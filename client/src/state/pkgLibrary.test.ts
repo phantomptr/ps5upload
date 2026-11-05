@@ -93,6 +93,7 @@ beforeEach(() => {
   });
 });
 import { useInstallSettingsStore } from "./installSettings";
+import { answerInstallAsk, registerInstallAskHost, useInstallAskStore } from "./installAsk";
 import { usePkgStorageStore } from "../lib/pkgStorage";
 import {
   listVolumes,
@@ -117,7 +118,6 @@ import {
   pkgLibraryStore,
   evictPkgLibraryStore,
   isFinishedPkg,
-  pkgInstallMayNotLaunch,
   pkgTypeForCategory,
   pkgRowInstalled,
   installSpaceWarning,
@@ -131,7 +131,7 @@ import {
   recordPkgAlternativeSelection,
   skipPkgAlternativeSelection,
   PKG_ALTERNATIVE_SKIP,
-  PKG_MAY_NOT_LAUNCH_MESSAGE,
+  pkgMayNotLaunchMessage,
   type PkgEntry,
 } from "./pkgLibrary";
 import { useTaskStore } from "./tasks";
@@ -139,7 +139,7 @@ import { useTaskStore } from "./tasks";
 describe("link install input", () => {
   it("rejects unsafe URLs before contacting the console", async () => {
     vi.mocked(invoke).mockClear();
-    const host = "192.168.86.99";
+    const host = "192.0.2.99";
     const store = pkgLibraryStore(host);
     for (const source of [
       "file:///tmp/game.pkg",
@@ -706,7 +706,7 @@ describe("pkgTypeForCategory (patch data-loss guard input)", () => {
 describe("installSpaceWarning (#115 pre-install free-space check)", () => {
   it("warns when the pkg is larger than free space", () => {
     const w = installSpaceWarning("Big Game", 50_000_000_000, 10_000_000_000);
-    expect(w).toMatch(/Not enough free space/);
+    expect(w).toMatch(/needs about/);
     expect(w).toMatch(/Big Game/);
   });
   it("does not warn when it fits", () => {
@@ -920,6 +920,14 @@ describe("waitForConsoleReady (install readiness gate)", () => {
     // timeoutMs/POLL(1500) = 3 attempts, then false.
     await expect(p).resolves.toBe(false);
   });
+
+  it("a probe that never answers cannot hold the wait past its time", async () => {
+    mockedReady.mockImplementation(() => new Promise<boolean>(() => {}));
+    const done = vi.fn();
+    void waitForConsoleReady("192.168.1.10", { timeoutMs: 3_000 }).then(done);
+    await vi.advanceTimersByTimeAsync(3_100);
+    expect(done).toHaveBeenCalledWith(false);
+  });
 });
 
 describe("recordPkgInstalled / isPkgInstalledHere (per-console isolation)", () => {
@@ -988,69 +996,6 @@ describe("recordPkgInstalled / isPkgInstalledHere (per-console isolation)", () =
     recordPkgAlternativeSelection(A, key, "optional-fingerprint");
     skipPkgAlternativeSelection(A, key);
     expect(loadPkgAlternativeSelections(A)[key]).toBe(PKG_ALTERNATIVE_SKIP);
-  });
-});
-
-describe("pkgInstallMayNotLaunch", () => {
-  it("trusts the engine's explicit may_not_launch flag", () => {
-    expect(pkgInstallMayNotLaunch({ may_not_launch: true })).toBe(true);
-    expect(pkgInstallMayNotLaunch({ may_not_launch: false })).toBe(false);
-    // Flag wins even if register_path would say otherwise.
-    expect(
-      pkgInstallMayNotLaunch({
-        may_not_launch: false,
-        register_path: "appinst-local",
-      }),
-    ).toBe(false);
-  });
-
-  it("falls back to register_path for older engines without the flag", () => {
-    // Only the unlaunchable last-resort path warns.
-    expect(pkgInstallMayNotLaunch({ register_path: "appinst-local" })).toBe(
-      true,
-    );
-    // Every launchable tier does not.
-    for (const rp of [
-      "appinst",
-      "shellui-rpc",
-      "intdebug",
-      "regular",
-      "tier0-worker",
-      "none",
-      "",
-    ]) {
-      expect(pkgInstallMayNotLaunch({ register_path: rp })).toBe(false);
-    }
-    // Nothing at all (very old engine) → no warning.
-    expect(pkgInstallMayNotLaunch({})).toBe(false);
-  });
-
-  it("prefers the engine's definitive app.db launchability verdict", () => {
-    // launchable=true overrides even the unlaunchable register_path: the
-    // engine confirmed the title registered in app.db, so it's a clean
-    // success (this is the elf-arsenal wait_for_install_row payoff).
-    expect(
-      pkgInstallMayNotLaunch({
-        register_path: "appinst-local",
-        launchable: true,
-      }),
-    ).toBe(false);
-    // launchable=false is a definitive warning even on a "launchable" tier —
-    // Sony accepted it but the title never registered.
-    expect(
-      pkgInstallMayNotLaunch({ register_path: "appinst", launchable: false }),
-    ).toBe(true);
-    // launchable wins over a conflicting may_not_launch flag too.
-    expect(
-      pkgInstallMayNotLaunch({ may_not_launch: true, launchable: true }),
-    ).toBe(false);
-    // launchable null/undefined ⇒ verification not applicable ⇒ heuristic.
-    expect(
-      pkgInstallMayNotLaunch({
-        register_path: "appinst-local",
-        launchable: null,
-      }),
-    ).toBe(true);
   });
 });
 
@@ -1157,9 +1102,64 @@ describe("runPkgInstall — unified endpoint: verdict + Auto-Delete staging", ()
     expect(req.title_id).toBe("CUSA07842");
     expect(req.category).toBe("PS4DP");
     expect(req.package_app_ver).toBe("01.09");
-    // The user explicitly chose this install; the guard must not block a
-    // re-install (preserves the prior warn-not-block behaviour).
-    expect(req.options?.allow_destructive_reinstall).toBe(true);
+    // Only a yes to the question sends this (see the test below).
+    expect(req.options?.allow_destructive_reinstall).toBeUndefined();
+  });
+
+  describe("an install that would replace what is on the console", () => {
+    const guard = (replaces: string) =>
+      installStatus({
+        phase: "failed",
+        verdict: "failed",
+        reason: "destructive_guard",
+        replaces,
+      } as Partial<InstallStatus>);
+
+    it("goes on only after a yes", async () => {
+      const end = registerInstallAskHost();
+      mockedStatus
+        .mockResolvedValueOnce(guard("game"))
+        .mockResolvedValue(installStatus({ phase: "done", verdict: "installed" }));
+      const run = runPkgInstall(host, path, null, null, false);
+      await vi.waitFor(() =>
+        expect(useInstallAskStore.getState().pending).toHaveLength(1),
+      );
+      expect(useInstallAskStore.getState().pending[0].message).toMatch(/removes the installed copy/);
+      answerInstallAsk(true);
+      await expect(run).resolves.toMatchObject({ installed: true });
+      expect(mockedInstall).toHaveBeenCalledTimes(2);
+      expect(mockedInstall.mock.calls[1][0].options?.allow_destructive_reinstall).toBe(true);
+      end();
+    });
+
+    it("a no leaves the console alone and says why, in the words for an update", async () => {
+      const end = registerInstallAskHost();
+      mockedStatus.mockResolvedValue(guard("update"));
+      const run = runPkgInstall(host, path, null, null, false);
+      await vi.waitFor(() =>
+        expect(useInstallAskStore.getState().pending).toHaveLength(1),
+      );
+      answerInstallAsk(false);
+      const out = await run;
+      expect(out.installed).toBe(false);
+      expect(out.errMessage).toMatch(/already has this update/);
+      expect(mockedInstall).toHaveBeenCalledTimes(1);
+      end();
+    });
+
+    it("with no screen to ask on, the answer is no", async () => {
+      mockedStatus.mockResolvedValue(guard("game"));
+      const out = await runPkgInstall(host, path, null, null, false);
+      expect(out.installed).toBe(false);
+      expect(mockedInstall).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("an engine that forgot the job leaves the outcome open, and the package", async () => {
+    mockedStatus.mockRejectedValue(new Error("no such job"));
+    const out = await runPkgInstall(host, path, null, null, true);
+    expect(out.unverified).toBe(true);
+    expect(mockedDelete).not.toHaveBeenCalled();
   });
 
   it("a may_not_launch verdict is a success WITH a caution (still deletable)", async () => {
@@ -1192,7 +1192,7 @@ describe("runPkgInstall — unified endpoint: verdict + Auto-Delete staging", ()
     mockedInstall.mockResolvedValue({ ok: false, error: "busy", job: "other" });
     await expect(
       runPkgInstall(host, path, "CID", "PS4GD", true),
-    ).rejects.toThrow(/already running/i);
+    ).rejects.toThrow(/Another install is running/i);
     expect(mockedDelete).not.toHaveBeenCalled();
   });
 
@@ -1303,7 +1303,7 @@ describe("installExternal — copies USB→internal, then installs", () => {
       .getState()
       .installExternal(usbPkg, USBHOST);
     expect(r.ok).toBe(false);
-    expect(r.message).toMatch(/staging was kept/i);
+    expect(r.message).toMatch(/internal storage was kept/i);
     // fsDelete is only reached on a confirmed install (and the dest-exists
     // copy retry, which didn't fire here).
     expect(mockedDeleteUsb).not.toHaveBeenCalled();
@@ -1321,7 +1321,7 @@ describe("installedLastResult", () => {
     const r = installedLastResult(true);
     expect(r.ok).toBe(true);
     expect(r.warn).toBe(true);
-    expect(r.message).toBe(PKG_MAY_NOT_LAUNCH_MESSAGE);
+    expect(r.message).toBe(pkgMayNotLaunchMessage());
     expect(r.message).toMatch(/Package Installer/);
   });
 });
@@ -1440,7 +1440,7 @@ describe("clearFinished", () => {
       .entries.map((e) => e.name);
     expect(names).toEqual(["done2.pkg"]);
     expect(pkgLibraryStore(HOST).getState().error).toContain(
-      "Failed to delete 1",
+      "Files that could not be deleted: 1",
     );
   });
 

@@ -34,12 +34,15 @@ function render(p: { tauri: boolean; mobile: boolean }): string {
 
 describe("settingsVisibility", () => {
   it("shows everything on the desktop app", () => {
-    expect(Object.values(settingsVisibility({ tauri: true, mobile: false }))).not.toContain(false);
+    const { engineBuiltIn, ...rest } = settingsVisibility({ tauri: true, mobile: false });
+    expect(engineBuiltIn).toBe(false);
+    expect(Object.values(rest)).not.toContain(false);
   });
 
   it("hides the engine URL on the phone apps, whose engine is built in", () => {
     const v = settingsVisibility({ tauri: true, mobile: true });
     expect(v.engineUrl).toBe(false);
+    expect(v.engineBuiltIn).toBe(true);
     expect(v.keepDeviceAwake).toBe(true);
     expect(v.appUpdates).toBe(true);
   });
@@ -47,6 +50,7 @@ describe("settingsVisibility", () => {
   it("hides what the browser build cannot do, and keeps the screen-on switch", () => {
     expect(settingsVisibility({ tauri: false, mobile: false })).toEqual({
       engineUrl: false,
+      engineBuiltIn: false,
       keepDeviceAwake: true,
       settingsFile: false,
       osNotifications: false,
@@ -57,6 +61,12 @@ describe("settingsVisibility", () => {
 });
 
 describe("Settings screen per platform", () => {
+  it("a phone says why there is no Engine URL", () => {
+    const html = render({ tauri: true, mobile: true });
+    expect(html).toContain("built-in engine");
+    expect(html).not.toContain("Engine URL");
+  });
+
   it("desktop shows the engine URL, keep-awake, settings file, OS notifications and updates", () => {
     const html = render({ tauri: true, mobile: false });
     expect(html).toContain("Engine URL");

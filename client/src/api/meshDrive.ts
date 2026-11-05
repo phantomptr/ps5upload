@@ -20,6 +20,9 @@ export interface DriveMember {
   app?: string;
   state?: string;
   error?: string;
+  /** The engine's own sentences carry a code to word them with; a raw error has none. */
+  error_code?: string;
+  error_args?: Record<string, string>;
   files?: number;
   bytes?: number;
   last_sync?: number;
@@ -35,6 +38,8 @@ export interface DriveLink {
   created: number;
   state: string;
   error: string;
+  error_code?: string;
+  error_args?: Record<string, string>;
   last_sync: number;
   by_name: string;
   /** Devices in that console's circle. */
@@ -64,7 +69,12 @@ export interface Drive {
 
 export interface DriveStatus {
   state: string;
+  /** English, for anything that has no words of its own. */
   detail: string;
+  /** Says which of the engine's sentences `detail` is, for the user's language (none for a raw
+   *  error). `detail_args` is what goes in it. */
+  detail_code?: string;
+  detail_args?: Record<string, string>;
   last_ok: number;
   files: number;
   uploaded: number;
@@ -72,6 +82,8 @@ export interface DriveStatus {
   deleted: number;
   conflicts: number;
   held_deletes: number;
+  /** The first of the held deletes, by path. Absent from an older engine. */
+  held_paths?: string[];
   bytes?: number;
   todo?: number;
   done?: number;
@@ -128,8 +140,9 @@ export type DrivesAnswer =
 
 async function engineJson(route: string, init?: RequestInit): Promise<Record<string, unknown>> {
   const res = await fetch(`${getEngineUrl()}${route}`, { ...init, signal: AbortSignal.timeout(60_000) });
-  if (res.status === 404) throw new EngineTooOldError();
   const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  // A route this engine does not have. (A 404 with words is "that drive is gone".)
+  if (res.status === 404 && typeof body.error !== "string") throw new EngineTooOldError();
   if (!res.ok) {
     throw new Error(typeof body.error === "string" && body.error ? body.error : `request failed (${res.status})`);
   }
@@ -207,9 +220,12 @@ export const driveApi = {
     call("/api/drive/create")(host, { name, hub: hub.path, hub_name: hub.name, path, password: password || undefined }),
   join: (host: string, drive: string, path: string, password?: string) =>
     call("/api/drive/join")(host, { drive, path, password: password || undefined }),
-  /** Sets, changes or (empty) removes the password. `current` for a device not in the drive. */
-  setPassword: (host: string, drive: string, password: string, current?: string) =>
-    call("/api/drive/password")(host, { drive, password, current: current || undefined }),
+  /** Sets, changes or (empty) removes the password. `current` for a device not in the drive.
+   *  `pending`: linked consoles that did not answer; each takes it from the next link pass. */
+  setPassword: async (host: string, drive: string, password: string, current?: string) => {
+    const b = await call("/api/drive/password")(host, { drive, password, current: current || undefined });
+    return { pending: Array.isArray(b.pending) ? (b.pending as string[]) : [] };
+  },
   leave: (host: string, drive: string, member: string) => call("/api/drive/leave")(host, { drive, member }),
   remove: (host: string, drive: string) => call("/api/drive/delete")(host, { drive }),
   pause: (host: string, drive: string, member: string, paused: boolean) =>

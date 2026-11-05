@@ -121,6 +121,28 @@ pub fn data_dir() -> Option<PathBuf> {
     (!home.trim().is_empty()).then(|| PathBuf::from(home).join(".ps5upload"))
 }
 
+/// Where the engine keeps large temporary copies: a package uploaded from a browser, a folder copied
+/// from a saved server for Convert. `PS5UPLOAD_STAGING_DIR`, else the data folder. Not the OS temp
+/// folder: in the Docker image that is the container's own layer (no volume, it survives restarts
+/// and fills the Docker Desktop VM's disk), and on Fedora and Arch desktops it is RAM. Neither is a
+/// place for tens of gigabytes.
+pub fn staging_root() -> PathBuf {
+    staging_root_from(
+        std::env::var_os("PS5UPLOAD_STAGING_DIR"),
+        // A test's copies stay in the temp folder, not in the user's data folder.
+        if cfg!(test) { None } else { data_dir() },
+    )
+}
+
+fn staging_root_from(pinned: Option<std::ffi::OsString>, data: Option<PathBuf>) -> PathBuf {
+    match pinned.filter(|v| !v.is_empty()) {
+        Some(dir) => PathBuf::from(dir),
+        None => data
+            .map(|d| d.join("staging"))
+            .unwrap_or_else(std::env::temp_dir),
+    }
+}
+
 /// On disk: each secret is `base64(nonce || ciphertext)` of the JSON-encoded [`Secret`].
 #[derive(Serialize, Deserialize)]
 struct Stored {
@@ -147,8 +169,10 @@ impl Store {
         let path = dir.join("connections.json");
         let mut state = Vec::new();
         if path.exists() {
-            let shape: FileShape = serde_json::from_slice(&std::fs::read(&path)?)?;
-            for st in shape.connections {
+            let bytes = std::fs::read(&path).map_err(|e| {
+                anyhow::anyhow!(crate::state_io::describe("saved connections", &path, &e))
+            })?;
+            for st in parse_or_set_aside(&path, &bytes)?.connections {
                 // A secret that no longer decrypts (key replaced) is dropped, not guessed at:
                 // the user re-enters it, and the connection itself survives.
                 let secret = st
@@ -205,10 +229,7 @@ impl Store {
         let moved = slot.0.host != conn.host
             || slot.0.port != conn.port
             || slot.0.protocol != conn.protocol;
-        // The saved password belongs to the old machine and must not be sent to a different
-        // one; a port fix or a host spelt in another case is still the same machine.
-        let other_machine = !slot.0.host.trim().eq_ignore_ascii_case(conn.host.trim())
-            || slot.0.protocol != conn.protocol;
+        let other_machine = !same_machine(&slot.0, &conn);
         if moved {
             conn.host_key = None;
         } else if conn.host_key.is_none() {
@@ -266,14 +287,14 @@ impl Store {
                 .collect::<anyhow::Result<_>>()?,
         };
         let path = self.dir.join("connections.json");
-        let tmp = self.dir.join("connections.json.tmp");
-        let describe = |p: &Path, e: std::io::Error| {
-            anyhow::anyhow!(crate::state_io::describe("saved connections", p, &e))
-        };
-        std::fs::write(&tmp, serde_json::to_vec_pretty(&shape)?).map_err(|e| describe(&tmp, e))?;
-        std::fs::rename(&tmp, &path).map_err(|e| describe(&path, e))?;
-        Ok(())
+        replace_private(&path, &serde_json::to_vec_pretty(&shape)?)
     }
+}
+
+/// Whether a password saved for `saved` may be sent to `conn`. It belongs to that machine and must
+/// not go to a different one; a port fix or a host spelt in another case is still the same machine.
+pub(crate) fn same_machine(saved: &Connection, conn: &Connection) -> bool {
+    saved.host.trim().eq_ignore_ascii_case(conn.host.trim()) && saved.protocol == conn.protocol
 }
 
 fn view(c: &Connection, s: &Secret) -> ConnectionView {
@@ -314,23 +335,77 @@ fn new_id(name: &str, taken: &[(Connection, Secret)]) -> String {
     }
 }
 
-fn load_or_create_key(path: &Path) -> anyhow::Result<[u8; 32]> {
-    if let Ok(bytes) = std::fs::read(path) {
-        if let Ok(key) = <[u8; 32]>::try_from(bytes.as_slice()) {
-            return Ok(key);
+/// The file parsed, or an empty store when it is not ours to read: a file that cannot be parsed
+/// would otherwise fail every use of saved connections, with no way out in the app. It stays beside
+/// the store under another name, so nothing is lost.
+fn parse_or_set_aside(path: &Path, bytes: &[u8]) -> anyhow::Result<FileShape> {
+    match serde_json::from_slice(bytes) {
+        Ok(shape) => Ok(shape),
+        Err(e) => {
+            let aside = path.with_extension(format!("json.bad-{}", crate::now_ms()));
+            std::fs::rename(path, &aside).map_err(|io| {
+                anyhow::anyhow!(crate::state_io::describe("saved connections", path, &io))
+            })?;
+            crate::log_warn!(
+                "saved connections: {} could not be read ({e}), kept as {}; starting empty",
+                path.display(),
+                aside.display()
+            );
+            Ok(FileShape {
+                version: 1,
+                connections: Vec::new(),
+            })
         }
     }
-    let mut key = [0u8; 32];
-    getrandom::fill(&mut key).map_err(|e| anyhow::anyhow!("reading OS randomness: {e}"))?;
-    write_private(path, &key).map_err(|e| match e.downcast_ref::<std::io::Error>() {
-        Some(io) => anyhow::anyhow!(crate::state_io::describe("saved connections", path, io)),
-        None => e,
-    })?;
-    Ok(key)
+}
+
+/// The key that encrypts this engine's secrets at rest. Made only when there is none: a file that
+/// cannot be read right now, or one that is damaged, is an error and stays untouched, because a
+/// new key would silently lose every saved password.
+pub(crate) fn load_or_create_key(path: &Path) -> anyhow::Result<[u8; 32]> {
+    // Two first callers (the store, the settings backups) must not each make a key.
+    static MAKING: Mutex<()> = Mutex::new(());
+    let _making = MAKING.lock().unwrap_or_else(|e| e.into_inner());
+    match std::fs::read(path) {
+        Ok(bytes) => <[u8; 32]>::try_from(bytes.as_slice()).map_err(|_| {
+            anyhow::anyhow!(
+                "{} is damaged ({} bytes, not 32), so saved passwords cannot be read. Restore the \
+                 file, or delete it and type the passwords again.",
+                path.display(),
+                bytes.len()
+            )
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let mut key = [0u8; 32];
+            getrandom::fill(&mut key).map_err(|e| anyhow::anyhow!("reading OS randomness: {e}"))?;
+            replace_private(path, &key)?;
+            Ok(key)
+        }
+        Err(e) => Err(anyhow::anyhow!(crate::state_io::describe(
+            "saved connections",
+            path,
+            &e
+        ))),
+    }
+}
+
+/// Writes `path` whole or not at all: a crash leaves the old file (or none), never a part of one.
+/// Readable by this user only.
+fn replace_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    let describe = |p: &Path, e: std::io::Error| {
+        anyhow::anyhow!(crate::state_io::describe("saved connections", p, &e))
+    };
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    // A leftover keeps its old mode through `open`; the mode below applies only to a new file.
+    let _ = std::fs::remove_file(&tmp);
+    write_private(&tmp, bytes).map_err(|e| describe(&tmp, e))?;
+    std::fs::rename(&tmp, path).map_err(|e| describe(path, e))
 }
 
 #[cfg(unix)]
-fn write_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let mut f = std::fs::OpenOptions::new()
@@ -340,32 +415,35 @@ fn write_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
         .mode(0o600)
         .open(path)?;
     f.write_all(bytes)?;
-    Ok(())
+    f.sync_all()
 }
 
 #[cfg(not(unix))]
-fn write_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-    std::fs::write(path, bytes)?;
-    Ok(())
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::File::create(path)?;
+    f.write_all(bytes)?;
+    f.sync_all()
 }
 
-fn encrypt(key: &[u8; 32], secret: &Secret) -> anyhow::Result<String> {
+/// `base64(nonce || ciphertext)` of `plain`.
+pub(crate) fn seal(key: &[u8; 32], plain: &[u8]) -> anyhow::Result<String> {
     use aes_gcm::aead::Aead;
     use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
     use base64::Engine;
     let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| anyhow::anyhow!("{e}"))?;
     let mut nonce = [0u8; 12];
     getrandom::fill(&mut nonce).map_err(|e| anyhow::anyhow!("reading OS randomness: {e}"))?;
-    let plain = serde_json::to_vec(secret)?;
     let sealed = cipher
-        .encrypt(&Nonce::from(nonce), plain.as_slice())
+        .encrypt(&Nonce::from(nonce), plain)
         .map_err(|_| anyhow::anyhow!("could not encrypt the secret"))?;
     let mut blob = nonce.to_vec();
     blob.extend_from_slice(&sealed);
     Ok(base64::engine::general_purpose::STANDARD.encode(blob))
 }
 
-fn decrypt(key: &[u8; 32], blob: &str) -> Option<Secret> {
+/// What [`seal`] sealed; `None` for anything else, or under another key.
+pub(crate) fn open_sealed(key: &[u8; 32], blob: &str) -> Option<Vec<u8>> {
     use aes_gcm::aead::Aead;
     use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
     use base64::Engine;
@@ -378,8 +456,15 @@ fn decrypt(key: &[u8; 32], blob: &str) -> Option<Secret> {
     let (nonce, sealed) = bytes.split_at(12);
     let nonce: [u8; 12] = nonce.try_into().ok()?;
     let cipher = Aes256Gcm::new_from_slice(key).ok()?;
-    let plain = cipher.decrypt(&Nonce::from(nonce), sealed).ok()?;
-    serde_json::from_slice(&plain).ok()
+    cipher.decrypt(&Nonce::from(nonce), sealed).ok()
+}
+
+fn encrypt(key: &[u8; 32], secret: &Secret) -> anyhow::Result<String> {
+    seal(key, &serde_json::to_vec(secret)?)
+}
+
+fn decrypt(key: &[u8; 32], blob: &str) -> Option<Secret> {
+    serde_json::from_slice(&open_sealed(key, blob)?).ok()
 }
 
 #[cfg(test)]
@@ -408,6 +493,20 @@ pub(crate) fn conn(name: &str, protocol: Protocol) -> Connection {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn staging_goes_where_it_is_told_else_beside_the_engines_data() {
+        let data = || Some(std::path::PathBuf::from("/data/.ps5upload"));
+        assert_eq!(
+            super::staging_root_from(Some("/big/disk".into()), data()),
+            std::path::PathBuf::from("/big/disk")
+        );
+        assert_eq!(
+            super::staging_root_from(Some("".into()), data()),
+            std::path::PathBuf::from("/data/.ps5upload/staging")
+        );
+        assert_eq!(super::staging_root_from(None, None), std::env::temp_dir());
+    }
+
     use super::*;
 
     fn pw(p: &str) -> Secret {
@@ -470,6 +569,108 @@ mod tests {
         let s2 = Store::open(&dir).unwrap();
         // The connection survives; its secret is gone rather than garbage.
         assert_eq!(s2.get(&v.conn.id).unwrap().1, Secret::None);
+    }
+
+    #[test]
+    fn a_damaged_key_is_an_error_and_stays_as_it_is() {
+        let dir = test_dir();
+        let s = Store::open(&dir).unwrap();
+        s.add(conn("NAS", Protocol::Smb), pw("hunter2")).unwrap();
+        let saved = std::fs::read(dir.join("connections.json")).unwrap();
+        std::fs::write(dir.join("connections.key"), b"").unwrap();
+        let e = Store::open(&dir)
+            .err()
+            .expect("a 0-byte key must not be replaced");
+        assert!(
+            e.to_string().contains("is damaged (0 bytes, not 32)"),
+            "{e}"
+        );
+        assert!(std::fs::read(dir.join("connections.key"))
+            .unwrap()
+            .is_empty());
+        assert_eq!(std::fs::read(dir.join("connections.json")).unwrap(), saved);
+    }
+
+    #[test]
+    fn a_key_that_cannot_be_read_is_never_replaced() {
+        // A read error other than "not there": here a folder in its place, as EIO or EACCES
+        // would be. A new key would lose every saved password.
+        let dir = test_dir();
+        std::fs::create_dir(dir.join("connections.key")).unwrap();
+        assert!(Store::open(&dir).is_err());
+        assert!(dir.join("connections.key").is_dir());
+    }
+
+    #[test]
+    fn a_key_is_written_whole_and_read_back_the_same() {
+        let dir = test_dir();
+        let path = dir.join("connections.key");
+        let made = load_or_create_key(&path).unwrap();
+        assert_eq!(load_or_create_key(&path).unwrap(), made);
+        assert!(!dir.join("connections.key.tmp").exists());
+    }
+
+    #[test]
+    fn a_damaged_connections_file_is_set_aside_and_the_store_opens_empty() {
+        let dir = test_dir();
+        std::fs::write(dir.join("connections.json"), b"{ not json").unwrap();
+        let s = Store::open(&dir).unwrap();
+        assert!(s.list().is_empty());
+        assert!(!dir.join("connections.json").exists());
+        let aside: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".bad-"))
+            .collect();
+        assert_eq!(aside.len(), 1);
+        assert_eq!(std::fs::read(aside[0].path()).unwrap(), b"{ not json");
+        // And it works from there.
+        s.add(conn("NAS", Protocol::Smb), pw("pw")).unwrap();
+        assert_eq!(Store::open(&dir).unwrap().list().len(), 1);
+    }
+
+    #[test]
+    fn shares_saved_before_10_7_3_with_folders_in_them_are_fixed_on_load() {
+        let dir = test_dir();
+        std::fs::write(
+            dir.join("connections.json"),
+            r#"{"version":1,"connections":[{"id":"nas-1","name":"NAS","protocol":"smb",
+                "host":"nas","port":445,"share":"Media/Games/PS5","user":"me",
+                "start_path":"/x"}]}"#,
+        )
+        .unwrap();
+        let (c, _) = Store::open(&dir).unwrap().get("nas-1").unwrap();
+        assert_eq!(c.share, "Media");
+        assert_eq!(c.start_path, "/Games/PS5/x");
+    }
+
+    #[test]
+    fn a_port_or_the_hosts_capitals_are_still_the_same_machine() {
+        let saved = conn("NAS", Protocol::Smb);
+        let same = |edit: &dyn Fn(&mut Connection)| {
+            let mut c = saved.clone();
+            edit(&mut c);
+            same_machine(&saved, &c)
+        };
+        assert!(same(&|_| {}));
+        assert!(same(&|c| c.host = format!(" {} ", c.host.to_uppercase())));
+        assert!(same(&|c| c.port = 4450));
+        assert!(!same(&|c| c.host = "evil.example".into()));
+        assert!(!same(&|c| c.protocol = Protocol::Ftp));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_connections_file_is_private_too() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = test_dir();
+        let s = Store::open(&dir).unwrap();
+        s.add(conn("NAS", Protocol::Smb), pw("pw")).unwrap();
+        let mode = std::fs::metadata(dir.join("connections.json"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[cfg(unix)]

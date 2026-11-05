@@ -69,10 +69,7 @@ pub(crate) fn is_image_file(path: &Path) -> bool {
 /// [`is_image_file`]'s name check alone, for a path on a server or console.
 pub(crate) fn has_image_extension(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-        matches!(
-            e.to_ascii_lowercase().as_str(),
-            "exfat" | "ffpkg" | "ufs2" | "ffpfs" | "ffpfsc" | "pkg"
-        )
+        ps5upload_core::archive_extract::GAME_FILE_EXTS.contains(&e.to_ascii_lowercase().as_str())
     })
 }
 

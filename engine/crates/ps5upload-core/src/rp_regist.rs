@@ -113,8 +113,7 @@ pub fn credential_from_regist_key(regist_key_hex: &str) -> Result<u64> {
     if text.is_empty() {
         bail!("regist key decoded to an empty string");
     }
-    u64::from_str_radix(text, 16)
-        .with_context(|| format!("regist key {text:?} is not a hex number"))
+    u64::from_str_radix(text, 16).context("regist key is not a hex number")
 }
 
 fn parse_hex(s: &str) -> Option<Vec<u8>> {
@@ -374,11 +373,19 @@ pub(crate) fn split_http(raw: &[u8]) -> Result<HttpReply> {
 fn reason_text(code: &str) -> &'static str {
     match code.to_ascii_lowercase().as_str() {
         "80108b09" => "the PIN was wrong or has expired",
-        // Hit when a pending registration was already finalised on the
-        // console — polling Remote Play status probes
-        // sceRemoteplayConfirmDeviceRegist, which does exactly that. Retrying
-        // from a clean state is the fix, so say so.
-        "80108b03" => "a previous pairing attempt is still pending — try again",
+        // Hit when a pending registration was already finalised on the console
+        // (polling Remote Play status probes sceRemoteplayConfirmDeviceRegist,
+        // which does exactly that): the engine tries again by itself. Reported
+        // from the field too with Enable Remote Play off on the console's own
+        // screen, where trying and unpairing change nothing: the step that is
+        // left is on the console.
+        "80108b03" => {
+            "Remote Play isn't ready on the PS5. Open Settings › System › Remote Play on the \
+             console and turn on Enable Remote Play. If it's greyed out, this PS5 user's account \
+             usually isn't activated: activate it in Accounts › Users. If it still won't turn on \
+             or stay on, run the offline sign-in in Play › Set up and restart the PS5. Then press \
+             Pair again"
+        }
         "80108b02" => "the console rejected the PSN account",
         "80108b10" => "Remote Play is already in use",
         "80108b15" => "Remote Play crashed on the console",
@@ -701,14 +708,55 @@ mod tests {
     }
 
     #[test]
+    fn a_bad_regist_key_is_not_quoted_in_its_error() {
+        // Decodes to text that isn't hex.
+        let hex: String = "SECRETZZ".bytes().map(|b| format!("{b:02x}")).collect();
+        let e = format!("{:#}", credential_from_regist_key(&hex).unwrap_err());
+        assert!(!e.contains("SECRETZZ"), "{e}");
+    }
+
+    #[test]
     fn the_pending_registration_refusal_is_named() {
         // 80108b03 used to fall through to the generic "the console refused",
-        // which reads as unfixable. It is fixable: retry from a clean state.
-        assert_eq!(
-            reason_text("80108b03"),
-            "a previous pairing attempt is still pending — try again"
-        );
+        // and then to "try again", which changes nothing when the console's own
+        // switch is what's missing. The next step, named.
+        let t = reason_text("80108b03");
+        assert!(t.contains("Enable Remote Play"), "{t}");
+        assert!(t.contains("Pair again"), "{t}");
+        assert!(t.contains("Accounts › Users"), "{t}");
         assert_eq!(reason_text("80108B03"), reason_text("80108b03"));
+    }
+
+    #[test]
+    fn a_pending_registration_is_tried_again_with_a_fresh_start_and_others_are_not() {
+        use std::cell::Cell;
+        let quick = Duration::ZERO;
+        // Clears by itself.
+        let n = Cell::new(0);
+        let r = with_pending_retries(3, quick, || {
+            n.set(n.get() + 1);
+            if n.get() < 3 {
+                bail!("registration failed (HTTP 403): x (reason 80108B03)")
+            }
+            Ok(7)
+        });
+        assert_eq!((r.unwrap(), n.get()), (7, 3));
+        // Doesn't: the last answer stands, with the next step in it.
+        let n = Cell::new(0);
+        let r: Result<()> = with_pending_retries(3, quick, || {
+            n.set(n.get() + 1);
+            bail!("registration failed (HTTP 403): x (reason 80108b03)")
+        });
+        assert_eq!(n.get(), 3);
+        assert!(r.unwrap_err().to_string().contains("80108b03"));
+        // Any other refusal: at once.
+        let n = Cell::new(0);
+        let r: Result<()> = with_pending_retries(3, quick, || {
+            n.set(n.get() + 1);
+            bail!("registration failed (HTTP 403): the PIN is wrong (reason 80108b09)")
+        });
+        assert_eq!(n.get(), 1);
+        assert!(r.is_err());
     }
 
     #[test]
@@ -801,24 +849,28 @@ pub fn pair_with_console(mgmt_addr: &str, host: &str) -> Result<PairResult> {
     // Give up any PIN left over from an abandoned attempt before asking for
     // a new one (the request replaces a live PIN anyway; this also clears a
     // finished attempt's state). Cancel makes no Sony call that can block.
-    let _ = crate::remoteplay::remoteplay_cancel(mgmt_addr);
+    // Done in the attempt below.
 
-    // The PIN comes back in the ack. It must NOT be fetched by polling
-    // status: that probes sceRemoteplayConfirmDeviceRegist, which finalises
-    // the pending registration on the console, and the handshake below is
-    // then refused (measured: HTTP 403, reason 80108b03).
-    // Its error already says what failed (the payload's Sony call and code).
-    let snap = crate::remoteplay::remoteplay_request(mgmt_addr, None)?;
+    let reg = with_pending_retries(PENDING_TRIES, PENDING_WAIT, || {
+        // A retry's old PIN goes first, as above.
+        let _ = crate::remoteplay::remoteplay_cancel(mgmt_addr);
+        // The PIN comes back in the ack. It must NOT be fetched by polling
+        // status: that probes sceRemoteplayConfirmDeviceRegist, which finalises
+        // the pending registration on the console, and the handshake below is
+        // then refused (measured: HTTP 403, reason 80108b03).
+        // Its error already says what failed (the payload's Sony call and code).
+        let snap = crate::remoteplay::remoteplay_request(mgmt_addr, None)?;
 
-    let pin = snap.pin.trim().to_string();
-    if pin.is_empty() {
-        bail!("the console did not return a pairing PIN");
-    }
-    let pin_num: u32 = pin
-        .parse()
-        .map_err(|_| anyhow!("the console produced a PIN we cannot read: {pin:?}"))?;
+        let pin = snap.pin.trim().to_string();
+        if pin.is_empty() {
+            bail!("the console did not return a pairing PIN");
+        }
+        let pin_num: u32 = pin
+            .parse()
+            .map_err(|_| anyhow!("the console produced a PIN we cannot read: {pin:?}"))?;
 
-    let reg = register(host, &account_id, pin_num)?;
+        register(host, &account_id, pin_num)
+    })?;
     let credential = credential_from_regist_key(&reg.regist_key)?;
 
     // Best effort: the PIN has been consumed, so clear the waiting state
@@ -834,6 +886,30 @@ pub fn pair_with_console(mgmt_addr: &str, host: &str) -> Result<PairResult> {
         account_id_b64: account_id,
         account_via: readiness.account_via,
     })
+}
+
+/// Tries at the helper's pairing when the console answers 80108b03 (a registration left pending),
+/// each with a fresh PIN, and the wait between them. It clears by itself when it was a finished
+/// attempt's state; a console where it doesn't has a step left on its own screen (`reason_text`).
+const PENDING_TRIES: u32 = 3;
+const PENDING_WAIT: Duration = Duration::from_secs(2);
+
+fn with_pending_retries<T>(
+    tries: u32,
+    wait: Duration,
+    mut attempt: impl FnMut() -> Result<T>,
+) -> Result<T> {
+    let mut n = 0;
+    loop {
+        n += 1;
+        match attempt() {
+            Err(e) if n < tries && e.to_string().to_ascii_lowercase().contains("80108b03") => {
+                crate::core_log!("rp_regist: pairing try {n}: a registration is pending; again");
+                std::thread::sleep(wait);
+            }
+            r => return r,
+        }
+    }
 }
 
 /// A PIN as the user typed it from the PS5's Link Device screen: eight digits, spaces and dashes

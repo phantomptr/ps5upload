@@ -10,6 +10,7 @@
  *   list    path offset limit-> {"entries":[{"name","kind","size","mtime"}],"more","next","total"}
  *   stat    path             -> {"kind","size","mtime"}
  *   mkdir   path             -> {"ok":true}
+ *   rename  path to          -> {"ok":true}  (inside one folder, never over something: a Replace's swap)
  *   copy    dir src dest overwrite -> {"job"}  dir "down": share src -> console dest; "up": back
  *   remove  path             -> {"job"}  (a file or folder tree on the share)
  *   scan    source (path | local:true) -> {"job"}  a game library scan (smbd_library.h) of the folder
@@ -425,6 +426,48 @@ static void op_simple(const char *op, const char *r, size_t n, sj_buf_t *b) {
     if (rc != 0) reply_err(b, rc, NULL);
 }
 
+/* The page's Replace on a share: the old item moves aside and the finished copy takes its name, so a
+ * failure on the way never leaves the share with neither (client/src/console/files/replace.ts). One
+ * folder only, and a target that is taken is refused: the server's rename never overwrites here
+ * (s_rename). The new name is one we create: the strict (Windows-safe) rule, as for an upload. */
+static void op_rename(const char *r, size_t n, sj_buf_t *b) {
+    smbconn_t c;
+    char from[SMBP_PATH_MAX], to[SMBP_PATH_MAX], pf[SMBP_PATH_MAX], pt[SMBP_PATH_MAX], detail[160];
+    const char *leaf;
+    xfs_t fs;
+    int rc;
+    if ((rc = conn_from(r, n, &c, 1)) != 0 || (rc = rel_from(r, n, "path", from, sizeof from)) != 0 ||
+        (rc = rel_from(r, n, "to", to, sizeof to)) != 0) {
+        smbconn_clear(&c);
+        reply_err(b, rc, NULL);
+        return;
+    }
+    smbp_parent(from, pf, sizeof pf);
+    smbp_parent(to, pt, sizeof pt);
+    leaf = strrchr(to, '/');
+    leaf = leaf ? leaf + 1 : to;
+    rc = !from[0] || !to[0] || strcmp(pf, pt) != 0 ? XE_BAD_REQUEST : !smbp_name_ok(leaf) ? XE_BAD_NAME : 0;
+    if (rc != 0) {
+        smbconn_clear(&c);
+        reply_err(b, rc, NULL);
+        return;
+    }
+    rc = smbfs_open(&fs, &c, detail, sizeof detail);
+    smbconn_clear(&c);
+    if (rc != 0) {
+        reply_err(b, rc, detail);
+        return;
+    }
+    rc = fs.ops->rename(&fs, from, to, 0);
+    smbfs_close(&fs);
+    if (rc != 0) {
+        reply_err(b, rc, NULL);
+        return;
+    }
+    cache_drop();
+    sj_raw(b, "{\"ok\":true}");
+}
+
 static void op_copy(const char *r, size_t n, sj_buf_t *b, int remove) {
     smbconn_t c;
     char dir[8], src[SMBP_PATH_MAX], dst[SMBP_PATH_MAX], id[33];
@@ -541,6 +584,8 @@ static void handle(const char *r, size_t n, sj_buf_t *b) {
         op_list(r, n, b);
     } else if (strcmp(op, "probe") == 0 || strcmp(op, "stat") == 0 || strcmp(op, "mkdir") == 0) {
         op_simple(op, r, n, b);
+    } else if (strcmp(op, "rename") == 0) {
+        op_rename(r, n, b);
     } else if (strcmp(op, "copy") == 0) {
         op_copy(r, n, b, 0);
     } else if (strcmp(op, "remove") == 0) {

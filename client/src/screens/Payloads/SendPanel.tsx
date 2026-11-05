@@ -16,7 +16,9 @@ import {
 import { Button, Spinner, Input } from "../../components";
 
 import { useConnectionStore, PS5_LOADER_PORT } from "../../state/connection";
-import { sendPayload } from "../../api/ps5";
+import { sendPayloadChecked } from "../../api/ps5";
+import { payloadSendRefusalText } from "../../lib/payloadSendRefusal";
+import { useHelperReplaceGuard } from "../Connection/useHelperReplaceGuard";
 import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
 import { BrowseButton } from "../../components/BrowseButton";
@@ -25,7 +27,7 @@ import { isRemotePath } from "../../lib/remotePath";
 import { PlaylistsPanel } from "./PlaylistsPanel";
 import { dropIsOwnedElsewhere } from "./dropZone";
 import { probeVerdict } from "./probeVerdict";
-import { formatDate } from "../../lib/formatDate";
+import { formatAgo } from "../../lib/formatDate";
 
 /**
  * Send tab of the Payloads screen — send any custom ELF (or BIN/JS/
@@ -94,14 +96,6 @@ function loaderPortForExt(path: string): number | null {
 /** "2m ago", "1h ago", "Apr 18" — compact timestamps for the history
  *  list. Uses absolute date only once a row is older than a week so
  *  users don't have to interpret "240h ago". */
-function formatAgo(ms: number): string {
-  const diff = Date.now() - ms;
-  if (diff < 60_000) return "just now";
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)}d ago`;
-  return formatDate(ms, "date");
-}
 
 function fileNameFrom(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
@@ -190,11 +184,11 @@ export default function SendPanel() {
       // User-initiated: clicking Clear and seeing nothing happen is
       // confusing. The on-disk file might be read-only, full, or
       // gone — surface so the user knows to investigate.
-      pushNotification("warning", "Couldn't clear send history", {
+      pushNotification("warning", tr("send_notif_clear_failed", undefined, "Couldn't clear send history"), {
         body: e instanceof Error ? e.message : String(e),
       });
     }
-  }, []);
+  }, [tr]);
 
   /** Keep elfPath (authoritative for the send call) in sync with the
    *  editable text field. Empty text clears the picked file so the
@@ -220,7 +214,7 @@ export default function SendPanel() {
         ],
       });
     } catch (e) {
-      pushNotification("warning", "Couldn't open file picker", {
+      pushNotification("warning", tr("send_notif_picker_failed", undefined, "Couldn't open file picker"), {
         body: e instanceof Error ? e.message : String(e),
       });
       return;
@@ -304,8 +298,11 @@ export default function SendPanel() {
    *  second pick. Setting the ref synchronously at probe start fixes
    *  that while preserving the latest-wins drop for rapid re-picks. */
   const latestProbePathRef = useRef<string | null>(null);
+  const pickedIsHelper = useRef(false);
+  const { guard: guardReplace, dialog: replaceDialog } = useHelperReplaceGuard();
   const probeFile = async (path: string) => {
     latestProbePathRef.current = path;
+    pickedIsHelper.current = false;
     if (isRemotePath(path)) {
       // Nothing to read here yet: it is copied from the server when it is sent.
       setStatus({ kind: "idle" });
@@ -318,6 +315,7 @@ export default function SendPanel() {
         { path },
       );
       if (latestProbePathRef.current !== path) return;
+      pickedIsHelper.current = !!r.is_ps5upload;
       const v = probeVerdict(r.code, !!r.is_ps5upload, r.error);
       setStatus({
         kind: "probed",
@@ -347,14 +345,16 @@ export default function SendPanel() {
 
   const send = async () => {
     if (!elfPath || !host?.trim() || parsedPort === null) return;
-    setStatus({ kind: "sending" });
     const startedHost = host.trim();
     const startedPort = parsedPort;
     const startedPath = elfPath;
+    // The file is our own helper: it replaces the one running, so ask as Connection does.
+    if (pickedIsHelper.current && startedPort === 9021 && !(await guardReplace(startedHost))) return;
+    setStatus({ kind: "sending" });
     try {
       // A payload on a saved server is copied here first (the loader sends local bytes), and
       // the copy goes once it is sent.
-      await withLocalCopy(startedPath, (local) => sendPayload(startedHost, local, startedPort));
+      await withLocalCopy(startedPath, (local) => sendPayloadChecked(startedHost, local, startedPort));
       setStatus({ kind: "sent", bytes: 0 });
       void commitToHistory({
         path: startedPath,
@@ -364,7 +364,7 @@ export default function SendPanel() {
         timestamp: Date.now(),
       });
     } catch (e) {
-      const err = e instanceof Error ? e.message : String(e);
+      const err = payloadSendRefusalText(e);
       setStatus({ kind: "failed", error: err });
       void commitToHistory({
         path: startedPath,
@@ -379,6 +379,7 @@ export default function SendPanel() {
 
   return (
     <div>
+      {replaceDialog}
       {/* Form + history. Font-AWARE auto-fit: each column wants at least
           ~24rem and the row holds as many as fit, collapsing to a single
           stacked column the moment two don't. Critically this is driven by
@@ -404,7 +405,10 @@ export default function SendPanel() {
                 clearSendBannerOnEdit();
               }}
               placeholder="192.168.1.50"
-              inputMode="decimal"
+              inputMode="url"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
             />
             <Input
               label={tr("sendpayload_port", undefined, "Port")}
@@ -453,7 +457,7 @@ export default function SendPanel() {
             </button>
             {portsOpen && (
               <>
-                <ul className="mt-2 ml-4 list-disc space-y-1">
+                <ul className="mt-2 ms-4 list-disc space-y-1">
                   <li>
                     <code>.elf</code> → <code>9021</code> ·{" "}
                     {tr("sendpayload_port_elf_desc", "elfldr (default)")}
@@ -514,8 +518,8 @@ export default function SendPanel() {
               }}
               placeholder={
                 dropActive
-                  ? "Drop the payload file…"
-                  : "/path/to/payload.elf — or drag a file onto the window"
+                  ? tr("send_path_placeholder_drop", undefined, "Drop the payload file…")
+                  : tr("send_path_placeholder", undefined, "/path/to/payload.elf, or drag a file onto the window")
               }
               spellCheck={false}
               className={`input flex-1 font-mono text-xs ${
@@ -676,14 +680,14 @@ function HistoryPanel({
           )}
         </div>
       ) : (
-        <ul className="grid max-h-[28rem] gap-1.5 overflow-y-auto pr-1">
+        <ul className="grid max-h-[28rem] gap-1.5 overflow-y-auto pe-1">
           {records.map((rec) => (
             <li key={`${rec.timestamp}-${rec.path}`}>
               <button
                 type="button"
                 onClick={() => onReplay(rec)}
                 title={rec.path}
-                className="group flex w-full items-start gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-left text-xs hover:border-[var(--color-accent)] hover:bg-[var(--color-surface-3)]"
+                className="group flex w-full items-start gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-start text-xs hover:border-[var(--color-accent)] hover:bg-[var(--color-surface-3)]"
               >
                 <StatusDot ok={rec.status === "success"} />
                 <div className="min-w-0 flex-1">

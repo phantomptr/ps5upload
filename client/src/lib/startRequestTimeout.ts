@@ -26,3 +26,9 @@ export async function fetchStart(
     throw e;
   }
 }
+
+/** Whether a request's failure text says it ran out of time: the desktop proxy's "operation timed
+ *  out", a browser's "signal timed out", an engine call's own deadline. */
+export function isRequestTimeout(message: string): boolean {
+  return /timed out|TimeoutError/i.test(message);
+}

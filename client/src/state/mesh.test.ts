@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { toMeshState, type MeshState } from "../api/mesh";
 import { busyText, replaceCheck } from "../lib/helperGuard";
-import { deviceName, othersBusy, othersOnline, othersRemotePlaying, presenceItems, remotePlayPads, RP_ACTIVITY } from "./mesh";
+import { deviceName, nearbyJoins, othersBusy, othersOnline, othersRemotePlaying, presenceItems, remotePlayPads, RP_ACTIVITY } from "./mesh";
 import { mergeShared, type SharedProfile } from "./rosterShare";
 import type { Task } from "./tasks";
 
@@ -82,6 +82,30 @@ describe("who is busy", () => {
     expect(parsed.supported && !parsed.same && parsed.devices[0].activity[0].pad).toBe("ws://192.168.1.20:19113/api/pad/ws");
   });
 
+  it("keeps a friend's Play Together through the engine's answer being checked", () => {
+    const join = {
+      code: "ABC123",
+      players: 1,
+      max: 4,
+      host_name: "Sam",
+      console_name: "PS5 Pro",
+      game_title: "Astro",
+      ws: "ws://192.168.1.20:19113/api/join/ws",
+    };
+    const parsed = toMeshState({
+      supported: true,
+      you: "me",
+      devices: [
+        { id: "me", online: true, activity: [] },
+        { id: "pc", online: true, activity: [{ kind: RP_ACTIVITY, join }] },
+        // Nothing to join with: a damaged or partial entry is not offered.
+        { id: "odd", online: true, activity: [{ kind: RP_ACTIVITY, join: { code: "X" } }] },
+      ],
+    });
+    expect(parsed.supported && !parsed.same).toBe(true);
+    expect(nearbyJoins(parsed as MeshState)).toEqual([{ device: expect.objectContaining({ id: "pc" }), join }]);
+  });
+
   it("names an app from before 8.0.0 plainly, and prefers the nickname", () => {
     expect(deviceName({ nick: "", name: "ps5upload", app: "" })).toBe("PS5Upload (older version)");
     expect(deviceName({ nick: "Office PC", name: "DESKTOP-1", app: "8.0.0" })).toBe("Office PC");
@@ -105,9 +129,7 @@ describe("presenceItems", () => {
         origin: "x",
         createdAt: "",
         status: "running",
-        attempts: 0,
-        maxAttempts: 1,
-        consoleId: "192.168.86.99",
+        consoleId: "192.0.2.99",
         payload: {},
         label: "Astro Bot",
         updatedAtMs: 0,
@@ -116,7 +138,7 @@ describe("presenceItems", () => {
       }) as Task;
     const items = presenceItems(
       [t({}), t({ id: "2", status: "done" }), t({ id: "3", consoleId: "10.0.0.1" }), t({ id: "4", status: "queued" })],
-      "192.168.86.99:9120",
+      "192.0.2.99:9120",
     );
     expect(items).toEqual([{ kind: "Upload", title: "Astro Bot", pct: 25 }]);
   });
@@ -134,9 +156,9 @@ describe("the same PS5 from two devices (8.0.0 listed it twice)", () => {
   it("collapses duplicates already saved, keeping the selected one and filling in what it lacks", async () => {
     const { collapseByHost } = await import("./roster");
     const list = [
-      { id: "a", name: "PS5", host: "192.168.86.99", notes: null, wake_credential: null },
-      { id: "b", name: "Phat", host: "192.168.86.99", notes: "fan loud", wake_credential: "cred" },
-      { id: "c", name: "Pro", host: "192.168.86.100", notes: null, wake_credential: null },
+      { id: "a", name: "PS5", host: "192.0.2.99", notes: null, wake_credential: null },
+      { id: "b", name: "Phat", host: "192.0.2.99", notes: "fan loud", wake_credential: "cred" },
+      { id: "c", name: "Pro", host: "192.0.2.100", notes: null, wake_credential: null },
     ];
     const out = collapseByHost(list, "b");
     expect(out.map((p) => p.id)).toEqual(["b", "c"]);

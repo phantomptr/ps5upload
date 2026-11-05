@@ -26,9 +26,7 @@ export interface ConnectionsState {
 }
 
 export function statusOf(error: string): ConnStatus {
-  if (/sign-in failed/i.test(error)) return "auth-failed";
-  if (/can't reach|unreachable|refused|timed out|timeout/i.test(error)) return "offline";
-  return "offline";
+  return /sign-in failed/i.test(error) ? "auth-failed" : "offline";
 }
 
 export const useConnectionsStore = create<ConnectionsState>((set, get) => ({

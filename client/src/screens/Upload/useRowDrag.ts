@@ -56,6 +56,11 @@ export function useRowDrag({
     setDragState(d);
   };
   const scrollerRef = useRef<HTMLElement | null>(null);
+  // A handle can outlive the render that made it (a memoized row): its handlers read these fresh.
+  const rules = useRef({ canDrop, onDrop });
+  useEffect(() => {
+    rules.current = { canDrop, onDrop };
+  });
 
   // Escape cancels; text selection stays off while a row is held.
   useEffect(() => {
@@ -95,14 +100,14 @@ export function useRowDrag({
           : null;
       const row = hit?.closest<HTMLElement>(`[${DRAG_ROW_ATTR}]`) ?? null;
       const target = row?.getAttribute(DRAG_ROW_ATTR) ?? null;
-      const over = target && target !== id && canDrop(id, target) ? target : null;
+      const over = target && target !== id && rules.current.canDrop(id, target) ? target : null;
       if (over !== d.over) setDrag({ id, over });
       edgeScroll(scrollerRef.current, e.clientY);
     },
     onPointerUp() {
       const d = dragRef.current;
       setDrag(null);
-      if (d?.over) onDrop(d.id, d.over);
+      if (d?.over) rules.current.onDrop(d.id, d.over);
     },
     onPointerCancel() {
       setDrag(null);

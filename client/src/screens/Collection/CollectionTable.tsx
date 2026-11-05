@@ -98,7 +98,7 @@ export function CollectionTable({
               <span className="font-medium">
                 {g.title}
                 {need && (
-                  <span className="ml-2 text-xs font-normal text-[var(--color-warn)]">
+                  <span className="ms-2 text-xs font-normal text-[var(--color-warn)]">
                     {tr("collection.fw_badge", { need }, "Needs FW {need}")}
                   </span>
                 )}

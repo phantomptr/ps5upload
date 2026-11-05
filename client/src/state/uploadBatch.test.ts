@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
-import { setBatchInspector, useUploadBatch } from "./uploadBatch";
+import { setBatchInspector, setBatchSiblingLister, useUploadBatch } from "./uploadBatch";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -62,6 +62,34 @@ describe("the Upload batch", () => {
     expect(useUploadBatch.getState().rows[0]).toMatchObject({ status: "error", error: "unreadable" });
     useUploadBatch.getState().remove(useUploadBatch.getState().rows[0].id);
     expect(useUploadBatch.getState().rows).toHaveLength(0);
+  });
+
+  it("adds only the first volume of a RAR set", () => {
+    useUploadBatch.getState().add([
+      { path: "/dl/G.part1.rar", isDir: false },
+      { path: "/dl/G.part2.rar", isDir: false },
+      { path: "/dl/G.part3.rar", isDir: false },
+    ]);
+    expect(useUploadBatch.getState().rows.map((r) => r.path)).toEqual(["/dl/G.part1.rar"]);
+  });
+
+  it("reads the files beside a split volume, as a single pick does", async () => {
+    setBatchInspector(async (path) => ({ kind: "file", path, meta: null, wrappedHint: null, zipInfo: null }));
+    const listed: string[] = [];
+    setBatchSiblingLister(async (dir) => {
+      listed.push(dir);
+      return ["Game.7z.001", "Game.7z.002"];
+    });
+    useUploadBatch.getState().add([
+      { path: "/dl/Game.7z.001", isDir: false },
+      { path: "/dl/plain.bin", isDir: false },
+    ]);
+    await flush();
+    await flush();
+    const [split, plain] = useUploadBatch.getState().rows;
+    expect(split.setIssue).toMatchObject({ kind: "split-unsupported", entryName: "Game.7z" });
+    expect(plain.setIssue).toBeUndefined();
+    expect(listed).toEqual(["/dl"]); // a plain name costs no listing
   });
 
   it("gives each archive the default its listing says, and asks when it can't tell (#645)", async () => {

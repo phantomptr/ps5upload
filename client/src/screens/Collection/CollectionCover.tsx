@@ -14,16 +14,23 @@ import { coverVersion } from "./coverVersion";
  *  cover that fails to load moves to the next, never to a broken image. The one read out of
  *  the game also comes over the IPC when the desktop window's own load of it is refused (the
  *  engine's cross-site guard turns WebKit's request for it away). */
+/** What a grid asks for: cards are about 192 CSS px, which this also covers on a high-density
+ *  screen, at some 20 KiB against a full cover's 300-700 KiB. */
+export const COVER_THUMB_PX = 384;
+
 export function CollectionCover({
   game,
+  size,
   className = "",
 }: {
   game: Pick<CollectionGame, "game_id" | "title" | "local_cover" | "cover_url"> &
     Partial<Pick<CollectionGame, "locations" | "cover_stamp">>;
+  /** A thumbnail of about this size in place of the full cover. */
+  size?: number;
   className?: string;
 }) {
   const version = coverVersion(game);
-  const local = game.local_cover ? collection.coverUrl(game.game_id, version) : null;
+  const local = game.local_cover ? collection.coverUrl(game.game_id, version, size) : null;
   const sources = [local, game.cover_url ?? null].filter((s): s is string => !!s);
   const [at, setAt] = useState(0);
   // A cover that failed once (asked for before the scan had saved it) is tried again when the
@@ -33,9 +40,9 @@ export function CollectionCover({
   const candidate = sources[at] ?? null;
   const onLocal = !!local && at === 0;
   const { src, onError, failed } = useImageRetry(candidate, {
-    cached: onLocal ? cachedCollectionCover(game.game_id, version) : undefined,
+    cached: onLocal ? cachedCollectionCover(game.game_id, version, size) : undefined,
     fallbackLoader: () =>
-      onLocal ? collectionCoverDataUrl(game.game_id, version) : Promise.resolve(null),
+      onLocal ? collectionCoverDataUrl(game.game_id, version, size) : Promise.resolve(null),
   });
   useEffect(() => {
     if (failed) setAt((i) => i + 1);

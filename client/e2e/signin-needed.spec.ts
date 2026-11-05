@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { seedConsole } from "./fixtures/engine";
 
 // "The PS5 is waiting at sign-in": a feature that needs a signed-in user (here, Play on a game)
 // says so once, with Sign in, which runs Wake & sign in and its passcode box. Phones used as
@@ -14,24 +15,7 @@ const status = {
 };
 
 test("Play with nobody signed in offers Sign in, which asks for the passcode", async ({ page }) => {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("ps5upload.host", "192.168.1.100");
-    window.localStorage.setItem(
-      "ps5upload.roster.v1",
-      JSON.stringify({
-        active_id: "p1",
-        profiles: [
-          {
-            id: "p1",
-            name: "Living room",
-            host: "192.168.1.100",
-            wake_regist_key: "00112233",
-            wake_rp_key: "0f".repeat(16), // made up (built here so it reads as no secret)
-          },
-        ],
-      }),
-    );
-  });
+  await seedConsole(page);
   let wake: Record<string, unknown> | null = null;
   const answers: unknown[] = [];
   await page.route(

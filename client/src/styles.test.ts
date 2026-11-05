@@ -34,4 +34,11 @@ describe("global CSS", () => {
     const top = unlayered(CSS.replace(/\/\*[\s\S]*?\*\//g, ""));
     expect(top).not.toMatch(/(^|[\s,}])button\s*\{[^}]*font/);
   });
+
+  it("leaves a field's size to a layer, so text-xs or py-1 on an Input or Select applies", () => {
+    const top = unlayered(CSS.replace(/\/\*[\s\S]*?\*\//g, ""));
+    expect(top).not.toMatch(/(^|[\s,}])\.(input|select|input-sm)\s*\{[^}]*(font-size|padding)\s*:/);
+    // The layered block itself is still there.
+    expect(CSS).toMatch(/@layer components\s*\{[^@]*\.input,\s*\.select\s*\{[^}]*padding:/);
+  });
 });

@@ -904,6 +904,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastrand"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
+
+[[package]]
 name = "fdeflate"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -949,6 +955,15 @@ dependencies = [
  "crc32fast",
  "miniz_oxide 0.9.1",
  "zlib-rs",
+]
+
+[[package]]
+name = "flume"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e139bc46ca777eb5efaf62df0ab8cc5fd400866427e56c68b22e414e53bd3be"
+dependencies = [
+ "spin",
 ]
 
 [[package]]
@@ -1557,6 +1572,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ebb8d8732c6a6df3d8f032a82911cfc747e00efb95cc46e8d0acd5b5b88570c"
 
 [[package]]
+name = "mdns-sd"
+version = "0.21.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6743ed743ff2bada2b8651ef298d3f98addb0b74844f19cdd57137d8bd0219e"
+dependencies = [
+ "fastrand",
+ "flume",
+ "if-addrs",
+ "mio",
+ "socket-pktinfo",
+ "socket2",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1605,6 +1634,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "30d65c71f1ce40ab09135ce117d742b9f8a19ff91a41a8b57ed50bc2de59c427"
 dependencies = [
  "libc",
+ "log",
  "wasi",
  "windows-sys 0.61.2",
 ]
@@ -2066,7 +2096,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-pfs"
-version = "11.0.8"
+version = "11.1.0"
 dependencies = [
  "flate2",
  "ps5-dump-forge-ufs2",
@@ -2075,7 +2105,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-ufs2"
-version = "11.0.8"
+version = "11.1.0"
 dependencies = [
  "ps5upload-fpkg",
  "ps5upload-pkg",
@@ -2083,8 +2113,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ps5upload-apidoc"
+version = "11.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "ps5upload-ava1"
-version = "11.0.8"
+version = "11.1.0"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2105,7 +2145,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-core"
-version = "11.0.8"
+version = "11.1.0"
 dependencies = [
  "aes 0.9.3",
  "aes-gcm 0.11.1",
@@ -2115,9 +2155,11 @@ dependencies = [
  "cfb-mode",
  "getrandom 0.4.3",
  "hmac",
+ "if-addrs",
  "image",
  "k256",
  "libc",
+ "mdns-sd",
  "serde",
  "serde_json",
  "sevenz-rust2",
@@ -2129,7 +2171,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-ctest"
-version = "11.0.8"
+version = "11.1.0"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2145,7 +2187,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-engine"
-version = "11.0.8"
+version = "11.1.0"
 dependencies = [
  "aes-gcm 0.11.1",
  "anyhow",
@@ -2155,6 +2197,7 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "blake3",
+ "flate2",
  "futures-util",
  "getrandom 0.4.3",
  "if-addrs",
@@ -2183,17 +2226,19 @@ dependencies = [
  "tokio-rustls",
  "tokio-stream",
  "tokio-tungstenite",
+ "tower",
  "tower-http",
  "trash",
  "unicode-normalization",
  "ureq",
  "uuid",
+ "webpki-roots",
  "zip",
 ]
 
 [[package]]
 name = "ps5upload-fpkg"
-version = "11.0.8"
+version = "11.1.0"
 dependencies = [
  "aes 0.9.3",
  "blake3",
@@ -2216,7 +2261,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-lab"
-version = "11.0.8"
+version = "11.1.0"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2234,7 +2279,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-pkg"
-version = "11.0.8"
+version = "11.1.0"
 dependencies = [
  "aes 0.9.3",
  "blake3",
@@ -2246,7 +2291,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-tests"
-version = "11.0.8"
+version = "11.1.0"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2264,7 +2309,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-unrar"
-version = "11.0.8"
+version = "11.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2969,6 +3014,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "socket-pktinfo"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "612942246d0cc239cfd83af1dfd39be47f649208a3524e5e9da651910128e0ac"
+dependencies = [
+ "libc",
+ "socket2",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "socket2"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2983,6 +3039,9 @@ name = "spin"
 version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
+dependencies = [
+ "lock_api",
+]
 
 [[package]]
 name = "spki"

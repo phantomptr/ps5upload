@@ -5,6 +5,7 @@
 // TCP send) stay in-process.
 
 import { trStatic } from "../lib/trStatic";
+import { formatBytes } from "../lib/format";
 import {
   classifySession,
   reportIfNotPaired,
@@ -12,6 +13,10 @@ import {
 } from "../lib/consoleSession";
 import { Channel } from "@tauri-apps/api/core";
 import { getEngineUrl } from "../state/engine";
+import { hostOf } from "../lib/addr";
+import { fetchConsoleStat } from "./consoleFiles";
+import { readWithRetries } from "../lib/pollRead";
+import { ENGINE_LONG_TIMEOUT_MS, ENGINE_TIMEOUT_MS, engineFetch } from "../lib/engineFetch";
 // Logging wrapper: every command leaves a trace breadcrumb + logs failures at
 // warn. See lib/invokeLogged.ts. (Channel still comes straight from core.)
 import { isTauriEnv } from "../lib/tauriEnv";
@@ -105,13 +110,6 @@ export interface ZipInspect {
   entry_names_complete?: boolean;
 }
 
-/** Inspect a `.zip` without extracting it. Reads only the central directory
- *  (plus, at most, one small embedded param.json), so it's fast even for a
- *  100 GB archive. Throws if the file isn't a readable zip. */
-export async function zipInspect(zipPath: string): Promise<ZipInspect> {
-  return invoke<ZipInspect>("zip_inspect", { req: { zip_path: zipPath } });
-}
-
 /** A single progress tick from `zipInspectStream`. `entriesSeen` is the
  *  running CDFH-record count while the central directory is parsed —
  *  not the final `file_count` (which excludes directories and sanitized
@@ -120,12 +118,15 @@ export interface ZipInspectProgress {
   entries_seen: number;
 }
 
-/** Streaming variant of `zipInspect`. The engine returns SSE — we forward
+/** Inspect a `.zip` without extracting it. Reads only the central directory
+ *  (plus, at most, one small embedded param.json), so it's fast even for a
+ *  100 GB archive. Throws if the file isn't a readable zip. The engine
+ *  returns SSE — we forward
  *  every `progress` event through `onProgress` so the UI can show a live
  *  entry-count while the central directory is walked, then resolve to the
  *  final `ZipInspect` once the engine emits `event: done`.
  *
- *  Unlike `zipInspect`, this call has no fixed deadline: the Tauri client
+ *  This call has no short deadline: the Tauri client
  *  uses a **dead-man-switch watchdog** (no SSE chunk for 30 s → fail). On
  *  a healthy engine the keep-alive sends `: heartbeat` every 1 s, so the
  *  watchdog only fires for a genuinely wedged sidecar. This is what lets
@@ -158,15 +159,8 @@ export async function zipInspectStream(
 // host-visible param.json, so `title` etc. stay null.
 
 /** Inspect a `.7z` without extracting it (file count + sizes). Fast even for a
- *  124 GB archive — only the small header is read. Throws if unreadable. */
-export async function sevenzInspect(archivePath: string): Promise<ZipInspect> {
-  return invoke<ZipInspect>("sevenz_inspect", {
-    req: { archive_path: archivePath },
-  });
-}
-
-/** Streaming variant of `sevenzInspect` — same dead-man-switch watchdog +
- *  progress channel as `zipInspectStream`. */
+ *  124 GB archive — only the small header is read. Throws if unreadable. Same
+ *  dead-man-switch watchdog + progress channel as `zipInspectStream`. */
 export async function sevenzInspectStream(
   archivePath: string,
   onProgress: (p: ZipInspectProgress) => void,
@@ -315,18 +309,6 @@ export async function profileNpRestore(
     { req: { addr, slot: 0, uid } },
   );
   return assertOk(resp, "Undo the sign-in");
-}
-
-/** Create a new local user account. Returns the new user's uid. */
-export async function userCreate(
-  name: string,
-  addr?: string,
-): Promise<{ ok: boolean; uid: number; name: string }> {
-  const resp = await invoke<{ ok: boolean; uid: number; name: string }>(
-    "user_create",
-    { req: { addr: addr ?? null, name } },
-  );
-  return assertOk(resp, "Create user");
 }
 
 /** Delete a local user account. */
@@ -524,10 +506,6 @@ function assertOk<T extends { ok?: boolean; error?: string | null }>(
  * live engine route with browserInvoke plumbing behind them
  * (profile/activate, users/list, volumes, zip/inspect, …).
  *
- * Others are superseded rather than unused: zipInspect and sevenzInspect
- * predate their *Stream variants and are kept for callers that do not
- * want to plumb a Channel through.
- *
  * Before deleting one, check for an engine route and a browserInvoke
  * case. If both exist, it is API surface, not debris.
  */
@@ -547,6 +525,32 @@ export async function sendPayload(
   return { viaPayloadManager: sentViaPayloadManager(resp?.status) };
 }
 
+/** A send the user started that should not go now, by the engine's reason (`pkg_install_busy`,
+ *  `helper_busy`, `loader_busy`): `payloadSendRefusalText` says it. */
+export class PayloadSendRefused extends Error {
+  constructor(readonly code: string) {
+    super(code);
+    this.name = "PayloadSendRefused";
+  }
+}
+
+/** `sendPayload` for a send the user started (Send, a catalogue card, a playlist step): asks the
+ *  engine first, so it does not land in an install or an elfldr swap, or stop the helper under a
+ *  running job. The app's own helper recovery uses `sendPayload` as it is. */
+export async function sendPayloadChecked(
+  ip: string,
+  elfPath: string,
+  port?: number,
+): Promise<{ viaPayloadManager: boolean }> {
+  const check = await invoke<{ ok?: boolean; status?: string }>("payload_send_check", {
+    ip,
+    path: elfPath,
+    port: port ?? null,
+  });
+  if (check?.ok === false) throw new PayloadSendRefused(check.status ?? "loader_busy");
+  return sendPayload(ip, elfPath, port);
+}
+
 /**
  * Send a payload that is already on the console (`path`, a .elf/.bin) to its
  * loader on :9021: the engine reads it back through the helper and sends it
@@ -559,7 +563,7 @@ export async function loadConsolePayload(host: string, path: string): Promise<{ 
 }
 
 /** Whether payload_send's status says the loader port was dead and the file
- *  was launched through Payload Manager instead (client/src-tauri probes.rs). */
+ *  was launched through Payload Manager instead (core payload_lifecycle.rs). */
 export function sentViaPayloadManager(status: string | undefined): boolean {
   return /through Payload Manager/i.test(status ?? "");
 }
@@ -630,8 +634,11 @@ export async function startTransferFileList(
   addr: string,
   txId?: string | null,
   bandwidthCapMbps?: number,
-): Promise<string> {
-  const res = await invoke<{ job_id: string }>("transfer_file_list", {
+): Promise<{ jobId: string; unreadable: string[] }> {
+  const res = await invoke<{
+    job_id: string;
+    skipped_unreadable?: { path: string; error: string }[];
+  }>("transfer_file_list", {
     req: {
       dest_root: destRoot,
       files,
@@ -641,7 +648,10 @@ export async function startTransferFileList(
         bandwidthCapMbps && bandwidthCapMbps > 0 ? bandwidthCapMbps : null,
     },
   });
-  return res.job_id;
+  return {
+    jobId: res.job_id,
+    unreadable: (res.skipped_unreadable ?? []).map((s) => s.path),
+  };
 }
 
 /** Start a zip-archive upload. The engine decompresses on the host so files
@@ -789,6 +799,8 @@ export async function resumeTxidLookup(
   src: string,
   dest: string,
 ): Promise<string | null> {
+  // The record lives in the desktop app; a browser has none and starts with a new id.
+  if (!isTauriEnv()) return null;
   const res = await invoke<{ tx_id_hex: string | null }>("resume_txid_lookup", {
     req: { host, src, dest },
   });
@@ -804,6 +816,7 @@ export async function resumeTxidRemember(
   txIdHex: string,
   mode: "reconcile" | "dir" | "file",
 ): Promise<void> {
+  if (!isTauriEnv()) return;
   await invoke("resume_txid_remember", {
     req: { host, src, dest, tx_id_hex: txIdHex, mode },
   });
@@ -818,6 +831,7 @@ export async function resumeTxidForget(
   src: string,
   dest: string,
 ): Promise<void> {
+  if (!isTauriEnv()) return;
   await invoke("resume_txid_forget", {
     req: { host, src, dest },
   });
@@ -854,7 +868,8 @@ export async function startTransferDownload(
 
 /** Download a PS5 file/folder straight into a `.zip` at `destZip`, streamed
  *  through Deflate as it downloads (no scratch dir). Returns the job_id —
- *  poll job_status for progress, same as a plain download. */
+ *  poll job_status for progress, same as a plain download. The caller has its person's answer
+ *  about a file already at `destZip` (the save dialog asks, and the phones pick a free name). */
 export async function startTransferDownloadZip(
   srcPath: string,
   destZip: string,
@@ -869,6 +884,7 @@ export async function startTransferDownloadZip(
       addr: transferAddr,
       kind,
       unsafe_read: unsafeRead,
+      existing: "replace",
     },
   });
   return res.job_id;
@@ -980,6 +996,8 @@ export interface DestinationProbe {
   exists: boolean;
   entryCount: number;
   totalBytes: number;
+  /** The folder holds more than `entryCount`: only one page was counted. */
+  more?: boolean;
 }
 
 export interface Volume {
@@ -1026,14 +1044,14 @@ export async function listVolumes(transferAddr: string): Promise<Volume[]> {
   return res?.volumes ?? [];
 }
 
-/** Bytes free across the volumes a game install can land on — the internal
- *  storage plus every extended-storage `/mnt/ext*` mount. Best-effort: returns
- *  null if volumes can't be read (so a check that can't run never blocks the
- *  install).
+/** Bytes free on the roomiest drive a game install can land on: the internal storage or an
+ *  extended-storage `/mnt/ext*` mount. A package lands on one drive, so the sum across drives
+ *  would over-promise. Best-effort: returns null if volumes can't be read (so a check that can't
+ *  run never blocks the install).
  *
  *  Internal is reported as `/user` on some consoles and `/data` on others (both
  *  are the one main data partition where `/user/app` lives) — we pick ONE of
- *  them (prefer `/user`) so overlapping mounts aren't double-counted. */
+ *  them (prefer `/user`). */
 export async function installFreeBytes(
   transferAddr: string,
 ): Promise<number | null> {
@@ -1041,22 +1059,14 @@ export async function installFreeBytes(
     const vols = await listVolumes(transferAddr);
     if (vols.length === 0) return null;
     const real = vols.filter((v) => !v.is_placeholder);
-    let free = 0;
-    let counted = false;
     const internal =
       real.find((v) => v.path === "/user") ??
       real.find((v) => v.path === "/data");
-    if (internal) {
-      free += volumeAllocatableBytes(internal);
-      counted = true;
-    }
-    for (const v of real) {
-      if (v.path.startsWith("/mnt/ext")) {
-        free += volumeAllocatableBytes(v);
-        counted = true;
-      }
-    }
-    return counted ? free : null;
+    const drives = [
+      ...(internal ? [internal] : []),
+      ...real.filter((v) => v.path.startsWith("/mnt/ext")),
+    ];
+    return drives.length > 0 ? Math.max(...drives.map(volumeAllocatableBytes)) : null;
   } catch {
     return null;
   }
@@ -1252,7 +1262,7 @@ export async function fsUnpack(
   path: string,
   opId: number,
 ): Promise<{ path: string; size: number }> {
-  const res = await fetch(`${getEngineUrl()}/api/ps5/fs/unpack`, {
+  const res = await engineFetch(`${getEngineUrl()}/api/ps5/fs/unpack`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ addr: toMgmtAddr(transferAddr), path, op_id: opId }),
@@ -1285,7 +1295,7 @@ export async function fsExtract(
   if (opts.password) body.password = opts.password;
   if (opts.merge) body.merge = true;
   if (opts.replace) body.replace = true;
-  const res = await fetch(`${getEngineUrl()}/api/ps5/fs/extract`, {
+  const res = await engineFetch(`${getEngineUrl()}/api/ps5/fs/extract`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -1316,7 +1326,6 @@ export interface FsDirEntry {
 export async function fsListDir(
   transferAddr: string,
   path: string,
-  _opts?: { offset?: number; limit?: number },
 ): Promise<FsDirEntry[]> {
   const addr = toMgmtAddr(transferAddr);
   const PAGE = 256; // matches the payload's hard cap
@@ -1363,15 +1372,19 @@ export async function fsListDir(
   return out;
 }
 
+/** Move on the console. An existing destination is refused (`fs_move_exists`) unless
+ *  `overwrite` is set, which only a caller that has asked the user may do: colliding files
+ *  are replaced, and folders are merged. */
 export async function fsMove(
   transferAddr: string,
   from: string,
   to: string,
   opId?: number,
+  overwrite?: boolean,
 ): Promise<void> {
   const addr = toMgmtAddr(transferAddr);
   await invoke("ps5_fs_move", {
-    req: { addr, from, to, op_id: opId ?? 0 },
+    req: { addr, from, to, op_id: opId ?? 0, overwrite: overwrite ?? false },
   });
 }
 
@@ -1393,24 +1406,33 @@ export async function fsMkdir(
   await invoke("ps5_fs_mkdir", { req: { addr, path } });
 }
 
-/** Best-effort "does this path exist on the PS5?" probe. Lists the
- *  parent directory and looks for the basename. There is no FS_STAT
- *  frame in the protocol, so this is the cheapest existence check
- *  we have without inventing a new frame type.
+/** True when a console stat, listing or read failed because the path is not there: the helper
+ *  answered ENOENT or ENOTDIR (`…_errno_2`, `…_errno_20`). Anything else (a timeout, a busy
+ *  helper, a dropped connection, access denied) says nothing about the path. */
+export function isPathMissingError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /ENOENT|ENOTDIR|No such file|_errno_(?:2|20)(?!\d)/.test(msg);
+}
+
+/** Whether `path` is on the console, asked with FS_STAT. Unlike {@link fsPathExists} it rejects
+ *  when the console could not answer, for decisions where "don't know" must not read as "no". */
+export async function fsPathPresent(transferAddr: string, path: string): Promise<boolean> {
+  try {
+    await fetchConsoleStat(transferAddr, path);
+    return true;
+  } catch (e) {
+    if (isPathMissingError(e)) return false;
+    throw e;
+  }
+}
+
+/** Best-effort "does this path exist on the PS5?": {@link fsPathPresent}, with every failure read
+ *  as `false`. Callers must treat `false` as "best-effort no" rather than a hard guarantee (the
+ *  payload's own `fs_copy_dest_exists` check is the real backstop). Anything that acts on a "no"
+ *  in a way that can lose data uses `fsPathPresent`.
  *
- *  Caveats:
- *  - Returns `false` on listing errors (parent missing, permission
- *    denied, allowlist rejection). Callers must treat `false` as
- *    "best-effort no" rather than a hard guarantee — the payload's
- *    own `fs_copy_dest_exists` check is the real backstop.
- *  - Listing is paginated (limit 1024). For directories with more
- *    entries the basename might be missed; pre-flight callers should
- *    accept that risk and let the payload reject if a race fires.
- *  - Comparison is case-sensitive because the PS5 filesystems we
- *    target (UFS internal, exfat external) are mixed: UFS is
- *    case-sensitive, exfat is case-preserving but case-insensitive.
- *    We err on the side of false-negative (look for an exact match)
- *    so we don't block legitimate moves that differ only in case. */
+ *  The answer comes from the filesystem, so on a case-insensitive drive (exFAT) a name that
+ *  differs only in case counts as present: that name is taken there. */
 export async function fsPathExists(
   transferAddr: string,
   path: string,
@@ -1419,21 +1441,11 @@ export async function fsPathExists(
   if (norm === "") return true; // root always exists
   const slash = norm.lastIndexOf("/");
   // No slash at all (e.g. "foo" — relative path) shouldn't reach this
-  // helper since callers pass PS5 absolute paths, but bail out so we
-  // don't accidentally list the wrong directory if it does.
+  // helper since callers pass PS5 absolute paths.
   if (slash < 0) return false;
-  const parent = slash === 0 ? "/" : norm.slice(0, slash);
   const basename = norm.slice(slash + 1);
   if (!basename) return false;
-  const addr = toMgmtAddr(transferAddr);
-  try {
-    const res = await invoke<{
-      entries?: Array<{ name?: string }>;
-    }>("ps5_list_dir", { addr, path: parent, offset: 0, limit: 1024 });
-    return (res.entries ?? []).some((e) => e.name === basename);
-  } catch {
-    return false;
-  }
+  return fsPathPresent(transferAddr, norm).catch(() => false);
 }
 
 /** Recursive copy on the PS5. Works across mount points (unlike fsMove,
@@ -1584,7 +1596,7 @@ export async function fsMount(
  *  (the PS5's own services usually do); `force` unmounts anyway after a flush. Goes through the
  *  engine directly (desktop, browser and Docker alike). */
 export async function usbEject(host: string, mountPoint: string, force = false): Promise<void> {
-  const res = await fetch(`${getEngineUrl()}/api/ps5/usb/eject`, {
+  const res = await engineFetch(`${getEngineUrl()}/api/ps5/usb/eject`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ addr: _mgmtAddr(host), mount_point: mountPoint, force }),
@@ -1724,6 +1736,8 @@ export interface HwInfo {
 }
 
 export interface HwTemps {
+  /** Set when only the basic temperatures could be read: why the full read failed. */
+  extended_error?: string;
   /** celsius */
   cpu_temp: number;
   /** celsius */
@@ -1771,9 +1785,9 @@ export interface HwTemps {
   fan_guard?: "off" | "ok" | "failing" | "";
   /** The fan controller's filtered temperature (°C, one decimal), null when unreadable. */
   fan_filtered_c?: number | null;
-  /** Where the clocks came from: "mp1" (read), "unsupported" (the console
-   *  refused the read; the helper doesn't try again until it restarts), ""
-   *  (not asked for, or an older helper/engine). */
+  /** Where the clocks came from: "mp1" (read; while the driver is busy, the last values
+   *  or zeros), "unsupported" (the console refused the read; the helper doesn't try again
+   *  until it restarts), "" (not asked for, or an older helper/engine). */
   gpu_clock_src?: "mp1" | "unsupported" | "";
   /** The eight CPU cores' clocks in MHz (the power controller's P-state
    *  figure); `0` = unknown. Empty unless read with `clocks`. */
@@ -1787,6 +1801,16 @@ export interface HwTemps {
   /** The clock each core really ran at while busy (MHz), indexed like cpu_core_mhz; 0 = not
    *  measured (the game cores are not open to the helper). */
   cpu_core_measured_mhz?: number[];
+  /** How the last CPU temperature read went: Sony's return code ("0x00000000" is success),
+   *  "fault", "missing", "range" or "none". Says why cpu_temp is 0. null from an older helper. */
+  cpu_temp_rc?: string | null;
+  /** The same for the SoC temperature. */
+  soc_temp_rc?: string | null;
+  /** How long the last read of the basic sensors took (ms); with `stale`, how long the read still
+   *  running has taken so far. null from an older helper. */
+  read_ms?: number | null;
+  /** Another request's read was still running, so these are the last values it had. */
+  stale?: boolean;
 }
 
 export interface HwPower {
@@ -1938,7 +1962,7 @@ export interface DiscoveredHost {
   loader_port_open: boolean;
   /** The helper's AVA1 port (9120) is reachable — our own payload is already running here. */
   payload_port_open: boolean;
-  /** 0-100 score; see commands/discover.rs::confidence for weights. */
+  /** 0-100 score; see core discover.rs::confidence for weights. */
   confidence: number;
   /** Pre-computed `confidence >= 50` so the renderer doesn't repeat
    *  the threshold value. UI shows a green badge when true. */
@@ -1966,7 +1990,7 @@ export async function discoverPs5(
 }
 
 // ─── Payload Library (curated catalogue + GitHub fetch) ───────────────
-// Backed by `commands/payloads.rs`. Three primitives:
+// Backed by `ps5upload-core`'s payload_library. Three primitives:
 //   - catalogue: static list of supported payloads
 //   - release: fetch latest GitHub release (cached on disk)
 //   - inventory + download: manage the on-disk cache the Send and
@@ -2011,7 +2035,7 @@ export interface PayloadReleaseInfo {
    *  the data is potentially stale and what went wrong, instead of
    *  silently presenting "old data as if fresh". Omitted (undefined)
    *  when the fetch succeeded. Mirrors sonicloader's `refreshError`
-   *  field — see backend `payloads.rs::ReleaseInfo`. */
+   *  field — see core `payload_library::ReleaseInfo`. */
   refresh_error?: string;
 }
 
@@ -2066,6 +2090,8 @@ export async function payloadsAddCustomRepo(args: {
   name: string;
   displayName?: string;
   assetHint?: string;
+  /** A `sha256sum`-style list the repo's releases publish. A download that doesn't match is refused. */
+  checksumFile?: string;
 }): Promise<PayloadInfo> {
   return invoke<PayloadInfo>("payloads_add_custom_repo", {
     host: args.host,
@@ -2073,6 +2099,7 @@ export async function payloadsAddCustomRepo(args: {
     name: args.name,
     displayName: args.displayName ?? null,
     assetHint: args.assetHint ?? null,
+    checksumFile: args.checksumFile ?? null,
   });
 }
 
@@ -2096,6 +2123,12 @@ export async function payloadsDownload(
     assetUrl,
     version,
   });
+}
+
+/** Stop a running download of this payload. Its `payloadsDownload` then rejects with
+ *  `download_cancelled` (`isDownloadCancelled`). False when none was running. */
+export async function payloadsDownloadCancel(id: string): Promise<boolean> {
+  return invoke<boolean>("payloads_download_cancel", { id });
 }
 
 // ─── ShadowMount+ awareness (read-only) ───────────────────────────────
@@ -2387,7 +2420,7 @@ export async function powerWake(
   host: string,
   credential: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  const res = await fetch(`${getEngineUrl()}/api/ps5/power/wake`, {
+  const res = await engineFetch(`${getEngineUrl()}/api/ps5/power/wake`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ host, credential }),
@@ -2430,7 +2463,9 @@ export async function pairForWake(
    *  id, base64 of its 8 bytes. */
   manual?: { pin: string; accountIdB64: string },
 ): Promise<PairForWakeResult> {
-  const res = await fetch(`${getEngineUrl()}/api/ps5/power/pair`, {
+  const res = await engineFetch(`${getEngineUrl()}/api/ps5/power/pair`, {
+    // Asks the helper, then registers with the console: it may take a while.
+    timeoutMs: 2 * ENGINE_TIMEOUT_MS,
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(
@@ -2467,7 +2502,9 @@ export class WakeLoginError extends Error {
 }
 
 async function wakeLoginCall(path: string, payload: unknown): Promise<WakeLoginResult> {
-  const res = await fetch(`${getEngineUrl()}${path}`, {
+  const res = await engineFetch(`${getEngineUrl()}${path}`, {
+    // Answers once the user is signed in, which takes the console as long as it takes.
+    timeoutMs: ENGINE_LONG_TIMEOUT_MS,
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
@@ -2545,7 +2582,7 @@ export interface DdpStatus {
 }
 
 export async function ddpStatus(host: string): Promise<DdpStatus> {
-  const res = await fetch(
+  const res = await engineFetch(
     `${getEngineUrl()}/api/ps5/power/ddp-status?host=${encodeURIComponent(host)}`,
   );
   if (!res.ok) throw new Error(`ddp status failed (${res.status})`);
@@ -2679,7 +2716,9 @@ export interface OpenSave {
 }
 
 async function engineJson<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${getEngineUrl()}${path}`, {
+  const res = await engineFetch(`${getEngineUrl()}${path}`, {
+    // Opening or closing a save copies its image on the console before it answers.
+    timeoutMs: ENGINE_LONG_TIMEOUT_MS,
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -2770,27 +2809,12 @@ export type ScreenshotPngMode = "sdr" | "hdr" | "hdr_plain";
 /** Create a scratch directory under the OS temp root. The returned
  *  absolute path is what the caller passes as `destDir` to
  *  `startTransferDownload` (for backup) or as `destDir` to
- *  `saveArchiveUnzip` (for restore). Always pair with
+ *  `saveArchiveBackupFinalize` (for a backup). Always pair with
  *  `saveArchiveCleanupTemp` in a `finally` block. */
 export async function saveArchiveMakeTemp(prefix: string): Promise<string> {
   return invoke<string>("save_archive_make_temp", { prefix });
 }
 
-/** Where the next automatic backup of a save goes. Makes `<dir>/<titleId>/`; called again with
- *  `prune` once the zip is written, removes that save's oldest automatic backups so `keep`
- *  remain. Desktop only. */
-export async function saveAutoBackupSlot(
-  dir: string,
-  titleId: string,
-  userId: number,
-  stamp: string,
-  keep: number,
-  prune = false,
-): Promise<string> {
-  return invoke<string>("save_auto_backup_slot", {
-    req: { dir, title_id: titleId, user_id: userId, stamp, keep, prune },
-  });
-}
 
 /** Best-effort recursive delete of a scratch dir. Refuses to remove
  *  anything outside the system temp root, so a bad call can't wipe
@@ -2810,6 +2834,8 @@ export async function saveArchiveZip(
   // is a content:// URI with no usable name; pass this so the backend keeps
   // distinct backups from colliding on one fixed Downloads filename.
   fileName?: string,
+  // The zip's comment: which PS5 and user the backup came from (`saveBackupApi.note`).
+  note?: string,
 ): Promise<string> {
   // Where the zip landed: `destZip` on desktop, a Downloads file when Android redirected it.
   const written = await invoke<string | null>("save_archive_zip", {
@@ -2818,36 +2844,10 @@ export async function saveArchiveZip(
       inner_root: innerRoot,
       dest_zip: destZip,
       dest_filename: fileName,
+      note,
     },
   });
   return typeof written === "string" && written ? written : destZip;
-}
-
-export interface SaveArchiveUnzipResult {
-  inner_root: string;
-  file_count: number;
-}
-
-/** Strict-validate + extract `zipPath` into `destDir`. The zip must
- *  contain exactly one top-level folder named `expectedInner`; any
- *  other layout (flat files at root, multiple roots, wrong name) is
- *  rejected before any bytes are written.
- *
- *  After success, the extracted save lives at
- *  `<destDir>/<expectedInner>/…` and can be uploaded with
- *  `startTransferDir`. */
-export async function saveArchiveUnzip(
-  zipPath: string,
-  destDir: string,
-  expectedInner: string,
-): Promise<SaveArchiveUnzipResult> {
-  return invoke<SaveArchiveUnzipResult>("save_archive_unzip", {
-    req: {
-      zip_path: zipPath,
-      dest_dir: destDir,
-      expected_inner: expectedInner,
-    },
-  });
 }
 
 export interface SaveArchiveBackupFinalizeResult {
@@ -2869,25 +2869,6 @@ export async function saveArchiveBackupFinalize(
 ): Promise<SaveArchiveBackupFinalizeResult> {
   return invoke<SaveArchiveBackupFinalizeResult>(
     "save_archive_backup_finalize",
-    { req: { src_dir: srcDir, title_id: titleId } },
-  );
-}
-
-export interface SaveArchiveRestorePrepareResult {
-  renamed_count: number;
-}
-
-/** Pre-upload preparation after unzipping. Re-adds `sdimg_` prefix to
- *  bare top-level image files (those whose prefix was stripped during
- *  backup) so the PS5 sees the filename it expects. Files that already
- *  start with `sdimg_`, end in `.bin`, or live under `sce_sys/` pass
- *  through unchanged. */
-export async function saveArchiveRestorePrepare(
-  srcDir: string,
-  titleId: string,
-): Promise<SaveArchiveRestorePrepareResult> {
-  return invoke<SaveArchiveRestorePrepareResult>(
-    "save_archive_restore_prepare",
     { req: { src_dir: srcDir, title_id: titleId } },
   );
 }
@@ -3031,15 +3012,10 @@ export interface ModuleInfo {
 export interface ModuleList {
   modules: ModuleInfo[];
   err?: string;
-}
-export async function procModulesGet(
-  addr: string,
-  pid?: number,
-): Promise<ModuleList> {
-  return invoke<ModuleList>("proc_modules_get", {
-    addr,
-    pid: pid ?? null,
-  });
+  /** How many the console listed; `refused` of them have no row, and `refused_rc` says why. */
+  count?: number;
+  refused?: number;
+  refused_rc?: string;
 }
 
 export interface ProcEntry {
@@ -3070,8 +3046,8 @@ export interface ShellRunResult {
   err?: string;
 }
 
-/** Run a shell command on the PS5. timeout_secs caps payload-side
- *  wait. stdout (with stderr merged) capped at 256 KB. */
+/** Run a shell command on the PS5. timeoutSecs bounds how long the engine waits for the answer;
+ *  the helper cannot stop a built-in that is running. stdout (with stderr merged) capped at 256 KB. */
 export async function shellRun(
   addr: string,
   cmd: string,
@@ -3175,12 +3151,33 @@ export async function fsWriteText(
  *  Read-modify-write of the small list file; idempotent (skips if the path is
  *  already listed). `added` is false when it was already present. SMP creates
  *  `/data/shadowmount/` itself, so this is only meaningful while SMP runs. */
-export async function smpManualInstall(
+export function smpManualInstall(
   addr: string,
   path: string,
 ): Promise<{ added: boolean }> {
+  // One edit of a console's list at a time: two hand-offs reading the same list lose one line.
+  const key = hostOf(addr);
+  const run = (smpListTail.get(key) ?? Promise.resolve()).then(() =>
+    appendToManualList(addr, path),
+  );
+  const tail: Promise<void> = run.then(
+    () => {},
+    () => {},
+  ).finally(() => {
+    if (smpListTail.get(key) === tail) smpListTail.delete(key);
+  });
+  smpListTail.set(key, tail);
+  return run;
+}
+
+const smpListTail = new Map<string, Promise<void>>();
+
+async function appendToManualList(addr: string, path: string): Promise<{ added: boolean }> {
+  // Only a list that is really not there counts as empty (fsWriteText then creates it). A read
+  // that fails (a timeout, a busy helper) must fail the hand-off: writing now would replace the
+  // whole list with this one line.
   let existing = "";
-  try {
+  if (await fsPathPresent(addr, SMP_MANUAL_LIST_PATH)) {
     const r = await fsReadPreview(addr, SMP_MANUAL_LIST_PATH);
     if (r.base64) {
       const bin = atob(r.base64);
@@ -3188,12 +3185,11 @@ export async function smpManualInstall(
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
       existing = new TextDecoder().decode(bytes);
     }
-  } catch {
-    existing = ""; // list/dir may not exist yet — fsWriteText creates it
   }
   const next = appendManualListLine(existing, path);
   if (next === null) return { added: false };
-  await fsWriteText(addr, SMP_MANUAL_LIST_PATH, next);
+  const w = await fsWriteText(addr, SMP_MANUAL_LIST_PATH, next);
+  if (!w.ok) throw new Error(`Add to ShadowMount+ list: ${w.err ?? "refused"}`);
   return { added: true };
 }
 
@@ -3378,11 +3374,14 @@ export interface LibraryEntry {
  *
  *  Permission-denied / non-existent paths are silently skipped — the
  *  PS5 has plenty of system-only directories a user payload can't
- *  read, and they're not library content. */
-export async function scanLibrary(
+ *  read, and they're not library content. Any other failure (a timeout,
+ *  a busy helper) is tried once more; pages already read are kept, and
+ *  the result says `incomplete` so the screen can tell the user. */
+export async function scanLibraryChecked(
   transferAddr: string,
-): Promise<LibraryEntry[]> {
+): Promise<{ entries: LibraryEntry[]; incomplete: boolean }> {
   const addr = toMgmtAddr(transferAddr);
+  let incomplete = false;
   const volumesRaw = await invoke<{ volumes?: Volume[] }>("ps5_volumes", {
     addr,
   });
@@ -3444,32 +3443,40 @@ export async function scanLibrary(
     Array<{ name?: string; kind?: string; size?: number; mtime?: number }>
   > =>
     scanLimit(async () => {
-      try {
-        type Entry = { name?: string; kind?: string; size?: number; mtime?: number };
-        const out: Entry[] = [];
-        // The helper paginates directory listings. A busy games directory can
-        // put every image beyond the first page; honor the same scan budget.
-        while (out.length < MAX_ENTRIES_PER_VOLUME) {
+      type Entry = { name?: string; kind?: string; size?: number; mtime?: number };
+      const out: Entry[] = [];
+      let retried = false;
+      // The helper paginates directory listings. A busy games directory can
+      // put every image beyond the first page; honor the same scan budget.
+      while (out.length < MAX_ENTRIES_PER_VOLUME) {
+        try {
           const res = await invoke<{ entries?: Entry[]; truncated?: boolean }>(
             "ps5_list_dir", { addr, path, offset: out.length, limit: 512 },
           );
           const page = res.entries ?? [];
           out.push(...page);
           if (!res.truncated || page.length === 0) break;
+        } catch (e) {
+          if (isListingRefused(e)) break;
+          if (!retried) {
+            retried = true;
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            continue;
+          }
+          incomplete = true;
+          break;
         }
-        // Stable sort: dir/file kind first, then name. Eliminates
-        // non-determinism from the payload returning entries in
-        // inode or readdir order instead of alphabetical.
-        out.sort((a, b) => {
-          const ak = a.kind ?? "";
-          const bk = b.kind ?? "";
-          if (ak !== bk) return ak.localeCompare(bk);
-          return (a.name ?? "").localeCompare(b.name ?? "");
-        });
-        return out;
-      } catch {
-        return [];
       }
+      // Stable sort: dir/file kind first, then name. Eliminates
+      // non-determinism from the payload returning entries in
+      // inode or readdir order instead of alphabetical.
+      out.sort((a, b) => {
+        const ak = a.kind ?? "";
+        const bk = b.kind ?? "";
+        if (ak !== bk) return ak.localeCompare(bk);
+        return (a.name ?? "").localeCompare(b.name ?? "");
+      });
+      return out;
     });
 
   const walkVolume = async (volumePath: string): Promise<void> => {
@@ -3645,7 +3652,20 @@ export async function scanLibrary(
     if (a.path !== b.path) return a.path.localeCompare(b.path);
     return a.name.localeCompare(b.name);
   });
-  return entries;
+  // No drive listed at all (mid-mount, say) is not a console with nothing on it.
+  return { entries, incomplete: incomplete || volumes.length === 0 };
+}
+
+/** {@link scanLibraryChecked} for a caller that has nowhere to say a scan came back short. */
+export async function scanLibrary(transferAddr: string): Promise<LibraryEntry[]> {
+  return (await scanLibraryChecked(transferAddr)).entries;
+}
+
+/** A folder the helper may not read or that is not there: not library content, not a failure.
+ *  EPERM, EACCES, or the helper's allowlist. */
+function isListingRefused(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return isPathMissingError(e) || /_errno_(?:1|13)(?!\d)|not_allowed|denied/.test(msg);
 }
 
 /** Tiny async gate: cap in-flight work to `max`, queue the rest FIFO.
@@ -4094,20 +4114,6 @@ export function appIconUrl(transferAddr: string, titleId: string, size?: IconSiz
 }
 
 /**
- * Cover art as a `data:` URL, fetched through the Tauri IPC instead of by
- * pointing an `<img>` at the engine.
- *
- * Only used as a fallback (see `useImageRetry`). A direct URL is cheaper —
- * no base64 inflation, and the browser caches it — but it is also the one
- * thing the desktop renderer loads over plain HTTP rather than over the
- * IPC, so when the webview refuses it every cover in the app goes blank
- * while the engine reports a healthy 200. These go over the channel the
- * rest of the app already uses.
- *
- * Returns null rather than throwing: the caller's next step is a glyph
- * either way, and a rejected promise here is not an app error.
- */
-/**
  * Cache keys for cover art. Exported as functions rather than inlined at
  * each use so the synchronous lookups below and the async fetches above
  * cannot drift apart — a mismatch would not fail loudly, it would just
@@ -4145,6 +4151,20 @@ export function cachedGameIcon(
   return getCachedIcon(gameIconKey(toMgmtAddr(transferAddr), path, size));
 }
 
+/**
+ * Cover art as a `data:` URL, fetched through the Tauri IPC instead of by
+ * pointing an `<img>` at the engine.
+ *
+ * Only used as a fallback (see `useImageRetry`). A direct URL is cheaper —
+ * no base64 inflation, and the browser caches it — but it is also the one
+ * thing the desktop renderer loads over plain HTTP rather than over the
+ * IPC, so when the webview refuses it every cover in the app goes blank
+ * while the engine reports a healthy 200. These go over the channel the
+ * rest of the app already uses.
+ *
+ * Returns null rather than throwing: the caller's next step is a glyph
+ * either way, and a rejected promise here is not an app error.
+ */
 export async function appIconDataUrl(
   transferAddr: string,
   titleId: string,
@@ -4263,7 +4283,7 @@ export async function checkDestinationFreeSpace(
     if (!volume) {
       return { volume: null, freeBytes: null, insufficient: false, shortBy: 0 };
     }
-    const freeBytes = volume.free_bytes;
+    const freeBytes = volumeAllocatableBytes(volume);
     const insufficient = freeBytes < requiredBytes;
     return {
       volume,
@@ -4293,57 +4313,41 @@ const toMgmtAddr = _mgmtAddr;
  *
  *  - Folder mode (isFolder=true): list `path` and report how many
  *    entries are in it.
- *  - File mode (isFolder=false): list `path`'s PARENT and look for
- *    the target filename — `list_dir` on a file path errors (ENOTDIR),
- *    which would hide an existing file under a "doesn't exist" banner.
+ *  - File mode (isFolder=false): stat `path` itself. A listing of its
+ *    parent stops at one page, which hides a file past entry 256.
  *
- *  Returns `{exists: false}` for real errors too — the caller only
- *  needs to know "something to override?", the specific reason doesn't
- *  affect the decision. */
+ *  `{exists: false}` means the path is really not there. Any other failure
+ *  rejects: "couldn't look" must not read as "nothing to overwrite".
+ *  `more` is set when a folder holds more than the one page counted. */
 export async function probeDestination(
   transferAddr: string,
   path: string,
   isFolder: boolean,
 ): Promise<DestinationProbe> {
   const addr = toMgmtAddr(transferAddr);
-  const listPath = isFolder ? path : parentDir(path);
-  const targetName = isFolder ? null : basenameUnix(path);
   try {
+    if (!isFolder) {
+      const st = await fetchConsoleStat(addr, path);
+      return { exists: true, entryCount: 1, totalBytes: st.size };
+    }
     const res = await invoke<{
       entries?: Array<{ name?: string; size?: number; kind?: string }>;
       truncated?: boolean;
-    }>("ps5_list_dir", { addr, path: listPath, offset: 0, limit: 256 });
+    }>("ps5_list_dir", { addr, path, offset: 0, limit: 256 });
     const entries = res.entries ?? [];
-    if (isFolder) {
-      const totalBytes = entries.reduce(
-        (acc, e) => acc + (typeof e.size === "number" ? e.size : 0),
-        0,
-      );
-      return { exists: true, entryCount: entries.length, totalBytes };
-    }
-    // File mode: look for our filename in the parent listing.
-    const match = entries.find((e) => e.name === targetName);
-    if (!match) return { exists: false, entryCount: 0, totalBytes: 0 };
-    return {
-      exists: true,
-      entryCount: 1,
-      totalBytes: typeof match.size === "number" ? match.size : 0,
-    };
-  } catch {
-    return { exists: false, entryCount: 0, totalBytes: 0 };
+    const totalBytes = entries.reduce(
+      (acc, e) => acc + (typeof e.size === "number" ? e.size : 0),
+      0,
+    );
+    return { exists: true, entryCount: entries.length, totalBytes, more: res.truncated === true };
+  } catch (e) {
+    // Only "not there" says it is clear. A console that did not answer says nothing, and
+    // reading that as clear overwrites an existing file unasked.
+    if (isPathMissingError(e)) return { exists: false, entryCount: 0, totalBytes: 0 };
+    throw e;
   }
 }
 
-function parentDir(absPath: string): string {
-  const i = absPath.lastIndexOf("/");
-  if (i <= 0) return "/";
-  return absPath.slice(0, i);
-}
-
-function basenameUnix(absPath: string): string {
-  const i = absPath.lastIndexOf("/");
-  return i < 0 ? absPath : absPath.slice(i + 1);
-}
 
 export type JobStatus = "running" | "done" | "failed";
 
@@ -4454,6 +4458,91 @@ export interface JobSnapshot {
    *  to two: the failure may be the source's, not the destination the caller polls
    *  against). A not-paired failure opens THIS console's pairing dialog. */
   error_console?: string;
+  /** The figures behind a refusal for lack of room. {@link jobStatus} words them in the user's
+   *  language into `error` and `error_detail`, which hold English when they come from the engine. */
+  error_space?: SpaceRefusal;
+}
+
+/** Why an upload does not fit (engine `SpaceRefusal`). */
+export interface SpaceRefusal {
+  /** What the engine calls the drive: the destination, or its mount path. */
+  volume: string;
+  /** What the upload must still allocate, after crediting what the console already has. */
+  need_bytes: number;
+  /** What it may allocate: free space less the margin and other uploads' promises. */
+  avail_bytes: number;
+  free_bytes: number;
+  reserve_bytes: number;
+  /** Promised to other uploads running now, already taken off `avail_bytes`. */
+  promised_bytes: number;
+  /** Already on the console and reused. */
+  reused_bytes: number;
+  /** The destination is inside an attached disk image. */
+  image: boolean;
+  /** The console ran out of room after the check had admitted the job. */
+  late: boolean;
+}
+
+function withVars(text: string, vars: Record<string, string>): string {
+  return Object.entries(vars).reduce((t, [k, v]) => t.split(`{${k}}`).join(v), text);
+}
+
+/** A refusal for lack of room, in the user's language. */
+export function describeSpaceRefusal(s: SpaceRefusal): string {
+  const vars = {
+    volume: s.volume,
+    need: formatBytes(s.need_bytes),
+    avail: formatBytes(s.avail_bytes),
+    free: formatBytes(s.free_bytes),
+    reserve: formatBytes(s.reserve_bytes),
+    promised: formatBytes(s.promised_bytes),
+    reused: formatBytes(s.reused_bytes),
+  };
+  const parts: string[] = [];
+  if (s.late) {
+    parts.push(
+      s.image
+        ? trStatic(
+            "joberr.space_late_image",
+            "The image ran out of room during this upload. It needed {need} more, and {avail} was free when this was checked. The partial upload is kept. Delete a file in the image, then retry.",
+          )
+        : trStatic(
+            "joberr.space_late",
+            "{volume} ran out of room during this upload. It needed {need} more, and {avail} could be used when this was checked. PS5 internal storage holds back about a fifth more than is written, so less fits than its free space suggests. The partial upload is kept, so free some space and retry to resume.",
+          ),
+    );
+  } else if (s.image) {
+    parts.push(
+      trStatic(
+        "joberr.space_image",
+        "This upload needs {need} more, but only {avail} is free in the image. Replacing a file needs room for the new copy while the old one is still there. Delete the old file first, or change the files where the image was made and rebuild it.",
+      ),
+    );
+  } else {
+    parts.push(
+      trStatic(
+        "joberr.space_drive",
+        "{volume} needs {need} more for this upload, but only {avail} can be used ({free} free, {reserve} kept back).",
+      ),
+    );
+  }
+  if (s.promised_bytes > 0) {
+    parts.push(
+      trStatic(
+        "joberr.space_promised",
+        "{promised} is set aside for other uploads running now.",
+      ),
+    );
+  }
+  if (s.reused_bytes > 0) {
+    parts.push(
+      trStatic(
+        "joberr.space_reused",
+        "{reused} of this upload is already on the console and will be reused.",
+      ),
+    );
+  }
+  return parts.map((p) => withVars(p, vars)).join(" ");
 }
 
 /** Job-failure exception carrying the structured `error_reason` +
@@ -4509,10 +4598,30 @@ export function humanizeJobErrorReason(
     ).replace("{code}", refused[1]);
   }
   switch (reason) {
+    case "ava1_file_too_large":
+      return trStatic(
+        "joberr.file_too_large",
+        "This file is too big for the destination drive's format: FAT32 holds at most 4 GiB per file. Use a drive formatted as exFAT, or the PS5's internal storage.",
+      );
+    case "source_missing":
+      return trStatic(
+        "joberr.source_missing",
+        "The folder to send is not there any more. If it is on an external drive or a share, connect it again, then retry.",
+      );
+    case "source_read_failed":
+      return trStatic(
+        "joberr.source_read_failed",
+        "A file could not be read on this computer. If it is on an external drive or a share, check that it is still connected, then retry. What already reached the PS5 is kept.",
+      );
     case "preflight_insufficient_space":
       return trStatic(
         "joberr.preflight_insufficient_space",
         "The destination drive doesn't have enough free space for this file. Free up space on the PS5 (Settings → Storage) or pick a different destination, then click Retry.",
+      );
+    case "preflight_insufficient_space_image":
+      return trStatic(
+        "joberr.preflight_insufficient_space_image",
+        "This folder is inside a game image, and the image doesn't have enough free space for this file. An image keeps only a little spare room, so freeing space on the PS5 doesn't help.",
       );
     case "direct_staged_file_missing":
       return trStatic(
@@ -4717,15 +4826,10 @@ export function humanizeJobErrorReason(
         "The PS5 sent a file list this app could not understand. Update the helper and this app to the same version, then retry.",
       );
     case "helper_not_ava1":
-      return isTauriEnv()
-        ? trStatic(
-            "joberr.helper_not_ava1",
-            "The PS5 helper is not running. Send it from the Connection screen, then retry.",
-          )
-        : trStatic(
-            "joberr.helper_not_ava1_web",
-            "The PS5 helper is not running. This web UI cannot send it: start the ps5upload payload on the console with your usual payload loader, then retry.",
-          );
+      return trStatic(
+        "joberr.helper_not_ava1",
+        "The PS5 helper is not running. Send it from the Connection screen, then retry.",
+      );
     case "ava1_not_paired":
     case "not_paired":
       return trStatic(
@@ -4745,7 +4849,7 @@ export function humanizeJobErrorReason(
     case "helper_not_running":
       return trStatic(
         "joberr.helper_not_running",
-        "No helper is running on the PS5. Send the helper first (Connection screen on the desktop app, or your payload loader), then retry.",
+        "No helper is running on the PS5. Send it from the Connection screen, then retry.",
       );
     case "tx_table_full":
       return trStatic(
@@ -4786,6 +4890,13 @@ export async function jobStatus(
       (raw as { error_reason?: unknown }).error_reason ?? raw.error,
       typeof named === "string" && named.trim() ? named : host,
     );
+    // Every screen shows `error` or `error_detail`: the engine's figures become the user's
+    // language here, once, instead of the engine's English sentence.
+    const space = (raw as { error_space?: SpaceRefusal }).error_space;
+    if (space) {
+      const text = describeSpaceRefusal(space);
+      return { ...raw, error: text, error_detail: text } as unknown as JobSnapshot;
+    }
   }
   return raw as unknown as JobSnapshot;
 }
@@ -4813,7 +4924,7 @@ export async function waitForJob(
   intervalMs = 500,
 ): Promise<JobSnapshot> {
   while (true) {
-    const snap = await jobStatus(jobId);
+    const snap = await readWithRetries(() => jobStatus(jobId));
     if (snap.status === "done") return snap;
     if (snap.status === "failed") {
       throw new UploadJobError(
@@ -4947,16 +5058,6 @@ export async function portProbe(
   return { open: !!resp?.open, error: resp?.error ?? null };
 }
 
-/**
- * Check whether the PS5 runtime (AVA1, :9120) is currently serving. Returns a
- * lightly-parsed shape — the full command's return covers more details
- * but these are the fields the status UI actually renders.
- *
- * When `reachable` is true, `payloadVersion` and `ps5Kernel` come from
- * the STATUS_ACK body (payload fills both fields). They're null when
- * unreachable or when a build predating the `ps5_kernel` field is
- * running — UI shows "—" in that case.
- */
 // ─── Self-update ─────────────────────────────────────────────────────
 //
 // Wraps the Rust-side `update_check` / `update_download` commands in
@@ -5019,10 +5120,11 @@ export async function updateCheck(
 
 /** Stream the update archive into the app's updates folder (a download
  *  installed by hand: the Downloads folder, revealed in the file manager). Re-running with the same URL
- *  is idempotent: if the file is already on disk with the expected
- *  size, we skip the download and just re-open the folder. With a
+ *  is idempotent: if the file is already on disk and matches, we skip the
+ *  download and just re-open the folder, and a download that was cut off
+ *  carries on where it stopped. With a
  *  `sha256`, the file must match it or the call rejects (and the file
- *  is deleted). */
+ *  is deleted). Progress arrives on `UPDATE_DOWNLOAD_PROGRESS_EVENT`. */
 export async function updateDownload(
   url: string,
   filename: string,
@@ -5033,6 +5135,20 @@ export async function updateDownload(
     filename,
     sha256: sha256 || null,
   });
+}
+
+/** The event `updateDownload` reports on while it runs. */
+export const UPDATE_DOWNLOAD_PROGRESS_EVENT = "update-download-progress";
+
+/** How far an update download is, in bytes (`total` 0 until the server says). */
+export interface UpdateDownloadProgress {
+  received: number;
+  total: number;
+}
+
+/** Stop the running `updateDownload`, which then rejects with `update_cancelled` (lib/shellError). */
+export async function updateDownloadCancel(): Promise<boolean> {
+  return invoke<boolean>("update_download_cancel");
 }
 
 /** Android: the update APK downloaded into the app's cache, checked. */
@@ -5134,6 +5250,16 @@ export function elfldrEnsure(host: string): Promise<{
   return invoke("ps5_elfldr_ensure", { host });
 }
 
+/**
+ * Check whether the PS5 runtime (AVA1, :9120) is currently serving. Returns a
+ * lightly-parsed shape — the full command's return covers more details
+ * but these are the fields the status UI actually renders.
+ *
+ * When `reachable` is true, `payloadVersion` and `ps5Kernel` come from
+ * the STATUS_ACK body (payload fills both fields). They're null when
+ * unreachable or when a build predating the `ps5_kernel` field is
+ * running — UI shows "—" in that case.
+ */
 export async function payloadCheck(ip: string): Promise<{
   reachable: boolean;
   loaded: boolean;
@@ -5300,6 +5426,12 @@ export interface HealthCheck {
   detail: string;
   remedy: string;
   fix?: HealthFixAction;
+  /** Which sentence `detail` is, with its values: see screens/Health/checkText. Absent from an
+   *  older engine, and from a check that has only its English. */
+  detail_id?: string;
+  values?: Record<string, string>;
+  /** Which sentence `remedy` is. */
+  remedy_id?: string;
 }
 
 export interface HealthReport {
@@ -5342,10 +5474,13 @@ export async function healthJunk(
 export async function healthFix(
   action: HealthFixAction,
   addr?: string,
+  /** For `clean_junk`: the files the user was shown. Nothing else is deleted. */
+  paths?: string[],
 ): Promise<HealthFixOutcome> {
   const resp: HealthFixOutcome = await invoke("health_fix", {
     addr: addr ?? null,
     action,
+    paths: paths ?? null,
   });
   return assertOk(resp, `Repair (${action})`, (r) =>
     r.changed.length ? `Completed first: ${r.changed.join("; ")}` : undefined,
@@ -5611,9 +5746,10 @@ export async function cheatsDelete(
   titleId: string,
   addr?: string,
 ): Promise<{ ok: boolean }> {
-  return invoke("cheats_delete", {
+  const resp = await invoke<{ ok: boolean; error?: string | null }>("cheats_delete", {
     req: { addr: addr ?? null, title_id: titleId },
   });
+  return assertOk(resp, "Remove cheats");
 }
 
 export async function cheatsReload(addr?: string): Promise<{ ok: boolean }> {
@@ -5633,7 +5769,11 @@ export async function cheatsEngineSet(
   enabled: boolean,
   addr?: string,
 ): Promise<{ ok: boolean; enabled: boolean }> {
-  return invoke("cheats_engine_set", { req: { addr: addr ?? null, enabled } });
+  const resp = await invoke<{ ok: boolean; enabled: boolean; error?: string | null }>(
+    "cheats_engine_set",
+    { req: { addr: addr ?? null, enabled } },
+  );
+  return assertOk(resp, "Turn cheats on or off");
 }
 
 /** A few fields of one title's appinfo.db row: its version, size, content
@@ -5930,7 +6070,10 @@ export interface InstallStatus {
   title_id: string | null;
   phase: "resolve" | "deliver" | "install" | "verify" | "done" | "failed";
   route: "loopback" | "stream" | "path" | null;
-  verdict: "installed" | "may_not_launch" | "failed" | null;
+  /** `unverified`: Sony accepted it and nothing failed, but the engine cannot say it finished
+   *  (the console fetches a bare link by itself; an update's version had not moved when the wait
+   *  ended). The package is kept. */
+  verdict: "installed" | "may_not_launch" | "failed" | "unverified" | null;
   code: number;
   hint: string | null;
   reason: string | null;
@@ -5949,6 +6092,10 @@ export interface InstallStatus {
   /** The PS5 refused a package from its own storage and the engine can safely send it through
    *  Stream: offer "Retry with Stream". Absent from an older engine. */
   retry_with_stream?: boolean;
+  /** With `reason: "destructive_guard"`: what the install would replace, "game" or "update". */
+  replaces?: string | null;
+  /** What the engine took the package to be (`PS4DP`, `PS5GD`…). */
+  package_type?: string | null;
   /** Windows only: the local adapter facing the console and what Windows says about it, set
    *  when the console could not reach this computer. Absent elsewhere and from an older engine. */
   net_diag?: NetDiag | null;
@@ -5956,18 +6103,27 @@ export interface InstallStatus {
   updated_at: number;
 }
 
-/** Start an install; returns the job id (or a busy error with the active job). */
+/** Start an install; returns the job id, or `error: "busy"` when the console already has one
+ *  running. The engine refuses that with a 409 (an engine before 11.1 with a 200), which both
+ *  transports turn into a thrown message ending in the body's `error`.
+ *  ok-checked-by-caller: pkgLibrary words "busy" and a refusal itself. */
 export async function pkgInstall(
   req: InstallRequestBody,
 ): Promise<{ ok: boolean; job?: string; error?: string }> {
-  return invoke("pkg_install", { req }) as Promise<{
-    ok: boolean;
-    job?: string;
-    error?: string;
-  }>;
+  try {
+    return (await invoke("pkg_install", { req })) as {
+      ok: boolean;
+      job?: string;
+      error?: string;
+    };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (/(^|: )busy$/.test(message.trim())) return { ok: false, error: "busy" };
+    throw e;
+  }
 }
 
-/** Stop a running install job; the engine ends it as `cancelled` within a few seconds. */
+/** Stop a running install job; the engine ends it as `cancelled` at once. */
 export async function pkgInstallStop(job: string): Promise<void> {
   await invoke("pkg_install_stop", { job });
 }

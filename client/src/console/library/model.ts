@@ -146,12 +146,6 @@ export function entriesOf(sources: LibSource[], scans: ReadonlyMap<string, LibSc
   return out.sort((a, b) => displayName(a).localeCompare(displayName(b)));
 }
 
-export function filterEntries(list: Entry[], query: string): Entry[] {
-  const q = query.trim().toLowerCase();
-  if (!q) return list;
-  return list.filter((e) => `${displayName(e)} ${e.name} ${e.title_id}`.toLowerCase().includes(q));
-}
-
 /** Where a copy of `e` goes on drive `drive` ("/data", "/mnt/usb0"…): its homebrew folder, where ShadowMount+ and the PC app look. */
 export function copyDest(drive: string, e: Pick<Entry, "name" | "path">): string {
   const name = e.name || e.path.split("/").pop() || "game";

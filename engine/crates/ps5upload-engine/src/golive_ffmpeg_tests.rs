@@ -93,6 +93,35 @@ fn redact_scrubs_keys_and_urls_longest_first() {
 }
 
 #[test]
+fn a_stream_is_flowing_by_frames_or_by_bytes() {
+    let report = |block: &str| {
+        let mut p = ProgressParser::default();
+        block.lines().find_map(|l| p.push(l)).unwrap()
+    };
+    // ffmpeg 6.1.1 with -c copy, sending: no frames counted.
+    assert!(report(
+        "frame=0\nbitrate=4828.0kbits/s\ntotal_size=1048576\nout_time_us=2000000\nprogress=continue"
+    )
+    .flowing());
+    // The size alone is enough, and the frames alone (tee reports neither of the others).
+    assert!(
+        report("frame=0\nbitrate=N/A\ntotal_size=9\nout_time_us=1\nprogress=continue").flowing()
+    );
+    assert!(
+        report("frame=9\nbitrate=N/A\ntotal_size=N/A\nout_time_us=1\nprogress=continue").flowing()
+    );
+    // Still connecting: nothing has gone anywhere.
+    assert!(
+        !report("frame=0\nbitrate=N/A\ntotal_size=0\nout_time_us=0\nprogress=continue").flowing()
+    );
+    assert!(
+        !report("frame=0\nbitrate=0.0kbits/s\ntotal_size=0\nout_time_us=5\nprogress=continue")
+            .flowing()
+    );
+    assert!(!report("frame=7\nout_time_us=N/A\nprogress=continue").flowing());
+}
+
+#[test]
 fn progress_reports_come_at_each_progress_line() {
     let mut p = ProgressParser::default();
     let block = "frame=120\nfps=59.94\nstream_0_0_q=-1.0\nbitrate=6123.4kbits/s\ntotal_size=1500000\nout_time_us=2000000\nout_time_ms=2000000\nout_time=00:00:02.000000\ndup_frames=0\ndrop_frames=3\nspeed=1.01x\nprogress=continue\n";
@@ -150,6 +179,38 @@ fn log_lines_are_classified() {
         Some(Failure::Dropped)
     );
     assert_eq!(c("[aac @ 0x1] Qavg: 1234.5"), None);
+}
+
+/// No trusted roots for ffmpeg's TLS (a system without a bundle): not the internet's fault.
+#[test]
+fn a_certificate_failure_is_said_as_one() {
+    for line in [
+        "[tls @ 0x1] error:0A000086:SSL routines::certificate verify failed",
+        "[tls @ 0x1] The certificate is NOT trusted.",
+        "[tls @ 0x1] TLS handshake failed: unknown error",
+    ] {
+        assert_eq!(classify(line), Some(Failure::Tls), "{line}");
+    }
+    let m = Failure::Tls.message("YouTube");
+    assert!(m.contains("YouTube") && m.contains("SSL_CERT_FILE"), "{m}");
+    assert!(!m.contains("internet"), "{m}");
+}
+
+/// Several sites at once: plain English, not "the streaming sites's server".
+#[test]
+fn messages_for_several_sites_read_right() {
+    for f in [
+        Failure::Unreachable,
+        Failure::Tls,
+        Failure::Rejected,
+        Failure::Codec,
+        Failure::Dropped,
+        Failure::Other,
+    ] {
+        let m = f.message_many();
+        assert!(!m.contains("sites's") && !m.contains("doesn't"), "{m}");
+        assert!(m.starts_with(|c: char| c.is_uppercase()), "{m}");
+    }
 }
 
 #[test]

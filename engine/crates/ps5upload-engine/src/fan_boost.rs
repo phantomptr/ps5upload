@@ -204,11 +204,13 @@ fn view(host: &str) -> serde_json::Value {
 
 #[derive(Deserialize)]
 pub struct AddrQuery {
+    #[serde(alias = "console", alias = "host")]
     addr: String,
 }
 
 #[derive(Deserialize)]
 pub struct SetReq {
+    #[serde(alias = "console", alias = "host")]
     addr: String,
     on: bool,
 }

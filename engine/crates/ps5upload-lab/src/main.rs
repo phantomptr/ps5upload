@@ -26,20 +26,8 @@ const DEFAULT_ADDR: &str = "192.168.137.2";
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// The console's host from whatever the caller typed: `host`, `host:9113` and `host:9114` all
-/// mean the same console (the ports they name no longer exist; AVA1 has one). A bracketed IPv6
-/// literal keeps its brackets; a bare one (several colons) has no port to lose.
-fn console_host(addr: &str) -> String {
-    if let Some(rest) = addr.strip_prefix('[') {
-        return match rest.find(']') {
-            Some(i) => format!("[{}]", &rest[..i]),
-            None => addr.to_string(),
-        };
-    }
-    match addr.split_once(':') {
-        Some((host, port)) if !port.contains(':') => host.to_string(),
-        _ => addr.to_string(),
-    }
-}
+/// mean the same console (the ports they name no longer exist; AVA1 has one).
+use ps5upload_core::events::console_addr as console_host;
 
 fn parse_tx_id(hex: &str) -> Result<[u8; 16]> {
     if hex.len() != 32 {
@@ -222,6 +210,13 @@ fn do_fan_raw(addr: &str) -> Result<()> {
 fn do_clocks_raw(addr: &str) -> Result<()> {
     let body = ps5upload_core::mgmt::call(addr, ps5upload_core::mgmt::m::HW_TEMPS, b"cd")?;
     print!("{}", String::from_utf8_lossy(&body));
+    Ok(())
+}
+
+/// The helper's own loaded modules (PROC_MODULES): name, code base and size, as JSON.
+fn do_proc_modules(addr: &str) -> Result<()> {
+    let list = ps5upload_core::diagnostics::proc_modules(addr, 0)?;
+    println!("{}", serde_json::to_string_pretty(&list)?);
     Ok(())
 }
 
@@ -907,6 +902,7 @@ fn usage() -> ! {
         "  processes                  detailed process list (pid/comm/title/mem/threads/kind)"
     );
     eprintln!("  process-kill <pid>         SIGKILL a process by pid");
+    eprintln!("  proc-modules               the helper's own loaded modules (JSON)");
     eprintln!("  saves                      list save-data folders + sizes");
     eprintln!("  fan-raw                    the helper's fan lines (HW_TEMPS \"f\"), servo profile hex included");
     eprintln!("  fan-set C                  set the fan target (45-85 C; 0 = the console's own)");
@@ -1290,6 +1286,7 @@ fn main() -> Result<()> {
         }
         "hw-temps" => do_hw_temps(addr, false),
         "hw-temps-x" => do_hw_temps(addr, true),
+        "proc-modules" => do_proc_modules(addr),
         "fan-raw" => do_fan_raw(addr),
         "clocks-raw" => do_clocks_raw(addr),
         // The cheat engine's remembered switch and crash guard (#550): read the status, set the
@@ -1480,11 +1477,11 @@ mod tests {
             create_us: 2500,
             fsync_us: 3750,
         };
-        let row = super::calibration_record("192.168.86.100", "/data/cal", 2000, 4096, &[point]);
+        let row = super::calibration_record("192.0.2.100", "/data/cal", 2000, 4096, &[point]);
         assert_eq!(row["schema"], 1);
         assert_eq!(row["kind"], "calibrate");
         assert_eq!(row["protocol"], "ava1");
-        assert_eq!(row["console"], "192.168.86.100");
+        assert_eq!(row["console"], "192.0.2.100");
         assert_eq!(row["dir"], "/data/cal");
         assert_eq!(row["files"], 2000);
         assert_eq!(row["size_bytes"], 4096);
@@ -1498,16 +1495,16 @@ mod tests {
     #[test]
     fn ava1_commands_use_port_9120() {
         assert_eq!(
-            super::ava1_cmds::ava1_addr("192.168.86.100:9113"),
-            "192.168.86.100:9120"
+            super::ava1_cmds::ava1_addr("192.0.2.100:9113"),
+            "192.0.2.100:9120"
         );
         assert_eq!(
-            super::ava1_cmds::ava1_addr("192.168.86.100:9114"),
-            "192.168.86.100:9120"
+            super::ava1_cmds::ava1_addr("192.0.2.100:9114"),
+            "192.0.2.100:9120"
         );
         assert_eq!(
-            super::ava1_cmds::ava1_addr("192.168.86.100"),
-            "192.168.86.100:9120"
+            super::ava1_cmds::ava1_addr("192.0.2.100"),
+            "192.0.2.100:9120"
         );
     }
 

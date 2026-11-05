@@ -6,12 +6,12 @@
 import { hostOf } from "../lib/addr";
 import { create } from "zustand";
 
-import type { AmprLz4Options, FpkgCompression, ImageFormat } from "../api/fpkg";
+import type { AmprLz4Options, FfpfscLevel, FpkgCompression, ImageFormat } from "../api/fpkg";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { useUploadSettingsStore } from "./uploadSettings";
 
 export type ConvertThen = "keep" | "stream" | "upload";
-export type ConvertStatus = "pending" | "running" | "installing" | "handed" | "done" | "failed";
+export type ConvertStatus = "pending" | "running" | "installing" | "handed" | "done" | "failed" | "cancelled";
 
 /** What a queued game becomes: an installable package, a game image (compressed into a
  *  .ffpfsc when `compress`), or a plain folder (#469: from a game image or a debug-key
@@ -27,7 +27,16 @@ export type ConvertBuild =
 export function buildExtension(build: ConvertBuild | undefined): string {
   if (!build || build.kind === "pkg") return ".pkg";
   if (build.kind === "folder") return "folder";
-  return build.compress ? ".ffpfsc" : `.${build.format}`;
+  return build.compress && !build.lz4 ? ".ffpfsc" : `.${build.format}`;
+}
+
+/** The image as a run makes it: LZ4 asset packs go into a plain image, so a remembered "compress"
+ *  does not apply to one (the engine refuses the two together). */
+export function imageBuildWith(
+  build: Extract<ConvertBuild, { kind: "image" }>,
+  lz4: AmprLz4Options | undefined,
+): Extract<ConvertBuild, { kind: "image" }> {
+  return lz4 ? { ...build, compress: false, lz4 } : build;
 }
 
 /** What is done after converting, as it can be done: an image is never streamed (it is
@@ -41,6 +50,10 @@ export interface ConvertItem {
   id: string;
   /** A game folder, image or archive, here or on a server or console. */
   source: string;
+  /** The source is a folder, whatever its name looks like (`Some.Game.2024`). */
+  isDir?: boolean;
+  /** A .rar's password: in this window's memory only, never saved with the queue. */
+  password?: string;
   outputDir?: string;
   /** The output goes next to its source (Workshop's "Save each next to its source"): a name
    *  already taken there is numbered, never overwritten or refused. */
@@ -60,6 +73,11 @@ export interface ConvertItem {
   host: string | null;
   /** Delete the package once its install is verified (only ever a package Convert built). */
   deleteAfterInstall?: boolean;
+  /** Re-read every byte of the output to check it, as it was set when the game was added
+   *  (absent on items queued before this was per game: the current setting). */
+  fullVerify?: boolean;
+  /** How hard a .ffpfsc is compressed, likewise. */
+  imageLevel?: FfpfscLevel;
   status: ConvertStatus;
   packagePath?: string;
   error?: string;
@@ -67,13 +85,29 @@ export interface ConvertItem {
 
 export type NewConvertItem = Omit<ConvertItem, "id" | "status" | "packagePath" | "error">;
 
-/** What can change on a game still waiting in the queue. */
-export type ConvertItemChange = Partial<Pick<ConvertItem, "build" | "then" | "host" | "deleteAfterInstall">>;
+/** What can change on a game still waiting in the queue: every choice it was added with (#669),
+ *  not only what it becomes. */
+export type ConvertItemChange = Partial<
+  Pick<
+    ConvertItem,
+    | "build"
+    | "then"
+    | "host"
+    | "deleteAfterInstall"
+    | "imageDest"
+    | "outputDir"
+    | "keepBoth"
+    | "compression"
+    | "language"
+    | "fullVerify"
+    | "imageLevel"
+  >
+>;
 
 /** How the queue builds and installs; the app wires the real ones (see convertQueueRunner). */
 export interface ConvertRunner {
   /** `installed`: the build also installed it (a console dump's swap runs inside the build). */
-  build(item: ConvertItem): Promise<{ ok: boolean; packagePath?: string; message?: string; installed?: boolean }>;
+  build(item: ConvertItem): Promise<{ ok: boolean; packagePath?: string; message?: string; installed?: boolean; cancelled?: boolean }>;
   handOff(item: ConvertItem, packagePath: string): Promise<{ ok: boolean; message?: string }>;
   /** Resolves once this computer can start the next build (a build started by hand finishes
    *  first). The queue waits here before it takes the next game, so a game waiting behind a
@@ -101,6 +135,12 @@ export function hydrateConvertQueue(items: ConvertItem[]): ConvertItem[] {
   );
 }
 
+/** What is written to storage: everything but a .rar's password. */
+export function savedItems(items: ConvertItem[]): Omit<ConvertItem, "password">[] {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  return items.map(({ password, ...kept }) => kept);
+}
+
 function load(): ConvertItem[] {
   try {
     const raw = safeGetItem(KEY);
@@ -124,11 +164,15 @@ interface ConvertQueueState {
   /** Change what a game still waiting becomes or what happens after (#518): queued games stay
    *  editable while the queue runs. False when it is no longer waiting. */
   update: (id: string, change: ConvertItemChange) => boolean;
+  /** A .rar refused for its password: try it again with this one, starting the queue. */
+  retryWithPassword: (id: string, password: string) => void;
   move: (id: string, delta: -1 | 1) => void;
   /** Run pending items until none are left or Stop; games added meanwhile are taken in order. */
   start: () => Promise<void>;
   /** Pause after the current build. */
   stop: () => void;
+  /** Hold the games still waiting: the running build is cancelled by the caller. */
+  holdNext: () => void;
   clearFinished: () => void;
 }
 
@@ -158,7 +202,7 @@ export function pipelinePhaseChanged(phase: string): void {
 }
 
 export const useConvertQueue = create<ConvertQueueState>((set, get) => {
-  const save = () => safeSetItem(KEY, JSON.stringify(get().items));
+  const save = () => safeSetItem(KEY, JSON.stringify(savedItems(get().items)));
   const patch = (id: string, p: Partial<ConvertItem>) => {
     set({ items: get().items.map((i) => (i.id === id ? { ...i, ...p } : i)) });
     save();
@@ -185,6 +229,11 @@ export const useConvertQueue = create<ConvertQueueState>((set, get) => {
       if (get().items.find((i) => i.id === id)?.status !== "pending") return false;
       patch(id, change);
       return true;
+    },
+    retryWithPassword: (id, password) => {
+      if (get().items.find((i) => i.id === id)?.status !== "failed") return;
+      patch(id, { status: "pending", error: undefined, password });
+      void get().start();
     },
     remove: (id) => {
       if (get().items.find((i) => i.id === id)?.status === "running") return;
@@ -216,16 +265,21 @@ export const useConvertQueue = create<ConvertQueueState>((set, get) => {
           const next = get().items.find((i) => i.status === "pending");
           if (!next) break;
           patch(next.id, { status: "running", error: undefined });
-          let r: { ok: boolean; packagePath?: string; message?: string; installed?: boolean };
+          let r: { ok: boolean; packagePath?: string; message?: string; installed?: boolean; cancelled?: boolean };
           try {
             r = await r0.build(next);
           } catch (e) {
             r = { ok: false, message: e instanceof Error ? e.message : String(e) };
           }
+          if (r.cancelled) {
+            patch(next.id, { status: "cancelled", password: undefined });
+            continue;
+          }
           if (!r.ok || !r.packagePath) {
             patch(next.id, { status: "failed", error: r.message ?? "The build did not finish." });
             continue;
           }
+          patch(next.id, { password: undefined });
           const pkg = r.packagePath;
           if (next.then === "keep" || !next.host || r.installed) {
             patch(next.id, { status: "done", packagePath: pkg });
@@ -245,6 +299,10 @@ export const useConvertQueue = create<ConvertQueueState>((set, get) => {
       }
     },
     stop: () => {
+      stopRequested = true;
+      set({ armed: false });
+    },
+    holdNext: () => {
       stopRequested = true;
       set({ armed: false });
     },

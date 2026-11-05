@@ -1,38 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-
-// These tests run in the node environment, which has no DOM storage, so the
-// store's `typeof localStorage === "undefined"` guards would short-circuit and
-// every case would trivially read "stable". Install a minimal in-memory
-// storage so the persistence path is actually exercised.
-function installStorage() {
-  const make = () => {
-    const map = new Map<string, string>();
-    return {
-      getItem: (k: string) => (map.has(k) ? (map.get(k) as string) : null),
-      setItem: (k: string, v: string) => void map.set(k, String(v)),
-      removeItem: (k: string) => void map.delete(k),
-      clear: () => map.clear(),
-      key: (i: number) => Array.from(map.keys())[i] ?? null,
-      get length() {
-        return map.size;
-      },
-    } as unknown as Storage;
-  };
-  const local = make();
-  const session = make();
-  // Both spellings matter: the store guards on bare `localStorage`, while
-  // lib/safeStorage goes through `window.localStorage`. Stub only one and the
-  // reads work while the writes silently vanish. The listener no-ops are
-  // needed because the store subscribes to window events on import.
-  vi.stubGlobal("localStorage", local);
-  vi.stubGlobal("sessionStorage", session);
-  vi.stubGlobal("window", {
-    localStorage: local,
-    sessionStorage: session,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-  });
-}
+import { installStorage } from "../test-utils/storage";
 
 vi.mock("../api/ps5", () => ({
   updateCheck: vi.fn(async () => ({

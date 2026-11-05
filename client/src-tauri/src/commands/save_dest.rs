@@ -18,12 +18,6 @@
 
 use std::path::PathBuf;
 
-/// The public Downloads directory on Android. Always present and writable with
-/// all-files access. A literal because Tauri's path API doesn't expose a
-/// public-Downloads resolver on Android (only app-private dirs).
-#[cfg(target_os = "android")]
-const ANDROID_PUBLIC_DOWNLOADS: &str = "/storage/emulated/0/Download";
-
 /// Resolve `requested` to a real path the caller can `File::create`.
 ///
 /// On desktop this is `requested` unchanged. On Android, a `content://` URI (or
@@ -37,7 +31,7 @@ pub fn resolve_save_dest(requested: &str, fallback_name: &str) -> Result<PathBuf
         // A `content://…` string is a Storage Access Framework URI, not a real
         // path; redirect it (along with an empty dest) into Downloads.
         if requested.is_empty() || requested.starts_with("content://") {
-            let dir = PathBuf::from(ANDROID_PUBLIC_DOWNLOADS);
+            let dir = PathBuf::from(super::local_fs::android_downloads_dir());
             std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
             return Ok(dir.join(sanitize_leaf(fallback_name)));
         }
@@ -89,7 +83,7 @@ mod tests {
             "ps5upload-bugreport.zip",
         )
         .unwrap();
-        assert!(p.starts_with(ANDROID_PUBLIC_DOWNLOADS));
+        assert!(p.starts_with(super::super::local_fs::android_downloads_dir()));
         assert_eq!(p.file_name().unwrap(), "ps5upload-bugreport.zip");
     }
 }

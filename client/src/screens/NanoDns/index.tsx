@@ -29,17 +29,9 @@ import {
   nanoDnsLogPath,
   setNanoDnsGeneralValue,
 } from "./nanoDnsConfig";
+import { decodeBase64Text } from "../../lib/base64Text";
 
 const YANDEX_DNS_NAME = "Yandex.DNS";
-
-function decodeBase64Text(base64: string): string {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index++) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return new TextDecoder().decode(bytes);
-}
 
 /** nanoDNS config editor — reads/writes the on-console nanodns.ini and shows
  *  how to point the PS5's DNS at it. nanoDNS reads its config at startup, so a
@@ -370,6 +362,7 @@ export default function NanoDnsScreen() {
               <textarea
                 value={text ?? ""}
                 onChange={(e) => setText(e.target.value)}
+                aria-label={tr("nanodns_config_label", undefined, "nanoDNS configuration")}
                 spellCheck={false}
                 className="h-[28rem] w-full resize-y rounded-[var(--radius-field)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-3 font-mono text-xs leading-relaxed outline-none focus:border-[var(--color-accent)]"
               />

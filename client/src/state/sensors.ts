@@ -4,7 +4,7 @@ import { useEffect, useMemo } from "react";
 import { hostOf, transferAddr } from "../lib/addr";
 import { fetchHwTemps, fetchHwPower, type HwTemps, type HwPower } from "../api/ps5";
 import { useConnectionStore } from "./connection";
-import { transferScreenBusy } from "../lib/ps5Transfers";
+import { consoleBusy } from "../lib/usePoll";
 import { isTerminal, useTaskStore } from "./tasks";
 
 /**
@@ -58,11 +58,47 @@ export interface SensorSample {
   power: HwPower | null;
 }
 
+/** Why the poll is holding off: it must not add to a transfer, and needs the helper. */
+export type SensorPause = "transfer" | "helper";
+
 interface HostBucket {
   samples: SensorSample[];
   /** Most recent successful reading (mirrors `samples.at(-1)` but
    *  nullable for "no data yet" without array indexing). */
   latest: SensorSample | null;
+  /** The last temperature reading that worked: a read that failed keeps it on screen. */
+  lastTemps?: { temps: HwTemps; ts: number } | null;
+  /** Temperature reads that failed since the last one that worked, and why the last one did. */
+  tempFailures?: number;
+  tempError?: string | null;
+  paused?: SensorPause | null;
+}
+
+/** What to show for a console's temperatures. `temps` may be an older reading: see `readAt`. */
+export interface TempsView {
+  temps: HwTemps | null;
+  /** When `temps` was read, if it is not current. */
+  readAt: number | null;
+  /** Why there is nothing newer; "reading" while the first answer is awaited. */
+  note: "reading" | "failed" | SensorPause | null;
+  error: string | null;
+}
+
+/** Failed reads in a row before saying so: one late answer is not news. */
+const FAILURES_SHOWN = 3;
+
+/** How a console's temperatures read, from what its poll has seen. */
+export function tempsView(bucket: HostBucket | undefined): TempsView {
+  const last = bucket?.lastTemps ?? null;
+  const failures = bucket?.tempFailures ?? 0;
+  const paused = bucket?.paused ?? null;
+  const note = paused ?? (failures >= FAILURES_SHOWN ? "failed" : last ? null : "reading");
+  return {
+    temps: last?.temps ?? null,
+    readAt: last && (paused || failures > 0) ? last.ts : null,
+    note,
+    error: note === "failed" ? (bucket?.tempError ?? null) : null,
+  };
 }
 
 interface SensorsState {
@@ -71,6 +107,10 @@ interface SensorsState {
 
   /** Record a sample into the host's ring buffer. */
   record: (host: string, sample: SensorSample) => void;
+  /** A temperature read failed. */
+  tempsFailed: (host: string, error: string) => void;
+  /** The poll is holding off (or no longer, with null). */
+  setPaused: (host: string, paused: SensorPause | null) => void;
   /** Clear a host's history (e.g. on disconnect). */
   clear: (host: string) => void;
 }
@@ -87,9 +127,38 @@ export const useSensorsStore = create<SensorsState>((set) => ({
       return {
         byHost: {
           ...s.byHost,
-          [key]: { samples, latest: sample },
+          [key]: {
+            ...prev,
+            samples,
+            latest: sample,
+            ...(sample.temps
+              ? {
+                  lastTemps: { temps: sample.temps, ts: sample.ts },
+                  tempFailures: 0,
+                  tempError: null,
+                }
+              : null),
+          },
         },
       };
+    }),
+  tempsFailed: (host, error) =>
+    set((s) => {
+      const key = hostOf(host) || host;
+      const prev = s.byHost[key] ?? { samples: [], latest: null };
+      return {
+        byHost: {
+          ...s.byHost,
+          [key]: { ...prev, tempFailures: (prev.tempFailures ?? 0) + 1, tempError: error },
+        },
+      };
+    }),
+  setPaused: (host, paused) =>
+    set((s) => {
+      const key = hostOf(host) || host;
+      const prev = s.byHost[key] ?? { samples: [], latest: null };
+      if ((prev.paused ?? null) === paused) return s;
+      return { byHost: { ...s.byHost, [key]: { ...prev, paused } } };
     }),
   clear: (host) =>
     set((s) => {
@@ -119,6 +188,12 @@ export function useLatestSample(
     const key = hostOf(host) || host;
     return s.byHost[key]?.latest ?? null;
   });
+}
+
+/** How a host's temperatures read now, reactively. */
+export function useTempsView(host: string | null | undefined): TempsView {
+  const bucket = useSensorsStore((s) => (host ? s.byHost[hostOf(host) || host] : undefined));
+  return useMemo(() => tempsView(bucket), [bucket]);
 }
 
 /** Read the sample history for a host (oldest → newest), reactively.
@@ -224,20 +299,31 @@ function startPoll(host: string, handle: PollHandle): void {
     if (handle.cancelled) return;
     if (handle.inFlight) return;
     if (typeof document !== "undefined" && document.hidden) return;
-    if (!payloadIsUpForHost(host)) return;
-    if (transferScreenBusy(host) || packageInstallIsActiveForHost(host)) return;
+    const store = useSensorsStore.getState();
+    if (!payloadIsUpForHost(host)) {
+      store.setPaused(host, "helper");
+      return;
+    }
+    if (consoleBusy(host) || packageInstallIsActiveForHost(host)) {
+      store.setPaused(host, "transfer");
+      return;
+    }
+    store.setPaused(host, null);
 
     handle.inFlight = true;
     const addr = transferAddr(host.trim());
     try {
+      let tempError = "";
       const [t, p] = await Promise.all([
-        fetchHwTemps(addr).catch(() => null),
+        fetchHwTemps(addr).catch((e: unknown) => {
+          tempError = e instanceof Error ? e.message : String(e);
+          return null;
+        }),
         fetchHwPower(addr).catch(() => null),
       ]);
       if (handle.cancelled) return;
-      if (t || p) {
-        useSensorsStore.getState().record(host, { ts: Date.now(), temps: t, power: p });
-      }
+      if (t || p) store.record(host, { ts: Date.now(), temps: t, power: p });
+      if (!t) store.tempsFailed(host, tempError);
     } catch {
       // ignore — transient network/payload errors
     } finally {

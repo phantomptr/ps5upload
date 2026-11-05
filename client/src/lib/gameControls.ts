@@ -38,10 +38,13 @@ export const DEFAULT_CONTROLS: GameControls = {
   macros: [],
 };
 
-/** The fastest turbo: the engine holds each press, and each release between two presses, for
- *  50 ms so the console sees it (rp_stream/pad_pace.rs MIN_HOLD), so more presses a second
- *  than this never reach the console (#655). */
-export const TURBO_MAX_HZ = 10;
+/** The fastest turbo. Up to `TURBO_FULL_HOLD_HZ` the engine holds each press, and each release
+ *  between two presses, for 50 ms (rp_stream/pad_pace.rs), about three console frames: any game
+ *  sees every press. Above it the page names the buttons in `PadState.turbo` and the engine holds
+ *  them about a frame (#671): at the top one frame on and one off at 60 fps, so only a game running
+ *  that fast sees every press. */
+export const TURBO_MAX_HZ = 30;
+export const TURBO_FULL_HOLD_HZ = 10;
 
 /** The buttons turbo and macros offer (sticks and the PS button are left out). */
 export const TURBO_BUTTONS: Array<{ bit: number; name: string }> = [
@@ -99,10 +102,13 @@ export interface ControlsState {
   macro: MacroRun | null;
   /** The keys held at the last read (a macro starts on its key's press, not while held). */
   lastKeys: Set<string>;
+  /** When turbo was last read, and whether the button was let go then. */
+  turboAt: number | null;
+  turboOff: boolean;
 }
 
 export function newControlsState(): ControlsState {
-  return { mouse: newMouseAim(), macro: null, lastKeys: new Set() };
+  return { mouse: newMouseAim(), macro: null, lastKeys: new Set(), turboAt: null, turboOff: false };
 }
 
 const clampStick = (v: number) => Math.max(-STICK, Math.min(STICK, Math.round(v)));
@@ -137,12 +143,23 @@ export function applyControls(
 
   // Turbo: a held turbo button is let go every other half-period.
   if (c.turbo && c.turboHz > 0) {
-    const off = Math.floor((now / 1000) * Math.min(c.turboHz, TURBO_MAX_HZ) * 2) % 2 === 1;
+    const hz = Math.min(c.turboHz, TURBO_MAX_HZ);
+    const halfPeriodMs = 500 / hz;
+    const sinceRead = st.turboAt === null ? 0 : now - st.turboAt;
+    // Reads further apart than a half-period (a slow frame rate, a phone in low-power mode) would
+    // alias against the clock, stuck held or stuck let go: flip at each read, the best rate there is.
+    const off =
+      sinceRead > halfPeriodMs ? !st.turboOff : Math.floor((now / 1000) * hz * 2) % 2 === 1;
+    st.turboAt = now;
+    st.turboOff = off;
     if (off) {
       out.buttons &= ~(c.turbo & ~(L2_BIT | R2_BIT));
       if (c.turbo & L2_BIT) out.l2 = 0;
       if (c.turbo & R2_BIT) out.r2 = 0;
     }
+    // L2 and R2 are not paced at all: only the real buttons need naming.
+    const fast = c.turbo & ~(L2_BIT | R2_BIT);
+    if (c.turboHz > TURBO_FULL_HOLD_HZ && fast) out.turbo = fast;
   }
 
   // Mouse aim: its speed pushes the right stick and fades when the mouse stops.

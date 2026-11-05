@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { asDoc, mergeEntries, plan, syncOnce, type Doc, type Entries, type PrefsApi } from "./sharedPrefs";
+import settingsApiRs from "../../../engine/crates/ps5upload-engine/src/settings_api.rs?raw";
+
+import { asDoc, mergeEntries, plan, SHARED_KEYS, syncOnce, type Doc, type Entries, type PrefsApi } from "./sharedPrefs";
 
 const PIN = "ps5upload.desktop-sidebar.pinned.v1";
 const CAP = "ps5upload.bandwidth_cap_mbps";
@@ -36,6 +38,13 @@ beforeEach(() => {
   });
 });
 afterEach(() => vi.unstubAllGlobals());
+
+describe("the engine's typed settings (settings_api.rs)", () => {
+  it("know every shared key", () => {
+    const missing = SHARED_KEYS.filter((k) => !settingsApiRs.includes(`"${k}"`));
+    expect(missing).toEqual([]);
+  });
+});
 
 describe("asDoc", () => {
   it("refuses an answer that is not a document, and drops malformed entries", () => {

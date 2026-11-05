@@ -39,7 +39,7 @@ export function SelectionBar({
         onClick={onClear}
         aria-label={clearLabel}
         title={clearLabel}
-        className="ml-auto shrink-0 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-1 shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)]"
+        className="ms-auto shrink-0 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-1 shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)]"
       >
         <X size={12} />
       </button>

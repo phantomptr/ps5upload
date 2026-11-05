@@ -114,10 +114,19 @@ fn stderr_sink() -> &'static std::sync::mpsc::SyncSender<String> {
     })
 }
 
+/// A line as it may be kept: every copy of it, the ring and engine.log, goes through this.
+fn clean(msg: String) -> String {
+    match ps5upload_core::secret_text::without_secrets(&msg) {
+        std::borrow::Cow::Owned(clean) => clean,
+        std::borrow::Cow::Borrowed(_) => msg,
+    }
+}
+
 /// Record a log line. Cheap: one allocation for the formatted message,
 /// one mutex acquisition, bounded-time pop on overflow. Also mirrors to
 /// stderr with a `[engine]` tag so terminal watchers see it too.
-pub(crate) fn record(level: &'static str, mut msg: String) {
+pub(crate) fn record(level: &'static str, msg: String) {
+    let mut msg = clean(msg);
     if msg.len() > MSG_MAX_BYTES {
         // Truncate on a valid UTF-8 char boundary so the String stays
         // well-formed. `floor_char_boundary` is stable; use a manual
@@ -137,7 +146,18 @@ pub(crate) fn record(level: &'static str, mut msg: String) {
     // Mirror to stderr off the calling (possibly reactor) thread — see
     // `stderr_sink`. try_send: if the parent is wedged and the queue is full,
     // drop the stderr mirror for this line rather than block the engine.
-    let _ = stderr_sink().try_send(format!("[engine:{level}] ts={ts} {msg}"));
+    if mirrors_to_stderr(level) {
+        let _ = stderr_sink().try_send(format!("[engine:{level}] ts={ts} {msg}"));
+    }
+    push(level, ts, msg);
+}
+
+/// Only the ring, not the stderr mirror: for a line the host has already written elsewhere.
+pub(crate) fn record_quiet(level: &'static str, msg: String) {
+    push(level, now_ms(), clean(msg));
+}
+
+fn push(level: &'static str, ts: u64, msg: String) {
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let entry = LogEntry {
         seq,
@@ -159,6 +179,18 @@ pub(crate) fn record(level: &'static str, mut msg: String) {
         g.pop_front();
     }
     g.push_back(entry);
+}
+
+/// In a container, stderr is `docker logs`: a file nothing rotates by default, while an open tab
+/// adds a debug line per request. The mirror exists for the desktop shell to tee, so there it only
+/// takes what someone reading `docker logs` wants, unless "Detailed logs" is on. The debug ring
+/// and the Log tab are not affected.
+fn mirrors_to_stderr(level: &str) -> bool {
+    use std::sync::OnceLock;
+    static QUIET: OnceLock<bool> = OnceLock::new();
+    !matches!(level, "debug" | "trace")
+        || !*QUIET.get_or_init(crate::pkg_install::in_container)
+        || ps5upload_core::log::verbose()
 }
 
 /// Return every entry whose `seq` is strictly greater than `since`.
@@ -219,6 +251,25 @@ macro_rules! log_detail {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `/api/engine-logs` answers from the rings, at both levels, and quiet lines too.
+    #[test]
+    fn no_line_keeps_a_secret() {
+        let id = std::process::id();
+        record("warn", format!("fetch https://u:hunter2@h/a-{id} failed"));
+        record("debug", format!("call-{id}?token=hunter2"));
+        record_quiet("info", format!("quiet-{id} password=hunter2"));
+        let mine: Vec<LogEntry> = tail_since(0)
+            .into_iter()
+            .filter(|e| e.msg.contains(&id.to_string()))
+            .collect();
+        assert!(mine.len() >= 3);
+        assert!(
+            mine.iter().all(|e| !e.msg.contains("hunter2")),
+            "{}",
+            mine.len()
+        );
+    }
 
     /// A flood of debug lines (one per request) does not push a warning out of the tail.
     #[test]

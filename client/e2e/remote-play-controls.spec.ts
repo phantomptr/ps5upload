@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { routeEngine } from "./fixtures/engine";
 
 // Per-game controls (9.11): the Game panel's Controls tab sets the running game's turbo buttons,
 // mouse aim and macros; they change what the console gets, and each game keeps its own.
@@ -27,26 +28,22 @@ test("turbo repeats a held button, and a macro key plays its presses", async ({ 
       }),
     );
   });
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "9.11.0", caps: {} };
-      if (path === "/api/ps5/status") body = status;
-      if (path === "/api/ps5/rp/session") body = { host: null };
-      if (path === "/api/ps5/process/list")
-        body = {
-          truncated: false,
-          processes: [{ pid: 77, name: "eboot", comm: "eboot.bin", title_id: "CUSA00001", app_id: 5, memory_mib: 1, threads: 1, kind: "app" }],
-        };
-      if (path === "/api/ps5/apps/installed") body = { titles: [{ title_id: "CUSA00001", title_name: "Bloodborne", origin: "pkg" }] };
-      if (path === "/api/ps5/cheats/status")
-        body = { enabled: false, game_running: true, game_title_id: "CUSA00001", game_pid: 77, patches_last: 0, patches_total: 0 };
-      if (path === "/api/ps5/cheats/get") body = { mods: [] };
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
+  await routeEngine(page, (path) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "9.11.0", caps: {} };
+    if (path === "/api/ps5/status") body = status;
+    if (path === "/api/ps5/rp/session") body = { host: null };
+    if (path === "/api/ps5/process/list")
+      body = {
+        truncated: false,
+        processes: [{ pid: 77, name: "eboot", comm: "eboot.bin", title_id: "CUSA00001", app_id: 5, memory_mib: 1, threads: 1, kind: "app" }],
+      };
+    if (path === "/api/ps5/apps/installed") body = { titles: [{ title_id: "CUSA00001", title_name: "Bloodborne", origin: "pkg" }] };
+    if (path === "/api/ps5/cheats/status")
+      body = { enabled: false, game_running: true, game_title_id: "CUSA00001", game_pid: 77, patches_last: 0, patches_total: 0 };
+    if (path === "/api/ps5/cheats/get") body = { mods: [] };
+    return body;
+  });
   await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, (ws) => {
     ws.onMessage((m) => {
       const msg = JSON.parse(String(m)) as { host?: string; pad?: { buttons: number } };
@@ -72,10 +69,10 @@ test("turbo repeats a held button, and a macro key plays its presses", async ({ 
   await stage.focus();
   pads.length = 0;
   await page.keyboard.down("Enter");
-  await page.waitForTimeout(600);
+  await expect
+    .poll(() => pads.filter((b, i) => i > 0 && (b & CROSS) !== (pads[i - 1] & CROSS)).length)
+    .toBeGreaterThanOrEqual(6);
   await page.keyboard.up("Enter");
-  const flips = pads.filter((b, i) => i > 0 && (b & CROSS) !== (pads[i - 1] & CROSS)).length;
-  expect(flips).toBeGreaterThanOrEqual(6);
 
   // A macro: Q plays ✕ for 100 ms.
   await page.getByTestId("rp-toolbar").hover();

@@ -29,7 +29,7 @@ export function RecentPathsPanel({
     <div
       ref={ref}
       data-testid="fs-recent-list"
-      className="glass-float elev-2 absolute right-0 top-full z-40 mt-1 w-72 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-[var(--radius-card)]"
+      className="glass-float elev-2 absolute end-0 top-full z-40 mt-1 w-72 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-[var(--radius-card)]"
       style={fit}
     >
       {pinned && <ConsolePinnedGroup group={pinned} onPick={onPick} />}
@@ -40,7 +40,7 @@ export function RecentPathsPanel({
               <button
                 type="button"
                 onClick={() => onPick(p)}
-                className="min-w-0 flex-1 truncate px-2 py-1 text-left font-mono text-xs hover:bg-[var(--color-surface-3)]"
+                className="min-w-0 flex-1 truncate px-2 py-1 text-start font-mono text-xs hover:bg-[var(--color-surface-3)]"
                 title={p}
               >
                 {p}
@@ -61,7 +61,7 @@ export function RecentPathsPanel({
         <button
           type="button"
           onClick={onClear}
-          className="block w-full border-t border-[var(--color-border)] px-2 py-1 text-left text-xs text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+          className="block w-full border-t border-[var(--color-border)] px-2 py-1 text-start text-xs text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
         >
           {tr("fs_recent_clear", undefined, "Clear all")}
         </button>
@@ -102,7 +102,7 @@ export function ConsolePinnedGroup({
             <button
               type="button"
               onClick={() => onPick(p)}
-              className="flex w-full min-w-0 items-center gap-1.5 truncate px-2 py-1 text-left font-mono text-xs hover:bg-[var(--color-surface-3)]"
+              className="flex w-full min-w-0 items-center gap-1.5 truncate px-2 py-1 text-start font-mono text-xs hover:bg-[var(--color-surface-3)]"
               title={p}
             >
               <Star size={11} className="shrink-0 text-[var(--color-accent)]" />
@@ -115,7 +115,7 @@ export function ConsolePinnedGroup({
         type="button"
         data-testid="fs-console-pin-toggle"
         onClick={group.onTogglePin}
-        className="flex w-full items-center gap-1.5 px-2 py-1 text-left text-xs text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+        className="flex w-full items-center gap-1.5 px-2 py-1 text-start text-xs text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
       >
         <Icon size={12} className="shrink-0" />
         {group.pinned
@@ -163,7 +163,7 @@ export function RecentPathsDropdown({
   if (filtered.length === 0 && !pinned) return null;
 
   return (
-    <div className="relative ml-auto">
+    <div className="relative ms-auto">
       <button
         type="button"
         onClick={() => {

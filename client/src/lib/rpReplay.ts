@@ -16,12 +16,14 @@ import {
 } from "mediabunny";
 
 import { getEngineUrl } from "../state/engine";
+import { avcDescription, lengthPrefixed } from "./fmp4";
 import { withDecoderStart } from "./videoDecoderGuard";
 
 export interface ReplayFrame {
   kind: 1 | 4;
   tUs: number;
   key: boolean;
+  /** Kind 1: an access unit. Kind 4: one Opus packet, without the index it came with. */
   data: Uint8Array;
 }
 
@@ -42,6 +44,32 @@ export function isHevcHeader(h: Uint8Array): boolean {
   return false;
 }
 
+/** Audio frames in the console's order, one of each. A frame is `[u16 index][Opus]`; copies
+ *  recovered from a later packet arrive late or twice, and the index (wrapping at 65536) says where
+ *  they belong. The times stay the arrival times, in order: a decoder wants them rising. */
+export function orderAudio(records: Array<{ tUs: number; data: Uint8Array }>): ReplayFrame[] {
+  const seen = new Set<number>();
+  const ordered: Array<{ seq: number; tUs: number; data: Uint8Array }> = [];
+  let last = -1;
+  for (const r of records) {
+    if (r.data.length < 3) continue;
+    const index = (r.data[0] << 8) | r.data[1];
+    // Nearest to the last one, whichever way round: an index's high byte turns over every 2.56 s.
+    let seq = index;
+    if (last >= 0) {
+      seq = last + ((index - last + 0x8000 + 0x10000 * 2) % 0x10000) - 0x8000;
+    }
+    last = Math.max(last, seq);
+    if (seen.has(seq)) continue;
+    seen.add(seq);
+    ordered.push({ seq, tUs: r.tUs, data: r.data.subarray(2) });
+  }
+  const times = ordered.map((f) => f.tUs).sort((a, b) => a - b);
+  return ordered
+    .sort((a, b) => a.seq - b.seq)
+    .map((f, i) => ({ kind: 4, tUs: times[i], key: false, data: f.data }));
+}
+
 /** Reads the engine's snapshot (rp_replay.rs `encode`). Throws on anything else. */
 export function parseReplay(buf: ArrayBuffer): Replay {
   const b = new Uint8Array(buf);
@@ -51,6 +79,7 @@ export function parseReplay(buf: ArrayBuffer): Replay {
   let videoHeader: Uint8Array | null = null;
   let audio: Replay["audio"] = null;
   const frames: ReplayFrame[] = [];
+  const sound: Array<{ tUs: number; data: Uint8Array }> = [];
   while (i < b.length) {
     if (i + 13 > b.length) throw new Error("replay cut short");
     const kind = b[i];
@@ -65,9 +94,11 @@ export function parseReplay(buf: ArrayBuffer): Replay {
     i += len;
     if (kind === 0) videoHeader = data;
     else if (kind === 3) audio = { channels: data[0], rate: new DataView(data.buffer, data.byteOffset).getUint32(2) };
-    else if (kind === 1 || kind === 4) frames.push({ kind, tUs, key, data });
+    else if (kind === 1) frames.push({ kind, tUs, key, data });
+    else if (kind === 4) sound.push({ tUs, data });
   }
   if (!videoHeader) throw new Error("replay has no video header");
+  frames.push(...orderAudio(sound));
   return { videoHeader, hevc: isHevcHeader(videoHeader), audio, frames };
 }
 
@@ -92,12 +123,19 @@ export function avcCodecFromHeader(h: Uint8Array): string {
 }
 
 /** The picture's size, from decoding the first keyframe (exact whatever the stream's shape). */
-async function probeSize(codec: string, keyframe: Uint8Array): Promise<{ width: number; height: number }> {
+async function probeSize(codec: string, header: Uint8Array, keyframe: Uint8Array): Promise<{ width: number; height: number }> {
+  // H.264 as the stream's own decoder takes it (WebKitGTK refuses Annex B with no description).
+  const description = codec.startsWith("avc") ? avcDescription(header) : null;
+  const data = description ? lengthPrefixed(keyframe, false, true) : keyframe;
   // The Linux app: the GL display WebKitGTK needs before a decoder (videoDecoderGuard).
-  return withDecoderStart(() => probeSizeNow(codec, keyframe));
+  return withDecoderStart(() => probeSizeNow(codec, data, description));
 }
 
-async function probeSizeNow(codec: string, keyframe: Uint8Array): Promise<{ width: number; height: number }> {
+async function probeSizeNow(
+  codec: string,
+  keyframe: Uint8Array,
+  description: Uint8Array | null,
+): Promise<{ width: number; height: number }> {
   let size: { width: number; height: number } | null = null;
   let failed: unknown = null;
   const dec = new VideoDecoder({
@@ -109,7 +147,7 @@ async function probeSizeNow(codec: string, keyframe: Uint8Array): Promise<{ widt
       failed = e;
     },
   });
-  dec.configure({ codec, optimizeForLatency: true });
+  dec.configure({ codec, optimizeForLatency: true, ...(description ? { description } : {}) });
   dec.decode(new EncodedVideoChunk({ type: "key", timestamp: 0, data: keyframe }));
   await dec.flush().catch((e) => {
     failed ??= e;
@@ -183,7 +221,7 @@ async function writeMp4(r: Replay, hint: ReplayHint, made: { output: Output | nu
   const codec = hint.codec || (r.hevc ? "" : avcCodecFromHeader(r.videoHeader));
   if (!codec) throw new Error("the replay's video codec is not known");
   const firstKey = joined(r.videoHeader, frames[0].data);
-  const { width, height } = await probeSize(codec, firstKey);
+  const { width, height } = await probeSize(codec, r.videoHeader, firstKey);
 
   await output.start();
   for (let i = 0; i < frames.length; i++) {

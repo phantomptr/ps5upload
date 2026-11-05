@@ -36,19 +36,18 @@ pub fn helper_not_ava1() -> UploadFailure {
 /// Nothing listens on the helper's port, and the console's payload loader (port 9021) does:
 /// the app can send the helper right away.
 pub const HELPER_DOWN_LOADER_UP_MESSAGE: &str = "The PS5 helper is not running, but the \
-    console's payload loader is (port 9021), so the app can send it. Desktop app: click Update \
-    helper, or send it from the Connection screen. Web UI: click Update helper, or load \
-    ps5upload.elf with your payload loader.";
+    console's payload loader is (port 9021), so the app can send it. Press Send helper on the \
+    Connection screen, or load ps5upload.elf with your payload loader.";
 /// Nothing listens on the helper's port or on the loader's: the console has no jailbreak
 /// loader up, which the helper cannot be sent without.
 pub const HELPER_DOWN_LOADER_DOWN_MESSAGE: &str = "Nothing on the PS5 answers: neither the \
     ps5upload helper nor a payload loader on port 9021. Run your jailbreak's loader first \
-    (etaHEN, elfldr or the loader you use), then send the helper: Update helper in the app, or \
+    (etaHEN, elfldr or the loader you use), then send the helper: Send helper in the app, or \
     load ps5upload.elf yourself.";
 /// A helper answered, but it is too old for this app.
 pub const HELPER_TOO_OLD_MESSAGE: &str = "An older ps5upload helper is running on the PS5; \
-    this app needs the one that ships with it. Desktop app: click Update helper. Web UI: click \
-    Update helper, or load the ps5upload.elf of this version with your payload loader.";
+    this app needs the one that ships with it. Press Send helper on the Connection screen, or \
+    load the ps5upload.elf of this version with your payload loader.";
 
 /// `helper_not_ava1` with the message that fits what was found: see the three constants.
 fn helper_not_ava1_because(detail: &'static str) -> UploadFailure {

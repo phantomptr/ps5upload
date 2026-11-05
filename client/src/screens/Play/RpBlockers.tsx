@@ -191,6 +191,20 @@ export function RpBlockerNoticeView({
 export function RpBlockerPhase({ host }: { host: string | null }) {
   const pausing = useRpBlockers((s) => (same(s.pausing?.host, host) ? s.pausing : null));
   const waiting = useRpBlockers((s) => (same(s.waiting?.host, host) ? s.waiting : null));
+  const checking = useRpBlockers((s) => same(s.checking ?? undefined, host));
+  const tr = useTr();
+  if (checking && !waiting && !pausing) {
+    return (
+      <div
+        className="absolute inset-0 z-20 flex items-center justify-center gap-2 bg-black/60 px-4 text-center text-sm text-white/85"
+        role="status"
+        data-testid="rp-blocker-checking"
+      >
+        <Spinner size={16} tone="inherit" />
+        {tr("rp_blocker_checking", undefined, "Getting ready…")}
+      </div>
+    );
+  }
   if (waiting) return <RpBlockerPhaseView ids={waiting.ids} waitS={waiting.maxS} onCancel={waiting.cancel} />;
   return pausing ? <RpBlockerPhaseView ids={pausing.ids} /> : null;
 }

@@ -1,50 +1,7 @@
 import { invoke } from "./invokeLogged";
-import { isTauriEnv } from "./tauriEnv";
-import { log } from "../state/logs";
 
-/**
- * Put the ps5upload helper back on a console after something displaced it.
- *
- * Environment-dependent by necessity, and getting it wrong is invisible until
- * a console is left with no helper at all:
- *
- *  - **Desktop** holds the ELF bytes and can open a socket to the loader, so
- *    it resolves the bundled path and sends it itself.
- *  - **Browser** can do neither. `payload_bundled_path` / `payload_send` are
- *    desktop-only commands; calling them from the web UI throws
- *    BrowserUnsupportedError, which is what made the whole DPI fallback — and
- *    therefore every patch install — fail from the web UI (#152). The engine
- *    owns the bytes and the socket there, via `payload_restore`.
- *
- * Extracted from pkgLibrary so every caller that can displace the helper gets
- * the same environment-aware restore. Never throws: a failed restore is logged
- * (it explains a helper that stayed offline in the next bug bundle) and the
- * app's reconnect watcher makes further attempts.
- */
-export async function restoreMainPayload(ip: string): Promise<void> {
-  try {
-    if (!isTauriEnv()) {
-      await engineSendsHelper(ip);
-      return;
-    }
-    const bp = (await invoke("payload_bundled_path")) as {
-      ok?: boolean;
-      path?: string;
-    };
-    if (bp?.ok && bp.path) {
-      await invoke("payload_send", { ip, path: bp.path, port: null });
-    }
-  } catch (e) {
-    log.warn(
-      "install",
-      `couldn't restore the main payload on ${ip}: ${
-        e instanceof Error ? e.message : String(e)
-      }`,
-    );
-  }
-}
-
-/** The browser build's send: the engine sends its own bundled helper. Throws when the engine
+/** The browser build's send: `payload_bundled_path` and `payload_send` are desktop-only commands,
+ *  so the engine, which owns the bytes and the socket there, sends its own bundled helper. Throws when the engine
  *  could not (no helper image, loader not answering), so a caller that records "a helper was
  *  sent" (lib/helperSendGate) records nothing for a send that never happened. */
 export async function engineSendsHelper(ip: string): Promise<void> {
@@ -52,5 +9,5 @@ export async function engineSendsHelper(ip: string): Promise<void> {
     ok?: boolean;
     error?: string;
   };
-  if (!r?.ok) throw new Error(r?.error ?? "engine reported no payload image");
+  if (!r?.ok) throw new Error(r?.error ?? "the engine has no helper to send");
 }

@@ -172,7 +172,7 @@ export function SnapshotsPanel({ prefill }: { prefill?: SnapshotPrefill | null }
       for (const p of batch) {
         const t = defaultTagFor(p);
         const result = await trackTask(
-          { kind: "backup-snapshot", origin: "backup", label: `Backup ${t}`, consoleId: addr },
+          { kind: "backup-snapshot", origin: "backup", label: tr("backup_task_snapshot", { tag: t }, "Backup {tag}"), consoleId: addr },
           () => backupSnapshot(t, p, addr),
         );
         files += result.files;
@@ -205,7 +205,7 @@ export function SnapshotsPanel({ prefill }: { prefill?: SnapshotPrefill | null }
     setError(null);
     try {
       const result = await trackTask(
-        { kind: "backup-snapshot", origin: "backup", label: `Backup ${tag.trim()}`, consoleId: addr },
+        { kind: "backup-snapshot", origin: "backup", label: tr("backup_task_snapshot", { tag: tag.trim() }, "Backup {tag}"), consoleId: addr },
         () => backupSnapshot(tag.trim(), path.trim(), addr),
       );
       setActionMsg(
@@ -244,7 +244,7 @@ export function SnapshotsPanel({ prefill }: { prefill?: SnapshotPrefill | null }
       setError(null);
       try {
         const result = await trackTask(
-          { kind: "backup-restore", origin: "backup", label: `Restore ${entry.tag}`, consoleId: addr },
+          { kind: "backup-restore", origin: "backup", label: tr("backup_task_restore", { tag: entry.tag }, "Restore {tag}"), consoleId: addr },
           () => backupRestore(entry.tag, entry.timestamp, addr),
         );
         setActionMsg(
@@ -505,7 +505,7 @@ export function SnapshotsPanel({ prefill }: { prefill?: SnapshotPrefill | null }
             )}
           </p>
           {/* What payload/src/backup.c actually does, so nobody finds out on restore. */}
-          <ul className="list-disc space-y-0.5 pl-4" data-testid="backup-limits">
+          <ul className="list-disc space-y-0.5 ps-4" data-testid="backup-limits">
             <li>
               {tr(
                 "backup_limit_keep",

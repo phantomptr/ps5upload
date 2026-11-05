@@ -245,15 +245,49 @@ static void streamed_body(void) {
     CHECK(status == 401);
 }
 
-/* 4 idle connections occupy every worker; a 5th request is still served
- * once their 5 s deadline drops them. */
+/* Idle connections hold no worker: four from anyone on the LAN (or a browser's speculative connects)
+ * used to keep the page from answering for as long as they kept coming. A request behind them is
+ * answered at once. */
+static void idle_connections_take_no_worker(void) {
+    int idle[8], i, st;
+    char resp[2048];
+    double t0;
+    for (i = 0; i < 8; i++) idle[i] = dial();
+    for (i = 0; i < 8; i++) CHECK(idle[i] >= 0);
+    sleep_ms(300);
+    t0 = now_s();
+    st = request("/api/x", webui_token(), resp, sizeof resp);
+    CHECK(st == 200);
+    CHECK(now_s() - t0 < 1.0);
+    for (i = 0; i < 8; i++)
+        if (idle[i] >= 0) close(idle[i]);
+}
+
+/* An idle connection is closed at its deadline, by nobody's worker. */
+static void idle_connection_closed_at_deadline(void) {
+    char buf[64];
+    int s = dial(), n;
+    double t0 = now_s();
+    CHECK(s >= 0);
+    if (s < 0) return;
+    n = read_all(s, buf, sizeof buf, 7000);
+    CHECK(n == 0);                  /* closed, with nothing said */
+    CHECK(now_s() - t0 > 4.0 && now_s() - t0 < 6.5);
+    close(s);
+}
+
+/* Four half-sent requests do occupy every worker (they said something); a request behind them is still
+ * served once their 5 s deadline drops them. */
 static void silent_client_dropped_and_next_served(void) {
     int idle[4], i, st;
     char resp[2048];
     double t0 = now_s();
-    for (i = 0; i < 4; i++) idle[i] = dial();
-    for (i = 0; i < 4; i++) CHECK(idle[i] >= 0);
-    /* Let the workers take the idle ones first, so the request below is
+    for (i = 0; i < 4; i++) {
+        idle[i] = dial();
+        CHECK(idle[i] >= 0);
+        if (idle[i] >= 0) CHECK(send(idle[i], "G", 1, 0) == 1);
+    }
+    /* Let the workers take them first, so the request below is
      * queued behind them with its own (later) deadline. */
     sleep_ms(1000);
     st = request("/api/x", webui_token(), resp, sizeof resp);
@@ -261,6 +295,68 @@ static void silent_client_dropped_and_next_served(void) {
     CHECK(now_s() - t0 < 7.5);
     for (i = 0; i < 4; i++)
         if (idle[i] >= 0) close(idle[i]);
+}
+
+/* 1 when the server has closed s (EOF or a reset), 0 when it still holds it. */
+static int closed_by_server(int s, int wait_ms) {
+    struct pollfd p = { s, POLLIN, 0 };
+    char b;
+    if (poll(&p, 1, wait_ms) <= 0) return 0;
+    return recv(s, &b, 1, MSG_PEEK) <= 0;
+}
+
+/* One address cannot take the whole server: past its 16 connections the next are closed at once, and
+ * another address is still served. Once it lets go, it is served again. */
+static void one_address_cannot_fill_the_server(void) {
+    enum { N = 30 };
+    int idle[N], i, st, closed = 0;
+    char resp[2048];
+    double t0;
+    for (i = 0; i < N; i++) idle[i] = dial();
+    for (i = 0; i < N; i++) CHECK(idle[i] >= 0);
+    sleep_ms(300);
+    for (i = 0; i < N; i++)
+        if (idle[i] >= 0 && closed_by_server(idle[i], 50)) closed++;
+    CHECK(closed == N - 16);
+
+    /* The same address, over its limit: turned away, at once, not queued. */
+    st = request("/api/x", webui_token(), resp, sizeof resp);
+    CHECK(st == -1);
+
+    /* Another address (Linux routes all of 127/8; macOS has only 127.0.0.1). */
+    {
+        struct sockaddr_in me, to;
+        int s = socket(AF_INET, SOCK_STREAM, 0);
+        CHECK(s >= 0);
+        memset(&me, 0, sizeof me);
+        me.sin_family = AF_INET;
+        me.sin_addr.s_addr = htonl(0x7f000002);
+        if (s >= 0 && bind(s, (struct sockaddr *)&me, sizeof me) == 0) {
+            char req[512];
+            int n = snprintf(req, sizeof req,
+                             "GET /api/x HTTP/1.1\r\nHost: 127.0.0.1:%u\r\nX-PS5U-Token: %s\r\n\r\n",
+                             (unsigned)g_port, webui_token());
+            memset(&to, 0, sizeof to);
+            to.sin_family = AF_INET;
+            to.sin_port = htons(g_port);
+            to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            t0 = now_s();
+            st = -1;
+            if (connect(s, (struct sockaddr *)&to, sizeof to) == 0 && send(s, req, (size_t)n, 0) == n &&
+                read_all(s, resp, sizeof resp, 3000) > 0)
+                (void)sscanf(resp, "HTTP/1.1 %d", &st);
+            CHECK(st == 200);
+            CHECK(now_s() - t0 < 1.0);
+        }
+        if (s >= 0) close(s);
+    }
+
+    /* It lets go: the count comes down and it is served again. */
+    for (i = 0; i < N; i++)
+        if (idle[i] >= 0) close(idle[i]);
+    sleep_ms(300);
+    st = request("/api/x", webui_token(), resp, sizeof resp);
+    CHECK(st == 200);
 }
 
 /* A request that never finishes its headers is dropped within the timeout. */
@@ -325,16 +421,20 @@ static void stop_then_start_rebinds_with_new_token(void) {
     CHECK(request("/api/x", t1, resp, sizeof resp) == 401);
 }
 
-/* Stop while a worker is blocked on a silent client: still within 2 s. */
+/* Stop while workers are blocked on half-sent requests, with more connections queued and idle ones
+ * waiting: still within 2 s. */
 static void stop_while_workers_busy(void) {
-    int idle[6], i;
+    int idle[10], i;
     double t0;
-    for (i = 0; i < 6; i++) idle[i] = dial();
+    for (i = 0; i < 10; i++) {
+        idle[i] = dial();
+        if (i < 6 && idle[i] >= 0) CHECK(send(idle[i], "G", 1, 0) == 1);
+    }
     sleep_ms(200);
     t0 = now_s();
     webui_stop();
     CHECK(now_s() - t0 < 2.5);
-    for (i = 0; i < 6; i++)
+    for (i = 0; i < 10; i++)
         if (idle[i] >= 0) close(idle[i]);
     CHECK(webui_start(NULL) == -1);
     CHECK(start_server() == 0);
@@ -351,9 +451,9 @@ static void restart_keeps_token_and_serves(void) {
 
 /* The listener watch's decisions (pure). */
 static void watch_decisions(void) {
-    char a[3][INET_ADDRSTRLEN] = { "127.0.0.1", "192.168.86.99", "169.254.3.4" };
-    char b[3][INET_ADDRSTRLEN] = { "192.168.86.99", "169.254.3.4", "127.0.0.1" };
-    char c[2][INET_ADDRSTRLEN] = { "127.0.0.1", "192.168.86.120" };
+    char a[3][INET_ADDRSTRLEN] = { "127.0.0.1", "192.0.2.99", "169.254.3.4" };
+    char b[3][INET_ADDRSTRLEN] = { "192.0.2.99", "169.254.3.4", "127.0.0.1" };
+    char c[2][INET_ADDRSTRLEN] = { "127.0.0.1", "192.0.2.120" };
     char d[2][INET_ADDRSTRLEN] = { "127.0.0.1", "169.254.9.9" };
     char e[1][INET_ADDRSTRLEN] = { "127.0.0.1" };
     char f[2][INET_ADDRSTRLEN] = { "8.8.4.4", "172.20.1.2" };
@@ -378,7 +478,7 @@ static void watch_decisions(void) {
     CHECK(webui_addrs_differ((const char (*)[INET_ADDRSTRLEN])e, 0, (const char (*)[INET_ADDRSTRLEN])e, 0) == 0);
 
     /* the address a phone opens */
-    CHECK(webui_pick_lan_addr((const char (*)[INET_ADDRSTRLEN])a, 3, out) == 1 && strcmp(out, "192.168.86.99") == 0);
+    CHECK(webui_pick_lan_addr((const char (*)[INET_ADDRSTRLEN])a, 3, out) == 1 && strcmp(out, "192.0.2.99") == 0);
     CHECK(webui_pick_lan_addr((const char (*)[INET_ADDRSTRLEN])d, 2, out) == 1 && strcmp(out, "169.254.9.9") == 0);
     CHECK(webui_pick_lan_addr((const char (*)[INET_ADDRSTRLEN])e, 1, out) == 0 && out[0] == '\0');
     CHECK(webui_pick_lan_addr((const char (*)[INET_ADDRSTRLEN])f, 2, out) == 1 && strcmp(out, "172.20.1.2") == 0);
@@ -404,8 +504,11 @@ int main(void) {
     garbage_400();
     too_big_413();
     streamed_body();
+    idle_connections_take_no_worker();
+    idle_connection_closed_at_deadline();
     silent_client_dropped_and_next_served();
     half_request_dropped_within_timeout();
+    one_address_cannot_fill_the_server();
     queue_overflow_closes_not_blocks();
     stop_then_start_rebinds_with_new_token();
     stop_while_workers_busy();

@@ -17,7 +17,7 @@
  * front is the system's choice: Chromium (browser, Windows app) gives it to any visible window;
  * WebKit (macOS app, Linux app) only to the window in front.
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { Square, Undo2, Volume2, VolumeX } from "lucide-react";
 
@@ -29,11 +29,15 @@ import { isTauriEnv, safeUnlisten } from "../../lib/tauriEnv";
 import { log } from "../../state/logs";
 import { visibleArea } from "./pipArea";
 import { phaseText } from "../../lib/rpPhaseText";
+import { friendsPlaying } from "../../lib/rpStopConfirm";
+import { closeTauriPopups, TAURI_PIP_PREFIX } from "../../lib/pipPopups";
+import { PadAsks, usePadLink } from "./PhonePads";
+import { JoinAsks } from "./PlayTogether";
+import { useJoinHost } from "./playTogetherState";
 
 const PIP_WIDTH = 480;
 const PIP_HEIGHT = 270;
 /** Window labels and the closed event of src-tauri/src/pip_window.rs. */
-const TAURI_PIP_PREFIX = "rp-pip-";
 const TAURI_PIP_CLOSED = "rp-pip-closed";
 
 interface DocumentPip {
@@ -127,17 +131,6 @@ async function focusMainWindow(): Promise<void> {
   }
 }
 
-async function closeTauriPopups(): Promise<void> {
-  try {
-    const { getAllWebviewWindows } = await import("@tauri-apps/api/webviewWindow");
-    for (const w of await getAllWebviewWindows()) {
-      if (w.label.startsWith(TAURI_PIP_PREFIX)) await w.close();
-    }
-  } catch {
-    // Already gone.
-  }
-}
-
 /** Take the picture out of picture in picture; `closeWindow` false when the window is already
  *  going (closed from its title bar). */
 export function closePip(closeWindow = true): void {
@@ -215,6 +208,10 @@ export async function openPip(opts: { title: string; onBack: () => void }): Prom
   open = cur;
   const gone = () => open === cur && closePip(false);
   win.addEventListener("pagehide", gone);
+  // The main page going (a reload) takes the player's page with it.
+  const mainGone = () => open === cur && closePip();
+  window.addEventListener("pagehide", mainGone);
+  cur.cleanups.push(() => window.removeEventListener("pagehide", mainGone));
   // A window can go without a word to this page (the desktop app's title bar): check now and then.
   const poll = window.setInterval(() => win.closed && gone(), 1000);
   cur.cleanups.push(() => window.clearInterval(poll));
@@ -324,6 +321,9 @@ async function openVideoPip(canvas: HTMLCanvasElement): Promise<boolean> {
   document.body.appendChild(video);
   const cur = { kind: "video" as const, win: null, root: null, video, cleanups: [] as Array<() => void> };
   open = cur;
+  // The video reads the canvas with the page hidden, which is when frames otherwise go undrawn.
+  const letGo = useRemotePlayStore.getState().stream?.holdPicture();
+  if (letGo) cur.cleanups.push(letGo);
   try {
     await video.play();
     await video.requestPictureInPicture();
@@ -350,7 +350,7 @@ async function openVideoPip(canvas: HTMLCanvasElement): Promise<boolean> {
 /** The stream ended (Stop, the console): picture in picture closes with it. */
 function watchStreamEnd(cur: NonNullable<typeof open>): void {
   const unsub = useRemotePlayStore.subscribe((s) => {
-    if (!s.stream && open === cur) closePip();
+    if ((!s.stream || !s.pictureHere) && open === cur) closePip();
   });
   cur.cleanups.push(unsub);
 }
@@ -364,8 +364,19 @@ function MiniPlayer({ win, onBack }: { win: Window; onBack: () => void }) {
   const prefs = useRemotePlayStore((s) => s.prefs);
   const setPrefs = useRemotePlayStore((s) => s.setPrefs);
   const stop = useRemotePlayStore((s) => s.stop);
+  const passcode = useRemotePlayStore((s) => !!s.passcode);
   const stage = useRef<HTMLDivElement>(null);
   const canvasHost = useRef<HTMLDivElement>(null);
+  // Friends and phones asking in: the app behind this window may not be looked at.
+  const [padLink] = usePadLink(!!target, target?.host ?? null);
+  const [join] = useJoinHost(!!target, target?.host ?? null);
+  // Stopping ends Play Together: asked here (a dialog would open in the window behind).
+  const [stopAsk, setStopAsk] = useState<number | null>(null);
+  const askStop = async () => {
+    const n = await friendsPlaying(target?.host);
+    if (n > 0) setStopAsk(n);
+    else stop();
+  };
 
   useEffect(() => {
     const host = canvasHost.current;
@@ -409,6 +420,37 @@ function MiniPlayer({ win, onBack }: { win: Window; onBack: () => void }) {
           screen. Without it the browser picks the box (a viewport), and the Windows app's picked
           one larger than this window: the picture was cut on the right and bottom (#566). */}
       <div ref={canvasHost} className="rp-place pointer-events-none absolute inset-0 z-0 flex items-center justify-center" />
+      <PadAsks pending={padLink.pending} />
+      <JoinAsks addr={target?.host ?? null} asks={join.asks} />
+      {passcode && (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/80 px-3 text-center text-sm text-white" role="alert" data-testid="rp-pip-passcode">
+          {tr("rp_passcode_title", undefined, "Enter this PS5 user's passcode")}
+          <button type="button" onClick={onBack} className="rounded-full bg-white px-3 py-1 text-xs font-medium text-black">
+            {tr("rp_pip_back", undefined, "Back to the app")}
+          </button>
+        </div>
+      )}
+      {stopAsk !== null && (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/80 px-3 text-center text-sm text-white" role="alertdialog" data-testid="rp-pip-stop-ask">
+          {tr("pt_confirm_stop", { n: stopAsk }, `Stopping Play ends Play Together for ${stopAsk} friend(s). Continue?`)}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setStopAsk(null);
+                stop();
+              }}
+              className="rounded-full bg-[var(--color-danger,#dc2626)] px-3 py-1 text-xs font-medium text-white"
+              data-testid="rp-pip-stop-yes"
+            >
+              {tr("join_confirm_continue", undefined, "Continue")}
+            </button>
+            <button type="button" onClick={() => setStopAsk(null)} className="rounded-full bg-white/15 px-3 py-1 text-xs text-white">
+              {tr("rp_switch_cancel", undefined, "Cancel")}
+            </button>
+          </div>
+        </div>
+      )}
       {waiting && (
         <div className="absolute inset-0 flex items-center justify-center gap-2 bg-black/40 text-sm text-white/85">
           <Spinner size={16} tone="inherit" />
@@ -459,7 +501,7 @@ function MiniPlayer({ win, onBack }: { win: Window; onBack: () => void }) {
         </button>
         <button
           type="button"
-          onClick={stop}
+          onClick={() => void askStop()}
           className="flex h-8 shrink-0 items-center gap-1 rounded-full bg-[var(--color-danger,#dc2626)] px-2.5 text-xs font-medium text-white hover:brightness-110"
           data-testid="rp-pip-stop"
         >

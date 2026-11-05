@@ -26,6 +26,8 @@ const jobCancel = vi.fn();
 const jobPause = vi.fn();
 const jobResume = vi.fn();
 const installStream = vi.fn();
+const runningJobs = vi.fn(async (..._a: unknown[]): Promise<unknown[]> => []);
+const inspect = vi.fn(async (..._a: unknown[]): Promise<{ content_id?: string | null }> => ({}));
 const uploadInstall = vi.fn();
 // The staged row an upload install reports through; the test drives it.
 type Listener = (s: { entries: { path: string; status: string; bytes?: number; totalBytes?: number }[] }) => void;
@@ -38,7 +40,8 @@ vi.mock("../api/fpkg", () => ({
     build: (...a: unknown[]) => build(...a),
     extract: (...a: unknown[]) => extract(...a),
     cleanupExtract: (...a: unknown[]) => cleanupExtract(...(a as [])),
-    compress: vi.fn(),
+    runningJobs: (...a: unknown[]) => runningJobs(...a),
+    inspect: (...a: unknown[]) => inspect(...a),
     deletePackage: (...a: unknown[]) => deletePackage(...(a as [])),
   },
 }));
@@ -47,6 +50,7 @@ vi.mock("../api/ps5", () => ({
   jobCancel: (...a: unknown[]) => jobCancel(...a),
   jobPause: (...a: unknown[]) => jobPause(...a),
   jobResume: (...a: unknown[]) => jobResume(...a),
+  fetchVolumes: async () => [],
 }));
 vi.mock("./pkgLibrary", () => ({
   pkgLibraryStore: () => ({
@@ -99,6 +103,7 @@ describe("fpkg pipeline", () => {
     useFpkgConversion.setState({ pipeline: { phase: "idle" } });
     useTaskStore.setState({ tasks: [] });
     build.mockReset().mockResolvedValue({ job_id: "j1" });
+    runningJobs.mockReset().mockResolvedValue([]);
     extract.mockReset().mockResolvedValue({ job_id: "x1" });
     runSwap.mockReset();
     finishSwap.mockClear();
@@ -359,22 +364,6 @@ describe("fpkg pipeline", () => {
     expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "done", titleId: "PPSA17221" });
   });
 
-  it("shows a compression job's progress though it reports no stages", async () => {
-    const compressJob = vi.fn().mockResolvedValue({ job_id: "c1" });
-    const { fpkg } = await import("../api/fpkg");
-    (fpkg as unknown as { compress: unknown }).compress = compressJob;
-    jobStatus.mockResolvedValueOnce({ status: "running", bytes_sent: 5, total_bytes: 10 });
-    await useFpkgConversion.getState().compress("/games/a.exfat");
-    await tick();
-    expect(useFpkgConversion.getState().pipeline).toMatchObject({
-      phase: "running",
-      mode: "ffpfsc",
-      stage: "compress",
-      stageDone: 5,
-      stageTotal: 10,
-    });
-  });
-
   it("sends the fast check by default and the full one when it is on", async () => {
     const { useConvertPrefs } = await import("./convertPrefs");
     const req = { source: "/games/a", outputDir: "/out" };
@@ -489,6 +478,7 @@ describe("fpkg pipeline", () => {
     });
     jobStatus.mockResolvedValueOnce({ status: "done", dest: "/out/W-app.ffpfsc", bytes_sent: 9 });
     await tick();
+    await tick(); // Its drive is decided with the console's drive list (#673).
     expect(added).toEqual([
       expect.objectContaining({
         sourceKind: "image",
@@ -576,10 +566,8 @@ describe("fpkg pipeline", () => {
 
   it("compresses in the same engine job, with no second job or leftover image", async () => {
     const buildImage = vi.fn().mockResolvedValue({ job_id: "i1" });
-    const compressJob = vi.fn().mockResolvedValue({ job_id: "c1" });
     const { fpkg } = await import("../api/fpkg");
     (fpkg as unknown as { buildImage: unknown }).buildImage = buildImage;
-    (fpkg as unknown as { compress: unknown }).compress = compressJob;
     jobStatus.mockResolvedValueOnce({
       status: "running",
       bytes_sent: 4,
@@ -601,7 +589,6 @@ describe("fpkg pipeline", () => {
       phase: "done",
       packagePath: "/out/G.ffpfsc",
     });
-    expect(compressJob).not.toHaveBeenCalled();
     expect(deletePackage).not.toHaveBeenCalled();
   });
 
@@ -723,6 +710,59 @@ describe("fpkg pipeline", () => {
     expect(await commandTask(t(), "cancel")).toBe(false); // a no-op, and says so
   });
 
+  it("a cancel is said as a cancel: no error notification", async () => {
+    const { pushNotification } = await import("./notifications");
+    vi.mocked(pushNotification).mockClear();
+    jobStatus.mockResolvedValueOnce({ status: "failed", error: "the build was cancelled" });
+    await useFpkgConversion.getState().start(req, { install: false, host: null });
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "failed", cancelled: true });
+    expect(pushNotification).not.toHaveBeenCalled();
+  });
+
+  it("has nothing to follow when the engine answers no list", async () => {
+    for (const answer of [null, {}, undefined]) {
+      runningJobs.mockResolvedValueOnce(answer as never);
+      await expect(useFpkgConversion.getState().attachRunning()).resolves.toBeUndefined();
+      expect(useFpkgConversion.getState().pipeline.phase).toBe("idle");
+    }
+  });
+
+  it("follows a build left running by a reload, and leaves its result for the queue", async () => {
+    runningJobs.mockResolvedValueOnce([{ job_id: "j9", kind: "image", source: "/g/A", started_at_ms: 5 }]);
+    await useFpkgConversion.getState().attachRunning();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      phase: "running",
+      mode: "image",
+      source: "/g/A",
+      jobId: "j9",
+      attached: true,
+    });
+    jobStatus.mockResolvedValueOnce({ status: "done", dest: "/out/A.exfat", bytes_sent: 3 });
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      phase: "done",
+      packagePath: "/out/A.exfat",
+      attached: true,
+    });
+  });
+
+  it("does not take over a window that is already busy", async () => {
+    await useFpkgConversion.getState().start(req, { install: false, host: null });
+    runningJobs.mockResolvedValueOnce([{ job_id: "j9", kind: "image", source: "/g/A", started_at_ms: 5 }]);
+    await useFpkgConversion.getState().attachRunning();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ source: "/games/a" });
+  });
+
+  it("an unpack whose page closed is dropped and the user is told", async () => {
+    runningJobs.mockResolvedValueOnce([{ job_id: "x9", kind: "extract", source: "/g/A.rar", started_at_ms: 5 }]);
+    jobStatus.mockResolvedValueOnce({ status: "done", dest: "/out/.ps5upload-extract-1/G" });
+    await useFpkgConversion.getState().attachRunning();
+    await tick();
+    expect(cleanupExtract).toHaveBeenCalled();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "failed", source: "/g/A.rar" });
+  });
+
   it("ends a cancelled build as cancelled and a broken one as failed", async () => {
     jobStatus.mockResolvedValueOnce({ status: "failed", error: "the build was cancelled" });
     await useFpkgConversion.getState().start(req, { install: false, host: null });
@@ -734,14 +774,6 @@ describe("fpkg pipeline", () => {
     await tick();
     const failed = useTaskStore.getState().tasks.find((x) => x.status === "failed");
     expect(failed?.lastError?.message).toBe("disk full");
-  });
-
-  it("names a compression run after its image", async () => {
-    await useFpkgConversion.getState().compress("/games/b.exfat");
-    expect(useTaskStore.getState().tasks[0]).toMatchObject({
-      kind: "ffpfsc-compress",
-      label: "Compress b.exfat",
-    });
   });
 
   it("never lets a finished Convert row cancel the conversion running now", async () => {
@@ -804,6 +836,23 @@ describe("fpkg pipeline", () => {
     const second = remoteFetch.mock.calls[0][1] as string;
     expect(first.startsWith("/out/.ps5upload-source/")).toBe(true);
     expect(second).not.toBe(first);
+  });
+
+  it("says after unpacking when the game inside would not play as a package here", async () => {
+    const { pushNotification } = await import("./notifications");
+    vi.mocked(pushNotification).mockClear();
+    const was = (conn as { ps5Kernel?: string | null }).ps5Kernel;
+    (conn as { ps5Kernel?: string | null }).ps5Kernel = "r229358/releases/13.60";
+    inspect.mockResolvedValueOnce({ content_id: "UP9000-PPSA03671_00-X" });
+    jobStatus
+      .mockResolvedValueOnce({ status: "done", dest: "/out/.ps5upload-extract-x2/G", bytes_sent: 1 })
+      .mockResolvedValueOnce({ status: "failed", error: "stop here" });
+    await useFpkgConversion.getState().start({ source: "/dl/g.7z", outputDir: "/out" }, { install: false, host: null });
+    await tick();
+    await tick();
+    expect(inspect).toHaveBeenCalledWith("/out/.ps5upload-extract-x2/G", "/out");
+    expect(pushNotification).toHaveBeenCalledWith("warning", expect.anything(), expect.objectContaining({ link: "/workshop" }));
+    (conn as { ps5Kernel?: string | null }).ps5Kernel = was;
   });
 
   it("unpacks a local archive, builds the game inside, then removes the unpack", async () => {
@@ -903,13 +952,6 @@ describe("fpkg pipeline", () => {
     expect(archiveStem("C:\\dl\\G.v1.02.7z")).toBe("G.v1.02");
     expect(archiveStem("remote://nas-1/dl/a.ZIP")).toBe("a");
     expect(archiveStem("/dl/Game..rar")).toBe("Game");
-  });
-
-  it("copies a server image before compressing it (compression reads local disk)", async () => {
-    jobStatus.mockResolvedValueOnce({ status: "failed", error: "x" });
-    await useFpkgConversion.getState().compress("remote://nas-1/g.exfat", "/out");
-    expect(useFpkgConversion.getState().pipeline).toMatchObject({ stage: "copy" });
-    expect(remoteFetch).toHaveBeenCalled();
   });
 
   it("swaps a console dump for its package instead of installing beside it", async () => {

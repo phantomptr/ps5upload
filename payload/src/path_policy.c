@@ -106,19 +106,35 @@ static int has_dotdot(const char *p) {
     return 0;
 }
 
+/* /data is a nullfs mount of /user/data (the mount table says so, see volumes.rs), some consoles list
+ * /user again as /original_user, and realpath does not see through a mount: /user/data/ps5upload/ava
+ * is the store under a name the forms above do not match. Every other name of `dir`, for a dir
+ * under /data: the i-th in `out`, returning 1; 0 past the last. */
+static int data_alias(const char *dir, int i, char *out, size_t cap) {
+    static const char *const roots[] = { "/user", "/original_user" };
+    if (strncasecmp(dir, "/data/", 6) != 0 || i >= (int)(sizeof roots / sizeof roots[0])) return 0;
+    return snprintf(out, cap, "%s%s", roots[i], dir) < (int)cap;
+}
+
 /* `norm`/`canon` (the path's two forms) against one protected directory: in_dir = the path is the
  * directory or below it; contains_dir = the directory is the path or below it. */
 static int in_dir(const char *norm, const char *canon, const char *dir) {
-    char pnorm[PATH_MAX], pcanon[PATH_MAX];
+    char pnorm[PATH_MAX], pcanon[PATH_MAX], alias[PATH_MAX];
+    int i;
     lex_normalize(dir, pnorm, sizeof pnorm);
     canonical_of(dir, pcanon, sizeof pcanon);
+    for (i = 0; data_alias(pnorm, i, alias, sizeof alias); i++)
+        if (under(norm, alias) || under(canon, alias)) return 1;
     return under(norm, pnorm) || under(canon, pnorm) || under(norm, pcanon) || under(canon, pcanon);
 }
 
 static int contains_dir(const char *norm, const char *canon, const char *dir) {
-    char pnorm[PATH_MAX], pcanon[PATH_MAX];
+    char pnorm[PATH_MAX], pcanon[PATH_MAX], alias[PATH_MAX];
+    int i;
     lex_normalize(dir, pnorm, sizeof pnorm);
     canonical_of(dir, pcanon, sizeof pcanon);
+    for (i = 0; data_alias(pnorm, i, alias, sizeof alias); i++)
+        if (under(alias, norm) || under(alias, canon)) return 1;
     return under(pnorm, norm) || under(pcanon, canon) || under(pnorm, canon) || under(pcanon, norm);
 }
 
@@ -129,6 +145,10 @@ int path_in_protected(const char *p) {
     lex_normalize(p, norm, sizeof norm);
     canonical_of(p, canon, sizeof canon);
     return in_dir(norm, canon, g_protected) || in_dir(norm, canon, PROTECTED_SMB);
+}
+
+int path_read_allowed(const char *p, int unsafe_read, int (*others)(const char *, int)) {
+    return !path_in_protected(p) && others && others(p, unsafe_read);
 }
 
 int path_contains_protected(const char *p) {

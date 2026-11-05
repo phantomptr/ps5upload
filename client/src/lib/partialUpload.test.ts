@@ -17,6 +17,9 @@ describe("partialUploadPath", () => {
     expect(partialUploadPath(item({ sourceKind: "file", errorReason: "preflight_insufficient_space" }))).toBe(
       "/data/homebrew/PPSA03671 Wolverine.ffpfsc.ava-part",
     );
+    expect(partialUploadPath(item({ sourceKind: "pkg", resolvedDest: "/data/pkg/g.pkg" }))).toBe(
+      "/data/pkg/g.pkg.ava-part",
+    );
   });
   it("is null for other failures, folders and archives", () => {
     expect(partialUploadPath(item({ errorReason: "ava1_connect" }))).toBeNull();

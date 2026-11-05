@@ -28,6 +28,9 @@ mod linux_gpu;
 mod quit_signals;
 
 mod commands;
+// Every panic to a file and the app log; a failure to start to a message box (#672).
+#[cfg_attr(mobile, allow(dead_code))]
+mod crash_hook;
 // The engine runs as a spawned sidecar binary on desktop, but in-process
 // (linked library) on mobile, where Tauri has no sidecar model. Same
 // `start`/`stop`/`url` surface either way; see engine.rs / engine_mobile.rs.
@@ -52,6 +55,9 @@ mod bg_activity;
 // The JavaVM / Application context every Android JNI caller shares.
 #[cfg(target_os = "android")]
 mod android_jni;
+// Phones: stderr (the shell's and the engine's) to engine.log and logcat; panics to the same file.
+#[cfg(any(mobile, test))]
+mod mobile_log;
 // Quitting never hangs: the exit clean-up is time-boxed, children killed past it.
 #[cfg(desktop)]
 mod exit_guard;
@@ -125,6 +131,11 @@ pub fn screenshot_decoder_child() -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Before anything that can fail, so that it leaves a word behind (#672). Phones have theirs
+    // in mobile_log.
+    #[cfg(desktop)]
+    crash_hook::install();
+
     // Linux WebKitGTK white-screen rescue, matched to the graphics stack.
     //
     // The shipped `PS5Upload.sh` launcher exports one of these too, but a user
@@ -185,7 +196,7 @@ pub fn run() {
     // stages the download first, see commands/dragout.rs).
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let builder = builder.plugin(tauri_plugin_drag::init());
-    let app = builder
+    let built = builder
         // ps5upload:// links (a Play Together invite's "Open in the PS5Upload app"), after
         // single-instance so a second launch's link reaches this one (open_links.rs).
         .plugin(tauri_plugin_deep_link::init())
@@ -207,18 +218,18 @@ pub fn run() {
             // A package this launch was asked to open (Windows / Linux pass it as an
             // argument; macOS sends RunEvent::Opened below). The page takes it on load.
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            {
+            crash_hook::optional("files this launch was asked to open", || {
                 let argv: Vec<String> = std::env::args_os()
                     .map(|a| a.to_string_lossy().into_owned())
                     .collect();
                 let cwd = std::env::current_dir().unwrap_or_default();
                 opened_files::push(opened_files::package_args(&argv, &cwd));
-            }
+            });
 
             // ps5upload:// links: the one this launch was opened with, and any that arrive later.
             // Installers register the scheme (bundle config); Windows and Linux also register it
             // at run time, for the portable zip and the AppImage.
-            {
+            crash_hook::optional("ps5upload:// links", || {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 #[cfg(any(windows, target_os = "linux"))]
                 match app.deep_link().register_all() {
@@ -240,10 +251,17 @@ pub fn run() {
                         tray::show_main(&handle);
                     }
                 });
-            }
+            });
 
             // The main window (built here, not from the config, so Remote Play's picture in
             // picture can open from it; see pip_window).
+            // Tauri turns an error from setup into a panic with no explanation, and the app is
+            // nothing without this window: end here and say why (#672).
+            #[cfg(desktop)]
+            if let Err(e) = pip_window::build_main(app.handle()) {
+                crash_hook::fatal(crash_hook::Stage::Window, &e.to_string());
+            }
+            #[cfg(mobile)]
             pip_window::build_main(app.handle())?;
 
             // Linux: SIGTERM / SIGINT / SIGHUP quit through the normal exit, so the
@@ -254,19 +272,23 @@ pub fn run() {
             // Open the main window centred + fully on-screen. Desktop-only —
             // the centre/monitor/size window APIs don't exist on mobile, so
             // this is a no-op there (see center_main_window).
-            center_main_window(app.handle());
+            crash_hook::optional("placing the window", || center_main_window(app.handle()));
 
             // One-time 6.0 upgrade clean-up of this app's data folder (old files are moved
             // aside, never reset). Desktop-only: mobile installs start on 6.x.
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            {
+            crash_hook::optional("the 6.0 data clean-up", || {
                 use tauri::Manager;
                 if let Ok(dir) = app.path().app_data_dir() {
                     for line in migrate_6::run(&dir) {
                         eprintln!("[tauri] 6.0 upgrade: {line}");
                     }
                 }
-            }
+            });
+
+            // Before the engine: its first lines go to the log file too.
+            #[cfg(mobile)]
+            mobile_log::start(app.handle());
 
             // Spawn the Rust engine binary as a sidecar. On failure we log and
             // keep the window open so the user can see diagnostic info — the
@@ -289,7 +311,13 @@ pub fn run() {
                         bg_activity::spawn(&handle);
                     }
                     Err(e) => {
-                        let message = format!("engine failed to start: {e:#}");
+                        // A coded failure goes as it is: the renderer words it.
+                        let text = format!("{e:#}");
+                        let message = if text.starts_with('{') {
+                            text
+                        } else {
+                            format!("engine failed to start: {text}")
+                        };
                         {
                             use tauri::Emitter;
                             let _ = handle.emit("ps5upload-engine-startup-error", &message);
@@ -329,10 +357,8 @@ pub fn run() {
             commands::transfer_dir,
             commands::transfer_file_list,
             commands::transfer_zip,
-            commands::zip_inspect,
             commands::zip_inspect_stream,
             commands::transfer_7z,
-            commands::sevenz_inspect,
             commands::sevenz_inspect_stream,
             commands::transfer_rar,
             commands::rar_inspect,
@@ -343,7 +369,6 @@ pub fn run() {
             commands::profile_np_state,
             commands::profile_np_backup,
             commands::profile_np_restore,
-            commands::user_create,
             commands::user_delete,
             commands::backup_snapshot,
             commands::backup_list,
@@ -428,7 +453,7 @@ pub fn run() {
             commands::ps5_elfldr_health,
             commands::ps5_elfldr_ensure,
             commands::ps5_payload_load_console,
-            commands::ffpfsc_compress,
+            commands::workshop_jobs,
             commands::exfat_build,
             commands::folder_build,
             commands::fpkg_extract,
@@ -451,7 +476,6 @@ pub fn run() {
             commands::ffpkg_extract,
             commands::pkg_installed_inventory,
             commands::pkg_install_preflight,
-            commands::pkg_remote_download_start,
             commands::pkg_remote_download_status,
             commands::pkg_remote_download_cancel,
             commands::pkg_remote_probe,
@@ -489,6 +513,7 @@ pub fn run() {
             commands::payloads_local_inventory,
             commands::payloads_local_path,
             commands::payloads_download,
+            commands::payloads_download_cancel,
             commands::payloads_add_custom_repo,
             commands::payloads_remove_custom_repo,
             // ── ShadowMount+ awareness (read-only) ──────────────────
@@ -545,13 +570,10 @@ pub fn run() {
             commands::save_archive_make_temp,
             commands::save_archive_cleanup_temp,
             commands::save_archive_zip,
-            commands::save_auto_backup_slot,
-            commands::save_archive_unzip,
             // Format-aware backup/restore: strip `sdimg_` prefix from
             // PS4-style images and drop Sony's nested bookkeeping so
             // backups are clean and cross-tool compatible.
             commands::save_archive_backup_finalize,
-            commands::save_archive_restore_prepare,
             // Generic text read/write at a user-picked path — backs the
             // bug-report bundle + settings export/import + search/stats
             // exports, which can't use plugin-fs read/writeTextFile
@@ -601,7 +623,6 @@ pub fn run() {
             commands::peripheral_beep,
             commands::peripheral_led,
             commands::peripheral_led_dim,
-            commands::proc_modules_get,
             commands::proc_list_get,
             // Shell + CRC32 + app.db query
             commands::shell_run_cmd,
@@ -659,11 +680,13 @@ pub fn run() {
             commands::user_config_save, // ~/.ps5upload/settings.json atomic write
             commands::user_config_path_resolved, // show-the-path for the Settings UI
             commands::app_data_reset,   // factory-reset: wipe all local data/metadata
+            commands::app_close_after_reset,
             // ── Connectivity + payload lifecycle probes ─────────────
             // Used by the Connection + Send payload tabs for
             // reachability checks and payload delivery.
             commands::port_check,
             commands::payload_send,
+            commands::payload_send_check,
             commands::payload_check,
             commands::payload_probe,
             // ── Self-update ─────────────────────────────────────────
@@ -673,6 +696,7 @@ pub fn run() {
             // commands/updates.rs for the full flow.
             commands::update_check,
             commands::update_download,
+            commands::update_download_cancel,
             commands::update_install,
             commands::update_install_on_quit,
             commands::update_last_install,
@@ -681,6 +705,7 @@ pub fn run() {
             commands::update_remove_old_downloads,
             commands::update_can_self_install,
             commands::update_open_log,
+            commands::reveal::open_local_folder,
             // Android: the APK into the app cache with progress, for the system installer.
             commands::update_download_apk,
             tray::tray_configure,
@@ -700,6 +725,9 @@ pub fn run() {
             // read). Harmless helpers on desktop.
             commands::local_list_dir,
             commands::local_storage_roots,
+            commands::local_downloads_dir,
+            commands::ios_inbox_sweep,
+            commands::ios_inbox_release,
             commands::storage_access_granted,
             commands::request_storage_access,
             // ── Background work (#457) ──────────────────────────────
@@ -714,8 +742,14 @@ pub fn run() {
             open_links::open_links_take,
             open_links::open_links_status,
         ])
-        .build(tauri::generate_context!())
-        .expect("tauri runtime failed to build");
+        .build(tauri::generate_context!());
+    let app = match built {
+        Ok(app) => app,
+        #[cfg(desktop)]
+        Err(e) => crash_hook::fatal(crash_hook::Stage::Start, &e.to_string()),
+        #[cfg(mobile)]
+        Err(e) => panic!("tauri runtime failed to build: {e}"),
+    };
 
     // App-level run loop. We use `RunEvent::Exit` (fires once when the
     // Tauri runtime is about to leave its run loop, regardless of how
@@ -745,6 +779,11 @@ pub fn run() {
         #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Reopen { .. } = &event {
             tray::show_main(_handle);
+        }
+        // Back from the background: iOS may have reclaimed the engine's listening socket.
+        #[cfg(mobile)]
+        if let tauri::RunEvent::Resumed = &event {
+            tauri::async_runtime::spawn(engine::check_listener());
         }
         if let tauri::RunEvent::Exit = event {
             // A downloaded update armed for the quit: its script waits for this process to end,
@@ -776,4 +815,27 @@ pub fn run() {
             tauri::async_runtime::block_on(cleanup);
         }
     });
+}
+
+#[cfg(test)]
+mod profile_tests {
+    /// `panic = "abort"` in this package's release profile switches off every `catch_unwind` in
+    /// shipped builds, and `cargo test` ignores the setting, so no other test can notice.
+    #[test]
+    fn release_profile_keeps_unwinding() {
+        let manifest = include_str!("../Cargo.toml");
+        let profile = manifest
+            .split("[profile.release]")
+            .nth(1)
+            .expect("Cargo.toml has a release profile")
+            .split("\n[")
+            .next()
+            .unwrap();
+        assert!(
+            !profile
+                .lines()
+                .any(|l| l.trim_start().starts_with("panic") && l.contains("abort")),
+            "the release profile must not set panic = \"abort\""
+        );
+    }
 }

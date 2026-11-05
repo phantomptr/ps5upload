@@ -1,7 +1,11 @@
 import { create } from "zustand";
 
 import type { RarPackage } from "../api/links";
+import { jobCancel } from "../api/ps5";
 import { hostOf } from "../lib/addr";
+import { staticTranslator as tx, trStatic } from "../lib/trStatic";
+import { isAndroid } from "../lib/platform";
+import { isTauriEnv } from "../lib/tauriEnv";
 import type { RarPasswordProblem } from "../lib/rarPassword";
 import { useTaskStore } from "./tasks";
 import type { QueueItem } from "./uploadQueue";
@@ -49,7 +53,12 @@ export interface ArchiveInstallState {
   busy: boolean;
   phase: RarPhase | null;
   result: RarInstallResult | null;
-  /** A raw error, or `not_first` / `not_archive` / `no_first_part` for those the screen
+  /** The unpack's engine job while it runs (what Stop cancels). */
+  unpackJob?: string | null;
+  stopRequested?: boolean;
+  /** An unpack whose status could no longer be read: it may still be writing to `dest`. */
+  lostUnpackJob?: { job: string; dest: string } | null;
+  /** A raw error, or `not_first` / `not_archive` / `no_first_part` / `rar_needs_desktop` for those the screen
    *  words itself. */
   error: string | null;
 }
@@ -169,6 +178,9 @@ export async function chooseArchive(host: string, path: string): Promise<void> {
     }));
   if (archiveKindOf(path) === null)
     return set({ ...state, error: "not_archive" });
+  // The Android engine has no RAR reader: say so here, before anything is read.
+  if (archiveKindOf(path) === "rar" && isAndroid() && isTauriEnv())
+    return set({ ...state, error: "rar_needs_desktop" });
   if (!isArchiveFirstVolume(path)) return set({ ...state, error: "not_first" });
   set(state);
   await inspect(host, path, null);
@@ -184,18 +196,33 @@ export async function submitArchivePassword(
   await inspect(host, cur.archive, password);
 }
 
-/** The Tasks line for a phase. English like the other task details, which are not translated. */
+/** The Tasks line for a phase. */
 function phaseDetail(p: RarPhase): string {
   switch (p.phase) {
     case "listing":
-      return "Reading the archive";
+      return trStatic("arcpkg.phase_listing", "Reading the archive");
     case "unpacking":
-      return "Unpacking the packages to the PS5";
+      return trStatic("arcpkg.phase_unpacking", "Unpacking the packages to the PS5");
     case "reading":
-      return `Checking package ${p.index} of ${p.count}`;
+      return tx("arcpkg.phase_reading", { index: p.index, count: p.count }, "Checking package {index} of {count}");
     case "installing":
-      return `Installing ${p.index} of ${p.count}: ${p.name}`;
+      return tx(
+        "arcpkg.phase_installing",
+        { index: p.index, count: p.count, name: p.name },
+        "Installing {index} of {count}: {name}",
+      );
   }
+}
+
+/** Stops the unpack of a run on `host`. What already reached the console stays in its folder. */
+export async function stopArchiveUnpack(
+  host: string,
+  cancel: (jobId: string) => Promise<void> = jobCancel,
+): Promise<void> {
+  const cur = archiveInstallFor(useArchiveInstallStore.getState(), host);
+  if (!cur?.unpackJob) return;
+  put(host, { stopRequested: true });
+  await cancel(cur.unpackJob).catch(() => {});
 }
 
 /** Unpacks the chosen archive's packages to the console and installs each. Resolves when the
@@ -217,7 +244,7 @@ export async function runArchiveInstall(host: string): Promise<void> {
   const taskId = tasks.registerTask({
     kind: "upload-archive",
     origin: "pkg.archive",
-    label: `Packages from ${name}`,
+    label: tx("arcpkg.task", { name }, "Packages from {name}"),
     consoleId: host,
     status: "running",
   });
@@ -226,6 +253,7 @@ export async function runArchiveInstall(host: string): Promise<void> {
       host,
       archivePath: cur.archive,
       password: cur.password,
+      onUnpackJob: (unpackJob) => put(host, { unpackJob }),
       onPhase: (phase) => {
         put(host, { phase });
         useTaskStore.getState().updateTask(taskId, {
@@ -242,20 +270,23 @@ export async function runArchiveInstall(host: string): Promise<void> {
         });
       },
     });
+    const stopped = archiveInstallFor(useArchiveInstallStore.getState(), host)?.stopRequested === true;
     put(host, {
       result: r,
+      // Its status could not be read any more, so it may still be writing there.
+      lostUnpackJob: r.lostJob ? { job: r.lostJob, dest: r.dest } : null,
       ...(r.password ? { passwordProblem: r.password } : {}),
       ...(r.space ? { target: { dest: r.dest, already: 0, space: r.space } } : {}),
     });
     useTaskStore
       .getState()
-      .finishTask(taskId, r.ok ? "done" : "failed", { detail: r.message });
+      .finishTask(taskId, r.ok ? "done" : stopped ? "cancelled" : "failed", { detail: r.message });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     put(host, { error: message });
     useTaskStore.getState().finishTask(taskId, "failed", { detail: message });
   } finally {
-    put(host, { busy: false, phase: null });
+    put(host, { busy: false, phase: null, unpackJob: null, stopRequested: false });
   }
 }
 
@@ -311,6 +342,7 @@ export function leftoverInUse(
     return true;
   // A run that is going and has not worked out its folder yet: hold every folder.
   if (cur?.busy && !cur.target) return true;
+  if (cur?.lostUnpackJob?.dest === path) return true;
   return queuedPaths.some((p) => p === path || p.startsWith(`${path}/`));
 }
 
@@ -461,22 +493,30 @@ export async function downloadArchiveParts(
       started = await deps.start(url, insecureTls);
     } catch (e) {
       return fail(
-        `Could not start downloading ${which}: ${e instanceof Error ? e.message : String(e)}`,
+        tx(
+          "arcpkg.dl_start_failed",
+          { which, error: e instanceof Error ? e.message : String(e) },
+          "Could not start downloading {which}: {error}",
+        ),
       );
     }
     const id = started.download_id;
     if (!id || !started.path)
-      return fail(`The engine did not start downloading ${which}.`);
+      return fail(tx("arcpkg.dl_not_started", { which }, "The engine did not start downloading {which}."));
     for (;;) {
       let st: LinkStatus;
       try {
         st = await deps.status(id);
       } catch (e) {
         return fail(
-          `Lost track of ${which}: ${e instanceof Error ? e.message : String(e)}`,
+          tx(
+            "arcpkg.dl_lost",
+            { which, error: e instanceof Error ? e.message : String(e) },
+            "Lost track of {which}: {error}",
+          ),
         );
       }
-      if (st.error) return fail(`Downloading ${which} failed: ${st.error}`);
+      if (st.error) return fail(tx("arcpkg.dl_failed", { which, error: st.error }, "Downloading {which} failed: {error}"));
       if (st.cancelled)
         return put(host, { downloading: null, downloaded: paths });
       if (st.done) break;

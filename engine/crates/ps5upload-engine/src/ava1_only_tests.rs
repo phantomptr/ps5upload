@@ -219,6 +219,47 @@ async fn transfer_file_list_with_no_ava1_listener_is_helper_not_ava1() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A file that cannot be read leaves the job, and the answer names it: the run must not report
+/// success with the file simply absent (R2-1 F25).
+#[tokio::test(flavor = "multi_thread")]
+async fn transfer_file_list_names_the_files_it_could_not_read() {
+    let dir = std::env::temp_dir().join(format!("p5-ava1only-fl-skip-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.bin"), b"hello").unwrap();
+    let missing = dir.join("gone.bin").to_string_lossy().into_owned();
+    let jobs: Arc<Mutex<HashMap<Uuid, JobState>>> = Arc::new(Mutex::new(HashMap::new()));
+    let req = TransferFileListReq {
+        addr: Some("127.0.0.1:9113".to_string()),
+        tx_id: None,
+        dest_root: "/data/x".to_string(),
+        files: vec![
+            FileListEntryReq {
+                src: dir.join("a.bin").to_string_lossy().into_owned(),
+                dest: "a.bin".to_string(),
+            },
+            FileListEntryReq {
+                src: missing.clone(),
+                dest: "gone.bin".to_string(),
+            },
+        ],
+        bandwidth_cap_mbps: None,
+    };
+    let resp = transfer_file_list_handler(State(state_for(&jobs)), Json(req))
+        .await
+        .into_response();
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(v["job_id"].is_string());
+    let skipped = v["skipped_unreadable"].as_array().unwrap();
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0]["path"], missing.as_str());
+    assert_helper_not_ava1(&jobs).await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_dir_reconcile_with_no_ava1_listener_is_helper_not_ava1() {
     let dir = std::env::temp_dir().join(format!("p5-ava1only-rc-{}", std::process::id()));
@@ -274,8 +315,46 @@ async fn transfer_download_zip_with_no_ava1_listener_is_helper_not_ava1() {
         dest_zip: dir.join("x.zip").to_string_lossy().into_owned(),
         unsafe_read: false,
         compression: None,
+        existing: None,
     };
     let resp = transfer_download_zip_handler(State(state_for(&jobs)), Json(req))
+        .await
+        .into_response();
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    assert_helper_not_ava1(&jobs).await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A finished download renames over its destination: an earlier backup under that name would be
+/// gone without a word. The person has to have chosen that (the save dialog asks; a script says so).
+#[tokio::test(flavor = "multi_thread")]
+async fn transfer_download_zip_refuses_an_existing_archive_unless_told_to_replace_it() {
+    let dir = std::env::temp_dir().join(format!("p5-dz-existing-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let zip = dir.join("x.zip");
+    std::fs::write(&zip, b"an earlier backup").unwrap();
+    let jobs: Arc<Mutex<HashMap<Uuid, JobState>>> = Arc::new(Mutex::new(HashMap::new()));
+    let req = |existing: Option<&str>| TransferDownloadZipReq {
+        addr: Some("127.0.0.1".to_string()),
+        src_path: "/data/x".to_string(),
+        kind: "folder".to_string(),
+        dest_zip: zip.to_string_lossy().into_owned(),
+        unsafe_read: false,
+        compression: None,
+        existing: existing.map(str::to_string),
+    };
+    let resp = transfer_download_zip_handler(State(state_for(&jobs)), Json(req(None)))
+        .await
+        .into_response();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(resp.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["existing_bytes"], 17);
+    assert!(jobs.lock().unwrap().is_empty(), "no job was started");
+    assert_eq!(std::fs::read(&zip).unwrap(), b"an earlier backup");
+    let resp = transfer_download_zip_handler(State(state_for(&jobs)), Json(req(Some("replace"))))
         .await
         .into_response();
     assert_eq!(resp.status(), StatusCode::ACCEPTED);

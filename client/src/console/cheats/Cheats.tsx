@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Gamepad2, Power, RefreshCw, Search } from "lucide-react";
+import { buttonWorks } from "../help/hints";
 import { useAppCover } from "../home/Home";
-import { onNavAction } from "../nav";
+import { DEFAULT_INPUT_MAP, onNavAction } from "../nav";
 import { t } from "../strings";
 import { pollWhileVisible } from "../ui/visiblePoll";
 import { createFinder, FINDER_CLOSED, savedText, type Finder, type FinderState } from "./finder";
@@ -32,6 +33,8 @@ export interface CheatsViewProps {
   onFind?: () => void;
   /** A finished download, one line (shown until the section changes). */
   notice?: string | null;
+  /** □ was measured on a console: the card may offer it next to ✕. */
+  squareWorks?: boolean;
 }
 
 /**
@@ -243,7 +246,7 @@ export function CheatsView(p: CheatsViewProps) {
                 ? t("cw_cheats_held")
                 : s.status && !engineOn
                   ? t("cw_cheats_engine_off_state")
-                  : t("cw_cheats_how")}
+                  : t(p.squareWorks ? "cw_cheats_how" : "cw_cheats_how_cross")}
             </div>
           </div>
           <div className="cw-cheats-game-buttons">
@@ -314,7 +317,7 @@ export function Cheats() {
   useEffect(() => {
     const c = createCheatsController(setState);
     ctl.current = c;
-    const stop = pollWhileVisible(() => void c.loadStatus(), CHEATS_POLL_MS);
+    const stop = pollWhileVisible(() => c.loadStatus(), CHEATS_POLL_MS);
     const onVisible = () => {
       if (!document.hidden) void c.loadList();
     };
@@ -389,6 +392,7 @@ export function Cheats() {
             : undefined
         }
         notice={notice && notice.title === titleId ? notice.text : null}
+        squareWorks={buttonWorks(DEFAULT_INPUT_MAP, "square")}
       />
       <FindCheats
         state={finderState}

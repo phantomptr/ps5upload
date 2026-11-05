@@ -35,7 +35,13 @@ docs/
 # …except the two the web UI bundles (its FAQ and Changelog screens).
 !FAQ.md
 !CHANGELOG.md
+# The engine serves these as MCP resources (src/mcp/resources.rs, include_str!).
+!AUTOMATION.md
+!API.md
+!MCP.md
 LICENSE*
+# …except the project's own licence, which goes into the image (GPLv3 section 4).
+!LICENSE
 # ...but keep the vendored crate whole: its licences must travel with the
 # source we build from, and excluding them here would quietly drop the
 # attribution that MIT/Apache-2.0 requires.

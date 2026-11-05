@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { routeEngine } from "./fixtures/engine";
 
 // Native keyboard & mouse (lib/kbmInput.ts): Settings › Controls picks Controller, Keyboard & mouse or
 // Mixed; the console's answer gates them; keys go to exactly one sink; everything is let go on blur;
@@ -43,28 +44,24 @@ async function mockConsole(
       }),
     );
   });
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "10.2.1", caps: {} };
-      if (path === "/api/ps5/status") body = status;
-      if (path === "/api/ps5/rp/session") body = { host: null };
-      if (path === "/api/ps5/vinput/caps") {
-        engine.capsAsked++;
-        body = {
-          supported: true,
-          ...caps,
-          open: false,
-          backend: caps.mouse ? "ps5" : "stub",
-          ...(caps.mouse || caps.keyboard ? {} : { reason: "vinput_unsupported" }),
-          ...extra,
-        };
-      }
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
+  await routeEngine(page, (path) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "10.2.1", caps: {} };
+    if (path === "/api/ps5/status") body = status;
+    if (path === "/api/ps5/rp/session") body = { host: null };
+    if (path === "/api/ps5/vinput/caps") {
+      engine.capsAsked++;
+      body = {
+        supported: true,
+        ...caps,
+        open: false,
+        backend: caps.mouse ? "ps5" : "stub",
+        ...(caps.mouse || caps.keyboard ? {} : { reason: "vinput_unsupported" }),
+        ...extra,
+      };
+    }
+    return body;
+  });
   await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, (ws) => {
     ws.onMessage((m) => {
       if (typeof m !== "string") {
@@ -187,8 +184,7 @@ test("Keyboard & mouse sends raw keys, Mixed sends the pad, the hotkey cycles an
 
   // The heartbeat keeps going.
   const beats = engine.kbm.length;
-  await page.waitForTimeout(1200);
-  expect(engine.kbm.length).toBeGreaterThanOrEqual(beats + 2);
+  await expect.poll(() => engine.kbm.length).toBeGreaterThanOrEqual(beats + 2);
 
   // A key held when the window loses the focus is let go.
   await page.keyboard.down("KeyW");
@@ -429,6 +425,24 @@ test("the desktop app grabs the cursor when no pointer lock comes, sends the mou
   await expect.poll(async () => (await cursorCalls(page)).slice(-2)).toEqual(UNGRAB);
 });
 
+test("after Got it on the card the keys still reach the PS5", async ({ page }) => {
+  await noPointerLock(page);
+  const engine = await mockConsole(page, { mouse: true, keyboard: true });
+  await start(page);
+  await nativeMode(page, engine);
+  await page.getByTestId("rp-stage").filter({ visible: true }).click();
+  // Focus on the button, as where a click puts it there (Chromium on a Mac leaves it on the stage,
+  // so a real click there passes either way).
+  const ok = page.getByTestId("rp-kbm-card-ok");
+  await ok.focus();
+  await ok.dispatchEvent("click");
+  await expect(page.getByTestId("rp-kbm-card")).toHaveCount(0);
+  await expect(page.getByTestId("rp-stage").filter({ visible: true })).toBeFocused();
+  engine.reports.length = 0;
+  await page.keyboard.press("KeyA");
+  await expect.poll(() => engine.reports.some((r) => keysOf(r).includes(0x04))).toBe(true);
+});
+
 test("a browser that refuses the pointer lock sends the mouse while it is over the picture", async ({ page }) => {
   await noPointerLock(page);
   const engine = await mockConsole(page, { mouse: true, keyboard: true });
@@ -437,8 +451,7 @@ test("a browser that refuses the pointer lock sends the mouse while it is over t
   const stage = page.getByTestId("rp-stage").filter({ visible: true });
   await expect(page.getByTestId("rp-capture-hint")).toHaveText("Click the picture to capture the mouse");
   await stage.click();
-  await page.waitForTimeout(300); // the lock's wait runs out
-  // The click gave the PS5 the keyboard and mouse all the same: the release key shows instead.
+  // Once the lock's wait runs out. The click gave the PS5 the keyboard and mouse all the same: the release key shows instead.
   await expect(page.getByTestId("rp-capture-hint")).toHaveCount(0);
   await expect(page.getByTestId("rp-kbm-card").or(page.getByTestId("rp-kbm-chip"))).toBeVisible();
   const box = (await stage.boundingBox())!;

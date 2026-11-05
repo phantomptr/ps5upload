@@ -3,7 +3,7 @@ import { PieChart, RefreshCw, ChevronUp, Square, Eraser, FolderOpen } from "luci
 import { Navigate, useNavigate } from "react-router";
 import { useConnectionStore } from "../../state/connection";
 import { Button, EmptyState, ErrorCard, Spinner } from "../../components";
-import { humanizePs5Error } from "../../lib/humanizeError";
+import { humanizePs5Error, humanizeCaught } from "../../lib/humanizeError";
 import { useTr } from "../../state/lang";
 import { formatBytes } from "../../lib/format";
 import { mgmtAddr } from "../../lib/addr";
@@ -11,6 +11,7 @@ import {
   blocksOf,
   cachedFolder,
   forgetWalks,
+  isWalkBusy,
   rememberWalk,
   runWalk,
   type DuBlock,
@@ -108,7 +109,7 @@ export function DiskUsagePanel({
         }
       })
       .catch((e) => {
-        if (!ac.signal.aborted) setError(e instanceof Error ? e.message : String(e));
+        if (!ac.signal.aborted) setError(humanizeCaught(e));
       })
       .finally(() => {
         if (!ac.signal.aborted) setScanning(false);
@@ -226,7 +227,15 @@ export function DiskUsagePanel({
       {error && (
         <ErrorCard
           title={tr("disk_usage_failed", undefined, "Couldn't read this folder")}
-          detail={humanizePs5Error(error) || error}
+          detail={
+            isWalkBusy(error)
+              ? tr(
+                  "disk_usage_busy",
+                  undefined,
+                  "Another folder on this PS5 is being counted. Wait for it to finish, then try again.",
+                )
+              : humanizePs5Error(error) || error
+          }
           action={
             <Button variant="secondary" size="sm" onClick={refresh}>
               {tr("disk_usage_retry", undefined, "Retry")}
@@ -292,13 +301,13 @@ export function DiskUsagePanel({
                 type="button"
                 onClick={() => drill(n.name, n.isDir)}
                 disabled={!n.isDir}
-                className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-[var(--color-surface-3)] disabled:cursor-default disabled:hover:bg-transparent"
+                className="flex w-full items-center justify-between px-3 py-2 text-start text-sm hover:bg-[var(--color-surface-3)] disabled:cursor-default disabled:hover:bg-transparent"
               >
                 <span className="truncate">
                   {n.isDir ? "📁 " : "📄 "}
                   {n.name}
                 </span>
-                <span className="ml-3 shrink-0 text-xs text-[var(--color-muted)]">
+                <span className="ms-3 shrink-0 text-xs text-[var(--color-muted)]">
                   {formatBytes(n.totalSize)}
                 </span>
               </button>

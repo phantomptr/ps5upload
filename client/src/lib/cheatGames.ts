@@ -5,8 +5,10 @@
  *  cheat collection has for it and what is already on the console — plus the
  *  odd cheat downloaded for a game that is not installed here. */
 
+import { compareText } from "./collate";
 import type { CheatRepoEntry, CheatTitle, InstalledTitle } from "../api/ps5";
 import { isSupportedCheatFormat, isUsableGameTitle } from "./cheatBrowse";
+import { compareVersions, sameVersion, versionParts } from "./versionNumbers";
 
 export interface CheatGame {
   titleId: string;
@@ -32,34 +34,7 @@ export interface CheatSection {
   games: CheatGame[];
 }
 
-/** Version strings compared by their numbers, so `01.000.016` equals
- *  `1.0.16` and `01.05` sorts below `01.10`. Non-numeric parts compare as 0. */
-export function versionParts(v: string | null | undefined): number[] {
-  return (v ?? "")
-    .trim()
-    .split(".")
-    .filter((p) => p.length > 0)
-    .map((p) => {
-      const n = parseInt(p, 10);
-      return Number.isFinite(n) ? n : 0;
-    });
-}
-
-export function compareVersions(a: string, b: string): number {
-  const x = versionParts(a);
-  const y = versionParts(b);
-  for (let i = 0; i < Math.max(x.length, y.length); i++) {
-    const d = (x[i] ?? 0) - (y[i] ?? 0);
-    if (d !== 0) return d;
-  }
-  return 0;
-}
-
-export function sameVersion(a: string | null | undefined, b: string | null | undefined): boolean {
-  if (!a || !b) return false;
-  if (versionParts(a).length === 0 || versionParts(b).length === 0) return false;
-  return compareVersions(a, b) === 0;
-}
+export { compareVersions, sameVersion, versionParts };
 
 export function buildCheatGames(input: {
   installed: InstalledTitle[];
@@ -124,8 +99,7 @@ export function buildCheatGames(input: {
  *  games with cheats ready to switch on, games with cheats to download, and
  *  the rest. Alphabetical inside each; empty sections are left out. */
 export function cheatSections(games: CheatGame[]): CheatSection[] {
-  const byName = (a: CheatGame, b: CheatGame) =>
-    a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+  const byName = (a: CheatGame, b: CheatGame) => compareText(a.name, b.name);
   const pick = (f: (g: CheatGame) => boolean) => games.filter(f).sort(byName);
   const sections: CheatSection[] = [
     { key: "playing", games: pick((g) => g.running) },

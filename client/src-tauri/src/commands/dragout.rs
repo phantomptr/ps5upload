@@ -16,23 +16,28 @@ const KEEP_FOR: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Create (or reuse) the staging folder for `key` and return its path. `key`
 /// is any string that identifies the console and remote directory; it is
-/// reduced to a filesystem-safe name.
+/// reduced to a filesystem-safe name. Off the main thread: pruning can delete a stale game
+/// folder of many GB.
 #[tauri::command]
-pub fn dragout_stage_dir(app: AppHandle, key: String) -> Result<String, String> {
+pub async fn dragout_stage_dir(app: AppHandle, key: String) -> Result<String, String> {
     let root: PathBuf = app
         .path()
         .app_local_data_dir()
         .map_err(|e| format!("no app data dir: {e}"))?
         .join("dragout");
-    std::fs::create_dir_all(&root).map_err(|e| format!("create {}: {e}", root.display()))?;
-    prune(&root);
-    let safe: String = key
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect();
-    let dir = root.join(format!("{safe}_{:08x}", fxhash(&key)));
-    std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
-    Ok(dir.to_string_lossy().into_owned())
+    tokio::task::spawn_blocking(move || {
+        std::fs::create_dir_all(&root).map_err(|e| format!("create {}: {e}", root.display()))?;
+        prune(&root);
+        let safe: String = key
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        let dir = root.join(format!("{safe}_{:08x}", fxhash(&key)));
+        std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+        Ok(dir.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| format!("dragout_stage_dir: {e}"))?
 }
 
 /// Remove staging folders that have not been touched for `KEEP_FOR`.

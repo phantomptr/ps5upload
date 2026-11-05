@@ -40,6 +40,14 @@ describe("ps5upload:// controller links", () => {
     expect(q.get("w")).toBeNull();
   });
 
+  it("keep the path an engine is served under", () => {
+    const prefixed = "http://192.168.1.20:19113/ps5/pad#t=0f0f0f0f0f0f0f0f";
+    const r = openLinkRoute(`ps5upload://pad?link=${encodeURIComponent(prefixed)}`)!;
+    expect(new URL(r, "http://x").searchParams.get("url")).toBe(
+      "ws://192.168.1.20:19113/ps5/api/pad/ws",
+    );
+  });
+
   it("keep watch links watching", () => {
     const r = openLinkRoute(`ps5upload://pad?link=${encodeURIComponent(`${pad}&w=1`)}`)!;
     expect(new URL(r, "http://x").searchParams.get("w")).toBe("1");

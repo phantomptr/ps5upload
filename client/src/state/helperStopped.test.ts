@@ -48,7 +48,7 @@ import {
 import { autoRedeployDecision } from "../lib/autoRedeploy";
 import { ensurePayloadCurrent, resetEnsurePayloadState } from "../lib/ensurePayloadCurrent";
 
-const H = "192.168.86.99";
+const H = "192.0.2.99";
 
 beforeEach(() => {
   resetHelperStopped();
@@ -94,7 +94,7 @@ describe("the mark", () => {
   it("is per console and ignores the port and case", () => {
     markHelperStopped(`${H}:9021`);
     expect(isHelperStopped(H)).toBe(true);
-    expect(isHelperStopped("192.168.86.100")).toBe(false);
+    expect(isHelperStopped("192.0.2.100")).toBe(false);
     markHelperStopped("PS5.local");
     expect(isHelperStopped("ps5.local")).toBe(true);
     clearHelperStopped(H);

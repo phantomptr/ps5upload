@@ -147,18 +147,96 @@ fn env_u64(key: &str, default: u64, min: u64, max: u64) -> u64 {
 #[derive(Debug, Clone)]
 pub struct RemoteProbe {
     pub total_size: u64,
-    /// Filename from the URL path, when it had one. Used only for display.
+    /// The name the response gives its file (Content-Disposition, else the last segment of the URL
+    /// it came from, decoded), when it does: a display name, or the start of a local one.
     pub filename: String,
     /// The origin's validators, when it sends them: a resumed download checks them so a
-    /// changed file is never spliced onto an older one.
+    /// changed file is never spliced onto an older one, and every later request asks for this
+    /// revision (see [`OriginValidators`]).
     pub etag: Option<String>,
     pub last_modified: Option<String>,
+}
+
+impl RemoteProbe {
+    pub fn validators(&self) -> OriginValidators {
+        OriginValidators {
+            etag: self.etag.clone(),
+            last_modified: self.last_modified.clone(),
+        }
+    }
+}
+
+/// What an origin said identifies this revision of the file. A link install runs for hours over
+/// many connections: a mirror rotating or a re-upload would otherwise splice another file into the
+/// package the console is writing.
+#[derive(Debug, Clone, Default)]
+pub struct OriginValidators {
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+}
+
+impl OriginValidators {
+    /// What `If-Range` can carry: a strong ETag, else the date. A weak ETag never matches there
+    /// (RFC 9110 asks for a strong comparison), so sending one would refuse every range.
+    fn if_range(&self) -> Option<&str> {
+        let usable = |v: &&str| !v.trim().is_empty();
+        self.etag
+            .as_deref()
+            .filter(usable)
+            .filter(|e| !e.trim_start().starts_with("W/"))
+            .or(self.last_modified.as_deref().filter(usable))
+    }
+}
+
+/// What a read fails with once the file behind the link has changed.
+pub(crate) const ORIGIN_CHANGED: &str =
+    "the file at this link changed while it was being read, so what was \
+     read so far can't be finished with it; start again";
+
+/// Whether a 200 to `If-Range` means another file. The body is the origin's whole current file, so
+/// its length and date say more than the validator: a mirror that spells its ETag differently (or
+/// a new one per response) serves the same bytes. Without a date to compare, a validator that had
+/// been honoured and no longer is means the file changed; one never honoured says nothing.
+fn origin_changed_on_200(
+    known: &OriginValidators,
+    total_size: u64,
+    content_length: Option<u64>,
+    last_modified: Option<&str>,
+    validator_honoured: bool,
+) -> bool {
+    if content_length.is_some_and(|l| l != total_size) {
+        return true;
+    }
+    match (known.last_modified.as_deref(), last_modified) {
+        (Some(a), Some(b)) => a.trim() != b.trim(),
+        _ => validator_honoured,
+    }
+}
+
+/// `bytes 5-9/100` as (5, Some(100)); a `*` total is `None`.
+fn parse_content_range(value: &str) -> Option<(u64, Option<u64>)> {
+    let spec = value.trim().strip_prefix("bytes")?.trim_start();
+    let (range, total) = spec.split_once('/')?;
+    let start = range.split_once('-')?.0.trim().parse().ok()?;
+    let total = match total.trim() {
+        "*" => None,
+        t => Some(t.parse().ok()?),
+    };
+    Some((start, total))
 }
 
 /// A package on an HTTP(S) origin, readable by byte range.
 pub struct RemoteSource {
     url: String,
     total_size: u64,
+    /// What the probe said identifies this revision of the file.
+    validators: OriginValidators,
+    /// The origin honoured `If-Range` at least once.
+    validator_honoured: std::sync::atomic::AtomicBool,
+    /// Its `If-Range` turned out to be unusable (an ETag per response, say): not sent any more.
+    validator_off: std::sync::atomic::AtomicBool,
+    /// The file changed: every later read fails at once, with the reason.
+    origin_changed: std::sync::atomic::AtomicBool,
     window_bytes: u64,
     parallelism: usize,
     max_windows: usize,
@@ -261,6 +339,8 @@ enum FetchErr {
         status: u16,
         retry_after: Option<Duration>,
     },
+    /// The origin no longer serves the revision this source started on.
+    OriginChanged,
     Other(String),
 }
 
@@ -278,6 +358,7 @@ impl std::fmt::Display for FetchErr {
                     None => String::new(),
                 }
             ),
+            FetchErr::OriginChanged => write!(f, "{ORIGIN_CHANGED}"),
             FetchErr::Other(m) => write!(f, "{m}"),
         }
     }
@@ -365,6 +446,86 @@ impl PieceStat {
 /// the shape of the 1.9 MB/s reports — a browser or download manager holds
 /// its connections open and never pays this.
 pub(crate) fn build_agent(parallelism: usize, insecure_tls: bool) -> ureq::Agent {
+    build_agent_guarded(
+        parallelism,
+        insecure_tls,
+        links_are_guarded().then_some(link_target_refused),
+    )
+}
+
+/// Whether link fetches are kept away from this machine and its link-local neighbours. Only when
+/// the API is open beyond this computer (PS5UPLOAD_ALLOW_IP): the engine then fetches what other
+/// machines name and reports what it found, which must not reach what only it can see (itself, a
+/// cloud metadata address). On a loopback-only engine the one asking is on this computer anyway,
+/// and a link to a server on it is a real use. A LAN server stays allowed either way.
+/// PS5UPLOAD_ALLOW_LOCAL_LINKS=1 opts out.
+fn links_are_guarded() -> bool {
+    !crate::pkg_install::parse_allow_ips_env().is_empty()
+        && std::env::var("PS5UPLOAD_ALLOW_LOCAL_LINKS").as_deref() != Ok("1")
+}
+
+/// The addresses a guarded fetch does not connect to: this machine, the unspecified address,
+/// link-local (169.254.169.254 is where clouds answer with credentials) and multicast.
+fn link_target_refused(addr: std::net::SocketAddr) -> bool {
+    use std::net::IpAddr;
+    match addr.ip().to_canonical() {
+        IpAddr::V4(ip) => {
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_link_local()
+                || ip.is_multicast()
+                || ip.is_broadcast()
+        }
+        IpAddr::V6(ip) => {
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || (ip.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
+}
+
+/// Name resolution that drops refused addresses. At this level it covers every hop of a redirect
+/// and a name that resolves differently the second time, which a check of the URL up front cannot.
+#[derive(Debug)]
+struct GuardedResolver {
+    inner: ureq::unversioned::resolver::DefaultResolver,
+    refused: fn(std::net::SocketAddr) -> bool,
+}
+
+impl ureq::unversioned::resolver::Resolver for GuardedResolver {
+    fn resolve(
+        &self,
+        uri: &ureq::http::Uri,
+        config: &ureq::config::Config,
+        timeout: ureq::unversioned::transport::NextTimeout,
+    ) -> Result<ureq::unversioned::resolver::ResolvedSocketAddrs, ureq::Error> {
+        let found = self.inner.resolve(uri, config, timeout)?;
+        // Through a proxy this is the proxy's own address, which the operator chose.
+        if config.proxy().is_some() {
+            return Ok(found);
+        }
+        let mut kept = self.empty();
+        for addr in found.iter().filter(|a| !(self.refused)(**a)) {
+            kept.push(*addr);
+        }
+        if kept.is_empty() {
+            return Err(ureq::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "this engine is open to the network, so it does not fetch links to its own \
+                 machine or to link-local addresses. Use the server's LAN address, or set \
+                 PS5UPLOAD_ALLOW_LOCAL_LINKS=1",
+            )));
+        }
+        Ok(kept)
+    }
+}
+
+fn build_agent_guarded(
+    parallelism: usize,
+    insecure_tls: bool,
+    refused: Option<fn(std::net::SocketAddr) -> bool>,
+) -> ureq::Agent {
     let keep = parallelism.max(1);
     let config = ureq::Agent::config_builder()
         // Certificate verification stays ON unless the caller asked for it to
@@ -387,7 +548,17 @@ pub(crate) fn build_agent(parallelism: usize, insecure_tls: bool) -> ureq::Agent
         .max_idle_connections_per_host(keep)
         .max_idle_connections(keep.saturating_mul(2).max(10))
         .build();
-    ureq::Agent::new_with_config(config)
+    match refused {
+        None => ureq::Agent::new_with_config(config),
+        Some(refused) => ureq::Agent::with_parts(
+            config,
+            ureq::unversioned::transport::DefaultConnector::default(),
+            GuardedResolver {
+                inner: Default::default(),
+                refused,
+            },
+        ),
+    }
 }
 
 /// `bytes 0-0/12345` → `12345`. A `*` total (unknown length) is rejected: the
@@ -396,16 +567,6 @@ pub(crate) fn build_agent(parallelism: usize, insecure_tls: bool) -> ureq::Agent
 fn total_from_content_range(value: &str) -> Option<u64> {
     let (_, total) = value.rsplit_once('/')?;
     total.trim().parse::<u64>().ok().filter(|t| *t > 0)
-}
-
-fn filename_from_url(url: &str) -> String {
-    url.split(['?', '#'])
-        .next()
-        .unwrap_or("")
-        .rsplit('/')
-        .next()
-        .unwrap_or("")
-        .to_string()
 }
 
 /// Deliberately omits the URL: an install link can carry a signed query token
@@ -452,6 +613,10 @@ impl RemoteSource {
             .call()
             .map_err(|e| format!("could not reach the package URL: {e}"))?;
         let round_trip = probe_started.elapsed();
+        let final_url = {
+            use ureq::ResponseExt;
+            resp.get_uri().to_string()
+        };
 
         // Who is on the other end, and how far away.
         //
@@ -512,7 +677,11 @@ impl RemoteSource {
         };
         Ok(RemoteProbe {
             total_size,
-            filename: filename_from_url(url),
+            // Where the link ended up says more than the link itself (a share link, a redirect).
+            filename: crate::link::name_from_response(
+                validator("content-disposition").as_deref(),
+                &final_url,
+            ),
             etag: validator("etag"),
             last_modified: validator("last-modified"),
         })
@@ -573,6 +742,10 @@ impl RemoteSource {
         Self {
             url,
             total_size,
+            validators: OriginValidators::default(),
+            validator_honoured: std::sync::atomic::AtomicBool::new(false),
+            validator_off: std::sync::atomic::AtomicBool::new(false),
+            origin_changed: std::sync::atomic::AtomicBool::new(false),
             window_bytes,
             parallelism,
             active: AtomicUsize::new(parallelism.max(1)),
@@ -599,8 +772,23 @@ impl RemoteSource {
         }
     }
 
+    /// Every request from here on asks for this revision of the file.
+    pub fn with_validators(mut self, validators: OriginValidators) -> Self {
+        self.validators = validators;
+        self
+    }
+
+    /// The file behind the link is no longer the one this source started on. Every read fails from
+    /// then on.
+    pub fn origin_changed(&self) -> bool {
+        self.origin_changed.load(Ordering::Relaxed)
+    }
+
     /// Read `[start, end]` inclusive. Blocking: call from `spawn_blocking`.
     pub fn read_range(&self, start: u64, end: u64) -> std::io::Result<Vec<u8>> {
+        if self.origin_changed() {
+            return Err(std::io::Error::other(ORIGIN_CHANGED));
+        }
         if self.total_size == 0 || start >= self.total_size || end < start {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -1139,6 +1327,12 @@ impl RemoteSource {
                     .to_string();
                     std::thread::sleep(wait);
                 }
+                // Said once more on another connection in case a mirror answered: the second answer
+                // settles it, and asking any longer would only read a package that cannot be used.
+                Err(FetchErr::OriginChanged) if stalls > 0 => {
+                    self.origin_changed.store(true, Ordering::Relaxed);
+                    return Err(ORIGIN_CHANGED.to_string());
+                }
                 Err(e) => {
                     stalls += 1;
                     last_err = e.to_string();
@@ -1164,19 +1358,55 @@ impl RemoteSource {
         dst: &mut [u8],
     ) -> Result<(u64, Duration), FetchErr> {
         let started = std::time::Instant::now();
-        let resp = agent
+        let if_range = self
+            .validators
+            .if_range()
+            .filter(|_| !self.validator_off.load(Ordering::Relaxed));
+        let mut request = agent
             .get(&self.url)
             .header("User-Agent", "ps5upload")
-            .header("Range", &format!("bytes={start}-{end}"))
+            .header("Range", &format!("bytes={start}-{end}"));
+        if let Some(v) = if_range {
+            request = request.header("If-Range", v);
+        }
+        let resp = request
             .call()
             .map_err(|e| FetchErr::Other(format!("{e}")))?;
         let ttfb = started.elapsed();
+        let header = |name: &str| {
+            resp.headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+        };
         let status = resp.status().as_u16();
         if status == 429 || status == 503 {
             return Err(FetchErr::RateLimited {
                 status,
                 retry_after: retry_after_of(&resp),
             });
+        }
+        // `If-Range` did not match: the whole current file is on its way instead of the range.
+        if status == 200 && if_range.is_some() {
+            let content_length = header("content-length").and_then(|v| v.trim().parse().ok());
+            if origin_changed_on_200(
+                &self.validators,
+                self.total_size,
+                content_length,
+                header("last-modified").as_deref(),
+                self.validator_honoured.load(Ordering::Relaxed),
+            ) {
+                return Err(FetchErr::OriginChanged);
+            }
+            // The same file: this origin's validator just cannot be used.
+            if !self.validator_off.swap(true, Ordering::Relaxed) {
+                crate::log_info!(
+                    "url-install origin: it does not honour its own validator; going on without one"
+                );
+            }
+            return Err(FetchErr::Other(
+                "the origin did not honour its validator".into(),
+            ));
         }
         if status != 206 {
             // A 200 here means the origin ignored the Range and is about to
@@ -1185,6 +1415,24 @@ impl RemoteSource {
             return Err(FetchErr::Other(format!(
                 "expected 206 for a range request, got {status}"
             )));
+        }
+        // The bytes are only what was asked for if the answer says so: copied blindly, a server (or
+        // something in between) answering another range puts the wrong bytes at this offset.
+        if let Some((got_start, got_total)) = header("content-range")
+            .as_deref()
+            .and_then(parse_content_range)
+        {
+            if got_total.is_some_and(|t| t != self.total_size) {
+                return Err(FetchErr::OriginChanged);
+            }
+            if got_start != start {
+                return Err(FetchErr::Other(format!(
+                    "asked for bytes from {start}, the server answered from {got_start}"
+                )));
+            }
+        }
+        if if_range.is_some() {
+            self.validator_honoured.store(true, Ordering::Relaxed);
         }
         let mut reader = resp.into_body().into_reader();
         let mut filled = 0usize;
@@ -1332,16 +1580,11 @@ mod tests {
     }
 
     #[test]
-    fn filename_from_url_drops_query_and_fragment() {
-        assert_eq!(
-            filename_from_url("https://h.example/a/b/game.pkg?token=x"),
-            "game.pkg"
-        );
-        assert_eq!(
-            filename_from_url("https://h.example/game.pkg#f"),
-            "game.pkg"
-        );
-        assert_eq!(filename_from_url("https://h.example/"), "");
+    fn a_name_from_the_url_drops_query_and_fragment() {
+        let name = |url| crate::link::name_from_response(None, url);
+        assert_eq!(name("https://h.example/a/b/game.pkg?token=x"), "game.pkg");
+        assert_eq!(name("https://h.example/game.pkg#f"), "game.pkg");
+        assert_eq!(name("https://h.example/"), "");
     }
 
     fn source(total: u64) -> RemoteSource {
@@ -1423,6 +1666,397 @@ pub(crate) mod origin_tests {
     use std::io::{BufRead, BufReader, Write};
     use std::net::{TcpListener, TcpStream};
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// One request as the scripted origin below sees it.
+    struct Asked {
+        start: usize,
+        end: usize,
+        if_range: Option<String>,
+    }
+
+    /// An origin that answers each request (one per connection) with whatever `answer` writes.
+    fn spawn_scripted_origin(
+        answer: impl Fn(&Asked) -> Vec<u8> + Send + Sync + 'static,
+    ) -> std::net::SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let answer = Arc::new(answer);
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut stream) = conn else { break };
+                let answer = answer.clone();
+                std::thread::spawn(move || {
+                    let Ok(peer) = stream.try_clone() else { return };
+                    let mut reader = BufReader::new(peer);
+                    let mut asked = Asked {
+                        start: 0,
+                        end: 0,
+                        if_range: None,
+                    };
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                            return;
+                        }
+                        if line == "\r\n" || line == "\n" {
+                            break;
+                        }
+                        let lower = line.to_ascii_lowercase();
+                        if let Some(v) = lower.strip_prefix("range: bytes=") {
+                            if let Some((a, b)) = v.trim().split_once('-') {
+                                asked.start = a.parse().unwrap_or(0);
+                                asked.end = b.parse().unwrap_or(0);
+                            }
+                        }
+                        if lower.starts_with("if-range:") {
+                            asked.if_range = Some(line["if-range:".len()..].trim().to_string());
+                        }
+                    }
+                    let _ = stream.write_all(&answer(&asked));
+                });
+            }
+        });
+        addr
+    }
+
+    fn partial(data: &[u8], asked: &Asked, headers: &str) -> Vec<u8> {
+        let end = asked.end.min(data.len() - 1);
+        let body = &data[asked.start..=end];
+        let mut out = format!(
+            "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {}-{end}/{}\r\n\
+             Content-Length: {}\r\n{headers}Connection: close\r\n\r\n",
+            asked.start,
+            data.len(),
+            body.len(),
+        )
+        .into_bytes();
+        out.extend_from_slice(body);
+        out
+    }
+
+    /// What `If-Range` not matching sends: the head of the whole file. The body is never read.
+    fn whole(len: usize, headers: &str) -> Vec<u8> {
+        format!("HTTP/1.1 200 OK\r\nContent-Length: {len}\r\n{headers}Connection: close\r\n\r\n")
+            .into_bytes()
+    }
+
+    const TEST_WINDOW: u64 = 64 * 1024;
+    const TEST_TOTAL: usize = 4 * TEST_WINDOW as usize;
+
+    fn test_bytes(seed: u8) -> Vec<u8> {
+        (0..TEST_TOTAL)
+            .map(|i| (i as u8).wrapping_mul(7) ^ seed)
+            .collect()
+    }
+
+    fn source_of(addr: std::net::SocketAddr, validators: OriginValidators) -> RemoteSource {
+        let mut src = RemoteSource::new(format!("http://{addr}/g.pkg"), TEST_TOTAL as u64)
+            .with_validators(validators);
+        src.window_bytes = TEST_WINDOW;
+        src
+    }
+
+    fn etag(v: &str) -> OriginValidators {
+        OriginValidators {
+            etag: Some(v.to_string()),
+            last_modified: None,
+        }
+    }
+
+    #[test]
+    fn only_a_validator_if_range_can_use_is_sent() {
+        assert_eq!(etag("\"a\"").if_range(), Some("\"a\""));
+        // A weak one never matches: sending it would refuse every range.
+        assert_eq!(etag("W/\"a\"").if_range(), None);
+        let weak_with_date = OriginValidators {
+            etag: Some("W/\"a\"".into()),
+            last_modified: Some("Tue, 03 Nov 2026 10:00:00 GMT".into()),
+        };
+        assert_eq!(
+            weak_with_date.if_range(),
+            Some("Tue, 03 Nov 2026 10:00:00 GMT")
+        );
+        assert_eq!(OriginValidators::default().if_range(), None);
+    }
+
+    #[test]
+    fn content_range_is_read_or_not_at_all() {
+        assert_eq!(parse_content_range("bytes 5-9/100"), Some((5, Some(100))));
+        assert_eq!(parse_content_range("bytes 5-9/*"), Some((5, None)));
+        assert_eq!(parse_content_range("bytes */100"), None);
+        assert_eq!(parse_content_range("junk"), None);
+    }
+
+    /// Hours over many connections: a re-upload half-way must end the read with the reason, not
+    /// splice the new file into what the console is writing.
+    #[test]
+    fn a_file_that_changes_during_a_read_is_refused_not_spliced() {
+        let state = Arc::new(Mutex::new((test_bytes(1), "\"one\"".to_string())));
+        let served = state.clone();
+        let addr = spawn_scripted_origin(move |asked| {
+            let (data, tag) = &*served.lock().unwrap();
+            if asked.if_range.as_deref().is_some_and(|v| v != tag) {
+                return whole(data.len(), "");
+            }
+            partial(data, asked, &format!("ETag: {tag}\r\n"))
+        });
+        let src = source_of(addr, etag("\"one\""));
+        let first = src.read_range(0, 1023).expect("the revision it started on");
+        assert_eq!(first, test_bytes(1)[..1024].to_vec());
+
+        *state.lock().unwrap() = (test_bytes(2), "\"two\"".to_string());
+        let err = src
+            .read_range(2 * TEST_WINDOW, 2 * TEST_WINDOW + 1023)
+            .expect_err("another revision must not be spliced in");
+        assert!(err.to_string().contains("changed"), "{err}");
+        // Every later read says the same at once.
+        let again = src.read_range(0, 15).expect_err("the source is done for");
+        assert!(again.to_string().contains("changed"), "{again}");
+        assert!(
+            src.origin_changed(),
+            "an install waiting on it can see that"
+        );
+    }
+
+    /// Some origins spell a new ETag with every response. Nothing is wrong with the file, so
+    /// the link must go on working as it did: the validator is simply dropped.
+    #[test]
+    fn an_origin_that_never_honours_its_validator_still_works() {
+        let data = test_bytes(3);
+        let served = data.clone();
+        let addr = spawn_scripted_origin(move |asked| {
+            if asked.if_range.is_some() {
+                return whole(served.len(), "ETag: \"fresh\"\r\n");
+            }
+            partial(&served, asked, "ETag: \"fresh\"\r\n")
+        });
+        let src = source_of(addr, etag("\"stale\""));
+        let got = src.read_range(0, TEST_TOTAL as u64 - 1).expect("read");
+        assert_eq!(got, data);
+        assert!(src.validator_off.load(Ordering::Relaxed));
+    }
+
+    /// Mirrors can spell an ETag differently for one file; its length and date say it is the same.
+    #[test]
+    fn a_mirror_with_its_own_etag_for_the_same_file_is_not_a_change() {
+        const DATE: &str = "Tue, 03 Nov 2026 10:00:00 GMT";
+        let data = test_bytes(4);
+        let served = data.clone();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        let addr = spawn_scripted_origin(move |asked| {
+            // The first answer is the mirror the probe saw, the second another one.
+            if asked.if_range.is_some() && counter.fetch_add(1, Ordering::SeqCst) == 1 {
+                return whole(served.len(), &format!("Last-Modified: {DATE}\r\n"));
+            }
+            partial(&served, asked, &format!("Last-Modified: {DATE}\r\n"))
+        });
+        let src = source_of(
+            addr,
+            OriginValidators {
+                etag: Some("\"a\"".into()),
+                last_modified: Some(DATE.into()),
+            },
+        );
+        assert_eq!(src.read_range(0, 1023).unwrap(), data[..1024].to_vec());
+        let far = src
+            .read_range(2 * TEST_WINDOW, 2 * TEST_WINDOW + 1023)
+            .expect("the same file");
+        assert_eq!(far, data[2 * TEST_WINDOW as usize..][..1024].to_vec());
+        assert!(!src.origin_changed.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn a_new_length_or_date_on_a_200_is_a_change() {
+        let known = OriginValidators {
+            etag: Some("\"a\"".into()),
+            last_modified: Some("old".into()),
+        };
+        let total = 100;
+        assert!(origin_changed_on_200(
+            &known,
+            total,
+            Some(99),
+            Some("old"),
+            false
+        ));
+        assert!(origin_changed_on_200(
+            &known,
+            total,
+            Some(100),
+            Some("new"),
+            false
+        ));
+        assert!(!origin_changed_on_200(
+            &known,
+            total,
+            Some(100),
+            Some("old"),
+            true
+        ));
+        // No date to go by: honoured before and not now says it changed; never honoured says
+        // nothing about the file.
+        let no_date = etag("\"a\"");
+        assert!(origin_changed_on_200(
+            &no_date,
+            total,
+            Some(100),
+            None,
+            true
+        ));
+        assert!(!origin_changed_on_200(
+            &no_date,
+            total,
+            Some(100),
+            None,
+            false
+        ));
+    }
+
+    /// A 206 is only the bytes asked for if it says so.
+    #[test]
+    fn a_range_from_another_offset_is_not_copied() {
+        let data = test_bytes(5);
+        let served = data.clone();
+        let addr = spawn_scripted_origin(move |asked| {
+            let wrong = Asked {
+                start: 0,
+                end: asked.end - asked.start,
+                if_range: None,
+            };
+            partial(&served, &wrong, "")
+        });
+        let src = source_of(addr, OriginValidators::default());
+        let err = src
+            .read_range(2 * TEST_WINDOW, 2 * TEST_WINDOW + 1023)
+            .expect_err("the wrong bytes for this offset");
+        assert!(err.to_string().contains("answered from 0"), "{err}");
+    }
+
+    #[test]
+    fn a_total_that_moved_is_another_file() {
+        let data = test_bytes(6);
+        let addr = spawn_scripted_origin(move |asked| {
+            let mut longer = data.clone();
+            longer.push(0);
+            partial(&longer, asked, "")
+        });
+        let src = source_of(addr, OriginValidators::default());
+        let err = src.read_range(0, 1023).expect_err("the size changed");
+        assert!(err.to_string().contains("changed"), "{err}");
+    }
+
+    /// The name is what the response says after any redirect, decoded: `Spider-Man%202.pkg` lost
+    /// its space and every non-Latin name collapsed.
+    #[test]
+    fn a_probe_names_the_file_from_the_response() {
+        let addr = spawn_scripted_origin(|_| {
+            b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-0/100\r\nContent-Length: 1\r\n\
+              Connection: close\r\n\r\nx"
+                .to_vec()
+        });
+        let p = RemoteSource::probe_with_options(
+            &format!("http://{addr}/dl/Spider-Man%202.pkg?token=SECRET"),
+            false,
+        )
+        .unwrap();
+        assert_eq!(p.filename, "Spider-Man 2.pkg");
+
+        let addr = spawn_scripted_origin(|_| {
+            b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-0/100\r\nContent-Length: 1\r\n\
+              Content-Disposition: attachment; filename*=UTF-8''%E3%82%B2%E3%83%BC%E3%83%A0.pkg\r\n\
+              Connection: close\r\n\r\nx"
+                .to_vec()
+        });
+        let p =
+            RemoteSource::probe_with_options(&format!("http://{addr}/get?id=7"), false).unwrap();
+        assert_eq!(p.filename, "ゲーム.pkg");
+    }
+
+    #[test]
+    fn a_guarded_fetch_stays_away_from_this_machine_and_link_local() {
+        let refused = |s: &str| link_target_refused(s.parse().unwrap());
+        for addr in [
+            "127.0.0.1:80",
+            "127.1.2.3:80",
+            "0.0.0.0:80",
+            "169.254.169.254:80",
+            "224.0.0.1:80",
+            "255.255.255.255:80",
+            "[::1]:80",
+            "[::]:80",
+            "[fe80::1]:80",
+            "[ff02::1]:80",
+            "[::ffff:127.0.0.1]:80",
+            "[::ffff:169.254.169.254]:80",
+        ] {
+            assert!(refused(addr), "{addr}");
+        }
+        // A NAS on the LAN, a server on the internet: what links are for.
+        for addr in [
+            "192.168.1.20:80",
+            "10.0.0.5:80",
+            "172.16.0.9:80",
+            "93.184.216.34:443",
+            "[2606:2800:220:1:248:1893:25c8:1946]:443",
+            "[fd00::1]:80",
+        ] {
+            assert!(!refused(addr), "{addr}");
+        }
+    }
+
+    static REFUSED_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
+    fn refused_port(addr: std::net::SocketAddr) -> bool {
+        addr.port() == REFUSED_PORT.load(Ordering::SeqCst)
+    }
+
+    /// Checked at connect time, so a redirect to a refused address is stopped as well (and the
+    /// link it came from need not look like anything).
+    #[test]
+    fn a_guarded_fetch_refuses_at_every_hop_of_a_redirect() {
+        let reached = Arc::new(AtomicUsize::new(0));
+        let hit = reached.clone();
+        let inner = spawn_scripted_origin(move |_| {
+            hit.fetch_add(1, Ordering::SeqCst);
+            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec()
+        });
+        REFUSED_PORT.store(inner.port(), Ordering::SeqCst);
+        let outer = spawn_scripted_origin(move |_| {
+            format!(
+                "HTTP/1.1 302 Found\r\nLocation: http://{inner}/secret\r\nContent-Length: 0\r\n\
+                 Connection: close\r\n\r\n"
+            )
+            .into_bytes()
+        });
+        let agent = build_agent_guarded(1, false, Some(refused_port));
+        // An HTTP proxy from the environment would see the hops instead of this resolver.
+        if agent.config().proxy().is_some() {
+            return;
+        }
+        let err = agent
+            .get(format!("http://{outer}/get"))
+            .call()
+            .expect_err("the second hop is refused");
+        assert!(err.to_string().contains("open to the network"), "{err}");
+        assert_eq!(reached.load(Ordering::SeqCst), 0, "nothing reached it");
+        // Unguarded, the same link goes through.
+        let open = build_agent_guarded(1, false, None);
+        assert_eq!(
+            open.get(format!("http://{outer}/get"))
+                .call()
+                .unwrap()
+                .status(),
+            200
+        );
+    }
+
+    #[test]
+    fn a_loopback_only_engine_does_not_guard_its_links() {
+        // No PS5UPLOAD_ALLOW_IP in a test run: a link to this computer works, as it must for the
+        // desktop app and for every test here that serves from loopback.
+        assert!(!links_are_guarded());
+    }
 
     /// Deterministic, position-dependent body: every byte encodes its own
     /// offset, so a misplaced piece is guaranteed to mismatch.
@@ -1774,6 +2408,7 @@ pub(crate) mod origin_tests {
                         let mut reader = BufReader::new(peer);
                         loop {
                             let mut saw = false;
+                            let mut range = (0usize, data.len() - 1);
                             loop {
                                 let mut line = String::new();
                                 match reader.read_line(&mut line) {
@@ -1784,6 +2419,13 @@ pub(crate) mod origin_tests {
                                     break;
                                 }
                                 saw = true;
+                                let lower = line.to_ascii_lowercase();
+                                if let Some((a, b)) = lower
+                                    .strip_prefix("range: bytes=")
+                                    .and_then(|v| v.trim().split_once('-'))
+                                {
+                                    range = (a.parse().unwrap(), b.parse().unwrap());
+                                }
                             }
                             if !saw {
                                 return;
@@ -1806,18 +2448,19 @@ pub(crate) mod origin_tests {
                             } else {
                                 format!(
                                     "HTTP/1.1 206 Partial Content\r\n\
-                                     Content-Range: bytes 0-{}/{}\r\n\
+                                     Content-Range: bytes {}-{}/{}\r\n\
                                      Content-Length: {}\r\n\
                                      Connection: keep-alive\r\n\r\n",
-                                    data.len() - 1,
+                                    range.0,
+                                    range.1,
                                     data.len(),
-                                    data.len()
+                                    range.1 - range.0 + 1
                                 )
                             };
                             if stream.write_all(resp.as_bytes()).is_err() {
                                 return;
                             }
-                            if !refuse && stream.write_all(&data).is_err() {
+                            if !refuse && stream.write_all(&data[range.0..=range.1]).is_err() {
                                 return;
                             }
                             if stream.flush().is_err() {

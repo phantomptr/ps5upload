@@ -31,7 +31,7 @@ import {
   type ActivityEntry,
   type ActivityOutcome,
 } from "../../state/activityHistory";
-import { formatBytes, formatDuration } from "../../lib/format";
+import { formatBytes } from "../../lib/format";
 import { averageRate } from "../../lib/rollingRate";
 import { fsOpCancel } from "../../api/ps5";
 import { hostOf } from "../../lib/addr";
@@ -43,7 +43,7 @@ import { useConnectionStore } from "../../state/connection";
 import { activityForHost } from "../../lib/activityScope";
 import { profileNameForAddr, useRosterStore } from "../../state/roster";
 import { ConsoleChip } from "../../components/ConsoleChip";
-import { formatDate } from "../../lib/formatDate";
+import { formatDate, formatNumber, formatDuration } from "../../lib/formatDate";
 
 /**
  * Tasks screen. Three tabs (`?tab=`):
@@ -245,7 +245,7 @@ export default function ActivityScreen({ embedded = false }: { embedded?: boolea
             <button
               type="button"
               onClick={() => clearRunning(scopeHost)}
-              className="chip ml-auto min-h-7 px-3 text-xs font-medium normal-case tracking-normal"
+              className="chip ms-auto min-h-7 px-3 text-xs font-medium normal-case tracking-normal"
               title={tr(
                 "activity_clear_running_tooltip",
                 undefined,
@@ -267,7 +267,7 @@ export default function ActivityScreen({ embedded = false }: { embedded?: boolea
         <section>
           <header className="mb-3 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
             {tr("activity_past", undefined, "Recent")}
-            <span className="ml-2 text-xs">· {past.length}</span>
+            <span className="ms-2 text-xs">· {past.length}</span>
           </header>
           <ul className="space-y-2">
             {past.map((e) => (
@@ -414,10 +414,10 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
               ? tr(
                   "activity_phase_finalizing_with_counter",
                   {
-                    done: (entry.filesFinalized ?? 0).toLocaleString(),
-                    total: entry.filesFinalizingTotal.toLocaleString(),
+                    done: formatNumber((entry.filesFinalized ?? 0)),
+                    total: formatNumber(entry.filesFinalizingTotal),
                   },
-                  `Finalizing on PS5 — ${(entry.filesFinalized ?? 0).toLocaleString()} / ${entry.filesFinalizingTotal.toLocaleString()} files`,
+                  `Finalizing on PS5 — ${formatNumber((entry.filesFinalized ?? 0))} / ${formatNumber(entry.filesFinalizingTotal)} files`,
                 )
               : tr("activity_phase_finalizing", undefined, "Finalizing on PS5")}
           </span>
@@ -431,7 +431,7 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
             )}
           </Badge>
         )}
-        <span className="ml-auto text-xs text-[var(--color-muted)]">
+        <span className="ms-auto text-xs text-[var(--color-muted)]">
           {formatRelative(entry.startedAtMs, tr)} ·{" "}
           {formatDuration(elapsedMs / 1000)}
         </span>
@@ -831,7 +831,7 @@ function ActivityTimeline({ entries }: { entries: ActivityEntry[] }) {
       </header>
       <div className="space-y-1">
         {/* X-axis labels: 0h, 6h, 12h, 18h, 24h. */}
-        <div className="ml-20 flex justify-between text-xs text-[var(--color-muted)]">
+        <div className="ms-20 flex justify-between text-xs text-[var(--color-muted)]">
           <span>00:00</span>
           <span>06:00</span>
           <span>12:00</span>
@@ -848,7 +848,7 @@ function ActivityTimeline({ entries }: { entries: ActivityEntry[] }) {
               {[0.25, 0.5, 0.75].map((p) => (
                 <div
                   key={p}
-                  className="absolute top-0 h-full border-l border-[var(--color-border)]"
+                  className="absolute top-0 h-full border-s border-[var(--color-border)]"
                   style={{ left: `${p * 100}%` }}
                 />
               ))}
@@ -886,7 +886,7 @@ function ActivityTimeline({ entries }: { entries: ActivityEntry[] }) {
                 );
               })}
             </div>
-            <div className="w-12 text-right text-xs tabular-nums text-[var(--color-muted)]">
+            <div className="w-12 text-end text-xs tabular-nums text-[var(--color-muted)]">
               {dayEntries.length}
             </div>
           </div>

@@ -28,7 +28,8 @@
 #          -e PS5_ADDR=192.168.1.50 \
 #          -e PS5UPLOAD_ALLOW_IP=172.17.0.1 \
 #          ps5upload-engine
-#   2. On Linux hosts, use --network host (connections are true loopback):
+#   2. On Linux hosts, use --network host (true loopback from the same machine only; other
+#      machines still need PS5UPLOAD_ALLOW_IP):
 #        docker run --rm --network host \
 #          -e PS5_ADDR=192.168.1.50 \
 #          ps5upload-engine
@@ -46,7 +47,7 @@
 # to the LAN interface (e.g. `-p 192.168.1.10:19113:19113`), not 0.0.0.0 on a
 # public host.
 
-FROM rust:alpine AS builder
+FROM rust:1.99.1-alpine3.24 AS builder
 
 # g++ compiles unrar's bundled C++ (for the ps5upload-unrar helper) against
 # musl; musl target links static.
@@ -59,6 +60,8 @@ RUN apk add --no-cache musl-dev g++ make
 WORKDIR /build
 COPY engine engine
 COPY third_party third_party
+# The engine serves these guides as MCP resources (src/mcp/resources.rs).
+COPY AUTOMATION.md API.md MCP.md ./
 # The PS5 helper ELFs the engine embeds (build.rs looks for them at
 # <repo root>/payload). Without this the image builds fine but installs
 # UPDATES and DLC with no installer to send — the exact #152 failure —
@@ -83,13 +86,15 @@ RUN cargo build --locked --release -p ps5upload-engine -p ps5upload-unrar
 RUN mkdir -p /rootfs/tmp /rootfs-data/data && chmod 1777 /rootfs/tmp /rootfs-data/data
 
 FROM scratch
+COPY LICENSE /LICENSE
 COPY --from=builder /build/engine/target/release/ps5upload-engine /ps5upload-engine
 # The engine looks for the RAR helper next to its own binary.
 COPY --from=builder /build/engine/target/release/ps5upload-unrar /ps5upload-unrar
-# /tmp: staging for uploaded packages, archive extraction and the like. It
-# is copied as a child of /rootfs because copying a directory applies only
-# its contents: `COPY /rootfs/tmp /tmp` left a 0755 root-owned /tmp and the
-# upload still failed. /data: the engine's home (HOME=/data puts its state in
+# /tmp: small scratch files. Uploaded packages and copies from a saved server
+# go to the data folder (PS5UPLOAD_STAGING_DIR moves them), since this layer is
+# no volume. It is copied as a child of /rootfs because copying a directory
+# applies only its contents: `COPY /rootfs/tmp /tmp` left a 0755 root-owned /tmp
+# and the upload still failed. /data: the engine's home (HOME=/data puts its state in
 # /data/.ps5upload), owned by the runtime user so it is writable.
 COPY --from=builder /rootfs/ /
 COPY --from=builder --chown=65532:65532 /rootfs-data/ /

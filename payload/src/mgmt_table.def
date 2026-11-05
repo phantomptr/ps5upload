@@ -168,6 +168,9 @@ MGMT_H1(AVA1_METHOD_CLEANUP_CANCEL, MGMT_FRAME_CLEANUP_CANCEL, MGMT_FRAME_CLEANU
 MGMT_H1(AVA1_METHOD_SMB_SHARES_LIST, MGMT_FRAME_SMB_SHARES_LIST, MGMT_FRAME_SMB_SHARES_LIST_ACK, 0, handle_smb_shares_list, mgmt_call_text)
 MGMT_H1(AVA1_METHOD_SMB_SHARES_SAVE, MGMT_FRAME_SMB_SHARES_SAVE, MGMT_FRAME_SMB_SHARES_SAVE_ACK, 0, handle_smb_shares_save, mgmt_call_text)
 MGMT_H1(AVA1_METHOD_SMB_SHARES_REMOVE, MGMT_FRAME_SMB_SHARES_REMOVE, MGMT_FRAME_SMB_SHARES_REMOVE_ACK, 0, handle_smb_shares_remove, mgmt_call_text)
+/* ---- tasks started on the console page, for the apps' Activity (console_tasks.c, #658) ---- */
+MGMT_H0(AVA1_METHOD_CONSOLE_TASKS, MGMT_FRAME_CONSOLE_TASKS, MGMT_FRAME_CONSOLE_TASKS_ACK, 0, handle_console_tasks, mgmt_call_text)
+MGMT_H1(AVA1_METHOD_CONSOLE_TASK_CANCEL, MGMT_FRAME_CONSOLE_TASK_CANCEL, MGMT_FRAME_CONSOLE_TASK_CANCEL_ACK, 0, handle_console_task_cancel, mgmt_call_text)
 /* ---- the devices that use this console and what they share (mesh.c) ---- */
 MGMT_H1(AVA1_METHOD_MESH_HELLO, MGMT_FRAME_MESH_HELLO, MGMT_FRAME_MESH_HELLO_ACK, 0, handle_mesh_hello, mgmt_call_text)
 MGMT_H1(AVA1_METHOD_MESH_STATE, MGMT_FRAME_MESH_STATE, MGMT_FRAME_MESH_STATE_ACK, 0, handle_mesh_state, mgmt_call_text)
@@ -182,7 +185,7 @@ MGMT_H1(AVA1_METHOD_MESH_ANNOUNCE, MGMT_FRAME_MESH_ANNOUNCE, MGMT_FRAME_MESH_ANN
 MGMT_H1(AVA1_METHOD_PROFILE_NP_STATE, MGMT_FRAME_PROFILE_NP_STATE, MGMT_FRAME_PROFILE_NP_STATE_ACK, MGMT_SONY, mgmt_w_profile_np_state, mgmt_call_text_keep)
 MGMT_H1(AVA1_METHOD_PROFILE_NP_BACKUP, MGMT_FRAME_PROFILE_NP_BACKUP, MGMT_FRAME_PROFILE_NP_BACKUP_ACK, MGMT_SONY, mgmt_w_profile_np_backup, mgmt_call_text_keep)
 MGMT_H1(AVA1_METHOD_PROFILE_NP_RESTORE, MGMT_FRAME_PROFILE_NP_RESTORE, MGMT_FRAME_PROFILE_NP_RESTORE_ACK, MGMT_SONY, mgmt_w_profile_np_restore, mgmt_call_text_keep)
-/* ---- the PC's keyboard and mouse as the console's own (vinput.c; the firmware side is a stub for now) ---- */
+/* ---- the PC's keyboard and mouse as the console's own (vinput.c, vinput_ps5.c) ---- */
 MGMT_H0(AVA1_METHOD_VINPUT_CAPS, MGMT_FRAME_VINPUT_CAPS, MGMT_FRAME_VINPUT_CAPS_ACK, MGMT_SONY, handle_vinput_caps, mgmt_call_text_keep)
 MGMT_H1(AVA1_METHOD_VINPUT_SESSION, MGMT_FRAME_VINPUT_SESSION, MGMT_FRAME_VINPUT_SESSION_ACK, MGMT_SONY, handle_vinput_session, mgmt_call_text_keep)
 MGMT_H1(AVA1_METHOD_VINPUT_REPORT, MGMT_FRAME_VINPUT_REPORT, MGMT_FRAME_VINPUT_REPORT_ACK, MGMT_SONY, handle_vinput_report, mgmt_call_text_keep)

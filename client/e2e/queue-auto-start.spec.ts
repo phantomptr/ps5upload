@@ -15,6 +15,15 @@ test("with queue auto-start off, Upload waits for Start queue", async ({ page })
       const url = new URL(route.request().url());
       const path = url.pathname;
       calls.push(`${route.request().method()} ${path}`);
+      // The upload dialog asks whether the destination is there.
+      if (path === "/api/ps5/fs/stat") {
+        await route.fulfill({
+          status: 502,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "payload rejected FS_STAT: fs_stat_failed_errno_2" }),
+        });
+        return;
+      }
       let body: unknown = {};
       if (path === "/api/version") body = { version: "9.2.0", caps: {} };
       if (path === "/api/ps5/status") body = { ok: true, version: "9.2.0" };

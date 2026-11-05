@@ -3,8 +3,10 @@ import { listen } from "@tauri-apps/api/event";
 
 import { updateDownloadApk, type UpdateCheck } from "../api/ps5";
 import { openExternalUrl } from "../lib/openExternalUrl";
+import { shellErrorText } from "../lib/shellError";
 import { t as translate } from "../i18n";
 import { useLangStore } from "./lang";
+import { trStatic } from "../lib/trStatic";
 
 // Android: download the update APK inside the app and hand it to Android's
 // installer, so the person sees the system "Update?" dialog instead of
@@ -77,7 +79,7 @@ export function parseInstallStatus(raw: string): InstallStatus {
   } catch {
     /* fall through */
   }
-  return { state: "failed", message: `unexpected installer status: ${raw}` };
+  return { state: "failed", message: trStatic("apk_unexpected_status", "Unexpected installer status: {status}", { status: raw }) };
 }
 
 /** Whole percent of a download, or null while the size is unknown. */
@@ -118,7 +120,27 @@ export function installRefusalMessage(code: string): string {
       "Install unknown apps is still off for PS5Upload. Turn it on, then try again.",
     );
   }
+  if (code === "not-an-app") {
+    return trFb("update_apk_not_an_app", "The download is not an Android app. Try again, or use the download page.");
+  }
+  if (code === "different-app") {
+    return trFb("update_apk_different_app", "The download is a different app. Use the download page.");
+  }
+  if (code === "not-downloaded") {
+    return trFb("update_apk_not_downloaded", "The update file is missing. Try again.");
+  }
+  if (code === "no-dialog") {
+    return trFb("update_apk_no_dialog", "Android did not show the install dialog. Try again, or use the download page.");
+  }
   return code;
+}
+
+/** What the person reads for an install that failed after Android took it: Android's own words
+ *  when it gave any (they are in the phone's language), else ours. */
+function failedMessage(message: string): string {
+  return message
+    ? installRefusalMessage(message)
+    : trFb("update_apk_install_failed", "The update did not install. Try again, or use the download page.");
 }
 
 interface ApkUpdateStore {
@@ -165,7 +187,7 @@ async function startInstall(bridge: UpdaterBridge, path: string): Promise<string
   for (;;) {
     const s = parseInstallStatus(bridge.status());
     if (s.state === "failed") {
-      const message = s.message || "install failed";
+      const message = failedMessage(s.message);
       setStep({ kind: "failed", message });
       return message;
     }
@@ -184,7 +206,7 @@ async function startInstall(bridge: UpdaterBridge, path: string): Promise<string
       if (s.state === "confirm" || s.state === "writing") continue;
       setStep(
         s.state === "failed"
-          ? { kind: "failed", message: s.message || "install failed" }
+          ? { kind: "failed", message: failedMessage(s.message) }
           : { kind: "idle" },
       );
       return;
@@ -233,9 +255,9 @@ export function openInstallSettings(): void {
  */
 export async function downloadAndInstallApk(result: UpdateCheck): Promise<string | null> {
   const bridge = updaterBridge();
-  if (!bridge) return "this copy cannot install updates itself";
+  if (!bridge) return trFb("update_apk_no_installer", "This copy cannot install updates itself. Use the download page.");
   if (!result.download_url || !result.download_filename) {
-    return "no APK for this device in this release";
+    return trFb("update_apk_none_for_device", "This release has no APK for this device. Use the download page.");
   }
   pendingPath = null;
   setStep({ kind: "downloading", received: 0, total: 0 });
@@ -260,7 +282,9 @@ export async function downloadAndInstallApk(result: UpdateCheck): Promise<string
     );
     path = dl.path;
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
+    const message = shellErrorText(e instanceof Error ? e.message : String(e), (key, _vars, fallback) =>
+      trFb(key, fallback),
+    );
     setStep({ kind: "failed", message, during: "download" });
     return message;
   } finally {

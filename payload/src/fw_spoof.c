@@ -2,6 +2,7 @@
 
 #include "kernel_rw_lock.h"
 #include "fw_spoof.h"
+#include "json_escape.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -169,6 +170,12 @@ int fw_spoof_status(char *buf, size_t cap, size_t *written) {
         snprintf(kern_ver_short, sizeof(kern_ver_short), "unknown");
     }
 
+    /* kern.version is a free-form build string and uname() is the kernel's word: one quote or
+     * backslash in either and the engine would reject the whole reply. */
+    char rel_esc[sizeof(kernel_rel) * 2], ver_esc[sizeof(kern_ver_short) * 2];
+    json_escape_into(kernel_rel[0] ? kernel_rel : "unknown", rel_esc, sizeof rel_esc);
+    json_escape_into(kern_ver_short, ver_esc, sizeof ver_esc);
+
     int n = snprintf(buf, cap,
         "{\"system_sw_version\":\"%s\","
         "\"system_sw_raw\":\"%s\","
@@ -178,11 +185,13 @@ int fw_spoof_status(char *buf, size_t cap, size_t *written) {
         "\"spoofed\":%s}",
         fw_str,
         fw_raw,
-        kernel_rel[0] ? kernel_rel : "unknown",
+        rel_esc,
         fw_str,
-        kern_ver_short,
+        ver_esc,
         spoofed ? "true" : "false");
 
-    if (written) *written = (size_t)(n > 0 ? n : 0);
-    return 0;
+    /* snprintf says how long it would have been: never hand that length on past the buffer. */
+    if (n < 0 || (size_t)n >= cap) n = 0;
+    if (written) *written = (size_t)n;
+    return n > 0 ? 0 : -1;
 }

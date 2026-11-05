@@ -13,7 +13,7 @@
 // The user-facing copy is localised: each branch returns `te("err_…")`,
 // which looks the key up in the active locale (falling back to English,
 // then to the key). The English source of truth for every `err_*` key
-// lives in `i18n/locales/en.ts`; the other 17 locales mirror it.
+// lives in `i18n/locales/en.ts`; the other locales mirror it.
 
 import { t } from "../i18n";
 import { useLangStore } from "../state/lang";
@@ -27,6 +27,29 @@ import { trStatic } from "./trStatic";
  *  blank, because `t()` walks active-locale → English → key. */
 function te(key: string, vars?: Record<string, string | number>): string {
   return t(useLangStore.getState().lang, key, vars);
+}
+
+/** The text of anything a `catch` can receive. A rejection is not always an Error: Tauri commands
+ *  reject with strings, some with an object, where `String(e)` prints "[object Object]". */
+export function caughtText(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  if (e && typeof e === "object") {
+    const o = e as { message?: unknown; error?: unknown };
+    if (typeof o.message === "string") return o.message;
+    if (typeof o.error === "string") return o.error;
+    try {
+      return JSON.stringify(e);
+    } catch {
+      // A cycle: fall through.
+    }
+  }
+  return String(e);
+}
+
+/** What a console-facing screen shows for a caught error: the sentence when we know the code. */
+export function humanizeCaught(e: unknown): string {
+  return humanizePs5Error(caughtText(e));
 }
 
 /** Rewrite a raw engine/payload error string into a single line of
@@ -73,12 +96,14 @@ export function humanizePs5Error(
   // React stopped a re-render loop (error #185) while the queue updated a row. The engine's job
   // never saw it, so the transfer may well have finished. The queue logs the stack for a report.
   if (/Minified React error #185|Maximum update depth exceeded/i.test(raw)) {
-    return (
-      "The app's display hit an error while this ran (React #185) and stopped following the " +
-      "transfer, which may have finished anyway: check the PS5, or press Retry. A bug report " +
-      "sent now helps us fix it."
-    );
+    return te("err_display_crashed");
   }
+
+  // ─── Remote Play pairing ───────────────────────────────────────────
+  // The console refused the registration with "a pairing is pending" (rp_regist.rs), also when
+  // Enable Remote Play on its own screen is not on, whatever the registry says: unpairing and
+  // pairing again changes nothing, so the step is on the console.
+  if (/80108b03/i.test(raw)) return te("err_pair_pending");
 
   // ─── Source / local filesystem ─────────────────────────────────────
   // "can't read source folder: /Users/me/game" — the engine failed to
@@ -100,6 +125,17 @@ export function humanizePs5Error(
   }
   if (/fs_unmount_permission/i.test(raw)) {
     return te("err_unmount_permission");
+  }
+
+  // ─── This computer has no room (a link download, a server copy, a browser upload) ─────
+  {
+    const m = raw.match(/Not enough space: needs (.+?), (.+?) free\./);
+    if (m) return te("err_not_enough_space", { need: m[1], free: m[2] });
+  }
+
+  // ─── The file behind a link changed during a read ─────────────────
+  if (/the file at this link changed while it was being read/i.test(raw)) {
+    return te("err_link_changed");
   }
 
   // ─── Uninstall the PS5 refused (#476) ──────────────────────────────
@@ -222,10 +258,10 @@ export function humanizePs5Error(
     }
   }
   if (/RAR is not supported on this build/i.test(raw)) {
-    // Android (and any build without the desktop-only unrar dep). The UI
-    // should feature-gate before calling, but if a request slips through the
-    // engine returns 501 with this body.
-    return te("err_rar_unsupported");
+    // The phone apps (no build there has the desktop-only unrar helper). The UI should
+    // feature-gate before calling, but if a request slips through the engine returns 501
+    // with this body.
+    return te("err_rar_phones");
   }
   if (/rar contains an unsafe or invalid entry path/i.test(raw)) {
     return te("err_rar_unsafe_entry");

@@ -22,9 +22,18 @@ import { consoleAddr, hostOf } from "./addr";
 import { isRemotePath } from "./remotePath";
 import { useConvertPrefs } from "../state/convertPrefs";
 import { useUploadQueueStore } from "../state/uploadQueue";
-import { useUploadStore } from "../state/upload";
+import { destinationVolumeFor } from "../state/upload";
 import { sendStep } from "./collectionInsights";
 import { DEFAULT_SEND_SUBPATH, collectionSendItem } from "./collectionSend";
+import { imageDriveNow } from "./imageUpload";
+
+/** Shows Workshop set to a compressed image for this visit: a preset, not the user's own choice,
+ *  so what Workshop opens with next time is unchanged. */
+function presetCompressedImage(): void {
+  const p = useConvertPrefs.getState();
+  p.showMake("image");
+  p.showImageChoice(p.imageFormat, true);
+}
 
 /** Opens Convert with these copies: one is checked there, several go into its queue with the
  *  settings Convert has. `compress`: make a compressed game image (.ffpfsc) of them, the
@@ -35,11 +44,7 @@ export function openInConvert(
   opts: { compress?: boolean } = {},
 ): void {
   if (copies.length === 0) return;
-  if (opts.compress) {
-    const p = useConvertPrefs.getState();
-    p.setMake("image");
-    p.setImageChoice(p.imageFormat, true);
-  }
+  if (opts.compress) presetCompressedImage();
   if (copies.length === 1) {
     navigate("/workshop", { state: { source: copies[0].absolute_path } });
     return;
@@ -90,17 +95,19 @@ export async function sendGamesTo(
   const offers: Parameters<typeof installOffers>[1] = [];
   const uploadIds: string[] = [];
   const q = useUploadQueueStore.getState();
-  const u = useUploadStore.getState();
+  // Asked once, and only if something is sent as a copy (#673).
+  let drive: string | null = null;
   for (const g of games) {
     const step = sendStep(g, unread ? undefined : states[g.game_id]);
     if (step.kind === "install") {
       for (const offer of step.offers) offers.push({ game: g, offer });
     } else if (step.kind === "upload") {
+      drive ??= (await imageDriveNow(host, destinationVolumeFor(host))).volume;
       uploadIds.push(
         q.add(
           collectionSendItem(g, step.copy, {
             host,
-            volume: u.destinationVolume ?? "/data",
+            volume: drive,
             subpath: DEFAULT_SEND_SUBPATH,
             register: true,
           }),
@@ -118,8 +125,8 @@ export async function sendGamesTo(
   return out;
 }
 
-/** A game folder or image on a console, as Convert's source (`ps5://host/path`). Converting it
- *  there replaces it with what Convert makes, which is how a console copy gets smaller. */
+/** A game folder or image on a console, as Convert's source (`ps5://host/path`). A package
+ *  installed from it replaces the dump; an image is made on this computer and leaves it alone. */
 export function consoleSource(host: string, path: string): string {
   return `ps5://${hostOf(host)}${path.startsWith("/") ? path : `/${path}`}`;
 }
@@ -131,11 +138,7 @@ export function openConsoleCopyInConvert(
   path: string,
   opts: { compress?: boolean } = {},
 ): void {
-  if (opts.compress) {
-    const p = useConvertPrefs.getState();
-    p.setMake("image");
-    p.setImageChoice(p.imageFormat, true);
-  }
+  if (opts.compress) presetCompressedImage();
   navigate("/workshop", { state: { source: consoleSource(host, path) } });
 }
 

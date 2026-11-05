@@ -32,12 +32,7 @@ pub(crate) fn is_newer(current: &str, latest: &str) -> bool {
     }
 }
 
-/// Whether this engine runs in a container: the images set `PS5UPLOAD_DOCKER=1`, and Docker
-/// leaves `/.dockerenv` for any other image built from them.
-fn in_container() -> bool {
-    std::env::var("PS5UPLOAD_DOCKER").is_ok_and(|v| v == "1")
-        || std::path::Path::new("/.dockerenv").exists()
-}
+use crate::pkg_install::in_container;
 
 fn fetch_latest() -> Result<(String, String), String> {
     let text = ureq::get(MANIFEST_URL)

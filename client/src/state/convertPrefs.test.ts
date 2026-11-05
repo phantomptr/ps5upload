@@ -23,6 +23,25 @@ describe("convertPrefs", () => {
     expect(useConvertPrefs.getState().compression).toBe("balanced");
   });
 
+  it("remembers Stored across loads", async () => {
+    const first = await import("./convertPrefs");
+    first.useConvertPrefs.getState().setCompression("stored");
+    vi.resetModules();
+    const second = await import("./convertPrefs");
+    expect(second.useConvertPrefs.getState().compression).toBe("stored");
+  });
+
+  it("a preset image choice shows now and is not remembered", async () => {
+    const first = await import("./convertPrefs");
+    first.useConvertPrefs.getState().showMake("image");
+    first.useConvertPrefs.getState().showImageChoice("exfat", true);
+    expect(first.useConvertPrefs.getState().imageCompress).toBe(true);
+    vi.resetModules();
+    const second = await import("./convertPrefs");
+    expect(second.useConvertPrefs.getState().imageCompress).toBe(false);
+    expect(second.useConvertPrefs.getState().make).not.toBe("image");
+  });
+
   it("remembers the folder and level across loads", async () => {
     const first = await import("./convertPrefs");
     first.useConvertPrefs.getState().setOutputDir("/Volumes/Gone/fpkg");

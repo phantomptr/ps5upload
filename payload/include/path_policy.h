@@ -34,6 +34,9 @@ int path_resolve_allowed(const char *p, int (*lexical_ok)(const char *));
  * path_contains_protected: `p` IS the directory or one of its ANCESTORS (renaming or deleting
  * /data/ps5upload takes the trust store with it): destructive operations on a source path refuse these too. */
 int path_in_protected(const char *p);
+/* The rule for every read: never the protected folders, by any of their names, whatever else the
+ * caller's own rules (`others`: its allowlist and read-only exceptions) would let through. */
+int path_read_allowed(const char *p, int unsafe_read, int (*others)(const char *, int));
 int path_contains_protected(const char *p);
 /* The one rule for every operation that walks a tree or moves/replaces one (copy, recursive chmod and
  * delete, move, an upload/download/copy root of a data-plane job): refuse a path that IS the trust store,

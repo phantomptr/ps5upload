@@ -2,8 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { create } from "zustand";
 import {
   t as translate,
-  ensureLocale,
+  ensureLocaleWithRetry,
   interpolate,
+  pickLanguage,
   subscribeLocaleLoaded,
   type LanguageCode,
 } from "../i18n";
@@ -12,9 +13,9 @@ import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 const STORAGE_KEY = "ps5upload.lang";
 
 /**
- * The 20 languages we ship with. Mirrors `translations` in `src/i18n.ts`
- * and the label table from v1.5.4's `App.tsx`. RTL detection is handled
- * in `applyLang()` below; only Arabic triggers it today.
+ * The 21 languages we ship with, one per file in `src/i18n/locales/`.
+ * RTL detection is handled in `applyLang()` below; Arabic and Persian
+ * trigger it (`RTL_LANGS`).
  */
 export const LANGUAGES: { code: LanguageCode; label: string }[] = [
   { code: "en", label: "English" },
@@ -48,17 +49,20 @@ function initialLang(): LanguageCode {
   if (stored && LANGUAGES.some((l) => l.code === stored)) {
     return stored as LanguageCode;
   }
-  // Best-effort: try the browser/OS locale. `navigator.language` returns
-  // BCP-47 (e.g. "zh-CN", "en-US"). Match exact then language-prefix.
-  const nav = navigator.language;
-  if (nav) {
-    const exact = LANGUAGES.find((l) => l.code === nav);
-    if (exact) return exact.code;
-    const prefix = nav.split("-")[0];
-    const partial = LANGUAGES.find((l) => l.code === prefix);
-    if (partial) return partial.code;
-  }
-  return "en";
+  // Best-effort: the browser/OS preference list, in BCP-47 ("zh-HK", "pt-PT", "en-US").
+  const wanted = navigator.languages?.length ? navigator.languages : [navigator.language];
+  return pickLanguage(wanted, LANGUAGES.map((l) => l.code));
+}
+
+/** Load a language's strings. If they cannot be loaded even on a retry, the app stays in English
+ *  and says so once. */
+function loadLocale(lang: LanguageCode) {
+  void ensureLocaleWithRetry(lang, (err) => {
+    console.warn(`[i18n] could not load the ${lang} strings`, err);
+    void import("./toasts").then(({ useToastStore }) =>
+      useToastStore.getState().push({ tone: "warn", message: translate(lang, "lang_load_failed") }),
+    );
+  });
 }
 
 function applyLang(lang: LanguageCode) {
@@ -82,7 +86,7 @@ export const useLangStore = create<LangState>((set) => ({
     // `t()` falls back to English until the import resolves; the
     // load-listener subscribed in `useTr()` re-renders consumers as
     // soon as the dict is in the cache.
-    if (lang !== "en") void ensureLocale(lang);
+    if (lang !== "en") loadLocale(lang);
   },
 }));
 
@@ -97,7 +101,7 @@ if (typeof document !== "undefined") {
 // React render rather than waiting for the first `setLang()` call).
 {
   const lang0 = initialLang();
-  if (lang0 !== "en") void ensureLocale(lang0);
+  if (lang0 !== "en") loadLocale(lang0);
 }
 
 /**

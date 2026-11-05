@@ -42,7 +42,7 @@ import { isAndroid, isMobile } from "../../lib/platform";
 import { isTauriEnv, safeUnlisten } from "../../lib/tauriEnv";
 import { log } from "../../state/logs";
 import { physicalPointInRect } from "./dropZone";
-import { formatDate } from "../../lib/formatDate";
+import { formatAgo } from "../../lib/formatDate";
 
 /**
  * Playlist editor + runner panel for the SendPayload screen.
@@ -118,10 +118,11 @@ export function PlaylistsPanel({ host, port }: { host: string; port: number }) {
       return;
     }
     try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
       const { readTextFileFromPath } = await import("../../lib/saveTextFile");
-      const src = await open({ multiple: false, filters: [{ name: "JSON", extensions: ["json"] }] });
-      if (!src || typeof src !== "string") return;
+      const { pickPath } = await import("../../lib/pickPath");
+      // Not the system dialog directly: on Android it answers with a content:// URI.
+      const src = await pickPath({ mode: "file", thisDevice: true, filters: [{ name: "JSON", extensions: ["json"] }] });
+      if (!src) return;
       await applyImport(await readTextFileFromPath(src));
     } catch (e) {
       setShareMsg({ ok: false, text: e instanceof Error ? e.message : String(e) });
@@ -417,7 +418,7 @@ export function PlaylistsPanel({ host, port }: { host: string; port: number }) {
               return (
                 <div
                   key={p.id}
-                  className="flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] py-1 pl-3 pr-1 text-xs"
+                  className="flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] py-1 ps-3 pe-1 text-xs"
                 >
                   <span className="max-w-[12rem] truncate font-medium">
                     {p.name}
@@ -697,7 +698,7 @@ function RunStatusBanner({ host }: { host: string }) {
             anything broke. Without this, users only see "N failed"
             and have to dig through logs to figure out which step. */}
         {hasFailures && runStatus.failures.length > 0 && (
-          <ul className="mt-1.5 space-y-0.5 pl-6 font-mono text-xs text-[var(--color-warn)]">
+          <ul className="mt-1.5 space-y-0.5 ps-6 font-mono text-xs text-[var(--color-warn)]">
             {runStatus.failures.map((f) => (
               <li key={f.stepIndex} className="break-all">
                 {tr(
@@ -865,6 +866,7 @@ function PlaylistCard({
             <input
               ref={renameRef}
               value={draftName}
+              aria-label={tr("playlist_rename_label", undefined, "Playlist name")}
               onChange={(e) => setDraftName(e.target.value)}
               onBlur={commitRename}
               onKeyDown={(e) => {
@@ -1086,7 +1088,10 @@ function PlaylistCard({
                       undefined,
                       "default",
                     )}
-                    inputMode="decimal"
+                    inputMode="url"
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    spellCheck={false}
                     onChange={(e) =>
                       updateStep(playlist.id, i, {
                         ip: e.target.value.trim(),
@@ -1138,7 +1143,7 @@ function PlaylistCard({
                       })
                     }
                     disabled={anyRunning}
-                    className="w-16 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-1 py-0.5 text-right text-xs tabular-nums"
+                    className="w-16 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-1 py-0.5 text-end text-xs tabular-nums"
                   />
                   <span>ms</span>
                 </label>
@@ -1253,7 +1258,7 @@ function PlaylistCard({
                         <button
                           type="button"
                           onClick={() => handleAddRepoStep(p)}
-                          className="flex w-full items-center gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-left text-xs hover:border-[var(--color-accent)]"
+                          className="flex w-full items-center gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-start text-xs hover:border-[var(--color-accent)]"
                         >
                           <PackageIcon
                             size={14}
@@ -1263,7 +1268,7 @@ function PlaylistCard({
                             <span className="block truncate font-medium text-[var(--color-text)]">
                               {p.display_name}
                               {p.is_custom && (
-                                <Badge tone="neutral" variant="outline" className="ml-1.5">
+                                <Badge tone="neutral" variant="outline" className="ms-1.5">
                                   {tr("payloads_custom_badge", undefined, "Custom")}
                                 </Badge>
                               )}
@@ -1320,17 +1325,4 @@ function StepStatusIcon({
 
 function basename(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
-}
-
-/** Compact "just now / 2m ago / 3h ago / Apr 18" for the recently-run
- *  strip. Mirrors the SendPanel history formatter; coarse enough that a
- *  stale render between ticks reads fine. */
-function formatAgo(ms: number): string {
-  if (ms <= 0) return "";
-  const diff = Date.now() - ms;
-  if (diff < 60_000) return "just now";
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)}d ago`;
-  return formatDate(ms, "date");
 }

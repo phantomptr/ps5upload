@@ -82,7 +82,9 @@ export type TaskKind =
   // a payload playlist (or the auto-loader) sending its steps
   | "payload-playlist"
   // this app downloading its own update
-  | "app-update";
+  | "app-update"
+  // started on the console's own page (PS5Upload Minion), running on the console (state/consoleTasks)
+  | "console-task";
 
 export type TaskStatus =
   | "queued"
@@ -138,7 +140,11 @@ export type TaskControlRef =
   // A Convert or .ffpfsc run; Cancel stops its build job.
   | { owner: "fpkg-convert" }
   // A copy from a saved server (NAS) to this computer: Cancel stops the engine's fetch job.
-  | { owner: "remote-fetch"; jobId: string };
+  | { owner: "remote-fetch"; jobId: string }
+  // A file going from this browser to the engine (lib/browserStaging): Cancel stops the upload.
+  | { owner: "browser-staging"; stagingId: string }
+  // A task started on the console's own page: Cancel asks the console to stop it.
+  | { owner: "console-task"; host: string; taskId: string; cancellable: boolean };
 
 /** Per-kind specifics. Kept loose (record of string→unknown) so each
  *  feature can store what it needs without forcing a union. The typed
@@ -157,8 +163,6 @@ export interface Task {
   rate?: TaskRate;
   eta?: number;
   lastError?: TaskError;
-  attempts: number;
-  maxAttempts: number;
   /** Bare host (port-stripped) of the PS5 this task runs against. */
   consoleId: string;
   /** Stable identity of that console: the roster profile id, resolved when the task was
@@ -229,7 +233,10 @@ function loadInitial(): Task[] {
     if (!parsed || !Array.isArray(parsed.tasks)) return [];
     // Any task that was non-terminal when the app closed is now stale.
     // Mark as "interrupted" so the user sees what happened + can retry.
-    return parsed.tasks.map((t) => {
+    // A console page's task is not this app's to interrupt: it keeps running on the console, and
+    // the next read lists it again if it does (state/consoleTasks).
+    const tasks = parsed.tasks.filter((t) => t.kind !== "console-task" || isTerminal(t.status));
+    return tasks.map((t) => {
       if (isTerminal(t.status)) return t;
       interruptedAtLoad.add(t.id);
       return { ...t, status: "interrupted" as TaskStatus, endedAtMs: t.updatedAtMs };
@@ -239,10 +246,47 @@ function loadInitial(): Task[] {
   }
 }
 
-function persist(tasks: Task[]): void {
-  const trimmed = trimTaskHistory(tasks);
-  const shape: PersistedShape = { tasks: trimmed };
+/** At most one progress write per this long. A plain debounce would never fire: running
+ *  transfers report more often than this, so there would be no quiet window to write in. */
+const PROGRESS_PERSIST_MS = 5000;
+let pendingPersist: Task[] | null = null;
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+function writeTasks(tasks: Task[]): void {
+  const shape: PersistedShape = { tasks: trimTaskHistory(tasks) };
   safeSetItem(STORAGE_KEY, JSON.stringify(shape));
+}
+
+/** Write what is pending now (on quit, and before any write that must not wait). */
+function flushPersist(): void {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  if (pendingPersist) {
+    const tasks = pendingPersist;
+    pendingPersist = null;
+    writeTasks(tasks);
+  }
+}
+
+/** A change a restart must find (a task added, ended or removed): written now. */
+function persist(tasks: Task[]): void {
+  pendingPersist = tasks;
+  flushPersist();
+}
+
+/** A progress tick: serialising up to 200 tasks into a blocking setItem per tick, per running
+ *  transfer, stalls the main thread for nothing a restart would miss. */
+function persistProgress(tasks: Task[]): void {
+  pendingPersist = tasks;
+  if (!persistTimer) persistTimer = setTimeout(flushPersist, PROGRESS_PERSIST_MS);
+}
+
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  // setItem is synchronous, so this completes before the page goes away.
+  window.addEventListener("beforeunload", flushPersist);
+  window.addEventListener("pagehide", flushPersist);
 }
 
 // ---------------------------------------------------------------------------
@@ -292,6 +336,9 @@ const MIN_SAMPLE_MS = 400;
 const RATE_ALPHA = 0.3;
 /** Below this a job shows no speed (and no time left) rather than a figure that means nothing. */
 const MIN_RATE = 1;
+/** What is left of a speed once the bytes have stopped: it fades, and under this it is gone
+ *  (the status bar showed "1.1222416 B/s" for a read-back that was still working, #669). */
+const FADED_RATE = 1024;
 
 /** Many jobs (library moves, downloads, file copies, watched engine jobs) report bytes moved
  *  but no speed, so the activity bar could show a percentage and nothing about how fast or how
@@ -319,7 +366,7 @@ export function deriveRate(
     prev.bytesPerSec > 0 ? prev.bytesPerSec + RATE_ALPHA * (instant - prev.bytesPerSec) : instant;
   // A step that moves no bytes (a conversion's hashing pass) decays the average by 0.7 a sample:
   // left alone it reached 1e-211 B/s and "1e+218h left". Under a byte a second is no speed.
-  if (bytesPerSec < MIN_RATE) bytesPerSec = 0;
+  if (bytesPerSec < MIN_RATE || (instant === 0 && bytesPerSec < FADED_RATE)) bytesPerSec = 0;
   samples.set(id, { at: now, current: progress.current, bytesPerSec });
   return bytesPerSec > 0 ? withEta(bytesPerSec, progress) : null;
 }
@@ -367,7 +414,6 @@ interface TaskState {
     control?: TaskControlRef;
     status?: TaskStatus;
     progress?: TaskProgress;
-    maxAttempts?: number;
   }) => string;
 
   /** Patch a task — typically progress/rate/eta as the engine reports.
@@ -424,8 +470,6 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       progress: init.progress,
       createdAt: new Date(now).toISOString(),
       updatedAtMs: now,
-      attempts: 1,
-      maxAttempts: init.maxAttempts ?? 3,
     };
     set((s) => {
       // New tasks go to the front so the Tasks tab shows newest first.
@@ -452,7 +496,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       const tasks = [...s.tasks];
       tasks[idx] = updated;
       const trimmed = trimTaskHistory(tasks);
-      persist(trimmed);
+      persistProgress(trimmed);
       return { tasks: trimmed };
     });
   },

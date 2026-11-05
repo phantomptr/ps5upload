@@ -43,6 +43,11 @@ use sha2::{Digest, Sha256};
 /// stays put.
 pub const SCHEMA: u32 = 4;
 
+/// Where the old one-call scan cut a library: see [`Corpus::open`].
+const OLD_SCAN_CUT: u64 = 2 * 1024 * 1024;
+/// More than a library's headers need.
+const LIBRARY_HEAD: u64 = 64 * 1024;
+
 /// Only these are libraries. A dot-prefixed name never is: copying a game
 /// folder from a Mac leaves a `._libSceAgc.sprx` AppleDouble sidecar beside
 /// every file, always ~4 KB, and an early build of this offered eight of them
@@ -73,6 +78,41 @@ fn u32le(d: &[u8], at: usize) -> Option<u32> {
 }
 fn u64le(d: &[u8], at: usize) -> Option<u64> {
     d.get(at..at + 8)?.try_into().ok().map(u64::from_le_bytes)
+}
+
+/// Where the last byte a library's own headers describe ends: the SELF entry table, or an ELF's
+/// program headers, which both sit at the front of the file. `None`: not a SELF or an ELF.
+fn declared_end(head: &[u8]) -> Option<u64> {
+    let mut end = 0u64;
+    if matches!(u32le(head, 0)?, SELF_MAGIC_PS4 | SELF_MAGIC_PS5) {
+        for i in 0..u16le(head, 0x18)? as usize {
+            let at = 0x20 + i * 0x20;
+            end = end.max(u64le(head, at + 8)?.saturating_add(u64le(head, at + 16)?));
+        }
+        return Some(end);
+    }
+    if head.get(..4)? != b"\x7fELF" {
+        return None;
+    }
+    let phoff = u64le(head, 0x20)? as usize;
+    let phentsize = u16le(head, 0x36)? as usize;
+    for i in 0..u16le(head, 0x38)? as usize {
+        let at = phoff.checked_add(i.checked_mul(phentsize)?)?;
+        end = end.max(u64le(head, at + 8)?.saturating_add(u64le(head, at + 0x20)?));
+    }
+    Some(end)
+}
+
+/// Why these bytes cannot go in the corpus as a library, if they cannot.
+fn library_problem(name: &str, data: &[u8]) -> Option<String> {
+    match declared_end(data) {
+        None => Some(format!("{name} is not a library file")),
+        Some(end) if end > data.len() as u64 => Some(format!(
+            "{name} is cut short: {} of {end} bytes",
+            data.len()
+        )),
+        Some(_) => None,
+    }
 }
 
 /// Byte offset of a module's param segment, or None.
@@ -401,7 +441,7 @@ pub struct Observation {
     /// Stable identity of the console it was seen on.
     ///
     /// `console` is a DISPLAY name and is not stable: the same machine was
-    /// recorded as `phat-5.10` by one scan and `192.168.86.99` by the next,
+    /// recorded as `phat-5.10` by one scan and `192.0.2.99` by the next,
     /// which made `same_source` treat one console as two and inflate a set's
     /// own evidence. The host does not change when the user renames a roster
     /// entry, so the dedupe keys on this when both sides have it.
@@ -467,9 +507,12 @@ mod observation_tests {
     }
 
     fn lib(name: &str, byte: u8) -> IncomingLibrary {
+        let mut data = vec![byte; 64];
+        data[..4].copy_from_slice(&SELF_MAGIC_PS4.to_le_bytes());
+        data[0x18..0x1a].copy_from_slice(&0u16.to_le_bytes());
         IncomingLibrary {
             name: name.to_string(),
-            data: vec![byte; 64],
+            data,
         }
     }
 
@@ -559,7 +602,7 @@ mod observation_tests {
     #[test]
     fn renaming_a_console_does_not_make_it_count_twice() {
         // Measured: one machine was recorded as `phat-5.10` by one scan and
-        // `192.168.86.99` by the next, and the dedupe — keyed on the DISPLAY
+        // `192.0.2.99` by the next, and the dedupe — keyed on the DISPLAY
         // name — treated them as two consoles. `distinctSightings` is a
         // ranking signal, so that inflated a set's own evidence.
         let root = scratch("rename");
@@ -567,14 +610,14 @@ mod observation_tests {
         corpus
             .add_set(
                 "Game A",
-                sighting_on("PPSA00001", "phat-5.10", "192.168.86.99"),
+                sighting_on("PPSA00001", "phat-5.10", "192.0.2.99"),
                 vec![lib("libSceAgc.sprx", 1)],
             )
             .expect("first add");
         corpus
             .add_set(
                 "Game A",
-                sighting_on("PPSA00001", "192.168.86.99", "192.168.86.99"),
+                sighting_on("PPSA00001", "192.0.2.99", "192.0.2.99"),
                 vec![lib("libSceAgc.sprx", 1)],
             )
             .expect("re-scan under a different display name");
@@ -593,14 +636,14 @@ mod observation_tests {
         corpus
             .add_set(
                 "Game A",
-                sighting_on("PPSA00001", "pro", "192.168.86.100"),
+                sighting_on("PPSA00001", "pro", "192.0.2.100"),
                 vec![lib("libSceAgc.sprx", 1)],
             )
             .expect("first");
         corpus
             .add_set(
                 "Game A",
-                sighting_on("PPSA00001", "phat", "192.168.86.99"),
+                sighting_on("PPSA00001", "phat", "192.0.2.99"),
                 vec![lib("libSceAgc.sprx", 1)],
             )
             .expect("second console");
@@ -703,7 +746,46 @@ impl Corpus {
             .and_then(|b| serde_json::from_slice::<Manifest>(&b).ok())
             .filter(|m| m.schema == SCHEMA)
             .unwrap_or_default();
-        Corpus { root, manifest }
+        let mut corpus = Corpus { root, manifest };
+        corpus.drop_cut_sets();
+        corpus
+    }
+
+    /// The scan used to read each library in one call, which stops at 2 MiB, and stored that as
+    /// the whole library. A re-scan only adds a whole copy beside it, so those sets go here: a
+    /// backport must not pick one. The next scan brings them back whole. The file is read only
+    /// for a build of exactly the size the cut left, so this costs nothing on a healthy corpus.
+    fn drop_cut_sets(&mut self) {
+        let cut: BTreeSet<String> = self
+            .manifest
+            .libraries
+            .iter()
+            .flat_map(|e| &e.builds)
+            .filter(|b| b.size == OLD_SCAN_CUT && self.build_is_cut(b))
+            .map(|b| b.sha256.clone())
+            .collect();
+        if cut.is_empty() {
+            return;
+        }
+        let ids: Vec<String> = self
+            .manifest
+            .sets
+            .iter()
+            .filter(|s| s.libraries.values().any(|sha| cut.contains(sha)))
+            .map(|s| s.id.clone())
+            .collect();
+        for id in ids {
+            let _ = self.delete_set(&id);
+        }
+    }
+
+    fn build_is_cut(&self, build: &Build) -> bool {
+        use std::io::Read;
+        let mut head = Vec::new();
+        std::fs::File::open(self.root.join(&build.path))
+            .and_then(|f| f.take(LIBRARY_HEAD).read_to_end(&mut head))
+            .is_ok()
+            && declared_end(&head).is_some_and(|end| end > build.size)
     }
 
     pub fn manifest(&self) -> &Manifest {
@@ -732,6 +814,14 @@ impl Corpus {
             .collect();
         if libraries.is_empty() {
             return Err(anyhow!("no library files (.sprx/.prx) in this import"));
+        }
+        // A set goes on a game as it is: a cut or foreign file here is a game that dies at load
+        // much later, with nothing to say why.
+        if let Some(problem) = libraries
+            .iter()
+            .find_map(|l| library_problem(&l.name, &l.data))
+        {
+            return Err(anyhow!(problem));
         }
 
         let mut mapping = BTreeMap::new();
@@ -921,7 +1011,7 @@ mod tests {
             title_id: "PPSA30528".into(),
             title_name: "Red Dead Redemption".into(),
             console: "PS5-Pro".into(),
-            console_key: "192.168.86.100".into(),
+            console_key: "192.0.2.100".into(),
             image_backed: true,
             at: "2026-09-09T00:00:00Z".into(),
         }
@@ -1031,6 +1121,129 @@ mod tests {
         assert!(!is_library_name("eboot.bin"));
         assert!(!is_library_name("../escape.sprx"));
         assert!(!is_library_name("dir/libSceAgc.sprx"));
+    }
+
+    /// A SELF of `len` bytes whose one entry says the file runs to `end`.
+    fn self_ending_at(end: u64, len: usize) -> Vec<u8> {
+        let mut d = vec![0u8; len];
+        d[0..4].copy_from_slice(&SELF_MAGIC_PS5.to_le_bytes());
+        d[0x18..0x1a].copy_from_slice(&1u16.to_le_bytes());
+        d[0x28..0x30].copy_from_slice(&0x40u64.to_le_bytes());
+        d[0x30..0x38].copy_from_slice(&(end - 0x40).to_le_bytes());
+        d
+    }
+
+    /// An ELF of `len` bytes whose one program header says the file runs to `end`.
+    fn elf_ending_at(end: u64, len: usize) -> Vec<u8> {
+        let mut d = vec![0u8; len];
+        d[0..4].copy_from_slice(b"\x7fELF");
+        d[0x20..0x28].copy_from_slice(&0x40u64.to_le_bytes());
+        d[0x36..0x38].copy_from_slice(&0x38u16.to_le_bytes());
+        d[0x38..0x3a].copy_from_slice(&1u16.to_le_bytes());
+        d[0x48..0x50].copy_from_slice(&0x100u64.to_le_bytes());
+        d[0x60..0x68].copy_from_slice(&(end - 0x100).to_le_bytes());
+        d
+    }
+
+    #[test]
+    fn a_cut_library_is_refused_and_nothing_is_stored() {
+        let dir = tempdir();
+        for data in [
+            self_ending_at(0x2000, 0x1000),
+            elf_ending_at(0x2000, 0x1000),
+        ] {
+            let mut c = Corpus::open(&dir);
+            let e = c
+                .add_set("cut", scan_origin(), vec![incoming("libSceAgc.sprx", data)])
+                .unwrap_err();
+            assert_eq!(
+                e.to_string(),
+                "libSceAgc.sprx is cut short: 4096 of 8192 bytes"
+            );
+            assert!(c.manifest().sets.is_empty() && c.manifest().libraries.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_file_that_is_no_library_is_refused() {
+        let dir = tempdir();
+        let mut c = Corpus::open(&dir);
+        for junk in [vec![], vec![1, 2], b"<html>not found</html>".to_vec()] {
+            let e = c
+                .add_set("junk", scan_origin(), vec![incoming("libA.sprx", junk)])
+                .unwrap_err();
+            assert_eq!(e.to_string(), "libA.sprx is not a library file");
+        }
+    }
+
+    #[test]
+    fn a_whole_library_with_bytes_past_its_last_entry_is_accepted() {
+        // Real libraries carry a trailer after the last entry (measured: 8 to 4602 bytes).
+        let dir = tempdir();
+        let mut c = Corpus::open(&dir);
+        for (i, data) in [self_ending_at(0x800, 0x900), elf_ending_at(0x800, 0x800)]
+            .into_iter()
+            .enumerate()
+        {
+            let id = c
+                .add_set(
+                    "whole",
+                    scan_origin(),
+                    vec![incoming(&format!("lib{i}.sprx"), data)],
+                )
+                .unwrap();
+            assert!(id.is_some());
+        }
+    }
+
+    #[test]
+    fn sets_the_old_scan_stored_cut_are_dropped_and_whole_ones_stay() {
+        let dir = tempdir();
+        let two_mib = OLD_SCAN_CUT as usize;
+        let mut c = Corpus::open(&dir);
+        c.add_set(
+            "small",
+            scan_origin(),
+            vec![incoming("libSmall.sprx", self_with((1, 2), 1, 2))],
+        )
+        .unwrap();
+        // What the old scan wrote: the first 2 MiB of a 3 MiB library, under a set of its own.
+        // And a library that really is exactly 2 MiB, which has nothing wrong with it.
+        for (set, name, data) in [
+            ("set-8", "libCut.sprx", self_ending_at(3 << 20, two_mib)),
+            (
+                "set-9",
+                "libExact.sprx",
+                self_ending_at(OLD_SCAN_CUT, two_mib),
+            ),
+        ] {
+            let sha = sha256_hex(&data);
+            c.store_build(name, &sha, &data, set).unwrap();
+            c.manifest.sets.push(SetEntry {
+                id: set.to_string(),
+                label: set.to_string(),
+                origin: scan_origin(),
+                observations: Vec::new(),
+                libraries: [(name.to_string(), sha)].into_iter().collect(),
+            });
+        }
+        c.write().unwrap();
+
+        let reopened = Corpus::open(&dir);
+        let ids: Vec<&str> = reopened
+            .manifest()
+            .sets
+            .iter()
+            .map(|s| s.id.as_str())
+            .collect();
+        assert_eq!(ids, ["set-1", "set-9"]);
+        assert!(reopened
+            .manifest()
+            .libraries
+            .iter()
+            .all(|e| e.name != "libCut.sprx"));
+        // Removed from disk too, so it stays gone without another look.
+        assert_eq!(Corpus::open(&dir).manifest().sets.len(), 2);
     }
 
     #[test]

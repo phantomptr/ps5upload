@@ -59,12 +59,12 @@ export function BrowseMenu(props: {
   const ref = useRef<HTMLDivElement>(null);
   const fit = useFitOnScreen(ref, true);
   const item =
-    "flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-[var(--color-surface-3)] disabled:opacity-50";
+    "flex w-full items-center gap-2 px-3 py-2 text-start text-sm hover:bg-[var(--color-surface-3)] disabled:opacity-50";
   return (
     <div
       ref={ref}
       role="menu"
-      className="glass-float elev-3 absolute right-0 top-full z-40 mt-1 min-w-56 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-[var(--radius-card)] p-1.5"
+      className="glass-float elev-3 absolute end-0 top-full z-40 mt-1 min-w-56 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-[var(--radius-card)] p-1.5"
       style={fit}
     >
       <button type="button" role="menuitem" className={item} onClick={props.onLocal}>

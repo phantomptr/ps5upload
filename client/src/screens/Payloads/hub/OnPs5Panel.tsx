@@ -22,14 +22,14 @@ import {
   payloadsRelease,
   processKill,
   processList,
-  sendPayload,
+  sendPayloadChecked,
   type PayloadInfo,
   type ProcessInfo,
 } from "../../../api/ps5";
 import { mgmtAddr, withPort } from "../../../lib/addr";
+import { payloadSendRefusalText } from "../../../lib/payloadSendRefusal";
 import { openExternalUrl } from "../../../lib/openExternalUrl";
 import { compareVersions } from "../../../lib/semver";
-import { isTauriEnv } from "../../../lib/tauriEnv";
 import { usePoll, useTransferBusy } from "../../../lib/usePoll";
 import { useDocumentVisible } from "../../../lib/visibility";
 import { useConnectionStore } from "../../../state/connection";
@@ -54,6 +54,7 @@ import {
   type IntegrationId,
   type IntegrationReport,
 } from "./registry";
+import { humanizeCaught } from "../../../lib/humanizeError";
 
 /** The process list is re-read this often while the tab is open. Slower than Processes'
  *  3 s: cards change state rarely, and this shares the helper with everything else. */
@@ -108,7 +109,6 @@ export default function OnPs5Panel() {
 
 function OnPs5Body() {
   const tr = useTr();
-  const native = isTauriEnv();
   const navigate = useNavigate();
   const host = useConnectionStore((s) => s.host);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
@@ -131,10 +131,9 @@ function OnPs5Body() {
   // Bumped after an Update, so the integrations' summaries read their version again.
   const [summaryRev, setSummaryRev] = useState(0);
   // The catalogue has been read (or failed): markers are checked once, against the full list.
-  const [catalogDone, setCatalogDone] = useState(!native);
+  const [catalogDone, setCatalogDone] = useState(false);
 
   useEffect(() => {
-    if (!native) return;
     let cancelled = false;
     payloadsCatalog()
       .then((c) => {
@@ -147,7 +146,7 @@ function OnPs5Body() {
     return () => {
       cancelled = true;
     };
-  }, [native]);
+  }, []);
 
   const entries = useMemo(() => hubEntries(catalog), [catalog]);
 
@@ -175,7 +174,7 @@ function OnPs5Body() {
       setError(null);
     } catch (e) {
       if (gen !== genRef.current) return;
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       inFlight.current = false;
       if (gen === genRef.current) setProcsLoaded(true);
@@ -242,12 +241,11 @@ function OnPs5Body() {
   }, [hbVersion, hbPort, report]);
 
   // The newest stable release of each card whose running version is known, so the card
-  // can offer an update. Desktop only (the catalogue's GitHub lookups live there).
+  // can offer an update.
   const versionKey = cards
     .map((c) => `${c.id}=${reports[c.id]?.version ?? ""}`)
     .join("|");
   useEffect(() => {
-    if (!native) return;
     let cancelled = false;
     for (const c of cards) {
       const v = reports[c.id]?.version;
@@ -263,7 +261,7 @@ function OnPs5Body() {
     };
     // versionKey stands for cards + reports here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [native, versionKey]);
+  }, [versionKey]);
 
   // A link that opened a card (an old tab's URL, a notification) scrolls to it once.
   const scrolledTo = useRef<string | null>(null);
@@ -308,7 +306,7 @@ function OnPs5Body() {
       }
       log.info("payloads", `stopped ${card.name}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(null);
       await refreshProcs();
@@ -333,7 +331,7 @@ function OnPs5Body() {
       await hbAct(host, { action: "stop" });
       log.info("payloads", "stopped HearBridge");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(null);
       await hb.refresh();
@@ -358,7 +356,7 @@ function OnPs5Body() {
       const inv = await payloadsLocalInventory();
       let local = inv.find((e) => e.payload_id === card.id && e.version === rel.tag);
       if (!local) local = await payloadsDownload(card.id, rel.picked_asset_url, rel.tag);
-      await sendPayload(host.trim(), local.path);
+      await sendPayloadChecked(host.trim(), local.path);
       pushNotification(
         "success",
         withConsolePrefix(host, tr("hub_updated", { name: card.name, version: rel.tag }, `Sent ${card.name} ${rel.tag}`)),
@@ -370,7 +368,7 @@ function OnPs5Body() {
       pushNotification(
         "error",
         withConsolePrefix(host, tr("hub_update_failed", { name: card.name }, `Couldn't update ${card.name}`)),
-        { body: String(e) },
+        { body: payloadSendRefusalText(e) },
       );
     } finally {
       setBusy(null);
@@ -414,26 +412,20 @@ function OnPs5Body() {
         <EmptyState
           icon={Boxes}
           title={tr("hub_empty_title", undefined, "Nothing found on this PS5")}
-          message={
-            native
-              ? tr(
-                  "hub_empty_body",
-                  undefined,
-                  "No payload from the catalogue is running or installed on this console. Catalog has them, and Send loads any payload file.",
-                )
-              : tr("hub_empty_body_web", undefined, "No known payload is running or installed on this console.")
-          }
+          message={tr(
+            "hub_empty_body",
+            undefined,
+            "No payload from the catalogue is running or installed on this console. Catalog has them, and Send loads any payload file.",
+          )}
           action={
-            native ? (
-              <div className="flex flex-wrap justify-center gap-2">
-                <Button size="sm" leftIcon={<Boxes size={14} />} onClick={() => navigate("/payloads?tab=catalog")}>
-                  {tr("payloads_tab_catalog", undefined, "Catalog")}
-                </Button>
-                <Button size="sm" leftIcon={<Rocket size={14} />} onClick={() => navigate("/payloads?tab=send")}>
-                  {tr("payloads_tab_send", undefined, "Send payload")}
-                </Button>
-              </div>
-            ) : undefined
+            <div className="flex flex-wrap justify-center gap-2">
+              <Button size="sm" leftIcon={<Boxes size={14} />} onClick={() => navigate("/payloads?tab=catalog")}>
+                {tr("payloads_tab_catalog", undefined, "Catalog")}
+              </Button>
+              <Button size="sm" leftIcon={<Rocket size={14} />} onClick={() => navigate("/payloads?tab=send")}>
+                {tr("payloads_tab_send", undefined, "Send payload")}
+              </Button>
+            </div>
           }
         />
       ) : (
@@ -442,7 +434,7 @@ function OnPs5Body() {
             const rep = reports[c.id];
             const tag = latest[c.id];
             const newer =
-              native && rep?.version && tag && compareVersions(rep.version, tag) === -1 ? tag : null;
+              rep?.version && tag && compareVersions(rep.version, tag) === -1 ? tag : null;
             return (
               <HubCardView
                 key={c.id}
@@ -615,7 +607,7 @@ function HubCardView({
           </div>
           <div className="mt-0.5 text-xs text-[var(--color-muted)]">{summary ? summary(detail) : detail}</div>
         </div>
-        <div className="ml-auto flex flex-wrap items-center gap-1.5">
+        <div className="ms-auto flex flex-wrap items-center gap-1.5">
           {link && (
             <Button
               variant="ghost"

@@ -16,6 +16,12 @@ describe("audioBufferFor", () => {
   });
 });
 
+describe("the picture on this device", () => {
+  it("is on unless the setting says otherwise", () => {
+    expect(DEFAULT_RP_PREFS.pictureHere).toBe(true);
+  });
+});
+
 describe("loadRpPrefs", () => {
   const stored = (v: unknown) => vi.spyOn(storage, "safeGetItem").mockReturnValue(v === null ? null : JSON.stringify(v));
 
@@ -28,6 +34,19 @@ describe("loadRpPrefs", () => {
     expect(p.rumble).toBe(false);
     expect(p.buttonMap).toEqual({});
     expect(p.picture).toMatchObject({ enhance: "fsr", sharpen: 30 });
+    vi.restoreAllMocks();
+  });
+
+  it("falls back from values this version has no use for", () => {
+    stored({ res: "4k", fps: 144, fit: "zoom", touchSize: "xl", decoding: "gpu" });
+    const p = loadRpPrefs();
+    expect(p).toMatchObject({
+      res: DEFAULT_RP_PREFS.res,
+      fps: DEFAULT_RP_PREFS.fps,
+      fit: DEFAULT_RP_PREFS.fit,
+      touchSize: DEFAULT_RP_PREFS.touchSize,
+      decoding: DEFAULT_RP_PREFS.decoding,
+    });
     vi.restoreAllMocks();
   });
 

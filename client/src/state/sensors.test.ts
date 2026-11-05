@@ -11,8 +11,8 @@ vi.mock("../api/ps5", () => ({
   fetchHwPower: sensorMocks.fetchPower,
 }));
 
-vi.mock("../lib/ps5Transfers", () => ({
-  transferScreenBusy: sensorMocks.transferBusy,
+vi.mock("../lib/usePoll", () => ({
+  consoleBusy: sensorMocks.transferBusy,
 }));
 
 import {
@@ -21,6 +21,7 @@ import {
   unsubscribeSensor,
   _refcountForTest,
   type SensorSample,
+  tempsView,
 } from "./sensors";
 import { EMPTY_HOST_RUNTIME, useConnectionStore } from "./connection";
 import { useTaskStore } from "./tasks";
@@ -290,5 +291,45 @@ describe("sensor polling safety", () => {
       expect(latest?.temps).toBe(temps);
       expect(latest?.power).toBeNull();
     });
+  });
+});
+
+describe("how a console's temperatures read", () => {
+  const H = "10.0.0.9";
+  const view = () => tempsView(useSensorsStore.getState().byHost[H]);
+  beforeEach(() => {
+    useSensorsStore.setState({ byHost: {} });
+  });
+
+  it("waits for the first answer, then shows it as current", () => {
+    expect(view()).toMatchObject({ temps: null, note: "reading" });
+    useSensorsStore.getState().record(H, makeSample(50, 1000));
+    expect(view()).toMatchObject({ note: null, readAt: null });
+    expect(view().temps?.cpu_temp).toBe(50);
+  });
+
+  it("keeps the last good reading through a failed read, with its time", () => {
+    useSensorsStore.getState().record(H, makeSample(50, 1000));
+    // The power read answered and the temperature read did not.
+    useSensorsStore.getState().record(H, { ts: 2000, temps: null, power: fakePower() });
+    useSensorsStore.getState().tempsFailed(H, "timeout");
+    expect(view()).toMatchObject({ readAt: 1000, note: null });
+    expect(view().temps?.cpu_temp).toBe(50);
+  });
+
+  it("says so after a few failures, and recovers on the next good read", () => {
+    for (let i = 0; i < 3; i++) useSensorsStore.getState().tempsFailed(H, "timeout");
+    expect(view()).toMatchObject({ temps: null, note: "failed", error: "timeout" });
+    useSensorsStore.getState().record(H, makeSample(40, 3000));
+    expect(view()).toMatchObject({ note: null, error: null });
+  });
+
+  it("says why the poll holds off", () => {
+    useSensorsStore.getState().setPaused(H, "transfer");
+    expect(view()).toMatchObject({ temps: null, note: "transfer" });
+    useSensorsStore.getState().record(H, makeSample(40, 3000));
+    expect(view()).toMatchObject({ note: "transfer", readAt: 3000 });
+    useSensorsStore.getState().setPaused(H, null);
+    expect(view()).toMatchObject({ note: null, readAt: null });
   });
 });

@@ -10,6 +10,8 @@ import { ChevronDown, MoreHorizontal } from "lucide-react";
 import { Button, type ButtonVariant } from "./Button";
 import { MenuDropdown } from "./Menu";
 import { fitOnScreen, visibleArea } from "./useFitOnScreen";
+import { useTr } from "../state/lang";
+import { useBackDismiss } from "../lib/systemBack";
 
 /**
  * One action inside an OverflowMenu.
@@ -65,8 +67,8 @@ export interface OverflowMenuItem {
  */
 export function OverflowMenu({
   items,
-  ariaLabel = "More actions",
-  buttonTitle = "More actions",
+  ariaLabel,
+  buttonTitle,
   align = "right",
   size = "sm",
   triggerLabel,
@@ -89,6 +91,10 @@ export function OverflowMenu({
   /** Extra classes for the trigger (a card makes the ⋯ a compact square beside its main button). */
   triggerClassName?: string;
 }) {
+  const tr = useTr();
+  const moreActions = tr("more_actions", undefined, "More actions");
+  const triggerAria = ariaLabel ?? moreActions;
+  const triggerTitle = buttonTitle ?? moreActions;
   const [open, setOpen] = useState(false);
   // Vertical flip + clamp: a menu anchored `top: 100%` can run off the bottom
   // of the viewport when its trigger sits low on screen (a Library row near the
@@ -143,6 +149,15 @@ export function OverflowMenu({
     return () => window.removeEventListener("resize", measure);
   }, [open]);
 
+  /** Close from the keyboard or a picked item: focus goes back to the trigger, or it would fall
+   *  to <body> with the menu item and the user would Tab from the top of the page again. A
+   *  command that opens a dialog next takes focus from here and gives it back here. */
+  const closeToTrigger = () => {
+    setOpen(false);
+    wrapperRef.current?.querySelector<HTMLElement>("button")?.focus();
+  };
+  useBackDismiss(open, () => setOpen(false));
+
   // Close on outside click + Escape. Both wired only when the menu
   // is open so we don't pay the listener cost for every closed menu
   // on every page (Library can render hundreds of rows).
@@ -153,7 +168,7 @@ export function OverflowMenu({
       if (!wrapperRef.current.contains(e.target as Node)) setOpen(false);
     }
     function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") closeToTrigger();
     }
     // pointerdown (not mousedown) so touch taps outside dismiss the menu
     // crisply on Android/touch — mousedown is only synthesized after the
@@ -179,8 +194,8 @@ export function OverflowMenu({
           onClick={() => setOpen((v) => !v)}
           aria-haspopup="menu"
           aria-expanded={open}
-          aria-label={ariaLabel}
-          title={buttonTitle}
+          aria-label={triggerAria}
+          title={triggerTitle}
         >
           {triggerLabel}
         </Button>
@@ -193,14 +208,14 @@ export function OverflowMenu({
           onClick={() => setOpen((v) => !v)}
           aria-haspopup="menu"
           aria-expanded={open}
-          aria-label={ariaLabel}
-          title={buttonTitle}
+          aria-label={triggerAria}
+          title={triggerTitle}
         />
       )}
       {open && (
         <MenuDropdown
           items={items}
-          onClose={() => setOpen(false)}
+          onClose={closeToTrigger}
           align={align}
           placement={placement}
           style={shiftX ? { marginLeft: shiftX, marginRight: -shiftX } : undefined}

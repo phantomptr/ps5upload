@@ -245,7 +245,8 @@ static scan_ent_t *scan_all(const cheats_list_cfg_t *cfg, size_t *count, int *tr
 
 /* ── State sidecar ───────────────────────────────────────────────── */
 
-/* Reads <state_dir>/<title>.json (at most 4096 bytes, as the toggle code does). Returns its length. */
+/* Reads <state_dir>/<title>.json into buf (CHEATS_STATE_FILE_MAX + 1 bytes), up to the same limit the
+ * toggle code has: a title with a few hundred cheats on is well past 4 KiB. Returns its length. */
 static size_t read_state(const char *dir, const char *title, char *buf, size_t cap) {
     char path[400];
     if (!dir) return 0;
@@ -253,7 +254,7 @@ static size_t read_state(const char *dir, const char *title, char *buf, size_t c
     int fd = open(path, O_RDONLY);
     if (fd < 0) return 0;
     struct stat st;
-    if (fstat(fd, &st) != 0 || st.st_size > 4096) {
+    if (fstat(fd, &st) != 0 || st.st_size > CHEATS_STATE_FILE_MAX) {
         close(fd);
         return 0;
     }
@@ -353,6 +354,8 @@ int cheats_list_build(const cheats_list_cfg_t *cfg, char *buf, size_t cap, size_
     buf[0] = '\0';
     sb_raw(&out, "{\"titles\":[");
     int first = 1;
+    /* On the heap, and one for the whole list: the sidecars can be 64 KiB. No memory: "none enabled". */
+    char *state = malloc(CHEATS_STATE_FILE_MAX + 1);
 
     for (size_t i = 0; v && i < cnt;) {
         size_t j = i;
@@ -376,11 +379,10 @@ int cheats_list_build(const cheats_list_cfg_t *cfg, char *buf, size_t cap, size_
             mods[nfiles] = m;
         }
         int enabled = 0;
-        char state[4096];
         int want_state = 0;
         for (int k = 0; k < nfiles; k++)
             if (mods[k] > 0) want_state = 1;
-        if (want_state && read_state(cfg->state_dir, title, state, sizeof state))
+        if (state && want_state && read_state(cfg->state_dir, title, state, CHEATS_STATE_FILE_MAX + 1))
             for (int k = 0; k < nfiles; k++)
                 if (mods[k] > 0) enabled += count_enabled(state, mods[k]);
 
@@ -424,6 +426,7 @@ int cheats_list_build(const cheats_list_cfg_t *cfg, char *buf, size_t cap, size_
         }
         i = j;
     }
+    free(state);
     free(v);
 
     /* The reserved tail: always room for these. */

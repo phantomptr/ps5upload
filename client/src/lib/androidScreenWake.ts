@@ -1,5 +1,6 @@
 import { isMobile } from "./platform";
 import { isTauriEnv } from "./tauriEnv";
+import { startKeepScreenVideo, stopKeepScreenVideo } from "./keepScreenVideo";
 
 // Android screen keep-awake, via the W3C Screen Wake Lock API.
 //
@@ -14,12 +15,15 @@ import { isTauriEnv } from "./tauriEnv";
 // over Wi-Fi doesn't die to the phone sleeping mid-stream — the same
 // failure the desktop inhibitor guards against.
 //
-// Scope (Phase 1): foreground only. This keeps the device awake while the
-// app is open and on-screen — the common "I started a big upload and set
-// the phone down" case. It does NOT survive a manual screen lock or an
-// app switch (the OS hides the document and releases the lock by spec);
-// true background uploads would need a foreground service (a deliberate
-// follow-up, gated on the Tauri MainActivity-leak caveat — tauri#11609).
+// Scope: foreground only. This keeps the device awake while the app is open and on-screen — the
+// common "I started a big upload and set the phone down" case. It does NOT survive a manual
+// screen lock or an app switch (the OS hides the document and releases the lock by spec). What
+// keeps a transfer going in the background is the foreground service on Android
+// (TransferService, scripts/release/android-postinit-patch.sh), not this.
+//
+// A phone's browser on plain http (the web UI, /join, the pad page on the LAN) has no such API:
+// it is limited to secure contexts. There a tiny looping video does the same job
+// (lib/keepScreenVideo.ts).
 //
 // Two design points the spec forces:
 //   1. The sentinel is auto-released whenever the page is hidden, so we
@@ -71,7 +75,10 @@ async function acquire(): Promise<void> {
   if (reasons.size === 0) return; // released out from under us meanwhile
   if (sentinel && !sentinel.released) return; // already held
   const api = wakeLockApi();
-  if (!api) return;
+  if (!api) {
+    if (isMobile()) startKeepScreenVideo();
+    return;
+  }
   try {
     const s = await api.request("screen");
     // The OS auto-releases on page-hide; drop our ref so the next
@@ -86,6 +93,7 @@ async function acquire(): Promise<void> {
 }
 
 async function release(): Promise<void> {
+  stopKeepScreenVideo();
   const s = sentinel;
   sentinel = null;
   if (s && !s.released) {

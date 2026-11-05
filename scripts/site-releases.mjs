@@ -15,10 +15,10 @@ const REPO = "phantomptr/ps5upload";
 const out = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "site", "releases.json");
 
 /** Only what the page reads, so the snapshot stays small. */
-const slim = (list) =>
+const slim = (list, count) =>
   list
     .filter((r) => !r.draft)
-    .slice(0, 12)
+    .slice(0, count)
     .map((r) => ({
       tag_name: r.tag_name,
       prerelease: r.prerelease,
@@ -28,9 +28,9 @@ const slim = (list) =>
       assets: r.assets.map((a) => ({ name: a.name, browser_download_url: a.browser_download_url, size: a.size })),
     }));
 
-async function fetchReleases() {
+async function fetchReleases(which = "?per_page=12") {
   try {
-    const json = execFileSync("gh", ["api", `repos/${REPO}/releases?per_page=12`], {
+    const json = execFileSync("gh", ["api", `repos/${REPO}/releases${which}`], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     });
@@ -38,12 +38,19 @@ async function fetchReleases() {
   } catch {
     const headers = { Accept: "application/vnd.github+json" };
     if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
-    const res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=12`, { headers });
+    const res = await fetch(`https://api.github.com/repos/${REPO}/releases${which}`, { headers });
     if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
     return res.json();
   }
 }
 
-const list = slim(await fetchReleases());
+const all = await fetchReleases();
+// The page offers the newest stable release first. With a run of pre-releases it can fall out of
+// the newest twelve, so it is added at the end.
+if (!all.some((r) => !r.draft && !r.prerelease)) {
+  const latest = await fetchReleases("/latest").catch(() => null);
+  if (latest?.tag_name) all.push(latest);
+}
+const list = slim(all, 13);
 writeFileSync(out, `${JSON.stringify(list, null, 1)}\n`);
 console.log(`site/releases.json: ${list.length} releases, newest ${list[0]?.tag_name ?? "none"}`);

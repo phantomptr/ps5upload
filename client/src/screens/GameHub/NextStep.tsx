@@ -212,6 +212,7 @@ export function ConvertBuildsCard({
       handed: tr("game_build_handed", undefined, "In the install queue"),
       done: tr("game_build_done", undefined, "Built"),
       failed: tr("game_build_failed", undefined, "Failed"),
+      cancelled: tr("cq_cancelled", undefined, "Cancelled"),
     })[i.status];
   return (
     <Card>

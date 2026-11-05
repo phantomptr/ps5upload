@@ -17,7 +17,7 @@ export interface VisibleRect {
 }
 
 /** The NAL payload without its emulation-prevention bytes (00 00 03 → 00 00). */
-function unescape(nal: Uint8Array): Uint8Array {
+export function rbsp(nal: Uint8Array): Uint8Array {
   const out = new Uint8Array(nal.length);
   let n = 0;
   let zeros = 0;
@@ -179,7 +179,7 @@ export function spsVisibleRect(header: Uint8Array, hevc: boolean): VisibleRect |
     const isSps = hevc ? ((nal[0] >> 1) & 0x3f) === 33 : (nal[0] & 0x1f) === 7;
     if (!isSps) continue;
     try {
-      const v = (hevc ? hevcSps : avcSps)(unescape(nal));
+      const v = (hevc ? hevcSps : avcSps)(rbsp(nal));
       return v.w > 0 && v.h > 0 && v.x >= 0 && v.y >= 0 ? v : null;
     } catch {
       return null;
@@ -209,7 +209,7 @@ export function hevcCodecString(header: Uint8Array): string | null {
   for (const nal of nals(header)) {
     if (nal.length < 2 || ((nal[0] >> 1) & 0x3f) !== 33) continue;
     try {
-      const r = new Bits(unescape(nal));
+      const r = new Bits(rbsp(nal));
       r.skip(16); // NAL header
       r.skip(8); // sps_video_parameter_set_id, sps_max_sub_layers_minus1, temporal_id_nesting
       const space = r.u(2);

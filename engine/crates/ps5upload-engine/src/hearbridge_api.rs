@@ -26,6 +26,7 @@ pub(crate) fn routes<S: Clone + Send + Sync + 'static>() -> Router<S> {
 #[derive(Deserialize)]
 pub(crate) struct HostParams {
     #[serde(alias = "addr")]
+    #[serde(alias = "console")]
     host: String,
 }
 
@@ -90,7 +91,9 @@ pub(crate) async fn devices(Query(q): Query<HostParams>) -> Response {
 
 #[derive(Deserialize)]
 pub(crate) struct ActionReq {
-    /// The console (`addr` here is the headset's Bluetooth address, see `ActionParams`).
+    /// The console (`addr` here is the headset's Bluetooth address, see `ActionParams`, so it is
+    /// no name for the console on this route).
+    #[serde(alias = "console")]
     host: String,
     action: String,
     #[serde(flatten)]

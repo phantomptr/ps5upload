@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { gamesApi, type ConsoleEntry, type GameView } from "../../api/games";
-import { hostOf, mgmtAddr } from "../../lib/addr";
+import { mgmtAddr } from "../../lib/addr";
 import { hasTitleId } from "../../lib/gamePage";
 import { useConnectionStore } from "../../state/connection";
-import { useRosterStore } from "../../state/roster";
 import { useUploadQueueStore } from "../../state/uploadQueue";
 import { finishedBaseline, finishedFor, loadTitled, resultFor, type TitledResult } from "./gameViewState";
 
@@ -14,7 +13,6 @@ import { finishedBaseline, finishedFor, loadTitled, resultFor, type TitledResult
 export function useGameView(titleId: string) {
   const host = useConnectionStore((s) => s.host?.trim() ?? "");
   const up = useConnectionStore((s) => s.payloadStatus === "up");
-  const rosterHosts = useRosterStore((s) => s.profiles.map((p) => hostOf(p.host)).join(","));
   // Tagged with the title it answers, so a page that moved to another game
   // never shows the previous one (see gameViewState).
   const [held, setHeld] = useState<TitledResult<GameView> | null>(null);
@@ -42,12 +40,6 @@ export function useGameView(titleId: string) {
   const view = mine?.value ?? null;
   const loading = mine === null;
   const error = mine?.error ?? null;
-
-  // The engine forgets consoles the app no longer has (a sync the roster missed while the
-  // engine was away happens here).
-  useEffect(() => {
-    void gamesApi.keep(rosterHosts ? rosterHosts.split(",").filter(Boolean) : []).catch(() => {});
-  }, [rosterHosts]);
 
   // The connected console answers now: its row is current, not a saved read.
   useEffect(() => {

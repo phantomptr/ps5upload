@@ -1,7 +1,8 @@
 import { getEngineUrl } from "../state/engine";
 
 /**
- * The engine's own list of running transfer jobs (`GET /api/jobs`).
+ * The engine's own list of running jobs (`GET /api/jobs`). Only its transfers are used here: an
+ * install (`kind: "install"`) has its own place in the app and its id is not a transfer's.
  *
  * In the self-hosted web UI the engine outlives the browser tab: a transfer keeps running
  * after the tab closes (R15, #372). A reopened tab has no memory of it, so this list is how
@@ -21,6 +22,8 @@ export interface RunningEngineJob {
 
 interface RawJob {
   job_id?: unknown;
+  /** `install`, or absent/`transfer`. */
+  kind?: unknown;
   status?: unknown;
   job?: Record<string, unknown> | null;
 }
@@ -34,6 +37,7 @@ export function parseRunningJobs(raw: unknown): RunningEngineJob[] {
   const out: RunningEngineJob[] = [];
   for (const r of raw as RawJob[]) {
     if (!r || r.status !== "running" || typeof r.job_id !== "string") continue;
+    if (r.kind === "install") continue;
     const j = r.job ?? {};
     out.push({
       jobId: r.job_id,

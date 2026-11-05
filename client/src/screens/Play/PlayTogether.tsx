@@ -1,3 +1,4 @@
+import { writeClipboard } from "../../lib/clipboard";
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy, Gamepad2, RefreshCw, Share2, Smartphone, UserMinus, Users, X } from "lucide-react";
 
@@ -5,6 +6,8 @@ import { Button, Callout, Toggle } from "../../components";
 import { SendHelperButton } from "../../components/SendHelperButton";
 import { delayTone, formatCode, playerColor } from "../../lib/joinProtocol";
 import { useTr } from "../../state/lang";
+import { useRemotePlayStore } from "../../state/remotePlay";
+import { PictureHereToggle, PlayOnTvNote } from "./PictureHere";
 import { QrCode } from "./PhonePads";
 import {
   inviteOn,
@@ -15,14 +18,9 @@ import {
   type JoinHostState,
 } from "./playTogetherState";
 import { NetworkChoice } from "./NetworkChoice";
+import { clock } from "../../lib/clockText";
 
 type Tr = ReturnType<typeof useTr>;
-
-/** 42 → "0:42". */
-const clock = (s: number) => {
-  const t = Math.max(0, Math.ceil(s));
-  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
-};
 
 /** What a friend is doing, in words. */
 export function guestStatusText(tr: Tr, g: JoinGuest): string {
@@ -93,6 +91,11 @@ function TvHint() {
   );
 }
 
+/** A friend's name, or "Friend" in this app's language when they gave none. */
+function friendName(tr: ReturnType<typeof useTr>, name: string): string {
+  return name || tr("pt_friend_fallback", undefined, "Friend");
+}
+
 function PlayerCard({ addr, player, guest }: { addr: string; player: number; guest: JoinGuest | null }) {
   const tr = useTr();
   const tone = delayTone(guest?.rttMs);
@@ -110,7 +113,7 @@ function PlayerCard({ addr, player, guest }: { addr: string; player: number; gue
       {guest ? (
         <>
           <div className="truncate text-sm font-semibold" data-testid="pt-player-name">
-            {guest.name}
+            {friendName(tr, guest.name)}
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
             <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${CHIP[guest.status]}`} data-testid="pt-player-status">
@@ -119,6 +122,11 @@ function PlayerCard({ addr, player, guest }: { addr: string; player: number; gue
             {guest.rttMs != null && guest.status !== "left" && (
               <span className={`text-xs tabular-nums ${TONE[tone]}`} data-testid="pt-player-delay" data-tone={tone}>
                 {Math.round(guest.rttMs)} ms
+              </span>
+            )}
+            {guest.behind && guest.status === "playing" && (
+              <span className="text-xs text-[var(--color-warn)]" data-testid="pt-player-behind">
+                {tr("pt_player_behind", undefined, "Connection can't keep up")}
               </span>
             )}
           </div>
@@ -163,6 +171,7 @@ export function PlayTogetherPanel({
   onPhones: () => void;
 }) {
   const tr = useTr();
+  const pictureHere = useRemotePlayStore((s) => s.pictureHere);
   const [failed, setFailed] = useState(false);
   // Why opening failed (`old_helper` shows the update callout; others are named in the text).
   const [why, setWhy] = useState<string | null>(null);
@@ -234,12 +243,10 @@ export function PlayTogetherPanel({
   };
   const copy = async () => {
     if (!link) return;
-    try {
-      await navigator.clipboard.writeText(link);
+    // writeClipboard also works on plain http, where the browser has no navigator.clipboard.
+    if (await writeClipboard(link)) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // No clipboard: the link is on screen to copy by hand.
     }
   };
 
@@ -285,11 +292,27 @@ export function PlayTogetherPanel({
       )}
       {failed && (
         <p className="text-sm text-[var(--color-warn)]" data-testid="pt-failed">
-          {tr("pt_unavailable", undefined, "Play Together could not start. Check that the engine is up to date.")}
-          {why ? ` (${why})` : ""}
+          {why === "host_not_local"
+            ? tr(
+                "pt_host_not_local",
+                undefined,
+                "A reverse proxy on the engine's computer is in the way. On the engine, set PS5UPLOAD_ALLOW_HOST to this page's name, and PS5UPLOAD_TRUSTED_PROXY to the proxy's address.",
+              )
+            : tr("pt_unavailable", undefined, "Play Together could not start. Check that the engine is up to date.")}
+          {why && why !== "host_not_local" ? ` (${why})` : ""}
         </p>
       )}
 
+      {helperOk && !failed && (
+        <PictureHereToggle
+          hint={tr(
+            "pt_picture_hint",
+            undefined,
+            "Off, this device only invites your friends: no picture, sound or controller here, and your friends' game carries on. For playing on your TV.",
+          )}
+        />
+      )}
+      {helperOk && !failed && !pictureHere && <PlayOnTvNote />}
       {helperOk && !failed && (
         <div className="flex flex-col gap-3 lg:flex-row">
           <Step n={1} title={tr("pt_step_invite", undefined, "Invite")}>
@@ -378,7 +401,7 @@ export function PlayTogetherPanel({
               <ul className="space-y-1.5" data-testid="pt-asks">
                 {state.asks.map((a) => (
                   <li key={a.id} className="flex flex-wrap items-center gap-2 text-sm">
-                    <span className="min-w-0 flex-1 truncate font-medium">{a.name}</span>
+                    <span className="min-w-0 flex-1 truncate font-medium">{friendName(tr, a.name)}</span>
                     <Button size="sm" variant="primary" onClick={() => void joinApi.decide(addr, a.id, true)}>
                       {tr("pt_allow", undefined, "Allow")}
                     </Button>
@@ -420,14 +443,14 @@ export function PlayTogetherPanel({
             tone="warn"
             title={tr(
               "pt_slow",
-              { name: slow.name, ms: Math.round(slow.rttMs ?? 0) },
-              `${slow.name}'s connection is slow (${Math.round(slow.rttMs ?? 0)} ms).`,
+              { name: friendName(tr, slow.name), ms: Math.round(slow.rttMs ?? 0) },
+              `${friendName(tr, slow.name)}'s connection is slow (${Math.round(slow.rttMs ?? 0)} ms).`,
             )}
           >
             {tr(
-              "pt_slow_body",
+              "pt_slow_body2",
               undefined,
-              "Lower Play quality in Settings › Stream (720p or 30 fps) for a smoother picture for everyone.",
+              "Lower Play quality in Settings › Picture (720p or 30 fps) for a smoother picture for everyone.",
             )}
           </Callout>
         </div>
@@ -492,7 +515,7 @@ export function JoinAsks({ addr, asks }: { addr: string | null; asks: JoinHostSt
       onPointerDown={(e) => e.stopPropagation()}
     >
       <Users size={14} />
-      <span>{tr("pt_asks", { name: a.name }, `${a.name} wants to play with you`)}</span>
+      <span>{tr("pt_asks", { name: friendName(tr, a.name) }, `${friendName(tr, a.name)} wants to play with you`)}</span>
       <button
         type="button"
         className="rounded-full bg-white px-3 py-1 text-xs font-medium text-black"

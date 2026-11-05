@@ -33,7 +33,7 @@
 #   back to the manual override: `gh workflow run publish.yml -f tag=vX.Y.Z`.
 #
 # Around it (scripts/release/)
-#   before:  make release-check               quality + e2e side by side, then test-payload
+#   before:  make release-check               quality, then e2e, then test-payload
 #            release-check is local; for a PR, wait on the merge gate only:
 #            scripts/release/wait-pr-gate.sh <pr>   ("PR gate"; CodeQL is not waited for,
 #            its open alerts still block step 1 below)
@@ -97,7 +97,9 @@ tag="v${target}"
 # agrees with VERSION before anything is committed or tagged.
 node scripts/update-version.js --check
 
-if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+# On origin too: release-tag.yml creates tags there that this clone may not have fetched.
+if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null \
+    || git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null; then
   echo "release: tag ${tag} already exists — bump VERSION to release again" >&2
   exit 1
 fi
@@ -136,10 +138,15 @@ fi
 
 git tag -a "${tag}" -m "${tag}"
 
-# ─── 5. Push branch then tag (two separate workflow triggers) ─────────────
+# ─── 5. Push branch and tag together (two separate workflow triggers) ─────
 
-git push origin main
-git push origin "refs/tags/${tag}"
+# Atomic: a refused tag must not leave the release commit on main, and a refused main must not
+# start a publish. The local tag goes on failure so a rerun is not stopped by its own tag above.
+if ! git push --atomic origin main "refs/tags/${tag}"; then
+  git tag -d "${tag}" >/dev/null
+  echo "release: push refused; nothing reached origin. Fix it (git pull --rebase?) and run this again" >&2
+  exit 1
+fi
 
 echo
 echo "Pushed ${tag} → origin. Watch the workflows at:"

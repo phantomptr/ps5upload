@@ -81,21 +81,48 @@ export const useAutoSaveBackupStore = create<AutoSaveBackupState>((set) => ({
   },
 }));
 
+/** The wait before sending the console list again after a failure, doubling up to the limit. */
+const RETRY_FIRST_MS = 5_000;
+const RETRY_MAX_MS = 5 * 60_000;
+
 /**
  * Keeps the engine's console list the same as the app's, and hands over the settings an older
  * version kept in this app (once, when the engine has no folder yet). Returns a stop.
  */
 export function startSaveBackupSync(): () => void {
   let sent = "";
+  let stopped = false;
+  let retry: ReturnType<typeof setTimeout> | null = null;
+  let failures = 0;
+  // What this client has told the engine about: only that can be taken off again. Several clients
+  // can share one engine, and each has its own roster.
+  let told: string[] = [];
   const push = (profiles: readonly { host: string }[]) => {
     const hosts = backupHosts(profiles);
     const key = hosts.join(",");
     if (key === sent) return;
     sent = key;
-    void saveBackupApi.set({ hosts }).catch((e) => {
-      sent = "";
-      log.warn("saves", "could not give the engine the console list for save backups", e);
-    });
+    if (retry) clearTimeout(retry);
+    retry = null;
+    const removed = told.filter((h) => !hosts.includes(h));
+    void saveBackupApi.set({ add_hosts: hosts, remove_hosts: removed }).then(
+      () => {
+        told = hosts;
+        failures = 0;
+      },
+      (e) => {
+        // The engine may not be up yet, and the roster may never change again: try again.
+        if (sent === key) sent = "";
+        if (failures++ === 0) {
+          log.warn("saves", "could not give the engine the console list for save backups", e);
+        }
+        if (stopped || retry) return;
+        retry = setTimeout(() => {
+          retry = null;
+          push(useRosterStore.getState().profiles);
+        }, Math.min(RETRY_MAX_MS, RETRY_FIRST_MS * 2 ** Math.min(failures, 8)));
+      },
+    );
   };
   void (async () => {
     try {
@@ -110,7 +137,12 @@ export function startSaveBackupSync(): () => void {
     }
     push(useRosterStore.getState().profiles);
   })();
-  return useRosterStore.subscribe((s) => push(s.profiles));
+  const unsubscribe = useRosterStore.subscribe((s) => push(s.profiles));
+  return () => {
+    stopped = true;
+    if (retry) clearTimeout(retry);
+    unsubscribe();
+  };
 }
 
 // Only a pre-engine leftover: the engine keeps the live setting (lib/liveSettings).

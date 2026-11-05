@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 
 import { sentViaPayloadManager } from "../../api/ps5";
 
-const probesRs: string = readFileSync(
-  new URL("../../../src-tauri/src/commands/probes.rs", import.meta.url),
+const lifecycleRs: string = readFileSync(
+  new URL("../../../../engine/crates/ps5upload-core/src/payload_lifecycle.rs", import.meta.url),
   "utf8",
 );
 const catalog: string = readFileSync(new URL("./CatalogPanel.tsx", import.meta.url), "utf8");
@@ -14,7 +14,7 @@ const catalog: string = readFileSync(new URL("./CatalogPanel.tsx", import.meta.u
 // and payload_send had launched the file through Payload Manager.
 describe("which route a catalogue send took", () => {
   it("recognises payload_send's Payload Manager status", () => {
-    expect(probesRs).toContain("through Payload Manager on {ip}:8084 instead");
+    expect(lifecycleRs).toContain("through Payload Manager on {host}:8084 instead");
     expect(
       sentViaPayloadManager(
         "connect 1.2.3.4:9021: refused; launched 1000 bytes through Payload Manager on 1.2.3.4:8084 instead",

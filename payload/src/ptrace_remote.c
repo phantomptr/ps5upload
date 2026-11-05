@@ -57,11 +57,8 @@
  * runs from a fatal signal handler, and a hang raises no signal.
  *
  * That is not hypothetical. A user on FW 12.40 reported exactly this
- * ("froze my console, had to shut it down"), and FW 12.x is precisely
- * where our symbol resolution is known to be incomplete (see the
- * "add FW-12.x renamed export here" TODOs in register.c) — i.e. where
- * a remote call is most likely to never produce the stop we're waiting
- * for.
+ * ("froze my console, had to shut it down"): a remote call may simply
+ * never produce the stop we're waiting for.
  *
  * 10 s is far beyond any healthy stop (they land in microseconds) while
  * still bounding the worst case to an annoyance rather than a reboot. */

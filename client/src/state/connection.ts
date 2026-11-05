@@ -229,9 +229,9 @@ const useLiveConnectionStore = create<ConnectionState>((set) => ({
   power: "unknown",
   payloadProbing: false,
   step1: "idle",
-  step1Msg: "Enter your PS5's address and check",
+  step1Msg: "",
   step2: "idle",
-  step2Msg: "Payload not loaded yet",
+  step2Msg: "",
   setHost: (host) =>
     set((s) => {
       persistHost(host);
@@ -246,9 +246,9 @@ const useLiveConnectionStore = create<ConnectionState>((set) => ({
         host,
         ...mirrorRuntime(host, rt),
         step1: "idle" as const,
-        step1Msg: "Enter your PS5's address and check",
+        step1Msg: "",
         step2: "idle" as const,
-        step2Msg: "Payload not loaded yet",
+        step2Msg: "",
       };
     }),
   setStatus: (patch) => set(patch),

@@ -8,7 +8,7 @@ const keys = (raw: unknown) => testLines(parseConnectionTest(raw), "Pro", "Phat"
 describe("Test connection verdicts", () => {
   it("say in one line per leg what the consoles and this device can reach", () => {
     const t = parseConnectionTest({
-      direct: { verdict: "reachable", ms: 4, target: "192.168.86.99:9120" },
+      direct: { verdict: "reachable", ms: 4, target: "192.0.2.99:9120" },
       relay: { from: { verdict: "ok" }, to: { verdict: "ok" } },
       deep: { ok: true, ms: 812 },
     });
@@ -18,7 +18,7 @@ describe("Test connection verdicts", () => {
       ["c2c_test_relay_ok", "good"],
       ["c2c_test_deep_ok", "good"],
     ]);
-    expect(lines[0].fallback).toBe("Pro reaches Phat at 192.168.86.99:9120 (4 ms): a direct send can connect.");
+    expect(lines[0].fallback).toBe("Pro reaches Phat at 192.0.2.99:9120 (4 ms): a direct send can connect.");
     expect(lines[2].vars).toEqual({ to: "Phat", ms: 812 });
   });
 

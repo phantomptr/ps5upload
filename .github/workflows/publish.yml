@@ -41,8 +41,10 @@ on:
         description: "Release tag to build & publish (e.g. v2.17.0). The tag must already exist."
         required: true
 
+# Only create-release writes (its own grant below): the build jobs run npm ci, Gradle, CocoaPods
+# and downloaded tooling, which have no use for a token that can change the repository.
 permissions:
-  contents: write
+  contents: read
   # scripts/release/wait-for-artifact.mjs reads this run's artifacts and jobs.
   actions: read
 
@@ -93,6 +95,19 @@ jobs:
           fi
           echo "tag $raw_tag matches VERSION $expected"
 
+      # The release step below always says pre-release, and updating an existing release takes
+      # those flags: a re-dispatch would pull a promoted release from the stable update channel
+      # and swap its files under the people already on it.
+      - name: Refuse to rebuild a promoted release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          if [ "$(gh release view "$INPUT_TAG" --json isPrerelease --jq .isPrerelease 2>/dev/null)" = false ]; then
+            echo "::error::$INPUT_TAG is already promoted. Cut the next version, or first make it a pre-release again: gh release edit $INPUT_TAG --prerelease"
+            exit 1
+          fi
+
       - name: Sync version from VERSION
         run: node scripts/update-version.js
 
@@ -119,7 +134,8 @@ jobs:
           }
           apt_retry update
           # Add LLVM apt repo for llvm-22 (not in Ubuntu 24.04 default repos)
-          curl -fsSL --retry 3 --retry-delay 5 https://apt.llvm.org/llvm.sh | sudo bash -s -- 22
+          sudo bash scripts/install-llvm-apt.sh 22
+          apt_retry update
           apt_retry install -y clang-22 llvm-22-dev lld-22 unzip python3
 
       - name: Install pinned PS5 Payload SDK
@@ -134,7 +150,7 @@ jobs:
       - name: Build payload ELF
         env:
           PS5_PAYLOAD_SDK: /opt/ps5-payload-sdk
-          # SDK v0.42's prospero-llvm-config candidate search maxes at 21,
+          # The SDK's prospero-llvm-config only looks for LLVM versions it knows,
           # so point it at the CI-installed LLVM 22 explicitly.
           LLVM_CONFIG: /usr/bin/llvm-config-22
         run: make payload
@@ -558,7 +574,8 @@ jobs:
               chmod +x "$staging/PS5Upload.AppImage"
               cp -v scripts/release/linux-launcher.sh "$staging/PS5Upload.sh"
               chmod +x "$staging/PS5Upload.sh"
-              (cd "$staging" && zip -9 "$dist_abs/PS5Upload.zip" PS5Upload.AppImage PS5Upload.sh)
+              cp -v LICENSE "$staging/LICENSE"
+              (cd "$staging" && zip -9 "$dist_abs/PS5Upload.zip" PS5Upload.AppImage PS5Upload.sh LICENSE)
               rm -rf "$staging"
               # The bare AppImage too, for AppImage managers (Shelly, Gear Lever, AppImageLauncher):
               # it applies the launcher's Wayland + NVIDIA fix itself (linux_gpu.rs).
@@ -587,12 +604,14 @@ jobs:
               staging="$dist_abs/_stage"
               mkdir -p "$staging"
               cp -v "$raw_exe" "$staging/PS5Upload.exe"
+              cp -v LICENSE "$staging/LICENSE"
               rm -f "$dist_abs/PS5Upload.zip"
               # PowerShell, rather than Bash, expands the $env variables below.
               # shellcheck disable=SC2016
               PS5UP_EXE="$staging/PS5Upload.exe" \
+              PS5UP_LICENSE="$staging/LICENSE" \
               PS5UP_ZIP="$dist_abs/PS5Upload.zip" \
-                pwsh -NoProfile -Command 'Compress-Archive -LiteralPath $env:PS5UP_EXE -DestinationPath $env:PS5UP_ZIP -CompressionLevel Optimal'
+                pwsh -NoProfile -Command 'Compress-Archive -LiteralPath $env:PS5UP_EXE,$env:PS5UP_LICENSE -DestinationPath $env:PS5UP_ZIP -CompressionLevel Optimal'
               rm -rf "$staging"
               # Also ship the NSIS installer (includes WebView2 bootstrapper
               # for Windows 10 users who don't have Edge/WebView2 installed).
@@ -783,6 +802,15 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: bash scripts/release/android-sign.sh
 
+      - name: Check the APKs
+        # armv7 is optional (android-sign.sh): only what was signed.
+        run: |
+          apks=()
+          for apk in PS5Upload-android.apk PS5Upload-android-armv7.apk; do
+            if [ -f "$apk" ]; then apks+=("$apk"); fi
+          done
+          python3 scripts/release/verify-android-apk.py "${apks[@]}"
+
       - name: Upload signed APK
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -877,7 +905,7 @@ jobs:
         run: npx tauri ios build --ci --target aarch64 --no-sign
 
       - name: Check the IPA
-        run: python3 scripts/release/verify-ios-ipa.py PS5Upload-ios-unsigned.ipa
+        run: TAG_VERSION="$(tr -d '[:space:]' < VERSION)" python3 scripts/release/verify-ios-ipa.py PS5Upload-ios-unsigned.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -982,6 +1010,9 @@ jobs:
             arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-linux-//')"
             cp -v "$f" "release/PS5Upload-${TAG_VERSION}-linux-${arch}.rpm"
           done
+          # The licence every download is under, for the files that cannot carry it themselves
+          # (the standalone engine and the helper are bare programs).
+          cp -v LICENSE release/LICENSE
           # Standalone engine binary per OS/arch (matches the desktop bundles).
           for f in artifacts/ps5upload-*/ps5upload-engine artifacts/ps5upload-*/ps5upload-engine.exe; do
             [ -f "$f" ] || continue
@@ -1106,13 +1137,6 @@ jobs:
           cat "$shares"/*.log
           exit "$rc"
 
-      # A signed record that each file was built by this workflow from this tag, so anyone can
-      # check a download is ours and untouched: gh attestation verify <file> -R phantomptr/ps5upload
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
-        with:
-          subject-path: release/*
-
       # The release body is the CHANGELOG section for this version. The old
       # "See CHANGELOG.md" placeholder shipped whenever the entry was missing
       # (scripts/release.sh tags before the changelog is written if you forget
@@ -1152,21 +1176,40 @@ jobs:
 
       # The iOS source for AltStore / SideStore / Feather (#512): read from the .ipa, so it can
       # only describe what it links. `releases/latest/download/altstore.json` then always names
-      # the newest promoted release.
+      # the newest promoted release. The last promoted release's file goes in too: it keeps the
+      # older versions listed, and it stands in when this build has no .ipa (build-ios is not a
+      # gate), because a promoted release without this file is a 404 for every source user.
       - name: Generate altstore.json iOS source
         env:
           TAG_VERSION: ${{ steps.tag.outputs.version }}
           TAG_NAME: ${{ steps.tag.outputs.tag }}
         run: |
+          previous="$RUNNER_TEMP/previous-altstore.json"
+          curl -fsSL --retry 3 --max-time 60 -o "$previous" \
+            https://github.com/phantomptr/ps5upload/releases/latest/download/altstore.json \
+            || echo "::warning::could not fetch the previous altstore.json"
           python3 -I scripts/gen-altstore-source.py \
             --ipa "release/PS5Upload-${TAG_VERSION}-ios-unsigned.ipa" \
             --tag "$TAG_NAME" \
             --repo phantomptr/ps5upload \
             --notes release/RELEASE_NOTES.md \
+            --previous "$previous" \
             --out release/altstore.json
+          if [ ! -s release/altstore.json ]; then
+            echo "::warning::no altstore.json in this release: do not promote it, source users would lose updates"
+          fi
 
       - name: Move release notes out of assets dir
         run: mv release/RELEASE_NOTES.md "$RUNNER_TEMP/RELEASE_NOTES.md"
+
+      # After the manifests (the updater reads latest.json) and with the notes out, so the
+      # attested files are exactly the ones the next step uploads.
+      # A signed record that each file was built by this workflow from this tag, so anyone can
+      # check a download is ours and untouched: gh attestation verify <file> -R phantomptr/ps5upload
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: release/*
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3

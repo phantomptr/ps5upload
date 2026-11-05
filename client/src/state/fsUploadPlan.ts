@@ -1,4 +1,5 @@
 import { isRemotePath } from "../lib/remotePath";
+import { keepBothName } from "../lib/consolePath";
 
 /**
  * Turns a pick on the Files screen ("Add files", "Add folder", a drop from the computer) into
@@ -78,8 +79,10 @@ export interface FsListFile {
 
 export type FsUploadStep =
   /** One file or folder, as its own job (a folder is told apart by `pathKind` at run time;
-   *  `asFile`: never a folder, the row action "Replace" with a picked file). */
-  | { kind: "one"; src: string; name: string; asFile?: boolean }
+   *  `asFile`: never a folder, the row action "Replace" with a picked file). `txId` is the job's
+   *  id, as for a list: a retry or a resume under the same id continues the console's partial.
+   *  Absent on what an older version saved; the run mints it. */
+  | { kind: "one"; src: string; name: string; asFile?: boolean; txId?: string }
   /** Files sent together as ONE file-list job. `txId` is the job's id: a resume sends the same
    *  list under the same id and the console's journal skips what it already has. */
   | { kind: "list"; txId: string; files: FsListFile[] };
@@ -101,15 +104,7 @@ export function baseNameOf(p: string): string {
   return t.split(/[\\/]/).pop() || t || "file";
 }
 
-/** "name.ext" → "name (n).ext" (a folder keeps its dots); a " (k)" it already ends with is
- *  replaced. The same rule the console's own Files page uses for Keep both. */
-export function keepBothName(name: string, n: number, dir: boolean): string {
-  const dot = dir ? -1 : name.lastIndexOf(".");
-  const stem = dot > 0 ? name.slice(0, dot) : name;
-  const ext = dot > 0 ? name.slice(dot) : "";
-  const m = /^(.+) \((\d+)\)$/.exec(stem);
-  return `${m ? m[1] : stem} (${n})${ext}`;
-}
+export { keepBothName };
 
 /** The first Keep both name for `name` that is not in `taken`. */
 export function freeKeepBothName(
@@ -141,7 +136,7 @@ interface Planned {
 
 /**
  * Settles conflicts and groups the pick into steps. Returns null when the user cancelled at a
- * conflict (nothing is sent). `newTxId` mints the id of the list job.
+ * conflict (nothing is sent). `newTxId` mints the id of each job.
  */
 export async function planFsUpload(
   picked: FsPickedItem[],
@@ -257,7 +252,7 @@ export async function planFsUpload(
       }
       continue;
     }
-    steps.push({ kind: "one", src: i.src, name: i.name });
+    steps.push({ kind: "one", src: i.src, name: i.name, txId: newTxId() });
   }
   return { steps, skipped };
 }

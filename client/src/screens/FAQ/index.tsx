@@ -22,7 +22,7 @@ import {
   type FaqTopic,
 } from "../../lib/faqDoc";
 import { log } from "../../state/logs";
-import { useTr } from "../../state/lang";
+import { useLangStore, useTr } from "../../state/lang";
 
 /**
  * FAQ screen: the bundled FAQ.md as something to look things up in, not one long page.
@@ -67,7 +67,8 @@ function Question({
   item: FaqItem;
   open: boolean;
   onToggle: () => void;
-  onCopyLink: (() => void) | null;
+  /** Resolves to whether the link reached the clipboard. */
+  onCopyLink: (() => Promise<boolean>) | null;
   /** Search words to mark in the question (search results only). */
   words?: string[];
   /** Shown above the question in search results. */
@@ -75,6 +76,12 @@ function Question({
   excerpt?: string;
 }) {
   const tr = useTr();
+  const [copied, setCopied] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (copied === null) return;
+    const timer = setTimeout(() => setCopied(null), 1600);
+    return () => clearTimeout(timer);
+  }, [copied]);
   return (
     <li
       id={item.id}
@@ -85,7 +92,7 @@ function Question({
         type="button"
         aria-expanded={open}
         onClick={onToggle}
-        className="flex w-full items-start gap-3 px-4 py-3 text-left"
+        className="flex w-full items-start gap-3 px-4 py-3 text-start"
       >
         <span className="min-w-0 flex-1">
           {topicLabel && (
@@ -114,11 +121,17 @@ function Question({
           {onCopyLink && (
             <button
               type="button"
-              onClick={onCopyLink}
+              onClick={() => void onCopyLink().then(setCopied)}
               className="mt-1 inline-flex items-center gap-1 text-[11px] text-[var(--color-muted)] hover:text-[var(--color-text)]"
             >
               <Link2 size={11} aria-hidden />
-              {tr("faq_copy_link", undefined, "Copy a link to this answer")}
+              <span aria-live="polite">
+                {copied === true
+                  ? tr("copied", undefined, "Copied")
+                  : copied === false
+                    ? tr("copy_failed", undefined, "Copy failed")
+                    : tr("faq_copy_link", undefined, "Copy a link to this answer")}
+              </span>
             </button>
           )}
         </div>
@@ -132,6 +145,7 @@ const groupOf = (t: FaqTopic) => t.group || "FAQ";
 
 export default function FAQScreen({ embedded = false }: { embedded?: boolean } = {}) {
   const tr = useTr();
+  const lang = useLangStore((s) => s.lang);
   const [raw, setRaw] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -212,7 +226,10 @@ export default function FAQScreen({ embedded = false }: { embedded?: boolean } =
     !isTauriEnv() && typeof navigator !== "undefined" && !!navigator.clipboard?.writeText;
   const copyLink = (item: FaqItem) => {
     const url = faqItemUrl(window.location.origin, import.meta.env.VITE_BASE_URL, item.id);
-    void navigator.clipboard.writeText(url).catch(() => {});
+    return navigator.clipboard.writeText(url).then(
+      () => true,
+      () => false,
+    );
   };
   const allOpen = !!topic && topic.items.length > 0 && topic.items.every((i) => open.has(i.id));
   const setTopicOpen = (on: boolean) =>
@@ -240,12 +257,18 @@ export default function FAQScreen({ embedded = false }: { embedded?: boolean } =
       )}
 
       <div>
+        {lang !== "en" && (
+          <p className="mb-2 text-xs text-[var(--color-muted)]" data-testid="faq-english-note">
+            {tr("faq_english_only", undefined, "The FAQ is in English. Search for English words or an error code.")}
+          </p>
+        )}
         <div className="mb-4 flex items-center gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2">
           <Search size={14} className="shrink-0 text-[var(--color-muted)]" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={tr("faq_search_placeholder", undefined, "Search the FAQ…")}
+            aria-label={tr("faq_search_placeholder", undefined, "Search the FAQ…")}
             className="max-md:min-h-11 flex-1 bg-transparent text-sm outline-none placeholder:text-[var(--color-muted)]"
           />
           {query && (
@@ -258,7 +281,7 @@ export default function FAQScreen({ embedded = false }: { embedded?: boolean } =
               type="button"
               onClick={() => setQuery("")}
               className="rounded-full p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
-              aria-label={tr("faq_clear_search", "Clear search")}
+              aria-label={tr("faq_clear_search", undefined, "Clear search")}
             >
               <X size={12} />
             </button>
@@ -325,7 +348,7 @@ export default function FAQScreen({ embedded = false }: { embedded?: boolean } =
                 >
                   <button
                     type="button"
-                    className="block w-full px-4 py-3 text-left"
+                    className="block w-full px-4 py-3 text-start"
                     onClick={() => {
                       setQuery("");
                       showTopic(h.topic.id);
@@ -387,7 +410,7 @@ export default function FAQScreen({ embedded = false }: { embedded?: boolean } =
                   >
                     {t.title}
                     {t.items.length > 0 && (
-                      <span className="ml-1.5 text-[11px] tabular-nums opacity-70">{t.items.length}</span>
+                      <span className="ms-1.5 text-[11px] tabular-nums opacity-70">{t.items.length}</span>
                     )}
                   </button>
                 ))}

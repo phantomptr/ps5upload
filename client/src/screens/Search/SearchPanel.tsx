@@ -18,7 +18,7 @@ import {
 import { transferAddr } from "../../lib/addr";
 import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
 import { ErrorCard, Button, EmptyState, Spinner } from "../../components";
-import { humanizePs5Error } from "../../lib/humanizeError";
+import { humanizePs5Error, humanizeCaught } from "../../lib/humanizeError";
 // Direct import to avoid the barrel's circular-dep warning at build.
 import { usePrompt } from "../../components/ConfirmDialog";
 import { pushNotification } from "../../state/notifications";
@@ -26,6 +26,7 @@ import { useTr, type Translator } from "../../state/lang";
 import { formatBytes } from "../../lib/format";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { NOOP_RELOAD, registerSettingReload } from "../../lib/liveSettings";
+import { formatNumber } from "../../lib/formatDate";
 
 /** Size filter options. `labelKey` resolves through `tr()` at render
  *  time; `labelFallback` is the English text used when the lang file
@@ -245,7 +246,7 @@ export function SearchPanel({
       setResult(res);
     } catch (e) {
       if (useConnectionStore.getState().host !== searchedHost) return;
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
       setResult(null);
     } finally {
       setLoading(false);
@@ -407,12 +408,12 @@ export function SearchPanel({
             {saved.map((s) => (
               <span
                 key={s.id}
-                className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] inline-flex items-center gap-1 py-0.5 pl-2 pr-1"
+                className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] inline-flex items-center gap-1 py-0.5 ps-2 pe-1"
               >
                 <button
                   type="button"
                   onClick={() => applySaved(s)}
-                  title={`${s.pattern} (min ${s.minSize})`}
+                  title={tr("search_saved_tooltip", { pattern: s.pattern, size: s.minSize }, "{pattern} (min {size})")}
                   className="hover:text-[var(--color-accent)]"
                 >
                   {s.name}
@@ -460,10 +461,10 @@ export function SearchPanel({
               {tr("search_searching", undefined, "Searching")}
             </span>
             <span className="text-xs text-[var(--color-muted)]">
-              {progress.scanned.toLocaleString()}{" "}
+              {formatNumber(progress.scanned)}{" "}
               {tr("search_entries_result", undefined, "entries")}{" "}
               {tr("search_scanned_progress", undefined, "scanned ·")}{" "}
-              {progress.hits.toLocaleString()}{" "}
+              {formatNumber(progress.hits)}{" "}
               {tr("search_match_progress", undefined, "matches")}{" "}
               {tr("search_so_far", undefined, "so far")}
             </span>
@@ -492,13 +493,13 @@ export function SearchPanel({
           {result.cancelled
             ? tr(
                 "search_stopped_summary",
-                { n: result.scanned.toLocaleString() },
-                `Search stopped. Scanned ${result.scanned.toLocaleString()} entries before you cancelled.`,
+                { n: formatNumber(result.scanned) },
+                `Search stopped. Scanned ${formatNumber(result.scanned)} entries before you cancelled.`,
               )
             : tr(
                 "search_no_matches_summary",
-                { n: result.scanned.toLocaleString() },
-                `No matches. Scanned ${result.scanned.toLocaleString()} entries.`,
+                { n: formatNumber(result.scanned) },
+                `No matches. Scanned ${formatNumber(result.scanned)} entries.`,
               )}
           {result.truncated &&
             ` ${tr(
@@ -513,10 +514,10 @@ export function SearchPanel({
         <>
           <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-[var(--color-muted)]">
             <span>
-              {result.hits.length.toLocaleString()}{" "}
+              {formatNumber(result.hits.length)}{" "}
               {tr("search_match_result", undefined, "matches")}{" "}
               {tr("search_scanned_result", undefined, "· scanned")}{" "}
-              {result.scanned.toLocaleString()}{" "}
+              {formatNumber(result.scanned)}{" "}
               {tr("search_entries_result", undefined, "entries")}
               {result.cancelled &&
                 ` · ${tr("search_you_stopped", undefined, "you stopped the search")}`}
@@ -526,7 +527,7 @@ export function SearchPanel({
             <button
               type="button"
               onClick={() => exportSearchResults(result.hits, "csv", tr)}
-              className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] ml-auto border-[var(--glass-edge)] bg-[var(--color-surface)] px-3 py-1 text-xs"
+              className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] ms-auto border-[var(--glass-edge)] bg-[var(--color-surface)] px-3 py-1 text-xs"
             >
               {tr("search_export_csv", undefined, "Export CSV")}
             </button>
@@ -626,13 +627,13 @@ async function exportSearchResults(
     pushNotification("success", tr("search_exported_title", "Search results exported"), {
       body: tr(
         "search_exported_body",
-        { n: hits.length.toLocaleString(), format: format.toUpperCase() },
+        { n: formatNumber(hits.length), format: format.toUpperCase() },
         "Saved {n} {format} rows.",
       ),
     });
   } catch (e) {
     pushNotification("error", tr("search_export_failed_title", "Couldn't export search results"), {
-      body: e instanceof Error ? e.message : String(e),
+      body: humanizeCaught(e),
     });
   }
 }

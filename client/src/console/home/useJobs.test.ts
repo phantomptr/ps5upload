@@ -199,6 +199,14 @@ describe("network-share jobs in Tasks (#658)", () => {
     expect(smbJobToJob(smb({ state: "cancelled" }), 1010)?.state).toBe("failed");
   });
 
+  it("keeps a long network-share copy that just ended (from when it ended, not when it started)", () => {
+    const now = 100_000;
+    const long = smb({ state: "done", started: 1000, ended: now - 5 });
+    expect(smbJobToJob(long, now)?.state).toBe("done");
+    expect(smbJobToJob(smb({ state: "done", started: 1000, ended: 2000 }), now)).toBeNull();
+    expect(smbJobToJob(smb({ state: "done", started: 1000 }), now)).toBeNull();
+  });
+
   it("leaves out library scans, junk and long-finished jobs", () => {
     expect(smbJobToJob(smb({ kind: "scan" }), 1010)).toBeNull();
     expect(smbJobToJob({ kind: "download" }, 1010)).toBeNull();

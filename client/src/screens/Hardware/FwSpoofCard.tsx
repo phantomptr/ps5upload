@@ -212,7 +212,7 @@ function DetailRow({ label, value }: { label: string; value: string }) {
   return (
     <>
       <dt className="text-[var(--color-muted)]">{label}</dt>
-      <dd className="min-w-0 break-words text-right font-mono">{value || "—"}</dd>
+      <dd className="min-w-0 break-words text-end font-mono">{value || "—"}</dd>
     </>
   );
 }

@@ -77,3 +77,14 @@ describe("shouldLook", () => {
     expect(shouldLook("down", 1_000, 1_000 + LOOK_EVERY_MS)).toBe(true);
   });
 });
+
+describe("looking for a console that is asleep", () => {
+  it("does not scan the network for one that said it is in rest mode", () => {
+    expect(shouldLook("down", undefined, 1_000, "rest")).toBe(false);
+  });
+
+  it("still looks for one that stopped answering: that is what a moved console does", () => {
+    expect(shouldLook("down", undefined, 1_000, "unreachable")).toBe(true);
+    expect(shouldLook("down", undefined, 1_000, "unknown")).toBe(true);
+  });
+});

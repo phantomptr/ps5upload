@@ -1,37 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import type { UpdateCheck, UpdateDownload } from "../api/ps5";
-
-// Same in-memory storage as update.channel.test.ts: the node environment has none.
-function installStorage() {
-  const make = () => {
-    const map = new Map<string, string>();
-    return {
-      getItem: (k: string) => (map.has(k) ? (map.get(k) as string) : null),
-      setItem: (k: string, v: string) => void map.set(k, String(v)),
-      removeItem: (k: string) => void map.delete(k),
-      clear: () => map.clear(),
-      key: (i: number) => Array.from(map.keys())[i] ?? null,
-      get length() {
-        return map.size;
-      },
-    } as unknown as Storage;
-  };
-  const local = make();
-  const session = make();
-  vi.stubGlobal("localStorage", local);
-  vi.stubGlobal("sessionStorage", session);
-  vi.stubGlobal("window", {
-    localStorage: local,
-    sessionStorage: session,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-  });
-}
+import { installStorage } from "../test-utils/storage";
 
 vi.mock("../api/ps5", () => ({
+  UPDATE_DOWNLOAD_PROGRESS_EVENT: "update-download-progress",
   updateCheck: vi.fn(),
   updateDownload: vi.fn(),
+  updateDownloadCancel: vi.fn(async () => true),
   updateInstall: vi.fn(),
   updateInstallOnQuit: vi.fn(async () => true),
   updateLastInstall: vi.fn(async () => null),
@@ -83,6 +59,34 @@ describe("desktop updates", () => {
       "PS5Upload-10.2.0-linux-x64.deb",
       "a".repeat(64),
     );
+  });
+
+  it("a cancelled download is back on offer, not a failure", async () => {
+    // F8: a download started by mistake could not be stopped.
+    const api = await import("../api/ps5");
+    vi.mocked(api.updateDownload).mockRejectedValue('{"code":"update_cancelled"}');
+    const { useUpdateStore } = await import("./update");
+    useUpdateStore.setState({ phase: { kind: "available", result: result("10.2.0") } });
+    await useUpdateStore.getState().download();
+    expect(useUpdateStore.getState().phase.kind).toBe("available");
+    expect(useUpdateStore.getState().downloadProgress).toBeNull();
+    await useUpdateStore.getState().cancelDownload();
+    expect(api.updateDownloadCancel).toHaveBeenCalled();
+  });
+
+  it("a failed download says what happened in words, never the shell's code", async () => {
+    const api = await import("../api/ps5");
+    vi.mocked(api.updateDownload).mockRejectedValue('{"code":"update_http","status":503}');
+    const { useUpdateStore } = await import("./update");
+    useUpdateStore.setState({ phase: { kind: "available", result: result("10.2.0") } });
+    await useUpdateStore.getState().download();
+    const phase = useUpdateStore.getState().phase;
+    expect(phase.kind).toBe("download-failed");
+    if (phase.kind === "download-failed") {
+      expect(phase.message).toContain("503");
+      expect(phase.message).not.toContain("update_http");
+      expect(phase.message).not.toContain("{");
+    }
   });
 
   it("a skipped version is no longer offered, and is remembered", async () => {

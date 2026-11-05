@@ -30,6 +30,10 @@ const POLL: Duration = Duration::from_secs(1);
 const HOLD_TTL_MS: u64 = 5 * 60 * 1000;
 /// Nothing active for this long stops the service. Covers the gap between queue items.
 const IDLE_GRACE_MS: u64 = 30 * 1000;
+/// While work is active, Android hears from the watcher at least this often, even with the same
+/// text: its wake lock has a timeout and is renewed by these, and a stall or a long wait has no
+/// new text to send.
+const KEEPALIVE_MS: u64 = 60 * 1000;
 /// Weight of the newest sample in the speed average.
 const EMA_ALPHA: f64 = 0.3;
 
@@ -159,6 +163,8 @@ pub struct State {
     pub fg: bool,
     idle_since_ms: Option<u64>,
     last: Option<Progress>,
+    /// When the service was last told anything.
+    last_sent_ms: u64,
     rates: HashMap<String, Rate>,
     pub strings: BgStrings,
 }
@@ -185,9 +191,13 @@ pub fn step(state: &mut State, snap: &Snapshot, hold: bool, now_ms: u64) -> Vec<
         let p = format_progress(&snap.active, &state.rates, &state.strings);
         if !state.fg {
             state.fg = true;
+            state.last_sent_ms = now_ms;
             out.push(Action::StartFg(p.clone()));
             state.last = Some(p);
-        } else if state.last.as_ref() != Some(&p) {
+        } else if state.last.as_ref() != Some(&p)
+            || now_ms.saturating_sub(state.last_sent_ms) >= KEEPALIVE_MS
+        {
+            state.last_sent_ms = now_ms;
             out.push(Action::Update(p.clone()));
             state.last = Some(p);
         }
@@ -586,6 +596,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_stalled_job_still_renews_the_service_once_a_minute() {
+        let mut st = State::default();
+        let stuck = || snap(1, vec![job("a", "upload", "Game", 10, 100)], vec![]);
+        // The first active poll starts the service.
+        let start = step(&mut st, &stuck(), false, 0);
+        assert!(matches!(start.first(), Some(Action::StartFg(_))));
+        // A rate settling may change the text once; after that nothing changes.
+        step(&mut st, &stuck(), false, 2_000);
+        let quiet = step(&mut st, &stuck(), false, 30_000);
+        assert!(quiet.is_empty(), "no new text, under a minute: {quiet:?}");
+        let renewed = step(&mut st, &stuck(), false, 63_000);
+        assert!(
+            matches!(renewed.as_slice(), [Action::Update(_)]),
+            "a minute of the same text must still reach the service: {renewed:?}"
+        );
+        assert!(step(&mut st, &stuck(), false, 64_000).is_empty());
+    }
+
     fn fin(seq: u64, id: &str) -> FinishedJob {
         FinishedJob {
             seq,
@@ -693,8 +722,11 @@ mod tests {
         assert!(
             matches!(a.as_slice(), [Action::StartFg(p)] if p.title == "Waiting for the next item")
         );
-        let a = step(&mut st, &snap(0, vec![], vec![]), true, 60_000);
+        // Nothing new to say under a minute; at a minute it renews the service's wake lock.
+        let a = step(&mut st, &snap(0, vec![], vec![]), true, 59_999);
         assert!(a.is_empty());
+        let a = step(&mut st, &snap(0, vec![], vec![]), true, 60_000);
+        assert!(matches!(a.as_slice(), [Action::Update(_)]), "{a:?}");
         assert!(st.fg);
     }
 

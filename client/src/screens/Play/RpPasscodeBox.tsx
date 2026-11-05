@@ -2,32 +2,32 @@ import { useEffect } from "react";
 
 import { PasscodeDialog } from "../../components/PasscodeDialog";
 import { useTr } from "../../state/lang";
-import { rpInput, useRemotePlayStore } from "../../state/remotePlay";
+import { pauseRpInput, rpInput, useRemotePlayStore } from "../../state/remotePlay";
 
 /**
  * The PS5 user's sign-in passcode, when the console asks for it before Remote Play starts (#608).
  * Cancel ends the start; a wrong one asks again. Sent straight to the engine, never stored.
  */
-export function RpPasscodeBox() {
+export function RpPasscodeBox({ placement = "stage" }: { placement?: "stage" | "screen" }) {
   const ask = useRemotePlayStore((s) => s.passcode);
   if (!ask) return null;
   // Each ask is a fresh, empty box.
-  return <StreamPasscode key={ask.seq} retry={ask.retry} />;
+  return <StreamPasscode key={ask.seq} retry={ask.retry} placement={placement} />;
 }
 
-function StreamPasscode({ retry }: { retry: boolean }) {
+function StreamPasscode({ retry, placement }: { retry: boolean; placement: "stage" | "screen" }) {
   const tr = useTr();
   useEffect(() => {
     // The game gets an idle pad while the box is open.
-    rpInput.paused = true;
+    pauseRpInput("passcode", true);
     rpInput.held.clear();
     return () => {
-      rpInput.paused = false;
+      pauseRpInput("passcode", false);
     };
   }, []);
   return (
     <PasscodeDialog
-      placement="stage"
+      placement={placement}
       testId="rp-passcode"
       retry={retry}
       title={tr("rp_passcode_title", undefined, "Enter this PS5 user's passcode")}

@@ -277,6 +277,44 @@ export function diagnoseArchiveSet(
   return null;
 }
 
+/** Whether these filenames are parts of one zip/7z set: separate archives that are uploaded one
+ *  after another into one folder (see `resolveUploadDest`). A RAR set is not: it is one archive,
+ *  opened from its first volume. */
+export function isManualPartSet(filenames: readonly string[]): boolean {
+  const parts = filenames.map(parseArchivePart);
+  const first = parts[0];
+  if (!first || first.ext === "rar") return false;
+  const stem = first.stem.toLowerCase();
+  return (
+    parts.every((p) => p !== null && p.ext === first.ext && p.stem.toLowerCase() === stem) &&
+    new Set(parts.map((p) => p?.index)).size === parts.length
+  );
+}
+
+/** Drops the later volumes of a RAR set whose opening file is in the same list: UnRAR follows
+ *  them from that one, and as rows of their own they would each be read as a whole archive. A
+ *  volume whose opening file is not listed stays, so it can be explained. */
+export function collapseRarVolumes<T extends { path: string }>(entries: readonly T[]): T[] {
+  const split = (p: string) => {
+    const at = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+    return { dir: p.slice(0, at + 1).toLowerCase(), name: p.slice(at + 1) };
+  };
+  const listed = new Set(entries.map((e) => e.path.toLowerCase()));
+  const firstParts = new Set<string>();
+  for (const e of entries) {
+    const { dir, name } = split(e.path);
+    const part = parseArchivePart(name);
+    if (part?.ext === "rar" && part.index === 1) firstParts.add(`${dir}${part.stem.toLowerCase()}`);
+  }
+  return entries.filter((e) => {
+    const { dir, name } = split(e.path);
+    const part = parseArchivePart(name);
+    if (part?.ext === "rar") return part.index === 1 || !firstParts.has(`${dir}${part.stem.toLowerCase()}`);
+    const vol = parseSplitVolume(name);
+    return !(vol?.scheme === "rar" && listed.has(`${dir}${vol.entryName.toLowerCase()}`));
+  });
+}
+
 // ── Native split schemes ────────────────────────────────────────────────
 //
 // `.partN.<ext>` (above) is what most repackers use, but each format also

@@ -95,6 +95,95 @@ describe("call", () => {
   });
 });
 
+describe("the deadline on every call", () => {
+  /** A fetch where the token answers and `/api/*` hangs: until aborted, or for ever when `deaf`. */
+  function hang(deaf = false): { signals: AbortSignal[] } {
+    const signals: AbortSignal[] = [];
+    globalThis.fetch = ((input: unknown, init?: RequestInit) => {
+      if (String(input) === "/api/token") return Promise.resolve(jsonResponse(200, { token: "ab".repeat(32) }));
+      const s = init?.signal as AbortSignal;
+      signals.push(s);
+      return new Promise<Response>((_, reject) => {
+        if (!deaf) s.addEventListener("abort", () => reject(new TypeError("aborted")));
+      });
+    }) as typeof fetch;
+    return { signals };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function endOf(p: Promise<unknown>, ms: number): Promise<unknown> {
+    let got: unknown = "still waiting";
+    p.then(
+      (v) => {
+        got = v;
+      },
+      (e: unknown) => {
+        got = e;
+      },
+    );
+    await vi.advanceTimersByTimeAsync(ms);
+    return got;
+  }
+
+  it("a route that never answers ends as a timeout, which reads as offline, and its request is aborted", async () => {
+    const { signals } = hang();
+    const p = api.call("/api/status");
+    expect(await endOf(p, api.CALL_TIMEOUT_MS - 1)).toBe("still waiting");
+    const err = await endOf(p, 1);
+    expect(err).toMatchObject({ status: 0, code: "timeout" });
+    expect(api.isOffline(err)).toBe(true);
+    expect(signals[0].aborted).toBe(true);
+  });
+
+  it("holds where fetch ignores the abort", async () => {
+    hang(true);
+    expect(await endOf(api.call("/api/status"), api.CALL_TIMEOUT_MS)).toMatchObject({ status: 0, code: "timeout" });
+  });
+
+  it("a reply that stalls half way counts too", async () => {
+    globalThis.fetch = (async (input: unknown) => {
+      if (String(input) === "/api/token") return jsonResponse(200, { token: "ab".repeat(32) });
+      return { status: 200, ok: true, json: () => new Promise(() => {}), blob: () => new Promise(() => {}) } as unknown as Response;
+    }) as typeof fetch;
+    expect(await endOf(api.call("/api/volumes"), api.CALL_TIMEOUT_MS)).toMatchObject({ code: "timeout" });
+    expect(await endOf(api.callBlob("/api/fs/read", { path: "/x" }), api.CALL_TIMEOUT_MS)).toMatchObject({ code: "timeout" });
+  });
+
+  it("routes that work before they answer get longer: a copy walks its source first", async () => {
+    hang();
+    expect(api.callTimeoutMs("/api/fs/copy")).toBe(600_000);
+    expect(api.callTimeoutMs("/api/apps/launch")).toBeGreaterThan(60_000);
+    expect(api.callTimeoutMs("/api/smb/list")).toBeGreaterThan(api.CALL_TIMEOUT_MS);
+    expect(api.callTimeoutMs("/api/fs/stat")).toBe(api.CALL_TIMEOUT_MS);
+    const p = api.call("/api/fs/copy", { src: "/a", dest: "/b" });
+    expect(await endOf(p, api.CALL_TIMEOUT_MS)).toBe("still waiting");
+    expect(await endOf(p, 600_000 - api.CALL_TIMEOUT_MS)).toMatchObject({ code: "timeout" });
+  });
+
+  it("the caller's signal still aborts it, as offline, and no timer is left behind", async () => {
+    const { signals } = hang();
+    const ctl = new AbortController();
+    const p = api.callBlob("/api/fs/read", { path: "/x" }, ctl.signal);
+    await vi.advanceTimersByTimeAsync(1);
+    ctl.abort();
+    expect(await endOf(p, 1)).toMatchObject({ status: 0, code: "offline" });
+    expect(signals[0].aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("a call that answered leaves no timer behind", async () => {
+    installFetch(() => jsonResponse(200, { ok: 1 }));
+    await expect(api.call("/api/status")).resolves.toEqual({ ok: 1 });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
 describe("probeHelper (is the helper there, or is this the offline copy?)", () => {
   it("true when the token arrives, and the token is kept for the calls after", async () => {
     const seen = installFetch(() => jsonResponse(200, { ok: true }));

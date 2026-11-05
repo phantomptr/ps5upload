@@ -21,6 +21,7 @@ import { Button, Spinner } from "../../components";
 import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
 import { formatBytes } from "../../lib/format";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /**
  * Local UFS2 inspector panel — collapsed by default, expands into
@@ -54,7 +55,7 @@ export default function FfpkgInspectorPanel({ path }: { path: string }) {
       setMeta(m);
       setOpen(true);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
       setOpen(true);
     } finally {
       setBusy(false);
@@ -78,13 +79,17 @@ export default function FfpkgInspectorPanel({ path }: { path: string }) {
     try {
       const r = await ffpkgExtract(path, innerPath, dest);
       setExtractResult(r);
-      pushNotification("success", `Extracted ${displayName}`, {
-        body: `${r.file_count} file${r.file_count === 1 ? "" : "s"}, ${formatBytes(r.bytes_written)} written to ${dest}.`,
+      pushNotification("success", tr("ffpkg_notif_extracted", { name: displayName }, "Extracted {name}"), {
+        body: tr(
+          "ffpkg_notif_extracted_body",
+          { count: r.file_count, size: formatBytes(r.bytes_written), dest },
+          "Files: {count}. {size} written to {dest}.",
+        ),
       });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = humanizeCaught(e);
       setError(msg);
-      pushNotification("error", `Extract failed: ${displayName}`, { body: msg });
+      pushNotification("error", tr("ffpkg_notif_extract_failed", { name: displayName }, "Extract failed: {name}"), { body: msg });
     } finally {
       setExtractBusy(null);
     }
@@ -132,7 +137,7 @@ export default function FfpkgInspectorPanel({ path }: { path: string }) {
       </div>
       {error && (
         <div className="border-t border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-bad)]">
-          <AlertTriangle size={11} className="mr-1 inline" />
+          <AlertTriangle size={11} className="me-1 inline" />
           {error}
         </div>
       )}
@@ -204,7 +209,7 @@ export default function FfpkgInspectorPanel({ path }: { path: string }) {
                   <summary className="cursor-pointer">
                     {tr("ffpkg_extract_show_paths", undefined, "show paths")}
                   </summary>
-                  <ul className="mt-1 max-h-32 overflow-auto pl-4">
+                  <ul className="mt-1 max-h-32 overflow-auto ps-4">
                     {extractResult.sample_paths.map((p) => (
                       <li key={p} className="break-all font-mono">{p}</li>
                     ))}
@@ -218,7 +223,7 @@ export default function FfpkgInspectorPanel({ path }: { path: string }) {
               <div className="mb-1 font-medium text-[var(--color-warn)]">
                 {tr("ffpkg_inspect_warnings", undefined, "Warnings")}
               </div>
-              <ul className="list-disc pl-4 text-[var(--color-muted)]">
+              <ul className="list-disc ps-4 text-[var(--color-muted)]">
                 {meta.warnings.map((w) => (
                   <li key={w}>{w}</li>
                 ))}

@@ -738,6 +738,49 @@ fn rar_cancel_ends_a_long_excluded_solid_skip_promptly() {
     );
 }
 
+/// A solid archive with an entry of unknown size is decoded end to end before the job can start
+/// (hours for a large game): a stop must not wait for that, and the job must not read "0 bytes".
+#[test]
+fn measuring_unknown_sizes_can_be_stopped_and_shows_how_far_it_got() {
+    use ps5upload_core::transfer::{LiveNotes, RarLayoutWatch, LIVE_PHASE_MEASURING};
+    use std::sync::atomic::Ordering;
+    let d = temp("rar-measure-watch");
+    let body = pattern(5, 0, 70_000);
+    write(
+        &d.join("a.rar"),
+        &rar5(&[Ent::Unknown("b/unknown", &body)], false),
+    );
+    let live = LiveNotes::default();
+    let cancel = AtomicBool::new(false);
+    let watch = RarLayoutWatch {
+        cancel: Some(&cancel),
+        live: Some(&live),
+    };
+    // Runs to the end: the size is learned and the phase is over.
+    let (m, _src) = RarSource::open_watched(&d.join("a.rar"), None, &[], watch).unwrap();
+    assert_eq!(
+        m.entries
+            .iter()
+            .find(|e| e.path == "b/unknown")
+            .unwrap()
+            .size,
+        70_000
+    );
+    assert_eq!(live.phase.load(Ordering::Relaxed), 0);
+    assert_ne!(LIVE_PHASE_MEASURING, 0);
+    // Raised before it starts: it stops at its first look.
+    cancel.store(true, Ordering::Relaxed);
+    let err = RarSource::open_watched(&d.join("a.rar"), None, &[], watch)
+        .err()
+        .expect("a raised cancel stops the measuring");
+    assert!(matches!(err, RarOpenError::Cancelled), "{err:?}");
+    assert_eq!(
+        live.phase.load(Ordering::Relaxed),
+        0,
+        "the phase ends with it"
+    );
+}
+
 #[test]
 fn an_entry_with_unknown_unpacked_size_is_measured_and_uploaded() {
     let d = temp("rar-unknown-size");

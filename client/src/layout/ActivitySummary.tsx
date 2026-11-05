@@ -7,11 +7,12 @@ import { humanizeJobErrorReason } from "../api/ps5";
 import { KindIcon } from "../components/TaskList";
 import { ProgressBar } from "../components/ProgressBar";
 import { Spinner } from "../components/Spinner";
-import { formatBytes, formatDuration } from "../lib/format";
+import { formatBytes } from "../lib/format";
 import type { ActivitySummary, FinishedRow, ActivityRow, QueuedRow } from "../state/activitySummary";
 import { routeForTask, shortLabel, shortLabelKey } from "../state/activitySummary";
 import { useTr } from "../state/lang";
 import type { Task, TaskKind } from "../state/tasks";
+import { formatDuration } from "../lib/formatDate";
 
 type Tr = ReturnType<typeof useTr>;
 
@@ -359,7 +360,7 @@ function RunningRow({ row, onOpen, onCancel, canCancel, consoleOf }: { row: Acti
           type="button"
           onClick={() => onOpen(routeForTask(task))}
           title={tr("activity_open_owner", undefined, "Open its screen")}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left hover:text-[var(--color-accent)]"
+          className="flex min-w-0 flex-1 items-center gap-2 text-start hover:text-[var(--color-accent)]"
         >
           <KindIcon kind={task.kind} size={13} />
           <span className="shrink-0 text-[var(--color-muted)]">{kindName(tr, task.kind)}</span>
@@ -415,7 +416,7 @@ function QueuedRowView({
         type="button"
         onClick={() => onOpen(row.route)}
         title={tr("activity_open_owner", undefined, "Open its screen")}
-        className="flex min-w-0 flex-1 items-center gap-2 text-left hover:text-[var(--color-accent)]"
+        className="flex min-w-0 flex-1 items-center gap-2 text-start hover:text-[var(--color-accent)]"
       >
         <KindIcon kind={row.kind} size={13} />
         <span className="shrink-0 text-[var(--color-muted)]">{kindName(tr, row.kind)}</span>
@@ -473,7 +474,7 @@ function FinishedRowView({ row, onOpen, onRetry, canRetry, consoleOf }: { row: F
           type="button"
           onClick={() => onOpen(routeForTask(task))}
           title={tr("activity_open_owner", undefined, "Open its screen")}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left hover:text-[var(--color-accent)]"
+          className="flex min-w-0 flex-1 items-center gap-2 text-start hover:text-[var(--color-accent)]"
         >
           <span className="shrink-0 text-[var(--color-muted)]">{kindName(tr, task.kind)}</span>
           <span className="min-w-0 truncate text-[var(--color-text)]">{task.label}</span>

@@ -5,7 +5,7 @@ import { JoinSession } from "./session";
 
 beforeEach(() => {
   // A page with neither WebCodecs nor MSE: the players need only an element to make.
-  const el = () => ({ dataset: {}, append() {}, getContext: () => null, removeAttribute() {}, src: "" });
+  const el = () => ({ dataset: {}, append() {}, addEventListener() {}, getContext: () => null, removeAttribute() {}, src: "" });
   vi.stubGlobal("document", { createElement: el });
   vi.stubGlobal("window", {});
 });

@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         Thanks for taking the time to file a bug report!
-        The app's **More → Bug report** fills this in for you and saves a zip with the logs: drag that zip into this issue.
+        The app's **Bug Report** in the sidebar fills this in for you and saves a zip with the logs: drag that zip into this issue.
   - type: textarea
     id: what-happened
     attributes:
@@ -35,7 +35,7 @@ body:
     id: version
     attributes:
       label: App version
-      placeholder: "e.g. 4.1.0 (see Help → About or the title bar)"
+      placeholder: "e.g. 11.0.8 (see Help → About)"
     validations:
       required: true
   - type: input

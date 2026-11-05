@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { CollectionLocation, CollectionOffer } from "../api/collection";
 import type { ConsoleEntry, GameView } from "../api/games";
-import { ageLabel, driveOffers, hasTitleId, offersAfterReread, rosterOnly, needsReread, queueLinkFor, REREAD_MS, rowActions, summaryLine, titleIdFromContentId } from "./gamePage";
+import { ageLabel, driveOffers, hasTitleId, offersAfterReread, rosterOnly, needsReread, queueLinkFor, REREAD_MS, rowActions, summaryLine } from "./gamePage";
 
 const tr = (_k: string, vars?: Record<string, string | number>, fallback?: string) =>
   (fallback ?? "").replace(/\{(\w+)\}/g, (_, k) => String(vars?.[k] ?? ""));
@@ -94,11 +94,6 @@ describe("ids", () => {
     expect(hasTitleId("PPSA01234")).toBe(true);
     expect(hasTitleId("CUSA00900")).toBe(true);
     expect(hasTitleId("MY-FOLDER")).toBe(false);
-  });
-  it("reads the title ID out of a content ID", () => {
-    expect(titleIdFromContentId("UP0000-PPSA01234_00-ASTRO0000000000")).toBe("PPSA01234");
-    expect(titleIdFromContentId("")).toBeNull();
-    expect(titleIdFromContentId("garbage")).toBeNull();
   });
 });
 

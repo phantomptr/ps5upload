@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { loadBundledDoc } from "../../lib/bundledDoc";
+import { recentChangelog } from "../../lib/changelogDoc";
 import { Sparkles, ExternalLink } from "lucide-react";
 import { openExternalUrl as openExternal } from "../../lib/openExternalUrl";
 
@@ -17,9 +18,9 @@ const GITHUB_RELEASES_URL =
   "https://github.com/phantomptr/ps5upload/releases";
 
 /**
- * Changelog screen ("What's new"). Renders the whole CHANGELOG.md the app
- * was built with, plus a link to the GitHub releases page (release
- * downloads, and notes for versions newer than this build).
+ * Changelog screen ("What's new"). Renders the CHANGELOG.md the app was built
+ * with, newest versions first and the rest on request, plus a link to the GitHub
+ * releases page (release downloads, and notes for versions newer than this build).
  *
  * `embedded`: shown as the What's new tab of Help, under that screen's own
  * header; the GitHub link then sits above the notes.
@@ -28,6 +29,8 @@ export default function ChangelogScreen({ embedded = false }: { embedded?: boole
   const tr = useTr();
   const [raw, setRaw] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const recent = useMemo(() => (raw === null ? null : recentChangelog(raw)), [raw]);
 
   useEffect(() => {
     (async () => {
@@ -84,7 +87,12 @@ export default function ChangelogScreen({ embedded = false }: { embedded?: boole
           <EmptyState message={tr("loading", undefined, "Loading…")} />
         )}
 
-        {raw !== null && <MarkdownView source={raw} />}
+        {raw !== null && recent && <MarkdownView source={showAll ? raw : recent.text} />}
+        {recent?.more && !showAll && (
+          <Button variant="secondary" size="sm" onClick={() => setShowAll(true)}>
+            {tr("changelog_show_older", undefined, "Show older versions")}
+          </Button>
+        )}
       </div>
     </div>
   );

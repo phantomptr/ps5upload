@@ -2,7 +2,7 @@
 // Convert and the queue use, with the start buttons; then the stage list while a run goes, then
 // the result with the actions that fit it. Every action targets the package the pipeline names.
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ComponentProps } from "react";
 
 import { CheckCircle2, Circle, ListPlus, Loader2, Pause, Play, XCircle } from "lucide-react";
 
@@ -14,6 +14,7 @@ import type { InstallMethod, Pipeline, PipelineStage } from "../../state/fpkgCon
 import { useTr } from "../../state/lang";
 import { formatBytes } from "../../lib/format";
 import type { Task } from "../../state/tasks";
+import { ImageDestination } from "./ImageDestination";
 import type { ImageFormat } from "../../api/fpkg";
 import { overallProgress, stageRows, type StageRow } from "./stages";
 import { lz4Active, type Lz4Choice } from "./ImageOptions";
@@ -103,6 +104,8 @@ export interface RunCardProps {
   canQueue?: boolean;
   onCompress: () => void;
   onCancel: () => void;
+  /** Cancel this game and hold the ones waiting behind it: offered while a queue runs. */
+  onCancelAndStop?: () => void;
   /** Hold the running job where it is (#631); absent where it cannot pause. */
   onPause?: () => void;
   onResume?: () => void;
@@ -322,7 +325,7 @@ export function RunCard(props: RunCardProps) {
             ) : null}
           </div>
           {r.state === "active" && (
-            <div className="pl-6">
+            <div className="ps-6">
               <ProgressBar
                 value={r.total ? (r.done ?? 0) / r.total : null}
                 label={label(r.stage)}
@@ -407,6 +410,11 @@ export function RunCard(props: RunCardProps) {
                 <Button variant="danger" onClick={props.onCancel}>
                   {tr("fpkg.cancel", undefined, "Cancel")}
                 </Button>
+                {props.onCancelAndStop && (
+                  <Button variant="danger" onClick={props.onCancelAndStop} data-testid="run-cancel-stop">
+                    {tr("fpkg.cancel_stop_queue", undefined, "Cancel and stop the queue")}
+                  </Button>
+                )}
               </div>
             )}
           </div>
@@ -422,9 +430,15 @@ export function RunCard(props: RunCardProps) {
         <div className="flex flex-col gap-3">
           {title}
           {stageList}
-          <div className="text-sm text-[var(--color-bad)]">
-            {label(p.stage)}: {p.message}
-          </div>
+          {p.cancelled ? (
+            <div className="text-sm text-[var(--color-muted)]" data-testid="run-cancelled">
+              {tr("fpkg.cancelled", undefined, "Cancelled. Nothing was finished.")}
+            </div>
+          ) : (
+            <div className="text-sm text-[var(--color-bad)]">
+              {label(p.stage)}: {p.message}
+            </div>
+          )}
           {p.packagePath && (
             <div className="text-sm text-[var(--color-muted)]">
               {tr("fpkg.kept", { path: p.packagePath }, "The package was built and kept: {path}")}
@@ -452,7 +466,7 @@ export function RunCard(props: RunCardProps) {
             ? props.title
               ? tr("fpkg.installedTitle", { title: props.title }, "Installed on PS5 — {title}")
               : tr("fpkg.installedOn", { host: p.host ?? "" }, "Installed on the PS5 ({host})")
-            : p.mode === "ffpfsc" || (p.mode === "image" && p.packagePath.endsWith(".ffpfsc"))
+            : p.mode === "image" && p.packagePath.endsWith(".ffpfsc")
               ? tr("fpkg.compressed", undefined, "Compressed image written and verified")
               : p.mode === "image"
                 ? tr(
@@ -527,6 +541,7 @@ export function RunCard(props: RunCardProps) {
         {!p.deleted && makesImage(p.mode) && (
           <ImageUpload
             queued={!!p.uploadQueued}
+            dest={props.choice.dest}
             canUpload={props.canInstall && !!props.onUploadImage}
             onUpload={(deleteAfter) => props.onUploadImage?.(deleteAfter)}
             onOpen={props.onOpenUpload}
@@ -563,11 +578,13 @@ export function RunCard(props: RunCardProps) {
 /** A finished image: send it to the PS5 through the Upload queue. */
 function ImageUpload({
   queued,
+  dest,
   canUpload,
   onUpload,
   onOpen,
 }: {
   queued: boolean;
+  dest?: OutputChoiceProps["dest"];
   canUpload: boolean;
   onUpload: (deleteAfter: boolean) => void;
   onOpen?: () => void;
@@ -594,6 +611,7 @@ function ImageUpload({
   }
   return (
     <div className="flex flex-col gap-2">
+      {canUpload && dest && <ImageDestination {...dest} />}
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="primary" disabled={!canUpload} onClick={() => onUpload(deleteAfter)}>
           {tr("fpkg.uploadImage", undefined, "Upload to PS5")}
@@ -636,9 +654,11 @@ export interface OutputChoiceProps {
   canInstall: boolean;
   /** For a libSceAmpr game: the AMPR LZ4 asset-pack option of an .exfat image. */
   lz4?: Lz4Choice;
+  /** Where an image goes on the PS5, when one can be uploaded. */
+  dest?: ComponentProps<typeof ImageDestination>;
 }
 
-function OutputChoice(c: OutputChoiceProps) {
+export function OutputChoice(c: OutputChoiceProps) {
   const tr = useTr();
   const image = c.make === "image";
   return (
@@ -686,6 +706,7 @@ function OutputChoice(c: OutputChoiceProps) {
           />
         )}
       </div>
+      {image && c.then === "upload" && c.dest && <ImageDestination {...c.dest} />}
     </div>
   );
 }

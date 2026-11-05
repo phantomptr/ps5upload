@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // The task store persists through `window.localStorage`; vitest's node env has no window.
 const mem = new globalThis.Map<string, string>();
@@ -21,12 +21,16 @@ const {
   cancelFsUpload,
   resumeFsUpload,
   dismissFsUploadStopped,
+  discardFsUploadPartial,
+  giveUpFsUploadStopped,
   restoreFsUploads,
 } = await import("./fsUpload");
 type Deps = import("./fsUpload").FsUploadDeps;
+type FsUploadStep = import("./fsUploadPlan").FsUploadStep;
 type Snap = Awaited<ReturnType<Deps["jobStatus"]>>;
 
 const HOST = "192.168.0.5";
+const ADDR = `${HOST}:9113`;
 
 /** A fake engine: each started job answers the snapshots queued for it, then "done". */
 function fakeEngine(script: Record<string, Snap[]> = {}) {
@@ -232,10 +236,32 @@ describe("runFsUpload", () => {
       "/pc/a.bin",
       "/pc/b.bin",
     ]);
-    expect(waits).toContain(5000);
+    // The first retry's wait, in slices Cancel can end.
+    expect(waits.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(5000);
     expect(
       fsUploadForHost(useFsUploadStore.getState(), HOST).stopped,
     ).toBeNull();
+  });
+
+  it("Cancel ends the wait before a retry instead of leaving the row busy", async () => {
+    const e = fakeEngine({
+      "job-1": [{ status: "failed", error: "connection reset" } as Snap],
+    });
+    const waits: number[] = [];
+    const r = await runFsUpload(
+      { host: HOST, addr: HOST, destDir: "/data/x", srcPaths: ["/pc/a.bin"] },
+      {
+        ...e.deps,
+        shouldRetry: () => true,
+        sleep: async (ms) => {
+          waits.push(ms);
+          if (waits.length === 3) cancelFsUpload(HOST, e.deps);
+        },
+      },
+    );
+    expect(r.ok).toBe(false);
+    expect(waits.reduce((a, b) => a + b, 0)).toBeLessThan(5000);
+    expect(e.started).toHaveLength(1);
   });
 
   it("shows that it is waiting to retry, and which try", async () => {
@@ -248,10 +274,10 @@ describe("runFsUpload", () => {
       {
         ...e.deps,
         shouldRetry: () => true,
-        sleep: async (ms) => {
-          if (ms >= 5000)
-            seen = fsUploadForHost(useFsUploadStore.getState(), HOST).active
-              ?.retry;
+        sleep: async () => {
+          seen ??=
+            fsUploadForHost(useFsUploadStore.getState(), HOST).active?.retry ??
+            null;
         },
       },
     );
@@ -701,5 +727,241 @@ describe("runFsUpload", () => {
       expect(st?.steps?.[0]).toMatchObject({ kind: "list", txId: TX });
       release();
     });
+  });
+});
+
+describe("Files uploads run under a job id of their own (R2-1 F25)", () => {
+  beforeEach(() => {
+    useFsUploadStore.setState({ byHost: {} });
+    mem.clear();
+  });
+  /** A run stopped on its first step, the way the app saves it. */
+  const stopped = () => fsUploadForHost(useFsUploadStore.getState(), HOST).stopped;
+
+  function withIds() {
+    const e = fakeEngine();
+    const ids: (string | undefined)[] = [];
+    let minted = 0;
+    e.deps.newTxId = () => `tx-${++minted}`;
+    const start = e.deps.startFile;
+    e.deps.startFile = async (src, dest, addr, cap, txId) => {
+      ids.push(txId);
+      return start(src, dest, addr, cap, txId);
+    };
+    e.deps.startDir = e.deps.startFile;
+    return { e, ids };
+  }
+
+  it("uses the planned id on every try and on a resume of a file", async () => {
+    const { e, ids } = withIds();
+    e.deps.shouldRetry = () => true;
+    let fails = 1;
+    const status = e.deps.jobStatus;
+    e.deps.jobStatus = async (id) =>
+      fails-- > 0 ? ({ status: "failed", error: "connection lost" } as Snap) : status(id);
+    await runFsUpload(
+      {
+        host: HOST,
+        addr: ADDR,
+        destDir: "/data/x",
+        srcPaths: [],
+        steps: [{ kind: "one", src: "/pc/a.bin", name: "a.bin", txId: "planned" }],
+      },
+      e.deps,
+    );
+    expect(ids).toEqual(["planned", "planned"]);
+  });
+
+  it("mints an id for a step saved without one, and keeps it for the resume", async () => {
+    const { e, ids } = withIds();
+    const failing = e.deps.jobStatus;
+    let fail = true;
+    e.deps.jobStatus = async (id) =>
+      fail ? ({ status: "failed", error: "disk full" } as Snap) : failing(id);
+    await runFsUpload(
+      { host: HOST, addr: ADDR, destDir: "/data/x", srcPaths: ["/pc/a.bin"] },
+      e.deps,
+    );
+    expect(stopped()?.steps?.[0]).toMatchObject({ kind: "one", txId: "tx-1" });
+    fail = false;
+    await resumeFsUpload(HOST, e.deps);
+    expect(ids).toEqual(["tx-1", "tx-1"]);
+  });
+
+  it("resumes a folder under its id while the staged tree is there, and starts over when it is gone", async () => {
+    const run = async (listing: Record<string, { name: string; kind: string; size: number }[]>) => {
+      const { e, ids } = withIds();
+      e.deps.listDir = async (_a, dir) => {
+        if (!listing[dir]) throw new Error("fs_list_dir_not_found");
+        return listing[dir];
+      };
+      await runFsUpload(
+        {
+          host: HOST,
+          addr: ADDR,
+          destDir: "/data/x",
+          srcPaths: [],
+          steps: [{ kind: "one", src: "/pc/folder", name: "G", txId: "old" }],
+          doneBefore: 0,
+        },
+        e.deps,
+      );
+      return ids;
+    };
+    const file = (name: string) => ({ name, kind: "dir", size: 0 });
+    expect(await run({ "/data/x": [file("G"), file("G.ava-part")] })).toEqual(["old"]);
+    expect(await run({ "/data/x": [file("G")], "/data/x/G": [] })).toEqual(["tx-1"]);
+    expect(await run({})).toEqual(["old"]); // no answer: never a reason to start over
+  });
+
+  it("does not ask the console on a first run", async () => {
+    const { e, ids } = withIds();
+    e.deps.listDir = vi.fn(async () => []);
+    await runFsUpload(
+      {
+        host: HOST,
+        addr: ADDR,
+        destDir: "/data/x",
+        srcPaths: [],
+        steps: [{ kind: "one", src: "/pc/folder", name: "G", txId: "first" }],
+      },
+      e.deps,
+    );
+    expect(ids).toEqual(["first"]);
+    expect(e.deps.listDir).not.toHaveBeenCalled();
+  });
+});
+
+describe("a list job's unreadable files (R2-1 F25)", () => {
+  beforeEach(() => {
+    useFsUploadStore.setState({ byHost: {} });
+    mem.clear();
+  });
+  it("are kept for the screen, and a run that follows clears them", async () => {
+    const e = fakeEngine();
+    e.deps.startList = async () => ({ jobId: "list-1", unreadable: ["/pc/locked.bin"] });
+    const steps: FsUploadStep[] = [
+      {
+        kind: "list",
+        txId: "t",
+        files: [
+          { src: "/pc/a.bin", name: "a.bin" },
+          { src: "/pc/locked.bin", name: "locked.bin" },
+        ],
+      },
+    ];
+    const r = await runFsUpload({ host: HOST, addr: ADDR, destDir: "/data/x", srcPaths: [], steps }, e.deps);
+    expect(r.ok).toBe(true);
+    const get = () => fsUploadForHost(useFsUploadStore.getState(), HOST).unreadable;
+    expect(get()).toEqual(["/pc/locked.bin"]);
+    e.deps.startList = async () => "list-2";
+    await runFsUpload({ host: HOST, addr: ADDR, destDir: "/data/x", srcPaths: [], steps }, e.deps);
+    expect(get()).toEqual([]);
+  });
+});
+
+describe("giving a stopped run up (R2-1 F10)", () => {
+  beforeEach(() => {
+    useFsUploadStore.setState({ byHost: {} });
+    mem.clear();
+  });
+  const part = "/data/x/G.ava-part";
+
+  function console_(folders: Record<string, string[]>, files: string[] = []) {
+    const removed: string[] = [];
+    return {
+      removed,
+      listDir: vi.fn(async (_a: string, p: string) => {
+        if (!(p in folders)) throw new Error("fs_list_dir_not_found");
+        return folders[p].map((name) => ({ name, kind: "file", size: 1 }));
+      }),
+      deleteRemote: vi.fn(async (_a: string, p: string) => {
+        if (!(p in folders) && !files.includes(p)) throw new Error("not found");
+        removed.push(p);
+        delete folders[p];
+      }),
+    };
+  }
+  const base = { addr: ADDR, destDir: "/data/x" };
+  const deps = (c: ReturnType<typeof console_>, over: Partial<Deps> = {}) => ({
+    ...fakeEngine().deps,
+    listDir: c.listDir,
+    deleteRemote: c.deleteRemote,
+    ...over,
+  });
+
+  it("deletes a folder step's staging tree and its empty place-holder", async () => {
+    const c = console_({ [part]: ["eboot.bin"], "/data/x/G": [] });
+    await discardFsUploadPartial({ ...base, steps: [{ kind: "one", src: "/pc/G", name: "G" }] }, deps(c));
+    expect(c.removed).toEqual([part, "/data/x/G"]);
+  });
+
+  it("deletes only the first step's partial: the others never started", async () => {
+    const c = console_({}, ["/data/x/a.bin.ava-part", "/data/x/b.bin.ava-part"]);
+    await discardFsUploadPartial(
+      {
+        ...base,
+        steps: [
+          { kind: "one", src: "/pc/a.bin", name: "a.bin" },
+          { kind: "one", src: "/pc/b.bin", name: "b.bin" },
+        ],
+      },
+      deps(c),
+    );
+    expect(c.removed).toEqual(["/data/x/a.bin.ava-part"]);
+  });
+
+  it("deletes a list step's parts only, by name, from one listing", async () => {
+    const c = console_({ "/data/x": ["a.bin.ava-part", "b.bin", "other.ava-part"] }, [
+      "/data/x/a.bin.ava-part",
+    ]);
+    await discardFsUploadPartial(
+      {
+        ...base,
+        steps: [
+          {
+            kind: "list",
+            txId: "t",
+            files: [
+              { src: "/pc/a.bin", name: "a.bin" },
+              { src: "/pc/b.bin", name: "b.bin" },
+            ],
+          },
+        ],
+      },
+      deps(c),
+    );
+    expect(c.removed).toEqual(["/data/x/a.bin.ava-part"]);
+  });
+
+  it("stops a job the closed app left running before deleting under it", async () => {
+    const c = console_({}, ["/data/x/a.bin.ava-part"]);
+    const order: string[] = [];
+    let running = true;
+    const d = deps(c, {
+      jobStatus: async () => ({ status: running ? "running" : "failed" }) as Snap,
+      jobCancel: async () => {
+        order.push("cancel");
+        running = false;
+      },
+    });
+    c.deleteRemote.mockImplementation(async () => void order.push("delete"));
+    await discardFsUploadPartial(
+      { ...base, jobId: "j", steps: [{ kind: "one", src: "/pc/a.bin", name: "a.bin" }] },
+      d,
+    );
+    expect(order).toEqual(["cancel", "delete"]);
+  });
+
+  it("the Dismiss button's call clears the card and deletes", async () => {
+    const e = fakeEngine();
+    e.deps.jobStatus = async () => ({ status: "failed", error: "disk full" }) as Snap;
+    e.deps.newTxId = () => "t";
+    await runFsUpload({ host: HOST, addr: ADDR, destDir: "/data/x", srcPaths: ["/pc/a.bin"] }, e.deps);
+    expect(fsUploadForHost(useFsUploadStore.getState(), HOST).stopped).not.toBeNull();
+    const c = console_({}, ["/data/x/a.bin.ava-part"]);
+    giveUpFsUploadStopped(HOST, deps(c));
+    expect(fsUploadForHost(useFsUploadStore.getState(), HOST).stopped).toBeNull();
+    await vi.waitFor(() => expect(c.removed).toEqual(["/data/x/a.bin.ava-part"]));
   });
 });

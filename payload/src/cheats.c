@@ -26,6 +26,7 @@
 
 #include "cheats.h"
 #include "cheats_list.h"
+#include "cheats_json.h"
 #include "notif.h"
 
 #include <ps5/kernel.h>
@@ -147,51 +148,6 @@ static struct {
 } g_rg_cache;
 
 /* ── JSON string extraction helpers (from runtime.c patterns) ────── */
-
-/* Find the value of a string field in a JSON blob. Writes the unquoted,
- * unescaped value to out. Returns 0 if found, -1 if not. */
-static int json_str(const char *json, const char *key, char *out, size_t cap) {
-    if (!json || !key || !out || cap == 0) return -1;
-    out[0] = '\0';
-    size_t klen = strlen(key);
-    const char *p = json;
-    while ((p = strstr(p, key))) {
-        /* Check this is a key: preceded by " and followed by " : */
-        const char *q = p + klen;
-        if (p > json && p[-1] == '"' && q[0] == '"' &&
-            (q[1] == ':' || q[1] == ' ' || q[1] == '\t')) {
-            /* Skip to the colon, then to the opening quote */
-            p = q + 1;
-            while (*p && *p != ':') p++;
-            if (*p != ':') return -1;
-            p++;
-            while (*p == ' ' || *p == '\t') p++;
-            if (*p != '"') return -1;
-            p++;
-            size_t i = 0;
-            while (*p && *p != '"' && i + 1 < cap) {
-                if (*p == '\\' && p[1]) {
-                    switch (p[1]) {
-                        case '"': out[i++] = '"'; break;
-                        case '\\': out[i++] = '\\'; break;
-                        case '/': out[i++] = '/'; break;
-                        case 'n': out[i++] = '\n'; break;
-                        case 't': out[i++] = '\t'; break;
-                        case 'r': out[i++] = '\r'; break;
-                        default: out[i++] = p[1]; break;
-                    }
-                    p += 2;
-                } else {
-                    out[i++] = *p++;
-                }
-            }
-            out[i] = '\0';
-            return 0;
-        }
-        p += klen;
-    }
-    return -1;
-}
 
 /* Find a numeric field in JSON. Returns 0 if found, -1 if not. */
 static int json_num(const char *json, const char *key, int64_t *out) {
@@ -656,10 +612,10 @@ typedef struct {
 static int parse_json_file(const char *json, size_t json_len,
                            cheat_file_t *cf) {
     (void)json_len;
-    /* Extract top-level fields */
-    json_str(json, "id", cf->title_id, sizeof(cf->title_id));
-    json_str(json, "name", cf->game_name, sizeof(cf->game_name));
-    json_str(json, "process", cf->process, sizeof(cf->process));
+    /* The file's own fields, wherever they sit: a cheat's "name" is not the game's. */
+    cj_top_str(json, "id", cf->title_id, sizeof(cf->title_id));
+    cj_top_str(json, "name", cf->game_name, sizeof(cf->game_name));
+    cj_top_str(json, "process", cf->process, sizeof(cf->process));
 
     /* Find "mods":[ */
     const char *p = strstr(json, "\"mods\"");
@@ -698,10 +654,10 @@ static int parse_json_file(const char *json, size_t json_len,
         strcpy(m->type, "checkbox");
         m->incomplete = mod_cut;
 
-        json_str(mod_buf, "name", m->name, sizeof(m->name));
-        json_str(mod_buf, "hint", m->hint, sizeof(m->hint));
-        json_str(mod_buf, "type", m->type, sizeof(m->type));
-        json_str(mod_buf, "module_name", m->module_name,
+        cj_str(mod_buf, "name", m->name, sizeof(m->name));
+        cj_str(mod_buf, "hint", m->hint, sizeof(m->hint));
+        cj_str(mod_buf, "type", m->type, sizeof(m->type));
+        cj_str(mod_buf, "module_name", m->module_name,
                  sizeof(m->module_name));
 
         int bval = 0;
@@ -744,11 +700,11 @@ static int parse_json_file(const char *json, size_t json_len,
 
                     mem_entry_t *e = &m->mem[mi];
                     memset(e, 0, sizeof(*e));
-                    json_str(me_buf, "offset", e->offset_str,
+                    cj_str(me_buf, "offset", e->offset_str,
                              sizeof(e->offset_str));
-                    json_str(me_buf, "on", e->on_str,
+                    cj_str(me_buf, "on", e->on_str,
                              sizeof(e->on_str));
-                    json_str(me_buf, "off", e->off_str,
+                    cj_str(me_buf, "off", e->off_str,
                              sizeof(e->off_str));
                     int64_t sv = 0;
                     if (json_num(me_buf, "section", &sv) == 0)
@@ -1282,7 +1238,7 @@ static void state_path(const char *title_id, char *out, size_t cap) {
 /* The sidecar is {"<flat index>":true,...}: one flat index across every cheat file of the
  * title, in find_cheat_files() order — the same numbering the mod list and toggles use.
  * Every key fits: 1024 mods at most (64 per file x 16 files), about 11 KiB. */
-#define STATE_FILE_MAX (64 * 1024)
+#define STATE_FILE_MAX CHEATS_STATE_FILE_MAX
 
 /* The whole sidecar as a NUL-terminated heap string ("" when there is none), or NULL when it
  * exists but cannot be read in full. Caller frees. */
@@ -1488,7 +1444,7 @@ static void game_versions(const char *title, game_ver_t *v) {
     close(fd);
     if (rd <= 0) return;
     buf[rd] = '\0';
-    json_str(buf, "contentVersion", v->content, sizeof v->content);
+    cj_str(buf, "contentVersion", v->content, sizeof v->content);
 }
 
 /* game_versions for a running game process: its version does not change while it runs, and the
@@ -2959,7 +2915,7 @@ static void *watcher_thread(void *arg) {
         fprintf(stderr, "[cheats] cannot watch game launches; looking for a new game every %u ms\n",
                 CHEATS_SESSION_IDLE_EVERY_MS);
 
-    cheats_sched_t k = { 0, 0 };
+    cheats_sched_t k = { 0, 0, 0 };
     uint64_t none_ms = 0; /* when the last look found no game (0: it found one) */
     launch_ev_t ev;
     memset(&ev, 0, sizeof ev);
@@ -2969,6 +2925,7 @@ static void *watcher_thread(void *arg) {
         if (ev.pid > 0) on_launch_locked(&ev, &k);
         if (ev.exited) k.last_full_ms = 0; /* the game closed: end its session now */
         memset(&ev, 0, sizeof ev);
+        k.watching = kq >= 0;
         int next = cheats_sched_next(&k, &g_sess, atomic_load(&g_engine_enabled), mono_ms(), &wait);
         if (next == CHEATS_NEXT_FULL) {
             full_pass_locked(&none_ms);
@@ -3026,6 +2983,8 @@ void cheats_init(void) {
         pthread_attr_t attr;
         pthread_attr_init(&attr);
         pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+        /* Its deepest path stacks some 30 KiB of parse buffers, and reaches sqlite through game_versions. */
+        pthread_attr_setstacksize(&attr, 512u * 1024u);
         if (pthread_create(&thr, &attr, watcher_thread, NULL) == 0) {
             /* Thread started */
         } else {

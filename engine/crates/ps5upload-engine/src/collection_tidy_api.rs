@@ -2,8 +2,8 @@
 //! Finder's junk files. PS Game Library's maintenance tools, behind the same preview-then-apply
 //! rule it used: nothing changes on disk without a preview the user saw, and an apply quotes
 //! that preview's token. Paths are never taken on trust: a trashed path must be a copy the
-//! index knows, an organizer move must be one the organizer itself plans again, and junk is
-//! checked again file by file at the moment it is removed.
+//! index knows, an organizer move must be one its preview planned (and its file unchanged since),
+//! and junk is checked again file by file at the moment it is removed.
 
 use std::collections::HashMap;
 use std::path::{Path as FsPath, PathBuf};
@@ -14,9 +14,9 @@ use std::time::{Duration, Instant};
 use axum::{http::StatusCode, response::Response, Json};
 use serde::{Deserialize, Serialize};
 
-use crate::collection::organize_fs::{path_string, raw_root, split_raw, tree_for, Tree};
-use crate::collection::{junk, organize, store};
-use crate::collection_api::{err, library, settings};
+use crate::collection::organize_fs::{path_string, raw_root, split_raw, tree_for, Meta, Tree};
+use crate::collection::{junk, organize, split, store, Location};
+use crate::collection_api::{err, err_coded, library, settings};
 
 /// How long a preview's token stays good.
 const TOKEN_TTL: Duration = Duration::from_secs(15 * 60);
@@ -68,6 +68,13 @@ pub struct TrashItem {
     pub game_id: String,
     pub title: String,
     pub size_bytes: u64,
+    /// The copy's other files (a split package's later parts, a `.rar` set's later volumes):
+    /// they go with it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<String>,
+    /// A game folder, whose bytes are measured rather than taken from the index.
+    #[serde(skip)]
+    pub folder: bool,
 }
 
 struct PendingTrash {
@@ -137,8 +144,164 @@ pub struct TrashPreview {
     pub mode: &'static str,
 }
 
+/// Bytes under `dir`; symlinks count for nothing and are not followed. Unreadable corners count
+/// for nothing too: this is for showing, and removal goes by folder.
+fn tree_bytes(dir: &FsPath) -> u64 {
+    let mut total = 0u64;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            match e.file_type() {
+                Ok(t) if t.is_dir() => stack.push(e.path()),
+                Ok(t) if t.is_file() => total += e.metadata().map_or(0, |m| m.len()),
+                _ => {}
+            }
+        }
+    }
+    total
+}
+
+/// The later parts of the split set `path` is in on disk now: `Some(parts)` for its first file
+/// (empty when it is a package on its own), `None` when it is itself a later part.
+fn split_parts_now(path: &FsPath) -> Option<Vec<String>> {
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else {
+        return Some(Vec::new());
+    };
+    let listed: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| !n.starts_with('.'))
+        .collect();
+    let names: Vec<&str> = listed.iter().map(String::as_str).collect();
+    let sets = split::split_sets(&names, &mut |n| {
+        let mut head = [0u8; 4];
+        std::fs::File::open(dir.join(n))
+            .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head))
+            .is_ok_and(|()| split::is_package_head(&head))
+    });
+    if sets
+        .iter()
+        .any(|s| s.parts.iter().any(|(part, _)| part == name))
+    {
+        return None;
+    }
+    Some(
+        sets.iter()
+            .find(|s| s.lead == name)
+            .map(|s| {
+                s.parts
+                    .iter()
+                    .map(|(part, _)| dir.join(part).to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default(),
+    )
+}
+
+/// What removing this copy takes, as it is on disk now: the bytes to show. `Err` when the index
+/// no longer describes what is there (the folder of an index from an older version that took a
+/// whole folder for one `.rar`, a part of a split package listed as a copy, a file that changed):
+/// the preview must show what will go, so it refuses and asks for a new scan.
+fn measure_copy(l: &Location) -> Result<u64, String> {
+    let again = || format!("{} changed since the last scan; scan again", l.name);
+    let path = FsPath::new(&l.absolute_path);
+    let meta = std::fs::symlink_metadata(path).map_err(|_| again())?;
+    if l.kind == "folder" {
+        // A folder's size is only recounted when its top level changes: what is there counts.
+        return if meta.is_dir() {
+            Ok(tree_bytes(path))
+        } else {
+            Err(again())
+        };
+    }
+    if !meta.is_file() {
+        return Err(again());
+    }
+    let mut total = meta.len();
+    for part in &l.parts {
+        let m = std::fs::symlink_metadata(part).map_err(|_| again())?;
+        if !m.is_file() {
+            return Err(again());
+        }
+        total += m.len();
+    }
+    if total != l.size_bytes {
+        return Err(again());
+    }
+    if l.kind == "pkg" && split_parts_now(path).as_ref() != Some(&l.parts) {
+        return Err(again());
+    }
+    Ok(total)
+}
+
+/// A refusal of the preview: its status, its code (if the client words it) and its message.
+type Refused = (StatusCode, Option<&'static str>, String);
+
+/// Every path checked against the index and the disk. Blocking: it looks at the disk.
+fn trash_items(
+    lib: &crate::collection::Library,
+    roots: &[String],
+    paths: &[String],
+) -> Result<Vec<TrashItem>, Refused> {
+    let mut items = Vec::new();
+    for p in unique(paths) {
+        let found = lib.games.values().find_map(|g| {
+            g.locations
+                .iter()
+                .find(|l| &l.absolute_path == p)
+                .map(|l| (g, l))
+        });
+        let Some((g, l)) = found else {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                None,
+                format!("not a copy in the collection: {p}"),
+            ));
+        };
+        if crate::remote::path::is_remote(&l.absolute_path) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                None,
+                format!("{} is on a server: remove it there", l.name),
+            ));
+        }
+        if let Some(outside) = std::iter::once(&l.absolute_path)
+            .chain(&l.parts)
+            .find(|f| !strictly_under_a_root(f, roots))
+        {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                None,
+                format!("{outside} is not inside a library folder"),
+            ));
+        }
+        if !FsPath::new(&l.absolute_path).exists() {
+            return Err((
+                StatusCode::CONFLICT,
+                Some("changed"),
+                format!("{} is no longer there; scan again", l.absolute_path),
+            ));
+        }
+        let size_bytes =
+            measure_copy(l).map_err(|why| (StatusCode::CONFLICT, Some("changed"), why))?;
+        items.push(TrashItem {
+            path: l.absolute_path.clone(),
+            name: l.name.clone(),
+            game_id: g.game_id.clone(),
+            title: g.title.clone(),
+            size_bytes,
+            parts: l.parts.clone(),
+            folder: l.kind == "folder",
+        });
+    }
+    Ok(items)
+}
+
 /// POST /api/collection/trash/preview: what moving these copies to the trash would take.
-/// Every path must be a copy in the index.
+/// Every path must be a copy in the index, and still be what the index says it is.
 pub async fn post_trash_preview(Json(req): Json<TrashPreviewReq>) -> Response {
     let Some(lib) = library() else {
         return err(
@@ -147,46 +310,13 @@ pub async fn post_trash_preview(Json(req): Json<TrashPreviewReq>) -> Response {
         );
     };
     let roots = settings().roots;
-    let mut items = Vec::new();
-    for p in unique(&req.paths) {
-        let found = lib.games.values().find_map(|g| {
-            g.locations
-                .iter()
-                .find(|l| &l.absolute_path == p)
-                .map(|l| (g, l))
-        });
-        let Some((g, l)) = found else {
-            return err(
-                StatusCode::BAD_REQUEST,
-                format!("not a copy in the collection: {p}"),
-            );
-        };
-        if crate::remote::path::is_remote(&l.absolute_path) {
-            return err(
-                StatusCode::BAD_REQUEST,
-                format!("{} is on a server: remove it there", l.name),
-            );
-        }
-        if !strictly_under_a_root(&l.absolute_path, &roots) {
-            return err(
-                StatusCode::BAD_REQUEST,
-                format!("{} is not inside a library folder", l.absolute_path),
-            );
-        }
-        if !FsPath::new(&l.absolute_path).exists() {
-            return err(
-                StatusCode::CONFLICT,
-                format!("{} is no longer there; scan again", l.absolute_path),
-            );
-        }
-        items.push(TrashItem {
-            path: l.absolute_path.clone(),
-            name: l.name.clone(),
-            game_id: g.game_id.clone(),
-            title: g.title.clone(),
-            size_bytes: l.size_bytes,
-        });
-    }
+    let checked = tokio::task::spawn_blocking(move || trash_items(&lib, &roots, &req.paths)).await;
+    let items = match checked {
+        Ok(Ok(items)) => items,
+        Ok(Err((status, Some(code), msg))) => return err_coded(status, code, msg),
+        Ok(Err((status, None, msg))) => return err(status, msg),
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
     if items.is_empty() {
         return err(StatusCode::BAD_REQUEST, "nothing to move to the trash");
     }
@@ -235,6 +365,55 @@ fn move_to_trash(_path: &FsPath) -> Result<(), String> {
     Err("this device has no trash".into())
 }
 
+/// What a copy's files add up to now, as the preview measured them.
+fn bytes_now(it: &TrashItem) -> Option<u64> {
+    if it.folder {
+        return Some(tree_bytes(FsPath::new(&it.path)));
+    }
+    std::iter::once(&it.path)
+        .chain(&it.parts)
+        .map(|f| std::fs::symlink_metadata(f).ok().map(|m| m.len()))
+        .sum()
+}
+
+/// Removes one previewed copy, all of its files or as few as it can: the later parts first, so
+/// a copy that stops half way still has the file that names it. What the preview showed is what
+/// goes: a copy that changed since is left alone.
+fn remove_copy(it: &TrashItem, mode: &str, out: &mut TrashResult) {
+    if !FsPath::new(&it.path).exists() {
+        out.failed.push(format!("{}: no longer there", it.path));
+        return;
+    }
+    if bytes_now(it) != Some(it.size_bytes) {
+        out.failed
+            .push(format!("{}: it changed since the preview", it.path));
+        return;
+    }
+    for f in it.parts.iter().rev().chain(std::iter::once(&it.path)) {
+        let p = FsPath::new(f);
+        let res = match mode {
+            "trash" => move_to_trash(p),
+            "delete" => delete_permanently(p),
+            _ => Err("this engine has no trash, and permanent delete is off".into()),
+        };
+        match res {
+            Ok(()) => crate::engine_log::record(
+                "info",
+                if mode == "delete" {
+                    format!("collection: deleted permanently: {f}")
+                } else {
+                    format!("collection: moved to trash: {f}")
+                },
+            ),
+            Err(e) => {
+                out.failed.push(format!("{f}: {e}"));
+                return;
+            }
+        }
+    }
+    out.moved.push(it.path.clone());
+}
+
 /// POST /api/collection/trash/apply: moves a preview's copies to the OS trash (recoverable).
 pub async fn post_trash_apply(Json(req): Json<TokenReq>) -> Response {
     let pending = pending_trash()
@@ -250,30 +429,7 @@ pub async fn post_trash_apply(Json(req): Json<TokenReq>) -> Response {
     let out = tokio::task::spawn_blocking(move || {
         let mut out = TrashResult::default();
         for it in pending.items {
-            let p = PathBuf::from(&it.path);
-            if !p.exists() {
-                out.failed.push(format!("{}: no longer there", it.path));
-                continue;
-            }
-            let res = match pending.mode {
-                "trash" => move_to_trash(&p),
-                "delete" => delete_permanently(&p),
-                _ => Err("this engine has no trash, and permanent delete is off".into()),
-            };
-            match res {
-                Ok(()) => {
-                    crate::engine_log::record(
-                        "info",
-                        if pending.mode == "delete" {
-                            format!("collection: deleted permanently: {}", it.path)
-                        } else {
-                            format!("collection: moved to trash: {}", it.path)
-                        },
-                    );
-                    out.moved.push(it.path);
-                }
-                Err(e) => out.failed.push(format!("{}: {e}", it.path)),
-            }
+            remove_copy(&it, pending.mode, &mut out);
         }
         out
     })
@@ -287,13 +443,45 @@ pub async fn post_trash_apply(Json(req): Json<TokenReq>) -> Response {
 
 // ─── Organizer ─────────────────────────────────────────────────────────
 
+/// What a preview planned, for the apply that quotes its token.
 struct PendingPlan {
     made: Instant,
+    /// Each move (container, from), and how its file stood when it was planned.
+    moves: HashMap<(String, String), (organize::Move, Option<Meta>)>,
+    /// Per container: the moves whose kind was inferred, for the report beside the undo log.
+    unsure: HashMap<String, Vec<organize::Move>>,
 }
 
 fn pending_plans() -> &'static Mutex<HashMap<String, PendingPlan>> {
     static P: OnceLock<Mutex<HashMap<String, PendingPlan>>> = OnceLock::new();
     P.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The organizer does one thing at a time per engine: a plan walks whole folders and a run renames
+/// in them, so a second click must not start another walk or rename under the first. Held by
+/// whoever is working, and released when dropped (a panic included).
+struct OrganizerTurn;
+
+static ORGANIZER_BUSY: AtomicBool = AtomicBool::new(false);
+
+impl OrganizerTurn {
+    fn take() -> Option<Self> {
+        (!ORGANIZER_BUSY.swap(true, Ordering::SeqCst)).then_some(Self)
+    }
+}
+
+impl Drop for OrganizerTurn {
+    fn drop(&mut self) {
+        ORGANIZER_BUSY.store(false, Ordering::SeqCst);
+    }
+}
+
+fn organizer_busy() -> Response {
+    err_coded(
+        StatusCode::CONFLICT,
+        "busy",
+        "the organizer is working on something else; try again in a moment",
+    )
 }
 
 /// Every collection root, on this computer or on a saved server: (the root as the organizer's
@@ -399,7 +587,7 @@ fn organize_dir() -> Option<PathBuf> {
     store::dir().map(|d| d.join("organize"))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PlanResponse {
     pub token: String,
     pub containers: Vec<String>,
@@ -411,35 +599,72 @@ pub struct PlanResponse {
     pub total_bytes: u64,
 }
 
-/// POST /api/collection/organize/plan: what the organizer would do. Touches nothing.
-pub async fn post_organize_plan() -> Response {
-    // Off the async workers: it lists every package folder, perhaps over the network.
-    let (containers, problems, plans) = tokio::task::spawn_blocking(|| {
-        let mut trees = Trees::default();
-        let (containers, problems) = all_containers(&mut trees);
-        let lib = library();
-        let roots = roots();
-        let plans = containers
-            .iter()
-            .map(|c| match trees.get(c) {
-                Ok(t) => organize::plan_cached(t, c, lib.as_deref(), &roots),
-                Err(_) => organize::Plan::default(),
-            })
-            .collect::<Vec<_>>();
-        (containers, problems, plans)
+/// The plan being made, or the last one: `POST .../plan/start` starts it (or joins it),
+/// `GET .../plan/status` follows it, `POST .../plan/cancel` stops it.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct PlanStatus {
+    pub running: bool,
+    /// `finding` (walking the folders) or `reading` (reading the packages the index does not
+    /// know), while running.
+    pub phase: String,
+    /// Items looked at, of how many found so far.
+    pub done: u64,
+    pub total: u64,
+    /// What it is looking at.
+    pub current: String,
+    pub cancelled: bool,
+    pub error: Option<String>,
+    /// The plan, once made.
+    pub plan: Option<PlanResponse>,
+    pub started_ms: u64,
+    pub finished_ms: u64,
+}
+
+struct PlanJob {
+    status: Mutex<PlanStatus>,
+    watch: Mutex<Arc<organize::PlanWatch>>,
+}
+
+fn plan_job() -> &'static PlanJob {
+    static J: OnceLock<PlanJob> = OnceLock::new();
+    J.get_or_init(|| PlanJob {
+        status: Mutex::new(PlanStatus::default()),
+        watch: Mutex::new(Arc::default()),
     })
-    .await
-    .unwrap_or_default();
-    if containers.is_empty() {
-        return err(
-            StatusCode::BAD_REQUEST,
-            if problems.is_empty() {
-                "no collection root could be read".to_string()
-            } else {
-                format!("no collection root could be read: {}", problems.join("; "))
-            },
-        );
+}
+
+fn plan_status() -> PlanStatus {
+    let job = plan_job();
+    let mut st = job.status.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if st.running {
+        let watch = job.watch.lock().unwrap_or_else(|e| e.into_inner());
+        st.done = watch.done.load(Ordering::Relaxed);
+        st.total = watch.total.load(Ordering::Relaxed);
+        st.phase = if watch.reading.load(Ordering::Relaxed) {
+            "reading"
+        } else {
+            "finding"
+        }
+        .into();
+        st.current = watch.current();
     }
+    st
+}
+
+/// What the organizer would do. Touches nothing. Blocking: it lists every package folder, perhaps
+/// over the network, and reads each package the index does not know.
+fn make_plan(watch: &organize::PlanWatch) -> Result<(PlanResponse, PendingPlan), String> {
+    let mut trees = Trees::default();
+    let (containers, problems) = all_containers(&mut trees);
+    if containers.is_empty() {
+        return Err(if problems.is_empty() {
+            "no collection root could be read".to_string()
+        } else {
+            format!("no collection root could be read: {}", problems.join("; "))
+        });
+    }
+    let lib = library();
+    let roots = roots();
     let mut resp = PlanResponse {
         token: new_token(),
         containers: containers.iter().map(|c| path_str(c)).collect(),
@@ -457,23 +682,137 @@ pub async fn post_organize_plan() -> Response {
         unsure_count: 0,
         total_bytes: 0,
     };
-    for p in plans {
-        resp.unsure_count += p.unsure.len();
-        resp.moves.extend(p.moves);
-        resp.skipped.extend(p.skipped);
+    let mut pending = PendingPlan {
+        made: Instant::now(),
+        moves: HashMap::new(),
+        unsure: HashMap::new(),
+    };
+    for c in &containers {
+        let Ok(tree) = trees.get(c) else {
+            continue;
+        };
+        let plan = organize::plan_watched(tree, c, lib.as_deref(), &roots, watch);
+        resp.unsure_count += plan.unsure.len();
+        pending.unsure.insert(path_str(c), plan.unsure);
+        for m in &plan.moves {
+            pending.moves.insert(
+                (m.container.clone(), m.from.clone()),
+                (m.clone(), tree.meta(&c.join(&m.from))),
+            );
+        }
+        resp.moves.extend(plan.moves);
+        resp.skipped.extend(plan.skipped);
     }
     resp.total_bytes = resp.moves.iter().map(|m| m.size).sum();
-    {
-        let mut p = pending_plans().lock().unwrap_or_else(|e| e.into_inner());
-        p.retain(|_, v| v.made.elapsed() < TOKEN_TTL);
-        p.insert(
-            resp.token.clone(),
-            PendingPlan {
-                made: Instant::now(),
-            },
-        );
+    Ok((resp, pending))
+}
+
+/// Starts a plan, or joins the one running. `false`: the organizer is busy applying or undoing.
+fn start_plan() -> bool {
+    let job = plan_job();
+    if job.status.lock().unwrap_or_else(|e| e.into_inner()).running {
+        return true;
     }
-    ok(&resp)
+    let Some(turn) = OrganizerTurn::take() else {
+        return false;
+    };
+    let watch = Arc::new(organize::PlanWatch::default());
+    *job.watch.lock().unwrap_or_else(|e| e.into_inner()) = Arc::clone(&watch);
+    *job.status.lock().unwrap_or_else(|e| e.into_inner()) = PlanStatus {
+        running: true,
+        phase: "finding".into(),
+        started_ms: now_ms(),
+        ..PlanStatus::default()
+    };
+    // Off the async workers, for as long as the folders take.
+    tokio::task::spawn_blocking(move || {
+        let _turn = turn;
+        let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| make_plan(&watch)))
+            .unwrap_or_else(|p| {
+                Err(format!(
+                    "the preview stopped unexpectedly: {}",
+                    crate::panic_text(&*p)
+                ))
+            });
+        let mut st = PlanStatus {
+            finished_ms: now_ms(),
+            done: watch.done.load(Ordering::Relaxed),
+            total: watch.total.load(Ordering::Relaxed),
+            ..PlanStatus::default()
+        };
+        st.started_ms = plan_job()
+            .status
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .started_ms;
+        if watch.cancel.load(Ordering::Relaxed) {
+            st.cancelled = true;
+        } else {
+            match made {
+                Ok((resp, pending)) => {
+                    let mut p = pending_plans().lock().unwrap_or_else(|e| e.into_inner());
+                    p.retain(|_, v| v.made.elapsed() < TOKEN_TTL);
+                    p.insert(resp.token.clone(), pending);
+                    st.plan = Some(resp);
+                }
+                Err(e) => st.error = Some(e),
+            }
+        }
+        *plan_job().status.lock().unwrap_or_else(|e| e.into_inner()) = st;
+    });
+    true
+}
+
+/// POST /api/collection/organize/plan/start: starts a plan in the background, or joins the one
+/// running (a second click must not walk the same folders again).
+pub async fn post_organize_plan_start() -> Response {
+    if !start_plan() {
+        return organizer_busy();
+    }
+    ok(&plan_status())
+}
+
+/// GET /api/collection/organize/plan/status
+pub async fn get_organize_plan_status() -> Response {
+    ok(&plan_status())
+}
+
+/// POST /api/collection/organize/plan/cancel
+pub async fn post_organize_plan_cancel() -> Response {
+    plan_job()
+        .watch
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .cancel
+        .store(true, Ordering::Relaxed);
+    ok(&plan_status())
+}
+
+/// POST /api/collection/organize/plan: the plan, in one call, for a caller that does not want to
+/// follow it: starts or joins it, and answers when it is made.
+pub async fn post_organize_plan() -> Response {
+    if !start_plan() {
+        return organizer_busy();
+    }
+    loop {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let st = plan_status();
+        if st.running {
+            continue;
+        }
+        return match (st.plan, st.error, st.cancelled) {
+            (Some(plan), _, _) => ok(&plan),
+            (_, _, true) => err_coded(
+                StatusCode::CONFLICT,
+                "cancelled",
+                "the preview was cancelled",
+            ),
+            (_, e, _) => err(
+                StatusCode::BAD_REQUEST,
+                e.unwrap_or_else(|| "the preview did not finish".into()),
+            ),
+        };
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -572,31 +911,80 @@ fn write_unsure_report(path: &FsPath, unsure: &[organize::Move]) {
     let _ = std::fs::write(path, lines.join("\n"));
 }
 
-/// POST /api/collection/organize/apply: runs the chosen moves, each re-planned first.
+/// The chosen moves of one container that its preview planned and that still stand as planned:
+/// nothing else runs. The parts of a split set go together or not at all, so a set with a part
+/// not chosen, or changed since the preview, is left alone whole. Also what was left out.
+fn pick_moves(
+    container: &str,
+    chosen: Vec<ChosenMove>,
+    pending: &PendingPlan,
+    now: &dyn Fn(&str) -> Option<Meta>,
+) -> (Vec<organize::Move>, Vec<String>) {
+    let mut dropped = Vec::new();
+    let mut picked: Vec<organize::Move> = Vec::new();
+    for want in chosen {
+        let planned = pending
+            .moves
+            .get(&(container.to_string(), want.from.clone()))
+            .filter(|(m, stood)| m.to == want.to && now(&m.from) == *stood && stood.is_some());
+        match planned {
+            Some((m, _)) => picked.push(m.clone()),
+            None => dropped.push(want.from),
+        }
+    }
+    // Sets: every part the plan holds must have made it through.
+    let whole = |set: &str, picked: &[organize::Move]| {
+        let planned = pending
+            .moves
+            .iter()
+            .filter(|((c, _), (m, _))| c == container && m.set == set)
+            .count();
+        planned == picked.iter().filter(|m| m.set == set).count()
+    };
+    let broken: std::collections::HashSet<String> = picked
+        .iter()
+        .filter(|m| !m.set.is_empty() && !whole(&m.set, &picked))
+        .map(|m| m.set.clone())
+        .collect();
+    picked.retain(|m| {
+        let keep = !broken.contains(&m.set);
+        if !keep {
+            dropped.push(m.from.clone());
+        }
+        keep
+    });
+    (picked, dropped)
+}
+
+/// POST /api/collection/organize/apply: runs the chosen moves of a preview. It does not plan
+/// again: the preview already read every package, and over a network that took minutes. A move
+/// runs only if its file is as the preview saw it and its new name is still free.
 pub async fn post_organize_apply(Json(req): Json<OrganizeApplyReq>) -> Response {
-    let known = pending_plans()
+    let Some(turn) = OrganizerTurn::take() else {
+        return organizer_busy();
+    };
+    let pending = pending_plans()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .remove(&req.token)
-        .is_some_and(|p| p.made.elapsed() < TOKEN_TTL);
-    if !known {
+        .filter(|p| p.made.elapsed() < TOKEN_TTL);
+    let Some(pending) = pending else {
         return err(
             StatusCode::BAD_REQUEST,
             "this preview has expired; preview again",
         );
-    }
+    };
     let Some(log_dir) = organize_dir() else {
         return err(
             StatusCode::INTERNAL_SERVER_ERROR,
             "no data folder for the undo log",
         );
     };
-    // Off the async workers: it lists every package folder, perhaps over the network.
+    // Off the async workers: it renames, perhaps over the network.
     let result = tokio::task::spawn_blocking(move || {
+        let _turn = turn;
         let mut trees = Trees::default();
         let (containers, _) = all_containers(&mut trees);
-        let lib = library();
-        let roots = roots();
         let mut out = OrganizeApplyResult::default();
         let mut wanted: HashMap<String, Vec<ChosenMove>> = HashMap::new();
         for m in req.moves {
@@ -616,16 +1004,10 @@ pub async fn post_organize_apply(Json(req): Json<OrganizeApplyReq>) -> Response 
                     continue;
                 }
             };
-            let plan = organize::plan_cached(tree, &c, lib.as_deref(), &roots);
-            let live: HashMap<&str, &organize::Move> =
-                plan.moves.iter().map(|m| (m.from.as_str(), m)).collect();
-            let mut picked = Vec::new();
-            for want in chosen {
-                match live.get(want.from.as_str()) {
-                    Some(m) if m.to == want.to => picked.push((*m).clone()),
-                    _ => out.dropped.push(want.from),
-                }
-            }
+            let (picked, dropped) = pick_moves(&container, chosen, &pending, &|from: &str| {
+                tree.meta(&c.join(from))
+            });
+            out.dropped.extend(dropped);
             if picked.is_empty() {
                 continue;
             }
@@ -644,7 +1026,7 @@ pub async fn post_organize_apply(Json(req): Json<OrganizeApplyReq>) -> Response 
                     "{}_unsure.txt",
                     base.file_name().unwrap_or_default().to_string_lossy()
                 )),
-                &plan.unsure,
+                pending.unsure.get(&container).map_or(&[], Vec::as_slice),
             );
             match organize::apply(tree, &c, picked, &log_path, &server_name(&c), origin_of(&c)) {
                 Ok(log) => {
@@ -697,6 +1079,10 @@ pub struct RunSummary {
     pub moved: usize,
     pub failed: usize,
     pub reverted_at: Option<String>,
+    /// Its log could not be read (cut short by a power cut, say): a run happened, and what it
+    /// moved cannot be undone from here.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unreadable: bool,
 }
 
 /// GET /api/collection/organize/runs: past organizer runs, newest first, for Undo.
@@ -704,7 +1090,33 @@ pub async fn get_organize_runs() -> Response {
     let Some(dir) = organize_dir() else {
         return ok(&Vec::<RunSummary>::new());
     };
-    let mut runs: Vec<RunSummary> = std::fs::read_dir(&dir)
+    let runs = tokio::task::spawn_blocking(move || read_runs(&dir))
+        .await
+        .unwrap_or_default();
+    ok(&runs)
+}
+
+/// A log that does not read as a log still names a run: it is listed as such, not left out.
+fn unreadable_run(name: String, path: &FsPath) -> RunSummary {
+    let at = std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs() as i64);
+    RunSummary {
+        id: name,
+        container_root: String::new(),
+        label: String::new(),
+        created_at: crate::collection::iso_utc(at),
+        moved: 0,
+        failed: 0,
+        reverted_at: None,
+        unreadable: true,
+    }
+}
+
+fn read_runs(dir: &FsPath) -> Vec<RunSummary> {
+    let mut runs: Vec<RunSummary> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
@@ -713,8 +1125,13 @@ pub async fn get_organize_runs() -> Response {
             if !name.starts_with("organize_") || !name.ends_with(".json") {
                 return None;
             }
-            let log: organize::UndoLog =
-                serde_json::from_slice(&std::fs::read(e.path()).ok()?).ok()?;
+            let log: organize::UndoLog = match std::fs::read(e.path())
+                .ok()
+                .and_then(|b| serde_json::from_slice(&b).ok())
+            {
+                Some(log) => log,
+                None => return Some(unreadable_run(name, &e.path())),
+            };
             let root = FsPath::new(&log.container_root);
             let shown = match (
                 connection_of(root),
@@ -745,11 +1162,12 @@ pub async fn get_organize_runs() -> Response {
                 moved: log.completed.len(),
                 failed: log.failed.len(),
                 reverted_at: log.reverted_at,
+                unreadable: false,
             })
         })
         .collect();
     runs.sort_by(|a, b| b.id.cmp(&a.id));
-    ok(&runs)
+    runs
 }
 
 /// Whether a run's folder is still where the run was made: the saved connection it names must
@@ -757,7 +1175,8 @@ pub async fn get_organize_runs() -> Response {
 /// the connection with the same id (Undo itself checks the folder is there), with a note.
 fn same_place(log_path: &FsPath) -> Result<Option<String>, String> {
     let bytes = std::fs::read(log_path).map_err(|e| e.to_string())?;
-    let log: organize::UndoLog = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    let log: organize::UndoLog = serde_json::from_slice(&bytes)
+        .map_err(|_| "this run's undo log could not be read; nothing was changed".to_string())?;
     let root = FsPath::new(&log.container_root);
     let Some((id, _)) = split_raw(&log.container_root) else {
         return Ok(None);
@@ -799,7 +1218,11 @@ pub async fn post_organize_revert(Json(req): Json<RevertReq>) -> Response {
     let Some(path) = organize_dir().map(|d| d.join(&req.id)) else {
         return err(StatusCode::NOT_FOUND, "no such run");
     };
+    let Some(turn) = OrganizerTurn::take() else {
+        return organizer_busy();
+    };
     let res = tokio::task::spawn_blocking(move || {
+        let _turn = turn;
         let note = same_place(&path).map_err(std::io::Error::other)?;
         organize::revert(&path, &tree_for).map(|mut r| {
             r.note = note;
@@ -1176,6 +1599,160 @@ pub async fn post_macos_spotlight(Json(req): Json<SpotlightReq>) -> Response {
 mod tests {
     use super::*;
 
+    fn planned(from: &str, to: &str, set: &str) -> organize::Move {
+        serde_json::from_value(serde_json::json!({
+            "container": "/c", "from": from, "to": to, "set": set,
+        }))
+        .unwrap()
+    }
+
+    fn chosen(from: &str, to: &str) -> ChosenMove {
+        ChosenMove {
+            container: "/c".into(),
+            from: from.into(),
+            to: to.into(),
+        }
+    }
+
+    fn plan_of(moves: &[organize::Move], stood: Meta) -> PendingPlan {
+        PendingPlan {
+            made: Instant::now(),
+            moves: moves
+                .iter()
+                .map(|m| (("/c".to_string(), m.from.clone()), (m.clone(), Some(stood))))
+                .collect(),
+            unsure: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn an_apply_runs_only_what_its_preview_planned_as_it_stood() {
+        let stood = Meta { size: 5, mtime: 9 };
+        let pending = plan_of(
+            &[
+                planned("a.pkg", "x/a.pkg", ""),
+                planned("b.pkg", "x/b.pkg", ""),
+            ],
+            stood,
+        );
+        let as_planned = |_: &str| Some(stood);
+        // Never planned, or going elsewhere than planned: not taken on trust.
+        let (picked, dropped) = pick_moves(
+            "/c",
+            vec![
+                chosen("a.pkg", "x/a.pkg"),
+                chosen("b.pkg", "../../evil.pkg"),
+                chosen("c.pkg", "x/c.pkg"),
+            ],
+            &pending,
+            &as_planned,
+        );
+        assert_eq!(picked.len(), 1);
+        assert_eq!(picked[0].from, "a.pkg");
+        assert_eq!(dropped, vec!["b.pkg".to_string(), "c.pkg".to_string()]);
+        // Changed or gone since the preview: left alone.
+        let (picked, dropped) = pick_moves(
+            "/c",
+            vec![chosen("a.pkg", "x/a.pkg"), chosen("b.pkg", "x/b.pkg")],
+            &pending,
+            &|from: &str| (from == "a.pkg").then_some(Meta { size: 6, mtime: 9 }),
+        );
+        assert!(picked.is_empty());
+        assert_eq!(dropped.len(), 2);
+        // Another folder's plan is no plan here.
+        let (picked, _) = pick_moves(
+            "/other",
+            vec![chosen("a.pkg", "x/a.pkg")],
+            &pending,
+            &as_planned,
+        );
+        assert!(picked.is_empty());
+    }
+
+    #[test]
+    fn a_set_goes_whole_or_not_at_all() {
+        let stood = Meta { size: 5, mtime: 9 };
+        let moves = [
+            planned("G_0.pkg", "x/G_0.pkg", "G_0.pkg"),
+            planned("G_1.pkg", "x/G_1.pkg", "G_0.pkg"),
+            planned("solo.pkg", "x/solo.pkg", ""),
+        ];
+        let pending = plan_of(&moves, stood);
+        let as_planned = |_: &str| Some(stood);
+        // One part unticked: the whole set stays; what else was chosen still goes.
+        let (picked, dropped) = pick_moves(
+            "/c",
+            vec![
+                chosen("G_0.pkg", "x/G_0.pkg"),
+                chosen("solo.pkg", "x/solo.pkg"),
+            ],
+            &pending,
+            &as_planned,
+        );
+        assert_eq!(picked.len(), 1);
+        assert_eq!(picked[0].from, "solo.pkg");
+        assert_eq!(dropped, vec!["G_0.pkg".to_string()]);
+        // One part changed since the preview: the same.
+        let (picked, dropped) = pick_moves(
+            "/c",
+            vec![
+                chosen("G_0.pkg", "x/G_0.pkg"),
+                chosen("G_1.pkg", "x/G_1.pkg"),
+            ],
+            &pending,
+            &|from: &str| (from != "G_1.pkg").then_some(stood),
+        );
+        assert!(picked.is_empty());
+        assert_eq!(dropped.len(), 2);
+        // All of it: all of it goes.
+        let (picked, dropped) = pick_moves(
+            "/c",
+            vec![
+                chosen("G_0.pkg", "x/G_0.pkg"),
+                chosen("G_1.pkg", "x/G_1.pkg"),
+            ],
+            &pending,
+            &as_planned,
+        );
+        assert_eq!(picked.len(), 2);
+        assert!(dropped.is_empty());
+    }
+
+    #[test]
+    fn only_one_organizer_job_at_a_time() {
+        // Every other test leaves this alone: only the handlers take a turn.
+        let first = OrganizerTurn::take().expect("free");
+        assert!(OrganizerTurn::take().is_none());
+        drop(first);
+        assert!(OrganizerTurn::take().is_some());
+    }
+
+    #[test]
+    fn a_log_that_cannot_be_read_is_listed_not_left_out() {
+        let d = scratch("runs");
+        std::fs::write(d.join("organize_1_x.json"), b"").unwrap();
+        let good = serde_json::json!({
+            "version": 1, "container_root": "/games", "created_at": "2026-11-04T00:00:00Z",
+            "moves": [],
+        });
+        std::fs::write(
+            d.join("organize_2_x.json"),
+            serde_json::to_vec(&good).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(d.join("other.json"), b"").unwrap();
+        let runs = read_runs(&d);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].id, "organize_2_x.json");
+        assert!(!runs[0].unreadable);
+        assert_eq!(runs[1].id, "organize_1_x.json");
+        assert!(runs[1].unreadable);
+        assert_eq!(runs[1].created_at.len(), "2026-11-04T00:00:00Z".len());
+        let refused = same_place(&d.join("organize_1_x.json")).unwrap_err();
+        assert!(refused.contains("could not be read"), "{refused}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     #[test]
     fn spotlight_is_offered_only_for_an_external_drive() {
         assert_eq!(
@@ -1184,6 +1761,119 @@ mod tests {
         );
         assert_eq!(external_volume("/Users/me/games"), None);
         assert_eq!(external_volume("/Volumes/"), None);
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("ps5u-trash-{tag}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn file(l_dir: &FsPath, name: &str, bytes: usize) -> String {
+        std::fs::write(l_dir.join(name), vec![7u8; bytes]).unwrap();
+        l_dir.join(name).to_string_lossy().into_owned()
+    }
+
+    fn copy(path: &str, kind: &str, size: u64, parts: Vec<String>) -> Location {
+        Location {
+            name: path.rsplit('/').next().unwrap().to_string(),
+            kind: kind.into(),
+            absolute_path: path.into(),
+            size_bytes: size,
+            parts,
+            ..Location::default()
+        }
+    }
+
+    /// From an index older than the fix: a folder with one `.rar` in it counts only the `.rar`,
+    /// and removing it would take all thirty packages beside it.
+    #[test]
+    fn a_rar_folder_from_an_old_index_is_refused_not_trashed() {
+        let d = scratch("rar-folder");
+        file(&d, "one.rar", 5);
+        file(&d, "game.pkg", 1000);
+        let l = copy(&d.to_string_lossy(), "rar", 5, vec![]);
+        assert!(measure_copy(&l).unwrap_err().contains("scan again"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_part_of_a_split_package_from_an_old_index_is_refused_not_trashed() {
+        let d = scratch("old-part");
+        let lead = file(&d, "G_0.pkg", 100);
+        let part = file(&d, "G_1.pkg", 50);
+        // Listed as a copy of its own.
+        assert!(measure_copy(&copy(&part, "pkg", 50, vec![])).is_err());
+        // The first part, without the rest it needs.
+        assert!(measure_copy(&copy(&lead, "pkg", 100, vec![])).is_err());
+        // As one copy: what goes is all of it.
+        assert_eq!(
+            measure_copy(&copy(&lead, "pkg", 150, vec![part.clone()])),
+            Ok(150)
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_file_that_changed_since_the_scan_is_refused() {
+        let d = scratch("changed");
+        let f = file(&d, "x.exfat", 10);
+        assert_eq!(measure_copy(&copy(&f, "mount.exfat", 10, vec![])), Ok(10));
+        assert!(measure_copy(&copy(&f, "mount.exfat", 9, vec![])).is_err());
+        std::fs::remove_file(&f).unwrap();
+        assert!(measure_copy(&copy(&f, "mount.exfat", 10, vec![])).is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_game_folder_shows_what_is_in_it_now() {
+        let d = scratch("folder");
+        std::fs::create_dir_all(d.join("sub")).unwrap();
+        file(&d, "a.bin", 10);
+        file(&d.join("sub"), "b.bin", 5);
+        // However stale the index's count (a deep change leaves the top level alone).
+        assert_eq!(
+            measure_copy(&copy(&d.to_string_lossy(), "folder", 1, vec![])),
+            Ok(15)
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn every_file_of_a_copy_goes_and_only_the_files_of_that_copy() {
+        let d = scratch("remove");
+        let lead = file(&d, "G_0.pkg", 100);
+        let part = file(&d, "G_1.pkg", 50);
+        let other = file(&d, "Other.pkg", 7);
+        let item = TrashItem {
+            path: lead.clone(),
+            name: "G_0.pkg".into(),
+            game_id: "CUSA00001".into(),
+            title: "G".into(),
+            size_bytes: 150,
+            parts: vec![part.clone()],
+            folder: false,
+        };
+        // Changed since the preview: nothing goes.
+        let mut out = TrashResult::default();
+        remove_copy(
+            &TrashItem {
+                size_bytes: 149,
+                ..item.clone()
+            },
+            "delete",
+            &mut out,
+        );
+        assert_eq!(out.failed.len(), 1);
+        assert!(FsPath::new(&lead).exists() && FsPath::new(&part).exists());
+        // As previewed: the whole set goes, one copy in the count.
+        let mut out = TrashResult::default();
+        remove_copy(&item, "delete", &mut out);
+        assert_eq!(out.moved, vec![lead.clone()]);
+        assert!(out.failed.is_empty());
+        assert!(!FsPath::new(&lead).exists() && !FsPath::new(&part).exists());
+        assert!(FsPath::new(&other).exists());
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

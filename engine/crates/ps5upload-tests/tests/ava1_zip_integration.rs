@@ -202,6 +202,21 @@ async fn upload_zip_with_colliding_paths_is_refused_whole() {
     );
 }
 
+/// The plan and the source must agree: an archive the upload refuses is refused at planning, not
+/// previewed as fine and failed after Start.
+#[test]
+fn zip_plan_preview_refuses_colliding_paths_as_the_upload_does() {
+    let zip = build_zip(&[("x/y.txt", b"AAAA"), ("x/./y.txt", b"BBBBBBBB")], true);
+    let e = zip_plan_preview(&zip.0, &[]).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("two zip entries name the same file"),
+        "{e:#}"
+    );
+    // Both excluded: neither is sent, so nothing collides (the source skips them first too).
+    let (total, files) = zip_plan_preview(&zip.0, &["y.txt".to_string()]).unwrap();
+    assert_eq!((total, files.len()), (0, 0));
+}
+
 /// Ports `transfer_zip_rejects_path_traversal` (zip-slip).
 #[tokio::test(flavor = "multi_thread")]
 async fn upload_zip_rejects_path_traversal() {

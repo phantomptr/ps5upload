@@ -140,6 +140,31 @@ describe("watchJob", () => {
     expect(state()?.phase).toBe("stopped");
   });
 
+  it("a failed status read does not end the run while the job goes on", async () => {
+    const e = engine([]);
+    const job = { status: "done", bytes_sent: 5, total_bytes: 5, dest: "/d" } as Snap;
+    let reads = 0;
+    e.deps.jobStatus = async () => {
+      if (++reads < 3) throw new Error("engine restarting");
+      return job;
+    };
+    await watchJob(INIT, async () => "job-3", e.deps);
+    expect(reads).toBe(3);
+    expect(state()?.phase).toBe("done");
+  });
+
+  it("gives up when the engine no longer knows the job", async () => {
+    const e = engine([]);
+    let reads = 0;
+    e.deps.jobStatus = async () => {
+      reads++;
+      throw new Error("job not found");
+    };
+    await watchJob(INIT, async () => "job-4", e.deps);
+    expect(reads).toBe(1);
+    expect(state()?.phase).toBe("failed");
+  });
+
   it("does not start the same key twice while it runs", async () => {
     const e = engine([]);
     const release = e.hold();

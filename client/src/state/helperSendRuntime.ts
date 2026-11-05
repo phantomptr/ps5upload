@@ -12,17 +12,18 @@ import {
   type HelperSendResult,
 } from "./helperSend";
 import type { Translator } from "./lang";
-import { invoke } from "../lib/invokeLogged";
 import { sendHelperOnce, sendInFlight, sentAgoMs } from "../lib/helperSendGate";
 import { isTauriEnv } from "../lib/tauriEnv";
 import { trStatic } from "../lib/trStatic";
 import { getAppVersion } from "../lib/appVersion";
+import { compareVersions } from "../lib/semver";
+import { engineSendsHelper } from "../lib/restoreMainPayload";
 
 /** The web UI has no helper file to send and no socket to the console: the engine sends its
  *  own bundled helper, stamped with its key, so it is paired by the send (#415). */
 /** "connect …:9021: Connection refused" says only that the send failed; say what to do. */
 export function loaderHint(error: string): string {
-  return /:9021\b.*(refused|reset|unreachable|timed out)/i.test(error)
+  return /:9021\b.*(refused|reset|unreachable|timed out|timeout)/i.test(error)
     ? trStatic(
         "connection_loader_down",
         "The PS5's loader (port 9021) isn't running. Load elfldr on the PS5 (your jailbreak or autoloader does it), then send the helper again. ({error})",
@@ -30,9 +31,8 @@ export function loaderHint(error: string): string {
     : error;
 }
 
-async function engineSendsHelper(ip: string): Promise<void> {
-  const r = (await invoke("payload_restore", { ip })) as { ok?: boolean; error?: string };
-  if (!r?.ok) throw new Error(loaderHint(r?.error ?? "the engine has no helper to send"));
+function withLoaderHint(e: unknown): never {
+  throw new Error(loaderHint(e instanceof Error ? e.message : String(e)));
 }
 
 /** A helper sent to this console moments ago is still starting: a button press in this window
@@ -85,7 +85,7 @@ export async function sendHelperTo(
           return;
         }
         await sendHelperOnce(ip, () =>
-          isTauriEnv() ? sendPayload(ip, elf) : engineSendsHelper(ip),
+          (isTauriEnv() ? sendPayload(ip, elf) : engineSendsHelper(ip)).catch(withLoaderHint),
         );
       },
       check: payloadCheck,
@@ -135,7 +135,7 @@ export async function sendHelperTo(
       waiting: tr(
         "connection_waiting_boot",
         undefined,
-        "Waiting for payload to boot…",
+        "Waiting for the helper to start…",
       ),
       running: tr(
         "connection_payload_running",
@@ -171,14 +171,43 @@ export async function sendHelperTo(
 /** sendHelperTo for a flow that goes on once the helper is up (Quick bring-up, the setup
  *  wizard): a send to this console already running is waited out rather than reported as
  *  "busy". Resolves null when the helper answered, otherwise what the send ended with (an
- *  unpaired console has had pairing opened by then). */
+ *  unpaired console has had pairing opened by then).
+ *
+ *  These flows want a helper running, not a new one: a helper of this app's version or newer
+ *  is left alone ("Run again" restarted a current helper and stopped uploads), and `guard`
+ *  (useHelperReplaceGuard) is asked before an older one is replaced. */
 export async function sendHelperAndWait(
   host: string,
   tr: Translator,
   sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
-  check: (host: string) => Promise<{ reachable: boolean; error?: string | null }> = payloadCheck,
+  check: (host: string) => Promise<{
+    reachable: boolean;
+    error?: string | null;
+    payloadVersion?: string | null;
+  }> = payloadCheck,
+  guard?: (host: string) => Promise<boolean>,
 ): Promise<string | null> {
   const target = host.trim();
+  // A send already under way is joined below, whatever the helper it replaces says now.
+  if (!sendInFlight(target) && helperSendFor(useHelperSendStore.getState(), target)?.state !== "busy") {
+    const running = await check(target).catch(() => null);
+    const version = running?.reachable ? running.payloadVersion : null;
+    const app = await getAppVersion().catch(() => null);
+    if (version && app && (compareVersions(version, app) ?? -1) >= 0) {
+      useConnectionStore.getState().setHostStatus(target, {
+        payloadStatus: "up",
+        payloadVersion: version,
+      });
+      return null;
+    }
+    if (guard && !(await guard(target))) {
+      return tr(
+        "helper_send_left_running",
+        undefined,
+        "The helper already running was left as it is.",
+      );
+    }
+  }
   const result = await sendHelperTo(target, tr);
   const entry = () => helperSendFor(useHelperSendStore.getState(), target);
   if (result === "busy") {

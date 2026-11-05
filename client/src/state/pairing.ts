@@ -17,6 +17,7 @@ import {
 } from "../api/ava1";
 import { hostOf } from "../lib/addr";
 import { onNotPaired } from "../lib/consoleSession";
+import { trStatic } from "../lib/trStatic";
 import { useConnectionStore } from "./connection";
 
 /** After the user dismisses the dialog for a console, it never opens by itself for that console
@@ -24,7 +25,8 @@ import { useConnectionStore } from "./connection";
  *  to come back every minute, which on a phone meant closing it over and over. */
 const QUIET_MS = Number.POSITIVE_INFINITY;
 
-const UNKNOWN_STATE = "unexpected reply from the engine";
+const unknownState = () =>
+  trStatic("pairing_unexpected_reply", "The app's engine sent a reply it could not read. Try again.");
 
 interface PairingState {
   open: boolean;
@@ -74,7 +76,7 @@ export const usePairingStore = create<PairingState>((set, get) => {
       if (view.state === "none") {
         // The engine said something this build does not know: an error with Retry, never a
         // panel stuck on "Contacting the PS5…".
-        set({ busy: false, view: null, error: UNKNOWN_STATE });
+        set({ busy: false, view: null, error: unknownState() });
         return;
       }
       set({ busy: false, view });
@@ -132,7 +134,7 @@ export const usePairingStore = create<PairingState>((set, get) => {
         if (next.state === "accepted") {
           set({ busy: false, open: false, view: next, paired: hostOf(host) });
         } else if (next.state === "none") {
-          set({ busy: false, error: UNKNOWN_STATE });
+          set({ busy: false, error: unknownState() });
         } else {
           // `wrong_code` (type again) or `closed` (five wrong codes, or the window shut).
           set({ busy: false, view: next });

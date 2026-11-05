@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Browser, type Page } from "@playwright/test";
+import { routeEngine } from "./fixtures/engine";
 
 // #538: the whole picture shows, whatever the window, display scaling, codec or the size the
 // console really sends. A real H.264/HEVC frame goes through the app's own decode and draw path
@@ -194,19 +195,12 @@ async function open(
       prefs: c.prefs ?? {},
     },
   );
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "9.2.0", caps: {} };
-      if (path === "/api/ps5/rp/session") body = { host: null };
-      await route.fulfill({
-        contentType: "application/json",
-        body: JSON.stringify(body),
-      });
-    },
-  );
+  await routeEngine(page, (path) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "9.2.0", caps: {} };
+    if (path === "/api/ps5/rp/session") body = { host: null };
+    return body;
+  });
   const starts: Array<{ codec?: string }> = [];
   let pic: { header: Uint8Array; au: Uint8Array } | null = null;
   await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, (ws) => {

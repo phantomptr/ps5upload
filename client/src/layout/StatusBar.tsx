@@ -4,6 +4,7 @@ import { useNavigate } from "react-router";
 
 import { useConnectionStore, EMPTY_HOST_RUNTIME } from "../state/connection";
 import { parsePS5Firmware } from "../lib/ps5Firmware";
+import { shellErrorText } from "../lib/shellError";
 import { useTr } from "../state/lang";
 import { captureAppScreenshot } from "../lib/captureScreenshot";
 import { useCaptureViewer } from "../lib/appCaptures";
@@ -69,6 +70,10 @@ export default function StatusBar() {
       aria-hidden
     />
   );
+  // The dots are colour alone: say the state to a screen reader too.
+  const dotText = (light: ConsoleLight) => (
+    <span className="sr-only">{consoleLightLabel(light, tr)}</span>
+  );
   const engineLight: ConsoleLight =
     engineStatus === "up" ? "up" : engineStatus === "down" ? "down" : "unknown";
 
@@ -110,12 +115,12 @@ export default function StatusBar() {
   return (
     // A quiet line on the atmosphere under the shell's canvas, lined up with
     // the canvas's inner edge.
-    <div className="hidden min-h-9 flex-wrap items-center gap-x-3 gap-y-1 whitespace-nowrap px-4 pb-[calc(var(--safe-bottom)_+_0.35rem)] pt-1.5 pl-[calc(env(safe-area-inset-left)_+_2rem)] pr-[calc(env(safe-area-inset-right)_+_2rem)] text-[0.6875rem] text-[var(--color-muted)] md:flex">
+    <div className="shell-statusbar hidden min-h-9 flex-wrap items-center gap-x-3 gap-y-1 whitespace-nowrap px-4 pb-[calc(var(--safe-bottom)_+_0.35rem)] pt-1.5 ps-[calc(var(--safe-left)_+_2rem)] pe-[calc(var(--safe-right)_+_2rem)] text-[0.6875rem] text-[var(--color-muted)] md:flex">
       {/* Group 1 — the Engine (our local backend). */}
       <div
         className="flex items-center gap-2"
         title={
-          engineError ??
+          (engineError && shellErrorText(engineError, tr)) ??
           tr(
             "status_engine_tooltip",
             { url: getEngineUrl() },
@@ -125,6 +130,7 @@ export default function StatusBar() {
       >
         {dot(engineLight)}
         <span>{tr("status_engine", undefined, "Engine")}</span>
+        {dotText(engineLight)}
       </div>
 
       <span className="h-3 w-px bg-[var(--color-border)]" aria-hidden />
@@ -135,8 +141,10 @@ export default function StatusBar() {
         <span className={ps5Connected ? undefined : "opacity-70"}>
           {ps5Name}
         </span>
-        {(ps5Light === "rest" || ps5Light === "unreachable") && (
+        {ps5Light === "rest" || ps5Light === "unreachable" ? (
           <span data-testid="status-ps5-power">{consoleLightLabel(ps5Light, tr)}</span>
+        ) : (
+          dotText(ps5Light)
         )}
         {ps5Connected && ps5Firmware && (
           <span className="rounded-full border border-[var(--color-border-strong)] px-2 font-mono text-[0.625rem]">

@@ -80,7 +80,7 @@ fn target_of(source: &str) -> Result<Target, String> {
             );
         }
         let (host, path) = crate::convert_source::console_target(source)?;
-        if in_image_mount_root(&path) {
+        if ps5upload_core::volumes::in_image_mount_root(&path) {
             return Err(MOUNTED_IMAGE.into());
         }
         return Ok(Target::Console {
@@ -111,44 +111,13 @@ fn target_of(source: &str) -> Result<Target, String> {
 const MOUNTED_IMAGE: &str = "This folder is a mounted image; rebuild the index on the image's \
                              file instead (copy it to this computer)";
 
-/// Where images are mounted on a console: ps5upload's own mounts, ShadowMount+'s, a running
-/// game's sandbox (its own image) and a disc.
-const CONSOLE_IMAGE_MOUNT_ROOTS: &[&str] = &[
-    "/mnt/ps5upload",
-    "/mnt/shadowmnt",
-    "/mnt/sandbox",
-    "/mnt/disc",
-];
-
-/// `path` is one of [`CONSOLE_IMAGE_MOUNT_ROOTS`] or inside one.
-fn in_image_mount_root(path: &str) -> bool {
-    let path = path.trim_end_matches('/');
-    CONSOLE_IMAGE_MOUNT_ROOTS
-        .iter()
-        .any(|root| path == *root || path.starts_with(&format!("{root}/")))
-}
-
-/// The console's mount holding `path` is an image: one the payload mounted (it records the
-/// image, and may mount it anywhere, e.g. `/data/homebrew/<title>`), a disk-image device
-/// (`/dev/lvd*`, `/dev/md*`), or a mount from or at an image mount root (a nullfs of one).
-fn on_mounted_image(vols: &ps5upload_core::volumes::VolumeList, path: &str) -> bool {
-    vols.find_for_path(path.trim_end_matches('/'))
-        .is_some_and(|v| {
-            !v.source_image.is_empty()
-                || v.mount_from.starts_with("/dev/lvd")
-                || v.mount_from.starts_with("/dev/md")
-                || in_image_mount_root(&v.path)
-                || in_image_mount_root(&v.mount_from)
-        })
-}
-
 /// A console folder is written only when the console's mount list says it is not inside a
 /// mounted image; when the list cannot be read, it is not written either.
 fn check_console_folder(addr: &str, path: &str) -> Result<(), String> {
     let vols = ps5upload_core::volumes::list_volumes(addr).map_err(|e| {
         format!("could not tell whether this folder is a mounted image (the PS5's drives: {e:#})")
     })?;
-    if on_mounted_image(&vols, path) {
+    if vols.on_mounted_image(path) {
         return Err(MOUNTED_IMAGE.into());
     }
     Ok(())
@@ -394,6 +363,7 @@ pub(crate) async fn ampr_index_handler(
                         error_reason: None,
                         error_detail: None,
                         error_console: None,
+                        error_space: None,
                     },
                 );
             }
@@ -671,7 +641,7 @@ mod tests {
             "/data/img/G",
             "/system_ex/app/PPSA02222",
         ] {
-            assert!(on_mounted_image(&vols, path), "{path}");
+            assert!(vols.on_mounted_image(path), "{path}");
         }
         for path in [
             "/data/homebrew/PPSA01234",
@@ -679,7 +649,7 @@ mod tests {
             "/mnt/ext0/games/G",
             "/system_ex/app/PPSA03333",
         ] {
-            assert!(!on_mounted_image(&vols, path), "{path}");
+            assert!(!vols.on_mounted_image(path), "{path}");
         }
     }
 

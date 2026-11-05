@@ -17,22 +17,31 @@ pub struct Remote {
     pub pool: Arc<Pool>,
 }
 
-static GLOBAL: OnceLock<Result<Arc<Remote>, String>> = OnceLock::new();
+static GLOBAL: OnceLock<Arc<Remote>> = OnceLock::new();
 
+/// The engine's store and pool. A failure is not kept: a key that could not be read for a moment,
+/// or one the user has since restored, works on the next call without a restart.
 pub fn global() -> Result<Arc<Remote>, RemoteError> {
-    GLOBAL
-        .get_or_init(|| {
-            let dir = super::store::data_dir().ok_or_else(|| {
-                "no home folder to keep saved connections in; set PS5UPLOAD_DATA_DIR".to_string()
-            })?;
-            let store = Store::open(&dir).map_err(|e| e.to_string())?;
-            Ok(Arc::new(Remote {
-                store: Arc::new(store),
-                pool: Arc::new(Pool::new(Box::new(RealConnector))),
-            }))
-        })
-        .clone()
-        .map_err(RemoteError::Io)
+    static OPENING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    if let Some(r) = GLOBAL.get() {
+        return Ok(Arc::clone(r));
+    }
+    // One at a time: two first calls must not both make a key.
+    let _opening = OPENING.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(r) = GLOBAL.get() {
+        return Ok(Arc::clone(r));
+    }
+    let dir = super::store::data_dir().ok_or_else(|| {
+        RemoteError::Io(
+            "no home folder to keep saved connections in; set PS5UPLOAD_DATA_DIR".to_string(),
+        )
+    })?;
+    let store = Store::open(&dir).map_err(|e| RemoteError::Io(e.to_string()))?;
+    let r = Arc::new(Remote {
+        store: Arc::new(store),
+        pool: Arc::new(Pool::new(Box::new(RealConnector))),
+    });
+    Ok(Arc::clone(GLOBAL.get_or_init(|| r)))
 }
 
 #[allow(clippy::double_must_use)] // async_trait expands to a must_use future
@@ -345,7 +354,7 @@ pub(crate) mod testing {
             let fs = crate::remote::MemFs::new(&[]);
             let handle = fs.share();
             let r = remote_with(fs, None);
-            let _ = GLOBAL.set(Ok(r));
+            let _ = GLOBAL.set(r);
             handle
         });
         mem.add(files);
@@ -393,12 +402,13 @@ pub(crate) mod testing {
         async fn open(&self, p: &str) -> Result<Arc<dyn RemoteFile>, RemoteError> {
             self.0.open(p).await
         }
-        async fn walk(
+        async fn walk_until(
             &self,
             p: &str,
             l: usize,
+            cancel: &std::sync::atomic::AtomicBool,
         ) -> Result<Vec<(String, crate::remote::Entry)>, RemoteError> {
-            self.0.walk(p, l).await
+            self.0.walk_until(p, l, cancel).await
         }
         async fn create_dir(&self, p: &str) -> Result<(), RemoteError> {
             self.0.create_dir(p).await

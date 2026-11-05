@@ -5,6 +5,7 @@ import { formatBytes } from "../../lib/format";
 import { formatEtaSeconds } from "../../lib/uploadEta";
 import { useRateEta } from "../../lib/useRateEta";
 import type { BottleneckCause, JobLive } from "../../lib/jobLive";
+import { formatNumber } from "../../lib/formatDate";
 
 /** Catalog key and English fallback for each cause (written out so the i18n scripts see them). */
 const CAUSE: Record<BottleneckCause, { key: string; text: string }> = {
@@ -31,6 +32,24 @@ export function BottleneckLine({ cause }: { cause: BottleneckCause | null }) {
  *  already holds. Without this line the wait looks like a stall. */
 export function SkippingLine({ live }: { live: JobLive }) {
   const tr = useTr();
+  if (live.measuringBytes !== undefined) {
+    const done = formatBytes(live.measuringBytes);
+    return (
+      <div
+        className="flex items-center gap-1.5 text-xs text-[var(--color-warn)]"
+        data-testid="measuring-line"
+      >
+        <Loader2 size={12} className="animate-spin" aria-hidden />
+        <span>
+          {tr(
+            "upload_phase_measuring",
+            { done },
+            `This RAR doesn't say how big its files are, so it is being read first: ${done} so far. A large one takes a while.`,
+          )}
+        </span>
+      </div>
+    );
+  }
   if (!live.skipping) return null;
   const done = formatBytes(live.skipDoneBytes);
   const total = formatBytes(live.skipTotalBytes);
@@ -71,8 +90,8 @@ export function SettlingLine({ live }: { live: JobLive }) {
         <span className="font-mono" data-testid="settling-count">
           {tr(
             "upload_phase_settling_count",
-            { left: left.toLocaleString(), total: total.toLocaleString() },
-            `${left.toLocaleString()} of ${total.toLocaleString()} files left`,
+            { left: formatNumber(left), total: formatNumber(total) },
+            `${formatNumber(left)} of ${formatNumber(total)} files left`,
           )}
           {rate > 0 && ` · ${rate < 10 ? rate.toFixed(1) : Math.round(rate)} ${tr("upload_phase_settling_rate", undefined, "files/s")}`}
           {etaSeconds !== null &&

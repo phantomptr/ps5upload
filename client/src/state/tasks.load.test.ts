@@ -14,13 +14,16 @@ it("records which tasks this start-up interrupted", async () => {
     addEventListener: () => {},
     removeEventListener: () => {},
   };
-  const base = { origin: "x", createdAt: new Date(0).toISOString(), attempts: 0, maxAttempts: 1, consoleId: "", payload: {}, label: "L", updatedAtMs: 5, endedAtMs: null };
+  const base = { origin: "x", createdAt: new Date(0).toISOString(), consoleId: "", payload: {}, label: "L", updatedAtMs: 5, endedAtMs: null };
   mem.set(
     "ps5upload.tasks.v1",
     JSON.stringify({
       tasks: [
         { ...base, id: "run", kind: "fpkg-convert", status: "running" },
         { ...base, id: "old", kind: "fpkg-convert", status: "done", endedAtMs: 4 },
+        // A console page's task kept running on the console: the next read finds it, not "interrupted".
+        { ...base, id: "console-run", kind: "console-task", status: "running" },
+        { ...base, id: "console-old", kind: "console-task", status: "done", endedAtMs: 4 },
       ],
     }),
   );
@@ -28,4 +31,6 @@ it("records which tasks this start-up interrupted", async () => {
   const { interruptedAtLoad, useTaskStore } = await import("./tasks");
   expect(useTaskStore.getState().tasks.find((t) => t.id === "run")?.status).toBe("interrupted");
   expect([...interruptedAtLoad]).toEqual(["run"]);
+  expect(useTaskStore.getState().tasks.some((t) => t.id === "console-run")).toBe(false);
+  expect(useTaskStore.getState().tasks.find((t) => t.id === "console-old")?.status).toBe("done");
 });

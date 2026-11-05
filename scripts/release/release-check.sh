@@ -1,26 +1,27 @@
 #!/usr/bin/env bash
 #
 # The local pre-release check (`make release-check`): what CI's PR gate covers, run on this
-# machine before a release, with the parts that do not depend on each other side by side.
+# machine before a release, one part after another.
 #
-#   1. at once:  make quality            (fmt, clippy, tests, client build; CPU-heavy)
-#                Playwright e2e suite    (vite dev server on a free port; make quality skips it)
-#   2. then:     make test-payload       (builds the payload with the PS5 SDK and checks the ELFs)
+#   1. make quality            (fmt, clippy, tests, client build; CPU-heavy)
+#   2. Playwright e2e suite    (own ports; serves the build from step 1 for its CSP tests)
+#   3. make test-payload       (builds the payload with the PS5 SDK and checks the ELFs)
+#
+# The e2e suite follows the build rather than running beside it: vite build empties client/dist,
+# which the suite's CSP server serves, and its tests have real timing that a loaded machine fails.
 #
 # Fails if any part fails, and prints each part's result and time. Logs go to a temp folder
 # (printed); a failed part's log tail is shown.
 #
-# BUILD_LOCK=/path/to/lockfile serializes the heavy builds (make quality, make test-payload)
-# with other builds sharing that lock (lockf on macOS, flock on Linux). The e2e run never
-# holds it: it is a dev server and a browser, not a build.
+# BUILD_LOCK=/path/to/lockfile serializes every part with other builds sharing that lock (lockf on
+# macOS, flock on Linux).
 #
-# The e2e suite gets its own vite on a free port through a temporary Playwright config, so a
-# dev server already on :1420 (`make run-client`) neither blocks it nor is reused by it.
+# The e2e suite gets its own vite on a free port (PS5UPLOAD_VITE_PORT, client/playwright.config.ts),
+# so a dev server already on :1420 (`make run-client`) neither blocks it nor is reused by it.
 
 set -uo pipefail
 
 cd "$(dirname "$0")/../.." || exit 2
-root="$PWD"
 logs="$(mktemp -d "${TMPDIR:-/tmp}/release-check.XXXXXX")"
 
 locked() {
@@ -31,36 +32,24 @@ locked() {
   fi
 }
 
-# A port with the next one up also free (vite's live reload may take port + 1).
+# A port with the next two up also free: vite, its live reload, and the production build's server.
 free_port() {
   node -e '
     const net = require("net");
     const take = (p) => new Promise((ok) => { const s = net.createServer();
       s.once("error", () => ok(false)); s.listen(p, "127.0.0.1", () => s.close(() => ok(true))); });
-    (async () => { for (let p = 14200; p < 14400; p += 2)
-      if ((await take(p)) && (await take(p + 1))) { console.log(p); return; }
+    (async () => { for (let p = 14200; p < 14400; p += 3)
+      if ((await take(p)) && (await take(p + 1)) && (await take(p + 2))) { console.log(p); return; }
       process.exit(1); })();'
 }
 
 e2e() {
-  local port cfg
+  local port
   port="$(free_port)" || { echo "no free port for the e2e dev server"; return 1; }
-  # Outside client/ so the concurrent typecheck and lint never see it; paths are absolute.
-  cfg="$logs/playwright.config.ts"
-  cat > "$cfg" <<EOF
-// Temporary (scripts/release/release-check.sh): the e2e suite on its own port.
-import base from "$root/client/playwright.config";
-const url = "http://127.0.0.1:$port";
-export default {
-  ...base,
-  testDir: "$root/client/e2e",
-  outputDir: "$root/output/playwright/test-results",
-  use: { ...base.use, baseURL: url },
-  webServer: { ...base.webServer, url, cwd: "$root/client", reuseExistingServer: false },
-};
-EOF
   echo "e2e: vite on 127.0.0.1:$port"
-  (cd client && PS5UPLOAD_VITE_PORT="$port" npx playwright test -c "$cfg")
+  # make quality has built it, unless its client lane stopped first (then this run has failed anyway).
+  [[ -f client/dist/index.html ]] || (cd client && locked npm run build:vite) || return 1
+  (cd client && PS5UPLOAD_VITE_PORT="$port" locked npx playwright test)
 }
 
 declare -a names=() codes=() secs=()
@@ -76,23 +65,18 @@ run_part() { # log, command...
   return "$rc"
 }
 
-trap 'kill $(jobs -p) 2>/dev/null' EXIT INT TERM
-
 echo "release-check: logs in $logs"
-echo "release-check: make quality + e2e, side by side..."
-run_part "$logs/quality.log" locked make quality &
-run_part "$logs/e2e.log" e2e &
-wait
-
-for part in quality e2e; do
-  read -r rc s < "$logs/$part.log.result" || { rc=1; s=0; }
-  record "$part" "$rc" "$s"
-done
-
-echo "release-check: make test-payload..."
-run_part "$logs/test-payload.log" locked make test-payload
-read -r rc s < "$logs/test-payload.log.result" || { rc=1; s=0; }
-record test-payload "$rc" "$s"
+run_and_record() { # name, command...
+  local name="$1" rc s
+  shift
+  echo "release-check: $name..."
+  run_part "$logs/$name.log" "$@"
+  read -r rc s < "$logs/$name.log.result" || { rc=1; s=0; }
+  record "$name" "$rc" "$s"
+}
+run_and_record quality locked make quality
+run_and_record e2e e2e
+run_and_record test-payload locked make test-payload
 
 failed=0
 echo

@@ -6,7 +6,10 @@ import { fetchHwTemps } from "../../../api/ps5";
 import { transferAddr } from "../../../lib/addr";
 import { getEngineUrl } from "../../../state/engine";
 import { useTr } from "../../../state/lang";
-import { useSensors } from "../../../state/sensors";
+import { useSensors, useTempsView } from "../../../state/sensors";
+import { TempsNote } from "../../../components/TempsNote";
+import { formatDate } from "../../../lib/formatDate";
+import { humanizeCaught } from "../../../lib/humanizeError";
 
 /** The engine's fan boost for a console (fan_boost.rs). */
 export interface FanBoost {
@@ -38,14 +41,16 @@ async function boostCall(addr: string, on?: boolean): Promise<FanBoost> {
   return readFanBoost(body);
 }
 
-const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const clock = (ms: number) => formatDate(ms, "time-short");
 
 /** The Console tab: temperatures (the shared 5 s reader, only while open) and fan boost. The
  *  fan's speed needs an extended read, so it is read only when asked. */
 export function ConsoleTab({ host }: { host: string | null }) {
   const tr = useTr();
-  const { sample } = useSensors(host);
-  const t = sample?.temps ?? null;
+  useSensors(host);
+  // The last reading that worked: one failed read keeps it on screen.
+  const tempsNow = useTempsView(host);
+  const t = tempsNow.temps;
   const addr = host ? transferAddr(host) : "";
   const [boost, setBoost] = useState<FanBoost | null>(null);
   const [busy, setBusy] = useState(false);
@@ -71,7 +76,7 @@ export function ConsoleTab({ host }: { host: string | null }) {
       try {
         setBoost(await boostCall(addr, on));
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(humanizeCaught(e));
       } finally {
         setBusy(false);
       }
@@ -102,9 +107,13 @@ export function ConsoleTab({ host }: { host: string | null }) {
     <div className="space-y-4 py-1" data-testid="rp-game-console">
       <section>
         {!t ? (
-          <div className="flex justify-center py-3">
-            <Spinner size={16} />
-          </div>
+          tempsNow.note === "reading" ? (
+            <div className="flex justify-center py-3">
+              <Spinner size={16} />
+            </div>
+          ) : (
+            <TempsNote view={tempsNow} />
+          )
         ) : (
           <>
             {row(tr("rp_console_cpu", undefined, "CPU"), t.cpu_temp, "rp-console-cpu")}
@@ -134,6 +143,7 @@ export function ConsoleTab({ host }: { host: string | null }) {
                 </button>
               )}
             </div>
+            <TempsNote view={tempsNow} />
           </>
         )}
       </section>

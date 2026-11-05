@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { routeEngine, seedConsole } from "./fixtures/engine";
 
 // The Game panel over the stream (9.6): the running game, its cheats, a save snapshot, the
 // console's temperatures and a fan boost — read only while the panel is open.
@@ -12,68 +13,46 @@ interface Calls {
 
 async function streaming(page: Page, calls: Calls) {
   let boostOn = false;
-  await page.addInitScript(() => {
-    window.localStorage.setItem("ps5upload.host", "192.168.1.100");
-    window.localStorage.setItem(
-      "ps5upload.roster.v1",
-      JSON.stringify({
-        active_id: "p1",
-        profiles: [
-          {
-            id: "p1",
-            name: "Living room",
-            host: "192.168.1.100",
-            wake_regist_key: "00112233",
-            wake_rp_key: "00112233445566778899aabbccddeeff",
-          },
-        ],
-      }),
-    );
+  await seedConsole(page);
+  await routeEngine(page, (path, req) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "9.6.0", caps: {} };
+    if (path === "/api/ps5/rp/session") body = { host: null };
+    if (path === "/api/ps5/cheats/status") {
+      calls.status++;
+      body = {
+        enabled: false,
+        patches_last: 0,
+        patches_total: 0,
+        game_running: true,
+        game_title_id: "PPSA01234",
+        game_pid: 77,
+        held: false,
+      };
+    }
+    if (path === "/api/ps5/cheats/get")
+      body = { mods: [{ index: 3, name: "Infinite health", desc: "Never die", type: "", on: false }] };
+    if (path === "/api/ps5/cheats/toggle") {
+      calls.toggles.push(req.postDataJSON());
+      body = { ok: true };
+    }
+    if (path === "/api/ps5/apps/installed")
+      body = { titles: [{ title_id: "PPSA01234", title_name: "Astro Test", origin: "pkg" }] };
+    if (path === "/api/ps5/hw/temps")
+      body = { cpu_temp: 61, soc_temp: 58, m2_temp: 0, cpu_freq_mhz: 800, soc_clock_mhz: 0, soc_power_mw: 0, cpu_usage_pct: -1, fan_duty_pct: -1, product_shape: -1, fan_pinned_c: 0 };
+    if (path === "/api/ps5/fan-boost") {
+      if (req.method() === "POST") {
+        calls.boosts.push(req.postDataJSON());
+        boostOn = (req.postDataJSON() as { on: boolean }).on;
+      }
+      body = boostOn ? { on: true, until_ms: Date.now() + 30 * 60_000, boost_c: 55 } : { on: false, boost_c: 55 };
+    }
+    if (path === "/api/save-backup/snapshot") {
+      calls.snapshots.push(req.postDataJSON());
+      body = { ok: true, files: ["PPSA01234_user10000000_2026-10-30_120000_snap.zip"] };
+    }
+    return body;
   });
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const req = route.request();
-      const path = new URL(req.url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "9.6.0", caps: {} };
-      if (path === "/api/ps5/rp/session") body = { host: null };
-      if (path === "/api/ps5/cheats/status") {
-        calls.status++;
-        body = {
-          enabled: false,
-          patches_last: 0,
-          patches_total: 0,
-          game_running: true,
-          game_title_id: "PPSA01234",
-          game_pid: 77,
-          held: false,
-        };
-      }
-      if (path === "/api/ps5/cheats/get")
-        body = { mods: [{ index: 3, name: "Infinite health", desc: "Never die", type: "", on: false }] };
-      if (path === "/api/ps5/cheats/toggle") {
-        calls.toggles.push(req.postDataJSON());
-        body = { ok: true };
-      }
-      if (path === "/api/ps5/apps/installed")
-        body = { titles: [{ title_id: "PPSA01234", title_name: "Astro Test", origin: "pkg" }] };
-      if (path === "/api/ps5/hw/temps")
-        body = { cpu_temp: 61, soc_temp: 58, m2_temp: 0, cpu_freq_mhz: 800, soc_clock_mhz: 0, soc_power_mw: 0, cpu_usage_pct: -1, fan_duty_pct: -1, product_shape: -1, fan_pinned_c: 0 };
-      if (path === "/api/ps5/fan-boost") {
-        if (req.method() === "POST") {
-          calls.boosts.push(req.postDataJSON());
-          boostOn = (req.postDataJSON() as { on: boolean }).on;
-        }
-        body = boostOn ? { on: true, until_ms: Date.now() + 30 * 60_000, boost_c: 55 } : { on: false, boost_c: 55 };
-      }
-      if (path === "/api/save-backup/snapshot") {
-        calls.snapshots.push(req.postDataJSON());
-        body = { ok: true, files: ["PPSA01234_user10000000_2026-10-30_120000_snap.zip"] };
-      }
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
   await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, (ws) => {
     ws.onMessage((m) => {
       if ((JSON.parse(String(m)) as { host?: string }).host) ws.send(JSON.stringify({ stage: "first_frame" }));

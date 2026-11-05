@@ -10,7 +10,6 @@
  * and a rename onto an existing name is refused by the helper anyway (it
  * never overwrites); the planner refuses it first, with the reason.
  */
-import { ApiError } from "../api";
 import type { BatchResult } from "./move";
 import { renameEntry } from "./move";
 
@@ -171,9 +170,4 @@ export async function runRenames(
     r.done.push([row.from, row.to]);
   }
   return r;
-}
-
-/** The helper refused a rename because the name is taken (409 exists). */
-export function isExists(err: unknown): boolean {
-  return err instanceof ApiError && err.status === 409 && /exist/i.test(err.code);
 }

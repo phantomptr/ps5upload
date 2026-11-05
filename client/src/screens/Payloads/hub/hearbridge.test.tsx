@@ -58,15 +58,15 @@ describe("HearBridge card", () => {
   });
 
   it("opens HearBridge's page on the port it answered on", () => {
-    expect(hbPageUrl("192.168.86.99", 8091)).toBe("http://192.168.86.99:8091/");
-    expect(hbPageUrl("192.168.86.99", null)).toBe("http://192.168.86.99:8090/");
+    expect(hbPageUrl("192.0.2.99", 8091)).toBe("http://192.0.2.99:8091/");
+    expect(hbPageUrl("192.0.2.99", null)).toBe("http://192.0.2.99:8090/");
   });
 });
 
 describe("HearBridge Manage panel", () => {
   it("has the everyday controls and points to HearBridge's page for the rest", () => {
     const html = renderToStaticMarkup(
-      <HearBridgePanel host="192.168.86.99" view={present} apply={noop} refresh={noopAsync} />,
+      <HearBridgePanel host="192.0.2.99" view={present} apply={noop} refresh={noopAsync} />,
     );
     expect(html).toContain('max="500"'); // volume, HearBridge's 0..500 %
     expect(html).toContain('max="400"'); // fixed latency, 40..400 ms
@@ -80,8 +80,8 @@ describe("HearBridge Manage panel", () => {
   it("falls back to the page link when HearBridge doesn't answer", () => {
     const html = renderToStaticMarkup(
       <HearBridgePanel
-        host="192.168.86.99"
-        view={{ present: false, error: "HearBridge didn't answer on 192.168.86.99 port 8090-8095" }}
+        host="192.0.2.99"
+        view={{ present: false, error: "HearBridge didn't answer on 192.0.2.99 port 8090-8095" }}
         apply={noop}
         refresh={noopAsync}
       />,

@@ -9,5 +9,5 @@ test("the FAQ and What's New screens load their documents", async ({ page }) => 
     timeout: 20_000,
   });
   await page.goto("/faq?tab=whats-new", { waitUntil: "domcontentloaded" });
-  await expect(page.getByRole("heading", { name: "5.37.1" }).first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("heading", { name: "11.0.8" }).first()).toBeVisible({ timeout: 20_000 });
 });

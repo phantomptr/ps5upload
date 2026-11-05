@@ -73,6 +73,11 @@
 #include "index_glob.h"
 #include "mgmt_rpc.h"
 #include "mgmt_fs.h"
+#include "fan_servo.h"
+#include "json_escape.h"
+#include "user_guard.h"
+#include "atomic_file.h"
+#include "sigpipe_guard.h"
 #include "path_policy.h"
 #include "cross_device.h"
 #include "ava1_stop.h"
@@ -81,15 +86,6 @@
 #include "storage_cleanup.h"
 #include "mesh.h"
 #include "ava1_server.h"
-
-/* Capacity policy mirrored by ps5upload-core::volumes. Keep a small working
- * margin -- 1 GiB, scaled down for small volumes -- out of every filesystem
- * for metadata and concurrent activity. The PS5 user-storage allocator can
- * still return ENOSPC while statfs(/data) advertises far more; that is not
- * predictable here and is handled after the fact, not by this gate. See
- * capacity_reserve_for_mount. */
-#define PS5UPLOAD2_GIB ((uint64_t)1024u * 1024u * 1024u)
-#define PS5UPLOAD2_EXTERNAL_SPACE_RESERVE (1u * PS5UPLOAD2_GIB)
 
 /* The frame numbers the management table (mgmt_table.def) carries per method. They are not on any wire now:
  * the number a handler runs under is written to g_inflight_frame_type, so the fatal-signal breadcrumb in
@@ -356,6 +352,11 @@
 #define MGMT_FRAME_VPAD_OUTPUT_ACK 357u
 #define MGMT_FRAME_VPAD_STATUS 358u
 #define MGMT_FRAME_VPAD_STATUS_ACK 359u
+/* tasks started on the console page (console_tasks.c) */
+#define MGMT_FRAME_CONSOLE_TASKS 360u
+#define MGMT_FRAME_CONSOLE_TASKS_ACK 361u
+#define MGMT_FRAME_CONSOLE_TASK_CANCEL 362u
+#define MGMT_FRAME_CONSOLE_TASK_CANCEL_ACK 363u
 #define MGMT_FRAME_SDK_SCAN 214u
 #define MGMT_FRAME_SDK_SCAN_ACK 215u
 #define MGMT_FRAME_SDK_PATCH 216u
@@ -500,24 +501,8 @@ static int mgmt_reply(uint16_t frame_type, const void *body, uint64_t body_len) 
 }
 
 
-/* Loop until `len` bytes have been written (EINTR retried). 0 on success, -1 on a hard error. */
-static int write_full(int fd, const void *buf, size_t len) {
-    const unsigned char *p = (const unsigned char *)buf;
-    size_t written = 0;
-    while (written < len) {
-        ssize_t w = write(fd, p + written, len - written);
-        if (w < 0) {
-            if (errno == EINTR) continue;
-            return -1;
-        }
-        if (w == 0) return -1;
-        written += (size_t)w;
-    }
-    return 0;
-}
-
-/* Creates a joinable worker thread with a bounded 512 KiB stack (the FreeBSD default is several MiB and the
- * console's per-process memory budget is small). Falls back to the default stack if attribute setup fails. */
+/* Creates a joinable worker thread with a bounded 512 KiB stack. The default is only 64 KiB (measured on FW
+ * 13.60), far too little for a handler. Falls back to the default stack if attribute setup fails. */
 static int create_worker_thread(pthread_t *tid, void *(*fn)(void *), void *arg) {
     pthread_attr_t attr;
     pthread_attr_t *attr_p = NULL;
@@ -541,7 +526,6 @@ int is_path_allowed(const char *p);
 int is_safe_unsafe_read_path(const char *p);
 /* JSON-escape helper. Used by ACK builders that embed user-controlled
  * paths/strings into JSON bodies. Defined alongside FS_LIST_VOLUMES. */
-static size_t json_escape_into(const char *src, char *dst, size_t dst_cap);
 static const char *json_string_end(const char *start, const char *limit);
 static int json_copy_unescaped_string(const char *start, const char *end,
                                       char *out, size_t out_len);
@@ -1153,7 +1137,7 @@ void runtime_classify_prior_instance(runtime_state_t *state) {
                                   runtime_system_boottime_unix(), prior_alive);
     state->prior_verdict = (int)v;
 
-    fprintf(stderr, "[payload2] prior instance: %s\n", instance_verdict_name(v));
+    fprintf(stderr, "[payload2] prior instance: %s\n", instance_verdict_first_look(v, instance_verdict_name(v)));
     if (v == PS5UPLOAD2_PRIOR_KILLED_EXTERNALLY) {
         fprintf(stderr,
                 "[payload2] the previous instance was killed by something else on this "
@@ -1554,7 +1538,7 @@ void runtime_arm_shutdown_watchdog(const runtime_state_t *state, int exit_code) 
     g_watchdog_state = state;
     g_watchdog_exit_code = exit_code;
     pthread_t t;
-    if (pthread_create(&t, NULL, runtime_shutdown_watchdog, NULL) == 0) {
+    if (create_worker_thread(&t, runtime_shutdown_watchdog, NULL) == 0) {
         pthread_detach(t);
     }
 }
@@ -1809,25 +1793,6 @@ static void read_ps5_kernel_version(char *dst, size_t dst_cap) {
  * Returns the number of bytes written (excluding the NUL). Callers
  * can detect truncation by comparing the return value against the
  * source strlen — if every source char was consumed, no truncation. */
-static size_t json_escape_into(const char *src, char *dst, size_t dst_cap) {
-    size_t ei = 0, ni = 0;
-    if (!dst || dst_cap == 0) return 0;
-    while (src && src[ni] && ei + 2 < dst_cap) {
-        unsigned char c = (unsigned char)src[ni];
-        if (c == '"' || c == '\\') {
-            dst[ei++] = '\\';
-            dst[ei++] = (char)c;
-        } else if (c < 0x20) {
-            dst[ei++] = '?';
-        } else {
-            dst[ei++] = (char)c;
-        }
-        ni++;
-    }
-    dst[ei] = '\0';
-    return ei;
-}
-
 static const char *json_string_end(const char *start, const char *limit) {
     const char *p = start;
     if (!p) return NULL;
@@ -1921,37 +1886,14 @@ static int is_user_storage_path(const char *path) {
     return 0;
 }
 
-/* Mirrors ps5upload-core::volumes::{safety_reserve_bytes,
- * external_reserve_for_total}. The host falls back to the SAME rule when an
- * older payload omits the published field, so the two must not drift.
- *
- * The margin is a CAP scaled to the volume, not a flat charge: a flat 1 GiB
- * on a 64 MiB mounted disk image reserves sixteen times its own capacity,
- * drives allocatable to zero, and refuses every write to it
- * (hardware-confirmed — a 29-byte write into a mounted 64 MiB image was
- * rejected as "have 0 bytes"). Internal storage is no longer a special case;
- * the body says why. */
-static uint64_t capacity_reserve_for_mount(const char *mnt_on,
-                                           const char *mnt_from,
-                                           uint64_t total_bytes) {
-    uint64_t scaled;
-    /* Internal storage (/data, /user) used to get a flat 80 GiB here, meant
-     * to model the PS5 content allocator's hidden pool. It was fitted to one
-     * FW 12.00 capture and did not generalise: this gate then rejected a
-     * 2.5 GiB pkg on a console with 86 GB free, and a 70 GB game on one with
-     * 136 GB free. The pool is real, but its size is not predictable from
-     * anything readable here -- and this gate REFUSES the transfer, so it now
-     * blocks only what is certainly impossible. A console that overstates its
-     * free space is caught mid-write instead, where the host turns that into
-     * a plain-language error (ps5upload-core::transfer::capacity_exhausted_body). */
-    (void)mnt_on;
-    (void)mnt_from;
-    /* A volume reporting no total reserves nothing — better to let the write
-     * be attempted than to block it on missing telemetry. */
-    scaled = total_bytes / 64u;
-    return scaled < PS5UPLOAD2_EXTERNAL_SPACE_RESERVE
-               ? scaled
-               : PS5UPLOAD2_EXTERNAL_SPACE_RESERVE;
+/* fs.freespace's policy (mgmt_fs_policy_t): the mount holding `path` is an attached disk image. Its
+ * source is an LVD/MD device, or for a nullfs of one (a title's /system_ex/app link) its mount point. */
+static int mount_is_disk_image(const char *path) {
+    struct statfs s;
+    if (statfs(path, &s) != 0) return 0;
+    return strncmp(s.f_mntfromname, "/dev/lvd", 8) == 0 || strncmp(s.f_mntfromname, "/dev/md", 7) == 0 ||
+           strncmp(s.f_mntfromname, "/mnt/shadowmnt/", 15) == 0 ||
+           strncmp(s.f_mntfromname, "/mnt/ps5upload/", 15) == 0;
 }
 
 static int handle_fs_list_volumes(runtime_state_t *state) {
@@ -2011,8 +1953,7 @@ static int handle_fs_list_volumes(runtime_state_t *state) {
         uint64_t avail = ((int64_t)mnts[i].f_bavail > 0)
                              ? (uint64_t)mnts[i].f_bavail * bs
                              : bfree;
-        uint64_t safety_reserve =
-            capacity_reserve_for_mount(mnt_on, mnt_from, total);
+        uint64_t safety_reserve = mgmt_fs_reserve_for(total);
         uint64_t allocatable =
             avail > safety_reserve ? avail - safety_reserve : 0;
         /* Reserve model: total is the FULL partition (f_blocks×f_bsize) and
@@ -4654,18 +4595,24 @@ static void resolve_sce_notification(void) {
  * repeating the same diagnostic cycle on the next FW that drops one. */
 typedef int (*sce_icc_bd_fn)(int state);
 typedef int (*sce_icc_usb_fn)(int port, int state);
+/* SceKernelModuleInfo: a versioned struct, `size` says which version the caller has. 0x160 bytes. An
+ * earlier declaration here was 296: base_addr and code_size read the middle of the segment table, and
+ * either the kernel refused the size (an empty list) or wrote 56 bytes past the struct. */
+typedef struct sce_module_segment {
+    void    *address;
+    uint32_t size;
+    int32_t  prot;
+} sce_module_segment_t;
 typedef struct sce_module_info {
-    size_t size;             /* sizeof(struct), Sony fills */
-    char   name[256];
-    int    type;             /* internal */
-    int    pad;
-    void  *base_addr;
-    size_t code_size;
-    void  *code_segment;
-    /* … more fields, but we only need name + base + size … */
+    size_t               size;
+    char                 name[256];
+    sce_module_segment_t segments[4];
+    uint32_t             segment_count;
+    uint8_t              fingerprint[20];
 } sce_module_info_t;
-typedef int (*sce_get_module_list_fn)(int *handle_list, int max_handles,
-                                       int *out_count);
+_Static_assert(sizeof(sce_module_info_t) == 0x160, "SceKernelModuleInfo is 0x160 bytes");
+typedef int (*sce_get_module_list_fn)(int *handle_list, size_t max_handles,
+                                      size_t *out_count);
 typedef int (*sce_get_module_info_fn)(int handle, sce_module_info_t *info);
 
 static sce_icc_bd_fn         p_sceKernelIccControlBDPowerState  = NULL;
@@ -5122,10 +5069,22 @@ static int handle_user_delete(runtime_state_t *state, const char *body) {
     if (uid > 0) {
         pthread_mutex_lock(&sony_api_lock);
         sceUserServiceInitialize(NULL); /* a Sony call: inside the lock (final review: console) */
-        int del_rc = sceUserServiceDestroyUser(uid);
-        usleep(SONY_API_POST_SLEEP_US);
+        /* Who is signed in, read under the same lock as the delete it decides. */
+        int foreground = -1;
+        int rc_fg = sceUserServiceGetForegroundUser(&foreground);
+        int ids[USER_SERVICE_MAX_USERS];
+        for (int i = 0; i < USER_SERVICE_MAX_USERS; i++) ids[i] = -1;
+        int rc_list = sceUserServiceGetLoginUserIdList(ids);
+        const char *refused = user_delete_refusal(uid, rc_fg, foreground, rc_list, ids, USER_SERVICE_MAX_USERS);
+        int del_rc = -1;
+        if (!refused) {
+            del_rc = sceUserServiceDestroyUser(uid);
+            usleep(SONY_API_POST_SLEEP_US);
+        }
         pthread_mutex_unlock(&sony_api_lock);
-        if (del_rc == 0) {
+        if (refused) {
+            err_msg = refused;
+        } else if (del_rc == 0) {
             rc = 0;
             /* Optional: wipe the saves Sony's cleanup leaves behind. Only after the account is
              * gone (a failed delete must not cost the user their saves), and at the home
@@ -6351,7 +6310,7 @@ static int handle_index_start(runtime_state_t *state, const char *body, uint64_t
         strcpy(args->roots[1], "/data");
         args->root_count = 2;
     }
-    if (pthread_create(&g_index_thread, NULL, index_thread_fn, args) != 0) {
+    if (create_worker_thread(&g_index_thread, index_thread_fn, args) != 0) {
         free(args);
         pthread_mutex_lock(&g_index_lock);
         g_index_phase = 0;
@@ -6983,33 +6942,23 @@ static int handle_peripheral_control(runtime_state_t *state, const char *body,
 
 /* ── Shell command exec ──────────────────────────────────────────────── */
 
-/* Run a single shell command via popen(), capturing stdout+stderr.
- *
- * Security note: the `cmd` string is passed verbatim to /bin/sh -c.
- * That's intentional — the renderer uses this for explicit
- * "advanced debugging" workflows (the user typed a command into a
- * shell prompt). We do NOT interpolate any other field into the
- * shell string (no separate cwd/env), so there is no injection
- * surface beyond what the user themselves typed. The whole RPC
- * surface (FS_DELETE, FS_CHMOD, etc.) already trusts an
- * authenticated LAN caller; this is the same trust boundary.
- *
- * There is no timeout: the built-ins run to completion on the request thread (the payload
+/* The shell has no timeout: the built-ins run to completion on the request thread (the payload
  * cannot fork, so there is no child to kill). A built-in's output is capped at 256 KB
- * (shell_builtin.c), and the reply itself at 32 KiB ("truncated":true past that). */
+ * (shell_builtin.c), and the reply itself at 32 KiB ("truncated":true past that). The engine's own
+ * deadline on the call is what bounds the wait (its timeout_secs field); this side reads the field
+ * and ignores it. */
 /* ── Built-in shell command interpreter ─────────────────────────────
  *
  * PS5 doesn't ship a shell binary (no /bin/sh, no /system/bin/sh,
- * nothing). popen("...", "r") in handle_shell_exec always fails on
- * PS5 because there's nothing for the libc shell-fork to exec. We
+ * nothing), and the payload cannot fork. We
  * implement a tiny built-in interpreter that handles the commands
  * a PS5 operator actually wants — directory listing, file read,
  * uname, ps, mount, sysctl, df, id — using the same syscalls the
  * rest of the payload already uses.
  *
  * Returns 0 on recognised command (sets *out_text + *out_exit;
- * caller frees out_text). Returns -1 on unrecognised command (caller
- * may fall through to popen path or surface "not supported").
+ * caller frees out_text). Returns -1 on unrecognised command (the caller
+ * surfaces "not supported").
  *
  * Threading: stateless — each invocation creates its own buffer. No
  * shared state, no locking. */
@@ -7142,7 +7091,7 @@ static int handle_shell_exec(runtime_state_t *state, const char *body,
         }
         (void)shell_json_string_field(tmp, body_len, "session_id",
                                       session_id, sizeof(session_id));
-        /* "timeout_secs" is accepted and ignored: nothing here can stop a running built-in. */
+        /* "timeout_secs" is the engine's deadline, not ours: nothing here can stop a running built-in. */
     }
     shell_session_get(session_id, fallback_cwd, cwd, sizeof(cwd));
     if (cmd[0] == '\0') {
@@ -7198,12 +7147,10 @@ static int handle_shell_exec(runtime_state_t *state, const char *body,
             free(builtin_out);
         }
     }
-    /* PS5 has NO shell binary — there's no /bin/sh, /system/bin/sh, or
-     * any other executable popen() could fork+exec. Skip the popen
-     * call entirely and route every command through our built-in
-     * interpreter (handle_shell_builtin) which uses the payload's
-     * existing FS/proc/uname code paths to answer the most-common
-     * "what's the state of this PS5?" queries. */
+    /* PS5 has NO shell binary and the payload cannot fork: every command
+     * goes through our built-in interpreter (handle_shell_builtin), which
+     * uses the payload's existing FS/proc/uname code paths to answer the
+     * most-common "what's the state of this PS5?" queries. */
     {
         char *builtin_out = NULL;
         int builtin_exit = -1;
@@ -7499,6 +7446,9 @@ static int g_save_is_ps4 = 0;
  * save was only looked at, and the real image is left as it was. */
 static time_t g_save_copy_mtime;
 static off_t g_save_copy_size;
+/* The real image as it was when the copy was made: only that image may be replaced on close. */
+static time_t g_save_image_mtime;
+static off_t g_save_image_size;
 /* The copy is no longer mounted but its write-back failed: a retry must not ask Sony to unmount
  * again (an unmount of nothing can fail with any errno, which would read as "still in use"). */
 static int g_save_unmounted = 0;
@@ -7585,7 +7535,9 @@ static void save_clear_state(void) {
  * -2 unmounted but the write-back failed: the state and the edited copy are kept so a retry
  * (or the next unmount) writes it back; the real image is untouched.
  * -3 the write-back failed a second time: the save is closed so the person is not stuck, and
- * the edited copy is kept beside the others as `<copy>.unsaved` (its path in `kept`). */
+ * the edited copy is kept beside the others as `<copy>.unsaved` (its path in `kept`).
+ * -4 the real image changed since the open (the game saved, or the save was restored): writing
+ * back would undo that, so it stays, the save is closed and the copy is kept the same way. */
 static int save_do_unmount(int *written_back, char *kept, size_t kept_sz) {
     *written_back = 0;
     if (kept_sz) kept[0] = 0;
@@ -7609,8 +7561,21 @@ static int save_do_unmount(int *written_back, char *kept, size_t kept_sz) {
         struct stat cst;
         int changed = stat(g_save_copy, &cst) != 0 || cst.st_mtime != g_save_copy_mtime ||
                       cst.st_size != g_save_copy_size;
+        struct stat ist;
+        int image_moved = stat(g_save_image, &ist) != 0 || ist.st_mtime != g_save_image_mtime ||
+                          ist.st_size != g_save_image_size;
         if (!changed) {
             unlink(g_save_copy);
+        } else if (image_moved) {
+            fprintf(stderr, "[payload2] save: %s changed since it was opened; edits not written back\n",
+                    g_save_image);
+            if (kept_sz && snprintf(kept, kept_sz, "%s.unsaved", g_save_copy) < (int)kept_sz &&
+                rename(g_save_copy, kept) != 0)
+                snprintf(kept, kept_sz, "%s", g_save_copy);
+            if (g_save_copy_key[0]) unlink(g_save_copy_key);
+            sync();
+            save_clear_state();
+            return -4;
         } else if (save_write_back(g_save_copy, g_save_image) == 0) {
             *written_back = 1;
             unlink(g_save_copy);
@@ -7699,11 +7664,13 @@ static int save_do_mount(const char *image, char *err, size_t err_sz, int *is_ps
     sceFsInitMountSaveDataOpt(&mopt);
     mopt.budgetid = "system";
     /* The mount talks to a shell service over a pipe; with SIGPIPE ignored (as our server
-     * runs) the call reports EPIPE instead of completing. */
-    void (*old)(int) = signal(SIGPIPE, SIG_DFL);
+     * runs) the call reports EPIPE instead of completing. The default is the whole process's,
+     * so every other thread keeps the signal blocked (sigpipe_guard.h). g_save_mtx: one at a time. */
+    sigpipe_window_t sp;
+    sigpipe_default_open(&sp);
     int ret = sceFsMountSaveData(&mopt, copy, SAVE_MOUNT_POINT, key);
     int e = errno;
-    signal(SIGPIPE, old);
+    sigpipe_default_close(&sp);
     memset(key, 0, sizeof key);
     if (ret < 0) {
         snprintf(err, err_sz, "save_mount_failed: 0x%x, %s", (unsigned)ret, strerror(e));
@@ -7715,6 +7682,8 @@ static int save_do_mount(const char *image, char *err, size_t err_sz, int *is_ps
     g_save_unmounted = 0;
     g_save_wb_failures = 0;
     g_save_is_ps4 = is_ps4;
+    g_save_image_mtime = st.st_mtime;
+    g_save_image_size = st.st_size;
     {
         struct stat cst;
         if (stat(copy, &cst) == 0) {
@@ -7761,7 +7730,15 @@ static int handle_save_mount(runtime_state_t *state, const char *body, uint64_t 
         char kept[1100];
         int wb = 0;
         int urc = g_save_mounted ? save_do_unmount(&wb, kept, sizeof kept) : 0;
-        if (urc == -3) {
+        if (urc == -4) {
+            char kesc[1200];
+            json_escape_into(kept, kesc, sizeof kesc);
+            n = snprintf(resp, sizeof resp,
+                         "{\"ok\":false,\"err\":\"save_changed_since_open: the open save changed on the "
+                         "console, so its edits were not written over it; it is closed now and the edits "
+                         "are kept as %s\"}",
+                         kesc);
+        } else if (urc == -3) {
             char kesc[1200];
             json_escape_into(kept, kesc, sizeof kesc);
             n = snprintf(resp, sizeof resp,
@@ -7806,7 +7783,15 @@ static int handle_save_unmount(runtime_state_t *state, const char *body, uint64_
     int was = g_save_mounted;
     char kept[1100];
     int urc = save_do_unmount(&wb, kept, sizeof kept);
-    if (urc == -3) {
+    if (urc == -4) {
+        char kesc[1200];
+        json_escape_into(kept, kesc, sizeof kesc);
+        n = snprintf(resp, sizeof resp,
+                     "{\"ok\":false,\"err\":\"save_changed_since_open: the save changed on the console "
+                     "while it was open, so your edits were not written over it; the save is closed "
+                     "and the edits are kept as %s\"}",
+                     kesc);
+    } else if (urc == -3) {
         char kesc[1200];
         json_escape_into(kept, kesc, sizeof kesc);
         n = snprintf(resp, sizeof resp,
@@ -8221,9 +8206,9 @@ static int handle_files_handoff_take(runtime_state_t *state, const char *body, u
 /* ── The PC's keyboard and mouse (vinput.c) ─────────────────────────────
  * The answers are the bodies vinput.c writes; a refusal ({"ok":false,"err":..}) is kept as the answer
  * (mgmt_call_text_keep), so the engine reads which device is missing and why. The console's own
- * devices (vinput_ps5.c, libSceMouse / libSceKeyboard) are off by default; then vinput.c's stub
- * answers "vinput_unsupported". */
-/* The console's devices replace the stub on first use, when vinput_ps5.c allows them (off by
+ * devices (vinput_ps5.c, libSceMouse / libSceKeyboard) are on by default; switched off, vinput.c's
+ * stub answers "vinput_unsupported". */
+/* The console's devices replace the stub on first use, when vinput_ps5.c allows them (on by
  * default). */
 static pthread_once_t g_vinput_backend_once = PTHREAD_ONCE_INIT;
 static void vinput_backend_pick(void) {
@@ -8406,6 +8391,30 @@ static int handle_smb_shares_remove(runtime_state_t *state, const char *body, ui
     return smb_pc_reply(state, MGMT_FRAME_SMB_SHARES_REMOVE_ACK, webui_smb_pc_remove, body, body_len);
 }
 
+/* ── Tasks started on the console page, read by the apps (webui_api.c, #658) ─
+ * Only reads a table and the job lists; a refusal is {"ok":false,"err":..}. */
+#define CONSOLE_TASKS_OUT_MAX (128u * 1024u)
+
+static int handle_console_tasks(runtime_state_t *state) {
+    char *out;
+    int n, rc;
+    if (!state) return -1;
+    out = malloc(CONSOLE_TASKS_OUT_MAX);
+    if (!out) return mgmt_reply(MGMT_FRAME_ERROR, "out_of_memory", 13);
+    n = webui_console_tasks(out, CONSOLE_TASKS_OUT_MAX);
+    rc = mgmt_reply(MGMT_FRAME_CONSOLE_TASKS_ACK, out, (uint64_t)(n > 0 ? n : 0));
+    free(out);
+    return rc;
+}
+
+static int handle_console_task_cancel(runtime_state_t *state, const char *body, uint64_t body_len) {
+    char out[128];
+    int n;
+    if (!state || body_len > 1024u) return mgmt_reply(MGMT_FRAME_ERROR, "bad_request", 11);
+    n = webui_console_task_cancel(body ? body : "", (size_t)body_len, out, sizeof out);
+    return mgmt_reply(MGMT_FRAME_CONSOLE_TASK_CANCEL_ACK, out, (uint64_t)(n > 0 ? n : 0));
+}
+
 /* ── The devices that use this console (mesh.c) ─────────────────────────
  * Every call acts as the device whose session made it (the AVA1 RPC identity). */
 static int mesh_reply(runtime_state_t *state, uint16_t ack, int which, const char *body, uint64_t body_len) {
@@ -8479,6 +8488,25 @@ static int handle_net_speed_test(runtime_state_t *state, const char *body,
 
 /* ── Module enumeration ──────────────────────────────────────────────── */
 
+/* hw_guard_call_out's shape, for the two getters. */
+typedef struct {
+    int *handles;
+    size_t max;
+    size_t *count;
+} module_list_call_t;
+static int module_list_call(void *p) {
+    module_list_call_t *c = p;
+    return p_sceKernelGetModuleList(c->handles, c->max, c->count);
+}
+typedef struct {
+    int handle;
+    sce_module_info_t *info;
+} module_info_call_t;
+static int module_info_call(void *p) {
+    module_info_call_t *c = p;
+    return p_sceKernelGetModuleInfo(c->handle, c->info);
+}
+
 static int handle_proc_modules(runtime_state_t *state, const char *body,
                                 uint64_t body_len) {
     if (!state) return -1;
@@ -8490,9 +8518,12 @@ static int handle_proc_modules(runtime_state_t *state, const char *body,
     (void)body_len;
     resolve_sce_kernel_extras();
     int handles[256];
-    int count = 0;
+    size_t count = 0;
+    /* Both getters under the hw guard (a fault there must not cost the helper), and the count is a
+     * size_t in the real signature: an int here took an 8-byte write in a 4-byte slot. */
+    module_list_call_t lc = {handles, 256, &count};
     int rc = p_sceKernelGetModuleList
-                ? p_sceKernelGetModuleList(handles, 256, &count) : -1;
+                ? hw_guard_call_out("sceKernelGetModuleList", module_list_call, &lc) : -1;
     if (rc != 0) count = 0;
     if (count > 256) count = 256;
     char *resp = malloc(64 * 1024);
@@ -8507,28 +8538,43 @@ static int handle_proc_modules(runtime_state_t *state, const char *body,
         if (w < 0 || w >= cap - n) { n = cap; } else { n += w; }
     }
     int wrote_one = 0;
-    for (int i = 0; i < count; i++) {
-        sce_module_info_t info;
-        memset(&info, 0, sizeof(info));
-        info.size = sizeof(info);
+    /* A module Sony will not describe has no row, so say how many there were and what it answered. */
+    unsigned refused = 0;
+    int refused_rc = 0;
+    for (size_t i = 0; i < count; i++) {
+        /* Room to spare past the struct: whatever a firmware writes stays in here. */
+        _Alignas(16) unsigned char raw[512];
+        sce_module_info_t *info = (sce_module_info_t *)raw;
+        memset(raw, 0, sizeof(raw));
+        info->size = sizeof(*info);
         if (!p_sceKernelGetModuleInfo) continue;
-        if (p_sceKernelGetModuleInfo(handles[i], &info) != 0) continue;
+        module_info_call_t ic = {handles[i], info};
+        int info_rc = hw_guard_call_out("sceKernelGetModuleInfo", module_info_call, &ic);
+        if (info_rc != 0) {
+            refused++;
+            refused_rc = info_rc;
+            continue;
+        }
+        info->name[sizeof(info->name) - 1] = '\0';
         char esc_name[260];
-        json_escape_into(info.name, esc_name, sizeof(esc_name));
-        if (n >= cap - 200) break;
+        json_escape_into(info->name, esc_name, sizeof(esc_name));
+        /* The first segment is the module's code. */
+        const void *base = info->segment_count > 0 ? info->segments[0].address : NULL;
+        unsigned code_size = info->segment_count > 0 ? info->segments[0].size : 0;
+        if (n >= cap - 400) break;
         if (wrote_one) resp[n++] = ',';
         wrote_one = 1;
         int w = snprintf(resp + n, n < cap ? (size_t)(cap - n) : 0,
                        "{\"handle\":%d,\"name\":\"%s\","
-                       "\"base\":\"%p\",\"code_size\":%zu}",
-                       handles[i], esc_name, info.base_addr, info.code_size);
+                       "\"base\":\"0x%llx\",\"code_size\":%u}",
+                       handles[i], esc_name, (unsigned long long)(uintptr_t)base, code_size);
         if (w < 0) break;
         if ((size_t)w >= (size_t)(cap - n)) { n = cap; break; }
         n += w;
     }
-    if (n < cap - 2) {
-        resp[n++] = ']';
-        resp[n++] = '}';
+    if (n < cap - 64) {
+        n += snprintf(resp + n, (size_t)(cap - n), "],\"count\":%zu,\"refused\":%u,\"refused_rc\":\"0x%08x\"}", count,
+                      refused, (unsigned)refused_rc);
     }
     int rc2 = mgmt_reply(MGMT_FRAME_PROC_MODULES_ACK, resp, (uint64_t)n);
     free(resp);
@@ -8657,45 +8703,26 @@ static int handle_hw_drive_sensors(runtime_state_t *state) {
                               MGMT_FRAME_HW_DRIVE_SENSORS_ACK, "hw_drive_sensors_failed");
 }
 
-/* Parse body as "NN" (ASCII decimal). Accepts an empty-body shortcut
- * meaning "reset to default 65 °C" so future UI can send a zero-body
- * frame as a quick reset. Leading whitespace and a trailing newline
- * are tolerated because some shells (lab CLI, curl) add them. */
+/* Body: "NN" or "NN reapply_sec" in ASCII decimal (fan_threshold_body_parse); 0 asks for the console's
+ * own fan setting back (hw_fan_restore_stock). The optional interval updates the watcher's too; a body
+ * with just the threshold leaves it unchanged. An invalid body changes nothing: it used to pin 65 C,
+ * and save it, from one typo. */
 static int handle_hw_set_fan_threshold(runtime_state_t *state, const char *body, uint64_t body_len) {
     if (!state) return -1;
 
-    uint8_t threshold = 65;
-    /* "0" asks for the console's own fan setting back (hw_fan_restore_stock). */
-    int restore = 0;
-    /* Optional reapply interval in seconds. If present in the body
-     * (as the second integer), update the watcher's interval too.
-     * Backward compat: a body with just the threshold ("65") leaves
-     * the interval unchanged. */
-    int has_reapply = 0;
-    int reapply_sec = 0;
-    if (body_len > 0 && body_len < 32) {
-        char buf[32];
-        memcpy(buf, body, (size_t)body_len);
-        buf[body_len] = '\0';
-        /* Parse "threshold" or "threshold reapply_sec". hw_fan_set_threshold
-         * clamps the threshold so a non-numeric payload degrades to a
-         * safe default rather than being rejected. */
-        int parsed = 0;
-        int second = 0;
-        int matched = sscanf(buf, "%d %d", &parsed, &second);
-        if (matched >= 1 && parsed > 0 && parsed < 255) {
-            threshold = (uint8_t)parsed;
-        } else if (matched >= 1 && parsed == 0) {
-            restore = 1;
-        }
-        if (matched >= 2 && second > 0) {
-            has_reapply = 1;
-            reapply_sec = second;
-        }
-    } else if (body_len >= 32) {
+    if (body_len >= 32) {
         static const char err[] = "body_too_long";
         return mgmt_reply(MGMT_FRAME_ERROR, err, (uint64_t)(sizeof(err) - 1));
     }
+    int value = 0, reapply_sec = 0;
+    if (fan_threshold_body_parse(body, (size_t)body_len, HW_FAN_THRESHOLD_MIN, HW_FAN_THRESHOLD_MAX, &value,
+                                 &reapply_sec) != 0) {
+        static const char err[] = "bad_threshold";
+        return mgmt_reply(MGMT_FRAME_ERROR, err, (uint64_t)(sizeof(err) - 1));
+    }
+    const int restore = value == 0;
+    const uint8_t threshold = (uint8_t)value;
+    const int has_reapply = reapply_sec > 0;
 
     const char *err_reason = NULL;
     if ((restore ? hw_fan_restore_stock(&err_reason) : hw_fan_set_threshold(threshold, &err_reason)) != 0) {
@@ -9305,23 +9332,11 @@ static void profile_sync_online_json_firstname(uint32_t uid, const char *name) {
         return;
     }
 
-    /* Atomic replace: write a sibling tmp then rename over the original so a
-     * crash mid-write can't leave a truncated online.json. */
+    /* A sibling tmp on disk before the rename, so a crash can't leave a truncated online.json. */
     char tmp[300];
     snprintf(tmp, sizeof(tmp), "%s.ps5up-tmp", path);
-    int wf = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (wf < 0) {
-        free(out);
-        return;
-    }
-    int wr = write_full(wf, out, (size_t)w);
-    close(wf);
+    (void)atomic_file_write(path, tmp, out, (size_t)w, 0644);
     free(out);
-    if (wr != 0) {
-        (void)unlink(tmp);
-        return;
-    }
-    if (rename(tmp, path) != 0) (void)unlink(tmp);
 }
 
 static int handle_profile_set_local_username(const char *body) {
@@ -9433,10 +9448,14 @@ static runtime_state_t *g_mgmt_fs_state;
 
 /* Also the AVA1 data plane's read rule (ava1_glue.c may_read: downloads, hash, crc32), so a path
  * fs.read may open is one a download may open too (the disc and avatar carve-outs included). */
-int mgmt_fs_read_allowed(const char *path, int unsafe_read) {
+static int mgmt_fs_read_roots(const char *path, int unsafe_read) {
     return is_path_allowed(path) || is_profile_avatar_read_path(path) || is_disc_read_path(path) ||
            is_original_user_read_path(path) || is_hyperhen_ready_read_path(path) ||
            (unsafe_read && is_safe_unsafe_read_path(path));
+}
+
+int mgmt_fs_read_allowed(const char *path, int unsafe_read) {
+    return path_read_allowed(path, unsafe_read, mgmt_fs_read_roots);
 }
 
 static void mgmt_fs_count(void) {

@@ -13,8 +13,9 @@
 import { ApiError, call } from "../api";
 import { t } from "../strings";
 import type { ClipItem } from "./clipboard";
-import { baseName, each, joinPath, type BatchOptions } from "./move";
+import { baseName, each, joinPath, type BatchOptions, type BatchResult } from "./move";
 import { freeName, statOrNull, type ConflictChoice, type Decision, type Conflict, type PasteResult } from "./paste";
+import { ReplaceError, replaceItem, type Placed, type ReplaceSide } from "./replace";
 
 export const SMB_PREFIX = "smb://";
 
@@ -119,8 +120,10 @@ export interface ShareForm {
  * do the same (remote/api.rs split_share).
  */
 export function splitShare(share: string, startPath: string): { share: string; start_path: string } {
-  const raw = share.trim();
-  const unc = raw.startsWith("\\\\") || raw.startsWith("//");
+  const typed = share.trim();
+  const scheme = /^(smb|cifs):\/\//i.exec(typed);
+  const raw = scheme ? typed.slice(scheme[0].length) : typed;
+  const unc = scheme !== null || raw.startsWith("\\\\") || raw.startsWith("//");
   const segs = raw.split(/[\\/]/).filter((x) => x.trim() !== "");
   if (unc && segs.length >= 2) segs.shift();
   if (segs.length <= 1) return { share: (segs[0] ?? raw).trim(), start_path: startPath };
@@ -303,7 +306,8 @@ export class SmbJobError extends ApiError {
  * Copy each item into `destDir`, where exactly one of the two is on a share.
  * A name that is taken is asked about: Skip, Keep both ("name (2).ext"), or
  * Replace (a file over a file: the daemon replaces it through its part file; a
- * folder, or a file against a folder: the old one is deleted first). Stop
+ * folder, or a file against a folder: through a temporary name beside the old
+ * one, which goes only once the new one has its place: replace.ts). Stop
  * cancels the job running and leaves the rest.
  */
 export async function transferItems(
@@ -319,17 +323,51 @@ export async function transferItems(
   const dir = destDir.startsWith(SMB_PREFIX) ? smbClean(destDir) : destDir.replace(/\/+$/, "") || "/";
   const declined: string[] = [];
   const cancelled: string[] = [];
+  const halted: string[] = [];
+  const notes: ReplaceError[] = [];
   const kinds = new Map(items.map((i) => [i.path, i.dir]));
   const paths = items.map((i) => i.path);
   let always: ConflictChoice | null = null;
 
-  const waitDelete = async (job: string): Promise<"done" | "failed" | "left"> => {
-    if (!down) {
-      const end = await watch(job, { stopped: opts?.stopped });
-      return end.end === "done" ? "done" : end.end === "cancelled" ? "left" : "failed";
+  const side: ReplaceSide = {
+    taken: async (p) => (await destStat(p)) != null,
+    rename: async (from, to) => {
+      await send(down ? "/api/fs/rename" : "/api/smb/rename", { from, to });
+    },
+    remove: async (p) => {
+      const { job } = await send<{ job: string }>(down ? "/api/fs/delete" : "/api/smb/delete", { path: p });
+      if (!down) await watch(job, {});
+      else if (opts?.waitJob) await opts.waitJob(job, true);
+      return (await destStat(p)) == null;
+    },
+  };
+
+  const copyJob = async (item: string, dest: string, res: BatchResult, overwrite: boolean) => {
+    const { job } = await send<{ job: string }>("/api/smb/copy", overwrite ? { src: item, dest, overwrite } : { src: item, dest });
+    res.started.push(job);
+    return watch(job, {
+      stopped: opts?.stopped,
+      onStatus: (s) => deps.onBytes?.(s.bytes_done, s.bytes_total),
+    });
+  };
+
+  /** Replace `dest` with `item`, through a temporary name (replace.ts). */
+  const replace = async (item: string, dest: string, res: BatchResult): Promise<void> => {
+    const place = async (temp: string): Promise<Placed> => {
+      const end = await copyJob(item, temp, res, false);
+      if (end.end === "done") return { end: "done" };
+      if (end.end === "cancelled") return { end: "stopped" };
+      if (end.end === "gone") return { end: "failed", why: new ApiError(502, "smb_job_lost") };
+      return { end: "failed", why: new SmbJobError(end.status.error ?? "io_error", end.status.failed) };
+    };
+    const r = await replaceItem(side, dir, dest, place);
+    const name = baseName(dest);
+    if (r.end === "stopped") {
+      halted.push(item);
+      if (r.temp) notes.push(new ReplaceError("temp_left", name, { temp: r.temp }));
+    } else if (r.old) {
+      notes.push(new ReplaceError("old_left", name, { old: r.old }));
     }
-    const end = opts?.waitJob ? await opts.waitJob(job) : "done";
-    return end === "left" ? "left" : end === "failed" ? "failed" : "done";
   };
 
   const r = await each(paths, { onProgress: opts?.onProgress, stopped: opts?.stopped }, async (item, res) => {
@@ -359,21 +397,10 @@ export async function transferItems(
       } else if (!isDir && existing.kind !== "dir") {
         overwrite = true;
       } else {
-        const { job } = await send<{ job: string }>(down ? "/api/fs/delete" : "/api/smb/delete", { path: dest });
-        const end = await waitDelete(job);
-        if (end === "left") {
-          cancelled.push(item);
-          return;
-        }
-        if (end === "failed") throw new ApiError(500, "replace_delete_failed");
+        return replace(item, dest, res);
       }
     }
-    const { job } = await send<{ job: string }>("/api/smb/copy", overwrite ? { src: item, dest, overwrite } : { src: item, dest });
-    res.started.push(job);
-    const end = await watch(job, {
-      stopped: opts?.stopped,
-      onStatus: (s) => deps.onBytes?.(s.bytes_done, s.bytes_total),
-    });
+    const end = await copyJob(item, dest, res, overwrite);
     if (end.end === "done") return;
     if (end.end === "cancelled") {
       cancelled.push(item);
@@ -383,15 +410,17 @@ export async function transferItems(
     throw new SmbJobError(end.status.error ?? "io_error", end.status.failed);
   });
 
-  const notDone = new Set<string>(declined.concat(cancelled, r.skipped, r.jobFailed, r.failed.map((f) => f.item)));
+  const notDone = new Set<string>(declined.concat(cancelled, halted, r.skipped, r.jobFailed, r.failed.map((f) => f.item)));
   return {
     ...r,
-    skipped: cancelled.concat(r.skipped),
+    cancelled,
+    skipped: halted.concat(r.skipped),
     done: paths.filter((p) => !notDone.has(p)),
     left: [],
-    halted: [],
+    halted,
     declined,
     here: [],
+    notes,
   };
 }
 

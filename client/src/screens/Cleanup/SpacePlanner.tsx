@@ -48,6 +48,7 @@ import {
   type StepProgress,
 } from "../../state/spacePlanRun";
 import { runWalk } from "../DiskUsage/duTree";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 type Tr = ReturnType<typeof useTr>;
 
@@ -318,7 +319,7 @@ function StepRow({
         {bits.length > 0 ? <div className="text-xs text-[var(--color-muted)]">{bits.join(" · ")}</div> : null}
         {detail ? <div className="text-xs text-[var(--color-bad)]">{detail}</div> : null}
       </div>
-      <div className="shrink-0 text-right text-sm tabular-nums">{formatBytes(c.bytes)}</div>
+      <div className="shrink-0 text-end text-sm tabular-nums">{formatBytes(c.bytes)}</div>
     </li>
   );
 }
@@ -393,7 +394,7 @@ export function SpacePlanner({
         const paths = d.map((x) => x.path);
         setDrive((cur) => cur || resolveDrive(request?.drive ?? "internal", paths) || paths[0] || "");
       })
-      .catch((e) => on && setError(e instanceof Error ? e.message : String(e)));
+      .catch((e) => on && setError(humanizeCaught(e)));
     return () => {
       on = false;
     };
@@ -461,7 +462,7 @@ export function SpacePlanner({
       setUnmeasured(g.unmeasured);
       setSelected(new Set(proposed.steps.filter((s) => s.selected).map((s) => s.candidate.id)));
     } catch (e) {
-      if (gen === live.current) setError(e instanceof Error ? e.message : String(e));
+      if (gen === live.current) setError(humanizeCaught(e));
     } finally {
       if (gen === live.current) setPhase(null);
     }

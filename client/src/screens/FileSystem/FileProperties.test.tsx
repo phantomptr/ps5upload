@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { FilePropertiesView } from "./FileProperties";
 
 vi.mock("../../state/lang", () => ({
+  useLangStore: { getState: () => ({ lang: "en" }) },
   useTr: () => (k: string, _v: unknown, fallback?: string) => fallback ?? k,
 }));
 

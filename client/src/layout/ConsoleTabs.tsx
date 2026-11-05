@@ -29,14 +29,18 @@ function StatusDot({ host }: { host: string }) {
   // Rest mode is a calm accent with its own tooltip, not the red of a fault.
   const light = consoleLight(rt);
   const quiet = light === "rest" || light === "unreachable";
+  // The dot is colour alone: the hidden text gives the tab its state for a screen reader.
   return (
-    <span
-      className="inline-block h-2 w-2 shrink-0 rounded-full"
-      style={{ background: consoleLightColor(light) }}
-      data-light={light}
-      title={quiet ? consoleLightLabel(light, tr) : undefined}
-      aria-hidden
-    />
+    <>
+      <span
+        className="inline-block h-2 w-2 shrink-0 rounded-full"
+        style={{ background: consoleLightColor(light) }}
+        data-light={light}
+        title={quiet ? consoleLightLabel(light, tr) : undefined}
+        aria-hidden
+      />
+      <span className="sr-only">{consoleLightLabel(light, tr)}</span>
+    </>
   );
 }
 
@@ -188,7 +192,10 @@ export default function ConsoleTabs() {
               if (e.key === "Escape") setAdding(false);
             }}
             placeholder={tr("console_tab_ip", "PS5 IP")}
-            inputMode="decimal"
+            inputMode="url"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
             className="w-28 rounded-full bg-[var(--color-surface)] px-3 py-1 text-sm outline-none"
           />
           <input

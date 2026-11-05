@@ -2,8 +2,9 @@
 // The website's translations (site/i18n/<code>.json) against its English (site/index.html's
 // data-i18n and data-i18n-attr, and app.js's t("key", "English") calls).
 //
-//   node scripts/site-i18n.mjs          check: every language has every key, no stale keys, and
-//                                        the same tags and {placeholders} as the English
+//   node scripts/site-i18n.mjs          check: every language has every key, no stale keys, the
+//                                        same tags and {placeholders} as the English, and no
+//                                        prose left in English
 //   node scripts/site-i18n.mjs --write  also rewrite site/i18n/en.json, the English the
 //                                        translators work from
 //
@@ -47,6 +48,22 @@ if (process.argv.includes("--write")) {
 /** What has to survive translation: tags (with their attributes) and {placeholders}. */
 const shape = (s) => [...s.matchAll(/<[^>]+>|\{\w+\}/g)].map((m) => m[0]).sort().join(" ");
 
+/** Two words of 3+ letters: a translator would be expected to change it (same test as i18n-coverage.mjs). */
+const isProse = (s) => (s.match(/[A-Za-z]{3,}/g) ?? []).length >= 2;
+
+/** English text that is right as it is. Distro names don't translate; "portable" is also the es and fr word. */
+const SAME_AS_ENGLISH = {
+  "dl.linux_arm64_deb": "*",
+  "dl.linux_arm64_rpm": "*",
+  "dl.linux_x64_deb": "*",
+  "dl.linux_x64_rpm": "*",
+  "dl.win_arm64_zip": ["es", "fr"],
+};
+const mayStayEnglish = (key, code) => {
+  const allowed = SAME_AS_ENGLISH[key];
+  return allowed === "*" || (Array.isArray(allowed) && allowed.includes(code));
+};
+
 let bad = 0;
 const fail = (msg) => {
   bad++;
@@ -66,6 +83,7 @@ for (const code of LANGS.filter((c) => c !== "en")) {
   for (const k of Object.keys(en)) {
     if (typeof tr[k] !== "string" || !tr[k].trim()) fail(`${code}: missing ${k}`);
     else if (shape(tr[k]) !== shape(en[k])) fail(`${code}: ${k} has other tags or placeholders than the English`);
+    else if (tr[k] === en[k] && isProse(en[k]) && !mayStayEnglish(k, code)) fail(`${code}: ${k} is still English: ${en[k]}`);
   }
   for (const k of Object.keys(tr)) if (!(k in en)) fail(`${code}: ${k} is not used any more`);
   const missing = SHOTS.filter((f) => !existsSync(`${site}assets/shots/${code}/${f}`));

@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { useEffect, useRef } from "react";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { pushNotification } from "./notifications";
+import { trStatic } from "../lib/trStatic";
 
 /**
  * Browser-side scheduled operations.
@@ -235,8 +236,8 @@ export function evaluateSchedule(
  *  "Run now" for a missed run both go through here. */
 export function runScheduleAction(s: Schedule): void {
   if (s.action === "notif") {
-    pushNotification("info", `Scheduled: ${s.label}`, {
-      body: s.body ?? "Schedule fired.",
+    pushNotification("info", trStatic("schedule_fired_title", "Scheduled: {name}", { name: s.label }), {
+      body: s.body ?? trStatic("schedule_fired_body", "Schedule fired."),
     });
   }
 }

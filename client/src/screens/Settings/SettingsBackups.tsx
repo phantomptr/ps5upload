@@ -13,7 +13,7 @@ import { syncId } from "../../lib/meshShare";
 import {
   applyBundle,
   backupBeforeChange,
-  buildBundle,
+  buildBackupBundle,
   getEngineBackup,
   listConsoleBackups,
   listEngineBackups,
@@ -29,6 +29,7 @@ import { useTr, type Translator } from "../../state/lang";
 import { meshFor, useMeshStore } from "../../state/mesh";
 import { useToastStore } from "../../state/toasts";
 import { BACKUP_ROWS_SHOWN, groupBackups, type BackupDeviceGroup } from "./backupGroups";
+import { formatDate } from "../../lib/formatDate";
 
 function reasonText(tr: Translator, r: string): string {
   switch (r) {
@@ -84,7 +85,7 @@ export function SettingsBackups() {
     setBusy(true);
     setError(null);
     try {
-      const b = buildBundle("manual", label);
+      const b = buildBackupBundle("manual", label);
       await saveEngineBackup(b);
       if (consoleOk) await saveConsoleBackup(host, me, label, b);
       useToastStore.getState().push({ tone: "success", message: tr("backup_saved", undefined, "Settings backed up") });
@@ -136,7 +137,7 @@ export function SettingsBackups() {
     }
   };
 
-  const when = (ms: number) => new Date(ms).toLocaleString();
+  const when = (ms: number) => formatDate(ms);
 
   const engineGroups = groupBackups(
     (local ?? []).map((b) => ({
@@ -249,7 +250,7 @@ function BackupSection<T>({
       else next.add(key);
       return next;
     });
-  const short = (ms: number) => new Date(ms).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
+  const short = (ms: number) => formatDate(ms);
   const rowCount = (groups ?? []).reduce((n, g) => n + g.rows.length, 0);
   let budget = all ? Infinity : BACKUP_ROWS_SHOWN;
   const shown = (groups ?? [])

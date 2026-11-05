@@ -26,6 +26,7 @@
 #include "path_policy.h"
 #include "pkg_info.h"
 #include "pkg_install_logic.h"
+#include "sigpipe_guard.h"
 #include "webui_codec.h"
 #include "webui_installer.h"
 
@@ -316,7 +317,7 @@ static int connect_local(int port, int timeout_s) {
 static int send_all(int s, const void *b, size_t n) {
     const char *p = b;
     while (n) {
-        ssize_t w = send(s, p, n, 0);
+        ssize_t w = send(s, p, n, MSG_NOSIGNAL);
         if (w < 0 && errno == EINTR) continue;
         if (w <= 0) return -1;
         p += w;

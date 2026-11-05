@@ -244,7 +244,7 @@ export function GameCard(props: GameCardProps) {
                 <button
                   type="button"
                   onClick={props.onView}
-                  className="ml-2 text-[var(--color-accent)] hover:underline"
+                  className="ms-2 text-[var(--color-accent)] hover:underline"
                 >
                   {tr("viewer_open", undefined, "View details")}
                 </button>

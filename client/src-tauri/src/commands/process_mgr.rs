@@ -15,8 +15,8 @@ pub async fn process_list_get(addr: String) -> Result<JsonValue, String> {
     tokio::task::spawn_blocking(move || process_list(&addr))
         .await
         .map_err(|e| format!("process_list task: {e}"))?
-        .map(|r| serde_json::to_value(r).unwrap_or(serde_json::json!({})))
         .map_err(|e| format!("process_list: {e}"))
+        .and_then(super::reply_json)
 }
 
 /// SIGKILL a process by pid. The payload guards self/kernel/init; the
@@ -26,6 +26,6 @@ pub async fn process_kill_pid(addr: String, pid: i32) -> Result<JsonValue, Strin
     tokio::task::spawn_blocking(move || process_kill(&addr, pid))
         .await
         .map_err(|e| format!("process_kill task: {e}"))?
-        .map(|ack| serde_json::to_value(ack).unwrap_or(serde_json::json!({})))
         .map_err(|e| format!("process_kill: {e}"))
+        .and_then(super::reply_json)
 }

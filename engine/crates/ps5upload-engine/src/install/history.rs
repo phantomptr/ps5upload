@@ -206,8 +206,8 @@ mod tests {
         // Measured on the Phat: history was written under ..._9114.jsonl and
         // the bare-host read (the bug bundle's) always came back empty.
         let d = TmpDir::new();
-        append(d.path(), "192.168.86.99:9114", &entry("a"), HISTORY_CAP).unwrap();
-        let got = read_recent(d.path(), "192.168.86.99", 10);
+        append(d.path(), "192.0.2.99:9114", &entry("a"), HISTORY_CAP).unwrap();
+        let got = read_recent(d.path(), "192.0.2.99", 10);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].job, "a");
     }
@@ -220,14 +220,14 @@ mod tests {
         let mut old = entry("old");
         old.at = 1_790_000_000;
         std::fs::write(
-            d.path().join("192.168.86.99_9114.jsonl"),
+            d.path().join("192.0.2.99_9114.jsonl"),
             format!("{}\n", serde_json::to_string(&old).unwrap()),
         )
         .unwrap();
         let mut new = entry("new");
         new.at = 1_790_000_100;
-        append(d.path(), "192.168.86.99:9114", &new, HISTORY_CAP).unwrap();
-        let got = read_recent(d.path(), "192.168.86.99", 10);
+        append(d.path(), "192.0.2.99:9114", &new, HISTORY_CAP).unwrap();
+        let got = read_recent(d.path(), "192.0.2.99", 10);
         assert_eq!(
             got.iter().map(|e| e.job.as_str()).collect::<Vec<_>>(),
             ["new", "old"]

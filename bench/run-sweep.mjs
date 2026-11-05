@@ -180,7 +180,8 @@ function spawnEngine(ps5Addr) {
   }
   const child = spawn(cmd, args, {
     cwd: path.join(repoRoot, 'engine'),
-    env: { ...process.env, PS5_ADDR: ps5Addr },
+    // PS5UPLOAD_ENGINE_DEBUG: /api/ps5/cleanup, which clears the sweep's folder, answers only then.
+    env: { ...process.env, PS5_ADDR: ps5Addr, PS5UPLOAD_ENGINE_DEBUG: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stdout?.on('data', (c) => process.stdout.write(String(c)));

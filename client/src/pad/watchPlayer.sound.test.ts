@@ -33,6 +33,7 @@ function fakeElement(tag: string) {
     tag,
     className: "",
     dataset: {} as Record<string, string>,
+    addEventListener() {},
     src: "",
     muted: false,
     autoplay: false,

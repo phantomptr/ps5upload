@@ -61,6 +61,11 @@ pub struct ControllerState {
     /// The pad's motion sensors (a phone's), or none: held still and level.
     #[serde(default)]
     pub motion: Option<MotionSample>,
+    /// The buttons (same bits as `buttons`) the page's turbo is pressing above 10 a second: their
+    /// presses and releases may be shorter (pad_pace.rs). Never reaches the console. Only the
+    /// page sets it; the API and MCP input routes and older pages leave it 0.
+    #[serde(default, skip_serializing)]
+    pub turbo: u32,
 }
 
 /// One reading of a pad's motion sensors, in the controller's axes (x right, y up out of its

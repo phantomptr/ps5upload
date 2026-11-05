@@ -10,6 +10,8 @@
 #   - Microsoft Edge WebView2 Runtime (preinstalled on Win11; verified)
 #   - Repository-pinned PS5 Payload SDK (currently v0.45)
 #     → $env:USERPROFILE\ps5-payload-sdk
+#   - Its portable prospero-nid, and the pinned SQLite sources the payload compiles
+#     → payload\third_party\sqlite3
 #
 # Run from an elevated PowerShell:
 #   PS> Set-ExecutionPolicy -Scope Process Bypass -Force
@@ -211,6 +213,86 @@ if ((Test-Path $prosperoMk) -and $installedSdkTag -eq $SdkTag) {
     if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
   }
   Ok "PS5 SDK $SdkTag installed at $SdkDir"
+}
+
+# ─── 6b. Portable prospero-nid ─────────────────────────────────────────────────
+# The SDK archive carries a Linux/x86-64 prospero-nid; the tagged source is portable Python.
+# Same pinned copy as scripts/install-ps5-sdk.sh. Nothing in `make payload` runs it, so Python is
+# not installed for it: only used to check it when it is already here.
+$portableNid = Join-Path $PSScriptRoot 'ps5-sdk\prospero-nid'
+if (-not (Test-Path $portableNid)) { Die "missing portable prospero-nid at $portableNid" }
+$nidSha256 = (Get-FileHash -Algorithm SHA256 -Path $portableNid).Hash.ToLowerInvariant()
+if ($nidSha256 -ne $sdkMetadata['PS5_SDK_NID_SHA256']) {
+  Die 'portable prospero-nid checksum does not match scripts\ps5-sdk.env'
+}
+$installedNid = Join-Path $SdkDir 'bin\prospero-nid'
+Copy-Item -Path $portableNid -Destination $installedNid -Force
+Ok "Installed portable prospero-nid at $installedNid"
+foreach ($python in @('python3', 'python')) {
+  if (-not (Has-Cmd $python)) { continue }
+  # Windows' Store stubs answer to these names and fail.
+  & $python --version *> $null
+  if ($LASTEXITCODE -ne 0) { continue }
+  $nid = & $python $installedNid sceKernelGetProcessTime
+  if ($nid -ne '4J2sUJmuHZQ') { Die "prospero-nid self-test failed (got $nid)" }
+  Ok 'prospero-nid self-test passed'
+  break
+}
+
+# ─── 6c. SQLite amalgamation ───────────────────────────────────────────────────
+# The payload compiles a real SQLite from these sources. Fetched rather than committed, pinned by
+# version and SHA-256 in ps5-sdk.env; same steps and archive-layout guard as install-ps5-sdk.sh.
+$sqliteVersion = $sdkMetadata['PS5_SQLITE_VERSION']
+$sqliteYear = $sdkMetadata['PS5_SQLITE_YEAR']
+$sqliteSha256 = $sdkMetadata['PS5_SQLITE_SHA256']
+if ($sqliteVersion -notmatch '^\d{7}$') { Die 'PS5_SQLITE_VERSION in scripts\ps5-sdk.env is invalid' }
+if ($sqliteYear -notmatch '^\d{4}$') { Die 'PS5_SQLITE_YEAR in scripts\ps5-sdk.env is invalid' }
+if ($sqliteSha256 -notmatch '^[0-9a-f]{64}$') { Die 'PS5_SQLITE_SHA256 in scripts\ps5-sdk.env must be a lowercase SHA-256' }
+$sqliteDir = Join-Path $repoRoot 'payload\third_party\sqlite3'
+$sqliteStamp = Join-Path $sqliteDir '.version'
+if ((Test-Path (Join-Path $sqliteDir 'sqlite3.c')) -and (Test-Path (Join-Path $sqliteDir 'sqlite3.h')) -and
+    (Test-Path $sqliteStamp) -and ((Get-Content $sqliteStamp -Raw).Trim() -eq $sqliteVersion)) {
+  Ok "SQLite $sqliteVersion amalgamation already present"
+} else {
+  Log "Downloading SQLite $sqliteVersion amalgamation"
+  $tmp = Join-Path $env:TEMP "ps5sqlite-$(Get-Random)"
+  New-Item -ItemType Directory -Path $tmp | Out-Null
+  try {
+    $zip = Join-Path $tmp 'sqlite-amalgamation.zip'
+    Invoke-WebRequest -UseBasicParsing -Uri "https://www.sqlite.org/$sqliteYear/sqlite-amalgamation-$sqliteVersion.zip" -OutFile $zip
+    $actualSha256 = (Get-FileHash -Algorithm SHA256 -Path $zip).Hash.ToLowerInvariant()
+    if ($actualSha256 -ne $sqliteSha256) {
+      Die "SQLite checksum mismatch: expected $sqliteSha256, got $actualSha256"
+    }
+    Ok "Verified SQLite archive SHA-256 $actualSha256"
+
+    # Every entry must live under the one documented top-level folder, with no traversal.
+    $top = "sqlite-amalgamation-$sqliteVersion"
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
+    try {
+      foreach ($entry in $archive.Entries) {
+        $name = $entry.FullName -replace '\\', '/'
+        if (-not $name.StartsWith("$top/")) { Die "unexpected SQLite archive entry: $name" }
+        if ("/$name/" -match '/\.\.?/') { Die "unsafe SQLite archive entry: $name" }
+      }
+    } finally {
+      $archive.Dispose()
+    }
+
+    Expand-Archive -Path $zip -DestinationPath $tmp -Force
+    foreach ($file in @('sqlite3.c', 'sqlite3.h')) {
+      if (-not (Test-Path (Join-Path $tmp "$top\$file"))) { Die "SQLite archive is missing $file" }
+    }
+    New-Item -ItemType Directory -Path $sqliteDir -Force | Out-Null
+    foreach ($file in @('sqlite3.c', 'sqlite3.h')) {
+      Copy-Item -Path (Join-Path $tmp "$top\$file") -Destination (Join-Path $sqliteDir $file) -Force
+    }
+    Set-Content -Path $sqliteStamp -Value $sqliteVersion -Encoding ascii
+  } finally {
+    if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
+  }
+  Ok "Installed SQLite $sqliteVersion sources at $sqliteDir"
 }
 
 # ─── 7. client npm deps ────────────────────────────────────────────────────────

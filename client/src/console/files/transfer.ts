@@ -10,7 +10,7 @@
  * itself there is nothing to pick files from and nowhere to save them.
  */
 import { ApiError, call, callRaw, sendWithProgress } from "../api";
-import { isPs5Browser } from "../backHistory";
+import { isPs5Browser } from "../fullscreen";
 import { onConsoleBrowser } from "../ui/PhoneHandoff";
 import { joinPath } from "./move";
 
@@ -117,11 +117,6 @@ export function uploadFolders(items: UploadItem[]): string[] {
     for (let i = 1; i < parts.length; i++) set.add(parts.slice(0, i).join("/"));
   }
   return Array.from(set).sort((a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b));
-}
-
-/** Total bytes of the items. */
-export function uploadBytes(items: UploadItem[]): number {
-  return items.reduce((s, it) => s + it.file.size, 0);
 }
 
 /**

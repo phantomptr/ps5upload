@@ -1,4 +1,5 @@
 import { hostOf } from "../../lib/addr";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /** What the game page holds: the answer for one title id, tagged with that id. */
 export interface TitledResult<T> {
@@ -30,7 +31,7 @@ export async function loadTitled<T>(
   try {
     r = { titleId, value: await read(titleId), error: null };
   } catch (e) {
-    r = { titleId, value: null, error: e instanceof Error ? e.message : String(e) };
+    r = { titleId, value: null, error: humanizeCaught(e) };
   }
   if (current() !== titleId) return;
   apply(r);

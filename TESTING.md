@@ -18,13 +18,14 @@ npm run validate      # or: make quality
 ```
 
 Runs, and fails on any of: version drift against `VERSION`; script syntax
-(Node, Bash, Python, and PowerShell when `pwsh` is present); the script
-inventory audit; `git whitespace` (`git diff --check`); **engine fmt**,
-**engine clippy** (`-D warnings`) and **engine tests**; **desktop clippy**
-(`--all-targets`, which type-checks everything a `cargo check` would) and
-**desktop tests**; **client typecheck**,
-**client lint**, **client tests** and **client vite build**; and **i18n
-coverage**.
+(Node, Bash, Python, and PowerShell when `pwsh` is present); the Linux launcher,
+Sony API lock and per-console isolation checks (skipped on Windows); the script
+inventory audit (`--strict`, as CI); `git whitespace` (`git diff --check`);
+**engine fmt**, **engine clippy** (`--locked -D warnings`) and **engine tests**;
+**desktop fmt**, **desktop clippy** (`--all-targets --locked`, which type-checks
+everything a `cargo check` would) and **desktop tests**; **client typecheck**,
+**client lint**, **client tests**, **client vite build** and the **embedded guest
+and pad pages** (rebuilt and compared with the committed files); and **i18n coverage**.
 
 Two of these catch things the others structurally cannot, and both have
 caught real regressions:
@@ -54,12 +55,12 @@ export PS5_PAYLOAD_SDK=/opt/ps5-payload-sdk
 npm run validate:full          # or: make quality-full / make test-payload
 ```
 
-Builds `payload/ps5upload.elf` and the DPI daemon, checks both are PS5
+Builds `payload/ps5upload.elf` and the installer, checks both are PS5
 ELFs with valid gzip resources, then runs every host self-test with
-`-Wall -Wextra -Werror`:
+`-Wall -Wextra -Werror`.
 
 Each self-test lives in `payload/tests/*_selftest.c` (hardware guards, ptrace recovery,
-`app.db` reading, FTP, SDK param rewriting, installer, cheats, wake watchdog and more). The
+`app.db` reading, SDK param rewriting, installer, cheats, wake watchdog and more).
 The payload's AVA1 code (the management methods, the glue) is tested by `ps5upload-ctest`, which
 compiles it with the AVA1 C library on the host and checks it against the Rust side (see the full
 gate below). The AVA1 library itself is tested in its own repository (`third_party/ava1`:
@@ -80,7 +81,7 @@ run `make test-payload`, and commit the changed pin.
 
 **Adding payload logic?** If it can be separated from the console, put it
 header-only in `payload/include/` and give it a self-test here. That is
-the established convention and the reason the list above exists.
+the established convention.
 
 ## Layer 3 — live console
 
@@ -102,9 +103,9 @@ committed defaults — those stay generic on purpose.
 |---|---|
 | `make validate` | Build, send, wait for `:9120`, smoke, sweep, write `bench/reports/<ts>-sweep.{json,md}` |
 | `make validate-xl` | Adds the 200k-file stress profile |
-| `node tests/smoke-hardware.mjs --no-spawn-engine` | Against an engine already running |
+| `node tests/smoke-hardware.mjs --no-spawn-engine` | Against an engine already running (started with `PS5UPLOAD_ENGINE_DEBUG=1`, or its cleanup step answers 404) |
 
-Clean up test uploads afterwards:
+Clean up test uploads afterwards. This route answers only on an engine started with `PS5UPLOAD_ENGINE_DEBUG=1`, which the test scripts do:
 
 ```sh
 curl -X POST http://127.0.0.1:19113/api/ps5/cleanup \
@@ -127,9 +128,8 @@ Before testing a payload change:
   `/api/ps5/status` between steps.
 - Some reads (temperatures, power telemetry) ptrace-pause the system UI.
   They are safe on demand and unsafe on a loop.
-- Expect blanks that are not bugs: SoC clock, SoC power, CPU usage, fan
-  duty, per-drive sensors and the console date/time are not exposed by
-  retail firmware.
+- Expect blanks that are not bugs: not every firmware answers every sensor
+  read (SoC power, clocks, per-drive sensors), and the helper has to be new enough to send each one.
 
 ## Layer 4 — fresh-install matrix, per release
 
@@ -152,6 +152,16 @@ macOS x64. Sideload the APK on a real Android device.
 See `v2.5.1` and `v2.5.2` for the "noticed after release, patched same
 day" playbook.
 
+## Browser tests
+
+```sh
+cd client && npm run build:vite && npx playwright test   # or name a spec file
+```
+
+The suite starts its own servers on ports 14470-14472 (`PS5UPLOAD_VITE_PORT` moves them), so a dev
+server on 1420 is left alone. In CI a test that passes only on its retry fails the run; the job
+uploads the traces of what failed as `playwright-results`.
+
 ## Coverage reports
 
 ```sh
@@ -168,7 +178,7 @@ and `coverage/engine/lcov.info`. Rust coverage needs `cargo-llvm-cov`
 
 CI checks the core crate for every shipped target
 (`x86_64`/`aarch64` × linux-gnu, apple-darwin, pc-windows-msvc) and runs
-the desktop Rust suite natively on `ubuntu-24.04`, `macos-14` and
+the desktop Rust suite natively on `ubuntu-24.04`, `macos-15` and
 `windows-2022` — that native matrix is what exercises the
 `#[cfg(target_os = ...)]` paths (keep-awake, update/download handling,
 launcher, sidecar extraction). A macOS dev box generally cannot build the
@@ -203,7 +213,8 @@ runtimes support (`PS5UPLOAD_IOS_SIM="iPhone 17 Pro"` picks another), and shuts 
 end if it booted it. Xcode needs its iOS platform once: `xcodebuild -downloadPlatform iOS`.
 The simulator shows how the app looks and works and can reach a PS5 on this Mac's network; the
 limits of a real iPhone (background suspension, the local-network prompt) only show on one. As on
-Android the engine runs in-process; unlike Android, `.rar` works.
+Android the engine runs in-process and `.rar` isn't available: the RAR helper is a separate program,
+which a phone app can't start.
 
 ## Self-hosted engine
 
@@ -228,6 +239,11 @@ must exist there or the gate fails. Then either translate it into the 20
 other locales (21 locale files in all) or add it to `scripts/i18n-known-missing.json` as a deliberate,
 scoped deferral.
 
+When you change the English of an existing key, retranslate it too. `i18n:check` compares against
+`scripts/i18n-source-hashes.json` and fails when English moved but a translation did not. After
+retranslating run `npm run i18n:hashes`; if a translation is still right (only the case changed, say)
+run `npm run i18n:ack -- <key>`. The site's strings are covered the same way.
+
 **Do not run `i18n:bootstrap`.** It rewrites the allowlist to the current
 state, silencing every gap at once — including whatever you were about to
 forget.
@@ -250,8 +266,8 @@ This needed a fix: upstream `unrar 0.5.8` reads ~8 KB out of a much
 smaller buffer every time it crosses a volume boundary, which aborted any
 debug build that touched a multi-part `.rar` and was a latent
 out-of-bounds read in release. `0.5.8` is the latest release, so the crate
-is vendored at `third_party/unrar` with the fix and both workspaces
-redirect to it via `[patch.crates-io]`.
+is vendored at `third_party/unrar` with the fix and `engine/Cargo.toml`
+redirects to it via `[patch.crates-io]` (the desktop app gets it through the engine's helper).
 
 See `third_party/unrar/README.md` for the patch. If you bump
 the crate, re-apply the hunk or drop the vendoring once upstream ships the

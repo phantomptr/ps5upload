@@ -243,6 +243,28 @@ int main(void) {
     }
     CHECK(cheats_list_build(&c, small, 100, &w) == -1);
 
+    /* a title with hundreds of cheats on: its sidecar is well past 4 KiB and still counts */
+    clear_files();
+    g_mods = 600;
+    put(dirs[0], "CUSA20001_01.00.json", "x");
+    {
+        static char big[CHEATS_STATE_FILE_MAX + 2];
+        size_t at = (size_t)snprintf(big, sizeof big, "{");
+        for (int k = 0; k < 600; k++) at += (size_t)snprintf(big + at, sizeof big - at, "%s\"%d\":true", k ? "," : "", k);
+        snprintf(big + at, sizeof big - at, "}");
+        CHECK(strlen(big) > 4096);
+        put(state_dir, "CUSA20001.json", big);
+        CHECK(cheats_list_build(&c, buf, sizeof buf, &w) == 0);
+        CHECK(strstr(buf, "\"enabled\":600") != NULL);
+        /* past the limit it is not read, as the toggle code refuses it too */
+        memset(big, ' ', CHEATS_STATE_FILE_MAX + 1);
+        big[CHEATS_STATE_FILE_MAX + 1] = 0;
+        put(state_dir, "CUSA20001.json", big);
+        CHECK(cheats_list_build(&c, buf, sizeof buf, &w) == 0);
+        CHECK(strstr(buf, "\"enabled\":0") != NULL);
+    }
+    g_mods = 3;
+
     /* invalid UTF-8 names are replaced, so the document parses */
     clear_files();
     put(dirs[0], "CUSA10001_01.00.json", "name=Caf\xE9 \x82\xA0 \xF0\x9F");

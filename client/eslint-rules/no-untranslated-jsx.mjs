@@ -12,9 +12,14 @@
  *   1. JSX text nodes      — <span>Cancel</span>
  *   2. UI-facing string-literal attributes — placeholder="Search…",
  *      title="…", alt="…", aria-label="…", label="…"
+ *   3. The same attributes built without tr(): a template literal
+ *      (title={`Unmount ${path}`}), or a literal or template in a branch of
+ *      `a ? "x" : "y"` / `a ?? "x"` / `a || "x"`.
  *
  * It does NOT flag:
- *   • {expr} children/attributes (already dynamic — tr() lives there)
+ *   • other {expr} children/attributes (tr() lives there). A template made
+ *     only of placeholders and punctuation has no text of its own, so
+ *     title={`${tr("a")}: ${name}`} is fine.
  *   • whitespace / punctuation / number-only / entity-only text
  *   • anything in ALLOWED_STRINGS or matching ALLOWED_PATTERNS below
  *
@@ -57,6 +62,7 @@ const ALLOWED_PATTERNS = [
   /\.(ini|log|gz|elf|bin|pkg|txt)\b/i, //   filenames
   /^\/[\w./-]+$/, //   absolute paths
   /^0x[0-9a-f]+$/i, //   hex example values (account ids, offsets)
+  /^(rtmps?|srt|https?):\/\//i, //   URL examples in a placeholder
 ];
 
 // JSX attributes whose string value is rendered to the user.
@@ -80,6 +86,33 @@ function isTranslatable(raw) {
   if (ALLOWED_STRINGS.has(text)) return false;
   if (ALLOWED_PATTERNS.some((re) => re.test(text))) return false;
   return true;
+}
+
+/**
+ * The string parts of an attribute's expression a user would read as they are:
+ * literals and the fixed text of templates, through `?:`, `??` and `||` (never
+ * into a call, so tr(...) stays out). Each result is the text with a template's
+ * placeholders dropped, so `Unmount ${path}` gives "Unmount".
+ */
+function literalParts(expr) {
+  switch (expr.type) {
+    case "Literal":
+      return typeof expr.value === "string" ? [expr.value] : [];
+    case "TemplateLiteral":
+      return [expr.quasis.map((q) => q.value.cooked ?? "").join(" ")];
+    case "ConditionalExpression":
+      return [...literalParts(expr.consequent), ...literalParts(expr.alternate)];
+    case "LogicalExpression":
+      // `a && "x"`: only "x" can be text. `a ?? "x"` / `a || "x"`: either side.
+      return expr.operator === "&&"
+        ? literalParts(expr.right)
+        : [...literalParts(expr.left), ...literalParts(expr.right)];
+    case "TSAsExpression":
+    case "TSNonNullExpression":
+      return literalParts(expr.expression);
+    default:
+      return [];
+  }
 }
 
 /** @type {import("eslint").Rule.RuleModule} */
@@ -113,22 +146,20 @@ const rule = {
         if (!UI_ATTRS.has(name)) return;
         const init = node.value;
         if (!init) return;
-        let literal = null;
+        let parts = [];
         if (init.type === "Literal" && typeof init.value === "string") {
-          literal = init.value;
-        } else if (
-          init.type === "JSXExpressionContainer" &&
-          init.expression.type === "Literal" &&
-          typeof init.expression.value === "string"
-        ) {
-          literal = init.expression.value;
+          parts = [init.value];
+        } else if (init.type === "JSXExpressionContainer") {
+          parts = literalParts(init.expression);
         }
-        if (literal === null || !isTranslatable(literal)) return;
-        context.report({
-          node,
-          messageId: "attr",
-          data: { attr: name, text: literal.slice(0, 60) },
-        });
+        for (const literal of parts) {
+          if (!isTranslatable(literal)) continue;
+          context.report({
+            node,
+            messageId: "attr",
+            data: { attr: name, text: literal.trim().slice(0, 60) },
+          });
+        }
       },
     };
   },

@@ -74,3 +74,29 @@ describe("keeping the patched elfldr in place", () => {
     ).resolves.toBeUndefined();
   });
 });
+
+describe("the elfldr swap and a running playlist", () => {
+  it("waits for the auto-loader to finish before swapping", async () => {
+    let polls = 0;
+    const order: string[] = [];
+    await guardElfldr("10.0.0.2", true, {
+      ensure: async () => void order.push("swap"),
+      playlistRuns: () => {
+        const running = polls++ < 2;
+        if (running) order.push("playlist");
+        return running;
+      },
+      ...clock,
+    });
+    expect(order).toEqual(["playlist", "playlist", "swap"]);
+  });
+
+  it("leaves a playlist that outlasts the wait, and asks again next time", async () => {
+    let swaps = 0;
+    const deps = { ensure: async () => void swaps++, playlistRuns: () => true, ...clock };
+    await guardElfldr("10.0.0.2", false, deps);
+    expect(swaps).toBe(0);
+    await guardElfldr("10.0.0.2", false, { ...deps, playlistRuns: () => false });
+    expect(swaps).toBe(1);
+  });
+});

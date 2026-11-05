@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import { hostOf } from "../lib/addr";
+import { readWithRetries } from "../lib/pollRead";
 
 /**
  * A speed test between this computer and a console, kept outside the screen.
@@ -108,7 +109,7 @@ async function leg(
   for (;;) {
     let snap: JobSnap;
     try {
-      snap = await deps.jobStatus(jobId, host);
+      snap = await readWithRetries(() => deps.jobStatus(jobId, host), deps.sleep);
     } catch (e) {
       return {
         ok: false,

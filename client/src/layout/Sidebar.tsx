@@ -212,10 +212,10 @@ export default function Sidebar() {
             <span
               className={
                 collapsed
-                  ? "absolute right-1 top-1 h-2 w-2 rounded-full bg-[var(--color-bad)]"
+                  ? "absolute end-1 top-1 h-2 w-2 rounded-full bg-[var(--color-bad)]"
                   : "rounded-full bg-[var(--color-bad)] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[var(--color-accent-contrast)]"
               }
-              aria-label={`${errorCount} logged errors`}
+              aria-label={tr("logged_error_count", { count: errorCount }, "Logged errors: {count}")}
             >
               {!collapsed && (errorCount > 99 ? "99+" : errorCount)}
             </span>
@@ -368,7 +368,7 @@ export default function Sidebar() {
                   type="button"
                   onClick={() => toggleSection(group.section.key)}
                   aria-expanded={open}
-                  className="flex w-full items-center gap-1 rounded-full px-2 pb-2 text-left text-[0.6875rem] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                  className="flex w-full items-center gap-1 rounded-full px-2 pb-2 text-start text-[0.6875rem] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)] hover:text-[var(--color-text)]"
                 >
                   <span className="min-w-0 flex-1 truncate">{title}</span>
                   {open ? <ChevronDown size={12} aria-hidden /> : <ChevronRight size={12} aria-hidden className="rtl:rotate-180" />}

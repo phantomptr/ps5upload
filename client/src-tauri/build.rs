@@ -150,6 +150,14 @@ fn main() {
         engine_path.display()
     );
     println!("cargo:rerun-if-changed={}", engine_path.display());
+    // The stamp that says which engine is extracted. Hashing here, once: at start-up it paged all
+    // 50 MB of the embedded engine in from the app's binary, cold on a slow disk, on every launch.
+    let engine_bytes = std::fs::read(&engine_path)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", engine_path.display()));
+    println!(
+        "cargo:rustc-env=PS5UPLOAD_ENGINE_BLAKE3={}",
+        blake3::hash(&engine_bytes).to_hex()
+    );
 
     // ── RAR helper (ps5upload-unrar): DESKTOP ONLY, next to the engine ──
     // UnRAR is GPL-incompatible, so it is not linked into the engine: it is

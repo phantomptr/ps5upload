@@ -216,6 +216,8 @@ async fn a_cross_device_rename_keeps_the_text_callers_match_on() {
             assert_eq!(method, gen::METHOD_FS_RENAME);
             let q = gen::FsRename::decode(body).unwrap();
             assert_eq!((q.from.as_str(), q.to.as_str()), ("/a", "/b"));
+            // A move replaces nothing unless the caller asked.
+            assert_eq!(q.overwrite, 0);
             err(gen::ERR_CROSS_DEVICE, "fs_move_cross_mount")
         }),
     )

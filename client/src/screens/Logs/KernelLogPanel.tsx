@@ -4,11 +4,11 @@ import { klogChunk } from "../../api/ps5";
 import { mgmtAddr } from "../../lib/addr";
 import { useConnectionStore } from "../../state/connection";
 import { Button, EmptyState, ErrorCard } from "../../components";
-import { useTr } from "../../state/lang";
+import { useTr, type Translator } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 import { writeClipboard } from "../../lib/clipboard";
-import { humanizePs5Error } from "../../lib/humanizeError";
+import { humanizePs5Error, humanizeCaught } from "../../lib/humanizeError";
 import { usePoll } from "../../lib/usePoll";
 import { windowRange } from "../../lib/windowing";
 
@@ -74,31 +74,70 @@ const CATEGORY_RULES: Array<{ cat: Category; re: RegExp }> = [
 
 const DEFAULT_HIDDEN_CATEGORIES: ReadonlySet<Category> = new Set<Category>();
 
-const CATEGORY_LABEL: Record<Category, string> = {
-  ps5upload: "ps5upload",
-  "shellui-crash": "ShellUI crash",
-  "kernel-error": "Kernel panic/error",
-  "sony-pf-auth": "Sony PFAuthClient",
-  "sony-bgs-storage": "Sony BgsStorage",
-  "sony-rnps": "Sony RNPS framework",
-  "sony-curl": "Sony RNPS Curl",
-  "sony-memory-stats": "Sony VM/heap stats",
-  "sony-framedrop": "Sony framedrop",
-  "sony-tick": "Sony tick markers",
-  "sony-fmem": "Sony FMEM dump",
-  "sony-other": "Sony other",
-  "kstuff-payload": "kstuff payload",
-  "etahen-payload": "etaHEN payload",
-  "shellui-info": "ShellUI info",
-  other: "Other / uncategorised",
-};
+const ALL_CATEGORIES: readonly Category[] = [
+  "ps5upload",
+  "shellui-crash",
+  "kernel-error",
+  "sony-pf-auth",
+  "sony-bgs-storage",
+  "sony-rnps",
+  "sony-curl",
+  "sony-memory-stats",
+  "sony-framedrop",
+  "sony-tick",
+  "sony-fmem",
+  "sony-other",
+  "kstuff-payload",
+  "etahen-payload",
+  "shellui-info",
+  "other",
+];
+
+/** A category's name in the Filters panel and on its lines. Names that are only identifiers of a
+ *  Sony component stay as they are. */
+function categoryLabel(cat: Category, tr: Translator): string {
+  switch (cat) {
+    case "ps5upload":
+      return "ps5upload";
+    case "shellui-crash":
+      return tr("kernel_cat_shellui_crash", undefined, "ShellUI crash");
+    case "kernel-error":
+      return tr("kernel_cat_kernel_error", undefined, "Kernel panic/error");
+    case "sony-pf-auth":
+      return "Sony PFAuthClient";
+    case "sony-bgs-storage":
+      return "Sony BgsStorage";
+    case "sony-rnps":
+      return "Sony RNPS";
+    case "sony-curl":
+      return "Sony RNPS Curl";
+    case "sony-memory-stats":
+      return tr("kernel_cat_memory_stats", undefined, "Sony memory stats");
+    case "sony-framedrop":
+      return tr("kernel_cat_framedrop", undefined, "Sony dropped frames");
+    case "sony-tick":
+      return tr("kernel_cat_tick", undefined, "Sony tick markers");
+    case "sony-fmem":
+      return tr("kernel_cat_fmem", undefined, "Sony FMEM dump");
+    case "sony-other":
+      return tr("kernel_cat_sony_other", undefined, "Sony, other");
+    case "kstuff-payload":
+      return "kstuff";
+    case "etahen-payload":
+      return "etaHEN";
+    case "shellui-info":
+      return tr("kernel_cat_shellui_info", undefined, "ShellUI information");
+    case "other":
+      return tr("kernel_cat_other", undefined, "Other");
+  }
+}
 
 const CATEGORY_BORDER: Partial<Record<Category, string>> = {
-  ps5upload: "border-l-2 border-l-[var(--color-accent)]",
-  "shellui-crash": "border-l-2 border-l-[var(--color-bad)] bg-[var(--color-bad)]/5",
-  "kernel-error": "border-l-2 border-l-[var(--color-bad)] bg-[var(--color-bad)]/5",
-  "kstuff-payload": "border-l-2 border-l-[var(--color-warn)]",
-  "etahen-payload": "border-l-2 border-l-[var(--color-warn)]",
+  ps5upload: "border-s-2 border-s-[var(--color-accent)]",
+  "shellui-crash": "border-s-2 border-s-[var(--color-bad)] bg-[var(--color-bad)]/5",
+  "kernel-error": "border-s-2 border-s-[var(--color-bad)] bg-[var(--color-bad)]/5",
+  "kstuff-payload": "border-s-2 border-s-[var(--color-warn)]",
+  "etahen-payload": "border-s-2 border-s-[var(--color-warn)]",
 };
 
 /** Row height of one kernel-log line, in rem. */
@@ -162,7 +201,7 @@ export default function KernelLogPanel() {
       }
     } catch (e) {
       if (useConnectionStore.getState().host !== tickHost) return;
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     }
   }, [host, payloadStatus]);
 
@@ -276,14 +315,18 @@ export default function KernelLogPanel() {
     if (ok) {
       pushNotification(
         "success",
-        withConsolePrefix(host, "Kernel log copied"),
+        withConsolePrefix(host, tr("kernel_notif_copied", undefined, "Kernel log copied")),
         {
-          body: `${visible.length} visible line${visible.length === 1 ? "" : "s"} on the clipboard. (${entries.length - visible.length} filtered.)`,
+          body: tr(
+            "kernel_notif_copied_body",
+            { copied: visible.length, filtered: entries.length - visible.length },
+            "Lines copied: {copied}. Filtered out: {filtered}.",
+          ),
         },
       );
     } else {
-      pushNotification("warning", "Copy failed", {
-        body: "Clipboard access denied.",
+      pushNotification("warning", tr("copy_failed", undefined, "Copy failed"), {
+        body: tr("kernel_notif_clipboard_denied", undefined, "The clipboard can't be reached."),
       });
     }
   }
@@ -324,7 +367,7 @@ export default function KernelLogPanel() {
           >
             {tr("klog_filters", undefined, "Filters")}
             {hiddenCats.size > 0 && (
-              <span className="ml-1 rounded bg-[var(--color-surface)] px-1 text-xs text-[var(--color-muted)]">
+              <span className="ms-1 rounded bg-[var(--color-surface)] px-1 text-xs text-[var(--color-muted)]">
                 −{hiddenCats.size}
               </span>
             )}
@@ -389,7 +432,7 @@ export default function KernelLogPanel() {
             </div>
           </div>
           <div className="grid grid-cols-1 gap-x-3 gap-y-1 sm:grid-cols-2 md:grid-cols-3">
-            {(Object.keys(CATEGORY_LABEL) as Category[]).map((cat) => {
+            {ALL_CATEGORIES.map((cat) => {
               const count = counts[cat] ?? 0;
               const hidden = hiddenCats.has(cat);
               return (
@@ -405,7 +448,7 @@ export default function KernelLogPanel() {
                     onChange={() => toggleCat(cat)}
                     className="mt-[1px]"
                   />
-                  <span className="flex-1 truncate">{CATEGORY_LABEL[cat]}</span>
+                  <span className="flex-1 truncate">{categoryLabel(cat, tr)}</span>
                   <span className="tabular-nums text-[var(--color-muted)]">
                     {count}
                   </span>
@@ -449,7 +492,11 @@ export default function KernelLogPanel() {
                   undefined,
                   "Waiting for kernel log output… (the buffer empties between reads, so messages from before you opened this tab won't appear here).",
                 )
-              : `All ${entries.length} buffered line${entries.length === 1 ? "" : "s"} are hidden by your filters. Open the Filters panel to enable more categories.`}
+              : tr(
+                  "kernel_all_hidden",
+                  { count: entries.length },
+                  "Your filters hide every line (lines waiting: {count}). Open the Filters panel to turn on more categories.",
+                )}
           </div>
         ) : (
           <div
@@ -470,7 +517,7 @@ export default function KernelLogPanel() {
                   height: rowHeight,
                   lineHeight: `${rowHeight}px`,
                 }}
-                title={CATEGORY_LABEL[v.cat]}
+                title={categoryLabel(v.cat, tr)}
               >
                 {v.text}
               </div>

@@ -4,14 +4,16 @@
 import { getEngineUrl } from "../state/engine";
 import { invoke } from "../lib/invokeLogged";
 import { getCachedIcon, setCachedIcon } from "../lib/iconMemoryCache";
+import { ENGINE_LONG_TIMEOUT_MS, ENGINE_TIMEOUT_MS, engineFetch, type EngineFetchInit } from "../lib/engineFetch";
 
 /** Keyed by the cover's version too: a cover read out again must not be answered with the
  *  bytes this session held for the old one. */
-const coverKey = (gameId: string, version?: string) => `collection|${gameId}|${version ?? ""}`;
+const coverKey = (gameId: string, version?: string, size?: number) =>
+  `collection|${gameId}|${version ?? ""}${size ? `|${size}` : ""}`;
 
 /** A Collection cover this session already holds, as a `data:` URL. */
-export function cachedCollectionCover(gameId: string, version?: string): string | undefined {
-  return getCachedIcon(coverKey(gameId, version));
+export function cachedCollectionCover(gameId: string, version?: string, size?: number): string | undefined {
+  return getCachedIcon(coverKey(gameId, version, size));
 }
 
 /** A Collection cover over the IPC, as a `data:` URL, or null. The desktop window's own load
@@ -20,13 +22,14 @@ export function cachedCollectionCover(gameId: string, version?: string): string 
 export async function collectionCoverDataUrl(
   gameId: string,
   version?: string,
+  size?: number,
 ): Promise<string | null> {
-  const hit = getCachedIcon(coverKey(gameId, version));
+  const hit = getCachedIcon(coverKey(gameId, version, size));
   if (hit) return hit;
   try {
-    const url = await invoke<string>("collection_cover_data", { gameId });
+    const url = await invoke<string>("collection_cover_data", { gameId, size });
     if (typeof url === "string" && url.startsWith("data:")) {
-      setCachedIcon(coverKey(gameId, version), url);
+      setCachedIcon(coverKey(gameId, version, size), url);
       return url;
     }
     return null;
@@ -90,6 +93,9 @@ export interface CollectionLocation {
   date_source?: string;
   added_ts: number;
   pkg?: CollectionPkg;
+  /** The copy's other files (a split package's later parts, a `.rar` set's later volumes). They
+   *  count in `size_bytes` and go wherever it goes. */
+  parts?: string[];
 }
 
 export interface CollectionGame {
@@ -123,6 +129,8 @@ export interface CollectionLibrary {
   roots?: string[];
   /** Roots the last scan could not open (deleted, unplugged, server down); skipped. */
   missing_roots?: string[];
+  /** Folders the last scan could not read: what it found there before is kept. */
+  unreadable?: string[];
   generated_at?: string;
   summary: CollectionSummary;
   games: Record<string, CollectionGame>;
@@ -158,6 +166,8 @@ export interface CollectionScanStatus {
   roots_done?: number;
   games_total?: number;
   games_done?: number;
+  /** Folders the last scan could not read. */
+  unreadable?: string[];
 }
 
 /** A package in the collection a console could take. */
@@ -191,6 +201,8 @@ export interface TrashItem {
   game_id: string;
   title: string;
   size_bytes: number;
+  /** Its other files: they go with it. */
+  parts?: string[];
 }
 
 export interface TrashPreview {
@@ -219,6 +231,8 @@ export interface OrganizeMove {
   size: number;
   content_id: string;
   part?: string;
+  /** A part of a split package: its set. A set moves as one, all of it or none of it. */
+  set?: string;
   duplicate?: boolean;
   duplicate_of?: string;
 }
@@ -241,6 +255,21 @@ export interface OrganizePlan {
   total_bytes: number;
 }
 
+/** The preview being made in the background, or the last one. */
+export interface OrganizePlanStatus {
+  running: boolean;
+  /** While running: walking the folders, or reading the packages the index does not know. */
+  phase: "finding" | "reading" | "";
+  done: number;
+  total: number;
+  current: string;
+  cancelled: boolean;
+  error: string | null;
+  plan: OrganizePlan | null;
+  started_ms: number;
+  finished_ms: number;
+}
+
 export interface OrganizeResult {
   moved: OrganizeMove[];
   failed: (OrganizeMove & { error: string })[];
@@ -258,6 +287,8 @@ export interface OrganizeRun {
   moved: number;
   failed: number;
   reverted_at: string | null;
+  /** Its undo log could not be read: a run happened, and it cannot be undone from here. */
+  unreadable?: boolean;
 }
 
 export interface JunkFile {
@@ -286,8 +317,20 @@ export interface MacSettings {
   volumes: { volume: string; indexing: string; has_index: boolean }[];
 }
 
-async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${getEngineUrl()}/api/collection${path}`, {
+/** A refusal from the engine: `code` says which, for the words in the user's language. */
+export class CollectionApiError extends Error {
+  code?: string;
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "CollectionApiError";
+    this.code = code;
+  }
+}
+
+async function call<T>(path: string, init?: EngineFetchInit): Promise<T> {
+  // Reads a whole index, or a console: allowed more than a plain request.
+  const res = await engineFetch(`${getEngineUrl()}/api/collection${path}`, {
+    timeoutMs: 2 * ENGINE_TIMEOUT_MS,
     ...init,
     headers: init?.body ? { "content-type": "application/json" } : undefined,
   });
@@ -299,9 +342,8 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     body = null;
   }
   if (!res.ok) {
-    const msg =
-      (body as { error?: string } | null)?.error ?? `HTTP ${res.status}`;
-    throw new Error(msg);
+    const b = body as { error?: string; code?: string } | null;
+    throw new CollectionApiError(b?.error ?? `HTTP ${res.status}`, b?.code);
   }
   return body as T;
 }
@@ -329,7 +371,7 @@ export const collection = {
     call<CollectionScanStatus>("/scan/cancel", { method: "POST" }),
   /** The export's text (json | csv | md). */
   exportText: async (format: "json" | "csv" | "md"): Promise<string> => {
-    const res = await fetch(
+    const res = await engineFetch(
       `${getEngineUrl()}/api/collection/export?format=${format}`,
     );
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -347,11 +389,23 @@ export const collection = {
     }),
   trashApply: (token: string) =>
     call<{ moved: string[]; failed: string[] }>("/trash/apply", {
+      timeoutMs: ENGINE_LONG_TIMEOUT_MS,
       method: "POST",
       body: JSON.stringify({ token }),
     }),
   organizePlan: () =>
     call<OrganizePlan>("/organize/plan", { method: "POST", body: "{}" }),
+  organizePlanStart: () =>
+    call<OrganizePlanStatus>("/organize/plan/start", {
+      method: "POST",
+      body: "{}",
+    }),
+  organizePlanStatus: () => call<OrganizePlanStatus>("/organize/plan/status"),
+  organizePlanCancel: () =>
+    call<OrganizePlanStatus>("/organize/plan/cancel", {
+      method: "POST",
+      body: "{}",
+    }),
   organizeApply: (
     token: string,
     moves: { container: string; from: string; to: string }[],
@@ -399,8 +453,11 @@ export const collection = {
       body: JSON.stringify({ path: path ?? null }),
     }),
   /** `version` (see coverVersion) makes a cover read again once its game changed. */
-  coverUrl: (gameId: string, version?: string) =>
-    `${getEngineUrl()}/api/collection/games/${encodeURIComponent(gameId)}/cover${
-      version ? `?v=${encodeURIComponent(version)}` : ""
-    }`,
+  coverUrl: (gameId: string, version?: string, size?: number) => {
+    const q = new URLSearchParams();
+    if (version) q.set("v", version);
+    if (size) q.set("size", String(size));
+    const query = q.toString();
+    return `${getEngineUrl()}/api/collection/games/${encodeURIComponent(gameId)}/cover${query ? `?${query}` : ""}`;
+  },
 };

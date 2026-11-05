@@ -24,6 +24,7 @@
 #include "fs_jobs.h"
 #include "path_policy.h"
 #include "runtime.h"
+#include "sigpipe_guard.h"
 #include "webui_codec.h"
 
 /* The extractor ELF, embedded by payload/Makefile (xxd of payload/extractor/ps5upload-extractor.elf). */
@@ -127,7 +128,7 @@ static int launch_extractor(void) {
             const unsigned char *p = ps5upload_extractor_elf;
             size_t left = ps5upload_extractor_elf_len;
             while (left) {
-                ssize_t w = send(fd, p, left, 0);
+                ssize_t w = send(fd, p, left, MSG_NOSIGNAL);
                 if (w < 0 && errno == EINTR) continue;
                 if (w <= 0) break;
                 p += w;
@@ -203,11 +204,19 @@ static void write_record(uint64_t xpid, int created, const char *dest) {
     fclose(f);
 }
 
+void archive_extract_sweep_request(void) {
+    struct stat st;
+    if (stat(EXTRACT_REQUEST, &st) != 0 || !archive_extract_request_stale(st.st_mtime, time(NULL))) return;
+    fprintf(stderr, "extract: removing a request no extractor read\n");
+    (void)unlink(EXTRACT_REQUEST);
+}
+
 void archive_extract_sweep(void) {
     char buf[1400], dest[1100];
     unsigned long long xpid = 0;
     long hpid = 0;
     int created = 0;
+    archive_extract_sweep_request();
     if (read_small(EXTRACT_RECORD, buf, sizeof buf) <= 0) return;
     dest[0] = 0;
     if (sscanf(buf, "%llu %ld %d\n%1023[^\n]", &xpid, &hpid, &created, dest) < 3) {

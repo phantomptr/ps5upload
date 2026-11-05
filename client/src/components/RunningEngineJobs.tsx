@@ -4,7 +4,6 @@ import { Loader2 } from "lucide-react";
 import { jobCancel } from "../api/ps5";
 import { fetchRunningJobs, unclaimedJobs, type RunningEngineJob } from "../lib/engineJobs";
 import { formatBytes } from "../lib/format";
-import { isTauriEnv } from "../lib/tauriEnv";
 import { formatEtaSeconds } from "../lib/uploadEta";
 import { useRateEta } from "../lib/useRateEta";
 import { useDocumentVisible } from "../lib/visibility";
@@ -17,6 +16,7 @@ import { useUploadQueueStore } from "../state/uploadQueue";
 import { humanizePs5Error } from "../lib/humanizeError";
 import { Button } from "./Button";
 import { ProgressBar } from "./ProgressBar";
+import { formatNumber } from "../lib/formatDate";
 
 const POLL_MS = 2000;
 
@@ -41,10 +41,9 @@ const SEP = "\n";
 
 /** Transfers the engine is still running that nothing in this tab is watching: what a reopened
  *  browser tab finds, because the self-hosted engine keeps a job going after the tab closes
- *  (R15, #372). Shows each one's progress and a Cancel. Renders nothing in the desktop app (its
- *  engine ends with the app, so there is never an orphan) or when there is none. */
+ *  (R15, #372), and what a reloaded desktop window finds, since its engine outlives the window too.
+ *  Shows each one's progress and a Cancel. Renders nothing when there is none. */
 export const RunningEngineJobs = memo(function RunningEngineJobs() {
-  const web = !isTauriEnv();
   const visible = useDocumentVisible();
   const [jobs, setJobs] = useState<RunningEngineJob[]>([]);
   const queueClaimed = useUploadQueueStore((s) => {
@@ -76,7 +75,7 @@ export const RunningEngineJobs = memo(function RunningEngineJobs() {
   );
 
   useEffect(() => {
-    if (!web || !visible) return;
+    if (!visible) return;
     let live = true;
     const tick = async () => {
       const next = await fetchRunningJobs();
@@ -88,7 +87,7 @@ export const RunningEngineJobs = memo(function RunningEngineJobs() {
       live = false;
       window.clearInterval(id);
     };
-  }, [web, visible]);
+  }, [visible]);
 
   const orphans = useMemo(() => {
     // `jobs` changes every tick, so the polled set is re-read as often.
@@ -99,7 +98,7 @@ export const RunningEngineJobs = memo(function RunningEngineJobs() {
     return unclaimedJobs(jobs, claimed);
   }, [jobs, queueClaimed, oneShotClaimed, downloadClaimed, convertClaimed]);
 
-  if (!web || orphans.length === 0) return null;
+  if (orphans.length === 0) return null;
   return (
     <div className="mb-3 flex flex-col gap-2" data-testid="running-engine-jobs">
       {orphans.map((j) => (
@@ -167,10 +166,10 @@ function RunningJobRow({ job, onGone }: { job: RunningEngineJob; onGone: () => v
               ` ${tr(
                 "engine_job_files_done",
                 {
-                  done: filesFinalized.toLocaleString(),
-                  total: filesFinalizingTotal.toLocaleString(),
+                  done: formatNumber(filesFinalized),
+                  total: formatNumber(filesFinalizingTotal),
                 },
-                `${filesFinalized.toLocaleString()} of ${filesFinalizingTotal.toLocaleString()} files`,
+                `${formatNumber(filesFinalized)} of ${formatNumber(filesFinalizingTotal)} files`,
               )}`}
           </span>
         )}

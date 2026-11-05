@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { looksLikeMacLocalNetworkBlock } from "./localNetworkHint";
+import { localNetworkHintFor, looksLikeMacLocalNetworkBlock } from "./localNetworkHint";
 
 const MAC =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15";
+const IPHONE =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15";
+// iPadOS sends a Mac's user agent; only its touch points (lib/platform isIOS) tell.
+const IPAD_AS_MAC =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15";
 const WIN = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
 
@@ -37,5 +42,28 @@ describe("a probe that macOS itself refused", () => {
         "X11; Linux x86_64",
       ),
     ).toBe(false);
+  });
+});
+
+describe("which Local Network instructions a failed probe gets", () => {
+  const blocked = "No route to host (os error 65)";
+
+  it("gives an iPhone its own steps, never macOS's", () => {
+    expect(looksLikeMacLocalNetworkBlock(blocked, IPHONE)).toBe(false);
+    expect(localNetworkHintFor(blocked, IPHONE, true)).toBe("ios");
+  });
+
+  it("gives an iPad its own steps though its user agent says Macintosh", () => {
+    expect(localNetworkHintFor(blocked, IPAD_AS_MAC, true)).toBe("ios");
+  });
+
+  it("covers any failure on iOS, since the error for a denied permission is not known", () => {
+    expect(localNetworkHintFor("timed out", IPHONE, true)).toBe("ios");
+  });
+
+  it("keeps a Mac's steps for its one error, and nothing elsewhere", () => {
+    expect(localNetworkHintFor(blocked, MAC, false)).toBe("mac");
+    expect(localNetworkHintFor("timed out", MAC, false)).toBe(null);
+    expect(localNetworkHintFor(blocked, WIN, false)).toBe(null);
   });
 });

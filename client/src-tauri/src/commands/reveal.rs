@@ -52,3 +52,45 @@ pub fn reveal(path: &Path) -> Result<(), String> {
 pub fn reveal(_path: &Path) -> Result<(), String> {
     Err("opening a folder isn't supported on this platform".into())
 }
+
+/// Whether `path` may be opened as a folder: a directory that is not a program. A macOS app
+/// bundle is a directory, and `open` would launch it.
+fn is_plain_folder(path: &Path) -> bool {
+    path.is_dir()
+        && !path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("app"))
+}
+
+/// Open a folder in the file manager, for the renderer (`lib/openLocalPath.ts`). Done here so
+/// the webview never has a way to hand the OS opener an arbitrary path, an executable included.
+#[tauri::command]
+pub async fn open_local_folder(path: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let path = Path::new(&path);
+        if !is_plain_folder(path) {
+            return Err(format!("{} is not a folder", path.display()));
+        }
+        reveal(path)
+    })
+    .await
+    .map_err(|e| format!("open_local_folder: {e}"))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_plain_folder;
+
+    #[test]
+    fn only_a_real_folder_opens() {
+        let dir = std::env::temp_dir().join(format!("ps5upload-reveal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Game.app")).unwrap();
+        std::fs::write(dir.join("program.exe"), b"x").unwrap();
+        assert!(is_plain_folder(&dir));
+        assert!(!is_plain_folder(&dir.join("Game.app")), "launches on macOS");
+        assert!(!is_plain_folder(&dir.join("program.exe")));
+        assert!(!is_plain_folder(&dir.join("missing")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

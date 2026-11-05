@@ -210,8 +210,25 @@ jobs:
           PS5UPLOAD_SAMBA_USER: runner
           PS5UPLOAD_SAMBA_PASS: ci-smb-fixture-only
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends samba samba-vfs-modules attr
+          # apt has no default network timeout (see "Install Tauri Linux deps"): a stalled mirror
+          # would hold this step until the job dies.
+          apt_retry() {
+            for attempt in 1 2 3; do
+              if sudo DEBIAN_FRONTEND=noninteractive apt-get \
+                   -o Acquire::Retries=3 \
+                   -o Acquire::http::Timeout=20 \
+                   -o Acquire::https::Timeout=20 \
+                   "$@"; then
+                return 0
+              fi
+              echo "apt attempt $attempt failed; retrying in 15s" >&2
+              sleep 15
+            done
+            echo "apt failed after 3 attempts: apt-get $*" >&2
+            return 1
+          }
+          apt_retry update -qq
+          apt_retry install -y --no-install-recommends samba samba-vfs-modules attr
           printf 'ci-smb-fixture-only\nci-smb-fixture-only\n' | sudo smbpasswd -a -s runner
           share=$(mktemp -d /tmp/ps5upload-smb-XXXXXX)
           chmod 777 "$share"
@@ -292,6 +309,61 @@ jobs:
             ~/.cargo/git
             engine/target
           key: ${{ runner.os }}-engine-test-${{ matrix.part }}-${{ hashFiles('engine/Cargo.lock') }}-${{ github.run_id }}
+
+  # Go live and the live feed against a real ffmpeg: the run loop's reconnects, a site failing
+  # beside another, the stream endpoint read over HTTP. `#[ignore]`d elsewhere because they need
+  # ffmpeg/ffprobe (libx264, libx265, libopus) on PATH and take real time; one at a time because
+  # they set the global session and fixed local RTMP ports. Nothing plays sound; output goes to
+  # files. Restores the engine test leg's cache and saves none of its own.
+  rust-golive:
+    name: rust tests (go live, ffmpeg)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          submodules: true
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+
+      - name: Restore cargo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+          key: ${{ runner.os }}-engine-test-engine-${{ hashFiles('engine/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-engine-test-engine-${{ hashFiles('engine/Cargo.lock') }}-
+            ${{ runner.os }}-engine-test-engine-
+
+      # The build the app itself downloads (ffmpeg_tool.rs PINS, linux x86_64): apt's 6.1.1 reports
+      # differently, and what ships is what must pass.
+      - name: Install the pinned ffmpeg
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          url="$(grep -A3 'os: "linux"' engine/crates/ps5upload-engine/src/ffmpeg_tool.rs | grep -A2 'arch: "x86_64"' | sed -n 's/.*url: "\(.*\)",/\1/p')"
+          sum="$(grep -A4 'os: "linux"' engine/crates/ps5upload-engine/src/ffmpeg_tool.rs | grep -A3 'arch: "x86_64"' | sed -n 's/.*sha256: "\(.*\)",/\1/p')"
+          test -n "$url" && test -n "$sum"
+          curl -fsSL --retry 3 --retry-delay 15 --connect-timeout 20 -o "$RUNNER_TEMP/ffmpeg.tar.xz" "$url"
+          echo "$sum  $RUNNER_TEMP/ffmpeg.tar.xz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/ffmpeg"
+          tar -xJf "$RUNNER_TEMP/ffmpeg.tar.xz" -C "$RUNNER_TEMP/ffmpeg" --strip-components=1
+          echo "$RUNNER_TEMP/ffmpeg/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/ffmpeg/lib" >> "$GITHUB_ENV"
+          LD_LIBRARY_PATH="$RUNNER_TEMP/ffmpeg/lib" "$RUNNER_TEMP/ffmpeg/bin/ffmpeg" -hide_banner -version | head -1
+
+      - name: cargo test (ignored, ffmpeg)
+        working-directory: engine
+        timeout-minutes: 20
+        env:
+          RUST_BACKTRACE: 1
+        run: cargo test -p ps5upload-engine --lib -- --ignored --test-threads 1 rp_golive live_feed ffmpeg_makes_a_picture_of_a_keyframe ffmpeg_says_why_garbage_makes_no_picture ffmpeg_makes_a_frame_for_a_session_with_no_page
 
   # The C interop suite. The C server and the data layer are process-wide singletons, so the
   # suite runs one test at a time: a test that holds the server cannot starve the others. That
@@ -765,6 +837,11 @@ jobs:
         working-directory: client
         run: npm run build:vite
 
+      # The engine embeds these two built pages, committed as files; a source edit without a
+      # rebuild would pass everything else and never reach a phone.
+      - name: Embedded guest and pad pages match their sources
+        run: node scripts/check-embedded-pages.mjs
+
       - name: Install Playwright Chromium
         working-directory: client
         run: npx playwright install --with-deps chromium
@@ -772,6 +849,15 @@ jobs:
       - name: Browser workflow smoke test
         working-directory: client
         run: npm run test:e2e
+
+      # What it takes to see why a browser test failed on a runner: traces and screenshots.
+      - name: Upload Playwright results
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: playwright-results
+          path: output/playwright/
+          retention-days: 14
 
   # ─────────────────────────────────────────────────────────────────────
   # Security scan: dependencies with known vulnerabilities (cargo audit,
@@ -896,7 +982,9 @@ jobs:
           components: llvm-tools-preview
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # cargo-llvm-cov
+        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
+        with:
+          tool: cargo-llvm-cov
 
       # scripts/coverage.mjs runs the instrumented suite under nextest when it is installed:
       # the same tests, side by side instead of one binary at a time (the serial pass took
@@ -908,9 +996,12 @@ jobs:
           tool: cargo-nextest
 
       - name: Generate coverage
+        id: coverage
         run: npm run coverage
 
+      # always(): the client report is already there when the engine half fails.
       - name: Upload coverage artifact
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: coverage-reports
@@ -918,6 +1009,14 @@ jobs:
             coverage/
             client/coverage/
           retention-days: 14
+
+      # This job cannot fail the run (continue-on-error), and it once failed on every main run
+      # for days with nothing showing it. The warning lands on the run's summary page.
+      - name: Say when there is no full report
+        if: always() && steps.coverage.outcome != 'success'
+        run: |
+          echo "::warning::coverage reports: no full report for this commit (generate step: ${{ steps.coverage.outcome }}). See the job log."
+          echo "Coverage: no full report for this commit (generate step: ${{ steps.coverage.outcome }})." >> "$GITHUB_STEP_SUMMARY"
 
   # ─────────────────────────────────────────────────────────────────────
   # Payload ELF — compile against the ps5-payload-sdk so we catch any
@@ -978,7 +1077,8 @@ jobs:
           }
           apt_retry update
           # Add LLVM apt repo for llvm-22 (not in Ubuntu 24.04 default repos)
-          curl -fsSL --retry 3 --retry-delay 5 https://apt.llvm.org/llvm.sh | sudo bash -s -- 22
+          sudo bash scripts/install-llvm-apt.sh 22
+          apt_retry update
           apt_retry install -y clang-22 llvm-22-dev lld-22 unzip python3
 
       # The shared installer reads scripts/ps5-sdk.env, verifies the official
@@ -990,7 +1090,7 @@ jobs:
       - name: Build payload
         env:
           PS5_PAYLOAD_SDK: /opt/ps5-payload-sdk
-          # SDK v0.42's prospero-llvm-config candidate search maxes at 21,
+          # The SDK's prospero-llvm-config only looks for LLVM versions it knows,
           # so point it at the CI-installed LLVM 22 explicitly.
           LLVM_CONFIG: /usr/bin/llvm-config-22
         run: make payload
@@ -1149,9 +1249,11 @@ jobs:
       #
       # Keyed loosely on purpose: the generated project pins its own
       # versions, so any recent cache is a useful starting point and a
-      # miss only costs a download.
-      - name: Cache Gradle dependencies
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      # miss only costs a download. Saved from main only, at the end of the job, as the cargo
+      # caches are: a PR's copy (~650 MB) is visible to that PR alone and evicts the others.
+      - name: Restore Gradle dependencies
+        id: gradle-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.gradle/caches
@@ -1226,6 +1328,14 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      # What publish.yml checks on the signed APK, here too: a missing manifest line or renderer
+      # handler is a PR failure rather than a release that silently ships without Android.
+      - name: Check the debug APKs
+        run: |
+          mapfile -t apks < <(find client/src-tauri/gen/android/app/build/outputs/apk -name '*.apk')
+          test "${#apks[@]}" -gt 0
+          python3 scripts/release/verify-android-apk.py "${apks[@]}"
+
       - name: Save cargo cache
         if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -1235,6 +1345,15 @@ jobs:
             ~/.cargo/git
             client/src-tauri/target
           key: ${{ runner.os }}-android-${{ hashFiles('client/src-tauri/Cargo.lock') }}-${{ github.run_id }}
+
+      - name: Save Gradle dependencies
+        if: github.ref == 'refs/heads/main' && steps.gradle-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-android-gradle-${{ hashFiles('client/src-tauri/tauri.conf.json') }}
 
   # ─────────────────────────────────────────────────────────────────────
   # Aggregate gate. One stable check that turns green only when every
@@ -1258,6 +1377,7 @@ jobs:
       - version-sync
       - rust-engine
       - rust-engine-tests
+      - rust-golive
       - rust-ctest
       - ava1
       - ava1-ctest-sanitize

@@ -175,6 +175,16 @@ export function SaveBackupsList({
                   {tr("save_backup_before_restore", undefined, "Before a restore")}
                 </span>
               )}
+              {b.tag === "beforecopy" && (
+                <span className="ms-2 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[11px] text-[var(--color-muted)]">
+                  {tr("save_backup_before_copy", undefined, "Before a copy")}
+                </span>
+              )}
+              {b.tag === "beforeshare" && (
+                <span className="ms-2 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[11px] text-[var(--color-muted)]">
+                  {tr("save_backup_before_share", undefined, "Before a shared save")}
+                </span>
+              )}
               {b.tag === "snap" && (
                 <span className="ms-2 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[11px] text-[var(--color-muted)]" data-testid="save-backup-snap">
                   {tr("save_backup_snap_label", undefined, "Taken while playing")}

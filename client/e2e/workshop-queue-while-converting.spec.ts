@@ -104,3 +104,90 @@ test("a game added while one converts is made after it", async ({ page }) => {
   await expect.poll(() => builds, { timeout: 20_000 }).toEqual(["/games/Astro", "/games/Bloodborne"]);
   await expect(main.getByText(/Done — \/out\/Bloodborne\.pkg/)).toBeVisible({ timeout: 20_000 });
 });
+
+// #669: while a game is being made, ② and ③ set the next game; every choice of a waiting game can
+// be changed. The report: a folder build running, a game folder could not be queued behind it.
+test("the next game gets its own choices while one is being made", async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 1600 });
+  const folderBuilds: string[] = [];
+  const json = (body: unknown, status = 200) => ({ status, contentType: "application/json", body: JSON.stringify(body) });
+  await page.route(
+    (u) => u.pathname.startsWith("/api/"),
+    async (route) => {
+      const req = route.request();
+      const path = new URL(req.url()).pathname;
+      const body = req.postDataJSON?.() as Record<string, unknown> | null;
+      if (path === "/api/fpkg/inspect")
+        return route.fulfill(
+          json({
+            source: "image",
+            files: 3,
+            bytes: 3 << 20,
+            content_id: "UP9000-PPSA01234_00-ASTROBOT00000000",
+            title: "Lego",
+            planned_size: 3 << 20,
+            output_free: 1 << 40,
+            checks: [{ name: "eboot.bin", ok: true, detail: "ok" }],
+          }),
+        );
+      if (path === "/api/fpkg/estimate") return route.fulfill(json({ error: "no" }, 500));
+      if (path === "/api/folder/build") {
+        folderBuilds.push(String(body?.source));
+        return route.fulfill(json({ job_id: "job-1" }));
+      }
+      // The build stays running for the whole test.
+      if (/^\/api\/jobs\/[^/]+$/.test(path))
+        return route.fulfill(
+          json({
+            status: "running",
+            started_at_ms: Date.now(),
+            bytes_sent: 1,
+            total_bytes: 10,
+            stage: { id: "verify", index: 2, count: 2, done: 1, total: 10 },
+          }),
+        );
+      if (path === "/api/local/storage-roots") return route.fulfill(json(["/games"]));
+      if (path === "/api/local/list-dir")
+        return route.fulfill(json([{ name: "Astro", path: "/games/Astro", is_dir: true, size: 0 }]));
+      return route.fulfill(json({ error: "down" }, 503));
+    },
+  );
+  await page.goto("/workshop");
+  const main = page.getByRole("main");
+  await expect(main.getByText("① Game")).toBeVisible({ timeout: 30_000 });
+
+  // A game image becomes a folder.
+  const source = main.locator("#fpkg-source");
+  await source.fill("/games/Lego.ffpfsc");
+  await source.blur();
+  const choice = main.getByTestId("make-choice");
+  await choice.getByRole("radio", { name: "A game folder" }).click();
+  await main.getByRole("button", { name: "Make game folder" }).first().click();
+  await expect.poll(() => folderBuilds).toEqual(["/games/Lego.ffpfsc"]);
+
+  // ② and ③ are open for the next game, and say so.
+  await expect(main.getByTestId("next-game-note")).toHaveCount(2);
+  await expect(main.locator("#fpkg-output")).toBeEnabled();
+  await choice.getByRole("radio", { name: "A package (.pkg)" }).click();
+
+  // A game folder goes into the queue behind the folder build.
+  await main.getByRole("button", { name: "Choose folder" }).first().click();
+  const picker = page.getByRole("dialog");
+  await picker.getByRole("checkbox", { name: "Include Astro" }).check();
+  await picker.getByRole("button", { name: "Add 1" }).click();
+  await expect(main.getByText(/only a game image or package can become a game folder/)).toHaveCount(0);
+  await expect(main.getByText("Astro", { exact: true })).toBeVisible();
+  await expect(main.getByTestId("cq-ext")).toHaveText(".pkg");
+
+  // Its own choices, all of them, while it waits.
+  await main.getByRole("button", { name: "This game's choices" }).click();
+  const options = main.getByTestId("queue-item-options");
+  await options.getByTestId("cq-output").fill("/mine/out");
+  await expect(main.getByText(/Waiting — \/mine\/out/)).toBeVisible();
+  await expect(options.getByText("Compression", { exact: true })).toBeVisible();
+  await expect(options.getByText("Game language")).toBeVisible();
+  await expect(options.getByText("Full verification")).toBeVisible();
+  await options.getByRole("radio", { name: "Game image" }).click();
+  await expect(options.getByTestId("image-choice")).toBeVisible();
+  await expect(main.getByTestId("cq-ext")).toHaveText(".exfat");
+});

@@ -1,7 +1,7 @@
 // i18n translations for PS5 Upload webapp
 //
-// The 20 locale dictionaries each live in `src/i18n/locales/<code>.ts`
-// and are imported here via per-locale dynamic `import()` so Vite ships
+// The 21 locale dictionaries each live in `src/i18n/locales/<code>.ts`;
+// the 20 besides English are imported here via per-locale dynamic `import()` so Vite ships
 // each as its own chunk. English is loaded eagerly because it's the
 // universal fallback and every screen's inline `tr(key, "English…")`
 // default needs it ready on first paint.
@@ -133,6 +133,55 @@ export function ensureLocale(code: LanguageCode): Promise<void> {
   })();
   pending[code] = p;
   return p;
+}
+
+/**
+ * `ensureLocale`, tried a second time after `retryMs` when the chunk does not load (a fetch cut
+ * short, a stale cache right after an upgrade). `onGiveUp` runs if the retry fails too; the app
+ * stays in English then, and never leaves an unhandled rejection behind.
+ */
+export function ensureLocaleWithRetry(
+  code: LanguageCode,
+  onGiveUp: (err: unknown) => void,
+  retryMs = 3000,
+  load: (code: LanguageCode) => Promise<void> = ensureLocale,
+): Promise<void> {
+  return load(code).catch(
+    () =>
+      new Promise<void>((resolve) => {
+        setTimeout(() => {
+          load(code).catch(onGiveUp).finally(resolve);
+        }, retryMs);
+      }),
+  );
+}
+
+/**
+ * The shipped language for a browser's preference list (`navigator.languages`): the first tag
+ * that has a match wins. A match is the exact code in any case, then Chinese by script or region
+ * (Hant, TW, HK, MO go to zh-TW, other zh to zh-CN), then the first shipped code with the same
+ * primary language (pt-PT to pt-BR, es-419 to es). "en" when nothing matches.
+ */
+export function pickLanguage<C extends string>(
+  tags: readonly (string | null | undefined)[],
+  have: readonly C[],
+): C | "en" {
+  for (const tag of tags) {
+    if (!tag) continue;
+    const lower = tag.toLowerCase();
+    const exact = have.find((c) => c.toLowerCase() === lower);
+    if (exact) return exact;
+    const parts = lower.split(/[-_]/);
+    const primary = parts[0];
+    if (primary === "zh") {
+      const traditional = parts.some((p) => ["hant", "tw", "hk", "mo"].includes(p));
+      const zh = have.find((c) => c === (traditional ? "zh-TW" : "zh-CN"));
+      if (zh) return zh;
+    }
+    const same = have.find((c) => c.toLowerCase().split("-")[0] === primary);
+    if (same) return same;
+  }
+  return "en";
 }
 
 /** Synchronously look up `key` in `lang`'s dictionary. Three-level

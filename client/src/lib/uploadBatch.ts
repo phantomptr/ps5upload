@@ -1,7 +1,10 @@
 // Upload with several sources: what a scanned folder's children are, and the checks a batch
-// passes before it is queued. Each check blocks or explains; none guesses.
+// passes before it is queued. Each check blocks or explains; none guesses. Only what certainly
+// cannot work blocks.
 
+import { isManualPartSet, parseArchivePart, type ArchiveSetIssue } from "./archiveParts";
 import { formatBytes } from "./format";
+import { isRarLaterVolume } from "./rarVolumes";
 
 export type ScanClass = "folder" | "package" | "archive" | "image" | "other";
 
@@ -12,6 +15,8 @@ export function classifyScanEntry(name: string, isDir: boolean): ScanClass {
   if (isDir) return "folder";
   const lower = name.toLowerCase();
   if (/\.f?pkg$/.test(lower)) return "package";
+  // A later part of a RAR set is read through the first: not a game of its own.
+  if (isRarLaterVolume(lower)) return "other";
   if (/\.(zip|7z|rar)$/.test(lower)) return "archive";
   if (/\.(exfat|ffpkg|ffpfs|ffpfsc)$/.test(lower)) return "image";
   return "other";
@@ -32,6 +37,8 @@ export interface BatchCheckRow {
   size: number | null;
   /** An encrypted archive still waiting for its password. */
   needsPassword: boolean;
+  /** What `diagnoseArchiveSet` found about the set this file belongs to. */
+  setIssue?: ArchiveSetIssue | null;
 }
 
 /** A message for the person: a translation key, its values, and the English text. */
@@ -52,12 +59,56 @@ export interface BatchCheck {
   blocked: boolean;
 }
 
+const fileNameOf = (p: string) => p.slice(Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\")) + 1);
+
+/** A warning about the set a row's file belongs to, or null. Never blocks: sending the file as it
+ *  is works, the person may only regret it. */
+function setIssueNote(r: BatchCheckRow, live: readonly BatchCheckRow[]): BatchMsg | null {
+  const issue = r.setIssue;
+  if (!issue) return null;
+  switch (issue.kind) {
+    case "split-unsupported":
+      return {
+        key: "batch_split_volume",
+        text: "One volume of a split set. Sent alone, the PS5 can't use it. Join the volumes into one archive first.",
+      };
+    case "pick-entry-volume":
+      return {
+        key: "batch_pick_entry",
+        vars: { entry: issue.entryName },
+        text: `One volume of a set. Add ${issue.entryName} instead: the other volumes come with it.`,
+      };
+    case "mixed-extensions":
+      return {
+        key: "batch_mixed_parts",
+        vars: { ext: issue.selectedExt, other: issue.otherExt },
+        text: `The parts beside it are .${issue.otherExt}, so they are not part of this .${issue.selectedExt} set. Only this file's contents would arrive.`,
+      };
+    case "manual-parts": {
+      const self = parseArchivePart(fileNameOf(r.sourcePath));
+      if (!self) return null;
+      const listed = live.filter((o) => {
+        const p = parseArchivePart(fileNameOf(o.sourcePath));
+        return p?.ext === self.ext && p.stem.toLowerCase() === self.stem.toLowerCase();
+      }).length;
+      if (listed >= issue.total) return null;
+      return {
+        key: "batch_missing_parts",
+        vars: { listed, total: issue.total },
+        text: `${listed} of ${issue.total} parts are in this list. Add the rest, or only these parts' files arrive.`,
+      };
+    }
+  }
+}
+
 export function validateBatch(
   rows: BatchCheckRow[],
   queued: { sourcePath: string; resolvedDest: string }[],
   freeByVolume: Map<string, number | null>,
   /** How much is likely to fit on each drive. Less than free on internal storage, where the
-   *  PS5 holds back more as it writes. A batch over this is warned about, never blocked. */
+   *  PS5 holds back more as it writes. A batch over this is warned about, never blocked. Neither
+   *  is one over free blocked: a resumed row counts here in full, though most of it may be on the
+   *  console already, and the engine's check at the start of each job knows that. */
   likelyFitsByVolume: Map<string, number | null> = new Map(),
 ): BatchCheck {
   const issues = new Map<string, BatchMsg[]>();
@@ -74,6 +125,8 @@ export function validateBatch(
   for (const r of live) byDest.set(r.dest, [...(byDest.get(r.dest) ?? []), r]);
   for (const [dest, same] of byDest) {
     if (same.length < 2) continue;
+    // The parts of one zip/7z set land in one folder on purpose (see resolveUploadDest).
+    if (isManualPartSet(same.map((r) => fileNameOf(r.sourcePath)))) continue;
     blocked = true;
     for (const r of same) {
       note(r.id, {
@@ -89,9 +142,12 @@ export function validateBatch(
       blocked = true;
       note(r.id, { key: "batch_needs_password", text: "needs its password" });
     }
+    const setNote = setIssueNote(r, live);
+    if (setNote) note(r.id, setNote);
   }
 
   const space: BatchMsg[] = [];
+  let over = false;
   const byVolume = new Map<string, BatchCheckRow[]>();
   for (const r of live) {
     const v = volumeOfDest(r.dest);
@@ -108,7 +164,7 @@ export function validateBatch(
         text: `${vol}: free space can't be read; check it has room for ${formatBytes(known)}`,
       });
     } else if (known > free) {
-      blocked = true;
+      over = true;
       space.push({
         key: "batch_space_short",
         vars: { drive: vol, size: formatBytes(known), free: formatBytes(free) },
@@ -128,6 +184,13 @@ export function validateBatch(
         text: `${vol}: the size of ${unknown} item(s) isn't known; ${formatBytes(known)} of the rest fits`,
       });
     }
+  }
+
+  if (over) {
+    space.push({
+      key: "batch_space_short_hint",
+      text: "What an earlier try left on the PS5 isn't counted here, so you can still try. The upload stops with a clear message if it runs out of room.",
+    });
   }
 
   return { issues, skip, space, blocked };

@@ -6,7 +6,9 @@ import { useUploadSettingsStore } from "./uploadSettings";
 import {
   buildExtension,
   hydrateConvertQueue,
+  imageBuildWith,
   pipelinePhaseChanged,
+  savedItems,
   setConvertRunner,
   startAfterBuild,
   thenFor,
@@ -38,6 +40,63 @@ describe("the Convert queue", () => {
 
   const add = (source: string, then: "keep" | "stream" = "stream") =>
     useConvertQueue.getState().add({ source, outputDir: "/out", compression: "balanced", then, host: "10.0.0.2" });
+
+  it("keeps a .rar's password in memory for the run, and never saves it", async () => {
+    useConvertQueue.getState().add({ source: "/g/A.rar", password: "secret", compression: "balanced", then: "keep", host: null });
+    const [item] = useConvertQueue.getState().items;
+    expect(item.password).toBe("secret");
+    expect(JSON.stringify(savedItems(useConvertQueue.getState().items))).not.toContain("secret");
+  });
+
+  it("offers a refused .rar again with a password, and starts the queue", async () => {
+    useConvertQueue.getState().add({ source: "/g/A.rar", compression: "balanced", then: "keep", host: null });
+    void useConvertQueue.getState().start();
+    await flush();
+    builds[0].resolve({ ok: false, message: "This archive is password-protected. Enter its password and start again." });
+    await flush();
+    const id = useConvertQueue.getState().items[0].id;
+    expect(useConvertQueue.getState().items[0].status).toBe("failed");
+    useConvertQueue.getState().retryWithPassword(id, "pw");
+    await flush();
+    expect(useConvertQueue.getState().items[0]).toMatchObject({ status: "running", password: "pw" });
+    expect(builds).toHaveLength(2);
+  });
+
+  it("marks a cancelled build as cancelled, not failed, and goes on unless held", async () => {
+    add("/g/A", "keep");
+    add("/g/B", "keep");
+    void useConvertQueue.getState().start();
+    await flush();
+    builds[0].resolve({ ok: false, cancelled: true } as never);
+    await flush();
+    const items = useConvertQueue.getState().items;
+    expect(items[0].status).toBe("cancelled");
+    expect(items[1].status).toBe("running");
+  });
+
+  it("Cancel and stop leaves the games behind it waiting", async () => {
+    add("/g/A", "keep");
+    add("/g/B", "keep");
+    void useConvertQueue.getState().start();
+    await flush();
+    useConvertQueue.getState().holdNext();
+    builds[0].resolve({ ok: false, cancelled: true } as never);
+    await flush();
+    const items = useConvertQueue.getState().items;
+    expect(items[0].status).toBe("cancelled");
+    expect(items[1].status).toBe("pending");
+    expect(builds).toHaveLength(1);
+  });
+
+  it("an image with LZ4 packs is never also compressed, whatever is remembered", () => {
+    const remembered = { kind: "image", format: "exfat", compress: true } as const;
+    expect(imageBuildWith(remembered, undefined)).toEqual(remembered);
+    const packed = imageBuildWith(remembered, { installRuntime: false });
+    expect(packed.compress).toBe(false);
+    expect(buildExtension(packed)).toBe(".exfat");
+    // An item queued before this: the chip says what will be made.
+    expect(buildExtension({ ...remembered, lz4: { installRuntime: false } })).toBe(".exfat");
+  });
 
   it("takes the same game for a second console, but not twice for one", () => {
     const q = useConvertQueue.getState();

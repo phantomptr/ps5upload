@@ -1,9 +1,31 @@
 import { describe, expect, it } from "vitest";
 
-import { humanizePs5Error } from "./humanizeError";
+import { caughtText, humanizeCaught, humanizePs5Error } from "./humanizeError";
 import en from "../i18n/locales/en";
 
 describe("humanizePs5Error", () => {
+  it("words this computer's lack of room in the user's language", () => {
+    expect(humanizePs5Error("engine HTTP 507: Not enough space: needs 12.5 GiB, 1.0 GiB free.")).toBe(
+      "Not enough free space on this computer: it needs 12.5 GiB, and 1.0 GiB is free. Free some space and try again.",
+    );
+  });
+
+  it("says a link's file changed in the user's language", () => {
+    expect(
+      humanizePs5Error(
+        "the file at this link changed while it was being read, so what was read so far can't be finished with it; start again",
+      ),
+    ).toBe(en.err_link_changed);
+  });
+
+  it("says the next step for a pairing the PS5 refuses as pending (80108b03)", () => {
+    const m = humanizePs5Error("registration failed (HTTP 403): anything (reason 80108B03)");
+    expect(m).toBe(en.err_pair_pending);
+    expect(m).toContain("Enable Remote Play");
+    expect(m).toContain("Pair again");
+    expect(m).toContain("Accounts › Users");
+  });
+
   it("returns empty input unchanged", () => {
     expect(humanizePs5Error("")).toBe("");
   });
@@ -65,7 +87,7 @@ describe("humanizePs5Error", () => {
     });
     it("maps the Android 501 body → unsupported copy", () => {
       expect(humanizePs5Error("RAR is not supported on this build")).toMatch(
-        /aren't supported on this build|\.zip and \.7z only/i,
+        /aren't supported on phones/i,
       );
     });
     it("maps an unsafe entry path → safety refusal copy", () => {
@@ -426,5 +448,29 @@ describe("a React render loop in the queue", () => {
     );
     expect(out).toContain("may have finished");
     expect(out).not.toContain("react.dev");
+  });
+});
+
+describe("caughtText", () => {
+  it("reads every shape a catch can receive", () => {
+    expect(caughtText(new Error("boom"))).toBe("boom");
+    expect(caughtText("plain")).toBe("plain");
+    expect(caughtText({ message: "from a message" })).toBe("from a message");
+    expect(caughtText({ error: "from an error" })).toBe("from an error");
+    expect(caughtText({ code: 5 })).toBe('{"code":5}');
+    expect(caughtText(undefined)).toBe("undefined");
+  });
+  it("never prints [object Object]", () => {
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    expect(caughtText({ code: 1 })).not.toContain("[object");
+    expect(typeof caughtText(cycle)).toBe("string");
+  });
+});
+
+describe("humanizeCaught", () => {
+  it("gives the sentence for a known code and the text for an unknown one", () => {
+    expect(humanizeCaught(new Error("fs_unmount_busy"))).not.toContain("fs_unmount_busy");
+    expect(humanizeCaught(new Error("something else"))).toBe("something else");
   });
 });

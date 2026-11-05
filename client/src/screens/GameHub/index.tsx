@@ -104,6 +104,7 @@ import { runningOn, useRunningAppsStore } from "../../state/runningApps";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { SaveBackupsList } from "./SaveBackupsList";
 import { formatBytes } from "../../lib/format";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 const TAB_IDS = ["overview", "cheats", "saves", "addons", "updates"] as const;
 
@@ -720,7 +721,7 @@ function useTabFetch<T>(
         if (!cancelled) setData(res);
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) setError(humanizeCaught(e));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -834,7 +835,7 @@ function CheatsTab({
       // Roll the switch back — the console didn't accept it — then read what the console
       // has: an off that went through but could not be saved is still off in the game.
       setOverrides((o) => ({ ...o, [mod.index]: !next }));
-      setToggleError(e instanceof Error ? e.message : String(e));
+      setToggleError(humanizeCaught(e));
       void cheatsGet(titleId, transferAddr(host.trim()))
         .then(setData)
         .catch(() => {});

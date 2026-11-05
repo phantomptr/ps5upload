@@ -227,6 +227,13 @@ impl LiveFeed {
         }
     }
 
+    /// A reader that took one frame and left (a frame request): nothing for the log.
+    pub(crate) fn remove_quiet(&self, id: u64) {
+        if let Ok(mut g) = self.readers.lock() {
+            g.retain(|r| r.id != id);
+        }
+    }
+
     /// The session ended: every reader's queue closes, and its stream with it.
     pub(crate) fn close(&self) {
         let all = self
@@ -520,6 +527,7 @@ impl Drop for Leave {
 pub struct LiveQuery {
     /// The console whose session to read (when given, it must be the one running).
     #[serde(default)]
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
 }
 
@@ -705,6 +713,15 @@ pub(crate) struct TestSession {
     live: Arc<super::Live>,
 }
 
+/// Some session is installed as the running one.
+#[cfg(test)]
+pub(crate) fn session_running() -> bool {
+    super::LIVE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_some()
+}
+
 #[cfg(test)]
 impl TestSession {
     /// Installs the session as the running one.
@@ -728,6 +745,14 @@ impl TestSession {
         if g.as_ref().is_some_and(|x| Arc::ptr_eq(x, &self.live)) {
             *g = None;
         }
+    }
+}
+
+/// A test that panics still ends its session: the next test would find it running.
+#[cfg(test)]
+impl Drop for TestSession {
+    fn drop(&mut self) {
+        self.end();
     }
 }
 

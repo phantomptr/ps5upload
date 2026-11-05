@@ -36,26 +36,23 @@ import {
   type Volume,
 } from "../api/ps5";
 import { consoleAddr, transferAddr } from "../lib/addr";
+import { formatBytes } from "../lib/format";
+import { staticTranslator as tx, trStatic } from "../lib/trStatic";
 import {
   libraryDirs,
   pkgMkdirChain,
   pkgStorageFor,
 } from "../lib/pkgStorage";
 import { rarPasswordProblem, type RarPasswordProblem } from "../lib/rarPassword";
+import { isRarFirstVolume } from "../lib/rarVolumes";
 import { splitPkgBytes, type ListedFile } from "../lib/splitPkgSize";
 import { pkgLibraryStore } from "./pkgLibrary";
 
 /** The exclude entry that keeps only packages; the engine lists with the same one. */
 export const RAR_PKG_ALLOW = "!*.pkg";
+export const RAR_FPKG_ALLOW = "!*.fpkg";
 
-/** True for the first (or only) volume of a RAR set: `.rar`, `.part1.rar`, `.part01.rar`. */
-export function isRarFirstVolume(path: string): boolean {
-  const name = path.replace(/\\/g, "/").split("/").pop() ?? "";
-  const lower = name.toLowerCase();
-  if (!lower.endsWith(".rar")) return false;
-  const part = /\.part0*(\d+)\.rar$/.exec(lower);
-  return part ? Number(part[1]) === 1 : true;
-}
+export { isRarFirstVolume };
 
 export type ArchiveKind = "zip" | "7z" | "rar";
 
@@ -78,21 +75,22 @@ export function isArchiveFirstVolume(path: string): boolean {
 }
 
 /** Folder name for an archive's packages: `<kind>_<stem>`, deterministic so a resumed run
- *  lands in the same place. */
-export function archiveFolderName(archivePath: string): string {
+ *  lands in the same place. Letters of every script stay: two archives named only in Chinese
+ *  must not share a folder. */
+export function unpackFolderName(archivePath: string): string {
   const name = archivePath.replace(/\\/g, "/").split("/").pop() ?? "archive";
   const kind = archiveKindOf(archivePath) ?? "rar";
   const stem = name
     .replace(/\.part0*\d+\.rar$/i, "")
     .replace(/\.(rar|zip|7z)$/i, "")
-    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/[^\p{L}\p{N}._-]+/gu, "_")
     .replace(/^[._]+|[._]+$/g, "");
   return `${kind}_${stem || "archive"}`.slice(0, 80);
 }
 
-/** True for a folder name `archiveFolderName` makes (`rar_…`, `zip_…`, `7z_…`). */
+/** True for a folder name `unpackFolderName` makes (`rar_…`, `zip_…`, `7z_…`). */
 export function isArchiveFolderName(name: string): boolean {
-  return /^(rar|zip|7z)_[A-Za-z0-9._-]+$/.test(name);
+  return /^(rar|zip|7z)_[\p{L}\p{N}._-]+$/u.test(name);
 }
 
 /** Bytes the packages take once unpacked: the sum of their sizes in the archive listing. */
@@ -146,7 +144,11 @@ export function archiveSpaceCheck(
   if (!volume) return { kind: "unknown", need, room: null, drive: null };
   const room = volumeAllocatableBytes(volume);
   const likely = volumeLikelyFitsBytes(volume);
-  const kind = need > room ? "no_room" : need > likely ? "tight" : "fits";
+  // The unpacked copy stays until the install has read it, and a game installs to internal
+  // storage by default: there the install needs its room on top. That only warns.
+  const internal = volume.path === "/user" || volume.path === "/data";
+  const atPeak = internal ? need + Math.max(0, needBytes) : need;
+  const kind = need > room ? "no_room" : atPeak > likely ? "tight" : "fits";
   return { kind, need, room, drive: volume.path };
 }
 
@@ -202,7 +204,7 @@ export async function planArchiveTarget(
       ? volumes
       : await fetchVolumes(transferAddr(host)).catch(() => null);
   const storage = pkgStorageFor(host, vols);
-  const dest = `${storage.dir}/${archiveFolderName(archivePath)}`;
+  const dest = `${storage.dir}/${unpackFolderName(archivePath)}`;
   const already = await consoleFolderBytes(host, dest);
   return {
     dest,
@@ -330,6 +332,8 @@ export interface RarInstallResult {
   message: string;
   /** The archive needs (or rejected) a password: ask again. */
   password?: RarPasswordProblem;
+  /** The unpack's status could not be read any more: this engine job may still be writing. */
+  lostJob?: string;
   /** The space check refused the run (nothing was sent). */
   space?: ArchiveSpace;
   /** Every package installed and the unpacked folder was deleted. */
@@ -343,7 +347,13 @@ export interface RarInstallOptions {
   archivePath: string;
   password?: string | null;
   onPhase?: (p: RarPhase) => void;
+  /** The unpack's engine job while it runs, so it can be stopped; null once it has ended. */
+  onUnpackJob?: (jobId: string | null) => void;
 }
+
+/** How many status reads in a row may fail before an unpack is given up on. It goes on in the
+ *  engine meanwhile, so one blip must not end the run and free its folder. */
+const UNPACK_STATUS_FAILURES = 30;
 
 const baseName = (p: string) => p.split("/").pop() ?? p;
 
@@ -368,7 +378,10 @@ export async function listRarPackages(
 async function unpack(
   opts: RarInstallOptions,
   dest: string,
-): Promise<{ ok: true } | { ok: false; message: string; password?: RarPasswordProblem }> {
+): Promise<
+  | { ok: true }
+  | { ok: false; message: string; password?: RarPasswordProblem; lostJob?: string }
+> {
   let jobId: string;
   try {
     const addr = consoleAddr(opts.host);
@@ -377,32 +390,45 @@ async function unpack(
     // RAR can be opened with a password.
     jobId =
       kind === "zip"
-        ? await startTransferZip(opts.archivePath, dest, addr, null, [RAR_PKG_ALLOW])
+        ? await startTransferZip(opts.archivePath, dest, addr, null, [RAR_PKG_ALLOW, RAR_FPKG_ALLOW])
         : kind === "7z"
-          ? await startTransfer7z(opts.archivePath, dest, addr, null, [RAR_PKG_ALLOW])
+          ? await startTransfer7z(opts.archivePath, dest, addr, null, [RAR_PKG_ALLOW, RAR_FPKG_ALLOW])
           : await startTransferRar(
               opts.archivePath,
               dest,
               addr,
               opts.password ?? null,
               null,
-              [RAR_PKG_ALLOW],
+              [RAR_PKG_ALLOW, RAR_FPKG_ALLOW],
             );
   } catch (e) {
     const msg = messageOf(e);
     const pw = rarPasswordProblem(null, msg);
     return { ok: false, message: msg, ...(pw ? { password: pw } : {}) };
   }
+  opts.onUnpackJob?.(jobId);
+  let failedReads = 0;
   for (;;) {
     let snap: JobSnapshot;
     try {
       snap = await jobStatus(jobId, opts.host);
+      failedReads = 0;
     } catch (e) {
-      return { ok: false, message: messageOf(e) };
+      failedReads += 1;
+      if (failedReads >= UNPACK_STATUS_FAILURES) {
+        // The folder may still be in use: the job id stays with the caller.
+        return { ok: false, message: messageOf(e), lostJob: jobId };
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+      continue;
     }
-    if (snap.status === "done") return { ok: true };
+    if (snap.status === "done") {
+      opts.onUnpackJob?.(null);
+      return { ok: true };
+    }
     if (snap.status === "failed") {
-      const msg = snap.error ?? "The unpack failed.";
+      opts.onUnpackJob?.(null);
+      const msg = snap.error ?? trStatic("arcpkg.unpack_failed", "The unpack failed.");
       const pw = rarPasswordProblem(snap.error_reason, msg);
       return { ok: false, message: msg, ...(pw ? { password: pw } : {}) };
     }
@@ -448,7 +474,7 @@ export async function installRarPackages(
       ok: false,
       dest: "",
       outcomes: [],
-      message: "That archive has no .pkg files in it.",
+      message: trStatic("rarpkg.none", "That archive has no .pkg files in it."),
     };
   }
 
@@ -462,7 +488,11 @@ export async function installRarPackages(
       dest,
       outcomes: [],
       space,
-      message: `Not enough space on ${space.drive}: the packages need ${fmtGb(space.need)}, it has ${fmtGb(space.room ?? 0)} free. Nothing was unpacked.`,
+      message: tx(
+        "arcpkg.space_refused",
+        { drive: space.drive ?? "", need: formatBytes(space.need), room: formatBytes(space.room ?? 0) },
+        "Not enough space on {drive}: the packages need {need}, and it has {room} free. Nothing was unpacked.",
+      ),
     };
   }
   for (const dir of pkgMkdirChain(dest)) {
@@ -476,6 +506,7 @@ export async function installRarPackages(
       dest,
       outcomes: [],
       message: unpacked.message,
+      ...(unpacked.lostJob ? { lostJob: unpacked.lostJob } : {}),
       ...(unpacked.password ? { password: unpacked.password } : {}),
     };
   }
@@ -502,7 +533,11 @@ export async function installRarPackages(
         entry: p.path,
         consolePath,
         status: "failed",
-        message: `Not a readable package (${messageOf(e)}). It was left at ${consolePath}.`,
+        message: tx(
+          "arcpkg.not_readable",
+          { error: messageOf(e), path: consolePath },
+          "Not a readable package ({error}). It was left at {path}.",
+        ),
       });
     }
   }
@@ -516,7 +551,11 @@ export async function installRarPackages(
         entry: pkg.entry,
         consolePath: pkg.consolePath,
         status: "skipped",
-        message: `Skipped: the base game ${pkg.titleId} did not install, and an update or DLC cannot go on without it. The file was left at ${pkg.consolePath}.`,
+        message: tx(
+          "arcpkg.skipped_no_base",
+          { id: pkg.titleId, path: pkg.consolePath },
+          "Skipped: the base game {id} did not install, and an update or DLC cannot go on without it. The file was left at {path}.",
+        ),
       });
       continue;
     }
@@ -539,7 +578,11 @@ export async function installRarPackages(
         entry: pkg.entry,
         consolePath: pkg.consolePath,
         status: "failed",
-        message: `${r.message ?? "The install did not complete."} The file was left at ${pkg.consolePath}.`,
+        message: tx(
+          "arcpkg.install_failed",
+          { error: r.message ?? trStatic("pkg.not_complete", "The install didn't complete."), path: pkg.consolePath },
+          "{error} The file was left at {path}.",
+        ),
       });
     }
   }
@@ -551,14 +594,24 @@ export async function installRarPackages(
       ok,
       dest,
       outcomes,
-      message: `Installed ${done} of ${outcomes.length}. The unpacked packages are still in ${dest}.`,
+      message: tx(
+        "arcpkg.partly_done",
+        { done, total: outcomes.length, dest },
+        "Installed {done} of {total}. The unpacked packages are still in {dest}.",
+      ),
     };
   }
   // Every install has ended (each was awaited), so nothing reads these files any more.
-  const installed = `Installed ${done} package${done === 1 ? "" : "s"} from the archive.`;
+  const installed = tx("arcpkg.all_done", { n: done }, "Packages installed from the archive: {n}.");
   try {
     await removeConsoleFolder(host, dest);
-    return { ok, dest, outcomes, removed: true, message: `${installed} The unpacked folder was deleted.` };
+    return {
+      ok,
+      dest,
+      outcomes,
+      removed: true,
+      message: `${installed} ${trStatic("arcpkg.folder_deleted", "The unpacked folder was deleted.")}`,
+    };
   } catch (e) {
     const why = messageOf(e);
     return {
@@ -566,11 +619,8 @@ export async function installRarPackages(
       dest,
       outcomes,
       removeError: why,
-      message: `${installed} The unpacked folder ${dest} could not be deleted (${why}).`,
+      message: `${installed} ${tx("arcpkg.folder_not_deleted", { dest, error: why }, "The unpacked folder {dest} could not be deleted ({error}).")}`,
     };
   }
 }
 
-function fmtGb(n: number): string {
-  return `${(n / 1e9).toFixed(1)} GB`;
-}

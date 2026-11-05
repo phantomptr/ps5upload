@@ -1,6 +1,8 @@
 // Card ② Options: where the package goes (remembered), how hard to compress it, and the one
 // language it declares when a game needs telling.
 
+import type { ReactNode } from "react";
+
 import type { FpkgCompression, FpkgEstimate, ImageFormat } from "../../api/fpkg";
 import { Button, Card } from "../../components";
 import { PLAYGO_LANGUAGES } from "../../lib/playgoLanguages";
@@ -9,6 +11,7 @@ import type { OutputPlace } from "../../lib/outputPlace";
 import { useTr } from "../../state/lang";
 import { CompressionTiles } from "./CompressionTiles";
 import { FullVerifyOption, ImageChoice, type Lz4Choice } from "./ImageOptions";
+import { NextGameNote } from "./MakeCard";
 import { prettyBytes } from "./RunCard";
 
 /** The most room a conversion needs on the output drive: the package, which the compressed
@@ -31,6 +34,8 @@ export interface OptionsCardProps {
   locked: boolean;
   /** The package's planned (uncompressed) size, once the game is checked. */
   plannedSize?: number;
+  /** The game's size, when it is being made into a compressed image: the warning for that. */
+  compressedFrom?: number;
   /** Room on the output drive; absent where the platform does not say. */
   outputFree?: number | null;
   /** The one language the package declares to PlayGo; "" keeps every language. */
@@ -46,6 +51,10 @@ export interface OptionsCardProps {
     lz4?: Lz4Choice;
   };
   onLanguage?: (code: string) => void;
+  /** A game is being made: this card sets what the next game added uses (#669). */
+  forNext?: boolean;
+  /** More choices, after the rest. */
+  children?: ReactNode;
 }
 
 export function OptionsCard(props: OptionsCardProps) {
@@ -55,6 +64,7 @@ export function OptionsCard(props: OptionsCardProps) {
     <Card padded={false} className="p-3.5 sm:p-4">
       <div className="flex flex-col gap-2.5 text-sm">
         <div className="font-medium">{tr("fpkg.card.options_v2", undefined, "③ Options")}</div>
+        {props.forNext && <NextGameNote />}
         <div className="flex flex-col gap-1">
           <label htmlFor="fpkg-output" className="text-[var(--color-muted)]">
             {tr("fpkg.output", undefined, "Output folder")}
@@ -101,6 +111,20 @@ export function OptionsCard(props: OptionsCardProps) {
             {tr("fpkg.free", undefined, "Free")}: {prettyBytes(props.outputFree)}
           </div>
         )}
+        {props.outputFree != null &&
+          props.compressedFrom != null &&
+          props.outputFree < props.compressedFrom * 0.4 && (
+            <div className="text-xs text-[var(--color-warn)]" data-testid="low-space-compressed">
+              {tr(
+                "fpkg.lowSpaceCompressed",
+                {
+                  size: prettyBytes(props.compressedFrom),
+                  free: prettyBytes(props.outputFree),
+                },
+                "Low on free space: this game is {size}, a compressed image is usually about half that, and the output drive has {free}. It may not fit.",
+              )}
+            </div>
+          )}
         {props.outputFree != null &&
           props.plannedSize != null &&
           props.outputFree < spaceNeeded(props.plannedSize) && (
@@ -186,6 +210,7 @@ export function OptionsCard(props: OptionsCardProps) {
           </div>
         )}
         <FullVerifyOption disabled={props.locked} />
+        {props.children}
       </div>
     </Card>
   );

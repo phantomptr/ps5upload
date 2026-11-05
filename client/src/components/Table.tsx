@@ -84,6 +84,26 @@ export interface TableProps<T> {
   zebra?: boolean;
 }
 
+/** One string for the rows' keys in order: equal when the same rows are listed the same way. */
+export function rowOrderKey<T>(rows: readonly T[], rowKey: (row: T, index: number) => string): string {
+  return rows.map((r, i) => rowKey(r, i)).join("\u0000");
+}
+
+/**
+ * Enter or Space on a focused cell opens that row, as a click on it does. Not on the selection
+ * column (that cell is a checkbox's), and not when focus is on a control inside a cell: the
+ * control's own key press must still work.
+ */
+export function isRowActivationKey(
+  key: string,
+  target: Pick<Element, "getAttribute">,
+  activeCol: number,
+  firstDataCol: number,
+): boolean {
+  if (key !== "Enter" && key !== " ") return false;
+  return target.getAttribute("role") === "gridcell" && activeCol >= firstDataCol;
+}
+
 const ARROW_KEYS = new Set([
   "ArrowUp",
   "ArrowDown",
@@ -143,10 +163,13 @@ export function Table<T>({
   const [renderCount, setRenderCount] = useState(pageSize);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
-  // Reset count when the data identity changes (new query, sort, etc.).
+  // Back to the first page when what is listed or its order changes (a new query, a sort), not
+  // whenever the array is rebuilt with the same rows in it: a value updating in a row (a play-time
+  // tick every 10 s) must not snap a list scrolled past the first page back under the user.
+  const rowOrder = useMemo(() => rowOrderKey(sortedRows, rowKey), [sortedRows, rowKey]);
   useEffect(() => {
     setRenderCount(pageSize);
-  }, [sortedRows, pageSize]);
+  }, [rowOrder, pageSize]);
 
   useEffect(() => {
     const el = sentinelRef.current;
@@ -251,6 +274,14 @@ export function Table<T>({
   // ---- Keyboard grid navigation ----
   const handleGridKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (isRowActivationKey(e.key, e.target as Element, activeCell.col, colOffset)) {
+        const row = sortedRows[activeCell.row];
+        if (!onRowClick || row === undefined) return;
+        if (isRowDisabled?.(row, activeCell.row)) return;
+        e.preventDefault();
+        onRowClick(row, activeCell.row);
+        return;
+      }
       if (!ARROW_KEYS.has(e.key) && e.key !== "Home" && e.key !== "End") return;
       const maxRow = sortedRows.length - 1;
       const maxCol = totalCols - 1;
@@ -292,14 +323,14 @@ export function Table<T>({
         return { row, col };
       });
     },
-    [sortedRows.length, totalCols],
+    [sortedRows, totalCols, activeCell, colOffset, onRowClick, isRowDisabled],
   );
 
   // ---- Render ----
   const rowH = density === "compact" ? "h-7" : "h-10";
   const cellPad = density === "compact" ? "px-2 py-0.5" : "px-3 py-2";
   const alignCls = (align?: string) =>
-    align === "right" ? "text-right" : align === "center" ? "text-center" : "text-left";
+    align === "right" ? "text-end" : align === "center" ? "text-center" : "text-start";
 
   const headerCells: ReactNode[] = [];
 
@@ -309,7 +340,7 @@ export function Table<T>({
       <th
         key="__sel"
         role="columnheader"
-        className="sticky left-0 z-20 border-b border-[var(--color-border)] bg-[var(--color-float)] px-2 py-2"
+        className="sticky start-0 z-20 border-b border-[var(--color-border)] bg-[var(--color-float)] px-2 py-2"
         style={{ width: 36 }}
       >
         {selectionMode === "multi" ? (
@@ -353,15 +384,21 @@ export function Table<T>({
         className={[
           "border-b border-[var(--color-border)] px-3 py-2.5 text-[0.6875rem] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]",
           col.sort ? "cursor-pointer select-none hover:text-[var(--color-text)]" : "",
-          col.sticky ? "sticky left-0 z-20 bg-[var(--color-float)]" : "",
+          col.sticky ? "sticky start-0 z-20 bg-[var(--color-float)]" : "",
           alignCls(col.align),
         ].join(" ")}
         style={col.width ? { width: col.width } : undefined}
       >
-        <span className="inline-flex items-center gap-1">
-          {col.header}
-          {SortIcon && <SortIcon size={12} className={isSorted ? "" : "opacity-40"} />}
-        </span>
+        {col.sort ? (
+          // A real button, so a keyboard can reach it. Its click bubbles to the <th>'s handler,
+          // which covers the cell's padding too.
+          <button type="button" className="inline-flex items-center gap-1 uppercase">
+            {col.header}
+            {SortIcon && <SortIcon size={12} className={isSorted ? "" : "opacity-40"} />}
+          </button>
+        ) : (
+          <span className="inline-flex items-center gap-1">{col.header}</span>
+        )}
       </th>,
     );
   });
@@ -396,7 +433,7 @@ export function Table<T>({
             // Rounded ends on the band, and the hover tint, live on the cells:
             // a row's own background is not clipped by its cells' radii.
             const bandCls =
-              "first:rounded-l-2xl last:rounded-r-2xl group-hover/row:bg-[var(--color-surface-3)]";
+              "first:rounded-s-2xl last:rounded-e-2xl group-hover/row:bg-[var(--color-surface-3)]";
 
             const cells: ReactNode[] = [];
 
@@ -408,7 +445,7 @@ export function Table<T>({
                   key="__sel"
                   role="gridcell"
                   tabIndex={cellActive ? 0 : -1}
-                  className={`sticky left-0 z-10 bg-[var(--color-float)] px-2 ${bandCls} ${zebraCls}`}
+                  className={`sticky start-0 z-10 bg-[var(--color-float)] px-2 ${bandCls} ${zebraCls}`}
                   style={{ width: 36 }}
                 >
                   <input
@@ -442,7 +479,7 @@ export function Table<T>({
                     cellPad,
                     alignCls(col.align),
                     col.sticky
-                      ? "sticky left-0 z-10 bg-[var(--color-float)]"
+                      ? "sticky start-0 z-10 bg-[var(--color-float)]"
                       : "",
                     zebraCls,
                     onRowClick && !disabled ? "cursor-pointer" : "",

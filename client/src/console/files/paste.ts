@@ -8,22 +8,24 @@
  * - Keep both: the item takes the first free "name (2).ext", "name (3).ext"…
  * - Replace: a FILE replacing a file goes by a copy job with the overwrite
  *   flag (job.copy replaces files one by one through a .part + rename). A
- *   folder (or a file replacing a folder, or the other way round) deletes the
- *   existing one first (a delete job, waited on), because job.copy's overwrite
- *   MERGES folders and would leave the old folder's other files behind. A cut
- *   on the same drive is a rename, which never overwrites: delete first too.
+ *   folder (or a file replacing a folder, or the other way round) goes through
+ *   a temporary name beside the old item, which is deleted only once the new
+ *   one has its place (replace.ts), because job.copy's overwrite MERGES folders
+ *   and would leave the old folder's other files behind. A cut on the same
+ *   drive is a rename, which never overwrites: it goes the same way.
  * "Apply to all" answers every later conflict of this paste the same way.
  *
  * Copy = copy job. Cut = rename on the same drive; across drives the helper
- * refuses the rename (cross_mount) and a copy job with the move flag does it.
+ * refuses the rename (cross_mount) and a copy job with the move flag does it
+ * (a Replace copies, and deletes the original once the new item is in place).
  * A folder never goes into itself (IntoItselfError); a cut item pasted into
  * its own folder stays as it is.
  *
  * "The item itself" is decided by identity (/api/fs/stat's dev + ino), not by
  * the path's spelling: exFAT USB drives are case-insensitive, so a cut of
  * /mnt/usb0/Games/x pasted into a typed /mnt/usb0/games finds x itself at the
- * destination. Offering Replace there would delete the item (delete-first), so
- * an identical entry is never replaceable, and for a cut it is "already here".
+ * destination. Offering Replace there would delete the item, so an identical
+ * entry is never replaceable, and for a cut it is "already here".
  * The destination folder is compared with each item's folder the same way. A
  * helper without ids falls back to the path compare.
  */
@@ -40,6 +42,8 @@ import {
   type BatchOptions,
   type BatchResult,
 } from "./move";
+import { renameChecked, ReplaceError, replaceItem, type Placed, type ReplaceSide } from "./replace";
+import { keepBothName } from "../../lib/consolePath";
 
 export type PasteMode = "copy" | "cut";
 export type ConflictChoice = "skip" | "replace" | "keep";
@@ -73,12 +77,14 @@ export interface PasteResult extends BatchResult {
   done: string[];
   /** Items whose job Stop left running (not known to be done: a cut keeps them in the clipboard). */
   left: string[];
-  /** Items not pasted because Stop came while the delete for their Replace ran (that delete runs on). */
+  /** Items not pasted because Stop came while the copy for their Replace ran: what was there is as it was. */
   halted: string[];
   /** Conflicts the user skipped. */
   declined: string[];
   /** Cut items already in this folder (nothing to do). */
   here: string[];
+  /** Replaces that left something to tell (a temporary or an old item that could not be deleted). */
+  notes?: ReplaceError[];
 }
 
 export interface PasteDeps {
@@ -116,14 +122,7 @@ export async function statOrNull(path: string): Promise<Stat | null> {
   }
 }
 
-/** "name.ext" → "name (n).ext" (a folder keeps its dots); a " (k)" it already ends with is replaced. */
-export function keepBothName(name: string, n: number, dir: boolean): string {
-  const dot = dir ? -1 : name.lastIndexOf(".");
-  const stem = dot > 0 ? name.slice(0, dot) : name;
-  const ext = dot > 0 ? name.slice(dot) : "";
-  const m = /^(.+) \((\d+)\)$/.exec(stem);
-  return `${m ? m[1] : stem} (${n})${ext}`;
-}
+export { keepBothName };
 
 /** The first free Keep both name for `name` in `dir`. */
 export async function freeName(
@@ -140,6 +139,20 @@ export async function freeName(
     if (!(await taken(joinPath(dir, candidate)))) return candidate;
   }
   throw new ApiError(409, "exists");
+}
+
+/** Why a copy job failed, when the helper can say: the no-space error a Replace reports by name. */
+async function jobFailure(job: string): Promise<ApiError | null> {
+  try {
+    const s = await call<{ code?: unknown; message?: unknown } | null>("/api/jobs/status", { job });
+    // AVA1_ERR_NO_SPACE, or the words of an older helper's message.
+    if (s?.code === 10 || (typeof s?.message === "string" && /drive is full|no space/i.test(s.message))) {
+      return new ApiError(507, "no_space");
+    }
+  } catch {
+    /* it is released already, or the helper is gone: the failure stays unnamed */
+  }
+  return null;
 }
 
 function sameDrive(a: string, b: string, volumes?: { path: string }[]): boolean | null {
@@ -159,8 +172,9 @@ export async function pasteItems(
   const dir = destDir.replace(/\/+$/, "") || "/";
   const declined: string[] = [];
   const here: string[] = [];
-  /** The item whose Replace delete was left running by Stop: it was not pasted. */
+  /** The items whose Replace Stop ended during the copy: they were not pasted. */
   const halted: string[] = [];
+  const notes: ReplaceError[] = [];
   /** Items whose job was still running when Stop let go of it. */
   const leftRunning: string[] = [];
   const kinds = new Map(items.map((i) => [i.path, i.dir]));
@@ -187,6 +201,52 @@ export async function pasteItems(
           return end;
         }
       : undefined,
+  };
+  const side: ReplaceSide = {
+    taken: async (p) => (await statOrNull(p)) != null,
+    rename: async (from, to) => {
+      await call("/api/fs/rename", { from, to });
+    },
+    remove: async (p) => {
+      const { job } = await call<{ job: string }>("/api/fs/delete", { path: p });
+      if (wait) await wait(job, true);
+      return (await statOrNull(p)) == null;
+    },
+  };
+
+  /** Replace `dest` with `item`, through a temporary name (replace.ts). */
+  const replace = async (item: string, dest: string, res: BatchResult, renames: boolean): Promise<void> => {
+    let renamed = false;
+    const place = async (temp: string): Promise<Placed> => {
+      if (renames) {
+        try {
+          await renameChecked(side, item, temp);
+          renamed = true;
+          return { end: "done", undo: () => renameChecked(side, temp, item) };
+        } catch (e) {
+          if (e instanceof ApiError && e.status === 401) throw e;
+          // Whatever is at the temporary name after this may be the item itself: it is never cleared.
+          if (!(e instanceof ApiError && e.code === "cross_mount")) return { end: "failed", why: e, notThere: true };
+        }
+      }
+      // A cut across drives copies too: its original goes only after the new item is in place.
+      const job = await startCopy(item, temp, false, res);
+      const end = wait ? await wait(job) : "done";
+      if (end === "done") return { end };
+      if (end === "cancelled") return { end: "stopped" };
+      if (end === "left") return { end };
+      return { end: "failed", why: end === "failed" ? await jobFailure(job) : null };
+    };
+    const r = await replaceItem(side, dir, dest, place);
+    const name = baseName(dest);
+    if (r.end === "stopped") {
+      halted.push(item);
+      if (r.temp) notes.push(new ReplaceError("temp_left", name, { temp: r.temp }));
+      return;
+    }
+    if (r.old) notes.push(new ReplaceError("old_left", name, { old: r.old }));
+    if (renamed) res.moved.push(item);
+    else if (mode === "cut" && !(await side.remove(item).catch(() => false))) notes.push(new ReplaceError("source_left", name));
   };
 
   const r = await each(paths, eachOpts, async (item, res) => {
@@ -230,17 +290,8 @@ export async function pasteItems(
         dest = joinPath(dir, await freeName(dir, baseName(item), isDir, async (p) => (await statOrNull(p)) != null));
       } else {
         const renames = mode === "cut" && sameDrive(item, dir, deps.volumes) !== false;
-        if (!isDir && existing.kind !== "dir" && !renames) {
-          overwrite = true;
-        } else {
-          const { job } = await call<{ job: string }>("/api/fs/delete", { path: dest });
-          const end = opts?.waitJob ? await opts.waitJob(job) : "done";
-          if (end === "left") {
-            halted.push(item);
-            return;
-          }
-          if (end === "failed") throw new ApiError(500, "replace_delete_failed");
-        }
+        if (isDir || existing.kind === "dir" || renames) return replace(item, dest, res, renames);
+        overwrite = true;
       }
     }
     if (mode === "copy") return startCopy(item, dest, false, res, overwrite);
@@ -257,7 +308,7 @@ export async function pasteItems(
   });
 
   const notDone = new Set<string>(
-    declined.concat(here, halted, leftRunning, r.skipped, r.jobFailed, r.failed.map((f) => f.item)),
+    declined.concat(here, halted, leftRunning, r.skipped, r.jobFailed, r.cancelled ?? [], r.failed.map((f) => f.item)),
   );
   return {
     ...r,
@@ -267,5 +318,6 @@ export async function pasteItems(
     halted,
     declined,
     here,
+    notes,
   };
 }

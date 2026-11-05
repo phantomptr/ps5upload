@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Security scan: known-vulnerable dependencies and committed secrets.
-# Run locally with `make security`; CI runs it in .github/workflows/security.yml.
+# Run locally with `make security`; CI runs it in the security-scan job of .github/workflows/engine-ci.yml.
 #
 #   cargo audit   engine/ and client/src-tauri/ lockfiles against the RustSec database
 #   npm audit     client/ and the root package (high and critical only)

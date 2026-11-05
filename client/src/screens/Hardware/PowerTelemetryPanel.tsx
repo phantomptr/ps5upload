@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { Battery, RefreshCw } from "lucide-react";
 import { powerTelemetryGet, type PowerTelemetry } from "../../api/ps5";
 import { Button, ErrorCard, Spinner } from "../../components";
-import { useTr } from "../../state/lang";
+import { useTr, type Translator } from "../../state/lang";
+import { formatNumber, formatDuration } from "../../lib/formatDate";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /**
  * Lifetime ICC telemetry — operating seconds, boot cycles, thermal
@@ -39,7 +41,7 @@ export default function PowerTelemetryPanel({ mgmtAddr }: { mgmtAddr: string }) 
       setData(t);
     } catch (e) {
       if (myId !== reqIdRef.current) return;
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       if (myId === reqIdRef.current) setLoading(false);
     }
@@ -79,7 +81,7 @@ export default function PowerTelemetryPanel({ mgmtAddr }: { mgmtAddr: string }) 
           <dt className="text-[var(--color-muted)]">
             {tr("power_telemetry_uptime", undefined, "Lifetime power-on")}
           </dt>
-          <dd>{formatSeconds(data.operating_seconds)}</dd>
+          <dd>{formatSeconds(data.operating_seconds, tr)}</dd>
           <dt className="text-[var(--color-muted)]">
             {tr("power_telemetry_cycles", undefined, "Boot cycles")}
           </dt>
@@ -87,7 +89,7 @@ export default function PowerTelemetryPanel({ mgmtAddr }: { mgmtAddr: string }) 
           <dt className="text-[var(--color-muted)]">
             {tr("power_telemetry_thermal", undefined, "Thermal alerts")}
           </dt>
-          <dd>{formatThermal(data.thermal_alert_flags)}</dd>
+          <dd>{formatThermal(data.thermal_alert_flags, tr)}</dd>
           <dt className="text-[var(--color-muted)]">
             {tr("power_telemetry_powerup", undefined, "Last power-up cause")}
           </dt>
@@ -130,7 +132,7 @@ const BOOT_CYCLES_MAX = 1_000_000;
 export function formatBootCycles(n: number | null | undefined): string {
   if (n === null || n === undefined) return "—";
   if (n < 0 || n > BOOT_CYCLES_MAX) return "—";
-  return n.toLocaleString();
+  return formatNumber(n);
 }
 
 /** One sentence explaining an empty readout, or null when there is nothing to
@@ -152,7 +154,7 @@ export function unavailableNote(data: {
   }
 }
 
-function formatSeconds(s: number | null | undefined): string {
+function formatSeconds(s: number | null | undefined, tr: Translator): string {
   // `== null`: a field an older engine or helper does not send is undefined, not null, and
   // must not take the whole Hardware screen down.
   if (s == null) return "—";
@@ -160,14 +162,18 @@ function formatSeconds(s: number | null | undefined): string {
   const minutes = Math.floor((s % 3600) / 60);
   if (hours > 24) {
     const days = Math.floor(hours / 24);
-    return `${days}d ${hours % 24}h (${hours.toLocaleString()} hours)`;
+    return tr(
+      "power_telemetry_uptime_days",
+      { days, rest: hours % 24, hours: formatNumber(hours) },
+      "{days} d {rest} h (total hours: {hours})",
+    );
   }
-  return `${hours}h ${minutes}m`;
+  return formatDuration(hours * 3600 + minutes * 60);
 }
 
-function formatThermal(flags: number | null | undefined): string {
+function formatThermal(flags: number | null | undefined, tr: Translator): string {
   if (flags == null) return "—";
-  if (flags === 0) return "no alerts";
+  if (flags === 0) return tr("power_telemetry_no_alerts", undefined, "no alerts");
   // Count the SET bits, not the raw flag value — `${flags} bits set` labelled
   // e.g. flag 0x4 as "4 bits set" when only one bit is set.
   let n = flags;
@@ -176,5 +182,9 @@ function formatThermal(flags: number | null | undefined): string {
     count += n & 1;
     n >>>= 1;
   }
-  return `0x${flags.toString(16)} (${count} bit${count === 1 ? "" : "s"} set)`;
+  return tr(
+    "power_telemetry_bits_set",
+    { flags: `0x${flags.toString(16)}`, count },
+    "{flags} (bits set: {count})",
+  );
 }

@@ -4,7 +4,7 @@ import {
 } from "../../lib/streamSelection";
 import { invoke } from "../../lib/invokeLogged";
 import { FpkgNote } from "./FpkgNote";
-import { formatDate } from "../../lib/formatDate";
+import { formatDate, formatDuration } from "../../lib/formatDate";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   failedStreamInstallIds,
@@ -106,12 +106,13 @@ import { Tabs } from "../../components/Tabs";
 import { linkModeFacts } from "../../lib/linkModes";
 import { useRecentLinksStore } from "../../state/recentLinks";
 import type { LinkInstallMode } from "../../state/linkInstallPrefs";
-import { formatBytes, formatDuration } from "../../lib/format";
+import { formatBytes } from "../../lib/format";
 import { canResumeExisting, type ExistingChoice } from "../../lib/linkDownload";
 import { remainingSeconds } from "../../lib/rollingRate";
 import { acceptPkgDrop, isInstallPackagePath } from "../../lib/pkgDropDedupe";
 import { writeClipboard } from "../../lib/clipboard";
 import { deleteBrowserPkgUpload, stageBrowserPkg } from "../../api/pkgUpload";
+import { stageWithTask } from "../../lib/browserStaging";
 
 /* ─── Cover art ────────────────────────────────────────────────────────
  * Thin wrapper over the shared GameIcon (keyed by title id from the
@@ -323,7 +324,7 @@ function PkgRow({
                 <button
                   type="button"
                   onClick={onView}
-                  className="ml-2 shrink-0 rounded-full px-1 text-[var(--color-accent)] hover:underline"
+                  className="ms-2 shrink-0 rounded-full px-1 text-[var(--color-accent)] hover:underline"
                 >
                   {tr("viewer_open", undefined, "View details")}
                 </button>
@@ -359,7 +360,7 @@ function PkgRow({
                     <button
                       type="button"
                       onClick={onView}
-                      className="ml-1 shrink-0 rounded-full px-1 text-[var(--color-accent)] hover:underline"
+                      className="ms-1 shrink-0 rounded-full px-1 text-[var(--color-accent)] hover:underline"
                     >
                       {tr("viewer_open", undefined, "View details")}
                     </button>
@@ -557,7 +558,7 @@ function PkgRow({
             {(!entry.lastResult.ok || entry.lastResult.warn) && (
               <button
                 type="button"
-                className="ml-1.5 underline underline-offset-2"
+                className="ms-1.5 underline underline-offset-2"
                 onClick={() =>
                   navigate(
                     entry.lastResult!.ok
@@ -973,7 +974,7 @@ export default function InstallPackageScreen({
       const names: Record<string, string> = {};
       const paths: string[] = [];
       for (const file of files) {
-        const staged = await stageBrowserPkg(file);
+        const staged = await stageWithTask(file, stageBrowserPkg);
         uploadIds.push(staged.uploadId);
         names[staged.path] = staged.filename || file.name;
         paths.push(staged.path);
@@ -1812,8 +1813,8 @@ export default function InstallPackageScreen({
                           variant="soft"
                         >
                           {unresolved > 0
-                            ? `${unresolved} choice${unresolved === 1 ? "" : "s"} needed`
-                            : `${alternatives.length} variant choice${alternatives.length === 1 ? "" : "s"} set`}
+                            ? tr("pkglib.variant.choicesNeeded", { count: unresolved }, "Choices needed: {count}")
+                            : tr("pkglib.variant.choicesSet", { count: alternatives.length }, "Variant choices set: {count}")}
                         </Badge>
                       )}
                     </div>
@@ -2297,6 +2298,7 @@ function ExternalPackages({ host }: { host: string }) {
   const setAutoScan = useInstallSettingsStore((s) => s.setAutoScanExternal);
   const [pkgs, setPkgs] = useState<ExternalPkg[]>([]);
   const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
   const [scanned, setScanned] = useState(false);
   const [installingPath, setInstallingPath] = useState<string | null>(null);
   const [results, setResults] = useState<
@@ -2320,10 +2322,12 @@ function ExternalPackages({ host }: { host: string }) {
     setScanning(true);
     try {
       setPkgs(await pkgScanExternal(transferAddr(host)));
+      setScanError(null);
       setScanned(true);
-    } catch {
-      // Best-effort: no drives / scan failure just shows an empty section.
+    } catch (e) {
+      // The empty section's "No packages found" would be untrue: nobody looked.
       setPkgs([]);
+      setScanError(e instanceof Error ? e.message : String(e));
       setScanned(true);
     } finally {
       setScanning(false);
@@ -2452,10 +2456,16 @@ function ExternalPackages({ host }: { host: string }) {
       ) : pkgs.length === 0 ? (
         // Empty state — informative, and the Scan button above stays put.
         <div className="rounded-[var(--radius-card)] border border-dashed border-[var(--glass-edge)] px-3 py-4 text-xs text-[var(--color-muted)]">
-          {tr(
-            "pkglib.external.empty",
-            "No .pkg or .fpkg install packages found on connected USB or external drives. Connect a drive that has packages on it, then click Scan.",
-          )}
+          {scanError
+            ? tr(
+                "pkglib.external.scanFailed",
+                { error: scanError },
+                "The drives could not be scanned: {error}",
+              )
+            : tr(
+                "pkglib.external.empty",
+                "No .pkg or .fpkg install packages found on connected USB or external drives. Connect a drive that has packages on it, then click Scan.",
+              )}
         </div>
       ) : (
         <ul className="grid gap-2">

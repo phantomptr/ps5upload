@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { X } from "lucide-react";
 
 import { useTr } from "../../state/lang";
-import { rpInput, useRemotePlayStore } from "../../state/remotePlay";
+import { pauseRpInput, rpInput, useRemotePlayStore } from "../../state/remotePlay";
 import { activateFocusTrap } from "../../lib/focusTrap";
 import { releaseCapture } from "../../lib/pointerCapture";
 import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
@@ -49,7 +49,7 @@ const keep = {
  * bottom on a phone. In full screen it is drawn inside the picture's full-screen view, so
  * opening it never leaves full screen and the picture keeps playing beside or above it.
  *
- * While it is open the console gets no keys, controller or touch (rpInput.paused), so arrows,
+ * While it is open the console gets no keys, controller or touch (pauseRpInput), so arrows,
  * typing and a controller work in the settings. Esc, ✕, a press outside, the Settings button
  * again and (on the sheet) a swipe down close it; focus goes back to where it was.
  */
@@ -104,7 +104,7 @@ export function SettingsDrawer({
     if (!open) return;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     // The console gets an idle pad from now until close: nothing held stays held.
-    rpInput.paused = true;
+    pauseRpInput("settings", true);
     rpInput.held.clear();
     rpInput.touch = null;
     useRemotePlayStore.getState().stream?.sendPad();
@@ -131,7 +131,7 @@ export function SettingsDrawer({
     });
     return () => {
       release();
-      rpInput.paused = false;
+      pauseRpInput("settings", false);
       useRemotePlayStore.getState().stream?.sendPad();
       queueMicrotask(() => {
         if (opener?.isConnected && opener.getClientRects().length > 0) opener.focus({ preventScroll: true });

@@ -42,10 +42,8 @@ import {
 } from "../../lib/cheatGames";
 import { useToast } from "../../state/toasts";
 import { reapplyToast } from "./reapplyToast";
-
-/** Game details by host + title id, for the session: a version doesn't
- *  change while you browse, and each is a round trip to the console. */
-const detailsCache = new Map<string, AppInfoDetails | null>();
+import { usePoll } from "../../lib/usePoll";
+import { cacheDetails, cachedDetails } from "../../lib/cheatDetailsCache";
 
 export default function CheatsScreen() {
   const tr = useTr();
@@ -89,6 +87,17 @@ export default function CheatsScreen() {
       setLoading(false);
     }
   }, [addr, up]);
+
+  // A game starting or closing unlocks or locks the switches: followed while this is on screen.
+  // usePoll holds off during transfers and while the window is hidden.
+  usePoll(
+    () =>
+      cheatsStatus(addr)
+        .then(setStatus)
+        .catch(() => {}),
+    5000,
+    { host: host ?? undefined, enabled: up, immediate: false },
+  );
 
   useEffect(() => {
     void refresh();
@@ -142,14 +151,17 @@ export default function CheatsScreen() {
       for (const g of ordered) {
         if (cancelled) return;
         const key = `${h}/${g.titleId}`;
-        if (!detailsCache.has(key)) {
-          detailsCache.set(key, await appInfoDetails(addr, g.titleId));
+        let read = cachedDetails(key, Date.now());
+        if (!read) {
+          read = await appInfoDetails(addr, g.titleId);
+          cacheDetails(key, read, Date.now());
         }
         if (cancelled) return;
+        const fresh = read;
         setDetails((prev) => {
-          if (prev.get(g.titleId) === detailsCache.get(key)) return prev;
+          if (prev.get(g.titleId) === fresh) return prev;
           const next = new Map(prev);
-          next.set(g.titleId, detailsCache.get(key) ?? null);
+          next.set(g.titleId, fresh);
           return next;
         });
       }
@@ -171,7 +183,7 @@ export default function CheatsScreen() {
   async function setEngine(enabled: boolean) {
     try {
       const r = await cheatsEngineSet(enabled, addr);
-      if (r.ok) setStatus((prev) => (prev ? { ...prev, enabled: r.enabled } : prev));
+      setStatus((prev) => (prev ? { ...prev, enabled: r.enabled } : prev));
     } catch (e) {
       setError(humanizePs5Error(String(e)));
     }

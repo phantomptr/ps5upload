@@ -11,6 +11,7 @@
 
 import { elfldrEnsure, elfldrHealth } from "../api/ps5";
 import { log } from "../state/logs";
+import { runStatusForHost, usePayloadPlaylistsStore } from "../state/payloadPlaylists";
 
 export type LoaderHealth = "healthy" | "stuck" | "absent";
 
@@ -63,6 +64,14 @@ export const LISTENER_LOADER_HINT =
 
 const lastAsked = new Map<string, number>();
 const GUARD_INTERVAL_MS = 10 * 60_000;
+/** How long the swap waits for a playlist on that console before leaving it for the next time. */
+const PLAYLIST_WAIT_MS = 2 * 60_000;
+const PLAYLIST_POLL_MS = 2_000;
+
+function playlistRunsOn(host: string): boolean {
+  const kind = runStatusForHost(usePayloadPlaylistsStore.getState(), host).kind;
+  return kind === "running" || kind === "sleeping";
+}
 
 /** Test hook. */
 export function resetElfldrGuard(): void {
@@ -75,12 +84,27 @@ export function resetElfldrGuard(): void {
 export async function guardElfldr(
   host: string,
   fresh: boolean,
-  deps: { ensure: (host: string) => Promise<unknown> } & Clock = { ensure: elfldrEnsure, ...realClock },
+  deps: { ensure: (host: string) => Promise<unknown>; playlistRuns?: (host: string) => boolean } & Clock = {
+    ensure: elfldrEnsure,
+    ...realClock,
+  },
 ): Promise<void> {
   const key = host.trim().toLowerCase();
   const last = lastAsked.get(key);
   if (!fresh && last !== undefined && deps.now() - last < GUARD_INTERVAL_MS) return;
   lastAsked.set(key, deps.now());
+  // The swap closes :9021 for about a second, and the auto-loader starts on the same "helper came
+  // up" edge. A step landing in that gap fails and drops the rest of the playlist; one the old
+  // elfldr takes just before it is killed reports success and never runs.
+  const playlistRuns = deps.playlistRuns ?? playlistRunsOn;
+  const giveUpAt = deps.now() + PLAYLIST_WAIT_MS;
+  while (playlistRuns(host)) {
+    if (deps.now() >= giveUpAt) {
+      lastAsked.delete(key);
+      return;
+    }
+    await deps.sleep(PLAYLIST_POLL_MS);
+  }
   try {
     const outcome = await deps.ensure(host);
     log.info("connection", `elfldr on ${host}: ${JSON.stringify(outcome)}`);

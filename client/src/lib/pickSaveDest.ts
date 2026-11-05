@@ -25,7 +25,7 @@ export async function pickSaveDest(
 ): Promise<string | null> {
   if (isIOS()) return documentsDest(opts.defaultPath ?? "ps5upload-export");
   if (isAndroid())
-    return freeDest(ANDROID_DOWNLOADS, opts.defaultPath ?? "ps5upload-export");
+    return freeDest(await androidDownloads(), opts.defaultPath ?? "ps5upload-export");
   const { save } = await import("@tauri-apps/plugin-dialog");
   return save(opts);
 }
@@ -34,13 +34,16 @@ export async function pickSaveDest(
  *  mid-game): Downloads on the desktop and Android, the app's Documents folder on iPhone. */
 export async function downloadsDest(suggested: string): Promise<string> {
   if (isIOS()) return documentsDest(suggested);
-  if (isAndroid()) return freeDest(ANDROID_DOWNLOADS, suggested);
+  if (isAndroid()) return freeDest(await androidDownloads(), suggested);
   const { downloadDir } = await import("@tauri-apps/api/path");
   return freeDest(await downloadDir(), suggested);
 }
 
-/** Android's public Downloads folder (the backend's ANDROID_PUBLIC_DOWNLOADS). */
-const ANDROID_DOWNLOADS = "/storage/emulated/0/Download";
+/** Android's public Downloads folder, for this user: a work profile or a second user has another
+ *  number there. The literal is the primary user's, if Android cannot say. */
+async function androidDownloads(): Promise<string> {
+  return localFs.downloadsDir().catch(() => "/storage/emulated/0/Download");
+}
 
 /** A free name in the iPhone app's Documents folder. Exported for tests. */
 export async function documentsDest(suggested: string): Promise<string> {

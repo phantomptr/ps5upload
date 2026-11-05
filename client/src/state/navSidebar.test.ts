@@ -1,22 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { installWindowStub } from "../test-utils/storage";
 
 const HIDDEN_KEY = "ps5upload.desktop-sidebar.hidden.v1";
 const CLOSED_KEY = "ps5upload.desktop-sidebar.closed-sections.v1";
 const PINNED_KEY = "ps5upload.desktop-sidebar.pinned.v1";
-
-// Plain-node environment: stand up localStorage by hand (see navItems/safeStorage).
-function installStorage(seed: Record<string, string> = {}) {
-  const map = new Map(Object.entries(seed));
-  (globalThis as { window?: unknown }).window = {
-    localStorage: {
-      getItem: (k: string) => map.get(k) ?? null,
-      setItem: (k: string, v: string) => void map.set(k, v),
-      removeItem: (k: string) => void map.delete(k),
-      clear: () => map.clear(),
-    },
-  };
-  return map;
-}
 
 /** The store reads storage at module load: seed, then re-import. */
 async function freshStore() {
@@ -25,7 +12,7 @@ async function freshStore() {
 }
 
 beforeEach(() => {
-  installStorage();
+  installWindowStub();
 });
 
 describe("the sidebar's hidden screens", () => {
@@ -36,11 +23,11 @@ describe("the sidebar's hidden screens", () => {
   });
 
   it("hides and shows a screen, and remembers it across a relaunch", async () => {
-    const storage = installStorage();
+    const storage = installWindowStub();
     const store = await freshStore();
     store.getState().toggleHidden("/cheats");
     expect(store.getState().hidden).toContain("/cheats");
-    expect(JSON.parse(storage.get(HIDDEN_KEY)!)).toEqual(["/cheats"]);
+    expect(JSON.parse(storage.getItem(HIDDEN_KEY)!)).toEqual(["/cheats"]);
     const again = await freshStore();
     expect(again.getState().hidden).toEqual(["/cheats"]);
     again.getState().toggleHidden("/cheats");
@@ -48,17 +35,17 @@ describe("the sidebar's hidden screens", () => {
   });
 
   it("collapses a section and remembers it", async () => {
-    const storage = installStorage();
+    const storage = installWindowStub();
     const store = await freshStore();
     store.getState().toggleSection("nav_section_diagnostics");
     expect(store.getState().closedSections).toEqual(["nav_section_diagnostics"]);
-    expect(JSON.parse(storage.get(CLOSED_KEY)!)).toEqual(["nav_section_diagnostics"]);
+    expect(JSON.parse(storage.getItem(CLOSED_KEY)!)).toEqual(["nav_section_diagnostics"]);
     store.getState().toggleSection("nav_section_diagnostics");
     expect(store.getState().closedSections).toEqual([]);
   });
 
   it("treats a damaged stored value as nothing hidden", async () => {
-    installStorage({ [HIDDEN_KEY]: "{not json", [CLOSED_KEY]: JSON.stringify([1, "nav_section_help"]) });
+    installWindowStub({ [HIDDEN_KEY]: "{not json", [CLOSED_KEY]: JSON.stringify([1, "nav_section_help"]) });
     const s = (await freshStore()).getState();
     expect(s.hidden).toEqual([]);
     expect(s.closedSections).toEqual(["nav_section_help"]);
@@ -78,13 +65,13 @@ describe("the sidebar's pinned screens", () => {
   });
 
   it("pins in pin order, unpins, and remembers it across a relaunch", async () => {
-    const storage = installStorage();
+    const storage = installWindowStub();
     const store = await freshStore();
     store.getState().togglePinned("/files");
     store.getState().togglePinned("/send");
     store.getState().togglePinned("/payloads");
     expect(store.getState().pinned).toEqual(["/files", "/send", "/payloads"]);
-    expect(JSON.parse(storage.get(PINNED_KEY)!)).toEqual(["/files", "/send", "/payloads"]);
+    expect(JSON.parse(storage.getItem(PINNED_KEY)!)).toEqual(["/files", "/send", "/payloads"]);
     store.getState().togglePinned("/send");
     expect(store.getState().pinned).toEqual(["/files", "/payloads"]);
     const again = await freshStore();
@@ -117,14 +104,14 @@ describe("the sidebar's pinned screens", () => {
     store.getState().togglePinned(screens[MAX_PINNED]);
     expect(store.getState().pinned).toHaveLength(MAX_PINNED);
     expect(store.getState().pinned[MAX_PINNED - 1]).toBe(screens[MAX_PINNED]);
-    installStorage();
+    installWindowStub();
     const empty = await freshStore();
     for (const to of ["/home", "/bug-report", "/no-such-screen"]) empty.getState().togglePinned(to);
     expect(empty.getState().pinned).toEqual([]);
   });
 
   it("drops unknown, removed, repeated and junk ids on load", async () => {
-    installStorage({
+    installWindowStub({
       [PINNED_KEY]: JSON.stringify(["/files", "/favorites-old", 4, "/files", "/home", "/send"]),
     });
     expect((await freshStore()).getState().pinned).toEqual(["/files", "/send"]);
@@ -139,7 +126,7 @@ describe("the sidebar's pinned screens", () => {
   });
 
   it("takes the settings-file mirror's pins, and keeps its own when the file has none", async () => {
-    const storage = installStorage();
+    const storage = installWindowStub();
     const store = await freshStore();
     store.getState().togglePinned("/files");
     // A file from before pinning: no `pinned` list.
@@ -147,7 +134,7 @@ describe("the sidebar's pinned screens", () => {
     expect(store.getState().pinned).toEqual(["/files"]);
     store.getState().setAll([], [], ["/workshop", "/gone", "/files"]);
     expect(store.getState().pinned).toEqual(["/workshop", "/files"]);
-    expect(JSON.parse(storage.get(PINNED_KEY)!)).toEqual(["/workshop", "/files"]);
+    expect(JSON.parse(storage.getItem(PINNED_KEY)!)).toEqual(["/workshop", "/files"]);
   });
 
   it("counts only the shown pins toward twelve", async () => {

@@ -2,7 +2,7 @@
   {
     "name": "same IP same placeholder",
     "redact": true,
-    "in": "connect 192.168.86.100:9120 then 192.168.86.99 then 192.168.86.100",
+    "in": "connect 192.0.2.100:9120 then 192.0.2.99 then 192.0.2.100",
     "out": "connect <ip-1>:9120 then <ip-2> then <ip-1>"
   },
   {
@@ -26,7 +26,7 @@
   {
     "name": "home folders",
     "redact": true,
-    "in": "/Users/yunpengl/Library/x and C:\\Users\\bob\\x and /home/amy/y",
+    "in": "/Users/alice/Library/x and C:\\Users\\bob\\x and /home/amy/y",
     "out": "~/Library/x and ~\\x and ~/y"
   },
   {
@@ -56,8 +56,8 @@
   {
     "name": "redaction off leaves addresses",
     "redact": false,
-    "in": "192.168.86.100 at /Users/me/x",
-    "out": "192.168.86.100 at /Users/me/x"
+    "in": "192.0.2.100 at /Users/me/x",
+    "out": "192.0.2.100 at /Users/me/x"
   },
   {
     "name": "multibyte text around everything",
@@ -68,7 +68,7 @@
   {
     "name": "an address after a word and a dot",
     "redact": true,
-    "in": "ps5upload.bugReportDraft.192.168.86.100 and v1.2.3.4.5",
+    "in": "ps5upload.bugReportDraft.192.0.2.100 and v1.2.3.4.5",
     "out": "ps5upload.bugReportDraft.<ip-1> and v1.2.3.4.5"
   },
   {

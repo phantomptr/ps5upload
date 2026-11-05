@@ -31,6 +31,7 @@ const VECTORS: { text: string; ecl: Ecl; version: number; mask: number; segnoMas
     ],
   },
   {
+    // Reference symbols from another encoder, for exactly this text.
     text: "http://192.168.86.99:9180/",
     ecl: "M",
     version: 2,

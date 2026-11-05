@@ -37,7 +37,7 @@ import { CaptureSortSelect } from "../Captures/CaptureSortSelect";
 import { sortCaptures, type CaptureSort } from "../Captures/sortCaptures";
 import { CaptureToolbar } from "../Captures/CaptureToolbar";
 import { useCaptureDelete } from "../Captures/useCaptureDelete";
-import { humanizePs5Error } from "../../lib/humanizeError";
+import { humanizePs5Error, humanizeCaught } from "../../lib/humanizeError";
 import { useTr } from "../../state/lang";
 import { pickPath } from "../../lib/pickPath";
 import { formatBytes } from "../../lib/format";
@@ -49,6 +49,7 @@ import {
   joinDir,
   isJxrScreenshot,
 } from "../../lib/screenshotConvert";
+import { shellErrorText } from "../../lib/shellError";
 import { isMobile } from "../../lib/platform";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { formatDate } from "../../lib/formatDate";
@@ -239,7 +240,7 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
       );
       await waitForJob(jobId);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusyPaths((s) => {
         const next = new Set(s);
@@ -285,7 +286,7 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
         await convertScreenshot(localJxr, localPng, true, mode);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizePs5Error(shellErrorText(e instanceof Error ? e.message : String(e), tr)));
     } finally {
       setConvertingPaths((s) => {
         const next = new Set(s);
@@ -351,7 +352,7 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
         return p;
       });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = shellErrorText(e instanceof Error ? e.message : String(e), tr);
       if (tempDir) await saveArchiveCleanupTemp(tempDir).catch(() => {});
       setPreview((p) =>
         p && p.item.path === item.path
@@ -631,7 +632,7 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
 
         {loading && items === null && (
           <div className="mt-4 text-center text-xs text-[var(--color-muted)]">
-            <Spinner size={12} className="mr-2 inline" />
+            <Spinner size={12} className="me-2 inline" />
             {tr("screenshots_loading", undefined, "Reading screenshots…")}
           </div>
         )}

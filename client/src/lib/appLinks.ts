@@ -33,7 +33,7 @@ export function readAppLink(url: string): { kind: "join"; link: string } | { kin
 /** The in-app screen for a controller link: /play/pad, through this app's engine relay. */
 export function padRoute(pad: PadLink): string {
   const q = new URLSearchParams({
-    url: `ws://${pad.authority}/api/pad/ws`,
+    url: `ws://${pad.authority}${pad.prefix ?? ""}/api/pad/ws`,
     name: pad.host,
     t: pad.key,
   });

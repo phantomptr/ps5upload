@@ -108,8 +108,9 @@ function checkSdkPin() {
   ];
   for (const file of currentFiles) {
     const content = fs.readFileSync(path.join(repoRoot, file), "utf8");
-    if (content.includes("SDK v0.41") || content.includes("SDK_TAG=\"v0.41\"")) {
-      failures.push(`${file} still references the previous SDK v0.41 pin`);
+    for (const [mention, tag] of content.matchAll(/SDK (v\d+\.\d+)|SDK_TAG="(v\d+\.\d+)"/g)) {
+      const named = tag ?? mention.match(/v\d+\.\d+/)[0];
+      if (named !== metadata.PS5_SDK_TAG) failures.push(`${file} still names SDK ${named}, not the pinned ${metadata.PS5_SDK_TAG}`);
     }
   }
   for (const file of ["README.md", "FAQ.md"]) {
@@ -142,6 +143,16 @@ function checkSdkPin() {
   return true;
 }
 
+// LICENSE was a stub for a long time and nothing noticed. GPLv3 section 4 needs the real text with
+// every copy, so it is pinned to the hash of https://www.gnu.org/licenses/gpl-3.0.txt.
+const GPL3_SHA256 = "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986";
+function checkLicense() {
+  const hash = createHash("sha256").update(fs.readFileSync(path.join(repoRoot, "LICENSE"))).digest("hex");
+  if (hash === GPL3_SHA256) return true;
+  process.stderr.write(`\n[check-scripts] LICENSE is not the unmodified GPL-3.0 text (sha256 ${hash})\n`);
+  return false;
+}
+
 const files = walk(repoRoot);
 const nodeFiles = files.filter((f) => /\.(mjs|js)$/i.test(f));
 const shellFiles = files.filter((f) => /\.sh$/i.test(f));
@@ -150,9 +161,13 @@ const psFiles = files.filter((f) => /\.ps1$/i.test(f));
 
 let ok = true;
 ok = checkSdkPin() && ok;
+ok = checkLicense() && ok;
 for (const f of nodeFiles) ok = run(path.relative(repoRoot, f), "node", ["--check", f]) && ok;
 // Scripts with logic worth pinning carry a node:test file beside them.
-const nodeTests = nodeFiles.filter((f) => f.endsWith(".test.mjs"));
+// A test that imports vitest belongs to the client's `npm test`, which has ESLint installed.
+const nodeTests = nodeFiles.filter(
+  (f) => f.endsWith(".test.mjs") && !/from\s+["']vitest["']/.test(fs.readFileSync(f, "utf8")),
+);
 if (nodeTests.length) ok = run("node --test", "node", ["--test", ...nodeTests]) && ok;
 if (hasCommand("bash")) {
   for (const f of shellFiles) ok = run(path.relative(repoRoot, f), "bash", ["-n", f]) && ok;

@@ -6,9 +6,9 @@ vi.mock("../../state/remotePlay", async () => {
   return { useRemotePlayStore: create(() => ({ stream: null, target: null, prefs: {} })) };
 });
 
-import type { LiveRun, StreamStatus } from "../../lib/goLive";
+import type { LiveCheck, LiveRun, StreamStatus } from "../../lib/goLive";
 import { useGoLiveStore } from "../../state/goLive";
-import { GoLiveChip, GoLivePanel, goLiveAvailable, obsFeedAvailable, ObsFeedView } from "./GoLivePanel";
+import { GoLiveChip, GoLivePanel, goLiveAvailable, obsFeedAvailable, ObsFeedView, problemText } from "./GoLivePanel";
 
 // No DOM here (vitest runs in node): static markup, asserting on what is shown.
 const html = (node: React.ReactNode) => renderToStaticMarkup(<>{node}</>);
@@ -106,6 +106,43 @@ describe("The Stream panel", () => {
     expect(out).toContain('data-testid="golive-ffmpeg-download"');
   });
 
+  it("says what to do when the ffmpeg download can't run here (a Docker image)", () => {
+    const s = status();
+    s.ffmpeg.installed = false;
+    s.ffmpeg.supported = false;
+    s.ffmpeg.needs_own = true;
+    set({ status: s });
+    const out = html(<GoLivePanel onClose={() => {}} />);
+    expect(out).toContain("PS5UPLOAD_FFMPEG");
+    expect(out).not.toContain('data-testid="golive-ffmpeg-download"');
+  });
+
+  it("shows a store that can't be read, with the file to look at", () => {
+    set({ status: status({ store_error: "reading /data/stream-destinations.json: expected value" }) });
+    const out = html(<GoLivePanel onClose={() => {}} />);
+    expect(out).toContain('data-testid="golive-store-error"');
+    expect(out).toContain("/data/stream-destinations.json");
+  });
+
+  it("says a saved key can't be read", () => {
+    set({
+      status: status({
+        destinations: [
+          { id: "t1", preset: "twitch", label: "Twitch", server: "", bandwidth_test: false, enabled: true, key_hint: "", key_lost: true, name: "Twitch" },
+        ],
+      }),
+    });
+    expect(html(<GoLivePanel onClose={() => {}} />)).toContain('data-testid="golive-key-lost"');
+  });
+
+  it("shows Stopping, with Stop off, until ffmpeg has gone", () => {
+    set({ status: status({ live: run({ phase: "stopping" }) }) });
+    const out = html(<GoLivePanel onClose={() => {}} />);
+    expect(out).toContain("Stopping…");
+    expect(out).toMatch(/<button[^>]*data-testid="golive-stop"[^>]*disabled|<button[^>]*disabled[^>]*data-testid="golive-stop"/);
+    expect(out).not.toContain("LIVE");
+  });
+
   it("offers each site to add when there is none", () => {
     set({ status: status() });
     const out = html(<GoLivePanel onClose={() => {}} />);
@@ -168,6 +205,48 @@ describe("The Stream panel", () => {
     expect(out).toMatch(/<button[^>]*disabled[^>]*data-testid="golive-start"|<button[^>]*data-testid="golive-start"[^>]*disabled/);
   });
 
+  it("offers the restart for this session only, and again for a later session in HEVC", () => {
+    const withKick = (session: StreamStatus["session"], checks: LiveCheck[]) =>
+      status({
+        session,
+        destinations: [
+          {
+            id: "kick-1",
+            preset: "kick",
+            label: "Kick",
+            server: "rtmps://k/app",
+            bandwidth_test: false,
+            enabled: true,
+            key_hint: "…abcd",
+            name: "Kick",
+            checks,
+          },
+        ],
+      });
+    const hevc: NonNullable<StreamStatus["session"]> = { host: "h", codec: "h265", width: 1920, height: 1080, fps: 60, bitrate_kbps: 6000 };
+    const refused: LiveCheck[] = [{ code: "codec", blocking: true, have: "h265", limit: ["h264"], message: "" }];
+    const blockedStart = /<button[^>]* disabled=""[^>]*data-testid="golive-start"|<button[^>]*data-testid="golive-start"[^>]* disabled=""/;
+
+    set({ status: withKick(hevc, refused) });
+    const first = html(<GoLivePanel onClose={() => {}} />);
+    expect(first).toContain("This lasts for this session only");
+    expect(first).not.toContain("until you change");
+    expect(first).toContain("golive-fix-restart");
+    expect(first).toMatch(blockedStart);
+
+    // Restarted in H.264: the engine's check passes, so nothing asks and Go live is on.
+    set({ status: withKick({ ...hevc, codec: "h264" }, []) });
+    const restarted = html(<GoLivePanel onClose={() => {}} />);
+    expect(restarted).not.toContain("golive-fix-restart");
+    expect(restarted).not.toMatch(blockedStart);
+
+    // The next session is back on the Picture settings: it asks again instead of failing at the site.
+    set({ status: withKick(hevc, refused) });
+    const later = html(<GoLivePanel onClose={() => {}} />);
+    expect(later).toContain("golive-fix-restart");
+    expect(later).toMatch(blockedStart);
+  });
+
   it("shows the live run per site, and Stop", () => {
     set({ status: status({ live: run() }) });
     const out = html(<GoLivePanel onClose={() => {}} />);
@@ -221,5 +300,49 @@ describe("The Stream panel", () => {
     expect(out).toContain("Input format: mpegts");
     expect(out).toContain("OBS connected (1)");
     expect(out).toContain("1080p 60 fps");
+  });
+});
+
+describe("engine error codes", () => {
+  const tr = ((_k: string, _v: unknown, fallback?: string) => fallback ?? _k) as unknown as Parameters<typeof problemText>[0];
+
+  it("never shows the engine's own English for a code it knows", () => {
+    for (const code of [
+      "unreachable",
+      "tls",
+      "rejected",
+      "codec_not_allowed",
+      "dropped",
+      "stopped",
+      "all_failed",
+      "ffmpeg_failed",
+      "destination_missing",
+      "not_found",
+      "preset_unknown",
+      "key_lost",
+      "key_missing",
+      "key_invalid",
+      "server_missing",
+      "url_invalid",
+      "store",
+      "disk",
+      "unsupported",
+      "unpack",
+      "network",
+      "play_ended",
+      "no_session",
+      "ffmpeg_missing",
+      "no_destinations",
+      "already_live",
+      "checksum",
+      "download",
+    ]) {
+      expect(problemText(tr, code, "ENGINE ENGLISH", "Twitch"), code).not.toContain("ENGINE ENGLISH");
+    }
+  });
+
+  it("says HTTP errors in words and passes an unknown code's sentence on", () => {
+    expect(problemText(tr, "http_500", "HTTP 500")).toBe("The engine refused that (HTTP 500). Try again.");
+    expect(problemText(tr, "brand_new", "A sentence from a newer engine.")).toBe("A sentence from a newer engine.");
   });
 });

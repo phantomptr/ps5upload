@@ -22,6 +22,7 @@ import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
 import { formatAccountId, parseAccountId } from "../Accounts/accountId";
 import { userSlots } from "../Accounts/userSlots";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 const LAST_PS4 = "ps5upload.ps4_move.host";
 
@@ -68,7 +69,7 @@ export default function MoveFromPs4() {
       await f();
       setStatus({ kind: "idle" });
     } catch (e) {
-      setStatus({ kind: "error", text: e instanceof Error ? e.message : String(e) });
+      setStatus({ kind: "error", text: humanizeCaught(e) });
     }
   };
 

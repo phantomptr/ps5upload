@@ -16,9 +16,10 @@ import { isTauriEnv } from "./tauriEnv";
 // Two backends, picked by platform:
 //   • Desktop — the Rust inhibitor (`keep_awake_acquire/release`), which
 //     keeps the machine awake even while minimized.
-//   • Android — a screen wake lock (`setScreenWakeReason`); the Rust
-//     inhibitor is a no-op there, so we hold the screen on instead, which
-//     keeps the app foreground (no Doze) for the upload's duration.
+//   • Phones — a screen wake lock (`setScreenWakeReason`); the Rust inhibitor is a no-op there,
+//     so we hold the screen on instead, while the app is on show. What keeps a transfer going
+//     once the app is in the background is Android's foreground service (bg_activity.rs), not
+//     this.
 // Both are driven from the same edge below so a transfer engages whichever
 // applies; the unused one no-ops.
 //

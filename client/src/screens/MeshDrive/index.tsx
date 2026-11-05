@@ -50,6 +50,8 @@ import { CreateDriveDialog, JoinDriveDialog, PasswordDialog } from "./DriveDialo
 import { ConflictsDialog, LinkDialog, LinkedConsoles, linkName } from "./LinksAndConflicts";
 import { useRosterStore } from "../../state/roster";
 import { AwayActions, AwayFolders, awayText, useConsoleName } from "./AwayFolders";
+import { driveDetailText } from "./driveDetail";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 type Tone = "good" | "warn" | "bad" | "neutral" | "accent";
 
@@ -70,6 +72,7 @@ function statusOf(
   consoleName: string,
 ): { tone: Tone; short: string; long: string } {
   const s = l.status;
+  const detail = driveDetailText(tr, s.detail_code, s.detail_args, s.detail);
   const ago = s.last_ok ? agoText(tr, now - s.last_ok) : "";
   // Its console is away: say which way, and that nothing made here is lost.
   if (s.state === "offline" && s.away) return { tone: "warn", ...awayText(tr, s, consoleName, now) };
@@ -109,12 +112,12 @@ function statusOf(
       return {
         tone: "neutral",
         short: tr("drive_badge_waiting", undefined, "Waiting"),
-        long: s.detail || tr("drive_waiting", undefined, "Another device is syncing it"),
+        long: detail || tr("drive_waiting", undefined, "Another device is syncing it"),
       };
     case "paused":
       return { tone: "neutral", short: tr("drive_paused", undefined, "Paused"), long: "" };
     case "offline":
-      return { tone: "warn", short: tr("drive_offline", undefined, "Folder offline"), long: s.detail };
+      return { tone: "warn", short: tr("drive_offline", undefined, "Folder offline"), long: detail };
     case "confirm":
       return {
         tone: "warn",
@@ -129,7 +132,7 @@ function statusOf(
       return {
         tone: "bad",
         short: tr("drive_badge_error", undefined, "Problem"),
-        long: s.detail || tr("drive_error", undefined, "The last sync failed"),
+        long: detail || tr("drive_error", undefined, "The last sync failed"),
       };
     case "removed":
       return { tone: "neutral", short: tr("drive_removed", undefined, "No longer in this drive"), long: "" };
@@ -222,7 +225,11 @@ function MemberRow({
               ].join(" · ")
             : tr("drive_member_joined", { ago: agoText(tr, now - m.joined) }, `joined ${agoText(tr, now - m.joined)}`)}
         </p>
-        {m.error && <p className="break-words text-xs text-[var(--color-bad)]">{m.error}</p>}
+        {m.error && (
+          <p className="break-words text-xs text-[var(--color-bad)]">
+            {driveDetailText(tr, m.error_code, m.error_args, m.error)}
+          </p>
+        )}
       </div>
       <div className="flex shrink-0 items-center justify-end gap-1">
         {/* On a phone the icons alone, so the device's name keeps the room. */}
@@ -251,6 +258,15 @@ function MemberRow({
       </div>
     </li>
   );
+}
+
+/** The files a held mass delete would take: the first ones by path, and how many more. */
+export function heldDetails(status: { held_deletes: number; held_paths?: string[] }, tr: Translator): string[] {
+  const shown = status.held_paths ?? [];
+  const more = status.held_deletes - shown.length;
+  return more > 0 && shown.length > 0
+    ? [...shown, tr("drive_confirm_more", { count: more }, "…and {count} more")]
+    : shown;
 }
 
 function DriveCard({
@@ -377,6 +393,7 @@ function DriveCard({
         undefined,
         "They were deleted in one place, so the drive would delete them on every device. Check that no folder was moved or a drive unplugged first. Deleted files stay in the drive's trash folder for 30 days.",
       ),
+      details: heldDetails(mine.status, tr),
       confirmLabel: tr("drive_confirm_go", undefined, "Delete everywhere"),
       destructive: true,
     });
@@ -609,7 +626,7 @@ export function MeshDriveSection() {
       setPollError(null);
       setNow(Date.now());
     } catch (e) {
-      if (mine === seq.current) setPollError(e instanceof Error ? e.message : String(e));
+      if (mine === seq.current) setPollError(humanizeCaught(e));
     } finally {
       inFlight.current = false;
     }
@@ -641,7 +658,7 @@ export function MeshDriveSection() {
     try {
       await f();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     }
     inFlight.current = false;
     await load();

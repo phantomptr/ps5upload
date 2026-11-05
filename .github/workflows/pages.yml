@@ -4,7 +4,8 @@ name: pages
 #
 # The page reads GitHub's releases API live in the visitor's browser, so a new release shows
 # up without a deploy. Each deploy also writes site/releases.json, the copy the page falls
-# back on when the API can't be reached (offline, or GitHub's anonymous rate limit).
+# back on when the API can't be reached (offline, or GitHub's anonymous rate limit), and
+# site/altstore.json, the iPhone source of the newest promoted release.
 #
 # When it deploys:
 # - a change to site/ (or this file) on main;
@@ -16,7 +17,7 @@ name: pages
 on:
   push:
     branches: [main]
-    paths: ["site/**", "scripts/site-releases.mjs", "scripts/site-i18n.mjs", ".github/workflows/pages.yml"]
+    paths: ["site/**", "scripts/site-releases.mjs", "scripts/site-altstore.mjs", "scripts/site-i18n.mjs", ".github/workflows/pages.yml"]
   workflow_run:
     workflows: [publish]
     types: [completed]
@@ -58,6 +59,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
+      - name: The iPhone source at the site's own address
+        run: node scripts/site-altstore.mjs
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:

@@ -17,6 +17,7 @@ import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { trStatic } from "../lib/trStatic";
 import { log } from "./logs";
 import { pushNotification } from "./notifications";
+import { useRpQualityStore } from "./rpQuality";
 import { useRemotePlayStore } from "./remotePlay";
 
 const AUTO_PAUSE_KEY = "ps5upload.rp_pause_blockers";
@@ -43,6 +44,8 @@ interface RpBlockersState {
   setAutoPause: (on: boolean) => void;
   /** A start waiting on the user's choice. */
   held: Held | null;
+  /** A start is looking for blockers on this console (a sleeping one answers nothing for 4 s). */
+  checking: string | null;
   /** Blockers being paused before a stream (the start waits for them). */
   pausing: { host: string; ids: string[] } | null;
   /** Blockers a start waits out (they get out of the way by themselves, within `maxS`). */
@@ -69,6 +72,7 @@ export const useRpBlockers = create<RpBlockersState>((set) => ({
     set({ autoPause: on });
   },
   held: null,
+  checking: null,
   pausing: null,
   waiting: null,
   paused: {},
@@ -108,7 +112,10 @@ export async function beforeRemotePlay(
   const s0 = useRpBlockers.getState();
   if (s0.pausing || s0.waiting) return;
   const ctx = blockerCtx(host);
+  if (s0.checking) return;
+  useRpBlockers.setState({ checking: k });
   let found = await withTimeout(checkBlockers(ctx, list).catch(() => [] as Found[]), CHECK_TIMEOUT_MS, [] as Found[]);
+  useRpBlockers.setState({ checking: null });
   const waits = found.filter((f) => f.status.kind === "wait");
   if (waits.length) {
     found = found.filter((f) => f.status.kind !== "wait");
@@ -259,9 +266,25 @@ export async function resumePaused(host: string, ids?: readonly string[]): Promi
   }
 }
 
+/** The console a restart with other settings left without a stream for now. */
+let restartingHost: string | null = null;
+
 // When a stream ends, what was paused for it goes back on.
 useRemotePlayStore.subscribe((s, prev) => {
   if (!prev.stream || s.stream || !prev.target) return;
+  // A restart with other settings (720p, Go live's): the next stream still needs them paused.
+  if (useRpQualityStore.getState().switching) {
+    restartingHost = prev.target.host;
+    return;
+  }
   const host = prev.target.host;
   if (useRpBlockers.getState().paused[key(host)]?.length) void resumePaused(host);
+});
+
+// That restart called off, or failed: nothing is streaming now.
+useRpQualityStore.subscribe((s, prev) => {
+  if (!prev.switching || s.switching || !restartingHost) return;
+  const host = restartingHost;
+  restartingHost = null;
+  if (!useRemotePlayStore.getState().stream && useRpBlockers.getState().paused[key(host)]?.length) void resumePaused(host);
 });

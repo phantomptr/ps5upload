@@ -3,6 +3,7 @@ import { AlertTriangle } from "lucide-react";
 
 import { Button } from ".";
 import { activateFocusTrap } from "../lib/focusTrap";
+import { useScrollLock } from "../lib/useScrollLock";
 import { useTr } from "../state/lang";
 
 /**
@@ -34,6 +35,8 @@ import { useTr } from "../state/lang";
 export interface ConfirmOptions {
   title: string;
   message?: string;
+  /** A list that goes with the message (the files this acts on), scrolled when long. */
+  details?: string[];
   /** Label of the affirmative button. Defaults to "Confirm". */
   confirmLabel?: string;
   /** Label of the cancel button. Defaults to "Cancel". */
@@ -41,6 +44,9 @@ export interface ConfirmOptions {
   /** When true, the confirm button uses the destructive (red)
    *  variant — appropriate for delete/unmount/discard actions. */
   destructive?: boolean;
+  /** Close as a Cancel after this long: a question nobody is there to answer must not hold up
+   *  work behind it. */
+  cancelAfterMs?: number;
 }
 
 interface PendingState extends ConfirmOptions {
@@ -53,6 +59,7 @@ export function useConfirm(): {
 } {
   const tr = useTr();
   const [pending, setPending] = useState<PendingState | null>(null);
+  useScrollLock(!!pending);
   // Stable id pair so aria-labelledby/-describedby on the dialog wire
   // up to the right elements without colliding with other dialogs.
   const titleId = useId();
@@ -118,6 +125,9 @@ export function useConfirm(): {
       }
     };
     window.addEventListener("keydown", handler);
+    const expiry = pending.cancelAfterMs
+      ? setTimeout(() => settle(false), pending.cancelAfterMs)
+      : undefined;
     // Escape goes through the shared modal stack so it closes only this
     // dialog, not a Modal it was opened from.
     const releaseTrap = activateFocusTrap(() => panelRef.current, window, {
@@ -128,6 +138,7 @@ export function useConfirm(): {
     });
     return () => {
       window.removeEventListener("keydown", handler);
+      if (expiry) clearTimeout(expiry);
       releaseTrap();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -168,6 +179,18 @@ export function useConfirm(): {
           >
             {pending.message}
           </p>
+        )}
+        {pending.details && pending.details.length > 0 && (
+          <ul
+            className="mb-5 max-h-48 overflow-auto rounded-[var(--radius-field)] border border-[var(--color-border)] px-3 py-2 font-mono text-xs"
+            data-testid="confirm-details"
+          >
+            {pending.details.map((line) => (
+              <li key={line} className="break-all">
+                {line}
+              </li>
+            ))}
+          </ul>
         )}
         <div className="flex items-center justify-end gap-2">
           <Button variant="ghost" size="sm" onClick={() => settle(false)}>
@@ -218,6 +241,7 @@ export function useAlert(): {
 } {
   const tr = useTr();
   const [pending, setPending] = useState<AlertPending | null>(null);
+  useScrollLock(!!pending);
   const titleId = useId();
   const bodyId = useId();
   const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -330,6 +354,7 @@ export function usePrompt(): {
 } {
   const tr = useTr();
   const [pending, setPending] = useState<PromptPending | null>(null);
+  useScrollLock(!!pending);
   const [value, setValue] = useState("");
   const titleId = useId();
   const bodyId = useId();

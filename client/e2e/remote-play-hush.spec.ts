@@ -69,6 +69,18 @@ async function hushConsole(page: Page): Promise<Console> {
         );
         body = { entries: [...names].map((name) => ({ name })) };
       }
+      if (path === "/api/ps5/fs/stat") {
+        const asked = (req.postDataJSON() as { path: string }).path;
+        if (![...c.files.keys()].some((f) => f === asked || f.startsWith(`${asked}/`))) {
+          await route.fulfill({
+            status: 502,
+            contentType: "application/json",
+            body: JSON.stringify({ error: "payload rejected FS_STAT: fs_stat_failed_errno_2" }),
+          });
+          return;
+        }
+        body = { kind: "file", size: 1, mtime: 1, mode: 420, dev: 1 };
+      }
       if (path === "/api/ps5/fs/read-preview") {
         const text = c.files.get((req.postDataJSON() as { path: string }).path);
         if (text === undefined) {

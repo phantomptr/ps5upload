@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { routeEngine, seedConsole } from "./fixtures/engine";
 
 // #637: the stream keeps showing in a small floating window on the app's other screens. Its one
 // canvas moves there and back (never in two places), a drag snaps it to a corner (remembered), a
@@ -6,34 +7,13 @@ import { expect, test, type Page } from "@playwright/test";
 // engine socket is faked; the browser is muted (playwright.config.ts).
 
 async function fakeEngine(page: Page): Promise<{ starts: () => number; stops: () => number }> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("ps5upload.host", "192.168.1.100");
-    window.localStorage.setItem(
-      "ps5upload.roster.v1",
-      JSON.stringify({
-        active_id: "p1",
-        profiles: [
-          {
-            id: "p1",
-            name: "Living room",
-            host: "192.168.1.100",
-            wake_regist_key: "00112233",
-            wake_rp_key: "0f".repeat(16), // made up (built here so it reads as no secret)
-          },
-        ],
-      }),
-    );
+  await seedConsole(page);
+  await routeEngine(page, (path) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "10.7.6", caps: {} };
+    if (path === "/api/ps5/rp/session") body = { host: null };
+    return body;
   });
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "10.7.6", caps: {} };
-      if (path === "/api/ps5/rp/session") body = { host: null };
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
   let starts = 0;
   let stops = 0;
   await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, (ws) => {

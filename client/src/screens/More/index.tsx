@@ -382,11 +382,7 @@ export function MoreRow({
         {showErrors && (
           <span
             className="rounded-full bg-[var(--color-bad)] px-2 py-0.5 text-xs font-semibold tabular-nums text-[var(--color-accent-contrast)]"
-            title={tr(
-              errorCount === 1 ? "logged_error_one" : "logged_error_many",
-              { count: errorCount },
-              `${errorCount} logged error${errorCount === 1 ? "" : "s"}`,
-            )}
+            title={tr("logged_error_count", { count: errorCount }, "Logged errors: {count}")}
           >
             {errorCount > 99 ? "99+" : errorCount}
           </span>
@@ -471,7 +467,7 @@ export function MoreRow({
               ? tr("nav_show_item", { name: label }, "Show {name} in the sidebar")
               : tr("nav_hide_item", { name: label }, "Hide {name} from the sidebar")
           }
-          className={`mr-2 hidden h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--color-surface-3)] md:flex ${
+          className={`me-2 hidden h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--color-surface-3)] md:flex ${
             hidden ? "text-[var(--color-muted)] opacity-60 hover:opacity-100" : "text-[var(--color-accent)]"
           }`}
         >

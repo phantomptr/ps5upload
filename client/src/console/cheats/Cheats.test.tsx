@@ -7,6 +7,8 @@ vi.mock("../api", async (importOriginal) => {
 });
 
 import { ApiError, call } from "../api";
+import { buttonWorks } from "../help/hints";
+import { DEFAULT_INPUT_MAP } from "../nav";
 import { SECTIONS } from "../sections";
 import { t } from "../strings";
 import { CheatsView, finderClosesFor, focusedCheatIndex, type CheatsViewProps } from "./Cheats";
@@ -146,7 +148,13 @@ describe("cheats section", () => {
     await c.loadStatus();
     let html = view(c.get());
     expect(html).toContain(`>${t("cw_cheats_on")}<`);
-    expect(html).toContain(t("cw_cheats_how"));
+    // □ is not confirmed on the PS5 browser (nav.ts): the card names only ✕ until it is.
+    expect(html).toContain(t("cw_cheats_how_cross"));
+    expect(html).not.toContain(t("cw_cheats_how"));
+    expect(view(c.get(), { squareWorks: true })).toContain(t("cw_cheats_how"));
+    expect(buttonWorks(DEFAULT_INPUT_MAP, "square")).toBe(false);
+    expect(buttonWorks(DEFAULT_INPUT_MAP, "cross")).toBe(true);
+    expect(buttonWorks([{ ...DEFAULT_INPUT_MAP[2], verified: true }], "square")).toBe(true);
     // The helper paused this game (it closed right after its cheats were applied): Saved, and why.
     h.held = true;
     await c.loadStatus();

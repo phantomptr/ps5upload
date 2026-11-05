@@ -41,6 +41,7 @@ export function RemotePlayMini() {
   const pip = useRemotePlayStore((s) => s.pip);
   const prefs = useRemotePlayStore((s) => s.prefs);
   const setPrefs = useRemotePlayStore((s) => s.setPrefs);
+  const pictureHere = useRemotePlayStore((s) => s.pictureHere);
   const androidPip = useAndroidPipStore((s) => s.inPip);
   const [dismissed, setDismissed] = useState(false);
   const [corner, setCorner] = useState<MiniCorner>(loadCorner);
@@ -66,6 +67,7 @@ export function RemotePlayMini() {
     androidPip,
     enabled: prefs.miniPlayer !== false,
     dismissed,
+    pictureHere,
   });
 
   useEffect(() => {
@@ -216,6 +218,7 @@ export function RemotePlayMini() {
  * the activity told whether a stream plays (mounted once, App.tsx).
  */
 export function AndroidPipPicture() {
+  const tr = useTr();
   const inPip = useAndroidPipStore((s) => s.inPip);
   const stream = useRemotePlayStore((s) => s.stream);
   const host = useRef<HTMLDivElement>(null);
@@ -228,7 +231,19 @@ export function AndroidPipPicture() {
       if (stream.canvas.parentElement === el) el.removeChild(stream.canvas);
     };
   }, [inPip, stream]);
-  if (!inPip || !stream) return null;
+  if (!inPip) return null;
+  // The stream ended in the small window: say so rather than show the app's screens in it, until
+  // the activity closes the window (setPipActive, android-postinit-patch.sh step 12).
+  if (!stream) {
+    return (
+      <div
+        className="fixed inset-0 z-[2147483000] flex items-center justify-center bg-black p-2 text-center text-xs text-white"
+        data-testid="rp-android-pip-ended"
+      >
+        {tr("rp_android_pip_ended", undefined, "Stream ended")}
+      </div>
+    );
+  }
   return (
     <div
       ref={host}

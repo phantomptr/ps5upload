@@ -72,22 +72,37 @@ export function refocusIfLost(within: ParentNode | null, prefer: string[]): HTML
 }
 
 /**
+ * Where a modal's focus starts: `el` itself when it is a control, else its [data-nav-default], else
+ * its first control. A disabled default is passed over: focus() does nothing on it, focus would stay
+ * on the page behind and the first ✕ would only pull it in (nav.ts).
+ */
+export function modalFocusTarget(el: HTMLElement | null): HTMLElement | null {
+  if (!el) return null;
+  if (el.matches(FOCUSABLE)) return el;
+  return el.querySelector<HTMLElement>("[data-nav-default]:not([disabled])") ?? el.querySelector<HTMLElement>(FOCUSABLE);
+}
+
+/**
+ * A modal closed: focus back to its opener. When the opener went with it and something live already
+ * has focus (a sheet closing in the same commit as its confirm put focus back on its own opener), that
+ * stays: a stand-in is only for focus that was lost.
+ */
+export function closeModalFocus(a: FocusAnchor): HTMLElement | null {
+  if (!a.el?.isConnected && !focusLost()) return null;
+  return restoreFocus(a);
+}
+
+/**
  * A modal's focus: on open, remember where focus was and move it to `first`
- * (a control, or a container: its [data-nav-default], else its first control);
- * on close, restoreFocus to the opener.
+ * (a control, or a container: see modalFocusTarget); on close, back to the opener.
  */
 export function useModalFocus(first: RefObject<HTMLElement | null>): void {
   useEffect(() => {
     const anchor = anchorOf(document.activeElement);
-    const el = first.current;
-    const target = el
-      ? el.matches(FOCUSABLE)
-        ? el
-        : (el.querySelector<HTMLElement>("[data-nav-default]") ?? el.querySelector<HTMLElement>(FOCUSABLE))
-      : null;
+    const target = modalFocusTarget(first.current);
     if (target) focusElement(target);
     return () => {
-      restoreFocus(anchor);
+      closeModalFocus(anchor);
     };
     // Once per open: the ref is stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps

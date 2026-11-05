@@ -20,7 +20,10 @@ use crate::gen;
 use ava1::manifest::{self, Entry, Manifest};
 use ava1::seq::{EntrySink, Keep, Restart, SeqSource};
 use ava1::source::{ReadAt, Source, SourceMeta};
-use ps5upload_core::transfer::{rar_layout, rar_walk, RarFailKind, RarWalkError, RarWalkSink};
+use ps5upload_core::transfer::{
+    rar_layout_watched, rar_walk, RarFailKind, RarLayoutWatch, RarWalkError, RarWalkSink,
+    RAR_LAYOUT_CANCELLED,
+};
 
 /// Why a RAR could not be uploaded. Terminal for the job: retrying the same bytes
 /// with the same password cannot help.
@@ -135,8 +138,24 @@ impl RarSource {
         password: Option<&str>,
         excludes: &[String],
     ) -> Result<(Manifest, Self), RarOpenError> {
-        let layout =
-            rar_layout(path, password, excludes).map_err(|e| RarOpenError::Plan(plan_error(&e)))?;
+        Self::open_watched(path, password, excludes, RarLayoutWatch::default())
+    }
+
+    /// [`Self::open`] for a job: entries of unknown size are decoded to measure them, which
+    /// `watch` can stop and shows the progress of.
+    pub fn open_watched(
+        path: &Path,
+        password: Option<&str>,
+        excludes: &[String],
+        watch: RarLayoutWatch<'_>,
+    ) -> Result<(Manifest, Self), RarOpenError> {
+        let layout = rar_layout_watched(path, password, excludes, watch).map_err(|e| {
+            if format!("{e:#}").contains(RAR_LAYOUT_CANCELLED) {
+                RarOpenError::Cancelled
+            } else {
+                RarOpenError::Plan(plan_error(&e))
+            }
+        })?;
         let mut files: BTreeMap<String, u64> = BTreeMap::new();
         // Console filesystems may fold case: two entries that differ only in case
         // would overwrite each other there.
@@ -251,6 +270,8 @@ pub enum RarOpenError {
     Plan(RarFailure),
     /// A shape AVA1's manifest cannot carry (duplicate or unsafe path).
     Unsupported(String),
+    /// The job was stopped while entries of unknown size were being measured.
+    Cancelled,
 }
 
 struct Adapter<'a> {

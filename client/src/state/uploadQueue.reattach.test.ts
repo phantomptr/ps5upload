@@ -20,10 +20,25 @@ vi.mock("../api/ps5", async (importOriginal) => {
     jobStatus: vi.fn(async () => ({ status: "running" })),
     jobCancel: vi.fn(async () => {}),
     fsMkdir: vi.fn(async () => {}),
+    fsDelete: vi.fn(async () => {}),
+    fsListDir: vi.fn(async () => ({ entries: [], truncated: false })),
   };
 });
 
-import { jobCancel, jobStatus, startTransferFile, uploadQueueLoad } from "../api/ps5";
+const { resolveJob, recordInstalled } = vi.hoisted(() => ({
+  resolveJob: vi.fn(),
+  recordInstalled: vi.fn(),
+}));
+vi.mock("./consoleQueueBridge", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./consoleQueueBridge")>();
+  return { ...actual, resolveInstallJob: resolveJob };
+});
+vi.mock("./pkgLibrary", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./pkgLibrary")>();
+  return { ...actual, recordPkgInstalled: recordInstalled };
+});
+
+import { fsDelete, jobCancel, jobStatus, startTransferFile, uploadQueueLoad } from "../api/ps5";
 import { useUploadQueueStore } from "./uploadQueue";
 
 const base = {
@@ -77,6 +92,101 @@ describe("the web UI re-attaches to running jobs after a reload", () => {
     vi.unstubAllGlobals();
   });
 
+  it("follows a package row's install instead of sending or installing it again", async () => {
+    vi.mocked(uploadQueueLoad).mockResolvedValueOnce({
+      items: [
+        {
+          ...base,
+          id: "p",
+          sourceKind: "pkg",
+          status: "running",
+          jobId: "upload-job",
+          uploadDone: true,
+          installPhase: "installing",
+          installJobId: "install-job",
+          deletePkgAfterInstall: false,
+        },
+      ],
+      continueOnFailure: false,
+    } as never);
+    resolveJob.mockResolvedValueOnce({ state: "running", pct: 40 });
+    resolveJob.mockResolvedValue({ state: "finished", result: { ok: true } });
+    await useUploadQueueStore.getState().hydrate();
+    await until(() => row("p")?.status === "done");
+    expect(resolveJob).toHaveBeenCalledWith("install-job");
+    expect(startTransferFile).not.toHaveBeenCalled();
+    expect(jobStatus).not.toHaveBeenCalled();
+    expect(row("p")?.installPhase).toBe("done");
+    expect(recordInstalled).toHaveBeenCalledWith("10.0.0.2", "/data/big.bin");
+    expect(fsDelete).not.toHaveBeenCalled();
+  });
+
+  it("removes the staged copy of a found install when the row asked for it", async () => {
+    vi.mocked(uploadQueueLoad).mockResolvedValueOnce({
+      items: [
+        {
+          ...base,
+          id: "p",
+          sourceKind: "pkg",
+          status: "running",
+          uploadDone: true,
+          installPhase: "installing",
+          installJobId: "install-job",
+        },
+      ],
+      continueOnFailure: false,
+    } as never);
+    resolveJob.mockResolvedValue({ state: "finished", result: { ok: true } });
+    await useUploadQueueStore.getState().hydrate();
+    await until(() => row("p")?.status === "done");
+    expect(fsDelete).toHaveBeenCalledWith(expect.anything(), "/data/big.bin");
+  });
+
+  it("marks a package row interrupted when its install left no job to follow", async () => {
+    vi.mocked(uploadQueueLoad).mockResolvedValueOnce({
+      items: [
+        {
+          ...base,
+          id: "p",
+          sourceKind: "pkg",
+          status: "running",
+          jobId: "upload-job",
+          uploadDone: true,
+          installPhase: "installing",
+        },
+      ],
+      continueOnFailure: false,
+    } as never);
+    await useUploadQueueStore.getState().hydrate();
+    expect(row("p")?.status).toBe("failed");
+    expect(row("p")?.installPhase).toBe("error");
+    expect(startTransferFile).not.toHaveBeenCalled();
+  });
+
+  it("a failed status read does not call a live install lost", async () => {
+    vi.mocked(uploadQueueLoad).mockResolvedValueOnce({
+      items: [
+        {
+          ...base,
+          id: "i",
+          sourceKind: "install",
+          status: "running",
+          install: { via: "console-path", path: "/data/a.pkg" },
+          installJobId: "install-job",
+        },
+      ],
+      continueOnFailure: false,
+    } as never);
+    resolveJob.mockResolvedValueOnce({ state: "unanswered" });
+    resolveJob.mockResolvedValue({ state: "finished", result: { ok: true } });
+    await useUploadQueueStore.getState().hydrate();
+    await until(() => row("i")?.status === "done");
+    expect(row("i")?.error).toBeNull();
+    // A file the user pointed at is theirs: recorded, never deleted.
+    expect(recordInstalled).toHaveBeenCalledWith("10.0.0.2", "/data/a.pkg");
+    expect(fsDelete).not.toHaveBeenCalled();
+  });
+
   it("adopts a job the engine is still running, without starting the upload again or cancelling it", async () => {
     vi.mocked(uploadQueueLoad).mockResolvedValueOnce({
       continueOnFailure: false,
@@ -108,10 +218,33 @@ describe("the web UI re-attaches to running jobs after a reload", () => {
     } as never);
     vi.mocked(jobStatus).mockRejectedValue(new Error("404"));
     await useUploadQueueStore.getState().hydrate();
-    await new Promise((r) => setTimeout(r, 30));
+    await until(() => vi.mocked(jobStatus).mock.calls.some((c) => c[0] === "GONE"));
+    await new Promise((r) => setTimeout(r, 0)); // its refusal handled
     expect(row("b")?.status).toBe("pending");
     expect(row("b")?.attachJobId).toBeUndefined();
     expect(useUploadQueueStore.getState().runningHosts["10.0.0.2"]).toBeFalsy();
+  });
+
+  it("Start all during the lookup waits for it instead of spinning (and hanging the tab)", async () => {
+    vi.mocked(uploadQueueLoad).mockResolvedValueOnce({
+      continueOnFailure: true,
+      items: [{ ...base, id: "d", status: "running", jobId: "GONE" }],
+    } as never);
+    let answer: (e: Error) => void = () => {};
+    vi.mocked(jobStatus).mockImplementationOnce(
+      () => new Promise((_, reject) => (answer = reject)) as never,
+    );
+    vi.mocked(jobStatus).mockResolvedValue({ status: "done", bytes_sent: 1, dest: "/data/big.bin" } as never);
+    await useUploadQueueStore.getState().hydrate();
+    expect(row("d")?.status).toBe("pending");
+
+    const started = useUploadQueueStore.getState().start();
+    // A macrotask still runs: this answer could never arrive while the loop spun.
+    await new Promise((r) => setTimeout(r, 5));
+    answer(new Error("job not found"));
+    await started;
+    expect(startTransferFile).toHaveBeenCalled();
+    expect(row("d")?.status).not.toBe("pending");
   });
 
   it("never carries an adopt marker across a reload", async () => {

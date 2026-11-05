@@ -20,11 +20,11 @@ afterEach(() => {
 describe("game meta cache", () => {
   it("reads a folder once and answers the next visit from memory", async () => {
     const load = vi.fn(async () => meta("Astro Bot"));
-    await cachedGameMeta("192.168.86.100", "/data/homebrew/A", load);
-    const again = await cachedGameMeta("192.168.86.100:9120", "/data/homebrew/A", load);
+    await cachedGameMeta("192.0.2.100", "/data/homebrew/A", load);
+    const again = await cachedGameMeta("192.0.2.100:9120", "/data/homebrew/A", load);
     expect(again.title).toBe("Astro Bot");
     expect(load).toHaveBeenCalledTimes(1);
-    expect(peekGameMeta("192.168.86.100", "/data/homebrew/A")?.title).toBe("Astro Bot");
+    expect(peekGameMeta("192.0.2.100", "/data/homebrew/A")?.title).toBe("Astro Bot");
   });
 
   it("shares one request between concurrent rows", async () => {

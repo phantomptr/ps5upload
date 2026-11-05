@@ -558,6 +558,14 @@ name = "METHOD_VPAD_STATUS"
 ty = "u16"
 value = 194
 [[const]]
+name = "METHOD_CONSOLE_TASKS"
+ty = "u16"
+value = 195
+[[const]]
+name = "METHOD_CONSOLE_TASK_CANCEL"
+ty = "u16"
+value = 196
+[[const]]
 name = "JOB_OP_DELETE"
 ty = "u8"
 value = 1

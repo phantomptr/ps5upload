@@ -59,7 +59,7 @@ pub fn kill_all() {
 }
 
 #[cfg(unix)]
-fn kill(pid: u32) {
+pub(crate) fn kill(pid: u32) {
     if let Ok(pid) = i32::try_from(pid) {
         // SAFETY: plain syscall on a PID this process started and has not reaped.
         unsafe {
@@ -69,7 +69,7 @@ fn kill(pid: u32) {
 }
 
 #[cfg(windows)]
-fn kill(pid: u32) {
+pub(crate) fn kill(pid: u32) {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let _ = std::process::Command::new("taskkill")

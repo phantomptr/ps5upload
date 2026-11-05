@@ -98,6 +98,51 @@ type KeyTarget = {
  *  modal surface listens on `window`, so without it one Escape closed the
  *  confirm AND the Modal beneath it. */
 const stack: symbol[] = [];
+const stackListeners = new Set<() => void>();
+/** What system Back closes, newest last: modal surfaces (by an Escape press) and the lighter
+ *  surfaces that are not modal but do cover the page, such as a sheet or a menu. */
+const backOrder: Array<() => void> = [];
+
+function stackChanged(): void {
+  for (const l of stackListeners) l();
+}
+
+function pressEscape(): void {
+  const from = document.activeElement ?? document;
+  from.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+}
+
+/** How many surfaces system Back would close. */
+export function openModalCount(): number {
+  return backOrder.length;
+}
+
+/** Called whenever a modal surface opens or closes; returns the undo. */
+export function onModalStackChange(listener: () => void): () => void {
+  stackListeners.add(listener);
+  return () => stackListeners.delete(listener);
+}
+
+/** Close what is on top, as an Escape press would: phones have no Escape key (lib/systemBack).
+ *  False when nothing is open. A surface that refuses Escape stays, and the press is still spent. */
+export function closeTopModal(): boolean {
+  const top = backOrder[backOrder.length - 1];
+  if (!top) return false;
+  top();
+  return true;
+}
+
+/** A surface that is not modal (a sheet, a menu) but that system Back should close first. Returns
+ *  the undo. Escape stays its own business. */
+export function registerBackDismiss(close: () => void): () => void {
+  backOrder.push(close);
+  stackChanged();
+  return () => {
+    const at = backOrder.lastIndexOf(close);
+    if (at !== -1) backOrder.splice(at, 1);
+    stackChanged();
+  };
+}
 
 export type FocusTrapOptions = {
   /** Called for an Escape press while this is the topmost modal surface.
@@ -118,6 +163,8 @@ export function activateFocusTrap(
 ): () => void {
   const id = Symbol("focus-trap");
   stack.push(id);
+  backOrder.push(pressEscape);
+  stackChanged();
   const handler = (e: KeyboardEvent) => {
     if (stack[stack.length - 1] !== id) return;
     if (e.key === "Escape") {
@@ -132,5 +179,8 @@ export function activateFocusTrap(
     target.removeEventListener("keydown", handler);
     const at = stack.indexOf(id);
     if (at !== -1) stack.splice(at, 1);
+    const inOrder = backOrder.lastIndexOf(pressEscape);
+    if (inOrder !== -1) backOrder.splice(inOrder, 1);
+    stackChanged();
   };
 }

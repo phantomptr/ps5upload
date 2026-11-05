@@ -94,6 +94,7 @@ export function ExtractDialog({
   load = extractInfo,
   taken = async (p: string) => (await statOrNull(p)) != null,
   initial = null,
+  confirming = false,
 }: {
   dir: string;
   name: string;
@@ -106,12 +107,14 @@ export function ExtractDialog({
   taken?: (path: string) => Promise<boolean>;
   /** Already read (tests): shown at once, not read again. */
   initial?: ExtractInfo | null;
+  /** Merge and replace is being confirmed already (tests). */
+  confirming?: boolean;
 }) {
   const [state, setState] = useState<Load>(initial ? { info: initial } : null);
   const [outName, setOutName] = useState<string | null>(null);
   const [naming, setNaming] = useState(false);
   const [nameError, setNameError] = useState<string | null>(null);
-  const [confirmReplace, setConfirmReplace] = useState(false);
+  const [confirmReplace, setConfirmReplace] = useState(confirming);
   const [deleteAfter, setDeleteAfter] = useState(false);
   const preset = initial != null;
   useEffect(() => {
@@ -157,19 +160,6 @@ export function ExtractDialog({
       },
     );
   };
-
-  if (confirmReplace) {
-    return (
-      <ConfirmDialog
-        title={t("cw_files_extract_replace_title", { name: folder })}
-        body={t("cw_files_extract_replace_body")}
-        confirmLabel={t("cw_files_extract_merge_replace")}
-        danger
-        onConfirm={() => onStart({ dest, merge: true, replace: true, deleteAfter })}
-        onCancel={() => setConfirmReplace(false)}
-      />
-    );
-  }
 
   const title = t("cw_files_extract_title", { name });
   return (
@@ -273,6 +263,17 @@ export function ExtractDialog({
           </button>
         )}
       </div>
+      {/* Over the dialog, which stays mounted: ○ returns to Merge and replace, not to a re-opened dialog. */}
+      {confirmReplace ? (
+        <ConfirmDialog
+          title={t("cw_files_extract_replace_title", { name: folder })}
+          body={t("cw_files_extract_replace_body")}
+          confirmLabel={t("cw_files_extract_merge_replace")}
+          danger
+          onConfirm={() => onStart({ dest, merge: true, replace: true, deleteAfter })}
+          onCancel={() => setConfirmReplace(false)}
+        />
+      ) : null}
     </Modal>
   );
 }

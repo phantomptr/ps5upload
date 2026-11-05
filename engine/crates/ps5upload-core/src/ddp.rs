@@ -105,12 +105,52 @@ pub fn probe(host: &str, timeout: Duration) -> Result<DdpStatus> {
     if sockets.is_empty() {
         return Err(anyhow!("could not send SRCH to {addr} on any network"));
     }
-    first_reply(&sockets, addr, timeout).ok_or_else(|| {
+    ask_again(
+        sockets,
+        addr,
+        timeout,
+        PROBE_RESEND_EVERY,
+        PROBE_RESENDS,
+        || send_every_way(pkt.as_bytes(), addr, true),
+    )
+    .ok_or_else(|| {
         anyhow!(
             "no reply from {addr}. A console only answers when \
              Remote Play is enabled in its settings."
         )
     })
+}
+
+/// SRCH is one UDP datagram: on Wi-Fi it, or its answer, can simply be lost, and one lost packet
+/// must not read as "the PS5 does not answer". So it goes again this often, this many more times,
+/// all within the caller's wait.
+const PROBE_RESEND_EVERY: Duration = Duration::from_millis(500);
+const PROBE_RESENDS: u32 = 2;
+
+/// Waits for the console's answer within `timeout`, asking again with `send` every `every`.
+fn ask_again(
+    mut sockets: Vec<UdpSocket>,
+    addr: SocketAddr,
+    timeout: Duration,
+    every: Duration,
+    resends: u32,
+    mut send: impl FnMut() -> Vec<UdpSocket>,
+) -> Option<DdpStatus> {
+    let end = std::time::Instant::now() + timeout;
+    for _ in 0..resends {
+        if end.saturating_duration_since(std::time::Instant::now()) <= every {
+            break;
+        }
+        if let Some(s) = first_reply(&sockets, addr, every) {
+            return Some(s);
+        }
+        sockets.extend(send());
+    }
+    first_reply(
+        &sockets,
+        addr,
+        end.saturating_duration_since(std::time::Instant::now()),
+    )
 }
 
 /// Sends `pkt` to `addr` every way this machine can reach it: from the default route, and
@@ -225,6 +265,7 @@ fn local_ipv4_on_subnet_of(_dst: Ipv4Addr) -> Vec<(Ipv4Addr, Ipv4Addr)> {
 
 /// The broadcast address of `local`/`mask` when `dst` is on that subnet; `None` otherwise, or
 /// for a mask too wide or too narrow to be a LAN (/0, /31, /32).
+#[cfg(any(unix, test))]
 fn same_subnet_broadcast(local: Ipv4Addr, mask: Ipv4Addr, dst: Ipv4Addr) -> Option<Ipv4Addr> {
     let (l, m, d) = (u32::from(local), u32::from(mask), u32::from(dst));
     if m == 0 || m.count_zeros() < 2 || (l & m) != (d & m) || l == d {
@@ -409,21 +450,21 @@ device-discovery-protocol-version:00030010\nsystem-version:09600004\n";
         let ip = |s: &str| s.parse::<Ipv4Addr>().unwrap();
         let m24 = ip("255.255.255.0");
         assert_eq!(
-            same_subnet_broadcast(ip("192.168.86.199"), m24, ip("192.168.86.99")),
-            Some(ip("192.168.86.255"))
+            same_subnet_broadcast(ip("192.0.2.199"), m24, ip("192.0.2.99")),
+            Some(ip("192.0.2.255"))
         );
         // Another subnet, the console itself, and point-to-point masks are not routes to it.
         assert_eq!(
-            same_subnet_broadcast(ip("10.0.0.2"), m24, ip("192.168.86.99")),
+            same_subnet_broadcast(ip("10.0.0.2"), m24, ip("192.0.2.99")),
             None
         );
         assert_eq!(
-            same_subnet_broadcast(ip("192.168.86.99"), m24, ip("192.168.86.99")),
+            same_subnet_broadcast(ip("192.0.2.99"), m24, ip("192.0.2.99")),
             None
         );
         for m in ["255.255.255.255", "255.255.255.254", "0.0.0.0"] {
             assert_eq!(
-                same_subnet_broadcast(ip("192.168.86.1"), ip(m), ip("192.168.86.99")),
+                same_subnet_broadcast(ip("192.0.2.1"), ip(m), ip("192.0.2.99")),
                 None
             );
         }
@@ -450,6 +491,59 @@ device-discovery-protocol-version:00030010\nsystem-version:09600004\n";
         let st = first_reply(&socks, addr, Duration::from_secs(2)).unwrap();
         assert_eq!(st.code, CODE_STANDBY);
         t.join().unwrap();
+    }
+
+    /// One lost datagram: the first SRCH gets no answer, the next does.
+    #[test]
+    fn a_lost_search_is_asked_again_within_the_wait() {
+        let console = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr = console.local_addr().unwrap();
+        let t = std::thread::spawn(move || {
+            let mut b = [0u8; 512];
+            let _lost = console.recv_from(&mut b).unwrap();
+            let (_, from) = console.recv_from(&mut b).unwrap();
+            console
+                .send_to(b"HTTP/1.1 200 Ok\nhost-type:PS5\n", from)
+                .unwrap();
+        });
+        let send = || {
+            let s = UdpSocket::bind("127.0.0.1:0").unwrap();
+            s.send_to(b"SRCH", addr).unwrap();
+            vec![s]
+        };
+        let st = ask_again(
+            send(),
+            addr,
+            Duration::from_secs(2),
+            Duration::from_millis(100),
+            2,
+            send,
+        )
+        .expect("the second one is answered");
+        assert_eq!(st.code, 200);
+        t.join().unwrap();
+    }
+
+    #[test]
+    fn nothing_answering_still_ends_when_the_wait_does() {
+        let quiet = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr = quiet.local_addr().unwrap();
+        let t0 = std::time::Instant::now();
+        let mut sends = 0;
+        let r = ask_again(
+            Vec::new(),
+            addr,
+            Duration::from_millis(250),
+            Duration::from_millis(100),
+            2,
+            || {
+                sends += 1;
+                Vec::new()
+            },
+        );
+        assert!(r.is_none());
+        assert_eq!(sends, 2);
+        assert!(t0.elapsed() < Duration::from_secs(1));
     }
 
     #[test]

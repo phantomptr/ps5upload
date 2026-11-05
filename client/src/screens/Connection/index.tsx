@@ -9,9 +9,6 @@ import {
   type ConnStep,
 } from "../../state/connection";
 import {
-  portProbe,
-  payloadCheck,
-  ddpStatus,
   bundledPayloadInfo,
   probeCompanions,
   discoverPs5,
@@ -27,23 +24,22 @@ import {
 import { sendHelperTo } from "../../state/helperSendRuntime";
 import { clearHelperStopped, useHelperStopped } from "../../state/helperStopped";
 import { StopHelperButton } from "./StopHelper";
-import { looksLikeMacLocalNetworkBlock } from "../../lib/localNetworkHint";
-import { localNetworkBlocked } from "../../lib/androidLocalNetwork";
 import { pairingAllow } from "../../api/ava1";
 import { parsePS5Firmware } from "../../lib/ps5Firmware";
 import { compareVersions } from "../../lib/semver";
 import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
 import { AlertTriangle, CheckCircle2, CircleDashed, Moon, XCircle, Send, ArrowRight, Radar, Sparkles, Cable, ExternalLink } from "lucide-react";
 import { openExternalUrl } from "../../lib/openExternalUrl";
-import { hostOf as bareHostOf } from "../../lib/addr";
-import { checkSaysRest } from "../../lib/consolePower";
+import { cleanConsoleAddress, hostOf as bareHostOf } from "../../lib/addr";
 import { PageHeader, Button, Spinner, ErrorCard } from "../../components";
-import { selectConsoleByAddress } from "../../state/roster";
 import { useTr } from "../../state/lang";
 import PowerControl from "./PowerControl";
 import { BringUpPanel } from "./BringUpPanel";
 import { useHelperReplaceGuard } from "./useHelperReplaceGuard";
+import { useConsoleAddressCommit } from "./useConsoleAddressCommit";
+import { checkConsole, closedPortText, payloadManagerReadyText } from "../../lib/consoleCheck";
 import { formatBytes } from "../../lib/format";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /** "rest": the console answered that it is in rest mode — not a failure, so it reads calm. */
 type StepState = "idle" | "busy" | "ok" | "fail" | "rest";
@@ -211,7 +207,7 @@ function AllowPairing({ host }: { host: string }) {
             await pairingAllow(host);
             setState("open");
           } catch (e) {
-            setError(e instanceof Error ? e.message : String(e));
+            setError(humanizeCaught(e));
             setState("failed");
           }
         }}
@@ -266,6 +262,9 @@ let pendingAutoCheck: string | null = null;
 export default function ConnectionScreen() {
   const tr = useTr();
   const { guard: guardReplace, dialog: replaceDialog } = useHelperReplaceGuard();
+  const { commit: commitAddress, dialog: addressDialog } = useConsoleAddressCommit();
+  // The console is on but has no loader: step 1 says what to load (see handleCheck).
+  const [loaderMissing, setLoaderMissing] = useState(false);
   const host = useConnectionStore((s) => s.host);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const payloadStatusHost = useConnectionStore((s) => s.payloadStatusHost);
@@ -324,7 +323,9 @@ export default function ConnectionScreen() {
   const sendPhase: SendPhase | null = helperSend?.phase ?? null;
 
   const step1: StepState = transientStep1 ?? storedStep1;
-  const step1Msg = transientStep1Msg ?? storedStep1Msg;
+  const step1Msg =
+    transientStep1Msg ??
+    (storedStep1Msg || tr("connection_step1_idle", undefined, "Enter your PS5's address and check"));
   const step2: StepState =
     helperSend?.state ?? transientStep2 ?? storedStep2;
   const step2Msg =
@@ -336,7 +337,7 @@ export default function ConnectionScreen() {
           undefined,
           "Stopped. You turned the helper off; it stays off until you send it again.",
         )
-      : storedStep2Msg);
+      : storedStep2Msg || tr("connection_payload_not_loaded", undefined, "Helper not loaded yet"));
   // Not "ready" while this app is not paired: the helper answers, but every upload would fail
   // with "not paired" (#415). The pairing banner above says what to do.
   const session = useConnectionStore((s) => s.session);
@@ -412,15 +413,17 @@ export default function ConnectionScreen() {
    *  A changed host remounts the tree, so anything we want to happen after the
    *  switch has to be parked in `pendingAutoCheck` rather than awaited here.
    */
-  const commitHost = (next: string, thenCheck: boolean) => {
-    const value = next.trim();
-    if (value === host) {
+  const commitHost = async (next: string, thenCheck: boolean) => {
+    // `192.168.1.5:9021` or a pasted URL: the console is the host in it.
+    const value = cleanConsoleAddress(next);
+    setHostDraft(value);
+    if (value === bareHostOf(host)) {
       if (thenCheck) void handleCheck(value);
       return;
     }
-    if (thenCheck) pendingAutoCheck = value;
 
-    // Re-point the ACTIVE ROSTER PROFILE — not just `connection.host`.
+    // Re-point the ACTIVE ROSTER PROFILE — not just `connection.host`, or add a console if this
+    // is another PS5 (the person says which when the active one has been seen).
     //
     // The roster profile is the source of truth for which console is
     // selected. `ensureRosterMigrated()` runs on every AppShell mount and
@@ -432,7 +435,13 @@ export default function ConnectionScreen() {
     // Worse, `setHost` also mirrors that host's last-known runtime, so the
     // reverted OLD console could still be showing "helper ok" and the check
     // appeared to pass against an address the PS5 no longer has. (#276)
-    selectConsoleByAddress(value);
+    const changed = await commitAddress(value, () => {
+      if (thenCheck) pendingAutoCheck = value;
+    });
+    if (!changed) {
+      setHostDraft(host);
+      return;
+    }
     settleStep1(
       "idle",
       tr("connection_step1_idle", undefined, "Enter your PS5's address and check"),
@@ -512,40 +521,44 @@ export default function ConnectionScreen() {
         "Checking {target}:{port}…",
       ),
     );
+    setLoaderMissing(false);
     clearHelperSend(target);
-    settleStep2("idle", tr("connection_payload_not_loaded", undefined, "Helper not loaded yet"), target);
     setTransientStep2(null);
     setTransientStep2Msg(null);
-    const probe = await portProbe(target, PS5_LOADER_PORT);
-    if (probe.open) {
-      settleStep1("ok", tr(
-          "connection_port_open",
-          { port: PS5_LOADER_PORT, host: target },
-          `Port ${PS5_LOADER_PORT} is open on ${target}`,
-        ), target);
-    } else {
-      // A closed loader port is not a problem when our helper is already
-      // running: some loaders (pldmgr, for one) don't keep :9021 open after
-      // boot, and "Port 9021 is not open" read as "not connected" to a user
-      // whose app was connected the whole time.
-      const helper = await payloadCheck(target).catch(() => null);
-      if (helper?.reachable) {
-        const running = tr(
-          "connection_payload_running",
-          { host: target },
-          `Helper is running on ${target}`,
+    const check = await checkConsole(target);
+    const running = () =>
+      tr("connection_payload_running", { host: target }, `Helper is running on ${target}`);
+    const notLoaded = () => tr("connection_payload_not_loaded", undefined, "Helper not loaded yet");
+    switch (check.kind) {
+      case "loader":
+        settleStep1(
+          "ok",
+          tr(
+            "connection_port_open",
+            { port: PS5_LOADER_PORT, host: target },
+            `Port ${PS5_LOADER_PORT} is open on ${target}`,
+          ),
+          target,
         );
-        settleStep1("ok", running, target);
-        settleStep2("ok", running, target);
+        // Read here, not left to the status poller: that only speaks up when the status changes,
+        // and on a connected console it does not, so this read "Helper not loaded yet".
+        settleStep2(check.helperRunning ? "ok" : "idle", check.helperRunning ? running() : notLoaded(), target);
         return;
-      }
-      // Asleep (DDP 620): nothing listens until it wakes, and the VPN / local-network hints
-      // below would send the user looking for a fault that is not there.
-      if (
-        await checkSaysRest(helper, () =>
-          ddpStatus(target).then((d) => d.code),
-        )
-      ) {
+      case "helper":
+        // A closed loader port is not a problem when our helper is already
+        // running: some loaders (pldmgr, for one) don't keep :9021 open after
+        // boot, and "Port 9021 is not open" read as "not connected" to a user
+        // whose app was connected the whole time.
+        settleStep1("ok", running(), target);
+        settleStep2("ok", running(), target);
+        return;
+      case "payload-manager":
+        settleStep1("ok", payloadManagerReadyText(tr), target);
+        settleStep2("idle", notLoaded(), target);
+        return;
+      case "rest":
+        // Asleep (DDP 620): nothing listens until it wakes, and the VPN / local-network hints
+        // would send the user looking for a fault that is not there.
         useConnectionStore.getState().setHostStatus(target, { power: "rest" });
         settleStep1(
           "rest",
@@ -556,35 +569,18 @@ export default function ConnectionScreen() {
           ),
           target,
         );
+        settleStep2("idle", notLoaded(), target);
         return;
-      }
-      // Append the probe's own reason. Without it a name that simply didn't
-      // resolve reads identically to a console that isn't jailbroken yet,
-      // and the user has no way to tell the two apart (#272).
-      const base = tr(
-        "connection_port_closed",
-        { port: PS5_LOADER_PORT, host: target },
-        "Port {port} is not open on {host}",
-      );
-      const detail = probe.error ? `${base} — ${probe.error}` : base;
-      // "No route to host" at once, on a Mac, with the console known to be up from another
-      // computer, is what a denied Local Network permission looks like: say where it is.
-      const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
-      settleStep1(
-        "fail",
-        localNetworkBlocked()
-          ? tr(
-              "connection_android_local_network_hint",
-              undefined,
-              "Android is blocking PS5Upload from your local network. Tap Allow at the top, then check again.",
-            )
-          : looksLikeMacLocalNetworkBlock(probe.error, ua)
-          ? `${detail}. ${tr("connection_mac_local_network_hint", undefined, "macOS may be blocking this app from your local network. Open System Settings → Privacy & Security → Local Network, allow PS5Upload, then check again.")}`
-          : // A VPN on this computer sends the console's address out through the tunnel: the
-            // likeliest cause when everything else is right (reported twice on Discord).
-            `${detail}. ${tr("connection_vpn_hint", undefined, "If a VPN is on, turn it off (or allow local network access in it), then check again.")}`,
-        target,
-      );
+      case "no-loader":
+        // Step 2 is out of reach here, and so was the callout that says to load elfldr first.
+        setLoaderMissing(true);
+        settleStep1("fail", closedPortText(tr, target, check), target);
+        settleStep2("idle", notLoaded(), target);
+        return;
+      case "unreachable":
+        settleStep1("fail", closedPortText(tr, target, check), target);
+        settleStep2("idle", notLoaded(), target);
+        return;
     }
   }
 
@@ -606,6 +602,7 @@ export default function ConnectionScreen() {
   return (
     <div className="app-page">
       {replaceDialog}
+      {addressDialog}
       <PageHeader
         icon={Cable}
         title={tr("connection_title", undefined, "Connect to your PS5")}
@@ -682,12 +679,15 @@ export default function ConnectionScreen() {
               onChange={(e) => setHostDraft(e.target.value)}
               // Leaving the field commits, so an address typed and then
               // navigated away from is not silently discarded.
-              onBlur={() => commitHost(hostDraft, false)}
+              onBlur={() => void commitHost(hostDraft, false)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") commitHost(hostDraft, true);
+                if (e.key === "Enter") void commitHost(hostDraft, true);
               }}
               placeholder="192.168.1.50"
-              inputMode="decimal"
+              inputMode="url"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
               disabled={step2 === "busy"}
               className="input max-md:min-h-11 flex-1 disabled:opacity-50"
             />
@@ -698,7 +698,7 @@ export default function ConnectionScreen() {
               // commit fires first, the host change remounts the tree, and
               // this button is gone before its click event is dispatched.
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => commitHost(hostDraft, true)}
+              onClick={() => void commitHost(hostDraft, true)}
               disabled={!hostDraft.trim() || step1 === "busy" || step2 === "busy"}
               loading={step1 === "busy"}
               title={tr(
@@ -710,7 +710,14 @@ export default function ConnectionScreen() {
               {tr("connection_check", undefined, "Check")}
             </Button>
           </div>
-          <DiscoverPanel
+          {loaderMissing && (
+            <div className="mt-3">
+              <ElfldrFirstCallout />
+            </div>
+          )}
+          {/* mDNS needs the desktop or Android app: a browser has no socket for it, and the
+              button showed a developer error there. */}
+          {isTauriEnv() && <DiscoverPanel
             disabled={step2 === "busy"}
             currentHost={host}
             onPick={(picked) => {
@@ -723,9 +730,9 @@ export default function ConnectionScreen() {
               // commitHost parks the check for after the remount, so the
               // probe's own messages survive the console switch instead of
               // being written to an unmounted screen.
-              commitHost(picked, true);
+              void commitHost(picked, true);
             }}
-          />
+          />}
           <p className="mt-3 text-xs text-[var(--color-muted)]">
             {tr(
               "connection_step1_hint",
@@ -824,7 +831,9 @@ export default function ConnectionScreen() {
           </StepCard>
         )}
 
-        {host.trim() && <CompanionStrip host={host.trim()} />}
+        {/* Raw port probes from this machine, which a browser cannot do: it said "None detected"
+            with tools running. */}
+        {host.trim() && isTauriEnv() && <CompanionStrip host={host.trim()} />}
 
         {/* Quick bring-up — the one-tap fast path that chains the bring-up
             playlist → helper → auto-loader. Shown once an address is set so a
@@ -888,7 +897,7 @@ function DiscoverPanel({
       setScannedMs(res.scanned_ms);
       if (res.error) setError(res.error);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
       setCandidates([]);
     } finally {
       setScanning(false);
@@ -1060,7 +1069,7 @@ function DiscoverRow({
           )}
           <span
             className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${tierColor}`}
-            title={`confidence: ${row.confidence}/100`}
+            title={tr("connection_confidence_tooltip", { score: row.confidence }, "Confidence: {score}/100")}
           >
             {tierLabel}
           </span>
@@ -1114,7 +1123,7 @@ function BundledPayloadBanner() {
   useEffect(() => {
     bundledPayloadInfo()
       .then(setInfo)
-      .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
+      .catch((e) => setErr(humanizeCaught(e)));
   }, []);
   if (err) {
     /* Show the backend's actual error string so the user knows WHY
@@ -1425,10 +1434,40 @@ function CompanionSuggestion() {
   );
 }
 
+/** A companion's name and purpose in the user's language, by the port that identifies it. The
+ *  shell's English text stands in for a tool this build has no words for. */
+function companionLabels(tr: ReturnType<typeof useTr>, row: CompanionStatus): { name: string; role: string } {
+  switch (row.port) {
+    case 9028:
+      return {
+        name: row.name,
+        role: tr("companion_role_etahen", undefined, row.role),
+      };
+    case 2323:
+      return {
+        name: tr("companion_name_telnet", undefined, row.name),
+        role: tr("companion_role_telnet", undefined, row.role),
+      };
+    case 2121:
+      return { name: row.name, role: tr("companion_role_ftp", undefined, row.role) };
+    case 8084:
+      return { name: row.name, role: tr("companion_role_payload_manager", undefined, row.role) };
+    case 5920:
+      return {
+        name: tr("companion_name_lz4", undefined, row.name),
+        role: tr("companion_role_lz4", undefined, row.role),
+      };
+    default:
+      return { name: row.name, role: row.role };
+  }
+}
+
 function CompanionPill({ row, host }: { row: CompanionStatus; host: string }) {
+  const tr = useTr();
+  const { name, role } = companionLabels(tr, row);
   const tooltip = row.reachable
-    ? `${row.role} — listening on port ${row.port}`
-    : row.error ?? "not reachable";
+    ? tr("companion_listening", { role, port: row.port }, "{role}: listening on port {port}")
+    : row.error ?? tr("companion_not_reachable", undefined, "Not reachable");
   // A tool with its own web UI opens in the browser: Payload Manager's and LZ4
   // Compression's pages are the tool, not a status readout.
   if (row.web && row.reachable) {
@@ -1437,12 +1476,12 @@ function CompanionPill({ row, host }: { row: CompanionStatus; host: string }) {
     return (
       <button
         type="button"
-        title={`${tooltip} — open its page`}
+        title={tr("companion_open_page", { tooltip }, "{tooltip}. Open its page")}
         onClick={() => void openExternalUrl(url)}
         className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-good-soft)] px-2 py-0.5 text-[var(--color-good)] hover:underline"
       >
         <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-good)]" />
-        <span className="font-medium">{row.name}</span>
+        <span className="font-medium">{name}</span>
         <span className="font-mono text-xs opacity-70">:{row.port}</span>
         <ExternalLink size={10} aria-hidden />
       </button>
@@ -1574,7 +1613,7 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
             <dd className={valueClass}>
               v{payloadVersion}
               {!payloadProbing && appVersion && cmp === 0 && (
-                <span className="ml-2 text-xs font-normal text-[var(--color-good)]">
+                <span className="ms-2 text-xs font-normal text-[var(--color-good)]">
                   {tr(
                     "connection_block_match",
                     undefined,
@@ -1583,7 +1622,7 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
                 </span>
               )}
               {!payloadProbing && appVersion && cmp === 1 && (
-                <span className="ml-2 text-xs font-normal text-[var(--color-muted)]">
+                <span className="ms-2 text-xs font-normal text-[var(--color-muted)]">
                   {tr(
                     "connection_block_newer",
                     { app: appVersion },

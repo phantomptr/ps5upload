@@ -135,7 +135,14 @@ beforeEach(() => {
     requestAnimationFrame: (cb: () => void) => setTimeout(cb, 16) as unknown as number,
     cancelAnimationFrame: (id: number) => clearTimeout(id),
   });
-  vi.stubGlobal("document", { createElement: () => fakeCanvas() });
+  const docEvents = new EventTarget();
+  vi.stubGlobal("document", {
+    createElement: () => fakeCanvas(),
+    addEventListener: docEvents.addEventListener.bind(docEvents),
+    removeEventListener: docEvents.removeEventListener.bind(docEvents),
+    dispatchEvent: docEvents.dispatchEvent.bind(docEvents),
+    visibilityState: "visible",
+  });
   ctxs = [];
   nodes = [];
   workers = [];
@@ -268,5 +275,203 @@ describe("RemotePlayStream at its end", () => {
     const before = ctx.resumes;
     window.dispatchEvent(new Event("pointerdown"));
     expect(ctx.resumes).toBe(before);
+  });
+
+  it("does not start behind a stop that came while it checked the codecs", async () => {
+    const o = options();
+    const s = new RemotePlayStream(o);
+    const starting = s.start();
+    s.stop();
+    await starting;
+    await flush();
+    // The one socket is the stop's own word to the engine; the start never connected.
+    expect(sockets).toHaveLength(1);
+    expect(o.phases).not.toContain("connecting");
+    expect(o.phases).toEqual(["ended"]);
+  });
+
+  const opened = async (o = options()) => {
+    const errors: Array<{ code: string; detail: string }> = [];
+    o.onError = (e) => errors.push(e);
+    const s = new RemotePlayStream(o);
+    await s.start();
+    const ws = sockets[sockets.length - 1];
+    ws.onopen?.();
+    return { s, ws, errors, o };
+  };
+
+  it("says why the console ended the stream, and that nothing is running any more", async () => {
+    const a = await opened();
+    a.ws.onmessage?.({ data: JSON.stringify({ stage: "ended", reason: "Server shutting down" }) });
+    expect(a.errors).toEqual([{ code: "console_ended", detail: "Server shutting down" }]);
+    a.s.stop();
+    await flush();
+
+    const b = await opened();
+    b.ws.onmessage?.({ data: JSON.stringify({ stage: "ended", reason: "no session" }) });
+    expect(b.errors[0].code).toBe("no_session");
+    b.s.stop();
+    await flush();
+  });
+
+  it("says nothing about a stream the player stopped", async () => {
+    const a = await opened();
+    a.s.stop();
+    a.ws.onmessage?.({ data: JSON.stringify({ stage: "ended", reason: "Client stopped" }) });
+    expect(a.errors).toEqual([]);
+    await flush();
+  });
+
+  it("sends what is held again on a new socket: the engine let go when the old one left", async () => {
+    const sent: string[] = [];
+    const o = options();
+    o.readPad = () => ({ buttons: 1, l2: 0, r2: 0, lx: 0, ly: 0, rx: 0, ry: 0 });
+    const s = new RemotePlayStream(o);
+    await s.start();
+    const first = sockets[0] as unknown as { readyState: number; send: (m: string) => void; onopen?: () => void };
+    first.readyState = 1;
+    first.send = (m) => sent.push(m);
+    vi.stubGlobal("WebSocket", Object.assign(FakeSocket, { OPEN: 1 }));
+    s.sendPad();
+    s.sendPad();
+    expect(sent.filter((m) => m.includes('"pad"'))).toHaveLength(1);
+    (s as unknown as { connect: (a: boolean) => void }).connect(true);
+    const second = sockets[1] as unknown as { readyState: number; send: (m: string) => void };
+    second.readyState = 1;
+    second.send = (m) => sent.push(m);
+    s.sendPad();
+    expect(sent.filter((m) => m.includes('"pad"'))).toHaveLength(2);
+    s.stop();
+    await flush();
+  });
+
+  it("lets go when the page goes to the background, where no frame will read the pad", async () => {
+    const o = options();
+    let hidden = 0;
+    o.onHidden = () => hidden++;
+    const s = new RemotePlayStream(o);
+    await s.start();
+    const send = vi.spyOn(s, "sendPad");
+    (document as unknown as { visibilityState: string }).visibilityState = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(hidden).toBe(1);
+    expect(send).toHaveBeenCalledTimes(1);
+    s.stop();
+    await flush();
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(hidden).toBe(1);
+  });
+
+  it("ends a session no decoder will ever take, rather than stream to nothing", async () => {
+    const a = await opened();
+    (a.s as unknown as { cannotDecode: (d: string) => void }).cannotDecode("no");
+    expect(a.errors[0].code).toBe("decode");
+    expect((a.s as unknown as { stopping: boolean }).stopping).toBe(true);
+    await flush();
+  });
+});
+
+describe("the picture on this device", () => {
+  /** A socket that keeps what the page sends, opened. */
+  class SentSocket extends FakeSocket {
+    sent: string[] = [];
+    send(m?: unknown) {
+      this.sent.push(String(m));
+    }
+  }
+  const started = async (o: StreamOptions) => {
+    vi.stubGlobal("WebSocket", SentSocket);
+    const s = new RemotePlayStream(o);
+    await s.start();
+    await flush();
+    const ws = sockets[0] as unknown as SentSocket;
+    ws.readyState = 1;
+    ws.onopen?.();
+    return { s, ws };
+  };
+  const msgs = (ws: SentSocket) => ws.sent.map((m) => JSON.parse(m) as Record<string, unknown>);
+  const internals = (s: RemotePlayStream) => s as unknown as { video: unknown; drawer: unknown; ticking: boolean; header: unknown };
+
+  it("off, keeps nothing running and sends no controller; on, comes back and asks for a keyframe", async () => {
+    let press = 0;
+    const heard: boolean[] = [];
+    const o: StreamOptions = {
+      ...options(),
+      readPad: () => ({ buttons: ++press, l2: 0, r2: 0, lx: 0, ly: 0, rx: 0, ry: 0 }),
+      onPictureHere: (on) => heard.push(on),
+    };
+    const { s, ws } = await started(o);
+    expect(ctxs).toHaveLength(1);
+    const first = s.canvas;
+    const pass = { release: vi.fn(), lost: false };
+    const decoder = { close: vi.fn(), state: "configured" };
+    const raw = internals(s);
+    raw.drawer = { kind: "gl", pass };
+    raw.video = decoder;
+    s.sendPad();
+    expect(msgs(ws).some((m) => "pad" in m)).toBe(true);
+
+    ws.sent.length = 0;
+    s.setPictureHere(false);
+    expect(heard).toEqual([false]);
+    expect(msgs(ws)).toEqual([{ picture: false }]);
+    expect(decoder.close).toHaveBeenCalled();
+    expect(raw.video).toBeNull();
+    expect(pass.release).toHaveBeenCalled();
+    expect(raw.drawer).toBeNull();
+    expect(ctxs[0].closed).toBe(1);
+    expect(workers[0].terminated).toBe(true);
+    expect(raw.ticking).toBe(false);
+    // A new canvas: the old one's context is gone with it. And its pixels.
+    expect(s.canvas).not.toBe(first);
+    expect(first.width).toBe(0);
+    // No controller, no recording, and media still on its way is dropped.
+    s.sendPad();
+    expect(msgs(ws).some((m) => "pad" in m)).toBe(false);
+    expect(s.captureMedia(60)).toBeNull();
+    await expect(s.snapshot()).resolves.toBeNull();
+    const record = new Uint8Array([1, 0, 0, 1, 0x65]).buffer;
+    ws.onmessage?.({ data: record });
+    expect(raw.video).toBeNull();
+    // The decoder's watchdog has nothing to judge.
+    (s as unknown as { watchDecoder(): void }).watchDecoder();
+    expect(raw.video).toBeNull();
+
+    // The session goes on: the reconnect keeps asking for it off.
+    ws.sent.length = 0;
+    ws.onopen?.();
+    expect(msgs(ws)[0].picture).toBe(false);
+
+    ws.sent.length = 0;
+    s.setPictureHere(true);
+    expect(heard).toEqual([false, true]);
+    expect(msgs(ws)).toEqual([{ picture: true }, { keyframe: true }]);
+    expect(ctxs).toHaveLength(2);
+    expect(raw.ticking).toBe(true);
+    s.stop();
+    ws.close();
+    await flush();
+  });
+
+  it("starts off when asked, with no sound made, and says so in the start message", async () => {
+    const { s, ws } = await started({ ...options(), pictureHere: false });
+    expect(ctxs).toHaveLength(0);
+    expect(s.pictureHere).toBe(false);
+    expect(msgs(ws)[0]).toMatchObject({ host: "192.168.1.100", picture: false });
+    s.stop();
+    ws.close();
+    await flush();
+  });
+
+  it("a page joining says nothing and follows what the engine tells it", async () => {
+    const heard: boolean[] = [];
+    const { s, ws } = await started({ ...options(), attach: true, onPictureHere: (on) => heard.push(on) });
+    expect("picture" in msgs(ws)[0]).toBe(false);
+    ws.onmessage?.({ data: JSON.stringify({ picture: false }) });
+    expect(heard).toEqual([false]);
+    expect(s.pictureHere).toBe(false);
+    s.stop();
+    ws.close();
+    await flush();
   });
 });

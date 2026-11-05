@@ -83,6 +83,33 @@ static int json_get_string(const char *buf, size_t len, const char *key,
     return 0;
 }
 
+/* 1 if `"key"` sits at an object-key position with the literal value true. Same token walk as
+ * json_get_string, so a string value's bytes can never look like the key. */
+static int json_get_true(const char *buf, size_t len, const char *key) {
+    const char *p = buf;
+    const char *end = buf + len;
+    size_t klen = strlen(key);
+    while (p < end) {
+        if (*p != '"') { p++; continue; }
+        const char *tok = p + 1;
+        while (tok < end && *tok != '"') {
+            if (*tok == '\\' && tok + 1 < end) tok++;
+            tok++;
+        }
+        if ((size_t)(tok - (p + 1)) == klen && memcmp(p + 1, key, klen) == 0) {
+            const char *v = (tok < end) ? tok + 1 : end;
+            while (v < end && (*v == ' ' || *v == '\t')) v++;
+            if (v < end && *v == ':') {
+                v++;
+                while (v < end && (*v == ' ' || *v == '\t')) v++;
+                if ((size_t)(end - v) >= 4 && memcmp(v, "true", 4) == 0) return 1;
+            }
+        }
+        p = (tok < end) ? tok + 1 : end;
+    }
+    return 0;
+}
+
 void inst_parse_request(const char *buf, size_t len, inst_request_t *req) {
     memset(req, 0, sizeof(*req));
     req->op = INST_OP_UNKNOWN;
@@ -104,6 +131,7 @@ void inst_parse_request(const char *buf, size_t len, inst_request_t *req) {
     }
     if (strcmp(op, "stop") == 0) {
         req->op = INST_OP_STOP;
+        req->force = json_get_true(buf, len, "force");
         req->error = NULL;
         return;
     }

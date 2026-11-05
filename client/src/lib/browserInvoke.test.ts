@@ -5,6 +5,7 @@ import {
   BrowserUnsupportedError,
   parseSseBlock,
   statusFailureFields,
+  statusFailureText,
   timeSyncBody,
 } from "./browserInvoke";
 
@@ -21,6 +22,22 @@ vi.mock("../state/engine", () => ({
  * dropped in translation does not error. It silently changes what the
  * console's clock gets set to.
  */
+describe("an engine error", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("reports a plain-text body, not a bare status code", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("Failed to parse the request body", { status: 422 })));
+    await expect(browserInvoke("ps5_volumes", { addr: "a" })).rejects.toThrow("Failed to parse the request body");
+  });
+
+  it("reports the JSON error, and the status when the body is empty", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "busy" }), { status: 502 })));
+    await expect(browserInvoke("ps5_volumes", { addr: "a" })).rejects.toThrow("busy");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 503 })));
+    await expect(browserInvoke("ps5_volumes", { addr: "a" })).rejects.toThrow("engine HTTP 503");
+  });
+});
+
 describe("timeSyncBody", () => {
   it("maps a PC-time sync to the engine's snake_case keys", () => {
     expect(
@@ -184,6 +201,16 @@ describe("engine-backed commands the web UI depends on (#300)", () => {
 
   const B = "http://engine.test:19113";
 
+  it("cuts a page of the engine's whole local listing, as the app's command does", async () => {
+    const all = [{ name: "a" }, { name: "b" }, { name: "c" }];
+    const calls = captureFetch(all);
+    await expect(browserInvoke("local_list_dir", { path: "/d", offset: 1, limit: 1 })).resolves.toEqual([
+      { name: "b" },
+    ]);
+    await expect(browserInvoke("local_list_dir", { path: "/d" })).resolves.toEqual(all);
+    expect(calls[0].url).toBe(`${B}/api/local/list-dir?path=%2Fd`);
+  });
+
   it("builds cheats_get with both query params, engine-encoded", async () => {
     const calls = captureFetch({ cheats: [] });
     await browserInvoke("cheats_get", {
@@ -206,9 +233,9 @@ describe("engine-backed commands the web UI depends on (#300)", () => {
     // A body-only addr reached the default console on engines that read the query alone:
     // cancel timed out and the real console kept its PIN.
     const calls = captureFetch({ ok: true });
-    await browserInvoke("remoteplay_cancel", { addr: "192.168.86.99" });
-    expect(calls[0].url).toBe(`${B}/api/ps5/remoteplay/cancel?addr=192.168.86.99`);
-    expect(JSON.parse(String(calls[0].init.body))).toEqual({ addr: "192.168.86.99" });
+    await browserInvoke("remoteplay_cancel", { addr: "192.0.2.99" });
+    expect(calls[0].url).toBe(`${B}/api/ps5/remoteplay/cancel?addr=192.0.2.99`);
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ addr: "192.0.2.99" });
   });
 
   it("asks the engine about the console's elfldr", async () => {
@@ -321,6 +348,163 @@ describe("engine-backed commands the web UI depends on (#300)", () => {
     await expect(
       browserInvoke("screenshot_save", { req: {} }),
     ).rejects.toBeInstanceOf(BrowserUnsupportedError);
+  });
+});
+
+describe("Payload Library and console tools in the web UI", () => {
+  const fetchMock = vi.fn();
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const answer = (body: unknown, status = 200) =>
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(body), { status }),
+    );
+  const asked = () => {
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit | undefined];
+    return {
+      url: url.replace("http://engine.test:19113", ""),
+      method: init?.method ?? "GET",
+      body: init?.body ? JSON.parse(init.body as string) : undefined,
+    };
+  };
+
+  it("reads the catalogue and the cache from one route", async () => {
+    answer({ payloads: [{ id: "kstuff" }], local: [{ payload_id: "kstuff", path: "/d/k.elf" }] });
+    expect(await browserInvoke("payloads_catalog", {})).toEqual([{ id: "kstuff" }]);
+    answer({ payloads: [], local: [{ payload_id: "kstuff", path: "/d/k.elf" }] });
+    expect(await browserInvoke("payloads_local_inventory", {})).toEqual([
+      { payload_id: "kstuff", path: "/d/k.elf" },
+    ]);
+    answer({ payloads: [], local: [{ payload_id: "kstuff", path: "/d/k.elf" }] });
+    expect(await browserInvoke("payloads_local_path", { id: "kstuff" })).toBe("/d/k.elf");
+    answer({ payloads: [], local: [] });
+    expect(await browserInvoke("payloads_local_path", { id: "kstuff" })).toBeNull();
+  });
+
+  it("asks for releases, forced only when asked", async () => {
+    answer([]);
+    await browserInvoke("payloads_releases", { id: "a b", forceRefresh: false });
+    expect(asked().url).toBe("/api/payloads/a%20b/releases");
+    fetchMock.mockReset();
+    answer({ tag: "v1" });
+    await browserInvoke("payloads_release", { id: "k", forceRefresh: true });
+    expect(asked().url).toBe("/api/payloads/k/releases/latest?force=1");
+  });
+
+  it("downloads and cancels by id", async () => {
+    answer({ payload_id: "k" });
+    await browserInvoke("payloads_download", { id: "k", assetUrl: "https://x/a.elf", version: "v1" });
+    expect(asked()).toEqual({
+      url: "/api/payloads/k/download",
+      method: "POST",
+      body: { asset_url: "https://x/a.elf", version: "v1" },
+    });
+    fetchMock.mockReset();
+    answer({ cancelled: true });
+    expect(await browserInvoke("payloads_download_cancel", { id: "k" })).toBe(true);
+    expect(asked().url).toBe("/api/payloads/k/download/cancel");
+  });
+
+  it("adds and removes a repo", async () => {
+    answer({ id: "custom-0a" });
+    await browserInvoke("payloads_add_custom_repo", {
+      host: "github.com",
+      owner: "o",
+      name: "n",
+      displayName: null,
+      assetHint: null,
+      checksumFile: "SHA256SUMS",
+    });
+    expect(asked().body).toEqual({
+      host: "github.com",
+      owner: "o",
+      name: "n",
+      display_name: null,
+      asset_hint: null,
+      checksum_file: "SHA256SUMS",
+    });
+    fetchMock.mockReset();
+    answer({ removed: true });
+    expect(await browserInvoke("payloads_remove_custom_repo", { id: "custom-0a" })).toBe(true);
+    expect(asked()).toMatchObject({ url: "/api/payloads/repos/custom-0a", method: "DELETE" });
+  });
+
+  it("keeps a worded code in front of the engine's error, and only that", async () => {
+    answer({ error: "1.2.3.4 is an IP", code: "repo_host_is_ip" }, 400);
+    await expect(
+      browserInvoke("payloads_add_custom_repo", { host: "1.2.3.4", owner: "o", name: "n" }),
+    ).rejects.toThrow("repo_host_is_ip: 1.2.3.4 is an IP");
+    answer({ error: "fetch x: HTTP 404 (Not Found)", code: "fetch_failed" }, 502);
+    await expect(browserInvoke("payloads_release", { id: "k" })).rejects.toThrow(
+      /^fetch x: HTTP 404/,
+    );
+  });
+
+  it("sends a file by path, with the port only when one is given", async () => {
+    answer({ ok: true, status: "sent 5 bytes", bytes: 5 });
+    await browserInvoke("payload_send", { ip: "10.0.0.2", path: "/d/k.elf", port: null });
+    expect(asked().body).toEqual({ host: "10.0.0.2", path: "/d/k.elf" });
+  });
+
+  it("turns the desktop's arguments into the console routes", async () => {
+    answer({ exit_code: 0 });
+    await browserInvoke("shell_run_cmd", {
+      addr: "10.0.0.2",
+      cmd: "ls",
+      sessionId: "s",
+      cwd: "/data",
+      timeoutSecs: 5,
+    });
+    expect(asked().body).toEqual({
+      addr: "10.0.0.2",
+      cmd: "ls",
+      session_id: "s",
+      cwd: "/data",
+      timeout_s: 5,
+    });
+
+    fetchMock.mockReset();
+    answer({ modules: [] });
+    await browserInvoke("proc_modules_get", { addr: "10.0.0.2", pid: 77 });
+    expect(asked().url).toBe("/api/ps5/process/77/modules?addr=10.0.0.2");
+
+    fetchMock.mockReset();
+    answer({ apps: [] });
+    await browserInvoke("appdb_query_get", { addr: "10.0.0.2" });
+    expect(asked().url).toBe("/api/ps5/appdb?addr=10.0.0.2");
+
+    fetchMock.mockReset();
+    answer({ hash: "x" });
+    await browserInvoke("fs_blake3_hash", { addr: "a", path: "/f" });
+    expect(asked().body).toEqual({ addr: "a", path: "/f", algo: "blake3" });
+
+    fetchMock.mockReset();
+    answer({ crc32: 1 });
+    await browserInvoke("crc32_file_get", { addr: "a", path: "/f" });
+    expect(asked().body).toEqual({ addr: "a", path: "/f", algo: "crc32" });
+
+    fetchMock.mockReset();
+    answer({ copied: 1 });
+    await browserInvoke("heal_appmeta", { addr: "a", titleId: "CUSA00001", sourcePath: "/g" });
+    expect(asked().body).toEqual({ addr: "a", title_id: "CUSA00001", source_path: "/g" });
+
+    fetchMock.mockReset();
+    answer([]);
+    await browserInvoke("companion_probe", { host: "10.0.0.2" });
+    expect(asked().url).toBe("/api/ps5/companions?addr=10.0.0.2");
+
+    fetchMock.mockReset();
+    answer({ ok: true, candidates: [] });
+    await browserInvoke("discover_ps5", { timeoutSecs: 4 });
+    expect(asked()).toMatchObject({ url: "/api/discover", body: { timeout_ms: 4000 } });
+    fetchMock.mockReset();
+    answer({ ok: true, candidates: [] });
+    await browserInvoke("discover_ps5", { timeoutSecs: null });
+    expect(asked().body).toEqual({});
   });
 });
 
@@ -497,5 +681,37 @@ describe("remote conversion preflight", () => {
     expect(deadline).toHaveBeenCalledWith(3_600_000);
     const call = vi.mocked(fetch).mock.calls[0];
     expect(JSON.parse(call[1]?.body as string).source).toBe("ps5://console/data/game.exfat");
+  });
+});
+
+describe("engine errors", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it("status failures read a normalized refusal as its text and keep other bodies raw", () => {
+    expect(statusFailureText('{"error":"loopback only","code":"forbidden"}')).toBe("loopback only");
+    expect(statusFailureText("  plain text ")).toBe("plain text");
+    const withReason = '{"error":"x","reason":"console_rest_mode"}';
+    expect(statusFailureText(withReason)).toBe(withReason);
+    expect(statusFailureText("")).toBe("");
+  });
+
+  it("a failed call throws the engine's text, from JSON or from a plain body", async () => {
+    const answer = (body: string, status: number) => {
+      globalThis.fetch = vi.fn(async () => new Response(body, { status })) as typeof fetch;
+    };
+    answer('{"error":"Missing field `path`","code":"unprocessable_entity"}', 422);
+    await expect(browserInvoke("inspect_folder", { path: "/x" })).rejects.toThrow("Missing field `path`");
+    // The console refused a drive action: a 502 now, read like any other failure.
+    answer('{"error":"PERIPHERAL_CONTROL failed: code 3","reason":"helper_refused"}', 502);
+    await expect(browserInvoke("peripheral_eject", { addr: "10.0.0.2" })).rejects.toThrow(
+      "PERIPHERAL_CONTROL failed",
+    );
+    answer("a proxy said no", 502);
+    await expect(browserInvoke("inspect_folder", { path: "/x" })).rejects.toThrow("a proxy said no");
+    answer("", 500);
+    await expect(browserInvoke("inspect_folder", { path: "/x" })).rejects.toThrow("engine HTTP 500");
   });
 });

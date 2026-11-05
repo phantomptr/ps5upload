@@ -559,6 +559,52 @@ done:
     free(rel);
 }
 
+/* A rename inside one folder of a share: the swap of a Replace (the page's files/replace.ts). The daemon
+ * refuses anything else as well; a target that is taken is the server's own "exists". */
+void webui_smb_rename(const char *b, size_t n, uint8_t *out, int fd) {
+    smb_share_t *s = calloc(1, sizeof *s);
+    char *from = malloc(SMBP_PATH_MAX), *to = malloc(SMBP_PATH_MAX), *pf = malloc(SMBP_PATH_MAX), *pt = malloc(SMBP_PATH_MAX);
+    char *raw = malloc(SMBP_PATH_MAX + 32), *rep;
+    char id[SMB_ID_LEN + 1];
+    sj_buf_t req;
+    (void)out;
+    if (!s || !from || !to || !pf || !pt || !raw) {
+        fail(fd, "out_of_memory", NULL);
+        goto done;
+    }
+    if (share_path(fd, b, n, "from", s, from, SMBP_PATH_MAX) != 0) goto done;
+    if (sj_str(b, n, "to", raw, SMBP_PATH_MAX + 32) != 1 || smb_path_parse(raw, id, to, SMBP_PATH_MAX) != 0 || strcmp(id, s->id) != 0) {
+        fail(fd, "bad_to", NULL);
+        goto done;
+    }
+    smbp_parent(from, pf, SMBP_PATH_MAX);
+    smbp_parent(to, pt, SMBP_PATH_MAX);
+    if (!from[0] || !to[0] || strcmp(pf, pt) != 0) {
+        fail(fd, "bad_path", NULL);
+        goto done;
+    }
+    if (enter(fd) != 0) goto done;
+    sj_init(&req, 0);
+    sj_raw(&req, "\"op\":\"rename\"");
+    conn_fields(&req, s);
+    sj_kv_str(&req, 1, "path", from);
+    sj_kv_str(&req, 1, "to", to);
+    rep = ask(fd, &req, SMB_WAIT_MS, 1);
+    leave();
+    if (rep) {
+        relay(fd, rep);
+        free(rep);
+    }
+done:
+    if (s) wipe_share(s);
+    free(s);
+    free(from);
+    free(to);
+    free(pf);
+    free(pt);
+    free(raw);
+}
+
 static void job_op(const char *op, const char *b, size_t n, int fd) {
     char job[40];
     size_t i;
@@ -622,6 +668,46 @@ void webui_smb_jobs(const char *b, size_t n, uint8_t *out, int fd) {
     }
     relay(fd, r);
     free(r);
+}
+
+/* A listing for a poll: a daemon that is slow to answer costs one empty list, not a worker's seconds. */
+#define SMB_PC_JOBS_MS 1500
+
+char *webui_smb_pc_jobs(void) {
+    char *r = NULL, err[48];
+    if (smbc_request("\"op\":\"jobs\"", 11, SMB_PC_JOBS_MS, 0, &r, err, sizeof err) != 0) return NULL;
+    return r;
+}
+
+int webui_smb_pc_cancel(const char *id, char *err, size_t err_cap) {
+    sj_buf_t req;
+    char *r = NULL, tok[32], daemon_err[48];
+    int rc, i;
+    if (strlen(id) != 32) {
+        snprintf(err, err_cap, "bad_job");
+        return -1;
+    }
+    for (i = 0; i < 32; i++)
+        if (!((id[i] >= '0' && id[i] <= '9') || (id[i] >= 'a' && id[i] <= 'f'))) {
+            snprintf(err, err_cap, "bad_job");
+            return -1;
+        }
+    sj_init(&req, 0);
+    sj_raw(&req, "\"op\":\"cancel\"");
+    sj_kv_str(&req, 1, "job", id);
+    rc = smbc_request(req.buf ? req.buf : "", req.len, SMB_QUICK_MS, 0, &r, daemon_err, sizeof daemon_err);
+    sj_free(&req);
+    if (rc != 0) {
+        snprintf(err, err_cap, "%s", !strcmp(daemon_err, "smb_daemon_not_running") ? "unknown_job" : daemon_err);
+        return -1;
+    }
+    rc = 0;
+    if (sj_str(r, strlen(r), "error", tok, sizeof tok) == 1 && strcmp(tok, "cancelled") != 0) {
+        snprintf(err, err_cap, "%s", !strcmp(tok, "not_found") ? "unknown_job" : tok);
+        rc = -1;
+    }
+    free(r);
+    return rc;
 }
 
 /* ---- the game library (#498) ---- */

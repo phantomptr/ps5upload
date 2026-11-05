@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { routeEngine, seedConsole } from "./fixtures/engine";
 
 // Typing into the PS5's on-screen keyboard: when the console opens its keyboard the engine says
 // so, and a text box shows over the stream, prefilled and focused. Typing goes to the console a
@@ -15,34 +16,13 @@ type Engine = {
 };
 
 async function mockConsole(page: Page): Promise<Engine> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("ps5upload.host", "192.168.1.100");
-    window.localStorage.setItem(
-      "ps5upload.roster.v1",
-      JSON.stringify({
-        active_id: "p1",
-        profiles: [
-          {
-            id: "p1",
-            name: "Living room",
-            host: "192.168.1.100",
-            wake_regist_key: "00112233",
-            wake_rp_key: "0f".repeat(16), // made up (built here so it reads as no secret)
-          },
-        ],
-      }),
-    );
+  await seedConsole(page);
+  await routeEngine(page, (path) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "10.2.0", caps: {} };
+    if (path === "/api/ps5/rp/session") body = { host: null };
+    return body;
   });
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "10.2.0", caps: {} };
-      if (path === "/api/ps5/rp/session") body = { host: null };
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
   const engine: Engine = { start: null, pads: [], texts: [], accepts: 0, rejects: 0, send: () => {} };
   await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, (ws) => {
     engine.send = (m) => ws.send(JSON.stringify(m));

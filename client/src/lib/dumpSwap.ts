@@ -143,8 +143,9 @@ export async function runSwap(
   onStep("release");
   const deadline = deps.now() + RELEASE_TIMEOUT_MS;
   for (;;) {
-    const names = await deps.list(`/user/app/${input.titleId}`).catch(() => []);
-    if (!names.some((n) => SMP_LINKS.includes(n))) break;
+    // A listing that failed is "not yet", never "SMP let go": keep looking until the deadline.
+    const names = await deps.list(`/user/app/${input.titleId}`).catch(() => null);
+    if (names && !names.some((n) => SMP_LINKS.includes(n))) break;
     if (deps.now() >= deadline) {
       return undo("ShadowMountPlus did not let go of the dump.");
     }
@@ -192,7 +193,8 @@ export async function finishSwap(
   deps: SwapDeps,
 ): Promise<void> {
   if (choice === "delete") await deps.remove(journal.parked);
-  const list = await deps.readText(MANUAL_LIST).catch(() => null);
+  // Each step may throw: the swap is forgotten only once all of them are done.
+  const list = await deps.readText(MANUAL_LIST);
   if (list !== null) {
     const next = removeManualListLine(list, journal.dump);
     if (next !== null) await deps.writeText(MANUAL_LIST, next);

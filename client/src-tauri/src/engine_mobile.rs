@@ -3,7 +3,7 @@
 //! Tauri mobile has no sidecar-binary spawn model (that's desktop-only),
 //! so instead of extracting and exec'ing `ps5upload-engine`, we link the
 //! engine as a library and run its Axum server on a background tokio
-//! task bound to loopback. The renderer keeps calling
+//! task (see `BIND_HOST`). The renderer keeps calling
 //! `http://127.0.0.1:19113` exactly as on desktop — only the server's
 //! host changes from a child process to this in-process task.
 //!
@@ -42,6 +42,9 @@ const FALLBACK_PORTS: std::ops::RangeInclusive<u16> = 19123..=19132;
 /// `engine_url_get`).
 static URL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
+/// `start` has run in this process.
+static STARTED_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// The first port that can be bound now, 19113 first. A probe bind released at once: the
 /// engine binds it a moment later on its own task.
 fn pick_port() -> u16 {
@@ -59,11 +62,13 @@ pub async fn start(app: &AppHandle) -> Result<&'static str> {
     // Android can run setup again when its Activity is recreated while the process lives on;
     // the engine from the first run still holds the port, and a second bind would only fail
     // and tell the renderer the engine did not start.
-    static STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-    if STARTED.set(()).is_err() {
+    if STARTED_ONCE.swap(true, std::sync::atomic::Ordering::Relaxed) {
         return Ok(url());
     }
     let port = pick_port();
+    // The stream-install URL the console fetches names this port, not the default.
+    // Before the engine task starts, as for `PS5UPLOAD_DATA_DIR` below.
+    std::env::set_var("PS5UPLOAD_ENGINE_PORT", port.to_string());
     let _ = URL.set(format!("http://127.0.0.1:{port}"));
     let bind = format!("{BIND_HOST}:{port}");
     point_engine_at_app_data(app);
@@ -96,12 +101,18 @@ pub async fn start(app: &AppHandle) -> Result<&'static str> {
 /// which is after this). An explicit `PS5UPLOAD_DATA_DIR` wins.
 fn point_engine_at_app_data(app: &AppHandle) {
     use tauri::Manager;
+    // The Payload Library's folder: the in-process /api/payloads and the Payloads screen share it.
+    if let Ok(dir) = crate::commands::payloads::library_dir(app) {
+        std::env::set_var(ps5upload_core::payload_library::PAYLOADS_DIR_ENV, dir);
+    }
     if std::env::var_os("PS5UPLOAD_DATA_DIR").is_some_and(|v| !v.is_empty()) {
         return;
     }
     match app.path().app_data_dir() {
-        Ok(dir) => {
-            let dir = dir.join("ps5upload");
+        Ok(base) => {
+            let dir = base.join("ps5upload");
+            // A factory reset the last run could not finish, its engine still running.
+            crate::commands::user_config::finish_engine_data_reset(&base, &dir);
             if let Err(e) = std::fs::create_dir_all(&dir) {
                 eprintln!(
                     "[engine] cannot create the data folder {}: {e}",
@@ -142,8 +153,8 @@ pub struct Diagnosis {
     pub os: &'static str,
 }
 
-pub async fn diagnose(_app: &AppHandle) -> Diagnosis {
-    let probe = match crate::engine_http::engine_client_builder().build() {
+async fn probe() -> Result<(), String> {
+    match crate::engine_http::engine_client_builder().build() {
         Ok(client) => match client
             .get(format!("{}/api/version", url()))
             .timeout(std::time::Duration::from_millis(800))
@@ -155,7 +166,11 @@ pub async fn diagnose(_app: &AppHandle) -> Diagnosis {
             Err(e) => Err(crate::engine_http::error_chain(&e)),
         },
         Err(e) => Err(e.to_string()),
-    };
+    }
+}
+
+pub async fn diagnose(_app: &AppHandle) -> Diagnosis {
+    let probe = probe().await;
     Diagnosis {
         url: url().to_string(),
         local: true,
@@ -165,22 +180,39 @@ pub async fn diagnose(_app: &AppHandle) -> Diagnosis {
         port_taken: None,
         binary_found: None,
         binary_error: None,
-        log_path: None,
+        log_path: crate::mobile_log::log_path().map(|p| p.display().to_string()),
         os: std::env::consts::OS,
     }
 }
 
 /// The in-process engine cannot be restarted without restarting the app.
 pub async fn restart(_app: &AppHandle) -> Result<String> {
-    Err(anyhow::anyhow!(
-        "on this device the engine runs inside the app; close the app fully and open it again"
-    ))
+    Err(anyhow::anyhow!(crate::commands::shell_error::code_only(
+        "engine_restart_in_app"
+    )))
 }
 
-/// No-op on mobile. The desktop build made the engine URL runtime-configurable
-/// (point the app at a remote/self-hosted engine), but mobile links the engine
-/// in-process — there is no sidecar and no remote-engine story here, so the
-/// `engine_url_set` command is inert. Defined so the shared command module
-/// (`commands::ps5_engine`) compiles for the Android/iOS target. The renderer
-/// may still store an Engine URL setting; mobile simply ignores it.
-pub fn set_url(_url: String) {}
+/// No-op on mobile, returning where the proxies stay. The desktop build made the engine URL
+/// runtime-configurable (point the app at a remote/self-hosted engine), but mobile links the engine
+/// in-process, its native commands always reach that engine and Android allows plain http to
+/// loopback only. Defined so the shared command module (`commands::ps5_engine`) compiles for the
+/// Android/iOS target. The page does not apply a stored remote URL on a phone either
+/// (state/engine.ts).
+pub fn set_url(_url: String) -> String {
+    url().to_string()
+}
+
+/// The app is back in front: if the engine has stopped answering, listen again.
+///
+/// iOS can reclaim a suspended app's listening sockets (seen by others; not yet measured on an
+/// iPhone here), and every renderer call goes through this one. The engine itself is fine, so
+/// only the listener is re-created.
+pub async fn check_listener() {
+    if !STARTED_ONCE.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    if let Err(e) = probe().await {
+        eprintln!("[engine] not answering after resume ({e}); listening again");
+        ps5upload_engine::rebind_in_process();
+    }
+}

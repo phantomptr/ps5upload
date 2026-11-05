@@ -18,6 +18,20 @@ pub fn engine_client_builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder().no_proxy()
 }
 
+/// The text of an engine error body for a message. The engine sends what used to be a plain-text
+/// refusal (a malformed request, a guard) as `{"error": .., "code": ..}`; that reads as its text,
+/// as it always did. Any other body stays as it is: the renderer matches tokens in it.
+pub fn plain_error_text(body: &str) -> String {
+    if let Ok(serde_json::Value::Object(o)) = serde_json::from_str(body) {
+        if o.len() == 2 && o.get("code").is_some_and(|c| c.is_string()) {
+            if let Some(text) = o.get("error").and_then(|e| e.as_str()) {
+                return text.to_string();
+            }
+        }
+    }
+    body.to_string()
+}
+
 /// `e` followed by each underlying cause. reqwest's Display stops at "error
 /// sending request for url (…)", which hides whether the connection was
 /// refused, timed out, or was sent to a proxy — the one detail a bug report
@@ -34,4 +48,26 @@ pub fn error_chain(e: &dyn std::error::Error) -> String {
         source = cause.source();
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::plain_error_text;
+
+    #[test]
+    fn a_normalized_refusal_reads_as_its_text_and_anything_else_stays_raw() {
+        assert_eq!(
+            plain_error_text(r#"{"error":"Missing field `path`","code":"unprocessable_entity"}"#),
+            "Missing field `path`"
+        );
+        for raw in [
+            "plain text",
+            "",
+            r#"{"error":"x"}"#,
+            r#"{"error":"x","reason":"console_rest_mode"}"#,
+            r#"{"error":"x","code":"a","reason":"b"}"#,
+        ] {
+            assert_eq!(plain_error_text(raw), raw);
+        }
+    }
 }

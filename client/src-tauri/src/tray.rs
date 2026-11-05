@@ -140,17 +140,17 @@ pub fn tray_configure<R: Runtime>(
     if want && (!SHOWN.load(Ordering::SeqCst) || current.as_ref() != Some(&labels)) {
         let _ = app.remove_tray_by_id(TRAY_ID);
         // A tray library that loads but fails (some Linux desktops) must not take the app down.
-        let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| build(&app, &labels)));
+        let made = crate::crash_hook::optional("the tray icon", || build(&app, &labels));
         match made {
-            Ok(Ok(())) => {
+            Some(Ok(())) => {
                 SHOWN.store(true, Ordering::SeqCst);
                 *current = Some(labels);
             }
-            Ok(Err(e)) => {
+            Some(Err(e)) => {
                 SHOWN.store(false, Ordering::SeqCst);
                 return Err(format!("could not add the tray icon: {e}"));
             }
-            Err(_) => {
+            None => {
                 SHOWN.store(false, Ordering::SeqCst);
                 return Err("could not add the tray icon".into());
             }

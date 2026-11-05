@@ -14,7 +14,7 @@
 #define MP1_PSTATE_NONE 0xFFFFFFFFu
 
 static pthread_mutex_t mp1_lock = PTHREAD_MUTEX_INITIALIZER;
-static int g_mp1_unsupported;  /* latched on the first failure; never cleared (but by the test) */
+static int g_mp1_unsupported;  /* latched on the first refusal; never cleared (but by the test) */
 static int g_mp1_cache_valid;
 static int64_t g_mp1_cache_ms;
 static mp1_clocks_t g_mp1_cache;
@@ -52,6 +52,38 @@ static void mp1_latch(const char *what, int err) {
             what, err);
 }
 
+/* "Not now", from the driver or the helper, as opposed to "no such thing": the SMU busy while a game
+ * runs, a signal, out of descriptors for a moment. Anything else, known or not, is a refusal. */
+int mp1_errno_transient(int err) {
+    switch (err) {
+    case EBUSY:
+    case EAGAIN:
+    case EDEADLK:
+    case EINTR:
+    case ETIMEDOUT:
+    case EMFILE:
+    case ENFILE:
+    case ENOMEM:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* A read that failed with errno `err`. Caller holds mp1_lock. A refusal latches. "Not now" answers
+ * with the last good values if there are any (zeros, that is "unknown", if not) and the next
+ * explicit read tries again: one busy moment must not turn the clocks into "unsupported" for good. */
+static int mp1_failed(const char *what, int err, mp1_clocks_t *out) {
+    if (!mp1_errno_transient(err)) {
+        mp1_latch(what, err);
+        return MP1_UNSUPPORTED;
+    }
+    fprintf(stderr, "[mp1] %s: not now (errno %d); keeping the last values\n", what, err);
+    if (g_mp1_cache_valid) *out = g_mp1_cache;
+    else mp1_blank(out, MP1_OK);
+    return MP1_OK;
+}
+
 int mp1_clocks_read(const mp1_ops_t *ops, mp1_clocks_t *out) {
     if (!out) return MP1_UNSUPPORTED;
     mp1_blank(out, MP1_UNSUPPORTED);
@@ -74,9 +106,9 @@ int mp1_clocks_read(const mp1_ops_t *ops, mp1_clocks_t *out) {
 
     int fd = ops->open_ro(ops->ctx);
     if (fd < 0) {
-        mp1_latch("open /dev/mp1", errno);
+        int rc = mp1_failed("open /dev/mp1", errno, out);
         pthread_mutex_unlock(&mp1_lock);
-        return MP1_UNSUPPORTED;
+        return rc;
     }
 
     /* 256 zeroed, 8-byte-aligned bytes for a request that moves 108. */
@@ -85,9 +117,9 @@ int mp1_clocks_read(const mp1_ops_t *ops, mp1_clocks_t *out) {
     if (mp1_get(ops, fd, MP1_GFX_IOCTL_GET, words) != 0) {
         int e = errno;
         ops->close_fd(ops->ctx, fd);
-        mp1_latch("GFX clock read", e);
+        int rc = mp1_failed("GFX clock read", e, out);
         pthread_mutex_unlock(&mp1_lock);
-        return MP1_UNSUPPORTED;
+        return rc;
     }
     for (int i = MP1_GFX_WORDS; i < MP1_GFX_BUF_WORDS; i++) {
         if (words[i] != 0) {
@@ -107,9 +139,9 @@ int mp1_clocks_read(const mp1_ops_t *ops, mp1_clocks_t *out) {
         if (mp1_get(ops, fd, MP1_CORE_IOCTL_GET, q) != 0) {
             int e = errno;
             ops->close_fd(ops->ctx, fd);
-            mp1_latch("CPU core clock read", e);
+            int rc = mp1_failed("CPU core clock read", e, out);
             pthread_mutex_unlock(&mp1_lock);
-            return MP1_UNSUPPORTED;
+            return rc;
         }
         res.core_raw_mhz[c] = q[2];
         res.core_mhz[c] = mp1_core_mhz_valid(q[2]);

@@ -5,6 +5,7 @@
 
 import { getEngineUrl } from "../state/engine";
 import { consoleAddr } from "../lib/addr";
+import { cleanConsolePath } from "../lib/consolePath";
 
 export interface ConsoleFilesPrefs {
   favorites: string[];
@@ -77,10 +78,7 @@ export async function takeHandoffForPc(host: string): Promise<HandoffTake> {
 }
 
 /** A path as the helper stores it: '//' collapsed, no trailing '/' (except "/"). */
-export function cleanConsolePath(p: string): string {
-  const c = p.replace(/\/{2,}/g, "/");
-  return c.length > 1 ? c.replace(/\/$/, "") : c;
-}
+export { cleanConsolePath };
 
 export interface ConsolePathStat {
   kind: string;
@@ -169,13 +167,6 @@ export async function minionSet(
     ...(typeof b.version === "string" ? { version: b.version } : {}),
     ...(typeof b.removed === "number" ? { removed: b.removed } : {}),
   };
-}
-
-export function minionTile(
-  host: string,
-  tile?: boolean,
-): Promise<MinionTileState> {
-  return minionSet(host, tile === undefined ? {} : { tile });
 }
 
 export async function importLocalCheat(

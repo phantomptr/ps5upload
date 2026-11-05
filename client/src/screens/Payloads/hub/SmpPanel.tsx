@@ -11,6 +11,7 @@ import {
 import { smpStatus, type SmpStatus } from "../../../api/ps5";
 import { Button, ErrorCard, Spinner } from "../../../components";
 import { useTr } from "../../../state/lang";
+import { humanizeCaught } from "../../../lib/humanizeError";
 
 /**
  * Read-only ShadowMount+ status panel. Renders nothing until the
@@ -258,7 +259,7 @@ function SmpFileBlock({
     <details className="rounded-2xl border border-[var(--glass-edge)] bg-[var(--color-surface)]">
       <summary className="cursor-pointer px-3 py-2 text-xs">
         <span className="font-medium">{title}</span>{" "}
-        <code className="ml-2 text-xs text-[var(--color-muted)]">{path}</code>
+        <code className="ms-2 text-xs text-[var(--color-muted)]">{path}</code>
       </summary>
       <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words border-t border-[var(--color-border)] p-2 font-mono text-xs text-[var(--color-text)]">
         {body}
@@ -388,7 +389,7 @@ function SmpAutotuneTable({
         onSaved();
       }
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : String(e));
+      setSaveError(humanizeCaught(e));
     } finally {
       setSaving(false);
     }
@@ -397,10 +398,10 @@ function SmpAutotuneTable({
     <details className="rounded-2xl border border-[var(--glass-edge)] bg-[var(--color-surface)]" open>
       <summary className="cursor-pointer px-3 py-2 text-xs">
         <span className="font-medium">autotune.ini</span>{" "}
-        <code className="ml-2 text-xs text-[var(--color-muted)]">
+        <code className="ms-2 text-xs text-[var(--color-muted)]">
           /data/shadowmount/autotune.ini
         </code>{" "}
-        <span className="ml-2 text-xs text-[var(--color-muted)]">
+        <span className="ms-2 text-xs text-[var(--color-muted)]">
           {tr(
             "smp_autotune_count",
             { n: rows.length },
@@ -518,7 +519,7 @@ function AutotuneSubsection({
       <div className="overflow-x-auto">
       <table className="w-full min-w-[360px] text-xs">
         <thead>
-          <tr className="text-left text-[var(--color-muted)]">
+          <tr className="text-start text-[var(--color-muted)]">
             <th className="px-1 py-0.5">{targetLabel}</th>
             <th className="px-1 py-0.5">{valueLabel}</th>
           </tr>

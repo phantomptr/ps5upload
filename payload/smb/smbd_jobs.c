@@ -189,8 +189,8 @@ static void status_locked(const job_t *j, sj_buf_t *b) {
     sj_fmt(b, ",\"bytes_done\":%llu,\"bytes_total\":%llu,\"files_done\":%u,\"files_total\":%u,\"scanning\":%s",
            (unsigned long long)j->pr.bytes_done, (unsigned long long)j->pr.bytes_total, (unsigned)j->pr.files_done,
            (unsigned)j->pr.files_total, j->pr.scanning ? "true" : "false");
-    sj_fmt(b, ",\"reconnects\":%u,\"dialect\":%u,\"started\":%lld", (unsigned)j->pr.reconnects, j->dialect,
-           (long long)j->started);
+    sj_fmt(b, ",\"reconnects\":%u,\"dialect\":%u,\"started\":%lld,\"ended\":%lld", (unsigned)j->pr.reconnects, j->dialect,
+           (long long)j->started, (long long)(j->state == ST_RUNNING ? 0 : j->ended));
     sj_kv_str(b, 1, "current", cur);
     sj_kv_str(b, 1, "src", j->src);
     sj_kv_str(b, 1, "dest", j->dst);

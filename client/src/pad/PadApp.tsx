@@ -7,6 +7,8 @@ import { TouchControls } from "../screens/Play/TouchControls";
 import { PhoneKeyboardButton, TouchModeToggle, TouchpadSurface } from "../screens/Play/TouchpadOverlay";
 import { KbmSender } from "../lib/kbmInput";
 import { useTr } from "../state/lang";
+import { setScreenWakeReason } from "../lib/androidScreenWake";
+import { setPadForwardReason } from "../lib/androidPadBridge";
 import { rpInput } from "../state/remotePlay";
 import { makeWatchPlayer, type MsePlayer, type WatchPlayer, type WatchProblem } from "./watchPlayer";
 
@@ -28,13 +30,23 @@ function stageText(tr: Tr, s: PadLinkStage, computer: string): string {
           : tr("pad_starting", undefined, "Connected. The stream is starting…");
     case "refused":
       if (s.why === "denied") return tr("pad_denied", undefined, "The computer said no.");
+      if (s.why === "no_answer") return tr("pad_no_answer", undefined, "The computer didn't answer in time. Try again.");
+      if (s.why === "kicked") return tr("pad_kicked", undefined, "The computer took this phone out of the game.");
+      if (s.why === "closed") return tr("pad_link_closed", undefined, "The computer closed the link. Scan the new code to play again.");
       if (s.why === "key") return tr("pad_old_code", undefined, "This code has expired. Scan the new one on the computer.");
       if (s.why === "full") return tr("pad_full", undefined, "Four phones are playing already.");
       if (s.why === "no_stream") return tr("pad_watch_no_stream", undefined, "Nothing is streaming on the computer right now.");
       return tr("pad_refused", undefined, "The computer did not let this phone in.");
+    case "reconnecting":
+      return tr("pad_reconnecting", undefined, "Connection lost. Reconnecting…");
     case "lost":
       return tr("pad_lost", undefined, "Lost the connection to the computer.");
   }
+}
+
+/** A refusal that trying again can't change: only the computer can. */
+function canRetry(s: PadLinkStage): boolean {
+  return !(s.kind === "refused" && (s.why === "kicked" || s.why === "closed"));
 }
 
 /** Fill the screen and hold it sideways, where the browser allows (Android Chrome does). */
@@ -126,6 +138,17 @@ export function PadApp({
   const [kbmCaps, setKbmCaps] = useState<KbmCapsMsg | null>(null);
   const [tab, setTab] = useState<"controller" | "touchpad">("controller");
 
+  // A phone being a controller (or a screen being watched) has nobody touching it: keep it on,
+  // and controllers plugged into it are this page's.
+  useEffect(() => {
+    setScreenWakeReason("pad-remote", true);
+    setPadForwardReason("pad-remote", true);
+    return () => {
+      setScreenWakeReason("pad-remote", false);
+      setPadForwardReason("pad-remote", false);
+    };
+  }, []);
+
   useEffect(() => {
     if (!motionOn) return;
     const stop = startMotion((m) => {
@@ -156,7 +179,21 @@ export function PadApp({
     });
     setClient(c);
     c.start();
+    // Hidden or out of focus: let go of everything (no stuck stick while the phone is away). In
+    // front again: a dropped link comes back now.
+    const vis = () => {
+      const hidden = document.visibilityState === "hidden";
+      c.setNeutral(hidden);
+      if (!hidden) c.wake();
+    };
+    const blur = () => c.setNeutral(true);
+    document.addEventListener("visibilitychange", vis);
+    window.addEventListener("blur", blur);
+    window.addEventListener("focus", vis);
     return () => {
+      document.removeEventListener("visibilitychange", vis);
+      window.removeEventListener("blur", blur);
+      window.removeEventListener("focus", vis);
       c.stop();
       p?.stop();
       p?.element.remove();
@@ -170,7 +207,8 @@ export function PadApp({
   }, []);
 
   const ended = stage.kind === "refused" || stage.kind === "lost";
-  const live = stage.kind === "joined";
+  // Through a short drop the controller stays where the thumbs are.
+  const live = stage.kind === "joined" || stage.kind === "reconnecting";
   return (
     <div
       className="fixed inset-0 select-none overflow-hidden bg-black text-white [-webkit-touch-callout:none]"
@@ -181,7 +219,7 @@ export function PadApp({
         <span
           className="inline-block h-2 w-2 shrink-0 rounded-full"
           style={{
-            background: live
+            background: stage.kind === "joined"
               ? light
                 ? `rgb(${light[0]},${light[1]},${light[2]})`
                 : "var(--color-success,#22c55e)"
@@ -191,7 +229,7 @@ export function PadApp({
           }}
         />
         <span className="truncate" data-testid="pad-stage">
-          {watch && live && stage.kind === "joined" && stage.host && !(stage.passcode && !stage.playing)
+          {watch && stage.kind === "joined" && stage.host && !(stage.passcode && !stage.playing)
             ? control
               ? tr("pad_watch_control", undefined, "Watching, and you have the controller")
               : tr("pad_watch_watching", { host: stage.host }, `Watching ${stage.host}`)
@@ -284,14 +322,16 @@ export function PadApp({
       {ended && (
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 px-6 text-center text-sm">
           <p className="max-w-sm text-white/85">{stageText(tr, stage, computer)}</p>
-          <button
-            type="button"
-            onClick={() => setAttempt((n) => n + 1)}
-            className="rounded-full bg-white px-4 py-2 text-sm font-medium text-black"
-            data-testid="pad-retry"
-          >
-            {tr("pad_retry", undefined, "Try again")}
-          </button>
+          {canRetry(stage) && (
+            <button
+              type="button"
+              onClick={() => setAttempt((n) => n + 1)}
+              className="rounded-full bg-white px-4 py-2 text-sm font-medium text-black"
+              data-testid="pad-retry"
+            >
+              {tr("pad_retry", undefined, "Try again")}
+            </button>
+          )}
         </div>
       )}
     </div>

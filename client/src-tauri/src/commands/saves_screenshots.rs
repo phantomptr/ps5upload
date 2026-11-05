@@ -9,8 +9,8 @@ pub async fn saves_list(addr: String, user_id: Option<i32>) -> Result<JsonValue,
     tokio::task::spawn_blocking(move || list_saves(&addr, uid))
         .await
         .map_err(|e| format!("saves task: {e}"))?
-        .map(|s| serde_json::to_value(s).unwrap_or(serde_json::json!({})))
         .map_err(|e| format!("saves: {e}"))
+        .and_then(super::reply_json)
 }
 
 #[tauri::command]
@@ -18,8 +18,8 @@ pub async fn screenshots_list(addr: String) -> Result<JsonValue, String> {
     tokio::task::spawn_blocking(move || list_screenshots(&addr))
         .await
         .map_err(|e| format!("screenshots task: {e}"))?
-        .map(|s| serde_json::to_value(s).unwrap_or(serde_json::json!({})))
         .map_err(|e| format!("screenshots: {e}"))
+        .and_then(super::reply_json)
 }
 
 #[tauri::command]
@@ -27,6 +27,6 @@ pub async fn videos_list(addr: String) -> Result<JsonValue, String> {
     tokio::task::spawn_blocking(move || list_videos(&addr))
         .await
         .map_err(|e| format!("videos task: {e}"))?
-        .map(|s| serde_json::to_value(s).unwrap_or(serde_json::json!({})))
         .map_err(|e| format!("videos: {e}"))
+        .and_then(super::reply_json)
 }

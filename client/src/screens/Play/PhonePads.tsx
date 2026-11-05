@@ -22,6 +22,24 @@ export interface PadLinkState {
   pending: Array<{ id: number; name: string }>;
 }
 
+/** A phone's name on this computer's list: what it calls itself, in this app's language when it
+ *  is one of the /pad page's device words (or gave none). */
+export function phoneName(tr: ReturnType<typeof useTr>, name: string): string {
+  switch (name) {
+    case "iphone":
+      return tr("rp_phone_name_iphone", undefined, "iPhone");
+    case "ipad":
+      return tr("rp_phone_name_ipad", undefined, "iPad");
+    case "android":
+      return tr("rp_phone_name_android", undefined, "Android phone");
+    case "":
+    case "phone":
+      return tr("rp_phone_name_phone", undefined, "Phone");
+    default:
+      return name;
+  }
+}
+
 const EMPTY: PadLinkState = {
   open: false,
   url: null,
@@ -307,7 +325,7 @@ export function PhonePadsPanel({
             <li key={p.id} className="flex items-center gap-2 text-sm">
               <span className="inline-block h-2 w-2 rounded-full bg-[var(--color-good)]" />
               <span className="flex-1 truncate">
-                {p.name}
+                {phoneName(tr, p.name)}
                 {p.watch && (
                   <span className="ms-2 text-xs text-[var(--color-muted)]">
                     {p.control
@@ -369,6 +387,7 @@ export function PadAsks({ pending }: { pending: PadLinkState["pending"] }) {
   const tr = useTr();
   if (!pending.length) return null;
   const p = pending[0];
+  const name = phoneName(tr, p.name);
   return (
     <div
       className="pointer-events-auto absolute left-1/2 top-16 z-40 flex -translate-x-1/2 flex-wrap items-center gap-2 rounded-full bg-black/85 px-4 py-2 text-sm text-white shadow-lg"
@@ -381,8 +400,8 @@ export function PadAsks({ pending }: { pending: PadLinkState["pending"] }) {
       <span>
         {tr(
           "rp_phone_ask",
-          { name: p.name },
-          `${p.name} wants to be a controller`,
+          { name },
+          `${name} wants to be a controller`,
         )}
       </span>
       <button

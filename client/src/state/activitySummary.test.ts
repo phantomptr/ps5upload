@@ -21,8 +21,6 @@ function task(p: Partial<Task>): Task {
     origin: "x",
     createdAt: new Date(NOW - 100_000 + n).toISOString(),
     status: "running",
-    attempts: 0,
-    maxAttempts: 1,
     consoleId: "h",
     payload: {},
     label: `Job ${n}`,

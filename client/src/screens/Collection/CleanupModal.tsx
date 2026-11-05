@@ -11,6 +11,8 @@ import { formatCollectionBytes } from "../../lib/collectionView";
 import { setCollectionSweep, useCollectionStore } from "../../state/collection";
 import { engineIsOnThisDevice } from "../../state/engine";
 import { useTr } from "../../state/lang";
+import { formatNumber } from "../../lib/formatDate";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /** A path shown from its collection folder ("games/PS4/._x.pkg"), the full one on hover. */
 function shortPath(path: string, roots: string[]): string {
@@ -47,7 +49,7 @@ export function CleanupModal({
       setJunk(st);
       if (st.running) timer.current = setTimeout(() => void poll(), 700);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     }
   };
 
@@ -76,7 +78,7 @@ export function CleanupModal({
       setJunk(await collection.junkScan());
       void poll();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     }
   };
 
@@ -87,7 +89,7 @@ export function CleanupModal({
       setCleaned(await collection.junkClean(junk.token));
       setJunk(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(false);
     }
@@ -99,7 +101,7 @@ export function CleanupModal({
     try {
       setMac(await fn());
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(false);
     }
@@ -129,7 +131,7 @@ export function CleanupModal({
             <span className="text-sm text-[var(--color-muted)]">
               {tr(
                 "collection.junk_scanning",
-                { n: junk.checked.toLocaleString() },
+                { n: formatNumber(junk.checked) },
                 "Looking… {n} items checked",
               )}
             </span>
@@ -173,7 +175,7 @@ export function CleanupModal({
             {tr(
               "collection.junk_found",
               {
-                n: junk.found.toLocaleString(),
+                n: formatNumber(junk.found),
                 size: formatCollectionBytes(junk.allocated),
               },
               "{n} files, {size} on disk",
@@ -189,7 +191,7 @@ export function CleanupModal({
               <li>
                 {tr(
                   "collection.junk_more",
-                  { n: (junk.found - junk.sample.length).toLocaleString() },
+                  { n: formatNumber((junk.found - junk.sample.length)) },
                   "… and {n} more",
                 )}
               </li>
@@ -205,7 +207,7 @@ export function CleanupModal({
             >
               {tr(
                 "collection.junk_remove",
-                { n: junk.found.toLocaleString() },
+                { n: formatNumber(junk.found) },
                 "Remove {n} files",
               )}
             </Button>
@@ -217,7 +219,7 @@ export function CleanupModal({
           {tr(
             "collection.junk_removed",
             {
-              n: cleaned.removed.toLocaleString(),
+              n: formatNumber(cleaned.removed),
               size: formatCollectionBytes(cleaned.freed),
             },
             "Removed {n} files, {size} freed.",

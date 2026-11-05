@@ -114,16 +114,16 @@ fn a_cross_device_refusal_carries_its_code_and_the_console_message() {
 fn the_record_holds_no_home_path_no_address_and_no_source_path() {
     let mut s = failed_state(
         None,
-        "open 7z /Users/yunpengl/Games/Secret Game.7z: connect 192.168.86.99:9021 refused; also C:\\Users\\bob\\x.zip and /home/alice/y",
+        "open 7z /Users/alice/Games/Secret Game.7z: connect 192.0.2.99:9021 refused; also C:\\Users\\bob\\x.zip and /home/alice/y",
     );
     s["dest"] = "/data/homebrew/My Private Game Folder".into();
-    s["src"] = "/Users/yunpengl/Games/Secret".into();
+    s["src"] = "/Users/alice/Games/Secret".into();
     let mut notes = ava1_notes();
-    notes["console_line"] = "from 10.0.0.5 saved /Users/yunpengl/x".into();
+    notes["console_line"] = "from 10.0.0.5 saved /Users/alice/x".into();
     let r = build_record(Uuid::new_v4(), "7z", &s, Some(&notes), 5);
     let text = serde_json::to_string(&r).unwrap();
     for banned in [
-        "yunpengl",
+        "alice",
         "/Users",
         "/home",
         "bob",

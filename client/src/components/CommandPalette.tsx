@@ -261,6 +261,9 @@ function useCommands(close: () => void, open: boolean): Command[] {
           close();
         },
       },
+      // Plain http has no navigator.clipboard, and nothing else can read it.
+      ...(typeof navigator !== "undefined" && navigator.clipboard
+        ? [
       {
         id: "conn:paste-host",
         label: tr(
@@ -269,7 +272,7 @@ function useCommands(close: () => void, open: boolean): Command[] {
           "Paste host from clipboard",
         ),
         keywords: ["ip", "address", "connect"],
-        group: "Connection",
+        group: "Connection" as const,
         hint: tr(
           "cmdpalette_paste_host_hint",
           undefined,
@@ -325,6 +328,8 @@ function useCommands(close: () => void, open: boolean): Command[] {
           close();
         },
       },
+          ]
+        : []),
       ...pinCommands,
       // The Collection's games, each to its page. Listed only when searching.
       ...games.map(
@@ -574,7 +579,7 @@ export function CommandPalette() {
                       tabIndex={-1}
                       onMouseEnter={() => setActiveIdx(flatIdx)}
                       onClick={() => void c.run()}
-                      className={`flex w-full items-center gap-2 rounded-full px-4 py-2 text-left text-sm ${
+                      className={`flex w-full items-center gap-2 rounded-full px-4 py-2 text-start text-sm ${
                         isActive
                           ? "bg-[var(--color-accent-soft)] font-medium text-[var(--color-text)]"
                           : "hover:bg-[var(--color-surface-3)]"

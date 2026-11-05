@@ -28,6 +28,7 @@
 #include <unistd.h>
 
 #include "ps5_firmware.h"
+#include "sigpipe_guard.h"
 #include "vinput_relay.h"
 
 #ifndef VINPUT_PS5
@@ -102,7 +103,7 @@ static int vps5_launch(void *ctx) {
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &to, sizeof to);
     }
     while (n) {
-        ssize_t w = send(fd, b, n, 0);
+        ssize_t w = send(fd, b, n, MSG_NOSIGNAL);
         if (w < 0 && errno == EINTR) continue;
         if (w <= 0) {
             close(fd);

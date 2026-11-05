@@ -125,6 +125,15 @@ fn basename(src: &str) -> Result<&str> {
     if name.is_empty() || name == "." || name == ".." || name.contains('\\') {
         return Err(anyhow!("{src:?} has no usable file name"));
     }
+    // Written on THIS computer, whatever it is: the same rule the entries inside get from
+    // `check_shape`. On Windows `CON` is a device, `a:b` a stream and `x.` another name.
+    if let Some(why) = host_unsafe_component(name) {
+        return Err(UploadFailure {
+            reason: "ava1_bad_manifest".into(),
+            detail: format!("{name:?} cannot be saved on this computer: {why}"),
+        }
+        .into());
+    }
     Ok(name)
 }
 
@@ -1057,6 +1066,23 @@ mod tests {
         assert_eq!(attempt_id(id, 0), id);
         assert_ne!(attempt_id(id, 1), id);
         assert_ne!(attempt_id(id, 1), attempt_id(id, 2));
+    }
+
+    /// Legal on the PS5; a device, a stream or another name once written on Windows.
+    #[test]
+    fn basename_refuses_a_root_name_this_computer_cannot_hold() {
+        for src in [
+            "/data/CON",
+            "/data/aux.dat",
+            "/data/x.",
+            "/data/a:b",
+            "/data/x ",
+        ] {
+            let e = basename(src).unwrap_err();
+            let f = e.downcast_ref::<UploadFailure>().expect(src);
+            assert_eq!(f.reason, "ava1_bad_manifest", "{src}");
+        }
+        assert_eq!(basename("/data/game.exfat").unwrap(), "game.exfat");
     }
 
     #[test]

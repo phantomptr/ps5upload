@@ -125,6 +125,8 @@ export function shortLabel(kind: TaskKind): string {
       return "Payloads";
     case "app-update":
       return "App update";
+    case "console-task":
+      return "On the PS5";
     default:
       return "Library";
   }

@@ -57,9 +57,13 @@ function currentDoc(): FullscreenDoc {
   return document as unknown as FullscreenDoc;
 }
 
-/** The PS5's own browser (its user agent names the console). */
+/**
+ * The console's own browser: its user agent names a PlayStation, however the firmware spells the
+ * rest ("PlayStation; PlayStation 5/13.60", "PlayStation 5 13.60"). The one test the page uses for
+ * "this is the console itself": ○ leaves the page, Upload is not offered, full screen by itself.
+ */
 export function isPs5Browser(ua: string = typeof navigator !== "undefined" ? navigator.userAgent : ""): boolean {
-  return ua.includes("PlayStation 5");
+  return /PlayStation/i.test(ua);
 }
 
 /** Which API the browser has: the standard one, WebKit's prefixed one, or none. */

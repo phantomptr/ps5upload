@@ -23,6 +23,14 @@ static int failures = 0;
 static void test_parse(void) {
     inst_request_t r;
 
+    /* A web page cannot drive the port. A daemon reads one line per connection, and what a browser
+     * sends first is its request line, with any quote in the URL as %22, so a body it could post is
+     * never looked at. */
+    const char *from_page = "POST /?{%22op%22:%22stop%22} HTTP/1.1\r";
+    inst_parse_request(from_page, strlen(from_page), &r);
+    CHECK(r.error != NULL);
+    CHECK(r.op == INST_OP_UNKNOWN);
+
     /* hello */
     inst_parse_request("{\"op\":\"hello\"}", 14, &r);
     CHECK(r.error == NULL);
@@ -77,7 +85,18 @@ static void test_parse(void) {
     CHECK(r.op == INST_OP_JOB);
     CHECK(strcmp(r.job, "1758800000-3") == 0);
 
-    /* stop */
+    /* stop, plain and forced: an older engine's request never reads as forced */
+    {
+        const char *forced = "{\"op\":\"stop\",\"force\":true}";
+        inst_parse_request(forced, strlen(forced), &r);
+        CHECK(r.error == NULL && r.op == INST_OP_STOP && r.force == 1);
+        const char *not_forced = "{\"op\":\"stop\",\"force\":false}";
+        inst_parse_request(not_forced, strlen(not_forced), &r);
+        CHECK(r.error == NULL && r.op == INST_OP_STOP && r.force == 0);
+        const char *as_value = "{\"op\":\"stop\",\"note\":\"force\"}";
+        inst_parse_request(as_value, strlen(as_value), &r);
+        CHECK(r.error == NULL && r.op == INST_OP_STOP && r.force == 0);
+    }
     inst_parse_request("{\"op\":\"stop\"}", 13, &r);
     CHECK(r.error == NULL && r.op == INST_OP_STOP);
 
@@ -201,6 +220,33 @@ static void test_url_build(void) {
     CHECK(strcmp(url, "http://127.0.0.1:40123/1758800000-1/Game%20Name.pkg") == 0);
 }
 
+static void test_serve_name(void) {
+    /* A short name is served as itself; the URL fits Sony's 127-byte limit. */
+    const char *attempt = "1758800000-12";
+    char url[256];
+    const char *n = inst_loopback_serve_name(attempt, "UP0001-CUSA00001_00-GAME000000000001.pkg");
+    CHECK(strcmp(n, "UP0001-CUSA00001_00-GAME000000000001.pkg") == 0);
+    /* Ten CJK characters + .pkg encode to 94 bytes: past what the URL can carry. */
+    const char *cjk = "\xE6\xB8\xB8\xE6\x88\x8F\xE6\xB8\xB8\xE6\x88\x8F\xE6\xB8\xB8\xE6\x88\x8F"
+                      "\xE6\xB8\xB8\xE6\x88\x8F\xE6\xB8\xB8\xE6\x88\x8F.pkg";
+    n = inst_loopback_serve_name(attempt, cjk);
+    CHECK(strcmp(n, "package.pkg") == 0);
+    int len = inst_build_loopback_url(url, sizeof(url), 65535, attempt, n);
+    CHECK(len > 0 && len <= INST_INSTALL_URI_MAX);
+    /* The longest job id the daemon makes still leaves room for the short name. */
+    len = inst_build_loopback_url(url, sizeof(url), 65535, "99999999999999999999-4294967295", n);
+    CHECK(len > 0 && len <= INST_INSTALL_URI_MAX);
+    /* Right at the limit it keeps its name, one past it does not. */
+    char exact[128];
+    int room = INST_INSTALL_URI_MAX - (int)strlen("http://127.0.0.1:65535/") - (int)strlen(attempt) - 1;
+    memset(exact, 'a', sizeof(exact));
+    exact[room] = '\0';
+    CHECK(inst_loopback_serve_name(attempt, exact) == exact);
+    exact[room] = 'a';
+    exact[room + 1] = '\0';
+    CHECK(strcmp(inst_loopback_serve_name(attempt, exact), "package.pkg") == 0);
+}
+
 static void test_network_class(void) {
     CHECK(inst_is_network_class(0x80431068u) == 1);
     CHECK(inst_is_network_class(0x80431084u) == 1);
@@ -209,6 +255,25 @@ static void test_network_class(void) {
     CHECK(inst_is_network_class(0x80A30004u) == 0);
     CHECK(inst_is_network_class(0x80B2150Fu) == 0);
     CHECK(inst_is_network_class(0u) == 0);
+}
+
+/* A stalled job used to block every later install until a reboot: it never completes, and only
+ * completion retired it. */
+static void test_job_released(void) {
+    CHECK(inst_job_released(100, 100, 0.0) == 1);      /* read in full */
+    CHECK(inst_job_released(0, 0, 0.0) == 1);          /* nothing to read */
+    CHECK(inst_job_released(50, 100, 0.0) == 0);       /* being read */
+    CHECK(inst_job_released(50, 100, INST_JOB_STALLED_S - 0.1) == 0);
+    CHECK(inst_job_released(50, 100, INST_JOB_STALLED_S) == 1);
+    /* through the two rules that use it */
+    CHECK(inst_admit_install(INST_JOB_SERVING, inst_job_released(50, 100, 1.0)) == 0);
+    CHECK(inst_admit_install(INST_JOB_SERVING, inst_job_released(50, 100, 301.0)) == 1);
+    CHECK(inst_stop_allowed(0, INST_JOB_SERVING, inst_job_released(50, 100, 1.0)) == 0);
+    CHECK(inst_stop_allowed(0, INST_JOB_SERVING, inst_job_released(50, 100, 301.0)) == 1);
+    CHECK(inst_stop_allowed(1, INST_JOB_SERVING, inst_job_released(50, 100, 301.0)) == 0);
+    /* forced: only a call in flight refuses */
+    CHECK(inst_stop_forced_allowed(0) == 1);
+    CHECK(inst_stop_forced_allowed(1) == 0);
 }
 
 static void test_boot_wait(void) {
@@ -241,9 +306,11 @@ int main(void) {
     test_pathsafe();
     test_rewrite();
     test_url_build();
+    test_serve_name();
     test_network_class();
     test_boot_wait();
     test_admission();
+    test_job_released();
     printf("installer_selftest: %s\n", failures == 0 ? "ALL PASS" : "FAILED");
     return failures == 0 ? 0 : 1;
 }

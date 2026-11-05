@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // The local gate. Quick repo checks run first, one after another; then three independent lanes
 // (engine, desktop, client) run side by side, each with its own log under output/validate/, since
-// they share no build directory and the engine tests mostly sit in sleeps. A lane that fails
+// the engine tests mostly sit in sleeps. (The desktop lane's first step builds in engine/target, so
+// it waits on cargo's lock while the engine lane builds there.) A lane that fails
 // prints the tail of its log; the others are left to finish so one run reports every failure.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -98,16 +99,25 @@ function androidNdkEnv() {
 
 runInline("version sync", "node", ["scripts/update-version.js", "--check"]);
 runInline("script syntax", "node", ["scripts/check-scripts.mjs"]);
-runInline("linux launcher", "sh", ["scripts/release/linux-launcher-selftest.sh"]);
-runInline("script inventory", "node", ["scripts/audit-scripts.mjs"]);
-runInline("i18n coverage", "node", ["scripts/i18n-coverage.mjs"]);
+// Plain sh, which a Windows host may not have on PATH (CI runs these on Linux).
+if (isWin) {
+  process.stdout.write("\n==> linux launcher, Sony API lock, per-console isolation — skipped on Windows\n");
+} else {
+  runInline("linux launcher", "sh", ["scripts/release/linux-launcher-selftest.sh"]);
+  runInline("Sony API lock", "sh", ["scripts/check-sony-api-lock.sh", "payload/src"]);
+  runInline("per-console isolation", "sh", ["scripts/check-per-console-isolation.sh"]);
+}
+runInline("script inventory", "node", ["scripts/audit-scripts.mjs", "--strict"]);
+runInline("i18n coverage", "node", ["scripts/i18n-coverage.mjs", "--strict"]);
+runInline("i18n orphan keys", "node", ["scripts/find-orphan-i18n.mjs", "--max", "0"]);
+runInline("dead exports", "node", ["scripts/check-dead-exports.mjs"]);
 runInline("git whitespace", "git", ["diff", "--check"]);
 
 const engineSteps = [
   step("engine fmt", "cargo", ["fmt", "--all", "--", "--check"], engineDir),
   // The RAR tests start the separate ps5upload-unrar program from the target directory.
   step("RAR helper (ps5upload-unrar)", "cargo", ["build", "-p", "ps5upload-unrar"], engineDir),
-  step("engine clippy", "cargo", ["clippy", "--workspace", "--", "-D", "warnings"], engineDir),
+  step("engine clippy", "cargo", ["clippy", "--workspace", "--locked", "--", "-D", "warnings"], engineDir),
   ...(nextest
     ? [
         step("engine tests (nextest)", "cargo", ["nextest", "run", "--workspace", "--exclude", "ps5upload-ctest", "--no-fail-fast"], engineDir),
@@ -125,9 +135,10 @@ const engineSteps = [
 
 // clippy --all-targets type-checks everything `cargo check --all-targets` did.
 const desktopSteps = [
+  step("desktop fmt", "cargo", ["fmt", "--all", "--", "--check"], desktopDir),
   // The desktop build embeds the RAR helper next to the engine (client/src-tauri/build.rs).
   step("RAR helper for the desktop build", "cargo", ["build", "--release", "-p", "ps5upload-unrar"], engineDir),
-  step("desktop clippy", "cargo", ["clippy", "--all-targets", "--", "-D", "warnings"], desktopDir),
+  step("desktop clippy", "cargo", ["clippy", "--all-targets", "--locked", "--", "-D", "warnings"], desktopDir),
   step("desktop tests", "cargo", ["test"], desktopDir),
 ];
 
@@ -166,6 +177,9 @@ if (failures.length) {
   process.stderr.write(`\nvalidate-repo: ${failures.map((f) => `${f.name}: ${f.label}`).join("; ")} failed\n`);
   process.exit(failures[0].code || 1);
 }
+
+// After the lanes: it rewrites two files the engine lane compiles in.
+if (!skipBuild) runInline("embedded guest and pad pages", "node", ["scripts/check-embedded-pages.mjs"]);
 
 if (full) {
   runInline("payload ELF build/validation", "make", ["test-payload"]);

@@ -28,6 +28,7 @@ import {
   type PackTransport,
 } from "../../lib/backportPack";
 import { trackTask } from "../../state/trackTask";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 const gb = (bytes: number) =>
   bytes >= 1 << 30
@@ -85,9 +86,10 @@ export function BackportPackCard({
   const browse = useCallback(async () => {
     // Tauri-only: a browser file picker cannot hand back a real filesystem
     // path, and the engine needs one. The web build types it instead.
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    const picked = await open({ directory: true, multiple: false });
-    if (typeof picked === "string") setPath(picked);
+    // pickPath, not the system dialog: a phone has no folder dialog at all.
+    const { pickPath } = await import("../../lib/pickPath");
+    const picked = await pickPath({ mode: "folder" });
+    if (picked) setPath(picked);
   }, []);
 
   const inspect = useCallback(async () => {
@@ -132,7 +134,7 @@ export function BackportPackCard({
         }),
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(null);
     }
@@ -145,7 +147,7 @@ export function BackportPackCard({
     setNote(null);
     try {
       const done = await trackTask(
-        { kind: "fakelib-import", origin: "backport", label: "Install backport pack" },
+        { kind: "fakelib-import", origin: "backport", label: tr("backport_task_install_pack", undefined, "Install backport pack") },
         () => applyPackInstall(plan, transport),
       );
       setRecord(done);
@@ -162,7 +164,7 @@ export function BackportPackCard({
         "Pack installed. The eboot came pre-patched, so no SDK patch was applied."));
     } catch (e) {
       if (e instanceof PackInstallError) setRecord(e.record);
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(null);
     }
@@ -177,7 +179,7 @@ export function BackportPackCard({
       setRecord(null);
       setNote(tr("pack_undone", undefined, "Put back what the pack replaced."));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(null);
     }

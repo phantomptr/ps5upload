@@ -6,17 +6,13 @@ import { Button, Modal } from "../../components";
 import { formatBytes } from "../../lib/format";
 import { planMove, quickDestinations, recentDestinations } from "../../lib/moveTo";
 import { useTr } from "../../state/lang";
+import { consoleParentDir as parentDir } from "../../lib/consolePath";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 export interface MoveItem {
   path: string;
   name: string;
   size: number;
-}
-
-function parentDir(p: string): string {
-  if (p === "/" || p === "") return "/";
-  const i = p.lastIndexOf("/");
-  return i <= 0 ? "/" : p.slice(0, i);
 }
 
 /** Pick where to move the selection, without browsing there first. Says before anything runs
@@ -70,7 +66,7 @@ export function MoveToDialog({
       .catch((e) => {
         if (!cancelled) {
           setDirs([]);
-          setListError(e instanceof Error ? e.message : String(e));
+          setListError(humanizeCaught(e));
         }
       });
     return () => {
@@ -110,7 +106,7 @@ export function MoveToDialog({
       key={key}
       type="button"
       onClick={() => setDest(path)}
-      className={`border rounded-[var(--radius-card)] transition-[background-color,border-color,box-shadow] flex w-full items-center gap-2 px-3.5 py-2.5 text-left text-xs ${
+      className={`border rounded-[var(--radius-card)] transition-[background-color,border-color,box-shadow] flex w-full items-center gap-2 px-3.5 py-2.5 text-start text-xs ${
         dest === path
           ? "border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] ring-1 ring-[color-mix(in_srgb,var(--color-accent)_30%,transparent)]"
           : "border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-raised)]"
@@ -213,7 +209,7 @@ export function MoveToDialog({
                   key={name}
                   type="button"
                   onClick={() => setDest(dest === "/" ? `/${name}` : `${dest}/${name}`)}
-                  className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-[var(--color-surface-3)]"
+                  className="flex w-full items-center gap-2 px-2 py-1.5 text-start text-xs hover:bg-[var(--color-surface-3)]"
                 >
                   <Folder size={14} className="shrink-0 text-[var(--color-muted)]" />
                   <span className="truncate">{name}</span>

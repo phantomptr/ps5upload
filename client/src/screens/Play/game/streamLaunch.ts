@@ -47,6 +47,8 @@ export interface RunnerDeps {
   playingHost: string | null;
   /** A stream is on (any console, any phase). */
   streamingHost: string | null;
+  /** Why the stream stopped or did not start, translated; null when nothing went wrong. */
+  streamError: string | null;
   /** Start (or switch to) the stream with `host`. Resolves once it was asked for. */
   startStream: (host: string) => Promise<void>;
   /** Start the title on the connected console (useGameLaunch's launch). */
@@ -84,6 +86,12 @@ export function useStreamLaunchRunner(d: RunnerDeps) {
       return;
     }
     if (d.playingHost !== pending.host) {
+      // Asked for, and it failed: no stage to wait on any more. (An error from before the request
+      // does not count: the start below clears it.)
+      if (started.current === key && d.streamError) {
+        st.set({ stage: "failed", error: d.streamError });
+        return;
+      }
       if (started.current !== key && d.streamingHost !== pending.host) {
         started.current = key;
         void deps.current.startStream(pending.host);
@@ -109,7 +117,7 @@ export function useStreamLaunchRunner(d: RunnerDeps) {
         launched.current = null;
         started.current = null;
       });
-  }, [pending, helperUp, connectedHost, d.playingHost, d.streamingHost]);
+  }, [pending, helperUp, connectedHost, d.playingHost, d.streamingHost, d.streamError]);
 
   // Waiting on the helper has an end.
   useEffect(() => {

@@ -1,6 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { backupHosts, clampKeep, legacySettings } from "./autoSaveBackup";
+const set = vi.fn();
+vi.mock("../api/saveBackup", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api/saveBackup")>()),
+  saveBackupApi: { set: (...a: unknown[]) => set(...a), view: vi.fn() },
+}));
+
+import { backupHosts, clampKeep, legacySettings, startSaveBackupSync } from "./autoSaveBackup";
+import { useRosterStore } from "./roster";
 import { stampLabel } from "../screens/GameHub/SaveBackupsList";
 
 describe("automatic save backup (engine-run)", () => {
@@ -31,5 +38,39 @@ describe("automatic save backup (engine-run)", () => {
   it("labels a backup's time in UTC", () => {
     expect(stampLabel("2026-10-24_101530")).toBe("2026-10-24 10:15 UTC");
     expect(stampLabel("odd")).toBe("odd");
+  });
+});
+
+describe("giving the engine the console list", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    set.mockReset();
+    useRosterStore.setState({ profiles: [{ host: "10.0.0.2" }] as never });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("tries again by itself when the engine was not up, then stops", async () => {
+    set.mockRejectedValueOnce(new Error("engine not up")).mockRejectedValueOnce(new Error("engine not up")).mockResolvedValue({});
+    const stop = startSaveBackupSync();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(set).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(set).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(set).toHaveBeenCalledTimes(3);
+    expect(set).toHaveBeenLastCalledWith({ add_hosts: ["10.0.0.2"], remove_hosts: [] });
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(set).toHaveBeenCalledTimes(3);
+    stop();
+  });
+
+  it("stops trying when stopped", async () => {
+    set.mockRejectedValue(new Error("engine not up"));
+    const stop = startSaveBackupSync();
+    await vi.advanceTimersByTimeAsync(0);
+    stop();
+    const calls = set.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(set).toHaveBeenCalledTimes(calls);
   });
 });

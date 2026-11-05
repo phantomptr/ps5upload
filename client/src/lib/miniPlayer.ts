@@ -51,8 +51,10 @@ export function miniPlayerVisible(s: {
   enabled: boolean;
   /** Closed with its × until Play is opened again. */
   dismissed: boolean;
+  /** False: the picture is off on this device, so there is nothing to float (the banner stays). */
+  pictureHere?: boolean;
 }): boolean {
-  if (!s.streaming || !s.phase || s.phase === "ended") return false;
+  if (!s.streaming || !s.phase || s.phase === "ended" || s.pictureHere === false) return false;
   // Another window of this app plays it: nothing is drawn here.
   if (s.phase === "moved") return false;
   if (s.pathname === "/play" || s.onScreen) return false;

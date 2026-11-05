@@ -10,12 +10,16 @@
  *
  * Commands that are native-only (local filesystem, host temp-zip, OS APIs)
  * throw `BrowserUnsupportedError` so callers fail loudly in dev rather than
- * silently doing nothing. Feature gating (hiding those buttons in the browser
- * UI) is handled by `isTauriEnv()` checks at the call sites.
+ * silently doing nothing. Hiding those buttons in the browser is up to the call
+ * sites (`isTauriEnv()`), and nothing enforces it: the coverage test only checks
+ * this map's names against the commands.
  */
 
+import { resumeForget, resumeLookup, resumeRemember, type ResumeKey } from "./resumeTxidBrowser";
+import { trStatic } from "./trStatic";
 import { getEngineUrl } from "../state/engine";
 import { consoleAddr } from "./addr";
+import { WORDED_ERROR_CODES } from "./payloadErrors";
 
 // ── Error types ──────────────────────────────────────────────────────────────
 
@@ -25,10 +29,9 @@ import { consoleAddr } from "./addr";
 export class BrowserUnsupportedError extends Error {
   readonly cmd: string;
   constructor(cmd: string) {
-    super(
-      `"${cmd}" requires the Tauri desktop client — it is not available in the browser.` +
-        ` Guard the call site with isTauriEnv() or hide the UI affordance.`,
-    );
+    // Reaches people, and their bug reports: this is for them, not for whoever wrote the call.
+    // The command's name is on the error for a developer.
+    super(trStatic("browser_unsupported", "This needs the desktop app. It does not work in the browser."));
     this.name = "BrowserUnsupportedError";
     this.cmd = cmd;
   }
@@ -98,6 +101,28 @@ export function statusFailureFields(body: string): {
   return out;
 }
 
+/**
+ * The text of a status failure. The engine sends what used to be a plain-text refusal as
+ * `{ error, code }`; that reads as its text, as before. Any other body stays raw: the callers
+ * match tokens in it.
+ */
+export function statusFailureText(body: string): string {
+  try {
+    const o = JSON.parse(body) as Record<string, unknown>;
+    if (
+      o &&
+      typeof o["error"] === "string" &&
+      typeof o["code"] === "string" &&
+      Object.keys(o).length === 2
+    ) {
+      return o["error"];
+    }
+  } catch {
+    /* not JSON: the text itself */
+  }
+  return body.trim();
+}
+
 /** Build a path + optional `?addr=` query, matching the Rust `addr_url()`. */
 function addrUrl(path: string, addr?: string | null): string {
   return addr && addr.length > 0 ? `${path}?addr=${uenc(addr)}` : path;
@@ -131,13 +156,20 @@ const TIMEOUT_STANDARD = 60_000; // 60 s — matches Rust http_client
 const TIMEOUT_LONG = 3_600_000; // 1 h  — matches Rust http_client_long
 
 async function extractEngineError(r: Response): Promise<string> {
-  try {
-    const j = (await r.json()) as Record<string, unknown>;
-    if (j && typeof j["error"] === "string") return j["error"] as string;
-  } catch {
-    /* fall through */
-  }
+  // One read: a body can only be consumed once, so parse the text rather than r.json().
   const text = await r.text().catch(() => "");
+  try {
+    const j = JSON.parse(text) as Record<string, unknown>;
+    if (j && typeof j["error"] === "string") {
+      // A code the app words itself goes in front, as it does through a desktop command.
+      const code = j["code"];
+      return typeof code === "string" && WORDED_ERROR_CODES.has(code)
+        ? `${code}: ${j["error"] as string}`
+        : (j["error"] as string);
+    }
+  } catch {
+    /* plain text: a JSON extractor's rejection, or a reverse proxy's message */
+  }
   return text.trim() || `engine HTTP ${r.status}`;
 }
 
@@ -348,15 +380,16 @@ export async function browserInvoke<T>(
     }
 
     case "ps5_fs_move": {
-      const { addr, from, to, op_id } = args["req"] as {
+      const { addr, from, to, op_id, overwrite } = args["req"] as {
         addr?: string | null;
         from: string;
         to: string;
         op_id?: number;
+        overwrite?: boolean;
       };
       return postJson<T>(
         "/api/ps5/fs/move",
-        { addr, from, to, op_id: op_id ?? 0 },
+        { addr, from, to, op_id: op_id ?? 0, overwrite: overwrite ?? false },
         /*long=*/ true,
       );
     }
@@ -409,12 +442,12 @@ export async function browserInvoke<T>(
         mode: string;
         recursive?: boolean;
       };
-      return postJson<T>("/api/ps5/fs/chmod", {
-        addr,
-        path,
-        mode,
-        recursive: recursive ?? false,
-      });
+      // Long, as the desktop proxy: a recursive chmod runs for up to 10 minutes.
+      return postJson<T>(
+        "/api/ps5/fs/chmod",
+        { addr, path, mode, recursive: recursive ?? false },
+        /*long=*/ true,
+      );
     }
 
     case "ps5_fs_mount": {
@@ -457,7 +490,7 @@ export async function browserInvoke<T>(
         addr?: string | null;
         title_id: string;
       };
-      return postJson<T>("/api/ps5/app/launch", { addr, title_id });
+      return postJson<T>("/api/ps5/app/launch", { addr, title_id }, /*long=*/ true);
     }
 
     case "ps5_app_register": {
@@ -466,11 +499,11 @@ export async function browserInvoke<T>(
         src_path: string;
         patch_drm_type?: boolean | null;
       };
-      return postJson<T>("/api/ps5/app/register", {
-        addr,
-        src_path,
-        patch_drm_type,
-      });
+      return postJson<T>(
+        "/api/ps5/app/register",
+        { addr, src_path, patch_drm_type },
+        /*long=*/ true,
+      );
     }
 
     case "ps5_app_unregister": {
@@ -478,7 +511,7 @@ export async function browserInvoke<T>(
         addr?: string | null;
         title_id: string;
       };
-      return postJson<T>("/api/ps5/app/unregister", { addr, title_id });
+      return postJson<T>("/api/ps5/app/unregister", { addr, title_id }, /*long=*/ true);
     }
 
     // ── Hardware monitoring ─────────────────────────────────────────────────
@@ -646,9 +679,30 @@ export async function browserInvoke<T>(
       })) as T;
     }
 
+    case "resume_txid_lookup":
+      return resumeLookup(args["req"] as ResumeKey) as T;
+    case "resume_txid_remember":
+      resumeRemember(args["req"] as ResumeKey & { tx_id_hex: string; mode?: string });
+      return undefined as T;
+    case "resume_txid_forget":
+      resumeForget(args["req"] as ResumeKey);
+      return undefined as T;
+
+    // The console's own notification, over its management port: the engine sends it.
+    case "toast_push":
+      return postJson<T>("/api/ps5/toast", {
+        addr: args["addr"],
+        title: args["title"],
+        subtitle: args["subtitle"] ?? null,
+        icon: args["icon"] ?? null,
+        action_url: args["actionUrl"] ?? null,
+      });
+
     case "collection_cover_data": {
       const res = await fetch(
-        `${getEngineUrl()}/api/collection/games/${encodeURIComponent(String(args["gameId"] ?? ""))}/cover`,
+        `${getEngineUrl()}/api/collection/games/${encodeURIComponent(String(args["gameId"] ?? ""))}/cover${
+          args["size"] ? `?size=${encodeURIComponent(String(args["size"]))}` : ""
+        }`,
       );
       if (!res.ok) throw new Error(`cover HTTP ${res.status}`);
       const blob = await res.blob();
@@ -836,13 +890,8 @@ export async function browserInvoke<T>(
     case "fpkg_extract_cleanup": {
       return postJson<T>("/api/fpkg/extract/cleanup", { path: args["path"] });
     }
-    case "ffpfsc_compress": {
-      return postJson<T>("/api/ffpfsc/compress", {
-        source: args["source"],
-        output_dir: args["outputDir"],
-        level: args["level"],
-        full_verify: args["fullVerify"] ?? false,
-      });
+    case "workshop_jobs": {
+      return getJson<T>("/api/workshop/jobs");
     }
     case "exfat_build": {
       return postJson<T>("/api/exfat/build", {
@@ -962,14 +1011,7 @@ export async function browserInvoke<T>(
     // Download-then-install: the engine pulls the package to ITS disk, which
     // for the browser build is the machine running the engine, not the one
     // running the browser. Same routes, so the mode works from the web UI.
-    case "pkg_remote_download_start":
-      return postJson<T>("/api/pkg/remote/download/start", {
-        url: args["url"],
-        insecure_tls: args["insecureTls"] ?? false,
-        dest_dir: args["destDir"],
-        keep_name: args["keepName"] ?? false,
-      });
-
+    // (lib/linkDownload.ts starts one over HTTP in both builds.)
     case "pkg_remote_download_status":
       return getJson<T>(
         `/api/pkg/remote/download/status?id=${uenc(args["id"] as string)}`,
@@ -1060,7 +1102,7 @@ export async function browserInvoke<T>(
           ok: false,
           reachable: false,
           engine: true,
-          error: body.trim() || `engine HTTP ${r.status}`,
+          error: statusFailureText(body) || `engine HTTP ${r.status}`,
           // The engine's `{ error, reason, power }`: passed through like probes.rs does.
           ...statusFailureFields(body),
         } as unknown as T;
@@ -1219,10 +1261,15 @@ export async function browserInvoke<T>(
     // ENGINE's own filesystem (e.g. a Docker container's mounted volumes),
     // backing the same in-app picker (LocalPathPicker) Android already uses.
 
-    case "local_list_dir":
-      return getJson<T>(
+    case "local_list_dir": {
+      // The route sends the whole folder; a page is cut from it here, as the command does it.
+      const all = await getJson<unknown[]>(
         `/api/local/list-dir?path=${uenc(args["path"] as string)}`,
       );
+      if (args["limit"] == null) return all as T;
+      const offset = Number(args["offset"] ?? 0);
+      return all.slice(offset, offset + Number(args["limit"])) as T;
+    }
 
     case "local_storage_roots":
       return getJson<T>("/api/local/storage-roots");
@@ -1303,6 +1350,7 @@ export async function browserInvoke<T>(
       return postJson<T>("/api/ps5/health/fix", {
         addr: args["addr"],
         action: args["action"],
+        paths: args["paths"],
       });
 
     case "speed_test_prepare":
@@ -1448,12 +1496,6 @@ export async function browserInvoke<T>(
 
     // ── Users / backup ───────────────────────────────────────────────────────
 
-    case "user_create":
-      return postJson<T>("/api/ps5/users/create", {
-        addr: args["req"]?.addr,
-        name: args["req"]?.name,
-      });
-
     case "user_delete":
       return postJson<T>("/api/ps5/users/delete", {
         addr: args["req"]?.addr,
@@ -1513,20 +1555,6 @@ export async function browserInvoke<T>(
         inner_path: args["innerPath"],
         dest_dir: args["destDir"],
       });
-
-    case "zip_inspect":
-      return postJson<T>(
-        "/api/zip/inspect",
-        { zip_path: args["req"]?.zip_path },
-        /*long=*/ true,
-      );
-
-    case "sevenz_inspect":
-      return postJson<T>(
-        "/api/7z/inspect",
-        { archive_path: args["req"]?.archive_path },
-        /*long=*/ true,
-      );
 
     case "rar_inspect":
       return postJson<T>(
@@ -1639,15 +1667,20 @@ export async function browserInvoke<T>(
         addr: args["req"]?.addr,
         kind: args["req"]?.kind,
         unsafe_read: args["req"]?.unsafe_read,
+        existing: args["req"]?.existing,
       });
 
     case "transfer_dir_diff_preview":
-      return postJson<T>("/api/transfer/dir-diff-preview", {
-        src_dir: args["srcDir"],
-        dest_root: args["destRoot"],
-        addr: args["addr"],
-        excludes: args["excludes"],
-      });
+      return postJson<T>(
+        "/api/transfer/dir-diff-preview",
+        {
+          src_dir: args["srcDir"],
+          dest_root: args["destRoot"],
+          addr: args["addr"],
+          excludes: args["excludes"],
+        },
+        /*long=*/ true,
+      );
 
     // ── Reachability ─────────────────────────────────────────────────────────
 
@@ -1656,6 +1689,141 @@ export async function browserInvoke<T>(
       // engine's, which is on the console's LAN even when the browser is not.
       return getJson<T>(
         qs("/api/ps5/port-check", { ip: args["ip"], port: args["port"] }),
+      );
+
+    // ── Payload Library ──────────────────────────────────────────────────────
+    // The catalogue, its cache and sends run on the engine here, over the engine's own folder,
+    // so an inventory `path` is one the engine can read.
+
+    case "payloads_catalog":
+      return (await getJson<{ payloads: T }>("/api/payloads")).payloads;
+
+    case "payloads_local_inventory":
+      return (await getJson<{ local: T }>("/api/payloads")).local;
+
+    case "payloads_local_path": {
+      const { local } = await getJson<{
+        local: Array<{ payload_id: string; path: string }>;
+      }>("/api/payloads");
+      return (local.find((e) => e.payload_id === args["id"])?.path ?? null) as T;
+    }
+
+    case "payloads_release":
+      return getJson<T>(
+        qs(`/api/payloads/${uenc(args["id"] as string)}/releases/latest`, {
+          force: args["forceRefresh"] ? 1 : undefined,
+        }),
+      );
+
+    case "payloads_releases":
+      return getJson<T>(
+        qs(`/api/payloads/${uenc(args["id"] as string)}/releases`, {
+          force: args["forceRefresh"] ? 1 : undefined,
+        }),
+      );
+
+    case "payloads_download":
+      return postJson<T>(
+        `/api/payloads/${uenc(args["id"] as string)}/download`,
+        { asset_url: args["assetUrl"], version: args["version"] },
+        /*long=*/ true,
+      );
+
+    case "payloads_download_cancel":
+      return (
+        await postJson<{ cancelled: T }>(
+          `/api/payloads/${uenc(args["id"] as string)}/download/cancel`,
+          {},
+        )
+      ).cancelled;
+
+    case "payloads_add_custom_repo":
+      return postJson<T>("/api/payloads/repos", {
+        host: args["host"],
+        owner: args["owner"],
+        name: args["name"],
+        display_name: args["displayName"],
+        asset_hint: args["assetHint"],
+        checksum_file: args["checksumFile"],
+      });
+
+    case "payloads_remove_custom_repo": {
+      const r = await fetch(
+        `${getEngineUrl()}/api/payloads/repos/${uenc(args["id"] as string)}`,
+        { method: "DELETE", signal: AbortSignal.timeout(TIMEOUT_STANDARD) },
+      );
+      if (!r.ok) throw new Error(await extractEngineError(r));
+      return ((await r.json()) as { removed: T }).removed;
+    }
+
+    case "payload_send":
+      return postJson<T>(
+        "/api/payload/send",
+        { host: args["ip"], path: args["path"], port: args["port"] ?? undefined },
+        /*long=*/ true,
+      );
+
+    case "companion_probe":
+      return getJson<T>(qs("/api/ps5/companions", { addr: args["host"] as string }));
+
+    case "discover_ps5":
+      return postJson<T>(
+        "/api/discover",
+        {
+          timeout_ms:
+            args["timeoutSecs"] == null ? undefined : (args["timeoutSecs"] as number) * 1000,
+        },
+        /*long=*/ true,
+      );
+
+    // ── Console diagnostics ──────────────────────────────────────────────────
+
+    case "shell_run_cmd":
+      return postJson<T>(
+        "/api/ps5/shell/run",
+        {
+          addr: args["addr"],
+          cmd: args["cmd"],
+          session_id: args["sessionId"],
+          cwd: args["cwd"],
+          timeout_s: args["timeoutSecs"],
+        },
+        /*long=*/ true,
+      );
+
+    case "appdb_query_get":
+      return getJson<T>(qs("/api/ps5/appdb", { addr: args["addr"] as string }));
+
+    case "proc_modules_get":
+      return getJson<T>(
+        qs(`/api/ps5/process/${Number(args["pid"] ?? 0)}/modules`, {
+          addr: args["addr"] as string,
+        }),
+      );
+
+    case "fs_blake3_hash":
+      return postJson<T>(
+        "/api/ps5/fs/hash",
+        { addr: args["addr"], path: args["path"], algo: "blake3" },
+        /*long=*/ true,
+      );
+
+    case "crc32_file_get":
+      return postJson<T>(
+        "/api/ps5/fs/hash",
+        { addr: args["addr"], path: args["path"], algo: "crc32" },
+        /*long=*/ true,
+      );
+
+    case "heal_appmeta":
+      return postJson<T>(
+        "/api/ps5/appmeta/heal",
+        {
+          addr: args["addr"],
+          title_id: args["titleId"],
+          source_path: args["sourcePath"],
+        },
+        /*long=*/ true,
       );
 
     // ── Native-only / unsupported ────────────────────────────────────────────

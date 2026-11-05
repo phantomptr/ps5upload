@@ -6,3 +6,6 @@
 # LF bytes stable so the pinned upstream SHA-256 remains verifiable and its
 # Unix shebang remains executable from Git Bash/WSL.
 scripts/ps5-sdk/prospero-nid text eol=lf
+
+# The verbatim GPL text: scripts/check-scripts.mjs pins its SHA-256.
+LICENSE text eol=lf

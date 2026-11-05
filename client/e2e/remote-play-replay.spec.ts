@@ -93,7 +93,15 @@ async function makeSnapshot(page: Page): Promise<number[]> {
     // Interleaved by time, as the session receives them.
     const all = [
       ...video.map((v) => ({ kind: 1, t: v.t, key: v.key, data: v.data })),
-      ...audio.map((a) => ({ kind: 4, t: a.t, key: undefined as boolean | undefined, data: a.data })),
+      // As the session carries them: each frame's u16 index first, crossing a high byte that an
+      // Opus decoder would choke on.
+      ...audio.map((a, i) => {
+        const n = 0xc000 + i;
+        const data = new Uint8Array(a.data.length + 2);
+        data.set([n >> 8, n & 255]);
+        data.set(a.data, 2);
+        return { kind: 4, t: a.t, key: undefined as boolean | undefined, data };
+      }),
     ].sort((a, b) => a.t - b.t);
     for (const f of all) rec(f.kind, f.t + 5_000_000, f.data, f.kind === 1 ? f.key : undefined);
     return parts;

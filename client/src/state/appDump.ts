@@ -4,6 +4,7 @@ import { appDump, type AppDumpRequest, type AppDumpResult } from "../api/appDump
 import { fsOpCancel, fsOpStatus } from "../api/ps5";
 import { transferAddr } from "../lib/addr";
 import { beginTask } from "./trackTask";
+import { trStatic } from "../lib/trStatic";
 
 export type DumpState = "waiting" | "running" | "done" | "failed" | "cancelled";
 
@@ -41,7 +42,7 @@ async function runNext(host: string): Promise<void> {
   if (!job) return;
   patch(job.id, { state: "running" });
   const addr = transferAddr(host);
-  const task = beginTask({ kind: "app-dump", origin: "games", label: `Dump ${job.name}`, consoleId: host });
+  const task = beginTask({ kind: "app-dump", origin: "games", label: trStatic("task_dump", "Dump {name}", { name: job.name }), consoleId: host });
   let finished = false;
   const poller = (async () => {
     while (!finished) {

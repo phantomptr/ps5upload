@@ -593,6 +593,32 @@ body {
   }
 }
 
+/* The shell clear of the system's insets where the sidebar layout shows on a device that has
+ * them: an iPad's status bar, a phone held sideways (notch on the side, a 3-button nav bar on
+ * the side). `.shell-safe-x` wraps the sidebar and the content. */
+.shell-safe-x {
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
+}
+@media (min-width: 768px) {
+  .shell-sidebar {
+    padding-top: var(--safe-top);
+  }
+}
+/* A phone held sideways is about 390 px tall: no room for the status bar and the sidebar's tall
+ * header. Same test as PHONE_LANDSCAPE_QUERY (screens/Play/immersive.ts). */
+@media (min-width: 768px) and (pointer: coarse) and (orientation: landscape) and (max-height: 520px) {
+  .shell-statusbar {
+    display: none !important;
+  }
+  .shell-safe-x {
+    padding-bottom: var(--safe-bottom);
+  }
+  .shell-sidebar > :first-child {
+    height: 3.5rem;
+  }
+}
+
 /* Sidebar nav item: a pill. Selected = a tinted row with an accent icon. */
 .nav-pill {
   color: var(--color-text);
@@ -1064,26 +1090,35 @@ body {
  * even when the device reports 0 (older Android). Use these on any edge
  * that touches the viewport bezel: top bars, bottom navs, drawer sides,
  * modal sheets, full-bleed lists. */
-.safe-top { padding-top: env(safe-area-inset-top); }
+.safe-top { padding-top: var(--safe-top); }
 /* The bottom safe area. env() where the browser reports it; otherwise the
    value the Android shell hands the page (lib/androidInsets.ts). Android
    WebView reports safe-area-inset-bottom as 0 for the navigation bar even when
    the app draws edge-to-edge — measured: top 49px, bottom 0px — which put the
    bottom tab bar under the gesture bar. */
-:root { --safe-bottom: max(env(safe-area-inset-bottom), var(--nav-inset-bottom, 0px)); }
+:root {
+  --safe-bottom: max(env(safe-area-inset-bottom), var(--nav-inset-bottom, 0px));
+  --safe-top: max(env(safe-area-inset-top), var(--sys-inset-top, 0px));
+  --safe-left: max(env(safe-area-inset-left), var(--sys-inset-left, 0px));
+  --safe-right: max(env(safe-area-inset-right), var(--sys-inset-right, 0px));
+}
 .safe-bottom { padding-bottom: var(--safe-bottom); }
-.safe-left { padding-left: env(safe-area-inset-left); }
-.safe-right { padding-right: env(safe-area-inset-right); }
+/* Keyboard up in the Android app (lib/androidInsets.ts): the page has been resized to what is left
+   of the screen, and these fixed bars would take up a good part of it. */
+html[data-keyboard] [data-bottom-nav],
+html[data-keyboard] [data-testid="activity-pill"] { display: none !important; }
+.safe-left { padding-left: var(--safe-left); }
+.safe-right { padding-right: var(--safe-right); }
 .safe-pad {
-  padding-top: env(safe-area-inset-top);
+  padding-top: var(--safe-top);
   padding-bottom: var(--safe-bottom);
-  padding-left: env(safe-area-inset-left);
-  padding-right: env(safe-area-inset-right);
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
 }
 /* Fixed-height chrome that needs to account for the inset in its height
  * (bottom nav = 56px + inset, top bar = 44px + inset). */
 .h-bottom-nav { height: calc(56px + var(--safe-bottom)); }
-.h-top-bar { height: calc(44px + env(safe-area-inset-top)); }
+.h-top-bar { height: calc(44px + var(--safe-top)); }
 
 /* ── Responsive width safety net ──────────────────────────────────────────
  * Hard requirement: content must always fit the viewport WIDTH (vertical
@@ -1209,12 +1244,23 @@ input[type="radio"] {
   border: 1px solid var(--glass-edge);
   background: var(--color-surface-raised);
   box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.06);
-  padding: 0.45rem 0.9rem;
-  font-size: 0.875rem;
   color: var(--color-text);
   transition:
     border-color 0.15s ease,
     box-shadow 0.15s ease;
+}
+/* Size only, in a layer so a utility on the field wins: unlayered rules outrank every @layer rule,
+ * which left `text-xs` or `py-1` on an <Input> or <Select> silently doing nothing. */
+@layer components {
+  .input,
+  .select {
+    padding: 0.45rem 0.9rem;
+    font-size: 0.875rem;
+  }
+  .input-sm {
+    padding: 0.25rem 0.7rem;
+    font-size: 0.75rem;
+  }
 }
 :root:is([data-theme="light"], [data-theme="peach"]) .input,
 :root:is([data-theme="light"], [data-theme="peach"]) .select {
@@ -1231,18 +1277,11 @@ textarea.input {
 .input::placeholder {
   color: var(--color-muted);
 }
-.input-sm {
-  padding: 0.25rem 0.7rem;
-  font-size: 0.75rem;
-}
 
 /* Touch-target floor for form controls (docs/v5-mobile-design.md §4.1).
  *
- * Applied here rather than as a Tailwind utility on each component: these
- * base classes are UNLAYERED css and set the `padding` shorthand, so a
- * layered `min-h-*` utility loses the cascade to them (the same trap that
- * made Input's leftIcon render on top of its text). A plain rule in the
- * same layer wins reliably.
+ * Unlayered, so a smaller height or padding utility on one field can't take
+ * it below the floor.
  *
  * 767px is the md breakpoint — the boundary the rest of the app already
  * uses to mean "mobile". Desktop density is untouched. */
@@ -1258,8 +1297,6 @@ textarea.input {
   border-radius: var(--radius-control);
   border: 1px solid var(--glass-edge);
   background: var(--color-surface-raised);
-  padding: 0.45rem 0.9rem;
-  font-size: 0.875rem;
   color: var(--color-text);
   transition:
     border-color 0.15s ease,
@@ -1382,10 +1419,10 @@ select option {
  * Phones: 40% of the width, clear of the top bar, the bottom tab bar and the system's insets.
  * Wider windows: 320 px, clear of the top bar and the status bar. */
 .rp-mini {
-  --mini-top: calc(env(safe-area-inset-top) + 4.25rem);
+  --mini-top: calc(var(--safe-top) + 4.25rem);
   --mini-bottom: calc(var(--safe-bottom) + 5.5rem);
-  --mini-left: calc(env(safe-area-inset-left) + 0.75rem);
-  --mini-right: calc(env(safe-area-inset-right) + 0.75rem);
+  --mini-left: calc(var(--safe-left) + 0.75rem);
+  --mini-right: calc(var(--safe-right) + 0.75rem);
   width: min(max(140px, 40vw), calc(100vw - 1.5rem));
 }
 @media (min-width: 768px) {

@@ -18,6 +18,7 @@ vi.mock("../state/fpkgConversion", () => ({
         pipeline = { phase: "done", packagePath: "/out/Game.ffpfsc" };
       },
       cancel: async () => {},
+      attachRunning: async () => {},
     }),
     subscribe: () => () => {},
   },
@@ -51,8 +52,19 @@ describe("the Convert queue's runner (bug: a queued image came out as a .pkg)", 
     await flush();
     expect(calls).toHaveLength(1);
     expect(calls[0].kind).toBe("image");
-    // source, outputDir, compress, format, no upload, no LZ4 packs, no password, no keep-both
-    expect(calls[0].args).toEqual(["/games/Game-app", undefined, true, "ffpfs", undefined, undefined, undefined, undefined]);
+    // source, outputDir, compress, format, no upload, no LZ4 packs, no password, no keep-both,
+    // and no choices of its own: the current settings apply
+    expect(calls[0].args).toEqual([
+      "/games/Game-app",
+      undefined,
+      true,
+      "ffpfs",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { fullVerify: undefined, imageLevel: undefined },
+    ]);
     const item = useConvertQueue.getState().items[0];
     expect(item.status).toBe("done");
     expect(item.packagePath).toBe("/out/Game.ffpfsc");
@@ -101,5 +113,47 @@ describe("the Convert queue's runner (bug: a queued image came out as a .pkg)", 
     expect(calls).toHaveLength(0);
     expect(useConvertQueue.getState().items[0].status).toBe("pending");
     useConvertQueue.getState().stop();
+  });
+
+  it("#669: a queued game is built with its own choices, not whatever is set now", async () => {
+    useConvertQueue.getState().add({
+      source: "/games/Own-app",
+      outputDir: "  /mine/out  ",
+      keepBoth: true,
+      compression: "stored",
+      build: { kind: "image", format: "ffpkg", compress: true },
+      fullVerify: true,
+      imageLevel: "smallest",
+      then: "keep",
+      host: null,
+    });
+    await useConvertQueue.getState().start();
+    await flush();
+    expect(calls[0].args).toEqual([
+      "/games/Own-app",
+      "/mine/out",
+      true,
+      "ffpkg",
+      undefined,
+      undefined,
+      undefined,
+      true,
+      { fullVerify: true, imageLevel: "smallest" },
+    ]);
+  });
+
+  it("#669: a game changed to an image while it waited still uploads, to the destination set now", async () => {
+    useConvertQueue.getState().add({
+      source: "/games/Changed-app",
+      compression: "balanced",
+      build: { kind: "image", format: "exfat", compress: false },
+      then: "upload",
+      host: "10.0.0.2",
+    });
+    await useConvertQueue.getState().start();
+    await flush();
+    const plan = calls[0].args[4] as { host: string; subpath: string } | undefined;
+    expect(plan?.host).toBe("10.0.0.2");
+    expect(plan?.subpath).toBeTruthy();
   });
 });

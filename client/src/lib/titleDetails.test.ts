@@ -8,9 +8,10 @@ import {
   patchesSiteUrl,
   platformForTitleId,
   readTitleCache,
-  titleIdFromContentId,
+  findTitleId,
   writeTitleCache,
 } from "./titleDetails";
+import { installWindowStub } from "../test-utils/storage";
 
 // Stub the Tauri `invoke` channel. The title-meta code path goes:
 // titleDetails.ts -> invoke("title_meta_fetch", {url}) -> Rust. The
@@ -28,27 +29,6 @@ vi.mock("./tauriEnv", () => ({ isTauriEnv: () => true }));
 
 function installInvokeStub(impl: typeof invokeImpl) {
   invokeImpl = impl;
-}
-
-function installLocalStorageStub() {
-  const store = new globalThis.Map<string, string>();
-  vi.stubGlobal("window", {
-    localStorage: {
-      getItem: (k: string) => (store.has(k) ? (store.get(k) as string) : null),
-      setItem: (k: string, v: string) => {
-        store.set(k, v);
-      },
-      removeItem: (k: string) => {
-        store.delete(k);
-      },
-      clear: () => store.clear(),
-      key: (i: number) => Array.from(store.keys())[i] ?? null,
-      get length() {
-        return store.size;
-      },
-    },
-  });
-  return store;
 }
 
 /** Skeleton of what the patches sites return for a known title —
@@ -87,20 +67,20 @@ describe("metaSourceForTitleId", () => {
   });
 });
 
-describe("titleIdFromContentId", () => {
+describe("findTitleId", () => {
   it("extracts the title id from a full ContentID", () => {
-    expect(titleIdFromContentId("EP4040-PPSA01342_00-DEADSPACEPS5BB00")).toBe(
+    expect(findTitleId("EP4040-PPSA01342_00-DEADSPACEPS5BB00")).toBe(
       "PPSA01342",
     );
-    expect(titleIdFromContentId("UP0006-CUSA57609_00-CARDEALERSIM0000")).toBe(
+    expect(findTitleId("UP0006-CUSA57609_00-CARDEALERSIM0000")).toBe(
       "CUSA57609",
     );
   });
   it("returns null for headerless / unrecognizable ids", () => {
-    expect(titleIdFromContentId("")).toBeNull();
-    expect(titleIdFromContentId(null)).toBeNull();
-    expect(titleIdFromContentId(undefined)).toBeNull();
-    expect(titleIdFromContentId("EP4040-XX_00")).toBeNull();
+    expect(findTitleId("")).toBeNull();
+    expect(findTitleId(null)).toBeNull();
+    expect(findTitleId(undefined)).toBeNull();
+    expect(findTitleId("EP4040-XX_00")).toBeNull();
   });
 });
 
@@ -118,7 +98,7 @@ describe("platformForTitleId", () => {
 
 describe("title cache", () => {
   beforeEach(() => {
-    installLocalStorageStub();
+    installWindowStub();
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -220,7 +200,7 @@ describe("parsePatchesHtml", () => {
 
 describe("fetchTitleInfo", () => {
   beforeEach(() => {
-    installLocalStorageStub();
+    installWindowStub();
   });
   afterEach(() => {
     vi.unstubAllGlobals();

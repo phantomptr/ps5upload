@@ -130,9 +130,9 @@ export function LinkInstallCard({
       </header>
       <p className="mb-3 text-xs text-[var(--color-muted)]">
         {tr(
-          "linkcard.help",
+          "linkcard.help2",
           undefined,
-          "Paste a direct download link to a .pkg. Nothing is copied to the PS5 first, so a 100 GB game needs no spare space there.",
+          "Paste a direct download link to a .pkg. Nothing is copied to the PS5 first, so it needs room only for the installed game, not for a copy as well.",
         )}
       </p>
 
@@ -192,7 +192,7 @@ export function LinkInstallCard({
               aria-checked={on}
               onClick={() => setMode(host, m)}
               data-testid={`link-mode-${m}`}
-              className={`border rounded-[var(--radius-card)] transition-[background-color,border-color,box-shadow] flex flex-col gap-1.5 p-4 text-left transition-colors ${
+              className={`border rounded-[var(--radius-card)] transition-[background-color,border-color,box-shadow] flex flex-col gap-1.5 p-4 text-start transition-colors ${
                 on
                   ? "border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] ring-1 ring-[color-mix(in_srgb,var(--color-accent)_30%,transparent)]"
                   : "border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-raised)]"
@@ -211,7 +211,7 @@ export function LinkInstallCard({
                 </span>
                 {modeTitle(m)}
                 {m === "stream" && (
-                  <span className="ml-auto shrink-0 whitespace-nowrap rounded-full bg-[var(--color-surface-3)] px-1.5 py-0.5 text-[10px] font-normal text-[var(--color-muted)]">
+                  <span className="ms-auto shrink-0 whitespace-nowrap rounded-full bg-[var(--color-surface-3)] px-1.5 py-0.5 text-[10px] font-normal text-[var(--color-muted)]">
                     {tr("linkcard.recommended", undefined, "Recommended")}
                   </span>
                 )}

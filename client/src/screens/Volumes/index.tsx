@@ -550,7 +550,7 @@ export function StorageCard({
           />
         </div>
       )}
-      {((v.writable && !v.is_placeholder && !isPackageDrive) || onEject || onFreeUp) && (
+      {((v.writable && !v.is_placeholder && !isPackageDrive) || onEject || onFreeUp || /^\/mnt\/ext\d+$/.test(v.path)) && (
         <div className="flex flex-wrap gap-2">
           {onFreeUp && (
             <Button
@@ -567,6 +567,15 @@ export function StorageCard({
             <Button variant="secondary" size="sm" onClick={onUseForPackages}>
               {tr("volumes_store_pkg_copies", undefined, "Store package copies here")}
             </Button>
+          )}
+          {/^\/mnt\/ext\d+$/.test(v.path) && (
+            <p className="basis-full text-xs text-[var(--color-muted)]" data-testid="volumes-ext-remove">
+              {tr(
+                "volumes_ext_remove_hint",
+                undefined,
+                "To take this drive out safely, use Storage in the PS5's own Settings.",
+              )}
+            </p>
           )}
           {onEject && (
             <Button

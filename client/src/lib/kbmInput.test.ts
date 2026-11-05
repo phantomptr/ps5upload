@@ -8,7 +8,6 @@ import {
   devicesFor,
   effectiveMode,
   encodeReport,
-  isCycleHotkey,
   KBM_BLOCK_TEXT,
   kbmBlocked,
   kbmButtonView,
@@ -18,8 +17,7 @@ import {
   readKbmStatus,
   routeFor,
   wheelNotches,
-  type KbmMode,
-} from "./kbmInput";
+  type KbmMode, kbmBlockReason } from "./kbmInput";
 
 const BOTH = { mouse: true, keyboard: true };
 const NONE = { mouse: false, keyboard: false };
@@ -126,12 +124,6 @@ describe("routing", () => {
     expect(nextMode("controller", { mouse: true, keyboard: false })).toBe("mixed");
   });
 
-  it("reserves Ctrl+Alt+M, and never the command palette's Ctrl+K", () => {
-    const k = { code: "KeyM", ctrlKey: true, altKey: true, metaKey: false, shiftKey: false };
-    expect(isCycleHotkey(k)).toBe(true);
-    expect(isCycleHotkey({ ...k, altKey: false })).toBe(false);
-    expect(isCycleHotkey({ ...k, code: "KeyK" })).toBe(false);
-  });
 });
 
 /** A sender over fake timers; what it sent, as hex reports or control objects. */
@@ -192,6 +184,21 @@ describe("KbmSender", () => {
     expect(f.sent).toEqual([rep(0, 0, 32767, 0), rep(0, 0, 7233, 0)]);
   });
 
+  // The touchpad's speed is 1.5 and a scaled display's movementX a fraction: this used to loop for
+  // ever on the page's main thread, sending a report each time round.
+  it("sends whole units and keeps a fraction for the next batch", () => {
+    const f = fakeSender();
+    f.s.move(1.5, -0.5);
+    f.s.flush();
+    expect(f.sent).toEqual([rep(0, 0, 1, 0)]);
+    f.s.move(0.5, -0.5);
+    f.s.flush();
+    expect(f.sent.slice(1)).toEqual([rep(0, 0, 1, -1)]);
+    f.s.move(0.25, 0.25);
+    f.s.flush();
+    expect(f.sent.length).toBe(3);
+  });
+
   it("lets go of everything once, and only when something is held", () => {
     const f = fakeSender();
     f.s.releaseAll();
@@ -246,7 +253,7 @@ describe("the stream bar's mode button", () => {
     expect(kbmBlocked({ ...NONE, supported: true, reason: "vinput_needs_loader" })).toBe("needs_loader");
     expect(kbmBlocked({ ...NONE, supported: true, reason: "vinput_companion_failed" })).toBe("companion_failed");
     expect(kbmBlocked({ ...NONE, supported: true, reason: "vinput_unsupported" })).toBe("unavailable");
-    expect(kbmBlocked({ ...NONE, supported: true, reason: "unreachable" })).toBe("unavailable");
+    expect(kbmBlocked({ ...NONE, supported: true, reason: "unreachable" })).toBe("unreachable");
     // A reason does not turn off devices the console says it has.
     expect(kbmBlocked({ ...BOTH, supported: true, reason: "vinput_needs_loader" })).toBeNull();
   });
@@ -284,5 +291,14 @@ describe("the stream bar's mode button", () => {
       icon: "controller",
       blocked: "needs_loader",
     });
+  });
+});
+
+describe("why keyboard and mouse are off", () => {
+  // A stream started from rest is up before the PS5's helper: not an old helper.
+  it("does not blame the helper's version when the helper does not answer", () => {
+    expect(kbmBlockReason({ mouse: false, keyboard: false, supported: false, reason: "unreachable" })).toBe("unreachable");
+    expect(kbmBlockReason({ mouse: false, keyboard: false, supported: false, reason: "helper_old" })).toBe("helper_old");
+    expect(kbmBlockReason({ mouse: false, keyboard: false, supported: false })).toBe("helper_old");
   });
 });

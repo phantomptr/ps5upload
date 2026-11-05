@@ -4,6 +4,7 @@
 // screens/Play/GoLivePanel.tsx.
 
 import { getEngineUrl } from "../state/engine";
+import { ENGINE_LONG_TIMEOUT_MS, engineFetch, type EngineFetchInit } from "./engineFetch";
 
 export type PresetId = "youtube" | "twitch" | "kick" | "facebook" | "custom";
 
@@ -39,6 +40,8 @@ export interface LiveDestination {
   enabled: boolean;
   /** "…abcd": the key's last four characters (the key itself never leaves the engine). */
   key_hint: string;
+  /** The saved key can't be read any more (the key file changed): the site must be added again. */
+  key_lost?: boolean;
   name: string;
   checks?: LiveCheck[];
 }
@@ -57,7 +60,8 @@ export interface LiveProblem {
   message: string;
 }
 
-export type LivePhase = "starting" | "live" | "reconnecting" | "waiting_for_play" | "ended" | "failed";
+/** `stopping`: Stop was pressed and ffmpeg is finishing (a few seconds at most). */
+export type LivePhase = "starting" | "live" | "reconnecting" | "waiting_for_play" | "stopping" | "ended" | "failed";
 
 export interface LiveDestStatus {
   id: string;
@@ -92,6 +96,9 @@ export interface FfmpegStatus {
   installed: boolean;
   version: string;
   supported: boolean;
+  /** There is a download for this system's OS and CPU, but it can't run here (a Docker image):
+   *  the engine needs its own ffmpeg (`PS5UPLOAD_FFMPEG`). */
+  needs_own?: boolean;
   download_bytes: number | null;
   source: string | null;
   install: {
@@ -124,8 +131,8 @@ export class LiveApiError extends Error {
   }
 }
 
-async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(`${getEngineUrl()}${path}`, {
+async function call<T>(path: string, init?: EngineFetchInit): Promise<T> {
+  const r = await engineFetch(`${getEngineUrl()}${path}`, {
     ...init,
     headers: init?.body ? { "content-type": "application/json" } : undefined,
   });
@@ -163,7 +170,7 @@ export const goLiveApi = {
     }),
   remove: (id: string) =>
     call<{ ok: boolean }>(`/api/stream/destinations/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  installFfmpeg: () => call<{ ok: boolean; ffmpeg: FfmpegStatus }>("/api/stream/tools/ffmpeg/install", { method: "POST" }),
+  installFfmpeg: () => call<{ ok: boolean; ffmpeg: FfmpegStatus }>("/api/stream/tools/ffmpeg/install", { timeoutMs: ENGINE_LONG_TIMEOUT_MS, method: "POST" }),
 };
 
 /** What the Add form holds. */

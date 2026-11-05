@@ -1,16 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockIsIOS, mockIsAndroid, mockRoots, mockList, mockSave } = vi.hoisted(() => ({
+const { mockIsIOS, mockIsAndroid, mockRoots, mockList, mockSave, mockDownloads } = vi.hoisted(() => ({
   mockIsIOS: vi.fn(),
   mockIsAndroid: vi.fn(),
   mockRoots: vi.fn(),
   mockList: vi.fn(),
   mockSave: vi.fn(),
+  mockDownloads: vi.fn(),
 }));
 
 vi.mock("./platform", () => ({ isIOS: () => mockIsIOS(), isAndroid: () => mockIsAndroid() }));
 vi.mock("../api/localFs", () => ({
-  localFs: { storageRoots: () => mockRoots(), listDir: (p: string) => mockList(p) },
+  localFs: {
+    storageRoots: () => mockRoots(),
+    listDir: (p: string) => mockList(p),
+    downloadsDir: () => mockDownloads(),
+  },
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ save: (o: unknown) => mockSave(o) }));
 
@@ -22,6 +27,7 @@ describe("pickSaveDest", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRoots.mockResolvedValue([DOCS]);
+    mockDownloads.mockResolvedValue("/storage/emulated/0/Download");
     mockList.mockResolvedValue([]);
     mockIsAndroid.mockReturnValue(false);
   });
@@ -63,6 +69,16 @@ describe("pickSaveDest", () => {
     expect(await pickSaveDest({ defaultPath: "report.zip" })).toBe("/storage/emulated/0/Download/report (2).zip");
     expect(mockList).toHaveBeenCalledWith("/storage/emulated/0/Download");
     expect(mockSave).not.toHaveBeenCalled();
+  });
+
+  it("uses this user's Downloads, and the primary user's when Android cannot say", async () => {
+    mockIsIOS.mockReturnValue(false);
+    mockIsAndroid.mockReturnValue(true);
+    mockList.mockRejectedValue(new Error("no such folder"));
+    mockDownloads.mockResolvedValueOnce("/storage/emulated/10/Download");
+    expect(await pickSaveDest({ defaultPath: "x.csv" })).toBe("/storage/emulated/10/Download/x.csv");
+    mockDownloads.mockRejectedValueOnce(new Error("no bridge"));
+    expect(await pickSaveDest({ defaultPath: "x.csv" })).toBe("/storage/emulated/0/Download/x.csv");
   });
 
   it("an unreadable Downloads folder still gets the name as it is", async () => {

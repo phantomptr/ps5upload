@@ -9,6 +9,7 @@ import { TouchControls } from "../screens/Play/TouchControls";
 import { useTr } from "../state/lang";
 import { devicePad, useJoinSession, type JoinSession } from "./session";
 import { useAutoHide } from "./autoHide";
+import { clock } from "../lib/clockText";
 
 type Tr = ReturnType<typeof useTr>;
 
@@ -16,10 +17,7 @@ type Tr = ReturnType<typeof useTr>;
 const GUIDED_KEY = "ps5upload.join.guided";
 
 /** 42 → "0:42". */
-export function clock(s: number): string {
-  const t = Math.max(0, Math.ceil(s));
-  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
-}
+export { clock };
 
 /** The message for a guest who is not (or no longer) in the game. */
 export function endText(tr: Tr, stage: JoinStage, host: string): string {
@@ -27,10 +25,14 @@ export function endText(tr: Tr, stage: JoinStage, host: string): string {
     switch (stage.why) {
       case "key":
         return tr("join_refused_key", { host }, `This invite has expired. Ask ${host} for a new link.`);
+      case "expired":
+        return tr("join_refused_expired", { host }, `Your place in the game was lost. Ask ${host} to let you in again.`);
       case "full":
         return tr("join_refused_full", undefined, "The game is full: four players already.");
       case "denied":
         return tr("join_refused_denied", { host }, `${host} didn't let you in this time.`);
+      case "no_answer":
+        return tr("join_refused_no_answer", { host }, `${host} didn't answer in time. Tell ${host}, then try again.`);
       case "closed":
         return tr("join_refused_closed", { host }, `${host} isn't hosting Play Together right now.`);
       case "old_helper":
@@ -41,6 +43,12 @@ export function endText(tr: Tr, stage: JoinStage, host: string): string {
         return tr("join_refused_unreachable", { host }, `${host}'s computer couldn't reach their PS5. Try again in a moment.`);
       case "slow_down":
         return tr("join_refused_slow_down", undefined, "Too many wrong codes. Wait a minute, then try again.");
+      case "address":
+        return tr(
+          "join_refused_address",
+          { host },
+          `This link's address is outside your home network, so the app will not use it. Ask ${host} for a link with their computer's IP address.`,
+        );
       default:
         return tr("join_refused_other", { host }, `${host} didn't let you in.`);
     }
@@ -53,6 +61,10 @@ export function endText(tr: Tr, stage: JoinStage, host: string): string {
         return tr("join_ended_closed", { host }, `${host} closed Play Together.`);
       case "host_stopped":
         return tr("join_ended_host_stopped", undefined, "The host stopped playing.");
+      case "replaced":
+        return tr("join_ended_replaced", undefined, "This game was opened in another tab or on another device, so it stopped here.");
+      case "pad_lost":
+        return tr("join_ended_pad_lost", { host }, `The PS5 lost your controller, so you're out of the game. Ask ${host} to let you in again.`);
       case "gave_up":
         return tr("join_ended_gave_up", { host }, `The connection to ${host} didn't come back in time.`);
       case "lost":
@@ -280,6 +292,25 @@ export function JoinView({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [live, full, poke]);
+
+  // System Back on a phone in full screen: back to the picture's place, still playing, as the
+  // host's player does (StreamPanel). Same state as the page's own entry: the router sees no
+  // navigation.
+  useEffect(() => {
+    if (!full || !coarsePointer()) return;
+    window.history.pushState(window.history.state, "");
+    const entry = window.location.href;
+    let popped = false;
+    const onPop = () => {
+      popped = true;
+      setFull(false);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      if (!popped && window.location.href === entry) window.history.back();
+    };
+  }, [full]);
 
   // The browser left full screen itself (Esc): back to the picture's place. Not on a touch
   // screen, where Android drops it on a system gesture mid-game and the picture keeps filling.

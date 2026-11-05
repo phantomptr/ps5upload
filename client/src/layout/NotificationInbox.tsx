@@ -6,6 +6,7 @@ import { useNotificationsStore } from "../state/notifications";
 import { useTr } from "../state/lang";
 import { useFitOnScreen } from "../components/useFitOnScreen";
 import { NotificationItem, useSeenWhileOpen } from "./notificationList";
+import { useBackDismiss } from "../lib/systemBack";
 
 /**
  * Which Tailwind anchor class the panel gets for a given alignment.
@@ -31,7 +32,7 @@ export function panelPlacementClass(placement: "above" | "below"): string {
  *  and never taller than the screen above the tab bar (its list scrolls).
  *  Wherever the bell sits, nothing can be cut off. */
 export const PANEL_SHEET =
-  "max-md:fixed max-md:inset-x-2 max-md:top-[calc(env(safe-area-inset-top)+3.75rem)] max-md:bottom-auto max-md:m-0 max-md:w-auto max-md:max-w-none max-md:max-h-[calc(100vh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-10rem)]";
+  "max-md:fixed max-md:inset-x-2 max-md:top-[calc(var(--safe-top)+3.75rem)] max-md:bottom-auto max-md:m-0 max-md:w-auto max-md:max-w-none max-md:max-h-[calc(100vh-var(--safe-top)-var(--safe-bottom)-10rem)]";
 
 /** How many of the latest notifications the bell shows; the rest are on the
  *  Notifications screen. */
@@ -76,6 +77,7 @@ export default function NotificationInbox({
   const remove = useNotificationsStore((s) => s.remove);
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const fit = useFitOnScreen(panelRef, open);
 
@@ -85,6 +87,7 @@ export default function NotificationInbox({
   // PEEK_COUNT stay unread (and keep the badge) until the Notifications screen
   // shows them.
   const seen = useSeenWhileOpen(open, peekUnreadIds(entries), markRead);
+  useBackDismiss(open, () => setOpen(false));
 
   useEffect(() => {
     if (!open) return;
@@ -94,7 +97,10 @@ export default function NotificationInbox({
       }
     }
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") {
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
     }
     document.addEventListener("mousedown", onClick, true);
     document.addEventListener("keydown", onKey);
@@ -108,15 +114,12 @@ export default function NotificationInbox({
     setOpen(false);
     navigate(to);
   };
-  const unreadLabel = tr(
-    unread === 1 ? "notifications_unread_one" : "notifications_unread_many",
-    { count: unread },
-    `${unread} unread notification${unread === 1 ? "" : "s"}`,
-  );
+  const unreadLabel = tr("notifications_unread_count", { count: unread }, "Unread notifications: {count}");
 
   return (
     <div ref={wrapperRef} className="relative">
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-label={tr("notifications_open", undefined, "Open notifications")}
@@ -133,7 +136,7 @@ export default function NotificationInbox({
         {unread > 0 && (
           <span
             data-testid="notifications-badge"
-            className="absolute -right-0.5 -top-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--color-bad)] px-1 text-[10px] font-semibold tabular-nums text-[var(--color-accent-contrast)]"
+            className="absolute -end-0.5 -top-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--color-bad)] px-1 text-[10px] font-semibold tabular-nums text-[var(--color-accent-contrast)]"
             title={unreadLabel}
           >
             {unread > 9 ? "9+" : unread}
@@ -159,7 +162,10 @@ export default function NotificationInbox({
             </h3>
             <button
               type="button"
-              onClick={() => setOpen(false)}
+              onClick={() => {
+                setOpen(false);
+                triggerRef.current?.focus();
+              }}
               aria-label={tr("close", undefined, "Close")}
               title={tr("close", undefined, "Close")}
               className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] max-md:p-2.5"

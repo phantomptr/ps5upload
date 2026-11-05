@@ -1,11 +1,13 @@
 import { formatDate } from "../../lib/formatDate";
-import { useEffect, useMemo, useState } from "react";
-import { ArrowRight, Undo2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowRight, Square, Undo2 } from "lucide-react";
 
 import {
   collection,
+  CollectionApiError,
   type OrganizeMove,
   type OrganizePlan,
+  type OrganizePlanStatus,
   type OrganizeResult,
   type OrganizeRun,
 } from "../../api/collection";
@@ -15,8 +17,8 @@ import { formatCollectionBytes } from "../../lib/collectionView";
 import { loadCollection } from "../../state/collection";
 import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
-
-const moveKey = (m: OrganizeMove) => `${m.container}|${m.from}`;
+import { moveKey, planProgressText, toggleMove } from "./organizePlan";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /** PS Game Library's package organizer: preview every move, untick any, apply, undo later. */
 export function OrganizeModal({
@@ -34,20 +36,69 @@ export function OrganizeModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<OrganizeResult | null>(null);
+  /** The preview being made; it can take minutes over a network. */
+  const [job, setJob] = useState<OrganizePlanStatus | null>(null);
+  // Only the latest preview's answers count; closing the modal drops them.
+  const latest = useRef(0);
+  // This window pressed Cancel. A preview stopped by another window is simply made again.
+  const stopAsked = useRef(false);
+
+  const errorText = (e: unknown) =>
+    e instanceof CollectionApiError && e.code === "busy"
+      ? tr(
+          "collection.org_busy",
+          undefined,
+          "The organizer is busy with something else. Try again in a moment.",
+        )
+      : humanizeCaught(e);
+
+  /** A preview, followed until it ends. An engine without preview jobs answers in one call. */
+  const makePlan = async (mine: number) => {
+    let st: OrganizePlanStatus;
+    try {
+      st = await collection.organizePlanStart();
+    } catch (e) {
+      if (!/^HTTP 40[45]$/.test(e instanceof Error ? e.message : "")) throw e;
+      setPlan(await collection.organizePlan());
+      return;
+    }
+    if (typeof st?.running !== "boolean") {
+      setPlan(await collection.organizePlan());
+      return;
+    }
+    while (st.running) {
+      if (mine === latest.current) setJob(st);
+      await new Promise((r) => setTimeout(r, 500));
+      if (mine !== latest.current) return;
+      st = await collection.organizePlanStatus();
+    }
+    if (mine !== latest.current) return;
+    if (st.cancelled && !stopAsked.current) return makePlan(mine);
+    setJob(st);
+    if (st.plan) setPlan(st.plan);
+    else if (st.error) setError(st.error);
+  };
 
   const refresh = async () => {
+    const mine = ++latest.current;
+    stopAsked.current = false;
     setError(null);
     setPlan(null);
+    setJob(null);
     setUnticked(new Set());
+    // The earlier runs show at once: the preview can take a while.
+    void collection
+      .organizeRuns()
+      .then((r) => {
+        if (mine === latest.current) setRuns(r);
+      })
+      .catch((e) => {
+        if (mine === latest.current) setError(errorText(e));
+      });
     try {
-      const [p, r] = await Promise.all([
-        collection.organizePlan(),
-        collection.organizeRuns(),
-      ]);
-      setPlan(p);
-      setRuns(r);
+      await makePlan(mine);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (mine === latest.current) setError(errorText(e));
     }
   };
 
@@ -55,6 +106,11 @@ export function OrganizeModal({
     if (!open) return;
     setResult(null);
     void refresh();
+    return () => {
+      // Closed: nobody is waiting for the preview, so the folders are not walked for nothing.
+      latest.current++;
+      void collection.organizePlanCancel().catch(() => {});
+    };
   }, [open]);
 
   const chosen = useMemo(
@@ -90,7 +146,7 @@ export function OrganizeModal({
       await loadCollection();
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     } finally {
       setBusy(false);
     }
@@ -122,19 +178,15 @@ export function OrganizeModal({
       await loadCollection();
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     } finally {
       setBusy(false);
     }
   };
 
   const toggle = (m: OrganizeMove, on: boolean) =>
-    setUnticked((prev) => {
-      const next = new Set(prev);
-      if (on) next.delete(moveKey(m));
-      else next.add(moveKey(m));
-      return next;
-    });
+    setUnticked((prev) => toggleMove(prev, plan?.moves ?? [], m, on));
+  const stopped = !plan && !error && !!job && !job.running && job.cancelled;
 
   return (
     <Modal
@@ -152,10 +204,44 @@ export function OrganizeModal({
         )}
       </p>
       {error && <p className="mt-3 text-sm text-[var(--color-bad)]">{error}</p>}
-      {!plan && !error && (
-        <div className="mt-4 flex items-center gap-2 text-sm text-[var(--color-muted)]">
-          <Spinner size={14} />
-          {tr("collection.org_planning", undefined, "Reading collection items\u2026")}
+      {!plan && !error && !stopped && (
+        <div className="mt-4 text-sm text-[var(--color-muted)]">
+          <div className="flex flex-wrap items-center gap-2">
+            <Spinner size={14} />
+            <span>{planProgressText(tr, job)}</span>
+            {job?.running && (
+              <Button
+                size="sm"
+                variant="secondary"
+                leftIcon={<Square size={11} />}
+                onClick={() => {
+                  stopAsked.current = true;
+                  void collection.organizePlanCancel();
+                }}
+              >
+                {tr("cancel", undefined, "Cancel")}
+              </Button>
+            )}
+          </div>
+          {job?.current && (
+            <div className="mt-1 truncate font-mono text-[0.6875rem]" title={job.current}>
+              {job.current}
+            </div>
+          )}
+        </div>
+      )}
+      {stopped && (
+        <div className="mt-4 flex flex-wrap items-center gap-2 text-sm text-[var(--color-muted)]">
+          <span>
+            {tr(
+              "collection.org_plan_stopped",
+              undefined,
+              "Preview stopped. Nothing was changed.",
+            )}
+          </span>
+          <Button size="sm" variant="secondary" onClick={() => void refresh()}>
+            {tr("collection.org_plan_again", undefined, "Preview again")}
+          </Button>
         </div>
       )}
       {result && (
@@ -245,7 +331,7 @@ export function OrganizeModal({
                   {tr("collection.org_none", undefined, "Select none")}
                 </button>
               </div>
-              <ul className="mt-2 flex max-h-[45vh] flex-col gap-1.5 overflow-y-auto pr-1">
+              <ul className="mt-2 flex max-h-[45vh] flex-col gap-1.5 overflow-y-auto pe-1">
                 {plan.moves.map((m, i) => (
                   <li
                     key={moveKey(m)}
@@ -389,16 +475,26 @@ export function OrganizeModal({
                 <span className="text-[var(--color-text)]">
                   {formatDate(new Date(r.created_at))}
                 </span>
-                <span className="text-[var(--color-muted)]">
-                  {tr("collection.org_run_moved", { n: r.moved }, "{n} moved")}
-                </span>
+                {!r.unreadable && (
+                  <span className="text-[var(--color-muted)]">
+                    {tr("collection.org_run_moved", { n: r.moved }, "{n} moved")}
+                  </span>
+                )}
                 <span
                   className="min-w-0 flex-1 truncate font-mono text-[0.6875rem] text-[var(--color-muted)]"
                   title={r.container_root}
                 >
                   {r.label ?? r.container_root}
                 </span>
-                {r.reverted_at ? (
+                {r.unreadable ? (
+                  <span className="text-[var(--color-warn)]">
+                    {tr(
+                      "collection.org_run_unreadable",
+                      undefined,
+                      "Its undo log could not be read, so it cannot be undone here.",
+                    )}
+                  </span>
+                ) : r.reverted_at ? (
                   <span className="text-[var(--color-muted)]">
                     {tr("collection.org_run_undone", undefined, "Undone")}
                   </span>

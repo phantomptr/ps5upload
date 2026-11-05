@@ -456,7 +456,7 @@ export function ImageBrowser({
             {dir && (
               <button
                 type="button"
-                className="flex w-full items-center gap-2 border-b border-[var(--color-border)] px-3 py-2 text-left text-sm hover:bg-[var(--color-surface-2)]"
+                className="flex w-full items-center gap-2 border-b border-[var(--color-border)] px-3 py-2 text-start text-sm hover:bg-[var(--color-surface-2)]"
                 onClick={() => image && void load(image, parentDir(dir))}
                 disabled={busy}
               >
@@ -479,7 +479,7 @@ export function ImageBrowser({
                 >
                   <button
                     type="button"
-                    className={`flex min-w-0 flex-1 items-center gap-2 text-left ${
+                    className={`flex min-w-0 flex-1 items-center gap-2 text-start ${
                       state === "deleted" ? "line-through opacity-60" : ""
                     } ${e.is_dir ? "hover:underline" : "cursor-default"}`}
                     onClick={() => e.is_dir && image && void load(image, path)}
@@ -498,7 +498,7 @@ export function ImageBrowser({
                   {state === "deleted" && (
                     <Badge tone="bad">{tr("imgbrowse_deleted", undefined, "will be deleted")}</Badge>
                   )}
-                  <span className="w-24 shrink-0 text-right font-mono text-xs text-[var(--color-muted)]">
+                  <span className="w-24 shrink-0 text-end font-mono text-xs text-[var(--color-muted)]">
                     {formatBytes(e.size)}
                   </span>
                   <div className="flex shrink-0 gap-1">

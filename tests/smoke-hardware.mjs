@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * tests2/smoke-hardware.mjs
+ * tests/smoke-hardware.mjs
  *
  * Real-hardware smoke test for the engine + PS5 payload.
  * Requires a live PS5 at PS5_ADDR (default 192.168.137.2) and
  * ps5upload-engine running at ENGINE_URL (default http://127.0.0.1:19113).
  *
  * Usage:
- *   node tests2/smoke-hardware.mjs [options]
+ *   node tests/smoke-hardware.mjs [options]
  *
  * Options:
  *   --engine-url=URL       engine HTTP base URL  (default: http://127.0.0.1:19113)
@@ -43,6 +43,11 @@ const DEFAULT_DEST_ROOT = '/data/ps5upload/tests/smoke';
 const DEFAULT_JOB_TIMEOUT_MS = 120_000;
 
 // ── helpers ─────────────────────────────────────────────────────────────────
+
+// PS5UPLOAD_ENGINE_DEBUG: /api/ps5/cleanup, which clears the test folder, answers only then.
+function engineEnv(opts) {
+  return { ...process.env, PS5_ADDR: opts.ps5Addr, PS5UPLOAD_ENGINE_DEBUG: '1' };
+}
 
 let passCount = 0;
 let failCount = 0;
@@ -194,14 +199,14 @@ async function main() {
       if (engineBin) {
         log(`spawning engine (pre-built: ${path.relative(repoRoot, engineBin)})...`);
         engineChild = spawn(engineBin, [], {
-          env: { ...process.env, PS5_ADDR: opts.ps5Addr },
+          env: engineEnv(opts),
           stdio: ['ignore', 'pipe', 'pipe'],
         });
       } else {
         log('spawning engine (cargo run — may take a moment to compile)...');
         engineChild = spawn('cargo', ['run', '-p', 'ps5upload-engine'], {
           cwd: path.join(repoRoot, 'engine'),
-          env: { ...process.env, PS5_ADDR: opts.ps5Addr },
+          env: engineEnv(opts),
           stdio: ['ignore', 'pipe', 'pipe'],
         });
       }

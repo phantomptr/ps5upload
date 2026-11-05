@@ -606,7 +606,7 @@ mod tests {
 
     #[test]
     fn refuses_console_addresses_that_are_not_one() {
-        for ok in ["192.168.86.99", "ps5.local", "[fe80::1]", "10.0.0.2:9120"] {
+        for ok in ["192.0.2.99", "ps5.local", "[fe80::1]", "10.0.0.2:9120"] {
             assert!(check_host(ok).is_ok(), "{ok}");
         }
         for bad in [

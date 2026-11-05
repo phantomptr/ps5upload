@@ -7,7 +7,7 @@ import {
   refreshLibrary,
   useLibraryStore,
 } from "../state/library";
-import { transferScreenBusy } from "./ps5Transfers";
+import { consoleBusy, usePoll } from "./usePoll";
 
 /**
  * Keep the connected console's drive scan (state/library) current while a screen that shows it
@@ -16,6 +16,9 @@ import { transferScreenBusy } from "./ps5Transfers";
  * Skipped while an upload to that console runs: the walk shares the helper's port with every
  * file's finalize, and can wait.
  */
+/** How often an open screen looks whether the last scan has gone stale. */
+const STALE_LOOK_MS = 60_000;
+
 export function useLibraryScan(enabled = true): void {
   const host = useConnectionStore((s) => s.host?.trim() ?? "");
   const up = useConnectionStore((s) => s.payloadStatus === "up");
@@ -24,13 +27,22 @@ export function useLibraryScan(enabled = true): void {
   );
   const active = enabled && up && !!host;
   useEffect(() => {
-    if (!active || transferScreenBusy(host)) return;
+    if (!active || consoleBusy(host)) return;
     if (libraryIsStale(host)) void refreshLibrary(host);
   }, [active, host, lastRefreshedAt]);
+  // A timer as well: nothing else fires while the screen just sits open, and a scan skipped for a
+  // transfer runs once it ends (usePoll holds off meanwhile and runs when it stops).
+  usePoll(
+    () => {
+      if (libraryIsStale(host)) return refreshLibrary(host);
+    },
+    STALE_LOOK_MS,
+    { host, enabled: active, immediate: false },
+  );
   useEffect(() => {
     if (!active) return;
     const onInvalidate = () => {
-      if (!transferScreenBusy(host)) void refreshLibrary(host);
+      if (!consoleBusy(host)) void refreshLibrary(host);
     };
     window.addEventListener("ps5upload:library:invalidate", onInvalidate);
     return () =>

@@ -9,6 +9,7 @@ const materializeRemote = vi.fn(async (p: string) => p);
 vi.mock("../lib/materialize", () => ({
   releaseCopy: (...a: unknown[]) => releaseCopy(...(a as [])),
   materializeRemote: (p: string) => materializeRemote(p),
+  existingCopyOf: () => null,
 }));
 vi.mock("../lib/ensurePayloadCurrent", () => ({
   ensurePayloadCurrent: vi.fn(async () => {}),
@@ -91,6 +92,7 @@ import {
   MAX_POLL_FAILURES,
   sameInstall,
 } from "./uploadQueue";
+import { installLocalStorageStub } from "../test-utils/storage";
 
 // The store before any test stubs its actions (some blocks replace startHost).
 const pristineQueue = useUploadQueueStore.getState();
@@ -102,20 +104,6 @@ const mockedStandby = vi.mocked(powerStandby);
 const mockedPkgInstall = vi.mocked(runPkgInstall);
 const mockedFsDelete = vi.mocked(fsDelete);
 const mockedQueueSave = vi.mocked(uploadQueueSave);
-
-function installLocalStorageStub() {
-  const store = new Map<string, string>();
-  vi.stubGlobal("localStorage", {
-    getItem: (k: string) => store.get(k) ?? null,
-    setItem: (k: string, v: string) => void store.set(k, v),
-    removeItem: (k: string) => void store.delete(k),
-    clear: () => store.clear(),
-    key: (i: number) => Array.from(store.keys())[i] ?? null,
-    get length() {
-      return store.size;
-    },
-  });
-}
 
 function addItem(addr: string, name: string): void {
   const input: AddQueueItem = {
@@ -729,7 +717,8 @@ describe("cancelItem (per-item cancel)", () => {
     void useUploadQueueStore.getState().startHost("192.168.1.10");
     await vi.advanceTimersByTimeAsync(50);
     useUploadQueueStore.getState().restartItem(byId("A1").id);
-    await vi.advanceTimersByTimeAsync(2_000);
+    // Waits for the stopped job to let go, which here it never quite does: the longest wait.
+    await vi.advanceTimersByTimeAsync(16_000);
     expect(byId("A1").status).toBe("running");
 
     finish = true;
@@ -1417,7 +1406,11 @@ describe("resumeFailedRecoverable", () => {
     expect(byId(recoverB).status).toBe("failed"); // other host → untouched
     expect(startHost).toHaveBeenCalledTimes(1);
     // Nobody clicked for this run: it must not send a helper the user stopped (#471).
-    expect(startHost).toHaveBeenCalledWith("192.168.1.10:9113", { unattended: true });
+    // And limited to the rows it reset: what a user merely queued stays waiting.
+    expect(startHost).toHaveBeenCalledWith("192.168.1.10:9113", {
+      onlyIds: [recoverA],
+      unattended: true,
+    });
   });
 
   it("no-ops and never starts the queue when autoResume is off", async () => {
@@ -1592,6 +1585,32 @@ describe("install items", () => {
     expect(useUploadQueueStore.getState().items.find((i) => i.id === q.id)?.stopping).toBe(true);
     // The engine ends the job as stopped; the row then leaves the queue.
     gate.get("/stop.pkg")!({ ok: false, message: "stopped" });
+    await waitFor(() => !useUploadQueueStore.getState().items.some((i) => i.id === q.id));
+  });
+
+  it("keeps a running install's row and says so when the stop did not go through", async () => {
+    const api = await import("../api/ps5");
+    vi.mocked(api.pkgInstallStop).mockRejectedValueOnce(new Error("engine unreachable"));
+    const q = useUploadQueueStore.getState().enqueueInstall({
+      host, request: { via: "stream", source: "/refused.pkg" }, displayName: "R",
+    });
+    await waitFor(() => calls.length === 1);
+    useUploadQueueStore.setState((st) => ({
+      items: st.items.map((i) => (i.id === q.id ? { ...i, installJobId: "job-9" } : i)),
+    }));
+    vi.useFakeTimers();
+    try {
+      useUploadQueueStore.getState().cancelItem(q.id);
+      await vi.advanceTimersByTimeAsync(31_000);
+    } finally {
+      vi.useRealTimers();
+    }
+    const row = useUploadQueueStore.getState().items.find((i) => i.id === q.id);
+    expect(row).toMatchObject({ status: "running", stopping: false });
+    expect(row?.installNote).toMatch(/still running/);
+    // It can be asked again; the install ends and the row leaves.
+    useUploadQueueStore.getState().cancelItem(q.id);
+    gate.get("/refused.pkg")!({ ok: false, message: "stopped" });
     await waitFor(() => !useUploadQueueStore.getState().items.some((i) => i.id === q.id));
   });
 
@@ -1861,13 +1880,16 @@ describe("install item lifecycle", () => {
 
   it("never writes a link to disk", async () => {
     registerInstallExecutor(() => new Promise(() => {}));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     useUploadQueueStore.getState().enqueueInstall({
       host,
       request: { via: "link", url: "https://cdn.example/x.pkg?token=SECRET", mode: "stream", insecureTls: false },
       displayName: "X",
     });
-    await new Promise((r) => setTimeout(r, 450)); // past the 300 ms save debounce
+    await vi.advanceTimersByTimeAsync(301); // past the 300 ms save debounce
+    vi.useRealTimers();
     const calls = mockedQueueSave.mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
     const saved = JSON.stringify(calls[calls.length - 1]?.[0]);
     expect(saved).not.toContain("SECRET");
     expect(saved).not.toContain("cdn.example");
@@ -2121,10 +2143,12 @@ describe("review fixes", () => {
   it("a queue item added before the saved queue loads is kept, and nothing is saved before the load", async () => {
     useUploadQueueStore.setState({ loaded: false });
     registerInstallExecutor(() => new Promise(() => {}));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const q = useUploadQueueStore.getState().enqueueInstall({
       host, request: { via: "stream", source: "/d.pkg" }, displayName: "D",
     });
-    await new Promise((r) => setTimeout(r, 400));
+    await vi.advanceTimersByTimeAsync(301); // past the 300 ms save debounce
+    vi.useRealTimers();
     expect(mockedQueueSave).not.toHaveBeenCalled();
     vi.mocked(uploadQueueLoad).mockResolvedValueOnce({
       continueOnFailure: false,

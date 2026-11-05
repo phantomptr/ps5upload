@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 
 import { Button } from ".";
-import { localFs } from "../api/localFs";
+import { localFs, storageAccessUsesPrompt } from "../api/localFs";
 import { remoteApi, RemoteApiError } from "../api/remote";
 import { parentOf, fmtSize } from "../lib/pathBrowser";
 import { displayPath, remotePath } from "../lib/remotePath";
@@ -26,6 +26,7 @@ import { useLocalPickerStore } from "../state/localPicker";
 import { usePackageViewer } from "../state/packageViewer";
 import { activateFocusTrap } from "../lib/focusTrap";
 import { useTr } from "../state/lang";
+import { humanizeCaught } from "../lib/humanizeError";
 
 /**
  * Global in-app file/folder browser. Mounted once at the app root; driven
@@ -118,7 +119,7 @@ export function PickerView(p: PickerViewProps) {
     // behind itself — and below the confirm/prompt layer (z-[60]).
     <div
       className="anim-scrim scrim fixed inset-0 z-[55] flex items-end justify-center sm:items-center"
-      style={{ paddingTop: "env(safe-area-inset-top)", paddingBottom: "var(--safe-bottom)" }}
+      style={{ paddingTop: "var(--safe-top)", paddingBottom: "var(--safe-bottom)" }}
       onClick={p.onCancel}
     >
       <div
@@ -149,15 +150,23 @@ export function PickerView(p: PickerViewProps) {
               {tr("picker_grant_title", undefined, "Allow access to your files")}
             </p>
             <p className="text-xs text-[var(--color-muted)]">
-              {tr(
-                "picker_grant_hint",
-                undefined,
-                "To upload a game folder or .zip, PS5 Upload needs permission to read your files. Tap below, enable “Allow access to manage all files”, then come back and tap Retry.",
-              )}
+              {storageAccessUsesPrompt()
+                ? tr(
+                    "picker_grant_hint_prompt",
+                    undefined,
+                    "To upload a game folder or .zip, PS5 Upload needs permission to read your files. Tap Allow, say yes in the prompt, then tap Retry.",
+                  )
+                : tr(
+                    "picker_grant_hint",
+                    undefined,
+                    "To upload a game folder or .zip, PS5 Upload needs permission to read your files. Tap below, enable “Allow access to manage all files”, then come back and tap Retry.",
+                  )}
             </p>
             <div className="mt-2 flex gap-2">
               <Button variant="primary" size="sm" onClick={p.onRequestAccess}>
-                {tr("picker_open_settings", undefined, "Open settings")}
+                {storageAccessUsesPrompt()
+                  ? tr("picker_allow", undefined, "Allow")
+                  : tr("picker_open_settings", undefined, "Open settings")}
               </Button>
               <Button variant="ghost" size="sm" onClick={p.onRetry}>
                 <RefreshCw size={14} />
@@ -242,7 +251,7 @@ export function PickerView(p: PickerViewProps) {
                         <button
                           type="button"
                           disabled={!selectable && !p.actions}
-                          className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left hover:bg-[var(--color-surface)] disabled:opacity-40"
+                          className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-start hover:bg-[var(--color-surface)] disabled:opacity-40"
                           onClick={() => {
                             if (e.is_dir) p.onOpenDir(e.path);
                             else if (p.mode !== "folder" && !p.actions) {
@@ -445,12 +454,13 @@ export function LocalPathPicker() {
           setCursor(page.next_cursor);
           writeLastDir(connectionId, path);
         } else {
-          setEntries(await localFs.listDir(path));
-          setCursor(null);
+          const page = await localFs.listDirPage(path, more ? Number(more) : 0);
+          setEntries((prev) => (more ? [...prev, ...page.entries] : page.entries));
+          setCursor(page.next === null ? null : String(page.next));
         }
         setCwd(path);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(humanizeCaught(e));
         setHint(e instanceof RemoteApiError ? (e.hint ?? null) : null);
         setCwd(path);
       } finally {
@@ -489,7 +499,7 @@ export function LocalPathPicker() {
       if (rs.length) await loadDir(rs[0]);
       else setLoading(false);
     } catch (e) {
-      setError(String(e));
+      setError(humanizeCaught(e));
       setGranted(true); // don't trap the user on a probe failure
       setLoading(false);
     }

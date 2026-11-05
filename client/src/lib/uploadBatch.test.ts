@@ -5,6 +5,11 @@ import { classifyScanEntry, validateBatch, volumeOfDest, type BatchCheckRow } fr
 describe("classifying a scanned folder's children", () => {
   it("pre-checks games, packages, archives and images, and leaves the rest out", () => {
     expect(classifyScanEntry("My Game", true)).toBe("folder");
+    // A multi-part RAR is one game: its first part, the rest read through it.
+    expect(classifyScanEntry("Game.part1.rar", false)).toBe("archive");
+    expect(classifyScanEntry("Game.part01.rar", false)).toBe("archive");
+    expect(classifyScanEntry("Game.part2.rar", false)).toBe("other");
+    expect(classifyScanEntry("Game.rar", false)).toBe("archive");
     expect(classifyScanEntry("a.pkg", false)).toBe("package");
     expect(classifyScanEntry("g.part1.rar", false)).toBe("archive");
     expect(classifyScanEntry("G.exfat", false)).toBe("image");
@@ -55,11 +60,12 @@ describe("checking a batch before it is added", () => {
     expect(r.issues.get("a")?.[0].text).toMatch(/password/);
   });
 
-  it("blocks only when a drive clearly can't take it, and warns when it can't tell", () => {
+  it("warns, never blocks, about space: a resumed row counts in full here", () => {
     const free = new Map<string, number | null>([["/data", 100], ["/mnt/ext0", null]]);
     const over = validateBatch([row("a", "/data/x/A", 60), row("b", "/data/x/B", 50)], [], free);
-    expect(over.blocked).toBe(true);
+    expect(over.blocked).toBe(false);
     expect(over.space.map((m) => m.text).join(" ")).toMatch(/\/data/);
+    expect(over.space.map((m) => m.key)).toEqual(["batch_space_short", "batch_space_short_hint"]);
     const fits = validateBatch([row("a", "/data/x/A", 60), row("b", "/data/x/B", null)], [], free);
     expect(fits.blocked).toBe(false);
     expect(fits.space.map((m) => m.text).join(" ")).toMatch(/size of 1/);
@@ -80,9 +86,47 @@ describe("checking a batch before it is added", () => {
     const fine = validateBatch([row("a", "/data/x/A", 90)], [], free, fits);
     expect(fine.space).toEqual([]);
 
-    // A real shortfall is still the blocking message, not the warning.
+    // More than free says so, with the note that it can still work.
     const over = validateBatch([row("a", "/data/x/A", 130)], [], free, fits);
-    expect(over.blocked).toBe(true);
-    expect(over.space.map((m) => m.key)).toEqual(["batch_space_short"]);
+    expect(over.blocked).toBe(false);
+    expect(over.space.map((m) => m.key)).toEqual(["batch_space_short", "batch_space_short_hint"]);
+  });
+
+  it("lets the parts of one zip or 7z set share a folder, and nothing else", () => {
+    const part = (n: number, ext = "zip") =>
+      row(`p${n}`, "/data/homebrew/Game", 1, { sourcePath: `/dl/Game.part${n}.${ext}` });
+    const parts = validateBatch([part(1), part(2), part(3)], [], new Map());
+    expect(parts.blocked).toBe(false);
+    expect(parts.issues.size).toBe(0);
+    // A different set, or a RAR set (one archive, not several), is still a clash.
+    expect(validateBatch([part(1), part(2, "7z")], [], new Map()).blocked).toBe(true);
+    expect(validateBatch([part(1, "rar"), part(2, "rar")], [], new Map()).blocked).toBe(true);
+    const other = row("x", "/data/homebrew/Game", 1, { sourcePath: "/dl/Other.part2.zip" });
+    expect(validateBatch([part(1), other], [], new Map()).blocked).toBe(true);
+  });
+
+  it("warns about a file's set without blocking", () => {
+    const split = validateBatch(
+      [row("a", "/data/x/Game.7z.001", 1, {
+        sourcePath: "/dl/Game.7z.001",
+        setIssue: { kind: "split-unsupported", scheme: "numeric", entryName: "Game.7z", volumeCount: 3 },
+      })],
+      [],
+      new Map(),
+    );
+    expect(split.blocked).toBe(false);
+    expect(split.issues.get("a")?.[0].key).toBe("batch_split_volume");
+  });
+
+  it("says so only when some of a set's parts are missing from the list", () => {
+    const part = (n: number) =>
+      row(`p${n}`, "/data/homebrew/Game", 1, {
+        sourcePath: `/dl/Game.part${n}.zip`,
+        setIssue: { kind: "manual-parts", total: 2 },
+      });
+    const one = validateBatch([part(1)], [], new Map());
+    expect(one.blocked).toBe(false);
+    expect(one.issues.get("p1")?.[0]).toMatchObject({ key: "batch_missing_parts", vars: { listed: 1, total: 2 } });
+    expect(validateBatch([part(1), part(2)], [], new Map()).issues.size).toBe(0);
   });
 });

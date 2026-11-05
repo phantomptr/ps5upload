@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { routeEngine } from "./fixtures/engine";
 
 // Send to PS5's Upload puts the item in the console's queue and starts it (8.10): its
 // progress shows on its queue row, not in a one-shot card of its own.
@@ -12,6 +13,15 @@ test("Upload sends through the queue", async ({ page }) => {
       const url = new URL(route.request().url());
       const path = url.pathname;
       calls.push(`${route.request().method()} ${path}`);
+      // The upload dialog asks whether the destination is there.
+      if (path === "/api/ps5/fs/stat") {
+        await route.fulfill({
+          status: 502,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "payload rejected FS_STAT: fs_stat_failed_errno_2" }),
+        });
+        return;
+      }
       let body: unknown = {};
       if (path === "/api/version") body = { version: "8.10.0", caps: {} };
       if (path === "/api/ps5/status") body = { ok: true, version: "8.10.0" };
@@ -67,38 +77,33 @@ test("Pause, Resume and Send now on queue rows", async ({ page }) => {
   const finish = (name: string) => {
     for (const j of jobs) if (j.name === name && j.state === "running") j.state = "done";
   };
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const req = route.request();
-      const path = new URL(req.url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "10.4.1", caps: {} };
-      if (path === "/api/ps5/status") body = { ok: true, version: "10.4.1" };
-      if (path === "/api/ps5/volumes")
-        body = { volumes: [{ path: "/data", writable: true, is_placeholder: false, free_bytes: 1e12, total_bytes: 2e12 }] };
-      if (path === "/api/transfer/file" && req.method() === "POST") {
-        const { src, tx_id } = req.postDataJSON() as { src: string; tx_id: string };
-        const id = `job-${jobs.length + 1}`;
-        jobs.push({ id, name: src.split("/").pop() ?? "", tx: tx_id, state: "running" });
-        body = { job_id: id };
+  await routeEngine(page, (path, req) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "10.4.1", caps: {} };
+    if (path === "/api/ps5/status") body = { ok: true, version: "10.4.1" };
+    if (path === "/api/ps5/volumes")
+      body = { volumes: [{ path: "/data", writable: true, is_placeholder: false, free_bytes: 1e12, total_bytes: 2e12 }] };
+    if (path === "/api/transfer/file" && req.method() === "POST") {
+      const { src, tx_id } = req.postDataJSON() as { src: string; tx_id: string };
+      const id = `job-${jobs.length + 1}`;
+      jobs.push({ id, name: src.split("/").pop() ?? "", tx: tx_id, state: "running" });
+      body = { job_id: id };
+    }
+    const m = /^\/api\/jobs\/(job-\d+)(\/cancel)?$/.exec(path);
+    if (m) {
+      const job = jobs.find((j) => j.id === m[1]);
+      if (m[2]) {
+        if (job?.state === "running") job.state = "cancelled";
+      } else if (job?.state === "running") {
+        body = { job_id: job.id, status: "running", bytes_sent: 2, total_bytes: 10, files_sent: 0, total_files: 1 };
+      } else if (job?.state === "done") {
+        body = { job_id: job.id, status: "done", bytes_sent: 10, total_bytes: 10, files_sent: 1, total_files: 1 };
+      } else {
+        body = { job_id: m[1], status: "failed", error: "transfer_cancelled" };
       }
-      const m = /^\/api\/jobs\/(job-\d+)(\/cancel)?$/.exec(path);
-      if (m) {
-        const job = jobs.find((j) => j.id === m[1]);
-        if (m[2]) {
-          if (job?.state === "running") job.state = "cancelled";
-        } else if (job?.state === "running") {
-          body = { job_id: job.id, status: "running", bytes_sent: 2, total_bytes: 10, files_sent: 0, total_files: 1 };
-        } else if (job?.state === "done") {
-          body = { job_id: job.id, status: "done", bytes_sent: 10, total_bytes: 10, files_sent: 1, total_files: 1 };
-        } else {
-          body = { job_id: m[1], status: "failed", error: "transfer_cancelled" };
-        }
-      }
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
+    }
+    return body;
+  });
   await page.goto("/send", { waitUntil: "domcontentloaded" });
   const queueRow = (name: string) => page.getByTestId("queue-row").filter({ hasText: name }).first();
   await page.getByRole("button", { name: "Start queue", exact: true }).click({ timeout: 30_000 });
@@ -144,36 +149,31 @@ test("Send now runs a row first and resumes the paused upload by itself", async 
   }, { items: [row("big.bin"), row("other.txt"), row("small.txt")], continueOnFailure: false });
   const jobs: { id: string; name: string; tx: string; state: "running" | "done" | "cancelled" }[] = [];
   const started = () => jobs.map((j) => j.name);
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const req = route.request();
-      const path = new URL(req.url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "10.4.1", caps: {} };
-      if (path === "/api/ps5/status") body = { ok: true, version: "10.4.1" };
-      if (path === "/api/transfer/file" && req.method() === "POST") {
-        const { src, tx_id } = req.postDataJSON() as { src: string; tx_id: string };
-        const id = `job-${jobs.length + 1}`;
-        jobs.push({ id, name: src.split("/").pop() ?? "", tx: tx_id, state: "running" });
-        body = { job_id: id };
+  await routeEngine(page, (path, req) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "10.4.1", caps: {} };
+    if (path === "/api/ps5/status") body = { ok: true, version: "10.4.1" };
+    if (path === "/api/transfer/file" && req.method() === "POST") {
+      const { src, tx_id } = req.postDataJSON() as { src: string; tx_id: string };
+      const id = `job-${jobs.length + 1}`;
+      jobs.push({ id, name: src.split("/").pop() ?? "", tx: tx_id, state: "running" });
+      body = { job_id: id };
+    }
+    const m = /^\/api\/jobs\/(job-\d+)(\/cancel)?$/.exec(path);
+    if (m) {
+      const job = jobs.find((j) => j.id === m[1]);
+      if (m[2]) {
+        if (job?.state === "running") job.state = "cancelled";
+      } else if (job?.state === "running") {
+        body = { job_id: job.id, status: "running", bytes_sent: 2, total_bytes: 10, files_sent: 0, total_files: 1 };
+      } else if (job?.state === "done") {
+        body = { job_id: job.id, status: "done", bytes_sent: 10, total_bytes: 10, files_sent: 1, total_files: 1 };
+      } else {
+        body = { job_id: m[1], status: "failed", error: "transfer_cancelled" };
       }
-      const m = /^\/api\/jobs\/(job-\d+)(\/cancel)?$/.exec(path);
-      if (m) {
-        const job = jobs.find((j) => j.id === m[1]);
-        if (m[2]) {
-          if (job?.state === "running") job.state = "cancelled";
-        } else if (job?.state === "running") {
-          body = { job_id: job.id, status: "running", bytes_sent: 2, total_bytes: 10, files_sent: 0, total_files: 1 };
-        } else if (job?.state === "done") {
-          body = { job_id: job.id, status: "done", bytes_sent: 10, total_bytes: 10, files_sent: 1, total_files: 1 };
-        } else {
-          body = { job_id: m[1], status: "failed", error: "transfer_cancelled" };
-        }
-      }
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
+    }
+    return body;
+  });
   await page.goto("/send", { waitUntil: "domcontentloaded" });
   const queueRow = (name: string) => page.getByTestId("queue-row").filter({ hasText: name }).first();
   await page.getByRole("button", { name: "Start queue", exact: true }).click({ timeout: 30_000 });

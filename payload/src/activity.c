@@ -34,6 +34,7 @@
 #endif
 #define POLL_INTERVAL_SEC 30
 #define LAUNCH_DEBOUNCE_SEC 5
+#define TOTAL_SECONDS_SANE_MAX (1ull << 40) /* some 35,000 years */
 
 /* sysctl KERN_PROC kinfo layout offsets (same as cheats.c) */
 #define KINFO_STRUCT_MINSIZE 448
@@ -59,6 +60,11 @@ static int g_count;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static atomic_int g_watcher_running;
 static time_t g_last_save;
+/* What the file does not hold yet: a launch, an end or a new entry (g_dirty), or only a running
+ * game's last-seen time (g_play_dirty). With neither, a save would rewrite and sync the same bytes
+ * on the console's internal drive, 1,000 times a day from an idle helper. Under g_lock. */
+static int g_dirty;
+static int g_play_dirty;
 
 static int64_t now_ts(void) {
     struct timespec ts;
@@ -136,6 +142,8 @@ static void load_state(void) {
         }
         if ((q = strstr(tid_end, "\"totalSeconds\":"))) {
             e->total_seconds = strtoull(q + 15, NULL, 10);
+            /* An older helper could save a total that underflowed: its real value is gone. */
+            if (e->total_seconds > TOTAL_SECONDS_SANE_MAX) e->total_seconds = 0;
         }
         if ((q = strstr(tid_end, "\"lastLaunchTs\":"))) {
             e->last_launch_ts = (int64_t)strtoll(q + 15, NULL, 10);
@@ -160,10 +168,22 @@ static void load_state(void) {
                     (uint64_t)(g_entries[i].last_seen_ts -
                                g_entries[i].session_started_ts);
                 g_entries[i].session_started_ts = 0;
+                g_dirty = 1;
             }
         }
         pthread_mutex_unlock(&g_lock);
     }
+}
+
+/* Whether the watcher should save now: a change a restart must find within a minute, a running
+ * game's time every few minutes (a crash loses at most that much play), and nothing else. The
+ * shutdown flush saves whatever is left. A clock moved back counts as due. */
+#define ACTIVITY_SAVE_CHANGE_SEC 60
+#define ACTIVITY_SAVE_PLAY_SEC 180
+static int activity_save_due(int dirty, int play_dirty, int64_t since_save) {
+    if (since_save < 0) return dirty || play_dirty;
+    return (dirty && since_save > ACTIVITY_SAVE_CHANGE_SEC) ||
+           (play_dirty && since_save > ACTIVITY_SAVE_PLAY_SEC);
 }
 
 static void save_state(void) {
@@ -243,6 +263,7 @@ static void record_resume(const char *title_id) {
     }
     e->session_started_ts = now;
     e->last_seen_ts = now;
+    g_dirty = 1;
     pthread_mutex_unlock(&g_lock);
 }
 
@@ -253,12 +274,16 @@ static void record_launch(const char *title_id) {
 
     int64_t now = now_ts();
     if (e->session_started_ts > 0) {
-        if (now - e->last_launch_ts < LAUNCH_DEBOUNCE_SEC) {
+        /* A bounce only when the clock ran forward: moved back, every launch would read as one. */
+        if (now >= e->last_launch_ts && now - e->last_launch_ts < LAUNCH_DEBOUNCE_SEC) {
             e->last_seen_ts = now;
             pthread_mutex_unlock(&g_lock);
             return;
         }
-        e->total_seconds += (uint64_t)(e->last_seen_ts - e->session_started_ts);
+        /* These are wall-clock: this app sets the console's clock and Sony's NTP can step it back,
+         * and a negative span cast to unsigned would be saved as 18 quintillion seconds. */
+        if (e->last_seen_ts > e->session_started_ts)
+            e->total_seconds += (uint64_t)(e->last_seen_ts - e->session_started_ts);
         e->session_started_ts = 0;
     }
 
@@ -266,6 +291,7 @@ static void record_launch(const char *title_id) {
     e->session_started_ts = now;
     e->last_launch_ts = now;
     e->last_seen_ts = now;
+    g_dirty = 1;
     pthread_mutex_unlock(&g_lock);
 }
 
@@ -285,6 +311,7 @@ static void record_exit(const char *title_id) {
         e->total_seconds += (uint64_t)(end - e->session_started_ts);
     e->session_started_ts = 0;
     e->last_seen_ts = end;
+    g_dirty = 1;
     pthread_mutex_unlock(&g_lock);
 }
 
@@ -402,7 +429,10 @@ static void detect_and_track(void) {
         /* Same game still being played — update last_seen */
         pthread_mutex_lock(&g_lock);
         entry_t *e = find_entry(g_current_title);
-        if (e) e->last_seen_ts = now_ts();
+        if (e) {
+            e->last_seen_ts = now_ts();
+            g_play_dirty = 1;
+        }
         pthread_mutex_unlock(&g_lock);
         return;
     }
@@ -439,12 +469,14 @@ static void *watcher_thread(void *arg) {
         g_first_poll = 0;
 
         time_t now = time(NULL);
-        if (now - g_last_save > 60) {
-            pthread_mutex_lock(&g_lock);
+        pthread_mutex_lock(&g_lock);
+        if (activity_save_due(g_dirty, g_play_dirty, (int64_t)(now - g_last_save))) {
             save_state();
-            pthread_mutex_unlock(&g_lock);
+            g_dirty = 0;
+            g_play_dirty = 0;
             g_last_save = now;
         }
+        pthread_mutex_unlock(&g_lock);
     }
     return NULL;
 }
@@ -500,6 +532,7 @@ void activity_init(void) {
         pthread_attr_t attr;
         pthread_attr_init(&attr);
         pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+        pthread_attr_setstacksize(&attr, 512u * 1024u);
         if (pthread_create(&thr, &attr, watcher_thread, NULL) != 0) {
             atomic_store(&g_watcher_running, 0);
         }
@@ -617,7 +650,7 @@ int activity_get_json(char *buf, size_t cap, size_t *written) {
         uint64_t live_total = e->total_seconds;
         int active = 0;
         if (e->session_started_ts > 0) {
-            live_total += (uint64_t)(now - e->session_started_ts);
+            if (now > e->session_started_ts) live_total += (uint64_t)(now - e->session_started_ts);
             active = 1;
         }
 

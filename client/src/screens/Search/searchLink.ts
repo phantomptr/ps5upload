@@ -8,8 +8,3 @@ export function fileSystemTargetFor(hit: Pick<SearchHit, "path" | "kind">): { di
   const cut = path.lastIndexOf("/");
   return { dir: cut > 0 ? path.slice(0, cut) : "/", select: path.slice(cut + 1) || undefined };
 }
-
-/** The same place as a link (`?path=` is Files' deep link). */
-export function fileSystemLinkFor(hit: Pick<SearchHit, "path" | "kind">): string {
-  return `/files?path=${encodeURIComponent(fileSystemTargetFor(hit).dir)}`;
-}

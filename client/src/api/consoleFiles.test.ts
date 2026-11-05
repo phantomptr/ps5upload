@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchConsoleStat, importLocalCheat, minionSet, minionTile } from "./consoleFiles";
+import { fetchConsoleStat, importLocalCheat, minionSet } from "./consoleFiles";
 vi.mock("../state/engine", () => ({ getEngineUrl: () => "http://engine" }));
 afterEach(() => vi.unstubAllGlobals());
 function reply(body: object, status = 200) {
@@ -20,13 +20,13 @@ describe("paired console controls", () => {
       tile_busy: true,
       tile_failed: false,
     });
-    await minionTile("10.0.0.2", true);
+    await minionSet("10.0.0.2", { tile: true });
     expect(fetcher.mock.calls[0][0]).toBe("http://engine/api/ps5/minion/tile");
     expect(JSON.parse(fetcher.mock.calls[0][1].body)).toEqual({
       addr: "10.0.0.2",
       tile: true,
     });
-    await minionTile("10.0.0.2");
+    await minionSet("10.0.0.2", {});
     expect(JSON.parse(fetcher.mock.calls[1][1].body)).not.toHaveProperty(
       "tile",
     );
@@ -39,12 +39,12 @@ describe("paired console controls", () => {
       tile_failed: false,
       tile_result: "hidden",
     });
-    expect(await minionTile("h", false)).toMatchObject({
+    expect(await minionSet("h", { tile: false })).toMatchObject({
       tile: false,
       tile_result: "hidden",
     });
     reply({ supported: true, tile: false, tile_busy: false, tile_failed: false });
-    expect(await minionTile("h")).not.toHaveProperty("tile_result");
+    expect(await minionSet("h", {})).not.toHaveProperty("tile_result");
   });
   it("turns Minion off and on and reports whether the helper can", async () => {
     const fetcher = reply({
@@ -70,9 +70,9 @@ describe("paired console controls", () => {
   });
   it("feature detects old helpers and rejects malformed settings", async () => {
     reply({ supported: false });
-    expect(await minionTile("h")).toEqual({ supported: false });
+    expect(await minionSet("h", {})).toEqual({ supported: false });
     reply({ supported: true });
-    await expect(minionTile("h")).rejects.toThrow("Invalid Minion");
+    await expect(minionSet("h", {})).rejects.toThrow("Invalid Minion");
   });
   it("rejects invalid stats and surfaces helper errors", async () => {
     reply({ kind: "file", mode: "0644" });

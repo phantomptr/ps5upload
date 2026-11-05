@@ -17,6 +17,11 @@
 //! and named in the folder's `note`. It stops at [`MAX_DIRS`] folders or after [`MAX_WALL`];
 //! the result is then `partial` and the folders it never read are noted `not_scanned`.
 //! A walk nobody has polled for [`UNWATCHED`] is abandoned (a closed browser tab never cancels).
+//!
+//! One walk per console: a second start for the folder being walked joins that walk (another tab,
+//! a retried request), and one for another folder is refused with 409 `disk_usage_busy` and the
+//! running walk's `id`. [`WORKERS`] is sized so one walk leaves the pollers their slots; two would
+//! take all of the helper's.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -411,6 +416,7 @@ enum Outcome {
 
 struct Job {
     id: Uuid,
+    addr: String,
     path: String,
     started: Instant,
     progress: Progress,
@@ -483,8 +489,24 @@ fn find(id: &str) -> Option<Arc<Job>> {
 
 #[derive(Deserialize)]
 pub(crate) struct StartReq {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     path: String,
+}
+
+/// The walk a new one for `addr` has to wait for or join: one still running that nobody has told
+/// to stop.
+fn running_walk(jobs: &HashMap<Uuid, Arc<Job>>, addr: &str) -> Option<Arc<Job>> {
+    jobs.values()
+        .find(|j| {
+            j.addr == addr
+                && !j.abandoned()
+                && j.outcome
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .is_none()
+        })
+        .cloned()
 }
 
 /// POST /api/ps5/disk-usage
@@ -499,6 +521,7 @@ pub(crate) async fn start(State(state): State<AppState>, Json(req): Json<StartRe
     let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
     let job = Arc::new(Job {
         id: Uuid::new_v4(),
+        addr: addr.clone(),
         path: normalize(&req.path),
         started: Instant::now(),
         progress: Progress::default(),
@@ -515,6 +538,20 @@ pub(crate) async fn start(State(state): State<AppState>, Json(req): Json<StartRe
                 .as_ref()
                 .is_none_or(|(_, _, at)| at.elapsed() < KEEP_FINISHED)
         });
+        if let Some(running) = running_walk(&g, &addr) {
+            if running.path == job.path {
+                return Json(running.status()).into_response();
+            }
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "disk_usage_busy",
+                    "id": running.id.to_string(),
+                    "path": running.path,
+                })),
+            )
+                .into_response();
+        }
         g.insert(job.id, job.clone());
     }
     let j = job.clone();
@@ -593,6 +630,42 @@ pub(crate) async fn cancel(Path(id): Path<String>) -> Response {
             Json(j.status()).into_response()
         }
         None => json_err(StatusCode::NOT_FOUND, "no such disk usage walk").into_response(),
+    }
+}
+
+#[cfg(test)]
+mod one_walk_per_console_tests {
+    use super::*;
+
+    fn job(addr: &str, path: &str) -> Arc<Job> {
+        Arc::new(Job {
+            id: Uuid::new_v4(),
+            addr: addr.into(),
+            path: path.into(),
+            started: Instant::now(),
+            progress: Progress::default(),
+            cancel: AtomicBool::new(false),
+            last_seen: Mutex::new(Instant::now()),
+            outcome: Mutex::new(None),
+        })
+    }
+
+    #[test]
+    fn only_a_live_walk_on_that_console_holds_the_slot() {
+        let live = job("a", "/data");
+        let jobs: HashMap<Uuid, Arc<Job>> = [(live.id, live.clone())].into_iter().collect();
+        assert_eq!(running_walk(&jobs, "a").map(|j| j.id), Some(live.id));
+        assert!(running_walk(&jobs, "b").is_none(), "another console");
+
+        // Told to stop (a new folder picked): the next walk need not wait for its last listing.
+        live.cancel.store(true, Ordering::Relaxed);
+        assert!(running_walk(&jobs, "a").is_none());
+        live.cancel.store(false, Ordering::Relaxed);
+
+        // Finished.
+        *live.outcome.lock().unwrap() =
+            Some((Outcome::Failed("x".into()), Duration::ZERO, Instant::now()));
+        assert!(running_walk(&jobs, "a").is_none());
     }
 }
 

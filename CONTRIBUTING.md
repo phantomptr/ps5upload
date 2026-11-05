@@ -22,6 +22,7 @@ single clean commit on `main`.
 
 ```bash
 make install     # bootstrap the dev env (auto-detects macOS / Linux / Windows)
+export PS5_PAYLOAD_SDK="$HOME/ps5-payload-sdk"   # where it put the SDK; `make build` needs this
 make build       # payload ELF + Rust engine + client UI
 make run-client  # launch the Tauri dev app
 ```
@@ -35,22 +36,23 @@ specific one, `SDK_CHECK=1` to only check); see TESTING.md, Layer 2.
 
 ## Quality gate: run before opening a PR
 
-CI runs the same checks, including the host-side payload self-tests (`make test-payload`;
-nothing in CI runs on a console); running them locally first saves a round-trip.
-`npm run validate` runs most of it in one command (version sync, script checks, i18n,
-engine and desktop fmt/clippy/tests, client typecheck/lint/tests/build). The complete gate is
-these, and `cargo fmt --check` must pass in BOTH `engine/` and `client/src-tauri`:
+CI runs the same checks, including the host-side payload self-tests (nothing in CI runs on a
+console); running them locally first saves a round-trip. [TESTING.md](TESTING.md) lists what
+`npm run validate` does.
 
 ```bash
-( cd engine && cargo fmt --all -- --check )       # fmt in BOTH workspaces
+npm run validate      # version sync, script checks, i18n, engine and desktop checks, client checks
 ( cd client/src-tauri && cargo fmt --all -- --check )
-( cd engine && cargo clippy --workspace -- -D warnings )
-( cd engine && cargo test --workspace )
+make test-payload     # needs PS5_PAYLOAD_SDK
+make check-no-ftx2    # the retired protocol must stay gone
+```
+
+To run one engine lane by hand, leave `ps5upload-ctest` out of the workspace run and run it on its
+own: its C server is one per process, so it needs a single test thread.
+
+```bash
+( cd engine && cargo test --workspace --exclude ps5upload-ctest )
 ( cd engine && cargo test -p ps5upload-ctest -- --test-threads=1 )
-make test-payload                                 # needs PS5_PAYLOAD_SDK
-make check-no-ftx2                                # the retired protocol must stay gone
-( cd client && npm run lint && npm run typecheck && npm test && npm run build:vite )
-npm run i18n:check                                # from the repo root
 ```
 
 `ps5upload-ctest` builds the payload's AVA1 C (the `third_party/ava1` library plus the payload's
@@ -79,6 +81,8 @@ locale needs an allowlist entry.
 - Keep PRs small and reviewable; unrelated cleanups belong in their own PR.
 - Hardware-specific behavior (anything that talks to a real PS5) can't be
   verified in CI — call out in your PR how you tested it on hardware.
+- A new or changed engine route or request struct changes the API's description: run
+  `( cd engine && cargo run -p ps5upload-apidoc )` and commit `api/openapi.json`. CI fails otherwise.
 - By contributing, you agree your work is licensed under the project's
   [GPLv3](LICENSE).
 

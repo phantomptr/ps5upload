@@ -941,7 +941,7 @@ fn record_for(
 /// whether it is armed: only an update this copy installs without a password can be. The
 /// renderer arms it only while nothing transfers and disarms it when a transfer starts.
 #[tauri::command]
-pub fn update_install_on_quit(
+pub async fn update_install_on_quit(
     app: AppHandle,
     path: Option<String>,
     version: Option<String>,
@@ -951,7 +951,12 @@ pub fn update_install_on_quit(
         return Ok(false);
     };
     let (download, dir) = downloaded_update(&app, &path)?;
-    let armed = installs_quietly(&download);
+    // Off the main thread: this runs whenever a transfer starts or ends while an update waits,
+    // and the plan probes the app's folder with a write and, on Linux, asks the package database.
+    let probe = download.clone();
+    let armed = tauri::async_runtime::spawn_blocking(move || installs_quietly(&probe))
+        .await
+        .map_err(|e| format!("update_install_on_quit: {e}"))?;
     let record = record_for(&app, &download, version.as_deref());
     *on_quit_slot() = armed.then_some(Armed {
         download,
@@ -991,9 +996,11 @@ pub async fn update_install(
     version: Option<String>,
 ) -> Result<(), String> {
     let (download, dir) = downloaded_update(&app, &path)?;
-    let plan = plan(&download).ok_or_else(|| {
-        "this copy cannot install updates by itself; install the download by hand".to_string()
-    })?;
+    let probe = download.clone();
+    let plan = tauri::async_runtime::spawn_blocking(move || plan(&probe))
+        .await
+        .map_err(|e| format!("update_install: {e}"))?
+        .ok_or_else(|| super::shell_error::code_only("update_cannot_self_install"))?;
     if let Plan::LinuxPackage {
         package, manager, ..
     } = &plan

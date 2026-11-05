@@ -63,7 +63,7 @@ export function ServingLinks() {
                 <span className="font-medium text-[var(--color-text)]">
                   {l.title}
                 </span>
-                <span className="ml-auto tabular-nums text-[var(--color-muted)]">
+                <span className="ms-auto tabular-nums text-[var(--color-muted)]">
                   {l.requests_served > 0
                     ? tr(
                         "collection.serving_sent",

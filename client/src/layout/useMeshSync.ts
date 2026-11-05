@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { hostOf } from "../lib/addr";
 import { isTauriEnv } from "../lib/tauriEnv";
 import { syncId } from "../lib/meshShare";
+import { consoleBusy } from "../lib/usePoll";
 import { dailyBackup } from "../lib/settingsBackup";
 import { getEngineUrl } from "../state/engine";
 import { useConnectionStore } from "../state/connection";
@@ -19,7 +20,7 @@ import {
   useMeshStore,
 } from "../state/mesh";
 import { useRemotePlayStore } from "../state/remotePlay";
-import type { MeshJoin } from "../api/mesh";
+import type { MeshActivityItem, MeshJoin } from "../api/mesh";
 import { joinApi, presenceJoin, setOwnJoinWs } from "../screens/Play/playTogetherState";
 import { useTaskStore } from "../state/tasks";
 import { useToastStore } from "../state/toasts";
@@ -28,8 +29,16 @@ import { useToastStore } from "../state/toasts";
 export const MESH_POLL_MS = 4_000;
 /** How often this window's presence is checked (it is sent only when it changed, or every 8 s). */
 export const PRESENCE_MS = 3_000;
+/** The same two while data is moving to that console: every call to it then costs the transfer
+ *  speed. Presence still goes out at once when the work itself changes, just not per percent. */
+export const MESH_BUSY_MS = 30_000;
 /** The daily settings backup is looked at this often (it runs once a day; lib/settingsBackup). */
 const BACKUP_CHECK_MS = 60 * 60 * 1000;
+
+/** What a presence list says apart from how far along each item is. */
+function presenceWork(items: readonly MeshActivityItem[]): string {
+  return JSON.stringify(items.map((i) => [i.kind, i.title, i.stage]));
+}
 
 /** How a backup names the app that made it: a browser of a Docker engine says so (several
  *  browsers share the engine's name). */
@@ -112,9 +121,14 @@ export function useMeshSync() {
     if (!key || !up) return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let lastRead = 0;
     const tick = async () => {
       if (stopped) return;
-      if (typeof document === "undefined" || document.visibilityState === "visible") await pollMesh(key);
+      const shown = typeof document === "undefined" || document.visibilityState === "visible";
+      if (shown && (!consoleBusy(key) || Date.now() - lastRead >= MESH_BUSY_MS)) {
+        lastRead = Date.now();
+        await pollMesh(key);
+      }
       if (!stopped) timer = setTimeout(tick, MESH_POLL_MS);
     };
     void tick();
@@ -131,6 +145,7 @@ export function useMeshSync() {
 
   // Publish this window's work, per console it touches (and the selected one, idle or not).
   useEffect(() => {
+    const sentWork = new Map<string, { work: string; at: number; items: MeshActivityItem[] }>();
     const id = window.setInterval(() => {
       const tasks = useTaskStore.getState().tasks;
       const conn = useConnectionStore.getState();
@@ -149,6 +164,20 @@ export function useMeshSync() {
         const rt = conn.runtimeByHost[h];
         if (rt && rt.payloadStatus !== "up") continue;
         const items = presenceItems(tasks, h);
+        if (h !== rpHost && consoleBusy(h)) {
+          // Only the percent moved: the same list again tells the engine this window is still here
+          // and costs the console nothing; a new percent goes out now and then.
+          const work = presenceWork(items);
+          const sent = sentWork.get(h);
+          if (sent && sent.work === work && Date.now() - sent.at < MESH_BUSY_MS) {
+            void publishPresence(h, sent.items);
+          } else {
+            sentWork.set(h, { work, at: Date.now(), items });
+            void publishPresence(h, items);
+          }
+          continue;
+        }
+        sentWork.delete(h);
         void publishPresence(
           h,
           h === rpHost ? [{ kind: RP_ACTIVITY, ...padOf(h), ...joinOf(h, rp.target?.name ?? "") }, ...items] : items,

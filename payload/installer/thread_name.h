@@ -17,6 +17,7 @@
 
 #define INST_THREAD_MAIN      "ps5u-installer"
 #define INST_THREAD_MONITOR   "ps5u-inst-monitor"
+#define INST_THREAD_WATCHDOG  "ps5u-inst-watch"
 #define INST_THREAD_CONN      "ps5u-inst-conn"
 #define INST_THREAD_INIT      "ps5u-inst-init"
 #define INST_THREAD_LB_LISTEN "ps5u-inst-lb"

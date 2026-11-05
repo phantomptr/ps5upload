@@ -12,8 +12,10 @@ import {
   type ActivityPhase,
 } from "./activityHistory";
 import { setBackgroundWorkHold, setTransferKeepAwake } from "../lib/keepAwakeHold";
-import { anyAwakeWork } from "../lib/awakeWork";
+import { anyWorkRunning } from "./runningWork";
 import { useTaskStore } from "./tasks";
+import { trStatic } from "../lib/trStatic";
+import { bulkOpLabel } from "./taskWiring";
 
 /**
  * Subscribes to the per-feature stores (transfer, FS bulk, FS
@@ -46,34 +48,12 @@ export function installActivityWiring() {
   // reconcile the OS sleep inhibitor on every relevant change. The hold
   // is edge-collapsed + best-effort in `setTransferKeepAwake`, and the
   // Rust side refcounts it separately from the manual Settings toggle.
-  const anyTransferActive = (): boolean => {
-    const phases = useTransferStore.getState().phasesByHost;
-    if (
-      Object.values(phases).some(
-        (p) => p.kind === "starting" || p.kind === "running",
-      )
-    )
-      return true;
-    if (
-      Object.values(useFsDownloadOpStore.getState().byHost).some(
-        (d) => d.active,
-      )
-    )
-      return true;
-    if (
-      useUploadQueueStore.getState().items.some((it) => it.status === "running")
-    )
-      return true;
-    // Installs (stream, link, archive, upload), copies and builds: every one registers a task.
-    if (anyAwakeWork(useTaskStore.getState().tasks)) return true;
-    return false;
-  };
   // The host's background-work hold (#457) also covers a queue between items: its
   // drain loop is running but no item is, for the settle delay before the next.
   const queueDraining = (): boolean =>
     Object.values(useUploadQueueStore.getState().runningHosts).some(Boolean);
   const reconcileKeepAwake = () => {
-    const active = anyTransferActive();
+    const active = anyWorkRunning();
     setTransferKeepAwake(active);
     setBackgroundWorkHold(active || queueDraining());
   };
@@ -124,7 +104,7 @@ export function installActivityWiring() {
           // two-console session can't tell whose upload this is.
           useActivityHistoryStore
             .getState()
-            .start("upload", "Upload starting…", { addr: host }),
+            .start("upload", trStatic("task_upload_starting", "Upload starting…"), { addr: host }),
         );
         continue;
       }
@@ -143,8 +123,8 @@ export function installActivityWiring() {
         useActivityHistoryStore.getState().update(existingId, {
           label:
             phase.fileCount > 1
-              ? `Uploading ${phase.fileCount} files`
-              : `Uploading ${phase.files[0]?.rel_path ?? ""}`.trim(),
+              ? trStatic("task_uploading_files", "Uploading files: {count}", { count: phase.fileCount })
+              : trStatic("task_uploading_file", "Uploading {name}", { name: phase.files[0]?.rel_path ?? "" }).trim(),
           bytes: phase.bytesSent,
           totalBytes: phase.totalBytes,
           phase: newPhase,
@@ -227,19 +207,14 @@ export function installActivityWiring() {
             : cur.op === "paste-copy"
               ? "fs-paste-copy"
               : "fs-paste-move";
-        const verb =
-          cur.op === "delete"
-            ? "Deleting"
-            : cur.op === "paste-copy"
-              ? "Copying"
-              : "Moving";
+        
         bulkActivityIds.set(
           host,
           useActivityHistoryStore
             .getState()
             .start(
               kind,
-              `${verb} ${cur.total} item${cur.total === 1 ? "" : "s"}`,
+              bulkOpLabel(cur.op, cur.total),
               {
                 fromPath: cur.fromPath || undefined,
                 toPath: cur.toPath || undefined,
@@ -287,7 +262,7 @@ export function installActivityWiring() {
           host,
           useActivityHistoryStore
             .getState()
-            .start("download", `Downloading ${cur.rootName}`, {
+            .start("download", trStatic("task_downloading", "Downloading {name}", { name: cur.rootName }), {
               fromPath: cur.rootSrcPath,
               toPath: cur.destDir,
               // The byHost key IS the bare console host.
@@ -358,7 +333,7 @@ export function installActivityWiring() {
       if (isRunning && !wasRunning) {
         const id = useActivityHistoryStore
           .getState()
-          .start("upload-queue", `Queue: ${item.displayName}`, {
+          .start("upload-queue", trStatic("activity_queue_item", "Queue: {name}", { name: item.displayName }), {
             fromPath: item.sourcePath,
             toPath: item.resolvedDest,
             // Which console this queue item targets — drives the console

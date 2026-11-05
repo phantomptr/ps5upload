@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   ScrollText,
   Trash2,
@@ -21,6 +21,7 @@ import { useTr } from "../../state/lang";
 import { writeClipboard } from "../../lib/clipboard";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { browserDownloadText } from "../../lib/browserDownload";
+import { formatDate } from "../../lib/formatDate";
 
 const LEVEL_ORDER: LogLevel[] = ["error", "warn", "info", "debug", "trace"];
 
@@ -250,7 +251,7 @@ export default function AppLogsPanel() {
           label={tr("logs_detailed", undefined, "Detailed logs")}
           hint={
             detailedOn && detailedUntil !== null
-              ? tr("logs_detailed_on_until", { time: new Date(detailedUntil).toLocaleString() }, "On until {time}. Turns itself off then.")
+              ? tr("logs_detailed_on_until", { time: formatDate(detailedUntil) }, "On until {time}. Turns itself off then.")
               : tr(
                   "logs_detailed_hint",
                   undefined,
@@ -288,7 +289,7 @@ export default function AppLogsPanel() {
         <Button
           variant="ghost"
           size="sm"
-          className="ml-auto"
+          className="ms-auto"
           onClick={() => void openLogsDir()}
         >
           {tr("logs_open_folder", undefined, "Open logs folder")}
@@ -389,7 +390,7 @@ function FilterPill({
   );
 }
 
-function LogRow({ entry }: { entry: LogEntry }) {
+const LogRow = memo(function LogRow({ entry }: { entry: LogEntry }) {
   const [expanded, setExpanded] = useState(false);
   const meta = LEVEL_META[entry.level];
   const hasDetail = !!entry.detail;
@@ -398,7 +399,7 @@ function LogRow({ entry }: { entry: LogEntry }) {
       <button
         type="button"
         onClick={() => hasDetail && setExpanded((v) => !v)}
-        className={`group flex w-full items-start gap-3 text-left max-md:min-h-11 max-md:items-center ${
+        className={`group flex w-full items-start gap-3 text-start max-md:min-h-11 max-md:items-center ${
           hasDetail ? "cursor-pointer" : "cursor-default"
         }`}
       >
@@ -424,10 +425,10 @@ function LogRow({ entry }: { entry: LogEntry }) {
         </span>
       </button>
       {expanded && entry.detail && (
-        <pre className="mt-2 ml-[54px] max-h-64 overflow-auto rounded-[var(--radius-field)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 font-mono text-xs text-[var(--color-muted)]">
+        <pre className="mt-2 ms-[54px] max-h-64 overflow-auto rounded-[var(--radius-field)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 font-mono text-xs text-[var(--color-muted)]">
           {entry.detail}
         </pre>
       )}
     </li>
   );
-}
+});

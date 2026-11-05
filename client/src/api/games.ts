@@ -3,6 +3,7 @@
 
 import { getEngineUrl } from "../state/engine";
 import type { CollectionLocation, CollectionOffer } from "./collection";
+import { engineFetch } from "../lib/engineFetch";
 
 /** One console's side of the game, as last read. */
 export interface ConsoleEntry {
@@ -31,7 +32,7 @@ export interface GameView {
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<{ status: number; body: T | null }> {
-  const res = await fetch(`${getEngineUrl()}/api${path}`, {
+  const res = await engineFetch(`${getEngineUrl()}/api${path}`, {
     ...init,
     headers: init?.body ? { "content-type": "application/json" } : undefined,
   });
@@ -78,7 +79,8 @@ export const gamesApi = {
     return r.body;
   },
   /** Forgets saved state of every console not in `hosts`. */
-  keep: async (hosts: string[]): Promise<void> => {
-    await call(`/console-snapshots/keep`, { method: "POST", body: JSON.stringify({ hosts }) });
+  /** Forget these consoles (removed here, or at a new IP); other clients' consoles stay. */
+  forget: async (hosts: string[]): Promise<void> => {
+    await call(`/console-snapshots/forget`, { method: "POST", body: JSON.stringify({ hosts }) });
   },
 };

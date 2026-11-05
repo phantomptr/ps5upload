@@ -1,6 +1,6 @@
 // Whether the host posts job complete / failed notifications itself (#457).
 //
-// The desktop and Android hosts watch the engine from Rust (bg_activity.rs) and
+// The desktop, Android and iPhone hosts watch the engine from Rust (bg_activity.rs) and
 // notify when a job ends, whatever the WebView is doing. When they do, the
 // renderer must not mirror its own notification for the same ending, or the
 // person gets two. The browser build has no host: false, the old behaviour.
@@ -30,10 +30,4 @@ export function nativeJobNotify(): Promise<boolean> {
       pending = null;
     });
   return pending;
-}
-
-/** Test hook: forget the cached answer. */
-export function resetNativeJobNotifyForTests(): void {
-  known = null;
-  pending = null;
 }

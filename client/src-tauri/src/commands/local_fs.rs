@@ -25,10 +25,26 @@ pub struct LocalEntry {
 
 /// List a real local directory: directories first, then files, each
 /// alphabetical (case-insensitive). Unreadable entries are skipped rather
-/// than failing the whole listing.
+/// than failing the whole listing. With `limit`, one page of that order from `offset`: the in-app
+/// browser asks for pages, since a folder of 100k entries (a phone's camera backup, say) as one
+/// IPC reply is many MB of JSON. Off the async workers: a read and a stat per entry.
 #[tauri::command]
-pub async fn local_list_dir(path: String) -> Result<Vec<LocalEntry>, String> {
-    let rd = std::fs::read_dir(&path).map_err(|e| format!("read_dir {path}: {e}"))?;
+pub async fn local_list_dir(
+    path: String,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> Result<Vec<LocalEntry>, String> {
+    tokio::task::spawn_blocking(move || read_sorted(&path, offset, limit))
+        .await
+        .map_err(|e| format!("local_list_dir: {e}"))?
+}
+
+fn read_sorted(
+    path: &str,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> Result<Vec<LocalEntry>, String> {
+    let rd = std::fs::read_dir(path).map_err(|e| format!("read_dir {path}: {e}"))?;
     let mut out: Vec<LocalEntry> = Vec::new();
     for ent in rd.flatten() {
         let md = match ent.metadata() {
@@ -47,6 +63,10 @@ pub async fn local_list_dir(path: String) -> Result<Vec<LocalEntry>, String> {
         (false, true) => std::cmp::Ordering::Greater,
         _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
     });
+    let start = offset.unwrap_or(0).min(out.len());
+    let end = limit.map_or(out.len(), |n| start.saturating_add(n).min(out.len()));
+    out.truncate(end);
+    out.drain(..start);
     Ok(out)
 }
 
@@ -120,9 +140,9 @@ pub async fn local_storage_roots() -> Result<Vec<String>, String> {
     }
 }
 
-/// Whether the app currently has all-files access. Android: reflects
-/// `Environment.isExternalStorageManager()`. Elsewhere: always true (no
-/// scoped-storage restriction), so the UI skips the grant step.
+/// Whether the app may read shared storage. Android 11+: `Environment.isExternalStorageManager()`.
+/// Android 7 to 10: the storage runtime permission. Elsewhere: always true (no scoped-storage
+/// restriction), so the UI skips the grant step.
 #[tauri::command]
 pub async fn storage_access_granted() -> Result<bool, String> {
     #[cfg(target_os = "android")]
@@ -135,8 +155,29 @@ pub async fn storage_access_granted() -> Result<bool, String> {
     }
 }
 
+/// Android's public Downloads folder for this user. `/storage/emulated/0/Download` for the
+/// primary user; a secondary user or work profile has another number there.
+#[tauri::command]
+pub async fn local_downloads_dir() -> Result<String, String> {
+    #[cfg(target_os = "android")]
+    {
+        Ok(android_downloads_dir())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Err("only the Android app has a public Downloads folder".to_string())
+    }
+}
+
+/// See `local_downloads_dir`. The literal only if Android cannot say (JNI failure).
+#[cfg(target_os = "android")]
+pub fn android_downloads_dir() -> String {
+    android::public_downloads_dir().unwrap_or_else(|| "/storage/emulated/0/Download".to_string())
+}
+
 /// Open this app's "All files access" settings page so the user can grant
-/// `MANAGE_EXTERNAL_STORAGE`. No-op off Android.
+/// `MANAGE_EXTERNAL_STORAGE`; on Android 7 to 10, which have no such page, the app's settings
+/// (the page normally shows the prompt instead, through `PS5UploadStorage`). No-op off Android.
 #[tauri::command]
 pub async fn request_storage_access() -> Result<(), String> {
     #[cfg(target_os = "android")]
@@ -147,6 +188,81 @@ pub async fn request_storage_access() -> Result<(), String> {
     {
         Ok(())
     }
+}
+
+/// The copies iOS makes for the Files sheet land in `<tmp>/<bundle>-Inbox` and nothing else ever
+/// removes them (state/iosInbox.ts decides when). Removes everything there except `keep`.
+/// Returns how many went. Does nothing off iOS.
+#[tauri::command]
+pub async fn ios_inbox_sweep(keep: Vec<String>) -> Result<u32, String> {
+    if !cfg!(target_os = "ios") {
+        return Ok(0);
+    }
+    Ok(sweep_inboxes(&std::env::temp_dir(), &keep))
+}
+
+/// Remove one copy, only if it really is one (a path directly inside an Inbox folder).
+#[tauri::command]
+pub async fn ios_inbox_release(path: String) -> Result<bool, String> {
+    if !cfg!(target_os = "ios") {
+        return Ok(false);
+    }
+    Ok(release_inbox_file(&std::env::temp_dir(), &path))
+}
+
+/// The folders the system put its copies in. `-Inbox` is the plugin's suffix for `asCopy`.
+fn inbox_dirs(tmp: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let Ok(rd) = std::fs::read_dir(tmp) else {
+        return Vec::new();
+    };
+    rd.flatten()
+        .filter(|e| e.file_name().to_string_lossy().ends_with("-Inbox"))
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect()
+}
+
+fn canonical_or_same(p: &std::path::Path) -> std::path::PathBuf {
+    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+}
+
+fn sweep_inboxes(tmp: &std::path::Path, keep: &[String]) -> u32 {
+    // /private/var and /var name the same place: compare the real paths.
+    let keep: Vec<std::path::PathBuf> = keep
+        .iter()
+        .map(|k| canonical_or_same(std::path::Path::new(k)))
+        .collect();
+    let mut removed = 0;
+    for dir in inbox_dirs(tmp) {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if keep.contains(&canonical_or_same(&path)) {
+                continue;
+            }
+            let gone = if path.is_dir() {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path)
+            };
+            if gone.is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
+
+fn release_inbox_file(tmp: &std::path::Path, path: &str) -> bool {
+    let real = canonical_or_same(std::path::Path::new(path));
+    let inbox = real.parent().is_some_and(|parent| {
+        inbox_dirs(tmp)
+            .iter()
+            .any(|d| canonical_or_same(d) == parent)
+    });
+    inbox && std::fs::remove_file(&real).is_ok()
 }
 
 /// Acquire a Wi-Fi MulticastLock so mDNS discovery receives multicast
@@ -175,7 +291,7 @@ mod tests {
         std::fs::write(tmp.join("b.txt"), b"hello").unwrap();
         std::fs::write(tmp.join("A.bin"), b"xy").unwrap();
 
-        let out = local_list_dir(tmp.to_string_lossy().into_owned())
+        let out = local_list_dir(tmp.to_string_lossy().into_owned(), None, None)
             .await
             .unwrap();
         let names: Vec<&str> = out.iter().map(|e| e.name.as_str()).collect();
@@ -192,8 +308,48 @@ mod tests {
 
     #[tokio::test]
     async fn local_list_dir_errors_on_missing_dir() {
-        let r = local_list_dir("/no/such/ps5upload-test-dir-xyz".into()).await;
+        let r = local_list_dir("/no/such/ps5upload-test-dir-xyz".into(), None, None).await;
         assert!(r.is_err());
+    }
+
+    fn inbox_fixture(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let tmp = std::env::temp_dir().join(format!("ps5u_inbox_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let inbox = tmp.join("com.app-Inbox");
+        std::fs::create_dir_all(&inbox).unwrap();
+        (tmp, inbox)
+    }
+
+    #[test]
+    fn inbox_sweep_keeps_only_what_the_queue_needs() {
+        let (tmp, inbox) = inbox_fixture("sweep");
+        std::fs::write(inbox.join("old.zip"), b"x").unwrap();
+        std::fs::write(inbox.join("queued.zip"), b"x").unwrap();
+        std::fs::write(tmp.join("not-an-inbox.txt"), b"x").unwrap();
+        let keep = [inbox.join("queued.zip").to_string_lossy().into_owned()];
+        assert_eq!(sweep_inboxes(&tmp, &keep), 1);
+        assert!(!inbox.join("old.zip").exists());
+        assert!(inbox.join("queued.zip").exists());
+        assert!(tmp.join("not-an-inbox.txt").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn inbox_release_only_touches_inbox_files() {
+        let (tmp, inbox) = inbox_fixture("release");
+        std::fs::write(inbox.join("done.zip"), b"x").unwrap();
+        std::fs::write(tmp.join("elsewhere.zip"), b"x").unwrap();
+        assert!(release_inbox_file(
+            &tmp,
+            &inbox.join("done.zip").to_string_lossy()
+        ));
+        assert!(!inbox.join("done.zip").exists());
+        assert!(!release_inbox_file(
+            &tmp,
+            &tmp.join("elsewhere.zip").to_string_lossy()
+        ));
+        assert!(tmp.join("elsewhere.zip").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[tokio::test]
@@ -225,11 +381,26 @@ mod android {
         let mut env = vm
             .attach_current_thread()
             .map_err(|e| format!("attach: {e}"))?;
-        // isExternalStorageManager() is API 30+. On older devices the
-        // legacy storage permissions apply instead, so report "granted"
-        // and let the runtime perms (declared in the manifest) cover it.
+        // isExternalStorageManager() is API 30+. On older devices the legacy storage permission
+        // applies, and it is a runtime permission: declared is not granted, and nothing else
+        // asks for it (the page does, through PS5UploadStorage).
         if sdk_int(&mut env).unwrap_or(30) < 30 {
-            return Ok(true);
+            let context = app_context(&mut env)?;
+            let perm = env
+                .new_string("android.permission.READ_EXTERNAL_STORAGE")
+                .map_err(|e| format!("perm: {e}"))?;
+            let state = env
+                .call_method(
+                    &context,
+                    "checkSelfPermission",
+                    "(Ljava/lang/String;)I",
+                    &[JValue::Object(&perm)],
+                )
+                .map_err(|e| format!("checkSelfPermission: {e}"))?
+                .i()
+                .map_err(|e| format!("int: {e}"))?;
+            // PackageManager.PERMISSION_GRANTED
+            return Ok(state == 0);
         }
         env.call_static_method(
             "android/os/Environment",
@@ -276,10 +447,14 @@ mod android {
             .l()
             .map_err(|e| format!("uri obj: {e}"))?;
 
-        // intent = new Intent(ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, uri)
-        let action = env
-            .new_string("android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION")
-            .map_err(|e| format!("action: {e}"))?;
+        // intent = new Intent(ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, uri), API 30+;
+        // below that ACTION_APPLICATION_DETAILS_SETTINGS, which holds the storage permission.
+        let action = if sdk_int(&mut env).unwrap_or(30) < 30 {
+            "android.settings.APPLICATION_DETAILS_SETTINGS"
+        } else {
+            "android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION"
+        };
+        let action = env.new_string(action).map_err(|e| format!("action: {e}"))?;
         let intent = env
             .new_object(
                 "android/content/Intent",
@@ -306,6 +481,32 @@ mod android {
         )
         .map_err(|e| format!("startActivity: {e}"))?;
         Ok(())
+    }
+
+    /// `Environment.getExternalStoragePublicDirectory(DIRECTORY_DOWNLOADS)`: None on any failure.
+    pub fn public_downloads_dir() -> Option<String> {
+        let vm = vm().ok()?;
+        let mut env = vm.attach_current_thread().ok()?;
+        let result = (|| -> Result<String, jni::errors::Error> {
+            let kind = env.new_string("Download")?;
+            let dir = env
+                .call_static_method(
+                    "android/os/Environment",
+                    "getExternalStoragePublicDirectory",
+                    "(Ljava/lang/String;)Ljava/io/File;",
+                    &[JValue::Object(&kind)],
+                )?
+                .l()?;
+            let path = env
+                .call_method(&dir, "getAbsolutePath", "()Ljava/lang/String;", &[])?
+                .l()?;
+            let path = JString::from(path);
+            let out: String = env.get_string(&path)?.into();
+            Ok(out)
+        })();
+        // Never hand the thread back with a pending exception.
+        let _ = env.exception_clear();
+        result.ok().filter(|p| !p.is_empty())
     }
 
     /// Real, app-readable directory path for every mounted storage volume
@@ -474,5 +675,35 @@ mod android {
             }
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod paging_tests {
+    use super::read_sorted;
+
+    #[test]
+    fn pages_follow_the_listing_order_and_end_cleanly() {
+        let dir = std::env::temp_dir().join(format!("ps5upload-local-page-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("folder")).unwrap();
+        for name in ["b.txt", "A.txt", "c.txt"] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let path = dir.to_string_lossy().into_owned();
+        let names = |offset, limit| -> Vec<String> {
+            read_sorted(&path, offset, limit)
+                .unwrap()
+                .into_iter()
+                .map(|e| e.name)
+                .collect()
+        };
+        // No limit: everything, as every caller but the browser wants it.
+        assert_eq!(names(None, None), ["folder", "A.txt", "b.txt", "c.txt"]);
+        assert_eq!(names(Some(0), Some(2)), ["folder", "A.txt"]);
+        assert_eq!(names(Some(2), Some(2)), ["b.txt", "c.txt"]);
+        assert_eq!(names(Some(3), Some(2)), ["c.txt"]);
+        assert!(names(Some(9), Some(2)).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

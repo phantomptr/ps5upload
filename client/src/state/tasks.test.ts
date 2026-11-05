@@ -37,17 +37,15 @@ describe("taskStore lifecycle", () => {
       kind: "upload-file",
       origin: "files.upload",
       label: "Upload PPSA09519.exfat",
-      consoleId: "192.168.86.100:9113",
+      consoleId: "192.0.2.100:9113",
     });
     const t = useTaskStore.getState().getTask(id);
     expect(t).toBeDefined();
     expect(t!.id).toBe(id);
     expect(t!.kind).toBe("upload-file");
     expect(t!.status).toBe("running");
-    expect(t!.attempts).toBe(1);
-    expect(t!.maxAttempts).toBe(3);
     // hostOf strips the port → bare host is the canonical consoleId.
-    expect(t!.consoleId).toBe("192.168.86.100");
+    expect(t!.consoleId).toBe("192.0.2.100");
     expect(t!.endedAtMs).toBeUndefined();
   });
 
@@ -56,7 +54,7 @@ describe("taskStore lifecycle", () => {
       kind: "upload-dir",
       origin: "files.upload",
       label: "Upload saves",
-      consoleId: "192.168.86.100",
+      consoleId: "192.0.2.100",
     });
     const before = useTaskStore.getState().getTask(id)!.updatedAtMs;
     // Bump time so updatedAtMs strictly increases.
@@ -82,7 +80,7 @@ describe("taskStore lifecycle", () => {
       kind: "fs-delete",
       origin: "files.bulk",
       label: "Delete temp",
-      consoleId: "192.168.86.100",
+      consoleId: "192.0.2.100",
     });
     useTaskStore.getState().finishTask(id, "done");
     const before = useTaskStore.getState().getTask(id)!;
@@ -100,7 +98,7 @@ describe("taskStore lifecycle", () => {
       kind: "pkg-install",
       origin: "games.install",
       label: "Install game.pkg",
-      consoleId: "192.168.86.100",
+      consoleId: "192.0.2.100",
     });
     useTaskStore.getState().finishTask(id, "done", {
       progress: { current: 1, total: 1, unit: "items" },
@@ -116,7 +114,7 @@ describe("taskStore lifecycle", () => {
       kind: "download",
       origin: "files.download",
       label: "Download save",
-      consoleId: "192.168.86.100",
+      consoleId: "192.0.2.100",
     });
     useTaskStore.getState().finishTask(id, "done");
     const doneAt = useTaskStore.getState().getTask(id)!.endedAtMs;
@@ -135,7 +133,7 @@ describe("taskStore lifecycle", () => {
       kind: "fs-copy",
       origin: "files.paste",
       label: "Copy dir",
-      consoleId: "192.168.86.100",
+      consoleId: "192.0.2.100",
     });
     useTaskStore.getState().removeTask(id);
     expect(useTaskStore.getState().getTask(id)).toBeDefined();
@@ -246,8 +244,6 @@ describe("bounded task history", () => {
     status,
     createdAt: new Date(id).toISOString(),
     updatedAtMs: id,
-    attempts: 1,
-    maxAttempts: 3,
   });
 
   it("caps terminal history while preserving active tasks in original order", () => {
@@ -303,6 +299,25 @@ describe("deriveRate", () => {
     expect(last).toBeNull();
     // Bytes moving again: a real speed comes back.
     expect(deriveRate(samples, "c", p(11 * 2 ** 30), 3000 * 1000)?.rate.bytesPerSec).toBeGreaterThan(1);
+  });
+
+  it("#669: a speed fades out once the bytes stop, and never shows a few bytes a second", async () => {
+    const { deriveRate } = await import("./tasks");
+    const samples = new Map();
+    const p = (current: number) => ({ current, total: 100 * 2 ** 30, unit: "bytes" as const });
+    deriveRate(samples, "f", p(0), 0);
+    deriveRate(samples, "f", p(2 ** 30), 1000);
+    const shown: number[] = [];
+    for (let i = 2; i < 100; i++) {
+      const r = deriveRate(samples, "f", p(2 ** 30), i * 1000);
+      if (r) shown.push(r.rate.bytesPerSec);
+    }
+    expect(shown.length).toBeGreaterThan(0);
+    expect(Math.min(...shown)).toBeGreaterThanOrEqual(1024);
+    // A real slow transfer, where bytes do move, still shows its speed.
+    const slow = new Map();
+    deriveRate(slow, "s", p(0), 0);
+    expect(deriveRate(slow, "s", p(500), 1000)?.rate.bytesPerSec).toBe(500);
   });
 
   it("fills in speed for an update that reports only bytes, and never overrides one that has a speed", async () => {

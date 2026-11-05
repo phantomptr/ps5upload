@@ -1,5 +1,5 @@
 import { usePoll, useTransferBusy } from "../../lib/usePoll";
-import { humanizePs5Error } from "../../lib/humanizeError";
+import { humanizePs5Error, humanizeCaught } from "../../lib/humanizeError";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Cpu, RefreshCw, RotateCw, Skull, TriangleAlert } from "lucide-react";
 import { Link } from "react-router";
@@ -117,7 +117,7 @@ export function ProcessesPanel({ onCount }: { onCount: (n: number | undefined) =
       lastLoggedErrRef.current = null;
     } catch (e) {
       if (gen !== genRef.current) return;
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = humanizeCaught(e);
       setError(msg);
       setLoadedOnce(true);
       // Log once per distinct error (not every 3s) so a dropped helper leaves
@@ -158,7 +158,7 @@ export function ProcessesPanel({ onCount }: { onCount: (n: number | undefined) =
         log.info("process", `killed ${p.comm || p.name} (pid ${p.pid})`);
         await refresh();
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
+        const msg = humanizeCaught(e);
         setError(msg);
         // Log the failure too — success is logged above, so without this a bug
         // report would show "killed X" but never "kill X failed".
@@ -224,13 +224,13 @@ export function ProcessesPanel({ onCount }: { onCount: (n: number | undefined) =
         try {
           await appLaunch(transferAddr(host), p.title_id);
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
+          const msg = humanizeCaught(e);
           log.warn("process", `relaunch ${p.title_id} failed: ${msg}`);
           if (mountedRef.current) setError(humanizePs5Error(msg));
         }
         await refresh();
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
+        const msg = humanizeCaught(e);
         setError(msg);
         log.warn(
           "process",
@@ -289,7 +289,7 @@ export function ProcessesPanel({ onCount }: { onCount: (n: number | undefined) =
             onChange={setAutoRefresh}
             label={tr("processes_auto_refresh", undefined, "Auto-refresh")}
           />
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ms-auto flex items-center gap-2">
             <Select
               value={sortKey}
               onChange={(e) => setSortKey(e.target.value as SortKey)}
@@ -529,7 +529,7 @@ function ProcessRowImpl({
             ))}
         </div>
       </div>
-      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+      <div className="ms-auto flex shrink-0 items-center gap-1.5">
         {isApp && proc.title_id && (
           <Button
             variant="secondary"

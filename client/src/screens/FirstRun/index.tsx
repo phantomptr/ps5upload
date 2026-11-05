@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import {
   Sparkles,
@@ -14,23 +14,27 @@ import {
 import {
   payloadsRelease,
   payloadsDownload,
-  payloadsLocalPath,
+  payloadsLocalInventory,
   sendPayload,
   payloadCheck,
-  portCheck,
   processList,
   type PayloadReleaseInfo,
 } from "../../api/ps5";
-import { mgmtAddr } from "../../lib/addr";
+import { cleanConsoleAddress, hostOf, mgmtAddr } from "../../lib/addr";
+import { checkConsole, closedPortText, payloadManagerReadyText } from "../../lib/consoleCheck";
+import { cachedCopyOfRelease, createRunTokens, settleBusyRows } from "../../lib/firstRunPayloads";
 import { runningChainPayloads, type ChainPayload } from "../../lib/runningChain";
 import { useConnectionStore, PS5_LOADER_PORT } from "../../state/connection";
 import { helperSendFor, useHelperSendStore } from "../../state/helperSend";
-import { sendHelperAndWait } from "../../state/helperSendRuntime";
+import { loaderHint, sendHelperAndWait } from "../../state/helperSendRuntime";
+import { useConsoleAddressCommit } from "../Connection/useConsoleAddressCommit";
+import { useHelperReplaceGuard } from "../Connection/useHelperReplaceGuard";
 import { PageHeader, Button, Spinner } from "../../components";
 import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
-import { selectConsoleByAddress, withConsolePrefix } from "../../state/roster";
+import { withConsolePrefix } from "../../state/roster";
 import { formatBytes } from "../../lib/format";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /**
  * First-run setup wizard.
@@ -86,27 +90,28 @@ export default function FirstRunScreen() {
   const [step3Msg, setStep3Msg] = useState<string>("");
   const [step3Detail, setStep3Detail] = useState<InstallStep[]>([]);
 
-  // Cancel flag — prevents the long install sequence from continuing
-  // after the user navigates away or clicks Cancel. The setStep3 +
-  // setStep3Detail effects below would otherwise fire on an unmounted
-  // component (React 18 silently drops, but the latent in-flight
-  // network calls still bill against the GitHub rate limit).
-  const cancelled = useRef(false);
-  useEffect(() => {
-    return () => {
-      cancelled.current = true;
-    };
-  }, []);
+  const { guard: guardReplace, dialog: replaceDialog } = useHelperReplaceGuard();
+  const { commit: commitAddress, dialog: addressDialog } = useConsoleAddressCommit();
+
+  // Stops the long install sequence after the user navigates away or clicks Cancel: its in-flight
+  // network calls would otherwise still bill against the GitHub rate limit, and its sends would
+  // still reach the console.
+  const [runs] = useState(createRunTokens);
+  useEffect(() => () => runs.cancel(), [runs]);
 
   /** Select the typed console, then check it (after the remount, if the address changed). */
-  const commitAndCheck = (thenCheck: boolean) => {
-    const value = hostDraft.trim();
-    if (value === host.trim()) {
+  const commitAndCheck = async (thenCheck: boolean) => {
+    // `192.168.1.5:9021` or a pasted URL: the console is the host in it.
+    const value = cleanConsoleAddress(hostDraft);
+    setHostDraft(value);
+    if (value === hostOf(host.trim())) {
       if (thenCheck) void handleCheck();
       return;
     }
-    if (thenCheck) pendingFirstRunCheck = true;
-    selectConsoleByAddress(value);
+    const changed = await commitAddress(value, () => {
+      if (thenCheck) pendingFirstRunCheck = true;
+    });
+    if (!changed) setHostDraft(host);
   };
   useEffect(() => {
     if (!pendingFirstRunCheck) return;
@@ -135,46 +140,56 @@ export default function FirstRunScreen() {
         `Checking ${host}:${PS5_LOADER_PORT}…`,
       ),
     );
-    const ok = await portCheck(host, PS5_LOADER_PORT);
-    if (!ok) {
-      setStep1("fail");
-      setStep1Msg(
-        tr(
-          "first_run_step1_unreachable",
-          { host, port: PS5_LOADER_PORT },
-          `Port ${PS5_LOADER_PORT} not open on ${host}. Is your PS5 jailbroken and on the same LAN?`,
-        ),
-      );
-      return;
+    // The same check as the Connection screen: rest mode, a running helper with its loader
+    // closed, Payload Manager, and why a probe failed.
+    const check = await checkConsole(host);
+    switch (check.kind) {
+      case "loader":
+        setStep1("ok");
+        setStep1Msg(
+          tr(
+            "first_run_step1_ok",
+            { host },
+            `${host} is reachable on the loader port.`,
+          ),
+        );
+        break;
+      case "helper":
+        setStep1("ok");
+        setStep1Msg(tr("connection_payload_running", { host }, `Helper is running on ${host}`));
+        break;
+      case "payload-manager":
+        setStep1("ok");
+        setStep1Msg(payloadManagerReadyText(tr));
+        break;
+      case "rest":
+        setStep1("fail");
+        setStep1Msg(
+          tr(
+            "connection_rest_mode",
+            undefined,
+            "Your PS5 is in rest mode. Wake it, then check again.",
+          ),
+        );
+        break;
+      default:
+        setStep1("fail");
+        setStep1Msg(closedPortText(tr, host, check));
     }
-    setStep1("ok");
-    setStep1Msg(
-      tr(
-        "first_run_step1_ok",
-        { host },
-        `${host} is reachable on the loader port.`,
-      ),
-    );
-    // Fire a payloadCheck to populate kernel/firmware in the store
-    // so step 2's auto-pick has data to work with. Best-effort: if
-    // no payload is loaded yet we have no kernel string and the
-    // user picks manually.
-    try {
-      const status = await payloadCheck(host);
-      if (status.reachable) {
-        setStatus({
-          payloadStatus: "up",
-          payloadStatusHost: host,
-          payloadVersion: status.payloadVersion,
-          ps5Kernel: status.ps5Kernel,
-          ucredElevated: status.ucredElevated,
-          power: "awake",
-          payloadProbing: false,
-        });
-      }
-    } catch {
-      // No payload yet → expected on first run, that's why we're
-      // here. Auto-pick falls back to "current FW" default.
+    // Populate kernel/firmware in the store so step 2's auto-pick has data to work with.
+    // No payload yet is expected on first run, that's why we're here: auto-pick then falls back
+    // to the "current FW" default.
+    const status = check.kind === "loader" || check.kind === "helper" ? check.helper : null;
+    if (status?.reachable) {
+      setStatus({
+        payloadStatus: "up",
+        payloadStatusHost: host,
+        payloadVersion: status.payloadVersion,
+        ps5Kernel: status.ps5Kernel,
+        ucredElevated: status.ucredElevated,
+        power: "awake",
+        payloadProbing: false,
+      });
     }
   }
 
@@ -202,7 +217,7 @@ export default function FirstRunScreen() {
   async function handleInstall(opts?: { helperOnly?: boolean }) {
     if (step1 !== "ok") return;
     const helperOnly = opts?.helperOnly === true;
-    cancelled.current = false;
+    const isCurrent = runs.start();
     setStep3("busy");
     setStep3Detail([]);
     const kstuffId = KSTUFF_CURRENT;
@@ -216,6 +231,7 @@ export default function FirstRunScreen() {
 
     // Helper to mutate one row by id without losing the others.
     const updateStep = (id: string, patch: Partial<InstallStep>) => {
+      if (!isCurrent()) return;
       setStep3Detail((prev) =>
         prev.map((s) => (s.id === id ? { ...s, ...patch } : s)),
       );
@@ -225,7 +241,7 @@ export default function FirstRunScreen() {
       const running = helperOnly ? new Set<ChainPayload>() : await detectRunningChain();
       // ── kstuff + SMP: download from catalogue, then send ──────
       for (const id of [kstuffId, SMP_ID]) {
-        if (cancelled.current) return;
+        if (!isCurrent()) return;
         if (helperOnly) {
           updateStep(id, {
             state: "ok",
@@ -272,12 +288,15 @@ export default function FirstRunScreen() {
           throw new Error(`${id}: ${note}`);
         }
 
-        // Skip the download if a same-version copy is already in the
-        // cache — saves bandwidth on re-runs.
-        const cachedPath = await payloadsLocalPath(id);
-        let elfPath: string | null = cachedPath;
+        // Skip the download if a copy of this release is already in the cache: saves bandwidth
+        // on re-runs. An older copy is not "the latest", so it is replaced.
+        const inventory = await payloadsLocalInventory().catch(() => []);
+        const cached = cachedCopyOfRelease(inventory, id, release.tag);
+        let elfPath: string | null = cached?.path ?? null;
+        let sentVersion = release.tag;
+        let downloadError: string | null = null;
         if (!elfPath) {
-          if (cancelled.current) return;
+          if (!isCurrent()) return;
           updateStep(id, {
             state: "busy",
             note: tr(
@@ -286,12 +305,21 @@ export default function FirstRunScreen() {
               "downloading {tag} ({size})…",
             ),
           });
-          const local = await payloadsDownload(
-            id,
-            release.picked_asset_url,
-            release.tag,
-          );
-          elfPath = local.path;
+          try {
+            const local = await payloadsDownload(
+              id,
+              release.picked_asset_url,
+              release.tag,
+            );
+            elfPath = local.path;
+          } catch (e) {
+            // An older copy still gets the console going, as long as the row says which it is.
+            const older = inventory.find((x) => x.payload_id === id);
+            if (!older) throw e;
+            elfPath = older.path;
+            sentVersion = older.version;
+            downloadError = e instanceof Error ? e.message : String(e);
+          }
         }
         if (!elfPath) {
           const note = tr(
@@ -303,7 +331,7 @@ export default function FirstRunScreen() {
           throw new Error(`${id}: ${note}`);
         }
 
-        if (cancelled.current) return;
+        if (!isCurrent()) return;
         updateStep(id, {
           state: "busy",
           note: tr(
@@ -312,8 +340,16 @@ export default function FirstRunScreen() {
             "sending to {host}:{port}…",
           ),
         });
-        await sendPayload(host, elfPath);
-        const sent = tr("first_run_note_sent", { tag: release.tag }, "sent {tag}");
+        await sendPayload(host, elfPath).catch((e: unknown) => {
+          throw new Error(loaderHint(e instanceof Error ? e.message : String(e)));
+        });
+        const sent = downloadError
+          ? tr(
+              "first_run_note_sent_old",
+              { version: sentVersion, tag: release.tag, error: downloadError },
+              "sent {version}. Could not download {tag}: {error}",
+            )
+          : tr("first_run_note_sent", { tag: sentVersion }, "sent {tag}");
         updateStep(id, { state: "ok", note: sent });
 
         // Wait the catalogue-recommended delay before the next
@@ -339,10 +375,10 @@ export default function FirstRunScreen() {
       // It records the helper up in the connection store, joins a send already running, and
       // opens pairing when the console answers but this app is not paired with it yet. While
       // it runs, the row shows the send's own step (see helperNote below).
-      if (cancelled.current) return;
+      if (!isCurrent()) return;
       updateStep("ps5upload", { state: "busy", note: undefined });
-      const failure = await sendHelperAndWait(host, tr);
-      if (cancelled.current) return;
+      const failure = await sendHelperAndWait(host, tr, undefined, undefined, guardReplace);
+      if (!isCurrent()) return;
       if (failure !== null) {
         updateStep("ps5upload", { state: "fail", note: failure });
         throw new Error(failure);
@@ -381,8 +417,10 @@ export default function FirstRunScreen() {
         },
       );
     } catch (e) {
+      if (!isCurrent()) return;
+      setStep3Detail((rows) => settleBusyRows(rows, "fail"));
       setStep3("fail");
-      setStep3Msg(e instanceof Error ? e.message : String(e));
+      setStep3Msg(humanizeCaught(e));
       pushNotification(
         "error",
         withConsolePrefix(
@@ -390,7 +428,7 @@ export default function FirstRunScreen() {
           tr("notif_first_run_failed_title", undefined, "PS5 setup failed"),
         ),
         {
-          body: e instanceof Error ? e.message : String(e),
+          body: humanizeCaught(e),
           link: "/first-run",
         },
       );
@@ -399,6 +437,8 @@ export default function FirstRunScreen() {
 
   return (
     <div className="app-page">
+      {replaceDialog}
+      {addressDialog}
       <PageHeader
         icon={Sparkles}
         title={tr("first_run_title", undefined, "Set up your PS5")}
@@ -419,7 +459,7 @@ export default function FirstRunScreen() {
           <div className="flex items-center gap-2">
             <input
               value={hostDraft}
-              onBlur={() => commitAndCheck(false)}
+              onBlur={() => void commitAndCheck(false)}
               onChange={(e) => {
                 setHostDraft(e.target.value);
                 setStep1("idle");
@@ -432,17 +472,24 @@ export default function FirstRunScreen() {
                 );
               }}
               onKeyDown={(e) => {
-                if (e.key === "Enter") commitAndCheck(true);
+                if (e.key === "Enter") void commitAndCheck(true);
               }}
               placeholder="192.168.1.50"
-              inputMode="decimal"
+              inputMode="url"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
               disabled={step3 === "busy"}
               className="input flex-1 disabled:opacity-50"
             />
             <Button
               variant="secondary"
               size="md"
-              onClick={() => commitAndCheck(true)}
+              // Keep focus in the input on mousedown. Otherwise the blur commit fires first, the
+              // host change remounts the tree, and this button is gone before its click lands:
+              // the wizard's first action was silently lost.
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => void commitAndCheck(true)}
               disabled={!hostDraft.trim() || step1 === "busy" || step3 === "busy"}
               loading={step1 === "busy"}
             >
@@ -497,7 +544,7 @@ export default function FirstRunScreen() {
               <Button
                 variant="secondary"
                 size="md"
-                className="ml-2"
+                className="ms-2"
                 onClick={() => void handleInstall({ helperOnly: true })}
               >
                 {tr("first_run_helper_only", undefined, "Send only ps5upload")}
@@ -511,16 +558,15 @@ export default function FirstRunScreen() {
               )}
             </p>
             {/* Cancel: the install is a multi-step chain with sleeps + several
-                round trips. The cancel flag was only ever set on unmount, so
-                a user with no button had no way to abort. Sets the flag the
-                step loop already checks and resets the card to idle. */}
+                round trips. Ends this run, which the step loop checks, and resets the card. */}
             {step3 === "busy" && (
               <Button
                 variant="secondary"
                 size="md"
-                className="ml-2"
+                className="ms-2"
                 onClick={() => {
-                  cancelled.current = true;
+                  runs.cancel();
+                  setStep3Detail((rows) => settleBusyRows(rows, "idle"));
                   setStep3("idle");
                   setStep3Msg("");
                 }}

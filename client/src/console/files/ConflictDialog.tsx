@@ -12,28 +12,19 @@ import type { Conflict, Decision } from "./paste";
  * confirm (the existing item is deleted). "Apply to all" answers the rest of
  * this paste's conflicts the same way.
  */
-export function ConflictDialog({ conflict, onAnswer }: { conflict: Conflict; onAnswer: (d: Decision) => void }) {
+export function ConflictDialog({
+  conflict,
+  onAnswer,
+  asking = false,
+}: {
+  conflict: Conflict;
+  onAnswer: (d: Decision) => void;
+  /** Replace is being confirmed already (tests). */
+  asking?: boolean;
+}) {
   const [all, setAll] = useState(false);
-  const [confirming, setConfirming] = useState(false);
+  const [confirming, setConfirming] = useState(asking);
   const name = baseName(conflict.dest);
-  if (confirming) {
-    return (
-      <ConfirmDialog
-        title={t(all ? "cw_files_conflict_replace_all_title" : "cw_files_conflict_replace_title", { name })}
-        body={t(
-          all
-            ? "cw_files_conflict_replace_all_body"
-            : conflict.destDir
-              ? "cw_files_conflict_replace_dir_body"
-              : "cw_files_conflict_replace_file_body",
-        )}
-        confirmLabel={t("cw_files_conflict_replace")}
-        danger
-        onConfirm={() => onAnswer({ choice: "replace", all })}
-        onCancel={() => setConfirming(false)}
-      />
-    );
-  }
   const skip = () => onAnswer({ choice: "skip", all });
   return (
     <Modal label={t("cw_files_conflict_title", { name })} className="cw-conflict" onBack={skip}>
@@ -75,6 +66,23 @@ export function ConflictDialog({ conflict, onAnswer }: { conflict: Conflict; onA
           </button>
         ) : null}
       </div>
+      {/* Over the dialog, which stays mounted: ○ returns to Replace, and the dialog keeps its opener. */}
+      {confirming ? (
+        <ConfirmDialog
+          title={t(all ? "cw_files_conflict_replace_all_title" : "cw_files_conflict_replace_title", { name })}
+          body={t(
+            all
+              ? "cw_files_conflict_replace_all_body"
+              : conflict.destDir
+                ? "cw_files_conflict_replace_dir_body"
+                : "cw_files_conflict_replace_file_body",
+          )}
+          confirmLabel={t("cw_files_conflict_replace")}
+          danger
+          onConfirm={() => onAnswer({ choice: "replace", all })}
+          onCancel={() => setConfirming(false)}
+        />
+      ) : null}
     </Modal>
   );
 }

@@ -437,6 +437,32 @@ pub fn fs_read_with_timeout(
     Ok(resp)
 }
 
+/// One read through the helper. It caps a single read (2 MiB), so a whole file takes a loop.
+const FS_READ_WHOLE_CHUNK: u64 = 1 << 20;
+
+/// A whole `size`-byte file from the console. An error when it ends early: nothing that wants the
+/// whole file can use part of one.
+pub fn fs_read_whole(addr: &str, path: &str, size: u64) -> Result<Vec<u8>> {
+    read_whole_with(path, size, |at, want| fs_read(addr, path, at, want))
+}
+
+fn read_whole_with(
+    path: &str,
+    size: u64,
+    mut read: impl FnMut(u64, u64) -> Result<Vec<u8>>,
+) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(usize::try_from(size).unwrap_or(0));
+    while (out.len() as u64) < size {
+        let at = out.len() as u64;
+        let piece = read(at, FS_READ_WHOLE_CHUNK.min(size - at))?;
+        if piece.is_empty() {
+            anyhow::bail!("{path} ended at {at} of {size} bytes");
+        }
+        out.extend_from_slice(&piece);
+    }
+    Ok(out)
+}
+
 // ─── Destructive ops (delete / move / chmod / mkdir) ────────────────────────
 
 /// Delete a file or directory recursively on the PS5. Path must be under
@@ -689,14 +715,17 @@ pub fn usb_eject(addr: &str, mount_point: &str, force: bool) -> Result<()> {
     anyhow::bail!("{err}")
 }
 
-/// Rename/move a file or directory intra-volume. Cross-volume moves
-/// surface as `fs_move_cross_mount` error — payload uses `rename(2)` which
-/// returns EXDEV across mount points.
+/// Rename/move a file or directory intra-volume. An existing destination is refused
+/// (`fs_move_exists`), never replaced. Cross-volume moves surface as `fs_move_cross_mount`
+/// error — payload uses `rename(2)` which returns EXDEV across mount points.
 pub fn fs_move(addr: &str, from: &str, to: &str) -> Result<()> {
-    fs_move_with_timeout(addr, from, to, None)
+    fs_move_with_timeout(addr, from, to, false, None)
 }
 
-/// Like [`fs_move`] but with a caller-supplied per-socket I/O timeout.
+/// Like [`fs_move`] with the caller's choice about an existing destination and its own
+/// per-socket I/O timeout. `replace` false: the console refuses with `fs_move_exists`. True:
+/// `rename(2)` replaces a file, or an empty folder, that is there. Only a caller that was told
+/// to replace passes true: this is how a same-drive move used to destroy files.
 /// Most fs_move calls return in milliseconds (rename(2) is a metadata
 /// op), but cross-volume moves where the engine retries via
 /// copy-then-delete inherit the same long-deadline need as fs_copy.
@@ -704,10 +733,12 @@ pub fn fs_move_with_timeout(
     addr: &str,
     from: &str,
     to: &str,
+    replace: bool,
     io_timeout: Option<std::time::Duration>,
 ) -> Result<()> {
-    let body = serde_json::to_vec(&serde_json::json!({ "from": from, "to": to }))
-        .context("serialize fs_move")?;
+    let body =
+        serde_json::to_vec(&serde_json::json!({ "from": from, "to": to, "overwrite": replace }))
+            .context("serialize fs_move")?;
     mgmt::call_with(addr, m::FS_RENAME, "FS_MOVE", &body, io_timeout)?;
     Ok(())
 }
@@ -963,9 +994,21 @@ pub type LocalInventory = std::collections::BTreeMap<String, u64>;
 /// Walk a local directory and build the flattened `{relpath → size}` map
 /// that reconcile logic compares against the remote inventory.
 pub fn walk_local_inventory(root: &std::path::Path, excludes: &[String]) -> Result<LocalInventory> {
+    walk_local_inventory_until(root, excludes, &|| false)
+}
+
+/// [`walk_local_inventory`], giving up with `reconcile_busy` between folders once `yield_now` says.
+fn walk_local_inventory_until(
+    root: &std::path::Path,
+    excludes: &[String],
+    yield_now: &dyn Fn() -> bool,
+) -> Result<LocalInventory> {
     let mut out = LocalInventory::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
+        if yield_now() {
+            return Err(preview_yielded());
+        }
         let rd = std::fs::read_dir(&dir).with_context(|| format!("read_dir {}", dir.display()))?;
         for entry in rd.flatten() {
             let Ok(ft) = entry.file_type() else { continue };
@@ -974,10 +1017,12 @@ pub fn walk_local_inventory(root: &std::path::Path, excludes: &[String]) -> Resu
             } else if ft.is_file() {
                 let size = entry.metadata().map_or(0, |m| m.len());
                 let path = entry.path();
-                if crate::excludes::is_excluded_strings(&path, excludes) {
+                // Relative to the source, as the transfer matches it: a pattern naming a folder
+                // that also occurs above the source must not exclude everything.
+                let rel = path.strip_prefix(root).unwrap_or(&path);
+                if crate::excludes::is_excluded_strings(rel, excludes) {
                     continue;
                 }
-                let rel = path.strip_prefix(root).unwrap_or(&path);
                 // Use forward-slash paths on every OS so relpaths match
                 // what the PS5 returns (PS5 is FreeBSD, always '/').
                 let rel_str = rel
@@ -1075,6 +1120,36 @@ pub struct ReconcileFile {
 /// console AND different source → fully parallel.
 static RECONCILE_KEYS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 static RECONCILE_CV: std::sync::Condvar = std::sync::Condvar::new();
+/// The keys real uploads are waiting for. A preview holding one gives way: it is optional, and an
+/// upload the user just started must not sit behind a walk nobody is waiting for any more (the
+/// panel that asked for it hides once the upload runs).
+static RECONCILE_WANTED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn reconcile_wanted(keys: &[String]) -> bool {
+    RECONCILE_WANTED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .any(|k| keys.contains(k))
+}
+
+/// Withdraws an upload's wish for its keys, however its wait ends.
+struct WantedKeys<'a>(&'a [String]);
+
+impl Drop for WantedKeys<'_> {
+    fn drop(&mut self) {
+        let mut wanted = RECONCILE_WANTED.lock().unwrap_or_else(|e| e.into_inner());
+        for k in self.0 {
+            if let Some(i) = wanted.iter().position(|w| w == k) {
+                wanted.swap_remove(i);
+            }
+        }
+    }
+}
+
+fn preview_yielded() -> anyhow::Error {
+    anyhow::anyhow!("reconcile_busy: an upload is waiting for this scan")
+}
 
 /// RAII reservation of a reconcile's key set. Drop releases every key and wakes
 /// any reconcile waiting on a now-free key.
@@ -1094,6 +1169,13 @@ impl Drop for ReconcileGate {
 /// is free; `block=false` (preview) bails immediately with `reconcile_busy` if
 /// any key is contended — before the expensive local walk.
 fn acquire_reconcile_gate(keys: Vec<String>, block: bool) -> Result<ReconcileGate> {
+    if block {
+        RECONCILE_WANTED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .extend(keys.iter().cloned());
+    }
+    let _wanted = WantedKeys(if block { &keys } else { &[] });
     let mut held = RECONCILE_KEYS.lock().unwrap_or_else(|e| e.into_inner());
     loop {
         let conflict = keys.iter().any(|k| held.contains(k));
@@ -1114,6 +1196,7 @@ fn acquire_reconcile_gate(keys: Vec<String>, block: bool) -> Result<ReconcileGat
         held.push(k.clone());
     }
     drop(held);
+    drop(_wanted);
     Ok(ReconcileGate { keys })
 }
 
@@ -1155,6 +1238,7 @@ fn list_remote_scoped(
     addr: &str,
     dest_root: &str,
     local: &LocalInventory,
+    yield_now: &dyn Fn() -> bool,
 ) -> Result<RemoteInventory> {
     use std::collections::BTreeSet;
     let mut parent_rels: BTreeSet<String> = BTreeSet::new();
@@ -1237,6 +1321,9 @@ fn list_remote_scoped(
 
     let mut out = RemoteInventory::new();
     for (i, parent_rel) in parent_rels.iter().enumerate() {
+        if yield_now() {
+            return Err(preview_yielded());
+        }
         let abs = if parent_rel.is_empty() {
             dest_root.to_string()
         } else {
@@ -1359,24 +1446,23 @@ pub fn reconcile(
     // concurrent reconcile to a DIFFERENT console from a DIFFERENT source
     // proceeds in parallel; one sharing either key serializes behind us (real
     // upload waits, preview bails) — see RECONCILE_KEYS.
-    let _walk_gate = acquire_reconcile_gate(
-        vec![
-            format!("addr:{addr}"),
-            format!("src:{}", src.to_string_lossy()),
-        ],
-        block_for_gate,
-    )?;
+    let keys = vec![
+        format!("addr:{addr}"),
+        format!("src:{}", src.to_string_lossy()),
+    ];
+    let _walk_gate = acquire_reconcile_gate(keys.clone(), block_for_gate)?;
+    let yield_now = || !block_for_gate && reconcile_wanted(&keys);
 
     let t_local = std::time::Instant::now();
     crate::core_log!("reconcile: walking local {} …", src.display(),);
-    let local = walk_local_inventory(src, excludes)?;
+    let local = walk_local_inventory_until(src, excludes, &yield_now)?;
     crate::core_log!(
         "reconcile: local walk {} files ({} ms)",
         local.len(),
         t_local.elapsed().as_millis(),
     );
     let t_remote = std::time::Instant::now();
-    let remote = list_remote_scoped(addr, dest_root, &local)?;
+    let remote = list_remote_scoped(addr, dest_root, &local, &yield_now)?;
     crate::core_log!(
         "reconcile: remote inventory built ({} ms, mode={:?}) — starting diff",
         t_remote.elapsed().as_millis(),
@@ -1504,6 +1590,37 @@ fn blake3_file(path: &std::path::Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::UnregisterOutcome;
+
+    /// What the console does: one read returns at most 2 MiB, and the file ends where it ends.
+    fn read_capped(file: &[u8], at: u64, want: u64) -> anyhow::Result<Vec<u8>> {
+        let start = (at as usize).min(file.len());
+        let end = (start + want.min(2 * 1024 * 1024) as usize).min(file.len());
+        Ok(file[start..end].to_vec())
+    }
+
+    #[test]
+    fn a_whole_file_is_read_past_the_helpers_ceiling() {
+        let file: Vec<u8> = (0..5 * 1024 * 1024u32).map(|i| (i % 251) as u8).collect();
+        let got = super::read_whole_with("/f", file.len() as u64, |at, want| {
+            read_capped(&file, at, want)
+        })
+        .unwrap();
+        assert_eq!(got, file);
+    }
+
+    #[test]
+    fn a_file_shorter_than_its_listing_is_an_error_not_a_short_result() {
+        let file = vec![7u8; 1000];
+        let e = super::read_whole_with("/f", 3000, |at, want| read_capped(&file, at, want))
+            .unwrap_err();
+        assert_eq!(e.to_string(), "/f ended at 1000 of 3000 bytes");
+    }
+
+    #[test]
+    fn an_empty_file_needs_no_read() {
+        let got = super::read_whole_with("/f", 0, |_, _| panic!("no read expected")).unwrap();
+        assert!(got.is_empty());
+    }
 
     /// The request is the payload's args JSON as-is: snake_case keys, `dlc` on unless said.
     #[test]
@@ -1781,6 +1898,38 @@ mod tests {
         let opts = ListDirOptions::default();
         assert_eq!(opts.offset, 0);
         assert_eq!(opts.limit, 256);
+    }
+
+    #[test]
+    fn a_preview_gives_way_to_an_upload_waiting_for_its_keys() {
+        let keys = vec!["addr:yield-test".to_string(), "src:/yield-test".to_string()];
+        let held = acquire_reconcile_gate(keys.clone(), false).unwrap();
+        assert!(!reconcile_wanted(&keys), "nobody waits yet");
+
+        let upload_keys = vec!["addr:yield-test".to_string(), "src:/other".to_string()];
+        let upload = std::thread::spawn(move || {
+            acquire_reconcile_gate(upload_keys, true)
+                .map(|_| ())
+                .is_ok()
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !reconcile_wanted(&keys) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the upload never asked"
+            );
+            std::thread::yield_now();
+        }
+
+        // The walk stops at its next folder, with the error the preview route turns into `busy`.
+        let e =
+            walk_local_inventory_until(std::path::Path::new("/"), &[], &|| reconcile_wanted(&keys))
+                .unwrap_err();
+        assert!(e.to_string().contains("reconcile_busy"), "{e}");
+
+        drop(held);
+        assert!(upload.join().unwrap(), "the upload goes ahead");
+        assert!(!reconcile_wanted(&keys), "its wish is withdrawn");
     }
 
     #[test]

@@ -4,6 +4,7 @@ import { askToSignIn } from "../lib/signInNeeded";
 import { getEngineUrl } from "./engine";
 import {
   DEFAULT_KEYMAP,
+  FIT_ORDER,
   IDLE_PAD,
   PadButton,
   RemotePlayStream,
@@ -25,6 +26,8 @@ import { gamepadsOf } from "../lib/nativePad";
 import { profileFor } from "../lib/padProfiles";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { setGameMode } from "../lib/gameMode";
+import { setScreenWakeReason } from "../lib/androidScreenWake";
+import { setPadForwardReason } from "../lib/androidPadBridge";
 import { padMotion, padTouchState, setPadTouchpad } from "../lib/padTouchpad";
 import { DualSenseEffects, dualSenseCapable, findDualSense } from "../lib/dualSense";
 import { applyControls } from "../lib/gameControls";
@@ -105,6 +108,9 @@ export interface RpPrefs {
   /** Android app: leaving the app while playing keeps the picture floating over other apps
    *  (Android's picture in picture, lib/androidPip.ts). */
   systemPip: boolean;
+  /** What a new session starts with: the picture, sound and controller on this device, or none
+   *  of them (Go live and Play Together keep getting the stream; #670, #649). */
+  pictureHere: boolean;
 }
 
 export const DEFAULT_RP_PREFS: RpPrefs = {
@@ -139,6 +145,7 @@ export const DEFAULT_RP_PREFS: RpPrefs = {
   touchpadSpeed: 1.5,
   miniPlayer: true,
   systemPip: true,
+  pictureHere: true,
 };
 
 /** The smallest sound buffer the Sound buffer setting offers. */
@@ -162,8 +169,16 @@ export function loadRpPrefs(): RpPrefs {
     const touchMode = p.touchMode === "touchpad" ? "touchpad" : "controller";
     const touchpadSpeed = Number.isFinite(p.touchpadSpeed) ? Math.min(4, Math.max(0.5, p.touchpadSpeed)) : 1.5;
     const bitrateKbps = RP_BITRATES.includes(p.bitrateKbps) ? p.bitrateKbps : 0;
+    // A value this version has no use for (hand-edited, a restored backup) falls back: `res` is
+    // split into numbers for the session, so a bad one would fail every stream.
+    const one = <T,>(v: T, allowed: readonly T[], fallback: T): T => (allowed.includes(v) ? v : fallback);
     return {
       ...p,
+      res: one(p.res, ["1920x1080", "1280x720"], DEFAULT_RP_PREFS.res),
+      fps: one(p.fps, [60, 30], DEFAULT_RP_PREFS.fps),
+      fit: one(p.fit, FIT_ORDER, DEFAULT_RP_PREFS.fit),
+      touchSize: one(p.touchSize, ["s", "m", "l"], DEFAULT_RP_PREFS.touchSize),
+      decoding: one(p.decoding, ["auto", "software"], DEFAULT_RP_PREFS.decoding),
       codec,
       bitrateKbps,
       touchMode,
@@ -183,6 +198,9 @@ export interface RpTarget {
   registKey: string;
   rpKey: string;
 }
+
+/** The fixed-for-a-session settings a restart may change for that session alone. */
+export type SessionQuality = Partial<Pick<RpPrefs, "res" | "codec" | "bitrateKbps" | "pictureHere">>;
 
 interface RpState {
   stream: RemotePlayStream | null;
@@ -209,8 +227,17 @@ interface RpState {
   pip: PipKind | null;
   /** The picture-in-picture window, when the picture is in one (not for "video"). */
   pipWindow: Window | null;
-  start: (t: RpTarget, opts?: { attach?: boolean }) => Promise<void>;
+  /** What this session runs at instead of the saved prefs ("Switch to 720p", Go live's restart).
+   *  Ends with the session: the saved settings are what the next one starts with. */
+  sessionQuality: SessionQuality | null;
+  /** This session's picture on this device: off, nothing is decoded or played here. */
+  pictureHere: boolean;
+  /** Turn it off or back on for this session (Settings keep what the next one starts with). */
+  setPictureHere: (on: boolean) => void;
+  start: (t: RpTarget, opts?: { attach?: boolean; quality?: SessionQuality | null }) => Promise<void>;
   stop: () => void;
+  /** Stop to start again at once (Play Together stays open). */
+  stopForRestart: () => void;
   setPrefs: (p: Partial<RpPrefs>) => void;
   setKeymap: (k: Record<string, KeyAction> | null) => void;
   setOnScreen: (v: boolean) => void;
@@ -221,6 +248,16 @@ interface RpState {
  *  Picture-in-Picture; video: the browser's video picture in picture (picture only). */
 export type PipKind = "popup" | "document" | "video";
 
+/** Who holds the game's input back now (Settings, the passcode box, the keyboard box). */
+const inputPauses = new Set<string>();
+
+/** While any `owner` has it on, the console gets an idle pad. Each lets go only of its own: the
+ *  keyboard box closing must not hand the pad back under open Settings. */
+export function pauseRpInput(owner: "settings" | "passcode" | "keyboard", on: boolean): void {
+  if (on) inputPauses.add(owner);
+  else inputPauses.delete(owner);
+}
+
 /** Keys held on the picture and a finger on the touchpad: read by the stream every frame. */
 export const rpInput = {
   held: new Set<string>(),
@@ -229,9 +266,11 @@ export const rpInput = {
   touchPad: IDLE_PAD as PadState,
   /** A controller is being mapped: its presses are answers, not play. */
   mapping: false,
-  /** Remote Play's settings are open over the stream: keys, controllers and touch are the
-   *  settings', and the console gets an idle pad until they close. */
-  paused: false,
+  /** Remote Play's settings or a box are open over the stream: keys, controllers and touch are
+   *  theirs, and the console gets an idle pad until they close ([`pauseRpInput`]). */
+  get paused(): boolean {
+    return inputPauses.size > 0;
+  },
   /** The phone's latest motion reading, while motion controls are on. */
   motion: null as MotionReading | null,
 };
@@ -254,9 +293,19 @@ export function rpGamepads(): Array<Gamepad | null> {
   return out;
 }
 
+/** A controller is connected, and neither it nor anything the browser sees has motors to run. */
+export function padsCannotVibrate(
+  pads: ReadonlyArray<Gamepad | null> = rpGamepads(),
+  browserPads: ReadonlyArray<Gamepad | null> = globalThis.navigator?.getGamepads?.() ?? [],
+): boolean {
+  const motors = (g: Gamepad | null) => !!(g as (Gamepad & { vibrationActuator?: unknown }) | null)?.vibrationActuator;
+  return pads.some((g) => !!g?.connected) && !pads.some(motors) && !browserPads.some(motors);
+}
+
 function readPad(): PadState {
   if (rpInput.paused) return IDLE_PAD;
   const s = useRemotePlayStore.getState();
+  if (!s.pictureHere) return IDLE_PAD;
   const controls = currentControls();
   // A macro's key plays the macro, not whatever button the key map gives it.
   const macroKeys = controls?.macros.length ? new Set(controls.macros.map((m) => m.key)) : null;
@@ -309,12 +358,25 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
   onScreen: false,
   pip: null,
   pipWindow: null,
+  sessionQuality: null,
+  pictureHere: true,
+  setPictureHere(on) {
+    const stream = get().stream;
+    if (!on) {
+      rpInput.held.clear();
+      rpInput.touch = null;
+      rpInput.touchPad = IDLE_PAD;
+    }
+    if (stream) stream.setPictureHere(on);
+    else set({ pictureHere: on });
+  },
 
   async start(t, opts) {
     const cur = get().stream;
     if (cur && cur.currentPhase !== "ended") return;
     const { prefs } = get();
-    const [width, height] = prefs.res.split("x").map(Number);
+    const quality = opts?.quality ?? null;
+    const [width, height] = (quality?.res ?? prefs.res).split("x").map(Number);
     // A DualSense here: the session starts in DualSense mode (triggers and haptics). Only the
     // desktop app looks (and only it waits for the answer).
     const ds = prefs.dualSense && dualSenseCapable() ? await findDualSense() : null;
@@ -324,7 +386,13 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
     const dualSense = ds
       ? new DualSenseEffects(ds, (strong, weak) => get().stream?.vibrate(strong, weak))
       : undefined;
+    // A page joining a running session takes what the session has (the engine says).
+    const pictureHere = opts?.attach ? undefined : (quality?.pictureHere ?? prefs.pictureHere);
     const stream: RemotePlayStream = new RemotePlayStream({
+      pictureHere,
+      onPictureHere: (on) => {
+        if (get().stream === stream) set({ pictureHere: on });
+      },
       host: t.host,
       registKey: t.registKey,
       rpKey: t.rpKey,
@@ -341,8 +409,8 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
       replayS: prefs.replayS,
       picture: prefs.picture,
       decoding: prefs.decoding,
-      codec: prefs.codec,
-      bitrateKbps: prefs.bitrateKbps || undefined,
+      codec: quality?.codec ?? prefs.codec,
+      bitrateKbps: (quality?.bitrateKbps ?? prefs.bitrateKbps) || undefined,
       onPictureOff: (why) =>
         pushNotification(
           "warning",
@@ -379,12 +447,21 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
         if (p === "ended") {
           dualSense?.stop();
           rpInput.held.clear();
-          set({ stream: null, light: null, keyboard: null, passcode: null });
+          set({ stream: null, light: null, keyboard: null, passcode: null, sessionQuality: null });
         }
       },
       onStats: (st) => get().stream === stream && set({ stats: st }),
       onError: (e) => get().stream === stream && set({ error: e }),
       onLight: (rgb) => get().stream === stream && set({ light: rgb }),
+      onHidden: () => {
+        if (get().stream !== stream) return;
+        // Picture in picture is the stream on show: its window has its own keys and focus.
+        const pip = get().pipWindow;
+        if (pip && !pip.closed) return;
+        rpInput.held.clear();
+        rpInput.touch = null;
+        rpInput.touchPad = IDLE_PAD;
+      },
       onKbm: (v) => {
         if (get().stream !== stream) return;
         const kbm = useKbmStore.getState();
@@ -403,8 +480,13 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
       gamepads: rpGamepads,
     });
     stream.setVolume(prefs.muted ? 0 : prefs.volume);
-    set({ stream, target: t, phase: "connecting", error: null, stats: null, light: null, keyboard: null, passcode: null });
+    set({ stream, target: t, phase: "connecting", error: null, stats: null, light: null, keyboard: null, passcode: null, sessionQuality: quality, pictureHere: pictureHere !== false });
     await stream.start();
+  },
+
+  stopForRestart() {
+    // A restart with other settings: the engine keeps friends' places through it.
+    get().stream?.stop();
   },
 
   stop() {
@@ -452,17 +534,32 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
 // The OS's game mode (lib/gameMode.ts) while a stream plays, on any screen. Off at start-up:
 // nothing plays yet, and a hold a reloaded page left on is let go.
 setGameMode(false);
-useRemotePlayStore.subscribe((s) => setGameMode(!!s.stream && s.phase === "playing"));
+useRemotePlayStore.subscribe((s) => setGameMode(!!s.stream && s.phase === "playing" && s.pictureHere));
+
+// Keep the screen on while playing (a controller does not count as touching the phone). From the
+// store, not a screen: the stream keeps playing in the mini player on other screens.
+useRemotePlayStore.subscribe((s) => setScreenWakeReason("remote-play", !!s.stream && s.phase === "playing"));
+
+// Controllers are the page's while there is a stream (lib/androidPadBridge).
+useRemotePlayStore.subscribe((s) => setPadForwardReason("remote-play", !!s.stream && s.pictureHere));
 
 // A DualSense's touchpad (lib/padTouchpad.ts) is read while a stream plays; each change sends the
 // pad at once, like a key, so a quick tap is not lost between two frames.
 setPadTouchpad(false, () => useRemotePlayStore.getState().stream?.sendPad());
-useRemotePlayStore.subscribe((s) => setPadTouchpad(!!s.stream && s.phase === "playing"));
+useRemotePlayStore.subscribe((s) => setPadTouchpad(!!s.stream && s.phase === "playing" && s.pictureHere));
 
 /** The session the engine is running, if any (it outlives a reload of this page). */
-export async function fetchRunningSession(): Promise<{ host: string | null; playing?: boolean; attached?: boolean }> {
+export async function fetchRunningSession(): Promise<{
+  host: string | null;
+  playing?: boolean;
+  attached?: boolean;
+  /** It was told to stop and is finishing (a wake or handshake it can't cut short at once). */
+  stopping?: boolean;
+  /** False: the picture is off on this device for that session. */
+  picture?: boolean;
+}> {
   try {
-    const r = await fetch(`${getEngineUrl()}/api/ps5/rp/session`);
+    const r = await fetch(`${getEngineUrl()}/api/ps5/rp/session?passive=1`);
     return r.ok ? await r.json() : { host: null };
   } catch {
     return { host: null };

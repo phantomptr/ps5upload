@@ -35,6 +35,8 @@ pub struct Cursor {
     pub offset: u64,
     /// The file's first bytes when the offset was taken: a different start means a new file.
     pub head: Vec<u8>,
+    /// Passes in a row that found the size unchanged and read nothing more.
+    pub quiet: u32,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -130,12 +132,31 @@ fn consoles() -> &'static Mutex<HashSet<String>> {
 /// A console answered a status call: mirror its log from now on.
 pub fn note_console(addr: &str) {
     let host = console_host(addr);
+    *last_status_call().lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
     if !host.is_empty() {
         consoles()
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(host);
     }
+}
+
+/// When a window last asked for a console's status.
+fn last_status_call() -> &'static Mutex<Option<std::time::Instant>> {
+    static AT: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
+    AT.get_or_init(Default::default)
+}
+
+/// The consoles that have answered a status call since this engine started, sorted.
+pub(crate) fn answered_consoles() -> Vec<String> {
+    let mut hosts: Vec<String> = consoles()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .cloned()
+        .collect();
+    hosts.sort();
+    hosts
 }
 
 /// Where the mirror reads a console's log files from: the console, or a fake in tests.
@@ -196,6 +217,14 @@ pub fn mirror_pass(
     emit: &mut dyn FnMut(Event),
 ) -> anyhow::Result<()> {
     let size = src.size(LOG)?;
+    // Nothing written since: the size says so with one call instead of three. A log rotated to
+    // exactly the same size is the one thing that hides, so the head is still looked at now and then.
+    let met = cur.offset > 0 || !cur.head.is_empty();
+    if met && size == cur.offset && cur.quiet + 1 < HEAD_CHECK_EVERY {
+        cur.quiet += 1;
+        return Ok(());
+    }
+    cur.quiet = 0;
     let head_now = read_from(src, LOG, 0, HEAD as u64)?;
     let mut emit_all = |bytes: &[u8], carry: &mut Vec<u8>| {
         for line in split_lines(bytes, carry) {
@@ -207,6 +236,7 @@ pub fn mirror_pass(
             *cur = Cursor {
                 offset: at,
                 head: head_now,
+                quiet: 0,
             };
             return Ok(());
         }
@@ -220,6 +250,7 @@ pub fn mirror_pass(
             *cur = Cursor {
                 offset: 0,
                 head: head_now.clone(),
+                quiet: 0,
             };
             0
         }
@@ -231,9 +262,17 @@ pub fn mirror_pass(
     *cur = Cursor {
         offset: start + bytes.len() as u64,
         head: head_now,
+        quiet: 0,
     };
     Ok(())
 }
+
+/// With the size unchanged, the head is read once per this many passes (a minute at the usual tick).
+const HEAD_CHECK_EVERY: u32 = 6;
+/// With no status call from any window for this long, nobody is looking: read at a slower pace.
+const NOBODY_LOOKING: Duration = Duration::from_secs(300);
+/// The slower pace: every this many ticks.
+const IDLE_EVERY_TICKS: u64 = 6;
 
 /// A console that has not answered this many ticks in a row (5 minutes) stops being read; its
 /// next successful status call ([`note_console`]) brings it back.
@@ -273,9 +312,18 @@ pub fn spawn(busy: BusyCheck) {
         let mut cursors: HashMap<String, Cursor> = HashMap::new();
         let mut carries: HashMap<String, Vec<u8>> = HashMap::new();
         let mut misses = Misses::default();
+        let mut tick_no: u64 = 0;
         loop {
             tokio::time::sleep(TICK).await;
+            tick_no += 1;
             if busy() {
+                continue;
+            }
+            let looking = last_status_call()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_some_and(|t| t.elapsed() < NOBODY_LOOKING);
+            if !looking && !tick_no.is_multiple_of(IDLE_EVERY_TICKS) {
                 continue;
             }
             let hosts: Vec<String> = consoles()
@@ -322,6 +370,7 @@ pub fn spawn(busy: BusyCheck) {
 
 #[derive(Deserialize)]
 pub struct FtpLogQuery {
+    #[serde(alias = "console", alias = "host")]
     pub addr: String,
     pub max_bytes: Option<u64>,
 }
@@ -433,9 +482,11 @@ mod tests {
             old: b"=== A\na1\na2\na3\n".to_vec(),
             fail_log: std::cell::Cell::new(true),
         };
+        // The new log happens to be as long as the old offset: the head look is what finds it.
         let mut cur = Cursor {
             offset: 12,
             head: b"=== A\na1\n".to_vec(),
+            quiet: HEAD_CHECK_EVERY,
         };
         let mut carry = Vec::new();
         let mut got = Vec::new();
@@ -444,6 +495,27 @@ mod tests {
         fake.fail_log.set(false);
         mirror_pass(&fake, "h", &mut cur, &mut carry, &mut |e| got.push(e)).unwrap();
         assert_eq!(texts(&got), vec!["a3", "=== B", "b1", "b2"]);
+    }
+
+    #[test]
+    fn an_unchanged_log_is_only_stat_ed_with_a_look_at_its_head_now_and_then() {
+        // Any read fails here, so a pass that reads shows as an error.
+        let fake = Fake {
+            log: b"=== A\nx1\n".to_vec(),
+            old: vec![],
+            fail_log: std::cell::Cell::new(true),
+        };
+        let mut cur = Cursor {
+            offset: 9,
+            head: b"=== A\nx1\n".to_vec(),
+            quiet: 0,
+        };
+        let (mut carry, mut got) = (Vec::new(), Vec::new());
+        for _ in 1..HEAD_CHECK_EVERY {
+            mirror_pass(&fake, "h", &mut cur, &mut carry, &mut |e| got.push(e)).unwrap();
+        }
+        assert!(mirror_pass(&fake, "h", &mut cur, &mut carry, &mut |e| got.push(e)).is_err());
+        assert!(got.is_empty());
     }
 
     #[test]
@@ -488,6 +560,7 @@ mod tests {
         let c = Cursor {
             offset: 100,
             head: b"=== ps5upload".to_vec(),
+            quiet: 0,
         };
         assert!(matches!(
             plan(&c, 180, b"=== ps5upload"),
@@ -500,6 +573,7 @@ mod tests {
         let c = Cursor {
             offset: 5000,
             head: b"=== A".to_vec(),
+            quiet: 0,
         };
         assert!(matches!(
             plan(&c, 300, b"=== B"),
@@ -512,6 +586,7 @@ mod tests {
         let c = Cursor {
             offset: 300,
             head: b"=== A".to_vec(),
+            quiet: 0,
         };
         assert!(matches!(
             plan(&c, 300, b"=== B"),
@@ -561,14 +636,14 @@ mod tests {
 
     #[test]
     fn lines_are_classified() {
-        let e = line_event("192.168.86.100", "[fatal] signal 11 while serving frame 88");
+        let e = line_event("192.0.2.100", "[fatal] signal 11 while serving frame 88");
         assert_eq!(
             (e.level, e.code.as_deref()),
             (Level::Error, Some("helper_fatal"))
         );
         assert!(matches!(e.src, Src::Helper));
         let ok = line_event(
-            "192.168.86.100",
+            "192.0.2.100",
             "ps5upload2 payload ready on port 9120 (instance=1)",
         );
         assert_eq!(

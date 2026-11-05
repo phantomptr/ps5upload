@@ -74,7 +74,9 @@ int profile_slot_clear(int slot);
  * something could not be written (the backup is kept then).
  * profile_np_state_json reports the backup and the values that matter for the sign-in.
  * All need sony_api_lock held by the caller. */
+#ifndef PROFILE_NP_BACKUP_ROOT
 #define PROFILE_NP_BACKUP_ROOT "/data/ps5upload/np-backup"
+#endif
 int profile_np_backup(int slot, uint32_t uid, int *out_created);
 int profile_np_backup_exists(uint32_t uid, int *out_slot);
 int profile_np_restore(uint32_t uid, int *out_written, int *out_failed);

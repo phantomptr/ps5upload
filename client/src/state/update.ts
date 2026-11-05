@@ -3,8 +3,10 @@ import { listen } from "@tauri-apps/api/event";
 
 import { openExternalUrl } from "../lib/openExternalUrl";
 import {
+  UPDATE_DOWNLOAD_PROGRESS_EVENT,
   updateCheck,
   updateDownload,
+  updateDownloadCancel,
   updateInstall,
   updateInstallOnQuit,
   updateLastInstall,
@@ -15,8 +17,10 @@ import {
   type LastInstall,
   type UpdateCheck,
   type UpdateDownload,
+  type UpdateDownloadProgress,
 } from "../api/ps5";
-import { isMobile } from "../lib/platform";
+import { isIOS, isMobile } from "../lib/platform";
+import { shellErrorCode, shellErrorText } from "../lib/shellError";
 import { isTauriEnv } from "../lib/tauriEnv";
 import { apkUpdaterAvailable, downloadAndInstallApk } from "./apkUpdate";
 import { safeGetItem, safeRemoveItem, safeSetItem } from "../lib/safeStorage";
@@ -40,6 +44,24 @@ import { log } from "./logs";
 // than the TTL. No localStorage — users installing a fresh version
 // should never see a stale "update available" hint from a previous
 // install.
+
+/** A phone could not open the download link. */
+function mobileLinkFailedMessage(): string {
+  const lang = useLangStore.getState().lang;
+  const say = (key: string, fallback: string) => {
+    const out = translate(lang, key, undefined);
+    return out === key ? fallback : out;
+  };
+  return isIOS()
+    ? say(
+        "update_ios_link_failed",
+        "Couldn't open the download link. Get the new .ipa from the GitHub releases page and install it with your sideloading app.",
+      )
+    : say(
+        "update_apk_link_failed",
+        "Couldn't open the download link. Tap “Get APK in browser”, or grab it from the GitHub releases page.",
+      );
+}
 
 const CHECK_TTL_MS = 24 * 60 * 60 * 1000; // 1 day
 const CACHE_KEY = "ps5upload.update-check-v2";
@@ -97,17 +119,56 @@ export function busyTasks(tasks: ReadonlyArray<{ kind: string; status: string }>
   return tasks.some((t) => (t.status === "running" || t.status === "queued") && !LIGHT_TASKS.has(t.kind));
 }
 
-async function appIdle(): Promise<boolean> {
-  const [{ useUploadQueueStore }, { useTransferStore }, { useTaskStore }] = await Promise.all([
+export async function appIdle(): Promise<boolean> {
+  const [
+    { useUploadQueueStore },
+    { useTransferStore },
+    { useTaskStore },
+    { useRemotePlayStore },
+    { activeJoin },
+    { useGoLiveStore },
+    { isLive },
+  ] = await Promise.all([
     import("./uploadQueue"),
     import("./transfer"),
     import("./tasks"),
+    import("./remotePlay"),
+    import("./joinSession"),
+    import("./goLive"),
+    import("../lib/goLive"),
   ]);
   if (useUploadQueueStore.getState().running) return false;
   if (busyTasks(useTaskStore.getState().tasks)) return false;
+  // Someone is playing or broadcasting, and no task says so: the restart would end the stream
+  // (a host's Play Together friends with it), a friend's game, or the broadcast.
+  if (useRemotePlayStore.getState().stream) return false;
+  if (activeJoin()) return false;
+  if (isLive(useGoLiveStore.getState().status?.live)) return false;
   return !Object.values(useTransferStore.getState().phasesByHost).some(
     (p) => p.kind === "starting" || p.kind === "running",
   );
+}
+
+/** How often an app left running looks whether its daily check is due. */
+const CHECK_AGAIN_MS = 60 * 60 * 1000;
+
+/** Runs the TTL-gated check now, every hour, and when the window comes back to the front (a
+ *  hidden window's timers can be held up for as long as it stays hidden). The tray keeps the
+ *  app running for days, and one check per launch would never see a release. Returns a stop. */
+export function startUpdateChecks(ensureChecked: () => Promise<void> | void): () => void {
+  const check = () => void ensureChecked();
+  check();
+  const timer = setInterval(check, CHECK_AGAIN_MS);
+  const onFront = () => {
+    if (document.visibilityState === "visible") check();
+  };
+  document.addEventListener("visibilitychange", onFront);
+  window.addEventListener("focus", onFront);
+  return () => {
+    clearInterval(timer);
+    document.removeEventListener("visibilitychange", onFront);
+    window.removeEventListener("focus", onFront);
+  };
 }
 
 /** Read the auto-check preference. Defaults to ON when unset (first run) —
@@ -311,6 +372,10 @@ interface UpdateStore {
    *  Mobile: opens the APK download URL (or the GitHub release page)
    *  in the system browser instead — no in-app download. */
   download: () => Promise<void>;
+  /** How far the download in progress is (desktop), once it has started. */
+  downloadProgress: UpdateDownloadProgress | null;
+  /** Stop the download in progress and delete what it saved: back to `available`. */
+  cancelDownload: () => Promise<void>;
   /** Reset to the cached `available` state so the Download button is
    *  clickable again after a failure or after the user dismissed the
    *  "downloaded" panel. */
@@ -424,7 +489,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
       set({
         phase: {
           kind: "error",
-          message: e instanceof Error ? e.message : String(e),
+          message: shellErrorText(e instanceof Error ? e.message : String(e), trFb),
         },
         lastCheckedMs: Date.now(),
       });
@@ -530,6 +595,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
   return {
     phase: initialPhase,
     lastCheckedMs: initialLastChecked,
+    downloadProgress: null,
     installing: false,
     autoInstallEnabled: loadAutoInstall(),
     installOnQuitEnabled: loadInstallOnQuit(),
@@ -633,7 +699,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
         await updateInstall(phase.download.path, phase.result.latest_version);
         // The app quits from here; nothing else to do.
       } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
+        const message = shellErrorText(e instanceof Error ? e.message : String(e), trFb);
         // A .deb / .rpm through pkexec: the prompt was closed, could not be shown, or the
         // package manager failed. Nothing changed; show the command to run instead.
         if (phase.download.needs_password) {
@@ -678,8 +744,8 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
     },
 
     async ensureChecked() {
-      // Respect the user's opt-out: the launch auto-check is the only
-      // caller of this; manual "Check now" goes through checkNow().
+      // Respect the user's opt-out: the automatic checks are the only
+      // callers of this; manual "Check now" goes through checkNow().
       if (!get().autoCheckEnabled) return;
       // TOCTOU-safe: AppShell mounts fire this 1.5 s after paint, and
       // the user could navigate to Settings (which also calls the
@@ -692,6 +758,8 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
       const cur = get();
       const age = Date.now() - cur.lastCheckedMs;
       if (cur.phase.kind !== "idle" && age < CHECK_TTL_MS) return;
+      // An app left running comes back here later: a download in progress or in hand stands.
+      if (cur.phase.kind === "downloading" || cur.phase.kind === "downloaded") return;
       // Skip if another check is already running in this tick. Synchronous
       // state read AFTER the set, so it correctly sees any concurrent
       // caller that's already flipped to "checking".
@@ -744,8 +812,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
                 result,
                 // openExternalUrl already logged the underlying error; give the
                 // user an actionable message + the in-panel browser button.
-                message:
-                  "Couldn't open the download link. Tap “Get APK in browser”, or grab it from the GitHub releases page.",
+                message: mobileLinkFailedMessage(),
               },
         });
         return;
@@ -755,12 +822,24 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
           phase: {
             kind: "download-failed",
             result,
-            message: "No download bundle for your platform in this release.",
+            message: trFb(
+              "update_no_platform_bundle",
+              undefined,
+              "No download for your platform in this release.",
+            ),
           },
         });
         return;
       }
-      set({ phase: { kind: "downloading", result } });
+      set({ phase: { kind: "downloading", result }, downloadProgress: null });
+      let unlisten: (() => void) | undefined;
+      try {
+        unlisten = await listen<UpdateDownloadProgress>(UPDATE_DOWNLOAD_PROGRESS_EVENT, (e) => {
+          set({ downloadProgress: e.payload });
+        });
+      } catch {
+        // No progress events: the download still runs, the bar just stays empty.
+      }
       try {
         const download = await updateDownload(
           result.download_url,
@@ -769,13 +848,25 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
         );
         set({ phase: { kind: "downloaded", result, download } });
       } catch (e) {
+        const raw = e instanceof Error ? e.message : String(e);
         set({
-          phase: {
-            kind: "download-failed",
-            result,
-            message: e instanceof Error ? e.message : String(e),
-          },
+          // Cancelled by the person: nothing failed, the update is on offer as before.
+          phase:
+            shellErrorCode(raw) === "update_cancelled"
+              ? { kind: "available", result }
+              : { kind: "download-failed", result, message: shellErrorText(raw, trFb) },
         });
+      } finally {
+        unlisten?.();
+        set({ downloadProgress: null });
+      }
+    },
+
+    async cancelDownload() {
+      try {
+        await updateDownloadCancel();
+      } catch {
+        // Nothing running, or a shell without the command: the download ends by itself.
       }
     },
 

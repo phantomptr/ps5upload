@@ -25,6 +25,10 @@ describe("miniPlayerVisible", () => {
     // Still connecting: it shows, with the progress.
     expect(miniPlayerVisible({ ...base, phase: "connecting" })).toBe(true);
   });
+  it("never with the picture off on this device: there is nothing to float", () => {
+    expect(miniPlayerVisible({ ...base, pictureHere: false })).toBe(false);
+    expect(miniPlayerVisible({ ...base, pictureHere: true })).toBe(true);
+  });
   it("never while the Play screen shows the stream", () => {
     expect(miniPlayerVisible({ ...base, pathname: "/play" })).toBe(false);
     expect(miniPlayerVisible({ ...base, onScreen: true })).toBe(false);

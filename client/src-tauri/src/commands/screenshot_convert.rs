@@ -95,27 +95,77 @@ const CHILD_ARG: &str = "--ps5upload-jxr-to-png";
 )))]
 fn convert_in_child(src_path: &str, dst_path: &str, mode: &str) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| format!("locate the app: {e}"))?;
-    let out = std::process::Command::new(exe)
-        .arg(CHILD_ARG)
-        .arg(src_path)
-        .arg(dst_path)
-        .arg(mode)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|e| format!("start the decoder: {e}"))?;
-    if out.status.success() {
+    let mut decoder = std::process::Command::new(exe);
+    decoder.arg(CHILD_ARG).arg(src_path).arg(dst_path).arg(mode);
+    let (status, stderr) = run_with_deadline(decoder, DECODE_DEADLINE)
+        .map_err(|e| format!("start the decoder: {e}"))?
+        .ok_or_else(|| super::shell_error::code_only("screenshot_decoder_timeout"))?;
+    if status.success() {
         return Ok(());
     }
-    let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    let msg = stderr.trim().to_string();
     Err(if msg.is_empty() {
         // Killed by a signal: the codec crashed on this file.
-        format!(
-            "this screenshot could not be decoded (the decoder stopped: {})",
-            out.status
+        super::shell_error::coded(
+            "screenshot_decoder_crashed",
+            serde_json::json!({ "detail": status.to_string() }),
         )
     } else {
         msg
     })
+}
+
+/// The longest one capture may take to decode. A real one takes seconds; this stops a decoder
+/// that loops on a corrupt file from holding its thread and the waiting thumbnail for the life of
+/// the app, one per file. The machine may be busy and the file on a slow disk, so it is generous.
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "ios",
+    all(target_os = "windows", target_arch = "aarch64")
+)))]
+const DECODE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Run `cmd`, killing it at `deadline`: its exit status and what it wrote to stderr, or None
+/// when the deadline passed.
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "ios",
+    all(target_os = "windows", target_arch = "aarch64")
+)))]
+fn run_with_deadline(
+    mut cmd: std::process::Command,
+    deadline: std::time::Duration,
+) -> std::io::Result<Option<(std::process::ExitStatus, String)>> {
+    use std::io::Read;
+    let mut child = cmd
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    // Read as it comes, on its own thread: a child that fills the pipe would never exit.
+    let mut pipe = child.stderr.take();
+    let reader = std::thread::spawn(move || {
+        let mut text = Vec::new();
+        if let Some(pipe) = pipe.as_mut() {
+            let _ = pipe.read_to_end(&mut text);
+        }
+        String::from_utf8_lossy(&text).into_owned()
+    });
+    let started = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break Some(status);
+        }
+        if started.elapsed() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    // Past the deadline nothing waits for the reader: a process the decoder started can hold the
+    // pipe open long after the decoder is gone, and the thread ends with the pipe.
+    Ok(status.map(|status| (status, reader.join().unwrap_or_default())))
 }
 
 /// Run as the one-shot decoder when started with `CHILD_ARG <src> <dst>`: convert, report any
@@ -173,7 +223,7 @@ pub async fn screenshot_convert(
     _delete_source: bool,
     _mode: Option<String>,
 ) -> Result<String, String> {
-    Err("Screenshot conversion is available in the desktop app only.".into())
+    Err(super::shell_error::code_only("screenshot_unsupported"))
 }
 
 #[cfg(not(any(
@@ -793,5 +843,59 @@ mod desktop {
                 assert!((c - 1.0).abs() < 0.02, "channel {c} drifted");
             }
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod deadline_tests {
+    use super::run_with_deadline;
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    fn sh(script: &str) -> Command {
+        let mut c = Command::new("sh");
+        c.args(["-c", script]);
+        c
+    }
+
+    #[test]
+    fn a_decoder_that_never_returns_is_killed_at_the_deadline() {
+        // F21: a decoder looping on a corrupt capture held its thread for the life of the app.
+        let started = Instant::now();
+        let out = run_with_deadline(sh("sleep 30"), Duration::from_millis(200)).unwrap();
+        assert!(out.is_none(), "the deadline passed");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "killed, not waited for"
+        );
+    }
+
+    #[test]
+    fn a_finished_decoder_reports_its_status_and_its_error_text() {
+        let (status, stderr) = run_with_deadline(
+            sh("echo 'not a JPEG XR file' >&2; exit 3"),
+            Duration::from_secs(30),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(status.code(), Some(3));
+        assert!(stderr.contains("not a JPEG XR file"), "{stderr}");
+        let (ok, _) = run_with_deadline(sh("exit 0"), Duration::from_secs(30))
+            .unwrap()
+            .unwrap();
+        assert!(ok.success());
+    }
+
+    #[test]
+    fn a_chatty_decoder_does_not_stall_on_a_full_pipe() {
+        let (status, stderr) = run_with_deadline(
+            sh("i=0; while [ $i -lt 20000 ]; do echo xxxxxxxxxxxxxxxx >&2; i=$((i+1)); done"),
+            Duration::from_secs(30),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(status.success());
+        assert!(stderr.len() > 64 * 1024, "{}", stderr.len());
     }
 }

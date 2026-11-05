@@ -5,14 +5,15 @@ import { openExternalUrl as openExternal } from "../lib/openExternalUrl";
  * Tiny inline markdown renderer. Scope kept narrow to what FAQ.md and
  * CHANGELOG.md actually use:
  *
- *   # / ## / ### headings
+ *   # / ## / ### / #### headings
  *   paragraphs (blank line separated)
  *   `inline code`
- *   fenced code blocks ``` ... ```
+ *   fenced code blocks ``` ... ```, also indented under a list item
  *   **bold** and *italic* / _italic_
  *   [link](url)
  *   - or * bullet lists (single-level; not nested)
- *   1. numbered lists (single-level; not nested)
+ *   1. numbered lists (single-level; not nested; keep the source's first number,
+ *      so a list split by a code block goes on counting)
  *   > blockquotes (single line)
  *   --- horizontal rules
  *   | pipe | tables | with a --- separator row
@@ -29,6 +30,17 @@ import { openExternalUrl as openExternal } from "../lib/openExternalUrl";
  * Output is React nodes, so we never inject raw HTML — no XSS surface.
  */
 
+// FAQ.md and CHANGELOG.md are also read on GitHub, so a link may be relative to the repository.
+// There is nothing at that path here: the system opener refuses it and the web UI's fallback
+// answers it with the app.
+const REPO_FILES = "https://github.com/phantomptr/ps5upload/blob/main/";
+
+/** The address a link in the docs really goes to. */
+export function resolveDocLink(url: string): string {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return url;
+  return REPO_FILES + url.replace(/^(?:\.?\/)+/, "");
+}
+
 function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
   const pattern =
     /(`[^`]+`)|(\*\*[^*]+\*\*)|(__[^_]+__)|(\*[^*\n]+\*)|(_[^_\n]+_)|(\[[^\]]+\]\([^)]+\))/g;
@@ -42,6 +54,18 @@ function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
     }
     const token = m[0];
     const k = `${keyPrefix}-i${idx++}`;
+    // `_` inside a word is part of a name (PS5UPLOAD_ALLOW_IP), not emphasis. Step over just
+    // this one: the next `_` may still open real emphasis further on.
+    if (
+      token.startsWith("_") &&
+      (/[\p{L}\p{N}]$/u.test(text.slice(0, m.index)) ||
+        /^[\p{L}\p{N}]/u.test(text.slice(m.index + token.length)))
+    ) {
+      out.push("_");
+      last = m.index + 1;
+      pattern.lastIndex = last;
+      continue;
+    }
     if (token.startsWith("`") && token.endsWith("`")) {
       out.push(
         <code
@@ -54,19 +78,20 @@ function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
     } else if (token.startsWith("**") || token.startsWith("__")) {
       out.push(
         <strong key={k} className="font-semibold text-[var(--color-text)]">
-          {token.slice(2, -2)}
+          {renderInline(token.slice(2, -2), k)}
         </strong>,
       );
     } else if (token.startsWith("*") || token.startsWith("_")) {
       out.push(
         <em key={k} className="italic">
-          {token.slice(1, -1)}
+          {renderInline(token.slice(1, -1), k)}
         </em>,
       );
     } else if (token.startsWith("[")) {
       const mLink = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(token);
       if (mLink) {
-        const [, label, url] = mLink;
+        const [, label, target] = mLink;
+        const url = resolveDocLink(target);
         out.push(
           <a
             key={k}
@@ -77,7 +102,7 @@ function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
             }}
             className="font-medium text-[var(--color-accent)] underline decoration-[var(--color-accent)]/30 decoration-[1.5px] underline-offset-[3px] transition-colors hover:text-[var(--color-accent)] hover:decoration-[var(--color-accent)]"
           >
-            {label}
+            {renderInline(label, k)}
           </a>,
         );
       } else {
@@ -93,13 +118,17 @@ function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
 }
 
 interface Block {
-  kind: "h1" | "h2" | "h3" | "p" | "ul" | "ol" | "hr" | "code" | "blockquote" | "table";
+  kind: "h1" | "h2" | "h3" | "h4" | "p" | "ul" | "ol" | "hr" | "code" | "blockquote" | "table";
   /** table only: header cells followed by body rows. */
   rows?: string[][];
   content: string;
   items?: string[];
+  /** ol only: the number the source gives its first item. */
+  start?: number;
   lang?: string;
 }
+
+const FENCE = /^\s*```/;
 
 function parseBlocks(md: string): Block[] {
   const lines = md.replace(/\r\n/g, "\n").split("\n");
@@ -107,14 +136,19 @@ function parseBlocks(md: string): Block[] {
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
-    if (line.startsWith("```")) {
-      const lang = line.slice(3).trim();
+    if (FENCE.test(line)) {
+      const indent = line.length - line.trimStart().length;
+      const lang = line.trim().slice(3).trim();
       const start = i + 1;
       let end = start;
-      while (end < lines.length && !lines[end].startsWith("```")) end += 1;
+      while (end < lines.length && !FENCE.test(lines[end])) end += 1;
       blocks.push({
         kind: "code",
-        content: lines.slice(start, end).join("\n"),
+        // A fence under a list item is indented with its item; the command isn't.
+        content: lines
+          .slice(start, end)
+          .map((l) => l.slice(Math.min(indent, l.length - l.trimStart().length)))
+          .join("\n"),
         lang,
       });
       i = end + 1;
@@ -137,6 +171,11 @@ function parseBlocks(md: string): Block[] {
     }
     if (line.startsWith("### ")) {
       blocks.push({ kind: "h3", content: line.slice(4).trim() });
+      i += 1;
+      continue;
+    }
+    if (line.startsWith("#### ")) {
+      blocks.push({ kind: "h4", content: line.slice(5).trim() });
       i += 1;
       continue;
     }
@@ -182,6 +221,7 @@ function parseBlocks(md: string): Block[] {
     }
     if (/^\s*\d+\.\s+/.test(line)) {
       const items: string[] = [];
+      const start = Number.parseInt(line, 10);
       while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
         items.push(lines[i].replace(/^\s*\d+\.\s+/, ""));
         i += 1;
@@ -192,7 +232,7 @@ function parseBlocks(md: string): Block[] {
           i += 1;
         }
       }
-      blocks.push({ kind: "ol", content: "", items });
+      blocks.push({ kind: "ol", content: "", items, start });
       continue;
     }
     if (line.trim() === "") {
@@ -205,7 +245,7 @@ function parseBlocks(md: string): Block[] {
       i < lines.length &&
       lines[i].trim() !== "" &&
       !lines[i].startsWith("#") &&
-      !lines[i].startsWith("```") &&
+      !FENCE.test(lines[i]) &&
       !/^\s*[-*+]\s+/.test(lines[i]) &&
       !/^\s*\d+\.\s+/.test(lines[i]) &&
       !/^-{3,}\s*$/.test(lines[i])
@@ -220,7 +260,7 @@ function parseBlocks(md: string): Block[] {
 
 /** A list item's wrapped line: indented, not blank, not a new item. */
 function isContinuation(line: string): boolean {
-  return /^\s{2,}\S/.test(line) && !/^\s*([-*+]|\d+\.)\s+/.test(line);
+  return /^\s{2,}\S/.test(line) && !/^\s*([-*+]|\d+\.)\s+/.test(line) && !FENCE.test(line);
 }
 
 export function MarkdownView({ source }: { source: string }) {
@@ -257,6 +297,15 @@ export function MarkdownView({ source }: { source: string }) {
                 {renderInline(b.content, key)}
               </h3>
             );
+          case "h4":
+            return (
+              <h4
+                key={key}
+                className="mb-2 mt-5 text-[15px] font-semibold text-[var(--color-text)]"
+              >
+                {renderInline(b.content, key)}
+              </h4>
+            );
           case "p":
             return (
               <p
@@ -279,7 +328,7 @@ export function MarkdownView({ source }: { source: string }) {
                       {head.map((cell, j) => (
                         <th
                           key={`${key}-h-${j}`}
-                          className="border-b border-[var(--color-border)] px-3 py-2 text-left font-semibold"
+                          className="border-b border-[var(--color-border)] px-3 py-2 text-start font-semibold"
                         >
                           {renderInline(cell, `${key}-h-${j}`)}
                         </th>
@@ -308,10 +357,10 @@ export function MarkdownView({ source }: { source: string }) {
             return (
               <ul
                 key={key}
-                className="mb-5 ml-6 list-disc space-y-2 text-[15px] leading-7 marker:text-[var(--color-accent)]/60"
+                className="mb-5 ms-6 list-disc space-y-2 text-[15px] leading-7 marker:text-[var(--color-accent)]/60"
               >
                 {(b.items ?? []).map((item, j) => (
-                  <li key={`${key}-${j}`} className="pl-1.5">
+                  <li key={`${key}-${j}`} className="ps-1.5">
                     {renderInline(item, `${key}-${j}`)}
                   </li>
                 ))}
@@ -321,10 +370,11 @@ export function MarkdownView({ source }: { source: string }) {
             return (
               <ol
                 key={key}
-                className="mb-5 ml-6 list-decimal space-y-2 text-[15px] leading-7 marker:font-semibold marker:text-[var(--color-accent)]/80"
+                start={b.start}
+                className="mb-5 ms-6 list-decimal space-y-2 text-[15px] leading-7 marker:font-semibold marker:text-[var(--color-accent)]/80"
               >
                 {(b.items ?? []).map((item, j) => (
-                  <li key={`${key}-${j}`} className="pl-1.5">
+                  <li key={`${key}-${j}`} className="ps-1.5">
                     {renderInline(item, `${key}-${j}`)}
                   </li>
                 ))}
@@ -341,7 +391,7 @@ export function MarkdownView({ source }: { source: string }) {
             return (
               <blockquote
                 key={key}
-                className="mb-5 rounded-r-md border-l-4 border-[var(--color-accent)] bg-[var(--color-surface-2)] px-4 py-3 text-[15px] italic leading-7 text-[var(--color-muted)]"
+                className="mb-5 rounded-e-md border-s-4 border-[var(--color-accent)] bg-[var(--color-surface-2)] px-4 py-3 text-[15px] italic leading-7 text-[var(--color-muted)]"
               >
                 {renderInline(b.content, key)}
               </blockquote>

@@ -198,6 +198,7 @@ test.describe("desktop", () => {
   });
 
   test("the shortcuts can be changed, are checked, persist and work", async ({ page }) => {
+    test.slow(); // see the toast below: each key press can take seconds on CI
     await nativeMode(page);
     const engine = await mockConsole(page);
     await start(page);
@@ -250,8 +251,20 @@ test.describe("desktop", () => {
     await chord(page);
     await page.waitForTimeout(200);
     await expect(page.getByTestId("rp-kbm-chip").or(page.getByTestId("rp-kbm-card"))).toBeVisible();
+    // Noted as it appears: under a granted pointer lock CI's software rendering can take longer to
+    // finish this key press than the toast's 2.5 s, so looking for it afterwards can miss it.
+    await page.evaluate(() => {
+      const seen: string[] = [];
+      (window as unknown as { __toasts: string[] }).__toasts = seen;
+      new MutationObserver(() => {
+        const t = document.querySelector('[data-testid="rp-kbm-toast"]');
+        if (t?.textContent) seen.push(t.textContent);
+      }).observe(document.body, { childList: true, subtree: true, characterData: true });
+    });
     await page.keyboard.press("Control+Shift+KeyN");
-    await expect(page.getByTestId("rp-kbm-toast")).toHaveText("Mixed · F8 to release");
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { __toasts: string[] }).__toasts))
+      .toContain("Mixed · F8 to release");
     await page.keyboard.press("F8");
     await expect(page.getByTestId("rp-kbm-chip")).toHaveCount(0);
     await expect(page.getByTestId("rp-capture-hint")).toBeVisible();
@@ -292,13 +305,13 @@ test.describe("phone, nothing attached", () => {
         }
       }, events);
 
-    // One finger drag: relative movement (times the speed, 1.5).
+    // One finger drag: relative movement (times the speed, 1.5). Odd steps: fractions of a unit.
     engine.reports.length = 0;
     await fire([
       ["pointerdown", 1, 400, 200],
-      ["pointermove", 1, 420, 200],
-      ["pointermove", 1, 440, 210],
-      ["pointerup", 1, 440, 210],
+      ["pointermove", 1, 421, 200],
+      ["pointermove", 1, 440, 211],
+      ["pointerup", 1, 440, 211],
     ]);
     await expect.poll(() => engine.reports.reduce((s, r) => s + (r[2] | (r[3] << 8)), 0)).toBeGreaterThan(0);
     expect(engine.reports.every((r) => r[0] === 0)).toBe(true); // no click

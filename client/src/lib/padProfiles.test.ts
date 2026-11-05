@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { padFromGamepads, PadButton, STANDARD_PROFILE } from "./remotePlayStream";
-import { addExtra, applyStep, blankProfile, detectAxis, detectPress, MAP_STEPS, withStandardGaps } from "./padProfiles";
+import { addExtra, applyStep, blankProfile, detectAxis, detectPress, loadProfiles, MAP_STEPS, withStandardGaps } from "./padProfiles";
+import * as storage from "./safeStorage";
+import { installWindowStub } from "../test-utils/storage";
 
 /** A controller as the Gamepad API gives it. */
 function pad(over: { buttons?: number[]; axes?: number[]; mapping?: string; id?: string } = {}): Gamepad {
@@ -18,6 +20,12 @@ function pad(over: { buttons?: number[]; axes?: number[]; mapping?: string; id?:
 const press = (i: number, n = 17) => {
   const b = new Array(n).fill(0);
   b[i] = 1;
+  return b;
+};
+/** Several buttons held at once, in the standard 17. */
+const held = (...which: number[]) => {
+  const b = new Array(17).fill(0);
+  for (const i of which) b[i] = 1;
   return b;
 };
 
@@ -102,6 +110,62 @@ describe("a controller forwarded by the Android app", () => {
     vi.unstubAllGlobals();
   });
 
+  it("#668: on the Linux app the kernel's reading is the controller, with the browser's rumble", async () => {
+    const { gamepadsOf, preferNativePads, installNativePad, resetNativePad } = await import("./nativePad");
+    resetNativePad();
+    vi.stubGlobal("window", { dispatchEvent: () => true });
+    installNativePad();
+    preferNativePads();
+    const nav = (pads: Array<Gamepad | null>) => ({ getGamepads: () => pads }) as unknown as Navigator;
+    // WebKitGTK with an unmapped pad: no d-pad, and R2 reads as the left stick pushed up.
+    const rumble = { playEffect: () => {} };
+    const real = {
+      ...pad({ id: "Sony Interactive Entertainment DualSense Wireless Controller", buttons: held(0), axes: [0, -1, 0, 0] }),
+      vibrationActuator: rumble,
+    } as unknown as Gamepad;
+    const send = window.__ps5uNativePad!;
+    send({ slot: 0, id: "DualSense Wireless Controller", buttons: held(0, 12, 15), axes: [0, 0, 0, 0] });
+    const list = gamepadsOf(nav([null, real]));
+    expect(list.filter(Boolean)).toHaveLength(1); // never read twice
+    const g = list[1]!;
+    expect(padFromGamepads(list).buttons).toBe(PadButton.CROSS | PadButton.UP | PadButton.RIGHT);
+    expect(padFromGamepads(list).ly).toBe(0); // the browser's noise is gone
+    expect((g as unknown as { vibrationActuator: unknown }).vibrationActuator).toBe(rumble);
+    // The same controller whether or not the browser has noticed it yet.
+    const before = gamepadsOf(nav([null]))[0]!;
+    expect([before.id, before.index]).toEqual([g.id, g.index]);
+    // Android and Windows: the browser's pad alone, as before.
+    preferNativePads(false);
+    expect(gamepadsOf(nav([real]))[0]).toBe(real);
+    resetNativePad();
+    vi.unstubAllGlobals();
+  });
+
+  it("#668: two controllers each find their twin; one the app does not read stays", async () => {
+    const { gamepadsOf, preferNativePads, installNativePad, resetNativePad } = await import("./nativePad");
+    resetNativePad();
+    vi.stubGlobal("window", { dispatchEvent: () => true });
+    installNativePad();
+    preferNativePads();
+    const rumble = { playEffect: () => {} };
+    const xbox = { ...pad({ id: "Xbox Wireless" }), vibrationActuator: rumble } as unknown as Gamepad;
+    const other = pad({ id: "Flight Stick", buttons: held(1) });
+    const nav = { getGamepads: () => [xbox, pad({ id: "DualSense" }), other] } as unknown as Navigator;
+    const send = window.__ps5uNativePad!;
+    send({ slot: 0, id: "DualSense", buttons: held(14), axes: [] });
+    send({ slot: 1, id: "Xbox Wireless", buttons: held(), axes: [] });
+    const list = gamepadsOf(nav);
+    expect(list.map((g) => g?.id)).toEqual(["Xbox Wireless (app)", "DualSense (app)", "Flight Stick"]);
+    expect((list[0] as unknown as { vibrationActuator: unknown }).vibrationActuator).toBe(rumble);
+    expect(padFromGamepads([list[1]]).buttons).toBe(PadButton.LEFT);
+    expect(padFromGamepads([list[2]]).buttons).toBe(PadButton.CIRCLE);
+    // A controller only the app has read so far is still offered.
+    const seenOne = { getGamepads: () => [pad({ id: "Xbox Wireless" })] } as unknown as Navigator;
+    expect(gamepadsOf(seenOne).map((g) => g?.id)).toEqual(["Xbox Wireless (app)", "DualSense (app)"]);
+    resetNativePad();
+    vi.unstubAllGlobals();
+  });
+
   it("the Linux app's controllers: several by slot, and gone when unplugged", async () => {
     const { gamepadsOf, installNativePad, resetNativePad } = await import("./nativePad");
     resetNativePad();
@@ -128,6 +192,44 @@ describe("a controller forwarded by the Android app", () => {
     send({ slot: 1, id: "Xbox", connected: false, buttons: [], axes: [] });
     expect(fired.filter((t) => t === "gamepaddisconnected")).toHaveLength(2);
     resetNativePad();
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("loadProfiles", () => {
+  it("keeps good profiles and drops damaged ones", () => {
+    const good = { buttons: [[1, { b: 0 }]], l2: null, r2: { b: 7 }, lx: null, ly: null, rx: null, ry: null };
+    const get = vi.spyOn(storage, "safeGetItem").mockReturnValue(
+      JSON.stringify({ a: good, b: { buttons: "x" }, c: 7, d: { ...good, buttons: [[1]] } }),
+    );
+    expect(Object.keys(loadProfiles())).toEqual(["a"]);
+    get.mockReturnValue("[]");
+    expect(loadProfiles()).toEqual({});
+    get.mockRestore();
+  });
+});
+
+describe("a mapping saved before the app read controllers itself (#668)", () => {
+  const paddles = blankProfile();
+
+  it("applies under the app's name, and is copied there without losing the old entry", async () => {
+    installWindowStub();
+    const mod = await import("./padProfiles");
+    mod.saveProfile("Sony DualSense", paddles);
+    const applied = mod.profileFor(pad({ id: "Sony DualSense (app)" }));
+    expect(applied).toEqual(paddles);
+    expect(Object.keys(mod.loadProfiles()).sort()).toEqual(["Sony DualSense", "Sony DualSense (app)"]);
+    vi.unstubAllGlobals();
+  });
+
+  it("does not guess between two saved controllers", async () => {
+    installWindowStub();
+    const mod = await import("./padProfiles");
+    mod.saveProfile("0ce6 Pad", paddles);
+    mod.saveProfile("0df2 Pad", paddles);
+    expect(Object.keys(mod.loadProfiles())).toHaveLength(2);
+    mod.profileFor(pad({ id: "Pad (app)" }));
+    expect(Object.keys(mod.loadProfiles())).toHaveLength(2);
     vi.unstubAllGlobals();
   });
 });

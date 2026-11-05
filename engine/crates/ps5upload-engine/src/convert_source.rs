@@ -183,11 +183,8 @@ mod tests {
     #[test]
     fn a_console_path_names_the_host_and_refuses_installed_games() {
         assert_eq!(
-            console_target("ps5://192.168.86.99/mnt/ext0/g/X.exfat").unwrap(),
-            (
-                "192.168.86.99".to_string(),
-                "/mnt/ext0/g/X.exfat".to_string()
-            )
+            console_target("ps5://192.0.2.99/mnt/ext0/g/X.exfat").unwrap(),
+            ("192.0.2.99".to_string(), "/mnt/ext0/g/X.exfat".to_string())
         );
         assert_eq!(
             console_target("ps5://10.0.0.2:8080/data/homebrew/G")
@@ -312,7 +309,7 @@ mod tests {
             ("/data/games/folder/sce_sys/param.json", b"{}"),
         ]);
         register();
-        let url = "ps5://192.168.86.99/data/games/mini.exfat".to_string();
+        let url = "ps5://192.0.2.99/data/games/mini.exfat".to_string();
         let out = std::env::temp_dir().join(format!("fpkg-console-build-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&out);
         let (c, o) = (console.clone(), out.clone());
@@ -322,7 +319,7 @@ mod tests {
             let remote = ps5upload_fpkg::source::open(Path::new(&url)).unwrap();
             assert_eq!(local.files(), remote.files());
             assert!(
-                remote.describe().contains("the PS5 at 192.168.86.99"),
+                remote.describe().contains("the PS5 at 192.0.2.99"),
                 "{}",
                 remote.describe()
             );
@@ -339,7 +336,7 @@ mod tests {
         // Only management calls reached the console, addressed by host alone.
         let calls = console.calls.lock().unwrap();
         assert!(!calls.is_empty());
-        assert!(calls.iter().all(|(a, _)| a == "192.168.86.99"));
+        assert!(calls.iter().all(|(a, _)| a == "192.0.2.99"));
         let _ = std::fs::remove_dir_all(&out);
     }
 
@@ -404,7 +401,7 @@ mod tests {
 
     /// Throughput of the console reader Convert uses, on a real file.
     /// Run by hand against a paired console:
-    /// PS5UPLOAD_SPEED_HOST=192.168.86.99 PS5UPLOAD_SPEED_FILE=/user/app/X/app.pkg
+    /// PS5UPLOAD_SPEED_HOST=192.0.2.99 PS5UPLOAD_SPEED_FILE=/user/app/X/app.pkg
     /// cargo test -p ps5upload-engine --release --lib console_read_speed -- --ignored --nocapture
     #[tokio::test(flavor = "multi_thread")]
     #[ignore]
@@ -448,7 +445,7 @@ mod tests {
     /// The #351 repro, live: inspect and build a console game dump (a folder or an image) with
     /// the console's FTP server stopped. Pair first (see `ps5upload-tests/tests/ava1_live.rs`);
     /// do not run while the engine is connected to the same console.
-    /// REAL_PS5_ADDR=192.168.86.99 PS5UPLOAD_CONVERT_PATH=/data/games/X.exfat
+    /// REAL_PS5_ADDR=192.0.2.99 PS5UPLOAD_CONVERT_PATH=/data/games/X.exfat
     /// cargo test -p ps5upload-engine --release --lib console_game_converts_live -- --ignored --nocapture
     #[tokio::test(flavor = "multi_thread")]
     #[ignore]

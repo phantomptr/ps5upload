@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluateOperationReadiness } from "./operationReadiness";
+import { evaluateOperationReadiness, helperNotConnected } from "./operationReadiness";
 
 const ready = {
   host: "192.168.1.20",
@@ -29,7 +29,7 @@ describe("operation readiness", () => {
     });
     expect(result.ready).toBe(false);
     expect(result.blockers).toEqual([
-      "The ps5upload engine is offline.",
+      "The PS5Upload engine is offline.",
       "No PS5 is selected.",
       "The PS5 helper is not connected.",
     ]);
@@ -51,5 +51,12 @@ describe("operation readiness", () => {
     });
     expect(result.ready).toBe(true);
     expect(result.warnings).toHaveLength(1);
+  });
+});
+
+describe("helperNotConnected", () => {
+  it("is the very blocker Home swaps for a better reason", () => {
+    const { blockers } = evaluateOperationReadiness("upload", { ...ready, helperUp: false });
+    expect(blockers).toContain(helperNotConnected());
   });
 });

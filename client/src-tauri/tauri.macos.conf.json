@@ -4,6 +4,7 @@
     "runner": "./macos-dev-runner.sh"
   },
   "bundle": {
+    "resources": { "../../LICENSE": "LICENSE" },
     "category": "Game",
     "macOS": {
       "infoPlist": "Info.macos.plist",

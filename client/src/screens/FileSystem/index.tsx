@@ -130,7 +130,7 @@ import {
   type SearchHit,
   type Volume,
 } from "../../api/ps5";
-import { kindsOf, namesPreview, planFsUpload } from "../../state/fsUploadPlan";
+import { baseNameOf, kindsOf, namesPreview, planFsUpload } from "../../state/fsUploadPlan";
 import { useConflictAsk } from "./ConflictAsk";
 import {
   loadFsLastPath,
@@ -139,6 +139,7 @@ import {
 } from "../../lib/fsLastPath";
 import { useFsNavStore } from "../../state/fsNavigation";
 import { stageBrowserFile } from "../../api/pkgUpload";
+import { isStagingCancelled, noteStaged, stageWithTask } from "../../lib/browserStaging";
 import { dragOut, dragOutAvailable, isDragOutCopy } from "../../lib/dragOut";
 import { beginTask, trackTask } from "../../state/trackTask";
 import { useActivityHistoryStore } from "../../state/activityHistory";
@@ -171,7 +172,8 @@ import {
   cancelFsUpload,
   fsUploadForHost,
   runFsUpload,
-  dismissFsUploadStopped,
+  clearFsUploadUnreadable,
+  giveUpFsUploadStopped,
   resumeFsUpload,
   useFsUploadStore,
   type FsUploadActive,
@@ -182,10 +184,11 @@ import { fsUploadDeps } from "../../state/fsUploadRuntime";
 import { useScrollLock } from "../../lib/useScrollLock";
 import { runBulkDelete as runBulkDeleteLoop } from "../../lib/bulkDelete";
 import { formatBytes } from "../../lib/format";
+import { useWindowedRows } from "../../lib/useWindowedRows";
 import { formatEtaSeconds } from "../../lib/uploadEta";
 import { useRateEta } from "../../lib/useRateEta";
 import { resumedShown } from "../../lib/resumedProgress";
-import { humanizePs5Error } from "../../lib/humanizeError";
+import { humanizePs5Error, humanizeCaught } from "../../lib/humanizeError";
 
 /**
  * PS5 file explorer with multi-select + cut/copy/paste.
@@ -206,22 +209,33 @@ import { humanizePs5Error } from "../../lib/humanizeError";
  * moves.
  */
 
+/** The console refused a move or copy because something already has that name. */
+function isMoveExistsError(raw: string): boolean {
+  return /fs_move_exists|fs_copy_dest_exists/.test(raw);
+}
+
+/** What to show for a failed move of `name`. */
+function moveErrorText(
+  tr: (key: string, vars?: Record<string, string | number>, fallback?: string) => string,
+  raw: string,
+  name: string,
+): string {
+  if (isMoveExistsError(raw)) {
+    return tr(
+      "fs_move_exists",
+      { name },
+      `"${name}" is already there, so nothing was replaced. Pick another name or delete it first.`,
+    );
+  }
+  return humanizePs5Error(raw) || raw;
+}
+
 interface DirEntry {
   name: string;
   kind: string; // "file" | "dir" | "link" | "other" | "unknown"
   size: number;
   /** Seconds since the epoch; older helpers omit it. */
   mtime?: number;
-}
-
-function formatDuration(sec: number): string {
-  if (!isFinite(sec) || sec < 0) return "—";
-  if (sec < 60) return `${Math.ceil(sec)}s`;
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  if (m < 60) return `${m}m ${s}s`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
 }
 
 // formatBytes moved to lib/format.ts.
@@ -239,6 +253,8 @@ import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import { labelEngineJob } from "../../lib/bgWork";
 import { canEjectUsb, useUsbEject } from "../../lib/useUsbEject";
 import { useMeshDriveShortcuts } from "./useMeshDriveShortcuts";
+import { formatNumber, formatDuration } from "../../lib/formatDate";
+import { Modal } from "../../components/Modal";
 
 function parent(p: string): string {
   if (p === "/" || p === "") return "/";
@@ -464,6 +480,9 @@ export default function FileSystemScreen() {
   const uploadRuns = useFsUploadStore(
     (s) => fsUploadForHost(s, host).finishedRuns,
   );
+  const uploadUnreadable = useFsUploadStore(
+    (s) => fsUploadForHost(s, host).unreadable,
+  );
   const stoppedAt = {
     name: uploadStopped?.name ?? "",
     done: uploadStopped?.doneCount ?? 0,
@@ -604,13 +623,6 @@ export default function FileSystemScreen() {
       if (latestListReqRef.current !== probedPath) return;
       if (probe.isStale()) return;
       const raw: DirEntry[] = listing;
-      raw.sort((a, b) => {
-        if (a.kind !== b.kind) {
-          if (a.kind === "dir") return -1;
-          if (b.kind === "dir") return 1;
-        }
-        return a.name.localeCompare(b.name);
-      });
       // A Mesh Drive's own sync files are hidden; the folder says it is a drive instead.
       setMeshHome(raw.some((e) => e.name === MESH_MARKER));
       setEntries(raw.filter((e) => !isMeshInternal(e.name)));
@@ -819,6 +831,7 @@ export default function FileSystemScreen() {
     openView("snapshots");
   };
   // A search hit opens its folder; a file hit is then selected once the listing has it.
+  const scrollToEntry = useRef<(name: string) => void>(() => {});
   const [pendingSelect, setPendingSelect] = useState<{ dir: string; name: string } | null>(null);
   const openHit = (hit: SearchHit) => {
     const t = fileSystemTargetFor(hit);
@@ -890,11 +903,12 @@ export default function FileSystemScreen() {
     setSelected(new Set([pendingSelect.name]));
     setPendingSelect(null);
     const name = pendingSelect.name;
-    requestAnimationFrame(() =>
-      document
-        .querySelector(`[data-fs-name="${CSS.escape(name)}"]`)
-        ?.scrollIntoView({ block: "center" }),
-    );
+    requestAnimationFrame(() => {
+      const row = document.querySelector(`[data-fs-name="${CSS.escape(name)}"]`);
+      // A long folder renders only the rows near the screen.
+      if (row) row.scrollIntoView({ block: "center" });
+      else scrollToEntry.current(name);
+    });
   }, [pendingSelect, path, entries]);
 
   const selectedEntries = useMemo(
@@ -1057,7 +1071,7 @@ export default function FileSystemScreen() {
     const itemPath = joinPath(path, name);
     const activityId = useActivityHistoryStore
       .getState()
-      .start("fs-delete", `Deleting ${name}`, {
+      .start("fs-delete", tr("fs_activity_deleting", { name }, "Deleting {name}"), {
         fromPath: itemPath,
         files: 1,
       });
@@ -1069,7 +1083,7 @@ export default function FileSystemScreen() {
         {
           kind: "fs-delete",
           origin: "files.delete",
-          label: `Delete ${name}`,
+          label: tr("fs_task_delete", { name }, "Delete {name}"),
           consoleId: host,
         },
         () => fsDelete(consoleAddr(host), itemPath),
@@ -1114,9 +1128,8 @@ export default function FileSystemScreen() {
       );
       return;
     }
-    // Don't silently clobber: the payload's rename() over an existing file
-    // destroys it and reports success. Block when the target name is already
-    // taken in this folder (the Move modal guards this too).
+    // Say so before asking the console, which would refuse an existing name anyway
+    // (`fs_move_exists`). The Move modal guards this too.
     if ((entries ?? []).some((en) => en.name === newName)) {
       setError(
         tr(
@@ -1139,7 +1152,7 @@ export default function FileSystemScreen() {
       await refresh();
     } catch (e) {
       const raw = e instanceof Error ? e.message : String(e);
-      const human = humanizePs5Error(raw) || raw;
+      const human = moveErrorText(tr, raw, newName);
       setError(human);
       pushNotification(
         "error",
@@ -1163,16 +1176,25 @@ export default function FileSystemScreen() {
    *    - `lower` / `upper` → case transform
    *
    *  Shows a preview dialog of what would change before applying. */
+  const moreLine = (count: number) =>
+    tr("fs_list_and_more", { count }, "…and {count} more");
   const runBulkRename = async (selectedNames: string[]) => {
     const pattern = await promptDialog({
-      title: `Bulk rename ${selectedNames.length} item(s)`,
-      message:
-        "Pattern grammar:\n" +
-        "  s/old/new/[gi]   substring replace\n" +
-        "  ^prefix_         add prefix\n" +
-        "  _suffix$         add suffix (before extension)\n" +
-        "  lower / upper    change case",
-      placeholder: "e.g. s/CUSA/PCSA/  or  ^backup_  or  lower",
+      title: tr(
+        "fs_bulk_rename_prompt_title",
+        { count: selectedNames.length },
+        "Bulk rename. Items: {count}",
+      ),
+      message: tr(
+        "fs_bulk_rename_grammar",
+        undefined,
+        "Pattern grammar:\n  s/old/new/[gi]   replace text\n  ^prefix_         add a prefix\n  _suffix$         add a suffix (before the extension)\n  lower / upper    change case",
+      ),
+      placeholder: tr(
+        "fs_bulk_rename_placeholder",
+        undefined,
+        "e.g. s/CUSA/PCSA/  or  ^backup_  or  lower",
+      ),
       okLabel: tr("fs_bulk_rename_next", undefined, "Next"),
     });
     if (!pattern) return;
@@ -1202,7 +1224,7 @@ export default function FileSystemScreen() {
             .slice(0, 10)
             .map((x) => `  ${x}`)
             .join("\n") +
-          (invalid.length > 10 ? `\n  ...and ${invalid.length - 10} more` : ""),
+          (invalid.length > 10 ? `\n  ${moreLine(invalid.length - 10)}` : ""),
       });
       return;
     }
@@ -1229,11 +1251,15 @@ export default function FileSystemScreen() {
       const conflicts: string[] = [];
       for (const r of renames) {
         if (seenTargets.has(r.to)) {
-          conflicts.push(`${r.to}  (two items rename to this)`);
+          conflicts.push(
+            `${r.to}  ${tr("fs_bulk_rename_conflict_twice", undefined, "(two items rename to this)")}`,
+          );
         }
         seenTargets.add(r.to);
         if (existing.has(r.to) && !fromSet.has(r.to)) {
-          conflicts.push(`${r.to}  (already exists)`);
+          conflicts.push(
+            `${r.to}  ${tr("fs_bulk_rename_conflict_exists", undefined, "(already exists)")}`,
+          );
         }
       }
       if (conflicts.length > 0) {
@@ -1255,7 +1281,7 @@ export default function FileSystemScreen() {
               .map((c) => `  ${c}`)
               .join("\n") +
             (conflicts.length > 10
-              ? `\n  …and ${conflicts.length - 10} more`
+              ? `\n  ${moreLine(conflicts.length - 10)}`
               : ""),
         });
         return;
@@ -1273,7 +1299,7 @@ export default function FileSystemScreen() {
       ),
       message:
         preview +
-        (renames.length > 10 ? `\n  …and ${renames.length - 10} more` : ""),
+        (renames.length > 10 ? `\n  ${moreLine(renames.length - 10)}` : ""),
       confirmLabel: tr("fs_bulk_rename_apply", undefined, "Rename"),
     });
     if (!ok) return;
@@ -1290,18 +1316,23 @@ export default function FileSystemScreen() {
         okCount++;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        failures.push(`${r.from} → ${r.to}: ${humanizePs5Error(msg) || msg}`);
+        failures.push(`${r.from} → ${r.to}: ${moveErrorText(tr, msg, r.to)}`);
       }
     }
     if (failures.length > 0) {
-      setError(`First failure: ${failures[0]}`);
+      const firstFailure = tr(
+        "fs_bulk_rename_first_failure",
+        { error: failures[0] },
+        "First failure: {error}",
+      );
+      setError(firstFailure);
       pushNotification(
         "error",
         withConsolePrefix(
           host,
           tr("notif_fs_rename_failed", undefined, "Rename failed"),
         ),
-        { body: `First failure: ${failures[0]}` },
+        { body: firstFailure },
       );
     }
     await alertDialog({
@@ -1319,7 +1350,7 @@ export default function FileSystemScreen() {
               .map((f) => `  ${f}`)
               .join("\n") +
             (failures.length > 10
-              ? `\n  …and ${failures.length - 10} more`
+              ? `\n  ${moreLine(failures.length - 10)}`
               : "")
           : undefined,
     });
@@ -1483,9 +1514,13 @@ export default function FileSystemScreen() {
           void (async () => {
             const paths: string[] = [];
             try {
-              for (const f of files) paths.push((await stageBrowserFile(f)).path);
+              for (const f of files) {
+                const staged = await stageWithTask(f, stageBrowserFile);
+                noteStaged(staged);
+                paths.push(staged.path);
+              }
             } catch (e) {
-              setError(e instanceof Error ? e.message : String(e));
+              if (!isStagingCancelled(e)) setError(humanizeCaught(e));
             }
             if (paths.length > 0) await addPicked(paths, "file");
           })();
@@ -1741,6 +1776,15 @@ export default function FileSystemScreen() {
     () => (entries ? sortEntries(entries, sort) : []),
     [entries, sort],
   );
+  // A folder can hold 100,000 entries: only those near the screen are rendered.
+  const rowsListRef = useRef<HTMLUListElement | null>(null);
+  const { start: rowsStart, end: rowsEnd, before: rowsBefore, after: rowsAfter, scrollToRow } = useWindowedRows(
+    sortedEntries.length,
+    rowsListRef,
+  );
+  useEffect(() => {
+    scrollToEntry.current = (name) => scrollToRow(sortedEntries.findIndex((e) => e.name === name));
+  }, [scrollToRow, sortedEntries]);
   // "Send to another console…" (#433): the items waiting for a console and folder.
   const [sendItems, setSendItems] = useState<SendItem[] | null>(null);
   // The console's own Files page: its pinned folders, and "Show on console".
@@ -1921,7 +1965,7 @@ export default function FileSystemScreen() {
     const task = beginTask({
       kind: "fs-unpack",
       origin: "files",
-      label: `Decompress ${entry.name}`,
+      label: tr("fs_task_decompress", { name: entry.name }, "Decompress {name}"),
       consoleId: host.trim(),
     });
     let stopped = false;
@@ -2012,7 +2056,7 @@ export default function FileSystemScreen() {
     const task = beginTask({
       kind: "fs-extract",
       origin: "files",
-      label: `Extract ${entry.name}`,
+      label: tr("fs_task_extract", { name: entry.name }, "Extract {name}"),
       consoleId: host.trim(),
     });
     let stopped = false;
@@ -2257,7 +2301,7 @@ export default function FileSystemScreen() {
         .map((c) => c.name)
         .join(", ");
       const more =
-        conflicts.length > 6 ? ` and ${conflicts.length - 6} more` : "";
+        conflicts.length > 6 ? ` ${moreLine(conflicts.length - 6)}` : "";
       overwrite = await confirmDialog({
         title: tr(
           "fs_paste_conflict_title",
@@ -2373,7 +2417,7 @@ export default function FileSystemScreen() {
         try {
           if (op === "cut") {
             try {
-              await fsMove(addr, item.path, target, opId);
+              await fsMove(addr, item.path, target, opId, overwrite);
             } catch (e) {
               // Cross-filesystem move failure → fall back to copy + delete.
               // The payload emits "fs_move_cross_mount" for EXDEV; matching
@@ -2421,7 +2465,11 @@ export default function FileSystemScreen() {
           // cancelled, and a "cancelled" entry would look like a
           // failure in the post-op summary.
           if (!msg.includes("cancelled")) {
-            errors.push(`${item.name}: ${msg}`);
+            errors.push(
+              isMoveExistsError(msg)
+                ? moveErrorText(tr, msg, item.name)
+                : `${item.name}: ${msg}`,
+            );
           }
         } finally {
           pollerStopped = true;
@@ -2513,7 +2561,7 @@ export default function FileSystemScreen() {
     } catch (e) {
       await alertDialog({
         title: tr("fs_preview_failed", undefined, "Preview failed"),
-        message: e instanceof Error ? e.message : String(e),
+        message: humanizeCaught(e),
       });
     }
   };
@@ -2556,7 +2604,7 @@ export default function FileSystemScreen() {
     } catch (e) {
       await alertDialog({
         title: tr("fs_verify_failed", undefined, "Verify failed"),
-        message: e instanceof Error ? e.message : String(e),
+        message: humanizeCaught(e),
       });
     }
   };
@@ -2612,7 +2660,7 @@ export default function FileSystemScreen() {
     } catch (e) {
       await alertDialog({
         title: tr("fs_crc32_error", undefined, "CRC32 error"),
-        message: e instanceof Error ? e.message : String(e),
+        message: humanizeCaught(e),
       });
     }
   };
@@ -2663,7 +2711,13 @@ export default function FileSystemScreen() {
           })
         : await pickPath({
             mode: "folder",
-            title: tr(
+            title: !isTauriEnv()
+              ? tr(
+                  "fs_copy_to_server_dialog_title",
+                  { name: entry.name },
+                  'Pick a folder on the server for "{name}"',
+                )
+              : tr(
               "fs_download_dialog_title",
               { name: entry.name },
               'Pick a destination folder for "{name}"',
@@ -2967,7 +3021,10 @@ export default function FileSystemScreen() {
             },
             {
               icon: Download,
-              label: tr("fs_menu_download", undefined, "Download"),
+              // In the web UI the destination is the server's disk, not the computer in front of you.
+              label: isTauriEnv()
+                ? tr("fs_menu_download", undefined, "Download")
+                : tr("fs_menu_copy_to_server", undefined, "Copy to the server…"),
               run: () => void runDownload(menuEntry),
               disabled: downloadOp.active,
             },
@@ -3181,7 +3238,7 @@ export default function FileSystemScreen() {
       {promptDialogNode}
       <PageHeader
         icon={FolderTree}
-        title={tr("file_system", undefined, "File System")}
+        title={tr("file_system", undefined, "Files")}
         loading={loading}
         right={
           // On a phone, Add folder / New folder / Refresh / ⋯ show their icon alone
@@ -3380,7 +3437,7 @@ export default function FileSystemScreen() {
               + accent border so they stand out. The active drive is highlighted. */}
           {volumes && volumes.length > 0 && (
             <div className="mb-2 flex items-center gap-1 text-xs max-sm:overflow-x-auto sm:flex-wrap sm:gap-1.5">
-              <span className="mr-0.5 inline-flex items-center gap-1 text-[var(--color-muted)] max-sm:sr-only">
+              <span className="me-0.5 inline-flex items-center gap-1 text-[var(--color-muted)] max-sm:sr-only">
                 <HardDrive size={12} />
                 {tr("fs_drives_label", undefined, "Drives")}
               </span>
@@ -3551,7 +3608,7 @@ export default function FileSystemScreen() {
                     type="button"
                     onClick={() => setPathDraft(path)}
                     title={tr("fs_go_to_path", undefined, "Go to path")}
-                    className="ml-1 shrink-0 rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+                    className="ms-1 shrink-0 rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
                   >
                     <Pencil size={12} />
                   </button>
@@ -3573,7 +3630,7 @@ export default function FileSystemScreen() {
                             tone: "warn",
                             message: tr(
                               "fs_console_pin_failed",
-                              { error: e instanceof Error ? e.message : String(e) },
+                              { error: humanizeCaught(e) },
                               `Couldn't change the console's pinned folders: ${e instanceof Error ? e.message : String(e)}`,
                             ),
                           }),
@@ -3591,11 +3648,7 @@ export default function FileSystemScreen() {
               <ClipboardPaste size={14} className="text-[var(--color-accent)]" />
               <span>
                 <span className="font-medium">
-                  {tr(
-                    clipboard.items.length === 1 ? "fs_item_one" : "fs_item_many",
-                    { count: clipboard.items.length },
-                    `${clipboard.items.length} item${clipboard.items.length === 1 ? "" : "s"}`,
-                  )}
+                  {tr("fs_item_count", { count: clipboard.items.length }, "Items: {count}")}
                 </span>{" "}
                 {clipboard.op === "cut"
                   ? tr("fs_to_move", undefined, "to move")
@@ -3604,7 +3657,7 @@ export default function FileSystemScreen() {
                   ? ` ${tr("fs_from", undefined, "from")} ${clipboard.sourceLabel}`
                   : ""}
               </span>
-              <div className="ml-auto flex items-center gap-1">
+              <div className="ms-auto flex items-center gap-1">
                 <button
                   type="button"
                   onClick={() => void runPaste()}
@@ -3801,7 +3854,7 @@ export default function FileSystemScreen() {
               {uploadQueue.items.map((item) => (
                 <div key={item.id} className="mt-2 flex items-center gap-2">
                   <span className="min-w-0 flex-1 break-all">
-                    {item.paused && <span className="mr-1 rounded bg-[var(--color-warn)]/15 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-[var(--color-warn)]" data-testid="fs-upload-paused">{tr("queue_paused", undefined, "Paused")}</span>}
+                    {item.paused && <span className="me-1 rounded bg-[var(--color-warn)]/15 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-[var(--color-warn)]" data-testid="fs-upload-paused">{tr("queue_paused", undefined, "Paused")}</span>}
                     {item.request.steps?.flatMap((s) => s.kind === "list" ? s.files.map((f) => f.name) : [s.name]).join(", ")} → {item.request.destDir}
                     {item.paused === "sendNow" && <span className="block text-[var(--color-muted)]">{tr("queue_paused_for_send_now", undefined, "Paused for a Send now. It carries on by itself after.")}</span>}
                     {item.error && <span className="block text-[var(--color-bad)]">{humanizePs5Error(item.error) || item.error}</span>}
@@ -3815,7 +3868,7 @@ export default function FileSystemScreen() {
                       {tr("queue_send_now", undefined, "Send now")}
                     </Button>
                   )}
-                  <Button size="sm" variant="ghost" disabled={uploadQueue.running && uploadQueue.currentId === item.id} onClick={() => removeFsUploadQueued(host, item.id)}>
+                  <Button size="sm" variant="ghost" disabled={uploadQueue.running && uploadQueue.currentId === item.id} onClick={() => removeFsUploadQueued(host, item.id, fsUploadDeps)}>
                     {tr("queue_remove", undefined, "Remove from queue")}
                   </Button>
                 </div>
@@ -3950,6 +4003,11 @@ export default function FileSystemScreen() {
                   "fs_upload_stopped_hint",
                   undefined,
                   "What already reached the PS5 is kept. Resume sends only the rest.",
+                )}{" "}
+                {tr(
+                  "fs_upload_dismiss_hint",
+                  undefined,
+                  "Dismiss gives up the rest and deletes the unfinished item from the PS5.",
                 )}
               </div>
               <div className="mt-2 flex gap-2">
@@ -3964,7 +4022,31 @@ export default function FileSystemScreen() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => dismissFsUploadStopped(host)}
+                  onClick={() => giveUpFsUploadStopped(host, fsUploadDeps)}
+                >
+                  {tr("dismiss", undefined, "Dismiss")}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {uploadUnreadable && uploadUnreadable.length > 0 && (
+            <div
+              className="mb-3 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-warn)_40%,transparent)] bg-[var(--color-surface-raised)] px-4 py-3.5 text-sm shadow-[var(--edge-highlight),var(--shadow-1)]"
+              data-testid="fs-upload-unreadable"
+            >
+              <div className="break-words">
+                {tr(
+                  "fs_upload_unreadable",
+                  { names: namesPreview(uploadUnreadable.map(baseNameOf)) },
+                  `These files could not be read on this computer, so they were not copied: ${namesPreview(uploadUnreadable.map(baseNameOf))}`,
+                )}
+              </div>
+              <div className="mt-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => clearFsUploadUnreadable(host)}
                 >
                   {tr("dismiss", undefined, "Dismiss")}
                 </Button>
@@ -4059,13 +4141,9 @@ export default function FileSystemScreen() {
                   title={tr("fs_select_all", undefined, "Select all")}
                 />
                 <span>
-                  {tr(
-                    entries.length === 1 ? "fs_item_one" : "fs_item_many",
-                    { count: entries.length },
-                    `${entries.length} item${entries.length === 1 ? "" : "s"}`,
-                  )}
+                  {tr("fs_item_count", { count: entries.length }, "Items: {count}")}
                 </span>
-                <span className="ml-auto flex items-center gap-1">
+                <span className="ms-auto flex items-center gap-1">
                   {(
                     [
                       ["name", tr("fs_sort_name", undefined, "Name")],
@@ -4088,8 +4166,12 @@ export default function FileSystemScreen() {
               </div>
             )}
 
-            <ul className="grid gap-1.5">
-              {sortedEntries.map((e) => {
+            <ul
+              ref={rowsListRef}
+              className="grid gap-1.5"
+              style={{ paddingTop: rowsBefore, paddingBottom: rowsAfter }}
+            >
+              {sortedEntries.slice(rowsStart, rowsEnd).map((e) => {
                 const isDir = e.kind === "dir";
                 const Icon = isDir ? Folder : FileIcon;
                 const isRenaming = renaming === e.name;
@@ -4141,6 +4223,7 @@ export default function FileSystemScreen() {
                       <input
                         autoFocus
                         value={renameDraft}
+                        aria-label={tr("fs_rename_input_label", { name: e.name }, "New name for {name}")}
                         onChange={(ev) => setRenameDraft(ev.target.value)}
                         onKeyDown={(ev) => {
                           if (ev.key === "Enter") runRename(e.name);
@@ -4157,7 +4240,7 @@ export default function FileSystemScreen() {
                         }}
                         title={e.name}
                         className={
-                          "min-w-0 flex-1 truncate text-left text-sm " +
+                          "min-w-0 flex-1 truncate text-start text-sm " +
                           (isDir ? "font-medium hover:text-[var(--color-accent)]" : "")
                         }
                         disabled={!isDir}
@@ -4214,44 +4297,28 @@ export default function FileSystemScreen() {
             )}
           </div>
           {preview && (
-            <div
-              className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] p-4"
-              onClick={() => setPreview(null)}
+            <Modal
+              open
+              onClose={() => setPreview(null)}
+              title={preview.name}
+              size="xl"
+              bodyClassName="p-3"
             >
-              <div
-                className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] flex max-h-[90dvh] w-full max-w-3xl flex-col overflow-hidden"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <header className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-2">
-                  <div>
-                    <div className="text-sm font-semibold">{preview.name}</div>
-                    <div className="text-xs text-[var(--color-muted)]">
-                      {formatBytes(preview.size)} · {preview.kind}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setPreview(null)}
-                    className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]"
-                  >
-                    ✕
-                  </button>
-                </header>
-                <div className="flex-1 overflow-auto p-3">
-                  {preview.kind === "image" ? (
-                    <img
-                      src={preview.body}
-                      alt={preview.name}
-                      className="mx-auto max-h-full"
-                    />
-                  ) : (
-                    <pre className="whitespace-pre-wrap break-all font-mono text-xs">
-                      {preview.body}
-                    </pre>
-                  )}
-                </div>
+              <div className="mb-2 text-xs text-[var(--color-muted)]">
+                {formatBytes(preview.size)} · {preview.kind}
               </div>
-            </div>
+              {preview.kind === "image" ? (
+                <img
+                  src={preview.body}
+                  alt={preview.name}
+                  className="mx-auto max-h-full"
+                />
+              ) : (
+                <pre className="whitespace-pre-wrap break-all font-mono text-xs">
+                  {preview.body}
+                </pre>
+              )}
+            </Modal>
           )}
         </div>
       </ConnectionGate>
@@ -4386,8 +4453,8 @@ function UploadProgressDetail({
             {settleLeft !== undefined &&
               ` ${tr(
                 "fs_finishing_files_left",
-                { left: settleLeft.toLocaleString() },
-                `${settleLeft.toLocaleString()} files left`,
+                { left: formatNumber(settleLeft) },
+                `${formatNumber(settleLeft)} files left`,
               )}`}
           </span>
         )}
@@ -4397,7 +4464,7 @@ function UploadProgressDetail({
             data-testid="fs-upload-pause"
             onClick={onPause}
             title={tr("queue_pause_tip", undefined, "Pause: keeps what is sent and lets the next item go")}
-            className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] ml-auto px-3 py-1"
+            className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] ms-auto px-3 py-1"
           >
             {tr("queue_pause", undefined, "Pause")}
           </button>
@@ -4405,7 +4472,7 @@ function UploadProgressDetail({
         <button
           type="button"
           onClick={onCancel}
-          className={`rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-3 py-1 ${onPause ? "" : "ml-auto"}`}
+          className={`rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-3 py-1 ${onPause ? "" : "ms-auto"}`}
         >
           {tr("cancel", undefined, "Cancel")}
         </button>
@@ -4530,7 +4597,7 @@ function BulkOpBanner({
           onClick={() => useFsBulkOpStore.getState().requestCancel(host)}
           disabled={cancelRequested}
           data-testid="fs-bulk-cancel"
-          className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] ml-auto px-3 py-1 text-xs disabled:opacity-50"
+          className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] ms-auto px-3 py-1 text-xs disabled:opacity-50"
           title={
             op === "delete"
               ? tr(
@@ -4702,7 +4769,7 @@ function DownloadOpBanner({
         <button
           type="button"
           onClick={() => useFsDownloadOpStore.getState().requestStop(host)}
-          className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] ml-auto px-3 py-1 text-xs"
+          className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] ms-auto px-3 py-1 text-xs"
           title={tr(
             "fs_download_stop_tooltip",
             undefined,

@@ -1,10 +1,12 @@
 import { create } from "zustand";
 
 import { deleteBrowserPkgUpload, stageBrowserPkg } from "../../../api/pkgUpload";
+import { stageWithTask } from "../../../lib/browserStaging";
 import { isInstallPackagePath } from "../../../lib/pkgDropDedupe";
 import { pkgLibraryStore } from "../../../state/pkgLibrary";
 import { pushNotification } from "../../../state/notifications";
 import { useRemotePlayStore } from "../../../state/remotePlay";
+import { useRpQualityStore } from "../../../state/rpQuality";
 import { trStatic } from "../../../lib/trStatic";
 
 /** A package dropped on the stream: a path on this computer (the desktop app) or a file the
@@ -42,7 +44,7 @@ export async function installDropped(p: DroppedPackage): Promise<void> {
   // The browser's file goes to the engine first (it cannot read the browser's disk).
   let uploadId: string | null = null;
   try {
-    const staged = await stageBrowserPkg(p.file);
+    const staged = await stageWithTask(p.file, stageBrowserPkg);
     uploadId = staged.uploadId;
     const r = await lib.installStream(staged.path, p.host, { displayName: staged.filename || p.name });
     if (!r.ok) {
@@ -102,5 +104,11 @@ export function flushHeldDrops(): void {
 useRemotePlayStore.subscribe((s, prev) => {
   const over = (p: typeof s.phase) => p === "ended" || p === "error";
   const ended = (prev.stream && !s.stream) || (over(s.phase) && !over(prev.phase));
-  if (ended) flushHeldDrops();
+  // A restart with other settings is not the end: the stream is back in a moment.
+  if (ended && !useRpQualityStore.getState().switching) flushHeldDrops();
+});
+
+// That restart called off, or failed: nothing is streaming now.
+useRpQualityStore.subscribe((s, prev) => {
+  if (prev.switching && !s.switching && !useRemotePlayStore.getState().stream) flushHeldDrops();
 });

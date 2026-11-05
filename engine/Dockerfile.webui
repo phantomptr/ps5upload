@@ -46,12 +46,14 @@ RUN npm ci --silent
 # Now copy the rest of the client source and build
 COPY client/ .
 COPY FAQ.md CHANGELOG.md ../
-ARG PS5UPLOAD_BASE_URL=/
+# Left empty, the bundle's paths are relative and one image runs at any prefix: the engine writes
+# PS5UPLOAD_BASE_URL into the page when it serves it. A value here bakes that prefix in instead.
+ARG PS5UPLOAD_BASE_URL=
 ENV VITE_BASE_URL=$PS5UPLOAD_BASE_URL
 RUN npm run build:vite
 
 # ── Stage 2: build the Rust engine with embedded web UI ──────────────────────
-FROM rust:alpine AS builder
+FROM rust:1.99.1-alpine3.24 AS builder
 
 # g++ compiles unrar's bundled C++ (for the ps5upload-unrar helper) against
 # musl; musl target links static.
@@ -64,6 +66,8 @@ RUN apk add --no-cache musl-dev g++ make
 WORKDIR /build
 COPY engine/ ./engine/
 COPY third_party/ ./third_party/
+# The engine serves these guides as MCP resources (src/mcp/resources.rs).
+COPY AUTOMATION.md API.md MCP.md ./
 # See engine/Dockerfile: build.rs embeds these, and the web UI's update /
 # DLC install is exactly what breaks without them (the web UI half of #152).
 COPY payload/ ./payload/
@@ -91,7 +95,8 @@ RUN mkdir -p /rootfs/tmp /rootfs-data/data && chmod 1777 /rootfs/tmp /rootfs-dat
 
 # ── Stage 3: minimal scratch image ───────────────────────────────────────────
 FROM scratch
-ARG PS5UPLOAD_BASE_URL=/
+ARG PS5UPLOAD_BASE_URL=
+COPY LICENSE /LICENSE
 COPY --from=builder /build/engine/target/release/ps5upload-engine /ps5upload-engine
 # The engine looks for the RAR helper next to its own binary.
 COPY --from=builder /build/engine/target/release/ps5upload-unrar /ps5upload-unrar

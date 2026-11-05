@@ -10,17 +10,29 @@ import type { PadState } from "./remotePlayStream";
 /** Why the host's engine did not let a guest in. Anything else reads as "refused". */
 export type RefuseWhy =
   | "key"
+  /** A place kept for this guest (the resume token) is gone. */
+  | "expired"
   | "full"
   | "denied"
+  /** The host did not answer the ask in time (not a no). */
+  | "no_answer"
   | "closed"
   | "old_helper"
   | "not_playing"
   | "unreachable"
+  | "address"
   | "slow_down"
   | "refused";
 
 /** How a joined guest's game ended, from the engine (`{"bye": …}`). */
-export type ByeWhy = "kicked" | "closed" | "host_stopped";
+export type ByeWhy =
+  | "kicked"
+  | "closed"
+  | "host_stopped"
+  /** The same place was opened in another tab or on another device. */
+  | "replaced"
+  /** The console no longer has this guest's controller (`{"bye": "lost"}`). */
+  | "pad_lost";
 
 /** What a guest is doing on the host's console, as the host's engine sees it. */
 export type GuestState = "asking" | "picking_user" | "playing" | "reconnecting" | "left";
@@ -45,7 +57,25 @@ export type ServerMessage =
   | { kind: "bye"; why: ByeWhy }
   | { kind: "pong"; t: number };
 
-const REFUSE: ReadonlySet<string> = new Set(["key", "full", "denied", "closed", "old_helper", "not_playing", "unreachable", "slow_down"]);
+const REFUSE: ReadonlySet<string> = new Set([
+  "key",
+  "expired",
+  "full",
+  "denied",
+  "no_answer",
+  "closed",
+  "old_helper",
+  "not_playing",
+  "unreachable",
+  "slow_down",
+  "address",
+]);
+const BYE: Readonly<Record<string, ByeWhy>> = {
+  kicked: "kicked",
+  host_stopped: "host_stopped",
+  replaced: "replaced",
+  lost: "pad_lost",
+};
 const GUEST_STATES: ReadonlySet<string> = new Set(["asking", "picking_user", "playing", "reconnecting", "left"]);
 
 const byte = (v: unknown) => Math.max(0, Math.min(255, Math.round(Number(v) || 0)));
@@ -67,13 +97,11 @@ export function readServerMessage(text: string): ServerMessage | null {
     return { kind: "joined", player: v.player, token: v.token, hevc: v.hevc === true };
   }
   if (v.stage === "refused") {
-    // "expired" (an invite or a kept place that ran out) reads as an expired invite.
-    const why = v.why === "expired" ? "key" : String(v.why ?? "");
+    const why = String(v.why ?? "");
     return { kind: "refused", why: REFUSE.has(why) ? (why as RefuseWhy) : "refused" };
   }
   if (typeof v.bye === "string") {
-    const why = v.bye === "kicked" || v.bye === "host_stopped" ? v.bye : "closed";
-    return { kind: "bye", why };
+    return { kind: "bye", why: Object.prototype.hasOwnProperty.call(BYE, v.bye) ? BYE[v.bye] : "closed" };
   }
   if (v.status && typeof v.status === "object") {
     const s = v.status as Record<string, unknown>;
@@ -186,12 +214,14 @@ export function parseJoinLink(text: string): JoinLink | null {
     return null;
   }
   if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-  if (!/\/join\/?$/.test(u.pathname)) return null;
+  const path = /^(.*)\/join\/?$/.exec(u.pathname);
+  if (!path) return null;
   const hash = new URLSearchParams(u.hash.replace(/^#/, ""));
   const invite = hash.get("i") ?? "";
   if (!/^[A-Za-z0-9_-]{8,128}$/.test(invite)) return null;
   const name = hash.get("n")?.trim() || null;
-  return { origin: u.origin, invite, name, code: null };
+  // With the path the engine is served under (PS5UPLOAD_BASE_URL), if any.
+  return { origin: `${u.origin}${path[1]}`, invite, name, code: null };
 }
 
 /** "Open in the PS5Upload app": an invite link as the ps5upload:// link the app opens. */
@@ -232,7 +262,8 @@ export function linkFromSocket(ws: string, name: string | null, code: string | n
   try {
     const u = new URL(ws);
     if (u.protocol !== "ws:" && u.protocol !== "wss:") return null;
-    return { origin: `${u.protocol === "wss:" ? "https:" : "http:"}//${u.host}`, invite: null, code, name };
+    const prefix = u.pathname.replace(/\/api\/join\/ws\/?$/, "").replace(/\/$/, "");
+    return { origin: `${u.protocol === "wss:" ? "https:" : "http:"}//${u.host}${prefix}`, invite: null, code, name };
   } catch {
     return null;
   }

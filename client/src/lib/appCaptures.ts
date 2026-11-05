@@ -48,7 +48,7 @@ export async function listCaptures(): Promise<SavedShot[]> {
 }
 
 /** Delete captures; returns the names that are gone, and tells every list. */
-export async function deleteCaptures(names: string[]): Promise<string[]> {
+export async function deleteAppCaptures(names: string[]): Promise<string[]> {
   const gone = (await invoke<string[]>("screenshot_delete", { names })) ?? [];
   if (gone.length && typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent<string[]>(CAPTURES_DELETED_EVENT, { detail: gone }));

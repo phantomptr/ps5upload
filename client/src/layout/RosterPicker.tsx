@@ -25,6 +25,7 @@ import { parsePS5Firmware } from "../lib/ps5Firmware";
 import { menuKeyTarget } from "../lib/menuKeys";
 import { formatDate } from "../lib/formatDate";
 import { useFitOnScreen } from "../components/useFitOnScreen";
+import { useBackDismiss } from "../lib/systemBack";
 
 /**
  * Sidebar dropdown for switching between known PS5s.
@@ -77,6 +78,7 @@ export default function RosterPicker() {
     setOpen(false);
     triggerRef.current?.focus();
   };
+  useBackDismiss(open, closeMenu);
 
   const onMenuKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape" || e.key === "Tab") {
@@ -327,7 +329,10 @@ function RosterManageModal({ onClose }: { onClose: () => void }) {
                         value={editHost}
                         onChange={(e) => setEditHost(e.target.value)}
                         placeholder="192.168.1.50"
-                        inputMode="decimal"
+                        inputMode="url"
+                        autoCapitalize="off"
+                        autoCorrect="off"
+                        spellCheck={false}
                         className="flex-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1"
                       />
                     </div>
@@ -475,7 +480,10 @@ function RosterManageModal({ onClose }: { onClose: () => void }) {
                 value={newHost}
                 onChange={(e) => setNewHost(e.target.value)}
                 placeholder="192.168.1.50"
-                inputMode="decimal"
+                inputMode="url"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
                 className="flex-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1 text-xs"
               />
               <button

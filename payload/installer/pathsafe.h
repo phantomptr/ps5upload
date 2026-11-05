@@ -30,6 +30,17 @@ int inst_percent_encode(const char *in, char *out, size_t cap);
 int inst_build_loopback_url(char *out, size_t cap, uint16_t port,
                             const char *attempt, const char *basename);
 
+/* The longest install source Sony takes: 127 bytes is accepted, 128 refused with 0x80A30003
+ * (SCE_APP_INSTALLER_ERROR_PARAM; measured by binary search on FW 5.10). */
+#define INST_INSTALL_URI_MAX 127
+
+/* What the loopback server calls the file: its own name while that keeps the URL within
+ * INST_INSTALL_URI_MAX, otherwise a short fixed name. Percent-encoding triples a non-ASCII name,
+ * so ten CJK characters are already too long. The port is taken as its longest, since the name is
+ * chosen before the ephemeral port is known. Sony reads the content id from the package, not the
+ * URL, and asks for a .crc by that id, so the name itself carries nothing. */
+const char *inst_loopback_serve_name(const char *attempt, const char *basename);
+
 /* 1 if `code` is a Sony network-class error: (code & 0xFFFF0000)==0x80430000. */
 int inst_is_network_class(uint32_t code);
 

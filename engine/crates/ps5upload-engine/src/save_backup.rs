@@ -290,8 +290,20 @@ pub(crate) fn wait_job(job_id: &str) -> Result<(), String> {
     }
 }
 
-/// A transfer to or from `host` is running: a backup would only compete with it.
+/// The install table the router built: installs live in their own state, not in `/api/jobs`.
+static INSTALLS: OnceLock<crate::pkg_install::PkgInstallStateHandle> = OnceLock::new();
+
+pub(crate) fn watch_installs(installs: crate::pkg_install::PkgInstallStateHandle) {
+    let _ = INSTALLS.set(installs);
+}
+
+/// A transfer, an install or a console file job on `host` is running: a backup would only compete
+/// with it. Its management traffic slows an install's disk writes a lot (measured on exFAT: from
+/// 120 to 10 MB/s).
 pub(crate) fn console_busy(host: &str) -> bool {
+    if console_job_running(host, INSTALLS.get()) {
+        return true;
+    }
     let Ok(Value::Array(jobs)) = get("/api/jobs") else {
         return false;
     };
@@ -301,6 +313,14 @@ pub(crate) fn console_busy(host: &str) -> bool {
                 .map(|job| mentions_host(&job.to_string(), host))
                 .unwrap_or(false)
     })
+}
+
+/// A job this engine runs in-process against `host`: no round trip to ask.
+fn console_job_running(
+    host: &str,
+    installs: Option<&crate::pkg_install::PkgInstallStateHandle>,
+) -> bool {
+    crate::helper_stop::is_busy(host) || installs.is_some_and(|i| i.jobs.active_for(host))
 }
 
 /// `text` names `host` as a whole address: `1.2.3.4` is not found in `1.2.3.40`.
@@ -350,7 +370,7 @@ pub(crate) fn back_up_one(
             None => stamp(now_ms()),
         };
         let dest = auto_backup_slot(dir, &entry.title_id, user, &st, keep, false)?;
-        let note = backup_note(console_identity(host).as_deref());
+        let note = backup_note(console_identity(host).as_deref(), Some(user));
         if let Err(e) = zip_folder_noted(&tmp, &entry.title_id, &dest, &note) {
             let _ = std::fs::remove_file(&dest);
             return Err(format!("zip: {e:#}"));
@@ -395,12 +415,20 @@ pub(crate) fn console_identity(host: &str) -> Option<String> {
     Some(id)
 }
 
-/// A backup zip's comment naming the PS5 it was made on ("" when that is not known).
-pub(crate) fn backup_note(console: Option<&str>) -> String {
-    match console {
-        Some(c) => json!({ "ps5upload": "save-backup", "console": c }).to_string(),
-        None => String::new(),
+/// A backup zip's comment naming the PS5 it was made on and the user whose save it is ("" when
+/// neither is known).
+pub(crate) fn backup_note(console: Option<&str>, user: Option<u32>) -> String {
+    if console.is_none() && user.is_none() {
+        return String::new();
     }
+    let mut note = json!({ "ps5upload": "save-backup" });
+    if let Some(c) = console {
+        note["console"] = json!(c);
+    }
+    if let Some(u) = user {
+        note["user"] = json!(format!("{u:08x}"));
+    }
+    note.to_string()
 }
 
 /// The PS5 the backup `zip` was made on, from its comment; None for an older backup.
@@ -413,6 +441,34 @@ pub(crate) fn backup_console(zip: &Path) -> Option<String> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .filter(|c| !c.is_empty())
+}
+
+/// The user whose save the backup `zip` holds: from its comment, else from an automatic backup's
+/// file name (`<title>_user<8 hex>_<stamp>.zip`). None for a zip that does not say.
+pub(crate) fn backup_user(zip: &Path, title_id: &str) -> Option<u32> {
+    let noted = zip_comment(zip)
+        .ok()
+        .and_then(|c| serde_json::from_str::<Value>(&c).ok())
+        .filter(|n| n.get("ps5upload").and_then(Value::as_str) == Some("save-backup"))
+        .and_then(|n| {
+            let hex = n.get("user")?.as_str()?.to_string();
+            u32::from_str_radix(&hex, 16).ok()
+        });
+    noted.or_else(|| {
+        let name = zip.file_name()?.to_str()?;
+        parse_backup_name(title_id, name).map(|(user, _)| user)
+    })
+}
+
+/// The message for a backup of another user's save.
+pub(crate) const OTHER_USER_ERROR: &str = "This backup is another user's save, and it would not load as this user's. Use Restore to another user in the game's backups instead.";
+
+/// Err when the backup `zip` holds the save of a user other than `user`; unknown is fine.
+pub(crate) fn same_user(zip: &Path, title_id: &str, user: u32) -> Result<(), String> {
+    match backup_user(zip, title_id) {
+        Some(made) if made != user => Err(OTHER_USER_ERROR.into()),
+        _ => Ok(()),
+    }
 }
 
 /// Err when the backup `zip` was made on a PS5 other than `here`; unknown either side is fine.
@@ -499,6 +555,34 @@ fn set_status(f: impl FnOnce(&mut Status)) {
     f(&mut shared().lock().unwrap_or_else(|e| e.into_inner()).status);
 }
 
+/// Marks a pass running, and clears that however the pass ends. A panic used to leave it set, and
+/// every later tick then returned at once: no automatic backup until the engine restarted, with
+/// no error anywhere.
+struct PassRunning;
+
+impl PassRunning {
+    /// `None`: a pass already runs.
+    fn begin() -> Option<Self> {
+        let mut g = shared().lock().unwrap_or_else(|e| e.into_inner());
+        if g.status.running {
+            return None;
+        }
+        g.status.running = true;
+        Some(Self)
+    }
+}
+
+impl Drop for PassRunning {
+    fn drop(&mut self) {
+        set_status(|st| {
+            st.running = false;
+            if std::thread::panicking() {
+                st.last_error = Some("the backup pass stopped unexpectedly".to_string());
+            }
+        });
+    }
+}
+
 /// One pass over every console in the settings. Does nothing when the feature is off, no folder
 /// is set, or a pass is already running.
 pub fn run_pass() -> Result<(), String> {
@@ -506,13 +590,9 @@ pub fn run_pass() -> Result<(), String> {
     if !s.enabled || s.dir.trim().is_empty() {
         return Ok(());
     }
-    {
-        let mut g = shared().lock().unwrap_or_else(|e| e.into_inner());
-        if g.status.running {
-            return Ok(());
-        }
-        g.status.running = true;
-    }
+    let Some(_running) = PassRunning::begin() else {
+        return Ok(());
+    };
     let mut done: Done = load(DONE_FILE);
     let (mut backed_up, mut failed, mut last_error) = (0u32, 0u32, None::<String>);
     for host in &s.hosts {
@@ -585,17 +665,15 @@ pub(crate) fn running_of<'a>(host: &str, titles: &[&'a str]) -> Result<Option<&'
 /// list measures it; one of an emulator as deep as its saves are measured (and one loose in a
 /// folder, as only its own entries there).
 fn fingerprint(host: &str, entry: &SaveEntry) -> Result<Vec<(String, u64, i64)>, String> {
-    let list = |p: &str| -> Result<Vec<Value>, String> {
-        let v = get(&format!(
-            "/api/ps5/list-dir?addr={}&path={}&offset=0&limit=512",
-            enc(host),
-            enc(p)
-        ))?;
-        Ok(v.get("entries")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default())
-    };
+    fingerprint_with(&|p| folder_entries(host, p), entry)
+}
+
+/// [`fingerprint`] over `list`, which answers a folder's whole listing: a write past the first
+/// page has to change the fingerprint as well.
+fn fingerprint_with(
+    list: &dyn Fn(&str) -> Result<Vec<Value>, String>,
+    entry: &SaveEntry,
+) -> Result<Vec<(String, u64, i64)>, String> {
     let depth = if crate::emulator_saves::is_emulator_save(entry) {
         crate::emulator_saves::DEPTH
     } else {
@@ -605,7 +683,7 @@ fn fingerprint(host: &str, entry: &SaveEntry) -> Result<Vec<(String, u64, i64)>,
     let folder = place.as_ref().map_or(entry.path.as_str(), |p| p.folder);
     let keep = |name: &str| place.as_ref().is_none_or(|p| p.holds(name));
     let mut out = Vec::new();
-    fingerprint_in(&list, folder, "", depth, &keep, &mut out)?;
+    fingerprint_in(list, folder, "", depth, &keep, &mut out)?;
     out.sort();
     Ok(out)
 }
@@ -731,6 +809,7 @@ pub fn back_up_now(host: &str, title_id: &str, user_id: u32) -> Result<PathBuf, 
 
 #[derive(Deserialize)]
 pub struct BackUpNowBody {
+    #[serde(alias = "console", alias = "host")]
     pub addr: String,
     pub title_id: String,
     pub user_id: u32,
@@ -800,6 +879,7 @@ pub async fn get_latest() -> Response {
 
 #[derive(Deserialize)]
 pub struct SnapshotBody {
+    #[serde(alias = "console", alias = "host")]
     pub addr: String,
     pub title_id: String,
 }
@@ -898,7 +978,22 @@ fn restore(
     if !zip.is_file() {
         return Err(format!("no backup {}", zip.display()));
     }
-    restore_zip(host, title_id, &zip, save_path, user_id)
+    restore_zip(host, title_id, &zip, save_path, user_id)?;
+    mark_restored(host, save_path);
+    Ok(())
+}
+
+/// A save just put back from the backup folder is already in it: the next pass need not back the
+/// same content up again, which would cost one more old version. Best effort: at worst that
+/// pass does back it up.
+fn mark_restored(host: &str, save_path: &str) {
+    let Ok(list) = list_saves(host) else { return };
+    let Some(entry) = list.iter().find(|e| e.path == save_path) else {
+        return;
+    };
+    let mut done: Done = load(DONE_FILE);
+    done.insert(done_key(host, save_path), entry.mtime);
+    let _ = save(DONE_FILE, &done);
 }
 
 /// The app that writes a save folder, which must be closed while it is restored.
@@ -944,6 +1039,20 @@ pub(crate) fn save_writer<'a>(
     })
 }
 
+/// The message for a restore while a save is open on the console.
+pub(crate) const SAVE_OPEN_ERROR: &str =
+    "A save is open in Save Data. Close it first, then restore.";
+/// The message for a shared save file picked as a backup.
+pub(crate) const SHARED_FILE_ERROR: &str = "This file is a shared save, not a backup, and restoring it would break the save. Use Load a save file instead.";
+
+/// Err when the unpacked zip folder `dir` is a shared save (loose files, no sealed images).
+fn not_a_shared_save(dir: &Path) -> Result<(), String> {
+    if dir.join(SHARE_MANIFEST).exists() {
+        return Err(SHARED_FILE_ERROR.into());
+    }
+    Ok(())
+}
+
 /// Puts the backup zip `zip` (on this computer) of `title_id` back into the save folder
 /// `save_path` on `host`: checked and unpacked first, the save there now backed up, then
 /// replaced (see `put_in_place`).
@@ -954,12 +1063,18 @@ pub(crate) fn restore_zip(
     save_path: &str,
     user_id: u32,
 ) -> Result<(), String> {
-    // An encrypted save made on another PS5 does not open here (an emulator's is plain files).
+    // An encrypted save made on another PS5 does not open here, and one of another user's does
+    // not load as this one's (an emulator's is plain files).
     if save_writer(save_path, title_id, user_id)?
         .emulator
         .is_none()
     {
         same_console(zip, console_identity(host).as_deref())?;
+        same_user(zip, title_id, user_id)?;
+    }
+    // Closing an open save writes its copy back: over the save put back here.
+    if a_save_is_open(host) {
+        return Err(SAVE_OPEN_ERROR.into());
     }
     restore_zip_with(host, title_id, zip, save_path, user_id, true)
 }
@@ -990,6 +1105,7 @@ pub(crate) fn restore_zip_with(
     let result = (|| {
         // Check and unpack the backup before anything on the console changes.
         unzip_strict(zip, &tmp, title_id).map_err(|e| format!("unzip: {e:#}"))?;
+        not_a_shared_save(&tmp.join(title_id))?;
         if !emulator {
             restore_prepare(&tmp.join(title_id)).map_err(|e| format!("prepare: {e:#}"))?;
         }
@@ -1003,7 +1119,7 @@ pub(crate) fn restore_zip_with(
             save_path,
             user_id,
             &s,
-            None,
+            Some(crate::save_backup_server::BEFORE_RESTORE_TAG),
             keep_current,
         )
     })();
@@ -1088,17 +1204,39 @@ pub(crate) fn put_in_place(
             .unwrap_or_default()
             .into(),
     };
+    // A folder with nothing in it (an earlier restore cut short, say) has nothing to keep, and
+    // an empty backup could not be put back.
+    let keep_current = keep_current && !holds_nothing(host, save_path)?;
     let mut kept: Option<PathBuf> = None;
+    // With no backup folder the copy lives here, for putting the save back if this fails.
+    let mut scratch: Option<PathBuf> = None;
     if !keep_current {
-        // Already kept by the caller.
+        // Already kept by the caller, or nothing to keep.
     } else if !s.dir.trim().is_empty() {
         kept = Some(
             back_up_one(host, &current, &s.dir, s.keep, tag, &|| Ok(()))
                 .map_err(|e| format!("could not back up the current save first: {e}"))?,
         );
-    } else if crate::save_backup_server::configured() {
-        crate::save_backup_server::back_up_before_restore(host, &current)
-            .map_err(|e| format!("could not back up the current save first: {e}"))?;
+    } else {
+        let dir = make_temp_dir(title_id)?;
+        let made = back_up_one(host, &current, &dir.to_string_lossy(), 1, tag, &|| Ok(()))
+            .and_then(|zip| {
+                if crate::save_backup_server::configured() {
+                    let tag = tag.unwrap_or(crate::save_backup_server::BEFORE_RESTORE_TAG);
+                    crate::save_backup_server::keep_on_server(&current, &zip, tag)?;
+                }
+                Ok(zip)
+            });
+        match made {
+            Ok(zip) => {
+                kept = Some(zip);
+                scratch = Some(dir);
+            }
+            Err(e) => {
+                let _ = cleanup_temp_dir(&dir.to_string_lossy());
+                return Err(format!("could not back up the current save first: {e}"));
+            }
+        }
     }
     // A save loose in a folder (a PlayStation 2 emulator's, beside its BIOS and games) is only
     // its own entries there: only those go.
@@ -1134,13 +1272,29 @@ pub(crate) fn put_in_place(
             .ok_or("upload did not start")?;
         wait_job(job)
     })();
+    let drop_scratch = || {
+        if let Some(dir) = &scratch {
+            let _ = cleanup_temp_dir(&dir.to_string_lossy());
+        }
+    };
     match (replaced, kept) {
-        (Ok(()), _) => Ok(()),
+        (Ok(()), _) => {
+            drop_scratch();
+            Ok(())
+        }
         (Err(why), None) => Err(why),
         // Every file of the folder back as it was, so a restore never leaves a save half put in.
         (Err(why), Some(zip)) => {
             match restore_zip_with(host, title_id, &zip, save_path, user_id, false) {
-                Ok(()) => Err(format!("{why}. The save there before was put back.")),
+                Ok(()) => {
+                    drop_scratch();
+                    Err(format!("{why}. The save there before was put back."))
+                }
+                // The only copy may be this one, so it stays and the message says where.
+                Err(e) if scratch.is_some() => Err(format!(
+                    "{why}. Putting the save back failed too ({e}); a copy of it is at {}.",
+                    zip.display()
+                )),
                 Err(e) => Err(format!(
                     "{why}. Putting the save back failed too ({e}); restore {} from the game's save backups.",
                     zip.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()
@@ -1148,6 +1302,18 @@ pub(crate) fn put_in_place(
             }
         }
     }
+}
+
+/// Whether the save at `save_path` has no files to keep: an empty folder, or for a save loose in
+/// a folder, none of its own entries.
+fn holds_nothing(host: &str, save_path: &str) -> Result<bool, String> {
+    let place = crate::ps2_saves::place_of(save_path);
+    let folder = place.as_ref().map_or(save_path, |p| p.folder);
+    Ok(!folder_entries(host, folder)?.iter().any(|e| {
+        e.get("name").and_then(Value::as_str).is_some_and(|name| {
+            name != "." && name != ".." && place.as_ref().is_none_or(|p| p.holds(name))
+        })
+    }))
 }
 
 // ── PS4 saves onto the PS5 ──────────────────────────────────────────────
@@ -1267,6 +1433,7 @@ fn import_ps4(
 
 #[derive(Deserialize)]
 pub struct ImportPs4Body {
+    #[serde(alias = "console", alias = "host")]
     pub addr: String,
     pub title_id: String,
     /// The PS4 save folder of the game on the PS5 (from the saves list, kind "ps4").
@@ -1375,6 +1542,18 @@ pub(crate) fn save_open_state(host: &str) -> Result<bool, String> {
         .ok_or_else(|| "the PS5 did not say whether a save is open".to_string())
 }
 
+/// The title a save image belongs to (`/user/home/<uid>/savedata[_prospero]/<title>/<image>`).
+pub(crate) fn title_of_save_image(image: &str) -> Option<&str> {
+    match image.split('/').collect::<Vec<_>>().as_slice() {
+        ["", "user", "home", _, "savedata_prospero" | "savedata", title, name]
+            if plain(title) && !name.is_empty() =>
+        {
+            Some(title)
+        }
+        _ => None,
+    }
+}
+
 /// A save is already open on the console (one at a time).
 pub(crate) fn a_save_is_open(host: &str) -> bool {
     save_open_state(host).unwrap_or(false)
@@ -1429,6 +1608,26 @@ pub struct SettingsPatch {
     pub dir: Option<String>,
     pub keep: Option<u32>,
     pub hosts: Option<Vec<String>>,
+    /// Consoles to add to `hosts`, whatever else is on it: what a client knows of its own roster.
+    /// Several clients share one engine, so none of them sends the whole list.
+    #[serde(default)]
+    pub add_hosts: Vec<String>,
+    /// Consoles to take off `hosts`.
+    #[serde(default)]
+    pub remove_hosts: Vec<String>,
+}
+
+/// `hosts` with the additions and removals made, tidy.
+fn hosts_with(mut hosts: Vec<String>, add: Vec<String>, remove: &[String]) -> Vec<String> {
+    hosts.extend(add);
+    let mut hosts: Vec<String> = hosts
+        .into_iter()
+        .map(|x| x.trim().to_string())
+        .filter(|x| !x.is_empty() && !remove.iter().any(|r| r.trim() == x))
+        .collect();
+    hosts.sort();
+    hosts.dedup();
+    hosts
 }
 
 /// Whether the engine can write `dir` (made if missing).
@@ -1446,7 +1645,7 @@ fn writable(dir: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// `PUT /api/save-backup` — change any of `{enabled, dir, keep, hosts}`.
+/// `PUT /api/save-backup` — change any of `{enabled, dir, keep, hosts, add_hosts, remove_hosts}`.
 pub async fn put_settings(Json(patch): Json<SettingsPatch>) -> Response {
     let mut next = settings();
     if let Some(d) = patch.dir {
@@ -1459,14 +1658,10 @@ pub async fn put_settings(Json(patch): Json<SettingsPatch>) -> Response {
         next.keep = clamp_keep(k);
     }
     if let Some(h) = patch.hosts {
-        let mut h: Vec<String> = h
-            .into_iter()
-            .map(|x| x.trim().to_string())
-            .filter(|x| !x.is_empty())
-            .collect();
-        h.sort();
-        h.dedup();
-        next.hosts = h;
+        next.hosts = hosts_with(h, Vec::new(), &[]);
+    }
+    if !patch.add_hosts.is_empty() || !patch.remove_hosts.is_empty() {
+        next.hosts = hosts_with(next.hosts, patch.add_hosts, &patch.remove_hosts);
     }
     if next.enabled && next.dir.is_empty() {
         return json_error(
@@ -1517,6 +1712,7 @@ pub async fn get_list(Query(q): Query<ListQuery>) -> Response {
 #[derive(Deserialize)]
 pub struct RestoreBody {
     /// The console (bare IP).
+    #[serde(alias = "console", alias = "host")]
     pub addr: String,
     pub title_id: String,
     pub file: String,
@@ -1544,9 +1740,176 @@ pub async fn post_restore(Json(b): Json<RestoreBody>) -> Response {
     }
 }
 
+#[derive(Deserialize)]
+pub struct RestoreFileBody {
+    /// The console (bare IP).
+    #[serde(alias = "console", alias = "host")]
+    pub addr: String,
+    pub title_id: String,
+    /// The backup `.zip` on this computer.
+    pub zip: String,
+    /// The save folder on the console (from the saves list).
+    pub save_path: String,
+    pub user_id: u32,
+}
+
+/// `POST /api/save-backup/restore-file` — puts a backup `.zip` from this computer back, with the
+/// refusals, the backup first and the putting back on failure of `restore`.
+pub async fn post_restore_file(Json(b): Json<RestoreFileBody>) -> Response {
+    let zip = PathBuf::from(b.zip.trim());
+    // A wrong path in the request, not a console that failed.
+    if !tokio::fs::metadata(&zip).await.is_ok_and(|m| m.is_file()) {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            format!("no backup {}", zip.display()),
+        );
+    }
+    let r = tokio::task::spawn_blocking(move || {
+        restore_zip(
+            b.addr.trim(),
+            &b.title_id.trim().to_ascii_uppercase(),
+            &zip,
+            b.save_path.trim(),
+            b.user_id,
+        )
+    })
+    .await;
+    match r {
+        Ok(Ok(())) => Json(json!({ "ok": true })).into_response(),
+        Ok(Err(e)) => json_error(StatusCode::BAD_GATEWAY, e),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct NoteQuery {
+    #[serde(alias = "console", alias = "host")]
+    pub addr: String,
+    pub user_id: u32,
+}
+
+/// `GET /api/save-backup/note?addr=&user_id=` — the comment for a backup zip the app writes itself
+/// (Saves › Back up, Save to USB), so a restore can tell where it came from.
+pub async fn get_note(Query(q): Query<NoteQuery>) -> Response {
+    let host = q.addr.trim().to_string();
+    let console = tokio::task::spawn_blocking(move || console_identity(&host))
+        .await
+        .ok()
+        .flatten();
+    Json(json!({ "note": backup_note(console.as_deref(), Some(q.user_id)) })).into_response()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn one_client_adding_or_removing_leaves_the_others_consoles_alone() {
+        let strs = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let on = strs(&["10.0.0.1", "10.0.0.2"]);
+        assert_eq!(
+            hosts_with(on.clone(), strs(&["10.0.0.3", " 10.0.0.1 "]), &[]),
+            strs(&["10.0.0.1", "10.0.0.2", "10.0.0.3"])
+        );
+        assert_eq!(
+            hosts_with(on, Vec::new(), &strs(&["10.0.0.1"])),
+            strs(&["10.0.0.2"])
+        );
+    }
+
     use super::*;
+
+    #[tokio::test]
+    async fn a_missing_local_zip_is_the_requests_fault() {
+        let body: RestoreFileBody = serde_json::from_value(json!({
+            "addr": "192.0.2.1",
+            "title_id": "PPSA00000",
+            "zip": "/no/such/backup.zip",
+            "save_path": "/user/home/1/savedata_prospero/PPSA00000/x",
+            "user_id": 1,
+        }))
+        .unwrap();
+        assert_eq!(
+            post_restore_file(Json(body)).await.status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    /// A backup says whose save it is; one of another user's is refused, unknown never.
+    #[test]
+    fn a_backup_names_the_user_whose_save_it_is() {
+        let tmp = make_temp_dir("usertest").unwrap();
+        std::fs::create_dir_all(tmp.join("PPSA01234")).unwrap();
+        std::fs::write(tmp.join("PPSA01234").join("sdimg_x"), b"x").unwrap();
+        let made = |name: &str, note: String| {
+            let z = tmp.join(name);
+            zip_folder_noted(&tmp, "PPSA01234", &z, &note).unwrap();
+            z
+        };
+        let noted = made("a.zip", backup_note(None, Some(0x1000_00aa)));
+        // No console known: the note names the user only, and no console is read from it.
+        assert_eq!(backup_console(&noted), None);
+        assert_eq!(backup_user(&noted, "PPSA01234"), Some(0x1000_00aa));
+        assert!(same_user(&noted, "PPSA01234", 0x1000_00aa).is_ok());
+        assert_eq!(
+            same_user(&noted, "PPSA01234", 0x1000_00bb).unwrap_err(),
+            OTHER_USER_ERROR
+        );
+        // An automatic backup's name says it too, for one from before the note did.
+        let named = made(
+            "PPSA01234_user100000aa_2026-10-24_101500.zip",
+            String::new(),
+        );
+        assert_eq!(backup_user(&named, "PPSA01234"), Some(0x1000_00aa));
+        assert!(same_user(&named, "PPSA01234", 0x1000_00bb).is_err());
+        // A zip that does not say is never refused.
+        let plain_zip = made("PPSA01234.zip", String::new());
+        assert_eq!(backup_user(&plain_zip, "PPSA01234"), None);
+        assert!(same_user(&plain_zip, "PPSA01234", 0x1000_00bb).is_ok());
+        let _ = cleanup_temp_dir(&tmp.to_string_lossy());
+    }
+
+    #[test]
+    fn a_save_image_names_its_title() {
+        assert_eq!(
+            title_of_save_image("/user/home/10000000/savedata_prospero/PPSA01234/sdimg_x"),
+            Some("PPSA01234")
+        );
+        assert_eq!(
+            title_of_save_image("/user/home/10000000/savedata/CUSA01234/sdimg_x"),
+            Some("CUSA01234")
+        );
+        assert_eq!(title_of_save_image("/data/x/sdimg_x"), None);
+        assert_eq!(title_of_save_image(""), None);
+    }
+
+    /// A shared save (loose files plus its manifest) is never put in the place of sealed images.
+    #[test]
+    fn a_shared_save_is_not_taken_for_a_backup() {
+        let tmp = make_temp_dir("sharetest").unwrap();
+        assert!(not_a_shared_save(&tmp).is_ok());
+        std::fs::write(tmp.join(SHARE_MANIFEST), b"{}").unwrap();
+        assert_eq!(not_a_shared_save(&tmp).unwrap_err(), SHARED_FILE_ERROR);
+        let _ = cleanup_temp_dir(&tmp.to_string_lossy());
+    }
+
+    /// The backup taken before a restore counts apart from the automatic ones, so restoring the
+    /// oldest of a full set never deletes the backup being restored.
+    #[test]
+    fn the_backup_before_a_restore_does_not_prune_the_one_restored() {
+        let dir = make_temp_dir("prunetest").unwrap();
+        let d = dir.to_string_lossy().into_owned();
+        let title = dir.join("PPSA01234");
+        std::fs::create_dir_all(&title).unwrap();
+        let oldest = "PPSA01234_user00000001_2026-01-01_000000.zip";
+        std::fs::write(title.join(oldest), b"z").unwrap();
+        let tag = crate::save_backup_server::BEFORE_RESTORE_TAG;
+        let st = format!("2026-02-01_000000_{tag}");
+        let slot = auto_backup_slot(&d, "PPSA01234", 1, &st, 1, false).unwrap();
+        std::fs::write(&slot, b"z").unwrap();
+        auto_backup_slot(&d, "PPSA01234", 1, &st, 1, true).unwrap();
+        assert!(title.join(oldest).exists());
+        assert!(slot.exists());
+        let _ = cleanup_temp_dir(&d);
+    }
 
     /// A backup notes the PS5 it was made on; one from another is refused, unknown never.
     #[test]
@@ -1556,7 +1919,7 @@ mod tests {
         std::fs::write(tmp.join("PPSA01234").join("sdimg_x"), b"x").unwrap();
         let made = |name: &str, console: Option<&str>| {
             let z = tmp.join(name);
-            zip_folder_noted(&tmp, "PPSA01234", &z, &backup_note(console)).unwrap();
+            zip_folder_noted(&tmp, "PPSA01234", &z, &backup_note(console, None)).unwrap();
             z
         };
         let here = made("a.zip", Some("D4F7D5D36123"));
@@ -1808,6 +2171,70 @@ mod tests {
         let due = needing_backup("h", &saves, &Done::new(), 2000, &BTreeSet::new());
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].title_id, "PPSA01234");
+    }
+
+    #[test]
+    fn a_console_file_job_or_an_install_makes_the_console_busy() {
+        let host = "192.0.2.77";
+        let installs = std::sync::Arc::new(crate::pkg_install::PkgInstallState::default());
+        assert!(!console_job_running(host, Some(&installs)));
+        assert!(!console_job_running(host, None));
+
+        let job = crate::helper_stop::enter(host);
+        assert!(console_job_running(host, None));
+        drop(job);
+        assert!(!console_job_running(host, None));
+
+        let install = installs.jobs.begin(host).unwrap();
+        assert!(console_job_running(host, Some(&installs)));
+        assert!(!console_job_running("192.0.2.78", Some(&installs)));
+        installs.jobs.finish(&install);
+        assert!(!console_job_running(host, Some(&installs)));
+    }
+
+    #[test]
+    fn a_write_past_the_first_page_changes_the_fingerprint() {
+        // A save folder with more files than one listing page: the snapshot's "nothing changed
+        // while it was copied" check has to see all of them.
+        let fingerprint_when_last_file_is = |size: u64| {
+            let list = move |_: &str| {
+                all_entries(&|offset| {
+                    let page: Vec<Value> = (offset..300)
+                        .take(LIST_PAGE as usize)
+                        .map(|i| {
+                            let size = if i == 299 { size } else { 1 };
+                            json!({ "name": format!("f{i:03}"), "kind": "file", "size": size })
+                        })
+                        .collect();
+                    Ok(json!({ "entries": page }))
+                })
+            };
+            let entry = save("/user/home/1/savedata_prospero/PPSA01234", 1000);
+            fingerprint_with(&list, &entry).unwrap()
+        };
+        let before = fingerprint_when_last_file_is(1);
+        assert_eq!(before.len(), 300);
+        assert_ne!(before, fingerprint_when_last_file_is(2));
+    }
+
+    #[test]
+    fn a_pass_that_panics_does_not_stay_running() {
+        let panicked = std::panic::catch_unwind(|| {
+            let _running = PassRunning::begin().expect("no other pass in this test");
+            panic!("a pass died");
+        });
+        assert!(panicked.is_err());
+        let running = PassRunning::begin();
+        assert!(running.is_some(), "the next pass can start");
+        assert!(PassRunning::begin().is_none(), "one at a time");
+        drop(running);
+        assert!(
+            !shared()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .status
+                .running
+        );
     }
 
     /// A save folder with more entries than one page holds is listed whole, so a restore

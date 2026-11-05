@@ -9,7 +9,8 @@
 // Releases come from GitHub's API when the page loads, so a new release shows up without a
 // redeploy. If that fails (offline, or GitHub's 60-requests-an-hour limit for anonymous
 // visitors), releases.json is used: a snapshot the Pages workflow writes on every deploy and
-// every published release (scripts/site-releases.mjs).
+// every published release (scripts/site-releases.mjs). The download buttons offer the newest
+// stable release and name a newer pre-release beside it (platform.js picks).
 "use strict";
 
 const REPO = "phantomptr/ps5upload";
@@ -178,17 +179,34 @@ const OS = {
   ios: "iPhone",
 };
 
-function detectOs() {
-  const ua = navigator.userAgent;
-  if (/android/i.test(ua)) return "android";
-  if (/iphone|ipad|ipod/i.test(ua)) return "ios";
-  if (/windows/i.test(ua)) return "windows";
-  if (/mac os x|macintosh/i.test(ua) && !/iphone|ipad/i.test(ua)) return "mac";
-  if (/linux|x11/i.test(ua)) return "linux";
-  return null;
+/** Chromium's exact CPU, which its user agent no longer tells. Never holds the page up. */
+async function browserHints() {
+  try {
+    const asked = navigator.userAgentData?.getHighEntropyValues(["architecture"]);
+    if (!asked) return null;
+    return await Promise.race([asked, new Promise((done) => setTimeout(() => done(null), 500))]);
+  } catch {
+    return null;
+  }
 }
 
-const mb = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(n / 1e6))} MB`);
+/** A file size in the page's language: 1.2 GB, 1,2 GB, 1,2 Go. */
+const mb = (n) => {
+  const big = n >= 1e9;
+  const value = big ? n / 1e9 : Math.max(1, Math.round(n / 1e6));
+  const digits = big ? 1 : 0;
+  try {
+    return new Intl.NumberFormat(lang, {
+      style: "unit",
+      unit: big ? "gigabyte" : "megabyte",
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    }).format(value);
+  } catch {
+    // Browsers from before Intl's unit style.
+    return `${value.toFixed(digits)} ${big ? "GB" : "MB"}`;
+  }
+};
 const date = (iso) =>
   iso ? new Date(iso).toLocaleDateString(lang, { year: "numeric", month: "short", day: "numeric" }) : "";
 
@@ -208,12 +226,20 @@ function normalize(list) {
 async function loadReleases() {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 6000);
+  const headers = { Accept: "application/vnd.github+json" };
   try {
-    const res = await fetch(API, { signal: ctl.signal, headers: { Accept: "application/vnd.github+json" } });
+    const res = await fetch(API, { signal: ctl.signal, headers });
     if (!res.ok) throw new Error(String(res.status));
     const list = normalize(await res.json());
-    if (list.length) return list;
-    throw new Error("empty");
+    if (!list.length) throw new Error("empty");
+    // A run of pre-releases can push the stable one out of the newest twelve.
+    if (list.every((r) => r.prerelease)) {
+      const more = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { signal: ctl.signal, headers })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      if (more) list.push(...normalize([more]));
+    }
+    return list;
   } catch {
     const res = await fetch("releases.json", { cache: "no-cache" });
     return normalize(await res.json());
@@ -315,31 +341,45 @@ function renderDownloads(rel, mine) {
   return groups;
 }
 
-function renderHero(rel, stable, groups, mine) {
+function renderHero(rel, newerPre, groups, platform) {
+  const mine = platform.os;
   const pre = rel.prerelease ? ` · ${t("js.prerelease_lower", "pre-release")}` : "";
   document.getElementById("hero-version").textContent = `${rel.tag}${pre} · ${date(rel.published)}`;
-  const first = mine && groups[mine]?.[0];
+  const files = mine ? pickFiles(groups[mine], platform) : [];
   const btn = document.getElementById("hero-download");
-  if (first) {
-    btn.href = first.url;
+  const others = `<a href="#download">${t("js.other_platforms", "Other platforms")}</a>`;
+  if (files.length) {
     document.getElementById("hero-download-label").textContent = t("js.download_for", "Download for {os}", { os: OS[mine] });
-    document.getElementById("hero-fine").innerHTML =
-      `${esc(first.label)} ${esc(first.note)} · ${mb(first.size)} · <a href="#download">${t("js.other_platforms", "Other platforms")}</a>`;
+    if (files.length === 1) {
+      const [only] = files;
+      btn.href = only.url;
+      document.getElementById("hero-fine").innerHTML = `${esc(only.label)} ${esc(only.note)} · ${mb(only.size)} · ${others}`;
+    } else {
+      // Can't tell which one (a Mac's chip in Safari): both, rather than a guess that won't open.
+      btn.href = "#download";
+      document.getElementById("hero-fine").innerHTML = `${files
+        .map((f) => `<a href="${esc(f.url)}">${esc(f.label)} ${esc(f.note)}</a> · ${mb(f.size)}`)
+        .join(" · ")} · ${others}`;
+    }
   } else {
     btn.href = "#download";
     document.getElementById("hero-download-label").textContent = t("hero.download", "Download");
   }
   document.getElementById("release-link").href = rel.url;
   const lead = document.getElementById("download-lead");
+  const preLine = (r) => t("js.lead_pre", "{tag} is a pre-release: new and being tested.", { tag: r.tag });
   lead.textContent = rel.prerelease
-    ? t("js.lead_pre", "{tag} is a pre-release: new and being tested.", { tag: rel.tag }) +
-      (stable ? ` ${t("js.lead_stable", "The last stable release is {tag}.", { tag: stable.tag })}` : "")
-    : t("js.lead_released", "{tag}, released {date}.", { tag: rel.tag, date: date(rel.published) });
-  if (rel.prerelease && stable) {
-    lead.insertAdjacentHTML("beforeend", ` <a href="${esc(stable.url)}">${esc(t("js.get", "Get {tag}", { tag: stable.tag }))}</a>`);
+    ? preLine(rel)
+    : newerPre
+      ? `${t("js.lead_stable", "The last stable release is {tag}.", { tag: rel.tag })} ${preLine(newerPre)}`
+      : t("js.lead_released", "{tag}, released {date}.", { tag: rel.tag, date: date(rel.published) });
+  if (newerPre) {
+    lead.insertAdjacentHTML("beforeend", ` <a href="${esc(newerPre.url)}">${esc(t("js.get", "Get {tag}", { tag: newerPre.tag }))}</a>`);
   }
+  // The same example values as engine/compose.yaml, so it pastes as it is and only the addresses
+  // and the folder need changing.
   document.getElementById("docker-cmd").textContent =
-    `docker run -d --name ps5upload --network host -v ps5upload-data:/data -e PS5_ADDR=<${t("js.docker_ip", "your PS5's IP")}> -e PS5UPLOAD_ALLOW_IP=<${t("js.docker_lan", "your LAN, e.g. 192.168.1.0/24")}> ghcr.io/${REPO.split("/")[0]}/ps5upload-engine-webui:${rel.tag.replace(/^v/, "")}`;
+    `docker run -d --name ps5upload --network host -v ps5upload-data:/data -v /srv/ps5/pkgs:/pkgs:ro -e PS5_ADDR=192.168.1.50 -e PS5UPLOAD_ALLOW_IP=192.168.1.0/24 -e PS5UPLOAD_BROWSE_ROOTS=/pkgs ghcr.io/${REPO.split("/")[0]}/ps5upload-engine-webui:${rel.tag.replace(/^v/, "")}`;
 }
 
 function renderNews(list) {
@@ -384,9 +424,11 @@ function showCoin(id) {
   document.querySelectorAll("#coin-tabs button").forEach((b) => {
     const on = b.dataset.coin === c.id;
     b.setAttribute("aria-selected", String(on));
+    b.tabIndex = on ? 0 : -1;
     b.style.background = on ? c.color : "";
     b.style.color = on ? "#fff" : "";
   });
+  document.getElementById("coin-panel").setAttribute("aria-labelledby", `coin-tab-${c.id}`);
   const qr = document.getElementById("coin-qr");
   qr.src = `assets/donate/${c.id}.svg`;
   qr.alt = `${c.name} ${t("thanks.qr", "QR code")}`;
@@ -406,10 +448,28 @@ function showCoin(id) {
 
 function setupThanks() {
   const tabs = document.getElementById("coin-tabs");
-  tabs.innerHTML = CRYPTO.map((c) => `<button type="button" role="tab" data-coin="${c.id}">${c.coin}</button>`).join("");
+  tabs.innerHTML = CRYPTO.map(
+    (c) => `<button type="button" role="tab" id="coin-tab-${c.id}" aria-controls="coin-panel" data-coin="${c.id}">${c.coin}</button>`,
+  ).join("");
   tabs.addEventListener("click", (e) => {
     const b = e.target.closest("button[data-coin]");
     if (b) showCoin(b.dataset.coin);
+  });
+  // A tab list is one stop for Tab; the arrows move inside it.
+  tabs.addEventListener("keydown", (e) => {
+    const all = [...tabs.querySelectorAll("button[data-coin]")];
+    const at = all.indexOf(document.activeElement);
+    if (at < 0) return;
+    const rtl = root.dir === "rtl";
+    const steps = { ArrowRight: rtl ? -1 : 1, ArrowLeft: rtl ? 1 : -1 };
+    let next = null;
+    if (e.key in steps) next = all[(at + steps[e.key] + all.length) % all.length];
+    else if (e.key === "Home") next = all[0];
+    else if (e.key === "End") next = all[all.length - 1];
+    if (!next) return;
+    e.preventDefault();
+    showCoin(next.dataset.coin);
+    next.focus();
   });
   showCoin("btc");
   const copy = document.getElementById("coin-copy");
@@ -454,11 +514,10 @@ async function loadSupporters() {
   try {
     const list = await loadReleases();
     if (!list.length) throw new Error("no releases");
-    const latest = list[0];
-    const stable = list.find((r) => !r.prerelease) ?? null;
-    const mine = detectOs();
-    const groups = renderDownloads(latest, mine);
-    renderHero(latest, stable && stable !== latest ? stable : null, groups, mine);
+    const { main, pre } = chooseReleases(list);
+    const platform = detectPlatform(navigator, await browserHints());
+    const groups = renderDownloads(main, platform.os);
+    renderHero(main, pre, groups, platform);
     renderNews(list);
   } catch {
     const msg = `<p class="muted">${t("js.load_failed", "Couldn't load the releases here.")} <a href="https://github.com/${REPO}/releases">${t("js.see_github", "See them on GitHub")}</a>.</p>`;

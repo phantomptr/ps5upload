@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  addConsoleByAddress,
+  addressChoiceNeeded,
   profileNameForAddr,
   profileNameForHost,
   reorderProfiles,
@@ -135,6 +137,46 @@ describe("selectConsoleByAddress", () => {
   });
 });
 
+describe("an address the roster has not got", () => {
+  const A = "192.168.50.10";
+  const seen = (last_seen_at: number | null) =>
+    useRosterStore.setState({
+      profiles: [{ id: "a", name: "Living room", host: A, last_seen_at }],
+      active_id: "a",
+    });
+
+  it("asks when the active console has been seen: it may be a second PS5", () => {
+    seen(1_700_000_000);
+    expect(addressChoiceNeeded("192.168.50.11")).toBe(true);
+  });
+
+  it("does not ask for a console in the roster, whatever way it is written", () => {
+    seen(1_700_000_000);
+    expect(addressChoiceNeeded(A)).toBe(false);
+    expect(addressChoiceNeeded(`${A}:9021`)).toBe(false);
+    expect(addressChoiceNeeded(`http://${A}/`)).toBe(false);
+  });
+
+  it("just corrects a console that never answered: a typo has nothing to lose", () => {
+    seen(null);
+    expect(addressChoiceNeeded("192.168.50.11")).toBe(false);
+  });
+
+  it("adding keeps the first console in the roster", () => {
+    seen(1_700_000_000);
+    addConsoleByAddress("192.168.50.11:9021");
+    const { profiles, active_id } = useRosterStore.getState();
+    expect(profiles.map((p) => p.host)).toEqual([A, "192.168.50.11"]);
+    expect(profiles.find((p) => p.id === active_id)?.host).toBe("192.168.50.11");
+  });
+
+  it("selecting cleans the address first: a pasted URL never becomes a console called http", () => {
+    useRosterStore.setState({ profiles: [], active_id: null });
+    selectConsoleByAddress("http://192.168.50.12/");
+    expect(useRosterStore.getState().profiles.map((p) => p.host)).toEqual(["192.168.50.12"]);
+  });
+});
+
 describe("the engine's saved console state follows the roster", () => {
   it("forgets a console when it is removed or moves to a new IP", async () => {
     const calls: { url: string; body: string }[] = [];
@@ -148,21 +190,22 @@ describe("the engine's saved console state follows the roster", () => {
       calls.length = 0;
       const a = useRosterStore.getState().add({ name: "Pro", host: "192.168.1.10" });
       useRosterStore.getState().add({ name: "Phat", host: "192.168.1.20" });
+      const forgets = () => calls.filter((c) => c.url.endsWith("/api/console-snapshots/forget"));
+      // Adding says nothing: what this roster lacks may be another client's console.
+      expect(forgets()).toHaveLength(0);
       useRosterStore.getState().remove(a);
       await Promise.resolve();
-      const keeps = calls.filter((c) => c.url.endsWith("/api/console-snapshots/keep"));
-      expect(JSON.parse(keeps[keeps.length - 1].body)).toEqual({ hosts: ["192.168.1.20"] });
+      expect(JSON.parse(forgets().pop()!.body)).toEqual({ hosts: ["192.168.1.10"] });
       // A rename changes no host: nothing is sent.
-      const before = keeps.length;
+      const before = forgets().length;
       const id = useRosterStore.getState().profiles[0].id;
       useRosterStore.getState().rename(id, "Old Phat");
       await Promise.resolve();
-      expect(calls.filter((c) => c.url.endsWith("/api/console-snapshots/keep")).length).toBe(before);
+      expect(forgets().length).toBe(before);
       // The last console removed is forgotten too.
       useRosterStore.getState().remove(id);
       await Promise.resolve();
-      const last = calls.filter((c) => c.url.endsWith("/api/console-snapshots/keep")).pop();
-      expect(JSON.parse(last!.body)).toEqual({ hosts: [] });
+      expect(JSON.parse(forgets().pop()!.body)).toEqual({ hosts: ["192.168.1.20"] });
     } finally {
       globalThis.fetch = realFetch;
     }

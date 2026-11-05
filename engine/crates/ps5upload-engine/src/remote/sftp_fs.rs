@@ -232,7 +232,7 @@ impl RemoteFile for SftpFile {
         }
         let len = len.min(self.size - offset) as usize;
         let host = self.host.as_str();
-        timed(host, "a read", async {
+        let mut f = timed(host, "a read", async {
             let mut f = self
                 .sftp
                 .open(self.path.clone())
@@ -241,22 +241,27 @@ impl RemoteFile for SftpFile {
             f.seek(std::io::SeekFrom::Start(offset))
                 .await
                 .map_err(|e| RemoteError::Io(format!("{host}: {e}")))?;
-            let mut out = vec![0u8; len];
-            let mut got = 0;
-            while got < len {
-                let n = f
-                    .read(&mut out[got..])
-                    .await
-                    .map_err(|e| RemoteError::Io(format!("{host}: {e}")))?;
-                if n == 0 {
-                    break;
-                }
-                got += n;
-            }
-            out.truncate(got);
-            Ok(out)
+            Ok(f)
         })
-        .await
+        .await?;
+        let mut out = vec![0u8; len];
+        let mut got = 0;
+        // The limit is on the server going quiet, per answer, not on the 4 to 8 MiB a caller asks
+        // for: on a link under about 280 KB/s the whole read took longer, and always failed.
+        while got < len {
+            let n = timed(host, "a read", async {
+                f.read(&mut out[got..])
+                    .await
+                    .map_err(|e| RemoteError::Io(format!("{host}: {e}")))
+            })
+            .await?;
+            if n == 0 {
+                break;
+            }
+            got += n;
+        }
+        out.truncate(got);
+        Ok(out)
     }
 }
 
@@ -317,10 +322,18 @@ impl RemoteFs for SftpFs {
         }))
     }
 
-    async fn walk(&self, path: &str, limit: usize) -> Result<Vec<(String, Entry)>, RemoteError> {
+    async fn walk_until(
+        &self,
+        path: &str,
+        limit: usize,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Vec<(String, Entry)>, RemoteError> {
         let mut out = Vec::new();
         let mut stack = vec![String::new()];
         while let Some(rel) = stack.pop() {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(super::walk_cancelled());
+            }
             let dir = if rel.is_empty() {
                 path.to_string()
             } else {
@@ -376,20 +389,18 @@ impl RemoteFs for SftpFs {
         use tokio::io::AsyncWriteExt;
         let full = under(&self.home, path);
         let host = self.host.as_str();
-        let mut out = self
-            .sftp
-            .create(full)
-            .await
-            .map_err(|e| sftp_err(host, e))?;
+        let mut out = timed(host, "starting an upload", async {
+            self.sftp.create(full).await.map_err(|e| sftp_err(host, e))
+        })
+        .await?;
         let file = tokio::fs::File::open(src).await.map_err(super::local_io)?;
-        let mut reader = super::AsyncCountingReader { file, progress };
-        tokio::io::copy(&mut reader, &mut out)
-            .await
-            .map_err(|e| RemoteError::Io(format!("{host}: writing {path}: {e}")))?;
-        out.shutdown()
-            .await
-            .map_err(|e| RemoteError::Io(format!("{host}: closing {path}: {e}")))?;
-        Ok(())
+        super::send_to_server(file, &mut out, progress, STEP, host, path).await?;
+        timed(host, "closing a file", async {
+            out.shutdown()
+                .await
+                .map_err(|e| RemoteError::Io(format!("{host}: closing {path}: {e}")))
+        })
+        .await
     }
 
     async fn remove_file(&self, path: &str) -> Result<(), RemoteError> {

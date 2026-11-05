@@ -16,6 +16,14 @@ describe("engine jobs", () => {
     ]);
   });
 
+  it("leaves installs out: their ids are not a transfer's", () => {
+    const jobs = parseRunningJobs([
+      { job_id: "1790000000-3", kind: "install", status: "running", job: { phase: "deliver" } },
+      { job_id: "a", kind: "transfer", status: "running", job: {} },
+    ]);
+    expect(jobs.map((j) => j.jobId)).toEqual(["a"]);
+  });
+
   it("is empty for anything that is not a list", () => {
     expect(parseRunningJobs({})).toEqual([]);
     expect(parseRunningJobs(undefined)).toEqual([]);

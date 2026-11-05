@@ -24,7 +24,8 @@ import { useConnectionStore } from "../../state/connection";
 import { useActivityHistoryStore } from "../../state/activityHistory";
 import { useNotificationsStore } from "../../state/notifications";
 import { useRunningTitleIds } from "../../state/runningApps";
-import { useSensors } from "../../state/sensors";
+import { useSensors, useTempsView } from "../../state/sensors";
+import { TempsNote } from "../../components/TempsNote";
 import { Badge, Card, ConsoleChip, Sparkline, Spinner } from "../../components";
 import { SendHelperButton } from "../../components/SendHelperButton";
 import { useTr } from "../../state/lang";
@@ -40,7 +41,7 @@ import { initials, useGreetedUser } from "./consoleUser";
 import { mgmtAddr } from "../../lib/addr";
 import {
   evaluateOperationReadiness,
-  HELPER_NOT_CONNECTED,
+  helperNotConnected,
   type Operation,
 } from "../../lib/operationReadiness";
 
@@ -66,20 +67,13 @@ export default function HomeScreen() {
   const ps5Kernel = useConnectionStore((s) => s.ps5Kernel);
   const ucredElevated = useConnectionStore((s) => s.ucredElevated);
   const { sample: sensorSample, history } = useSensors(host);
-  const temps = sensorSample?.temps ?? null;
+  // The last reading that worked, not the last sample: one failed read keeps it on screen.
+  const tempsNow = useTempsView(host);
+  const temps = tempsNow.temps;
   const power = sensorSample?.power ?? null;
   const [recentFilter, setRecentFilter] = useState<RecentFilter>("all");
 
-  const allActivity = useActivityHistoryStore((s) => s.entries);
   const allNotifs = useNotificationsStore((s) => s.entries);
-  const recentActivity = useMemo(
-    () =>
-      allActivity
-        .filter((e) => recentFilter === "all" || e.outcome === recentFilter)
-        .slice(-5)
-        .reverse(),
-    [allActivity, recentFilter],
-  );
   const recentNotifs = useMemo(() => allNotifs.slice(0, 5), [allNotifs]);
   const runningTitleIds = useRunningTitleIds(host);
   const cpuHistory = useMemo(
@@ -109,7 +103,7 @@ export default function HomeScreen() {
     const r = evaluateOperationReadiness(operation, readinessContext);
     if (!resting) return r;
     const rest = tr("status_ps5_rest_mode", "In rest mode");
-    return { ...r, blockers: r.blockers.map((b) => (b === HELPER_NOT_CONNECTED ? rest : b)) };
+    return { ...r, blockers: r.blockers.map((b) => (b === helperNotConnected() ? rest : b)) };
   };
 
   // The user at the selected console, greeted by name with their avatar; read in the background
@@ -284,48 +278,7 @@ export default function HomeScreen() {
                     "Latest operations across every console.",
                   )}
                 </p>
-                {recentActivity.length === 0 ? (
-                  <CompactEmpty
-                    icon={ActivityIcon}
-                    title={tr("v5_home_no_activity", "No activity yet")}
-                    body={tr(
-                      "v5_home_no_activity_desc",
-                      "Uploads, installs, and file jobs will appear here.",
-                    )}
-                  />
-                ) : (
-                  <ul className="space-y-1">
-                    {recentActivity.map((entry) => (
-                      <li
-                        key={entry.id}
-                        className="flex min-h-11 items-center gap-3 rounded-2xl px-3 py-2 text-xs hover:bg-[var(--color-surface-3)]"
-                      >
-                        {entry.outcome === "done" ? (
-                          <CheckCircle2
-                            size={15}
-                            className="shrink-0 text-[var(--color-good)]"
-                          />
-                        ) : entry.outcome === "failed" ? (
-                          <XCircle
-                            size={15}
-                            className="shrink-0 text-[var(--color-bad)]"
-                          />
-                        ) : entry.outcome === "running" ? (
-                          <Spinner size={13} className="shrink-0" />
-                        ) : (
-                          <ActivityIcon
-                            size={15}
-                            className="shrink-0 text-[var(--color-muted)]"
-                          />
-                        )}
-                        <span className="min-w-0 flex-1 truncate font-medium">
-                          {entry.label}
-                        </span>
-                        <ConsoleChip addr={entry.addr} className="shrink-0" />
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                <RecentActivityList filter={recentFilter} />
               </Card>
             </section>
           </div>
@@ -474,11 +427,11 @@ export default function HomeScreen() {
                   <div className="grid grid-cols-2 gap-2">
                     <SensorMetric
                       label={tr("v5_home_cpu", "CPU")}
-                      value={`${temps.cpu_temp?.toFixed(0) ?? "?"}°C`}
+                      value={temps.cpu_temp > 0 ? `${temps.cpu_temp.toFixed(0)}°C` : "—"}
                     />
                     <SensorMetric
                       label={tr("v5_home_soc", "SoC")}
-                      value={`${temps.soc_temp?.toFixed(0) ?? "?"}°C`}
+                      value={temps.soc_temp > 0 ? `${temps.soc_temp.toFixed(0)}°C` : "—"}
                     />
                     {temps.m2_temp > 0 && (
                       <SensorMetric
@@ -492,12 +445,15 @@ export default function HomeScreen() {
                         value={`${power.operating_time_hours ?? 0}h`}
                       />
                     )}
+                    {tempsNow.note && <TempsNote view={tempsNow} className="col-span-2" />}
                   </div>
-                ) : connected ? (
+                ) : connected && tempsNow.note === "reading" ? (
                   <div className="flex items-center gap-2 text-xs text-[var(--color-muted)]">
                     <Spinner size={13} />
                     {tr("v5_home_loading_sensors", "Reading sensors…")}
                   </div>
+                ) : connected ? (
+                  <TempsNote view={tempsNow} />
                 ) : (
                   <div className="text-xs text-[var(--color-muted)]">
                     {tr(
@@ -703,8 +659,12 @@ function ActionTile({
         <span className="line-clamp-2 block text-[0.9375rem] font-medium leading-tight tracking-[-0.01em]">
           {label}
         </span>
-        <span className="mt-0.5 block truncate text-[0.6875rem] text-[var(--color-muted)]">
-          {detail}
+        {/* Why a tile is off is written out, not left to a tooltip: a phone has no hover and a
+            keyboard can't reach one. */}
+        <span
+          className={`mt-0.5 block text-[0.6875rem] text-[var(--color-muted)] ${readiness.ready ? "truncate" : "line-clamp-3"}`}
+        >
+          {readiness.ready || readiness.blockers.length === 0 ? detail : readiness.blockers.join(" ")}
         </span>
       </span>
       {readiness.ready && (
@@ -720,7 +680,6 @@ function ActionTile({
     return (
       <div
         aria-disabled="true"
-        title={readiness.blockers.join(" ")}
         className="action-tile"
       >
         {content}
@@ -731,6 +690,67 @@ function ActionTile({
     <Link to={to} className="action-tile">
       {content}
     </Link>
+  );
+}
+
+/** The latest operations. Its own component, subscribed on its own: a running upload rewrites its
+ *  history entry on every progress tick, and only these few rows care. */
+function RecentActivityList({ filter }: { filter: RecentFilter }) {
+  const tr = useTr();
+  const allActivity = useActivityHistoryStore((s) => s.entries);
+  const recentActivity = useMemo(
+    () =>
+      allActivity
+        .filter((e) => filter === "all" || e.outcome === filter)
+        .slice(-5)
+        .reverse(),
+    [allActivity, filter],
+  );
+  return (
+    <>
+      {recentActivity.length === 0 ? (
+        <CompactEmpty
+          icon={ActivityIcon}
+          title={tr("v5_home_no_activity", "No activity yet")}
+          body={tr(
+            "v5_home_no_activity_desc",
+            "Uploads, installs, and file jobs will appear here.",
+          )}
+        />
+      ) : (
+        <ul className="space-y-1">
+          {recentActivity.map((entry) => (
+            <li
+              key={entry.id}
+              className="flex min-h-11 items-center gap-3 rounded-2xl px-3 py-2 text-xs hover:bg-[var(--color-surface-3)]"
+            >
+              {entry.outcome === "done" ? (
+                <CheckCircle2
+                  size={15}
+                  className="shrink-0 text-[var(--color-good)]"
+                />
+              ) : entry.outcome === "failed" ? (
+                <XCircle
+                  size={15}
+                  className="shrink-0 text-[var(--color-bad)]"
+                />
+              ) : entry.outcome === "running" ? (
+                <Spinner size={13} className="shrink-0" />
+              ) : (
+                <ActivityIcon
+                  size={15}
+                  className="shrink-0 text-[var(--color-muted)]"
+                />
+              )}
+              <span className="min-w-0 flex-1 truncate font-medium">
+                {entry.label}
+              </span>
+              <ConsoleChip addr={entry.addr} className="shrink-0" />
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
   );
 }
 

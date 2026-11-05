@@ -6,6 +6,8 @@ import { useConfirm } from "../../components/ConfirmDialog";
 import { ProgressBar } from "../../components/ProgressBar";
 import { formatBytes } from "../../lib/format";
 import { invoke } from "../../lib/invokeLogged";
+import { isAndroid } from "../../lib/platform";
+import { isTauriEnv } from "../../lib/tauriEnv";
 import { startLinkDownload } from "../../lib/linkDownload";
 import { pickPath } from "../../lib/pickPath";
 import { useLinkInstallPrefs } from "../../state/linkInstallPrefs";
@@ -20,6 +22,7 @@ import {
   downloadArchiveParts,
   parseArchiveLinks,
   stopArchiveDownload,
+  stopArchiveUnpack,
   type ArchiveLinkDeps,
   runArchiveInstall,
   submitArchivePassword,
@@ -84,6 +87,8 @@ export function ArchivePackagesCard({ host }: { host: string }) {
   }, [host, busy]);
   const leftoverBytes = (leftovers?.items ?? []).reduce((n, l) => n + l.bytes, 0);
   const noRoom = st?.target?.space.kind === "no_room";
+  // The Android app reads .zip and .7z; its engine has no RAR reader.
+  const noRar = isAndroid() && isTauriEnv();
 
   async function removeLeftovers() {
     const items = leftovers?.items ?? [];
@@ -108,7 +113,9 @@ export function ArchivePackagesCard({ host }: { host: string }) {
     const picked = await pickPath({
       mode: "file",
       title: tr("arcpkg.pick", undefined, "Choose an archive"),
-      filters: [{ name: "ZIP, 7z, RAR", extensions: ["zip", "7z", "rar"] }],
+      filters: noRar
+        ? [{ name: "ZIP, 7z", extensions: ["zip", "7z"] }]
+        : [{ name: "ZIP, 7z, RAR", extensions: ["zip", "7z", "rar"] }],
     });
     if (picked) await chooseArchive(host, picked);
   }
@@ -162,7 +169,13 @@ export function ArchivePackagesCard({ host }: { host: string }) {
               undefined,
               "The files were downloaded, but none of them is the first part of an archive (.zip, .7z, .rar or .part1.rar). Check the links.",
             )
-          : (st?.error ?? null);
+          : st?.error === "rar_needs_desktop"
+            ? tr(
+                "err_rar_phones",
+                undefined,
+                "RAR archives aren't supported on phones (the app uploads .zip and .7z only). Extract the .rar on a computer first, or use the desktop app.",
+              )
+            : (st?.error ?? null);
 
   return (
     <section
@@ -176,11 +189,17 @@ export function ArchivePackagesCard({ host }: { host: string }) {
         </h3>
       </header>
       <p className="mb-3 text-xs text-[var(--color-muted)]">
-        {tr(
-          "arcpkg.help",
-          undefined,
-          "For a .zip, .7z or .rar that holds one or more .pkg files, in any folder. Only the packages are unpacked, straight to the PS5 (nothing is extracted on this computer), then installed one by one: the base game before its update, then DLC. A multi-part RAR (.part1.rar, .part2.rar…) works: choose the first part and keep the rest beside it. A password is asked for when a RAR needs one; password-protected ZIP and 7z files are not supported.",
-        )}
+        {noRar
+          ? tr(
+              "arcpkg.helpNoRar",
+              undefined,
+              "For a .zip or .7z that holds one or more .pkg files, in any folder. Only the packages are unpacked, straight to the PS5 (nothing is extracted on this device), then installed one by one: the base game before its update, then DLC. Password-protected files are not supported, and .rar needs the desktop app.",
+            )
+          : tr(
+              "arcpkg.help",
+              undefined,
+              "For a .zip, .7z or .rar that holds one or more .pkg files, in any folder. Only the packages are unpacked, straight to the PS5 (nothing is extracted on this computer), then installed one by one: the base game before its update, then DLC. A multi-part RAR (.part1.rar, .part2.rar…) works: choose the first part and keep the rest beside it. A password is asked for when a RAR needs one; password-protected ZIP and 7z files are not supported.",
+            )}
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <Button
@@ -370,6 +389,18 @@ export function ArchivePackagesCard({ host }: { host: string }) {
             phase.count > 0 && (
               <ProgressBar value={(phase.index - 1) / phase.count} size="sm" />
             )}
+          {st?.unpackJob && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mt-2"
+              disabled={st.stopRequested}
+              onClick={() => void stopArchiveUnpack(host)}
+              data-testid="archive-packages-stop"
+            >
+              {tr("stop", undefined, "Stop")}
+            </Button>
+          )}
           <p className="mt-1 text-[11px] text-[var(--color-muted)]">
             {tr(
               "arcpkg.keepsRunning",

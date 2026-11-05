@@ -19,6 +19,7 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub(crate) struct ReplaceReq {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     /// The stored copy on the console.
     path: String,

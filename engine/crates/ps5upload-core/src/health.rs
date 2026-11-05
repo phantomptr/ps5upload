@@ -15,6 +15,7 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -65,6 +66,15 @@ pub struct HealthCheck {
     /// Present only when the engine can actually perform the repair.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fix: Option<FixAction>,
+    /// Which sentence `detail` is, with its values, for a client to say it in its own language
+    /// (`title` goes by `id`). `detail` and `remedy` stay plain English for everything else.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub detail_id: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub values: BTreeMap<String, String>,
+    /// Which sentence `remedy` is.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub remedy_id: String,
 }
 
 impl HealthCheck {
@@ -83,7 +93,26 @@ impl HealthCheck {
             detail: detail.into(),
             remedy: String::new(),
             fix: None,
+            detail_id: String::new(),
+            values: BTreeMap::new(),
+            remedy_id: String::new(),
         }
+    }
+
+    /// Names the sentence in `detail`, and the values in it.
+    fn said(mut self, detail_id: &str, values: &[(&str, String)]) -> Self {
+        self.detail_id = detail_id.into();
+        self.values = values
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), v.clone()))
+            .collect();
+        self
+    }
+
+    /// Names the sentence in `remedy`.
+    fn remedy_said(mut self, remedy_id: &str) -> Self {
+        self.remedy_id = remedy_id.into();
+        self
     }
 
     pub fn with_remedy(mut self, remedy: impl Into<String>) -> Self {
@@ -197,6 +226,7 @@ pub fn is_junk_entry(name: &str) -> bool {
         || n.ends_with(".partial")
         || n.ends_with(".staging")
         || n.ends_with(".download")
+        || n.ends_with(".ava-part")
 }
 
 /// Folders whose whole contents are throwaway once they have sat for a while, with how long
@@ -264,13 +294,16 @@ pub fn run_health_scan(addr: &str, engine_version: &str) -> HealthReport {
     // ── connectivity + runtime ──────────────────────────────────────
     let status = fetch_status(addr);
     match &status {
-        Ok(_) => checks.push(HealthCheck::new(
-            "mgmt_reachable",
-            "Helper is reachable",
-            CheckCategory::Connectivity,
-            CheckStatus::Pass,
-            format!("The helper answered on {addr}."),
-        )),
+        Ok(_) => checks.push(
+            HealthCheck::new(
+                "mgmt_reachable",
+                "Helper is reachable",
+                CheckCategory::Connectivity,
+                CheckStatus::Pass,
+                format!("The helper answered on {addr}."),
+            )
+            .said("mgmt_ok", &[("addr", addr.to_string())]),
+        ),
         Err(e) => checks.push(
             HealthCheck::new(
                 "mgmt_reachable",
@@ -279,10 +312,15 @@ pub fn run_health_scan(addr: &str, engine_version: &str) -> HealthReport {
                 CheckStatus::Fail,
                 format!("No answer from {addr}: {e}"),
             )
+            .said(
+                "mgmt_failed",
+                &[("addr", addr.to_string()), ("error", e.to_string())],
+            )
             .with_remedy(
                 "Load the ps5upload payload on your console, then scan again. \
                     Everything below depends on this.",
-            ),
+            )
+            .remedy_said("load_helper"),
         ),
     }
 
@@ -315,14 +353,23 @@ pub fn run_health_scan(addr: &str, engine_version: &str) -> HealthReport {
         "Helper matches this app",
         CheckCategory::Runtime,
         vstatus,
-        format!("Console helper {shown}, desktop app {engine_version}."),
+        format!("Console helper {shown}, this app {engine_version}."),
+    )
+    .said(
+        "version",
+        &[
+            ("helper", shown.clone()),
+            ("app", engine_version.to_string()),
+        ],
     );
     if vstatus != CheckStatus::Pass {
-        vcheck = vcheck.with_remedy(
-            "Send the payload again from this version of the app. A helper built \
+        vcheck = vcheck
+            .with_remedy(
+                "Send the payload again from this version of the app. A helper built \
                 from different source is the most common reason a feature appears to \
                 do nothing.",
-        );
+            )
+            .remedy_said("resend");
     }
     checks.push(vcheck);
 
@@ -349,30 +396,41 @@ pub fn run_health_scan(addr: &str, engine_version: &str) -> HealthReport {
                         )
                     },
                 )
+                .said(
+                    if sym_ok { "symbols_ok" } else { "symbols_bad" },
+                    &[("err", format!("0x{:08X}", r.registry_err))],
+                )
                 .with_remedy(if sym_ok {
                     String::new()
                 } else {
                     "Several features read the registry and will silently do nothing \
                         while this fails. Reload the payload; if it persists, report it."
                         .to_string()
-                }),
+                })
+                .remedy_said(if sym_ok { "" } else { "registry" }),
             );
 
             match decode_fw_bcd(r.fw_magic) {
-                Some(fw) => checks.push(HealthCheck::new(
-                    "firmware_detected",
-                    "Firmware detected",
-                    CheckCategory::Runtime,
-                    CheckStatus::Pass,
-                    format!("System software {fw}."),
-                )),
-                None => checks.push(HealthCheck::new(
-                    "firmware_detected",
-                    "Firmware detected",
-                    CheckCategory::Runtime,
-                    CheckStatus::Skip,
-                    "The console did not report a readable firmware version.".to_string(),
-                )),
+                Some(fw) => checks.push(
+                    HealthCheck::new(
+                        "firmware_detected",
+                        "Firmware detected",
+                        CheckCategory::Runtime,
+                        CheckStatus::Pass,
+                        format!("System software {fw}."),
+                    )
+                    .said("fw", &[("version", fw.to_string())]),
+                ),
+                None => checks.push(
+                    HealthCheck::new(
+                        "firmware_detected",
+                        "Firmware detected",
+                        CheckCategory::Runtime,
+                        CheckStatus::Skip,
+                        "The console did not report a readable firmware version.".to_string(),
+                    )
+                    .said("fw_none", &[]),
+                ),
             }
 
             // Remote Play
@@ -391,10 +449,12 @@ pub fn run_health_scan(addr: &str, engine_version: &str) -> HealthReport {
                 } else {
                     "Remote Play is switched off on this console.".to_string()
                 },
-            );
+            )
+            .said(if svc { "rp_on" } else { "rp_off" }, &[]);
             if !svc {
                 rp = rp
                     .with_remedy("Turn Remote Play on.")
+                    .remedy_said("rp_on")
                     .with_fix(FixAction::EnableRemotePlay);
             }
             checks.push(rp);
@@ -416,35 +476,59 @@ pub fn run_health_scan(addr: &str, engine_version: &str) -> HealthReport {
                         "No usable account is signed in on this console.".to_string()
                     },
                 )
+                .said(
+                    if activated {
+                        "account_ok"
+                    } else {
+                        "account_none"
+                    },
+                    &[],
+                )
                 .with_remedy(if activated {
                     String::new()
                 } else {
                     "Remote Play needs a signed-in account. Sign in on the console, \
                         or activate the profile from the Profile screen."
                         .to_string()
-                }),
+                })
+                .remedy_said(if activated { "" } else { "account" }),
             );
         }
-        Err(e) => checks.push(HealthCheck::new(
-            "sony_symbols_resolved",
-            "System registry is readable",
-            CheckCategory::Runtime,
-            CheckStatus::Skip,
-            format!("Could not read console readiness: {e}"),
-        )),
+        Err(e) => checks.push(
+            HealthCheck::new(
+                "sony_symbols_resolved",
+                "System registry is readable",
+                CheckCategory::Runtime,
+                CheckStatus::Skip,
+                format!("Could not read console readiness: {e}"),
+            )
+            .said("readiness_failed", &[("error", e.to_string())]),
+        ),
     }
 
     // ── storage ─────────────────────────────────────────────────────
     match crate::hw::hw_storage(addr) {
         Ok(st) => {
             let status = classify_free_space(st.free_bytes, st.total_bytes);
-            let detail = match free_pct(st.free_bytes, st.total_bytes) {
+            let pct = free_pct(st.free_bytes, st.total_bytes);
+            let detail = match pct {
                 Some(pct) => format!(
                     "{} free of {} ({pct:.1}%).",
                     human_bytes(st.free_bytes),
                     human_bytes(st.total_bytes)
                 ),
                 None => "The console did not report a storage size.".to_string(),
+            };
+            let (detail_id, values) = match pct {
+                Some(pct) => (
+                    "storage",
+                    vec![
+                        ("free", human_bytes(st.free_bytes)),
+                        ("total", human_bytes(st.total_bytes)),
+                        ("pct", format!("{pct:.1}")),
+                    ],
+                ),
+                None => ("storage_none", Vec::new()),
             };
             checks.push(
                 HealthCheck::new(
@@ -454,6 +538,12 @@ pub fn run_health_scan(addr: &str, engine_version: &str) -> HealthReport {
                     status,
                     detail,
                 )
+                .said(detail_id, &values)
+                .remedy_said(match status {
+                    CheckStatus::Fail => "space_low",
+                    CheckStatus::Warn => "space_tight",
+                    _ => "",
+                })
                 .with_remedy(match status {
                     CheckStatus::Fail => {
                         "Very little space left. Installs and transfers will fail. \
@@ -467,13 +557,16 @@ pub fn run_health_scan(addr: &str, engine_version: &str) -> HealthReport {
                 }),
             );
         }
-        Err(e) => checks.push(HealthCheck::new(
-            "internal_free_space",
-            "Console storage",
-            CheckCategory::Storage,
-            CheckStatus::Skip,
-            format!("Could not read storage: {e}"),
-        )),
+        Err(e) => checks.push(
+            HealthCheck::new(
+                "internal_free_space",
+                "Console storage",
+                CheckCategory::Storage,
+                CheckStatus::Skip,
+                format!("Could not read storage: {e}"),
+            )
+            .said("storage_failed", &[("error", e.to_string())]),
+        ),
     }
 
     // ── tool directories + junk ─────────────────────────────────────
@@ -513,10 +606,19 @@ pub fn run_health_scan(addr: &str, engine_version: &str) -> HealthReport {
         } else {
             format!("Missing or unreadable: {}.", missing.join(", "))
         },
+    )
+    .said(
+        if missing.is_empty() {
+            "dirs_ok"
+        } else {
+            "dirs_missing"
+        },
+        &[("dirs", missing.join(", "))],
     );
     if !missing.is_empty() {
         dircheck = dircheck
             .with_remedy("Create the missing folders.")
+            .remedy_said("create_dirs")
             .with_fix(FixAction::CreateToolDirs);
     }
     checks.push(dircheck);
@@ -531,6 +633,7 @@ pub fn run_health_scan(addr: &str, engine_version: &str) -> HealthReport {
             CheckStatus::Skip,
             "Could not read every tool folder, so leftovers were not counted.".to_string(),
         )
+        .said("junk_unread", &[])
     } else {
         HealthCheck::new(
             "junk_files",
@@ -551,10 +654,22 @@ pub fn run_health_scan(addr: &str, engine_version: &str) -> HealthReport {
                 )
             },
         )
+        .said(
+            if junk_files.is_empty() {
+                "junk_none"
+            } else {
+                "junk_found"
+            },
+            &[
+                ("count", junk_files.len().to_string()),
+                ("size", human_bytes(junk_total)),
+            ],
+        )
     };
     if !junk_files.is_empty() {
         junkcheck = junkcheck
             .with_remedy("Delete them. Only files ps5upload created are removed.")
+            .remedy_said("delete_junk")
             .with_fix(FixAction::CleanJunk);
     }
     checks.push(junkcheck);
@@ -582,43 +697,57 @@ pub fn run_health_scan(addr: &str, engine_version: &str) -> HealthReport {
                         CheckCategory::System,
                         status,
                         format!("Console clock differs from this computer by {skew}s."),
-                    );
+                    )
+                    .said("clock_skew", &[("skew", skew.to_string())]);
                     if status != CheckStatus::Pass {
                         c = c
                             .with_remedy(
                                 "A wrong clock breaks licence checks and makes logs \
                                     hard to read. Set it from this computer.",
                             )
+                            .remedy_said("clock")
                             .with_fix(FixAction::SyncClock);
                     }
                     checks.push(c);
                 }
-                None => checks.push(HealthCheck::new(
-                    "clock_sane",
-                    "Console clock",
-                    CheckCategory::System,
-                    CheckStatus::Skip,
-                    "The console reported a date that could not be interpreted.".to_string(),
-                )),
+                None => checks.push(
+                    HealthCheck::new(
+                        "clock_sane",
+                        "Console clock",
+                        CheckCategory::System,
+                        CheckStatus::Skip,
+                        "The console reported a date that could not be interpreted.".to_string(),
+                    )
+                    .said("clock_bad", &[]),
+                ),
             }
         }
-        Ok(t) => checks.push(HealthCheck::new(
-            "clock_sane",
-            "Console clock",
-            CheckCategory::System,
-            CheckStatus::Skip,
-            format!(
-                "The console did not report its clock: {}.",
-                crate::sys_time::humanize_err(t.err_code)
+        Ok(t) => checks.push(
+            HealthCheck::new(
+                "clock_sane",
+                "Console clock",
+                CheckCategory::System,
+                CheckStatus::Skip,
+                format!(
+                    "The console did not report its clock: {}.",
+                    crate::sys_time::humanize_err(t.err_code)
+                ),
+            )
+            .said(
+                "clock_silent",
+                &[("error", crate::sys_time::humanize_err(t.err_code))],
             ),
-        )),
-        Err(e) => checks.push(HealthCheck::new(
-            "clock_sane",
-            "Console clock",
-            CheckCategory::System,
-            CheckStatus::Skip,
-            format!("Could not read the console clock: {e}"),
-        )),
+        ),
+        Err(e) => checks.push(
+            HealthCheck::new(
+                "clock_sane",
+                "Console clock",
+                CheckCategory::System,
+                CheckStatus::Skip,
+                format!("Could not read the console clock: {e}"),
+            )
+            .said("clock_failed", &[("error", e.to_string())]),
+        ),
     }
 
     let summary = summarize(&checks);
@@ -682,6 +811,17 @@ pub fn preview_junk(addr: &str) -> Vec<(String, u64)> {
     out
 }
 
+/// What of `junk` may go: all of it, or only what the user confirmed.
+fn confirmed_junk(junk: Vec<(String, u64)>, confirmed: Option<&[String]>) -> Vec<(String, u64)> {
+    match confirmed {
+        None => junk,
+        Some(list) => junk
+            .into_iter()
+            .filter(|(path, _)| list.contains(path))
+            .collect(),
+    }
+}
+
 /// Perform one repair.
 ///
 /// Every branch is a named, bounded operation. `CleanJunk` deletes only
@@ -689,6 +829,17 @@ pub fn preview_junk(addr: &str) -> Vec<(String, u64)> {
 /// work-in-progress files under directories this tool owns. It never
 /// walks user content.
 pub fn apply_fix(addr: &str, action: &FixAction, engine_version: &str) -> FixOutcome {
+    apply_fix_of(addr, action, None, engine_version)
+}
+
+/// [`apply_fix`], with `CleanJunk` limited to `confirmed`: the files the user was shown. What is
+/// on the list now but was not shown stays, and so does what was shown but is no longer on it.
+pub fn apply_fix_of(
+    addr: &str,
+    action: &FixAction,
+    confirmed: Option<&[String]>,
+    engine_version: &str,
+) -> FixOutcome {
     let _ = engine_version;
     let mut changed = Vec::new();
     let result: Result<()> = (|| {
@@ -706,7 +857,7 @@ pub fn apply_fix(addr: &str, action: &FixAction, engine_version: &str) -> FixOut
                 }
             }
             FixAction::CleanJunk => {
-                for (path, size) in preview_junk(addr) {
+                for (path, size) in confirmed_junk(preview_junk(addr), confirmed) {
                     crate::fs_ops::fs_delete(addr, &path)?;
                     changed.push(format!("deleted {path} ({})", human_bytes(size)));
                 }
@@ -762,6 +913,17 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn a_clean_up_takes_only_what_was_shown_and_is_still_junk() {
+        let junk = || vec![("/a".to_string(), 1), ("/b".to_string(), 2)];
+        assert_eq!(confirmed_junk(junk(), None).len(), 2);
+        let shown = ["/b".to_string(), "/gone".to_string()];
+        assert_eq!(
+            confirmed_junk(junk(), Some(&shown)),
+            vec![("/b".to_string(), 2)]
+        );
+    }
+
     fn gb(n: u64) -> u64 {
         n * 1024 * 1024 * 1024
     }
@@ -815,6 +977,7 @@ mod tests {
         assert!(is_junk_entry("upload.TMP"));
         assert!(is_junk_entry("x.partial"));
         assert!(is_junk_entry("y.staging"));
+        assert!(is_junk_entry("Game.pkg.ava-part"));
     }
 
     #[test]
@@ -829,6 +992,7 @@ mod tests {
             "partition", // starts with "part" but is not a suffix
             "tmpfile",   // contains "tmp" but is not a suffix
             "notes.partly",
+            "ava-part", // the suffix alone is a name someone chose
         ] {
             assert!(!is_junk_entry(name), "{name} must not be treated as junk");
         }

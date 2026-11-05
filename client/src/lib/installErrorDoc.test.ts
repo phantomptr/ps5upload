@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import faqText from "virtual:doc/faq";
 
+import { parseFaq, searchFaq } from "./faqDoc";
 import { DOC_ANCHORS, faqLink, installErrorDoc, installErrorLink } from "./installErrorDoc";
 
 // FAQ.md is what the in-app FAQ renders. Every anchor an error can link to must
@@ -46,6 +47,13 @@ describe("installErrorDoc", () => {
   it("every anchor resolves to a section of FAQ.md", () => {
     for (const [name, anchor] of Object.entries(DOC_ANCHORS)) {
       expect(faq.includes(anchor.toLowerCase()), `${name}: "${anchor}" not in FAQ.md`).toBe(true);
+    }
+  });
+
+  it("every anchor finds an answer through the FAQ's own search", () => {
+    const doc = parseFaq(faqText);
+    for (const [name, anchor] of Object.entries(DOC_ANCHORS)) {
+      expect(searchFaq(doc, anchor).length, `${name}: searching "${anchor}" finds nothing`).toBeGreaterThan(0);
     }
   });
 

@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+## mDNS in console discovery (discover.rs). The desktop app and desktop engines turn it on; a
+## standalone Android engine leaves it out and sweeps only.
+mdns = ["dep:mdns-sd"]
+
 [dependencies]
 anyhow.workspace = true
 # Cross-platform OS randomness for the Remote Play registration nonce. The old
@@ -46,7 +51,11 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 sevenz-rust2 = { version = "0.23", default-features = false }
 # Community cheat search/download over HTTPS (cheats.rs). rustls + ring, which
 # the engine already builds for Android, so this needs no C toolchain there.
-ureq = { version = "3", features = ["rustls"] }
+ureq = { version = "3.5", features = ["rustls"] }  # 3.5: timeout_per_read (payload_library)
+# Console discovery's interface list and mDNS browse (discover.rs). if-addrs is already in the
+# engine's tree; mdns-sd is pure Rust, with no system avahi or bonjour.
+if-addrs = "0.15"
+mdns-sd = { version = "0.21", default-features = false, optional = true }
 # Decode user-supplied avatar images (profile.rs). Pure-Rust decoders only
 # (png/jpeg/webp/bmp/gif) — no C deps, so the Android cross-compile stays
 # clean, same care as the zip/sevenz pins above. We hand-roll the bilinear
@@ -59,4 +68,4 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # engine starts and talks to over pipes (src/rar_helper.rs). Do not add the
 # `unrar` crate (or any crate that links UnRAR) to this crate or anything the
 # engine/desktop binaries link: see LICENSES/UnRAR-exception.md. RAR stays
-# desktop-only: the code is `#[cfg(not(target_os = "android"))]`.
+# desktop-only: the code is `#[cfg(not(any(target_os = "android", target_os = "ios")))]`.

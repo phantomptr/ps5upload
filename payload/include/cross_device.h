@@ -55,7 +55,7 @@
  *   src/files_prefs.c     1  dir    files-prefs.json: tmp -> final
  *   src/fakelib_overlay.c 1  dir    the overlay record left for the next helper: <record>.tmp -> record
  *   src/mesh.c            1  dir    device list, settings and shared documents: <file>.tmp -> file
- *   src/profile.c         4  dir    PSN sign-in backup: <uid>.txt.tmp -> <uid>.txt (made, or a slot added) and
+ *   src/profile.c         3  dir    PSN sign-in backup: <uid>.txt.tmp -> <uid>.txt (made, or a slot added) and
  *                                   <uid>.txt -> .restored;
  *                                   an NP file put back: <file>.ps5upload-tmp -> file
  *   src/webui_files.c     2  dir    text save and upload: .ps5u-<hex>.part beside the target -> target

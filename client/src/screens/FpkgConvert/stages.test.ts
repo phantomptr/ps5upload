@@ -117,14 +117,6 @@ describe("stageRows", () => {
     expect(rows[0]).toMatchObject({ state: "active", done: 5, total: 10 });
   });
 
-  it("lists the copy for compressing a server image", () => {
-    const rows = stageRows(
-      { phase: "running", ...base, source: "remote://nas-1/g.exfat", mode: "ffpfsc", stage: "copy", stageDone: 0, stageTotal: 0, stageMs: {} },
-      null,
-    );
-    expect(rows[0]).toMatchObject({ stage: "copy", state: "active" });
-  });
-
   it("shows the pack row only for an image build that packs LZ4 assets", () => {
     const packing = stageRows(
       { phase: "running", ...base, mode: "image", stage: "pack", stageDone: 1, stageTotal: 4, stageMs: {} },

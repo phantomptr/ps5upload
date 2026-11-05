@@ -220,7 +220,7 @@ export function Processes({ ctx, switcher }: { ctx: SectionContext; switcher?: R
     }
   }, []);
 
-  useEffect(() => pollWhileVisible(() => void load(), PROCS_POLL_MS), [load]);
+  useEffect(() => pollWhileVisible(load, PROCS_POLL_MS), [load]);
   useEffect(
     () =>
       onNavAction(

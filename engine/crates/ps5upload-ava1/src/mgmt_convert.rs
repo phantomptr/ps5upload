@@ -122,13 +122,19 @@ pub fn fs_mkdir_request(body: &[u8], label: &str) -> Result<gen::FsMkdir> {
     })
 }
 
-/// `{"from","to"}` -> `FsRename`. The legacy move was a plain `rename(2)`, which replaces.
+/// `{"from","to","overwrite"}` -> `FsRename`. Without `overwrite` the console refuses a
+/// destination that exists: replacing what is there is something a caller has to ask for.
 pub fn fs_rename_request(body: &[u8], label: &str) -> Result<gen::FsRename> {
     let v = parse(body, label)?;
+    let overwrite = match v.get("overwrite") {
+        Some(Value::Bool(b)) => *b,
+        Some(n) => n.as_i64().unwrap_or(0) != 0,
+        None => false,
+    };
     Ok(gen::FsRename {
         from: str_field(&v, "from"),
         to: str_field(&v, "to"),
-        overwrite: 1,
+        overwrite: u8::from(overwrite),
     })
 }
 
@@ -433,6 +439,23 @@ mod tests {
         ] {
             assert!(v.get(k).is_none(), "{k} must be gone");
         }
+    }
+
+    #[test]
+    fn a_rename_replaces_only_when_the_caller_asked() {
+        let req = |body: &str| fs_rename_request(body.as_bytes(), "FS_MOVE").unwrap();
+        let q = req(r#"{"from":"/a","to":"/b"}"#);
+        assert_eq!((q.from.as_str(), q.to.as_str()), ("/a", "/b"));
+        assert_eq!(q.overwrite, 0);
+        assert_eq!(
+            req(r#"{"from":"/a","to":"/b","overwrite":false}"#).overwrite,
+            0
+        );
+        assert_eq!(
+            req(r#"{"from":"/a","to":"/b","overwrite":true}"#).overwrite,
+            1
+        );
+        assert_eq!(req(r#"{"from":"/a","to":"/b","overwrite":1}"#).overwrite, 1);
     }
 
     #[test]

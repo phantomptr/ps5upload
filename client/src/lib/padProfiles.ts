@@ -9,6 +9,7 @@
 import { safeGetItem, safeSetItem } from "./safeStorage";
 import {
   guessProfile,
+  hatPosition,
   PadButton,
   STANDARD_PROFILE,
   type PadAxis,
@@ -18,12 +19,30 @@ import {
 
 const KEY = "ps5upload.rp_pad_profiles.v1";
 
+function isPadSource(v: unknown): boolean {
+  return v === null || (typeof v === "object" && !Array.isArray(v));
+}
+
+function isPadProfile(v: unknown): v is PadProfile {
+  if (!v || typeof v !== "object") return false;
+  const p = v as Partial<Record<keyof PadProfile, unknown>>;
+  return (
+    Array.isArray(p.buttons) &&
+    p.buttons.every((b) => Array.isArray(b) && b.length === 2 && typeof b[0] === "number" && isPadSource(b[1])) &&
+    [p.l2, p.r2, p.lx, p.ly, p.rx, p.ry].every(isPadSource)
+  );
+}
+
 /** Saved profiles by the controller's id (what the browser calls it). */
 export function loadProfiles(): Record<string, PadProfile> {
   try {
     const raw = safeGetItem(KEY);
     const v = raw ? (JSON.parse(raw) as unknown) : null;
-    return v && typeof v === "object" ? (v as Record<string, PadProfile>) : {};
+    if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+    // A damaged entry is dropped: its controller plays with the default until mapped again.
+    return Object.fromEntries(
+      Object.entries(v).filter((entry): entry is [string, PadProfile] => isPadProfile(entry[1])),
+    );
   } catch {
     return {};
   }
@@ -43,12 +62,25 @@ let cache: Record<string, PadProfile> | null = null;
 /** The profile `g` plays with: its saved one, else the browser's standard layout or the guess. */
 export function profileFor(g: Gamepad): PadProfile {
   cache ??= loadProfiles();
-  return cache[g.id] ?? guessProfile(g);
+  return cache[g.id] ?? migratedProfile(cache, g.id) ?? guessProfile(g);
 }
 
-/** Forget the cached profiles (another window saved one). */
-export function reloadProfiles(): void {
-  cache = null;
+/** A forwarded controller is named `<name> (app)` since #668. A mapping saved under the name the
+ *  browser gave it applies still, and is copied to the new name on first use; the old entry stays,
+ *  for a browser or an older version that still reads it. */
+function migratedProfile(all: Record<string, PadProfile>, id: string): PadProfile | null {
+  if (!id.endsWith(" (app)")) return null;
+  const name = id.slice(0, -" (app)".length).trim().toLowerCase();
+  if (!name) return null;
+  const same = Object.keys(all).filter((k) => {
+    const key = k.trim().toLowerCase();
+    return key === name || key.includes(name);
+  });
+  const exact = same.find((k) => k.trim().toLowerCase() === name);
+  const from = exact ?? (same.length === 1 ? same[0] : null);
+  if (!from) return null;
+  cache = saveProfile(id, all[from]);
+  return all[from];
 }
 
 /** A controller as one moment of its buttons and axes. */
@@ -70,6 +102,12 @@ export function detectPress(rest: PadSnapshot, now: PadSnapshot): PadSource | nu
     if (v > 0.5 && moved > 0.5 && (!best || moved > best.amount)) best = { src: { b: i }, amount: moved };
   });
   if (best) return (best as { src: PadSource }).src;
+  // A d-pad on one axis: resting outside -1..1, each direction a value of its own. Taken as half an
+  // axis, up, right and down would all be one source, and left too small a move to count.
+  for (let i = 0; i < now.axes.length; i++) {
+    const at = Math.abs(rest.axes[i] ?? 0) > 1.05 ? hatPosition(now.axes[i]) : null;
+    if (at !== null) return { h: i, at };
+  }
   now.axes.forEach((v, i) => {
     const r = rest.axes[i] ?? 0;
     const moved = v - r;
@@ -153,7 +191,7 @@ export function addExtra(prof: PadProfile, bit: number, src: PadSource): PadProf
  *  standard meaning). */
 export function withStandardGaps(prof: PadProfile): PadProfile {
   const have = new Set(prof.buttons.map(([bit]) => bit));
-  const key = (s: PadSource) => ("b" in s ? `b${s.b}` : `a${s.a}${s.d}`);
+  const key = (s: PadSource) => ("b" in s ? `b${s.b}` : "h" in s ? `h${s.h}.${s.at}` : `a${s.a}${s.d}`);
   const used = new Set([...prof.buttons.map(([, s]) => key(s)), ...[prof.l2, prof.r2].filter((s): s is PadSource => !!s).map(key)]);
   return {
     buttons: [

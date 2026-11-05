@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { isNotifRead, markAllUpTo, setOneRead } from "./ps5NotifRead";
+import * as storage from "../lib/safeStorage";
+import { isNotifRead, loadNotifReadState, markAllUpTo, setOneRead } from "./ps5NotifRead";
 
 describe("PS5 notification read state", () => {
   it("starts with everything unread", () => {
@@ -32,5 +33,16 @@ describe("PS5 notification read state", () => {
 
   it("never moves the watermark backwards", () => {
     expect(markAllUpTo(markAllUpTo(undefined, 10), 4).upTo).toBe(10);
+  });
+});
+
+describe("the stored read state", () => {
+  it("keeps good entries and drops damaged ones", () => {
+    const good = { upTo: 3, read: [1], unread: [] };
+    const get = vi.spyOn(storage, "safeGetItem").mockReturnValue(
+      JSON.stringify({ a: good, b: { upTo: 1 }, c: { upTo: 1, read: ["x"], unread: [] }, d: null }),
+    );
+    expect(loadNotifReadState()).toEqual({ a: good });
+    get.mockRestore();
   });
 });

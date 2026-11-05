@@ -12,13 +12,14 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use axum::extract::{Multipart, Path as AxumPath, Query};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use ps5upload_core::fakelibs::{is_library_name, Corpus, IncomingLibrary, Origin};
-use ps5upload_core::fs_ops::{fs_read, list_dir, ListDirOptions};
+use ps5upload_core::fs_ops::{fs_read, fs_read_whole, list_dir, ListDirOptions};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -191,6 +192,7 @@ pub struct ScanTitle {
 
 #[derive(Debug, Deserialize)]
 pub struct ScanRequest {
+    #[serde(alias = "host")]
     pub addr: String,
     #[serde(default)]
     pub console: String,
@@ -223,7 +225,14 @@ pub struct ScanState {
     pub without_libraries: usize,
     pub errors: Vec<String>,
     pub error: Option<String>,
+    /// When the scan ended, for [`KEEP_FINISHED`].
+    #[serde(skip)]
+    pub finished_at: Option<Instant>,
 }
+
+/// How long a finished scan's result stays to be read: another tab, a retried request or a
+/// repeated effect all read it again.
+const KEEP_FINISHED: Duration = Duration::from_secs(10 * 60);
 
 type Registry = Mutex<std::collections::HashMap<Uuid, Arc<Mutex<ScanState>>>>;
 
@@ -244,10 +253,11 @@ pub async fn start_scan(Json(req): Json<ScanRequest>) -> impl IntoResponse {
         titles_total: req.titles.len(),
         ..Default::default()
     }));
-    registry()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(id, Arc::clone(&state));
+    {
+        let mut scans = registry().lock().unwrap_or_else(|e| e.into_inner());
+        scans.retain(|_, s| !finished_long_ago(s));
+        scans.insert(id, Arc::clone(&state));
+    }
     tokio::task::spawn_blocking(move || {
         // Ends the scan however the thread leaves: a panic used to keep it "running"
         // forever, and a lock it poisoned failed every later status read.
@@ -272,7 +282,15 @@ impl Drop for ScanDone {
         }
         s.current.clear();
         s.done = true;
+        s.finished_at.get_or_insert_with(Instant::now);
     }
+}
+
+fn finished_long_ago(scan: &Mutex<ScanState>) -> bool {
+    scan.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .finished_at
+        .is_some_and(|at| at.elapsed() >= KEEP_FINISHED)
 }
 
 pub async fn scan_status(AxumPath(id): AxumPath<String>) -> impl IntoResponse {
@@ -287,12 +305,6 @@ pub async fn scan_status(AxumPath(id): AxumPath<String>) -> impl IntoResponse {
     match state {
         Some(s) => {
             let snapshot = s.lock().unwrap_or_else(|e| e.into_inner()).clone();
-            if snapshot.done {
-                registry()
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .remove(&id);
-            }
             (StatusCode::OK, Json(snapshot)).into_response()
         }
         None => err(
@@ -316,6 +328,34 @@ fn fs_addr(addr: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_finished_scan_can_be_read_more_than_once() {
+        let id = Uuid::new_v4();
+        let state = Arc::new(Mutex::new(ScanState::default()));
+        registry().lock().unwrap().insert(id, Arc::clone(&state));
+        drop(ScanDone(Arc::clone(&state)));
+        for _ in 0..3 {
+            let r = scan_status(AxumPath(id.to_string())).await.into_response();
+            assert_eq!(r.status(), StatusCode::OK);
+        }
+        assert!(state.lock().unwrap().done);
+        registry().lock().unwrap().remove(&id);
+    }
+
+    #[test]
+    fn only_a_scan_that_ended_long_ago_is_forgotten() {
+        let scan = |finished_at| {
+            Mutex::new(ScanState {
+                finished_at,
+                ..Default::default()
+            })
+        };
+        assert!(!finished_long_ago(&scan(None)), "still running");
+        assert!(!finished_long_ago(&scan(Some(Instant::now()))));
+        let long_ago = Instant::now().checked_sub(KEEP_FINISHED + Duration::from_secs(1));
+        assert!(finished_long_ago(&scan(long_ago)));
+    }
 
     #[test]
     fn fs_addr_normalises_to_the_bare_host() {
@@ -446,7 +486,9 @@ fn harvest(addr: &str, title: &ScanTitle) -> anyhow::Result<Vec<IncomingLibrary>
         if entry.kind != "file" || !is_library_name(&entry.name) {
             continue;
         }
-        let data = fs_read(addr, &format!("{dir}/{}", entry.name), 0, entry.size)?;
+        // The listing says how big it is: one read stops at the helper's ceiling (2 MiB), and a
+        // part of a library stored as a library is a game that dies at load.
+        let data = fs_read_whole(addr, &format!("{dir}/{}", entry.name), entry.size)?;
         out.push(IncomingLibrary {
             name: entry.name,
             data,
@@ -589,6 +631,7 @@ pub async fn import_pack(Json(req): Json<ImportPackReq>) -> impl IntoResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct SdkPairQuery {
+    #[serde(alias = "console", alias = "host")]
     pub addr: String,
     /// The title's source directory; `eboot.bin` is read from inside it.
     pub path: String,

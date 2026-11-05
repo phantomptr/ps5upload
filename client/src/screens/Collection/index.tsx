@@ -44,11 +44,13 @@ import {
   addCollectionRoot,
   cancelCollectionScan,
   collectionGames,
+  followEngineScan,
   loadCollection,
   loadConsoleStates,
   startCollectionScan,
   useCollectionStore,
 } from "../../state/collection";
+import { usePoll } from "../../lib/usePoll";
 import { useConnectionStore } from "../../state/connection";
 import { pushNotification } from "../../state/notifications";
 import { useNavigate } from "react-router";
@@ -93,6 +95,9 @@ import {
 } from "../../state/library";
 import { useRunningTitleIds } from "../../state/runningApps";
 
+/** How often an open grid looks whether the engine finished a scan of its own. */
+const COLLECTION_FOLLOW_MS = 30_000;
+
 /** The games kept on this computer's drives: PS Game Library, inside ps5upload.
  *  `embedded`: shown as the Games screen's grid, under that screen's own
  *  header, so only the actions are drawn here (no page title or page padding). */
@@ -129,6 +134,10 @@ export default function CollectionScreen({ embedded = false }: { embedded?: bool
   useEffect(() => {
     void loadCollection();
   }, []);
+
+  // The engine rescans by itself (once a minute by default): a scan that ended while this is open
+  // shows without leaving and coming back.
+  usePoll(() => followEngineScan(), COLLECTION_FOLLOW_MS, { immediate: false, duringTransfers: true });
 
   // Cmd/Ctrl+R scans, as in PS Game Library. Capture phase: the desktop app's reload guard
   // swallows the keystroke on the way down, and in a browser it would reload the page.
@@ -301,6 +310,10 @@ export default function CollectionScreen({ embedded = false }: { embedded?: bool
     const p = playableRef.current.get(gameId.toUpperCase());
     if (p) void launcherRef.current.stop(p);
   }, []);
+  // Play time changes on every credit (each 10 s while a game runs): the view depends on it only
+  // when this sort or filter reads it.
+  const sortLastPlayed = s.sort === "played-desc" ? lastPlayed : undefined;
+  const filterPlaySeconds = s.consoleFilter === "unplayed" ? playSeconds : undefined;
   const shown = useMemo(
     () =>
       viewGames(games, {
@@ -312,9 +325,9 @@ export default function CollectionScreen({ embedded = false }: { embedded?: bool
         consoleStates,
         consoleFw,
         cheatIds,
-        lastPlayed,
+        lastPlayed: sortLastPlayed,
         driveIds,
-        playSeconds,
+        playSeconds: filterPlaySeconds,
       }),
     [
       games,
@@ -326,9 +339,9 @@ export default function CollectionScreen({ embedded = false }: { embedded?: bool
       consoleStates,
       consoleFw,
       cheatIds,
-      lastPlayed,
+      sortLastPlayed,
       driveIds,
-      playSeconds,
+      filterPlaySeconds,
     ],
   );
   const counts = useMemo(
@@ -684,6 +697,17 @@ export default function CollectionScreen({ embedded = false }: { embedded?: bool
         </div>
       )}
 
+      {/* A folder that would not list is not an empty folder: what it held stays listed. */}
+      {(s.library?.unreadable?.length ?? 0) > 0 && (
+        <p className="mb-4 rounded-2xl border border-[var(--color-warn)]/30 bg-[var(--color-warn)]/10 px-3 py-2 text-xs">
+          {tr(
+            "collection.unreadable_folders",
+            { paths: (s.library?.unreadable ?? []).slice(0, 5).join(", ") },
+            "The last scan could not read: {paths}. What it found there before is kept. Check the folder or the server, then scan again.",
+          )}
+        </p>
+      )}
+
       {/* A folder the last scan could not open was skipped (#461): its games are missing
           until it is back, so say which and where to remove it. */}
       {(s.library?.missing_roots?.length ?? 0) > 0 && (
@@ -916,7 +940,7 @@ export default function CollectionScreen({ embedded = false }: { embedded?: bool
                 "On this PS5",
               )}
             >
-              <span className="mr-1 text-[0.6875rem] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]">
+              <span className="me-1 text-[0.6875rem] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]">
                 {consoleEntry?.loading
                   ? tr(
                       "collection.console_reading",
@@ -1171,7 +1195,7 @@ export default function CollectionScreen({ embedded = false }: { embedded?: bool
       {selecting && (
         // The selection's actions, kept in view while the grid scrolls.
         <div className="sticky bottom-3 z-20 mt-4 flex flex-wrap items-center gap-2 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-float)] px-4 py-3 text-sm shadow-lg backdrop-blur">
-          <span className="mr-auto tabular-nums">
+          <span className="me-auto tabular-nums">
             {tr("collection.selected_n", { n: selected.size }, "{n} selected")}
           </span>
           <Button

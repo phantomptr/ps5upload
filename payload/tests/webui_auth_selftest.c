@@ -5,7 +5,7 @@
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
 
-static const char *OWN[] = { "192.168.86.99" };
+static const char *OWN[] = { "192.0.2.99" };
 static const char TOK[] =
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -50,10 +50,10 @@ int main(void) {
     r = req("", NULL, TOK);
     CHECK(webui_check(&r, &c0, 1) == WEBUI_DENY_HOST);
 
-    r = req("192.168.86.99:9180", NULL, TOK);                     /* lan_host_only_when_lan_on */
+    r = req("192.0.2.99:9180", NULL, TOK);                     /* lan_host_only_when_lan_on */
     CHECK(webui_check(&r, &c0, 1) == WEBUI_DENY_HOST);
     CHECK(webui_check(&r, &c1, 1) == WEBUI_ALLOW);
-    r = req("192.168.86.98:9180", NULL, TOK);
+    r = req("192.0.2.98:9180", NULL, TOK);
     CHECK(webui_check(&r, &c1, 1) == WEBUI_DENY_HOST);
 
     r = req("127.0.0.1:9180", "http://evil.example", TOK);        /* foreign_origin_denied */
@@ -64,7 +64,7 @@ int main(void) {
     CHECK(webui_check(&r, &c0, 1) == WEBUI_DENY_ORIGIN);
     r = req("127.0.0.1:9180", "http://localhost:9180", TOK);      /* allowed host value */
     CHECK(webui_check(&r, &c0, 1) == WEBUI_ALLOW);
-    r = req("127.0.0.1:9180", "http://192.168.86.99:9180", TOK);
+    r = req("127.0.0.1:9180", "http://192.0.2.99:9180", TOK);
     CHECK(webui_check(&r, &c0, 1) == WEBUI_DENY_ORIGIN);
     CHECK(webui_check(&r, &c1, 1) == WEBUI_ALLOW);
     r = req("127.0.0.1:9180", "http://127.0.0.1:9180/", TOK);

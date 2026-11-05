@@ -3,7 +3,9 @@
 //! The desktop process runs about fifty management calls in-process (power, hardware,
 //! processes, saves, SMP, ...). It cannot hold its own AVA1 session next to this engine's
 //! (one console session per identity), so it forwards them here and the call goes over the
-//! session this engine already has. The wire is `ps5upload_core::mgmt_proxy`.
+//! session this engine already has. The wire is `ps5upload_core::mgmt_proxy`. It is an internal
+//! seam for that shell: an API client wants the named routes (`console_tools_api`, and the rest
+//! of `/api/ps5/*`), which say what they do to a console.
 //!
 //! Guard: none of its own. The route sits behind the same two layers as every other `/api/*`
 //! route, the peer-IP policy (`loopback_guard`: loopback, or a peer matched by
@@ -33,11 +35,11 @@ async fn handle(req: ProxyRequest, transport: Option<Arc<dyn MgmtTransport>>) ->
     .await;
     match res {
         Ok(r) => Json(r).into_response(),
-        Err(e) => (
+        Err(e) => crate::json_err(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("management call task failed: {e}"),
         )
-            .into_response(),
+        .into_response(),
     }
 }
 

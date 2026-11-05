@@ -9,7 +9,7 @@ import { fileToBase64 } from "../../lib/browserBugBundle";
 import { SCREENSHOT_EVENT, type SavedShot } from "../../lib/captureScreenshot";
 import {
   CAPTURES_DELETED_EVENT,
-  deleteCaptures,
+  deleteAppCaptures,
   openCapturesFolder,
   useCaptureViewer,
   withoutNames,
@@ -111,7 +111,7 @@ export default function ScreenshotsSection({
     if (!ok) return;
     setProblem(null);
     try {
-      const gone = await deleteCaptures(captures.map((c) => c.name));
+      const gone = await deleteAppCaptures(captures.map((c) => c.name));
       if (gone.length < n) setProblem(tr("cap_delete_failed", undefined, "The capture could not be deleted."));
     } catch (e) {
       setProblem(e instanceof Error ? e.message : String(e));

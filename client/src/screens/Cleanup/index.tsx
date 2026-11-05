@@ -9,7 +9,6 @@ import {
   cleanupScanStart,
   cleanupScanStatus,
   CleanupError,
-  type CleanupApplyStatus,
   type CleanupItem,
   type CleanupScan,
 } from "../../api/cleanup";
@@ -34,7 +33,6 @@ import {
   parentDir,
   selectionTotals,
   setGroup,
-  summarizeApply,
   toggle,
   type ApplySummary,
   type CleanupGroup,
@@ -54,13 +52,20 @@ import { formatBytes } from "../../lib/format";
 import { saveFsLastPath } from "../../lib/fsLastPath";
 import { parseSpacePlanQuery } from "../../lib/spacePlan";
 import { useConnectionStore } from "../../state/connection";
+import {
+  attachRunningApply,
+  cleanupRunOf,
+  dismissCleanupResult,
+  followApply,
+  startedApply,
+  useCleanupRuns,
+} from "../../state/cleanupRun";
 import { useTr } from "../../state/lang";
 import { SpacePlanner } from "./SpacePlanner";
 import { NotPlayedCard } from "./NotPlayedCard";
 
 
 const SCAN_POLL_MS = 700;
-const APPLY_POLL_MS = 1000;
 
 function errorText(t: CleanupT, e: unknown): string {
   if (e instanceof CleanupError) {
@@ -127,7 +132,7 @@ function ItemRow({
           {item.path}
         </div>
       </div>
-      <div className="shrink-0 text-right text-sm tabular-nums">{formatBytes(itemBytes(item))}</div>
+      <div className="shrink-0 text-end text-sm tabular-nums">{formatBytes(itemBytes(item))}</div>
       {item.cat === "G" ? (
         <Button size="sm" variant="ghost" leftIcon={<FolderOpen size={14} />} onClick={onShow}>
           {tr("cw_cleanup_show_in_files", undefined, "Show in Files")}
@@ -174,7 +179,7 @@ function GroupCard({
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold">
             {categoryTitle(tr, group.cat)}
-            <span className="ml-2 text-xs font-normal text-[var(--color-muted)]">
+            <span className="ms-2 text-xs font-normal text-[var(--color-muted)]">
               {tr("cw_cleanup_group_count", { count: group.items.length }, `${group.items.length} items`)}
             </span>
           </div>
@@ -307,9 +312,8 @@ export default function CleanupScreen() {
   const [scanning, setScanning] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [confirming, setConfirming] = useState(false);
-  const [applying, setApplying] = useState<CleanupApplyStatus | null>(null);
-  const [summary, setSummary] = useState<ApplySummary | null>(null);
-  const [freeBefore, setFreeBefore] = useState<number | null>(null);
+  // Kept in a store: it runs on the helper, whether or not this screen stays open.
+  const { applying, summary, freeBefore, error: runError } = useCleanupRuns((st) => cleanupRunOf(st, host));
   const [error, setError] = useState<string | null>(null);
   const live = useRef(0);
   // "Plan space" from a refused install opens the planner with its size and drive filled in.
@@ -326,7 +330,7 @@ export default function CleanupScreen() {
       const run = ++live.current;
       setScanning(true);
       setError(null);
-      if (!keepSummary) setSummary(null);
+      if (!keepSummary && host) dismissCleanupResult(host);
       try {
         // A scan lives in the helper's memory: a helper restarted meanwhile (sent again, by this
         // or another device) has forgotten it. Start it again rather than stop with an error.
@@ -365,16 +369,32 @@ export default function CleanupScreen() {
 
   useEffect(() => {
     setScan(null);
-    setSummary(null);
     setSelected(new Set());
-    if (host && payloadStatus === "up") void runScan();
-    // Leaving the screen (or a console switch) drops a scan still being polled.
+    if (host && payloadStatus === "up") {
+      // A Remove still running (this window left and came back, or another started it) is shown;
+      // a scan would only be refused until it ends. A result it left is kept for this visit.
+      void attachRunningApply(host).then((running) => {
+        if (!running) void runScan(true);
+      });
+    }
+    // Leaving the screen (or a console switch) drops a scan still being polled, and a result
+    // that has been seen.
     const gen = live;
     return () => {
       gen.current++;
+      if (host) dismissCleanupResult(host);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [host, payloadStatus]);
+
+  // A Remove ended while this is open: read the console again (after a helper restart, some items
+  // may already be gone).
+  const wasApplying = useRef(false);
+  useEffect(() => {
+    if (wasApplying.current && !applying) void runScan(true);
+    wasApplying.current = !!applying;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [applying]);
 
   const items = useMemo(() => scan?.items ?? [], [scan]);
   const groups = useMemo(() => groupItems(items), [items]);
@@ -390,25 +410,13 @@ export default function CleanupScreen() {
     setConfirming(false);
     setError(null);
     const ids = items.filter((i) => selected.has(i.id) && isRemovable(i)).map((i) => i.id);
-    const before = scan.free_bytes;
     try {
       const { apply_id } = await cleanupApply(host, scan.scan_id, ids);
-      let st = await cleanupApplyStatus(host, apply_id);
-      setApplying(st);
-      while (st.state === "running") {
-        await new Promise((r) => setTimeout(r, APPLY_POLL_MS));
-        st = await cleanupApplyStatus(host, apply_id);
-        setApplying(st);
-      }
-      setSummary(summarizeApply(st, items));
-      setFreeBefore(before);
+      startedApply(host, await cleanupApplyStatus(host, apply_id));
+      void followApply(host, apply_id, items, scan.free_bytes);
     } catch (e) {
       setError(errorText(tr, e));
-    } finally {
-      setApplying(null);
     }
-    // Read the console again either way (after a helper restart, some items may already be gone).
-    void runScan(true);
   }
 
   async function stopApply() {
@@ -459,7 +467,11 @@ export default function CleanupScreen() {
       />
       <ConnectionGate require="payload">
         <div className="min-w-0 space-y-3">
-          {error ? <Callout tone="error" title={tr("cw_cleanup_failed", undefined, "Clean up stopped")}>{error}</Callout> : null}
+          {error || runError ? (
+            <Callout tone="error" title={tr("cw_cleanup_failed", undefined, "Clean up stopped")}>
+              {error ?? errorText(tr, runError)}
+            </Callout>
+          ) : null}
           {payloadStatus === "up" && !planning ? <NotPlayedCard host={host} /> : null}
 
           {planning && host ? (

@@ -16,8 +16,9 @@
  * thread pinned to it, so the caller's thread keeps its own affinity.
  *
  * Cost and safety: about 20 ms of one core per measured core, only for an explicit "Read
- * sensors" (never a timer); one lock; a 2 s cache; when no CPU at all accepts the pin, the
- * measurement is marked unsupported for the rest of the helper's life. */
+ * sensors" (never a timer); one lock; a 2 s cache. When no CPU at all accepts the pin that read has
+ * nothing to measure: the last good measurement is the answer if there is one, else "unsupported",
+ * and the next read tries again (a running game can refuse every core for as long as it runs). */
 
 #define CPUM_CORES      8
 #define CPUM_LOGICAL    16
@@ -44,7 +45,7 @@ typedef struct {
 
 enum {
     CPUM_OK = 0,
-    CPUM_UNSUPPORTED = -1, /* latched: no CPU accepted the pin */
+    CPUM_UNSUPPORTED = -1, /* no CPU accepted the pin, and nothing was measured earlier */
 };
 
 typedef struct {
@@ -61,7 +62,7 @@ uint32_t cpum_mhz(uint64_t adds, uint64_t ns);
 /* The HW_TEMPS lines: cpu_core_measured_mhz (8 values) and cpu_measure_src. snprintf's return. */
 int cpu_measure_format(const cpum_clocks_t *c, char *out, size_t cap);
 
-/* Host tests only: forget the cache and the latch. */
+/* Host tests only: forget the cache. */
 void cpu_measure_reset(void);
 
 #endif /* PS5UPLOAD_CPU_MEASURE_H */

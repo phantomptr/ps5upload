@@ -16,6 +16,7 @@ import { isInstallPackagePath } from "../lib/pkgDropDedupe";
 import { remoteApi } from "../api/remote";
 import { materializeRemote } from "../lib/materialize";
 import { isRemotePath } from "../lib/remotePath";
+import { trStatic } from "../lib/trStatic";
 import { platformFromTitleId, titleIdFromContentId } from "./pkgLibrary";
 import { registerSettingReload } from "../lib/liveSettings";
 
@@ -59,6 +60,8 @@ export interface PkgSourceInfo {
 export interface PickedSource {
   kind: SourceKind;
   path: string;
+  /** A local copy of a file on a saved server: the server's path, which the queue keeps. */
+  remoteOrigin?: string;
   /** Populated for `folder` and `game-folder`. Null otherwise. */
   meta: FolderInspectResult | null;
   /** Present when the root isn't a game but a single child subdir is. */
@@ -232,6 +235,13 @@ const BLANK_DRAFT: UploadDraft = {
  *  no extra re-renders and the map survives as long as the app is open. */
 const draftStash = new Map<string, UploadDraft>();
 
+/** The drive picked for `host` on the Upload screen (each console has its own), or null. */
+export function destinationVolumeFor(host: string | null | undefined): string | null {
+  const key = draftKey(host);
+  if (key === draftKey(useConnectionStore.getState().host)) return useUploadStore.getState().destinationVolume;
+  return draftStash.get(key)?.destinationVolume ?? null;
+}
+
 const draftKey = (host: string | null | undefined): string =>
   hostOf(host ?? "") || "_unset_";
 
@@ -277,7 +287,12 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       try {
         const local = await materializeRemote(path);
         if (get().source?.path !== path) return;
-        return get().pickFile(local);
+        await get().pickFile(local);
+        // The queue keeps the server's path, not this copy's: the engine sweeps its copies at
+        // start, so a queued item would fail after an app restart. It makes a new copy then.
+        const picked = get().source;
+        if (picked?.path === local) set({ source: { ...picked, remoteOrigin: path } });
+        return;
       } catch (e) {
         if (get().source?.path !== path) return;
         set({ detecting: false, detectError: e instanceof Error ? e.message : String(e) });
@@ -322,8 +337,10 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         if ((meta.parts?.length ?? 1) > 1) {
           set({
             detecting: false,
-            detectError:
-              "Split .pkg sets aren't supported — pick the single lead .pkg.",
+            detectError: trStatic(
+              "upload_split_pkg_unsupported",
+              "This is one part of a split package, and split packages can't be installed. Join the parts into one .pkg first.",
+            ),
           });
           return;
         }
@@ -353,9 +370,10 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         if (get().source?.path !== path) return;
         set({
           detecting: false,
-          detectError: `Couldn't read .pkg header: ${
-            e instanceof Error ? e.message : String(e)
-          }`,
+          detectError: trStatic(
+            "upload_pkg_header_unreadable",
+            "Couldn't read the .pkg header: {error}",
+          ).replace("{error}", () => (e instanceof Error ? e.message : String(e))),
         });
       }
       return;

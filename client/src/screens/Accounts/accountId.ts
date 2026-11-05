@@ -1,3 +1,4 @@
+import { decimalToHex } from "../../lib/remoteplay";
 // Account ids as text: the console's 64-bit id in the forms people and tools use.
 
 /* An account id is 64 bits, so BigInt is the obvious tool and the wrong one:
@@ -11,27 +12,7 @@
  * These are string-to-string conversions, which are exact at any width.
  */
 
-/** Decimal string -> lower-case hex, no prefix. Schoolbook repeated division,
- *  so it is exact for values far beyond 2^53. Null when not a decimal. */
-export function decimalToHex(dec: string): string | null {
-  const trimmed = dec.trim();
-  if (!/^\d+$/.test(trimmed)) return null;
-  let digits = trimmed.split("").map((c) => c.charCodeAt(0) - 48);
-  const out: string[] = [];
-  while (digits.length > 0) {
-    let remainder = 0;
-    const next: number[] = [];
-    for (const d of digits) {
-      const cur = remainder * 10 + d;
-      const q = Math.floor(cur / 16);
-      remainder = cur % 16;
-      if (next.length > 0 || q > 0) next.push(q);
-    }
-    out.push("0123456789abcdef"[remainder]);
-    digits = next;
-  }
-  return out.length > 0 ? out.reverse().join("") : "0";
-}
+export { decimalToHex };
 
 /** Validate what the user typed and return it canonically as "0x…".
  *

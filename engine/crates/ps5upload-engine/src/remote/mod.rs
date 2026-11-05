@@ -92,7 +92,19 @@ pub trait RemoteFs: Send + Sync {
     async fn stat(&self, path: &str) -> Result<Entry, RemoteError>;
     async fn open(&self, path: &str) -> Result<Arc<dyn RemoteFile>, RemoteError>;
     /// Every regular file under `path`, as (path relative to `path`, entry), capped at `limit`.
-    async fn walk(&self, path: &str, limit: usize) -> Result<Vec<(String, Entry)>, RemoteError>;
+    async fn walk(&self, path: &str, limit: usize) -> Result<Vec<(String, Entry)>, RemoteError> {
+        let never = std::sync::atomic::AtomicBool::new(false);
+        self.walk_until(path, limit, &never).await
+    }
+
+    /// [`Self::walk`], ending with [`walk_cancelled`] between folders once `cancel` is set: one
+    /// listing per folder takes minutes on a big tree.
+    async fn walk_until(
+        &self,
+        path: &str,
+        limit: usize,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Vec<(String, Entry)>, RemoteError>;
 
     // ── Writes: only what the Collection's organizer needs, all of it non-destructive ──
 
@@ -143,6 +155,11 @@ pub trait RemoteFs: Send + Sync {
     }
 }
 
+/// What a walk ends with when told to stop. A job's error reads the same as a cancelled copy's.
+pub(crate) fn walk_cancelled() -> RemoteError {
+    RemoteError::Io("cancelled".to_string())
+}
+
 /// What a file write reports to, and listens to.
 pub struct PutProgress {
     /// Bytes sent since the last call.
@@ -176,27 +193,60 @@ impl std::io::Read for CountingReader<'_> {
     }
 }
 
-/// The same for the async writers.
-pub(crate) struct AsyncCountingReader<'a> {
-    pub file: tokio::fs::File,
-    pub progress: &'a PutProgress,
+/// Sends the local `file` to `out` for `path`. A server that takes no bytes for `stall` fails the
+/// write, and a cancel stops it at once. A plain copy parks on the socket when the server stops
+/// reading (a sleeping NAS, Wi-Fi gone with no reset): nothing polls the reader then, so neither
+/// would ever fire.
+pub(crate) async fn send_to_server<W>(
+    mut file: tokio::fs::File,
+    out: &mut W,
+    progress: &PutProgress,
+    stall: std::time::Duration,
+    host: &str,
+    path: &str,
+) -> Result<(), RemoteError>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let cancelled = || RemoteError::Io("cancelled".to_string());
+    let mut buf = vec![0u8; PUT_CHUNK];
+    loop {
+        if progress.cancelled() {
+            return Err(cancelled());
+        }
+        let n = file.read(&mut buf).await.map_err(local_io)?;
+        if n == 0 {
+            return Ok(());
+        }
+        let mut sent = 0;
+        while sent < n {
+            let wrote = tokio::select! {
+                w = tokio::time::timeout(stall, out.write(&buf[sent..n])) => w,
+                () = until_cancelled(progress) => return Err(cancelled()),
+            };
+            let wrote = wrote
+                .map_err(|_| {
+                    RemoteError::Io(format!(
+                        "{host}: the server took nothing for {} s while writing {path}",
+                        stall.as_secs()
+                    ))
+                })?
+                .map_err(|e| RemoteError::Io(format!("{host}: writing {path}: {e}")))?;
+            if wrote == 0 {
+                return Err(RemoteError::Io(format!(
+                    "{host}: the server closed the connection while writing {path}"
+                )));
+            }
+            (progress.add)(wrote as u64);
+            sent += wrote;
+        }
+    }
 }
 
-impl tokio::io::AsyncRead for AsyncCountingReader<'_> {
-    fn poll_read(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        if self.progress.cancelled() {
-            return std::task::Poll::Ready(Err(std::io::Error::other("cancelled")));
-        }
-        let before = buf.filled().len();
-        let r = std::pin::Pin::new(&mut self.file).poll_read(cx, buf);
-        if let std::task::Poll::Ready(Ok(())) = &r {
-            (self.progress.add)((buf.filled().len() - before) as u64);
-        }
-        r
+async fn until_cancelled(progress: &PutProgress) {
+    while !progress.cancelled() {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 }
 
@@ -212,6 +262,7 @@ pub(crate) struct MemFs {
     mtimes: Arc<Mutex<BTreeMap<String, i64>>>,
     fail_reads: Arc<AtomicUsize>,
     fail_lists: AtomicUsize,
+    lists: AtomicUsize,
     /// Folders made explicitly (an empty one has no file to imply it).
     dirs: Arc<Mutex<BTreeSet<String>>>,
     /// The next writes happen but their reply is lost: the caller sees a dropped connection.
@@ -240,6 +291,7 @@ impl MemFs {
             mtimes: Arc::default(),
             fail_reads: Arc::new(AtomicUsize::new(0)),
             fail_lists: AtomicUsize::new(0),
+            lists: AtomicUsize::new(0),
             dirs: Arc::default(),
             lose_replies: Arc::default(),
             down_after: Arc::default(),
@@ -275,12 +327,22 @@ impl MemFs {
             mtimes: Arc::clone(&self.mtimes),
             fail_reads: Arc::new(AtomicUsize::new(0)),
             fail_lists: AtomicUsize::new(0),
+            lists: AtomicUsize::new(0),
             dirs: Arc::clone(&self.dirs),
             lose_replies: Arc::clone(&self.lose_replies),
             down_after: Arc::clone(&self.down_after),
             down: Arc::clone(&self.down),
             keep_dirs: Arc::clone(&self.keep_dirs),
         }
+    }
+
+    /// Folder listings asked for since the last reset.
+    pub fn list_count(&self) -> usize {
+        self.lists.load(Ordering::SeqCst)
+    }
+
+    pub fn reset_list_count(&self) {
+        self.lists.store(0, Ordering::SeqCst);
     }
 
     /// From now on folders are never removed (`remove_dir` is unsupported), as on WebDAV.
@@ -465,6 +527,7 @@ impl RemoteFs for MemFs {
 
     async fn list(&self, path: &str, cursor: Option<String>) -> Result<Page, RemoteError> {
         self.check_up()?;
+        self.lists.fetch_add(1, Ordering::SeqCst);
         if self.list_fails() {
             return Err(RemoteError::Io("connection reset".into()));
         }
@@ -520,7 +583,15 @@ impl RemoteFs for MemFs {
         }))
     }
 
-    async fn walk(&self, path: &str, limit: usize) -> Result<Vec<(String, Entry)>, RemoteError> {
+    async fn walk_until(
+        &self,
+        path: &str,
+        limit: usize,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Vec<(String, Entry)>, RemoteError> {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(walk_cancelled());
+        }
         let dir = normal(path);
         let prefix = if dir == "/" {
             "/".to_string()
@@ -673,6 +744,109 @@ impl RemoteFs for MemFs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn local_file(bytes: &[u8]) -> std::path::PathBuf {
+        let path = crate::remote::store::test_dir().join("src.bin");
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    fn counting() -> (
+        PutProgress,
+        Arc<AtomicUsize>,
+        Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        let sent = Arc::new(AtomicUsize::new(0));
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let added = Arc::clone(&sent);
+        (
+            PutProgress {
+                add: Box::new(move |n| {
+                    added.fetch_add(n as usize, std::sync::atomic::Ordering::Relaxed);
+                }),
+                cancel: Arc::clone(&cancel),
+            },
+            sent,
+            cancel,
+        )
+    }
+
+    #[tokio::test]
+    async fn a_write_delivers_every_byte_and_counts_them() {
+        use tokio::io::AsyncReadExt;
+        let body: Vec<u8> = (0..3 * PUT_CHUNK + 17).map(|i| (i % 251) as u8).collect();
+        let path = local_file(&body);
+        let (progress, sent, _) = counting();
+        let (mut out, mut server) = tokio::io::duplex(64 * 1024);
+        let reader = tokio::spawn(async move {
+            let mut got = Vec::new();
+            server.read_to_end(&mut got).await.unwrap();
+            got
+        });
+        let file = tokio::fs::File::open(&path).await.unwrap();
+        send_to_server(
+            file,
+            &mut out,
+            &progress,
+            std::time::Duration::from_secs(5),
+            "nas",
+            "/a",
+        )
+        .await
+        .unwrap();
+        drop(out);
+        assert_eq!(reader.await.unwrap(), body);
+        assert_eq!(sent.load(std::sync::atomic::Ordering::Relaxed), body.len());
+    }
+
+    /// The server stops reading and says nothing: the write ends with a reason of its own. A
+    /// plain copy parked there for good, holding the session.
+    #[tokio::test]
+    async fn a_server_that_stops_reading_fails_the_write() {
+        let path = local_file(&vec![1u8; 4 * PUT_CHUNK]);
+        let (progress, _, _) = counting();
+        let (mut out, _server) = tokio::io::duplex(1024);
+        let file = tokio::fs::File::open(&path).await.unwrap();
+        let e = send_to_server(
+            file,
+            &mut out,
+            &progress,
+            std::time::Duration::from_millis(50),
+            "nas",
+            "/a",
+        )
+        .await
+        .unwrap_err();
+        assert!(e.to_string().contains("took nothing"), "{e}");
+    }
+
+    /// Cancel reaches a write that is parked on the socket: nothing polls the file then.
+    #[tokio::test]
+    async fn cancel_stops_a_write_stuck_on_the_socket() {
+        let path = local_file(&vec![1u8; 4 * PUT_CHUNK]);
+        let (progress, _, cancel) = counting();
+        let (mut out, _server) = tokio::io::duplex(1024);
+        let file = tokio::fs::File::open(&path).await.unwrap();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
+        let e = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            send_to_server(
+                file,
+                &mut out,
+                &progress,
+                std::time::Duration::from_secs(600),
+                "nas",
+                "/a",
+            ),
+        )
+        .await
+        .expect("the cancel must end the write")
+        .unwrap_err();
+        assert_eq!(e.to_string(), "cancelled");
+    }
 
     #[tokio::test]
     async fn memfs_lists_pages_stats_reads_and_walks() {

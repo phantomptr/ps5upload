@@ -336,7 +336,13 @@ static void *overlay_main(void *unused) {
 int fakelib_overlay_start(void) {
     if (g_overlay.started) return 0;
     g_overlay.stop = 0;
-    if (pthread_create(&g_overlay.thread, NULL, overlay_main, NULL) != 0) {
+    /* Named size: the default is 64 KiB, and this thread stacks path buffers and walks mounts. */
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 256 * 1024);
+    int rc = pthread_create(&g_overlay.thread, &attr, overlay_main, NULL);
+    pthread_attr_destroy(&attr);
+    if (rc != 0) {
         set_state("error", NULL, "thread_create_failed");
         return -1;
     }

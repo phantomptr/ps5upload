@@ -246,14 +246,14 @@ function BugReportPage({ host }: { host: string }) {
           {blocked && (
             // Its own line on a phone, beside the button on a wider screen.
             <span
-              className="order-first basis-full text-xs text-[var(--color-muted)] sm:order-none sm:min-w-0 sm:flex-1 sm:basis-auto sm:text-right"
+              className="order-first basis-full text-xs text-[var(--color-muted)] sm:order-none sm:min-w-0 sm:flex-1 sm:basis-auto sm:text-end"
               data-testid="br-blocked"
             >
               {blocked}
             </span>
           )}
           <Button
-            className="ml-auto shrink-0"
+            className="ms-auto shrink-0"
             variant="primary"
             leftIcon={<FileArchive size={14} />}
             loading={busy}

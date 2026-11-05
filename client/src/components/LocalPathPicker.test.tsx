@@ -140,8 +140,8 @@ describe("picking several", () => {
 
 describe("the console as a source", () => {
   it("answers a pick on the PS5 as a ps5:// path on its host", () => {
-    expect(consolePickResult("192.168.86.99:9113", "/data/homebrew/G.exfat")).toBe(
-      "ps5://192.168.86.99/data/homebrew/G.exfat",
+    expect(consolePickResult("192.0.2.99:9113", "/data/homebrew/G.exfat")).toBe(
+      "ps5://192.0.2.99/data/homebrew/G.exfat",
     );
     expect(consolePickResult("10.0.0.2", "/")).toBe("ps5://10.0.0.2/");
   });

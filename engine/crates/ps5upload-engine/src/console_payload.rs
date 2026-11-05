@@ -24,6 +24,7 @@ const LOADER_POLL: Duration = Duration::from_millis(250);
 
 #[derive(Deserialize)]
 pub struct LoadRequest {
+    #[serde(alias = "console", alias = "addr")]
     host: String,
     path: String,
 }
@@ -34,15 +35,19 @@ pub fn is_payload_name(path: &str) -> bool {
     p.ends_with(".elf") || p.ends_with(".bin")
 }
 
+/// Whether `bytes` is a ps5upload helper image.
+pub fn is_helper(bytes: &[u8]) -> bool {
+    bytes
+        .windows(HELPER_MARKER.len())
+        .any(|w| w == HELPER_MARKER)
+}
+
 /// Why `bytes` must not go to the loader, or None.
 pub fn refusal(bytes: &[u8]) -> Option<&'static str> {
     if bytes.len() < 64 || &bytes[..4] != b"\x7FELF" {
         return Some("payload_not_elf");
     }
-    if bytes
-        .windows(HELPER_MARKER.len())
-        .any(|w| w == HELPER_MARKER)
-    {
+    if is_helper(bytes) {
         return Some("payload_is_helper");
     }
     None

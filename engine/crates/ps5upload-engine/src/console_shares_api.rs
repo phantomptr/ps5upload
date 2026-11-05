@@ -24,11 +24,13 @@ use crate::{console_addr_or_default, required_console_addr, AppState};
 
 #[derive(Deserialize)]
 pub(crate) struct AddrQuery {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct RemoveBody {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     id: String,
 }
@@ -73,12 +75,38 @@ pub(crate) async fn list(State(state): State<AppState>, Query(q): Query<AddrQuer
     run(move || cs::list(&addr)).await
 }
 
-pub(crate) async fn save(Json(req): Json<serde_json::Value>) -> Response {
+/// A share typed with folders after it (`Media/Games/PS5`, a pasted `\\nas\Media\Games`): the
+/// first name is the share and the rest goes in front of the start folder, the rule the engine's
+/// own connections follow. The helper would ask the server for a share with that whole name.
+fn split_typed_share(req: &mut serde_json::Value) {
+    let Some(raw) = req
+        .get("share")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let start = req
+        .get("start_path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let (share, start_path) = crate::remote::api::split_share(&raw, &start);
+    if share.is_empty() {
+        return;
+    }
+    req["share"] = share.into();
+    req["start_path"] = start_path.trim_start_matches('/').into();
+}
+
+pub(crate) async fn save(Json(mut req): Json<serde_json::Value>) -> Response {
     let Some(addr) =
         required_console_addr(req.get("addr").and_then(|a| a.as_str()).map(str::to_string))
     else {
         return crate::missing_console_addr();
     };
+    split_typed_share(&mut req);
     crate::log_info!(
         "console share save: addr={addr} id={}",
         req.get("id").and_then(|v| v.as_str()).unwrap_or("(new)")
@@ -107,6 +135,43 @@ mod tests {
         assert_eq!(status_for("shares_full"), StatusCode::INSUFFICIENT_STORAGE);
         assert_eq!(status_for("unsupported"), StatusCode::NOT_IMPLEMENTED);
         assert_eq!(status_for("smb_unreachable"), StatusCode::BAD_GATEWAY);
+    }
+
+    #[test]
+    fn a_share_typed_with_folders_is_split_before_it_reaches_the_helper() {
+        let split = |share: &str, start: &str| {
+            let mut req = serde_json::json!({ "addr": "a", "share": share, "start_path": start });
+            split_typed_share(&mut req);
+            (
+                req["share"].as_str().unwrap().to_string(),
+                req["start_path"].as_str().unwrap().to_string(),
+            )
+        };
+        let pair = |a: &str, b: &str| (a.to_string(), b.to_string());
+        assert_eq!(split("Media", "Games"), pair("Media", "Games"));
+        assert_eq!(split("Media/Games/PS5", ""), pair("Media", "Games/PS5"));
+        assert_eq!(
+            split("Media/Games", "PS5/New"),
+            pair("Media", "Games/PS5/New")
+        );
+        assert_eq!(split("\\\\nas\\Media\\Games", ""), pair("Media", "Games"));
+        assert_eq!(
+            split("smb://nas/Media/Games", "x"),
+            pair("Media", "Games/x")
+        );
+        // A name in Chinese is one share, whole (#663).
+        assert_eq!(split("共享/游戏", ""), pair("共享", "游戏"));
+    }
+
+    #[test]
+    fn an_empty_share_stays_empty_so_the_server_text_can_supply_it() {
+        let mut req = serde_json::json!({ "addr": "a", "server": "smb://nas/Media/Games" });
+        split_typed_share(&mut req);
+        assert!(req.get("share").is_none() && req.get("start_path").is_none());
+        let mut req = serde_json::json!({ "addr": "a", "share": "  ", "start_path": "x" });
+        split_typed_share(&mut req);
+        assert_eq!(req["share"], "  ");
+        assert_eq!(req["start_path"], "x");
     }
 
     #[test]

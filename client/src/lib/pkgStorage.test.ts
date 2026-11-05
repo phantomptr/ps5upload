@@ -98,20 +98,20 @@ describe("usePkgStorageStore", () => {
 
   it("remembers a default drive per console", () => {
     const s = usePkgStorageStore.getState();
-    s.setDefault("192.168.86.99:9113", "/mnt/usb0");
-    s.setDefault("192.168.86.100", "/mnt/ext1");
-    expect(usePkgStorageStore.getState().defaultFor("192.168.86.99")).toBe("/mnt/usb0");
-    expect(usePkgStorageStore.getState().defaultFor("192.168.86.100:9114")).toBe("/mnt/ext1");
+    s.setDefault("192.0.2.99:9113", "/mnt/usb0");
+    s.setDefault("192.0.2.100", "/mnt/ext1");
+    expect(usePkgStorageStore.getState().defaultFor("192.0.2.99")).toBe("/mnt/usb0");
+    expect(usePkgStorageStore.getState().defaultFor("192.0.2.100:9114")).toBe("/mnt/ext1");
     expect(usePkgStorageStore.getState().defaultFor("10.0.0.1")).toBeNull();
   });
 
   it("choosing internal clears the choice", () => {
     const s = usePkgStorageStore.getState();
-    s.setDefault("192.168.86.99", "/mnt/usb0");
-    s.setDefault("192.168.86.99", null);
-    expect(usePkgStorageStore.getState().defaultFor("192.168.86.99")).toBeNull();
-    s.setDefault("192.168.86.99", "/data");
-    expect(usePkgStorageStore.getState().defaultFor("192.168.86.99")).toBeNull();
+    s.setDefault("192.0.2.99", "/mnt/usb0");
+    s.setDefault("192.0.2.99", null);
+    expect(usePkgStorageStore.getState().defaultFor("192.0.2.99")).toBeNull();
+    s.setDefault("192.0.2.99", "/data");
+    expect(usePkgStorageStore.getState().defaultFor("192.0.2.99")).toBeNull();
   });
 });
 

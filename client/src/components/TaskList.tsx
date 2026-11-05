@@ -39,11 +39,11 @@ import {
   HardDriveDownload,
   Send,
   ListOrdered,
+  Tv,
 } from "lucide-react";
 import clsx from "clsx";
 
 import { ProgressBar } from "./ProgressBar";
-import { Badge } from "./Badge";
 import { Spinner } from "./Spinner";
 import { ConsoleChip } from "./ConsoleChip";
 import { OverflowMenu, type OverflowMenuItem } from "./OverflowMenu";
@@ -57,10 +57,11 @@ import {
   type TaskProgressUnit,
   type TaskStatus,
 } from "../state/tasks";
-import { formatBytes, formatDuration } from "../lib/format";
+import { formatBytes } from "../lib/format";
 import { useRosterStore } from "../state/roster";
 import { consoleAddr } from "../lib/addr";
 import { commandTask, taskCapabilities } from "../state/taskControls";
+import { formatDuration } from "../lib/formatDate";
 
 /** Render the icon for a TaskKind. */
 export function KindIcon({ kind, size = 14 }: { kind: TaskKind; size?: number }) {
@@ -104,6 +105,7 @@ const kindIconMap: Record<TaskKind, typeof Upload> = {
   "helper-send": Send,
   "payload-playlist": ListOrdered,
   "app-update": Download,
+  "console-task": Tv,
 };
 
 /** Status → icon element for the row's left badge. */
@@ -337,11 +339,6 @@ function TaskRow({ task }: { task: Task }) {
         <span className="font-medium">
           {statusLabel(task.status, tr)}
         </span>
-        {task.attempts > 1 && (
-          <Badge tone="neutral" variant="soft">
-            {tr("task_attempts", { n: task.attempts }, `×${task.attempts}`)}
-          </Badge>
-        )}
       </div>
 
       {/* Error message */}
@@ -429,7 +426,7 @@ export function TaskList({ maxFinished = 20 }: { maxFinished?: number }) {
             <button
               type="button"
               onClick={clearFinished}
-              className="ml-auto rounded-full border border-[var(--color-border)] px-2 py-0.5 text-xs normal-case tracking-normal hover:bg-[var(--color-surface-3)]"
+              className="ms-auto rounded-full border border-[var(--color-border)] px-2 py-0.5 text-xs normal-case tracking-normal hover:bg-[var(--color-surface-3)]"
             >
               {tr("task_clear_finished", undefined, "Clear finished")}
             </button>

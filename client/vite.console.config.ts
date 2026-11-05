@@ -19,6 +19,11 @@
  * - Offline copy: sw.js and cache.appcache next to the page (offlineCopy.ts), with the page's
  *   hash in them; payload/Makefile embeds both (build/webui_offline.c), served at /sw.js and
  *   /cache.appcache.
+ * - Right-to-left: console.css is written with logical properties. At this target the margins,
+ *   paddings and borders stay as written (Safari 12.1 has them); `inset-inline-*` (Safari 14.1) is
+ *   rewritten by the minifier into left/right pairs picked by `:lang(…)`, which strings.ts keeps in
+ *   step with `dir`. splitLangLists then gives each pair one language per `:lang()`: a list makes
+ *   Chromium before 141 (a phone opening the page over the LAN) drop both rules.
  */
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
@@ -26,6 +31,8 @@ import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
+// @ts-expect-error plain .mjs build helper, no type declarations
+import { splitLangLists } from "./postcss/langLists.mjs";
 import { appcacheManifest, serviceWorkerSource } from "./src/console/offline/offlineCopy.ts";
 
 const RAW_BUDGET = 768 * 1024;
@@ -173,7 +180,9 @@ function singleFile(): Plugin {
         } else if (file.fileName.endsWith(".css")) {
           const re = new RegExp(`<link[^>]*href="[^"]*${escapeRe(name)}"[^>]*>`);
           if (!re.test(page)) return this.error(`singleFile: ${name} is not referenced by index.html`);
-          const css = String(file.source).replace(/<\/style/gi, "<\\/style");
+          // One language per `:lang()` (postcss/langLists.mjs says why). Here because the one CSS asset
+          // of cssCodeSplit:false is only emitted in Vite's own generateBundle, after normal plugins.
+          const css = splitLangLists(String(file.source)).replace(/<\/style/gi, "<\\/style");
           page = page.replace(re, () => `<style>${css}</style>`);
           delete bundle[name];
         }

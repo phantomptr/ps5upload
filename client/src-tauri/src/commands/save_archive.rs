@@ -10,18 +10,12 @@
 //!   3. `save_archive_zip` — zip `<scratch>/<title_id>/` into the user-picked `.zip` path.
 //!   4. `save_archive_cleanup_temp` — remove the scratch dir.
 //!
-//! Restore flow:
-//!   1. `save_archive_make_temp` — scratch dir.
-//!   2. `save_archive_unzip` — strict-validate the zip's layout, then extract into the scratch dir.
-//!   3. existing `transfer_dir` from `<scratch>/<title_id>/` → PS5 path.
-//!   4. `save_archive_cleanup_temp`.
+//! A restore is the engine's (`POST /api/save-backup/restore-file`), so it has one set of refusals,
+//! the backup first and the putting back on failure.
 
+pub use ps5upload_core::save_archive::SaveArchiveBackupFinalizeResp;
 use ps5upload_core::save_archive::{
-    auto_backup_slot, backup_finalize, cleanup_temp_dir, make_temp_dir, restore_prepare,
-    unzip_strict, zip_folder,
-};
-pub use ps5upload_core::save_archive::{
-    SaveArchiveBackupFinalizeResp, SaveArchiveRestorePrepareResp, SaveArchiveUnzipResp,
+    backup_finalize, cleanup_temp_dir, make_temp_dir, zip_folder_noted,
 };
 use serde::Deserialize;
 use std::path::Path;
@@ -60,6 +54,10 @@ pub struct SaveArchiveZipReq {
     /// keeps each save backup from colliding on one fixed Downloads filename.
     #[serde(default)]
     pub dest_filename: Option<String>,
+    /// The zip's comment: which PS5 and user the backup came from, so a restore can refuse one
+    /// that would not load here.
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 #[tauri::command]
@@ -77,7 +75,12 @@ pub async fn save_archive_zip(req: SaveArchiveZipReq) -> Result<String, String> 
     let dest_buf = super::save_dest::resolve_save_dest(&req.dest_zip, fallback)?;
     let dest = dest_buf.to_string_lossy().into_owned();
     let result = tokio::task::spawn_blocking(move || {
-        zip_folder(Path::new(&req.src_dir), &req.inner_root, dest_buf.as_path())
+        zip_folder_noted(
+            Path::new(&req.src_dir),
+            &req.inner_root,
+            dest_buf.as_path(),
+            req.note.as_deref().unwrap_or_default(),
+        )
     })
     .await
     .map_err(|e| format!("zip task: {e}"))?;
@@ -113,82 +116,4 @@ pub async fn save_archive_backup_finalize(
     .map_err(|e| format!("backup finalize: {e:#}"))
 }
 
-#[derive(Debug, Deserialize)]
-pub struct SaveArchiveRestorePrepareReq {
-    pub src_dir: String,
-    pub title_id: String,
-}
-
-#[tauri::command]
-pub async fn save_archive_restore_prepare(
-    req: SaveArchiveRestorePrepareReq,
-) -> Result<SaveArchiveRestorePrepareResp, String> {
-    tokio::task::spawn_blocking(move || {
-        restore_prepare(&Path::new(&req.src_dir).join(&req.title_id))
-    })
-    .await
-    .map_err(|e| format!("restore prepare task: {e}"))?
-    .map_err(|e| format!("restore prepare: {e:#}"))
-}
-
-// ── strict unzip for restore ────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-pub struct SaveArchiveUnzipReq {
-    /// Path to the user-picked `.zip`.
-    pub zip_path: String,
-    /// Empty scratch dir to extract into.
-    pub dest_dir: String,
-    /// Title ID we expect as the zip's single top-level folder.
-    pub expected_inner: String,
-}
-
-#[tauri::command]
-pub async fn save_archive_unzip(req: SaveArchiveUnzipReq) -> Result<SaveArchiveUnzipResp, String> {
-    tokio::task::spawn_blocking(move || {
-        unzip_strict(
-            Path::new(&req.zip_path),
-            Path::new(&req.dest_dir),
-            &req.expected_inner,
-        )
-    })
-    .await
-    .map_err(|e| format!("unzip task: {e}"))?
-    .map_err(|e| format!("unzip: {e:#}"))
-}
-
 // ─── Automatic save backups ────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-pub struct SaveAutoBackupSlotReq {
-    /// The folder the user chose for automatic backups.
-    pub dir: String,
-    pub title_id: String,
-    pub user_id: u32,
-    /// `YYYY-MM-DD_HHMMSS`, local time (the renderer's `backupTimestamp`).
-    pub stamp: String,
-    /// How many backups of one save to keep, this one included (at least 1).
-    pub keep: u32,
-    /// True once this slot's zip has been written: this save's backups beyond `keep` are
-    /// then removed. False beforehand, so a failed backup never costs an old one.
-    #[serde(default)]
-    pub prune: bool,
-}
-
-/// Where the next automatic backup of a save goes (`ps5upload_core::save_archive::auto_backup_slot`).
-#[tauri::command]
-pub async fn save_auto_backup_slot(req: SaveAutoBackupSlotReq) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
-        auto_backup_slot(
-            &req.dir,
-            &req.title_id,
-            req.user_id,
-            &req.stamp,
-            req.keep,
-            req.prune,
-        )
-        .map(|p| p.to_string_lossy().into_owned())
-    })
-    .await
-    .map_err(|e| format!("automatic backup task: {e}"))?
-}

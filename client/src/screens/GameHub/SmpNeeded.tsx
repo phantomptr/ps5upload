@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router";
 import { Download } from "lucide-react";
 
 import { smpStatus, type SmpStatus } from "../../api/ps5";
@@ -7,7 +6,6 @@ import { Button, Spinner, WarningCard } from "../../components";
 import { hostOf, mgmtAddr } from "../../lib/addr";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { invoke } from "../../lib/invokeLogged";
-import { isTauriEnv } from "../../lib/tauriEnv";
 import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
 
@@ -118,30 +116,15 @@ export function SmpNeededWarning({
       )}
       action={
         <div className="flex flex-wrap items-center gap-2">
-          {/* payloads_local_path / payload_send are desktop-only commands: the browser build
-              sends payloads from the Payloads screen (the engine holds the files there). */}
-          {isTauriEnv() ? (
-            <Button
-              variant="primary"
-              size="sm"
-              disabled={sending}
-              onClick={() => void send()}
-            >
-              {sending ? <Spinner size={14} /> : <Download size={14} />}
-              {tr("installed_smp_send", undefined, "Send ShadowMount+")}
-            </Button>
-          ) : (
-            <Link
-              to="/payloads"
-              className="text-xs text-[var(--color-accent)] underline"
-            >
-              {tr(
-                "installed_smp_send_browser",
-                undefined,
-                "Send it from Payloads → On your PS5.",
-              )}
-            </Link>
-          )}
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={sending}
+            onClick={() => void send()}
+          >
+            {sending ? <Spinner size={14} /> : <Download size={14} />}
+            {tr("installed_smp_send", undefined, "Send ShadowMount+")}
+          </Button>
           {msg ? (
             <span className="text-xs text-[var(--color-muted)]">{msg}</span>
           ) : null}

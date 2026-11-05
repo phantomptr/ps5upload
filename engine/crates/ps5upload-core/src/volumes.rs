@@ -121,9 +121,38 @@ pub struct Volume {
     pub likely_fits_bytes: u64,
 }
 
+/// Where images are mounted on a console: ps5upload's own mounts, ShadowMount+'s, a running
+/// game's sandbox (its own image) and a disc.
+pub const CONSOLE_IMAGE_MOUNT_ROOTS: &[&str] = &[
+    "/mnt/ps5upload",
+    "/mnt/shadowmnt",
+    "/mnt/sandbox",
+    "/mnt/disc",
+];
+
+/// `path` is one of [`CONSOLE_IMAGE_MOUNT_ROOTS`] or inside one.
+pub fn in_image_mount_root(path: &str) -> bool {
+    let path = path.trim_end_matches('/');
+    CONSOLE_IMAGE_MOUNT_ROOTS.iter().any(|root| {
+        path.strip_prefix(root)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    })
+}
+
 impl Volume {
     pub fn is_internal_user_storage(&self) -> bool {
         self.path == "/data" || self.path == "/user" || self.mount_from.contains("ssd0.user")
+    }
+
+    /// This mount is a disk image, not a drive: one the payload mounted (it records the image,
+    /// and may mount it anywhere, e.g. `/data/homebrew/<title>`), a disk-image device
+    /// (`/dev/lvd*`, `/dev/md*`), or a mount from or at an image mount root (a nullfs of one).
+    pub fn is_attached_image(&self) -> bool {
+        !self.source_image.is_empty()
+            || self.mount_from.starts_with("/dev/lvd")
+            || self.mount_from.starts_with("/dev/md")
+            || in_image_mount_root(&self.path)
+            || in_image_mount_root(&self.mount_from)
     }
 
     /// Capacity held back from the *blocking* capacity gate.
@@ -134,7 +163,16 @@ impl Volume {
     /// all. The console's hidden content-allocator pool is explicitly NOT
     /// modelled here — see `INTERNAL_STORAGE_HIDDEN_RESERVE_ESTIMATE_BYTES`
     /// for why guessing at it up front was a mistake.
+    ///
+    /// An attached disk image keeps none, whatever an older payload publishes. The margin is
+    /// for metadata and other activity on a shared drive, and nothing else writes into an
+    /// image. An image is also built with little spare room (0.5%, 64 to 512 MiB), so above
+    /// about 4 GiB the margin was larger than the spare and every write into it was refused:
+    /// a game's 29-byte config edit as much as a 211 MiB file (#bugs-report, 2026-11-03).
     pub fn safety_reserve_bytes(&self) -> u64 {
+        if self.is_attached_image() {
+            return 0;
+        }
         let local = external_reserve_for_total(self.total_bytes);
         if self.safety_reserve_bytes == 0 {
             return local;
@@ -218,6 +256,12 @@ impl VolumeList {
             }
         }
         best
+    }
+
+    /// The console's mount holding `path` is a disk image (see [`Volume::is_attached_image`]).
+    pub fn on_mounted_image(&self, path: &str) -> bool {
+        self.find_for_path(path.trim_end_matches('/'))
+            .is_some_and(Volume::is_attached_image)
     }
 }
 
@@ -360,12 +404,12 @@ mod tests {
             r#"{"path":"/mnt/ps5upload/rwtest","mount_from":"/dev/lvd1","fs_type":"exfatfs","total_bytes":67108864,"free_bytes":66936832,"writable":true}"#,
         )
         .unwrap();
-        assert!(
-            img.allocatable_bytes() > 60 * 1024 * 1024,
-            "a 64 MiB image must stay usable, got {} allocatable",
-            img.allocatable_bytes()
+        assert_eq!(
+            img.allocatable_bytes(),
+            66_936_832,
+            "an image is writable up to its last free byte"
         );
-        assert_eq!(img.safety_reserve_bytes(), 67_108_864 / 64);
+        assert_eq!(img.safety_reserve_bytes(), 0);
 
         // A real external drive still gets the full flat cap.
         let drive: Volume = serde_json::from_str(
@@ -391,6 +435,84 @@ mod tests {
 
         // Unknown total reserves nothing rather than blocking everything.
         assert_eq!(external_reserve_for_total(0), 0);
+    }
+
+    /// The Discord report (2026-11-03): editing a game run from an image was refused with
+    /// "only 0 bytes are safely allocatable". The image is 40 GiB with the 200 MiB spare a
+    /// build leaves it, and an older payload publishes 1/64th of it (640 MiB) as a reserve.
+    #[test]
+    fn an_old_payloads_reserve_on_an_attached_image_is_ignored() {
+        const MIB: u64 = 1 << 20;
+        let free = 200 * MIB;
+        for (path, from, source) in [
+            ("/mnt/ps5upload/G", "/dev/lvd3", ""),
+            ("/data/homebrew/G", "/dev/md2", ""),
+            ("/data/homebrew/G", "/dev/lvd1", "/data/homebrew/G.ffpkg"),
+            ("/mnt/shadowmnt/G_ca51a0d7", "/dev/lvd2", ""),
+            ("/system_ex/app/PPSA00001", "/mnt/shadowmnt/G_ca51a0d7", ""),
+        ] {
+            let v: Volume = serde_json::from_value(serde_json::json!({
+                "path": path,
+                "mount_from": from,
+                "source_image": source,
+                "fs_type": "exfatfs",
+                "total_bytes": 40u64 << 30,
+                "free_bytes": free,
+                "writable": true,
+                "safety_reserve_bytes": 640 * MIB,
+                "allocatable_bytes": 0,
+            }))
+            .unwrap();
+            assert!(v.is_attached_image(), "{path}");
+            assert_eq!(v.safety_reserve_bytes(), 0, "{path}");
+            assert_eq!(v.allocatable_bytes(), free, "{path}");
+        }
+    }
+
+    #[test]
+    fn a_real_drive_keeps_its_working_margin() {
+        for (path, from) in [
+            ("/data", "/dev/ssd0.user"),
+            ("/mnt/ext0", "/dev/nvme1"),
+            ("/mnt/usb0", "/dev/da1p1"),
+            // Not an image root: only the same path segment counts.
+            ("/mnt/shadowmntx", "/dev/da2"),
+        ] {
+            let v: Volume = serde_json::from_value(serde_json::json!({
+                "path": path,
+                "mount_from": from,
+                "fs_type": "exfatfs",
+                "total_bytes": 128u64 << 30,
+                "free_bytes": 100u64 << 30,
+                "writable": true,
+            }))
+            .unwrap();
+            assert!(!v.is_attached_image(), "{path}");
+            assert_eq!(
+                v.safety_reserve_bytes(),
+                EXTERNAL_STORAGE_SAFETY_RESERVE_BYTES,
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_path_inside_an_image_is_found_through_the_mount_list() {
+        let vols: VolumeList = serde_json::from_str(
+            r#"{"volumes":[
+            {"path":"/data","mount_from":"/dev/ssd0.user","fs_type":"ufs","total_bytes":1,"free_bytes":1,"writable":true},
+            {"path":"/data/homebrew/G","mount_from":"/dev/lvd0","fs_type":"ufs","total_bytes":1,"free_bytes":0,"writable":true,"source_image":"/data/homebrew/G.ffpkg"}
+            ]}"#,
+        )
+        .unwrap();
+        assert!(vols.on_mounted_image("/data/homebrew/G/sce_sys/param.json"));
+        assert!(vols.on_mounted_image("/data/homebrew/G/"));
+        assert!(!vols.on_mounted_image("/data/homebrew/H/eboot.bin"));
+        assert!(in_image_mount_root(
+            "/mnt/shadowmnt/pfsc/PPSA21567_e7a36f16/a"
+        ));
+        assert!(in_image_mount_root("/mnt/ps5upload"));
+        assert!(!in_image_mount_root("/mnt/ps5uploads/a"));
     }
 
     #[test]

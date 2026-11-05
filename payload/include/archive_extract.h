@@ -20,6 +20,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <time.h>
 
 #define EXTRACT_DIR "/data/ps5upload/extract"
 
@@ -32,6 +33,20 @@ void archive_extract_register(void);
 /* A helper that died mid-extraction leaves its extractor's work behind: at the next start, a folder
  * that run created is removed (unless the old helper or its extractor still runs). */
 void archive_extract_sweep(void);
+
+/* The request can hold the archive's password in clear. The extractor deletes it the moment it has read
+ * it and the helper when the extractor never starts, so one is left only by a helper that died in
+ * between (a crash, a power cut). Older than this it cannot be waiting for an extractor (the helper
+ * gives one 20 s to report), so it goes; so does one dated in the future (the clock moved, its age is
+ * unknown). A younger one may belong to an extractor another helper instance just started. */
+#define EXTRACT_REQUEST_STALE_S 60
+static inline int archive_extract_request_stale(time_t mtime, time_t now) {
+    return now < mtime || now - mtime >= EXTRACT_REQUEST_STALE_S;
+}
+
+/* Deletes a request left behind (archive_extract_request_stale). Run at the start, by archive_extract_sweep,
+ * and again a minute later for one too young to judge then. */
+void archive_extract_sweep_request(void);
 
 /* What an extraction of `path` would do, read without starting it (the console page asks first). */
 typedef struct {

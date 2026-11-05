@@ -345,7 +345,7 @@ export function RowActionButtonList({ actions }: { actions: RowAction[] }) {
   return (
     <div
       data-testid="fs-row-actions"
-      className="ml-2 hidden shrink-0 items-center gap-1 sm:flex"
+      className="ms-2 hidden shrink-0 items-center gap-1 sm:flex"
     >
       {actions.filter((a) => !a.menuOnly).map((a) => (
         <button
@@ -429,7 +429,7 @@ export function menuPlacement(
 function safeInsets(): { insetTop: number; insetBottom: number } {
   const probe = document.createElement("div");
   probe.style.cssText =
-    "position:fixed;visibility:hidden;pointer-events:none;padding-top:env(safe-area-inset-top);padding-bottom:var(--safe-bottom, env(safe-area-inset-bottom))";
+    "position:fixed;visibility:hidden;pointer-events:none;padding-top:var(--safe-top);padding-bottom:var(--safe-bottom, env(safe-area-inset-bottom))";
   document.body.appendChild(probe);
   const cs = getComputedStyle(probe);
   const insets = {
@@ -553,7 +553,7 @@ export function RowMenu({
       // The same floating glass as the app's other menus (components/Menu).
       // `--color-surface` is the translucent page tint: with it the rows under
       // the menu read straight through the items.
-      className="glass-float elev-2 fixed z-50 max-h-[calc(100dvh-0.5rem-env(safe-area-inset-top)-var(--safe-bottom,0px))] min-w-[12rem] max-w-[calc(100vw-0.5rem)] overflow-y-auto rounded-[var(--radius-card)] p-1.5 text-sm"
+      className="glass-float elev-2 fixed z-50 max-h-[calc(100dvh-0.5rem-var(--safe-top)-var(--safe-bottom,0px))] min-w-[12rem] max-w-[calc(100vw-0.5rem)] overflow-y-auto rounded-[var(--radius-card)] p-1.5 text-sm"
     >
       <RowMenuList
         items={items}

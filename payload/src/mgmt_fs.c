@@ -1,7 +1,11 @@
 /* AVA1 filesystem management methods: see include/mgmt_fs.h. */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE /* host builds on glibc: RTLD_DEFAULT */
+#endif
 #include "mgmt_fs.h"
 
 #include <dirent.h>
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -89,6 +93,23 @@ static int errno_error(mgmt_ctx_t *cx, const char *prefix, int err) {
 
 /* ---- fs.list ---- */
 
+/* An entry's metadata, not following a link. `full` is its whole path (it always fits: a path under
+ * FS_PATH_MAX, a '/' and a name of at most 255 bytes). The kernel refuses a path of FS_PATH_MAX bytes
+ * or more, so an entry past that is asked about through its open directory, when this firmware's
+ * libkernel exports fstatat (looked up rather than linked: a symbol a firmware lacks would stop the
+ * whole ELF from loading, and only such a deep entry needs it). 0, or -1: listed with an unknown kind. */
+static int entry_stat(DIR *dir, const char *name, const char *full, struct stat *st) {
+    typedef int (*fstatat_fn)(int, const char *, struct stat *, int);
+    static fstatat_fn at;
+    static int looked;
+    if (strlen(full) < FS_PATH_MAX) return lstat(full, st);
+    if (!looked) {
+        at = (fstatat_fn)dlsym(RTLD_DEFAULT, "fstatat");
+        looked = 1;
+    }
+    return at ? at(dirfd(dir), name, st, AT_SYMLINK_NOFOLLOW) : -1;
+}
+
 int mgmt_run_fs_list(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
     ava1_fs_list_t q;
     ava1_fs_list_result_t res;
@@ -130,12 +151,14 @@ int mgmt_run_fs_list(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
             more = 1;
             break;
         }
-        if (snprintf(full, sizeof full, "%s/%s", path, name) >= (int)sizeof path) {
+        /* Compared with the buffer it is written to: a deep directory's entries used to be measured
+         * against the 1024-byte path limit here and vanished from the listing without a word. */
+        if (snprintf(full, sizeof full, "%s/%s", path, name) >= (int)sizeof full) {
             /* Skipped without counting, so the caller's offset arithmetic still lines up
              * (the handler's rule: a page of such names must not look like the end). */
             continue;
         }
-        stat_ok = lstat(full, &st) == 0;
+        stat_ok = entry_stat(dir, name, full, &st) == 0;
         memset(&e, 0, sizeof e);
         /* The wire name is UTF-8 text; a name that is not valid is shown with '?' for its high bytes. */
         if (nl >= sizeof clean) nl = sizeof clean - 1;
@@ -219,10 +242,23 @@ int mgmt_run_fs_stat(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
 
 /* ---- fs.freespace ---- */
 
-/* The working margin kept back from a write on a drive: 1/64th of it, at most 1 GiB. The same rule as
- * runtime.c's capacity_reserve_for_mount (the console's own capacity gate) and the engine's
- * Volume::safety_reserve_bytes: small enough never to block an upload that fits, and nothing speculative
- * (the console's hidden allocator pool is not modelled; the memory admit budget is not disk). */
+/* The working margin kept back from a write on a drive: 1/64th of it, at most 1 GiB, and nothing for a
+ * drive reporting no total (better to attempt the write than block it on missing telemetry). The one
+ * rule on the console: fs.freespace and fs.list_volumes both ask here. The engine's
+ * ps5upload-core::volumes::{safety_reserve_bytes, external_reserve_for_total} is the same rule for an
+ * older helper that omits the published field, so the two must not drift.
+ *
+ * A cap scaled to the volume, not a flat charge: a flat 1 GiB on a 64 MiB mounted disk image reserves
+ * sixteen times its capacity and refuses every write to it (hardware-confirmed: a 29-byte write was
+ * rejected as "have 0 bytes"). Internal storage is no special case either: a flat 80 GiB, fitted to one
+ * FW 12.00 capture to model the content allocator's hidden pool, rejected a 2.5 GiB pkg with 86 GB free.
+ * The pool is real, but its size cannot be read here and this gate refuses transfers, so it blocks only
+ * what is certainly impossible. A console that overstates its free space is caught mid-write instead,
+ * where the host turns that into a plain-language error (ps5upload-core::transfer).
+ *
+ * An attached disk image keeps none (is_image_mount, asked by fs.freespace): nothing else writes into
+ * it, and an image is built with less spare room than this margin, so every write into it would be
+ * refused. */
 #define FS_RESERVE_CAP (1024ull * 1024ull * 1024ull)
 
 uint64_t mgmt_fs_reserve_for(uint64_t total_bytes) {
@@ -260,7 +296,7 @@ int mgmt_run_fs_freespace(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
     memset(&r, 0, sizeof r);
     r.total = (uint64_t)vfs.f_blocks * bs;
     r.free = free_bytes;
-    r.reserve = mgmt_fs_reserve_for(r.total);
+    r.reserve = (P.is_image_mount && P.is_image_mount(path)) ? 0 : mgmt_fs_reserve_for(r.total);
     r.usable = free_bytes > r.reserve ? free_bytes - r.reserve : 0;
     r.dev = (uint64_t)st.st_dev;
     ava1_w_init(&out, cx->out, cx->cap);

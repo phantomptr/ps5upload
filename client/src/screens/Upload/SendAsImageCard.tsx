@@ -4,10 +4,11 @@ import { Layers } from "lucide-react";
 
 import type { ImageFormat } from "../../api/fpkg";
 import { Button, Checkbox, Select } from "../../components";
-import { DEFAULT_IMAGE_SUBPATH } from "../../lib/imageUpload";
+import { DEFAULT_IMAGE_SUBPATH, imageDrive } from "../../lib/imageUpload";
 import { useConnectionStore } from "../../state/connection";
 import { useFpkgConversion } from "../../state/fpkgConversion";
 import { useTr } from "../../state/lang";
+import { imageFolderPath, useConsoleVolumes } from "../FpkgConvert/ImageDestination";
 
 type Choice = "ffpfsc" | "ffpkg" | "exfat";
 
@@ -39,6 +40,10 @@ export function SendAsImageCard({
     pipeline.source === sourcePath;
   const busyElsewhere = pipeline.phase === "running" && !mine;
 
+  // With no drive picked, an image goes to this console's drive for packages (#673).
+  const volumes = useConsoleVolumes(host);
+  const goesTo = host ? `${imageFolderPath(imageDrive(host, destinationVolume, volumes).volume, destinationSubpath)}/…` : null;
+
   const start = () => {
     if (!host) return;
     const format: ImageFormat = choice === "exfat" ? "exfat" : "ffpkg";
@@ -64,6 +69,11 @@ export function SendAsImageCard({
           "One image file that ShadowMount+ mounts, instead of thousands of files: far quicker to send, and compressed it takes less space on the PS5. The image is built on this computer first (it needs room here for it), then uploaded into the folder below; progress shows in Workshop.",
         )}
       </p>
+      {goesTo && (
+        <p className="mt-1 break-all text-xs text-[var(--color-muted)]" data-testid="send-as-image-path">
+          {tr("image_dest_goes_to", { path: goesTo }, `Goes to ${goesTo}`)}
+        </p>
+      )}
       <div className="mt-3 flex flex-wrap items-end gap-3">
         <Select
           block={false}

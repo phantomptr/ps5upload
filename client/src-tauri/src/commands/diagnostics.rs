@@ -2,7 +2,7 @@
 
 use ps5upload_core::diagnostics::{
     appdb_query, crc32_file, fs_write_bytes, klog_read, net_interfaces, peripheral_control,
-    proc_modules, shell_run, PeripheralAction,
+    shell_run, PeripheralAction,
 };
 use ps5upload_core::fs_ops::{fs_hash, fs_read_with_timeout};
 use ps5upload_core::hw::proc_list;
@@ -23,8 +23,8 @@ pub async fn net_interfaces_get(addr: String) -> Result<JsonValue, String> {
     tokio::task::spawn_blocking(move || net_interfaces(&addr))
         .await
         .map_err(|e| format!("net task: {e}"))?
-        .map(|v| serde_json::to_value(v).unwrap_or(serde_json::json!({})))
         .map_err(|e| format!("net: {e}"))
+        .and_then(super::reply_json)
 }
 
 #[tauri::command]
@@ -66,30 +66,20 @@ async fn invoke_periph(
     tokio::task::spawn_blocking(move || peripheral_control(&addr, action, port))
         .await
         .map_err(|e| format!("periph task: {e}"))?
-        .map(|v| serde_json::to_value(v).unwrap_or(serde_json::json!({})))
         .map_err(|e| format!("periph: {e}"))
+        .and_then(super::reply_json)
 }
 
 /// Full running-process list (pid + name) for the bug-report PS5 snapshot.
-/// Distinct from `proc_modules_get` (which lists a single process's loaded
+/// Distinct from a process's module list (which lists a single process's loaded
 /// modules). Read-only allproc walk; cheap.
 #[tauri::command]
 pub async fn proc_list_get(addr: String) -> Result<JsonValue, String> {
     tokio::task::spawn_blocking(move || proc_list(&addr))
         .await
         .map_err(|e| format!("proc_list task: {e}"))?
-        .map(|v| serde_json::to_value(v).unwrap_or(serde_json::json!({})))
         .map_err(|e| format!("proc_list: {e}"))
-}
-
-#[tauri::command]
-pub async fn proc_modules_get(addr: String, pid: Option<i32>) -> Result<JsonValue, String> {
-    let p = pid.unwrap_or(0);
-    tokio::task::spawn_blocking(move || proc_modules(&addr, p))
-        .await
-        .map_err(|e| format!("modules task: {e}"))?
-        .map(|v| serde_json::to_value(v).unwrap_or(serde_json::json!({})))
-        .map_err(|e| format!("modules: {e}"))
+        .and_then(super::reply_json)
 }
 
 #[tauri::command]
@@ -106,8 +96,8 @@ pub async fn shell_run_cmd(
     })
     .await
     .map_err(|e| format!("shell task: {e}"))?
-    .map(|v| serde_json::to_value(v).unwrap_or(serde_json::json!({})))
     .map_err(|e| format!("shell: {e}"))
+    .and_then(super::reply_json)
 }
 
 #[tauri::command]
@@ -115,8 +105,8 @@ pub async fn crc32_file_get(addr: String, path: String) -> Result<JsonValue, Str
     tokio::task::spawn_blocking(move || crc32_file(&addr, &path))
         .await
         .map_err(|e| format!("crc32 task: {e}"))?
-        .map(|v| serde_json::to_value(v).unwrap_or(serde_json::json!({})))
         .map_err(|e| format!("crc32: {e}"))
+        .and_then(super::reply_json)
 }
 
 #[tauri::command]
@@ -124,8 +114,8 @@ pub async fn appdb_query_get(addr: String) -> Result<JsonValue, String> {
     tokio::task::spawn_blocking(move || appdb_query(&addr))
         .await
         .map_err(|e| format!("appdb task: {e}"))?
-        .map(|v| serde_json::to_value(v).unwrap_or(serde_json::json!({})))
         .map_err(|e| format!("appdb: {e}"))
+        .and_then(super::reply_json)
 }
 
 /// Compute the BLAKE3 hash of a PS5-side file. Mirrors the FS_HASH
@@ -201,6 +191,6 @@ pub async fn fs_write_bytes_run(
     tokio::task::spawn_blocking(move || fs_write_bytes(&addr, &path, &raw, only))
         .await
         .map_err(|e| format!("write task: {e}"))?
-        .map(|v| serde_json::to_value(v).unwrap_or(serde_json::json!({})))
         .map_err(|e| format!("write: {e}"))
+        .and_then(super::reply_json)
 }

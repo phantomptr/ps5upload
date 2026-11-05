@@ -204,6 +204,9 @@ static int serve_one(struct inst_loopback *lb, int conn, const char *req, size_t
         if (send_all(conn, buf, (size_t)n) != 0) break;
         pthread_mutex_lock(&lb->mutex);
         inst_coverage_add(&lb->coverage, off, off + (uint64_t)n - 1);
+        /* A body still moving is not idle: Sony reads a package's trailing metadata in one
+         * request, whose size scales with the package. */
+        lb->last_req_mono = mono_now();
         pthread_mutex_unlock(&lb->mutex);
         off += (uint64_t)n;
     }

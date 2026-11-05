@@ -1,5 +1,5 @@
-import { t } from "../i18n";
-import { useLangStore } from "../state/lang";
+import { interpolate, t } from "../i18n";
+import { useLangStore, type Translator } from "../state/lang";
 
 /**
  * Translate from a plain module (no React hook available).
@@ -16,12 +16,30 @@ import { useLangStore } from "../state/lang";
  * key. Never throws: a translation lookup must not turn an error message into
  * an exception.
  */
-export function trStatic(key: string, fallback: string): string {
+export function trStatic(
+  key: string,
+  fallback: string,
+  vars?: Record<string, string | number>,
+): string {
+  const english = () => (vars ? interpolate(fallback, vars) : fallback);
   try {
     const lang = useLangStore.getState().lang;
-    const out = t(lang, key);
-    return out === key ? fallback : out;
+    const out = t(lang, key, vars);
+    return out === key ? english() : out;
   } catch {
-    return fallback;
+    return english();
   }
 }
+
+/** `trStatic` in the shape of `useTr()`'s translator, for code shared with components. */
+export const staticTranslator: Translator = ((
+  key: string,
+  a?: Record<string, string | number> | string,
+  b?: string,
+) => {
+  const fallback = typeof a === "string" ? a : (b ?? key);
+  const text = trStatic(key, fallback);
+  return typeof a === "object"
+    ? Object.entries(a).reduce((out, [k, v]) => out.split(`{${k}}`).join(String(v)), text)
+    : text;
+}) as Translator;

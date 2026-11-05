@@ -264,12 +264,6 @@ export function nextMode(cur: KbmMode, caps: KbmCaps | null): KbmMode {
   return "controller";
 }
 
-/** The cycle hotkey: Ctrl+Alt+M (app-reserved, never sent to the game; Ctrl+K is the app's command
- *  palette, and no key of the stream's key list uses Ctrl or Alt). */
-export function isCycleHotkey(e: Pick<KeyboardEvent, "code" | "ctrlKey" | "altKey" | "metaKey" | "shiftKey">): boolean {
-  return e.code === "KeyM" && e.ctrlKey && e.altKey && !e.metaKey && !e.shiftKey;
-}
-
 // ── The sender: what is held, batched motion, release-all and the heartbeat ──────────────────
 
 export interface KbmSenderDeps {
@@ -433,7 +427,9 @@ export class KbmSender {
       this.wheel -= w;
       this.hwheel -= hw;
       this.d.send(encodeReport(held, dx, dy, w, hw));
-    } while (this.dx || this.dy || this.wheel || this.hwheel);
+      // Whole units go; a fraction (touchpad speed 1.5, a scaled display's movementX) stays for the
+      // next batch. Waiting for it to reach zero here would never end: it truncates to no movement.
+    } while (Math.abs(this.dx) >= 1 || Math.abs(this.dy) >= 1 || this.wheel || this.hwheel);
   }
 
   /** Lets go of every key and button of this page (motion not yet sent is dropped). What a phone
@@ -484,10 +480,14 @@ export interface KbmCapsInfo extends KbmCaps {
 }
 
 /** Why no keyboard & mouse mode can be picked on this console. */
-export type KbmBlock = "helper_old" | "needs_loader" | "companion_failed" | "unavailable";
+export type KbmBlock = "unreachable" | "helper_old" | "needs_loader" | "companion_failed" | "unavailable";
 
 /** The text for each KbmBlock: the i18n key and its English. */
 export const KBM_BLOCK_TEXT: Readonly<Record<KbmBlock, { key: string; en: string }>> = {
+  unreachable: {
+    key: "rp_kbm_unreachable",
+    en: "The PS5's helper isn't running yet. Keyboard and mouse come on when it's back.",
+  },
   helper_old: { key: "rp_kbm_helper_old", en: "Update the PS5 helper to use a keyboard and mouse." },
   needs_loader: { key: "rp_kbm_needs_loader", en: "Needs a payload loader on port 9021" },
   companion_failed: {
@@ -499,6 +499,8 @@ export const KBM_BLOCK_TEXT: Readonly<Record<KbmBlock, { key: string; en: string
 
 /** Why `caps` rules out every mode but Controller (no caps yet, or a reason the engine gave). */
 export function kbmBlockReason(caps: KbmCapsInfo | null): KbmBlock {
+  // Not asked yet is not an old helper: after a wake it is often not back at the first frame.
+  if (caps?.reason === "unreachable") return "unreachable";
   if (caps && caps.supported === false) return "helper_old";
   if (caps?.reason === "helper_old") return "helper_old";
   if (caps?.reason === "vinput_needs_loader") return "needs_loader";

@@ -75,6 +75,23 @@ describe("archive install, kept outside the screen", () => {
     expect(at(B)).toBeNull();
   });
 
+  it("says a .rar needs the desktop app on Android, without asking the engine", async () => {
+    vi.stubGlobal("navigator", { userAgent: "Mozilla/5.0 (Linux; Android 14)" });
+    vi.stubGlobal("window", { ...globalThis.window, __TAURI_INTERNALS__: {} });
+    try {
+      mod.listRarPackages.mockClear();
+      await chooseArchive(A, "/x/Game.rar");
+      expect(at(A)?.error).toBe("rar_needs_desktop");
+      expect(mod.listRarPackages).not.toHaveBeenCalled();
+      // A .zip still goes to the engine there.
+      mod.listRarPackages.mockResolvedValue({ packages: [{ path: "a.pkg", size: 1 }] });
+      await chooseArchive(A, "/x/Bundle.zip");
+      expect(mod.listRarPackages).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("refuses a later RAR part and a file that is no archive, before reading anything", async () => {
     await chooseArchive(A, "/x/a.part2.rar");
     expect(at(A)?.error).toBe("not_first");

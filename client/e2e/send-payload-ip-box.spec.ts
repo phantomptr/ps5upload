@@ -96,3 +96,46 @@ test("typing an address in First run keeps every keystroke and the console", asy
   await expect(box).toBeFocused();
   await expect(tabA).toHaveAttribute("aria-current", "page");
 });
+
+// The first click on Check is the wizard's first action. Blur commits the address, the commit
+// remounts the screen, and the button the mouse was on is gone before its click lands, unless
+// mousedown keeps focus in the field. The check then runs on the new mount.
+test("the setup wizard's Check works on the first click after typing an address", async ({ page }) => {
+  // The wizard is a desktop-only screen: the same stand-in for the Tauri runtime as above.
+  await page.addInitScript(() => {
+    const w = window as unknown as Record<string, unknown>;
+    let id = 0;
+    w.__TAURI_INTERNALS__ = {
+      invoke: async () => null,
+      transformCallback: () => ++id,
+      unregisterCallback: () => {},
+      convertFileSrc: (p: string) => p,
+      metadata: { currentWindow: { label: "main" }, currentWebview: { windowLabel: "main", label: "main" } },
+      plugins: {},
+    };
+    w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+  });
+  await page.addInitScript(
+    ([a]) => {
+      if (window.localStorage.getItem("ps5upload.roster.v1")) return;
+      window.localStorage.setItem("ps5upload.host", a.host);
+      window.localStorage.setItem(
+        "ps5upload.roster.v1",
+        JSON.stringify({ profiles: [a], active_id: a.id }),
+      );
+    },
+    [A],
+  );
+  await page.route(
+    (u) => u.pathname.startsWith("/api/"),
+    (route) => route.fulfill({ status: 200, contentType: "application/json", body: "{}" }),
+  );
+  await page.goto("/first-run", { waitUntil: "domcontentloaded" });
+  const root = page.locator("[data-scroll-root]:visible");
+  const box = root.getByPlaceholder("192.168.1.50");
+  await box.fill("10.0.0.77");
+  await root.getByRole("button", { name: "Check", exact: true }).click();
+  // The step line changes only once a check ran on the console just typed.
+  await expect(root.getByText("Enter your PS5's IP and check")).toHaveCount(0, { timeout: 15_000 });
+  await expect(root.getByPlaceholder("192.168.1.50")).toHaveValue("10.0.0.77");
+});

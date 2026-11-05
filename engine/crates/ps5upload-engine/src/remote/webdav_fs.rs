@@ -17,13 +17,90 @@ use super::{Entry, Page, RemoteError, RemoteFile, RemoteFs, PAGE};
 
 /// One request, including a ranged read of a few MiB from a slow NAS.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+/// A PUT has no limit on the whole: a game file over a NAS link takes as long as it takes. These
+/// bound what can hang: the server taking no bytes, and its answer once it has them all.
+const PUT_CONNECT: Duration = Duration::from_secs(30);
+const PUT_STALL: Duration = Duration::from_secs(60);
+const PUT_COMMIT: Duration = Duration::from_secs(5 * 60);
 /// A listing of a folder with thousands of entries is still well under this.
 const PROPFIND_MAX: u64 = 64 * 1024 * 1024;
+
+/// A WebDAV server as typed or pasted: `nas`, `nas:5006`, `[fe80::1]:5006`,
+/// `https://nas:5006/remote.php/dav`.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct TypedHost {
+    pub host: String,
+    pub port: Option<u16>,
+    /// What came after the address, with no trailing slash; empty for none.
+    pub path: String,
+    /// What a typed scheme said: `Some(true)` for https.
+    pub https: Option<bool>,
+}
+
+pub(crate) fn parse_host(raw: &str) -> TypedHost {
+    let raw = raw.trim();
+    let mut https = None;
+    let mut rest = raw;
+    for (scheme, secure) in [
+        ("https://", true),
+        ("davs://", true),
+        ("http://", false),
+        ("dav://", false),
+    ] {
+        // By `get`: a name in Chinese has no letter boundary at a scheme's length (#663).
+        if raw
+            .get(..scheme.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(scheme))
+        {
+            https = Some(secure);
+            rest = &raw[scheme.len()..];
+            break;
+        }
+    }
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let path = path.trim_end_matches('/');
+    let path = if path.is_empty() {
+        String::new()
+    } else {
+        format!("/{path}")
+    };
+    // user:password@ in a pasted address: the form has its own fields for those.
+    let authority = authority.rsplit_once('@').map_or(authority, |(_, a)| a);
+    let (host, port) = if let Some(end) = authority.strip_prefix('[').and_then(|a| a.find(']')) {
+        let (h, after) = authority.split_at(end + 2);
+        (h, after.strip_prefix(':').and_then(|p| p.parse().ok()))
+    } else {
+        match authority.split_once(':') {
+            // Exactly one colon: host:port. More than one is a bare IPv6 address.
+            Some((h, p)) if !p.contains(':') => match p.parse() {
+                Ok(port) => (h, Some(port)),
+                Err(_) => (authority, None),
+            },
+            _ => (authority, None),
+        }
+    };
+    TypedHost {
+        host: host.to_string(),
+        port: port.filter(|p: &u16| *p != 0),
+        path,
+        https,
+    }
+}
+
+fn put_limits(
+    b: ureq::config::ConfigBuilder<ureq::typestate::AgentScope>,
+) -> ureq::config::ConfigBuilder<ureq::typestate::AgentScope> {
+    b.timeout_connect(Some(PUT_CONNECT))
+        .timeout_per_write(Some(PUT_STALL))
+        .timeout_recv_response(Some(PUT_COMMIT))
+}
 
 pub struct WebdavFs {
     agent: ureq::Agent,
     /// For PROPFIND and the writes: follows no redirect itself (see [`run_dav`]).
     dav: ureq::Agent,
+    /// For a PUT: [`PUT_STALL`] and [`PUT_COMMIT`] instead of [`REQUEST_TIMEOUT`].
+    put: ureq::Agent,
     /// `https://nas:5006`, no trailing slash.
     base: String,
     host: String,
@@ -38,11 +115,14 @@ impl WebdavFs {
         } else {
             "http"
         };
-        let host = conn.host.trim().trim_matches('/');
+        // Connections saved before the form moved a typed port or path out of Server.
+        let typed = parse_host(&conn.host);
+        let host = typed.host.as_str();
+        let port = typed.port.unwrap_or(conn.port);
         let hostport = if host.contains(':') && !host.starts_with('[') {
-            format!("[{host}]:{}", conn.port)
+            format!("[{host}]:{port}")
         } else {
-            format!("{host}:{}", conn.port)
+            format!("{host}:{port}")
         };
         let auth = match (conn.user.trim(), secret) {
             ("", _) => None,
@@ -55,7 +135,7 @@ impl WebdavFs {
                 base64::engine::general_purpose::STANDARD.encode(format!("{user}:"))
             )),
         };
-        let config = |redirects: u32| {
+        let builder = |redirects: u32| {
             ureq::Agent::config_builder()
                 .tls_config(
                     ureq::tls::TlsConfig::builder()
@@ -65,14 +145,20 @@ impl WebdavFs {
                 .http_status_as_error(false)
                 // PROPFIND is not in ureq's method list.
                 .allow_non_standard_methods(true)
-                .timeout_global(Some(REQUEST_TIMEOUT))
                 .max_idle_connections_per_host(8)
                 .max_redirects(redirects)
-                .build()
+        };
+        let timed = |redirects: u32| {
+            ureq::Agent::new_with_config(
+                builder(redirects)
+                    .timeout_global(Some(REQUEST_TIMEOUT))
+                    .build(),
+            )
         };
         let fs = Self {
-            agent: ureq::Agent::new_with_config(config(10)),
-            dav: ureq::Agent::new_with_config(config(0)),
+            agent: timed(10),
+            dav: timed(0),
+            put: ureq::Agent::new_with_config(put_limits(builder(0)).build()),
             base: format!("{scheme}://{hostport}"),
             host: hostport,
             auth,
@@ -577,10 +663,18 @@ impl RemoteFs for WebdavFs {
         }))
     }
 
-    async fn walk(&self, path: &str, limit: usize) -> Result<Vec<(String, Entry)>, RemoteError> {
+    async fn walk_until(
+        &self,
+        path: &str,
+        limit: usize,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Vec<(String, Entry)>, RemoteError> {
         let mut out = Vec::new();
         let mut stack = vec![String::new()];
         while let Some(rel) = stack.pop() {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(super::walk_cancelled());
+            }
             let dir = if rel.is_empty() {
                 path.to_string()
             } else {
@@ -645,7 +739,7 @@ impl RemoteFs for WebdavFs {
         src: &std::path::Path,
         progress: &super::PutProgress,
     ) -> Result<(), RemoteError> {
-        let agent = self.dav.clone();
+        let agent = self.put.clone();
         let url = self.url(&normal(path));
         let auth = self.auth.clone();
         let host = self.host.clone();
@@ -723,6 +817,62 @@ impl RemoteFs for WebdavFs {
         Err(RemoteError::Unsupported(format!(
             "{path} left in place: WebDAV can only remove a folder with everything in it"
         )))
+    }
+}
+
+#[cfg(test)]
+mod typed_host_tests {
+    use super::*;
+
+    fn typed(host: &str, port: Option<u16>, path: &str, https: Option<bool>) -> TypedHost {
+        TypedHost {
+            host: host.into(),
+            port,
+            path: path.into(),
+            https,
+        }
+    }
+
+    #[test]
+    fn a_typed_port_scheme_and_path_come_out_of_the_server_field() {
+        assert_eq!(parse_host(" nas "), typed("nas", None, "", None));
+        assert_eq!(parse_host("nas:5006"), typed("nas", Some(5006), "", None));
+        assert_eq!(
+            parse_host("https://nas:5006/remote.php/dav/"),
+            typed("nas", Some(5006), "/remote.php/dav", Some(true))
+        );
+        assert_eq!(
+            parse_host("HTTP://me:pw@nas/dav"),
+            typed("nas", None, "/dav", Some(false))
+        );
+        assert_eq!(
+            parse_host("192.168.1.10:8080"),
+            typed("192.168.1.10", Some(8080), "", None)
+        );
+    }
+
+    #[test]
+    fn ipv6_addresses_keep_their_colons() {
+        assert_eq!(parse_host("fe80::1"), typed("fe80::1", None, "", None));
+        assert_eq!(parse_host("[fe80::1]"), typed("[fe80::1]", None, "", None));
+        assert_eq!(
+            parse_host("https://[fe80::1]:5006/dav"),
+            typed("[fe80::1]", Some(5006), "/dav", Some(true))
+        );
+    }
+
+    #[test]
+    fn a_name_in_chinese_does_not_panic() {
+        assert_eq!(parse_host("群晖:5006"), typed("群晖", Some(5006), "", None));
+    }
+
+    #[test]
+    fn a_put_has_no_limit_on_the_whole_request() {
+        // 120 s on the whole request cut every file that takes longer to send.
+        let config = put_limits(ureq::Agent::config_builder()).build();
+        assert_eq!(config.timeouts().global, None);
+        assert_eq!(config.timeout_per_write(), Some(PUT_STALL));
+        assert_eq!(config.timeouts().recv_response, Some(PUT_COMMIT));
     }
 }
 

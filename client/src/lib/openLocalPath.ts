@@ -1,6 +1,7 @@
-import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import { log } from "../state/logs";
+import { invoke } from "./invokeLogged";
 import { isTauriEnv } from "./tauriEnv";
 
 /**
@@ -12,9 +13,11 @@ import { isTauriEnv } from "./tauriEnv";
  * user's side — the Edit Game Image screen's "Show files" button looked
  * like it did nothing at all, which is how it shipped broken.
  *
- * `openPath` opens the folder itself, so the user lands among the files
- * rather than beside the volume. If that is refused we fall back to
- * revealing the item, which the default permission set always allows.
+ * `open_local_folder` opens the folder itself, so the user lands among the
+ * files rather than beside the volume. The shell does that and refuses anything
+ * but a folder: the webview has no way to hand the OS opener an arbitrary path,
+ * an executable included. For a file (or where a folder can't be opened, a phone)
+ * we fall back to revealing the item, which the default permission set allows.
  *
  * Returns false rather than throwing, but callers should surface that:
  * a button that quietly does nothing is worse than one that says why.
@@ -26,10 +29,10 @@ export async function openLocalPath(path: string): Promise<boolean> {
     return false;
   }
   try {
-    await openPath(path);
+    await invoke("open_local_folder", { path });
     return true;
   } catch (e) {
-    log.warn("ui", `openPath failed for ${path}: ${String(e)}`);
+    log.debug("ui", `not opened as a folder, revealing ${path}: ${String(e)}`);
   }
   try {
     await revealItemInDir(path);

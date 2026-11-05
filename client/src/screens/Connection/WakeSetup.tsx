@@ -23,6 +23,7 @@ import {
   type PowerState,
   type WakeUi,
 } from "../../lib/wakeState";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 // Example key values shown as input placeholders — illustrative hex, not
 // translatable copy, so kept as constants rather than i18n strings.
@@ -45,7 +46,7 @@ function Requirements() {
     <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)]">
       <button
         type="button"
-        className="flex w-full items-center gap-1.5 p-2 text-left text-xs text-[var(--color-muted)] hover:text-[var(--color-fg)]"
+        className="flex w-full items-center gap-1.5 p-2 text-start text-xs text-[var(--color-muted)] hover:text-[var(--color-fg)]"
         onClick={() => setOpen((v) => !v)}
       >
         {open ? <ChevronDown size={12} /> : <ChevronRight size={12} className="rtl:rotate-180" />}
@@ -169,7 +170,7 @@ export default function WakeSetup({
       // The engine's pairing errors are already specific and actionable
       // ("no signed-in user with an activated PSN account…"), so show them
       // rather than a house-style "setup failed".
-      setPairError(e instanceof Error ? e.message : String(e));
+      setPairError(humanizeCaught(e));
       setShowManual(true);
     } finally {
       setPairing(false);

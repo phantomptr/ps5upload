@@ -81,7 +81,7 @@ pub(crate) fn civil_from_days(z: i64) -> (i64, i64, i64) {
 }
 
 /// `app-YYYYMMDD.jsonl` for the day containing `ms` (UTC).
-fn file_name_for(ms: u64) -> String {
+pub(crate) fn file_name_for(ms: u64) -> String {
     let (y, m, d) = civil_from_days((ms / 86_400_000) as i64);
     format!("app-{y:04}{m:02}{d:02}.jsonl")
 }
@@ -152,24 +152,30 @@ pub async fn diag_log_append(app: AppHandle, lines: Vec<String>) -> Result<(), S
     if lines.is_empty() {
         return Ok(());
     }
-    let dir = logs_dir(&app)?;
-    let path = dir.join(file_name_for(now_ms()));
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .map_err(|e| format!("open {path:?}: {e}"))?;
-    let mut buf = String::with_capacity(lines.iter().map(|l| l.len() + 1).sum());
-    for l in &lines {
-        // Defensive: a stray newline inside a line would split one JSON object
-        // across two physical lines and break the reader. Replace with space.
-        buf.push_str(&l.replace('\n', " "));
-        buf.push('\n');
-    }
-    f.write_all(buf.as_bytes())
-        .map_err(|e| format!("write {path:?}: {e}"))?;
-    prune(&dir);
-    Ok(())
+    // Off the async workers: this runs every couple of seconds, and on a slow disk the append
+    // and the prune (a stat of every log file) would hold up whatever shares the worker.
+    tokio::task::spawn_blocking(move || {
+        let dir = logs_dir(&app)?;
+        let path = dir.join(file_name_for(now_ms()));
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|e| format!("open {path:?}: {e}"))?;
+        let mut buf = String::with_capacity(lines.iter().map(|l| l.len() + 1).sum());
+        for l in &lines {
+            // Defensive: a stray newline inside a line would split one JSON object
+            // across two physical lines and break the reader. Replace with space.
+            buf.push_str(&l.replace('\n', " "));
+            buf.push('\n');
+        }
+        f.write_all(buf.as_bytes())
+            .map_err(|e| format!("write {path:?}: {e}"))?;
+        prune(&dir);
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("diag_log_append: {e}"))?
 }
 
 /// Every retained line whose `ts` ≥ `since_ms` (unparseable lines kept).

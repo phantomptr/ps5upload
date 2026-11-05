@@ -1,41 +1,18 @@
 import { expect, test, type Page } from "@playwright/test";
+import { routeEngine, seedConsole } from "./fixtures/engine";
 
 // Remote Play on a phone: upright, the picture is on top with its bar and controller under it
 // (every action reachable at 390 px); sideways or with Full screen, the picture fills the
 // screen with one small menu handle, and taps on the picture never leave full screen or stop.
 
 async function mockConsole(page: Page) {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("ps5upload.host", "192.168.1.100");
-    window.localStorage.setItem(
-      "ps5upload.roster.v1",
-      JSON.stringify({
-        active_id: "p1",
-        profiles: [
-          {
-            id: "p1",
-            name: "Living room",
-            host: "192.168.1.100",
-            wake_regist_key: "00112233",
-            wake_rp_key: "00112233445566778899aabbccddeeff",
-          },
-        ],
-      }),
-    );
+  await seedConsole(page);
+  await routeEngine(page, (path) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "8.11.0", caps: {} };
+    if (path === "/api/ps5/rp/session") body = { host: null };
+    return body;
   });
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "8.11.0", caps: {} };
-      if (path === "/api/ps5/rp/session") body = { host: null };
-      await route.fulfill({
-        contentType: "application/json",
-        body: JSON.stringify(body),
-      });
-    },
-  );
   const counts = { starts: 0, stops: 0 };
   await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, (ws) => {
     ws.onMessage((m) => {

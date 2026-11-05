@@ -77,6 +77,11 @@ jobs:
             [ "$n" -ge 4 ] && break
             sleep 20
           done
+          # Fewer than four and the alert query below would pass on part of the picture.
+          if [ "$n" -lt 4 ]; then
+            echo "::error::only $n of 4 CodeQL analyses of $SHA arrived in time: re-run this job"
+            exit 1
+          fi
           sleep 20
           open="$(gh api --paginate "repos/$REPO/code-scanning/alerts?ref=$REF&state=open&per_page=100" \
             --jq '.[] | "\(.rule.id)  \(.most_recent_instance.location.path):\(.most_recent_instance.location.start_line)  \(.html_url)"')"

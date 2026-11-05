@@ -53,7 +53,7 @@ export function Card({
     : "border-[var(--glass-edge)]";
   const pad = padded ? "p-5" : "";
   const liftCls = interactive
-    ? "transition-[transform,box-shadow,border-color] hover:-translate-y-0.5 hover:shadow-[var(--edge-highlight),var(--shadow-2)] cursor-pointer text-left"
+    ? "transition-[transform,box-shadow,border-color] hover:-translate-y-0.5 hover:shadow-[var(--edge-highlight),var(--shadow-2)] cursor-pointer text-start"
     : "";
 
   const header = title && (

@@ -335,7 +335,7 @@ export function CheatGameDetail({
                       checked={m.on}
                       disabled={toggling === m.index || !game.running}
                       onChange={() => void toggle(m)}
-                      label={m.name || `Cheat #${m.index}`}
+                      label={m.name || tr("cheats_unnamed_mod", { index: m.index }, "Cheat #{index}")}
                       hint={m.desc || undefined}
                     />
                     {game.running && <CheatAppliedLine mod={m} className="mt-0.5" />}

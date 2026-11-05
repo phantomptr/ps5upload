@@ -259,7 +259,6 @@ static void register_module_init_impl(void) {
     {
         static const char *const title_dir_names[] = {
             "sceAppInstUtilAppInstallTitleDir",
-            /* add FW-12.x renamed export here when identified */
             NULL,
         };
         g_reg.app_install_title_dir = (app_install_title_dir_fn_t)
@@ -271,7 +270,6 @@ static void register_module_init_impl(void) {
     {
         static const char *const uninstall_names[] = {
             "sceAppInstUtilAppUnInstall",
-            /* add FW-12.x renamed export here when identified */
             NULL,
         };
         g_reg.app_uninstall = (app_uninstall_fn_t)
@@ -1055,20 +1053,6 @@ int register_remount_nullfs(const char *title_id, const char *src_path,
 
 /* -- sqlite-backed snd0info patch + list_registered -------------------- */
 
-/* An earlier build updated snd0info on the app.db row after Sony's
- * installer ran, but we removed that path with the sqlite dependency
- * because dlopen'ing libSceSqlite.sprx hangs indefinitely on some
- * firmware versions. The
- * snd0info patch was best-effort (audio fallback on the XMB tile) so
- * the degradation on skip is purely cosmetic: a title whose snd0.at9
- * isn't pointed-to plays no tile audio, but the game itself launches
- * fine. This stub preserves the callsite so register_title_from_path
- * doesn't need editing; it always returns -1 (no update). */
-static int update_snd0info(const char *title_id) {
-    (void)title_id;
-    return -1;
-}
-
 /* Check whether a name looks like a PS5 title-id (9 chars, PPSA / CUSA /
  * NPXS / similar prefix). Strict enough to filter out non-title
  * directories under /user/app/ without over-filtering. */
@@ -1419,12 +1403,6 @@ int register_title_from_path(const char *src_path,
     }
 
     /* 7 -- snd0info patch (best effort) */
-    char snd0[REG_MAX_PATH];
-    snprintf(snd0, sizeof(snd0), "%s/sce_sys/snd0.at9", src_path);
-    if (path_exists(snd0)) {
-        (void)update_snd0info(title_id);
-    }
-
     /* Populate outputs only on full success. */
     size_t tlen  = strlen(title_id);
     size_t nlen  = strlen(title_name);

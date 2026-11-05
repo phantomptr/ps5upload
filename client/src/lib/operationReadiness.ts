@@ -1,3 +1,5 @@
+import { trStatic } from "./trStatic";
+
 export type Operation =
   | "browse-console"
   | "upload"
@@ -24,7 +26,9 @@ export interface OperationReadiness {
  * need verified kernel R/W. */
 /** The blocker for a console whose helper does not answer; callers that know why (rest mode)
  * swap it for a better reason. */
-export const HELPER_NOT_CONNECTED = "The PS5 helper is not connected.";
+export function helperNotConnected(): string {
+  return trStatic("readiness_helper_not_connected", "The PS5 helper is not connected.");
+}
 
 export function evaluateOperationReadiness(
   operation: Operation,
@@ -33,21 +37,28 @@ export function evaluateOperationReadiness(
   const blockers: string[] = [];
   const warnings: string[] = [];
 
-  if (!context.engineUp) blockers.push("The ps5upload engine is offline.");
+  if (!context.engineUp) blockers.push(trStatic("readiness_engine_offline", "The PS5Upload engine is offline."));
   if (operation !== "local-only") {
-    if (!context.host.trim()) blockers.push("No PS5 is selected.");
-    if (!context.helperUp) blockers.push(HELPER_NOT_CONNECTED);
+    if (!context.host.trim()) blockers.push(trStatic("readiness_no_console", "No PS5 is selected."));
+    if (!context.helperUp) blockers.push(helperNotConnected());
   }
   if (operation === "manage-system") {
     if (context.kernelRw === false) {
-      blockers.push("Kernel read/write is required for this system action.");
+      blockers.push(
+        trStatic("readiness_kernel_rw_required", "Kernel read/write is required for this system action."),
+      );
     } else if (context.kernelRw === null) {
-      warnings.push("Kernel read/write has not been verified yet.");
+      warnings.push(
+        trStatic("readiness_kernel_rw_unverified", "Kernel read/write has not been verified yet."),
+      );
     }
   }
   if (operation === "install-package" && context.kernelRw !== true) {
     warnings.push(
-      "Package compatibility cannot be fully confirmed until console readiness is checked.",
+      trStatic(
+        "readiness_package_unconfirmed",
+        "Package compatibility cannot be fully confirmed until console readiness is checked.",
+      ),
     );
   }
 

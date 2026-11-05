@@ -1,3 +1,4 @@
+import { pageBasePath } from "./lib/basePath";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router";
@@ -20,6 +21,7 @@ import { installConsoleCapture, installDiskLogSink, log } from "./state/logs";
 import { installEngineLogBridge } from "./state/engineLogBridge";
 import { installEngineStartupEvents } from "./state/engineStartupEvents";
 import { installAccidentalReloadGuard } from "./lib/preventAccidentalReload";
+import { installSystemBack } from "./lib/systemBack";
 
 // Capture console.error / warn + unhandled promise rejections into
 // the in-app log store before any other module runs — that way the
@@ -73,6 +75,12 @@ void hydrateFromUserConfig();
 // non-Tauri / Android. See preventAccidentalReload.ts for the dev/prod split.
 installAccidentalReloadGuard();
 
+// System Back closes what is open on top before it changes the page (phones have no Escape).
+installSystemBack();
+
+// iPhone: the copies the Files sheet makes do not stay forever.
+void import("./state/iosInbox").then((m) => m.installIosInbox());
+
 // Android soft-keyboard avoidance: when the keyboard appears, the visualViewport
 // shrinks. Scroll the focused input into view so it isn't hidden behind the
 // keyboard. Uses visualViewport API (available on Android Chrome/WebView 61+).
@@ -102,7 +110,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <RootErrorBoundary>
       {/* react-router 8 removed the react-router-dom package;
           imports come from react-router and react-router/dom. */}
-      <BrowserRouter basename={(import.meta.env.VITE_BASE_URL || "/").replace(/\/+$/, "") || "/"}>
+      <BrowserRouter basename={pageBasePath() || "/"}>
         <App />
       </BrowserRouter>
     </RootErrorBoundary>

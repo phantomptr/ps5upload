@@ -98,7 +98,11 @@ export function shareErrorText(e: unknown, tr: Tr): string {
     case "smb_timeout":
       return tr("cshares_err_unreachable", undefined, "The PS5 could not reach that server.");
     case "smb_no_share":
-      return tr("cshares_err_no_share", undefined, "The server has no share of that name.");
+      return tr(
+        "cshares_err_no_share",
+        undefined,
+        "The server has no share of that name. The share is the first folder name only (for example Media in \\\\nas\\Media\\Games); folders inside it go in Start folder.",
+      );
     case "not_found":
     case "not_dir":
       return tr("cshares_err_folder", undefined, "That folder is not on the share.");

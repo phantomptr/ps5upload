@@ -176,7 +176,8 @@ export async function loadMeshMe(): Promise<MeshMe | null> {
 export function presenceItems(tasks: readonly Task[], host: string): MeshActivityItem[] {
   const key = hostOf(host);
   return tasks
-    .filter((t) => !isTerminal(t.status) && t.status !== "queued" && hostOf(t.consoleId) === key)
+    // A console page's task is every device's to see on its own (state/consoleTasks), not this one's work.
+    .filter((t) => !isTerminal(t.status) && t.status !== "queued" && t.kind !== "console-task" && hostOf(t.consoleId) === key)
     .slice(0, 8)
     .map((t) => {
       const total = t.progress?.total ?? 0;

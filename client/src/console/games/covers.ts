@@ -40,10 +40,14 @@ function slot<T>(fn: () => Promise<T>): Promise<T> {
   });
 }
 
-/** `blob` drawn down to `px` square as a JPEG data URL; the object URL when that cannot be done. */
-function shrink(blob: Blob, px: number): Promise<string> {
+/**
+ * `blob` drawn down to `px` square as a JPEG data URL. A picture that decodes but cannot be drawn
+ * stays its object URL (revoked when the cache lets it go); bytes that are no picture at all give
+ * null, with their URL revoked.
+ */
+function shrink(blob: Blob, px: number): Promise<string | null> {
   const url = URL.createObjectURL(blob);
-  return new Promise<string>((resolve) => {
+  return new Promise<string | null>((resolve) => {
     const img = new Image();
     img.onload = () => {
       try {
@@ -60,9 +64,19 @@ function shrink(blob: Blob, px: number): Promise<string> {
         resolve(url);
       }
     };
-    img.onerror = () => resolve(url);
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(null);
+    };
     img.src = url;
   });
+}
+
+/** Drop a cached cover; one still held as an object URL gives its memory back. */
+function forget(key: string): void {
+  const url = cache.get(key);
+  cache.delete(key);
+  if (url?.startsWith("blob:")) URL.revokeObjectURL(url);
 }
 
 /** The cover of `titleId` (cached), or null when it has none. */
@@ -99,9 +113,13 @@ export async function loadImage(key: string, paths: string[], px: number = COVER
     }
     try {
       const url = await shrink(b, px);
+      if (!url) {
+        missing.add(titleId);
+        return null;
+      }
       if (cache.size >= CACHE_MAX) {
         const first = cache.keys().next().value;
-        if (first !== undefined) cache.delete(first);
+        if (first !== undefined) forget(first);
       }
       cache.set(titleId, url);
       return url;

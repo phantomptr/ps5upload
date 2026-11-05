@@ -30,7 +30,7 @@ const info = (id: string, display: string, hint: string | null, marker: string |
   homepage: "",
 });
 
-// A slice of the desktop catalogue (commands/payloads.rs).
+// A slice of the desktop catalogue (ps5upload-core payload_library).
 const CATALOG: PayloadInfo[] = [
   info("kstuff-echostretch", "kstuff", null, "/data/kstuff.elf"),
   info("kstuff-lite-drakmor", "kstuff-lite", null, "/data/kstuff.elf"),

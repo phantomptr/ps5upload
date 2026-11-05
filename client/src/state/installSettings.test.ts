@@ -1,21 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { useInstallSettingsStore } from "./installSettings";
-
-// vitest's default node env has no `window`; the store reads
-// `window.localStorage`. Install a tiny in-memory stub (same pattern as
-// diagSettings.test.ts) so the real persist branches run.
-function installWindowStub(seed?: Record<string, string>) {
-  const store = new globalThis.Map<string, string>(
-    seed ? Object.entries(seed) : [],
-  );
-  const localStorage = {
-    getItem: (k: string) => (store.has(k) ? (store.get(k) as string) : null),
-    setItem: (k: string, v: string) => void store.set(k, String(v)),
-    removeItem: (k: string) => void store.delete(k),
-    clear: () => store.clear(),
-  };
-  (globalThis as { window?: unknown }).window = { localStorage };
-}
+import { installWindowStub } from "../test-utils/storage";
 
 const KEY = "ps5upload.auto_install_after_upload";
 

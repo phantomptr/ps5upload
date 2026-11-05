@@ -22,8 +22,16 @@ services:
     # port instead and set PS5UPLOAD_PKG_HOST_IP to that computer's LAN IP.)
     network_mode: host
 
+    # Docker's default log driver keeps everything for ever. The engine leaves its per-request
+    # lines out of this log unless Detailed logs is on; this bounds what remains.
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
     environment:
-      # EDIT: your PS5's IP address.
+      # EDIT: your PS5's IP address. The first browser finds this console already listed.
       PS5_ADDR: "192.168.1.50"
       # EDIT: who may use the engine. It has NO password — anyone allowed here
       # can install, delete and read files on your PS5. Your LAN's range is the
@@ -34,8 +42,13 @@ services:
       # engine's home directory (/data), not at your packages below.
       # Comma-separate the value to offer more than one root.
       PS5UPLOAD_BROWSE_ROOTS: "/pkgs"
-      # Only needed without host networking: this server's LAN IP.
+      # Only needed without host networking: this server's LAN IP, and the port
+      # you publish if it is not 19113 (`ports: ["8080:19113"]`).
       # PS5UPLOAD_PKG_HOST_IP: "192.168.1.10"
+      # PS5UPLOAD_PKG_HOST_PORT: "8080"
+      # Where packages uploaded from a browser wait for their install. By default
+      # beside the engine's state in /data; point it at a bigger volume if needed.
+      # PS5UPLOAD_STAGING_DIR: "/pkgs-staging"
 
     # Synology and other NAS boxes: the container runs as UID 65532 unless told
     # otherwise, and your bind mount is owned by someone else. Pick ONE:

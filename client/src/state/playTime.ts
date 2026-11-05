@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { hostOf } from "../lib/addr";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { useRunningAppsStore } from "./runningApps";
+import { trStatic } from "../lib/trStatic";
 
 /**
  * Per-title play-time accumulator.
@@ -220,9 +221,9 @@ export function formatPlayTime(sec: number | undefined): string {
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   const s = sec % 60;
-  if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
+  if (h > 0) return trStatic("playtime_hm", "{h}h {m}m", { h, m });
+  if (m > 0) return trStatic("playtime_ms", "{m}m {s}s", { m, s });
+  return trStatic("playtime_s", "{s}s", { s });
 }
 
 /** Number of whole days between `ms` and now (>= 0). `undefined` in → null
@@ -247,7 +248,7 @@ export function formatLastSeen(
   locale = "en",
 ): string {
   const d = daysSinceLastSeen(ms, now);
-  if (d === null) return "never";
+  if (d === null) return trStatic("playtime_never", "never");
   try {
     // `numeric: "auto"` turns 0 and -1 days into "today" / "yesterday" (and
     // their equivalents in other languages); older reads "N days ago".

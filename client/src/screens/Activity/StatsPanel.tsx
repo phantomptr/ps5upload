@@ -10,7 +10,7 @@ import { formatBytes } from "../../lib/format";
 import { pushNotification } from "../../state/notifications";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { activityToCsv, computeStats, type ComputedStats } from "./stats";
-import { formatDate } from "../../lib/formatDate";
+import { formatDate, formatNumber, formatDuration } from "../../lib/formatDate";
 
 /**
  * Stats tab of the Tasks screen: aggregates of the activity history the
@@ -42,11 +42,11 @@ export function StatsPanel({ entries }: { entries: ActivityEntry[] }) {
         if (!dest || typeof dest !== "string") return;
         await writeTextFileToPath(dest, csv, fileName);
       }
-      pushNotification("success", "Activity exported", {
-        body: `Saved ${entries.length.toLocaleString()} rows.`,
+      pushNotification("success", tr("activity_notif_exported", undefined, "Activity exported"), {
+        body: tr("activity_notif_exported_body", { count: formatNumber(entries.length) }, "Rows saved: {count}"),
       });
     } catch (e) {
-      pushNotification("error", "Couldn't export activity", {
+      pushNotification("error", tr("activity_notif_export_failed", undefined, "Couldn't export activity"), {
         body: e instanceof Error ? e.message : String(e),
       });
     }
@@ -123,7 +123,7 @@ function KpiRow({ stats }: { stats: ComputedStats }) {
         label={tr("stats_avg_duration", undefined, "Avg duration")}
         value={
           stats.averageDurationMs !== null
-            ? formatDuration(stats.averageDurationMs)
+            ? formatAverage(stats.averageDurationMs)
             : "—"
         }
       />
@@ -177,7 +177,7 @@ function DailyChart({
             <div
               key={d.date}
               className="group relative flex-1"
-              title={`${d.date}: ${d.count} operations · ${formatBytes(d.bytes)}`}
+              title={tr("activity_stats_day_tooltip", { date: d.date, count: formatNumber(d.count), size: formatBytes(d.bytes) }, "{date} · Operations: {count} · {size}")}
             >
               <div
                 className="rounded-t-md bg-[image:var(--accent-fill)] transition-all hover:opacity-80"
@@ -253,21 +253,21 @@ function TopTransfers({
       <table className="w-full min-w-[420px] text-xs">
         <thead className="text-[var(--color-muted)]">
           <tr>
-            <th className="px-1 py-0.5 text-left">{tr("stats_label", undefined, "Label")}</th>
-            <th className="px-1 py-0.5 text-right">{tr("stats_size", undefined, "Size")}</th>
-            <th className="px-1 py-0.5 text-right">{tr("stats_speed", undefined, "Speed")}</th>
-            <th className="px-1 py-0.5 text-right">{tr("stats_when", undefined, "When")}</th>
+            <th className="px-1 py-0.5 text-start">{tr("stats_label", undefined, "Label")}</th>
+            <th className="px-1 py-0.5 text-end">{tr("stats_size", undefined, "Size")}</th>
+            <th className="px-1 py-0.5 text-end">{tr("stats_speed", undefined, "Speed")}</th>
+            <th className="px-1 py-0.5 text-end">{tr("stats_when", undefined, "When")}</th>
           </tr>
         </thead>
         <tbody>
           {transfers.map((t) => (
             <tr key={`${t.label}-${t.whenMs}`} className="border-t border-[var(--color-border)]">
               <td className="truncate px-1 py-0.5">{t.label}</td>
-              <td className="px-1 py-0.5 text-right tabular-nums">{formatBytes(t.bytes)}</td>
-              <td className="px-1 py-0.5 text-right tabular-nums font-semibold">
+              <td className="px-1 py-0.5 text-end tabular-nums">{formatBytes(t.bytes)}</td>
+              <td className="px-1 py-0.5 text-end tabular-nums font-semibold">
                 {t.mbps.toFixed(1)} MiB/s
               </td>
-              <td className="px-1 py-0.5 text-right text-[var(--color-muted)]">
+              <td className="px-1 py-0.5 text-end text-[var(--color-muted)]">
                 {formatDate(t.whenMs, "date")}
               </td>
             </tr>
@@ -279,10 +279,6 @@ function TopTransfers({
   );
 }
 
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms.toFixed(0)} ms`;
-  const s = ms / 1000;
-  if (s < 60) return `${s.toFixed(1)} s`;
-  const m = Math.floor(s / 60);
-  return `${m}m ${Math.floor(s % 60)}s`;
+function formatAverage(ms: number): string {
+  return ms < 1000 ? `${formatNumber(Math.round(ms))} ms` : formatDuration(ms / 1000);
 }

@@ -29,6 +29,7 @@
 #include "config.h"
 #include "files_handoff.h"
 #include "files_prefs.h"
+#include "console_tasks.h"
 #include "fs_jobs.h"
 #include "hw_info.h"
 #include "path_policy.h"
@@ -606,6 +607,8 @@ static void r_fs_read(const char *b, size_t n, uint8_t *out, int fd) {
     free(data);
 }
 
+static long long mono_ms(void);
+
 static void send_job(int fd, const uint8_t id[16]) {
     char hex[33], json[48];
     int k;
@@ -649,8 +652,26 @@ static void r_fs_copy(const char *b, size_t n, uint8_t *out, int fd) {
         return;
     }
     st = call(AVA1_METHOD_JOB_COPY, req, w.len, out, &ol);
-    if (st != AVA1_STATUS_OK) send_status_error(fd, st, out, ol);
-    else send_job(fd, q.job_id);
+    if (st != AVA1_STATUS_OK) {
+        send_status_error(fd, st, out, ol);
+    } else {
+        ctasks_started(q.job_id, move ? "move" : "copy", src, (uint64_t)mono_ms());
+        send_job(fd, q.job_id);
+    }
+}
+
+/* What the apps call a page's operation (console_tasks.h). */
+static const char *op_task_kind(int op) {
+    switch (op) {
+    case AVA1_JOB_OP_DELETE: return "delete";
+    case AVA1_JOB_OP_CHMOD_R: return "chmod";
+    case AVA1_JOB_OP_HASH:
+    case AVA1_JOB_OP_CRC32: return "verify";
+    case AVA1_JOB_OP_FFPFSC_UNPACK: return "unpack";
+    case AVA1_JOB_OP_ARCHIVE_EXTRACT: return "extract";
+    case AVA1_JOB_OP_PKG_INSTALL: return "pkg_install";
+    default: return "other";
+    }
 }
 
 /* A one-path job (delete, chmod, hash, crc32, unpack): op's args are {"path":...} as the engine sends
@@ -687,8 +708,12 @@ static void start_path_job(int fd, uint8_t *out, int op, const char *path, const
     st = call(AVA1_METHOD_JOB_RUN, req, w.len, out, &ol);
     free(args);
     free(req);
-    if (st != AVA1_STATUS_OK) send_status_error(fd, st, out, ol);
-    else send_job(fd, q.job_id);
+    if (st != AVA1_STATUS_OK) {
+        send_status_error(fd, st, out, ol);
+    } else {
+        ctasks_started(q.job_id, op_task_kind(op), path, (uint64_t)mono_ms());
+        send_job(fd, q.job_id);
+    }
 }
 
 static void run_path_job(const char *b, size_t n, uint8_t *out, int fd, int op, const char *tail) {
@@ -917,6 +942,8 @@ static void r_jobs(const char *b, size_t n, uint8_t *out, int fd) {
         send_status_error(fd, st, NULL, 0);
         return;
     }
+    /* before the release below: how a job ended is kept for the apps (console_tasks.h) */
+    (void)ctasks_observe(out, ol, (uint64_t)mono_ms());
     json = malloc(API_JOBS_JSON + API_UPLOADS_JSON);
     if (!json) {
         send_error(fd, 500, "out_of_memory", 13);
@@ -946,9 +973,69 @@ static void r_jobs_cancel(const char *b, size_t n, uint8_t *out, int fd) {
         send_bad(fd, "bad_job");
         return;
     }
+    (void)ctasks_cancel_requested(id);
     st = ava1_job_cancel_any(id);
-    if (st != AVA1_STATUS_OK) send_status_error(fd, st, NULL, 0);
-    else send_json(fd, 200, "{}", 2);
+    if (st != AVA1_STATUS_OK) {
+        ctasks_cancel_failed(id);
+        send_status_error(fd, st, NULL, 0);
+    } else {
+        send_json(fd, 200, "{}", 2);
+    }
+}
+
+/* console.tasks (webui_api.h): the same job list /api/jobs reads, narrowed to what the page started.
+ * It does not release finished jobs (ava1_jobs_release_seen): the open page has not seen them yet. */
+int webui_console_tasks(char *out, size_t cap) {
+    uint8_t *res = malloc(API_OUT_MAX);
+    char *smb;
+    size_t ol = 0, pos, smb_len = 0;
+    const char *arr = NULL;
+    int k;
+    if (!res) return snprintf(out, cap, "{\"ok\":false,\"err\":\"out_of_memory\"}");
+    if (ava1_jobs_list_all(k_console_id, res, API_OUT_MAX, &ol) == AVA1_STATUS_OK)
+        (void)ctasks_observe(res, ol, (uint64_t)mono_ms());
+    free(res);
+    pos = (size_t)snprintf(out, cap, "{\"ok\":true,\"now\":%lld,\"tasks\":[", (long long)time(NULL));
+    if (pos >= cap) return snprintf(out, cap, "{\"ok\":false,\"err\":\"too_long\"}");
+    k = ctasks_json(out + pos, cap - pos, (uint64_t)mono_ms());
+    if (k < 0) return snprintf(out, cap, "{\"ok\":false,\"err\":\"too_long\"}");
+    pos += (size_t)k;
+    /* The daemon answers {"jobs":[...]}: carried as it is; the engine reads it. Left out when it
+     * does not fit: the page's own jobs still go through. */
+    smb = webui_smb_pc_jobs();
+    if (smb) {
+        arr = strchr(smb, '[');
+        const char *end = strrchr(smb, ']');
+        if (arr && end && end > arr) smb_len = (size_t)(end - arr) + 1;
+    }
+    if (smb_len && pos + smb_len + 32 < cap)
+        k = snprintf(out + pos, cap - pos, "],\"smb_jobs\":%.*s}", (int)smb_len, arr);
+    else
+        k = snprintf(out + pos, cap - pos, "],\"smb_jobs\":[]}");
+    free(smb);
+    if (k < 0 || (size_t)k >= cap - pos) return snprintf(out, cap, "{\"ok\":false,\"err\":\"too_long\"}");
+    return (int)(pos + (size_t)k);
+}
+
+int webui_console_task_cancel(const char *b, size_t n, char *out, size_t cap) {
+    char id[48], err[48];
+    uint8_t job[16];
+    int st;
+    if (webui_json_str(b, n, "id", id, sizeof id) != 1) return snprintf(out, cap, "{\"ok\":false,\"err\":\"bad_job\"}");
+    if (!strncmp(id, "smb:", 4)) {
+        if (webui_smb_pc_cancel(id + 4, err, sizeof err) != 0)
+            return snprintf(out, cap, "{\"ok\":false,\"err\":\"%s\"}", err);
+        return snprintf(out, cap, "{\"ok\":true}");
+    }
+    if (webui_parse_hex16(id, job) != 0) return snprintf(out, cap, "{\"ok\":false,\"err\":\"bad_job\"}");
+    if (!ctasks_known(job)) return snprintf(out, cap, "{\"ok\":false,\"err\":\"unknown_job\"}");
+    /* Over already: say so, the next listing says how. */
+    if (!ctasks_cancel_requested(job)) return snprintf(out, cap, "{\"ok\":false,\"err\":\"ended\"}");
+    st = ava1_job_cancel_any(job);
+    if (st != AVA1_STATUS_OK) ctasks_cancel_failed(job);
+    if (st == AVA1_ERR_UNKNOWN_JOB) return snprintf(out, cap, "{\"ok\":false,\"err\":\"ended\"}");
+    if (st != AVA1_STATUS_OK) return snprintf(out, cap, "{\"ok\":false,\"err\":\"failed\"}");
+    return snprintf(out, cap, "{\"ok\":true}");
 }
 
 /* One of the page's own operation jobs, read as JOB_STATUS (progress, its message, and once it ended
@@ -2276,8 +2363,6 @@ static void r_index_cancel(const char *b, size_t n, uint8_t *out, int fd) {
 #define XFER_TEXT_TOTAL_MS 60000u /* a text save's whole body within this */
 #define XFER_IDLE_TEXT_MS 10000u
 
-static long long mono_ms(void);
-
 static int policy_write(const char *p) {
     const ava1_data_cfg_t *cfg = ava1_data_cfg();
     return !path_in_protected(p) && cfg && cfg->may_write && cfg->may_write(p);
@@ -2966,6 +3051,7 @@ static const struct {
     { "/api/smb/mkdir", webui_smb_mkdir },
     { "/api/smb/copy", webui_smb_copy },
     { "/api/smb/delete", webui_smb_delete },
+    { "/api/smb/rename", webui_smb_rename },
     { "/api/smb/job", webui_smb_job },
     { "/api/smb/cancel", webui_smb_cancel },
     { "/api/smb/jobs", webui_smb_jobs },

@@ -18,6 +18,12 @@
 //! page turns it off, leaves, is replaced by another owner, or goes quiet for [`vinput::TIMEOUT`].
 //! The helper lets go on its own too when the engine goes quiet.
 //!
+//! * over plain HTTP, for a script: `PUT /api/ps5/vinput {host, on, mouse?, keyboard?, lease_s?}`
+//!   and `POST /api/ps5/vinput/report {host, report_hex | reports_hex}`. Same rules as the local
+//!   socket. There is no connection to tell when the script is gone, so "on" lasts `lease_s`
+//!   (30 by default, at most 300) from the last of these calls; the engine keeps the heartbeat up
+//!   meanwhile. `GET /api/ps5/vinput?host=` says what the PS5 sees now.
+//!
 //! `GET /api/ps5/vinput/caps?addr=` says what the console can make.
 
 use std::collections::HashMap;
@@ -566,6 +572,7 @@ pub(crate) fn control(host: &str, owner: Owner, m: &KbmMsg, status: StatusFn) {
 
 #[derive(Debug, serde::Deserialize)]
 pub struct CapsQuery {
+    #[serde(alias = "console", alias = "host")]
     addr: String,
 }
 
@@ -595,12 +602,44 @@ pub async fn caps(Query(q): Query<CapsQuery>) -> Response {
 
 #[derive(Debug, serde::Deserialize)]
 pub struct WsQuery {
+    #[serde(alias = "console", alias = "addr")]
     host: String,
 }
 
-/// Only this machine may send input without a stream.
+/// `PS5UPLOAD_ALLOW_AUTOMATION` is on: the operator of a self-hosted engine opened the routes that
+/// otherwise answer to this computer alone (a stream, input, the live feed) to the addresses
+/// `PS5UPLOAD_ALLOW_IP` lets in. Off by default, and read once.
+fn automation_opened() -> bool {
+    static OPENED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OPENED.get_or_init(|| {
+        std::env::var("PS5UPLOAD_ALLOW_AUTOMATION")
+            .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "on" | "yes"))
+    })
+}
+
+/// Only this machine may send input without a stream, unless the operator opened it. Requests only
+/// get this far past the engine's own address check (`loopback_allows`, `PS5UPLOAD_ALLOW_IP`), and
+/// none of the routes that ask here are among the few that check lets everyone reach.
 pub(crate) fn local_allowed(peer: std::net::IpAddr) -> bool {
-    peer.is_loopback()
+    peer.is_loopback() || automation_opened()
+}
+
+/// With automation opened: a `Host` no outside page can make its own by re-pointing a name (DNS
+/// rebinding). An IP literal cannot be re-pointed; a name counts only when the operator listed it in
+/// `PS5UPLOAD_ALLOW_HOST` (`name`, `*.domain` or `*`).
+fn opened_host_allowed(name: &str, allow_hosts: &str) -> bool {
+    let name = name.trim().trim_end_matches('.').to_ascii_lowercase();
+    if name.parse::<std::net::IpAddr>().is_ok() {
+        return true;
+    }
+    allow_hosts.split(',').map(str::trim).any(|e| {
+        let e = e.to_ascii_lowercase();
+        e == "*"
+            || e == name
+            || e.strip_prefix("*.").is_some_and(|s| {
+                name == s || name.strip_suffix(s).is_some_and(|r| r.ends_with('.'))
+            })
+    })
 }
 
 /// The request addresses this computer by a loopback name (`localhost`, `127.0.0.1`, `[::1]`,
@@ -632,7 +671,17 @@ pub(crate) fn host_is_local(headers: &axum::http::HeaderMap) -> bool {
         },
     };
     let port_ok = port.is_none_or(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
-    port_ok && (name.eq_ignore_ascii_case("localhost") || name == "127.0.0.1" || name == "::1")
+    if !port_ok {
+        return false;
+    }
+    name.eq_ignore_ascii_case("localhost")
+        || name == "127.0.0.1"
+        || name == "::1"
+        || (automation_opened()
+            && opened_host_allowed(
+                name,
+                &std::env::var("PS5UPLOAD_ALLOW_HOST").unwrap_or_default(),
+            ))
 }
 
 /// The refusal of a request that does not address this computer by a loopback name.
@@ -713,9 +762,365 @@ async fn local_session(mut socket: WebSocket, host: String) {
     off(&host, owner, "left");
 }
 
+// ── The same without a socket, for a script ─────────────────────────────────────────────────────
+
+/// How long "on" lasts after the last call, unless the call says.
+const LEASE_DEFAULT: Duration = Duration::from_secs(30);
+const LEASE_MAX: Duration = Duration::from_secs(300);
+/// How long `PUT /api/ps5/vinput` waits to say what the PS5 sees (opening takes a moment).
+const PUT_WAIT: Duration = Duration::from_secs(2);
+/// Reports accepted in one call: about a second of mouse motion at 250 Hz.
+const MAX_REPORTS: usize = 256;
+/// The script's owner id. One per console: a second script is the same script.
+const HTTP_OWNER: Owner = Owner::Local(u64::MAX);
+
+/// One console's HTTP input.
+struct Lease {
+    until: Instant,
+    /// How long it lasts from the last call.
+    length: Duration,
+    /// A newer `on` replaces this one's keeper.
+    gen: u64,
+    /// What the link last said, as `{"kbm": {...}}`.
+    status: serde_json::Value,
+}
+
+static LEASES: Mutex<Option<HashMap<String, Lease>>> = Mutex::new(None);
+
+fn leases() -> std::sync::MutexGuard<'static, Option<HashMap<String, Lease>>> {
+    LEASES.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn fail(status: StatusCode, code: &str, message: &str) -> Response {
+    (
+        status,
+        Json(serde_json::json!({"error": code, "message": message})),
+    )
+        .into_response()
+}
+
+fn http_gate(peer: std::net::IpAddr, headers: &axum::http::HeaderMap) -> Option<Response> {
+    if !host_is_local(headers) {
+        return Some(host_not_local());
+    }
+    if !local_allowed(peer) {
+        return Some(fail(
+            StatusCode::FORBIDDEN,
+            "local_only",
+            "Keyboard and mouse input is accepted from this computer only.",
+        ));
+    }
+    None
+}
+
+/// A call from the script: its input stays on for another lease. False when it is not on.
+fn renew(key: &str) -> bool {
+    let mut g = leases();
+    let Some(l) = g.as_mut().and_then(|m| m.get_mut(key)) else {
+        return false;
+    };
+    l.until = Instant::now() + l.length;
+    true
+}
+
+/// What the link says now for an answer: `{on, mouse, keyboard, err, reason}`.
+fn status_of(key: &str) -> serde_json::Value {
+    let g = leases();
+    let held = g.as_ref().and_then(|m| m.get(key));
+    let mut v = held
+        .and_then(|l| l.status.get("kbm").cloned())
+        .unwrap_or_else(|| serde_json::json!({"on": false, "mouse": false, "keyboard": false}));
+    v["lease_s"] = held
+        .map(|l| {
+            l.until
+                .saturating_duration_since(Instant::now())
+                .as_secs()
+                .into()
+        })
+        .unwrap_or(serde_json::Value::Null);
+    v
+}
+
+#[derive(serde::Deserialize)]
+pub struct HttpWant {
+    #[serde(default, alias = "addr", alias = "console")]
+    host: String,
+    #[serde(default)]
+    on: bool,
+    /// Left out with `on`: both.
+    #[serde(default)]
+    mouse: Option<bool>,
+    #[serde(default)]
+    keyboard: Option<bool>,
+    #[serde(default)]
+    lease_s: Option<u64>,
+}
+
+/// `PUT /api/ps5/vinput`.
+pub async fn http_put(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
+    Json(r): Json<HttpWant>,
+) -> Response {
+    if let Some(res) = http_gate(peer.ip(), &headers) {
+        return res;
+    }
+    let host = crate::consoles_api::resolve(&r.host);
+    let key = host_key(host.trim());
+    if key.is_empty() {
+        return fail(StatusCode::BAD_REQUEST, "bad_request", "host is required");
+    }
+    let (mouse, keyboard) = (r.mouse.unwrap_or(true), r.keyboard.unwrap_or(true));
+    if !r.on || (!mouse && !keyboard) {
+        off(&key, HTTP_OWNER, "off");
+        if let Some(m) = leases().as_mut() {
+            m.remove(&key);
+        }
+        return Json(serde_json::json!({"ok": true, "host": key, "on": false})).into_response();
+    }
+    // A Remote Play page showing this console owns its input.
+    if crate::rp_stream_api::page_attached(&key) {
+        return fail(
+            StatusCode::CONFLICT,
+            "rp_session_owns_input",
+            "A Remote Play page shows this console, and it owns the keyboard and mouse.",
+        );
+    }
+    let lease = r
+        .lease_s
+        .map(Duration::from_secs)
+        .unwrap_or(LEASE_DEFAULT)
+        .clamp(Duration::from_secs(1), LEASE_MAX);
+    static GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let gen = GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    leases().get_or_insert_with(HashMap::new).insert(
+        key.clone(),
+        Lease {
+            until: Instant::now() + lease,
+            length: lease,
+            gen,
+            status: status_json(true, &SessionState::default(), None, None),
+        },
+    );
+    let status: StatusFn = {
+        let key = key.clone();
+        Arc::new(move |v| {
+            let ended = v["kbm"]["reason"]
+                .as_str()
+                .is_some_and(|r| r == "taken" || r == "timeout" || r == "left");
+            let mut g = leases();
+            if let Some(m) = g.as_mut() {
+                if ended {
+                    if m.get(&key).is_some_and(|l| l.gen == gen) {
+                        m.remove(&key);
+                    }
+                } else if let Some(l) = m.get_mut(&key).filter(|l| l.gen == gen) {
+                    l.status = v;
+                }
+            }
+        })
+    };
+    want(&key, HTTP_OWNER, mouse, keyboard, status.clone());
+    // The heartbeat the socket's page would send, until the lease runs out.
+    {
+        let key = key.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(vinput::HEARTBEAT).await;
+                let expired = {
+                    let g = leases();
+                    match g
+                        .as_ref()
+                        .and_then(|m| m.get(&key))
+                        .filter(|l| l.gen == gen)
+                    {
+                        Some(l) => Instant::now() >= l.until,
+                        None => return, // turned off, or a newer `on`.
+                    }
+                };
+                if expired || crate::rp_stream_api::page_attached(&key) {
+                    off(&key, HTTP_OWNER, "left");
+                    if let Some(m) = leases().as_mut() {
+                        if m.get(&key).is_some_and(|l| l.gen == gen) {
+                            m.remove(&key);
+                        }
+                    }
+                    return;
+                }
+                want(&key, HTTP_OWNER, mouse, keyboard, status.clone());
+            }
+        });
+    }
+    // Say what the PS5 sees once the open is answered.
+    let until = Instant::now() + PUT_WAIT;
+    loop {
+        let v = status_of(&key);
+        let settled = v["mouse"] == true
+            || v["keyboard"] == true
+            || (v["err"].is_string() && v["err"] != "vinput_starting");
+        if settled || Instant::now() >= until {
+            let mut out = v;
+            out["ok"] = true.into();
+            out["host"] = key.clone().into();
+            return Json(out).into_response();
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct HttpStatusQuery {
+    #[serde(default, alias = "addr", alias = "console")]
+    host: String,
+}
+
+/// `GET /api/ps5/vinput?host=`.
+pub async fn http_get(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
+    Query(q): Query<HttpStatusQuery>,
+) -> Response {
+    if let Some(res) = http_gate(peer.ip(), &headers) {
+        return res;
+    }
+    let host = crate::consoles_api::resolve(&q.host);
+    let key = host_key(host.trim());
+    let mut v = status_of(&key);
+    v["host"] = key.into();
+    Json(v).into_response()
+}
+
+#[derive(serde::Deserialize)]
+pub struct HttpReport {
+    #[serde(default, alias = "addr", alias = "console")]
+    host: String,
+    /// One 16-byte report as 32 hex characters: buttons, modifiers, dx (i16 LE), dy (i16 LE),
+    /// wheel, hwheel, then up to 8 HID usage IDs held.
+    #[serde(default)]
+    report_hex: Option<String>,
+    /// Several, in order.
+    #[serde(default)]
+    reports_hex: Vec<String>,
+}
+
+fn parse_report(hex: &str) -> Option<[u8; REPORT_LEN]> {
+    let hex = hex.trim();
+    if hex.len() != REPORT_LEN * 2 || !hex.is_ascii() {
+        return None;
+    }
+    let mut out = [0u8; REPORT_LEN];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
+/// `POST /api/ps5/vinput/report`.
+pub async fn http_report(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
+    Json(r): Json<HttpReport>,
+) -> Response {
+    if let Some(res) = http_gate(peer.ip(), &headers) {
+        return res;
+    }
+    let host = crate::consoles_api::resolve(&r.host);
+    let key = host_key(host.trim());
+    let hexes: Vec<&str> = r
+        .report_hex
+        .iter()
+        .chain(r.reports_hex.iter())
+        .map(String::as_str)
+        .collect();
+    if hexes.is_empty() || hexes.len() > MAX_REPORTS {
+        return fail(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "send report_hex, or at most 256 in reports_hex",
+        );
+    }
+    let mut reports = Vec::with_capacity(hexes.len());
+    for h in hexes {
+        match parse_report(h) {
+            Some(b) => reports.push(b),
+            None => {
+                return fail(
+                    StatusCode::BAD_REQUEST,
+                    "bad_request",
+                    "a report is 16 bytes as 32 hex characters",
+                )
+            }
+        }
+    }
+    // Only while this script has it on: a report never turns anything on by itself.
+    if !renew(&key) {
+        return fail(
+            StatusCode::CONFLICT,
+            "not_on",
+            "Turn input on first with PUT /api/ps5/vinput.",
+        );
+    }
+    let n = reports.len();
+    for b in &reports {
+        report(&key, HTTP_OWNER, b);
+    }
+    let mut v = status_of(&key);
+    v["ok"] = true.into();
+    v["sent"] = n.into();
+    Json(v).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_report_is_sixteen_bytes_in_hex() {
+        let r = parse_report("01020304050607080900000000000000").unwrap();
+        assert_eq!(r[0], 1);
+        assert_eq!(r[8], 9);
+        assert!(Report::from_bytes(&r).is_some());
+        assert_eq!(
+            parse_report("  ffffffffffffffffffffffffffffffff\n"),
+            Some([0xff; 16])
+        );
+        for bad in [
+            "",
+            "01",
+            "zz020304050607080900000000000000",
+            "é1020304050607080900000000000000",
+        ] {
+            assert_eq!(parse_report(bad), None, "{bad}");
+        }
+    }
+
+    /// With automation opened, a page still cannot reach it by re-pointing its own name.
+    #[test]
+    fn an_opened_engine_takes_ip_literals_and_listed_names_only() {
+        for (name, list, ok) in [
+            ("192.168.1.10", "", true),
+            ("::1", "", true),
+            ("evil.example", "", false),
+            ("nas.local", "", false),
+            ("nas.local", "nas.local", true),
+            ("NAS.local.", "nas.local", true),
+            ("nas.local", "other, nas.local", true),
+            ("ps5.example.com", "*.example.com", true),
+            ("example.com", "*.example.com", true),
+            ("badexample.com", "*.example.com", false),
+            ("anything", "*", true),
+        ] {
+            assert_eq!(opened_host_allowed(name, list), ok, "{name} with {list:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_report_never_turns_input_on_by_itself() {
+        assert!(!renew("10.0.0.123"));
+        let v = status_of("10.0.0.123");
+        assert_eq!(v["on"], false);
+        assert!(v["lease_s"].is_null());
+    }
 
     fn with_host(h: Option<&str>) -> axum::http::HeaderMap {
         let mut m = axum::http::HeaderMap::new();

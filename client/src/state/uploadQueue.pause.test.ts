@@ -33,25 +33,12 @@ import {
   type QueueItem,
 } from "./uploadQueue";
 import { useUploadSettingsStore } from "./uploadSettings";
+import { installLocalStorageStub } from "../test-utils/storage";
 
 const HOST = "192.168.1.10";
 const mockedJobStatus = vi.mocked(jobStatus);
 const mockedStartFile = vi.mocked(startTransferFile);
 type Snap = Awaited<ReturnType<typeof jobStatus>>;
-
-function installLocalStorageStub() {
-  const store = new Map<string, string>();
-  vi.stubGlobal("localStorage", {
-    getItem: (k: string) => store.get(k) ?? null,
-    setItem: (k: string, v: string) => void store.set(k, v),
-    removeItem: (k: string) => void store.delete(k),
-    clear: () => store.clear(),
-    key: (i: number) => Array.from(store.keys())[i] ?? null,
-    get length() {
-      return store.size;
-    },
-  });
-}
 
 function addItem(name: string, addr = `${HOST}:9113`): string {
   const input: AddQueueItem = {

@@ -613,6 +613,18 @@ fn assemble_zip_at(
         for (src, name) in [
             (dirs.engine.join("engine.log"), "logs/engine.log"),
             (dirs.engine.join("engine.log.old"), "logs/engine.log.old"),
+            (
+                dirs.engine.join("engine.log.old.2"),
+                "logs/engine.log.old.2",
+            ),
+            (
+                dirs.engine.join("engine.log.old.3"),
+                "logs/engine.log.old.3",
+            ),
+            (
+                dirs.engine.join("engine.log.old.4"),
+                "logs/engine.log.old.4",
+            ),
             // The desktop updater's own steps (#611), beside the engine folder.
             (
                 dirs.engine.with_file_name("updates").join("update.log"),
@@ -800,7 +812,8 @@ diagnostics to help debug an issue — no games or app data.\n\
                        (diagnostic.settings.detailed_logs).\n\
   logs/app.jsonl       The app's unified log for the selected time window\n\
                        (one JSON object per line: ts, level, source, message).\n\
-  logs/engine.log      Full transfer-engine log (crash-survivable).\n\
+  logs/engine.log      Full transfer-engine log (crash-survivable); .old and\n\
+                       .old.2 to .old.4 are the earlier parts, newest first.\n\
   crash-reports/       Auto-collected crash/error reports.\n\
   ps5/klog.txt         PS5 /dev/klog tail (kernel log).\n\
   ps5/syslog.txt       PS5 kern.msgbuf tail.\n\
@@ -875,7 +888,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             engine.join("engine.log"),
-            b"[engine:warn] connect 192.168.86.99:9021 refused\n",
+            b"[engine:warn] connect 192.0.2.99:9021 refused\n",
         )
         .unwrap();
         std::fs::write(
@@ -890,7 +903,7 @@ mod tests {
         let args = BugReportArgs {
             dest: dest.to_string_lossy().into_owned(),
             dest_filename: None,
-            report_json: r#"{"kind":"ps5upload-bug-report","error":"connect 192.168.86.99:9021"}"#
+            report_json: r#"{"kind":"ps5upload-bug-report","error":"connect 192.0.2.99:9021"}"#
                 .to_string(),
             redact: true,
             window_minutes: 30,
@@ -965,13 +978,13 @@ mod tests {
             .read_to_string(&mut engine_log)
             .unwrap();
         assert!(engine_log.contains("<ip-1>:9021"));
-        assert!(!engine_log.contains("192.168.86.99"));
+        assert!(!engine_log.contains("192.0.2.99"));
         let mut report = String::new();
         zip.by_name("report.json")
             .unwrap()
             .read_to_string(&mut report)
             .unwrap();
-        assert!(!report.contains("192.168.86.99"));
+        assert!(!report.contains("192.0.2.99"));
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1094,7 +1107,7 @@ mod tests {
             extra_entries: vec![
                 ExtraEntry {
                     path: "timeline.txt".into(),
-                    text: Some("18:27 [engine] 192.168.86.100 lost".into()),
+                    text: Some("18:27 [engine] 192.0.2.100 lost".into()),
                     base64: None,
                 },
                 ExtraEntry {

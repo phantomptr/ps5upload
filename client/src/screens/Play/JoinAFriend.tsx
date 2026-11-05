@@ -1,3 +1,4 @@
+import { isIOS } from "../../lib/platform";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link2, Radar, ScanLine, Users } from "lucide-react";
 
@@ -7,6 +8,7 @@ import { linkFromSocket, normalizeCode, parseJoinLink, type JoinLink } from "../
 import { JoinView } from "../../join/JoinView";
 import { lastName, rememberName } from "../../join/guestName";
 import { useTr } from "../../state/lang";
+import { useJoinPresence } from "../../state/joinPresence";
 import { activeJoin, useJoinStore } from "../../state/joinSession";
 import { useRemotePlayStore } from "../../state/remotePlay";
 import { holdPageStill, lockLandscape, setWindowFullscreen, unlockOrientation } from "./immersive";
@@ -93,6 +95,11 @@ export async function okToStartPlay(tr: Tr, confirm: Confirm): Promise<boolean> 
  * The app decodes with WebCodecs (a secure page), the lowest-delay path.
  */
 export function JoinAFriend({ pending, onPendingDone }: { pending?: string | null; onPendingDone?: () => void }) {
+  // The keyboard is the game's only while this shows (join/session.ts).
+  useEffect(() => {
+    useJoinPresence.setState({ onScreen: true });
+    return () => useJoinPresence.setState({ onScreen: false });
+  }, []);
   const tr = useTr();
   const session = useJoinStore((s) => s.session);
   const lastLink = useJoinStore((s) => s.link);
@@ -404,9 +411,12 @@ async function appFullscreen(on: boolean): Promise<void> {
 type Detector = { detect: (src: CanvasImageSource) => Promise<Array<{ rawValue: string }>> };
 type DetectorCtor = new (o: { formats: string[] }) => Detector;
 
-/** A camera QR scanner exists here (BarcodeDetector: Chrome on Android, some desktops). */
+/** A camera QR scanner exists here (BarcodeDetector: Chrome on Android, some desktops). Never the
+ *  iPhone app: WebKit has no such API by default, and the app no longer asks for the camera, so
+ *  it could not use one (the iPhone's own Camera app scans the code and opens the invite). */
 export function scanAvailable(): boolean {
   return (
+    !isIOS() &&
     typeof window !== "undefined" &&
     "BarcodeDetector" in window &&
     typeof navigator !== "undefined" &&

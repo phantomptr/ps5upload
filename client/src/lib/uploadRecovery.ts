@@ -57,6 +57,8 @@ const FATAL_REASON_SUBSTRINGS = [
   "corrupt", // direct_tx_corrupt etc. — data integrity, not transport
   "source_missing",
   "src_not_found",
+  "source_names_made_up", // the NAS shows names Samba made up: a person has to rename them
+  "file_too_large", // EFBIG: a file too big for the drive's format
   // The console has not accepted this app / the archive needs a password: only a person
   // can fix either (the pairing dialog, the password prompt). `helper_not_ava1` is NOT
   // here: no AVA1 listener means the helper is not running, and re-sending it is the fix.
@@ -112,6 +114,8 @@ const AVA1_FATAL_REASON_PREFIXES = [
  *  precise "no such file" / "os error 2" forms. */
 const FATAL_MESSAGE_SUBSTRINGS = [
   "no such file", // ENOENT — source file/dir is gone
+  "source directory not found", // an unplugged drive
+  "rar_password", // the prompt is what is needed, not three retries first
   // NOTE: ENOENT's numeric form ("os error 2") is matched separately via a
   // digit-anchored regex below — a plain substring "os error 2" also matches
   // "os error 20".."os error 29", which includes the TRANSIENT, recoverable
@@ -208,6 +212,8 @@ export function isAutoRecoverable(
   // word in its detail text.
   if (!reason) {
     const m = (message ?? "").toLowerCase();
+    // The person stopped it (a copy from a saved server ends with just this).
+    if (m === "cancelled" || m === "transfer_cancelled") return false;
     if (FATAL_MESSAGE_SUBSTRINGS.some((s) => m.includes(s))) return false;
     if (FATAL_ENOENT_NUMERIC.test(m)) return false; // ENOENT, not os error 20-29
   }
@@ -216,6 +222,14 @@ export function isAutoRecoverable(
   // MAX_AUTO_RECOVER_ATTEMPTS so an unknown-but-truly-fatal error still
   // surfaces after a few cheap tries.
   return true;
+}
+
+/** Whether a failure can be the helper's: only then is sending it again part of the recovery. It
+ *  stops other work on that console, so a failed read of the source or a console that refused one
+ *  write does not earn it: those just try again. */
+export function recoveryResendsHelper(reason: string | null | undefined): boolean {
+  const r = (reason ?? "").toLowerCase();
+  return !(r === "source_read_failed" || r === "ava1_stalled" || /^ava1_refused_\d+$/.test(r));
 }
 
 /**

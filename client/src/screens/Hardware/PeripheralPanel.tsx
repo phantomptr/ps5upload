@@ -21,6 +21,7 @@ import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 import { discDriveOf } from "./discDrive";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /**
  * Peripheral control: BD drive eject / power.
@@ -77,7 +78,7 @@ export default function PeripheralPanel({
         );
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(null);
     }
@@ -101,7 +102,7 @@ export default function PeripheralPanel({
         );
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(null);
     }

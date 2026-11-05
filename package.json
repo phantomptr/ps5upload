@@ -11,6 +11,8 @@
     "i18n:check": "node scripts/i18n-coverage.mjs",
     "i18n:report": "node scripts/i18n-coverage.mjs --report",
     "i18n:bootstrap": "node scripts/i18n-coverage.mjs --update-allowlist",
+    "i18n:hashes": "node scripts/i18n-source-hashes.mjs --update",
+    "i18n:ack": "node scripts/i18n-source-hashes.mjs --ack",
     "smoke:hardware": "node tests/smoke-hardware.mjs",
     "release": "./scripts/release.sh"
   },

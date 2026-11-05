@@ -28,6 +28,7 @@ import { useConfirm } from "../../components/ConfirmDialog";
 import { NpSignInSection } from "./NpSignInSection";
 import { accountIdToB64, formatAccountId, parseAccountId } from "./accountId";
 import { UserInfoBackup } from "./UserInfoBackup";
+import { userDeleteRefusal } from "./userDelete";
 import { userSlots } from "./userSlots";
 import { RemotePlaySection } from "./RemotePlaySection";
 import { useConnectionStore } from "../../state/connection";
@@ -510,6 +511,7 @@ function UsernameSection({
               uidHex={u.uid_hex}
               name={u.username}
               slot={slotOf.get(u.uid) ?? null}
+              signedIn={u.uid === info?.uid}
               onChanged={onChanged}
             />
           ))}
@@ -565,6 +567,7 @@ function UserRow({
   uidHex,
   name,
   slot,
+  signedIn,
   onChanged,
 }: {
   addr: string;
@@ -573,6 +576,8 @@ function UserRow({
   name: string;
   /** The account slot that goes with this user (its name is the user's), if one does. */
   slot: ProfileSlot | null;
+  /** The console's foreground user. Another signed-in user is refused by the helper itself. */
+  signedIn: boolean;
   onChanged: () => void;
 }) {
   const tr = useTr();
@@ -626,6 +631,12 @@ function UserRow({
     }
   }
 
+  const signedInText = tr(
+    "profile.username.deleteSignedIn",
+    undefined,
+    "This user is signed in on the PS5. Sign them out there, then delete them.",
+  );
+
   async function doDelete() {
     const confirmed = await confirm({
       title: tr("profile.username.deleteTitle", undefined, "Delete User"),
@@ -643,7 +654,17 @@ function UserRow({
       await userDelete(uid, true, addr);
       onChanged();
     } catch (e) {
-      setError(`${e}`);
+      const refusal = userDeleteRefusal(e);
+      if (refusal === "signed_in") setError(signedInText);
+      else if (refusal === "state_unknown")
+        setError(
+          tr(
+            "profile.username.deleteStateUnknown",
+            undefined,
+            "Could not check who is signed in on the PS5. Try again.",
+          ),
+        );
+      else setError(`${e}`);
     } finally {
       setDeleting(false);
     }
@@ -696,8 +717,8 @@ function UserRow({
         <button
           type="button"
           onClick={doDelete}
-          disabled={deleting}
-          title={tr("profile.username.deleteTitle", "Delete User")}
+          disabled={deleting || signedIn}
+          title={signedIn ? signedInText : tr("profile.username.deleteTitle", "Delete User")}
           className="shrink-0 rounded-full border border-[var(--color-border)] p-1.5 text-[var(--color-warn)] hover:bg-[var(--color-surface-3)] disabled:opacity-50"
         >
           {deleting ? <Spinner size={14} /> : <Trash2 size={14} />}
@@ -989,6 +1010,7 @@ function SlotRow({
         <input
           className="min-w-0 flex-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1 text-sm"
           value={draft}
+          aria-label={tr("profile.username.slot_label", { n: slot }, "User name in slot {n}")}
           maxLength={31}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {

@@ -4,7 +4,7 @@
 //! they encode real H.264/HEVC and Opus, push it through the feed as the console would (jitter,
 //! a frame-index wrap, a lost frame, keyframes only when the feed asks for them), and check the
 //! result with ffprobe and a full decode. Run them with
-//! `cargo test -p ps5upload-engine --lib rp_live -- --ignored --nocapture --test-threads 1`.
+//! `cargo test -p ps5upload-engine --lib live_feed -- --ignored --nocapture --test-threads 1`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

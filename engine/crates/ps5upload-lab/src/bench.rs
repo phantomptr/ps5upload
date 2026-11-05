@@ -47,9 +47,6 @@ pub const LISTING_MARKER: &str = ".ps5upload-lab-listing";
 /// The frozen record schema version (A3). Every record carries `schema: 1` plus the
 /// identity fields; changing the schema means bumping this and saying what changed,
 /// never silently.
-// FIXME-ish note, not a lint hack: SCHEMA is consumed by the record-writing commands
-// (the follow-up calibrate arm and Task 27's runner) and by the tests; until then the
-// bin build sees it unused.
 pub const SCHEMA: u64 = 1;
 
 /// One corpus's statistics. Serializes (T27/T28 record it); `duplicate_ratio` is `NaN`
@@ -650,13 +647,7 @@ pub struct BenchArgs {
     pub warmup: bool,
 }
 
-fn host_of(console: &str) -> String {
-    console
-        .rsplit_once(':')
-        .map(|(h, _)| h)
-        .unwrap_or(console)
-        .to_string()
-}
+use ps5upload_core::events::console_addr as host_of;
 
 impl BenchArgs {
     pub fn parse<S: AsRef<str>>(args: &[S]) -> anyhow::Result<BenchArgs> {
@@ -3044,7 +3035,7 @@ mod tests {
     /// guard, and — with BENCH_DUMP_LINES=FILE — writes them out so the report is
     /// generated from exactly what is tested.
     fn task28_lines() -> (Vec<String>, Vec<String>) {
-        let consoles = ["192.168.86.100", "192.168.86.99"];
+        let consoles = ["192.0.2.100", "192.0.2.99"];
         let drives = ["/data", "/mnt/usb0", "/mnt/ext1"];
         let (mut stage, mut bench) = (Vec::new(), Vec::new());
         for c in consoles {

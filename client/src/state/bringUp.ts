@@ -43,7 +43,11 @@ interface BringUpState {
   /** Run the full bring-up chain against `host` (a bare ip or ip:port). `autoLoader: false`
    *  leaves the post-helper playlist to AppShell's down-to-up edge, which first checks that it
    *  is not loaded already (the unattended bring-up: its console always reads down first). */
-  run: (host: string, tr: Translator, opts?: { autoLoader?: boolean }) => Promise<void>;
+  run: (
+    host: string,
+    tr: Translator,
+    opts?: { autoLoader?: boolean; guard?: (host: string) => Promise<boolean> },
+  ) => Promise<void>;
   reset: (host: string) => void;
 }
 
@@ -105,17 +109,29 @@ export const useBringUpStore = create<BringUpState>((set, get) => ({
         if (rs.kind === "failed") {
           const step = "stepIndex" in rs ? rs.stepIndex + 1 : 0;
           const err = "error" in rs ? rs.error : "unknown error";
-          throw new Error(`pre-helper step ${step} failed: ${err}`);
+          throw new Error(
+            tr(
+              "bringup_prehelper_step_failed",
+              { step, error: err },
+              "Step {step} of the bring-up playlist failed: {error}",
+            ),
+          );
         }
         if (rs.kind !== "done") {
-          throw new Error(`pre-helper playlist "${playlist.name}" was stopped before it finished`);
+          throw new Error(
+            tr(
+              "bringup_prehelper_stopped",
+              { name: playlist.name },
+              "The bring-up playlist \"{name}\" was stopped before it finished.",
+            ),
+          );
         }
       }
 
       // ── Phase 2: send the helper and wait for it to answer ───────────────
       phase = "helper";
       put({ kind: "running", host: bare, phase, detail: "" });
-      const failure = await sendHelperAndWait(h, tr);
+      const failure = await sendHelperAndWait(h, tr, undefined, undefined, opts?.guard);
       if (failure !== null) throw new Error(failure);
 
       // Run the post-helper auto-loader playlist OURSELVES. We can't rely on

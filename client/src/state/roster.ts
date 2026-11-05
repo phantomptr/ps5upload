@@ -4,7 +4,7 @@ import { useRunningAppsStore } from "./runningApps";
 import { useFsClipboardStore, evictFsClipboard } from "./fsClipboard";
 import { useUploadStore, evictUploadDraft } from "./upload";
 import { evictPkgLibraryStore } from "./pkgLibrary";
-import { hostOf } from "../lib/addr";
+import { cleanConsoleAddress, hostOf } from "../lib/addr";
 import { gamesApi } from "../api/games";
 import { setConsoleKeyResolver } from "./tasks";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
@@ -239,6 +239,9 @@ export function collapseByHost<T extends Pick<PS5Profile, "id" | "host" | "name"
 }
 
 const initial = loadStored();
+
+/** How old `last_seen_at` may get before a successful probe refreshes it. */
+export const SEEN_REFRESH_S = 5 * 60;
 
 export const useRosterStore = create<RosterState>((set, get) => ({
   profiles: initial.profiles,
@@ -486,6 +489,20 @@ export const useRosterStore = create<RosterState>((set, get) => ({
   },
   noteSeen: (id, patch) => {
     const now = Math.floor(Date.now() / 1000);
+    // Every status poll lands here (every 10 s per console). A new array re-renders every screen
+    // holding `profiles` and rewrites the roster, and "last seen" reads in minutes: only a new
+    // firmware or helper version, or a stamp gone stale, is worth that.
+    const seen = get().profiles.find((p) => p.id === id);
+    if (
+      seen &&
+      seen.last_seen_at != null &&
+      now - seen.last_seen_at < SEEN_REFRESH_S &&
+      now >= seen.last_seen_at &&
+      (patch.kernel === undefined || patch.kernel === seen.last_seen_kernel) &&
+      (patch.payload === undefined || patch.payload === seen.last_seen_payload)
+    ) {
+      return;
+    }
     const next = get().profiles.map((p) =>
       p.id === id
         ? {
@@ -675,7 +692,7 @@ setConsoleKeyResolver((host) => profileIdForHost(host, useRosterStore.getState()
  * callers do this on commit (blur, Enter, Check), never per keystroke.
  */
 export function selectConsoleByAddress(address: string): void {
-  const value = address.trim();
+  const value = cleanConsoleAddress(address);
   if (!value) return;
   const roster = useRosterStore.getState();
   const existing = roster.profiles.find((p) => hostOf(p.host) === hostOf(value));
@@ -688,14 +705,35 @@ export function selectConsoleByAddress(address: string): void {
   }
 }
 
+/** Whether this address could be another console rather than the active one at a new address, so
+ *  the person has to say which: it is not in the roster, and the active profile has been seen
+ *  answering. A profile that never answered has no keys to lose, so a typo is simply corrected. */
+export function addressChoiceNeeded(address: string): boolean {
+  const value = cleanConsoleAddress(address);
+  if (!value) return false;
+  const roster = useRosterStore.getState();
+  if (roster.profiles.some((p) => hostOf(p.host) === value)) return false;
+  return !!roster.profiles.find((p) => p.id === roster.active_id)?.last_seen_at;
+}
+
+/** Adds the console at `address` to the roster and selects it; the active one stays as it is. */
+export function addConsoleByAddress(address: string): void {
+  const value = cleanConsoleAddress(address);
+  if (!value) return;
+  const roster = useRosterStore.getState();
+  roster.setActive(roster.add({ name: `PS5 (${value})`, host: value }));
+}
+
 /** The engine keeps what it last read from each console for the game page: a console removed
  *  from the roster, or now at another IP, is forgotten there too. */
 function rosterHosts(profiles: PS5Profile[]): string[] {
   return [...new Set(profiles.map((p) => hostOf(p.host)).filter(Boolean))].sort();
 }
 useRosterStore.subscribe((s, prev) => {
-  const now = rosterHosts(s.profiles);
-  // An empty roster is sent too: the last console removed is forgotten as well.
-  if (now.join(",") === rosterHosts(prev.profiles).join(",")) return;
-  void gamesApi.keep(now).catch(() => {});
+  if (s.profiles === prev.profiles) return;
+  // Only what left this roster: several clients can share one engine, and what this one lacks
+  // may be another's console.
+  const now = new Set(rosterHosts(s.profiles));
+  const gone = rosterHosts(prev.profiles).filter((h) => !now.has(h));
+  if (gone.length > 0) void gamesApi.forget(gone).catch(() => {});
 });

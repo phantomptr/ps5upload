@@ -3,6 +3,7 @@ import reactHooks from "eslint-plugin-react-hooks";
 import tseslint from "typescript-eslint";
 import localRules from "./eslint-rules/no-untranslated-jsx.mjs";
 import requireAssertOk from "./eslint-rules/require-assert-ok.mjs";
+import noLiteralUserText from "./eslint-rules/no-literal-user-text.mjs";
 
 const browserGlobals = {
   AbortController: "readonly",
@@ -67,7 +68,7 @@ export default tseslint.config(
     plugins: {
       "react-hooks": reactHooks,
       local: {
-        rules: { ...localRules.rules, ...requireAssertOk.rules },
+        rules: { ...localRules.rules, ...requireAssertOk.rules, ...noLiteralUserText.rules },
       },
     },
     rules: {
@@ -113,6 +114,18 @@ export default tseslint.config(
         },
       ],
     },
+  },
+  {
+    // Text stores and helpers hand to the notification center, Tasks, Activity and toasts.
+    files: [
+      "src/state/**/*.{ts,tsx}",
+      "src/lib/**/*.{ts,tsx}",
+      "src/layout/**/*.{ts,tsx}",
+      "src/screens/**/*.{ts,tsx}",
+      "src/components/**/*.{ts,tsx}",
+    ],
+    ignores: ["src/**/*.test.{ts,tsx}"],
+    rules: { "local/no-literal-user-text": "error" },
   },
   {
     files: ["src/**/*.test.{ts,tsx}"],

@@ -7,10 +7,10 @@ for (const [name, width] of [["desktop", 1280], ["phone", 390]] as const)
   test(`Home shows Thank you under the connection badge (${name})`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await page.addInitScript(() => {
-      window.localStorage.setItem("ps5upload.host", "192.168.86.100");
+      window.localStorage.setItem("ps5upload.host", "192.0.2.100");
       window.localStorage.setItem(
         "ps5upload.roster.v1",
-        JSON.stringify({ profiles: [{ id: "a", name: "PS5", host: "192.168.86.100" }], active_id: "a" }),
+        JSON.stringify({ profiles: [{ id: "a", name: "PS5", host: "192.0.2.100" }], active_id: "a" }),
       );
       (window as unknown as { __opened: string[] }).__opened = [];
       window.open = ((url: string) => {

@@ -18,6 +18,9 @@
  *  ELF dump — no protocol framing. */
 export const PS5_LOADER_PORT = 9021;
 
+/** Payload Manager's web/API port: it can launch an ELF when the loader is closed (#344). */
+export const PAYLOAD_MANAGER_PORT = 8084;
+
 /** The port the ps5upload helper's AVA1 listener binds. Shown in copy and
  *  used for the firewall hint; never put in an address the app sends (the
  *  engine owns it: see `consoleAddr`). */
@@ -56,6 +59,15 @@ export function hostOf(addr: string): string {
   // the host is everything before the first colon.
   const i = addr.indexOf(":");
   return i < 0 ? addr : addr.slice(0, i);
+}
+
+/** What a person typed or pasted as a console's address, reduced to the bare host the app keys
+ *  a console by: `192.168.1.5:9021` and `http://192.168.1.5/` are both `192.168.1.5`, where
+ *  `hostOf("http://1.2.3.4")` alone would give `http`. */
+export function cleanConsoleAddress(raw: string): string {
+  const noScheme = raw.trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
+  // Anything after a slash, a query or a fragment is not part of the address.
+  return hostOf(noScheme.split(/[/?#]/, 1)[0]);
 }
 
 /** Combine a host with a port number. `host` may include a port

@@ -96,7 +96,7 @@ export function Toaster() {
         // Desktop: bottom-right; Mobile (pointer coarse): top, full-width
         "bottom-4 right-4 max-w-[min(24rem,calc(100vw-2rem))]",
         // Mobile: a full-width stack under the top bar, inside the safe area.
-        "max-[767px]:bottom-auto max-[767px]:right-0 max-[767px]:left-0 max-[767px]:top-[calc(44px+env(safe-area-inset-top)+0.5rem)] max-[767px]:w-auto max-[767px]:max-w-none max-[767px]:pl-[max(0.5rem,env(safe-area-inset-left))] max-[767px]:pr-[max(0.5rem,env(safe-area-inset-right))]",
+        "max-[767px]:bottom-auto max-[767px]:right-0 max-[767px]:left-0 max-[767px]:top-[calc(44px+var(--safe-top)+0.5rem)] max-[767px]:w-auto max-[767px]:max-w-none max-[767px]:ps-[max(0.5rem,var(--safe-left))] max-[767px]:pe-[max(0.5rem,var(--safe-right))]",
       ].join(" ")}
     >
       {/* The newest few: a burst cannot stack past the bottom of a phone. */}
