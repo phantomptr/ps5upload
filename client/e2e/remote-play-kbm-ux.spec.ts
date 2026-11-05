@@ -93,68 +93,6 @@ async function chord(page: Page) {
 const keysOf = (r: number[]) => r.slice(8).filter((k) => k !== 0);
 const last = (e: Engine) => e.reports[e.reports.length - 1];
 
-/** Diagnosis only (taken out again): what the page's main thread does from the capture on. */
-async function watchPage(page: Page) {
-  await page.evaluate(() => {
-    const t0 = performance.now();
-    const at = () => Math.round(performance.now() - t0);
-    const d = {
-      keys: [] as unknown[],
-      toast: [] as number[],
-      long: [] as unknown[],
-      loaf: [] as unknown[],
-      raf: { n: 0, gaps: [] as number[] },
-      lock: [] as unknown[],
-      fetches: 0,
-    };
-    (window as unknown as { __diag: unknown }).__diag = d;
-    for (const ty of ["keydown", "keyup"] as const)
-      window.addEventListener(
-        ty,
-        (e) => d.keys.push([ty, e.code, at(), Math.round(performance.now() - e.timeStamp)]),
-        true,
-      );
-    document.addEventListener("pointerlockchange", () => d.lock.push([at(), !!document.pointerLockElement]));
-    document.addEventListener("pointerlockerror", () => d.lock.push([at(), "error"]));
-    new MutationObserver(() => {
-      if (document.querySelector('[data-testid="rp-kbm-toast"]')) d.toast.push(at());
-    }).observe(document.body, { childList: true, subtree: true });
-    new PerformanceObserver((l) => {
-      for (const e of l.getEntries()) d.long.push([Math.round(e.startTime - t0), Math.round(e.duration)]);
-    }).observe({ type: "longtask", buffered: false });
-    try {
-      new PerformanceObserver((l) => {
-        for (const e of l.getEntries() as unknown as Array<{
-          startTime: number;
-          duration: number;
-          blockingDuration: number;
-          scripts: Array<{ sourceURL: string; sourceFunctionName: string; duration: number; invoker: string }>;
-        }>) {
-          d.loaf.push([
-            Math.round(e.startTime - t0),
-            Math.round(e.duration),
-            Math.round(e.blockingDuration),
-            e.scripts
-              .slice(0, 3)
-              .map((x) => [x.invoker.slice(0, 50), x.sourceURL.slice(-40), x.sourceFunctionName, Math.round(x.duration)]),
-          ]);
-        }
-      }).observe({ type: "long-animation-frame", buffered: false });
-    } catch {
-      /* not in this browser */
-    }
-    let last = performance.now();
-    const tick = () => {
-      const now = performance.now();
-      d.raf.n++;
-      if (now - last > 250) d.raf.gaps.push(Math.round(last - t0), Math.round(now - last));
-      last = now;
-      requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-  });
-}
-
 async function shot(page: Page, name: string) {
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/${name}.png` });
 }
@@ -259,65 +197,8 @@ test.describe("desktop", () => {
     expect(JSON.parse((await page.evaluate(() => localStorage.getItem("ps5upload.rp_prefs.v1")))!).kbmChip).toBe(false);
   });
 
-  /** Diagnosis only (taken out again): the page 12 s after each of these, on this machine. */
-  for (const kind of ["idle", "lock", "no-lock", "lock-after-settings"] as const) {
-    test(`kbm-diag ${kind}`, async ({ page, browser }) => {
-      test.setTimeout(120_000);
-      await nativeMode(page);
-      if (kind === "no-lock") {
-        await page.addInitScript(() => {
-          Element.prototype.requestPointerLock = function () {
-            setTimeout(() => document.dispatchEvent(new Event("pointerlockerror")), 0);
-            return Promise.reject(new Error("refused"));
-          } as never;
-        });
-      }
-      await mockConsole(page);
-      await start(page);
-      if (kind === "lock-after-settings") {
-        await page.getByTestId("rp-toolbar").hover();
-        await page.getByTestId("rp-settings-button").click();
-        await page.getByTestId("rp-settings-tab-controls").click();
-        await page.getByTestId("rp-settings-close").click();
-      }
-      await watchPage(page);
-      await browser.startTracing(page, {
-        categories: ["toplevel", "blink", "cc", "gpu", "viz", "disabled-by-default-devtools.timeline", "devtools.timeline"],
-      });
-      if (kind !== "idle") {
-        await capture(page);
-        await page.getByTestId("rp-kbm-card-ok").click({ force: true, timeout: 3000 }).catch(() => {});
-      }
-      await page.waitForTimeout(12_000);
-      const buf = await browser.stopTracing();
-      const events = (JSON.parse(buf.toString()).traceEvents ?? []) as Array<{
-        name: string;
-        ph: string;
-        dur?: number;
-        tid: number;
-        pid: number;
-        args?: { name?: string };
-      }>;
-      const threads = new Map(
-        events.filter((e) => e.name === "thread_name").map((e) => [`${e.pid}:${e.tid}`, e.args?.name ?? "?"]),
-      );
-      const sums = new Map<string, [number, number]>();
-      for (const e of events) {
-        if (e.ph !== "X" || !e.dur) continue;
-        const k = `${threads.get(`${e.pid}:${e.tid}`) ?? "?"}|${e.name}`;
-        const v = sums.get(k) ?? [0, 0];
-        v[0] += e.dur;
-        v[1]++;
-        sums.set(k, v);
-      }
-      const top = [...sums].sort((x, y) => y[1][0] - x[1][0]).slice(0, 28).map(([k, v]) => [k, Math.round(v[0] / 1000), v[1]]);
-      const d = await page.evaluate(() => (window as unknown as { __diag: { raf: unknown; lock: unknown; long: unknown[] } }).__diag);
-      const dom = await page.evaluate(() => ({ nodes: document.querySelectorAll("*").length, anims: document.getAnimations().length, vids: document.querySelectorAll("video,canvas").length, cursor: getComputedStyle(document.querySelector('[data-testid="rp-stage"]')!).cursor }));
-      console.log(`[kbm-diag2] ${JSON.stringify({ kind, raf: d.raf, lock: d.lock, long: d.long.length, dom, top })}`);
-    });
-  }
-
   test("the shortcuts can be changed, are checked, persist and work", async ({ page }) => {
+    test.slow(); // see the toast below: each key press can take seconds on CI
     await nativeMode(page);
     const engine = await mockConsole(page);
     await start(page);
@@ -363,8 +244,6 @@ test.describe("desktop", () => {
     expect(saved.release).toEqual({ ctrl: false, alt: false, shift: false, meta: false, code: "F8" });
     await page.getByTestId("rp-settings-close").click();
 
-    await watchPage(page);
-    try {
     await capture(page);
     await expect(page.getByTestId("rp-kbm-card")).toContainText("Press F8 to get them back.");
     await page.getByTestId("rp-kbm-card-ok").click({ force: true }).catch(() => {});
@@ -372,11 +251,20 @@ test.describe("desktop", () => {
     await chord(page);
     await page.waitForTimeout(200);
     await expect(page.getByTestId("rp-kbm-chip").or(page.getByTestId("rp-kbm-card"))).toBeVisible();
+    // Noted as it appears: under a granted pointer lock CI's software rendering can take longer to
+    // finish this key press than the toast's 2.5 s, so looking for it afterwards can miss it.
+    await page.evaluate(() => {
+      const seen: string[] = [];
+      (window as unknown as { __toasts: string[] }).__toasts = seen;
+      new MutationObserver(() => {
+        const t = document.querySelector('[data-testid="rp-kbm-toast"]');
+        if (t?.textContent) seen.push(t.textContent);
+      }).observe(document.body, { childList: true, subtree: true, characterData: true });
+    });
     await page.keyboard.press("Control+Shift+KeyN");
-    await expect(page.getByTestId("rp-kbm-toast")).toHaveText("Mixed · F8 to release");
-    } finally {
-      console.log("[kbm-diag]", JSON.stringify(await page.evaluate(() => (window as unknown as { __diag: unknown }).__diag)));
-    }
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { __toasts: string[] }).__toasts))
+      .toContain("Mixed · F8 to release");
     await page.keyboard.press("F8");
     await expect(page.getByTestId("rp-kbm-chip")).toHaveCount(0);
     await expect(page.getByTestId("rp-capture-hint")).toBeVisible();
