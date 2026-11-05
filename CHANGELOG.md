@@ -4,6 +4,12 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.2.1
+
+- Queue: when rest mode or a lost connection interrupts a queue you started, the whole queue now carries on when the console is back. It used to run only the interrupted row, and the rest waited for you to press Start.
+- Queue: a file on an SMB share that fails to close no longer stops the next file from opening.
+- Remote Play: if this device can't decode the stream's sound, the stream now says so, instead of playing nothing with no explanation.
+
 ## 11.2.0
 
 - New **MCP & API** page in the sidebar. Claude Code, Codex and OpenCode get one-click Add, Update and Remove, plus the commands to copy. Gemini CLI, Cursor, Claude Desktop and curl have setup to copy. It lists all 128 agent tools with search, and every API route with a curl line, and two API calls can be run right there. OpenCode has no remove command, so its card says what to delete.
