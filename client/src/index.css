@@ -1120,7 +1120,11 @@ html[data-keyboard] [data-testid="activity-pill"] { display: none !important; }
 .h-bottom-nav { height: calc(56px + var(--safe-bottom)); }
 /* min-height, not height: the buttons inside are taller than 44px less the bar's padding, and on a
    screen with no top inset (an iPhone Duo folded and held sideways) they stuck out past the top. */
-.h-top-bar { min-height: calc(44px + var(--safe-top)); }
+.h-top-bar {
+  min-height: calc(44px + var(--safe-top));
+  padding-left: calc(var(--safe-left) + 1rem);
+  padding-right: calc(var(--safe-right) + 1rem);
+}
 
 /* ── Responsive width safety net ──────────────────────────────────────────
  * Hard requirement: content must always fit the viewport WIDTH (vertical
