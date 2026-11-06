@@ -399,14 +399,14 @@ dependencies = [
 
 [[package]]
 name = "ccm"
-version = "0.6.0-rc.3"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4edea5ea70a1285565ac264767613d6c88351a9a0557e7af793a0942590baaed"
+checksum = "0be9b34d99d395af800e996c5784f810f8400ccd64202f91859dc677825b5378"
 dependencies = [
  "aead 0.6.1",
  "cipher 0.5.2",
  "ctr 0.10.1",
- "subtle",
+ "ctutils",
 ]
 
 [[package]]
@@ -1518,18 +1518,12 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "lz4_flex"
-version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ef0d4ed8669f8f8826eb00dc878084aa8f253506c4fd5e8f58f5bce72ddb97e"
-dependencies = [
- "twox-hash",
-]
-
-[[package]]
-name = "lz4_flex"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
+dependencies = [
+ "twox-hash",
+]
 
 [[package]]
 name = "lzma-rust2"
@@ -2202,7 +2196,7 @@ dependencies = [
  "getrandom 0.4.3",
  "if-addrs",
  "image",
- "lz4_flex 0.14.0",
+ "lz4_flex",
  "lzma-rust2",
  "mime_guess",
  "ps5-dump-forge-pfs",
@@ -2248,7 +2242,7 @@ dependencies = [
  "hmac",
  "libc",
  "libdeflater",
- "lz4_flex 0.14.0",
+ "lz4_flex",
  "num-bigint",
  "ps5upload-pkg",
  "serde",
@@ -2971,21 +2965,22 @@ checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
 name = "smb2"
-version = "0.23.0"
+version = "0.39.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c0018b95fcd44078c2d2147891a9a8d8c8305f46b59b017017c737053b5edeb"
+checksum = "fdf2efe6ebfe83abf0813ef2de818ed1095cb36a19e7b2f6d44b3226238b202f"
 dependencies = [
  "aes 0.9.3",
  "aes-gcm 0.11.1",
  "async-trait",
  "ccm",
  "cmac",
+ "ctutils",
  "digest 0.11.3",
  "futures-util",
  "getrandom 0.4.3",
  "hmac",
  "log",
- "lz4_flex 0.13.1",
+ "lz4_flex",
  "md-5",
  "md4",
  "num_enum",
