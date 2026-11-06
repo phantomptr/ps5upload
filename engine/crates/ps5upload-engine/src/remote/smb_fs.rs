@@ -235,8 +235,9 @@ struct SmbFile {
     host: String,
 }
 
-// smb2's FileReader::drop deliberately does not send CLOSE. A metadata read must not
-// leave a live server handle inside a game directory until the entire session ends.
+// smb2 closes a dropped FileReader on its own, but nothing can wait for that. Closing it here lets
+// finish_closes wait, so a rename or delete of a game's folder doesn't meet a handle still open
+// from a metadata read.
 impl Drop for SmbFile {
     fn drop(&mut self) {
         if let Some(reader) = self.reader.take() {
@@ -320,8 +321,8 @@ impl RemoteFs for SmbFs {
                 self.host
             );
         }
-        let s = self.session.lock().await;
-        let (client, tree) = &*s;
+        let mut s = self.session.lock().await;
+        let (client, tree) = &mut *s;
         let reader = client
             .open_file_reader(tree, &share_path(path))
             .await
@@ -410,8 +411,8 @@ impl RemoteFs for SmbFs {
         use tokio::io::AsyncReadExt;
         self.finish_closes().await?;
         let mut writer = {
-            let s = self.session.lock().await;
-            let (client, tree) = &*s;
+            let mut s = self.session.lock().await;
+            let (client, tree) = &mut *s;
             client
                 .create_file_writer(tree, &share_path(path))
                 .await

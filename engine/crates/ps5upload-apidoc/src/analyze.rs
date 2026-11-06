@@ -305,6 +305,7 @@ impl BodyScan<'_, '_> {
             Expr::Match(m) => m.arms.iter().find_map(|arm| self.infer(&arm.body)),
             Expr::Struct(s) => Some(Shape::Ty(
                 Box::new(Type::Path(syn::TypePath {
+                    attrs: Vec::new(),
                     qself: None,
                     path: s.path.clone(),
                 })),
