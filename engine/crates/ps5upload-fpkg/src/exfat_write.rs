@@ -185,6 +185,14 @@ fn name_units(name: &str) -> Result<Vec<u16>> {
             "\"{name}\" cannot be stored: exFAT does not allow {bad:?} in a name"
         ));
     }
+    // macOS hands out decomposed names; a game looks its files up by the composed spelling, and
+    // exFAT compares units, not canonical equivalents. The UFS2 writer refuses these too.
+    if !unicode_normalization::is_nfc(name) {
+        return format_err(format!(
+            "\"{name}\" cannot be stored: the name is decomposed (NFD, usually from a Mac), so \
+             the game could not find the file. Rename it, or copy the game from another computer"
+        ));
+    }
     Ok(units)
 }
 
@@ -768,6 +776,14 @@ mod tests {
         let out = out_path(name);
         let built = build_exfat(src, &out, cluster, &mut |_, _| {}, &|| false).expect("build");
         (out, built)
+    }
+
+    #[test]
+    fn a_decomposed_name_is_refused_and_a_composed_one_is_not() {
+        let err = name_units("cafe\u{301}.bin").unwrap_err().to_string();
+        assert!(err.contains("decomposed"), "{err}");
+        assert!(name_units("caf\u{e9}.bin").is_ok());
+        assert!(name_units("\u{30b2}\u{30fc}\u{30e0}.bin").is_ok());
     }
 
     #[test]

@@ -749,6 +749,18 @@ const AMPR_SEGMENT_LIMIT: u64 = 64 * 1024 * 1024;
 /// The import whose presence means the title needs `ampr_emu` on the console.
 const AMPR_LIB: &[u8] = b"libSceAmpr";
 
+/// Is `tree` an LZ4-packed game: a root `ampr_assets.index` that starts with `AMPRPAK4`? Its
+/// `ampr_emu.index` also lists the files inside the packs, and `ampr_emu` checks each one it opens
+/// against the pack's list (id = record order, path, size), so that index is carried as it is. A
+/// list that can't be read is an error, never "not packed": that answer would drop those records.
+pub fn lz4_packed(tree: &mut dyn SourceTree) -> Result<bool> {
+    let listed = tree
+        .files()
+        .iter()
+        .any(|f| f.path == "ampr_assets.index" && f.size >= 8);
+    Ok(listed && tree.read_range("ampr_assets.index", 0, 8)? == b"AMPRPAK4")
+}
+
 /// Does `rel` import `libSceAmpr`?
 ///
 /// A title built against AMPR installs normally and then fails to start unless `ampr_emu` is

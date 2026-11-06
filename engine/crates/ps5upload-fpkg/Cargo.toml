@@ -5,6 +5,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+unicode-normalization = "0.1"
 # Cross-platform OS randomness for the outer PFS seed. Opening /dev/urandom
 # directly meant Windows silently fell back to the clock. Already in the tree.
 getrandom = "0.4"

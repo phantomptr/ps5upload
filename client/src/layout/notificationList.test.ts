@@ -42,7 +42,7 @@ describe("notifTabOf", () => {
 
 describe("PANEL_SHEET", () => {
   it("makes the bell panel a fixed full-width sheet below md, whatever its anchor", () => {
-    for (const cls of ["max-md:fixed", "max-md:inset-x-2", "max-md:w-auto", "max-md:max-w-none"]) {
+    for (const cls of ["max-md:fixed", "panel-sheet-x", "max-md:w-auto", "max-md:max-w-none"]) {
       expect(PANEL_SHEET.split(" ")).toContain(cls);
     }
     expect(PANEL_SHEET).toMatch(/max-md:max-h-\[/);

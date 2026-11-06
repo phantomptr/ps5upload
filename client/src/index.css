@@ -1126,6 +1126,27 @@ html[data-keyboard] [data-testid="activity-pill"] { display: none !important; }
   padding-right: calc(var(--safe-right) + 1rem);
 }
 
+/* A panel held under the top bar on a phone: 8px from each side, clear of the system's insets. */
+@media (max-width: 767.98px) {
+  .panel-sheet-x {
+    left: max(0.5rem, var(--safe-left));
+    right: max(0.5rem, var(--safe-right));
+  }
+}
+
+/* A dialog's sides, clear of what the system keeps there (an iPhone Duo's column of system icons).
+   On a phone a sheet still reaches the edges unless an inset says otherwise. */
+.modal-safe-x {
+  padding-left: max(1rem, var(--safe-left));
+  padding-right: max(1rem, var(--safe-right));
+}
+@media (max-width: 639.98px) {
+  .modal-safe-x:has(> .anim-sheet-up) {
+    padding-left: var(--safe-left);
+    padding-right: var(--safe-right);
+  }
+}
+
 /* ── Responsive width safety net ──────────────────────────────────────────
  * Hard requirement: content must always fit the viewport WIDTH (vertical
  * scrolling is fine). Three rules, validated on a real Android device (Pixel,

@@ -51,8 +51,16 @@ export function docFullscreen(): boolean {
   return !!(d.fullscreenElement || d.webkitFullscreenElement);
 }
 
+/** The iOS app: its web view already has the whole screen. Asking WebKit for full screen on top
+ *  of that adds Apple's own close button over the controller's L2, and WebKit leaves full screen
+ *  when the keyboard opens, so the picture jumped each time ⌨ was tapped (an iPhone Duo, #675). */
+function inIosApp(): boolean {
+  return isTauriEnv() && isIOS();
+}
+
 /** Whether the page can ask the browser for full screen at all (not iPhone Safari). */
 export function canDocFullscreen(): boolean {
+  if (inIosApp()) return false;
   const el = document.documentElement as FsEl;
   return (
     typeof el.requestFullscreen === "function" ||
@@ -113,6 +121,7 @@ export async function setWindowFullscreen(on: boolean): Promise<void> {
       await setAndroidUi(on, on && androidUi.landscape);
       return;
     }
+    if (inIosApp()) return;
     if (isTauriEnv() && !isMobile()) {
       const { getCurrentWindow } = await import("@tauri-apps/api/window");
       await getCurrentWindow().setFullscreen(on);

@@ -51,7 +51,7 @@ import {
   useRemotePlayStore,
   type RpPrefs,
 } from "../../state/remotePlay";
-import { TouchControls, useTouchFirst, type TouchLayout } from "./TouchControls";
+import { SAFE_MIDDLE, TouchControls, useTouchFirst, type TouchLayout } from "./TouchControls";
 import {
   canDocFullscreen,
   COARSE_QUERY,
@@ -110,6 +110,9 @@ type Tr = ReturnType<typeof useTr>;
 
 /** Full screen on an upright phone: where the picture starts, under the menu handle's row. */
 const PICTURE_TOP = "calc(max(6px, env(safe-area-inset-top)) + 2.75rem)";
+
+/** Full screen: the room left each side of the picture. */
+const PICTURE_SIDE = "min(env(safe-area-inset-left), env(safe-area-inset-right))";
 
 /** Set once the browser advice was dismissed. */
 const BROWSER_ADVICE_KEY = "ps5upload.rp_browser_advice_dismissed";
@@ -430,6 +433,8 @@ export function StreamPanel() {
   const coarse = useMedia(COARSE_QUERY);
   const portrait = useMedia("(orientation: portrait)");
   const phoneLandscape = useMedia(PHONE_LANDSCAPE_QUERY);
+  // Too narrow for both names of the touch mode switch between the shoulder buttons.
+  const tightDeck = useMedia("(max-width: 619px)");
   // Settings as a sheet from the bottom on a phone (either way up), at the right edge elsewhere.
   const settingsSheet = useMedia("(max-width: 639px)") || phoneLandscape;
   const [menuOpen, setMenuOpen] = useState(false);
@@ -1111,12 +1116,15 @@ export function StreamPanel() {
             // stage's handlers get every press, and controls over it are hit first everywhere.
             className="rp-place pointer-events-none absolute inset-0 z-0 flex items-center justify-center"
             style={
-              portraitFull
+              portraitFull && touchHere
                 ? { top: PICTURE_TOP, bottom: "auto", height: "56.25vw" }
                 : full
                   ? {
-                      paddingLeft: "env(safe-area-inset-left)",
-                      paddingRight: "env(safe-area-inset-right)",
+                      // Both sides by the same amount, so the picture stays in the middle: a notch
+                      // has the same inset each side, and an iPhone Duo's column of system icons
+                      // is on one side only and can sit over the picture.
+                      paddingLeft: PICTURE_SIDE,
+                      paddingRight: PICTURE_SIDE,
                       paddingTop: "env(safe-area-inset-top)",
                       paddingBottom: "env(safe-area-inset-bottom)",
                     }
@@ -1437,7 +1445,9 @@ export function StreamPanel() {
               mode={touchpadOn ? "touchpad" : "controller"}
               onChange={(m) => setPrefs({ touchMode: m })}
               blocked={kbm.hostCaps?.mouse ? null : kbmBlockText(tr, kbmBlockReason(kbm.hostCaps))}
+              tight={tightDeck && touchLayout === "deck"}
               style={{
+                left: SAFE_MIDDLE,
                 top:
                   touchLayout === "deck"
                     ? `calc(${PICTURE_TOP} + 56.25vw + 8px)`

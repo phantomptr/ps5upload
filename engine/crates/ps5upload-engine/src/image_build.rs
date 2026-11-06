@@ -59,6 +59,11 @@ impl ImageFormat {
 /// longer than this, in bytes.
 pub(crate) const PFS_NAME_MAX: usize = 63;
 
+/// The longest stem of any image, in bytes: ShadowMountPlus mounts it at
+/// `/mnt/shadowmnt/<stem>_<8 hex>`, and FreeBSD's mount path holds 87 bytes (MNAMELEN 88), so a
+/// longer name builds and then fails to mount with ENAMETOOLONG. (Rule from PS5 Dump Forge.)
+const IMAGE_STEM_MAX: usize = 63;
+
 /// A safe file stem from a game folder's name.
 /// Image files a build may read as its source (an .exfat into a .ffpkg, say), and a package
 /// made with the debug key, which `source::open` reads like an image.
@@ -156,8 +161,13 @@ pub(crate) fn output_names(
         let inner = fit(&stem, format.extension(), Some(PFS_NAME_MAX));
         (outer, Some(inner))
     } else {
-        let max = (format == ImageFormat::Ffpfs).then_some(PFS_NAME_MAX);
-        (fit(&stem, format.extension(), max), None)
+        let ext = format.extension();
+        let max = if format == ImageFormat::Ffpfs {
+            PFS_NAME_MAX
+        } else {
+            IMAGE_STEM_MAX + 1 + ext.len()
+        };
+        (fit(&stem, ext, Some(max)), None)
     }
 }
 
@@ -587,6 +597,10 @@ impl<'a> AmprIndexed<'a> {
         mtime: i64,
     ) -> Result<Option<Self>, String> {
         let name = ps5upload_fpkg::ampr_index::NAME;
+        // An LZ4-packed game's index also lists the files inside its packs: it stays as it is.
+        if ps5upload_fpkg::source::lz4_packed(inner).map_err(|e| e.to_string())? {
+            return Ok(None);
+        }
         let had = inner
             .files()
             .iter()
@@ -1167,9 +1181,18 @@ mod tests {
             "{outer}"
         );
         assert!(inner.unwrap().ends_with(".ffpkg"));
-        // A UFS2 or exFAT image is not held to it.
-        let (ufs, _) = output_names(long, ImageFormat::Ffpkg, false);
-        assert!(ufs.len() > PFS_NAME_MAX);
+        // A UFS2 or exFAT image has its own limit, on the stem: the mount path has to fit.
+        for (format, ext) in [
+            (ImageFormat::Ffpkg, ".ffpkg"),
+            (ImageFormat::Exfat, ".exfat"),
+        ] {
+            let (name, _) = output_names(long, format, false);
+            let stem = name.strip_suffix(ext).expect(&name);
+            assert!(stem.len() <= IMAGE_STEM_MAX, "{name}");
+            // Shorter names are left as they are.
+            let (short, _) = output_names(Path::new("/g/PPSA01234-app"), format, false);
+            assert_eq!(short, format!("PPSA01234-app{ext}"));
+        }
         // Multi-byte characters are never cut in half.
         let wide = Path::new("/g/ゲームゲームゲームゲームゲームゲームゲームゲームゲームゲーム");
         let (w, _) = output_names(wide, ImageFormat::Ffpfs, false);
@@ -1713,6 +1736,10 @@ mod tests {
         let plain = game(&root.join("noampr"));
         let mut t2 = FolderSource::open(&plain).unwrap();
         assert!(AmprIndexed::wrap(&mut t2).unwrap().is_none());
+        // An LZ4-packed game keeps its index: it also lists the files inside the packs.
+        std::fs::write(src.join("ampr_assets.index"), b"AMPRPAK4 and the rest").unwrap();
+        let mut t3 = FolderSource::open(&src).unwrap();
+        assert!(AmprIndexed::wrap(&mut t3).unwrap().is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 

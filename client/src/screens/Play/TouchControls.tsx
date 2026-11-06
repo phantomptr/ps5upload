@@ -5,7 +5,7 @@ import { IDLE_PAD, PadButton, touchAt, type PadState, type RemotePlayStream } fr
 import { gamepadsOf } from "../../lib/nativePad";
 import { useTr } from "../../state/lang";
 import { rpInput, type RpPrefs } from "../../state/remotePlay";
-import { controllerScale, thumbOffset, touchOpacity } from "./touchLook";
+import { controllerScale, deckIsShort, thumbOffset, touchOpacity } from "./touchLook";
 
 /** True when the on-screen controller should show: set on, or (auto) a touch screen with no
  *  controller connected. A controller connecting hides it, as PS Remote Play does. */
@@ -27,6 +27,11 @@ export function useTouchFirst(mode: RpPrefs["touchControls"]): boolean {
   if (mode === "off") return false;
   return state.coarse && !state.pad;
 }
+
+/** The middle of the part of the screen clear of the system's insets: with an iPhone Duo's column
+ *  of system icons on one side, that isn't the middle of the screen. */
+export const SAFE_MIDDLE =
+  "calc(50% + (env(safe-area-inset-left) - env(safe-area-inset-right)) / 2)";
 
 type Part =
   | { kind: "button"; bit: number }
@@ -337,16 +342,21 @@ export function TouchControls({
     transform: "scale(var(--k))",
     transformOrigin: origin,
   });
+  // Too little black under the picture for a row of sticks above Create and Options (a folded iPhone
+  // Duo upright): the sticks drop beside them, so they keep clear of the D-pad and the face buttons.
+  const short = deck && deckIsShort(k, space.height);
   // Upright (deck) the clusters sit in rows on the black; sideways the D-pad and the face
   // buttons sit by the edges at mid height, the sticks lower and further in, toward the thumbs.
   const midY = deck ? undefined : "58%";
   const clusterPos = (side: "left" | "right"): React.CSSProperties =>
     deck
-      ? { top: plus(T, 112, 90), [side]: side === "left" ? L : R }
+      ? { top: plus(T, short ? 96 : 112, short ? 72 : 90), [side]: side === "left" ? L : R }
       : { top: midY, translate: "0 -50%", [side]: side === "left" ? L : R };
   const stickPos = (side: "left" | "right"): React.CSSProperties => ({
-    bottom: plus(B, deck ? 56 : 0, 44),
-    [side]: plus(side === "left" ? L : R, deck ? 40 : 168),
+    bottom: short ? B : plus(B, deck ? 56 : 0, 44),
+    [side]: short
+      ? `calc(${side === "left" ? L : R} + 8px + max(${u(80)}, 44px))`
+      : plus(side === "left" ? L : R, deck ? 40 : 168),
   });
   const menu = !!onMenu && !deck;
 
@@ -428,7 +438,13 @@ export function TouchControls({
         <div style={at("bottom left", { bottom: B, left: L })}>{pill("Create", PadButton.SHARE)}</div>
         <div style={at("bottom right", { bottom: B, right: R })}>{pill("Options", PadButton.OPTIONS)}</div>
         {/* PS: bottom middle, above the menu button when there is one. */}
-        <div style={at("bottom center", { bottom: plus(B, menu ? 48 : 0, 48), left: "50%", translate: "-50% 0" })}>
+        <div style={at("bottom center", {
+            // With the sticks on the bottom row, PS sits above them, between the D-pad and the face
+            // buttons, where a narrow phone still has room.
+            bottom: short ? plus(B, 124, 88) : plus(B, menu ? 48 : 0, 48),
+            left: SAFE_MIDDLE,
+            translate: "-50% 0",
+          })}>
           {round("PS", PadButton.PS)}
         </div>
       </div>
@@ -436,7 +452,7 @@ export function TouchControls({
       {menu && (
         <div
           style={{
-            ...at("bottom center", { bottom: B, left: "50%", translate: "-50% 0" }),
+            ...at("bottom center", { bottom: B, left: SAFE_MIDDLE, translate: "-50% 0" }),
             opacity: Math.max(0.7, touchOpacity(opacity)),
           }}
         >

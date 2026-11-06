@@ -61,7 +61,7 @@ export function WhatsNewCard() {
     <Card>
       <div className="flex flex-wrap items-center gap-3" data-testid="home-whats-new">
         <Sparkles size={18} className="shrink-0 text-[var(--color-accent)]" />
-        <div className="min-w-0 flex-1 text-sm font-medium">
+        <div className="min-w-[8rem] flex-1 text-sm font-medium">
           {tr("home_updated_to", { version }, `Updated to v${version}`)}
         </div>
         <Link

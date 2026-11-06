@@ -4,6 +4,17 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.2.7
+
+- iPhone and iPad app: full screen no longer asks iOS for its own web full screen. That put Apple's X on top of L2, and opening the keyboard from the Touchpad made the screen jump. (#675)
+- Phones and tablets: the on-screen controller's parts no longer sit on each other. The Controller/Touchpad switch overlapped L2 and R2 on most phones, and on a folded iPhone Duo or a short screen the sticks ran into the D-pad and the face buttons. (#675)
+- iPhone Duo: dialogs and Notifications stay clear of the column of system icons, so their buttons can be reached. In full screen the picture stays centered and uses the full width, and with a controller connected it sits in the middle when held upright. (#675)
+- Convert: `.exfat` and `.ffpkg` names are kept short enough to mount. A long folder name used to build fine and then fail to mount.
+- Convert: an LZ4-packed game keeps its `ampr_emu.index` when made into a package or a plain image. Replacing it dropped the files inside the packs.
+- Convert: making a game folder from an image also replaces a stale `ampr_emu.index`, as images and packages already did.
+- Convert: an `.exfat` with a decomposed file name, usually from a Mac, is refused with a message instead of building a game that can't find its files.
+- Packages build and verify a little faster: the CRC check is about five times quicker.
+
 ## 11.2.6
 
 - Dependency updates, including a much newer SMB client (0.39) and audio library (cpal 0.18). Browsing, reading, uploading, renaming and deleting on a network share were checked against a real Samba server.
