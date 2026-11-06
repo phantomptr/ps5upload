@@ -90,6 +90,21 @@ async function chord(page: Page) {
   await page.keyboard.up("Control");
 }
 
+/** Notes the mode toast as it appears: under a granted pointer lock CI's software rendering can take
+ *  longer to finish a key press than the toast's 2.5 s, so looking for it afterwards can miss it. */
+async function noteToasts(page: Page) {
+  await page.evaluate(() => {
+    const seen: string[] = [];
+    (window as unknown as { __toasts: string[] }).__toasts = seen;
+    new MutationObserver(() => {
+      const t = document.querySelector('[data-testid="rp-kbm-toast"]');
+      if (t?.textContent) seen.push(t.textContent);
+    }).observe(document.body, { childList: true, subtree: true, characterData: true });
+  });
+}
+
+const toastsSeen = (page: Page) => page.evaluate(() => (window as unknown as { __toasts: string[] }).__toasts);
+
 const keysOf = (r: number[]) => r.slice(8).filter((k) => k !== 0);
 const last = (e: Engine) => e.reports[e.reports.length - 1];
 
@@ -152,8 +167,9 @@ test.describe("desktop", () => {
     await capture(page);
     await expect(chip).toBeVisible();
     await expect(card).toHaveCount(0);
+    await noteToasts(page);
     await page.keyboard.press("Control+Alt+KeyM");
-    await expect(page.getByTestId("rp-kbm-toast")).toHaveText("Mixed · ⌃ ⌥ to release");
+    await expect.poll(() => toastsSeen(page)).toContain("Mixed · ⌃ ⌥ to release");
     await expect(chip).toBeVisible(); // switching never releases
     await expect(page.getByTestId("rp-kbm-lock")).toHaveCount(1);
   });
@@ -251,20 +267,9 @@ test.describe("desktop", () => {
     await chord(page);
     await page.waitForTimeout(200);
     await expect(page.getByTestId("rp-kbm-chip").or(page.getByTestId("rp-kbm-card"))).toBeVisible();
-    // Noted as it appears: under a granted pointer lock CI's software rendering can take longer to
-    // finish this key press than the toast's 2.5 s, so looking for it afterwards can miss it.
-    await page.evaluate(() => {
-      const seen: string[] = [];
-      (window as unknown as { __toasts: string[] }).__toasts = seen;
-      new MutationObserver(() => {
-        const t = document.querySelector('[data-testid="rp-kbm-toast"]');
-        if (t?.textContent) seen.push(t.textContent);
-      }).observe(document.body, { childList: true, subtree: true, characterData: true });
-    });
+    await noteToasts(page);
     await page.keyboard.press("Control+Shift+KeyN");
-    await expect
-      .poll(() => page.evaluate(() => (window as unknown as { __toasts: string[] }).__toasts))
-      .toContain("Mixed · F8 to release");
+    await expect.poll(() => toastsSeen(page)).toContain("Mixed · F8 to release");
     await page.keyboard.press("F8");
     await expect(page.getByTestId("rp-kbm-chip")).toHaveCount(0);
     await expect(page.getByTestId("rp-capture-hint")).toBeVisible();
