@@ -575,6 +575,63 @@ fn a_case_collision_in_an_ampr_title_is_refused() {
 }
 
 /// A build reports its stages in order, each once: what the Convert screen's stage list shows.
+/// A minimal unsigned PS5 executable: one `PT_LOAD` of the file past its headers.
+fn unsigned_elf() -> Vec<u8> {
+    let mut f: Vec<u8> = (0..0x3000u32).map(|i| (i * 7 + 3) as u8).collect();
+    f[..0x78].fill(0);
+    f[..8].copy_from_slice(&[0x7F, b'E', b'L', b'F', 2, 1, 1, 9]);
+    f[0x10..0x12].copy_from_slice(&0xFE10u16.to_le_bytes());
+    f[0x12..0x14].copy_from_slice(&0x3Eu16.to_le_bytes());
+    f[0x14..0x18].copy_from_slice(&1u32.to_le_bytes());
+    f[0x20..0x28].copy_from_slice(&0x40u64.to_le_bytes()); // e_phoff
+    f[0x34..0x36].copy_from_slice(&0x40u16.to_le_bytes()); // e_ehsize
+    f[0x36..0x38].copy_from_slice(&0x38u16.to_le_bytes()); // e_phentsize
+    f[0x38..0x3A].copy_from_slice(&1u16.to_le_bytes()); // e_phnum
+    f[0x40..0x44].copy_from_slice(&1u32.to_le_bytes()); // PT_LOAD
+    f[0x48..0x50].copy_from_slice(&0x1000u64.to_le_bytes()); // p_offset
+    f[0x60..0x68].copy_from_slice(&0x2000u64.to_le_bytes()); // p_filesz
+    f
+}
+
+/// An unsigned eboot goes into a package fake-signed: the console's loader refuses a plain ELF.
+/// The package verifies, holds the signed bytes with the segment inside them, and the source
+/// is left as it was.
+#[test]
+fn an_unsigned_eboot_is_fake_signed_in_the_package() {
+    let source_dir = TempDir::new("unsigned-source");
+    let output_dir = TempDir::new("unsigned-out");
+    write_tree(source_dir.path());
+    let elf = unsigned_elf();
+    std::fs::write(source_dir.path().join("eboot.bin"), &elf).unwrap();
+
+    let request = BuildRequest {
+        time: Some((1_700_000_000, 0)),
+        seed: Some([0x42; 16]),
+        ..BuildRequest::new(source_dir.path(), output_dir.path())
+    };
+    let mut phases = Vec::new();
+    let report = build::build(&request, &mut |phase| phases.push(phase.to_string())).unwrap();
+    assert!(report.verify.ok(), "{}", report.verify);
+    assert!(
+        phases.iter().any(|p| p.contains("fake-signing 1")),
+        "{phases:?}"
+    );
+
+    let mut built = source::open(&report.path).unwrap();
+    let eboot = built.read("eboot.bin").unwrap();
+    // The signing writes the older mark; a package build's own repair makes it the PS5 one.
+    assert_eq!(eboot[..4], source::magic::SELF_PS5);
+    assert!(eboot.len() > elf.len() - 0x1000);
+    assert!(
+        eboot.windows(0x2000).any(|w| w == &elf[0x1000..0x3000]),
+        "the segment's bytes are in the SELF"
+    );
+    assert_eq!(
+        std::fs::read(source_dir.path().join("eboot.bin")).unwrap(),
+        elf
+    );
+}
+
 #[test]
 fn a_build_reports_its_stages_in_order() {
     use ps5upload_fpkg::build::{BuildControl, Stage};

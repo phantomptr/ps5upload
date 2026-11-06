@@ -752,6 +752,54 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// An unsigned eboot in a game unpacked to a folder comes out fake-signed, and the folder
+    /// verifies: the verify stage reopens the source and must see the same bytes the write did.
+    #[test]
+    fn an_unsigned_eboot_is_fake_signed_and_the_folder_verifies() {
+        let root = scratch("unsigned");
+        let src = root.join("PPSA77776");
+        std::fs::create_dir_all(src.join("sce_sys")).unwrap();
+        let mut elf: Vec<u8> = (0..0x3000u32).map(|i| (i * 7 + 3) as u8).collect();
+        elf[..0x78].fill(0);
+        elf[..8].copy_from_slice(&[0x7F, b'E', b'L', b'F', 2, 1, 1, 9]);
+        elf[0x10..0x12].copy_from_slice(&0xFE10u16.to_le_bytes());
+        elf[0x12..0x14].copy_from_slice(&0x3Eu16.to_le_bytes());
+        elf[0x14..0x18].copy_from_slice(&1u32.to_le_bytes());
+        elf[0x20..0x28].copy_from_slice(&0x40u64.to_le_bytes());
+        elf[0x34..0x36].copy_from_slice(&0x40u16.to_le_bytes());
+        elf[0x36..0x38].copy_from_slice(&0x38u16.to_le_bytes());
+        elf[0x38..0x3A].copy_from_slice(&1u16.to_le_bytes());
+        elf[0x40..0x44].copy_from_slice(&1u32.to_le_bytes());
+        elf[0x48..0x50].copy_from_slice(&0x1000u64.to_le_bytes());
+        elf[0x60..0x68].copy_from_slice(&0x2000u64.to_le_bytes());
+        std::fs::write(src.join("eboot.bin"), &elf).unwrap();
+        std::fs::write(src.join("sce_sys/param.json"), b"{}").unwrap();
+
+        let (mut tree, _, signing) = ps5upload_fpkg::module_case::open(&src).unwrap();
+        assert_eq!(signing.signed, ["eboot.bin"]);
+        let path = src.clone();
+        let reopen = move || {
+            ps5upload_fpkg::module_case::open(&path)
+                .map(|(t, _, _)| t)
+                .map_err(|e| e.to_string())
+        };
+        let target = root.join("out");
+        build(
+            &mut *tree,
+            &reopen,
+            &target,
+            VerifyMode::Full,
+            &AtomicBool::new(false),
+            &mut |_, _, _| {},
+        )
+        .unwrap();
+        let out = std::fs::read(target.join("eboot.bin")).unwrap();
+        assert_eq!(out[..4], [0x4F, 0x15, 0x3D, 0x1D]);
+        assert!(out.windows(0x2000).any(|w| w == &elf[0x1000..0x3000]));
+        assert_eq!(std::fs::read(src.join("eboot.bin")).unwrap(), elf);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// An image whose module the eboot loads in another letter case unpacks with the eboot's
     /// spelling, and verifies: the verify stage reopens the source, and must see the same names
     /// the write did (it failed with "not in this exFAT volume" when it did not).
@@ -781,12 +829,12 @@ mod tests {
         )
         .unwrap();
         let target = root.join("out");
-        let (mut tree, renamed) = ps5upload_fpkg::module_case::open(&image).unwrap();
+        let (mut tree, renamed, _) = ps5upload_fpkg::module_case::open(&image).unwrap();
         assert_eq!(renamed.len(), 1);
         let path = image.clone();
         let reopen = move || {
             ps5upload_fpkg::module_case::open(&path)
-                .map(|(t, _)| t)
+                .map(|(t, _, _)| t)
                 .map_err(|e| e.to_string())
         };
         build(

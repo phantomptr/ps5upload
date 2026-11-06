@@ -4,6 +4,11 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.2.8
+
+- Convert: a game whose executables are plain unsigned ELFs now gets them fake-signed in the package, image or game folder you make, because the console won't start a plain ELF. Your source isn't changed. A game folder sent as it is stays as it is.
+- Convert: more packages can be read. Patches and updates, and packages built with PSVIETHOA FPKG Builder, were refused when they used smaller blocks, byte shuffling (PFS v3) or a different layout mark.
+
 ## 11.2.7
 
 - iPhone and iPad app: full screen no longer asks iOS for its own web full screen. That put Apple's X on top of L2, and opening the keyboard from the Touchpad made the screen jump. (#675)

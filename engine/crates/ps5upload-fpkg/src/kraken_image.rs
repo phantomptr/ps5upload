@@ -543,7 +543,8 @@ fn layout_entries(image: &KrakenImage, entries: &[(u64, u8)]) -> Result<Vec<u8>>
         }
     }
     blob.resize(blob.len().next_multiple_of(8), 0);
-    blob.extend_from_slice(&[0x00, 0x00, 0x04]); // 0x040000, the ublock size
+    // What every plain build measured carries here, at 128 KiB blocks too (see `describe`).
+    blob.extend_from_slice(&[0x00, 0x00, 0x04]);
     for r in &recs {
         blob.extend_from_slice(&r.to_le_bytes()[..9]);
     }
@@ -585,6 +586,59 @@ pub struct DescribedBlock {
     /// set on every raw odd half and on Sony's bare entropy-array halves). Lets a
     /// reader with a full Kraken decoder read Sony's own blocks, which ours does not.
     pub mode_bits: u8,
+    /// The block's byte shuffle, an index into [`SHUFFLES`] (0: none).
+    pub shuffle: u8,
+}
+
+/// The PFSv3 byte shuffles (LibProsperoPkg's 13 concrete `PfsShufflePattern`s, `None` first),
+/// as the field sizes of one 8- or 16-byte vector. A shuffled block is stored as a
+/// structure-of-arrays de-interleave of each 64 KiB unit: every vector's first field, then every
+/// vector's second, ...; a trailing partial vector stays as it is. A descriptor's shuffle table
+/// lists a pattern as these sizes, zero-padded to 8 bytes.
+pub const SHUFFLES: [&[u8]; 13] = [
+    &[],
+    &[4, 4],
+    &[2, 2, 4],
+    &[1, 1, 6],
+    &[1, 1, 1, 1, 1, 1, 1, 1],
+    &[8, 2, 2, 4],
+    &[1, 1, 6, 2, 2, 4],
+    &[1, 1, 6, 1, 1, 6],
+    &[4, 4, 4, 4],
+    &[8, 8],
+    &[8, 4, 4],
+    &[2, 6],
+    &[2, 6, 2, 6],
+];
+const SHUFFLE_UNIT: usize = 0x1_0000;
+
+/// Undo shuffle `SHUFFLES[pattern]` in `data`, a decoded block, one 64 KiB unit at a time.
+fn deshuffle(data: &mut [u8], pattern: u8) -> Result<()> {
+    let Some(&fields) = SHUFFLES.get(pattern as usize) else {
+        return format_err(format!(
+            "shuffle pattern {pattern} is not one of the 13 known"
+        ));
+    };
+    let stride: usize = fields.iter().map(|&f| f as usize).sum();
+    if stride == 0 {
+        return Ok(());
+    }
+    let mut unit = Vec::with_capacity(SHUFFLE_UNIT.min(data.len()));
+    for chunk in data.chunks_mut(SHUFFLE_UNIT) {
+        unit.clear();
+        unit.extend_from_slice(chunk);
+        let vectors = chunk.len() / stride;
+        let (mut off, mut at) = (0, 0);
+        for &f in fields {
+            let f = f as usize;
+            for v in 0..vectors {
+                chunk[v * stride + off..][..f].copy_from_slice(&unit[at..at + f]);
+                at += f;
+            }
+            off += f;
+        }
+    }
+    Ok(())
 }
 
 /// Walk a descriptor the way the console does: records in order, anchors moving the stored
@@ -604,8 +658,10 @@ pub fn describe(blob: &[u8]) -> Result<Vec<DescribedBlock>> {
     let files = (w0 & 0xFF_FFFF) as usize + 1;
     let ublocks = (w0 >> 32) & 0xFF_FFFF;
     let outer = (w1 & 0xFF_FFFF) as usize;
+    let shuffle = ((w0 >> 28) & 0xF) as usize;
     let records = ((w1 >> 24) & 0xFF_FFFF) as usize + 2;
-    let fidx_at = 16 + outer * 8;
+    // The outer-block digests, then the shuffle-pattern table (8 B each), then `fidx`.
+    let fidx_at = 16 + (outer + shuffle) * 8;
     // Every count is a 24-bit field, so these sums cannot overflow; the tables they place must
     // all lie inside the blob before the boundary table is sliced or a record read.
     let u2c_end = fidx_at + files * 6 + (ublocks / 8 + 1) as usize * 10;
@@ -613,6 +669,22 @@ pub fn describe(blob: &[u8]) -> Result<Vec<DescribedBlock>> {
     if blob.len() < rec_at + records * 9 {
         return format_err("descriptor shorter than its records");
     }
+    // Each listed pattern as an index into `SHUFFLES`; all zeros is the identity.
+    let table = (0..shuffle)
+        .map(|p| {
+            let e = &blob[16 + (outer + p) * 8..][..8];
+            let used = e.iter().position(|&x| x == 0).unwrap_or(8);
+            SHUFFLES
+                .iter()
+                .position(|s| e[used..].iter().all(|&x| x == 0) && **s == e[..used])
+                .map(|id| id as u8)
+                .ok_or_else(|| {
+                    crate::Error::Format(format!(
+                        "shuffle pattern {p}: unknown descriptor {e:02x?}"
+                    ))
+                })
+        })
+        .collect::<Result<Vec<u8>>>()?;
     let entries: Vec<(u64, u8)> = (0..files)
         .map(|i| {
             let r = &blob[fidx_at + i * 6..fidx_at + i * 6 + 6];
@@ -623,6 +695,12 @@ pub fn describe(blob: &[u8]) -> Result<Vec<DescribedBlock>> {
         })
         .collect();
     let mount = entries.last().map_or(0, |e| e.0);
+    if let Some(e) = entries.iter().find(|e| e.0 > mount) {
+        return format_err(format!(
+            "a file boundary at {:#x} lies past the mount's end {mount:#x}",
+            e.0
+        ));
+    }
     let mut bounds: Vec<u64> = entries.iter().map(|e| e.0).collect();
     bounds.sort_unstable();
     bounds.dedup();
@@ -643,16 +721,24 @@ pub fn describe(blob: &[u8]) -> Result<Vec<DescribedBlock>> {
             (e.0, bounds.get(at).copied().unwrap_or(mount))
         })
         .collect();
+    // The three bytes before the records read `00 00 04` in every plain build measured (Sony's,
+    // LibProsperoPkg's at 128 and 256 KiB blocks, ours). Other builders carry other values
+    // there (`00 00 06` in a LIH patch, PPSA23566 01.006; `00 00 55` in PSVIETHOA's updates and
+    // remasters), and their records' carried nibbles don't follow the rule below; their blocks
+    // are placed exactly as a plain build's are, so only those two checks are left out.
+    let strict = blob[rec_at - 3..rec_at] == [0x00, 0x00, 0x04];
+    let rec = |i: usize| {
+        let mut x = [0u8; 16];
+        x[..9].copy_from_slice(&blob[rec_at + i * 9..rec_at + i * 9 + 9]);
+        u128::from_le_bytes(x)
+    };
     let mut out = Vec::new();
     let (mut cursor, mut logical) = (0u64, 0u64);
     let mut next_is_anchor = true; // index 0 is the start anchor
                                    // The previous record's bits 68–71: the low nibble of this record's key (see `layout`).
     let mut carried_nibble = 0u64;
     for i in 0..records.saturating_sub(1) {
-        let r = &blob[rec_at + i * 9..rec_at + i * 9 + 9];
-        let mut x = [0u8; 16];
-        x[..9].copy_from_slice(r);
-        let v = u128::from_le_bytes(x);
+        let v = rec(i);
         let f = |lo: u32, w: u32| ((v >> lo) & ((1u128 << w) - 1)) as u64;
         let nibble = std::mem::replace(&mut carried_nibble, f(68, 4));
         let anchor = next_is_anchor;
@@ -661,7 +747,7 @@ pub fn describe(blob: &[u8]) -> Result<Vec<DescribedBlock>> {
             cursor = (f(26, 22) << 18) | f(48, 18);
             // The terminator (the second-last record) is the one key nobody carries.
             let terminator = i + 2 == records;
-            if i > 0 && !terminator && nibble != (cursor >> 16) & 0xF {
+            if strict && i > 0 && !terminator && nibble != (cursor >> 16) & 0xF {
                 return format_err(format!(
                     "record {i}: the anchor's position nibble disagrees"
                 ));
@@ -671,7 +757,7 @@ pub fn describe(blob: &[u8]) -> Result<Vec<DescribedBlock>> {
         while let Some(&end) = gaps.get(&logical) {
             logical = end;
         }
-        if i > 0 && nibble != logical & 0xF {
+        if strict && i > 0 && nibble != logical & 0xF {
             return format_err(format!(
                 "record {i}: the exact start's low nibble disagrees (the console would read the \
                  block at the wrong offset)"
@@ -683,10 +769,54 @@ pub fn describe(blob: &[u8]) -> Result<Vec<DescribedBlock>> {
             ));
         }
         let next_bound = *bounds.iter().find(|&&b| b > logical).unwrap_or(&mount);
-        let len = (next_bound.min(mount) - logical).min(UBLOCK);
         if (logical % WINDOW) >> 4 != f(0, 14) {
             return format_err(format!("record {i}: logical offset disagrees"));
         }
+        // A block runs to the next boundary, the mount's end or 256 KiB, whichever comes
+        // first, unless the next block record starts before that: a build at a smaller block
+        // size (128 KiB measured, LibProsperoPkg's `--block-size 128`) says so only by where
+        // that record starts within its window (bits 0..13, to 16 bytes; the nibble the record
+        // before it carries makes it exact). Its padding region still uses 256 KiB blocks.
+        let cap = logical + (next_bound.min(mount) - logical).min(UBLOCK);
+        // The record after an anchor is never one, and the sentinel (the last) is no block.
+        let next = if f(66, 1) == 1 { i + 2 } else { i + 1 };
+        let mut after_cap = cap;
+        while let Some(&end) = gaps.get(&after_cap) {
+            after_cap = end;
+        }
+        let next_key = rec(next.min(records - 1)) as u64 & 0x3FFF;
+        // A next record where the full-length block would leave off says nothing: that also
+        // keeps a block before a sparse stretch whole, whatever the stretch's length does to
+        // the window offset (Sony's Astro Bot has 1,988 of them). A plain build's carried nibble
+        // settles the last 16 bytes.
+        let leaves_off_at_cap = next_key == (after_cap % WINDOW) >> 4
+            && (!strict || (rec(next - 1) >> 68) as u64 & 0xF == after_cap & 0xF);
+        let len = if next + 1 < records && !leaves_off_at_cap {
+            let at16 = (logical & !(WINDOW - 1)) | (next_key << 4);
+            let at16 = if at16 <= logical & !0xF {
+                at16 + WINDOW
+            } else {
+                at16
+            };
+            // The low nibble: a plain build's carried one; elsewhere it isn't trusted, and a
+            // block that ends before a boundary is a whole multiple of 64 KiB, so the next one
+            // starts on this one's nibble.
+            let low = if strict {
+                (rec(next - 1) >> 68) as u64 & 0xF
+            } else {
+                logical & 0xF
+            };
+            let exact = at16 | low;
+            // A next block under 16 bytes long (a 136 KiB build's file tail) starts within the
+            // cap's own 16 bytes; only a plain build's carried nibble is trusted to say so.
+            if at16 + 16 <= cap || (strict && exact < cap) {
+                exact - logical
+            } else {
+                cap - logical
+            }
+        } else {
+            cap - logical
+        };
         // A block ends where its record says, within the window. The one case that cannot say
         // so is a block stored whole and raw — exactly 256 KiB, ending where it began modulo the
         // window — so a block whose halves are both raw takes the full window.
@@ -701,6 +831,17 @@ pub fn describe(blob: &[u8]) -> Result<Vec<DescribedBlock>> {
         if end == cursor && even_raw && odd_raw && len > kraken::HALF as u64 {
             end += WINDOW;
         }
+        // Bits 44..47: 0 for none, else the table's pattern k - 1 (measured on LibProsperoPkg's
+        // `--pfs v3` builds, every pattern and the predictive ones).
+        let shuffle = match f(44, 4) as usize {
+            0 => 0,
+            k => *table.get(k - 1).ok_or_else(|| {
+                crate::Error::Format(format!(
+                    "record {i}: shuffle index {k} is past the table's {} pattern(s)",
+                    table.len()
+                ))
+            })?,
+        };
         out.push(DescribedBlock {
             logical,
             len,
@@ -710,6 +851,7 @@ pub fn describe(blob: &[u8]) -> Result<Vec<DescribedBlock>> {
             even_lz: f(33, 1) == 1,
             odd_lz: f(36, 1) == 1,
             mode_bits: f(32, 5) as u8,
+            shuffle,
         });
         cursor = end;
         logical += len;
@@ -776,7 +918,9 @@ pub fn decode_described(image: &[u8], b: &DescribedBlock) -> Result<Vec<u8>> {
         let odd_logical = b.len - kraken::HALF as u64;
         halves.push(half(o, b.odd_lz, b.mode_bits & 0b1000 != 0, odd_logical));
     }
-    kraken::decode_block(&halves, b.len as usize)
+    let mut data = kraken::decode_block(&halves, b.len as usize)?;
+    deshuffle(&mut data, b.shuffle)?;
+    Ok(data)
 }
 
 #[cfg(test)]
@@ -1079,6 +1223,7 @@ mod tests {
             even_lz: false,
             odd_lz: false,
             mode_bits: 0,
+            shuffle: 0,
         };
         assert!(decode_described(&image, &block(1 << 40, 0, 0x100)).is_err());
         assert!(decode_described(&image, &block(0, 0, 0x100)).is_err());
@@ -1110,6 +1255,7 @@ mod tests {
             even_lz: false,
             odd_lz: false,
             mode_bits: 0x04,
+            shuffle: 0,
         };
         assert_eq!(
             decode_described(&image, &block).unwrap(),
@@ -1121,5 +1267,336 @@ mod tests {
             ..block
         };
         assert!(decode_described(&image, &short).is_err());
+    }
+
+    /// Where `blob`'s three-byte field before the records starts.
+    fn field_at(blob: &[u8]) -> usize {
+        let w0 = u64::from_le_bytes(blob[0..8].try_into().unwrap());
+        let w1 = u64::from_le_bytes(blob[8..16].try_into().unwrap());
+        let (files, ublocks) = (
+            (w0 & 0xFF_FFFF) as usize + 1,
+            ((w0 >> 32) & 0xFF_FFFF) as usize,
+        );
+        let tables = ((w1 & 0xFF_FFFF) + ((w0 >> 28) & 0xF)) as usize * 8;
+        (16 + tables + files * 6 + (ublocks / 8 + 1) * 10).next_multiple_of(8)
+    }
+
+    /// Only `00 00 04` before the records holds the records to their carried nibbles; any
+    /// other value (a LIH patch's `00 00 06`, PSVIETHOA's `00 00 55`) walks the same blocks.
+    #[test]
+    fn only_the_plain_field_checks_the_carried_nibbles() {
+        let good = sample_descriptor();
+        let at = field_at(&good);
+        assert_eq!(good[at..at + 3], [0, 0, 4]);
+        let blocks = describe(&good).unwrap();
+        // Record 1 (the first block) carries record 2's nibble in its last byte's top half.
+        let mut off = good.clone();
+        off[at + 3 + 9 + 8] ^= 0x30;
+        assert!(describe(&off).is_err());
+        for field in [[0, 0, 6], [0, 0, 0x55], [0x12, 0x34, 0x56], [0, 0, 0]] {
+            let mut other = off.clone();
+            other[at..at + 3].copy_from_slice(&field);
+            assert_eq!(describe(&other).unwrap(), blocks, "{field:02x?}");
+        }
+    }
+
+    /// A shuffle table entry: the pattern's field sizes, zero-padded to 8 bytes.
+    fn entry(fields: &[u8]) -> [u8; 8] {
+        let mut e = [0u8; 8];
+        e[..fields.len()].copy_from_slice(fields);
+        e
+    }
+
+    /// `blob` (with no shuffle table) listing `table`'s patterns.
+    fn with_table(blob: &[u8], table: &[[u8; 8]]) -> Vec<u8> {
+        let w0 = u64::from_le_bytes(blob[0..8].try_into().unwrap());
+        let w1 = u64::from_le_bytes(blob[8..16].try_into().unwrap());
+        let tables_end = 16 + (w1 & 0xFF_FFFF) as usize * 8;
+        let mut out = blob[..tables_end].to_vec();
+        out[..8].copy_from_slice(&(w0 | (table.len() as u64) << 28).to_le_bytes());
+        out.extend(table.iter().flatten());
+        out.extend_from_slice(&blob[tables_end..]);
+        out
+    }
+
+    /// The shuffle-pattern table (header bits 28..31, 8 B a pattern) sits between the outer
+    /// digests and `fidx`.
+    #[test]
+    fn a_shuffle_table_moves_the_boundary_table() {
+        let blob = sample_descriptor();
+        let blocks = describe(&blob).unwrap();
+        let w0 = u64::from_le_bytes(blob[0..8].try_into().unwrap());
+        for patterns in [1usize, 3, 15] {
+            let table: Vec<_> = (0..patterns).map(|p| entry(SHUFFLES[1 + p % 12])).collect();
+            let shuffled = with_table(&blob, &table);
+            assert_eq!(describe(&shuffled).unwrap(), blocks, "{patterns} patterns");
+            // Read as if there were none, the table is taken for boundaries.
+            let mut unmarked = shuffled.clone();
+            unmarked[..8].copy_from_slice(&w0.to_le_bytes());
+            assert!(describe(&unmarked).is_err());
+        }
+    }
+
+    /// The forward shuffle, as LibProsperoPkg's engine documents it: per 64 KiB unit, every
+    /// whole vector's first field, then every vector's second, ...; a partial vector stays.
+    fn shuffle_forward(data: &[u8], fields: &[u8]) -> Vec<u8> {
+        let stride: usize = fields.iter().map(|&f| f as usize).sum();
+        let mut out = Vec::with_capacity(data.len());
+        for unit in data.chunks(SHUFFLE_UNIT) {
+            let vectors = unit.len() / stride;
+            let mut off = 0;
+            for &f in fields {
+                for v in 0..vectors {
+                    out.extend_from_slice(&unit[v * stride + off..][..f as usize]);
+                }
+                off += f as usize;
+            }
+            out.extend_from_slice(&unit[vectors * stride..]);
+        }
+        out
+    }
+
+    /// Every pattern's inverse, over two whole 64 KiB units and a short last one that ends in
+    /// a partial vector (1,005 bytes: 13 past the last 16-byte vector, 5 past an 8-byte one).
+    #[test]
+    fn every_shuffle_is_undone() {
+        let len = 2 * SHUFFLE_UNIT + 1005;
+        let plain: Vec<u8> = (0..len as u32).map(|i| (i * 7 + i / 251) as u8).collect();
+        for (id, fields) in SHUFFLES.iter().enumerate().skip(1) {
+            let mut data = shuffle_forward(&plain, fields);
+            assert_ne!(data, plain, "{fields:?}");
+            assert_eq!(
+                data[len - 5..],
+                plain[len - 5..],
+                "{fields:?}: the partial vector"
+            );
+            deshuffle(&mut data, id as u8).unwrap();
+            assert_eq!(data, plain, "{fields:?}");
+        }
+        // Shuffle44 by hand: two vectors, then three bytes left as they are.
+        let mut data: Vec<u8> = [0, 1, 2, 3, 8, 9, 10, 11, 4, 5, 6, 7, 12, 13, 14, 15]
+            .into_iter()
+            .chain([16, 17, 18])
+            .collect();
+        deshuffle(&mut data, 1).unwrap();
+        assert_eq!(data, (0..19).collect::<Vec<u8>>());
+        // Identity leaves anything as it is; an id past the table is refused.
+        deshuffle(&mut data, 0).unwrap();
+        assert_eq!(data, (0..19).collect::<Vec<u8>>());
+        assert!(deshuffle(&mut data, 13).is_err());
+    }
+
+    /// A 128 KiB build (LibProsperoPkg's `--block-size 128`): within a file each block ends
+    /// where the next record starts in its window (0x00060 / 0x20060 alternating, the low
+    /// nibble carried), not at 256 KiB; its padding run still uses 256 KiB blocks. `layout`
+    /// walks it back exactly.
+    #[test]
+    fn blocks_of_128_kib_walk_to_their_lengths() {
+        let spans = [
+            (0, 0x60, Owner::File(0)),
+            (0x60, 0x2_0000, Owner::File(1)),
+            (0x2_0060, 0x2_0000, Owner::File(1)),
+            (0x4_0060, 0x1_0000, Owner::File(1)),
+            (0x5_0060, 0x4_0000, Owner::Gap),
+            (0x9_0060, 0x3_ffa0, Owner::Gap),
+            (0xd_0000, 0x2_0000, Owner::Meta),
+            (0xf_0000, 0x2_0000, Owner::Meta),
+        ];
+        let mut at = 0u64;
+        let blocks: Vec<StoredBlock> = spans
+            .iter()
+            .enumerate()
+            .map(|(i, &(logical, len, owner))| {
+                // Every other one stored raw: a raw block of 128 KiB is its even half alone.
+                let half = kraken::HALF as u32;
+                let halves = match (i % 2 == 0, len > half) {
+                    (true, true) => vec![(half, false), (len - half, false)],
+                    (true, false) => vec![(len, false)],
+                    (false, true) => vec![(0x100, true), (0x80, true)],
+                    (false, false) => vec![(0x100, true)],
+                };
+                let block = b(logical, len, at, &halves, owner);
+                at += block.stored_len();
+                block
+            })
+            .collect();
+        let image = image_of(blocks, 0x11_0000, 0x5_0060, 0xd_0000);
+        let blob = layout(&image, &[0, 0x60]).unwrap();
+        let walked: Vec<_> = describe(&blob)
+            .unwrap()
+            .iter()
+            .map(|b| (b.logical, b.len))
+            .collect();
+        let expected: Vec<_> = spans.iter().map(|&(l, n, _)| (l, u64::from(n))).collect();
+        assert_eq!(walked, expected);
+    }
+
+    /// Outside a plain build the carried nibbles say nothing: 128 KiB blocks of a file starting
+    /// off a 16-byte boundary still walk to their lengths with every nibble scrambled.
+    #[test]
+    fn short_blocks_keep_their_nibble_outside_a_plain_build() {
+        let spans = [
+            (0, 0x61, Owner::File(0)),
+            (0x61, 0x2_0000, Owner::File(1)),
+            (0x2_0061, 0x2_0000, Owner::File(1)),
+            (0x4_0061, 0x1_ff9f, Owner::Gap),
+            (0x6_0000, 0x2_0000, Owner::Meta),
+        ];
+        let mut at = 0u64;
+        let blocks: Vec<StoredBlock> = spans
+            .iter()
+            .map(|&(logical, len, owner)| {
+                let block = b(logical, len, at, &[(len.min(0x100), len > 0x100)], owner);
+                at += block.stored_len();
+                block
+            })
+            .collect();
+        let image = image_of(blocks, 0x8_0000, 0x4_0061, 0x6_0000);
+        let mut blob = layout(&image, &[0, 0x61]).unwrap();
+        let expected: Vec<_> = spans.iter().map(|&(l, n, _)| (l, u64::from(n))).collect();
+        let walk = |blob: &[u8]| -> Vec<(u64, u64)> {
+            describe(blob)
+                .unwrap()
+                .iter()
+                .map(|b| (b.logical, b.len))
+                .collect()
+        };
+        assert_eq!(walk(&blob), expected);
+        let field = field_at(&blob);
+        blob[field..field + 3].copy_from_slice(&[0, 0, 0x55]);
+        let records =
+            (u64::from_le_bytes(blob[8..16].try_into().unwrap()) >> 24 & 0xFF_FFFF) as usize + 2;
+        for r in 0..records {
+            blob[field + 3 + r * 9 + 8] ^= 0xF0;
+        }
+        assert_eq!(walk(&blob), expected);
+    }
+
+    /// A 136 KiB build (`--block-size 136`): a file's 8-byte tail block starts within the
+    /// 16 bytes before the next file's boundary, so only the carried nibble places it.
+    #[test]
+    fn a_tail_under_16_bytes_ends_the_block_before_it() {
+        let spans = [
+            (0, 0x2_2000, Owner::File(0)),
+            (0x2_2000, 8, Owner::File(0)),
+            (0x2_2008, 5, Owner::File(1)),
+            (0x2_200d, 0x1_dff3, Owner::Gap),
+            (0x4_0000, 0x2_0000, Owner::Meta),
+        ];
+        let mut at = 0u64;
+        let blocks: Vec<StoredBlock> = spans
+            .iter()
+            .map(|&(logical, len, owner)| {
+                let halves = if len > kraken::HALF as u32 {
+                    vec![(0x100, true), (0x80, true)]
+                } else {
+                    vec![(len.min(0x100), len > 0x100)]
+                };
+                let block = b(logical, len, at, &halves, owner);
+                at += block.stored_len();
+                block
+            })
+            .collect();
+        let image = image_of(blocks, 0x6_0000, 0x2_200d, 0x4_0000);
+        let blob = layout(&image, &[0, 0x2_2008]).unwrap();
+        let walked: Vec<_> = describe(&blob)
+            .unwrap()
+            .iter()
+            .map(|b| (b.logical, b.len))
+            .collect();
+        let expected: Vec<_> = spans.iter().map(|&(l, n, _)| (l, u64::from(n))).collect();
+        assert_eq!(walked, expected);
+    }
+
+    /// A block before a sparse stretch stays whole even when the stretch's length puts the next
+    /// record's window offset inside the block, which alone would read as a short block.
+    #[test]
+    fn a_sparse_stretch_does_not_cut_the_block_before_it() {
+        let blocks = vec![
+            b(0, 0x8000, 0, &[(0x100, true)], Owner::File(0)),
+            // 0x8000..0x44000: the gap, no block. 0x44000 is 0x4000 into its window.
+            b(0x44000, 0x1000, 0x100, &[(0x40, true)], Owner::File(2)),
+            b(
+                0x45000,
+                0x3b000,
+                0x140,
+                &[(0x30, true), (0x30, true)],
+                Owner::Gap,
+            ),
+            b(
+                0x80000,
+                0x40000,
+                0x10000,
+                &[(0x200, true), (0x200, true)],
+                Owner::Meta,
+            ),
+        ];
+        let img = image_of(blocks.clone(), 0xc0000, 0x45000, 0x80000);
+        let entries = [(0, 0), (0x8000, GAP_TYPE), (0x44000, 0)];
+        let blob = layout_entries(&img, &entries).unwrap();
+        let walked: Vec<_> = describe(&blob)
+            .unwrap()
+            .iter()
+            .map(|b| (b.logical, b.len))
+            .collect();
+        let expected: Vec<_> = blocks
+            .iter()
+            .map(|b| (b.logical, u64::from(b.len)))
+            .collect();
+        assert_eq!(walked, expected);
+    }
+
+    /// A block record's bits 44..47 name its pattern: 0 none, k the table's pattern k - 1 (an
+    /// all-zero entry is none too). An index past the table and an unknown entry are refused.
+    #[test]
+    fn shuffle_indices_resolve_through_the_table() {
+        let table = [entry(&[4, 4]), entry(&[]), entry(&[2, 6])];
+        let blob = with_table(&sample_descriptor(), &table);
+        // Record 1 is the first block; byte 5's top nibble holds bits 44..47.
+        let at = field_at(&blob) + 3 + 9 + 5;
+        let with_index = |k: u8| {
+            let mut b = blob.clone();
+            b[at] = b[at] & 0x0F | k << 4;
+            b
+        };
+        for (k, id) in [(0u8, 0u8), (1, 1), (2, 0), (3, 11)] {
+            let blocks = describe(&with_index(k)).unwrap();
+            assert_eq!(blocks[0].shuffle, id, "index {k}");
+            assert!(blocks[1..].iter().all(|b| b.shuffle == 0));
+        }
+        for k in [4, 15] {
+            let e = describe(&with_index(k)).unwrap_err().to_string();
+            assert!(e.contains(&format!("shuffle index {k} is past")), "{e}");
+        }
+        for bad in [entry(&[3, 5]), entry(&[4, 4, 0, 4]), [0xFF; 8]] {
+            let e = describe(&with_table(&sample_descriptor(), &[bad]))
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("unknown descriptor"), "{e}");
+        }
+    }
+
+    /// `decode_described` undoes a block's shuffle after decoding it (here a raw block).
+    #[test]
+    fn a_shuffled_block_decodes_to_its_bytes() {
+        let plain: Vec<u8> = (0..0x1_8007u32).map(|i| (i ^ i >> 9) as u8).collect();
+        let stored = shuffle_forward(&plain, SHUFFLES[6]);
+        let block = DescribedBlock {
+            logical: 0,
+            len: plain.len() as u64,
+            stored_at: 0,
+            even_len: plain.len() as u64,
+            stored_len: plain.len() as u64,
+            even_lz: false,
+            odd_lz: false,
+            mode_bits: 0,
+            shuffle: 6,
+        };
+        assert_eq!(decode_described(&stored, &block).unwrap(), plain);
+        let unknown = DescribedBlock {
+            shuffle: 13,
+            ..block
+        };
+        assert!(decode_described(&stored, &unknown).is_err());
     }
 }

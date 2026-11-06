@@ -35,6 +35,7 @@ pub mod ffpfsc_compat;
 pub mod fih;
 pub mod fih_write;
 pub mod flt;
+pub mod fself;
 pub mod inner;
 pub mod keys;
 pub mod kraken;
