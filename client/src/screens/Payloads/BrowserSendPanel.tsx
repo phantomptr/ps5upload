@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Button, ErrorCard, SuccessCard, Input } from "../../components";
 import { useConnectionStore } from "../../state/connection";
+import { sendBlockedByRest } from "./probeVerdict";
 import { getEngineUrl } from "../../state/engine";
 import { hostOf } from "../../lib/addr";
 import { useTr } from "../../state/lang";
@@ -11,6 +12,9 @@ import { payloadSendRefusalText } from "../../lib/payloadSendRefusal";
 export default function BrowserSendPanel() {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
+  const power = useConnectionStore((s) => s.power);
+  const helperStatus = useConnectionStore((s) => s.payloadStatus);
+  const asleep = sendBlockedByRest(host, host, power, helperStatus);
   const [file, setFile] = useState<File | null>(null);
   const [port, setPort] = useState("9021");
   const [busy, setBusy] = useState(false);
@@ -43,7 +47,12 @@ export default function BrowserSendPanel() {
     </label>
     <p className="text-xs text-[var(--color-muted)]">{tr("browserPayload.hint", "Send an ELF payload from this device through the server to the selected PS5. Start the ELF loader first. Sending bytes does not confirm that the payload started.")}</p>
     <Input label={tr("browserPayload.port", "Loader port")} type="number" min={1} max={65535} value={port} disabled={busy} onChange={(e) => setPort(e.target.value)} />
-    <Button disabled={busy || !file || !host || !/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535} onClick={() => void send()}>{tr("payloads_tab_send", undefined, "Send payload")}</Button>
+    {asleep && (
+      <p className="text-xs text-[var(--color-muted)]" data-testid="send-rest-mode">
+        {tr("sendpayload_rest_mode", undefined, "The PS5 is in rest mode. Wake it to send a payload.")}
+      </p>
+    )}
+    <Button disabled={busy || asleep || !file || !host || !/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535} onClick={() => void send()}>{tr("payloads_tab_send", undefined, "Send payload")}</Button>
     {sent != null && <SuccessCard title={tr("browserPayload.sent", { n: sent }, "Sent {n} bytes to the loader.")} />}
     {error && <ErrorCard title={error} />}
   </div>;

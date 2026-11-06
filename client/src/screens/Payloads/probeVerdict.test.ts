@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { probeVerdict } from "./probeVerdict";
+import { probeVerdict, sendBlockedByRest } from "./probeVerdict";
 
 describe("probeVerdict", () => {
   it("blocks a file that couldn't be read, and says why", () => {
@@ -21,5 +21,17 @@ describe("probeVerdict", () => {
     expect(probeVerdict("payload_probe_no_signature", false)).toMatchObject({ blocked: false, good: false });
     expect(probeVerdict("payload_probe_no_signature", true)).toMatchObject({ blocked: false, good: true });
     expect(probeVerdict("payload_probe_invalid_ext", false).blocked).toBe(false);
+  });
+});
+
+describe("sendBlockedByRest", () => {
+  it("blocks only the selected console, only while it is asleep with no helper", () => {
+    expect(sendBlockedByRest("192.168.1.9", "192.168.1.9", "rest", "down")).toBe(true);
+    // Awake with the helper down: a payload is how it gets running again.
+    expect(sendBlockedByRest("192.168.1.9", "192.168.1.9", "unknown", "down")).toBe(false);
+    expect(sendBlockedByRest("192.168.1.9", "192.168.1.9", "rest", "up")).toBe(false);
+    // Another address typed into the form is its own console.
+    expect(sendBlockedByRest("192.168.1.10", "192.168.1.9", "rest", "down")).toBe(false);
+    expect(sendBlockedByRest("", "192.168.1.9", "rest", "down")).toBe(false);
   });
 });

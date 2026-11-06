@@ -367,7 +367,7 @@ export function playRumble(
 }
 
 export { avcCodecString, isKeyframe, supportedHevc } from "./rpCodec";
-import { avcCodecString, isKeyframe, supportedHevc } from "./rpCodec";
+import { avcCodecString, isKeyframe, noPictureStep, supportedHevc } from "./rpCodec";
 import { avcDescription, lengthPrefixed } from "./fmp4";
 
 function sameBytes(a: Uint8Array | null, b: Uint8Array): boolean {
@@ -603,6 +603,9 @@ export interface StreamOptions {
   onPictureOff?: (why: "failed" | "slow" | "linux") => void;
   /** HDR was asked for and did not work here (`started`: the session is in HDR, shown as SDR). */
   onHdrOff?: (why: string, started: boolean) => void;
+  /** This device showed no picture from the console's HEVC, so the session ended: the next start
+   *  should ask for H.264. */
+  onHevcFailed?: () => void;
   /** How the picture fills the place it is shown in (default: the whole picture). */
   fit?: PictureFit;
   /** False: this session starts with no picture, sound or controller on this device (#670,
@@ -774,6 +777,8 @@ export class RemotePlayStream {
   private loggedVisibleFix = false;
   /** The hardware decoder gave a picture that could not be put right: software from now on. */
   private softwareAfterBadFrame = false;
+  /** Decoder failures in a row before any picture came. */
+  private noPictureFails = 0;
 
   /** The frame with the stream's own visible picture where the decoder reported a smaller one
    *  (hardware HEVC decoding in Chromium browsers on Windows: Edge, so the Windows app, and
@@ -2440,9 +2445,9 @@ export class RemotePlayStream {
         // A broken picture: start over from the next keyframe rather than give up.
         this.video = null;
         this.sawKey = false;
+        if (this.decoded === 0 && !this.nextAfterNoPicture(String(e))) return;
         if (this.header) this.openVideo();
         this.ws?.send(JSON.stringify({ keyframe: true }));
-        if (this.decoded === 0) this.o.onError({ code: "decode", detail: String(e) });
       },
     });
     this.video = video;
@@ -2511,6 +2516,30 @@ export class RemotePlayStream {
       if (description) void configure(avcCodecString(this.header), description);
       else this.cannotDecode("The stream's H.264 header has no SPS/PPS.");
     }
+  }
+
+  /** A decoder failed with no picture yet. Starting the same one over forever only repeats the
+   *  error (#683), so a few tries lead to the next setup. False when the session ended. */
+  private nextAfterNoPicture(detail: string): boolean {
+    this.noPictureFails++;
+    const software = this.o.decoding === "software" || this.softwareAfterBadFrame || linuxSoftwareVideo();
+    const step = noPictureStep(this.noPictureFails, { hevc: this.hevc, software });
+    if (step === "retry") return true;
+    if (step === "software") {
+      log.warn("remote-play", `no picture from the hardware decoder (${detail}): decoding in software`);
+      this.softwareAfterBadFrame = true;
+      this.noPictureFails = 0;
+      return true;
+    }
+    if (step === "h264") {
+      log.warn("remote-play", `no picture from HEVC (${detail}): ending the stream, the next start asks for H.264`);
+      this.o.onHevcFailed?.();
+      this.stop();
+      return false;
+    }
+    log.warn("remote-play", `no picture with any decoder (${detail})`);
+    this.cannotDecode(detail);
+    return false;
   }
 
   /** No decoder will ever take this stream: said, and the session ends rather than go on streaming

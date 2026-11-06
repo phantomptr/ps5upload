@@ -363,6 +363,8 @@ test.describe("a friend's phone", () => {
       say = (m) => ws.send(JSON.stringify(m));
       ws.onMessage((m) => {
         if (typeof m !== "string") return void frames.push([...m]);
+        const ping = (JSON.parse(m) as { ping?: number }).ping;
+        if (ping !== undefined) ws.send(JSON.stringify({ pong: ping }));
         if (m.includes("hello")) ws.send(JSON.stringify({ stage: "joined", player: 3, token: "T3", hevc: false }));
       });
     });
@@ -380,6 +382,7 @@ test.describe("a friend's phone", () => {
     // clear of the controller's buttons.
     const bar = page.getByTestId("join-bar");
     await expect(bar).toHaveAttribute("data-shown", "0", { timeout: 6_000 });
+    await expect(page.getByTestId("join-delay-corner")).toBeVisible();
     await page.getByTestId("rp-menu-handle").tap();
     await expect(bar).toHaveAttribute("data-shown", "1");
     const card = (await bar.boundingBox())!;

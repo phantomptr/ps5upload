@@ -26,7 +26,7 @@ import { withLocalCopy } from "../../lib/materialize";
 import { isRemotePath } from "../../lib/remotePath";
 import { PlaylistsPanel } from "./PlaylistsPanel";
 import { dropIsOwnedElsewhere } from "./dropZone";
-import { probeVerdict } from "./probeVerdict";
+import { probeVerdict, sendBlockedByRest } from "./probeVerdict";
 import { formatAgo } from "../../lib/formatDate";
 
 /**
@@ -109,6 +109,9 @@ export default function SendPanel() {
   // other consoles' kept screens and snapped the box back to the old address).
   const [hostDraft, setHostDraft] = useState<string | null>(null);
   const host = hostDraft ?? selectedHost;
+  const power = useConnectionStore((s) => s.power);
+  const helperStatus = useConnectionStore((s) => s.payloadStatus);
+  const asleep = sendBlockedByRest(host, selectedHost, power, helperStatus);
   const [elfPath, setElfPath] = useState<string | null>(null);
   // Mirror of `elfPath` used by the editable text input so the user can
   // paste/type a path instead of being forced through the file picker.
@@ -557,6 +560,11 @@ export default function SendPanel() {
             />
           )}
 
+          {asleep && (
+            <p className="mt-4 text-xs text-[var(--color-muted)]" data-testid="send-rest-mode">
+              {tr("sendpayload_rest_mode", undefined, "The PS5 is in rest mode. Wake it to send a payload.")}
+            </p>
+          )}
           <div className="mt-5 flex items-center justify-end gap-2">
             <Button
               variant="primary"
@@ -568,6 +576,7 @@ export default function SendPanel() {
                 !elfPath ||
                 !host?.trim() ||
                 !portValid ||
+                asleep ||
                 status.kind === "probing" ||
                 (status.kind === "probed" && status.blocked)
               }

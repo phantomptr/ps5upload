@@ -29,6 +29,21 @@ export function avcCodecString(header: Uint8Array): string {
   return "avc1.4d4028";
 }
 
+/** Failed tries of one setup before the next is tried: one failure can be a passing hiccup. */
+export const NO_PICTURE_TRIES = 3;
+
+/** What to do when a decoder failed and the stream has shown no picture at all. Asking the console
+ *  for H.264 comes first where it applies, since it is the lightest for an old computer, but it
+ *  takes a new session; software decoding comes next, and past that nothing else is left. */
+export function noPictureStep(
+  fails: number,
+  now: { hevc: boolean; software: boolean },
+): "retry" | "h264" | "software" | "give_up" {
+  if (fails < NO_PICTURE_TRIES) return "retry";
+  if (now.hevc) return "h264";
+  return now.software ? "give_up" : "software";
+}
+
 const HEVC_CANDIDATES = ["hev1.1.6.L153.B0", "hvc1.1.6.L153.B0", "hev1.2.4.L153.B0", "hvc1.2.4.L153.B0", "hev1.1.6.L150.90"];
 
 /** The first HEVC codec string this device decodes, or null. */
