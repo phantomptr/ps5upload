@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { friendsIn, inviteOn, joinApi, playerSlots, presenceJoin, readJoinState, slowFriend } from "./playTogetherState";
+import { friendsIn, inviteOn, joinApi, playerSlots, presenceJoin, readJoinState, slowFriend, streamSeatFriend } from "./playTogetherState";
 import { nearbyJoins } from "../../state/mesh";
 import type { MeshDevice } from "../../api/mesh";
 import { guestStatusText } from "./PlayTogether";
@@ -74,6 +74,23 @@ describe("Play Together host state", () => {
       [4, "Cy"],
     ]);
     expect(playerSlots(readJoinState({ settings: { max_players: 1 } })).map((s) => s.player)).toEqual([2]);
+  });
+
+  it("puts the friend on the stream's controller first, within the friends allowed", () => {
+    const guests = [
+      { id: 1, name: "Ann", player: 1, status: "playing" },
+      { id: 2, name: "Ben", player: 2, status: "playing" },
+    ];
+    const slots = playerSlots(readJoinState({ settings: { max_players: 3 }, guests }));
+    expect(slots.map((s) => [s.player, s.guest?.name ?? null])).toEqual([
+      [1, "Ann"],
+      [2, "Ben"],
+      [3, null],
+    ]);
+    const left = [{ id: 1, name: "Ann", player: 1, status: "left" }];
+    const after = readJoinState({ settings: { max_players: 1 }, guests: left });
+    expect(streamSeatFriend(after)).toBeNull();
+    expect(playerSlots(after).map((s) => s.player)).toEqual([2]);
   });
 
   it("moves an invite to another address of this computer", () => {

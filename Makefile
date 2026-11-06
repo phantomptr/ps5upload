@@ -1309,6 +1309,12 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/hw_temps_flight_selftest.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-hw-temps-flight-selftest
 	@echo "✓ one sensor read at a time, a stalled getter holds nobody up, a stale answer says so"
+	@echo "Running clock read self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
+		-o $(SELFTEST_DIR)/ps5upload-hw-bg-read-selftest \
+		$(PAYLOAD_DIR)/tests/hw_bg_read_selftest.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-hw-bg-read-selftest
+	@echo "✓ a clock read that does not come back costs one thread and holds nobody up"
 	@echo "Running hw-guard fault-recovery self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o $(SELFTEST_DIR)/ps5upload-hw-guard-selftest \
 		$(PAYLOAD_DIR)/tests/hw_guard_selftest.c

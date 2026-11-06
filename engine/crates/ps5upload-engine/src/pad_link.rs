@@ -103,6 +103,10 @@ pub fn merge_pads<'a>(states: impl IntoIterator<Item = &'a ControllerState>) -> 
 pub struct PadSources(Mutex<BTreeMap<u64, ControllerState>>);
 
 impl PadSources {
+    pub fn is_empty(&self) -> bool {
+        self.0.lock().map(|g| g.is_empty()).unwrap_or(true)
+    }
+
     /// Record `source`'s state (None: it left) and return the merged pad.
     pub fn set(&self, source: u64, state: Option<ControllerState>) -> ControllerState {
         let Ok(mut g) = self.0.lock() else {

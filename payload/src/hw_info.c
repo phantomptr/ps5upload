@@ -41,6 +41,7 @@
 #include "hw_info.h"
 #include "hw_guard.h"
 #include "hw_temps_flight.h"
+#include "hw_bg_read.h"
 #include "fan_servo.h"
 #include "mp1_clock.h"
 #include "cpu_measure.h"
@@ -583,6 +584,49 @@ static const cpum_ops_t k_cpum_ops = {
     cpum_real_run, cpum_real_pin, cpum_real_core_now, cpum_real_chain_ns, mp1_real_now_ms, NULL,
 };
 
+/* The clocks, off the request's thread: see hw_bg_read.h. Each has its own thread, so one that does
+ * not come back still leaves the other's answer. Idle they take about 90 ms together. */
+#define HW_CLOCKS_WAIT_MS 2000
+
+typedef struct {
+    int rc;
+    mp1_clocks_t c;
+} mp1_bg_t;
+static void mp1_bg_read(void *out) {
+    mp1_bg_t *m = out;
+    memset(&m->c, 0, sizeof m->c);
+    m->rc = mp1_clocks_read(&k_mp1_ops, &m->c);
+}
+static void cpum_bg_read(void *out) {
+    (void)cpu_measure_read(&k_cpum_ops, out);
+}
+static mp1_bg_t g_mp1_bg_buf;
+static cpum_clocks_t g_cpum_bg_buf;
+static hw_bg_read_t g_mp1_bg = HW_BG_READ_INIT(mp1_bg_read, g_mp1_bg_buf);
+static hw_bg_read_t g_cpum_bg = HW_BG_READ_INIT(cpum_bg_read, g_cpum_bg_buf);
+
+static void *hw_bg_thread_main(void *p) {
+    cpum_thread_arg_t a = *(cpum_thread_arg_t *)p;
+    free(p);
+    proc_name_set_self(PS5UPLOAD2_PROC_NAME);
+    a.fn(a.arg);
+    return NULL;
+}
+static int hw_bg_spawn(void (*fn)(void *), void *arg) {
+    cpum_thread_arg_t *a = malloc(sizeof *a);
+    if (!a) return -1;
+    a->fn = fn;
+    a->arg = arg;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    pthread_t th;
+    int rc = pthread_create(&th, &attr, hw_bg_thread_main, a);
+    pthread_attr_destroy(&attr);
+    if (rc != 0) free(a);
+    return rc;
+}
+
 /* Holds ONLY the basic, auto-poll-safe sensors (CPU/SoC temp + CPU clock). The
  * extended telemetry (power, CPU usage, fan duty, product shape) is deliberately NOT
  * kept: it's read fresh on the explicit "Read sensors" request and must never be
@@ -809,6 +853,7 @@ int hw_temps_get_text_ex(int flags, char *out, size_t out_cap,
     cpum_clocks_t cpum;
     memset(&cpum, 0, sizeof cpum);
     cpum.state = CPUM_UNSUPPORTED;
+    int clocks_busy = 0; /* 1: mp1's read has not come back; 2: the measuring one */
 
     /* ── Basic sensors (1 s cache; auto-poll-safe; no lock across the calls) ── */
     hw_temps_sample_t temps;
@@ -916,9 +961,20 @@ int hw_temps_get_text_ex(int flags, char *out, size_t out_cap,
          * Read-only, own lock, 2 s cache, and it stops for good after the
          * first refusal: see mp1_clock.h. Only for an explicit 'c'. */
         if (flags & HW_EXT_CLOCKS) {
-            if (mp1_clocks_read(&k_mp1_ops, &mp1) == MP1_OK) gpu_clock_mhz = mp1.gpu_mhz;
+            int mp1_began = hw_bg_read_begin(&g_mp1_bg, hw_bg_spawn);
             /* And the clock the system's cores really run at (cpu_measure.h). */
-            (void)cpu_measure_read(&k_cpum_ops, &cpum);
+            int cpum_began = hw_bg_read_begin(&g_cpum_bg, hw_bg_spawn);
+            int spent = mp1_began == 1 ? hw_bg_read_wait(&g_mp1_bg, HW_CLOCKS_WAIT_MS) : 0;
+            if (cpum_began == 1) (void)hw_bg_read_wait(&g_cpum_bg, HW_CLOCKS_WAIT_MS - spent);
+            mp1_bg_t m;
+            if (hw_bg_read_take(&g_mp1_bg, &m)) {
+                mp1 = m.c;
+                if (m.rc == MP1_OK) gpu_clock_mhz = mp1.gpu_mhz;
+            } else {
+                clocks_busy |= 1;
+                mp1.state = MP1_UNSUPPORTED;
+            }
+            if (!hw_bg_read_take(&g_cpum_bg, &cpum)) clocks_busy |= 2;
         }
 
         /* Basic product shape — a raw Sony enum that distinguishes hardware
@@ -964,6 +1020,13 @@ int hw_temps_get_text_ex(int flags, char *out, size_t out_cap,
         }
         n += c;
         c = cpu_measure_format(&cpum, out + n, out_cap - (size_t)n);
+        if (c < 0 || (size_t)c >= out_cap - (size_t)n) {
+            if (err_reason_out) *err_reason_out = "hw_temps_format_failed";
+            return -1;
+        }
+        n += c;
+        c = snprintf(out + n, out_cap - (size_t)n, "mp1_busy=%d\nmeasure_busy=%d\n",
+                     (clocks_busy & 1) != 0, (clocks_busy & 2) != 0);
         if (c < 0 || (size_t)c >= out_cap - (size_t)n) {
             if (err_reason_out) *err_reason_out = "hw_temps_format_failed";
             return -1;

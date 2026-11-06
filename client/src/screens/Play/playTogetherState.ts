@@ -157,11 +157,19 @@ export function slowFriend(s: JoinHostState): JoinGuest | null {
   return worst;
 }
 
-/** The three places, P2–P4, with the friend in each (or null: free). */
+/** The friend on the stream's own controller (Player 1, with the picture off here), or null. */
+export function streamSeatFriend(s: JoinHostState): JoinGuest | null {
+  return s.guests.find((g) => g.player === 1 && g.status !== "left") ?? null;
+}
+
+/** The places, with the friend in each (or null: free): P2–P4, and P1 first while a friend is on
+ *  the stream's own controller. Never more than the friends allowed. */
 export function playerSlots(s: JoinHostState): Array<{ player: number; guest: JoinGuest | null }> {
   const n = Math.max(1, Math.min(3, s.settings.maxPlayers));
+  const onStream = streamSeatFriend(s);
+  const first = onStream ? 1 : 2;
   return Array.from({ length: n }, (_, i) => {
-    const player = i + 2;
+    const player = first + i;
     const here = s.guests.filter((g) => g.player === player);
     // A friend who left shows until another takes the place.
     return { player, guest: here.find((g) => g.status !== "left") ?? here[0] ?? null };

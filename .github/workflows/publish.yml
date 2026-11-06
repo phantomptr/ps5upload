@@ -856,7 +856,7 @@ jobs:
   build-ios:
     name: build-ios
     # Starts with build-payload and waits for its ELFs (see build-client).
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 45
     # Same reasoning as build-android: continue-on-error covers a failed job,
     # and the long steps carry their own timeouts so a hang fails a step

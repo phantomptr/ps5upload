@@ -30,6 +30,13 @@ describe("clock row hint", () => {
       "Click Read sensors for a live reading",
     );
   });
+  it("says the read didn't come back, whatever else the reply says", () => {
+    expect(
+      clockHint(tr, { gpu_clock_src: "unsupported", mp1_busy: true }, false, read),
+    ).toBe(
+      "The console didn't answer this read in time. It usually answers once the game is closed",
+    );
+  });
   it("says so when the console refused the read", () => {
     expect(
       clockHint(tr, { gpu_clock_src: "unsupported" }, false, read),

@@ -77,7 +77,7 @@ jobs:
   iphone:
     name: iPhone (unsigned arm64 .ipa)
     needs: payload
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

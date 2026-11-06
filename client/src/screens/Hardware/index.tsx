@@ -205,7 +205,7 @@ type Tr = (
  *  console that refused the read, or a value out of range. */
 export function clockHint(
   tr: Tr,
-  temps: Pick<HwTemps, "gpu_clock_src"> | null,
+  temps: Pick<HwTemps, "gpu_clock_src" | "mp1_busy"> | null,
   hasValue: boolean,
   readHint: string,
 ): string {
@@ -215,6 +215,7 @@ export function clockHint(
       undefined,
       "Click Read sensors for a live reading",
     );
+  if (temps.mp1_busy) return clockBusyHint(tr);
   const src = temps.gpu_clock_src ?? "";
   if (src === "unsupported")
     return tr(
@@ -237,9 +238,18 @@ export function clockHint(
   return readHint;
 }
 
+function clockBusyHint(tr: Tr): string {
+  return tr(
+    "hw_clock_busy",
+    undefined,
+    "The console didn't answer this read in time. It usually answers once the game is closed",
+  );
+}
+
 /** The measured row's hint: like clockHint, from the measurement's own source. */
 function measuredHint(tr: Tr, temps: HwTemps | null, hasValue: boolean): string {
   if (!temps) return clockHint(tr, null, false, "");
+  if (temps.measure_busy) return clockBusyHint(tr);
   const src = temps.cpu_measure_src ?? "";
   if (src === "unsupported")
     return tr(
