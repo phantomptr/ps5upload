@@ -56,6 +56,7 @@ use axum::extract::{ConnectInfo, Query};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
+use ps5upload_core::rp_stream::ControllerState;
 use ps5upload_core::vpad::{self, Motion, PadState, Touch};
 use tokio::sync::{mpsc, oneshot};
 
@@ -104,6 +105,10 @@ const PAD_RATE: f64 = 250.0;
 const PAD_BURST: f64 = 32.0;
 /// How often each open Play Together checks the host's session, expiries and resumes.
 const WATCH_EVERY: Duration = Duration::from_millis(250);
+/// The player who uses the stream's own controller instead of a helper pad (#687): with the picture
+/// off on the host's device that controller sits idle and still takes one of the console's four
+/// places. No slot, no "Who's using this controller?": it plays as the user the stream signed in.
+const STREAM_SEAT: u8 = 1;
 /// Guest → engine binary kind: one pad state.
 pub(crate) const KIND_PAD: u8 = 0x01;
 /// The optional motion block's tag inside a pad frame.
@@ -291,6 +296,8 @@ pub(crate) struct Guest {
     playing: bool,
     /// Since when the console has asked "Who's using this controller?" (the pad was made).
     picking_since: Instant,
+    /// On [`STREAM_SEAT`]: when their last state arrived, while one is held on the controller.
+    seat_input_at: Option<Instant>,
     /// The helper has the pad (closed while the host is away).
     slot_open: bool,
     joined_at: Instant,
@@ -395,6 +402,10 @@ pub(crate) enum Effect {
     Say(mpsc::Sender<Out>, Out),
     Link(link::Cmd),
     Log(String),
+    /// The guest on [`STREAM_SEAT`]'s controller state (None: let go).
+    SeatPad(Option<ControllerState>),
+    /// Whether a guest has the stream's controller, so the host's page is kept off it.
+    Seat(bool),
 }
 
 /// Play Together for one console.
@@ -493,6 +504,23 @@ impl Party {
         })
     }
 
+    /// The next guest's player number: the stream's controller when `seat_free` says nobody on
+    /// the host's side uses it, else a helper pad. Never more guests than the host allows.
+    fn next_player(&self, tried: &[u8], seat_free: bool) -> Option<u8> {
+        if self.guests_in() >= usize::from(self.settings.max_players.clamp(1, MAX_GUESTS)) {
+            return None;
+        }
+        if seat_free
+            && !self
+                .guests
+                .iter()
+                .any(|g| g.active() && g.player == STREAM_SEAT)
+        {
+            return Some(STREAM_SEAT);
+        }
+        self.free_player(tried)
+    }
+
     fn guest_mut(&mut self, id: u64) -> Option<&mut Guest> {
         self.guests.iter_mut().find(|g| g.id == id)
     }
@@ -525,6 +553,7 @@ impl Party {
             left: None,
             playing: false,
             picking_since: now,
+            seat_input_at: None,
             slot_open: false,
             joined_at: now,
             stats: Arc::default(),
@@ -553,6 +582,10 @@ impl Party {
                 g.away_since = Some(now);
                 if g.slot_open {
                     fx.push(Effect::Link(link::Cmd::Neutral { slot: g.player }));
+                }
+                if g.player == STREAM_SEAT {
+                    g.seat_input_at = None;
+                    fx.push(Effect::SeatPad(None));
                 }
             }
         }
@@ -585,6 +618,11 @@ impl Party {
         if g.slot_open {
             g.slot_open = false;
             fx.push(Effect::Link(link::Cmd::Close { slot: g.player }));
+        }
+        if g.player == STREAM_SEAT {
+            g.seat_input_at = None;
+            fx.push(Effect::SeatPad(None));
+            fx.push(Effect::Seat(false));
         }
         let s = &g.stats;
         let n = s.rtt_n.load(Ordering::Relaxed);
@@ -724,6 +762,18 @@ impl Party {
             // would let PS be blocked at once: the grace or the host's "They're in" decides.
             if !g.playing && now.duration_since(g.picking_since) >= PICKING_GRACE {
                 g.playing = true;
+            }
+            // Gone quiet on the stream's controller: nothing stays held (the helper does this
+            // for its pads).
+            if g.seat_input_at
+                .is_some_and(|t| now.duration_since(t) >= vpad::NEUTRAL_AFTER)
+            {
+                g.seat_input_at = None;
+                fx.push(Effect::SeatPad(None));
+            }
+            // Also claims it on a session that replaced the old one.
+            if g.player == STREAM_SEAT && live.is_some() {
+                fx.push(Effect::Seat(true));
             }
         }
         for id in gone {
@@ -877,6 +927,8 @@ fn apply(console: &str, fx: Vec<Effect>) {
             }
             Effect::Link(c) => link::send(console, c),
             Effect::Log(s) => crate::log_info!("{s}"),
+            Effect::SeatPad(state) => crate::rp_stream_api::push_guest_pad(console, state),
+            Effect::Seat(on) => crate::rp_stream_api::guest_seat(console, on),
         }
     }
 }
@@ -898,6 +950,25 @@ fn session_of(console: &str) -> Option<u64> {
         }
     }
     crate::rp_stream_api::live_session(console)
+}
+
+/// What the stream's controller rumbles goes to the guest who has it.
+pub(crate) fn stream_rumble(console: &str, left: u8, right: u8) {
+    let key = host_key(console);
+    let fx = with_party(&key, |p| {
+        p.guests
+            .iter()
+            .find(|g| g.active() && g.player == STREAM_SEAT)
+            .and_then(|g| g.conn.as_ref())
+            .map(|c| {
+                vec![Effect::Say(
+                    c.tx.clone(),
+                    Out::Text(serde_json::json!({"rumble": [left, right]})),
+                )]
+            })
+            .unwrap_or_default()
+    });
+    apply(console, fx.unwrap_or_default());
 }
 
 /// Whether the console's helper has Play Together: `Ok(false)` for an older helper.
@@ -1330,7 +1401,7 @@ async fn resume(socket: &mut WebSocket, token: &str) -> Option<Admit> {
     .flatten() else {
         return Some(Admit::Refused("expired"));
     };
-    if !open {
+    if !open && player != STREAM_SEAT {
         // The pad was removed while the host was away: make it again (the console asks who
         // they are again).
         crate::log_detail!(
@@ -1512,8 +1583,9 @@ async fn ask(socket: &mut WebSocket, entry: Entry, name: &str, ip: IpAddr) -> Op
     let mut tried = Vec::new();
     loop {
         let now = Instant::now();
+        let seat_free = crate::rp_stream_api::stream_seat_free(&console);
         let g = with_party(&key, |p| {
-            let player = p.free_player(&tried)?;
+            let player = p.next_player(&tried, seat_free)?;
             p.admit(name, player, now)
                 .map(|g| (g.id, g.player, g.pad_token.clone()))
         })
@@ -1521,6 +1593,24 @@ async fn ask(socket: &mut WebSocket, entry: Entry, name: &str, ip: IpAddr) -> Op
         let Some((gid, player, pad_token)) = g else {
             return Some(Admit::Refused("full"));
         };
+        if player == STREAM_SEAT {
+            // Nothing to make, nobody to pick: the stream's user is already signed in.
+            let ok = with_party(&key, |p| {
+                p.guest_mut(gid).filter(|g| g.active()).map(|g| {
+                    g.playing = true;
+                    g.joined_at = now;
+                })
+            })
+            .flatten()
+            .is_some();
+            if !ok {
+                return Some(Admit::Refused("closed"));
+            }
+            crate::rp_stream_api::guest_seat(&console, true);
+            crate::log_info!("join: a guest has the stream's controller on {console}");
+            crate::log_detail!("join: {name} has the stream's controller on {console}");
+            return Some(Admit::New(console, gid));
+        }
         let r = open_slot(&console, player, &pad_token).await;
         let now = Instant::now();
         if r == link::OpenResult::Ok {
@@ -1608,14 +1698,74 @@ impl<T> PadPacer<T> {
     }
 }
 
+/// A guest's pad state as the stream's controller takes it.
+fn controller_state(st: &PadState) -> ControllerState {
+    use ps5upload_core::rp_stream::button as rp;
+    use ps5upload_core::rp_stream::feedback::{MotionSample, TOUCHPAD_H};
+    const MAP: [(u32, u32); 16] = [
+        (vpad::button::CROSS, rp::CROSS),
+        (vpad::button::CIRCLE, rp::CIRCLE),
+        (vpad::button::SQUARE, rp::SQUARE),
+        (vpad::button::TRIANGLE, rp::TRIANGLE),
+        (vpad::button::LEFT, rp::DPAD_LEFT),
+        (vpad::button::RIGHT, rp::DPAD_RIGHT),
+        (vpad::button::UP, rp::DPAD_UP),
+        (vpad::button::DOWN, rp::DPAD_DOWN),
+        (vpad::button::L1, rp::L1),
+        (vpad::button::R1, rp::R1),
+        (vpad::button::L3, rp::L3),
+        (vpad::button::R3, rp::R3),
+        (vpad::button::OPTIONS, rp::OPTIONS),
+        (vpad::button::CREATE, rp::SHARE),
+        (vpad::button::TOUCHPAD, rp::TOUCHPAD),
+        (vpad::button::PS, rp::PS),
+    ];
+    let axis = |v: u8| ((i32::from(v) - 128) * 32767 / 127).clamp(-32768, 32767) as i16;
+    let milli = |v: [f32; 3]| v.map(|x| (x * 1000.0) as i32);
+    ControllerState {
+        buttons: MAP
+            .iter()
+            .filter(|(pad, _)| st.buttons & pad != 0)
+            .fold(0, |acc, (_, b)| acc | b),
+        l2: st.l2,
+        r2: st.r2,
+        lx: axis(st.lx),
+        ly: axis(st.ly),
+        rx: axis(st.rx),
+        ry: axis(st.ry),
+        // The guest's touch is in 1920 x 1080, the stream's touchpad is shorter.
+        touch: st
+            .touch
+            .first()
+            .map(|t| [t.x, (u32::from(t.y) * u32::from(TOUCHPAD_H) / 1080) as u16]),
+        motion: st.motion.map(|m| MotionSample {
+            gyro: milli(m.gyro),
+            accel: milli(m.accel),
+            t: crate::rp_stream_api::motion_clock_us(),
+        }),
+        turbo: 0,
+    }
+}
+
 /// A guest's pad state to their pad (PS and Create taken while they play).
 fn forward_pad(key: &str, console: &str, id: u64, gen: u64, mut st: PadState) {
+    let now = Instant::now();
     let mask = with_party(key, |p| {
-        p.is_current(id, gen).then(|| p.strip_mask(id)).flatten()
+        let m = p.is_current(id, gen).then(|| p.strip_mask(id)).flatten();
+        if let Some((STREAM_SEAT, _)) = m {
+            if let Some(g) = p.guest_mut(id) {
+                g.seat_input_at = Some(now);
+            }
+        }
+        m
     });
     if let Some((slot, strip)) = mask.flatten() {
         st.buttons &= !strip;
-        link::send(console, link::Cmd::State { slot, state: st });
+        if slot == STREAM_SEAT {
+            crate::rp_stream_api::push_guest_pad(console, Some(controller_state(&st)));
+        } else {
+            link::send(console, link::Cmd::State { slot, state: st });
+        }
     }
 }
 
@@ -3563,6 +3713,81 @@ mod tests {
         q.tick(t, None);
         let (_, keep) = q.tick(t + HOST_RESTART_WINDOW, None);
         assert!(!keep);
+    }
+
+    #[test]
+    fn the_first_guest_takes_the_stream_controller_only_when_it_is_free() {
+        let now = Instant::now();
+        let mut p = party();
+        assert_eq!(
+            p.next_player(&[], false),
+            Some(2),
+            "the host's page uses it"
+        );
+        assert_eq!(p.next_player(&[], true), Some(STREAM_SEAT));
+        p.admit("a", STREAM_SEAT, now);
+        assert_eq!(p.next_player(&[], true), Some(2), "one guest has it");
+        p.admit("b", 2, now);
+        assert_eq!(p.next_player(&[], true), Some(3));
+        p.admit("c", 3, now);
+        assert_eq!(p.next_player(&[], true), None, "no more than max_players");
+    }
+
+    #[test]
+    fn a_guest_on_the_stream_controller_lets_go_when_quiet_or_gone() {
+        let t = Instant::now();
+        let mut p = party();
+        let id = p.admit("a", STREAM_SEAT, t).unwrap().id;
+        let session = p.session;
+        let seat_pads = |fx: &[Effect]| {
+            fx.iter()
+                .filter(|e| matches!(e, Effect::SeatPad(None)))
+                .count()
+        };
+        p.guest_mut(id).unwrap().seat_input_at = Some(t);
+        let (fx, _) = p.tick(t + Duration::from_millis(100), Some(session));
+        assert_eq!(seat_pads(&fx), 0, "still fresh");
+        assert!(fx.iter().any(|e| matches!(e, Effect::Seat(true))));
+        let (fx, _) = p.tick(t + vpad::NEUTRAL_AFTER, Some(session));
+        assert_eq!(seat_pads(&fx), 1, "quiet: nothing stays held");
+        let (fx, _) = p.tick(t + vpad::NEUTRAL_AFTER * 2, Some(session));
+        assert_eq!(seat_pads(&fx), 0, "and only once");
+        let fx = p.leave(id, "left", t);
+        assert_eq!(seat_pads(&fx), 1);
+        assert!(fx.iter().any(|e| matches!(e, Effect::Seat(false))));
+        assert!(
+            !fx.iter().any(|e| matches!(e, Effect::Link(_))),
+            "no helper pad was ever made for it"
+        );
+    }
+
+    #[test]
+    fn a_guest_state_maps_onto_the_stream_controller() {
+        use ps5upload_core::rp_stream::button as rp;
+        let st = PadState {
+            buttons: vpad::button::CROSS | vpad::button::CREATE | vpad::button::L2,
+            lx: 0,
+            ly: 128,
+            rx: 255,
+            ry: 128,
+            l2: 200,
+            r2: 0,
+            touch: vec![Touch {
+                id: 0,
+                x: 1919,
+                y: 1079,
+            }],
+            motion: None,
+        };
+        let c = controller_state(&st);
+        assert_eq!(
+            c.buttons,
+            rp::CROSS | rp::SHARE,
+            "L2 is the trigger's value here"
+        );
+        assert_eq!(c.l2, 200);
+        assert_eq!((c.lx, c.ly, c.rx), (-32768, 0, 32767));
+        assert_eq!(c.touch, Some([1919, 941]));
     }
 
     #[test]

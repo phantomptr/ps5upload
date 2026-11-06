@@ -14,6 +14,7 @@ import {
   joinApi,
   playerSlots,
   slowFriend,
+  streamSeatFriend,
   type JoinGuest,
   type JoinHostState,
 } from "./playTogetherState";
@@ -313,6 +314,15 @@ export function PlayTogetherPanel({
         />
       )}
       {helperOk && !failed && !pictureHere && <PlayOnTvNote />}
+      {helperOk && !failed && pictureHere && state && streamSeatFriend(state) && (
+        <p className="text-xs text-[var(--color-muted)]" data-testid="pt-stream-seat-note">
+          {tr(
+            "pt_stream_seat_note",
+            undefined,
+            "A friend is using this stream's controller, so your controller here doesn't play until they leave.",
+          )}
+        </p>
+      )}
       {helperOk && !failed && (
         <div className="flex flex-col gap-3 lg:flex-row">
           <Step n={1} title={tr("pt_step_invite", undefined, "Invite")}>

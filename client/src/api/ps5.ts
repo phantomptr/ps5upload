@@ -1789,6 +1789,8 @@ export interface HwTemps {
    *  or zeros), "unsupported" (the console refused the read; the helper doesn't try again
    *  until it restarts), "" (not asked for, or an older helper/engine). */
   gpu_clock_src?: "mp1" | "unsupported" | "";
+  /** The power controller's read has not come back (seen while a game runs). */
+  mp1_busy?: boolean;
   /** The eight CPU cores' clocks in MHz (the power controller's P-state
    *  figure); `0` = unknown. Empty unless read with `clocks`. */
   cpu_core_mhz?: number[];
@@ -1798,6 +1800,8 @@ export interface HwTemps {
   /** How the measured clocks came: "add_chain" (timed on the console), "unsupported", or ""
    *  (not asked for, or an older helper/engine). */
   cpu_measure_src?: "add_chain" | "unsupported" | "";
+  /** The measuring read has not come back (seen while a game runs). */
+  measure_busy?: boolean;
   /** The clock each core really ran at while busy (MHz), indexed like cpu_core_mhz; 0 = not
    *  measured (the game cores are not open to the helper). */
   cpu_core_measured_mhz?: number[];

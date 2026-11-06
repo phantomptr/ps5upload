@@ -118,6 +118,10 @@ pub struct HwTemps {
     /// restarts), or `""` (not asked for, or an older helper).
     #[serde(default)]
     pub gpu_clock_src: String,
+    /// The power controller's read has not come back (seen for as long as a game runs), so
+    /// `gpu_clock_src` and the core clocks say nothing. `false` from an older helper.
+    #[serde(default)]
+    pub mp1_busy: bool,
     /// The eight CPU cores' clocks in MHz: the power controller's figure for each core's
     /// P-state, not a cycle count. `0` = unknown or outside 400–4000 MHz. Empty when the clocks
     /// were not read.
@@ -133,6 +137,10 @@ pub struct HwTemps {
     /// earlier; the next read tries again), or `""` (not asked for, or an older helper).
     #[serde(default)]
     pub cpu_measure_src: String,
+    /// The measuring read has not come back, so `cpu_measure_src` and the measured clocks say
+    /// nothing. `false` from an older helper.
+    #[serde(default)]
+    pub measure_busy: bool,
     /// The clock each of the eight cores really ran at while busy, in MHz, measured with a
     /// timed chain of adds; indexed like `cpu_core_mhz`. `0` = not measured (the game cores
     /// are not open to the helper) or outside 400–5000 MHz.
@@ -450,6 +458,7 @@ fn parse_hw_temps(body: &[u8]) -> HwTemps {
             .filter(|v| matches!(*v, "mp1" | "unsupported"))
             .unwrap_or("")
             .to_string(),
+        mp1_busy: get("mp1_busy") == Some("1"),
         cpu_core_mhz: get("cpu_core_mhz").map(parse_core_list).unwrap_or_default(),
         cpu_core_mhz_min: get("cpu_core_mhz_min")
             .and_then(|v| v.parse().ok())
@@ -461,6 +470,7 @@ fn parse_hw_temps(body: &[u8]) -> HwTemps {
             .filter(|v| matches!(*v, "add_chain" | "unsupported"))
             .unwrap_or("")
             .to_string(),
+        measure_busy: get("measure_busy") == Some("1"),
         cpu_core_measured_mhz: get("cpu_core_measured_mhz")
             .map(parse_core_list)
             .unwrap_or_default(),
@@ -1182,6 +1192,10 @@ mod tests {
         );
         assert_eq!((t.cpu_core_mhz_min, t.cpu_core_mhz_max), (2844, 3500));
         assert_eq!(t.cpu_measure_src, "", "an older helper says nothing");
+        assert!(
+            !t.mp1_busy && !t.measure_busy,
+            "an older helper says nothing"
+        );
         assert!(t.cpu_core_measured_mhz.is_empty());
     }
 
@@ -1219,6 +1233,10 @@ mod tests {
         assert_eq!(t.soc_clock_mhz, 2500);
         let t = sanitize_temps(parse_hw_temps(b"soc_clock_mhz=-2230\n"));
         assert_eq!(t.soc_clock_mhz, 0);
+
+        // The read has not come back: the helper says which, and the rest says nothing.
+        let t = parse_hw_temps(b"mp1_busy=1\nmeasure_busy=0\n");
+        assert!(t.mp1_busy && !t.measure_busy);
 
         // Unsupported: all zero, no min/max, the source word kept so the UI can say so.
         let body = b"soc_clock_mhz=0\ngpu_clock_src=unsupported\ncpu_core_mhz=0,0,0,0,0,0,0,0\ncpu_core_mhz_min=0\ncpu_core_mhz_max=0\n";

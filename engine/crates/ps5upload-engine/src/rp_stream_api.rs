@@ -281,6 +281,8 @@ struct Live {
     pad: Mutex<std::collections::VecDeque<ControllerState>>,
     /// Every controller's latest state: the page (source 0) and phones (pad_link.rs).
     sources: crate::pad_link::PadSources,
+    /// A Play Together guest has the stream's controller: see [`guest_seat`].
+    guest_seat: AtomicBool,
     stop: AtomicBool,
     viewer: Mutex<Option<Viewer>>,
     /// Since when no page has been attached.
@@ -478,6 +480,8 @@ pub(crate) fn diag_summary() -> serde_json::Value {
 
 /// The page's controller among the session's controllers (phones are 1 and up).
 const PAGE_SOURCE: u64 = 0;
+/// A Play Together guest on the stream's own controller (join.rs `STREAM_SEAT`).
+const GUEST_SEAT_SOURCE: u64 = u64::MAX - 1;
 
 fn live() -> Option<Arc<Live>> {
     LIVE.lock().ok().and_then(|g| g.clone())
@@ -488,6 +492,38 @@ pub(crate) fn push_pad(source: u64, state: Option<ControllerState>) {
     if let Some(l) = live() {
         l.push_pad(source, state);
     }
+}
+
+/// The session on `host`, if it is the one running.
+fn live_on(host: &str) -> Option<Arc<Live>> {
+    live().filter(|l| l.host == host)
+}
+
+/// Nobody on the host's side uses the stream's controller: the picture is off on their device and
+/// no phone is linked as a controller, and no guest has it yet.
+pub(crate) fn stream_seat_free(host: &str) -> bool {
+    live_on(host).is_some_and(|l| l.seat_free())
+}
+
+/// A guest has the stream's controller, or no longer. The page stays off it meanwhile, also with
+/// its picture back on, so two people never share one player.
+pub(crate) fn guest_seat(host: &str, on: bool) {
+    if let Some(l) = live_on(host) {
+        l.set_guest_seat(on);
+    }
+}
+
+/// The guest's state on the stream's controller (None: let go).
+pub(crate) fn push_guest_pad(host: &str, state: Option<ControllerState>) {
+    if let Some(l) = live_on(host) {
+        l.push_pad(GUEST_SEAT_SOURCE, state);
+    }
+}
+
+/// A clock for motion samples that come with none of their own: µs, wrapping.
+pub(crate) fn motion_clock_us() -> u32 {
+    static T0: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    T0.get_or_init(Instant::now).elapsed().as_micros() as u32
 }
 
 /// A phone's touchpad & keyboard input for the page (pad_link.rs): `{"pad_kbm": v}` on the
@@ -800,6 +836,7 @@ impl Live {
             keep_alive,
             pad: Default::default(),
             sources: Default::default(),
+            guest_seat: AtomicBool::new(false),
             stop: AtomicBool::new(false),
             viewer: Mutex::new(None),
             alone_since: Mutex::new(None),
@@ -962,6 +999,27 @@ impl Live {
 
     fn picture_off(&self) -> bool {
         self.page_off.load(Ordering::Relaxed)
+    }
+
+    fn seat_free(&self) -> bool {
+        self.picture_off() && !self.guest_seat.load(Ordering::Relaxed) && self.sources.is_empty()
+    }
+
+    fn set_guest_seat(&self, on: bool) {
+        if self.guest_seat.swap(on, Ordering::Relaxed) == on {
+            return;
+        }
+        crate::log_info!(
+            "rp_stream: {}: a guest {} the stream's controller",
+            self.host,
+            if on { "has" } else { "left" }
+        );
+        self.push_pad(if on { PAGE_SOURCE } else { GUEST_SEAT_SOURCE }, None);
+    }
+
+    /// The page's controller counts: its picture is on and no guest has the stream's controller.
+    fn page_pad_open(&self) -> bool {
+        !self.picture_off() && !self.guest_seat.load(Ordering::Relaxed)
     }
 
     /// With no page attached, the session still has a reason to run: the picture is off here on
@@ -1255,6 +1313,7 @@ impl StreamSink for Sink {
     fn rumble(&mut self, left: u8, right: u8) {
         let v = serde_json::json!({"rumble": [left, right]});
         crate::pad_link::broadcast(&v.to_string());
+        crate::join::stream_rumble(&self.live.host, left, right);
         if !self.live.picture_off() {
             self.live.send_ctl(text(v));
         }
@@ -1756,7 +1815,10 @@ async fn session(mut socket: WebSocket) {
                         if let Some(p) = pong(&m) {
                             let _ = pong_tx.try_send(p);
                         }
-                        if let Some(p) = m.pad.filter(|_| !live.picture_off()) {
+                        if let Some(p) = m
+                            .pad
+                            .filter(|_| live.page_pad_open())
+                        {
                             live.push_pad(PAGE_SOURCE, Some(p));
                         }
                         if let Some(on) = m.picture.filter(|_| live.is_viewer(id)) {
@@ -1986,6 +2048,49 @@ mod tests {
     // H.264: an IDR slice and a plain slice.
     const PIC_KEY: &[u8] = &[0, 0, 1, 0x65, 1];
     const PIC_DELTA: &[u8] = &[0, 0, 1, 0x41, 1];
+
+    #[test]
+    fn a_guest_on_the_stream_controller_keeps_the_page_off_it() {
+        let l = Live::new("10.0.0.7".into(), false, Duration::from_secs(60));
+        l.playing.store(true, Ordering::Relaxed);
+        assert!(!l.seat_free(), "the page uses it");
+        assert!(l.page_pad_open());
+        l.set_picture(false);
+        assert!(l.seat_free(), "the picture is off: it sits idle");
+
+        l.set_guest_seat(true);
+        assert!(!l.seat_free(), "one guest has it");
+        let cross = ControllerState {
+            buttons: 1,
+            ..Default::default()
+        };
+        l.push_pad(GUEST_SEAT_SOURCE, Some(cross));
+        assert_eq!(l.pad.lock().unwrap().back().map(|p| p.buttons), Some(1));
+
+        l.set_picture(true);
+        assert!(
+            !l.page_pad_open(),
+            "picture back, the guest keeps the controller"
+        );
+
+        l.set_guest_seat(false);
+        assert_eq!(
+            l.pad.lock().unwrap().back().map(|p| p.buttons),
+            Some(0),
+            "what they held is let go"
+        );
+        assert!(l.page_pad_open());
+    }
+
+    #[test]
+    fn a_linked_phone_is_someone_using_the_stream_controller() {
+        let l = Live::new("10.0.0.7".into(), false, Duration::from_secs(60));
+        l.set_picture(false);
+        l.push_pad(1, Some(ControllerState::default()));
+        assert!(!l.seat_free());
+        l.push_pad(1, None);
+        assert!(l.seat_free());
+    }
 
     #[test]
     fn picture_off_stops_the_page_and_nobody_else() {

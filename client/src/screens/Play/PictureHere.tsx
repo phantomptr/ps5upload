@@ -73,7 +73,7 @@ export function PlayOnTvNote() {
           {tr(
             "pt_tv_seats",
             undefined,
-            "A PS5 takes 4 controllers, and the stream's user holds one even with nobody on it. With your DualSense on the TV, that leaves room for 2 friends.",
+            "A PS5 takes 4 controllers. With your DualSense on the TV, the first friend uses the stream's own controller and plays as its user, with no user to pick, and 2 more get a controller of their own: room for 3 friends.",
           )}
         </p>
       </Callout>

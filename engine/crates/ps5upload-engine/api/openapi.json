@@ -5339,6 +5339,14 @@
             "description": "M.2 NVMe expansion slot temperature (°C). Channel 2 of the SoC\nsensor array. `0` = no M.2 drive installed or sensor unavailable.\nRequires >= 20 to be treated as valid (empty slot returns 0).",
             "type": "integer"
           },
+          "measure_busy": {
+            "description": "The measuring read has not come back, so `cpu_measure_src` and the measured clocks say\nnothing. `false` from an older helper.",
+            "type": "boolean"
+          },
+          "mp1_busy": {
+            "description": "The power controller's read has not come back (seen for as long as a game runs), so\n`gpu_clock_src` and the core clocks say nothing. `false` from an older helper.",
+            "type": "boolean"
+          },
           "product_shape": {
             "description": "Raw Sony \"basic product shape\" code (distinguishes hardware\nfamilies). `-1` = unavailable. The desktop maps known codes to a\nlabel and otherwise shows the number; the model string remains the\nprimary identifier. Read on demand only.",
             "type": "integer"
@@ -5392,10 +5400,12 @@
           "fan_guard",
           "fan_filtered_c",
           "gpu_clock_src",
+          "mp1_busy",
           "cpu_core_mhz",
           "cpu_core_mhz_min",
           "cpu_core_mhz_max",
           "cpu_measure_src",
+          "measure_busy",
           "cpu_core_measured_mhz",
           "cpu_temp_rc",
           "soc_temp_rc",
