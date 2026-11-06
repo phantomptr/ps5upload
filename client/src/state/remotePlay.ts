@@ -440,6 +440,16 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
               ),
         );
       },
+      onHevcFailed: () => {
+        get().setPrefs({ codec: "h264" });
+        pushNotification(
+          "warning",
+          trStatic(
+            "rp_codec_now_h264",
+            "This device showed no picture in the video format it tried, so Video format is now H.264. Press Start to play again.",
+          ),
+        );
+      },
       rumble: () => get().prefs.rumble,
       onPhase: (p) => {
         if (get().stream !== stream) return;

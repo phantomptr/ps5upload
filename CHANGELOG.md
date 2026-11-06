@@ -4,6 +4,14 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.2.4
+
+- Play: when a computer can't show any picture from a stream, the app no longer repeats "could not decode the picture" forever. It switches to H.264 and asks you to press Start again, then tries software decoding, and only then stops and says so. It came up on an older Intel Mac. (#683)
+- Workshop: making a game image reads a block again before calling it damaged, so one bad read from a shaky drive or network share doesn't end hours of work. A block that stays bad still stops it, since the source really is damaged. (#685)
+- Send Payload is greyed out on Home and says the PS5 is in rest mode, instead of "Ready", since nothing can be sent until it wakes. (#681)
+- Remote Play pairing: a reply the app can't read now says so in plain words and what to try, instead of "no header/body break". (#649)
+- Play Together: friends see a tiny delay reading in the corner while the buttons are hidden. (#649)
+
 ## 11.2.3
 
 - Play Together: a friend's picture no longer freezes about 10 seconds after joining. It hit friends on plain `http` links (LAN and Tailscale) until they reloaded. The Watch party on phones gets the same fix. (#649)

@@ -547,6 +547,21 @@ export function JoinView({
       >
         <div ref={screen} className="pointer-events-none absolute inset-0 z-0 flex items-center justify-center" aria-hidden />
 
+        {/* The buttons are hidden, and the delay with them: a small reading stays in the corner. */}
+        {autoHide && !chrome.shown && !reconnecting && delay != null && (
+          <span
+            className="pointer-events-none absolute z-10 rounded-full bg-black/40 px-1.5 py-0.5 text-[10px] leading-none tabular-nums"
+            style={{
+              color: TONE_COLOR[tone],
+              top: "max(0.5rem, env(safe-area-inset-top))",
+              right: "max(0.5rem, env(safe-area-inset-right))",
+            }}
+            data-testid="join-delay-corner"
+          >
+            {Math.round(delay)} ms
+          </span>
+        )}
+
         {showTouch ? (
           // Over the on-screen controller: a card in the middle of the picture, which the
           // controller keeps clear (its top row is the shoulders and the touchpad).

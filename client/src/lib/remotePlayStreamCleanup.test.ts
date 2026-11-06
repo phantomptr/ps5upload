@@ -475,3 +475,69 @@ describe("the picture on this device", () => {
     await flush();
   });
 });
+
+describe("RemotePlayStream with a decoder that never shows a picture (#683)", () => {
+  /** Every decoder fails as soon as it is configured, and remembers how it was set up. */
+  function failingDecoders() {
+    const made: VideoDecoderConfig[] = [];
+    class FailingDecoder {
+      static isConfigSupported = async () => ({ supported: true });
+      constructor(private readonly init: VideoDecoderInit) {}
+      configure(c: VideoDecoderConfig) {
+        made.push(c);
+        queueMicrotask(() => this.init.error(new DOMException("Decoder failure", "EncodingError")));
+      }
+      decode() {}
+      close() {}
+      flush = async () => {};
+    }
+    vi.stubGlobal("VideoDecoder", FailingDecoder);
+    return made;
+  }
+  // An H.264 header with a minimal SPS and PPS.
+  const HEADER = Uint8Array.from([0, 0, 0, 1, 0x67, 0x4d, 0x40, 0x28, 0xe8, 0, 0, 0, 1, 0x68, 0xee, 0x3c, 0x80]);
+  const settle = async () => {
+    for (let i = 0; i < 40; i++) await flush();
+  };
+  const open = (s: RemotePlayStream, hevc: boolean) => {
+    const p = s as unknown as { hevc: boolean; codecChoice: string; header: Uint8Array; openVideo(): void };
+    p.hevc = hevc;
+    p.codecChoice = hevc ? "h265" : "h264";
+    p.header = HEADER;
+    p.openVideo();
+  };
+
+  it("on H.264: hardware a few times, software a few times, then one error and the end", async () => {
+    const made = failingDecoders();
+    const errors: string[] = [];
+    const o = { ...options(), onError: (e: { code: string }) => errors.push(e.code) };
+    const s = new RemotePlayStream(o);
+    await s.start();
+    open(s, false);
+    await settle();
+    expect(made.map((c) => c.hardwareAcceleration)).toEqual([
+      "prefer-hardware",
+      "prefer-hardware",
+      "prefer-hardware",
+      "prefer-software",
+      "prefer-software",
+      "prefer-software",
+    ]);
+    expect(errors).toEqual(["decode"]);
+    expect(o.phases[o.phases.length - 1]).toBe("ended");
+  });
+
+  it("on HEVC: ends the stream with no error and asks for H.264 next time", async () => {
+    failingDecoders();
+    const errors: string[] = [];
+    const onHevcFailed = vi.fn();
+    const o = { ...options(), onHevcFailed, onError: (e: { code: string }) => errors.push(e.code) };
+    const s = new RemotePlayStream(o);
+    await s.start();
+    open(s, true);
+    await settle();
+    expect(onHevcFailed).toHaveBeenCalledTimes(1);
+    expect(errors).toEqual([]);
+    expect(o.phases[o.phases.length - 1]).toBe("ended");
+  });
+});

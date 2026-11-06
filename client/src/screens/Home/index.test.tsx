@@ -17,6 +17,7 @@ vi.mock("../../state/sensors", () => ({
 }));
 
 import HomeScreen from "./index";
+import { useConnectionStore } from "../../state/connection";
 
 const html = () =>
   renderToStaticMarkup(
@@ -26,6 +27,18 @@ const html = () =>
   );
 
 describe("Home", () => {
+  it("says Send Payload can't run while the console is in rest mode, not Ready (#681)", () => {
+    // A server render reads the store's initial state.
+    const init = useConnectionStore.getInitialState();
+    const was = { ...init };
+    Object.assign(init, { engineStatus: "up", payloadStatus: "down", power: "rest" });
+    expect(html()).not.toContain("/payloads?tab=send");
+    // Awake with the helper down: a payload is how it gets running again.
+    Object.assign(init, { power: "unknown" });
+    expect(html()).toContain("/payloads?tab=send");
+    Object.assign(init, was);
+  });
+
   it("shows the servers card exactly once, outside the empty-state boxes", () => {
     // With no activity and no notifications, both cards show their empty state; the
     // servers card used to ride inside that box and so appeared twice.

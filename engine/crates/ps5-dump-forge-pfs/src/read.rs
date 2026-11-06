@@ -37,6 +37,8 @@ const MAX_DEPTH: u32 = 32;
 const MAX_PATH_BYTES: u64 = 256 << 20;
 /// Decoded PFSC blocks kept per file: a sequential read needs one, a directory walk a few.
 const CACHE_BLOCKS: usize = 8;
+/** How many times one compressed block is read before it counts as damaged. */
+const BLOCK_READ_TRIES: u32 = 3;
 
 /// The header's facts, for verification and inspect.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -660,6 +662,26 @@ impl Pfsc {
         Ok(n)
     }
 
+    /// Block `n` read once from its span and decoded.
+    fn read_block(&self, r: &mut dyn ReadSeek, n: u64, start: u64, end: u64) -> Result<Vec<u8>> {
+        let mut stored = vec![0u8; (end - start) as usize];
+        r.seek(SeekFrom::Start(self.at + start))?;
+        r.read_exact(&mut stored)?;
+        if stored.len() == BLOCK as usize {
+            return Ok(stored);
+        }
+        let mut d = Vec::with_capacity(BLOCK as usize);
+        let inflated = ZlibDecoder::new(&stored[..])
+            .take(BLOCK + 1)
+            .read_to_end(&mut d);
+        if inflated.is_err() || d.len() != BLOCK as usize {
+            return Err(err(format!(
+                "damaged PFSC container: block {n} does not inflate to 64 KiB"
+            )));
+        }
+        Ok(d)
+    }
+
     /// Decoded block `n`: a 64 KiB span is raw, a shorter one inflates to exactly 64 KiB.
     fn block(&mut self, r: &mut dyn ReadSeek, n: u64) -> Result<&[u8]> {
         if let Some(i) = self.cache.iter().position(|(b, _)| *b == n) {
@@ -667,22 +689,16 @@ impl Pfsc {
             self.cache.push(hit);
         } else {
             let (start, end) = self.span(r, n)?;
-            let mut stored = vec![0u8; (end - start) as usize];
-            r.seek(SeekFrom::Start(self.at + start))?;
-            r.read_exact(&mut stored)?;
-            let plain = if stored.len() == BLOCK as usize {
-                stored
-            } else {
-                let mut d = Vec::with_capacity(BLOCK as usize);
-                let inflated = ZlibDecoder::new(&stored[..])
-                    .take(BLOCK + 1)
-                    .read_to_end(&mut d);
-                if inflated.is_err() || d.len() != BLOCK as usize {
-                    return Err(err(format!(
-                        "damaged PFSC container: block {n} does not inflate to 64 KiB"
-                    )));
+            // A bad read of a good file (a shaky USB drive or network share) looks the same as
+            // a damaged block, and one used to end hours of work (#685): read it again first.
+            let mut tries = 0;
+            let plain = loop {
+                tries += 1;
+                match self.read_block(r, n, start, end) {
+                    Ok(plain) => break plain,
+                    Err(_) if tries < BLOCK_READ_TRIES => {}
+                    Err(e) => return Err(e),
                 }
-                d
             };
             if self.cache.len() >= CACHE_BLOCKS {
                 self.cache.remove(0);
@@ -848,5 +864,90 @@ fn prefix(label: &str, e: Error) -> Error {
         Error::Format(m) => Error::Format(format!("{label}: {m}")),
         Error::Io(io) => Error::Format(format!("{label}: {io}")),
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flate2::Compression;
+    use flate2::write::ZlibEncoder;
+    use std::io::{Cursor, Write};
+
+    /// A one-block container, and where its compressed data starts.
+    fn container() -> (Vec<u8>, Vec<u8>, u64) {
+        let plain: Vec<u8> = (0..BLOCK).map(|i| (i % 251) as u8).collect();
+        let mut z = ZlibEncoder::new(Vec::new(), Compression::default());
+        z.write_all(&plain).unwrap();
+        let data = z.finish().unwrap();
+        let data_at = PFSC_TABLE_AT + 16;
+        let mut f = vec![0u8; data_at as usize];
+        f[0..4].copy_from_slice(&PFSC_MAGIC.to_le_bytes());
+        f[0x0C..0x10].copy_from_slice(&(BLOCK as u32).to_le_bytes());
+        f[0x10..0x18].copy_from_slice(&BLOCK.to_le_bytes());
+        f[0x18..0x20].copy_from_slice(&PFSC_TABLE_AT.to_le_bytes());
+        f[0x20..0x28].copy_from_slice(&data_at.to_le_bytes());
+        f[0x28..0x30].copy_from_slice(&BLOCK.to_le_bytes());
+        let t = PFSC_TABLE_AT as usize;
+        f[t..t + 8].copy_from_slice(&data_at.to_le_bytes());
+        f[t + 8..t + 16].copy_from_slice(&(data_at + data.len() as u64).to_le_bytes());
+        f.extend_from_slice(&data);
+        (f, plain, data_at)
+    }
+
+    /// Hands back wrong bytes for the first `bad` reads that touch the compressed data.
+    struct Shaky {
+        inner: Cursor<Vec<u8>>,
+        data_at: u64,
+        bad: u32,
+    }
+    impl Read for Shaky {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let at = self.inner.position();
+            let n = self.inner.read(buf)?;
+            if at >= self.data_at && self.bad > 0 {
+                self.bad -= 1;
+                buf[..n].iter_mut().for_each(|b| *b ^= 0x5A);
+            }
+            Ok(n)
+        }
+    }
+    impl Seek for Shaky {
+        fn seek(&mut self, to: SeekFrom) -> io::Result<u64> {
+            self.inner.seek(to)
+        }
+    }
+
+    fn read_with(bad: u32) -> (Result<Vec<u8>>, Vec<u8>) {
+        let (f, plain, data_at) = container();
+        let stored = f.len() as u64;
+        let mut r = Shaky {
+            inner: Cursor::new(f),
+            data_at,
+            bad,
+        };
+        let e = Extent {
+            at: 0,
+            stored,
+            len: BLOCK,
+            compressed: true,
+        };
+        let mut p = Pfsc::open(&mut r, e).unwrap();
+        (p.block(&mut r, 0).map(<[u8]>::to_vec), plain)
+    }
+
+    #[test]
+    fn a_bad_read_of_a_good_block_is_read_again() {
+        for bad in [0, 1, BLOCK_READ_TRIES - 1] {
+            let (got, plain) = read_with(bad);
+            assert_eq!(got.unwrap(), plain, "{bad} bad reads");
+        }
+    }
+
+    #[test]
+    fn a_block_that_stays_bad_is_still_called_damaged() {
+        let (got, _) = read_with(BLOCK_READ_TRIES);
+        let e = got.unwrap_err().to_string();
+        assert!(e.contains("does not inflate"), "{e}");
     }
 }

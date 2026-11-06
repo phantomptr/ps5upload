@@ -1,3 +1,4 @@
+import { hostOf } from "../../lib/addr";
 /**
  * What the Send tab says about a picked payload, from `payload_probe`'s code
  * (client/src-tauri/src/commands/probes.rs).
@@ -67,4 +68,16 @@ export function probeVerdict(code: string, isPs5upload: boolean, error?: string)
         good: isPs5upload,
       };
   }
+}
+
+/** The address being sent to is the selected console, and that one is asleep: its loader isn't
+ *  running, so a send can't work. Another address typed here is its own console. */
+export function sendBlockedByRest(
+  target: string | null | undefined,
+  selected: string | null | undefined,
+  power: string,
+  helper: string,
+): boolean {
+  const same = !!target?.trim() && !!selected?.trim() && hostOf(target.trim()) === hostOf(selected.trim());
+  return same && power === "rest" && helper === "down";
 }

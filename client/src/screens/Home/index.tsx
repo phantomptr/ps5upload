@@ -190,8 +190,13 @@ export default function HomeScreen() {
                 icon={Rocket}
                 label={tr("v5_qa_send_payload", undefined, "Send Payload")}
                 // A payload goes to the console's loader, not the helper: it is often what
-                // gets the helper (or kstuff) running in the first place.
-                readiness={readinessFor("local-only")}
+                // gets the helper (or kstuff) running in the first place. The loader doesn't run
+                // in rest mode, though (#681).
+                readiness={
+                  resting
+                    ? { ready: false, blockers: [tr("status_ps5_rest_mode", "In rest mode")], warnings: [] }
+                    : readinessFor("local-only")
+                }
               />
               <ActionTile
                 to="/games"

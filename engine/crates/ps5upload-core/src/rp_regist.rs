@@ -339,12 +339,26 @@ pub(crate) fn reply_for_log(reply: &HttpReply) -> String {
     )
 }
 
+/// What to say when the console's answer isn't an HTTP reply. Only its size: the rest is not ours
+/// to put in a log.
+fn unreadable_reply(len: usize) -> String {
+    let what = if len == 0 {
+        "The PS5 closed the connection without answering".to_string()
+    } else {
+        format!("The PS5 sent a reply the app can't read ({len} bytes)")
+    };
+    format!(
+        "{what}. Its Remote Play may be stuck on an earlier session: close Remote Play on any other \
+         device, restart the PS5 and try again"
+    )
+}
+
 /// Split a raw HTTP response into its status code, headers and body.
 pub(crate) fn split_http(raw: &[u8]) -> Result<HttpReply> {
     let split = raw
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
-        .ok_or_else(|| anyhow!("no header/body break in the console's reply"))?;
+        .ok_or_else(|| anyhow!("{}", unreadable_reply(raw.len())))?;
     let head = String::from_utf8_lossy(&raw[..split]);
     let body = raw[split + 4..].to_vec();
 
@@ -705,6 +719,18 @@ mod tests {
             .headers
             .iter()
             .any(|(k, v)| k == "rp-version" && v == "1.0"));
+    }
+
+    #[test]
+    fn a_reply_that_is_not_http_gets_a_plain_error_with_only_its_size() {
+        let none = split_http(b"").err().unwrap().to_string();
+        assert!(none.contains("without answering"), "{none}");
+        let junk = split_http(b"secret-looking bytes")
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(junk.contains("20 bytes"), "{junk}");
+        assert!(!junk.contains("secret"), "{junk}");
     }
 
     #[test]
