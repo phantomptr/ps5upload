@@ -4,6 +4,12 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.2.6
+
+- Dependency updates, including a much newer SMB client (0.39) and audio library (cpal 0.18). Browsing, reading, uploading, renaming and deleting on a network share were checked against a real Samba server.
+- DualSense haptics keep playing through a small audio glitch. The new audio library reports glitches as errors, and those no longer stop the rumble.
+- Thanks & Support: two more names on the list. Thank you!
+
 ## 11.2.5
 
 - Hardware: Read sensors works while a game runs. It used to wait 30 seconds and bring back only the temperatures, because the measured CPU clock doesn't answer during a game. Now the fan, GPU and core clocks come back in about 2 seconds, then almost at once, and only the measured clock waits until the game is closed.

@@ -627,7 +627,7 @@ Thank you to everyone who has supported PS5Upload. Every coffee keeps it going. 
 the website list you too, under Thanks & Support.)
 
 <!-- supporters:start (scripts/supporters.mjs) -->
-BigPapii420 · clincher · Ice · Marv530e · San · Dennis · gabuscus · Slappula · b1ackcoffee · drsam · f0d · John Malpas · kheops · LEO · Lucky · MagneTo · Peejay571 · Ronnie K. · B3aver08 · Beetle · David Rabilero · Florian · hernanr1993 · JB · Joe Szymkowicz · Joey Lam · kuttenkop de kutjelikker · Mehmet · Niko · StrijderNL · Ferko · GerardoPTC · Griffdaddy · here · Mayankk! · Rubén · Turcan Vadim · Zeiko
+BigPapii420 · clincher · Ice · Marv530e · San · Dennis · gabuscus · Slappula · b1ackcoffee · drsam · f0d · John Malpas · kheops · LEO · Lucky · MagneTo · Peejay571 · Ronnie K. · B3aver08 · Beetle · David Rabilero · Florian · hernanr1993 · JB · Joe Szymkowicz · Joey Lam · kuttenkop de kutjelikker · Mehmet · Niko · StrijderNL · Ferko · GerardoPTC · Griffdaddy · here · Mayankk! · Rubén · Turcan Vadim · Zeiko · GorFMan · Pedro Madureira
 
 …and 8 anonymous supporters. Thank you all! 💛
 

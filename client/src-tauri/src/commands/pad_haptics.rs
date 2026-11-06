@@ -192,7 +192,11 @@ mod output {
     fn build(d: &cpal::Device, stop: Arc<AtomicBool>) -> Option<cpal::Stream> {
         let (cfg, format) = config(d)?;
         let ch = usize::from(cfg.channels);
-        let on_err = move |e: cpal::StreamError| {
+        let on_err = move |e: cpal::Error| {
+            // A late buffer is a small gap in the rumble; only a stream that has stopped ends it.
+            if e.kind() == cpal::ErrorKind::Xrun {
+                return;
+            }
             eprintln!("[pad-haptics] stream error: {e}");
             stop.store(true, Ordering::Relaxed);
         };
@@ -209,9 +213,9 @@ mod output {
         }
         let s = match format {
             cpal::SampleFormat::F32 => {
-                d.build_output_stream::<f32, _, _>(&cfg, cb::<f32>(ch), on_err, None)
+                d.build_output_stream::<f32, _, _>(cfg, cb::<f32>(ch), on_err, None)
             }
-            _ => d.build_output_stream::<i16, _, _>(&cfg, cb::<i16>(ch), on_err, None),
+            _ => d.build_output_stream::<i16, _, _>(cfg, cb::<i16>(ch), on_err, None),
         };
         match s {
             Ok(s) => s.play().ok().map(|_| s),

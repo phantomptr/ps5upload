@@ -1,6 +1,6 @@
 [package]
 name = "ps5upload-desktop"
-version = "11.2.5"
+version = "11.2.6"
 description = "The all-in-one PS5 companion app."
 license = "GPL-3.0-or-later"
 edition = "2021"
@@ -123,7 +123,7 @@ hidapi = { version = "2.6", default-features = false, features = ["windows-nativ
 # Desktop-only: a DualSense's haptics for Remote Play (commands/pad_haptics.rs), played on the
 # controller's USB audio device (channels 3 and 4). Apache-2.0. CoreAudio on macOS, WASAPI on
 # Windows, ALSA on Linux (libasound2-dev to build, libasound.so.2 at run time).
-cpal = "0.17"
+cpal = "0.18"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios", all(target_os = "windows", target_arch = "aarch64"))))'.dependencies]
 jpegxr = "0.3"
