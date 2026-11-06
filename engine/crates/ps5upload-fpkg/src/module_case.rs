@@ -175,11 +175,15 @@ pub fn tree_fixes(tree: &mut dyn SourceTree) -> Vec<CaseFix> {
     fixes(&paths, names.iter().map(String::as_str))
 }
 
-/// [`crate::source::open`] with the renames applied, and the renames. Every read of a build's
-/// source (the write and, later, the verify that reopens it) goes through this, so both see the
-/// same names.
-pub fn open(path: &std::path::Path) -> crate::Result<(Box<dyn SourceTree>, Vec<CaseFix>)> {
-    Ok(CaseFixed::wrap(crate::source::open(path)?))
+/// [`crate::source::open`] with the renames applied and unsigned executables fake-signed
+/// ([`crate::fself`]), and what was done. Every read of a build's source (the write and, later,
+/// the verify that reopens it) goes through this, so both see the same names and bytes.
+pub fn open(
+    path: &std::path::Path,
+) -> crate::Result<(Box<dyn SourceTree>, Vec<CaseFix>, crate::fself::Signing)> {
+    let (tree, fixes) = CaseFixed::wrap(crate::source::open(path)?);
+    let (tree, signing) = crate::fself::wrap(tree);
+    Ok((tree, fixes, signing))
 }
 
 /// One line per rename, for a log or a readiness detail.

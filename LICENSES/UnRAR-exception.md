@@ -24,9 +24,10 @@ would otherwise forbid combining with GPL code (GPLv3 §7). To resolve that, the
 copyright holder grants the following additional permission. It covers the
 code the ps5upload project holds the copyright to, which is all the GPL code in
 `ps5upload-unrar`. (The PS5 Dump Forge image writers in
-`engine/crates/ps5-dump-forge-*` also carry their authors' own, identically
-worded exception, PS5 Dump Forge's `vendor/LICENSE-UnRAR-exception.md`; they are
-not part of `ps5upload-unrar`.)
+`engine/crates/ps5-dump-forge-*` and the fake-signing port in
+`engine/crates/ps5upload-fpkg/src/fself.rs` also carry their authors' own,
+identically worded exception, PS5 Dump Forge's
+`vendor/LICENSE-UnRAR-exception.md`; they are not part of `ps5upload-unrar`.)
 
 ## Additional permission under GNU GPL version 3 section 7
 

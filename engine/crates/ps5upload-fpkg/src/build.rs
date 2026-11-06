@@ -288,7 +288,11 @@ fn build_mode(
     mode: Mode,
 ) -> Result<BuildReport> {
     enter(control, Stage::Check);
-    let mut tree = source::open(&request.source)?;
+    // An unsigned executable would install and then never start: it goes in fake-signed.
+    let (mut tree, signing) = crate::fself::wrap(source::open(&request.source)?);
+    if let Some(line) = signing.describe() {
+        progress(&line);
+    }
     let mut files: Vec<SourceFile> = tree.files().to_vec();
     if files.is_empty() {
         return format_err(format!("{} has no files", tree.describe()));

@@ -50,6 +50,11 @@ pub fn hash(path: &str) -> u64 {
     h.max(1)
 }
 
+/// Where record `i`'s size sits in an index (a plain u64, no checksum over it).
+pub(crate) fn size_at(i: usize) -> usize {
+    HEADER + i * RECORD + 8
+}
+
 /// The index's name at the image root.
 pub const NAME: &str = "ampr_emu.index";
 

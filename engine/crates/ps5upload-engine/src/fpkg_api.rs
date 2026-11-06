@@ -940,13 +940,16 @@ pub(crate) async fn exfat_build_handler(
             return Ok(tree);
         }
         // A UFS2 image (.ffpkg) is case-sensitive like /data: give modules the eboot's spelling.
-        let (mut tree, renamed) =
+        let (mut tree, renamed, signing) =
             ps5upload_fpkg::module_case::open(&scan_source).map_err(|e| e.to_string())?;
         if !renamed.is_empty() {
             crate::log_info!(
                 "image build: renamed to the eboot's spelling: {}",
                 ps5upload_fpkg::module_case::describe(&renamed)
             );
+        }
+        if let Some(line) = signing.describe() {
+            crate::log_info!("image build: {line}");
         }
         if check_packs && install_runtime {
             // The game's own ampr_emu is missing or too old for packs: the image gets the
@@ -1373,13 +1376,16 @@ pub(crate) async fn folder_build_handler(
         // An image ignores letter case and /data does not: a Unity dump whose
         // Il2cppUserAssemblies.prx the eboot loads as Il2CppUserAssemblies.prx plays from the
         // image and crashes a second in from the folder. The folder takes the eboot's spelling.
-        let (tree, renamed) =
+        let (tree, renamed, signing) =
             ps5upload_fpkg::module_case::open(&scan_source).map_err(|e| e.to_string())?;
         if !renamed.is_empty() {
             crate::log_info!(
                 "folder build: renamed to the eboot's spelling: {}",
                 ps5upload_fpkg::module_case::describe(&renamed)
             );
+        }
+        if let Some(line) = signing.describe() {
+            crate::log_info!("folder build: {line}");
         }
         Ok::<_, String>(Unpacked::Tree(tree))
     })
@@ -1508,7 +1514,7 @@ pub(crate) async fn folder_build_handler(
                 Unpacked::Tree(t) | Unpacked::File { tree: t, .. } => t,
             }),
             None => ps5upload_fpkg::module_case::open(&reopen_source)
-                .map(|(t, _)| t)
+                .map(|(t, _, _)| t)
                 .map_err(|e| e.to_string()),
         };
         let outcome = match unpacked {
