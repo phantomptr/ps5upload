@@ -20,6 +20,8 @@ class FakePort {
 let ctxs: FakeAudioContext[] = [];
 let nodes: FakeWorkletNode[] = [];
 let workers: FakeWorker[] = [];
+/** Every animation frame asked for, so none outlives its test. */
+const frames = new Set<ReturnType<typeof setTimeout>>();
 let sockets: FakeSocket[] = [];
 
 class FakeAudioContext {
@@ -132,7 +134,11 @@ beforeEach(() => {
     clearTimeout,
     setInterval,
     clearInterval,
-    requestAnimationFrame: (cb: () => void) => setTimeout(cb, 16) as unknown as number,
+    requestAnimationFrame: (cb: () => void) => {
+      const id = setTimeout(cb, 16);
+      frames.add(id);
+      return id as unknown as number;
+    },
     cancelAnimationFrame: (id: number) => clearTimeout(id),
   });
   const docEvents = new EventTarget();
@@ -154,6 +160,9 @@ beforeEach(() => {
   vi.stubGlobal("VideoDecoder", { isConfigSupported: async () => ({ supported: true }) });
 });
 afterEach(() => {
+  // A stream a test left running must not tick once `window` is gone.
+  for (const id of frames) clearTimeout(id);
+  frames.clear();
   vi.unstubAllGlobals();
 });
 
