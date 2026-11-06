@@ -69,7 +69,7 @@ sha2 = "0.11"
 flate2 = "1"
 # Unpacks the pinned ffmpeg for Linux (BtbN's .tar.xz) for Go live (ffmpeg_tool.rs). Already in
 # the tree through sevenz-rust2; "xz" adds its .xz reader.
-lzma-rust2 = { version = "0.21", default-features = false, features = ["std", "xz"] }
+lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "xz"] }
 # Mesh Drive passwords (Argon2id).
 argon2 = { version = "0.6", default-features = false, features = ["alloc"] }
 russh = { version = "0.65", default-features = false, features = ["ring", "rsa", "flate2"] }
