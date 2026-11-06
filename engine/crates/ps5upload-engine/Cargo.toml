@@ -35,7 +35,7 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 # Already a workspace dependency via ps5upload-core; not a new build cost.
 blake3.workspace = true
 mime_guess = { version = "2", optional = true }
-smb2 = "0.23"
+smb2 = "0.39"
 ps5upload-core = { path = "../ps5upload-core" }
 ps5upload-pkg = { path = "../ps5upload-pkg" }
 ps5upload-fpkg = { path = "../ps5upload-fpkg" }
