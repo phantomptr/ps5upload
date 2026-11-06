@@ -10,4 +10,4 @@ description = "Writes the engine's OpenAPI document from its source: the routes,
 proc-macro2 = "1"
 quote = "1"
 serde_json.workspace = true
-syn = { version = "2", features = ["full", "visit", "visit-mut"] }
+syn = { version = "3", features = ["full", "visit", "visit-mut"] }
