@@ -194,7 +194,7 @@ jobs:
             ${{ runner.os }}-engine-test-${{ matrix.part }}-
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2
         with:
           tool: cargo-nextest
 
@@ -579,7 +579,7 @@ jobs:
       # like the cargo caches above (a PR's own entries would be visible to that PR alone);
       # a PR reads main's. A cache sccache cannot reach is a miss, never a failed build.
       - name: Install sccache
-        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2
         with:
           tool: sccache@0.18.0
 
@@ -881,7 +881,7 @@ jobs:
           node-version: 22
           check-latest: true
       - name: Install cargo-audit
-        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2
         with:
           tool: cargo-audit
       - name: Install gitleaks (checksum-verified release)
@@ -982,7 +982,7 @@ jobs:
           components: llvm-tools-preview
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2
         with:
           tool: cargo-llvm-cov
 
@@ -991,7 +991,7 @@ jobs:
       # ~26 of this job's ~32 min). engine/.config/nextest.toml still serializes the
       # timing-sensitive binaries.
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2
         with:
           tool: cargo-nextest
 
