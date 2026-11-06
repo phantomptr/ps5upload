@@ -46,6 +46,21 @@ export function controllerScale(
   return Math.round(fit * s * 1000) / 1000;
 }
 
+/** The home bar's room at most, CSS px (it isn't known here). */
+const BOTTOM_ROOM = 34;
+
+/**
+ * Upright: whether `height` of black under the picture is too little for the rows of a controller
+ * drawn `k` times its size, from the top: the shoulders, the D-pad and the face buttons (156 tall),
+ * the sticks (124), and Create and Options. The gaps keep their 44 px hit areas when drawn small.
+ */
+export function deckIsShort(k: number, height: number): boolean {
+  if (!(height > 0)) return false;
+  const rows =
+    8 + Math.max(112 * k, 90) + 156 * k + 124 * k + Math.max(56 * k, 44) + BOTTOM_ROOM;
+  return rows > height;
+}
+
 /**
  * Where a stick's thumb disc is drawn, px from the ring's centre, for an axis pair in
  * -32767..32767: inside a circle of `travel` (the axes are clamped as a square, the disc never

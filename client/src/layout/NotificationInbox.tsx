@@ -32,7 +32,7 @@ export function panelPlacementClass(placement: "above" | "below"): string {
  *  and never taller than the screen above the tab bar (its list scrolls).
  *  Wherever the bell sits, nothing can be cut off. */
 export const PANEL_SHEET =
-  "max-md:fixed max-md:inset-x-2 max-md:top-[calc(var(--safe-top)+3.75rem)] max-md:bottom-auto max-md:m-0 max-md:w-auto max-md:max-w-none max-md:max-h-[calc(100vh-var(--safe-top)-var(--safe-bottom)-10rem)]";
+  "panel-sheet-x max-md:fixed max-md:top-[calc(var(--safe-top)+3.75rem)] max-md:bottom-auto max-md:m-0 max-md:w-auto max-md:max-w-none max-md:max-h-[calc(100vh-var(--safe-top)-var(--safe-bottom)-10rem)]";
 
 /** How many of the latest notifications the bell shows; the rest are on the
  *  Notifications screen. */

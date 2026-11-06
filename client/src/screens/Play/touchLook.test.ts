@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { controllerScale, thumbOffset, touchOpacity } from "./touchLook";
+import { controllerScale, deckIsShort, thumbOffset, touchOpacity } from "./touchLook";
 
 describe("touchOpacity", () => {
   it("keeps a setting in range", () => {
@@ -62,5 +62,15 @@ describe("thumbOffset", () => {
     const { dx, dy } = thumbOffset(16384, 16384, 30);
     expect(dx).toBeCloseTo(15, 0);
     expect(dy).toBeCloseTo(15, 0);
+  });
+});
+
+describe("deckIsShort", () => {
+  it("says so when the rows don't fit the black under the picture", () => {
+    // A folded iPhone Duo upright, and the phone the deck was drawn for.
+    expect(deckIsShort(0.7, 328)).toBe(true);
+    expect(deckIsShort(1, 534)).toBe(false);
+    // Not measured yet: nothing to say.
+    expect(deckIsShort(1, 0)).toBe(false);
   });
 });

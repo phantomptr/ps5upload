@@ -489,13 +489,33 @@ fn build_mode(
     // A libSceAmpr title looks its files up through `ampr_emu.index` at the image root (see
     // `ampr_index`), and `ampr_emu` trusts its sizes. It is always generated from exactly the
     // files packaged: a dump's own copy lists the folder as it was, before the param.json
-    // rewrite, executable repairs, left-out files and the icons the container carries.
+    // rewrite, executable repairs, left-out files and the icons the container carries. An
+    // LZ4-packed source's is the exception (`source::lz4_packed`): it goes in byte for byte.
     let mut generated: std::collections::HashMap<String, Vec<u8>> =
         std::collections::HashMap::new();
     let dump_index = files
         .iter()
         .any(|f| f.path.eq_ignore_ascii_case(AMPR_INDEX));
-    if dump_index || source::imports_ampr(tree.as_mut(), "eboot.bin") {
+    if source::lz4_packed(tree.as_mut())? {
+        let at = files
+            .iter()
+            .find(|f| f.path.eq_ignore_ascii_case(AMPR_INDEX))
+            .map(|f| f.path.clone());
+        let readable = match at {
+            Some(path) => crate::ampr_index::parse(&tree.read(&path)?).is_some(),
+            None => false,
+        };
+        if !readable {
+            return format_err(format!(
+                "{} holds LZ4 packs but no readable {AMPR_INDEX}, the one list of the files \
+                 inside them, so a package can't be made from it",
+                tree.describe()
+            ));
+        }
+        progress(&format!(
+            "keeping the LZ4-packed game's {AMPR_INDEX}: it has to match the packs"
+        ));
+    } else if dump_index || source::imports_ampr(tree.as_mut(), "eboot.bin") {
         files.retain(|f| !f.path.eq_ignore_ascii_case(AMPR_INDEX));
         let mut listed: Vec<(String, u64)> =
             files.iter().map(|f| (f.path.clone(), f.size)).collect();

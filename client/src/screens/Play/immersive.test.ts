@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const invoke = vi.fn(async (..._a: unknown[]) => undefined);
 vi.mock("../../lib/invokeLogged", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 vi.mock("../../lib/tauriEnv", () => ({ isTauriEnv: () => true }));
-vi.mock("../../lib/platform", () => ({ isAndroid: () => true, isMobile: () => true }));
+vi.mock("../../lib/platform", () => ({ isAndroid: () => true, isIOS: () => false, isMobile: () => true }));
 
 import {
   lockLandscape,

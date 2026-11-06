@@ -424,6 +424,35 @@ pub(crate) fn build(
     cancel: &AtomicBool,
     stage: &mut dyn FnMut(&str, u64, u64),
 ) -> Result<FolderBuilt, String> {
+    // A libSceAmpr game gets a fresh ampr_emu.index, as an image and a package do (#449): a stale
+    // one crashes the game. The read-back makes the same index from the source opened again.
+    let mtime = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    if let Some(mut indexed) = crate::image_build::AmprIndexed::wrap_at(&mut *tree, mtime)? {
+        return build_tree(
+            &mut indexed,
+            reopen,
+            Some(mtime),
+            target,
+            mode,
+            cancel,
+            stage,
+        );
+    }
+    build_tree(tree, reopen, None, target, mode, cancel, stage)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_tree(
+    tree: &mut dyn SourceTree,
+    reopen: &dyn Fn() -> Result<Box<dyn SourceTree>, String>,
+    index_mtime: Option<i64>,
+    target: &Path,
+    mode: VerifyMode,
+    cancel: &AtomicBool,
+    stage: &mut dyn FnMut(&str, u64, u64),
+) -> Result<FolderBuilt, String> {
     if tree.files().is_empty() {
         return Err(format!("{} has no files in it", tree.describe()));
     }
@@ -469,11 +498,19 @@ pub(crate) fn build(
         }
 
         let mut fresh = reopen()?;
+        let mut indexed = match index_mtime {
+            Some(m) => crate::image_build::AmprIndexed::wrap_at(&mut *fresh, m)?,
+            None => None,
+        };
+        let source: &mut dyn SourceTree = match indexed.as_mut() {
+            Some(i) => i,
+            None => &mut *fresh,
+        };
         let summary = verify(
             &partial,
             &listed,
             &empty_dirs,
-            &mut *fresh,
+            source,
             mode,
             cancel,
             &mut |d, t| stage("verify", d, t),
@@ -672,6 +709,47 @@ mod tests {
             assert_eq!(stages, ["write", "verify"]);
         }
         r
+    }
+
+    /// A libSceAmpr game's stale index doesn't reach the folder, and the read-back sees the same
+    /// fresh one; an LZ4-packed game's index is kept, since it also lists what is in the packs.
+    #[test]
+    fn a_stale_ampr_index_is_replaced_unless_the_game_is_packed() {
+        let root = scratch("ampr");
+        let src = root.join("PPSA77778");
+        std::fs::create_dir_all(src.join("sce_sys")).unwrap();
+        let mut eboot = vec![7u8; 5000];
+        eboot[1000..1014].copy_from_slice(b"libSceAmpr.prx");
+        std::fs::write(src.join("eboot.bin"), &eboot).unwrap();
+        std::fs::write(src.join("sce_sys/param.json"), b"{}").unwrap();
+        std::fs::write(src.join("ampr_emu.index"), b"stale").unwrap();
+        let run = |name: &str| {
+            let target = root.join(name);
+            let mut tree = FolderSource::open(&src).unwrap();
+            let again = src.clone();
+            let reopen = move || -> Result<Box<dyn SourceTree>, String> {
+                Ok(Box::new(
+                    FolderSource::open(&again).map_err(|e| e.to_string())?,
+                ))
+            };
+            build(
+                &mut tree,
+                &reopen,
+                &target,
+                VerifyMode::Full,
+                &AtomicBool::new(false),
+                &mut |_, _, _| {},
+            )
+            .unwrap();
+            std::fs::read(target.join("ampr_emu.index")).unwrap()
+        };
+        let fresh = ps5upload_fpkg::ampr_index::parse(&run("fresh")).expect("a real index");
+        assert!(fresh
+            .iter()
+            .any(|e| e.path == "eboot.bin" && e.size == 5000));
+        std::fs::write(src.join("ampr_assets.index"), b"AMPRPAK4 and the rest").unwrap();
+        assert_eq!(run("packed"), b"stale");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// An image whose module the eboot loads in another letter case unpacks with the eboot's
