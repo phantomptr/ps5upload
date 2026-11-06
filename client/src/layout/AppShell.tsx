@@ -1768,7 +1768,7 @@ export default function AppShell() {
       {isTauriEnv() && <CaptureViewer />}
       {/* v5 mobile top bar — kept slim; primary nav is the bottom
           tab bar. Only renders below md. */}
-      <div className="h-top-bar flex items-center gap-2.5 px-4 pb-2 pt-[calc(var(--safe-top)_+_0.5rem)] md:hidden">
+      <div className="h-top-bar flex shrink-0 items-center gap-2.5 pb-2 pl-[calc(var(--safe-left)_+_1rem)] pr-[calc(var(--safe-right)_+_1rem)] pt-[calc(var(--safe-top)_+_0.5rem)] md:hidden">
         <NavigationControls />
         <AppLogo size={28} />
         <span className="text-base font-semibold tracking-[-0.02em]">PS5Upload</span>

@@ -4,6 +4,13 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.2.5
+
+- Hardware: Read sensors works while a game runs. It used to wait 30 seconds and bring back only the temperatures, because the measured CPU clock doesn't answer during a game. Now the fan, GPU and core clocks come back in about 2 seconds, then almost at once, and only the measured clock waits until the game is closed.
+- Play Together: with Picture on this device off, the first friend uses the stream's own controller, so there's room for 3 friends beside your DualSense on the TV. If you turn the picture back on, they keep that controller until they leave. (#687)
+- iPhone: built with Xcode 27.1, so the app should fill the iPhone Duo's screen, folded and unfolded, and change layout without restarting. (#675)
+- Phones: the top bar is no longer cut off on a screen with no space above it, and stays clear of the status bar when held sideways.
+
 ## 11.2.4
 
 - Play: when a computer can't show any picture from a stream, the app no longer repeats "could not decode the picture" forever. It switches to H.264 and asks you to press Start again, then tries software decoding, and only then stops and says so. It came up on an older Intel Mac. (#683)
