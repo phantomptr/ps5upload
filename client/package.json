@@ -39,7 +39,7 @@
     "clsx": "^2.1.1",
     "html-to-image": "^1.11.13",
     "lucide-react": "^1.67.0",
-    "mediabunny": "1.65.0",
+    "mediabunny": "1.65.1",
     "qrcode-generator": "2.0.4",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
