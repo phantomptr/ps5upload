@@ -4,6 +4,11 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.5.1
+
+- Keyboard & mouse in Play: a double click in a game no longer switches full screen and drops the mouse; only one started from the free cursor does. Ctrl+R and F5 reach the game instead of being swallowed (the app still never reloads). In a window, Esc gives the mouse back (the browser always does that); the stream now says so and suggests full screen, where a quick Esc goes to the game.
+- Accounts: an avatar that is a JPEG named .png shows instead of the placeholder. (#718)
+
 ## 11.5.0
 
 Remote Play:
