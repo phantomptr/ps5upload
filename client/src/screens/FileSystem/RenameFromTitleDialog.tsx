@@ -10,11 +10,13 @@ import {
   DEFAULT_NAME_FORMATS,
   fittedName,
   formatOfName,
+  nameFormatProblem,
   nameOverLimit,
   shownName,
   suggestedName,
   type NameValues,
 } from "../../lib/nameFormats";
+import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
 import { useTr } from "../../state/lang";
 import { titleIdOf } from "../FpkgConvert/GameCard";
 
@@ -33,13 +35,22 @@ export function valuesOf(inspection: FpkgInspection, name: string, folder: boole
   };
 }
 
+const KEY_OWN_FORMAT = "ps5upload.files.rename_format";
+const OWN_FORMAT_EXAMPLE = "{title} [{titleid}] <v{version:short}>";
+
 /** Every name the formats give, once each, then shortened twins of those too long to mount. */
-export function nameChoices(values: NameValues, name: string, folder: boolean): string[] {
+export function nameChoices(
+  values: NameValues,
+  name: string,
+  folder: boolean,
+  own?: string,
+): string[] {
   const out: string[] = [];
   const add = (n: string | null) => {
     if (n && n !== name && !out.includes(n)) out.push(n);
   };
-  for (const f of DEFAULT_NAME_FORMATS) {
+  const formats = own?.trim() ? [own, ...DEFAULT_NAME_FORMATS] : DEFAULT_NAME_FORMATS;
+  for (const f of formats) {
     add(suggestedName(f, values, name, folder));
     add(fittedName(f, values, name, folder));
   }
@@ -64,6 +75,8 @@ export function RenameFromTitleDialog({
   const [inspection, setInspection] = useState<FpkgInspection | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [draft, setDraft] = useState(name);
+  const [own, setOwn] = useState(() => safeGetItem(KEY_OWN_FORMAT) ?? "");
+  const ownProblem = own.trim() ? nameFormatProblem(own) : null;
   useEffect(() => {
     let live = true;
     fpkg
@@ -79,8 +92,8 @@ export function RenameFromTitleDialog({
     };
   }, [source]);
   const choices = useMemo(
-    () => (inspection ? nameChoices(valuesOf(inspection, name, folder), name, folder) : []),
-    [inspection, name, folder],
+    () => (inspection ? nameChoices(valuesOf(inspection, name, folder), name, folder, own) : []),
+    [inspection, name, folder, own],
   );
   const over = nameOverLimit(draft.trim());
   return (
@@ -127,6 +140,27 @@ export function RenameFromTitleDialog({
             </button>
           ))}
         </div>
+        <label className="block text-xs">
+          <span className="mb-1 block font-medium">{tr("fs_rename_format", undefined, "Your own format")}</span>
+          <input
+            className="input w-full"
+            value={own}
+            placeholder={OWN_FORMAT_EXAMPLE}
+            data-testid="rename-title-format"
+            onChange={(e) => {
+              setOwn(e.target.value);
+              safeSetItem(KEY_OWN_FORMAT, e.target.value);
+            }}
+          />
+          <span className={`mt-1 block ${ownProblem ? "text-[var(--color-warn)]" : "text-[var(--color-muted)]"}`}>
+            {ownProblem ??
+              tr(
+                "fs_rename_format_hint",
+                undefined,
+                "Fields: {title} {titleid} {contentid} {version} {format} {platform} {name}. Modifiers: {title:upper}, {title:20}, {version:short}. <...> is left out when a value in it is missing. Remembered on this device.",
+              )}
+          </span>
+        </label>
         <input
           className="input w-full"
           value={draft}

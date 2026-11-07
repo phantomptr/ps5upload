@@ -58,6 +58,7 @@ pub(super) fn tools() -> Vec<ToolDef> {
                         "enum": [
                             "upload_file", "upload_dir", "upload_zip", "upload_7z", "upload_rar",
                             "upload_file_list", "link_download", "download", "install",
+                            "image_build", "package_build", "folder_build",
                         ],
                         "description": "What to run.",
                     },

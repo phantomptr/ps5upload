@@ -12,7 +12,8 @@
 //! bytes are stamped with this engine's AVA1 key (no launch token: a stored copy starts at
 //! every boot, a token is good for one launch), so the copy that starts at boot trusts
 //! this engine like the one just sent. A copy that already holds exactly those bytes is
-//! left alone (`unchanged`).
+//! left alone (`unchanged`). A name that carries the old version moves with the new one, where
+//! the slot's `meta.json` names it (as fthdgn-gh/Alembic does for its own payload).
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde::Deserialize;
@@ -79,6 +80,11 @@ trait Console {
     fn is_file(&self, path: &str) -> Result<bool, String>;
     fn blake3(&self, path: &str) -> Option<String>;
     fn write(&self, path: &str, bytes: &[u8]) -> Result<(), String>;
+    /// A small text file, when it can be read.
+    fn read_text(&self, path: &str) -> Option<String>;
+    /// Moves a file within its folder. Never replaces one.
+    fn rename(&self, from: &str, to: &str) -> Result<(), String>;
+    fn exists(&self, path: &str) -> bool;
 }
 
 fn replace(console: &dyn Console, path: &str, bytes: &[u8]) -> Result<Outcome, String> {
@@ -93,7 +99,54 @@ fn replace(console: &dyn Console, path: &str, bytes: &[u8]) -> Result<Outcome, S
         return Ok(Outcome::Unchanged);
     }
     console.write(path, bytes)?;
+    follow_version(console, path, env!("CARGO_PKG_VERSION"));
     Ok(Outcome::Updated(bytes.len()))
+}
+
+/// A helper's file name with its version changed to `version`: `ps5upload-11.2.0.elf`, also
+/// `ps5upload_v11.2.0.elf`. `None` when the name holds no version, or this one already.
+fn renamed_for_version(name: &str, version: &str) -> Option<String> {
+    let stem = name.strip_suffix(".elf")?;
+    let rest = stem.strip_prefix("ps5upload")?;
+    let lead = rest.len() - rest.trim_start_matches(['-', '_', 'v', '.']).len();
+    let (prefix, old) = rest.split_at(lead);
+    let parts: Vec<&str> = old.split('.').collect();
+    let numbered = parts.len() >= 2
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    (numbered && old != version).then(|| format!("ps5upload{prefix}{version}.elf"))
+}
+
+/// Payload Manager lists a slot's file by the name in its `meta.json`, so a name carrying the old
+/// version kept saying so after the bytes were replaced. It moves with the version where that file
+/// names it, and the file's text follows. Best effort: the new bytes are already in place, and a
+/// name that stays is only out of date.
+fn follow_version(console: &dyn Console, path: &str, version: &str) {
+    let Some((dir, name)) = path.rsplit_once('/') else {
+        return;
+    };
+    let Some(to) = renamed_for_version(name, version) else {
+        return;
+    };
+    let meta_path = format!("{dir}/meta.json");
+    let Some(meta) = console.read_text(&meta_path) else {
+        return;
+    };
+    let target = format!("{dir}/{to}");
+    if !meta.contains(name) || console.exists(&target) {
+        return;
+    }
+    if console.rename(path, &target).is_err() {
+        return;
+    }
+    // Back as it was if the slot can't be told: a slot naming a missing file wouldn't start.
+    if console
+        .write(&meta_path, meta.replace(name, &to).as_bytes())
+        .is_err()
+    {
+        let _ = console.rename(&target, path);
+    }
 }
 
 struct Live<'a>(&'a str);
@@ -126,6 +179,16 @@ impl Console for Live<'_> {
         ps5upload_core::diagnostics::fs_write_bytes_large(self.0, path, bytes, false)
             .map(|_| ())
             .map_err(|e| format!("{e:#}"))
+    }
+    fn read_text(&self, path: &str) -> Option<String> {
+        let bytes = ps5upload_core::fs_ops::fs_read(self.0, path, 0, 1 << 20).ok()?;
+        String::from_utf8(bytes).ok()
+    }
+    fn rename(&self, from: &str, to: &str) -> Result<(), String> {
+        ps5upload_core::fs_ops::fs_move(self.0, from, to).map_err(|e| format!("{e:#}"))
+    }
+    fn exists(&self, path: &str) -> bool {
+        ps5upload_core::fs_ops::fs_exists(self.0, path).unwrap_or(true)
     }
 }
 
@@ -222,6 +285,110 @@ mod tests {
         );
     }
 
+    #[derive(Default)]
+    struct Slot {
+        meta: Option<String>,
+        taken: bool,
+        moves: RefCell<Vec<(String, String)>>,
+        written: RefCell<Vec<(String, String)>>,
+        fail_write: bool,
+    }
+
+    impl Console for Slot {
+        fn is_file(&self, _: &str) -> Result<bool, String> {
+            Ok(true)
+        }
+        fn blake3(&self, _: &str) -> Option<String> {
+            None
+        }
+        fn write(&self, path: &str, bytes: &[u8]) -> Result<(), String> {
+            if self.fail_write && path.ends_with("meta.json") {
+                return Err("no".into());
+            }
+            self.written.borrow_mut().push((
+                path.to_string(),
+                String::from_utf8_lossy(bytes).into_owned(),
+            ));
+            Ok(())
+        }
+        fn read_text(&self, _: &str) -> Option<String> {
+            self.meta.clone()
+        }
+        fn rename(&self, from: &str, to: &str) -> Result<(), String> {
+            self.moves
+                .borrow_mut()
+                .push((from.to_string(), to.to_string()));
+            Ok(())
+        }
+        fn exists(&self, _: &str) -> bool {
+            self.taken
+        }
+    }
+
+    #[test]
+    fn a_name_with_a_version_gets_the_new_one() {
+        let r = |n: &str| renamed_for_version(n, "11.4.0");
+        assert_eq!(
+            r("ps5upload-11.2.0.elf").as_deref(),
+            Some("ps5upload-11.4.0.elf")
+        );
+        assert_eq!(
+            r("ps5upload_v9.1.elf").as_deref(),
+            Some("ps5upload_v11.4.0.elf")
+        );
+        assert_eq!(r("ps5upload.elf"), None, "no version in it");
+        assert_eq!(r("ps5upload-11.4.0.elf"), None, "already this one");
+        assert_eq!(r("ps5upload-helper.elf"), None);
+        assert_eq!(r("other-1.0.elf"), None);
+    }
+
+    #[test]
+    fn a_slot_follows_only_where_its_meta_names_the_file() {
+        let path = "/data/pldmgr/slot/ps5upload-1.0.0.elf";
+        let slot = Slot {
+            meta: Some(r#"{"file":"ps5upload-1.0.0.elf","x":1}"#.into()),
+            ..Default::default()
+        };
+        follow_version(&slot, path, "2.0.0");
+        assert_eq!(
+            slot.moves.borrow()[0].1,
+            "/data/pldmgr/slot/ps5upload-2.0.0.elf"
+        );
+        assert_eq!(
+            slot.written.borrow()[0].1,
+            r#"{"file":"ps5upload-2.0.0.elf","x":1}"#
+        );
+
+        let unnamed = Slot {
+            meta: Some("{}".into()),
+            ..Default::default()
+        };
+        follow_version(&unnamed, path, "2.0.0");
+        assert!(unnamed.moves.borrow().is_empty());
+
+        let no_meta = Slot::default();
+        follow_version(&no_meta, path, "2.0.0");
+        assert!(no_meta.moves.borrow().is_empty());
+
+        let taken = Slot {
+            meta: Some("ps5upload-1.0.0.elf".into()),
+            taken: true,
+            ..Default::default()
+        };
+        follow_version(&taken, path, "2.0.0");
+        assert!(taken.moves.borrow().is_empty(), "never replaces a file");
+
+        let failing = Slot {
+            meta: Some("ps5upload-1.0.0.elf".into()),
+            fail_write: true,
+            ..Default::default()
+        };
+        follow_version(&failing, path, "2.0.0");
+        let moves = failing.moves.borrow();
+        assert_eq!(moves.len(), 2);
+        assert_eq!(moves[1].1, path, "put back when the meta can't be written");
+    }
+
     struct Fake {
         file: Option<Vec<u8>>,
         writes: RefCell<usize>,
@@ -239,6 +406,15 @@ mod tests {
         fn write(&self, _: &str, _: &[u8]) -> Result<(), String> {
             *self.writes.borrow_mut() += 1;
             Ok(())
+        }
+        fn read_text(&self, _: &str) -> Option<String> {
+            None
+        }
+        fn rename(&self, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn exists(&self, _: &str) -> bool {
+            false
         }
     }
 

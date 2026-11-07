@@ -263,6 +263,10 @@ function AmprEmuOption() {
   );
 }
 
+/** Product names, the same in every language. */
+const AMPR_EMU = "ampr_emu 0.4.2.1";
+const AMPR_EMU_NG = "ampr-emu-ng 0.3.2";
+
 /** Which emulator a game gets: drakmor's, or quer3q's, which also reads zstd packs. */
 export function AmprEmuBuildChoice({
   build,
@@ -281,8 +285,8 @@ export function AmprEmuBuildChoice({
         className="select w-auto!"
         data-testid="ampr-emu-build"
       >
-        <option value="ampr_emu">{tr("fpkg.image.ampr_emu_build_drakmor", undefined, "ampr_emu 0.4.2.1")}</option>
-        <option value="ampr-emu-ng">{tr("fpkg.image.ampr_emu_build_ng", undefined, "ampr-emu-ng 0.3.2")}</option>
+        <option value="ampr_emu">{AMPR_EMU}</option>
+        <option value="ampr-emu-ng">{AMPR_EMU_NG}</option>
       </select>
     </label>
   );
