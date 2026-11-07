@@ -1255,7 +1255,7 @@ export function StreamPanel() {
           )}
           {playing && kbm.toast && !pip && <KbmToast key={kbm.toast.n} mode={kbm.toast.mode} captured={kbm.toast.captured} />}
           {running && <PadAsks pending={padLink.pending} />}
-          {running && <JoinAsks addr={target?.host ?? null} asks={joinHost.asks} />}
+          {running && <JoinAsks addr={target?.host ?? null} asks={joinHost.asks} seatNext={joinHost.seatNext} />}
           {running && <RpKeyboardBox />}
           {running && <RpPasscodeBox />}
           {running && pip && (

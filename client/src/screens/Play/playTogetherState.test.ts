@@ -40,14 +40,49 @@ describe("Play Together host state", () => {
     expect(s.guests.map((g) => g.name)).toEqual(["Ann", "Ben", "Cy"]);
     expect(s.guests[1]).toMatchObject({ status: "reconnecting", reconnectingLeftS: 42, connected: false });
     expect(s.asks).toEqual([{ id: 11, name: "Dee" }]);
-    expect(s.settings).toEqual({ blockSystemButtons: false, maxPlayers: 3 });
+    expect(s.settings).toEqual({ blockSystemButtons: false, maxPlayers: 3, streamSeat: false });
+    expect(s.seatNext).toBe(false);
+  });
+
+  it("reads the stream seat: the setting, who has it, and whether the next friend gets it (#720)", () => {
+    const s = readJoinState({
+      ...engine,
+      settings: { ...engine.settings, stream_seat: true },
+      seat_next: true,
+      guests: [
+        { id: 1, name: "Ann", player: 1, state: "playing", stream_seat: true },
+        // Moving off it (the host needs it back): Player 1 still, no longer on it.
+        { id: 2, name: "Ben", player: 1, state: "reconnecting", stream_seat: false },
+      ],
+    });
+    expect(s.settings.streamSeat).toBe(true);
+    expect(s.seatNext).toBe(true);
+    expect(s.guests.map((g) => g.streamSeat)).toEqual([true, false]);
+    // An older engine says nothing: its Player 1 was the stream's controller.
+    expect(readJoinState({ guests: [{ id: 3, player: 1 }] }).guests[0].streamSeat).toBe(true);
+    expect(readJoinState({ guests: [{ id: 3, player: 2 }] }).guests[0].streamSeat).toBe(false);
+  });
+
+  it("sends the stream seat setting", async () => {
+    const calls: Array<[string, unknown]> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push([url, init?.body ? JSON.parse(String(init.body)) : null]);
+        return new Response(JSON.stringify(engine), { status: 200 });
+      }),
+    );
+    await joinApi.settings("192.168.1.100", { stream_seat: true });
+    expect(calls[0][0]).toMatch(/\/api\/join\/settings$/);
+    expect(calls[0][1]).toEqual({ addr: "192.168.1.100", stream_seat: true });
+    vi.unstubAllGlobals();
   });
 
   it("an older or broken answer never breaks the panel", () => {
     const s = readJoinState({ guests: [null, { id: 1 }], asks: "x", invite: { code: 1 } });
     expect(s.invite).toBeNull();
     expect(s.guests).toEqual([
-      { id: 1, name: "", player: 0, status: "playing", reconnectingLeftS: null, rttMs: null, connected: true, behind: false },
+      { id: 1, name: "", player: 0, status: "playing", reconnectingLeftS: null, rttMs: null, connected: true, behind: false, streamSeat: false },
     ]);
     expect(s.settings.blockSystemButtons).toBe(false);
     expect(readJoinState(null).helperOk).toBe(true);

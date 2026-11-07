@@ -15,9 +15,26 @@ type Tr = ReturnType<typeof useTr>;
 
 /** Set once the guide card ("press PS, pick Quick Play") was dismissed. */
 const GUIDED_KEY = "ps5upload.join.guided";
+/** The host's stream's own controller (the engine's `STREAM_SEAT`). */
+const STREAM_SEAT = 1;
+
+/** The first-time guide ("press PS, pick a user"): never on the stream's controller, which plays
+ *  as the host's user; again after moving off it onto a controller of their own. */
+export function showsGuide(o: { player: number; guided: boolean; movedOff: boolean; reconnecting: boolean }): boolean {
+  return o.player !== STREAM_SEAT && (!o.guided || o.movedOff) && !o.reconnecting;
+}
 
 /** 42 → "0:42". */
 export { clock };
+
+/** Off the host's stream's controller (they needed it back) with no other controller free. */
+function seatTakenText(tr: Tr, host: string): string {
+  return tr(
+    "join_seat_taken",
+    { host },
+    `${host} needed their controller back and no other controller was free on the PS5, so you're out of the game. Ask ${host} to let you in again.`,
+  );
+}
 
 /** The message for a guest who is not (or no longer) in the game. */
 export function endText(tr: Tr, stage: JoinStage, host: string): string {
@@ -49,6 +66,8 @@ export function endText(tr: Tr, stage: JoinStage, host: string): string {
           { host },
           `This link's address is outside your home network, so the app will not use it. Ask ${host} for a link with their computer's IP address.`,
         );
+      case "seat_taken":
+        return seatTakenText(tr, host);
       default:
         return tr("join_refused_other", { host }, `${host} didn't let you in.`);
     }
@@ -71,6 +90,8 @@ export function endText(tr: Tr, stage: JoinStage, host: string): string {
         return tr("join_ended_lost", { host }, `Couldn't reach ${host}. Check that you're on the same network.`);
       case "left":
         return tr("join_ended_left", undefined, "You left the game.");
+      case "seat_taken":
+        return seatTakenText(tr, host);
     }
   }
   return "";
@@ -192,6 +213,15 @@ export function JoinView({
   const now = useNow(reconnecting);
   const live = stage.kind === "joined" || reconnecting;
   const picking = status?.state === "picking_user";
+  // Player 1 is the host's stream's own controller (#687): signed in as the host's PS5 user, so
+  // there is no user to pick. Moved off it (the host needed it back, #720), the guide comes back.
+  const livePlayer = stage.kind === "joined" || stage.kind === "reconnecting" ? stage.player : 0;
+  const [movedOff, setMovedOff] = useState(false);
+  const lastPlayer = useRef(livePlayer);
+  useEffect(() => {
+    if (lastPlayer.current === STREAM_SEAT && livePlayer > STREAM_SEAT) setMovedOff(true);
+    if (livePlayer) lastPlayer.current = livePlayer;
+  }, [livePlayer]);
   // The buttons over the picture hide after a quiet moment where the picture is the screen
   // (full screen; the /join page always), like a streaming app's. A touch on the picture, a
   // mouse move, Esc or the handle brings them back. Never while the guest must see them
@@ -385,7 +415,8 @@ export function JoinView({
   const tone = delayTone(delay);
   const coarse = coarsePointer();
   const showTouch = live && !reconnecting && !pad.ready && coarse && (!inApp || full);
-  const showGuide = !guided && !reconnecting;
+  const showGuide = showsGuide({ player, guided, movedOff, reconnecting });
+  const onSeat = player === STREAM_SEAT;
   const leftS = reconnecting ? (stage.deadline - now) / 1000 : 0;
   const toggleFull = async () => {
     const next = !full;
@@ -422,9 +453,14 @@ export function JoinView({
           {Math.round(delay)} ms
         </span>
       )}
-      {picking && (
+      {onSeat && (
+        <span className="rounded-full bg-black/60 px-2.5 py-1 text-white/85" data-testid="join-seat-stream">
+          {tr("join_seat_stream", { host }, `You're playing as ${host}'s PS5 user. No need to pick one.`)}
+        </span>
+      )}
+      {picking && !onSeat && (
         <span className="rounded-full bg-white/90 px-2.5 py-1 font-medium text-black" data-testid="join-picking">
-          {tr("join_picking", undefined, "On the TV: pick Quick Play")}
+          {tr("join_picking", undefined, "Press PS, then pick Quick Play on the TV")}
         </span>
       )}
     </>
@@ -649,12 +685,12 @@ export function JoinView({
           </p>
         )}
 
-        {picking && touch && !chrome.shown && !reconnecting && (
+        {picking && !onSeat && touch && !chrome.shown && !reconnecting && (
           <p
             className="pointer-events-none absolute left-1/2 top-2 z-20 -translate-x-1/2 whitespace-nowrap rounded-full bg-white/90 px-2.5 py-1 text-xs font-medium text-black"
             data-testid="join-picking-note"
           >
-            {tr("join_picking", undefined, "On the TV: pick Quick Play")}
+            {tr("join_picking", undefined, "Press PS, then pick Quick Play on the TV")}
           </p>
         )}
 
@@ -665,7 +701,11 @@ export function JoinView({
           >
             <p className="font-semibold">{tr("join_guide_title", undefined, "One more step on the TV")}</p>
             <p className="mt-1 text-white/75">
-              {tr("join_guide_body", undefined, "Press PS on your controller, then on the TV pick Quick Play.")}
+              {tr(
+                "join_guide_body",
+                undefined,
+                'On your controller, press PS once. The TV asks "Who\'s using this controller?". Pick Quick Play or your own user. The host doesn\'t need to do anything.',
+              )}
             </p>
             <p className="mt-1 text-white/60">
               {tr(
@@ -679,6 +719,7 @@ export function JoinView({
               onClick={() => {
                 safeSetItem(GUIDED_KEY, "1");
                 setGuided(true);
+                setMovedOff(false);
               }}
               className="mt-3 rounded-full bg-white px-3 py-1 text-xs font-medium text-black"
               data-testid="join-guide-ok"
