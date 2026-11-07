@@ -7449,6 +7449,7 @@ helper_mismatch_boot_copy: "Seu PS5 iniciou uma cópia antiga do auxiliar que gu
   "rp_kbm_release_to": "Pressione {key} para liberar o teclado e mouse",
   "rp_kbm_card_first": "Seu teclado e mouse agora controlam o PS5. Pressione {key} para recuperá-los.",
   "rp_kbm_card_again": "Para recuperar o teclado e mouse, pressione {key}.",
+  "rp_kbm_card_esc_window": "Em uma janela, Esc devolve o mouse: o navegador sempre faz isso e o app não pode impedir. Jogue em tela cheia: lá um Esc rápido vai para o jogo, e segurar Esc sai da tela cheia.",
   "rp_kbm_card_ok": "Entendi",
   "rp_kbm_chip": "{key} para liberar",
   "rp_kbm_hotkey2": "{key} alterna.",

@@ -7450,6 +7450,7 @@ helper_mismatch_boot_copy: "Votre PS5 a lancé une ancienne copie de l'assistant
   "rp_kbm_release_to": "Appuyez sur {key} pour libérer le clavier et la souris",
   "rp_kbm_card_first": "Votre clavier et votre souris contrôlent maintenant la PS5. Appuyez sur {key} pour les récupérer.",
   "rp_kbm_card_again": "Pour récupérer le clavier et la souris, appuyez sur {key}.",
+  "rp_kbm_card_esc_window": "Dans une fenêtre, Échap rend la souris : le navigateur le fait toujours et l'app ne peut pas l'empêcher. Jouez plutôt en plein écran : là, un Échap rapide va au jeu, et maintenir Échap quitte le plein écran.",
   "rp_kbm_card_ok": "Compris",
   "rp_kbm_chip": "{key} pour libérer",
   "rp_kbm_hotkey2": "{key} pour changer.",

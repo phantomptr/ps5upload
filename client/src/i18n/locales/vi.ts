@@ -7436,6 +7436,7 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
   "rp_kbm_release_to": "Nhấn {key} để nhả bàn phím & chuột",
   "rp_kbm_card_first": "Bàn phím & chuột của bạn đang điều khiển PS5. Nhấn {key} để lấy lại.",
   "rp_kbm_card_again": "Để lấy lại bàn phím & chuột, nhấn {key}.",
+  "rp_kbm_card_esc_window": "Trong cửa sổ, Esc trả lại chuột: trình duyệt luôn làm vậy và ứng dụng không thể ngăn. Hãy chơi toàn màn hình: ở đó nhấn nhanh Esc sẽ vào trò chơi, còn giữ Esc sẽ thoát toàn màn hình.",
   "rp_kbm_card_ok": "Đã hiểu",
   "rp_kbm_chip": "{key} để nhả",
   "rp_kbm_hotkey2": "{key} để chuyển.",

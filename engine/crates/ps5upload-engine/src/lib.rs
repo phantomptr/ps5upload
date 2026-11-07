@@ -9203,6 +9203,34 @@ struct AvatarCurrentQuery {
     uid: u32,
 }
 
+/// The image type of an avatar file by its first bytes: PNG or JPEG, or None (a .dds, say).
+fn avatar_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod avatar_mime_tests {
+    #[test]
+    fn a_jpeg_named_png_is_shown_as_a_jpeg() {
+        assert_eq!(
+            super::avatar_mime(b"\x89PNG\r\n\x1a\nrest"),
+            Some("image/png")
+        );
+        assert_eq!(
+            super::avatar_mime(&[0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10, b'J', b'F']),
+            Some("image/jpeg")
+        );
+        assert_eq!(super::avatar_mime(b"DDS |...."), None);
+        assert_eq!(super::avatar_mime(b""), None);
+    }
+}
+
 /// GET /api/profile/avatar/current?addr&uid — read the user's CURRENT avatar
 /// image from Sony's profile cache so the UI can show it before a change. The
 /// cache dir is `/system_data/priv/cache/profile/0x<UID>/` — UPPERCASE hex, to
@@ -9217,14 +9245,15 @@ async fn profile_avatar_current_handler(
 ) -> impl IntoResponse {
     let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
     let uid = q.uid;
-    let png: Option<Vec<u8>> = tokio::task::spawn_blocking(move || {
+    let found: Option<(Vec<u8>, &'static str)> = tokio::task::spawn_blocking(move || {
         let dir = format!("/system_data/priv/cache/profile/0x{uid:08X}");
         for name in ["avatar.png", "picture.png"] {
             let path = format!("{dir}/{name}");
             if let Ok(bytes) = ps5upload_core::fs_ops::fs_read(&addr, &path, 0, 2 * 1024 * 1024) {
-                // Only trust a real PNG (the cache also holds .dds we can't show).
-                if bytes.starts_with(b"\x89PNG") {
-                    return Some(bytes);
+                // By what the file is, not its name: a PSN avatar is often a JPEG named .png
+                // (#718). The cache also holds .dds we can't show.
+                if let Some(mime) = avatar_mime(&bytes) {
+                    return Some((bytes, mime));
                 }
             }
         }
@@ -9232,10 +9261,10 @@ async fn profile_avatar_current_handler(
     })
     .await
     .unwrap_or(None);
-    let data_url = png.map(|bytes| {
+    let data_url = found.map(|(bytes, mime)| {
         use base64::Engine as _;
         let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-        format!("data:image/png;base64,{b64}")
+        format!("data:{mime};base64,{b64}")
     });
     (
         StatusCode::OK,

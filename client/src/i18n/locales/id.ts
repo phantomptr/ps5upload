@@ -7443,6 +7443,7 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
   "rp_kbm_release_to": "Tekan {key} untuk melepas papan ketik & mouse",
   "rp_kbm_card_first": "Papan ketik & mouse Anda kini mengendalikan PS5. Tekan {key} untuk mengambilnya kembali.",
   "rp_kbm_card_again": "Untuk mengambil kembali papan ketik & mouse, tekan {key}.",
+  "rp_kbm_card_esc_window": "Di jendela, Esc mengembalikan mouse: browser selalu melakukannya dan aplikasi tidak bisa mencegahnya. Mainkan dalam layar penuh: di sana Esc singkat masuk ke game, dan menahan Esc keluar dari layar penuh.",
   "rp_kbm_card_ok": "Mengerti",
   "rp_kbm_chip": "{key} untuk melepas",
   "rp_kbm_hotkey2": "{key} untuk beralih.",

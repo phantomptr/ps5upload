@@ -31,7 +31,7 @@ export function KeyCaps({ shortcut, size = "lg" }: { shortcut: Shortcut; size?: 
   );
 }
 
-export function KbmCaptureCard({ reason, onDone }: { reason: "first" | "attempt"; onDone: () => void }) {
+export function KbmCaptureCard({ reason, onDone }: { reason: "first" | "attempt" | "esc_window"; onDone: () => void }) {
   const tr = useTr();
   const release = useKbmStore((s) => s.shortcuts.release);
   const key = shortcutLabel(release);
@@ -48,7 +48,13 @@ export function KbmCaptureCard({ reason, onDone }: { reason: "first" | "attempt"
       >
         <KeyCaps shortcut={release} />
         <p className="text-sm leading-6 text-white/90">
-          {reason === "first"
+          {reason === "esc_window"
+            ? tr(
+                "rp_kbm_card_esc_window",
+                undefined,
+                "In a window, Esc gives the mouse back: the browser always does that and the app can't stop it. Play in full screen instead: there a quick Esc goes to the game, and holding Esc leaves full screen.",
+              )
+            : reason === "first"
             ? tr(
                 "rp_kbm_card_first",
                 { key },

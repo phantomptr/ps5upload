@@ -107,7 +107,7 @@ interface Opts {
 }
 
 /** The big card over the picture: the first capture on this device, or someone trying to get out. */
-export type KbmHint = { reason: "first" | "attempt"; n: number };
+export type KbmHint = { reason: "first" | "attempt" | "esc_window"; n: number };
 
 export function useNativeKbm({
   stream,
@@ -279,7 +279,7 @@ export function useNativeKbm({
   const [hint, setHint] = useState<KbmHint | null>(null);
   const lastAttempt = useRef(-Infinity);
   const showHint = useCallback((reason: KbmHint["reason"]) => {
-    if (reason === "attempt") {
+    if (reason === "attempt" || reason === "esc_window") {
       const now = performance.now();
       if (now - lastAttempt.current < HINT_COOLDOWN_MS) return;
       lastAttempt.current = now;
@@ -293,14 +293,32 @@ export function useNativeKbm({
     return () => window.clearTimeout(id);
   }, [hint]);
 
+  /** Set while this hook gives the capture back itself: any other end of a lock is the
+   *  browser's own (Esc in a window, where no page can keep it). */
+  const releasing = useRef(false);
   /** Gives the keyboard and mouse back: everything held let go first, then the capture. */
   const release = useCallback(() => {
+    releasing.current = true;
+    window.setTimeout(() => (releasing.current = false), 500);
     listener.reset();
     sender?.releaseAll();
     releaseCapture();
     setHint(null);
     onReleasedRef.current?.();
   }, [listener, sender]);
+
+  // The browser ended the lock itself in a window: Esc does that and no page can stop it there.
+  // Said once in a while, with the way round it (full screen, where a quick Esc is the game's).
+  useEffect(() => {
+    let was = captureState().kind;
+    return subscribeCapture(() => {
+      const now = captureState().kind;
+      if (was === "lock" && now === "none" && !releasing.current && typeof document !== "undefined" && !document.fullscreenElement) {
+        showHint("esc_window");
+      }
+      was = now;
+    });
+  }, [showHint]);
 
   // Where the last press on the picture was: where the virtual pointer starts on a capture.
   const pressAt = useRef<{ x: number; y: number } | null>(null);

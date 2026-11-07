@@ -7387,6 +7387,7 @@ helper_mismatch_boot_copy: "你的 PS5 啟動了為開機保留的舊版助手�
   "rp_kbm_release_to": "按 {key} 釋放鍵盤和滑鼠",
   "rp_kbm_card_first": "鍵盤和滑鼠現在控制 PS5。按 {key} 收回。",
   "rp_kbm_card_again": "要收回鍵盤和滑鼠，請按 {key}。",
+  "rp_kbm_card_esc_window": "在視窗中，按 Esc 會交還滑鼠：瀏覽器總是這樣做，應用程式無法阻止。請改用全螢幕遊玩：全螢幕時短按 Esc 會傳給遊戲，長按 Esc 會離開全螢幕。",
   "rp_kbm_card_ok": "知道了",
   "rp_kbm_chip": "按 {key} 釋放",
   "rp_kbm_hotkey2": "{key} 切換。",

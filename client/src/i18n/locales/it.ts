@@ -7387,6 +7387,7 @@ helper_mismatch_boot_copy: "La PS5 ha avviato una copia più vecchia dell'helper
   "rp_kbm_release_to": "Premi {key} per rilasciare tastiera e mouse",
   "rp_kbm_card_first": "Tastiera e mouse ora controllano la PS5. Premi {key} per riprenderli.",
   "rp_kbm_card_again": "Per riprendere tastiera e mouse, premi {key}.",
+  "rp_kbm_card_esc_window": "In una finestra, Esc restituisce il mouse: il browser lo fa sempre e l'app non può impedirlo. Gioca a schermo intero: lì un Esc rapido va al gioco e tenere premuto Esc esce dallo schermo intero.",
   "rp_kbm_card_ok": "Ho capito",
   "rp_kbm_chip": "{key} per rilasciare",
   "rp_kbm_hotkey2": "{key} cambia.",
