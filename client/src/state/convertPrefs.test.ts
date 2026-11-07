@@ -126,4 +126,17 @@ describe("convertPrefs", () => {
     const second = await import("./convertPrefs");
     expect(second.useConvertPrefs.getState().make).toBe("image");
   });
+
+  it("remembers the zstd pack runtime: the newest release by default and for a corrupt value", async () => {
+    const first = await import("./convertPrefs");
+    expect(first.useConvertPrefs.getState().zstdRuntime).toBe("latest");
+    first.useConvertPrefs.getState().setZstdRuntime("pinned");
+    vi.resetModules();
+    const second = await import("./convertPrefs");
+    expect(second.useConvertPrefs.getState().zstdRuntime).toBe("pinned");
+    stored.set("ps5upload.convert.zstd_runtime", "v9");
+    vi.resetModules();
+    const third = await import("./convertPrefs");
+    expect(third.useConvertPrefs.getState().zstdRuntime).toBe("latest");
+  });
 });

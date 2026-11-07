@@ -396,7 +396,7 @@ describe("fpkg pipeline", () => {
     expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "running", stage: "extract" });
     expect(extract).toHaveBeenCalledWith("/dl/My Game.part1.rar", "/out", "pw");
     await tick();
-    expect(buildImage).toHaveBeenCalledWith(game, "/out", "ffpkg", true, undefined, 8192, false, "My Game", "balanced", undefined);
+    expect(buildImage).toHaveBeenCalledWith(game, "/out", "ffpkg", true, undefined, 8192, false, "My Game", "balanced", undefined, { add: true, build: "ampr_emu" });
     await tick();
     expect(useFpkgConversion.getState().pipeline).toMatchObject({
       phase: "done",
@@ -418,7 +418,7 @@ describe("fpkg pipeline", () => {
     });
     await useFpkgConversion.getState().buildImage("/games/PPSA1-app", "/out", false);
     await tick();
-    expect(buildImage).toHaveBeenCalledWith("/games/PPSA1-app", "/out", "exfat", false, undefined, 8192, false, undefined, "balanced", undefined);
+    expect(buildImage).toHaveBeenCalledWith("/games/PPSA1-app", "/out", "exfat", false, undefined, 8192, false, undefined, "balanced", undefined, { add: true, build: "ampr_emu" });
     expect(useFpkgConversion.getState().pipeline).toMatchObject({
       phase: "running",
       mode: "image",
@@ -448,7 +448,7 @@ describe("fpkg pipeline", () => {
     await useFpkgConversion.getState().buildFolder("/games/Game.ffpfsc", "/out");
     expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "running", mode: "folder", stage: "write" });
     await tick();
-    expect(buildFolder).toHaveBeenCalledWith("/games/Game.ffpfsc", "/out", undefined, false, undefined, undefined);
+    expect(buildFolder).toHaveBeenCalledWith("/games/Game.ffpfsc", "/out", undefined, false, undefined, undefined, undefined);
     expect(useFpkgConversion.getState().pipeline).toMatchObject({ stage: "verify", stageDone: 2, stageTotal: 5 });
     jobStatus.mockResolvedValueOnce({ status: "done", dest: "/out/Game", bytes_sent: 9 });
     await tick();
@@ -457,6 +457,26 @@ describe("fpkg pipeline", () => {
     // A folder is never installed.
     await useFpkgConversion.getState().retryInstall("10.0.0.2");
     expect(useFpkgConversion.getState().pipeline).toBe(p);
+  });
+
+  it("packs a game folder into a folder in zstd packs: pack first, the packs sent with the build", async () => {
+    const buildFolder = vi.fn().mockResolvedValue({ job_id: "f2" });
+    const { fpkg } = await import("../api/fpkg");
+    (fpkg as unknown as { buildFolder: unknown }).buildFolder = buildFolder;
+    jobStatus.mockResolvedValueOnce({
+      status: "running",
+      bytes_sent: 4,
+      total_bytes: 9,
+      stage: { id: "pack", index: 0, count: 3, done: 4, total: 18 },
+    });
+    const zstd = { level: 19, runtime: "pinned" as const };
+    await useFpkgConversion.getState().buildFolder("/games/PPSA1-app", "/out", true, { zstd });
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "running", mode: "folder", stage: "pack" });
+    await tick();
+    expect(buildFolder).toHaveBeenCalledWith("/games/PPSA1-app", "/out", undefined, false, undefined, true, zstd);
+    jobStatus.mockResolvedValueOnce({ status: "done", dest: "/out/PPSA1-app", bytes_sent: 9 });
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "done", mode: "folder" });
   });
 
   it("puts the finished image in the Upload queue when the run was asked to", async () => {
@@ -505,7 +525,7 @@ describe("fpkg pipeline", () => {
     jobStatus.mockResolvedValueOnce({ status: "done", dest: "/out/G.ffpkg", bytes_sent: 9 });
     await useFpkgConversion.getState().buildImage("/games/G", "/out", false, "ffpkg");
     await tick();
-    expect(buildImage).toHaveBeenCalledWith("/games/G", "/out", "ffpkg", false, undefined, 8192, false, undefined, "balanced", undefined);
+    expect(buildImage).toHaveBeenCalledWith("/games/G", "/out", "ffpkg", false, undefined, 8192, false, undefined, "balanced", undefined, { add: true, build: "ampr_emu" });
     expect(useFpkgConversion.getState().pipeline).toMatchObject({
       phase: "done",
       packagePath: "/out/G.ffpkg",
@@ -524,7 +544,7 @@ describe("fpkg pipeline", () => {
     await useFpkgConversion.getState().buildImage("/games/A", "/out", false, "exfat", undefined, lz4);
     expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "running", stage: "pack" });
     await tick();
-    expect(buildImage).toHaveBeenCalledWith("/games/A", "/out", "exfat", false, lz4, 8192, false, undefined, "balanced", undefined);
+    expect(buildImage).toHaveBeenCalledWith("/games/A", "/out", "exfat", false, lz4, 8192, false, undefined, "balanced", undefined, { add: true, build: "ampr_emu" });
     expect(useFpkgConversion.getState().pipeline).toMatchObject({
       stage: "pack",
       stageDone: 5,
@@ -557,7 +577,7 @@ describe("fpkg pipeline", () => {
     try {
       await useFpkgConversion.getState().buildImage("/games/S", "/out", true, "ffpkg");
       await tick();
-      expect(buildImage).toHaveBeenCalledWith("/games/S", "/out", "ffpkg", true, undefined, 8192, false, undefined, "smallest", undefined);
+      expect(buildImage).toHaveBeenCalledWith("/games/S", "/out", "ffpkg", true, undefined, 8192, false, undefined, "smallest", undefined, { add: true, build: "ampr_emu" });
     } finally {
       useConvertPrefs.getState().setImageLevel("balanced");
       useFpkgConversion.setState({ pipeline: { phase: "idle" } });
@@ -576,7 +596,7 @@ describe("fpkg pipeline", () => {
     });
     await useFpkgConversion.getState().buildImage("/games/G", "/out", true, "ffpkg");
     await tick();
-    expect(buildImage).toHaveBeenCalledWith("/games/G", "/out", "ffpkg", true, undefined, 8192, false, undefined, "balanced", undefined);
+    expect(buildImage).toHaveBeenCalledWith("/games/G", "/out", "ffpkg", true, undefined, 8192, false, undefined, "balanced", undefined, { add: true, build: "ampr_emu" });
     expect(useFpkgConversion.getState().pipeline).toMatchObject({
       phase: "running",
       mode: "image",
@@ -936,7 +956,7 @@ describe("fpkg pipeline", () => {
     expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "running", mode: "image", stage: "extract" });
     expect(extract).toHaveBeenCalledWith("/dl/My Game.part1.rar", "/out", "pw");
     await tick();
-    expect(buildImage).toHaveBeenCalledWith(game, "/out", "exfat", true, undefined, 8192, false, "My Game", "balanced", undefined);
+    expect(buildImage).toHaveBeenCalledWith(game, "/out", "exfat", true, undefined, 8192, false, "My Game", "balanced", undefined, { add: true, build: "ampr_emu" });
     await tick();
     expect(useFpkgConversion.getState().pipeline).toMatchObject({
       phase: "done",

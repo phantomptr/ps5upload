@@ -116,6 +116,7 @@ mod webui;
 mod win_net;
 mod workshop_api;
 mod zstd_packs;
+mod zstd_runtime;
 
 #[cfg(test)]
 mod api_surface_tests;
@@ -4496,6 +4497,11 @@ struct PowerWakeLoginReq {
     regist_key: String,
     #[serde(default)]
     rp_key: String,
+    /// Which of the console's paired PS5 users to sign in (an account id, a name as
+    /// `GET /api/consoles` lists it under `rp_users`, or its number there), when the keys are left
+    /// out. Left out, the chosen user (the one Play starts as).
+    #[serde(default)]
+    user: Option<String>,
     /// Someone is there to type the user's login passcode if the console asks: the sign-in is
     /// held and the passcode asked for (wake_login_api). Otherwise (an automatic wake) a
     /// passcode request ends it with the console awake at its sign-in screen.
@@ -4512,9 +4518,27 @@ struct PowerWakeLoginReq {
 async fn ps5_power_wake_login(Json(mut req): Json<PowerWakeLoginReq>) -> impl IntoResponse {
     req.host = consoles_api::resolve(&req.host);
     if req.regist_key.trim().is_empty() && req.rp_key.trim().is_empty() {
-        if let Some((regist_key, rp_key)) = consoles_api::rp_keys(&req.host) {
-            req.regist_key = regist_key;
-            req.rp_key = rp_key;
+        match consoles_api::rp_keys_for(&req.host, req.user.as_deref()) {
+            Ok((regist_key, rp_key)) => {
+                req.regist_key = regist_key;
+                req.rp_key = rp_key;
+                // The wake credential goes with the user signed in.
+                if req.user.is_some() {
+                    req.credential.clear();
+                }
+            }
+            Err(consoles_api::NoKeys::NoSuchUser(names)) => {
+                return json_err(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "no paired user of this console is {:?}; paired: {}",
+                        req.user.as_deref().unwrap_or_default(),
+                        names.join(", ")
+                    ),
+                )
+                .into_response();
+            }
+            Err(consoles_api::NoKeys::NotPaired) => {}
         }
     }
     let host = req.host.clone();
@@ -4591,6 +4615,11 @@ struct PowerPairReq {
     /// The PSN account id (base64 of its 8 bytes) to pair, with `pin`.
     #[serde(default)]
     account_id: Option<String>,
+    /// The paired user's name, for telling a console's paired users apart. Left out, the helper's
+    /// name for the user is used when it can be read. Pairing another user adds to the console's
+    /// paired users; pairing one again replaces that user's keys.
+    #[serde(default)]
+    user_name: Option<String>,
 }
 
 /// POST /api/ps5/power/pair — pair with a console so it can be woken.
@@ -4620,11 +4649,18 @@ async fn ps5_power_pair(Json(req): Json<PowerPairReq>) -> impl IntoResponse {
         }
     );
     let account_id = req.account_id.unwrap_or_default();
+    let user_name = req
+        .user_name
+        .map(|n| n.trim().chars().take(64).collect::<String>())
+        .filter(|n| !n.is_empty());
     let r = tokio::task::spawn_blocking(move || {
-        let p = match manual {
+        let mut p = match manual {
             Some(pin) => ps5upload_core::rp_regist::pair_with_pin(&host, &account_id, &pin),
             None => ps5upload_core::rp_regist::pair_with_console(&addr, &host),
         }?;
+        if let Some(name) = user_name {
+            p.user_name = name;
+        }
         // The engine keeps the keys too, so a script can start a stream by address alone.
         consoles_api::remember_pairing(&host, &p);
         Ok::<_, anyhow::Error>(p)
@@ -12116,6 +12152,14 @@ fn build_app_and_mcp(
         .route(
             "/api/ps5/helper/replace-copy",
             post(helper_copies_api::replace_copy_handler),
+        )
+        .route(
+            "/api/ps5/helper/restore-previous",
+            post(helper_copies_api::restore_previous_handler),
+        )
+        .route(
+            "/api/ps5/helper/store-in-pldmgr",
+            post(helper_copies_api::store_in_pldmgr_handler),
         )
         .route("/api/ps5/pldmgr", get(pldmgr_api::overview))
         .route("/api/ps5/pldmgr/launch", post(pldmgr_api::launch))

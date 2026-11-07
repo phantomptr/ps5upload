@@ -4,6 +4,7 @@ import "virtual:pc-tokens.css";
 import "./console.css";
 import { App } from "./App";
 import { call, probeHelper } from "./api";
+import { INPUT_LOG_SWITCH, setInputLogEnabled } from "./inputLog";
 import { installBackHistory } from "./backHistory";
 import { installFullscreen } from "./fullscreen";
 import { installMarquee } from "./ui/marquee";
@@ -50,6 +51,13 @@ function Root() {
         call<{ version?: unknown }>("/api/settings").then(
           (s) => {
             if (isNewerHelper(s?.version)) markUpdateReady();
+          },
+          () => undefined,
+        );
+        // A measuring session (INPUT_LOG_SWITCH on the console): log input on every screen.
+        call<{ missing?: unknown }>("/api/fs/stat", { path: INPUT_LOG_SWITCH, missing_ok: true }).then(
+          (st) => {
+            if (st && st.missing !== true) setInputLogEnabled(true);
           },
           () => undefined,
         );

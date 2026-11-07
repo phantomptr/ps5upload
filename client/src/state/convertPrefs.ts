@@ -21,6 +21,7 @@ const KEY_MAKE = "ps5upload.convert.make";
 const KEY_IMAGE_FORMAT = "ps5upload.convert.image_format";
 const KEY_IMAGE_COMPRESS = "ps5upload.convert.image_compress";
 const KEY_IMAGE_LEVEL = "ps5upload.convert.image_level";
+const KEY_ZSTD_RUNTIME = "ps5upload.convert.zstd_runtime";
 const IMAGE_LEVELS: readonly FfpfscLevel[] = ["fast", "balanced", "smallest"];
 const IMAGE_FORMATS: readonly ImageFormat[] = ["ffpkg", "exfat", "ffpfs"];
 const LEVELS: readonly FpkgCompression[] = ["stored", "fast", "balanced", "smallest"];
@@ -71,6 +72,16 @@ interface ConvertPrefs {
   setFullVerify: (full: boolean) => void;
   setAddAmprEmu: (on: boolean) => void;
   setAmprEmuBuild: (build: AmprEmuBuild) => void;
+  /** Which ampr-emu-ng goes into a zstd-packed game: the newest release (checked against the
+   *  digest GitHub publishes for it) or the tested one. */
+  zstdRuntime: ZstdRuntime;
+  setZstdRuntime: (runtime: ZstdRuntime) => void;
+}
+
+export type ZstdRuntime = "latest" | "pinned";
+
+export function parseZstdRuntime(v: string | null): ZstdRuntime {
+  return v === "pinned" ? v : "latest";
 }
 
 function storedLevel(): FpkgCompression {
@@ -163,11 +174,17 @@ export const useConvertPrefs = create<ConvertPrefs>((set) => ({
     safeSetItem(KEY_ADD_AMPR_EMU, on ? "1" : "0");
     set({ addAmprEmu: on });
   },
+  zstdRuntime: parseZstdRuntime(safeGetItem(KEY_ZSTD_RUNTIME)),
+  setZstdRuntime: (runtime) => {
+    const v = parseZstdRuntime(runtime);
+    safeSetItem(KEY_ZSTD_RUNTIME, v);
+    set({ zstdRuntime: v });
+  },
 }));
 
 // A change synced from another device shows at once (lib/liveSettings).
 registerSettingReload(
-  [KEY_DIR, KEY_PLACE, KEY_VERIFY_CHUNK, KEY_FULL_VERIFY, KEY_ADD_AMPR_EMU, KEY_AMPR_EMU_BUILD, KEY_MAKE, KEY_IMAGE_FORMAT, KEY_IMAGE_COMPRESS, KEY_IMAGE_LEVEL, "ps5upload.convert.compression"],
+  [KEY_DIR, KEY_PLACE, KEY_VERIFY_CHUNK, KEY_FULL_VERIFY, KEY_ADD_AMPR_EMU, KEY_AMPR_EMU_BUILD, KEY_MAKE, KEY_IMAGE_FORMAT, KEY_IMAGE_COMPRESS, KEY_IMAGE_LEVEL, KEY_ZSTD_RUNTIME, "ps5upload.convert.compression"],
   () =>
     useConvertPrefs.setState({
       outputDir: safeGetItem(KEY_DIR) ?? "",
@@ -181,5 +198,6 @@ registerSettingReload(
       imageFormat: parseImageFormat(safeGetItem(KEY_IMAGE_FORMAT)),
       imageCompress: safeGetItem(KEY_IMAGE_COMPRESS) === "1",
       imageLevel: parseImageLevel(safeGetItem(KEY_IMAGE_LEVEL)),
+      zstdRuntime: parseZstdRuntime(safeGetItem(KEY_ZSTD_RUNTIME)),
     }),
 );

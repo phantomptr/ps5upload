@@ -142,6 +142,26 @@ describe("the Convert queue's runner (bug: a queued image came out as a .pkg)", 
     ]);
   });
 
+  it("a queued image keeps the AMPR emulator choice it was added with", async () => {
+    useConvertQueue.getState().add({
+      source: "/games/Emu-app",
+      compression: "balanced",
+      build: { kind: "image", format: "exfat", compress: false },
+      addAmprEmu: false,
+      amprEmuBuild: "ampr-emu-ng",
+      then: "keep",
+      host: null,
+    });
+    await useConvertQueue.getState().start();
+    await flush();
+    expect(calls[0].args[8]).toEqual({
+      fullVerify: undefined,
+      imageLevel: undefined,
+      addAmprEmu: false,
+      amprEmuBuild: "ampr-emu-ng",
+    });
+  });
+
   it("#669: a game changed to an image while it waited still uploads, to the destination set now", async () => {
     useConvertQueue.getState().add({
       source: "/games/Changed-app",

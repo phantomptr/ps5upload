@@ -22,6 +22,10 @@
 import { call, callKeepalive } from "./api";
 
 export const INPUT_LOG_ROUTE = "/api/input-log";
+/** While this file exists on the console, the page logs input on every screen from its start:
+ *  a measuring session driven from the PC (Remote Play input), where the browser's picture is
+ *  blank in the stream and the Controls screen can't be found by sight. Remove it to stop. */
+export const INPUT_LOG_SWITCH = "/data/ps5upload/webui-input-log.on";
 export const INPUT_LOG_FLUSH_MS = 1000;
 export const INPUT_LOG_MAX_BODY = 4096;
 export const INPUT_LOG_MAX_QUEUE = 200;

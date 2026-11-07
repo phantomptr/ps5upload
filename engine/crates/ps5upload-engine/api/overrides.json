@@ -748,6 +748,12 @@
   "POST /api/ps5/helper/replace-copy": {
    "summary": "Overwrite a stored copy of the helper"
   },
+  "POST /api/ps5/helper/restore-previous": {
+   "summary": "Put back the stored helper copy a replace kept"
+  },
+  "POST /api/ps5/helper/store-in-pldmgr": {
+   "summary": "Store this app's helper in Payload Manager"
+  },
   "POST /api/ps5/minion/tile": {
    "summary": "Install, turn off or remove the Minion tile on the home screen"
   },

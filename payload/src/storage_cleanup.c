@@ -1034,12 +1034,14 @@ static int unchanged(const sc_item_t *it) {
     return sz.bytes == it->bytes;
 }
 
-/* Waits up to `ms` for `path` to disappear. 1 gone. */
+/* Waits up to `ms` for `path` to disappear. 1 gone, 0 still there, -1 Stop was asked meanwhile
+ * (#714: Stop used to wait out the whole 5 minutes of every update). */
 static int wait_gone(const char *path, uint32_t ms) {
     uint64_t end = now_ms() + ms;
     while (now_ms() < end) {
         if (!exists_path(path)) return 1;
-        usleep(2u * 1000u * 1000u);
+        if (G.apply_cancel) return -1;
+        usleep(500u * 1000u);
     }
     return !exists_path(path);
 }
@@ -1079,8 +1081,14 @@ static void apply_one(sc_item_t *it, int idx) {
         int r = uninstall_patch(it->title_id, &rc);
         if (r == 0) {
             set_apply_phase(idx + 1, "waiting");
-            if (wait_gone(it->path, it->cat == 'A' ? SC_PATCH_WAIT_MS : SC_ORPHAN_PATCH_WAIT_MS)) {
+            int gone = wait_gone(it->path, it->cat == 'A' ? SC_PATCH_WAIT_MS : SC_ORPHAN_PATCH_WAIT_MS);
+            if (gone > 0) {
                 finish_item(it, 1, "", 0);
+                return;
+            }
+            if (gone < 0) {
+                /* Sony may still finish removing it; a later scan shows which */
+                finish_item(it, 2, "cancelled", 0);
                 return;
             }
             if (it->cat == 'A' || content_db_has_title(it->title_id) != 0) {

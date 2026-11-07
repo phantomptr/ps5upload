@@ -22,6 +22,17 @@ pub struct AudioHeader {
 }
 
 impl AudioHeader {
+    /// What the PS5 sends for its stereo Opus sound: 2 channels, 16 bits, 48 kHz, 10 ms frames.
+    /// Used when a stream's info came without a header but Opus frames arrive anyway.
+    pub fn default_bytes() -> [u8; 14] {
+        let mut h = [0u8; 14];
+        h[0] = 2;
+        h[1] = 16;
+        h[2..6].copy_from_slice(&48000u32.to_be_bytes());
+        h[6..10].copy_from_slice(&480u32.to_be_bytes());
+        h
+    }
+
     pub fn parse(b: &[u8]) -> Option<Self> {
         if b.len() < 14 {
             return None;
@@ -89,6 +100,10 @@ pub struct AudioAssembler {
     /// Packets already counted, by their frame index: a repeated packet is not a second one.
     packets: SeenWindow,
     pub frames: u64,
+    /// Audio packets in a format other than Opus (codec 5), which are not played, and the last
+    /// such codec: a console that sends sound we can't play is told apart from one sending none.
+    pub other_codec: u64,
+    pub last_other_codec: Option<u8>,
     /// Packet sequence stats since the last [`AudioAssembler::take_seq`]
     /// (chiaki's "seq" stats over audio packet frame indexes).
     seq_min: Option<u16>,
@@ -131,6 +146,8 @@ impl AudioAssembler {
             }
         }
         if p.codec != 5 {
+            self.other_codec += 1;
+            self.last_other_codec = Some(p.codec);
             return out;
         }
         let unit = (p.units_in_frame_fec >> 8) as usize;
@@ -220,6 +237,27 @@ mod tests {
         // Packet for 11 lost; 12 carries copies of 10 and 11.
         let got: Vec<u16> = a.push(&pkt(12, 1, 2, 4)).into_iter().map(|f| f.0).collect();
         assert_eq!(got, vec![12, 11]);
+    }
+
+    #[test]
+    fn the_default_header_reads_as_stereo_opus_48k() {
+        let a = AudioHeader::parse(&AudioHeader::default_bytes()).unwrap();
+        assert_eq!(
+            (a.channels, a.bits, a.rate, a.frame_size),
+            (2, 16, 48000, 480)
+        );
+    }
+
+    #[test]
+    fn sound_in_another_format_is_counted_not_played() {
+        let mut a = AudioAssembler::default();
+        let mut p = pkt(10, 1, 0, 4);
+        p.codec = 3;
+        assert!(a.push(&p).is_empty());
+        assert_eq!(
+            (a.other_codec, a.last_other_codec, a.frames),
+            (1, Some(3), 0)
+        );
     }
 
     #[test]

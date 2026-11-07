@@ -369,6 +369,7 @@ export function playRumble(
 export { avcCodecString, isKeyframe, supportedHevc } from "./rpCodec";
 import { avcCodecString, isKeyframe, noPictureStep, supportedHevc } from "./rpCodec";
 import { avcDescription, lengthPrefixed } from "./fmp4";
+import { MsePlayer, MseSound } from "../pad/watchPlayer";
 
 function sameBytes(a: Uint8Array | null, b: Uint8Array): boolean {
   return !!a && a.length === b.length && a.every((x, i) => x === b[i]);
@@ -461,12 +462,46 @@ export function streamRefusal(): "insecure_page" | "no_decoder" | null {
   return typeof window !== "undefined" && window.isSecureContext === false ? "insecure_page" : "no_decoder";
 }
 
+/** A record as the engine sends it: [kind][payload]. */
+export function tagRecord(kind: number, payload: Uint8Array): ArrayBuffer {
+  const out = new Uint8Array(payload.length + 1);
+  out[0] = kind;
+  out.set(payload, 1);
+  return out.buffer;
+}
+
+/** Whether this device has Media Source Extensions (the media player fallback, #683). */
+export function mseAvailable(): boolean {
+  const w = globalThis as { MediaSource?: unknown; ManagedMediaSource?: unknown };
+  return typeof w.MediaSource === "function" || typeof w.ManagedMediaSource === "function";
+}
+
+/** Seconds of picture with no sound before the stream says so. */
+export const SOUND_MISSING_AFTER_S = 6;
+
+/** Whether the engine's stats say no sound reaches this device, and why. Engines before 11.5
+ *  don't report it (no audio_frames_total), and then nothing is said. */
+export function soundMissingFrom(
+  st: Record<string, unknown>,
+  silentSeconds: number,
+  played = true,
+): "none" | "format" | "device" | undefined {
+  if (typeof st.audio_frames_total !== "number") return undefined;
+  if (silentSeconds < SOUND_MISSING_AFTER_S) return undefined;
+  // Sound reaches this device, but none of it ever got to the speakers.
+  if (st.audio_frames_total > 0) return played ? undefined : "device";
+  return typeof st.audio_other_codec === "number" && st.audio_other_codec > 0 ? "format" : "none";
+}
+
 export interface StreamStats {
   /** The browser holds the sound back until the page is clicked or a key pressed (autoplay
    *  rules: the session started without a click right before it). */
   soundBlocked?: boolean;
   /** This device can't decode the stream's sound, so there is none. */
   soundUnavailable?: boolean;
+  /** Seconds of picture went by and no sound reached this device: the PS5 sends none ("none")
+   *  or sends it in a format the engine doesn't play ("format"). Unset while sound comes. */
+  soundMissing?: "none" | "format" | "device";
   fps: number;
   mbps: number;
   decodeMs: number;
@@ -725,6 +760,20 @@ export class RemotePlayStream {
   /** The last audio header, for the page to take over if the worker fails. */
   private audioHeader: Uint8Array | null = null;
   private soundUnavailable = false;
+  /** Seconds with picture and no sound played yet, and what that means: the engine got no
+   *  sound frame (none, format), or got them and this device played none (device). */
+  private silentSeconds = 0;
+  private soundMissing: "none" | "format" | "device" | undefined;
+  /** Some sound was buffered for the speakers at some point this session. */
+  private soundEverPlayed = false;
+  /** No WebCodecs decoder gives a picture here (#683: Safari 18 on an older Intel Mac): the
+   *  stream plays through the system's media player instead (MSE, the watch page's player), over
+   *  the canvas. Its sound too when this device can't decode Opus itself. */
+  private mse: MsePlayer | null = null;
+  private mseSound = false;
+  /** This device can't decode Opus itself (an older Safari or WebKit): the sound goes through
+   *  the system's media player instead, while the picture stays on WebCodecs. */
+  private mseAudio: MseSound | null = null;
   /** No worklet: when the next scheduled buffer starts (AudioContext time). */
   private audioNext = 0;
   private audioMs = 0;
@@ -777,6 +826,10 @@ export class RemotePlayStream {
   private loggedVisibleFix = false;
   /** The hardware decoder gave a picture that could not be put right: software from now on. */
   private softwareAfterBadFrame = false;
+  /** H.264 fed as Annex B (start codes, parameter sets in each keyframe, no description): the
+   *  next try when the usual AVC form gave no picture. An older WebKit on macOS (#683, an M1 Pro
+   *  on an older macOS) failed every decode of the AVC form. */
+  private annexB = false;
   /** Decoder failures in a row before any picture came. */
   private noPictureFails = 0;
 
@@ -1121,7 +1174,10 @@ export class RemotePlayStream {
     } catch {
       this.audioCtx = new AudioContext({ latencyHint: "interactive" });
     }
-    void this.audioCtx.resume();
+    // iOS refuses to start the output while another app or a call holds the audio session
+    // ("Failed to start the audio device"): not a crash. The next tap or key tries again
+    // (watchSoundBlocked), and the stream shows Turn on sound meanwhile.
+    this.audioCtx.resume().catch((e: unknown) => log.info("remote-play", `sound output not started yet: ${String(e)}`));
     this.watchSoundBlocked(this.audioCtx);
     this.gainNode = this.audioCtx.createGain();
     this.gainNode.gain.value = this.volume;
@@ -1276,6 +1332,7 @@ export class RemotePlayStream {
       this.o.onStats({
         soundBlocked: this.soundBlocked(),
         soundUnavailable: this.soundUnavailable,
+        soundMissing: this.soundMissing,
         fps: this.decoded - lastDecoded,
         mbps: ((this.bytes - lastBytes) * 8) / 1e6,
         decodeMs: this.decodeMs,
@@ -1326,6 +1383,8 @@ export class RemotePlayStream {
   resumeSound(): void {
     const actx = this.audioCtx;
     if (actx && this.soundBlocked()) void actx.resume().catch(() => {});
+    this.mseAudio?.resume();
+    this.mse?.resumeSound();
   }
 
   /** The browser may refuse to start the sound when the session did not start right after a
@@ -1492,6 +1551,13 @@ export class RemotePlayStream {
         (planes, scale) => this.play(planes, scale),
         undefined,
         () => {
+          if (this.startMseAudio()) return;
+          if (this.mse && !this.mseSound) {
+            this.mseSound = true;
+            this.mse.startSound();
+            if (this.audioHeader) this.mse.onMessage(tagRecord(3, this.audioHeader));
+            return;
+          }
           this.soundUnavailable = true;
           log.warn("remote-play", "sound: this device can't decode the stream's Opus sound, so there is none");
         },
@@ -1615,6 +1681,7 @@ export class RemotePlayStream {
         } else if (kind === 3) this.audioHeader = payload.slice();
         return;
       }
+      if (this.mse && this.routeToMse(kind, b, m.data as ArrayBuffer)) return;
       if (kind <= 1) this.onVideo(kind, payload, recv, NaN);
       else if (kind === 7) {
         if (b.length < 9) return;
@@ -1867,6 +1934,8 @@ export class RemotePlayStream {
   setVolume(v: number): void {
     this.volume = Math.max(0, Math.min(1, v));
     if (this.gainNode) this.gainNode.gain.value = this.volume;
+    if (this.mseAudio) this.mseAudio.el.volume = this.volume;
+    this.mse?.setMuted(this.volume === 0);
   }
 
   setAudioBuffer(ms: number): void {
@@ -1893,6 +1962,8 @@ export class RemotePlayStream {
   private finish(): void {
     if (this.ended) return;
     this.ended = true;
+    this.stopMse();
+    this.stopMseAudio();
     this.endDecoderStart();
     this.ticking = false;
     try {
@@ -2030,6 +2101,14 @@ export class RemotePlayStream {
         };
         this.consoleRttMs = typeof st.console_rtt_ms === "number" && Number.isFinite(st.console_rtt_ms) ? st.console_rtt_ms : null;
         if (st.quality && typeof st.quality === "object") this.quality = st.quality;
+        if (this.audioMs > 0) this.soundEverPlayed = true;
+        const silent = num(st.audio_frames_total) === 0 || !this.soundEverPlayed;
+        this.silentSeconds = num(st.frames) > 0 && silent && this.pictureOn ? this.silentSeconds + 1 : 0;
+        const missing = soundMissingFrom(st, this.silentSeconds, this.soundEverPlayed);
+        if (missing && missing !== this.soundMissing) {
+          log.warn("remote-play", `no sound (${missing}): engine ${num(st.audio_frames_total)} sound frames, ${num(st.audio_other_codec)} in another format, header ${st.audio_header === true ? "yes" : "no"}`);
+        }
+        this.soundMissing = missing;
         break;
       }
       case "moved":
@@ -2091,7 +2170,7 @@ export class RemotePlayStream {
     if (!this.sawKey && !key) return;
     this.sawKey = true;
     let data = payload;
-    if (!this.hevc) {
+    if (!this.hevc && !this.annexB) {
       // AVC form (length-prefixed, parameter sets in the description): the Linux app's
       // WebKitGTK decodes no H.264 given as Annex B ("Decode error", a black picture).
       data = lengthPrefixed(payload, false, true);
@@ -2513,7 +2592,8 @@ export class RemotePlayStream {
       });
     } else if (this.header) {
       const description = avcDescription(this.header);
-      if (description) void configure(avcCodecString(this.header), description);
+      if (this.annexB) void configure(avcCodecString(this.header));
+      else if (description) void configure(avcCodecString(this.header), description);
       else this.cannotDecode("The stream's H.264 header has no SPS/PPS.");
     }
   }
@@ -2525,6 +2605,13 @@ export class RemotePlayStream {
     const software = this.o.decoding === "software" || this.softwareAfterBadFrame || linuxSoftwareVideo();
     const step = noPictureStep(this.noPictureFails, { hevc: this.hevc, software });
     if (step === "retry") return true;
+    if (step === "software" && !this.hevc && !this.annexB) {
+      // The hardware decoder once more, fed Annex B, before software.
+      log.warn("remote-play", `no picture from H.264 in AVC form (${detail}): trying Annex B`);
+      this.annexB = true;
+      this.noPictureFails = 0;
+      return true;
+    }
     if (step === "software") {
       log.warn("remote-play", `no picture from the hardware decoder (${detail}): decoding in software`);
       this.softwareAfterBadFrame = true;
@@ -2537,9 +2624,131 @@ export class RemotePlayStream {
       this.stop();
       return false;
     }
+    if (this.startMse(detail)) return false;
     log.warn("remote-play", `no picture with any decoder (${detail})`);
     this.cannotDecode(detail);
     return false;
+  }
+
+  /** The system's media player (MSE), when WebCodecs gave no picture with any decoder. False
+   *  when this device has none either, or it was tried already. */
+  private startMse(detail: string): boolean {
+    if (this.mse || !mseAvailable()) return false;
+    const parent = this.cv.parentElement;
+    if (!parent) return false;
+    log.warn("remote-play", `no picture with WebCodecs (${detail}): playing through the system's media player (MSE)`);
+    this.endDecoderStart();
+    try {
+      this.video?.close();
+    } catch {
+      // Already closed.
+    }
+    this.video = null;
+    const mse = new MsePlayer(
+      (p) => {
+        if (p) log.warn("remote-play", `media player: ${p}`);
+      },
+      "player",
+      () => this.ws?.send(JSON.stringify({ keyframe: true })),
+    );
+    mse.setHevc(this.hevc);
+    mse.onSoundFail = () => log.warn("remote-play", "media player: no sound on this device either");
+    const el = mse.element;
+    el.classList.add("pointer-events-none", "absolute", "inset-0");
+    el.dataset.testid = "rp-mse";
+    parent.append(el);
+    this.cv.style.visibility = "hidden";
+    this.mse = mse;
+    const tagged = tagRecord;
+    if (this.header) mse.onMessage(tagged(0, this.header));
+    // This device can't decode the sound itself: the media player plays it.
+    if (this.soundUnavailable) {
+      this.mseSound = true;
+      mse.startSound();
+      mse.setMuted(this.volume === 0);
+      if (this.audioHeader) mse.onMessage(tagged(3, this.audioHeader));
+    }
+    this.ws?.send(JSON.stringify({ keyframe: true }));
+    return true;
+  }
+
+  /** A record while the media player shows the stream: true when it took it. */
+  private routeToMse(kind: number, b: Uint8Array, whole: ArrayBuffer): boolean {
+    const mse = this.mse;
+    if (!mse) return false;
+    if (kind === 0) {
+      this.header = b.slice(1);
+      mse.onMessage(whole);
+      return true;
+    }
+    if (kind === 1) {
+      mse.onMessage(whole);
+      this.decoded++;
+      return true;
+    }
+    if (kind === 7) {
+      // A timed access unit: the media player takes it as a plain one.
+      if (b.length < 9) return true;
+      const out = new Uint8Array(b.length - 8);
+      out[0] = 1;
+      out.set(b.subarray(9), 1);
+      mse.onMessage(out.buffer);
+      this.decoded++;
+      return true;
+    }
+    if ((kind === 3 || kind === 4) && this.mseSound) {
+      if (kind === 3) this.audioHeader = b.slice(1);
+      mse.onMessage(whole);
+      return true;
+    }
+    return false;
+  }
+
+  /** The sound through the system's media player (MSE), for a device whose WebCodecs has no
+   *  Opus. False when it has no MSE either, or MSE has no Opus in MP4. */
+  private startMseAudio(): boolean {
+    if (this.mseAudio || this.mse || !mseAvailable()) return false;
+    let failed = false;
+    const ms = new MseSound("player", () => {
+      failed = true;
+      log.warn("remote-play", "sound: the system's media player can't play Opus either, so there is none");
+      this.stopMseAudio();
+      this.soundUnavailable = true;
+    });
+    if (failed) return false;
+    ms.el.hidden = true;
+    ms.el.volume = this.volume;
+    document.body.append(ms.el);
+    this.mseAudio = ms;
+    if (this.audioHeader) ms.setHeader(this.audioHeader);
+    ms.start();
+    log.warn("remote-play", "sound: no Opus decoder here, playing it through the system's media player");
+    return !failed;
+  }
+
+  private stopMseAudio(): void {
+    const ms = this.mseAudio;
+    if (!ms) return;
+    this.mseAudio = null;
+    try {
+      ms.stop();
+    } catch {
+      // Already stopped.
+    }
+    ms.el.remove();
+  }
+
+  private stopMse(): void {
+    if (!this.mse) return;
+    try {
+      this.mse.stop();
+    } catch {
+      // Already stopped.
+    }
+    this.mse.element.remove();
+    this.mse = null;
+    this.mseSound = false;
+    this.cv.style.visibility = "";
   }
 
   /** No decoder will ever take this stream: said, and the session ends rather than go on streaming
@@ -2554,6 +2763,14 @@ export class RemotePlayStream {
   private onAudio(kind: number, payload: Uint8Array, whole: ArrayBuffer): void {
     if (!this.audioCtx) return;
     if (kind === 3) this.audioHeader = payload.slice();
+    const ms = this.mseAudio;
+    if (ms) {
+      if (kind === 3) ms.setHeader(payload.slice());
+      else ms.frame(payload);
+      // Counted as played once it plays: the no-sound notice is about this path now.
+      if (ms.playing) this.soundEverPlayed = true;
+      return;
+    }
     const w = this.audioWorker;
     if (w) {
       w.postMessage(whole, [whole]);

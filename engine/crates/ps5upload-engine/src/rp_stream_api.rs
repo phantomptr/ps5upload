@@ -289,6 +289,8 @@ struct Live {
     alone_since: Mutex<Option<Instant>>,
     video_header: Mutex<Option<Vec<u8>>>,
     audio_header: Mutex<Option<Vec<u8>>>,
+    /// The stream's last once-a-second stats (frames, loss, sound arrived), for rp_session.
+    stats: Mutex<Option<serde_json::Value>>,
     playing: AtomicBool,
     /// The page cannot use a frame until the next keyframe.
     need_key: AtomicBool,
@@ -319,6 +321,9 @@ struct Live {
     auto: automation::AutoState,
     /// The live feed's readers (rp_live.rs, OBS).
     feed: Arc<live_feed::LiveFeed>,
+    /// The regist key (hex) the session was started with: which paired PS5 user it signed in
+    /// (consoles_api's `rp_users`). Never shown or logged; `user_name` names it.
+    regist_hex: std::sync::OnceLock<String>,
 }
 
 /// A watcher's queue. `need_key`: it cannot use a frame until the next keyframe (it just
@@ -842,6 +847,7 @@ impl Live {
             alone_since: Mutex::new(None),
             video_header: Mutex::new(None),
             audio_header: Mutex::new(None),
+            stats: Mutex::new(None),
             playing: AtomicBool::new(false),
             need_key: AtomicBool::new(false),
             want_key: AtomicBool::new(false),
@@ -859,7 +865,20 @@ impl Live {
             passcode_answer: Mutex::new(None),
             auto: Default::default(),
             feed: Arc::new(live_feed::LiveFeed::new(hevc)),
+            regist_hex: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Whether the session signs in the user these keys are (hex).
+    fn same_user(&self, regist_hex: &str) -> bool {
+        self.regist_hex
+            .get()
+            .is_some_and(|r| r.eq_ignore_ascii_case(regist_hex.trim()))
+    }
+
+    /// The paired user the session signed in, by name, when it is one of the console's.
+    fn user_name(&self) -> Option<String> {
+        crate::consoles_api::user_name_of(&self.host, self.regist_hex.get()?)
     }
 
     /// What the page is told while the console waits for the passcode.
@@ -1177,6 +1196,9 @@ impl Live {
             "picture": !self.picture_off(),
             // Told to stop, and finishing (a wake or handshake takes a moment to cut short).
             "stopping": self.stop.load(Ordering::Relaxed),
+            // The last second's stats while streaming: frames, loss, round trip, and sound
+            // (audio_frames_total; audio_other_codec, audio_header say why there is none).
+            "stats": self.stats.lock().ok().and_then(|g| g.clone()),
         })
     }
 }
@@ -1247,7 +1269,12 @@ impl StreamSink for Sink {
         let ms = self.t0.elapsed().as_millis() as u64;
         let v = match p {
             Progress::Waking => serde_json::json!({"stage": "waking", "ms": ms}),
-            Progress::Stats(s) => serde_json::json!({"stage": "stats", "stats": s}),
+            Progress::Stats(s) => {
+                if let Ok(mut g) = self.live.stats.lock() {
+                    *g = serde_json::to_value(s).ok();
+                }
+                serde_json::json!({"stage": "stats", "stats": s})
+            }
             Progress::Nonce => serde_json::json!({"stage": "nonce", "ms": ms}),
             Progress::SessionId => serde_json::json!({"stage": "session", "ms": ms}),
             Progress::TakionConnected => serde_json::json!({"stage": "takion", "ms": ms}),
@@ -1388,6 +1415,39 @@ impl StreamSink for Sink {
     }
 }
 
+/// When this engine's last session with each console ended.
+static SESSION_ENDED: std::sync::LazyLock<
+    Mutex<std::collections::HashMap<String, std::time::Instant>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+/// How long a console holds Remote Play after a session ends (12-30 s seen), with a margin.
+const SLOT_HOLD: Duration = Duration::from_secs(40);
+
+/// Session init closed with no reply: "busy" with the wait left when our own session with this
+/// console ended moments ago (the player waits it out and starts again by itself), otherwise "in
+/// use" by another device. None for any other error.
+fn slot_held_status(host: &str, e: &anyhow::Error) -> Option<serde_json::Value> {
+    let text = format!("{e:#}");
+    if !text.contains(ps5upload_core::rp_session::SESSION_INIT_CLOSED) {
+        return None;
+    }
+    let since = SESSION_ENDED
+        .lock()
+        .ok()
+        .and_then(|g| g.get(host).map(|t| t.elapsed()));
+    Some(slot_held_value(since, &text))
+}
+
+fn slot_held_value(since_ours: Option<Duration>, text: &str) -> serde_json::Value {
+    match since_ours {
+        Some(d) if d < SLOT_HOLD => {
+            let left = (SLOT_HOLD - d).as_secs().max(3);
+            serde_json::json!({"stage": "error", "code": "busy", "retry_s": left, "error": text})
+        }
+        _ => serde_json::json!({"stage": "error", "code": "in_use", "retry_s": 10, "error": text}),
+    }
+}
+
 /// An error as the player shows it: a stable `code` to pick the plain-English
 /// message from, plus the raw text for the details line.
 fn error_status(e: &anyhow::Error) -> serde_json::Value {
@@ -1460,6 +1520,13 @@ pub async fn current(
     let mut v = current_for(live.as_ref().map(|l| l.snapshot()), local);
     if local {
         control::add_details(&mut v, live.as_deref());
+        // How the last session started and ended (stages, frames, sound frames, loss): what an
+        // agent checks after a stream it ran, without a bug report. This computer only.
+        v["last_session"] = LAST_SESSION
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+            .unwrap_or_default();
     }
     Json(v)
 }
@@ -1572,6 +1639,13 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
             .unwrap_or(DEFAULT_KEEP_ALIVE)
             .min(MAX_KEEP_ALIVE),
     ));
+    let _ = live.regist_hex.set(
+        creds
+            .regist_key
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+    );
     live.mic_enabled.store(cfg.mic, Ordering::Relaxed);
     live.keyboard.enabled.store(cfg.keyboard, Ordering::Relaxed);
     live.set_replay(start.replay_s);
@@ -1602,6 +1676,8 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
                 "dropped": rep.video.frames_dropped,
                 "rebuilt": rep.video.frames_recovered,
                 "audio_frames": rep.audio_frames,
+                "audio_other_codec": rep.audio_other_codec,
+                "audio_header": rep.audio_header,
                 "units_seen": rep.units_seen,
                 "loss_seen": rep.loss_seen,
                 "loss_reported": rep.loss_reported,
@@ -1613,8 +1689,15 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
                 "ws_dropped": l.dropped.load(Ordering::Relaxed),
                 "reason": rep.disconnect_reason,
             }),
-            Err(e) => error_status(&e),
+            Err(e) => slot_held_status(&l.host, &e).unwrap_or_else(|| error_status(&e)),
         };
+        // A session that reached the console holds its slot for a while after: remembered, so a
+        // start refused meanwhile is told apart from another device's session.
+        if end["code"] != "busy" && end["code"] != "in_use" {
+            if let Ok(mut g) = SESSION_ENDED.lock() {
+                g.insert(l.host.clone(), std::time::Instant::now());
+            }
+        }
         crate::log_info!("rp_stream: {end}");
         let end_note = end.clone();
         note_last(|v| {
@@ -1931,6 +2014,28 @@ pub(crate) mod test_live {
         fn drop(&mut self) {
             *LIVE.lock().unwrap() = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod slot_held_tests {
+    use super::*;
+
+    #[test]
+    fn a_closed_start_right_after_our_session_waits_it_out() {
+        let v = slot_held_value(Some(Duration::from_secs(10)), "x");
+        assert_eq!(
+            (v["code"].as_str(), v["retry_s"].as_u64()),
+            (Some("busy"), Some(30))
+        );
+        let v = slot_held_value(Some(Duration::from_secs(39)), "x");
+        assert_eq!(v["retry_s"], 3);
+        let v = slot_held_value(Some(Duration::from_secs(90)), "x");
+        assert_eq!(v["code"], "in_use");
+        assert_eq!(slot_held_value(None, "x")["code"], "in_use");
+        let e = anyhow::anyhow!("{}", ps5upload_core::rp_session::SESSION_INIT_CLOSED);
+        assert!(slot_held_status("10.9.9.9", &e).is_some());
+        assert!(slot_held_status("10.9.9.9", &anyhow::anyhow!("other")).is_none());
     }
 }
 

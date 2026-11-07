@@ -35,6 +35,19 @@ export function mergeBackups(local: SaveBackupFile[], server: SaveBackupFile[]):
   );
 }
 
+/** Whether a backup of `user` shows under `save`: its own user's, or (a PS5 save) a user this
+ *  console no longer has, which a reset (or signing an account in again) leaves behind under an
+ *  old ID; Restore puts one into this save as Restore to another user does. */
+export function shownUnder(
+  save: Pick<SaveEntry, "user_id" | "kind">,
+  users: readonly Pick<ProfileUser, "uid">[],
+  user: number,
+): boolean {
+  const own = save.user_id >>> 0;
+  if (user >>> 0 === own) return true;
+  return save.kind === "ps5" && users.length > 0 && !users.some((u) => u.uid >>> 0 === user >>> 0);
+}
+
 /** The automatic backups of one save, newest first, each with Restore: those in the backup
  *  folder and those on the network share. The engine puts the backup back after keeping what is
  *  there now, so a restore can itself be undone. */
@@ -82,18 +95,23 @@ export function SaveBackupsList({
   useEffect(() => {
     if (!serverSettings) void refreshServer();
   }, [serverSettings, refreshServer]);
-  const dir = settings?.dir ?? "";
+  // Backups in a folder used before the current one still list (the engine reads them all).
+  const readsLocal = !!settings?.dir.trim() || (settings?.old_dirs?.length ?? 0) > 0;
   const target = serverSettings?.target ?? "";
+  // By value: a new array of the same users each render must not list again.
+  const userIds = users.map((u) => u.uid >>> 0).join(",");
+  const { title_id: titleId, user_id: userId, kind } = save;
   const load = useCallback(async () => {
-    const mine = (b: SaveBackupFile) => b.user_id === save.user_id >>> 0;
+    const known = userIds ? userIds.split(",").map((u) => ({ uid: Number(u) })) : [];
+    const mine = (b: SaveBackupFile) => shownUnder({ user_id: userId, kind }, known, b.user_id);
     // A server that can't be reached leaves its backups out; the local ones still show.
     const none: SaveBackupFile[] = [];
     const [local, server] = await Promise.all([
-      dir.trim() ? saveBackupApi.list(save.title_id).catch(() => none) : none,
-      target ? serverBackupApi.list(save.title_id).catch(() => none) : none,
+      readsLocal ? saveBackupApi.list(titleId).catch(() => none) : none,
+      target ? serverBackupApi.list(titleId).catch(() => none) : none,
     ]);
     setBackups(mergeBackups(local.filter(mine), server.filter(mine)));
-  }, [dir, target, save.title_id, save.user_id]);
+  }, [readsLocal, target, titleId, userId, kind, userIds]);
   useEffect(() => {
     void load();
   }, [load, reload]);
@@ -183,6 +201,11 @@ export function SaveBackupsList({
               {b.tag === "beforeshare" && (
                 <span className="ms-2 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[11px] text-[var(--color-muted)]">
                   {tr("save_backup_before_share", undefined, "Before a shared save")}
+                </span>
+              )}
+              {b.user_id >>> 0 !== save.user_id >>> 0 && (
+                <span className="ms-2 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[11px] text-[var(--color-muted)]" data-testid="save-backup-gone-user">
+                  {tr("save_backup_gone_user", undefined, "From a user no longer on this PS5")}
                 </span>
               )}
               {b.tag === "snap" && (

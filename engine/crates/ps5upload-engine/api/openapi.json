@@ -424,6 +424,10 @@
               "integer",
               "null"
             ]
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/RuntimeChoice",
+            "description": "Which ampr-emu-ng goes in: `latest` (the default: the newest GitHub release, used only\nwhen its download matches the SHA-256 GitHub publishes for it, else the tested one) or\n`pinned` (the tested release). The job's `commit_ack.ampr_runtime` says which went in."
           }
         },
         "type": "object"
@@ -3973,6 +3977,17 @@
       },
       "FolderBuildReq": {
         "properties": {
+          "ampr_zstd": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AmprZstdReq"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Write the game with its files in zstd asset packs for ampr-emu-ng, as an image build's\n`ampr_zstd` does, as a plain folder: the packs, the files that stay loose, and the\nemulator in `fakelib/libSceAmpr.sprx`. The source may then also be a game folder (on\nthis computer, a saved server or a console). Not with `entry`."
+          },
           "entry": {
             "description": "Save only this file or folder of the image (#479, the image browser's Save), by its\npath inside the image: a folder becomes a folder named after it, a file a file. Its\nname is the entry's own unless `name` says otherwise.",
             "type": [
@@ -5645,6 +5660,13 @@
             "description": "`game`, `update`, `dlc`, `app` or `other`.",
             "type": "string"
           },
+          "exe_platform": {
+            "description": "`ps4` or `ps5` as `eboot.bin`'s process param says (its SDK words), when it has one\nthat can be read. `platform` falls back to it when the title id says nothing.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "platform": {
             "description": "`ps4`, `ps5` or empty.",
             "type": "string"
@@ -5676,6 +5698,7 @@
           "content_id",
           "concept_id",
           "platform",
+          "exe_platform",
           "category",
           "content_type",
           "region"
@@ -8266,6 +8289,10 @@
           },
           "rp_key": {
             "type": "string"
+          },
+          "user_name": {
+            "description": "The paired user's name on the console, when it could be read (the helper's user list), for\ntelling a console's paired users apart. Empty when not known.",
+            "type": "string"
           }
         },
         "required": [
@@ -8275,7 +8302,8 @@
           "nickname",
           "mac",
           "account_id_b64",
-          "account_via"
+          "account_via",
+          "user_name"
         ],
         "type": "object"
       },
@@ -9028,6 +9056,13 @@
               "string",
               "null"
             ]
+          },
+          "user_name": {
+            "description": "The paired user's name, for telling a console's paired users apart. Left out, the helper's\nname for the user is used when it can be read. Pairing another user adds to the console's\npaired users; pairing one again replaces that user's keys.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -9125,6 +9160,13 @@
           },
           "rp_key": {
             "type": "string"
+          },
+          "user": {
+            "description": "Which of the console's paired PS5 users to sign in (an account id, a name as\n`GET /api/consoles` lists it under `rp_users`, or its number there), when the keys are left\nout. Left out, the chosen user (the one Play starts as).",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -10288,6 +10330,10 @@
               "host"
             ]
           },
+          "keep_previous": {
+            "description": "Keep the copy being replaced as `<path>.prev` first.",
+            "type": "boolean"
+          },
           "local_path": {
             "description": "The helper ELF on this computer (the desktop app's bundled one); otherwise the\nengine's own bundled image.",
             "type": [
@@ -10375,6 +10421,27 @@
           "zip",
           "save_path",
           "user_id"
+        ],
+        "type": "object"
+      },
+      "RestoreReq": {
+        "properties": {
+          "addr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
         ],
         "type": "object"
       },
@@ -10533,6 +10600,14 @@
           "app_id"
         ],
         "type": "object"
+      },
+      "RuntimeChoice": {
+        "description": "Which ampr-emu-ng goes into a packed game.",
+        "enum": [
+          "latest",
+          "pinned"
+        ],
+        "type": "string"
       },
       "SameConsoleReq": {
         "properties": {
@@ -12131,6 +12206,13 @@
               "null"
             ]
           },
+          "user": {
+            "description": "Which PS5 user to play as, when the console has more than one paired: an account id, a name\nas `GET /api/consoles` lists it under `rp_users` (any case), or its number there (1, 2, …).\nLeft out, the chosen user: the one picked last in Play, else the last paired. The console\nsigns that user in when the session starts. A session already running for the console as\nanother user answers 409 `busy_user`: stop it first.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "wait_s": {
             "minimum": 0,
             "type": [
@@ -12197,35 +12279,6 @@
             ]
           }
         },
-        "type": "object"
-      },
-      "StoreReq": {
-        "properties": {
-          "confirmed": {
-            "description": "The caller saw `check`'s answer and accepts that storing into an existing folder\nremoves that folder's other files.",
-            "type": "boolean"
-          },
-          "filename": {
-            "description": "The name Payload Manager files it under (its folder is derived from this).",
-            "type": "string"
-          },
-          "host": {
-            "type": "string",
-            "x-aliases": [
-              "console",
-              "addr"
-            ]
-          },
-          "local_path": {
-            "description": "A file on this computer (the catalogue's cached ELF).",
-            "type": "string"
-          }
-        },
-        "required": [
-          "host",
-          "filename",
-          "local_path"
-        ],
         "type": "object"
       },
       "SystemControlAck": {
@@ -13769,6 +13822,31 @@
         ],
         "type": "object"
       },
+      "engine.helper_copies_api.StoreReq": {
+        "properties": {
+          "addr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "confirmed": {
+            "description": "The caller accepts that storing into an existing `ps5upload` folder removes its other\nfiles (Payload Manager's own rule).",
+            "type": "boolean"
+          },
+          "local_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "engine.inspect.InspectReq": {
         "properties": {
           "path": {
@@ -13925,6 +14003,35 @@
         "required": [
           "host",
           "filename"
+        ],
+        "type": "object"
+      },
+      "engine.pldmgr_api.StoreReq": {
+        "properties": {
+          "confirmed": {
+            "description": "The caller saw `check`'s answer and accepts that storing into an existing folder\nremoves that folder's other files.",
+            "type": "boolean"
+          },
+          "filename": {
+            "description": "The name Payload Manager files it under (its folder is derived from this).",
+            "type": "string"
+          },
+          "host": {
+            "type": "string",
+            "x-aliases": [
+              "console",
+              "addr"
+            ]
+          },
+          "local_path": {
+            "description": "A file on this computer (the catalogue's cached ELF).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "filename",
+          "local_path"
         ],
         "type": "object"
       },
@@ -17249,7 +17356,7 @@
     },
     "/api/consoles": {
       "get": {
-        "description": "`GET /api/consoles`.",
+        "description": "`GET /api/consoles`. Each console says whether it has keys (`has_rp_credentials`,\n`has_wake_credential`) and lists the PS5 users it is paired as, by name only: `rp_users:\n[{name, chosen}]`, `chosen` being the one Remote Play starts as when `POST /api/ps5/rp/start`\nnames no `user`. A user paired without a known name is \"user N\" (its place, from 1).",
         "responses": {
           "200": {
             "content": {
@@ -19646,7 +19753,7 @@
     },
     "/api/folder/build": {
       "post": {
-        "description": "POST /api/folder/build — unpack a game image or a debug-key package into a plain folder\n(#469). Runs as a job like an image build: stages `write` and `verify`, the folder written\nas `<name>.partial/` and renamed only once it reads back. Done's `dest` is the folder.",
+        "description": "POST /api/folder/build — unpack a game image or a debug-key package into a plain folder\n(#469). Runs as a job like an image build: stages `write` and `verify`, the folder written\nas `<name>.partial/` and renamed only once it reads back. Done's `dest` is the folder. With\n`ampr_zstd` the game's files go into zstd packs (stage `pack` first), from an image,\npackage or game folder; `commit_ack.ampr_runtime` names the emulator that went in.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -31105,6 +31212,97 @@
         }
       }
     },
+    "/api/ps5/helper/restore-previous": {
+      "post": {
+        "description": "`{ok:true, status:\"restored\"|\"unchanged\"}`; `{ok:false, error:\"not_found\"}` when no copy was\nkept; 400 for a path the replace route would not write either.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "bytes": {},
+                        "ok": {
+                          "type": "boolean"
+                        },
+                        "status": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "bytes": {
+                          "type": "integer"
+                        },
+                        "ok": {
+                          "type": "boolean"
+                        },
+                        "status": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Put back the stored helper copy a replace kept",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
     "/api/ps5/helper/stop": {
       "post": {
         "description": "POST /api/ps5/helper/stop — Body: `{ addr }`. Asks the console's helper to exit\n(`node.shutdown`), refused while this engine runs a job against that console.\n\n200 `{ \"state\": \"stopped\" }` once the helper's port went quiet, or `{ \"state\": \"not_running\" }`\nwhen nothing answered. 409 `{ \"error\", \"reason\": \"busy\" }` while a job runs; 502\n`{ \"error\", \"reason\": \"refused\" | \"still_running\" }` otherwise.",
@@ -31160,6 +31358,80 @@
           }
         },
         "summary": "Body: `{ addr }`",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/ps5/helper/store-in-pldmgr": {
+      "post": {
+        "description": "`POST /api/ps5/helper/store-in-pldmgr {addr, local_path?, confirmed}`: this app's helper,\nstamped like every stored copy, into Payload Manager as `ps5upload.elf`. Answers like\n`/api/ps5/pldmgr/store`: `{ok:false, needs_confirm:true, folder, file_exists}` first when\nthe folder is there and `confirmed` is not set.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/engine.helper_copies_api.StoreReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "bytes": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "folder": {},
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Store this app's helper in Payload Manager",
         "tags": [
           "payloads"
         ],
@@ -32655,7 +32927,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/StoreReq"
+                "$ref": "#/components/schemas/engine.pldmgr_api.StoreReq"
               }
             }
           },
@@ -35792,7 +36064,7 @@
     },
     "/api/ps5/rp/start": {
       "post": {
-        "description": "`POST /api/ps5/rp/start`.",
+        "description": "`POST /api/ps5/rp/start`. With `user`, as that paired PS5 user (`rp_users` in\n`GET /api/consoles`); the console signs that user in as the session starts. The answer's `user`\nnames the user the session signed in.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -35819,7 +36091,13 @@
                     },
                     "playing": {},
                     "session": {},
-                    "started": {}
+                    "started": {},
+                    "user": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
                   },
                   "type": "object"
                 }
@@ -35869,6 +36147,23 @@
                         "message": {
                           "type": "string"
                         },
+                        "user": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
                         "retry_s": {}
                       },
                       "type": "object"
@@ -35882,6 +36177,18 @@
                         "message": {
                           "type": "string"
                         }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "users": {}
                       },
                       "type": "object"
                     }

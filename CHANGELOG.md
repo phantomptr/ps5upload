@@ -4,6 +4,51 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.5.0
+
+Remote Play:
+
+- No sound? The stream now says why after a few seconds: the PS5 is sending none, it sends a format the app can't play, or it arrives and this device plays none of it. The log says which, so a bug report shows it. Both of our consoles send sound normally.
+- A device that can't decode the stream's Opus sound now plays it through the system's media player instead of staying silent.
+- A device where no video decoder gives a picture now plays the stream through the system's media player instead of ending. This is for older Macs whose Safari can't decode it, and it's untested on such a Mac. (#683)
+- Starting again right after a stream ended no longer says to close Remote Play on another device. The PS5 holds Remote Play for up to half a minute after a session ends; the app now says so and starts by itself once it's free. A pairing PIN refused for the same reason (0x80FC0101) says so too.
+- No picture from H.264: before falling back to software, the app tries the hardware decoder with the stream in its other form (Annex B), which an older macOS WebKit needed, then the system's media player.
+- Streaming over a VPN on cellular: a console reached through a tunnel or another network now streams with smaller packets. The full-size first message was dropped in a WireGuard tunnel on cellular, and the stream never started. (#713)
+- iOS refusing to start the sound output (another app or a call holding it) is no longer logged as a crash. (#713)
+- Pairing refused, or Remote Play greyed out on the PS5: the message now mentions that a PS5 switched to the sp-int NP environment does this.
+- Play as: pair more than one PS5 user on a console and choose which one Remote Play signs in as. Pairing another user adds them instead of replacing the first, and Wake & sign in follows the choice. Pairing a second user from this app's side isn't tried on a console yet.
+- For agents: rp_session shows the stream's last second (frames, loss, sound) and how the last session started and ended.
+
+Files and transfers:
+
+- Extracting a big archive on the console no longer fails after 60 seconds while it carries on. Long copies, moves, deletes and extracts follow the work to the end. (#712)
+- Clean-up: Stop always ends a run, and a helper that stops answering ends the wait for the PS5 instead of hanging. (#714)
+- Writing into a game that runs from a disk image no longer says "0 bytes are safely allocatable" when the image is nearly full but has room.
+- Phones: the first file's menu in a folder of files no longer covers its own Download button.
+- Files: game images and folders show a small format tag (exFAT, FFPFSC, FFPFS, UFS2, PKG, Folder).
+- FTP: a folder whose name has square brackets, like [PS5], lists its files. Some servers read the brackets as a pattern and listed nothing.
+- Update notice: Details shows the release notes, fetched from GitHub when the update check has none.
+
+Saves:
+
+- Backups made before a reset, a crash or a new account ID restore from the list onto the current user. They used to fail as another user's save, and backups of users no longer on the console now show too.
+- Load a save file accepts the app's own backup zip.
+- Changing the backup folder keeps earlier backups listed and restorable.
+
+Workshop and Convert:
+
+- zstd packs into a folder: Convert writes a packed game as a plain folder too, from an image, a package or a game folder, and reads every file back through the packs.
+- The zstd pack runtime (ampr-emu-ng) follows its newest release, checked against the SHA-256 GitHub publishes for it, so its fixes reach packed games without waiting for us. It falls back to the tested 0.3.2 when that can't be checked, and Convert can be set to always use 0.3.2. The game's job says which went in.
+- A .pkg dropped onto Workshop is taken; several go into the queue. (#716)
+- A queued game keeps the AMPR emulator choice it was added with.
+- PS4 packages: a package whose image has an empty folder that the container fills (Resident Evil 2) no longer fails its read-back check. A real PS4 game converted this way was installed by ShadowMount+ and ran to its title screen.
+- The PS4 or PS5 platform of a game folder without a usual title ID is read from its eboot.bin.
+
+PS5Upload Minion and Payload Manager:
+
+- Settings › PS5Upload Minion: "Keep Minion off on consoles I add" turns it off once on each new console. (#715)
+- Payload Manager: "Load the PS5Upload helper at boot" stores the helper there and loads it after your other payloads, so Minion works with no PC. Each connect updates the stored copy and keeps the previous one; if the new one doesn't come up after a restart, the previous one goes back. (#715)
+
 ## 11.4.0
 
 Games and formats:

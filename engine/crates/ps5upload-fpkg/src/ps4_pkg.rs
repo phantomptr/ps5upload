@@ -417,6 +417,8 @@ pub struct Ps4Package {
     inner: PfsSource,
     extras: Vec<(String, Vec<u8>)>,
     files: Vec<SourceFile>,
+    /// The inner image's empty folders, less those the container's files went into.
+    empty_dirs: Vec<String>,
 }
 
 /// Whether these are a package's first bytes that a PS5 one never starts with.
@@ -559,10 +561,12 @@ impl Ps4Package {
             extras.push((path, bytes));
         }
         files.sort_by(|a, b| a.path.cmp(&b.path));
+        let empty_dirs = still_empty(inner.empty_dirs(), &files);
         Ok(Self {
             inner,
             extras,
             files,
+            empty_dirs,
         })
     }
 
@@ -574,12 +578,30 @@ impl Ps4Package {
     }
 }
 
+/// The folders of `empty` that no file in `files` is under: a folder empty in the image that
+/// the container's files went into (sce_sys/changeinfo with changeinfo.xml from the CNT) has
+/// files now, and an image built from this source would read back without it as empty.
+fn still_empty(empty: &[String], files: &[SourceFile]) -> Vec<String> {
+    empty
+        .iter()
+        .filter(|d| {
+            let dir = d.trim_matches('/');
+            !files.iter().any(|f| {
+                f.path.len() > dir.len()
+                    && f.path.as_bytes()[dir.len()] == b'/'
+                    && f.path[..dir.len()].eq_ignore_ascii_case(dir)
+            })
+        })
+        .cloned()
+        .collect()
+}
+
 impl SourceTree for Ps4Package {
     fn files(&self) -> &[SourceFile] {
         &self.files
     }
     fn empty_dirs(&self) -> &[String] {
-        self.inner.empty_dirs()
+        &self.empty_dirs
     }
     fn read(&mut self, path: &str) -> Result<Vec<u8>> {
         match self.extra(path) {
@@ -605,6 +627,21 @@ impl SourceTree for Ps4Package {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_folder_the_container_filled_is_not_empty() {
+        let f = |p: &str| SourceFile {
+            path: p.into(),
+            size: 1,
+        };
+        let empty = vec![
+            "sce_sys/changeinfo".to_string(),
+            "sce_sys/trophy".to_string(),
+            "x".to_string(),
+        ];
+        let files = vec![f("sce_sys/changeinfo/changeinfo.xml"), f("xy.bin")];
+        assert_eq!(still_empty(&empty, &files), ["sce_sys/trophy", "x"]);
+    }
 
     fn hex(b: &[u8]) -> String {
         b.iter().map(|x| format!("{x:02x}")).collect()

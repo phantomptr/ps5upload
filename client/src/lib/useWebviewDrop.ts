@@ -8,27 +8,12 @@ import { isMobile } from "./platform";
 import { isTauriEnv } from "./tauriEnv";
 import { engineIsOnThisDevice } from "../state/engine";
 
-/** A .pkg is a package to install; AppShell's app-wide drop listener routes those. */
-const isPackage = (path: string) => /\.pkg$/i.test(path);
-
-/**
- * Calls `onDrop` with the first dropped path while `enabled`; returns whether a drag is over
- * the window, for highlighting a drop zone. The subscription is cleaned up even when it
- * resolves after unmount, as Upload's is.
- */
-export function useWebviewDrop(onDrop: (path: string) => void, enabled: boolean): boolean {
-  return useWebviewDropCore(
-    (paths) => {
-      const first = paths[0];
-      if (first && !isPackage(first)) onDrop(first);
-    },
-    enabled,
-  );
-}
-
 /**
  * Every dropped path, packages included, while `enabled` (the Files screen copies whatever is
- * dropped into the open folder). Returns whether a drag is over the window.
+ * dropped into the open folder; Workshop converts a dropped .pkg like any other game). Returns
+ * whether a drag is over the window. A screen that takes drops is listed in packageViewer's
+ * OWN_DROPS, so the app-wide listener leaves them to it: a filter here that dropped packages
+ * left a .pkg dropped on Workshop with nobody to take it (#716).
  */
 export function useWebviewDropAll(onDrop: (paths: string[]) => void, enabled: boolean): boolean {
   return useWebviewDropCore((paths) => {

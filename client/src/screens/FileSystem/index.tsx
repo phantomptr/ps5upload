@@ -1,3 +1,4 @@
+import { gameFormatLabel, gameFormatTag } from "../../lib/gameFormatTag";
 import { splitPkgBytes } from "../../lib/splitPkgSize";
 import { FileProperties } from "./FileProperties";
 import { consoleAddr, hostOf } from "../../lib/addr";
@@ -4283,6 +4284,22 @@ export default function FileSystemScreen() {
                         {e.name}
                       </button>
                     )}
+                    {(() => {
+                      const tag = gameFormatTag(e.name, isDir);
+                      if (!tag) return null;
+                      return (
+                        <span
+                          data-testid="fs-format-tag"
+                          className={
+                            "shrink-0 rounded border border-[var(--glass-edge)] px-1 text-[10px] leading-4 font-medium text-[var(--color-muted)] sm:text-[11px] " +
+                            // A folder already shows its icon: the word only where there is room.
+                            (tag === "folder" ? "hidden sm:inline" : "")
+                          }
+                        >
+                          {gameFormatLabel(tag, tr("fs_tag_folder", undefined, "Folder"))}
+                        </span>
+                      );
+                    })()}
                     <span className="shrink-0 text-xs text-[var(--color-muted)] tabular-nums">
                       {isDir ? "—" : formatBytes(e.size)}
                     </span>

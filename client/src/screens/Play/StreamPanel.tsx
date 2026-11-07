@@ -33,6 +33,8 @@ import { useTr } from "../../state/lang";
 import { phaseText } from "../../lib/rpPhaseText";
 import { useAndroidPipStore } from "../../lib/androidPip";
 import { useRosterStore } from "../../state/roster";
+import { chosenRpUser, rpUsersOf } from "../../lib/rpUsers";
+import { rpUserLabel } from "./setup/PairedUsers";
 import { deviceName, meshFor, othersRemotePlaying, remotePlayPads, useMeshStore } from "../../state/mesh";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { isLinuxDesktop, isMobile } from "../../lib/platform";
@@ -460,6 +462,11 @@ export function StreamPanel() {
 
   const profile = useMemo(() => profiles.find((p) => p.id === profileId) ?? null, [profiles, profileId]);
   const paired = !!(profile?.wake_regist_key && profile?.wake_rp_key);
+  // The PS5 users this console is paired as: with more than one, Start says which to play as
+  // (the choice stays with the console, and Wake signs in the same user).
+  const rpUsers = useMemo(() => rpUsersOf(profile), [profile]);
+  const rpUser = chosenRpUser(profile);
+  const chooseRpUser = useRosterStore((s) => s.chooseRpUser);
   // One stream at a time, for whichever console it plays. This page shows the selected console:
   // the stream when it is that console's, otherwise that console's own Start, with the other
   // stream offered (show it, or stop it and play this one).
@@ -1204,6 +1211,22 @@ export function StreamPanel() {
               🔇 {tr("rp_sound_unavailable", undefined, "This device can't play the stream's sound. Update your system or browser, then start again.")}
             </div>
           )}
+          {/* Picture for a while and not one sound frame: the PS5 sends none, or in a format we
+              don't play. Said so, instead of silence with no explanation. */}
+          {playing && stats?.soundMissing && !stats.soundUnavailable && !stats.soundBlocked && !settingsOpen && !pip && (
+            <div
+              className={`absolute right-3 z-20 max-w-[70%] rounded-2xl bg-black/70 px-3 py-1 text-xs text-white/90 ${showBar && !compact ? "top-16" : "top-3"}`}
+              data-testid="rp-sound-missing"
+              data-reason={stats.soundMissing}
+            >
+              🔇{" "}
+              {stats.soundMissing === "format"
+                ? tr("rp_sound_format", undefined, "The PS5 sends its sound in a format PS5Upload can't play yet. A bug report from now tells us which.")
+                : stats.soundMissing === "device"
+                  ? tr("rp_sound_device", undefined, "The PS5's sound reaches this device, but none of it plays. Check this device's sound output and volume, then stop and start the stream. Still silent? Send a bug report.")
+                  : tr("rp_sound_none", undefined, "The PS5 isn't sending any sound to this stream. Stop and start the stream again; if it stays silent, check where the PS5 plays its sound (Settings › Sound › Audio Output) and send a bug report.")}
+            </div>
+          )}
           {playing && kbm.pointerHeld && prefs.kbmChip && !settingsOpen && !pip && !kbm.hint && (
             <KbmReleaseChip low={showBar && !compact} />
           )}
@@ -1567,6 +1590,17 @@ export function StreamPanel() {
               ? tr("rp_switch_start", undefined, "Stop the other stream and start")
               : tr("rp_start", undefined, "Start")}
           </Button>
+          {profile && rpUsers.length > 1 && (
+            <Select
+              label={tr("rp_play_as", undefined, "Play as")}
+              block={false}
+              className="w-40"
+              value={rpUser ?? ""}
+              onChange={(e) => chooseRpUser(profile.id, e.target.value)}
+              options={rpUsers.map((u, i) => ({ value: u.wake_regist_key, label: rpUserLabel(u, i, tr) }))}
+              data-testid="rp-play-as"
+            />
+          )}
           <Select
             label={tr("rp_quality", undefined, "Picture")}
             block={false}

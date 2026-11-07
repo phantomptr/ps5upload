@@ -9,7 +9,16 @@ vi.stubGlobal("window", {
   },
 });
 
-import { minionNeedsReapply, minionRememberedOff, rememberMinion } from "./minionMemory";
+import {
+  markMinionHandled,
+  minionDefaultApplies,
+  minionHandled,
+  minionNeedsReapply,
+  minionOffForNew,
+  minionRememberedOff,
+  rememberMinion,
+  setMinionOffForNew,
+} from "./minionMemory";
 
 describe("Minion kept off from this computer", () => {
   beforeEach(() => data.clear());
@@ -31,5 +40,24 @@ describe("Minion kept off from this computer", () => {
     expect(minionNeedsReapply(false, on)).toBe(false);
     // An older helper says nothing about its file: never guessed.
     expect(minionNeedsReapply(true, { supported: true, enabled: true })).toBe(false);
+  });
+
+  it("keeps Minion off on new consoles only, once each", () => {
+    expect(minionOffForNew()).toBe(false);
+    // Turning it on leaves the consoles already known as they are.
+    setMinionOffForNew(true, ["192.168.1.9:9113"]);
+    expect(minionOffForNew()).toBe(true);
+    expect(minionHandled("192.168.1.9")).toBe(true);
+    expect(minionHandled("192.168.1.20")).toBe(false);
+    const on = { supported: true, enabled: true };
+    expect(minionDefaultApplies(true, false, on)).toBe(true);
+    // Once handled (applied, or chosen by hand), never again.
+    markMinionHandled("192.168.1.20");
+    expect(minionDefaultApplies(true, minionHandled("192.168.1.20"), on)).toBe(false);
+    expect(minionDefaultApplies(false, false, on)).toBe(false);
+    expect(minionDefaultApplies(true, false, { ...on, enabled: false })).toBe(false);
+    // An older helper without the switch is not guessed at.
+    expect(minionDefaultApplies(true, false, { supported: true })).toBe(false);
+    expect(minionDefaultApplies(true, false, { supported: false })).toBe(false);
   });
 });

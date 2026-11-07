@@ -123,6 +123,14 @@ pub fn request_failure_text(err: &str) -> String {
     let err = err.trim();
     if err.is_empty() {
         "the PS5 could not make a pairing PIN (it gave no reason)".into()
+    } else if err.to_ascii_lowercase().contains("0x80fc0101") {
+        // The console's Remote Play is busy: a session is running or still being let go (it
+        // holds on 12-30 s after one ends, and longer after one ended badly).
+        format!(
+            "the PS5 could not make a pairing PIN because Remote Play is in use on it: a stream is \
+             running or still closing. Stop any stream, wait 30 seconds and try again; if it keeps \
+             saying this, restart the PS5 ({err})"
+        )
     } else {
         format!("the PS5 could not make a pairing PIN: {err}")
     }

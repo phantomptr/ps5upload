@@ -49,6 +49,53 @@ pub struct Settings {
     /// The consoles to back up (bare IPs), as the app's console list has them.
     #[serde(default)]
     pub hosts: Vec<String>,
+    /// Backup folders used before `dir`: their backups still list and restore, newest folder
+    /// first. New backups go only into `dir`.
+    #[serde(default)]
+    pub old_dirs: Vec<String>,
+}
+
+impl Settings {
+    /// Every folder backups are read from: `dir`, then the earlier ones.
+    pub fn read_dirs(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for d in std::iter::once(&self.dir).chain(&self.old_dirs) {
+            let d = d.trim();
+            if !d.is_empty() && !out.iter().any(|o| same_dir(o, d)) {
+                out.push(d.to_string());
+            }
+        }
+        out
+    }
+
+    /// `dir` changed to `next`: the folder it leaves stays readable (an earlier one).
+    pub fn move_to(&mut self, next: &str) {
+        let next = next.trim().to_string();
+        let prev = std::mem::replace(&mut self.dir, next.clone());
+        let prev = prev.trim();
+        if !prev.is_empty() && !same_dir(prev, &next) {
+            self.old_dirs.insert(0, prev.to_string());
+        }
+        self.old_dirs
+            .retain(|d| !d.trim().is_empty() && !same_dir(d, &next));
+        let mut seen: Vec<String> = Vec::new();
+        self.old_dirs.retain(|d| {
+            let fresh = !seen.iter().any(|o| same_dir(o, d));
+            seen.push(d.clone());
+            fresh
+        });
+    }
+}
+
+/// Two spellings of one folder (a trailing separator, Windows letter case).
+fn same_dir(a: &str, b: &str) -> bool {
+    let t = |s: &str| s.trim().trim_end_matches(['/', '\\']).to_string();
+    let (a, b) = (t(a), t(b));
+    if cfg!(windows) {
+        a.eq_ignore_ascii_case(&b)
+    } else {
+        a == b
+    }
 }
 
 fn default_keep() -> u32 {
@@ -62,6 +109,7 @@ impl Default for Settings {
             dir: String::new(),
             keep: DEFAULT_KEEP,
             hosts: Vec::new(),
+            old_dirs: Vec::new(),
         }
     }
 }
@@ -835,14 +883,27 @@ pub async fn post_back_up_now(Json(b): Json<BackUpNowBody>) -> Response {
 
 /// The newest backup of each game and user in `dir`: `(title_id, user_id, stamp)`, the stamp
 /// without its tag. A folder that isn't a game's, or a name that isn't a backup's, is skipped.
+#[cfg(test)]
 pub fn latest_backups(dir: &str) -> Vec<(String, u32, String)> {
+    latest_backups_in(&[dir.to_string()])
+}
+
+/// `latest_backups` over several folders (the backup folder and the earlier ones).
+pub fn latest_backups_in(dirs: &[String]) -> Vec<(String, u32, String)> {
+    let mut best: BTreeMap<(String, u32), String> = BTreeMap::new();
+    for dir in dirs {
+        latest_into(dir, &mut best);
+    }
+    best.into_iter().map(|((t, u), s)| (t, u, s)).collect()
+}
+
+fn latest_into(dir: &str, best: &mut BTreeMap<(String, u32), String>) {
     if dir.trim().is_empty() {
-        return Vec::new();
+        return;
     }
     let Ok(rd) = std::fs::read_dir(dir) else {
-        return Vec::new();
+        return;
     };
-    let mut best: BTreeMap<(String, u32), String> = BTreeMap::new();
     for title in rd.filter_map(|e| e.ok()) {
         let Ok(title_id) = title.file_name().into_string() else {
             continue;
@@ -858,14 +919,13 @@ pub fn latest_backups(dir: &str) -> Vec<(String, u32, String)> {
             }
         }
     }
-    best.into_iter().map(|((t, u), s)| (t, u, s)).collect()
 }
 
 /// `GET /api/save-backup/latest` — `{latest: [{title_id, user_id, stamp}]}`, the newest backup of
 /// each game and user in the backup folder (Save Data's "Backed up …" line).
 pub async fn get_latest() -> Response {
-    let dir = settings().dir;
-    match tokio::task::spawn_blocking(move || latest_backups(&dir)).await {
+    let dirs = settings().read_dirs();
+    match tokio::task::spawn_blocking(move || latest_backups_in(&dirs)).await {
         Ok(list) => Json(json!({
             "latest": list
                 .into_iter()
@@ -934,6 +994,31 @@ pub(crate) fn plain(s: &str) -> bool {
         && !s.contains("..")
 }
 
+/// The backups of `title_id` in every folder of `dirs`, newest first; a name in two folders is
+/// listed once, from the first.
+pub fn list_backups_in(dirs: &[String], title_id: &str) -> Vec<BackupFile> {
+    let mut out: Vec<BackupFile> = Vec::new();
+    for dir in dirs {
+        for b in list_backups(dir, title_id) {
+            if !out.iter().any(|o| o.file == b.file) {
+                out.push(b);
+            }
+        }
+    }
+    out.sort_by(|a, b| b.stamp.cmp(&a.stamp));
+    out
+}
+
+/// The backup `file` of `title_id` in the first of `dirs` that has it.
+pub fn find_backup(dirs: &[String], title_id: &str, file: &str) -> Option<PathBuf> {
+    if !plain(title_id) || !plain(file) || !file.ends_with(".zip") {
+        return None;
+    }
+    dirs.iter()
+        .map(|d| Path::new(d).join(title_id).join(file))
+        .find(|p| p.is_file())
+}
+
 /// The backups of `title_id` in `dir`, newest first.
 pub fn list_backups(dir: &str, title_id: &str) -> Vec<BackupFile> {
     if !plain(title_id) || dir.trim().is_empty() {
@@ -974,11 +1059,9 @@ fn restore(
     if !plain(title_id) || !plain(file) || !file.ends_with(".zip") {
         return Err("unexpected backup name".into());
     }
-    let zip = Path::new(&s.dir).join(title_id).join(file);
-    if !zip.is_file() {
-        return Err(format!("no backup {}", zip.display()));
-    }
-    restore_zip(host, title_id, &zip, save_path, user_id)?;
+    let zip = find_backup(&s.read_dirs(), title_id, file)
+        .ok_or_else(|| format!("no backup {file} in {}", s.dir))?;
+    restore_zip_any_user(host, title_id, &zip, save_path, user_id, None)?;
     mark_restored(host, save_path);
     Ok(())
 }
@@ -1077,6 +1160,44 @@ pub(crate) fn restore_zip(
         return Err(SAVE_OPEN_ERROR.into());
     }
     restore_zip_with(host, title_id, zip, save_path, user_id, true)
+}
+
+/// `restore_zip`, for a backup of a user this console no longer has under that ID (a reset gives
+/// every user a new one, and so can signing an account in again after a crash): put in the way
+/// Restore to another user does, since the person already chose the save it goes into. `beside`:
+/// where the save it replaces is kept when no backup folder or server is set.
+pub(crate) fn restore_zip_any_user(
+    host: &str,
+    title_id: &str,
+    zip: &Path,
+    save_path: &str,
+    user_id: u32,
+    beside: Option<PathBuf>,
+) -> Result<(), String> {
+    match restore_zip(host, title_id, zip, save_path, user_id) {
+        Err(e) if e == OTHER_USER_ERROR => {
+            let file = backup_file_name(zip, title_id);
+            let live = match beside {
+                Some(dir) => crate::save_copy::Live::keeping_in(host, dir),
+                None => crate::save_copy::Live::new(host),
+            };
+            crate::log_info!(
+                "save backup: {file} is another user's; restoring it into {user_id:08x}'s save"
+            );
+            crate::save_copy::restore_to_user(&live, title_id, &file, zip, user_id)
+                .map(|_| ())
+                .map_err(|e| e.msg)
+        }
+        r => r,
+    }
+}
+
+/// Whether `zip` is a save backup this app made (its comment says so; from 10.6.0).
+pub(crate) fn noted_backup(zip: &Path) -> bool {
+    zip_comment(zip)
+        .ok()
+        .and_then(|c| serde_json::from_str::<Value>(&c).ok())
+        .is_some_and(|n| n.get("ps5upload").and_then(Value::as_str) == Some("save-backup"))
 }
 
 /// `restore_zip`; with `keep_current` false the save there now is not backed up first (it is
@@ -1649,7 +1770,8 @@ pub(crate) fn writable(dir: &str) -> Result<(), String> {
 pub async fn put_settings(Json(patch): Json<SettingsPatch>) -> Response {
     let mut next = settings();
     if let Some(d) = patch.dir {
-        next.dir = d.trim().to_string();
+        // Backups already in the folder left behind still list and restore.
+        next.move_to(&d);
     }
     if let Some(e) = patch.enabled {
         next.enabled = e;
@@ -1701,9 +1823,9 @@ pub struct ListQuery {
 
 /// `GET /api/save-backup/list?title_id=` — that game's backups, newest first.
 pub async fn get_list(Query(q): Query<ListQuery>) -> Response {
-    let dir = settings().dir;
+    let dirs = settings().read_dirs();
     let title = q.title_id.trim().to_ascii_uppercase();
-    match tokio::task::spawn_blocking(move || list_backups(&dir, &title)).await {
+    match tokio::task::spawn_blocking(move || list_backups_in(&dirs, &title)).await {
         Ok(list) => Json(json!({ "backups": list })).into_response(),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
@@ -1783,28 +1905,8 @@ pub async fn post_restore_file(Json(b): Json<RestoreFileBody>) -> Response {
     let r = tokio::task::spawn_blocking(move || {
         let host = b.addr.trim();
         let title_id = b.title_id.trim().to_ascii_uppercase();
-        match restore_zip(host, &title_id, &zip, b.save_path.trim(), b.user_id) {
-            // A reset console has new users, so a backup made before it is "another user's". The
-            // way that works is the one Restore to another user uses, and this person has already
-            // chosen the save it goes into: no second place to go and find.
-            Err(e) if e == OTHER_USER_ERROR => {
-                let file = backup_file_name(&zip, &title_id);
-                let beside = zip
-                    .parent()
-                    .map(|d| d.join("before-restore"))
-                    .unwrap_or_default();
-                crate::save_copy::restore_to_user(
-                    &crate::save_copy::Live::keeping_in(host, beside),
-                    &title_id,
-                    &file,
-                    &zip,
-                    b.user_id,
-                )
-                .map(|_| ())
-                .map_err(|e| e.msg)
-            }
-            r => r,
-        }
+        let beside = zip.parent().map(|d| d.join("before-restore"));
+        restore_zip_any_user(host, &title_id, &zip, b.save_path.trim(), b.user_id, beside)
     })
     .await;
     match r {
@@ -2529,6 +2631,96 @@ mod tests {
         assert!(list_backups(&d, "../PPSA01234").is_empty());
         assert!(list_backups("", "PPSA01234").is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A new backup folder: backups already in the old one still list, restore and count as the
+    /// latest, and a file in both is listed once.
+    #[test]
+    fn backups_in_an_earlier_folder_still_list() {
+        let mut st = Settings {
+            dir: "/old/".into(),
+            ..Settings::default()
+        };
+        st.move_to("/new");
+        assert_eq!(st.dir, "/new");
+        assert_eq!(st.old_dirs, ["/old/"]);
+        assert_eq!(st.read_dirs(), ["/new", "/old/"]);
+        // Back to the first one: the other is the earlier one now, never both.
+        st.move_to("/old");
+        assert_eq!(st.read_dirs(), ["/old", "/new"]);
+        st.move_to("/old");
+        assert_eq!(st.old_dirs, ["/new"]);
+        // Cleared: what was there still reads.
+        st.move_to("");
+        assert_eq!(st.read_dirs(), ["/old", "/new"]);
+
+        let base = std::env::temp_dir().join(format!("ps5u-dirs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (old, new) = (base.join("old"), base.join("new"));
+        for (dir, stamp) in [
+            (&old, "2026-10-01_090000"),
+            (&old, "2026-10-02_090000"),
+            (&new, "2026-10-02_090000"),
+            (&new, "2026-11-01_090000"),
+        ] {
+            let t = dir.join("PPSA01234");
+            std::fs::create_dir_all(&t).unwrap();
+            std::fs::write(t.join(format!("PPSA01234_user0000abcd_{stamp}.zip")), b"z").unwrap();
+        }
+        let dirs = [
+            new.to_string_lossy().into_owned(),
+            old.to_string_lossy().into_owned(),
+        ];
+        let stamps: Vec<String> = list_backups_in(&dirs, "PPSA01234")
+            .into_iter()
+            .map(|b| b.stamp)
+            .collect();
+        assert_eq!(
+            stamps,
+            [
+                "2026-11-01_090000",
+                "2026-10-02_090000",
+                "2026-10-01_090000"
+            ]
+        );
+        let found = |f: &str| find_backup(&dirs, "PPSA01234", f);
+        assert_eq!(
+            found("PPSA01234_user0000abcd_2026-10-01_090000.zip"),
+            Some(
+                old.join("PPSA01234")
+                    .join("PPSA01234_user0000abcd_2026-10-01_090000.zip")
+            )
+        );
+        assert_eq!(
+            found("PPSA01234_user0000abcd_2026-10-02_090000.zip"),
+            Some(
+                new.join("PPSA01234")
+                    .join("PPSA01234_user0000abcd_2026-10-02_090000.zip")
+            )
+        );
+        assert_eq!(found("../x.zip"), None);
+        assert_eq!(found("PPSA01234_user0000abcd_2027-01-01_090000.zip"), None);
+        assert_eq!(
+            latest_backups_in(&dirs),
+            [("PPSA01234".to_string(), 0xabcd, "2026-11-01_090000".into())]
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Load a save file takes a backup the app made (its note says so) as a backup.
+    #[test]
+    fn a_backup_the_app_made_is_told_by_its_note() {
+        let tmp = make_temp_dir("notedtest").unwrap();
+        std::fs::create_dir_all(tmp.join("PPSA01234")).unwrap();
+        std::fs::write(tmp.join("PPSA01234").join("sdimg_x"), b"x").unwrap();
+        let noted = tmp.join("noted.zip");
+        zip_folder_noted(&tmp, "PPSA01234", &noted, &backup_note(None, Some(7))).unwrap();
+        assert!(noted_backup(&noted));
+        let plain_zip = tmp.join("plain.zip");
+        zip_folder_noted(&tmp, "PPSA01234", &plain_zip, "").unwrap();
+        assert!(!noted_backup(&plain_zip));
+        assert!(!noted_backup(&tmp.join("missing.zip")));
+        let _ = cleanup_temp_dir(&tmp.to_string_lossy());
     }
 
     #[test]
