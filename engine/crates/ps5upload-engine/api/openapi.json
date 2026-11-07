@@ -355,6 +355,13 @@
       },
       "AmprEmuReq": {
         "properties": {
+          "build": {
+            "description": "Which emulator: `ampr_emu` (the default) or `ampr-emu-ng`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "source": {
             "type": "string"
           }
@@ -3398,6 +3405,13 @@
           "add_ampr_emu": {
             "description": "Add ampr_emu to a game that reads through libSceAmpr and ships no emulator: without one\nit fails to start from an image. On unless turned off.",
             "type": "boolean"
+          },
+          "ampr_emu_build": {
+            "description": "Which emulator: `ampr_emu` (the default) or `ampr-emu-ng`.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "ampr_lz4": {
             "anyOf": [
@@ -9678,7 +9692,8 @@
           "ftps",
           "sftp",
           "webdav",
-          "webdavs"
+          "webdavs",
+          "nfs"
         ],
         "type": "string"
       },

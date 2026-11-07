@@ -878,7 +878,7 @@ export async function browserInvoke<T>(
       return postJson<T>("/api/fpkg/delete", { path: args["path"] });
     }
     case "fpkg_ampr_emu": {
-      return postJson<T>("/api/fpkg/ampr-emu", { source: args["source"] });
+      return postJson<T>("/api/fpkg/ampr-emu", { source: args["source"], build: args["build"] });
     }
     case "fpkg_ampr_index": {
       return postJson<T>("/api/fpkg/ampr-index", { source: args["source"] });
@@ -912,6 +912,7 @@ export async function browserInvoke<T>(
         rebuild_ampr_index: args["rebuildAmprIndex"] ?? false,
         add_ampr_emu: args["addAmprEmu"] ?? true,
         ampr_zstd: args["amprZstd"],
+        ampr_emu_build: args["amprEmuBuild"],
       });
     }
     case "folder_build": {

@@ -1,7 +1,7 @@
 //! WebDAV (RFC 4918) over plain HTTP or HTTPS: PROPFIND for listings and stat, ranged GET
 //! for reads, and for the organizer's few writes MKCOL, MOVE (`Overwrite: F`) and DELETE of an
-//! empty collection. Basic auth only, which is what NAS boxes, Nextcloud, Alist and
-//! rclone serve; Digest-only servers answer 401 and the hint says so.
+//! empty collection. Basic auth, which is what NAS boxes, Nextcloud, Alist and rclone serve, or
+//! Digest when the server offers it (see [`super::http_digest`]).
 //!
 //! Paths are absolute on the server (`/remote.php/dav/files/me/games`): the DAV root goes
 //! in the connection's start folder, and the browser walks down from there. Nothing here
@@ -10,8 +10,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use base64::Engine as _;
-
+use super::http_digest::Auth;
 use super::store::{Connection, Protocol, Secret};
 use super::{Entry, Page, RemoteError, RemoteFile, RemoteFs, PAGE};
 
@@ -104,8 +103,8 @@ pub struct WebdavFs {
     /// `https://nas:5006`, no trailing slash.
     base: String,
     host: String,
-    /// `Basic …`, when the connection has a user.
-    auth: Option<String>,
+    /// How requests are signed, when the connection has a user.
+    auth: Arc<Auth>,
 }
 
 impl WebdavFs {
@@ -124,16 +123,15 @@ impl WebdavFs {
         } else {
             format!("{host}:{port}")
         };
-        let auth = match (conn.user.trim(), secret) {
-            ("", _) => None,
-            (user, Secret::Password { password }) => Some(format!(
-                "Basic {}",
-                base64::engine::general_purpose::STANDARD.encode(format!("{user}:{password}"))
-            )),
-            (user, _) => Some(format!(
-                "Basic {}",
-                base64::engine::general_purpose::STANDARD.encode(format!("{user}:"))
-            )),
+        let password = match secret {
+            Secret::Password { password } => password.as_str(),
+            _ => "",
+        };
+        let user = conn.user.trim().to_string();
+        let auth = if user.is_empty() {
+            Auth::None
+        } else {
+            Auth::basic(&user, password)
         };
         // A certificate the user accepted, as SFTP's host key and FTPS's certificate are. Checked
         // once per connection, then the requests don't verify: ureq has no place for a verifier
@@ -166,13 +164,13 @@ impl WebdavFs {
                     .build(),
             )
         };
-        let fs = Self {
+        let mut fs = Self {
             agent: timed(10),
             dav: timed(0),
             put: ureq::Agent::new_with_config(put_limits(builder(0)).build()),
             base: format!("{scheme}://{hostport}"),
             host: hostport,
-            auth,
+            auth: Arc::new(auth),
         };
         // Signing in = one PROPFIND of the start folder (or the root).
         let start = if conn.start_path.trim().is_empty() {
@@ -180,6 +178,11 @@ impl WebdavFs {
         } else {
             conn.start_path.trim().to_string()
         };
+        if !user.is_empty() {
+            if let Some(digest) = fs.digest_offered(&start, &user, password).await {
+                fs.auth = Arc::new(digest);
+            }
+        }
         match fs.propfind(&start, 0).await {
             Ok(_) => Ok(fs),
             // A certificate no authority vouches for, as a NAS's usually is: offer it for
@@ -200,6 +203,30 @@ impl WebdavFs {
     }
 
     /// PROPFIND `path` with `depth` 0 or 1, parsed.
+    /// The connection's Digest form, when an unsigned request says the server offers it.
+    async fn digest_offered(&self, path: &str, user: &str, password: &str) -> Option<Auth> {
+        let agent = self.dav.clone();
+        let url = self.url(path);
+        let (user, password) = (user.to_string(), password.to_string());
+        tokio::task::spawn_blocking(move || {
+            let req = ureq::http::Request::builder()
+                .method("PROPFIND")
+                .uri(url.as_str())
+                .header("Depth", "0")
+                .header("User-Agent", "ps5upload")
+                .body(())
+                .ok()?;
+            let resp = agent.run(req).ok()?;
+            if resp.status().as_u16() != 401 {
+                return None;
+            }
+            Auth::digest_from(&user, &password, challenges(&resp))
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+
     async fn propfind(&self, path: &str, depth: u8) -> Result<Vec<DavItem>, RemoteError> {
         let agent = self.dav.clone();
         let base = self.base.clone();
@@ -207,14 +234,14 @@ impl WebdavFs {
         let auth = self.auth.clone();
         let host = self.host.clone();
         tokio::task::spawn_blocking(move || {
-            let mut resp = run_dav(&agent, &base, &url, &host, |url| {
+            let mut resp = run_dav(&agent, &base, &url, &host, &auth, |url| {
                 let mut req = ureq::http::Request::builder()
                     .method("PROPFIND")
                     .uri(url)
                     .header("Depth", depth.to_string())
                     .header("Content-Type", "application/xml; charset=utf-8")
                     .header("User-Agent", "ps5upload");
-                if let Some(a) = &auth {
+                if let Some(a) = auth.header("PROPFIND", url) {
                     req = req.header("Authorization", a);
                 }
                 req.body(PROPFIND_BODY)
@@ -257,7 +284,7 @@ impl WebdavFs {
         let auth = self.auth.clone();
         let host = self.host.clone();
         tokio::task::spawn_blocking(move || {
-            let resp = run_dav(&agent, &base, &url, &host, |url| {
+            let resp = run_dav(&agent, &base, &url, &host, &auth, |url| {
                 let mut req = ureq::http::Request::builder()
                     .method(method)
                     .uri(url)
@@ -265,7 +292,7 @@ impl WebdavFs {
                 for (k, v) in &headers {
                     req = req.header(*k, v);
                 }
-                if let Some(a) = &auth {
+                if let Some(a) = auth.header(method, url) {
                     req = req.header("Authorization", a);
                 }
                 req.body(())
@@ -295,6 +322,14 @@ impl WebdavFs {
     }
 }
 
+/// A response's `WWW-Authenticate` values.
+fn challenges<B>(resp: &ureq::http::Response<B>) -> impl Iterator<Item = &str> {
+    resp.headers()
+        .get_all("WWW-Authenticate")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+}
+
 /// Sends `make(url)`, and once more to where a redirect points when that is on the same
 /// server. ureq's own redirects drop the Authorization header, and Apache (behind many NAS
 /// WebDAV shares) redirects a folder's URL without its trailing slash to the one with it.
@@ -303,9 +338,13 @@ fn run_dav<B: ureq::AsSendBody>(
     base: &str,
     url: &str,
     host: &str,
+    auth: &Auth,
     make: impl Fn(&str) -> Result<ureq::http::Request<B>, RemoteError>,
 ) -> Result<ureq::http::Response<ureq::Body>, RemoteError> {
-    let resp = agent.run(make(url)?).map_err(|e| map_err(host, e))?;
+    let mut resp = agent.run(make(url)?).map_err(|e| map_err(host, e))?;
+    if resp.status().as_u16() == 401 && auth.renew(challenges(&resp)) {
+        resp = agent.run(make(url)?).map_err(|e| map_err(host, e))?;
+    }
     if !matches!(resp.status().as_u16(), 301 | 302 | 307 | 308) {
         return Ok(resp);
     }
@@ -339,7 +378,7 @@ fn auth_reason(status: u16) -> String {
     if status == 403 {
         "the server refused this user (HTTP 403)".into()
     } else {
-        "the server rejected the user and password (HTTP 401). Only Basic authentication is supported".into()
+        "the server rejected the user and password (HTTP 401). Basic and Digest authentication are supported".into()
     }
 }
 
@@ -581,7 +620,7 @@ struct WebdavInner {
     agent: ureq::Agent,
     base: String,
     host: String,
-    auth: Option<String>,
+    auth: Arc<Auth>,
 }
 
 #[async_trait::async_trait]
@@ -599,15 +638,21 @@ impl RemoteFile for WebdavFile {
         let inner = Arc::clone(&self.fs);
         let url = format!("{}{}", inner.base, encode_path(&self.path));
         tokio::task::spawn_blocking(move || {
-            let mut req = inner
-                .agent
-                .get(&url)
-                .header("User-Agent", "ps5upload")
-                .header("Range", format!("bytes={offset}-{end}"));
-            if let Some(a) = &inner.auth {
-                req = req.header("Authorization", a);
+            let send = || {
+                let mut req = inner
+                    .agent
+                    .get(&url)
+                    .header("User-Agent", "ps5upload")
+                    .header("Range", format!("bytes={offset}-{end}"));
+                if let Some(a) = inner.auth.header("GET", &url) {
+                    req = req.header("Authorization", a);
+                }
+                req.call().map_err(|e| map_err(&inner.host, e))
+            };
+            let mut resp = send()?;
+            if resp.status().as_u16() == 401 && inner.auth.renew(challenges(&resp)) {
+                resp = send()?;
             }
-            let mut resp = req.call().map_err(|e| map_err(&inner.host, e))?;
             match resp.status().as_u16() {
                 206 => {}
                 // The server ignored the range: usable only from the start, and only up to len.
@@ -684,7 +729,7 @@ impl RemoteFs for WebdavFs {
                 agent: self.agent.clone(),
                 base: self.base.clone(),
                 host: self.host.clone(),
-                auth: self.auth.clone(),
+                auth: Arc::clone(&self.auth),
             }),
             path: normal(path),
             size: e.size,
@@ -793,7 +838,7 @@ impl RemoteFs for WebdavFs {
                 .uri(&url)
                 .header("User-Agent", "ps5upload")
                 .header("Content-Length", size.to_string());
-            if let Some(a) = &auth {
+            if let Some(a) = auth.header("PUT", &url) {
                 req = req.header("Authorization", a);
             }
             let req = req

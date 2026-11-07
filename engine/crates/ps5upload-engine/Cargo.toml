@@ -66,6 +66,7 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring"]
 # Public roots for the Play Together relay's wss:// (already in the tree through ureq).
 webpki-roots = "1"
 sha2 = "0.11"
+md-5 = "0.11"
 # Gzips the web UI and the guest pages (web_pages.rs). Already in the tree through russh.
 flate2 = "1"
 # Unpacks the pinned ffmpeg for Linux (BtbN's .tar.xz) for Go live (ffmpeg_tool.rs). Already in

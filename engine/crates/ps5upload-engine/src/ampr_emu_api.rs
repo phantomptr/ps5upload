@@ -35,6 +35,9 @@ const MODULE: &str = "libSceAmpr.sprx";
 #[derive(Deserialize)]
 pub(crate) struct AmprEmuReq {
     source: String,
+    /// Which emulator: `ampr_emu` (the default) or `ampr-emu-ng`.
+    #[serde(default)]
+    build: Option<String>,
 }
 
 #[derive(Serialize, Debug, PartialEq, Eq)]
@@ -174,7 +177,11 @@ fn to_console(
 }
 
 /// An image on the console: a backport folder, and ShadowMount+ asked to look again.
-fn attach_console_image(addr: &str, image: &Path) -> Result<AmprEmuOutcome, String> {
+fn attach_console_image(
+    addr: &str,
+    image: &Path,
+    build: Option<&str>,
+) -> Result<AmprEmuOutcome, String> {
     let (_, path) = crate::convert_source::console_target(&image.to_string_lossy())?;
     let mut tree = ps5upload_fpkg::source::open(image).map_err(|e| e.to_string())?;
     let module = needed(tree.as_mut())?;
@@ -191,7 +198,7 @@ fn attach_console_image(addr: &str, image: &Path) -> Result<AmprEmuOutcome, Stri
     if exists(&format!("{folder}/{at}")) {
         return Err(format!("{folder} already has an AMPR emulator in {target}"));
     }
-    let runtime = crate::ampr_trace::release_runtime()?;
+    let runtime = crate::ampr_trace::emulator(build)?;
     let write_index = !has_index(tree.as_ref()) && !exists(&format!("{folder}/{INDEX}"));
     let copy = existing.is_none().then_some((own_dir.as_str(), target));
     let files = writes(tree.as_mut(), &at, &runtime, copy, write_index, now())?;
@@ -210,10 +217,15 @@ fn attach_console_image(addr: &str, image: &Path) -> Result<AmprEmuOutcome, Stri
 type Put = dyn Fn(&[(String, Vec<u8>)]) -> Result<Vec<String>, String>;
 
 /// A folder on the console, or on this computer: in place.
-fn attach_folder(source: &Path, put: &Put, folder: String) -> Result<AmprEmuOutcome, String> {
+fn attach_folder(
+    source: &Path,
+    put: &Put,
+    folder: String,
+    build: Option<&str>,
+) -> Result<AmprEmuOutcome, String> {
     let mut tree = ps5upload_fpkg::source::open(source).map_err(|e| e.to_string())?;
     let module = needed(tree.as_mut())?;
-    let runtime = crate::ampr_trace::release_runtime()?;
+    let runtime = crate::ampr_trace::emulator(build)?;
     let write_index = !has_index(tree.as_ref());
     let files = writes(tree.as_mut(), &module, &runtime, None, write_index, now())?;
     Ok(AmprEmuOutcome {
@@ -224,7 +236,7 @@ fn attach_folder(source: &Path, put: &Put, folder: String) -> Result<AmprEmuOutc
     })
 }
 
-fn attach(source: &str) -> Result<AmprEmuOutcome, String> {
+fn attach(source: &str, build: Option<&str>) -> Result<AmprEmuOutcome, String> {
     let path = resolve_engine_path(source);
     let image = crate::image_build::has_image_extension(&path);
     if source.starts_with("ps5://") {
@@ -236,7 +248,7 @@ fn attach(source: &str) -> Result<AmprEmuOutcome, String> {
         }
         let addr = crate::console_addr(&host);
         if image {
-            return attach_console_image(&addr, &path);
+            return attach_console_image(&addr, &path, build);
         }
         let put_addr = addr.clone();
         let base = console_path.clone();
@@ -244,6 +256,7 @@ fn attach(source: &str) -> Result<AmprEmuOutcome, String> {
             &path,
             &move |files| to_console(&put_addr, &base, files),
             console_path,
+            build,
         );
     }
     if ps5upload_fpkg::remote_source::is_remote(&path) {
@@ -272,13 +285,15 @@ fn attach(source: &str) -> Result<AmprEmuOutcome, String> {
             Ok(written)
         },
         path.to_string_lossy().into_owned(),
+        build,
     )
 }
 
 /// POST /api/fpkg/ampr-emu `{source}`: the emulator added to a game where it stands.
 pub(crate) async fn ampr_emu_handler(Json(req): Json<AmprEmuReq>) -> impl IntoResponse {
     let source = req.source.trim().to_string();
-    let done = tokio::task::spawn_blocking(move || attach(&source))
+    let build = req.build;
+    let done = tokio::task::spawn_blocking(move || attach(&source, build.as_deref()))
         .await
         .unwrap_or_else(|e| Err(e.to_string()));
     match done {

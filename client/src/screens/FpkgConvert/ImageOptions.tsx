@@ -1,6 +1,12 @@
 import { Button, Toggle } from "../../components";
 import type { AmprLz4Options, AmprPacksReadiness, FfpfscLevel, ImageFormat } from "../../api/fpkg";
-import { DEFAULT_VERIFY_CHUNK_KIB, VERIFY_CHUNK_KIB, useConvertPrefs } from "../../state/convertPrefs";
+import {
+  DEFAULT_VERIFY_CHUNK_KIB,
+  VERIFY_CHUNK_KIB,
+  parseAmprEmuBuild,
+  useConvertPrefs,
+  type AmprEmuBuild,
+} from "../../state/convertPrefs";
 import { useTr } from "../../state/lang";
 
 // The options of a game image (③ Options when "A game image" is what Convert makes): its
@@ -238,8 +244,10 @@ function AmprEmuOption() {
   const tr = useTr();
   const on = useConvertPrefs((s) => s.addAmprEmu);
   const set = useConvertPrefs((s) => s.setAddAmprEmu);
+  const build = useConvertPrefs((s) => s.amprEmuBuild);
+  const setBuild = useConvertPrefs((s) => s.setAmprEmuBuild);
   return (
-    <div data-testid="ampr-emu-option">
+    <div className="space-y-1" data-testid="ampr-emu-option">
       <Toggle
         checked={on}
         onChange={set}
@@ -250,7 +258,33 @@ function AmprEmuOption() {
           "This game reads its files through AMPR and has no emulator, so it would fail to start from an image. Adds drakmor's ampr_emu 0.4.2.1 as fakelib/libSceAmpr.sprx, fetched once from its GitHub release and checked against a known digest.",
         )}
       />
+      {on && <AmprEmuBuildChoice build={build} onBuild={setBuild} />}
     </div>
+  );
+}
+
+/** Which emulator a game gets: drakmor's, or quer3q's, which also reads zstd packs. */
+export function AmprEmuBuildChoice({
+  build,
+  onBuild,
+}: {
+  build: AmprEmuBuild;
+  onBuild: (build: AmprEmuBuild) => void;
+}) {
+  const tr = useTr();
+  return (
+    <label className="flex items-center gap-2 text-xs">
+      <span>{tr("fpkg.image.ampr_emu_build", undefined, "Emulator")}</span>
+      <select
+        value={build}
+        onChange={(e) => onBuild(parseAmprEmuBuild(e.target.value))}
+        className="select w-auto!"
+        data-testid="ampr-emu-build"
+      >
+        <option value="ampr_emu">ampr_emu 0.4.2.1</option>
+        <option value="ampr-emu-ng">ampr-emu-ng 0.3.2</option>
+      </select>
+    </label>
   );
 }
 

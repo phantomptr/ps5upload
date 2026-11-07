@@ -678,6 +678,9 @@ pub(crate) struct ExfatBuildReq {
     /// it fails to start from an image. On unless turned off.
     #[serde(default = "default_add_ampr_emu")]
     add_ampr_emu: bool,
+    /// Which emulator: `ampr_emu` (the default) or `ampr-emu-ng`.
+    #[serde(default)]
+    ampr_emu_build: Option<String>,
     /// Pack the game's files into zstd asset packs for ampr-emu-ng, which goes in the image: a
     /// plain image of any format, not with LZ4 packs. A game in LZ4 packs is decoded on the way.
     #[serde(default)]
@@ -984,6 +987,7 @@ pub(crate) async fn exfat_build_handler(
     let check_packs = packs.is_some();
     let install_runtime = req.ampr_lz4.as_ref().is_some_and(|r| r.install_runtime);
     let add_ampr_emu = req.add_ampr_emu;
+    let ampr_emu_build = req.ampr_emu_build.clone();
     let edited_tree = edited.map(|e| e.tree);
     let scanned = tokio::task::spawn_blocking(move || {
         // An edited copy keeps the image's own names: only the user's changes are made.
@@ -1034,20 +1038,24 @@ pub(crate) async fn exfat_build_handler(
             // A libSceAmpr game with no emulator fails to start from an image, and ShadowMount+
             // doesn't add one. Packs have their own choice below.
             if let Some(module) = ps5upload_fpkg::ampr_pack::image::emulator_needed_at(&mut *tree) {
-                let bytes = crate::ampr_trace::release_runtime().map_err(|e| {
-                    format!(
+                let bytes =
+                    crate::ampr_trace::emulator(ampr_emu_build.as_deref()).map_err(|e| {
+                        format!(
                         "this game needs an AMPR emulator to start from an image, and it could \
                          not be fetched: {e}. Connect to the internet, or turn off \
                          \"Add the AMPR emulator\" in Convert's options"
                     )
-                })?;
+                    })?;
                 tree = Box::new(
                     ps5upload_fpkg::ampr_pack::image::RuntimeInstalled::new_at(
                         tree, bytes, &module,
                     )
                     .map_err(|e| e.to_string())?,
                 );
-                crate::log_info!("image build: ampr_emu 0.4.2.1 added as {module}");
+                crate::log_info!(
+                    "image build: {} added as {module}",
+                    ampr_emu_build.as_deref().unwrap_or("ampr_emu")
+                );
             }
         }
         if check_packs && install_runtime {

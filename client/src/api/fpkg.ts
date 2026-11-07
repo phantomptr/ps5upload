@@ -188,6 +188,7 @@ export const fpkg = {
       ffpfscLevel: compress ? ffpfscLevel : undefined,
       keepBoth,
       addAmprEmu: useConvertPrefs.getState().addAmprEmu,
+      amprEmuBuild: useConvertPrefs.getState().amprEmuBuild,
     }),
   /** Unpack a game image (.exfat, .ffpkg, .ffpfs, .ffpfsc) or a package made with the debug
    *  key into a plain folder in the output folder, named after the source (or `name`). One
@@ -217,7 +218,7 @@ export const fpkg = {
    *  {@link AmprIndexOutcome}. */
   /** The AMPR emulator added to a game where it stands: in a folder, or as a backport folder for
    *  an image on the PS5. */
-  addAmprEmu: (source: string) => invoke<AmprEmuOutcome>("fpkg_ampr_emu", { source }),
+  addAmprEmu: (source: string) => invoke<AmprEmuOutcome>("fpkg_ampr_emu", { source, build: useConvertPrefs.getState().amprEmuBuild }),
   rebuildAmprIndex: (source: string) => invoke<{ job_id: string }>("fpkg_ampr_index", { source }),
   /** An edited copy of a game image whose one change is a regenerated `ampr_emu.index` (#621),
    *  named `<name>-edited` next to it (`<name>-edited (2)` when a rebuild already made one).

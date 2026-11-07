@@ -243,6 +243,14 @@ pub(crate) fn release_runtime() -> Result<Vec<u8>, String> {
     )
 }
 
+/// The emulator a game gets: ampr-emu-ng when asked for by name, else drakmor's ampr_emu.
+pub(crate) fn emulator(build: Option<&str>) -> Result<Vec<u8>, String> {
+    match build {
+        Some("ampr-emu-ng") => ng_runtime(),
+        _ => release_runtime(),
+    }
+}
+
 /// ampr-emu-ng's release, which reads zstd packs.
 pub(crate) fn ng_runtime() -> Result<Vec<u8>, String> {
     use crate::zstd_packs::{NG_SHA256, NG_URL, NG_VERSION};

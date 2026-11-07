@@ -4609,6 +4609,7 @@ dependencies = [
  "image",
  "lz4_flex",
  "lzma-rust2 0.25.0",
+ "md-5",
  "ps5-dump-forge-pfs",
  "ps5-dump-forge-ufs2",
  "ps5-dump-forge-zstd",

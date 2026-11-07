@@ -12,6 +12,8 @@ pub mod fetch;
 pub mod ftp_fs;
 pub mod hints;
 pub mod host_key;
+mod http_digest;
+pub mod nfs_fs;
 pub mod path;
 pub mod pool;
 pub mod range;

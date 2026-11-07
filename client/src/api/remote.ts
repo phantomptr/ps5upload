@@ -4,7 +4,7 @@
 import { getEngineUrl } from "../state/engine";
 import { ENGINE_TIMEOUT_MS, engineFetch } from "../lib/engineFetch";
 
-export type Protocol = "smb" | "ftp" | "ftps" | "sftp" | "webdav" | "webdavs";
+export type Protocol = "smb" | "ftp" | "ftps" | "sftp" | "webdav" | "webdavs" | "nfs";
 
 export interface Connection {
   id: string;
