@@ -846,6 +846,10 @@ jobs:
         working-directory: client
         run: npx playwright install --with-deps chromium
 
+      - name: Build the console page for its browser test
+        working-directory: client
+        run: npm run build:console
+
       - name: Browser workflow smoke test
         working-directory: client
         run: npm run test:e2e

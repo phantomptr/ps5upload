@@ -1,5 +1,5 @@
-// The AMPR emulator added to a game that is already where it plays. A game that reads through
-// libSceAmpr and has none fails to start from an image or folder. A folder takes it in place; an
+// The AMPR emulator added to a game that is already where it plays. Some games that read through
+// libSceAmpr and have none fail to start from an image or folder. A folder takes it in place; an
 // image on the PS5, .ffpfsc included, gets a ShadowMount+ backport folder. An image on this
 // computer gets it from Convert, which writes a new one.
 
@@ -54,7 +54,7 @@ export function AmprEmuTool({
         title={tr(
           "ampr_emu_add_hint",
           undefined,
-          "This game reads its files through AMPR and has no emulator, so it would fail to start from an image or folder. Adds drakmor's ampr_emu 0.4.2.1, fetched once and checked against a known digest. An image isn't changed: the emulator goes in a ShadowMount+ backport folder.",
+          "This game reads its files through AMPR and has no emulator. Some such games won't start from an image without one, and others run fine. Adds drakmor's ampr_emu 0.4.2.1, fetched once and checked against a known digest. An image isn't changed: the emulator goes in a ShadowMount+ backport folder.",
         )}
         onClick={() => {
           setBusy(true);

@@ -1,6 +1,6 @@
 //! Adding the AMPR emulator to a game that is already where it plays, without converting it.
 //!
-//! A game that reads through libSceAmpr and ships no emulator fails to start from an image or a
+//! Some games that read through libSceAmpr and ship no emulator fail to start from an image or a
 //! folder, and ShadowMount+ doesn't add one. Convert puts one in what it writes; this is for a
 //! game that already exists:
 //!
@@ -11,8 +11,8 @@
 //!   one also takes the game's other fakelib modules, because the backport's folder is the one
 //!   the game then loads from.
 //!
-//! The layout follows fthdgn-gh/Alembic's `attach_backport` (GPL-3.0-or-later), whose owner
-//! started a game this way on a console. An image on this computer gets it from Convert instead.
+//! The layout follows fthdgn-gh/Alembic's `attach_backport` (GPL-3.0-or-later). Tried on the Pro:
+//! ShadowMount+ said "Backport applied" and LEGO Horizon Adventures reached its menu. An image on this computer gets it from Convert instead.
 
 use std::path::Path;
 

@@ -238,8 +238,9 @@ function Lz4Option({ lz4 }: { lz4: Lz4Choice }) {
   );
 }
 
-/** A libSceAmpr game with no emulator fails to start from an image, and ShadowMount+ doesn't add
- *  one. On by default; packs have their own choice. */
+/** Some libSceAmpr games with no emulator fail to start from an image (Alembic's two on a console),
+ *  others run (LEGO Horizon Adventures reaches its menu with or without one, on the Pro), and
+ *  ShadowMount+ doesn't add one. On by default; packs have their own choice. */
 function AmprEmuOption() {
   const tr = useTr();
   const on = useConvertPrefs((s) => s.addAmprEmu);
@@ -255,7 +256,7 @@ function AmprEmuOption() {
         hint={tr(
           "fpkg.image.ampr_emu_body",
           undefined,
-          "This game reads its files through AMPR and has no emulator, so it would fail to start from an image. Adds drakmor's ampr_emu 0.4.2.1 as fakelib/libSceAmpr.sprx, fetched once from its GitHub release and checked against a known digest.",
+          "This game reads its files through AMPR and has no emulator. Some such games won't start from an image without one, and others run fine. Adds drakmor's ampr_emu 0.4.2.1 as fakelib/libSceAmpr.sprx, fetched once from its GitHub release and checked against a known digest.",
         )}
       />
       {on && <AmprEmuBuildChoice build={build} onBuild={setBuild} />}

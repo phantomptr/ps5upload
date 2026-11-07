@@ -1035,14 +1035,14 @@ pub(crate) async fn exfat_build_handler(
             );
         }
         if !check_packs && zstd_level.is_none() && add_ampr_emu {
-            // A libSceAmpr game with no emulator fails to start from an image, and ShadowMount+
-            // doesn't add one. Packs have their own choice below.
+            // Some libSceAmpr games with no emulator fail to start from an image, and
+            // ShadowMount+ doesn't add one. Packs have their own choice below.
             if let Some(module) = ps5upload_fpkg::ampr_pack::image::emulator_needed_at(&mut *tree) {
                 let bytes =
                     crate::ampr_trace::emulator(ampr_emu_build.as_deref()).map_err(|e| {
                         format!(
-                        "this game needs an AMPR emulator to start from an image, and it could \
-                         not be fetched: {e}. Connect to the internet, or turn off \
+                        "this game may need an AMPR emulator to start from an image, and it \
+                         could not be fetched: {e}. Connect to the internet, or turn off \
                          \"Add the AMPR emulator\" in Convert's options"
                     )
                     })?;

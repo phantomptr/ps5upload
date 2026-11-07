@@ -29,7 +29,7 @@ pub struct Readiness {
     /// [`RUNTIME_VERSION`] into the image makes packs possible); `no_ampr` (the game does not
     /// read through AMPR, so nothing could serve packs: .ffpfsc is its compression).
     pub kind: &'static str,
-    /// The game reads through AMPR and ships no emulator at all: it won't start from an image
+    /// The game reads through AMPR and ships no emulator at all: it may not start from an image
     /// or folder without one, packs or not ([`emulator_needed_at`]).
     pub emulator_missing: bool,
 }
@@ -131,9 +131,9 @@ pub fn emulator_home(tree: &dyn SourceTree) -> String {
 }
 
 /// Where an AMPR emulator has to go for a game that reads its files through libSceAmpr and ships
-/// no emulator; `None` for any other game. Without one the game fails to start from an image or
-/// folder (Alembic's console test: `APR_FATAL_ERROR_ASYNC`, or an abort in eboot.bin), and
-/// ShadowMount+ doesn't add one. A game with a `fakelib2` loads from there, in its own spelling.
+/// no emulator; `None` for any other game. Without one some games fail to start from an image or
+/// folder (Alembic's console test: `APR_FATAL_ERROR_ASYNC`, or an abort in eboot.bin) and others
+/// run (LEGO Horizon Adventures on the Pro), and ShadowMount+ doesn't add one. A game with a `fakelib2` loads from there, in its own spelling.
 pub fn emulator_needed_at(tree: &mut dyn SourceTree) -> Option<String> {
     if !crate::source::imports_ampr(tree, "eboot.bin") {
         return None;
