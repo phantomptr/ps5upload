@@ -7947,6 +7947,7 @@ saves_copy_console_title_to: "Копировать на {console}",
 saves_copy_console_title: "Копировать на другую консоль",
 saves_copy_console_asking: "Запрашиваем у {console} список…",
 saves_copy_console_pick: "Копировать сохранение {game} пользователя {source} в:",
+engine_op_lost: "Движок перезапустился во время операции, поэтому неизвестно, чем она закончилась. Проверьте файлы на консоли, прежде чем запускать её снова.",
 };
 
 export default ru;

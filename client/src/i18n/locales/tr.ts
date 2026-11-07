@@ -8001,6 +8001,7 @@ saves_copy_console_title_to: "{console} konsoluna kopyala",
 saves_copy_console_title: "Başka konsola kopyala",
 saves_copy_console_asking: "{console} konsoluna neleri olduğu soruluyor…",
 saves_copy_console_pick: "{source} kullanıcısının {game} kaydını şuraya kopyala:",
+engine_op_lost: "Bu işlem sürerken motor yeniden başladı, bu yüzden nasıl bittiği bilinmiyor. Yeniden başlatmadan önce konsoldaki dosyalara bakın.",
 };
 
 export default tr;

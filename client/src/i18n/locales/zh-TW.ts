@@ -7947,6 +7947,7 @@ saves_copy_console_title_to: "複製到 {console}",
 saves_copy_console_title: "複製到另一台主機",
 saves_copy_console_asking: "正在詢問 {console} 裡有什麼…",
 saves_copy_console_pick: "把 {source} 的 {game} 存檔複製到：",
+engine_op_lost: "執行期間引擎重新啟動了，因此無法得知結果。再次開始之前，請先查看主機上的檔案。",
 };
 
 export default zh_TW;

@@ -7994,6 +7994,7 @@ saves_copy_console_title_to: "نسخ إلى {console}",
 saves_copy_console_title: "نسخ إلى وحدة تحكم أخرى",
 saves_copy_console_asking: "جارٍ سؤال {console} عمّا لديها…",
 saves_copy_console_pick: "نسخ حفظ {source} للعبة {game} إلى:",
+engine_op_lost: "أُعيد تشغيل المحرك أثناء تنفيذ هذه العملية، لذا لا يُعرف كيف انتهت. تحقق من الملفات على الجهاز قبل أن تبدأها من جديد.",
 };
 
 export default ar;

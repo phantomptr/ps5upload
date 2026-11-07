@@ -8010,6 +8010,7 @@ saves_copy_console_title_to: "Copier vers {console}",
 saves_copy_console_title: "Copier vers une autre console",
 saves_copy_console_asking: "Demande à {console} ce qu'elle contient…",
 saves_copy_console_pick: "Copier la sauvegarde de {source} pour {game} vers :",
+engine_op_lost: "Le moteur a redémarré pendant l'opération, on ne sait donc pas comment elle s'est terminée. Vérifiez les fichiers sur la console avant de la relancer.",
 };
 
 export default fr;

@@ -8002,6 +8002,7 @@ saves_copy_console_title_to: "Nach {console} kopieren",
 saves_copy_console_title: "Auf andere Konsole kopieren",
 saves_copy_console_asking: "{console} wird gefragt, was vorhanden ist…",
 saves_copy_console_pick: "Spielstand von {source} für {game} kopieren nach:",
+engine_op_lost: "Die Engine wurde während des Vorgangs neu gestartet, daher ist unbekannt, wie er endete. Sieh dir die Dateien auf der Konsole an, bevor du ihn erneut startest.",
 };
 
 export default de;

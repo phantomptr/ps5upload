@@ -8009,6 +8009,7 @@ saves_copy_console_title_to: "Copiar para {console}",
 saves_copy_console_title: "Copiar para outro console",
 saves_copy_console_asking: "Perguntando a {console} o que ele tem…",
 saves_copy_console_pick: "Copiar o save de {game} de {source} para:",
+engine_op_lost: "O mecanismo reiniciou enquanto isto rodava, então não se sabe como terminou. Confira os arquivos no console antes de iniciar de novo.",
 };
 
 export default pt_BR;

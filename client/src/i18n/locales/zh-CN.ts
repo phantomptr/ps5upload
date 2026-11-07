@@ -7953,6 +7953,7 @@ saves_copy_console_title_to: "复制到 {console}",
 saves_copy_console_title: "复制到另一台主机",
 saves_copy_console_asking: "正在询问 {console} 里有什么…",
 saves_copy_console_pick: "把 {source} 的 {game} 存档复制到：",
+engine_op_lost: "运行期间引擎重新启动了，因此无法得知结果。再次开始之前，请先查看主机上的文件。",
 };
 
 export default zh_CN;

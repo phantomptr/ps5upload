@@ -8290,6 +8290,7 @@ saves_copy_console_title_to: "Másolás ide: {console}",
 saves_copy_console_title: "Másolás másik konzolra",
 saves_copy_console_asking: "{console} lekérdezése, mi van rajta…",
 saves_copy_console_pick: "{source} {game} mentésének másolása ide:",
+engine_op_lost: "A motor újraindult a művelet közben, ezért nem tudni, hogyan ért véget. Nézd meg a fájlokat a konzolon, mielőtt újraindítod.",
 };
 
 export default hu;

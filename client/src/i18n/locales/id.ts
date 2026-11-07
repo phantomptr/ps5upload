@@ -8003,6 +8003,7 @@ saves_copy_console_title_to: "Salin ke {console}",
 saves_copy_console_title: "Salin ke konsol lain",
 saves_copy_console_asking: "Menanyakan isi {console}…",
 saves_copy_console_pick: "Salin save {game} milik {source} ke:",
+engine_op_lost: "Engine dimulai ulang saat ini berjalan, jadi tidak diketahui bagaimana hasilnya. Periksa file di konsol sebelum memulainya lagi.",
 };
 
 export default id;

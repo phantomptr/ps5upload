@@ -16,7 +16,8 @@ import { getEngineUrl } from "../state/engine";
 import { hostOf } from "../lib/addr";
 import { fetchConsoleStat } from "./consoleFiles";
 import { readWithRetries } from "../lib/pollRead";
-import { ENGINE_LONG_TIMEOUT_MS, ENGINE_TIMEOUT_MS, engineFetch } from "../lib/engineFetch";
+import { ENGINE_LONG_TIMEOUT_MS, ENGINE_TIMEOUT_MS, engineFetch, engineLongPost } from "../lib/engineFetch";
+import { WORDED_ERROR_CODES } from "../lib/payloadErrors";
 // Logging wrapper: every command leaves a trace breadcrumb + logs failures at
 // warn. See lib/invokeLogged.ts. (Channel still comes straight from core.)
 import { isTauriEnv } from "../lib/tauriEnv";
@@ -1242,15 +1243,25 @@ function patternToRegex(pattern: string): RegExp {
 // (/data/**, /user/**, /mnt/ext*/**, /mnt/usb*/**) — other paths return
 // a `*_path_not_allowed` error surfaced here as an Error thrown to the UI.
 
+/** A console file operation's route, followed to its end however long it runs (#712): a large
+ *  tree takes far longer than one request may stay open. Throws the route's error as the engine
+ *  worded it (a code the app words itself stays in front, as through the other transports). */
+async function fsLongOp(route: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const ans = await engineLongPost(getEngineUrl(), route, body);
+  if (ans.ok) return ans.body;
+  const error = ans.body.error;
+  if (typeof error !== "string") throw new Error(`engine HTTP ${ans.status}`);
+  const code = ans.body.code;
+  throw new Error(typeof code === "string" && WORDED_ERROR_CODES.has(code) ? `${code}: ${error}` : error);
+}
+
 export async function fsDelete(
   transferAddr: string,
   path: string,
   opId?: number,
 ): Promise<void> {
   const addr = toMgmtAddr(transferAddr);
-  await invoke("ps5_fs_delete", {
-    req: { addr, path, op_id: opId ?? 0 },
-  });
+  await fsLongOp("/api/ps5/fs/delete", { addr, path, op_id: opId ?? 0 });
 }
 
 /** Decompress a `.ffpfsc` on the console into the image it holds, beside it (#453). Resolves
@@ -1262,13 +1273,10 @@ export async function fsUnpack(
   path: string,
   opId: number,
 ): Promise<{ path: string; size: number }> {
-  const res = await engineFetch(`${getEngineUrl()}/api/ps5/fs/unpack`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ addr: toMgmtAddr(transferAddr), path, op_id: opId }),
-  });
-  const body = (await res.json().catch(() => ({}))) as { path?: string; size?: number; error?: string };
-  if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+  const body = (await fsLongOp("/api/ps5/fs/unpack", { addr: toMgmtAddr(transferAddr), path, op_id: opId })) as {
+    path?: string;
+    size?: number;
+  };
   return { path: body.path ?? "", size: body.size ?? 0 };
 }
 
@@ -1295,14 +1303,8 @@ export async function fsExtract(
   if (opts.password) body.password = opts.password;
   if (opts.merge) body.merge = true;
   if (opts.replace) body.replace = true;
-  const res = await engineFetch(`${getEngineUrl()}/api/ps5/fs/extract`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const out = (await res.json().catch(() => ({}))) as Record<string, unknown> & { error?: string };
-  if (!res.ok) throw new Error(typeof out.error === "string" ? out.error : `HTTP ${res.status}`);
-  return toExtractResult(out);
+  // Thousands of files take far longer than a minute (#712): followed to the end, not timed out.
+  return toExtractResult(await fsLongOp("/api/ps5/fs/extract", body));
 }
 
 export interface FsDirEntry {
@@ -1383,9 +1385,7 @@ export async function fsMove(
   overwrite?: boolean,
 ): Promise<void> {
   const addr = toMgmtAddr(transferAddr);
-  await invoke("ps5_fs_move", {
-    req: { addr, from, to, op_id: opId ?? 0, overwrite: overwrite ?? false },
-  });
+  await fsLongOp("/api/ps5/fs/move", { addr, from, to, op_id: opId ?? 0, overwrite: overwrite ?? false });
 }
 
 export async function fsChmod(
@@ -1467,9 +1467,7 @@ export async function fsCopy(
   overwrite = false,
 ): Promise<void> {
   const addr = toMgmtAddr(transferAddr);
-  await invoke("ps5_fs_copy", {
-    req: { addr, from, to, op_id: opId ?? 0, overwrite },
-  });
+  await fsLongOp("/api/ps5/fs/copy", { addr, from, to, op_id: opId ?? 0, overwrite });
 }
 
 /** Snapshot the in-flight FS op identified by `opId`. Returns the

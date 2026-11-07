@@ -8011,6 +8011,7 @@ saves_copy_console_title_to: "{console}(으)로 복사",
 saves_copy_console_title: "다른 콘솔로 복사",
 saves_copy_console_asking: "{console}에 무엇이 있는지 확인하는 중…",
 saves_copy_console_pick: "{source}의 {game} 세이브를 복사할 대상:",
+engine_op_lost: "실행 중에 엔진이 다시 시작되어 어떻게 끝났는지 알 수 없습니다. 다시 시작하기 전에 콘솔의 파일을 확인하세요.",
 };
 
 export default ko;

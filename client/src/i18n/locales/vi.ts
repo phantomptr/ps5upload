@@ -7996,6 +7996,7 @@ saves_copy_console_title_to: "Sao chép sang {console}",
 saves_copy_console_title: "Sao chép sang máy console khác",
 saves_copy_console_asking: "Đang hỏi {console} xem có gì…",
 saves_copy_console_pick: "Sao chép bản lưu {game} của {source} sang:",
+engine_op_lost: "Engine đã khởi động lại khi việc này đang chạy, nên không rõ nó kết thúc thế nào. Hãy xem các tệp trên máy trước khi chạy lại.",
 };
 
 export default vi;

@@ -7994,6 +7994,7 @@ saves_copy_console_title_to: "{console}-এ কপি করুন",
 saves_copy_console_title: "অন্য কনসোলে কপি করুন",
 saves_copy_console_asking: "{console}-এর কাছে জানতে চাওয়া হচ্ছে…",
 saves_copy_console_pick: "{game}-এর {source}-এর সেভ কপি করুন:",
+engine_op_lost: "এটি চলার সময় ইঞ্জিন আবার চালু হয়েছে, তাই এটি কীভাবে শেষ হয়েছে তা অজানা। আবার শুরু করার আগে কনসোলের ফাইলগুলো দেখুন।",
 };
 
 export default bn;

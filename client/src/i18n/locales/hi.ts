@@ -8008,6 +8008,7 @@ saves_copy_console_title_to: "{console} पर कॉपी करें",
 saves_copy_console_title: "दूसरे कंसोल पर कॉपी करें",
 saves_copy_console_asking: "{console} से पूछा जा रहा है कि उसमें क्या है…",
 saves_copy_console_pick: "{game} का {source} वाला सेव यहाँ कॉपी करें:",
+engine_op_lost: "यह चलते समय इंजन फिर से शुरू हो गया, इसलिए पता नहीं कि यह कैसे खत्म हुआ। इसे फिर से शुरू करने से पहले कंसोल पर फ़ाइलें देखें।",
 };
 
 export default hi;

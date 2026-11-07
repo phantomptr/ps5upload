@@ -8299,6 +8299,7 @@ saves_copy_console_title_to: "Copy to {console}",
 saves_copy_console_title: "Copy to another console",
 saves_copy_console_asking: "Asking {console} what it has…",
 saves_copy_console_pick: "Copy {source}'s save of {game} to:",
+engine_op_lost: "The engine restarted while this was running, so how it ended is unknown. Look at the files on the console before you start it again.",
 };
 
 export default en;

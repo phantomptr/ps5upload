@@ -8001,6 +8001,7 @@ saves_copy_console_title_to: "คัดลอกไปยัง {console}",
 saves_copy_console_title: "คัดลอกไปยังคอนโซลเครื่องอื่น",
 saves_copy_console_asking: "กำลังถาม {console} ว่ามีอะไรบ้าง…",
 saves_copy_console_pick: "คัดลอกเซฟ {game} ของ {source} ไปยัง:",
+engine_op_lost: "เอนจินรีสตาร์ตระหว่างที่งานนี้กำลังทำงาน จึงไม่ทราบว่างานจบอย่างไร ตรวจดูไฟล์บนคอนโซลก่อนเริ่มใหม่",
 };
 
 export default th;

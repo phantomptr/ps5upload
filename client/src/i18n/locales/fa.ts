@@ -8276,6 +8276,7 @@ saves_copy_console_title_to: "کپی به {console}",
 saves_copy_console_title: "کپی به کنسول دیگر",
 saves_copy_console_asking: "در حال پرسیدن از {console} که چه دارد…",
 saves_copy_console_pick: "کپی ذخیره‌ی {source} از {game} به:",
+engine_op_lost: "موتور در حین اجرای این کار دوباره راه‌اندازی شد، بنابراین معلوم نیست چگونه تمام شد. پیش از شروع دوباره، فایل‌های کنسول را بررسی کنید.",
 };
 
 export default fa;

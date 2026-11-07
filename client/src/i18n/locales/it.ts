@@ -7947,6 +7947,7 @@ saves_copy_console_title_to: "Copia su {console}",
 saves_copy_console_title: "Copia su un'altra console",
 saves_copy_console_asking: "Chiedo a {console} cosa contiene…",
 saves_copy_console_pick: "Copia il salvataggio di {game} di {source} in:",
+engine_op_lost: "Il motore si è riavviato durante l'operazione, quindi non si sa come sia finita. Controlla i file sulla console prima di riavviarla.",
 };
 
 export default it;

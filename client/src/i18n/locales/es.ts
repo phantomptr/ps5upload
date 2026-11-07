@@ -7947,6 +7947,7 @@ saves_copy_console_title_to: "Copiar a {console}",
 saves_copy_console_title: "Copiar a otra consola",
 saves_copy_console_asking: "Preguntando a {console} qué tiene…",
 saves_copy_console_pick: "Copiar la partida de {source} de {game} a:",
+engine_op_lost: "El motor se reinició mientras esto se ejecutaba, así que no se sabe cómo terminó. Revisa los archivos de la consola antes de volver a iniciarlo.",
 };
 
 export default es;

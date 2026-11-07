@@ -8235,6 +8235,7 @@ saves_copy_console_title_to: "Kopiuj do: {console}",
 saves_copy_console_title: "Kopiuj na inną konsolę",
 saves_copy_console_asking: "Pytanie konsoli {console}, co zawiera…",
 saves_copy_console_pick: "Kopiuj zapis {game} użytkownika {source} do:",
+engine_op_lost: "Silnik uruchomił się ponownie w trakcie operacji, więc nie wiadomo, jak się zakończyła. Sprawdź pliki na konsoli, zanim uruchomisz ją ponownie.",
 };
 
 export default pl;
