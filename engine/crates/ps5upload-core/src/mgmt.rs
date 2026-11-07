@@ -201,6 +201,7 @@ methods! {
     (VPAD_STATUS, 194, "VPAD_STATUS"),
     (CONSOLE_TASKS, 195, "CONSOLE_TASKS"),
     (CONSOLE_TASK_CANCEL, 196, "CONSOLE_TASK_CANCEL"),
+    (LOG_LEVEL, 197, "LOG_LEVEL"),
 }
 
 /// A management call the payload refused.

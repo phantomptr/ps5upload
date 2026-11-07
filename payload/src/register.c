@@ -30,6 +30,7 @@
 #include "authid.h"
 #include "config.h"
 #include "register.h"
+#include "plog.h"
 #include "unregister_outcome.h"
 #include "content_db.h"
 #include "sony_api_lock.h"
@@ -1223,6 +1224,7 @@ int register_title_from_path(const char *src_path,
     out_title_id[0] = '\0';
     out_title_name[0] = '\0';
     if (out_used_nullfs) *out_used_nullfs = 0;
+    PLOG(PLOG_DEBUG, PLOG_INSTALL, "[register] register from %s (drm patch %d)", src_path, patch_drm_type);
 
     /* 0 -- resolve metadata so we have a title_id. */
     char title_id[REGISTER_MAX_TITLE_ID];
@@ -1467,6 +1469,7 @@ int unregister_title(const char *title_id, const char **err_reason_out,
     unregister_outcome_t local = {0};
     if (!out) out = &local;
     memset(out, 0, sizeof(*out));
+    PLOG(PLOG_DEBUG, PLOG_INSTALL, "[register] unregister %s", title_id ? title_id : "(none)");
     if (!title_id || !is_safe_component(title_id)) {
         if (err_reason_out) *err_reason_out = "unregister_title_id_invalid";
         return -1;
