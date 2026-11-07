@@ -57,7 +57,10 @@ import {
   cleanupRunOf,
   dismissCleanupResult,
   followApply,
+  HELPER_SILENT,
   startedApply,
+  STOP_UNCONFIRMED,
+  stopCleanupApply,
   useCleanupRuns,
 } from "../../state/cleanupRun";
 import { useTr } from "../../state/lang";
@@ -69,6 +72,9 @@ const SCAN_POLL_MS = 700;
 
 function errorText(t: CleanupT, e: unknown): string {
   if (e instanceof CleanupError) {
+    // #714: the helper died or the console went away while the PS5 was removing an update.
+    if (e.reason === HELPER_SILENT) return t("cleanup_err_helper_silent");
+    if (e.reason === STOP_UNCONFIRMED) return t("cleanup_err_stop_unconfirmed");
     const known = refusalText(t, e.reason);
     if (known) return known;
   }
@@ -313,7 +319,7 @@ export default function CleanupScreen() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [confirming, setConfirming] = useState(false);
   // Kept in a store: it runs on the helper, whether or not this screen stays open.
-  const { applying, summary, freeBefore, error: runError } = useCleanupRuns((st) => cleanupRunOf(st, host));
+  const { applying, summary, freeBefore, error: runError, stopping } = useCleanupRuns((st) => cleanupRunOf(st, host));
   const [error, setError] = useState<string | null>(null);
   const live = useRef(0);
   // "Plan space" from a refused install opens the planner with its size and drive filled in.
@@ -419,8 +425,8 @@ export default function CleanupScreen() {
     }
   }
 
-  async function stopApply() {
-    if (applying && host) await cleanupCancel(host, applying.apply_id).catch(() => {});
+  function stopApply() {
+    if (host) stopCleanupApply(host);
   }
 
   function show(item: CleanupItem) {
@@ -502,7 +508,9 @@ export default function CleanupScreen() {
             <div className="flex flex-wrap items-center justify-center gap-2 text-xs" data-testid="cleanup-applying">
               <Spinner size={12} />
               <span className="tabular-nums">
-                {applying.phase === "waiting"
+                {stopping
+                  ? tr("fs_bulk_stopping", undefined, "Stopping…")
+                  : applying.phase === "waiting"
                   ? tr("cw_cleanup_waiting_sony", undefined, "Waiting for the PS5 to finish removing the update…")
                   : tr(
                       "cw_cleanup_removing",
@@ -510,7 +518,14 @@ export default function CleanupScreen() {
                       `Removing… ${doneCount} of ${applying.total}, ${formatBytes(applying.freed_bytes)} freed`,
                     )}
               </span>
-              <Button variant="ghost" size="sm" leftIcon={<Square size={10} />} onClick={() => void stopApply()}>
+              <Button
+                variant="ghost"
+                size="sm"
+                leftIcon={<Square size={10} />}
+                onClick={stopApply}
+                disabled={stopping}
+                data-testid="cleanup-apply-stop"
+              >
                 {tr("stop", undefined, "Stop")}
               </Button>
             </div>

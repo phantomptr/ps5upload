@@ -8016,6 +8016,10 @@ saves_copy_console_title_to: "{console} にコピー",
 saves_copy_console_title: "別のコンソールにコピー",
 saves_copy_console_asking: "{console} の内容を確認中…",
 saves_copy_console_pick: "{source} の {game} のセーブのコピー先:",
+engine_op_lost: "実行中にエンジンが再起動したため、どう終わったかは不明です。もう一度始める前に、本体のファイルを確認してください。",
+cleanup_err_helper_silent: "削除中にPS5のヘルパーが応答しなくなったため、アプリは待つのをやめました。ヘルパーをもう一度送信（ヘルパーを更新）してから、再スキャンして残っているものを確認してください。",
+cleanup_err_stop_unconfirmed: "停止しました。PS5から確認がなかったため、処理中の項目はまだ完了する可能性があります。再スキャンして残っているものを確認してください。",
+update_notes_unavailable: "v{version} のリリースノートを GitHub から読み込めませんでした。",
 };
 
 export default ja;

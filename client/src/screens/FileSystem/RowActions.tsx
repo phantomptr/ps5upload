@@ -435,27 +435,31 @@ export function RowActionsTrigger({
  *  the button's end edge; above the button when there is no room below. The
  *  viewport's `insetTop` / `insetBottom` are the phone's status and navigation
  *  bars: a menu item under the status bar can't be tapped (Android takes the
- *  touch), so the menu stays between them. */
+ *  touch), so the menu stays between them.
+ *
+ *  When neither side has room for the whole menu it goes on the roomier side,
+ *  as tall as that side allows, and scrolls (`maxHeight`). It never lies over
+ *  its own ⋮: the first file of a folder holding only files sits where neither
+ *  side has room, and a menu laid over the button put Download under the very
+ *  finger that had just opened it, where the tap on it did nothing (Discord). */
 export function menuPlacement(
   anchor: { left: number; right: number; top: number; bottom: number },
   menu: { width: number; height: number },
   viewport: { width: number; height: number; insetTop?: number; insetBottom?: number },
   margin = 4,
-): { left: number; top: number } {
+): { left: number; top: number; maxHeight?: number } {
   const left = Math.max(
     margin,
     Math.min(anchor.right - menu.width, viewport.width - menu.width - margin),
   );
   const minTop = (viewport.insetTop ?? 0) + margin;
   const maxBottom = viewport.height - (viewport.insetBottom ?? 0) - margin;
-  const fitsBelow = anchor.bottom + menu.height <= maxBottom;
-  const fitsAbove = anchor.top - menu.height >= minTop;
-  const top = fitsBelow
-    ? anchor.bottom
-    : fitsAbove
-      ? anchor.top - menu.height
-      : Math.max(minTop, maxBottom - menu.height);
-  return { left, top };
+  const roomBelow = maxBottom - anchor.bottom;
+  const roomAbove = anchor.top - minTop;
+  if (menu.height <= roomBelow) return { left, top: anchor.bottom };
+  if (menu.height <= roomAbove) return { left, top: anchor.top - menu.height };
+  if (roomBelow >= roomAbove) return { left, top: anchor.bottom, maxHeight: Math.max(0, roomBelow) };
+  return { left, top: minTop, maxHeight: Math.max(0, roomAbove) };
 }
 
 /** The status and navigation bar heights (CSS px) the page is drawn under. */
@@ -494,7 +498,7 @@ export function RowMenu({
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState({ left: x, top: y });
+  const [pos, setPos] = useState<{ left: number; top: number; maxHeight?: number }>({ left: x, top: y });
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -555,6 +559,8 @@ export function RowMenu({
     // when the ⋮ is tapped would close the menu the moment it opened.
     const openedAt = performance.now();
     const onScroll = (e: Event) => {
+      // A menu taller than the room it has scrolls itself: that is not the page moving.
+      if (e.target instanceof Node && ref.current?.contains(e.target)) return;
       if (performance.now() - openedAt > 250) close(e);
     };
     // Escape with focus somewhere else (the menu's own handler stops it otherwise).
@@ -582,7 +588,7 @@ export function RowMenu({
       role="menu"
       data-testid="fs-row-menu"
       onKeyDown={onMenuKeyDown}
-      style={{ left: pos.left, top: pos.top }}
+      style={{ left: pos.left, top: pos.top, maxHeight: pos.maxHeight }}
       // The same floating glass as the app's other menus (components/Menu).
       // `--color-surface` is the translucent page tint: with it the rows under
       // the menu read straight through the items.

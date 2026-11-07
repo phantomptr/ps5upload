@@ -241,13 +241,13 @@ describe("menuPlacement", () => {
     expect(menuPlacement(anchor, menu, vp)).toEqual({ left: 140, top: 400 });
   });
 
-  it("stays inside the viewport when neither side has room", () => {
+  it("stays inside the viewport when neither side has room: the roomier side, scrolling", () => {
     const anchor = { left: 0, right: 30, top: 200, bottom: 230 };
     const tall = { width: 200, height: 700 };
     const pos = menuPlacement(anchor, tall, vp);
     expect(pos.left).toBe(4);
-    expect(pos.top).toBe(96);
-    expect(pos.top + tall.height).toBeLessThanOrEqual(vp.height);
+    expect(pos).toEqual({ left: 4, top: 230, maxHeight: 566 });
+    expect(pos.top + pos.maxHeight!).toBeLessThanOrEqual(vp.height - 4);
   });
 
   // A phone with one file in the folder: no room under the row, and flipping
@@ -257,7 +257,21 @@ describe("menuPlacement", () => {
     const anchor = { left: 360, right: 400, top: 440, bottom: 490 };
     const pos = menuPlacement(anchor, { width: 200, height: 420 }, phone);
     expect(pos.top).toBeGreaterThanOrEqual(phone.insetTop + 4);
-    expect(pos.top + 420).toBeLessThanOrEqual(phone.height - phone.insetBottom - 4);
+    expect(pos.top + Math.min(420, pos.maxHeight ?? 420)).toBeLessThanOrEqual(phone.height - phone.insetBottom - 4);
+  });
+
+  // Discord: the first file of a folder holding only files. Neither side had room, so the menu
+  // was laid over the ⋮ with Download under the finger that opened it, and that tap did nothing.
+  it("never lies over its own ⋮", () => {
+    const phone = { width: 412, height: 915, insetTop: 32, insetBottom: 48 };
+    for (const top of [300, 440, 520, 600]) {
+      const anchor = { left: 360, right: 400, top, bottom: top + 44 };
+      const pos = menuPlacement(anchor, { width: 200, height: 560 }, phone);
+      const bottom = pos.top + Math.min(560, pos.maxHeight ?? 560);
+      expect(bottom <= anchor.top || pos.top >= anchor.bottom).toBe(true);
+      expect(pos.top).toBeGreaterThanOrEqual(phone.insetTop + 4);
+      expect(bottom).toBeLessThanOrEqual(phone.height - phone.insetBottom - 4);
+    }
   });
 });
 

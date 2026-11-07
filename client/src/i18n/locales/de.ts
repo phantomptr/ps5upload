@@ -8005,6 +8005,10 @@ saves_copy_console_title_to: "Nach {console} kopieren",
 saves_copy_console_title: "Auf andere Konsole kopieren",
 saves_copy_console_asking: "{console} wird gefragt, was vorhanden ist…",
 saves_copy_console_pick: "Spielstand von {source} für {game} kopieren nach:",
+engine_op_lost: "Die Engine wurde während des Vorgangs neu gestartet, daher ist unbekannt, wie er endete. Sieh dir die Dateien auf der Konsole an, bevor du ihn erneut startest.",
+cleanup_err_helper_silent: "Der Helfer auf der PS5 hat beim Entfernen nicht mehr geantwortet, daher wartet die App nicht länger. Sende den Helfer erneut (Helfer aktualisieren) und scanne dann erneut, um zu sehen, was übrig ist.",
+cleanup_err_stop_unconfirmed: "Gestoppt. Die PS5 hat es nicht bestätigt, daher beendet sie eventuell noch das aktuelle Element. Scanne erneut, um zu sehen, was übrig ist.",
+update_notes_unavailable: "Die Hinweise zu v{version} konnten nicht von GitHub gelesen werden.",
 };
 
 export default de;

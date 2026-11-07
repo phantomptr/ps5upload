@@ -17,9 +17,9 @@ import {
 import { useTr } from "../state/lang";
 import { Spinner } from "../components/Spinner";
 import { Modal } from "../components/Modal";
-import { MarkdownView } from "../components/MarkdownView";
 import { Button } from "../components/Button";
 import { openExternalUrl } from "../lib/openExternalUrl";
+import { ReleaseNotesBody } from "./ReleaseNotesBody";
 import { isIOS, isMobile } from "../lib/platform";
 import { useApkInstallGuard } from "./useApkInstallGuard";
 import { apkUpdaterAvailable, progressPercent, useApkUpdateStore } from "../state/apkUpdate";
@@ -73,11 +73,7 @@ export function ReleaseNotesDialog({
       }
     >
       <div className="max-h-[60vh] overflow-auto p-4 text-sm">
-        {notes.trim() ? (
-          <MarkdownView source={notes} />
-        ) : (
-          <p className="text-[var(--color-muted)]">v{version}</p>
-        )}
+        <ReleaseNotesBody version={version} notes={notes} />
       </div>
     </Modal>
   );

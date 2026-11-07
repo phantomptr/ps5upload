@@ -1276,6 +1276,12 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/cleanup_rules_selftest.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-cleanup-rules-selftest
 	@echo "✓ clean-up removes only its categories' paths: never the package library, saves, installed games or another drive's system folders"
+	@echo "Running attached-image mount self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o $(SELFTEST_DIR)/ps5upload-image-mount-selftest \
+		$(PAYLOAD_DIR)/tests/image_mount_selftest.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-image-mount-selftest
+	@echo "✓ a title's nullfs link to a disk image keeps no drive margin, so edits to the game fit its spare room"
 	@echo "Checking per-console isolation..."
 	@./scripts/check-per-console-isolation.sh
 	@echo "✓ one console's data cannot be shown under another's name"

@@ -8004,6 +8004,10 @@ saves_copy_console_title_to: "คัดลอกไปยัง {console}",
 saves_copy_console_title: "คัดลอกไปยังคอนโซลเครื่องอื่น",
 saves_copy_console_asking: "กำลังถาม {console} ว่ามีอะไรบ้าง…",
 saves_copy_console_pick: "คัดลอกเซฟ {game} ของ {source} ไปยัง:",
+engine_op_lost: "เอนจินรีสตาร์ตระหว่างที่งานนี้กำลังทำงาน จึงไม่ทราบว่างานจบอย่างไร ตรวจดูไฟล์บนคอนโซลก่อนเริ่มใหม่",
+cleanup_err_helper_silent: "ตัวช่วยบน PS5 หยุดตอบระหว่างการลบ แอปจึงหยุดรอ ส่งตัวช่วยอีกครั้ง (อัปเดตตัวช่วย) แล้วสแกนอีกครั้งเพื่อดูว่าเหลืออะไรอยู่",
+cleanup_err_stop_unconfirmed: "หยุดแล้ว PS5 ไม่ได้ยืนยัน จึงอาจยังทำรายการที่กำลังทำอยู่ให้เสร็จ สแกนอีกครั้งเพื่อดูว่าเหลืออะไรอยู่",
+update_notes_unavailable: "อ่านบันทึกของ v{version} จาก GitHub ไม่ได้",
 };
 
 export default th;
