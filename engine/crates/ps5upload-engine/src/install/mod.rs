@@ -2258,6 +2258,29 @@ fn read_host_header(path: &str) -> Option<ps5upload_pkg::ReaderMetadata> {
     })
 }
 
+/// The package is a full game, known from its category (gd, gde, ...). An unknown category is
+/// not a game for a refusal: an add-on whose category the caller didn't send was refused as one
+/// whenever its base game ran from an image (#721).
+fn certainly_a_game(category: &str) -> bool {
+    let c = category.trim().to_ascii_lowercase();
+    !c.is_empty() && !(c.ends_with("gp") || c.ends_with("dp") || c.ends_with("ac"))
+}
+
+#[cfg(test)]
+mod certainly_a_game_tests {
+    #[test]
+    fn only_a_known_game_category_is_a_game() {
+        assert!(super::certainly_a_game("gd"));
+        assert!(super::certainly_a_game("GDE"));
+        assert!(!super::certainly_a_game("ac"));
+        assert!(!super::certainly_a_game("gp"));
+        assert!(!super::certainly_a_game("dp"));
+        // Not sent: an add-on is never refused as a game (#721).
+        assert!(!super::certainly_a_game(""));
+        assert!(!super::certainly_a_game("  "));
+    }
+}
+
 /// What refuses an install before anything reaches the console, when it is certain. Reads that
 /// fail refuse nothing.
 async fn refusal_before_delivery(
@@ -2266,9 +2289,7 @@ async fn refusal_before_delivery(
     title_id: &str,
     mgmt: &str,
 ) -> Option<(FailReason, String)> {
-    let c = category.to_ascii_lowercase();
-    let is_game = !(c.ends_with("gp") || c.ends_with("dp") || c.ends_with("ac"));
-    if is_game {
+    if certainly_a_game(category) {
         let (m, t) = (mgmt.to_string(), title_id.to_string());
         let mounted = tokio::task::spawn_blocking(move || {
             ps5upload_core::fs_ops::app_list_registered(&m)
