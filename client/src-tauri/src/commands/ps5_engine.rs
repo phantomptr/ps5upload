@@ -2333,7 +2333,11 @@ pub async fn fpkg_delete(path: String) -> Result<JsonValue, String> {
 pub async fn fpkg_ampr_emu(source: String, build: Option<String>) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/fpkg/ampr-emu");
-    post_json(&url, &serde_json::json!({ "source": source, "build": build })).await
+    post_json(
+        &url,
+        &serde_json::json!({ "source": source, "build": build }),
+    )
+    .await
 }
 
 #[tauri::command]
