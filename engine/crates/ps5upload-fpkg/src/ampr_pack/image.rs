@@ -209,7 +209,7 @@ impl Lz4Unpacked {
                 continue;
             }
             let path = m.path(i)?;
-            let path = path.strip_prefix("/app0/").unwrap_or(&path).to_string();
+            let path = path.strip_prefix("/app0/").unwrap_or(path).to_string();
             if !files
                 .iter()
                 .any(|known| known.path.eq_ignore_ascii_case(&path))

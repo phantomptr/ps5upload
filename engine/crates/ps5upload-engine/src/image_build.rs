@@ -1263,7 +1263,7 @@ mod tests {
     #[test]
     fn an_lz4_packed_image_reads_as_the_game_it_was() {
         use ps5upload_fpkg::ampr_pack::image::{Lz4Unpacked, Unpacking};
-        let root = std::env::temp_dir().join(format!("ps5upload-imgu-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("ps5upload-imglz4-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = ampr_game(&root);
         let out = root.join("PPSA99999-app.exfat");
