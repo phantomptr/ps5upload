@@ -92,6 +92,25 @@ export function endText(tr: Tr, stage: JoinStage, host: string): string {
         return tr("join_ended_left", undefined, "You left the game.");
       case "seat_taken":
         return seatTakenText(tr, host);
+      // An internet invite's connection (join/rtcTransport).
+      case "mismatch":
+        return tr("join_net_mismatch", undefined, "This link doesn't match the host; ask them for a new one.");
+      case "no_direct":
+        return tr(
+          "join_net_no_direct",
+          undefined,
+          "A direct connection isn't possible from this network (both sides' routers are strict). Try Wi-Fi instead of mobile data, or ask the host to turn on UPnP.",
+        );
+      case "no_room":
+        return tr("join_net_no_room", { host }, `This invite isn't open any more. Ask ${host} for a new link.`);
+      case "net_full":
+        return tr("join_net_full", { host }, `${host}'s game has no room for another friend right now. Try again in a moment.`);
+      case "no_hub":
+        return tr("join_net_no_hub", undefined, "Couldn't reach the PS5Upload invite service. Check your internet connection, then try again.");
+      case "offer":
+        return tr("join_net_offer", { host }, `${host}'s computer couldn't connect to this browser. Try another browser.`);
+      case "no_webrtc":
+        return tr("join_net_no_webrtc", undefined, "This browser can't make direct connections. Try a recent Chrome, Safari or Firefox.");
     }
   }
   return "";
@@ -373,7 +392,8 @@ export function JoinView({
   }
 
   if (stage.kind === "refused" || stage.kind === "ended") {
-    const again = stage.kind === "refused" || stage.why !== "left";
+    // A link that is not the host's never works: no asking again with it.
+    const again = stage.kind === "refused" || (stage.why !== "left" && stage.why !== "mismatch");
     return (
       <div
         className={

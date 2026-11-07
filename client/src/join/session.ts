@@ -1,7 +1,9 @@
 // One guest's Play Together session (#641): the link to the host's engine (lib/joinClient), the
 // picture (pad/watchPlayer, in the player's low-latency mode) and the pad this device sends.
 // Shared by the /join page a friend opens in any browser and the app's own Join a friend view;
-// React reads it through useJoinSession (useSyncExternalStore).
+// React reads it through useJoinSession (useSyncExternalStore). The link runs over a WebSocket on
+// the LAN, or over a WebRTC data channel for an internet invite (rtcTransport.ts): the same
+// messages either way, so the picture, the sound, the pad and the stages are the same.
 
 import { useSyncExternalStore } from "react";
 
@@ -22,6 +24,7 @@ import { makeWatchPlayer, type MsePlayer, type WatchPlayer, type WatchProblem } 
 import { rpInput } from "../state/remotePlay";
 import { setScreenWakeReason } from "../lib/androidScreenWake";
 import { setPadForwardReason } from "../lib/androidPadBridge";
+import type { JoinTransport } from "./rtcTransport";
 
 export interface JoinSnapshot {
   stage: JoinStage;
@@ -46,6 +49,9 @@ export interface JoinSessionOptions {
   keysLive?: () => boolean;
   /** The guest socket (direct, or through this app's engine). */
   url: string;
+  /** What carries the session: the WebSocket to `url` (the LAN, the default), or an internet
+   *  invite's WebRTC data channel (`rtcTransport`, which ignores `url`). */
+  transport?: JoinTransport;
   invite: string | null;
   code?: string | null;
   name: string;
@@ -115,6 +121,7 @@ export class JoinSession {
       invite: opts.invite,
       code: opts.code ?? null,
       name: opts.name,
+      WebSocketImpl: opts.transport,
       readPad: devicePad,
       onStage: (stage) => {
         this.set({ stage });
