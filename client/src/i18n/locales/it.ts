@@ -7950,6 +7950,7 @@ saves_copy_console_pick: "Copia il salvataggio di {game} di {source} in:",
 engine_op_lost: "Il motore si è riavviato durante l'operazione, quindi non si sa come sia finita. Controlla i file sulla console prima di riavviarla.",
 cleanup_err_helper_silent: "L'helper sulla PS5 ha smesso di rispondere durante la rimozione, quindi l'app ha smesso di attendere. Invia di nuovo l'helper (Aggiorna helper), poi esegui di nuovo la scansione per vedere cosa resta.",
 cleanup_err_stop_unconfirmed: "Interrotto. La PS5 non l'ha confermato, quindi potrebbe ancora completare l'elemento in corso. Esegui di nuovo la scansione per vedere cosa resta.",
+update_notes_unavailable: "Non è stato possibile leggere da GitHub le note della v{version}.",
 };
 
 export default it;

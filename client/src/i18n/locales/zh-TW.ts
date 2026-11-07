@@ -7950,6 +7950,7 @@ saves_copy_console_pick: "把 {source} 的 {game} 存檔複製到：",
 engine_op_lost: "執行期間引擎重新啟動了，因此無法得知結果。再次開始之前，請先查看主機上的檔案。",
 cleanup_err_helper_silent: "刪除期間 PS5 上的助手停止回應，因此應用程式不再等待。請重新傳送助手（更新助手），然後重新掃描以查看剩餘內容。",
 cleanup_err_stop_unconfirmed: "已停止。PS5 未確認，因此它可能仍會完成正在處理的項目。請重新掃描以查看剩餘內容。",
+update_notes_unavailable: "無法從 GitHub 讀取 v{version} 的更新說明。",
 };
 
 export default zh_TW;

@@ -8013,6 +8013,7 @@ saves_copy_console_pick: "Copier la sauvegarde de {source} pour {game} vers :",
 engine_op_lost: "Le moteur a redémarré pendant l'opération, on ne sait donc pas comment elle s'est terminée. Vérifiez les fichiers sur la console avant de la relancer.",
 cleanup_err_helper_silent: "L'assistant sur la PS5 a cessé de répondre pendant la suppression, l'app a donc arrêté d'attendre. Renvoyez l'assistant (Mettre à jour l'assistant), puis analysez à nouveau pour voir ce qui reste.",
 cleanup_err_stop_unconfirmed: "Arrêté. La PS5 ne l'a pas confirmé, elle peut donc encore terminer l'élément en cours. Analysez à nouveau pour voir ce qui reste.",
+update_notes_unavailable: "Les notes de la v{version} n'ont pas pu être lues depuis GitHub.",
 };
 
 export default fr;

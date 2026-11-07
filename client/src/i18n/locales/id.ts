@@ -8006,6 +8006,7 @@ saves_copy_console_pick: "Salin save {game} milik {source} ke:",
 engine_op_lost: "Engine dimulai ulang saat ini berjalan, jadi tidak diketahui bagaimana hasilnya. Periksa file di konsol sebelum memulainya lagi.",
 cleanup_err_helper_silent: "Helper di PS5 berhenti menjawab saat menghapus, jadi aplikasi berhenti menunggu. Kirim helper lagi (Perbarui helper), lalu pindai lagi untuk melihat apa yang tersisa.",
 cleanup_err_stop_unconfirmed: "Dihentikan. PS5 tidak mengonfirmasinya, jadi mungkin masih menyelesaikan item yang sedang dikerjakan. Pindai lagi untuk melihat apa yang tersisa.",
+update_notes_unavailable: "Catatan v{version} tidak dapat dibaca dari GitHub.",
 };
 
 export default id;

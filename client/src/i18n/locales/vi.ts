@@ -7999,6 +7999,7 @@ saves_copy_console_pick: "Sao chép bản lưu {game} của {source} sang:",
 engine_op_lost: "Engine đã khởi động lại khi việc này đang chạy, nên không rõ nó kết thúc thế nào. Hãy xem các tệp trên máy trước khi chạy lại.",
 cleanup_err_helper_silent: "Trình trợ giúp trên PS5 đã ngừng phản hồi khi đang xóa, nên ứng dụng ngừng chờ. Hãy gửi lại trình trợ giúp (Cập nhật trình trợ giúp), rồi quét lại để xem còn lại gì.",
 cleanup_err_stop_unconfirmed: "Đã dừng. PS5 chưa xác nhận, nên có thể nó vẫn hoàn tất mục đang xử lý. Hãy quét lại để xem còn lại gì.",
+update_notes_unavailable: "Không đọc được ghi chú của v{version} từ GitHub.",
 };
 
 export default vi;

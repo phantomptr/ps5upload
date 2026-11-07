@@ -7950,6 +7950,7 @@ saves_copy_console_pick: "Copiar la partida de {source} de {game} a:",
 engine_op_lost: "El motor se reinició mientras esto se ejecutaba, así que no se sabe cómo terminó. Revisa los archivos de la consola antes de volver a iniciarlo.",
 cleanup_err_helper_silent: "El ayudante de la PS5 dejó de responder mientras eliminaba, así que la app dejó de esperar. Envía el ayudante de nuevo (Actualizar ayudante) y vuelve a escanear para ver qué queda.",
 cleanup_err_stop_unconfirmed: "Detenido. La PS5 no lo confirmó, así que puede que aún termine el elemento en el que estaba. Vuelve a escanear para ver qué queda.",
+update_notes_unavailable: "No se pudieron leer de GitHub las notas de la v{version}.",
 };
 
 export default es;
