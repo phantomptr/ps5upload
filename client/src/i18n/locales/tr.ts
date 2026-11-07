@@ -8001,6 +8001,14 @@ saves_copy_console_title_to: "{console} konsoluna kopyala",
 saves_copy_console_title: "Başka konsola kopyala",
 saves_copy_console_asking: "{console} konsoluna neleri olduğu soruluyor…",
 saves_copy_console_pick: "{source} kullanıcısının {game} kaydını şuraya kopyala:",
+rp_play_as: "Şu kullanıcıyla oyna",
+rp_user_n: "Kullanıcı {n}",
+rp_users_title: "Eşlenmiş PS5 kullanıcıları",
+rp_users_chosen: "Bu kullanıcıyla oynar",
+rp_users_remove: "Unut",
+rp_users_remove_confirm: "{name} için eşleme unutulsun mu?",
+rp_users_remove_body: "Yeniden eşleyene kadar Oyna bu kullanıcıyla başlayamaz. PS5, siz oradan kaldırana kadar bu uygulamayı bağlı cihazlar listesinde tutar.",
+rp_users_add_hint: "Başka bir kullanıcıyla da oynamak için PS5'te o kullanıcıyla oturum açıp yeniden eşleyin: her kullanıcı saklanır ve Oyna › Başlat'ta birini seçersiniz.",
 };
 
 export default tr;

@@ -8008,6 +8008,14 @@ saves_copy_console_title_to: "{console} पर कॉपी करें",
 saves_copy_console_title: "दूसरे कंसोल पर कॉपी करें",
 saves_copy_console_asking: "{console} से पूछा जा रहा है कि उसमें क्या है…",
 saves_copy_console_pick: "{game} का {source} वाला सेव यहाँ कॉपी करें:",
+rp_play_as: "इस रूप में खेलें",
+rp_user_n: "उपयोगकर्ता {n}",
+rp_users_title: "जोड़े गए PS5 उपयोगकर्ता",
+rp_users_chosen: "इसी उपयोगकर्ता के रूप में खेलता है",
+rp_users_remove: "भूलें",
+rp_users_remove_confirm: "{name} की जोड़ी भूलें?",
+rp_users_remove_body: "दोबारा जोड़ने तक खेलें इस उपयोगकर्ता के रूप में शुरू नहीं हो पाएगा। जब तक आप वहाँ से हटाते नहीं, PS5 इस ऐप को अपनी लिंक किए गए डिवाइस की सूची में रखता है।",
+rp_users_add_hint: "किसी दूसरे उपयोगकर्ता के रूप में भी खेलने के लिए, PS5 पर उस उपयोगकर्ता से साइन इन करें और फिर से जोड़ें: हर उपयोगकर्ता रखा जाता है, और खेलें › शुरू करें में आप एक चुन सकते हैं।",
 };
 
 export default hi;

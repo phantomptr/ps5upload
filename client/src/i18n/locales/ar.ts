@@ -7994,6 +7994,14 @@ saves_copy_console_title_to: "نسخ إلى {console}",
 saves_copy_console_title: "نسخ إلى وحدة تحكم أخرى",
 saves_copy_console_asking: "جارٍ سؤال {console} عمّا لديها…",
 saves_copy_console_pick: "نسخ حفظ {source} للعبة {game} إلى:",
+rp_play_as: "العب باسم",
+rp_user_n: "المستخدم {n}",
+rp_users_title: "مستخدمو PS5 المقترنون",
+rp_users_chosen: "يلعب باسم هذا المستخدم",
+rp_users_remove: "انسَ",
+rp_users_remove_confirm: "نسيان الاقتران الخاص بـ {name}؟",
+rp_users_remove_body: "لن يتمكن اللعب من البدء باسم هذا المستخدم حتى تقرنه مرة أخرى. يُبقي جهاز PS5 هذا التطبيق في قائمة الأجهزة المرتبطة حتى تزيله من هناك.",
+rp_users_add_hint: "للعب باسم مستخدم آخر أيضًا، سجّل الدخول إلى ذلك المستخدم على PS5 ثم أعد الاقتران: يُحفظ كل مستخدم، ويتيح لك العب › ابدأ اختيار أحدهم.",
 };
 
 export default ar;

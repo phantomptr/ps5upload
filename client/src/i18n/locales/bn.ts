@@ -7994,6 +7994,14 @@ saves_copy_console_title_to: "{console}-এ কপি করুন",
 saves_copy_console_title: "অন্য কনসোলে কপি করুন",
 saves_copy_console_asking: "{console}-এর কাছে জানতে চাওয়া হচ্ছে…",
 saves_copy_console_pick: "{game}-এর {source}-এর সেভ কপি করুন:",
+rp_play_as: "এই হিসেবে খেলুন",
+rp_user_n: "ব্যবহারকারী {n}",
+rp_users_title: "যুক্ত PS5 ব্যবহারকারী",
+rp_users_chosen: "এই ব্যবহারকারী হিসেবে খেলে",
+rp_users_remove: "ভুলে যান",
+rp_users_remove_confirm: "{name}-এর জোড়া ভুলে যাবেন?",
+rp_users_remove_body: "আবার জোড়া না দেওয়া পর্যন্ত খেলুন এই ব্যবহারকারী হিসেবে আর শুরু হবে না। PS5 থেকে সরিয়ে না দেওয়া পর্যন্ত এই অ্যাপটি তার লিঙ্ক করা ডিভাইসের তালিকায় থাকে।",
+rp_users_add_hint: "অন্য ব্যবহারকারী হিসেবেও খেলতে, PS5-এ সেই ব্যবহারকারীতে সাইন ইন করে আবার জোড়া দিন: প্রত্যেক ব্যবহারকারী রাখা থাকে, আর খেলুন › শুরু-তে একজনকে বেছে নিতে পারেন।",
 };
 
 export default bn;

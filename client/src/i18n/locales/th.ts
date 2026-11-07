@@ -8001,6 +8001,14 @@ saves_copy_console_title_to: "คัดลอกไปยัง {console}",
 saves_copy_console_title: "คัดลอกไปยังคอนโซลเครื่องอื่น",
 saves_copy_console_asking: "กำลังถาม {console} ว่ามีอะไรบ้าง…",
 saves_copy_console_pick: "คัดลอกเซฟ {game} ของ {source} ไปยัง:",
+rp_play_as: "เล่นในฐานะ",
+rp_user_n: "ผู้ใช้ {n}",
+rp_users_title: "ผู้ใช้ PS5 ที่จับคู่แล้ว",
+rp_users_chosen: "เล่นในฐานะผู้ใช้นี้",
+rp_users_remove: "ลืม",
+rp_users_remove_confirm: "ลืมการจับคู่ของ {name} ไหม?",
+rp_users_remove_body: "เล่นจะเริ่มในฐานะผู้ใช้นี้ไม่ได้อีกจนกว่าคุณจะจับคู่ใหม่ PS5 จะเก็บแอปนี้ไว้ในรายการอุปกรณ์ที่ลิงก์จนกว่าคุณจะลบออกที่นั่น",
+rp_users_add_hint: "หากต้องการเล่นในฐานะผู้ใช้อื่นด้วย ให้ลงชื่อเข้าใช้ผู้ใช้นั้นบน PS5 แล้วจับคู่อีกครั้ง: ผู้ใช้แต่ละคนจะถูกเก็บไว้ และ เล่น › เริ่ม ให้คุณเลือกได้",
 };
 
 export default th;

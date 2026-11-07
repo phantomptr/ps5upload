@@ -8276,6 +8276,14 @@ saves_copy_console_title_to: "کپی به {console}",
 saves_copy_console_title: "کپی به کنسول دیگر",
 saves_copy_console_asking: "در حال پرسیدن از {console} که چه دارد…",
 saves_copy_console_pick: "کپی ذخیره‌ی {source} از {game} به:",
+rp_play_as: "بازی به‌عنوان",
+rp_user_n: "کاربر {n}",
+rp_users_title: "کاربران PS5 جفت‌شده",
+rp_users_chosen: "به‌عنوان این کاربر بازی می‌کند",
+rp_users_remove: "فراموش کن",
+rp_users_remove_confirm: "جفت‌سازی {name} فراموش شود؟",
+rp_users_remove_body: "تا دوباره جفت نکنید، بازی دیگر نمی‌تواند به‌عنوان این کاربر شروع شود. PS5 این برنامه را در فهرست دستگاه‌های پیوندشده نگه می‌دارد تا آن را از آنجا حذف کنید.",
+rp_users_add_hint: "برای بازی به‌عنوان کاربری دیگر نیز، روی PS5 با آن کاربر وارد شوید و دوباره جفت کنید: هر کاربر نگه داشته می‌شود و در بازی › شروع یکی را انتخاب می‌کنید.",
 };
 
 export default fa;

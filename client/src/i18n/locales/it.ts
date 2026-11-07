@@ -7947,6 +7947,14 @@ saves_copy_console_title_to: "Copia su {console}",
 saves_copy_console_title: "Copia su un'altra console",
 saves_copy_console_asking: "Chiedo a {console} cosa contiene…",
 saves_copy_console_pick: "Copia il salvataggio di {game} di {source} in:",
+rp_play_as: "Gioca come",
+rp_user_n: "Utente {n}",
+rp_users_title: "Utenti PS5 associati",
+rp_users_chosen: "Gioca come questo utente",
+rp_users_remove: "Dimentica",
+rp_users_remove_confirm: "Dimenticare l’associazione di {name}?",
+rp_users_remove_body: "Gioca non potrà più avviarsi come questo utente finché non lo associ di nuovo. La PS5 tiene questa app nell’elenco dei dispositivi collegati finché non la rimuovi lì.",
+rp_users_add_hint: "Per giocare anche come un altro utente, accedi con quell’utente sulla PS5 e associa di nuovo: ogni utente viene conservato e Gioca › Avvia ti lascia sceglierne uno.",
 };
 
 export default it;

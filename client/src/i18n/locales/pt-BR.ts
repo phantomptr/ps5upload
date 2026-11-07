@@ -8009,6 +8009,14 @@ saves_copy_console_title_to: "Copiar para {console}",
 saves_copy_console_title: "Copiar para outro console",
 saves_copy_console_asking: "Perguntando a {console} o que ele tem…",
 saves_copy_console_pick: "Copiar o save de {game} de {source} para:",
+rp_play_as: "Jogar como",
+rp_user_n: "Usuário {n}",
+rp_users_title: "Usuários do PS5 pareados",
+rp_users_chosen: "Joga como este usuário",
+rp_users_remove: "Esquecer",
+rp_users_remove_confirm: "Esquecer o pareamento de {name}?",
+rp_users_remove_body: "Jogar não poderá mais iniciar como este usuário até você pareá-lo de novo. O PS5 mantém este app na lista de dispositivos vinculados até você removê-lo lá.",
+rp_users_add_hint: "Para jogar também como outro usuário, entre com esse usuário no PS5 e pareie de novo: cada usuário é mantido, e Jogar › Iniciar deixa você escolher um.",
 };
 
 export default pt_BR;

@@ -8011,6 +8011,14 @@ saves_copy_console_title_to: "{console}(으)로 복사",
 saves_copy_console_title: "다른 콘솔로 복사",
 saves_copy_console_asking: "{console}에 무엇이 있는지 확인하는 중…",
 saves_copy_console_pick: "{source}의 {game} 세이브를 복사할 대상:",
+rp_play_as: "플레이할 사용자",
+rp_user_n: "사용자 {n}",
+rp_users_title: "페어링된 PS5 사용자",
+rp_users_chosen: "이 사용자로 플레이",
+rp_users_remove: "삭제",
+rp_users_remove_confirm: "{name}의 페어링을 삭제할까요?",
+rp_users_remove_body: "다시 페어링할 때까지 플레이를 이 사용자로 시작할 수 없습니다. PS5에서 제거하기 전까지 이 앱은 PS5의 연결된 기기 목록에 남아 있습니다.",
+rp_users_add_hint: "다른 사용자로도 플레이하려면 PS5에서 그 사용자로 로그인한 뒤 다시 페어링하세요. 각 사용자가 유지되며 플레이 › 시작에서 고를 수 있습니다.",
 };
 
 export default ko;

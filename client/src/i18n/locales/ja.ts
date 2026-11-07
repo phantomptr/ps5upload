@@ -8013,6 +8013,14 @@ saves_copy_console_title_to: "{console} にコピー",
 saves_copy_console_title: "別のコンソールにコピー",
 saves_copy_console_asking: "{console} の内容を確認中…",
 saves_copy_console_pick: "{source} の {game} のセーブのコピー先:",
+rp_play_as: "プレイするユーザー",
+rp_user_n: "ユーザー {n}",
+rp_users_title: "ペアリング済みの PS5 ユーザー",
+rp_users_chosen: "このユーザーでプレイ",
+rp_users_remove: "削除",
+rp_users_remove_confirm: "{name} のペアリングを削除しますか？",
+rp_users_remove_body: "もう一度ペアリングするまで、プレイはこのユーザーで開始できなくなります。PS5 側で削除するまで、このアプリは PS5 のリンク済み機器の一覧に残ります。",
+rp_users_add_hint: "別のユーザーでもプレイするには、PS5 でそのユーザーにサインインしてもう一度ペアリングしてください。各ユーザーは保持され、プレイ › 開始で選べます。",
 };
 
 export default ja;

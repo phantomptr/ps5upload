@@ -33,7 +33,13 @@ const MAX_BYTES: usize = 8 * 1024 * 1024;
 /// The local storage key of the app's console list.
 const ROSTER_KEY: &str = "ps5upload.roster.v1";
 /// What a console's saved profile holds that opens the console: not settings.
-const SECRET_FIELDS: [&str; 3] = ["wake_credential", "wake_regist_key", "wake_rp_key"];
+const SECRET_FIELDS: [&str; 4] = [
+    "wake_credential",
+    "wake_regist_key",
+    "wake_rp_key",
+    // Each paired PS5 user's keys (consoles_api.rs).
+    "rp_users",
+];
 /// Where a bundle on disk keeps [`SECRET_FIELDS`], encrypted: `{profile id: {field: value}}`.
 const SEALED: &str = "sealed_secrets";
 
@@ -66,7 +72,9 @@ fn take_secrets(bundle: &mut Value) -> Option<serde_json::Map<String, Value>> {
         let mut secrets = serde_json::Map::new();
         for field in SECRET_FIELDS {
             if let Some(v) = fields.remove(field) {
-                if v.as_str().is_some_and(|s| !s.is_empty()) {
+                let held = v.as_str().is_some_and(|s| !s.is_empty())
+                    || v.as_array().is_some_and(|a| !a.is_empty());
+                if held {
                     secrets.insert(field.to_string(), v);
                 }
             }

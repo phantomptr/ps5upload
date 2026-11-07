@@ -8290,6 +8290,14 @@ saves_copy_console_title_to: "Másolás ide: {console}",
 saves_copy_console_title: "Másolás másik konzolra",
 saves_copy_console_asking: "{console} lekérdezése, mi van rajta…",
 saves_copy_console_pick: "{source} {game} mentésének másolása ide:",
+rp_play_as: "Játék mint",
+rp_user_n: "{n}. felhasználó",
+rp_users_title: "Párosított PS5-felhasználók",
+rp_users_chosen: "Ezzel a felhasználóval játszik",
+rp_users_remove: "Elfelejtés",
+rp_users_remove_confirm: "Elfelejted {name} párosítását?",
+rp_users_remove_body: "A Játék nem indulhat ezzel a felhasználóval, amíg újra nem párosítod. A PS5 a csatolt eszközei között tartja ezt az alkalmazást, amíg ott el nem távolítod.",
+rp_users_add_hint: "Ha másik felhasználóként is játszanál, jelentkezz be azzal a felhasználóval a PS5-ön, és párosíts újra: minden felhasználó megmarad, a Játék › Indítás pedig választhatóvá teszi őket.",
 };
 
 export default hu;

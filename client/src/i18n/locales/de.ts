@@ -8002,6 +8002,14 @@ saves_copy_console_title_to: "Nach {console} kopieren",
 saves_copy_console_title: "Auf andere Konsole kopieren",
 saves_copy_console_asking: "{console} wird gefragt, was vorhanden ist…",
 saves_copy_console_pick: "Spielstand von {source} für {game} kopieren nach:",
+rp_play_as: "Spielen als",
+rp_user_n: "Benutzer {n}",
+rp_users_title: "Gekoppelte PS5-Benutzer",
+rp_users_chosen: "Spielt als dieser Benutzer",
+rp_users_remove: "Vergessen",
+rp_users_remove_confirm: "Kopplung für {name} vergessen?",
+rp_users_remove_body: "Spielen kann dann nicht mehr als dieser Benutzer starten, bis du ihn erneut koppelst. Die PS5 führt diese App weiter in ihrer Liste verknüpfter Geräte, bis du sie dort entfernst.",
+rp_users_add_hint: "Um auch als anderer Benutzer zu spielen, melde dich auf der PS5 bei diesem Benutzer an und kopple erneut: Jeder Benutzer bleibt erhalten, und unter Spielen › Start wählst du einen aus.",
 };
 
 export default de;

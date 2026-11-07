@@ -8299,6 +8299,14 @@ saves_copy_console_title_to: "Copy to {console}",
 saves_copy_console_title: "Copy to another console",
 saves_copy_console_asking: "Asking {console} what it has…",
 saves_copy_console_pick: "Copy {source}'s save of {game} to:",
+rp_play_as: "Play as",
+rp_user_n: "User {n}",
+rp_users_title: "Paired PS5 users",
+rp_users_chosen: "Plays as this user",
+rp_users_remove: "Forget",
+rp_users_remove_confirm: "Forget the pairing for {name}?",
+rp_users_remove_body: "Play can no longer start as this user until you pair it again. The PS5 keeps this app on its list of linked devices until you remove it there.",
+rp_users_add_hint: "To play as another user too, sign in to that user on the PS5 and pair again: each user is kept, and Play › Start lets you pick one.",
 };
 
 export default en;

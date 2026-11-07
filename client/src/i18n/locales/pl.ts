@@ -8235,6 +8235,14 @@ saves_copy_console_title_to: "Kopiuj do: {console}",
 saves_copy_console_title: "Kopiuj na inną konsolę",
 saves_copy_console_asking: "Pytanie konsoli {console}, co zawiera…",
 saves_copy_console_pick: "Kopiuj zapis {game} użytkownika {source} do:",
+rp_play_as: "Graj jako",
+rp_user_n: "Użytkownik {n}",
+rp_users_title: "Sparowani użytkownicy PS5",
+rp_users_chosen: "Gra jako ten użytkownik",
+rp_users_remove: "Zapomnij",
+rp_users_remove_confirm: "Zapomnieć parowanie dla {name}?",
+rp_users_remove_body: "Graj nie uruchomi się już jako ten użytkownik, dopóki nie sparujesz go ponownie. PS5 trzyma tę aplikację na liście połączonych urządzeń, dopóki jej tam nie usuniesz.",
+rp_users_add_hint: "Aby grać także jako inny użytkownik, zaloguj się na nim na PS5 i sparuj ponownie: każdy użytkownik zostaje zachowany, a w Graj › Start wybierasz jednego.",
 };
 
 export default pl;

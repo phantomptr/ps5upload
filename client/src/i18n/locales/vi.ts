@@ -7996,6 +7996,14 @@ saves_copy_console_title_to: "Sao chép sang {console}",
 saves_copy_console_title: "Sao chép sang máy console khác",
 saves_copy_console_asking: "Đang hỏi {console} xem có gì…",
 saves_copy_console_pick: "Sao chép bản lưu {game} của {source} sang:",
+rp_play_as: "Chơi với tư cách",
+rp_user_n: "Người dùng {n}",
+rp_users_title: "Người dùng PS5 đã ghép nối",
+rp_users_chosen: "Chơi bằng người dùng này",
+rp_users_remove: "Quên",
+rp_users_remove_confirm: "Quên ghép nối của {name}?",
+rp_users_remove_body: "Chơi sẽ không thể bắt đầu bằng người dùng này cho đến khi bạn ghép nối lại. PS5 vẫn giữ ứng dụng này trong danh sách thiết bị được liên kết cho đến khi bạn xóa nó ở đó.",
+rp_users_add_hint: "Để chơi bằng cả người dùng khác, hãy đăng nhập người dùng đó trên PS5 rồi ghép nối lại: mỗi người dùng đều được giữ, và Chơi › Bắt đầu cho bạn chọn một người.",
 };
 
 export default vi;

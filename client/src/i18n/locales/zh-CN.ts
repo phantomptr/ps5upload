@@ -7953,6 +7953,14 @@ saves_copy_console_title_to: "复制到 {console}",
 saves_copy_console_title: "复制到另一台主机",
 saves_copy_console_asking: "正在询问 {console} 里有什么…",
 saves_copy_console_pick: "把 {source} 的 {game} 存档复制到：",
+rp_play_as: "以此用户游玩",
+rp_user_n: "用户 {n}",
+rp_users_title: "已配对的 PS5 用户",
+rp_users_chosen: "以此用户游玩中",
+rp_users_remove: "忘记",
+rp_users_remove_confirm: "要忘记 {name} 的配对吗？",
+rp_users_remove_body: "在重新配对之前，畅玩将无法以此用户开始。PS5 会把此应用保留在已链接设备列表中，直到你在那里移除它。",
+rp_users_add_hint: "若也想以其他用户游玩，请在 PS5 上登录该用户并再次配对：每个用户都会保留，在 畅玩 › 开始 中可以选择其一。",
 };
 
 export default zh_CN;

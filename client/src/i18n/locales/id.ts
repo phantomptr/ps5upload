@@ -8003,6 +8003,14 @@ saves_copy_console_title_to: "Salin ke {console}",
 saves_copy_console_title: "Salin ke konsol lain",
 saves_copy_console_asking: "Menanyakan isi {console}…",
 saves_copy_console_pick: "Salin save {game} milik {source} ke:",
+rp_play_as: "Main sebagai",
+rp_user_n: "Pengguna {n}",
+rp_users_title: "Pengguna PS5 yang dipasangkan",
+rp_users_chosen: "Bermain sebagai pengguna ini",
+rp_users_remove: "Lupakan",
+rp_users_remove_confirm: "Lupakan pemasangan untuk {name}?",
+rp_users_remove_body: "Main tidak bisa lagi dimulai sebagai pengguna ini sampai Anda memasangkannya lagi. PS5 tetap menyimpan aplikasi ini di daftar perangkat tertautnya sampai Anda menghapusnya di sana.",
+rp_users_add_hint: "Untuk bermain juga sebagai pengguna lain, masuk ke pengguna itu di PS5 lalu pasangkan lagi: setiap pengguna disimpan, dan Main › Mulai memungkinkan Anda memilih salah satunya.",
 };
 
 export default id;

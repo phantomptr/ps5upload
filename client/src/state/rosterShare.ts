@@ -58,7 +58,7 @@ function canonical(v: unknown): unknown {
 const same = (a: unknown, b: unknown) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 
 /** What wakes a console and signs in to it. A save that leaves one out keeps the engine's. */
-const KEY_FIELDS = ["wake_credential", "wake_regist_key", "wake_rp_key"] as const;
+const KEY_FIELDS = ["wake_credential", "wake_regist_key", "wake_rp_key", "rp_users"] as const;
 
 const withoutKeys = (list: readonly SharedProfile[]) =>
   list.map((p) => {
