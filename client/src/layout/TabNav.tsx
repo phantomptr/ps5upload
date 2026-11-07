@@ -166,7 +166,7 @@ function useSideRail() {
       delete root.dataset.tabRail;
     };
   }, [side]);
-  return { side, probe: el };
+  return [side, el] as const;
 }
 
 function useActiveTab(): string | null {
@@ -181,15 +181,15 @@ export function TabBottomNav() {
   const tr = useTr();
   const activeTab = useActiveTab();
   const playing = useAnyGameRunning();
-  const rail = useSideRail();
+  const [railAt, railProbe] = useSideRail();
 
   return (
     <>
       {/* Measures the insets (useSideRail). */}
-      <span ref={rail.probe} aria-hidden className="tab-rail-probe" />
+      <span ref={railProbe} aria-hidden className="tab-rail-probe" />
       <nav
         data-bottom-nav
-        data-rail={rail.side ?? undefined}
+        data-rail={railAt ?? undefined}
         aria-label={tr("v5_tab_primary_nav", undefined, "Primary")}
         // Floats above the gesture bar: the safe area is a margin here, not
         // padding, so the pill keeps its shape on every phone.
