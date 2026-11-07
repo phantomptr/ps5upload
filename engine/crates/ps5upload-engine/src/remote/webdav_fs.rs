@@ -135,11 +135,22 @@ impl WebdavFs {
                 base64::engine::general_purpose::STANDARD.encode(format!("{user}:"))
             )),
         };
+        // A certificate the user accepted, as SFTP's host key and FTPS's certificate are. Checked
+        // once per connection, then the requests don't verify: ureq has no place for a verifier
+        // of our own. Weaker than checking on each request, and far stronger than the
+        // verify-nothing switch a self-signed NAS needed before.
+        let https = conn.protocol == Protocol::Webdavs;
+        let pinned = https && !conn.insecure_tls && conn.host_key.is_some();
+        if pinned {
+            let shown = super::ftp_fs::certificate_fingerprint(&hostport).await?;
+            super::host_key::check_host_key(conn.host_key.as_deref(), &shown)?;
+        }
+        let unverified = conn.insecure_tls || pinned;
         let builder = |redirects: u32| {
             ureq::Agent::config_builder()
                 .tls_config(
                     ureq::tls::TlsConfig::builder()
-                        .disable_verification(conn.insecure_tls)
+                        .disable_verification(unverified)
                         .build(),
                 )
                 .http_status_as_error(false)
@@ -169,8 +180,19 @@ impl WebdavFs {
         } else {
             conn.start_path.trim().to_string()
         };
-        fs.propfind(&start, 0).await?;
-        Ok(fs)
+        match fs.propfind(&start, 0).await {
+            Ok(_) => Ok(fs),
+            // A certificate no authority vouches for, as a NAS's usually is: offer it for
+            // acceptance. The usual trust is untouched when the server has a proper one.
+            Err(RemoteError::Io(m)) if https && !unverified && is_certificate_error(&m) => {
+                let shown = super::ftp_fs::certificate_fingerprint(&fs.host).await?;
+                Err(RemoteError::HostKey {
+                    fingerprint: shown,
+                    changed: false,
+                })
+            }
+            Err(e) => Err(e),
+        }
     }
 
     fn url(&self, path: &str) -> String {
@@ -306,6 +328,12 @@ fn run_dav<B: ureq::AsSendBody>(
 
 const PROPFIND_BODY: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 <D:propfind xmlns:D="DAV:"><D:prop><D:resourcetype/><D:getcontentlength/><D:getlastmodified/></D:prop></D:propfind>"#;
+
+/// Whether a failed request's words say the server's certificate wasn't trusted.
+fn is_certificate_error(message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    m.contains("certificate") || m.contains("unknownissuer") || m.contains("unknown issuer")
+}
 
 fn auth_reason(status: u16) -> String {
     if status == 403 {
@@ -879,6 +907,15 @@ mod typed_host_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_untrusted_certificate_is_told_from_other_failures() {
+        assert!(is_certificate_error(
+            "nas:5006: invalid peer certificate: UnknownIssuer"
+        ));
+        assert!(is_certificate_error("nas: certificate expired"));
+        assert!(!is_certificate_error("nas: connection refused"));
+    }
 
     const NEXTCLOUD: &str = r#"<?xml version="1.0"?>
 <d:multistatus xmlns:d="DAV:" xmlns:s="http://sabredav.org/ns" xmlns:oc="http://owncloud.org/ns">

@@ -268,6 +268,45 @@ impl rustls::client::danger::ServerCertVerifier for Tofu {
     }
 }
 
+/// The fingerprint of the certificate a TLS server at `addr` (`host:port`) shows. The handshake
+/// stops there, before anything is sent.
+pub(super) async fn certificate_fingerprint(addr: &str) -> Result<String, RemoteError> {
+    let seen = Arc::new(StdMutex::new(None));
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let config = rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
+        .with_safe_default_protocol_versions()
+        .map_err(|e| RemoteError::Io(e.to_string()))?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(Tofu {
+            accepted: None,
+            seen: Arc::clone(&seen),
+            provider,
+        }))
+        .with_no_client_auth();
+    let host = addr.rsplit_once(':').map_or(addr, |(h, _)| h);
+    let host = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
+    let name = rustls::pki_types::ServerName::try_from(host)
+        .map_err(|e| RemoteError::Io(format!("{addr}: {e}")))?;
+    let attempt = async {
+        let tcp = tokio::net::TcpStream::connect(addr)
+            .await
+            .map_err(|e| RemoteError::Unreachable(format!("{addr}: {e}")))?;
+        // It fails at the verifier, on purpose: all this wants is what it was shown.
+        let _ = tokio_rustls::TlsConnector::from(Arc::new(config))
+            .connect(name, tcp)
+            .await;
+        Ok(())
+    };
+    tokio::time::timeout(STEP, attempt)
+        .await
+        .map_err(|_| RemoteError::Io(format!("{addr}: no answer to TLS after 30 s")))??;
+    let shown = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    shown.ok_or_else(|| RemoteError::Io(format!("{addr}: the server showed no certificate")))
+}
+
 async fn sign_in(t: &Target) -> Result<Ftp, RemoteError> {
     let addr = addr_of(&t.conn);
     let mut ftp = timed(&addr, "connecting", async {
