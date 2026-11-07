@@ -7730,6 +7730,7 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
   "rp_kbm_release_to": "Nyomd meg: {key} a billentyűzet és egér elengedéséhez",
   "rp_kbm_card_first": "A billentyűzet és egér most a PS5-öt vezérli. Nyomd meg: {key} a visszavételükhöz.",
   "rp_kbm_card_again": "A billentyűzet és egér visszavételéhez nyomd meg: {key}.",
+  "rp_kbm_card_esc_window": "Ablakban az Esc visszaadja az egeret: a böngésző mindig ezt teszi, és az alkalmazás nem tudja megakadályozni. Játssz inkább teljes képernyőn: ott a rövid Esc a játékhoz megy, a nyomva tartott Esc pedig kilép a teljes képernyőből.",
   "rp_kbm_card_ok": "Értem",
   "rp_kbm_chip": "{key}: elengedés",
   "rp_kbm_hotkey2": "{key}: váltás.",

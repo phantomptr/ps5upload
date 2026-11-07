@@ -7442,6 +7442,7 @@ helper_mismatch_boot_copy: "Deine PS5 hat eine ältere Kopie des Helfers gestart
   "rp_kbm_release_to": "Drücke {key}, um Tastatur & Maus freizugeben",
   "rp_kbm_card_first": "Deine Tastatur & Maus steuern jetzt die PS5. Drücke {key}, um sie zurückzuholen.",
   "rp_kbm_card_again": "Um Tastatur & Maus zurückzuholen, drücke {key}.",
+  "rp_kbm_card_esc_window": "In einem Fenster gibt Esc die Maus zurück: Das macht der Browser immer, und die App kann es nicht verhindern. Spiele stattdessen im Vollbild: Dort geht ein kurzes Esc an das Spiel, und Esc gedrückt halten verlässt das Vollbild.",
   "rp_kbm_card_ok": "Verstanden",
   "rp_kbm_chip": "{key} zum Freigeben",
   "rp_kbm_hotkey2": "{key} wechselt.",

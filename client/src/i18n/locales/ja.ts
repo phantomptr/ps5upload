@@ -7453,6 +7453,7 @@ helper_mismatch_boot_copy: "PS5 が起動用に保持している古いヘルパ
   "rp_kbm_release_to": "{key} でキーボードとマウスを解放",
   "rp_kbm_card_first": "キーボードとマウスでPS5を操作中です。{key} で戻せます。",
   "rp_kbm_card_again": "キーボードとマウスを戻すには {key} を押してください。",
+  "rp_kbm_card_esc_window": "ウィンドウでは Esc でマウスが戻ります。これはブラウザーの決まりで、アプリでは止められません。全画面でプレイしてください。全画面では Esc を短く押すとゲームに届き、長押しで全画面を終了します。",
   "rp_kbm_card_ok": "OK",
   "rp_kbm_chip": "{key} で解放",
   "rp_kbm_hotkey2": "{key} で切り替え。",

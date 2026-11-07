@@ -7441,6 +7441,7 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
   "rp_kbm_release_to": "Klavye ve fareyi bırakmak için {key} tuşlarına basın",
   "rp_kbm_card_first": "Klavye ve fareniz artık PS5'i kontrol ediyor. Geri almak için {key} tuşlarına basın.",
   "rp_kbm_card_again": "Klavye ve fareyi geri almak için {key} tuşlarına basın.",
+  "rp_kbm_card_esc_window": "Pencerede Esc fareyi geri verir: tarayıcı bunu her zaman yapar ve uygulama engelleyemez. Bunun yerine tam ekranda oynayın: orada kısa bir Esc oyuna gider, Esc'yi basılı tutmak tam ekrandan çıkar.",
   "rp_kbm_card_ok": "Anladım",
   "rp_kbm_chip": "Bırakmak için {key}",
   "rp_kbm_hotkey2": "{key} değiştirir.",

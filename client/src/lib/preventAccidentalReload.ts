@@ -1,4 +1,5 @@
 import { isTauriEnv } from "./tauriEnv";
+import { isCaptured } from "./pointerCapture";
 
 /**
  * Stop an accidental WebView reload from tearing the user away from in-flight
@@ -56,7 +57,9 @@ export function installAccidentalReloadGuard(): void {
       const isReload = k === "f5" || ((e.ctrlKey || e.metaKey) && k === "r");
       if (isReload) {
         e.preventDefault();
-        e.stopPropagation();
+        // While a stream has the keyboard and mouse, the keys are the game's (Ctrl+R in a PC
+        // game's bindings): the reload is still blocked, but the press goes on to the stream.
+        if (!isCaptured()) e.stopPropagation();
       }
     },
     { capture: true },

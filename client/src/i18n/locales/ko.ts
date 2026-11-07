@@ -7451,6 +7451,7 @@ helper_mismatch_boot_copy: "PS5가 부팅용으로 보관한 이전 헬퍼 사�
   "rp_kbm_release_to": "{key} 키로 키보드 및 마우스 해제",
   "rp_kbm_card_first": "이제 키보드 및 마우스가 PS5를 조작합니다. {key} 키로 되돌릴 수 있습니다.",
   "rp_kbm_card_again": "키보드 및 마우스를 되돌리려면 {key} 키를 누르세요.",
+  "rp_kbm_card_esc_window": "창 모드에서는 Esc를 누르면 마우스가 돌아옵니다. 브라우저가 항상 그렇게 하며 앱이 막을 수 없습니다. 대신 전체 화면으로 플레이하세요. 전체 화면에서는 Esc를 짧게 누르면 게임으로 전달되고, 길게 누르면 전체 화면이 종료됩니다.",
   "rp_kbm_card_ok": "확인",
   "rp_kbm_chip": "{key} 키로 해제",
   "rp_kbm_hotkey2": "{key} 키로 전환.",

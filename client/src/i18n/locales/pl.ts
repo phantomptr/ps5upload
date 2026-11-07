@@ -7675,6 +7675,7 @@ helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą t
   "rp_kbm_release_to": "Naciśnij {key}, aby zwolnić klawiaturę i mysz",
   "rp_kbm_card_first": "Klawiatura i mysz sterują teraz PS5. Naciśnij {key}, aby je odzyskać.",
   "rp_kbm_card_again": "Aby odzyskać klawiaturę i mysz, naciśnij {key}.",
+  "rp_kbm_card_esc_window": "W oknie Esc oddaje mysz: przeglądarka zawsze tak robi i aplikacja nie może temu zapobiec. Graj na pełnym ekranie: tam krótkie Esc trafia do gry, a przytrzymanie Esc wychodzi z pełnego ekranu.",
   "rp_kbm_card_ok": "Rozumiem",
   "rp_kbm_chip": "{key}, aby zwolnić",
   "rp_kbm_hotkey2": "{key} przełącza.",

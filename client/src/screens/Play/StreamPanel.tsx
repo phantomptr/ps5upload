@@ -450,6 +450,9 @@ export function StreamPanel() {
   // Whether the last press on the picture was a mouse: only a mouse double-click toggles full
   // screen (a double tap of a finger is play).
   const lastPointer = useRef("mouse");
+  /** Whether the mouse was captured at the latest press, and at the one before it. */
+  const downCaptured = useRef(false);
+  const firstClickCaptured = useRef(false);
   const [elsewhere, setElsewhere] = useState<string | null>(null);
   const stage = useRef<HTMLDivElement>(null);
   const canvasHost = useRef<HTMLDivElement>(null);
@@ -1118,14 +1121,22 @@ export function StreamPanel() {
                   // The stage moves into a portal on body: an event left to bubble on reaches
                   // React a second time there and would toggle straight back.
                   e.stopPropagation();
-                  // A finger's double tap is play (or a mis-tap), never full screen.
-                  if (lastPointer.current === "mouse") toggleFull();
+                  // A finger's double tap is play (or a mis-tap), never full screen. Nor is a
+                  // double click while the mouse was already playing (a game's double click):
+                  // only one that started from the free cursor (its first click captures).
+                  if (lastPointer.current === "mouse" && !firstClickCaptured.current) toggleFull();
                 }
               : undefined
           }
           onPointerUpCapture={refullOnTouch}
           onContextMenu={running ? (e) => e.preventDefault() : undefined}
-          onPointerDown={(e) => onPointer(e, "down")}
+          onPointerDown={(e) => {
+            // Whether the mouse was captured at each of the last two presses: a double click
+            // whose first press was already captured belongs to the game.
+            firstClickCaptured.current = downCaptured.current;
+            downCaptured.current = isCaptured();
+            onPointer(e, "down");
+          }}
           onPointerMove={(e) => onPointer(e, "move")}
           onPointerUp={(e) => onPointer(e, "up")}
           onPointerLeave={(e) => onPointer(e, "up")}
