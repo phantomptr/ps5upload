@@ -129,9 +129,21 @@ pub(crate) fn gauges(shared: &Shared) -> Gauges {
     }
 }
 
-pub(crate) fn router(shared: Arc<Shared>) -> Router {
-    Router::new()
+pub(crate) fn router(shared: Arc<Shared>, with_metrics: bool) -> Router {
+    let r = Router::new()
         .route("/ws", get(ws_handler))
+        .route("/health", get(|| async { "ok\n" }));
+    let r = if with_metrics {
+        r.route("/metrics", get(metrics_handler))
+    } else {
+        r
+    };
+    r.with_state(shared)
+}
+
+/// The private metrics listener's routes.
+pub(crate) fn metrics_router(shared: Arc<Shared>) -> Router {
+    Router::new()
         .route("/health", get(|| async { "ok\n" }))
         .route("/metrics", get(metrics_handler))
         .with_state(shared)

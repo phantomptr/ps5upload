@@ -71,6 +71,11 @@ impl std::str::FromStr for Cidr {
 pub struct Config {
     /// Where the WebSocket/HTTP server listens. Behind Caddy: a loopback address.
     pub http_listen: SocketAddr,
+    /// A separate listener for `/metrics` (and `/health`). Set: `/metrics` is served only there,
+    /// not on `http_listen` (on Fly.io the public port carries `/ws`, and Fly scrapes this one
+    /// over its private network). Unset: `/metrics` is on `http_listen` and the reverse proxy
+    /// keeps it private.
+    pub metrics_listen: Option<SocketAddr>,
     /// UDP addresses for the optional STUN server; empty (the default) runs none, and clients
     /// use public STUN servers. `[::]:3478` is dual stack on Linux (IPv4 arrives as IPv4-mapped
     /// IPv6); an address that cannot be bound is counted in the start-up log and skipped.
@@ -115,6 +120,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             http_listen: "127.0.0.1:8787".parse().expect("static address"),
+            metrics_listen: None,
             stun_listen: Vec::new(),
             allowed_origins: vec![GUEST_PAGE_ORIGIN.to_string()],
             trusted_proxies: Vec::new(),
@@ -180,6 +186,13 @@ impl Config {
                 .trim()
                 .parse()
                 .map_err(|_| "HUB_HTTP_LISTEN: not a socket address")?;
+        }
+        if let Some(v) = get("HUB_METRICS_LISTEN").filter(|v| !v.trim().is_empty()) {
+            c.metrics_listen = Some(
+                v.trim()
+                    .parse()
+                    .map_err(|_| "HUB_METRICS_LISTEN: not a socket address")?,
+            );
         }
         if let Some(v) = get("HUB_STUN_LISTEN") {
             c.stun_listen = list(&v)

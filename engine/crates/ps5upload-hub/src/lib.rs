@@ -66,9 +66,24 @@ impl Shared {
     }
 }
 
+fn serve(listener: TcpListener, app: axum::Router, shared: &Shared) -> JoinHandle<()> {
+    let mut rx = shared.shutdown.subscribe();
+    tokio::spawn(async move {
+        let _ = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            let _ = rx.wait_for(|v| *v).await;
+        })
+        .await;
+    })
+}
+
 /// A running hub.
 pub struct Hub {
     pub http_addr: SocketAddr,
+    pub metrics_addr: Option<SocketAddr>,
     pub stun_addrs: Vec<SocketAddr>,
     pub shared: Arc<Shared>,
     tasks: Vec<JoinHandle<()>>,
@@ -81,6 +96,14 @@ impl Hub {
     pub async fn start(config: Config, log: LogSink) -> io::Result<Hub> {
         let listener = TcpListener::bind(config.http_listen).await?;
         let http_addr = listener.local_addr()?;
+        let metrics_listener = match config.metrics_listen {
+            Some(a) => Some(TcpListener::bind(a).await?),
+            None => None,
+        };
+        let metrics_addr = match &metrics_listener {
+            Some(l) => Some(l.local_addr()?),
+            None => None,
+        };
         let mut stun_socks = Vec::new();
         let mut stun_failed = 0u64;
         for addr in &config.stun_listen {
@@ -114,18 +137,11 @@ impl Hub {
             )));
         }
         tasks.push(tokio::spawn(hub::sweeper(shared.clone(), stun_table)));
-        let app = hub::router(shared.clone());
-        let mut rx = shared.shutdown.subscribe();
-        tasks.push(tokio::spawn(async move {
-            let _ = axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .with_graceful_shutdown(async move {
-                let _ = rx.wait_for(|v| *v).await;
-            })
-            .await;
-        }));
+        let app = hub::router(shared.clone(), metrics_listener.is_none());
+        tasks.push(serve(listener, app, &shared));
+        if let Some(l) = metrics_listener {
+            tasks.push(serve(l, hub::metrics_router(shared.clone()), &shared));
+        }
         shared.log(
             "started",
             &[
@@ -136,6 +152,7 @@ impl Hub {
         );
         Ok(Hub {
             http_addr,
+            metrics_addr,
             stun_addrs,
             shared,
             tasks,

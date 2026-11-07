@@ -754,3 +754,19 @@ async fn logs_hold_no_addresses_ids_or_payloads() {
         }
     }
 }
+
+#[tokio::test]
+async fn metrics_on_a_separate_listener() {
+    let t = start(Config {
+        metrics_listen: Some("127.0.0.1:0".parse().unwrap()),
+        ..cfg()
+    })
+    .await;
+    let private = t.hub.metrics_addr.expect("metrics listener");
+    let public = http_get(t.hub.http_addr, "/metrics").await;
+    assert!(public.starts_with("HTTP/1.1 404"), "{public}");
+    assert!(http_get(t.hub.http_addr, "/health").await.ends_with("ok\n"));
+    let m = http_get(private, "/metrics").await;
+    assert!(m.starts_with("HTTP/1.1 200"));
+    assert_eq!(metric(&m, "hub_rooms"), 0);
+}
