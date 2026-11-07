@@ -33,6 +33,10 @@ const RING_CAP: usize = 500;
 /// The debug and trace ring is bigger: with a level raised it fills fast, and `/api/logs/recent`
 /// (MCP `logs_recent`) reads from it. 2000 lines of ~200 bytes is ~400 KB.
 const DEBUG_RING_CAP: usize = 2000;
+/// The per-request access log (`GET /api/x -> 200 (3ms)`) has a small ring of its own: in the
+/// debug ring, an open window's requests pushed out the debug lines someone raised a level for
+/// (a Remote Play handshake was gone within minutes). Every line still reaches engine.log.
+const ACCESS_RING_CAP: usize = 300;
 
 /// Cap per-entry message length. Our own log sites all format short
 /// diagnostic lines, but `core_log!` forwards from ps5upload-core
@@ -71,19 +75,44 @@ fn debug_ring() -> &'static Mutex<VecDeque<LogEntry>> {
     RING.get_or_init(|| Mutex::new(VecDeque::with_capacity(DEBUG_RING_CAP)))
 }
 
-fn cap_for(level: &str) -> usize {
-    if matches!(level, "debug" | "trace") {
-        DEBUG_RING_CAP
-    } else {
-        RING_CAP
-    }
+/// The ring for the access log (see `ACCESS_RING_CAP`).
+fn access_ring() -> &'static Mutex<VecDeque<LogEntry>> {
+    use std::sync::OnceLock;
+    static RING: OnceLock<Mutex<VecDeque<LogEntry>>> = OnceLock::new();
+    RING.get_or_init(|| Mutex::new(VecDeque::with_capacity(ACCESS_RING_CAP)))
 }
 
-fn ring_for(level: &str) -> &'static Mutex<VecDeque<LogEntry>> {
-    if matches!(level, "debug" | "trace") {
-        debug_ring()
-    } else {
-        ring()
+/// Which ring a line goes to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ring {
+    Main,
+    Debug,
+    Access,
+}
+
+impl Ring {
+    fn for_level(level: &str) -> Ring {
+        if matches!(level, "debug" | "trace") {
+            Ring::Debug
+        } else {
+            Ring::Main
+        }
+    }
+
+    fn cap(self) -> usize {
+        match self {
+            Ring::Main => RING_CAP,
+            Ring::Debug => DEBUG_RING_CAP,
+            Ring::Access => ACCESS_RING_CAP,
+        }
+    }
+
+    fn get(self) -> &'static Mutex<VecDeque<LogEntry>> {
+        match self {
+            Ring::Main => ring(),
+            Ring::Debug => debug_ring(),
+            Ring::Access => access_ring(),
+        }
     }
 }
 
@@ -145,6 +174,16 @@ pub(crate) fn record(level: &'static str, msg: String) {
 
 /// [`record`] in a category.
 pub(crate) fn record_cat(level: &'static str, cat: &'static str, msg: String) {
+    record_in(Ring::for_level(level), level, cat, msg)
+}
+
+/// One line of the per-request access log: a debug line in `api`, written to engine.log like any
+/// other but kept in its own ring, so requests never push other debug lines out.
+pub(crate) fn record_access(msg: String) {
+    record_in(Ring::Access, "debug", "api", msg)
+}
+
+fn record_in(which: Ring, level: &'static str, cat: &'static str, msg: String) {
     let mut msg = clean(msg);
     if msg.len() > MSG_MAX_BYTES {
         // Truncate on a valid UTF-8 char boundary so the String stays
@@ -173,15 +212,21 @@ pub(crate) fn record_cat(level: &'static str, cat: &'static str, msg: String) {
         };
         let _ = stderr_sink().try_send(line);
     }
-    push(level, cat, ts, msg);
+    push(which, level, cat, ts, msg);
 }
 
 /// Only the ring, not the stderr mirror: for a line the host has already written elsewhere.
 pub(crate) fn record_quiet(level: &'static str, msg: String) {
-    push(level, ps5upload_core::log::GENERAL, now_ms(), clean(msg));
+    push(
+        Ring::for_level(level),
+        level,
+        ps5upload_core::log::GENERAL,
+        now_ms(),
+        clean(msg),
+    );
 }
 
-fn push(level: &'static str, cat: &'static str, ts: u64, msg: String) {
+fn push(which: Ring, level: &'static str, cat: &'static str, ts: u64, msg: String) {
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let entry = LogEntry {
         seq,
@@ -199,8 +244,8 @@ fn push(level: &'static str, cat: &'static str, ts: u64, msg: String) {
     // whole engine down. The ring buffer's only state is the
     // contained entries; a half-mutated ring is still safe to read
     // from and append to.
-    let mut g = ring_for(level).lock().unwrap_or_else(|e| e.into_inner());
-    if g.len() >= cap_for(level) {
+    let mut g = which.get().lock().unwrap_or_else(|e| e.into_inner());
+    if g.len() >= which.cap() {
         g.pop_front();
     }
     g.push_back(entry);
@@ -263,8 +308,8 @@ pub(crate) fn tail_since(since: u64) -> Vec<LogEntry> {
         let g = ring().lock().unwrap_or_else(|e| e.into_inner());
         g.iter().filter(|e| e.seq > since).cloned().collect()
     };
-    {
-        let g = debug_ring().lock().unwrap_or_else(|e| e.into_inner());
+    for r in [debug_ring(), access_ring()] {
+        let g = r.lock().unwrap_or_else(|e| e.into_inner());
         out.extend(g.iter().filter(|e| e.seq > since).cloned());
     }
     out.sort_by_key(|e| e.seq);
@@ -322,6 +367,27 @@ macro_rules! log_detail {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A busy window's requests never push a raised level's debug lines out of the tail.
+    #[test]
+    fn requests_do_not_push_debug_lines_out() {
+        let id = std::process::id();
+        let mark = format!("rp-handshake-kept-{id}");
+        record_cat("debug", "rp", mark.clone());
+        for i in 0..DEBUG_RING_CAP + 50 {
+            record_access(format!("GET /api/x-{id}-{i} -> 200 (1ms)"));
+        }
+        let lines = tail_since(0);
+        assert!(lines.iter().any(|e| e.msg == mark && e.cat == "rp"));
+        let access = lines
+            .iter()
+            .filter(|e| e.cat == "api" && e.msg.starts_with(&format!("GET /api/x-{id}-")))
+            .count();
+        assert!(access <= ACCESS_RING_CAP, "{access}");
+        assert!(lines
+            .iter()
+            .any(|e| e.msg == format!("GET /api/x-{id}-{} -> 200 (1ms)", DEBUG_RING_CAP + 49)));
+    }
 
     /// `/api/engine-logs` answers from the rings, at both levels, and quiet lines too.
     #[test]

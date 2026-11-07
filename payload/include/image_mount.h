@@ -3,6 +3,8 @@
 #ifndef PS5UPLOAD_IMAGE_MOUNT_H
 #define PS5UPLOAD_IMAGE_MOUNT_H
 
+#include <stddef.h>
+#include <stdio.h>
 #include <string.h>
 
 /* A nullfs is followed through at most this many lower mounts. */
@@ -28,6 +30,32 @@ static inline int image_mount_kind(const char *fstype, const char *from) {
     if (fstype && strcmp(fstype, "nullfs") == 0 && from[0] == '/' && strncmp(from, "/dev/", 5) != 0)
         return IMAGE_MOUNT_FOLLOW;
     return IMAGE_MOUNT_NO;
+}
+
+/* What statfs says about the mount holding `path`: its f_fstypename and f_mntfromname copied into
+ * `fstype` and `from` (NUL-terminated). Non-zero when statfs failed. */
+typedef int (*image_mount_look_fn)(const char *path, char *fstype, size_t fstype_n, char *from,
+                                   size_t from_n, void *ctx);
+
+/* Whether the mount holding `path` is an attached disk image, following nullfs views at most
+ * IMAGE_MOUNT_MAX_HOPS mounts down. The first look is at `path` itself, whatever its length (a copy
+ * into a mount-name-sized buffer cut a long request path short and asked about the wrong
+ * directory); only a mount's source, which statfs bounds, is copied for the hops after it. */
+static inline int image_mount_walk(const char *path, image_mount_look_fn look, void *ctx) {
+    char fstype[32];
+    char from[256];
+    char at[256];
+    const char *cur = path;
+    if (!path || !look) return 0;
+    for (int hop = 0; hop <= IMAGE_MOUNT_MAX_HOPS; hop++) {
+        if (look(cur, fstype, sizeof fstype, from, sizeof from, ctx) != 0) return 0;
+        int kind = image_mount_kind(fstype, from);
+        if (kind != IMAGE_MOUNT_FOLLOW) return kind == IMAGE_MOUNT_YES;
+        if (strcmp(cur, from) == 0) return 0;
+        snprintf(at, sizeof at, "%s", from);
+        cur = at;
+    }
+    return 0;
 }
 
 #endif

@@ -205,7 +205,8 @@ int plog_apply(const char *body, size_t len, uint64_t now_s) {
             long long v = read_num(body, &i, len);
             if (v < 0) return -1;
             if (kl == 5 && memcmp(k, "level", 5) == 0) level = clamp_level(v);
-            else if (kl == 7 && memcmp(k, "until_s", 7) == 0) until = v;
+            /* Never more than a day (the engine's longest raise), whatever the sender's clock did. */
+            else if (kl == 7 && memcmp(k, "until_s", 7) == 0) until = v > 86400 ? 86400 : v;
         }
         i = skip_ws(body, i, len);
         if (i < len && body[i] == ',') {

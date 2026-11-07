@@ -56,6 +56,7 @@ pub struct LogLevelReq {
 }
 
 pub async fn log_level_set(Json(req): Json<LogLevelReq>) -> Response {
+    let before = ps5upload_core::log::levels();
     let was = ps5upload_core::log::verbose();
     if req.detailed {
         let now = now_ms();
@@ -73,6 +74,8 @@ pub async fn log_level_set(Json(req): Json<LogLevelReq>) -> Response {
             crate::log_info!("detailed logs off");
         }
     }
+    // Saved and announced like a PUT /api/logs/level, so a restart keeps it and the app hears.
+    crate::log_levels::changed(&before, &ps5upload_core::log::levels());
     Json(level_json()).into_response()
 }
 

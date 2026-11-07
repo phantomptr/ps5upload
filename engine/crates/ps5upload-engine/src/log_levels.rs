@@ -15,7 +15,9 @@
 //! raise still ends on time), and hands it to every helper it talks to (`helper_push`).
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use axum::extract::Query;
@@ -40,17 +42,52 @@ fn path() -> Option<PathBuf> {
     ps5upload_ava1::pool::data_dir().map(|d| d.join(FILE))
 }
 
-fn save(levels: &Levels) {
+/// Writes the setting in force now. Saves are one at a time and each writes what is current when
+/// it runs, so two changes in quick succession can never leave the older one on disk; each uses
+/// its own temporary file.
+fn save() {
+    static LOCK: Mutex<()> = Mutex::new(());
+    let _one = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let Some(p) = path() else { return };
+    save_to(&p, &clog::levels());
+}
+
+fn save_to(p: &Path, levels: &Levels) {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
     if let Some(dir) = p.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let tmp = p.with_extension("json.tmp");
+    let tmp = p.with_file_name(format!(
+        "{FILE}.{}.{}.tmp",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
     let ok = serde_json::to_vec_pretty(levels)
         .ok()
         .is_some_and(|bytes| std::fs::write(&tmp, bytes).is_ok());
-    if ok {
-        let _ = std::fs::rename(&tmp, &p);
+    if !ok || std::fs::rename(&tmp, p).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+/// The setting went from `before` to `now_set`: logged, announced and saved, by every route that
+/// changes it.
+pub(crate) fn changed(before: &Levels, now_set: &Levels) {
+    if now_set == before {
+        return;
+    }
+    crate::log_info!("log levels: {}", summary(now_set));
+    ps5upload_core::events::emit(
+        ps5upload_core::events::Cat::System,
+        ps5upload_core::events::Level::Info,
+        "log_levels",
+        None,
+        format!("log levels: {}", summary(now_set)),
+    );
+    if tokio::runtime::Handle::try_current().is_ok() {
+        tokio::task::spawn_blocking(save);
+    } else {
+        save();
     }
 }
 
@@ -76,10 +113,18 @@ pub(crate) fn load_saved() {
             let mut tick = tokio::time::interval(EXPIRY_TICK);
             loop {
                 tick.tick().await;
-                if clog::expire_now() {
+                let what = clog::expire_now();
+                if what != clog::Expiry::Unchanged {
                     let l = clog::levels();
-                    save(&l);
-                    crate::log_info!("log levels: the raise ran out, back to {}", summary(&l));
+                    tokio::task::spawn_blocking(save);
+                    if what == clog::Expiry::RanOut {
+                        crate::log_info!("log levels: the raise ran out, back to {}", summary(&l));
+                    } else {
+                        crate::log_info!(
+                            "log levels: the clock went back; the raise now ends within a day: {}",
+                            summary(&l)
+                        );
+                    }
                 }
             }
         });
@@ -146,7 +191,7 @@ pub struct LevelReq {
     /// When a raise ends, Unix ms.
     #[serde(default)]
     until_ms: Option<u64>,
-    /// How long a raise lasts from now, in minutes (instead of `until_ms`).
+    /// How long a raise lasts from now, in minutes (instead of `until_ms`): at most 1440, a day.
     #[serde(default)]
     minutes: Option<u64>,
     /// Start from the default (info, no overrides) before the rest.
@@ -195,7 +240,9 @@ pub(crate) fn apply(current: &Levels, req: &LevelReq, now: u64) -> Result<Levels
         }
     }
     if let Some(m) = req.minutes {
-        next.until_ms = Some(now + m.max(1) * 60_000);
+        // Capped before multiplying: a huge count must not overflow into a short (or no) raise.
+        let m = m.clamp(1, clog::MAX_RAISE_MS / 60_000);
+        next.until_ms = Some(now.saturating_add(m * 60_000));
     } else if let Some(u) = req.until_ms {
         next.until_ms = Some(u);
     } else if next.raised() && !current.raised() {
@@ -214,18 +261,7 @@ pub async fn put_level(Json(req): Json<LevelReq>) -> Response {
         Err(e) => return bad(e),
     };
     let now_set = clog::set_levels(next);
-    if now_set != before {
-        crate::log_info!("log levels: {}", summary(&now_set));
-        ps5upload_core::events::emit(
-            ps5upload_core::events::Cat::System,
-            ps5upload_core::events::Level::Info,
-            "log_levels",
-            None,
-            format!("log levels: {}", summary(&now_set)),
-        );
-        let saved = now_set.clone();
-        tokio::task::spawn_blocking(move || save(&saved));
-    }
+    changed(&before, &now_set);
     Json(levels_json()).into_response()
 }
 
@@ -286,6 +322,15 @@ pub async fn recent(Query(q): Query<RecentQuery>) -> Response {
 
 // ---- the helper's copy ----
 
+/// The seconds a raise ending at `until_ms` has left at `now`, never more than the longest raise
+/// (an end the clock left too far away would otherwise reach the helper whole).
+pub(crate) fn helper_seconds_left(until_ms: u64, now: u64) -> u64 {
+    until_ms
+        .saturating_sub(now)
+        .div_ceil(1000)
+        .min(clog::MAX_RAISE_MS / 1000)
+}
+
 /// What a helper is told: the global level and per-category levels as numbers (1 error .. 5
 /// trace), and how many seconds a raise has left (0: none). The helper counts the seconds on its
 /// own clock, so the two clocks need not agree.
@@ -301,7 +346,7 @@ pub(crate) fn helper_config() -> Value {
     json!({
         "level": l.level as u8,
         "cats": cats,
-        "until_s": if live { l.until_ms.unwrap_or(0).saturating_sub(now).div_ceil(1000) } else { 0 },
+        "until_s": if live { helper_seconds_left(l.until_ms.unwrap_or(0), now) } else { 0 },
     })
 }
 
@@ -342,6 +387,48 @@ mod tests {
     }
 
     #[test]
+    fn minutes_are_capped_before_they_are_multiplied() {
+        let now = 1_800_000_000_000;
+        let cur = Levels::default();
+        for m in [1441, u64::MAX / 60_000 + 1, u64::MAX] {
+            let n = apply(&cur, &req(json!({"level": "debug", "minutes": m})), now).unwrap();
+            assert_eq!(n.until_ms, Some(now + clog::MAX_RAISE_MS), "{m}");
+        }
+        let n = apply(&cur, &req(json!({"level": "debug", "minutes": 0})), now).unwrap();
+        assert_eq!(n.until_ms, Some(now + 60_000));
+    }
+
+    #[test]
+    fn a_save_leaves_the_file_whole_and_no_temporary_behind() {
+        let dir = std::env::temp_dir().join(format!(
+            "ps5upload-log-levels-save-{}-{}",
+            std::process::id(),
+            clog::now_ms()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join(FILE);
+        let raised = Levels {
+            level: Lv::Debug,
+            categories: BTreeMap::new(),
+            until_ms: Some(1_800_000_000_000),
+        };
+        std::thread::scope(|s| {
+            for _ in 0..8 {
+                s.spawn(|| save_to(&p, &raised));
+            }
+        });
+        let back: Levels = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+        assert_eq!(back, raised);
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![std::ffi::OsString::from(FILE)]);
+        std::fs::remove_file(&p).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+    }
+
+    #[test]
     fn unknown_names_are_refused() {
         let cur = Levels::default();
         assert!(apply(&cur, &req(json!({"level": "loud"})), 0).is_err());
@@ -370,6 +457,15 @@ mod tests {
         assert!(got.iter().any(|e| e.msg == format!("recent-w-{id}")));
         assert!(!got.iter().any(|e| e.msg == format!("recent-d-{id}")));
         assert!(got.iter().all(|e| e.cat == "install"));
+    }
+
+    #[test]
+    fn the_helper_never_gets_more_than_a_day() {
+        let now = 1_800_000_000_000;
+        assert_eq!(helper_seconds_left(now + 1500, now), 2);
+        assert_eq!(helper_seconds_left(now, now), 0);
+        assert_eq!(helper_seconds_left(now + 30 * 86_400_000, now), 86_400);
+        assert_eq!(helper_seconds_left(u64::MAX, 0), 86_400);
     }
 
     #[test]

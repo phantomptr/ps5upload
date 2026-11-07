@@ -799,6 +799,20 @@ pub fn generate(crates: &Path) -> Result<Generated, String> {
         "required": ["error"],
     });
 
+    // Words the types cannot say (a field's upper bound), merged into a named schema.
+    if let Some(listed) = overrides["schemas"].as_object() {
+        for (name, extra) in listed {
+            match components_value.get_mut(name) {
+                Some(schema) => merge(schema, extra),
+                None => {
+                    return Err(format!(
+                        "api/overrides.json describes schema {name}, which no route uses"
+                    ))
+                }
+            }
+        }
+    }
+
     let tag_words = &overrides["tags"];
     let tag_list: Vec<Value> = tags
         .iter()

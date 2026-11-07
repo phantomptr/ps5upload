@@ -215,6 +215,20 @@ impl Levels {
         }
     }
 
+    /// An end more than [`MAX_RAISE_MS`] away is pulled in to that: the clock was set back since
+    /// the raise began, and without this the raise would outlast the cap by as much. True when
+    /// the end moved.
+    pub fn clamp_end(&mut self, now_ms: u64) -> bool {
+        let max = now_ms.saturating_add(MAX_RAISE_MS);
+        match self.until_ms {
+            Some(u) if u > max => {
+                self.until_ms = Some(max);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// A raise that has run out goes: raised levels fall back to `info`. True when anything changed.
     pub fn expire(&mut self, now_ms: u64) -> bool {
         if !self.raised() || self.raise_live(now_ms) {
@@ -285,14 +299,31 @@ pub fn levels() -> Levels {
     state().read().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
-/// Drop a raise that has run out. True when it did (the caller saves and tells people).
-pub fn expire_now() -> bool {
+/// What [`expire_now`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Expiry {
+    Unchanged,
+    /// The end was more than [`MAX_RAISE_MS`] away (the clock went back) and was pulled in.
+    EndPulledIn,
+    /// The raise ran out and was dropped.
+    RanOut,
+}
+
+/// Drop a raise that has run out, and pull in an end the clock left too far away. Anything but
+/// [`Expiry::Unchanged`] changed the setting (the caller saves it and tells people).
+pub fn expire_now() -> Expiry {
+    let now = now_ms();
     let mut l = levels();
-    if l.expire(now_ms()) {
-        set_levels(l);
-        true
+    let pulled = l.clamp_end(now);
+    let ran_out = l.expire(now);
+    if !pulled && !ran_out {
+        return Expiry::Unchanged;
+    }
+    set_levels(l);
+    if ran_out {
+        Expiry::RanOut
     } else {
-        false
+        Expiry::EndPulledIn
     }
 }
 
@@ -500,9 +531,30 @@ mod tests {
         // A raise that has run out writes nothing above info, before anyone expires it.
         set_levels(lv(Lv::Debug, &[], Some(now_ms() - 1)));
         assert!(!enabled(Lv::Debug, "rp"));
-        assert!(expire_now());
+        assert_eq!(expire_now(), Expiry::RanOut);
         assert_eq!(levels().level, Lv::Info);
+        assert_eq!(expire_now(), Expiry::Unchanged);
+        // The clock went back a week after a day's raise began: the end is pulled in to a day.
+        let far = now_ms() + 8 * MAX_RAISE_MS;
+        *state().write().unwrap() = lv(Lv::Debug, &[], Some(far));
+        assert_eq!(expire_now(), Expiry::EndPulledIn);
+        let u = levels().until_ms.unwrap();
+        assert!(u <= now_ms() + MAX_RAISE_MS && u + 60_000 > now_ms() + MAX_RAISE_MS);
+        assert_eq!(levels().level, Lv::Debug);
         set_levels(Levels::default());
+    }
+
+    #[test]
+    fn an_end_too_far_away_is_pulled_in() {
+        let now = 1_800_000_000_000;
+        let mut l = lv(Lv::Debug, &[], Some(now + 3 * MAX_RAISE_MS));
+        assert!(l.clamp_end(now));
+        assert_eq!(l.until_ms, Some(now + MAX_RAISE_MS));
+        assert!(!l.clamp_end(now));
+        let mut l = lv(Lv::Debug, &[], Some(u64::MAX));
+        // No overflow at the edge of the clock.
+        assert!(!l.clamp_end(u64::MAX - 5));
+        assert_eq!(l.until_ms, Some(u64::MAX));
     }
 
     #[test]

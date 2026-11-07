@@ -1894,18 +1894,18 @@ static int is_user_storage_path(const char *path) {
 /* fs.freespace's policy (mgmt_fs_policy_t): the mount holding `path` is an attached disk image. Its
  * source is an LVD/MD device, or for a nullfs of one (a title's /system_ex/app link) the mount it
  * views, followed to the image wherever that is mounted (image_mount.h). */
-static int mount_is_disk_image(const char *path) {
+static int image_mount_statfs(const char *path, char *fstype, size_t fstype_n, char *from,
+                              size_t from_n, void *ctx) {
     struct statfs s;
-    char at[sizeof s.f_mntfromname];
-    snprintf(at, sizeof at, "%s", path);
-    for (int hop = 0; hop <= IMAGE_MOUNT_MAX_HOPS; hop++) {
-        if (statfs(at, &s) != 0) return 0;
-        int kind = image_mount_kind(s.f_fstypename, s.f_mntfromname);
-        if (kind != IMAGE_MOUNT_FOLLOW) return kind == IMAGE_MOUNT_YES;
-        if (strcmp(at, s.f_mntfromname) == 0) return 0;
-        snprintf(at, sizeof at, "%s", s.f_mntfromname);
-    }
+    (void)ctx;
+    if (statfs(path, &s) != 0) return -1;
+    snprintf(fstype, fstype_n, "%.*s", (int)sizeof s.f_fstypename, s.f_fstypename);
+    snprintf(from, from_n, "%.*s", (int)sizeof s.f_mntfromname, s.f_mntfromname);
     return 0;
+}
+
+static int mount_is_disk_image(const char *path) {
+    return image_mount_walk(path, image_mount_statfs, NULL);
 }
 
 static int handle_fs_list_volumes(runtime_state_t *state) {

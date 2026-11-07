@@ -71,13 +71,22 @@ const MOD_MAGIC: u32 = 0x3C13_F4BF;
 const DIGEST_SITE: (usize, usize) = (0x510, 32);
 
 fn u16le(d: &[u8], at: usize) -> Option<u16> {
-    d.get(at..at + 2)?.try_into().ok().map(u16::from_le_bytes)
+    d.get(at..at.checked_add(2)?)?
+        .try_into()
+        .ok()
+        .map(u16::from_le_bytes)
 }
 fn u32le(d: &[u8], at: usize) -> Option<u32> {
-    d.get(at..at + 4)?.try_into().ok().map(u32::from_le_bytes)
+    d.get(at..at.checked_add(4)?)?
+        .try_into()
+        .ok()
+        .map(u32::from_le_bytes)
 }
 fn u64le(d: &[u8], at: usize) -> Option<u64> {
-    d.get(at..at + 8)?.try_into().ok().map(u64::from_le_bytes)
+    d.get(at..at.checked_add(8)?)?
+        .try_into()
+        .ok()
+        .map(u64::from_le_bytes)
 }
 
 /// Where the last byte a library's own headers describe ends: the SELF entry table, or an ELF's
@@ -247,13 +256,19 @@ pub fn param_site_from_header(header: &[u8]) -> Option<usize> {
     if elf.get(..4)? != b"\x7fELF" {
         return None;
     }
-    let phoff = u64le(elf, 0x20)? as usize;
+    // Every offset below comes from the file: checked, so a bad one is "cannot place", never an
+    // overflow.
+    let phoff = usize::try_from(u64le(elf, 0x20)?).ok()?;
     let phentsize = u16le(elf, 0x36)? as usize;
     let phnum = u16le(elf, 0x38)? as usize;
     let mut headers = Vec::with_capacity(phnum);
     for i in 0..phnum {
-        let at = phoff.checked_add(i * phentsize)?;
-        headers.push((u32le(elf, at)?, u64le(elf, at + 8)?, u64le(elf, at + 0x20)?));
+        let at = phoff.checked_add(i.checked_mul(phentsize)?)?;
+        headers.push((
+            u32le(elf, at)?,
+            u64le(elf, at.checked_add(8)?)?,
+            u64le(elf, at.checked_add(0x20)?)?,
+        ));
     }
     for (i, &(ptype, off, filesz)) in headers.iter().enumerate() {
         if ptype != PT_SCE_PROCPARAM && ptype != PT_SCE_MODULEPARAM {
@@ -263,19 +278,25 @@ pub fn param_site_from_header(header: &[u8]) -> Option<usize> {
             .iter()
             .find(|&&(id, _, sz)| id as usize == i && sz == filesz)
         {
-            return Some(o as usize);
+            return usize::try_from(o).ok();
         }
         if base == 0 {
-            return Some(off as usize);
+            return usize::try_from(off).ok();
         }
+        let Some(param_end) = off.checked_add(0x18) else {
+            continue;
+        };
         for (j, &(t2, off2, sz2)) in headers.iter().enumerate() {
-            if t2 == 1 && off2 <= off && off + 0x18 <= off2 + sz2 {
-                if let Some(&(_, o, _)) = entries
-                    .iter()
-                    .find(|&&(id, _, sz)| id as usize == j && sz == sz2)
-                {
-                    return Some((o + (off - off2)) as usize);
-                }
+            let inside =
+                t2 == 1 && off2 <= off && off2.checked_add(sz2).is_some_and(|end| param_end <= end);
+            if !inside {
+                continue;
+            }
+            if let Some(&(_, o, _)) = entries
+                .iter()
+                .find(|&&(id, _, sz)| id as usize == j && sz == sz2)
+            {
+                return usize::try_from(o.checked_add(off - off2)?).ok();
             }
         }
     }
@@ -1083,6 +1104,56 @@ mod tests {
         let a = self_with((0x0904_0001, 0x0400_0031), 0xAA, 0x11);
         let b = self_with((0x0904_0001, 0x0400_0031), 0xAA, 0x22);
         assert_ne!(code_id(&a), code_id(&b));
+    }
+
+    /// A header whose offsets run to the end of u64: no placement, and no overflow.
+    #[test]
+    fn header_offsets_near_the_end_of_u64_are_refused() {
+        fn put(d: &mut [u8], at: usize, v: &[u8]) {
+            d[at..at + v.len()].copy_from_slice(v);
+        }
+        // A bare ELF whose program headers start just before u64::MAX.
+        let mut elf = vec![0u8; 0x40];
+        put(&mut elf, 0, b"\x7fELF");
+        put(&mut elf, 0x20, &(u64::MAX - 4).to_le_bytes());
+        put(&mut elf, 0x36, &0x38u16.to_le_bytes());
+        put(&mut elf, 0x38, &2u16.to_le_bytes());
+        assert_eq!(param_site_from_header(&elf), None);
+
+        // A SELF: the param header sits inside a load segment that runs to u64::MAX, and the
+        // segment's entry starts just before u64::MAX, so its file offset cannot be added up.
+        let self_header = |param_off: u64, load_off: u64, load_size: u64, entry_off: u64| {
+            let mut d = vec![0u8; 0x40 + 0x40 + 2 * 0x38];
+            put(&mut d, 0, &SELF_MAGIC_PS5.to_le_bytes());
+            put(&mut d, 0x18, &1u16.to_le_bytes());
+            put(&mut d, 0x20, &(1u64 << 20).to_le_bytes()); // the entry for program header 1
+            put(&mut d, 0x28, &entry_off.to_le_bytes());
+            put(&mut d, 0x30, &load_size.to_le_bytes());
+            let e = 0x40;
+            put(&mut d, e, b"\x7fELF");
+            put(&mut d, e + 0x20, &0x40u64.to_le_bytes());
+            put(&mut d, e + 0x36, &0x38u16.to_le_bytes());
+            put(&mut d, e + 0x38, &2u16.to_le_bytes());
+            let ph = e + 0x40;
+            put(&mut d, ph, &PT_SCE_PROCPARAM.to_le_bytes());
+            put(&mut d, ph + 8, &param_off.to_le_bytes());
+            put(&mut d, ph + 0x20, &0x18u64.to_le_bytes());
+            put(&mut d, ph + 0x38, &1u32.to_le_bytes());
+            put(&mut d, ph + 0x38 + 8, &load_off.to_le_bytes());
+            put(&mut d, ph + 0x38 + 0x20, &load_size.to_le_bytes());
+            d
+        };
+        // Sane numbers place it: the entry's offset plus the param's place in the segment.
+        let ok = self_header(0x2000, 0x1000, 0x4000, 0x10_000);
+        assert_eq!(param_site_from_header(&ok), Some(0x11_000));
+        // The entry offset near u64::MAX.
+        let d = self_header(0x2000, 0x1000, u64::MAX - 0x1000, u64::MAX - 8);
+        assert_eq!(param_site_from_header(&d), None);
+        // The param header near u64::MAX (its end overflows), and a segment end that overflows.
+        let d = self_header(u64::MAX - 4, 0x1000, u64::MAX - 0x10, 0x10_000);
+        assert_eq!(param_site_from_header(&d), None);
+        let d = self_header(0x2000, 0x1000, u64::MAX, 0x10_000);
+        assert_eq!(param_site_from_header(&d), None);
     }
 
     #[test]

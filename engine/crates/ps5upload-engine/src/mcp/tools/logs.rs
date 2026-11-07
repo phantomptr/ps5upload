@@ -48,8 +48,13 @@ pub(super) fn tools() -> Vec<ToolDef> {
                     },
                     "merge": flag("Change only the categories named and keep the other \
                                    overrides. Without it, `categories` replaces them."),
-                    "minutes": whole("How long a raise above info lasts. Default 60, at most \
-                                      1440."),
+                    "minutes": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 1440,
+                        "description": "How long a raise above info lasts. Default 60, at most \
+                                        1440."
+                    },
                     "reset": flag("Back to info everywhere, no overrides, before the rest."),
                 }),
                 &[],

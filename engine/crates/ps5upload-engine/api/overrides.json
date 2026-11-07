@@ -990,5 +990,14 @@
   "transfer": "Uploads and downloads, as jobs.",
   "users": "Console users and profiles.",
   "workshop": "Package conversion, images, backporting and AMPR."
+ },
+ "schemas": {
+  "LevelReq": {
+   "properties": {
+    "minutes": {
+     "maximum": 1440
+    }
+   }
+  }
  }
 }

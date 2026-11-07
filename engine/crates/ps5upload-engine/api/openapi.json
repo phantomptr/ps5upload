@@ -6861,7 +6861,8 @@
             "type": "boolean"
           },
           "minutes": {
-            "description": "How long a raise lasts from now, in minutes (instead of `until_ms`).",
+            "description": "How long a raise lasts from now, in minutes (instead of `until_ms`): at most 1440, a day.",
+            "maximum": 1440,
             "minimum": 0,
             "type": [
               "integer",

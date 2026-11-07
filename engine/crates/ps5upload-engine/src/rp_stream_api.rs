@@ -479,23 +479,34 @@ fn note_decoder(host: &str, page: u64, mut ev: serde_json::Value) {
     if text.len() > 2048 {
         return;
     }
+    ev["unix_ms"] = unix_ms().into();
     let failed = ev
         .get("event")
         .and_then(|e| e.as_str())
         .is_some_and(|e| e.contains("error") || e.contains("fail"));
+    // Logged only while the session's list has room: a page that kept sending (one failing on
+    // every frame) would otherwise fill the log, and push the handshake out of the debug ring.
+    let mut kept = false;
+    note_last(|v| kept = keep_decoder_event(v, ev));
+    if !kept {
+        return;
+    }
     if failed {
         crate::log_at!(Warn, "rp", "rp_stream: {host}: page {page} decoder: {text}");
     } else {
         crate::log_at!(Info, "rp", "rp_stream: {host}: page {page} decoder: {text}");
     }
-    ev["unix_ms"] = unix_ms().into();
-    note_last(|v| {
-        if let Some(a) = v["decoder"].as_array_mut() {
-            if a.len() < DECODER_EVENTS {
-                a.push(ev);
-            }
+}
+
+/// Adds `ev` to a session's decoder list while it holds fewer than [`DECODER_EVENTS`]; true when added.
+fn keep_decoder_event(session: &mut serde_json::Value, ev: serde_json::Value) -> bool {
+    match session["decoder"].as_array_mut() {
+        Some(a) if a.len() < DECODER_EVENTS => {
+            a.push(ev);
+            true
         }
-    });
+        _ => false,
+    }
 }
 
 fn unix_ms() -> u64 {
@@ -2155,6 +2166,27 @@ mod slot_held_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_session_keeps_and_logs_only_its_first_decoder_events() {
+        let mut session = serde_json::json!({"decoder": []});
+        for i in 0..DECODER_EVENTS {
+            assert!(keep_decoder_event(
+                &mut session,
+                serde_json::json!({"event": "decode_error", "n": i})
+            ));
+        }
+        assert!(!keep_decoder_event(
+            &mut session,
+            serde_json::json!({"event": "decode_error"})
+        ));
+        assert_eq!(session["decoder"].as_array().unwrap().len(), DECODER_EVENTS);
+        // A session record without the list keeps nothing.
+        assert!(!keep_decoder_event(
+            &mut serde_json::json!({}),
+            serde_json::json!({"event": "configure"})
+        ));
+    }
 
     /// The session id (for a local script) is left out for a request not addressed to
     /// localhost; the rest, which the app reads, stays.

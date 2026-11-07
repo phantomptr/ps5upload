@@ -735,12 +735,9 @@ async fn log_requests(req: Request, next: Next) -> axum::response::Response {
     // failure still gets through: only this debug line is skipped, and the 5xx
     // path below is untouched.
     if !is_constant_poll(&path) {
-        // The access log: always kept (engine.log is the crash trace), whatever the level says.
-        engine_log::record_cat(
-            "debug",
-            "api",
-            format!("{method} {path} -> {status} ({ms}ms)"),
-        );
+        // The access log: always kept (engine.log is the crash trace), whatever the level says,
+        // in a ring of its own so requests never push other debug lines out of the tail.
+        engine_log::record_access(format!("{method} {path} -> {status} ({ms}ms)"));
     }
 
     // A console that is switched off answers every status poll with 502,

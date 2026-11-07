@@ -57,6 +57,13 @@ int main(void) {
     CHECK(apply("{\"level\":5,\"cats\":{},\"until_s\":0}", now) == 0);
     CHECK(!plog_on(PLOG_DEBUG, PLOG_RP));
 
+    /* A raise is never more than a day, whatever until_s says. */
+    CHECK(apply("{\"level\":4,\"cats\":{},\"until_s\":9999999}", now) == 0);
+    plog_describe(out, sizeof out, now);
+    CHECK(strstr(out, "\"until_s\":86400") != NULL);
+    plog_expire(now + 86401);
+    CHECK(!plog_on(PLOG_DEBUG, PLOG_RP));
+
     /* Bad bodies change nothing; an empty one only reads. */
     plog_reset();
     CHECK(apply("[1]", now) == -1);
