@@ -144,6 +144,23 @@ test.describe("a dialog and the notifications, folded", () => {
     const box = (await panel.boundingBox())!;
     expect(box.x + box.width).toBeLessThanOrEqual(466 - 93 + 1);
   });
+
+  test("the banner of a running stream, with its Stop, stays out from under the icons", async ({ page }) => {
+    await mockConsole(page);
+    await insets(page, { top: 44, right: 93, bottom: 20, left: 0 });
+    await page.goto("/play", { waitUntil: "domcontentloaded" });
+    await expect(page.getByRole("heading", { name: "Play", exact: true })).toBeVisible({ timeout: 30_000 });
+    await page.getByTestId("rp-start").click();
+    await expect(page.getByTestId("rp-stage")).toBeVisible();
+    await page.locator('[data-bottom-nav] a[href="/home"]').tap();
+    const banner = page.getByTestId("rp-banner");
+    await expect(banner).toBeVisible();
+    const box = (await banner.boundingBox())!;
+    expect(box.x + box.width).toBeLessThanOrEqual(466 - 93);
+    const stop = (await banner.getByRole("button", { name: "Stop" }).boundingBox())!;
+    expect(stop.x + stop.width).toBeLessThanOrEqual(466 - 93);
+    await page.screenshot({ path: "../output/playwright/rp-screens/Duo folded banner.png" });
+  });
 });
 
 // Read off a real one (#675): an open Duo held sideways has large insets top and bottom, which cut

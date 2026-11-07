@@ -6668,7 +6668,7 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "rp_picture_contrast": "Kontrast",
 "rp_picture_saturation": "Farbe",
 "rp_picture_crop": "Auf 21:9 zuschneiden",
-"rp_picture_crop_hint": "Schneidet die schwarzen Balken eines Spiels für Ultrawide-Bildschirme ab, damit es einen solchen Bildschirm füllt.",
+"rp_picture_crop_hint": "Schneidet oben und unten vom Bild ab, sodass es 21:9 wird. Nur für Spiele für Ultrawide-Bildschirme, die dort schwarze Balken haben: Bei allen anderen Spielen fehlt dann ein Teil des Bildes.",
 "rp_picture_pixelated": "Scharfe Pixel",
 "rp_picture_pixelated_hint": "Skaliert mit harten Kanten statt zu glätten: für Retro-Spiele.",
 "rp_picture_reset": "Bild zurücksetzen",

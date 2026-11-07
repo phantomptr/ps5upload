@@ -6679,7 +6679,7 @@ library_compressed_hint: "圧縮イメージのプレイには ShadowMount+ が�
 "rp_picture_contrast": "コントラスト",
 "rp_picture_saturation": "色",
 "rp_picture_crop": "21:9 に切り抜く",
-"rp_picture_crop_hint": "ウルトラワイド向けのゲームの黒帯を切り取り、ウルトラワイド画面いっぱいに表示します。",
+"rp_picture_crop_hint": "映像の上下を切り取って 21:9 にします。上下に黒帯があるウルトラワイド向けのゲーム専用です。それ以外のゲームでは映像の一部が欠けます。",
 "rp_picture_pixelated": "くっきりピクセル",
 "rp_picture_pixelated_hint": "なめらかにせず、角を立てて拡大します（レトロゲーム向け）。",
 "rp_picture_reset": "画質を元に戻す",

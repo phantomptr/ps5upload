@@ -6675,7 +6675,7 @@ library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para joga
 "rp_picture_contrast": "Contraste",
 "rp_picture_saturation": "Cor",
 "rp_picture_crop": "Recortar para 21:9",
-"rp_picture_crop_hint": "Corta as faixas pretas de um jogo feito para telas ultrawide, para que ele preencha uma tela assim.",
+"rp_picture_crop_hint": "Corta a parte de cima e de baixo da imagem para deixá-la em 21:9. Só para jogos feitos para telas ultrawide, que têm faixas pretas ali: qualquer outro jogo perde parte da imagem.",
 "rp_picture_pixelated": "Pixels nítidos",
 "rp_picture_pixelated_hint": "Amplia com bordas duras em vez de suavizar: para jogos retrô.",
 "rp_picture_reset": "Restaurar a imagem",

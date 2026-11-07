@@ -6613,7 +6613,7 @@ library_compressed_hint: "壓縮映像需要 ShadowMount+ 才能遊玩。如需�
 "rp_picture_contrast": "對比",
 "rp_picture_saturation": "色彩",
 "rp_picture_crop": "裁切為 21:9",
-"rp_picture_crop_hint": "裁掉為超寬螢幕製作的遊戲的黑邊，讓它填滿超寬螢幕。",
+"rp_picture_crop_hint": "裁掉畫面的頂部和底部，使其變為 21:9。僅適用於為超寬螢幕製作、上下有黑邊的遊戲：其他遊戲會缺少部分畫面。",
 "rp_picture_pixelated": "銳利像素",
 "rp_picture_pixelated_hint": "用硬邊緣放大而不平滑：適合復古遊戲。",
 "rp_picture_reset": "重設畫面",

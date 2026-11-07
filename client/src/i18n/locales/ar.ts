@@ -6660,7 +6660,7 @@ library_compressed_hint: "تحتاج الصور المضغوطة إلى ShadowMo
 "rp_picture_contrast": "التباين",
 "rp_picture_saturation": "الألوان",
 "rp_picture_crop": "قص إلى 21:9",
-"rp_picture_crop_hint": "يقص الأشرطة السوداء للعبة مصممة للشاشات فائقة العرض كي تملأ شاشة كهذه.",
+"rp_picture_crop_hint": "يقص أعلى الصورة وأسفلها لتصبح 21:9. فقط للألعاب المصممة للشاشات فائقة العرض التي فيها أشرطة سوداء هناك: أي لعبة أخرى تفقد جزءًا من صورتها.",
 "rp_picture_pixelated": "بكسلات حادة",
 "rp_picture_pixelated_hint": "يكبّر بحواف حادة بدل التنعيم: للألعاب القديمة.",
 "rp_picture_reset": "إعادة ضبط الصورة",

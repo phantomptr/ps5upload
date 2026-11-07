@@ -6677,7 +6677,7 @@ library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가
 "rp_picture_contrast": "대비",
 "rp_picture_saturation": "색",
 "rp_picture_crop": "21:9로 자르기",
-"rp_picture_crop_hint": "울트라와이드 화면용 게임의 검은 띠를 잘라 울트라와이드 화면을 채웁니다.",
+"rp_picture_crop_hint": "화면의 위아래를 잘라 21:9로 만듭니다. 위아래에 검은 띠가 있는 울트라와이드 화면용 게임에만 쓰세요. 다른 게임은 화면 일부가 잘립니다.",
 "rp_picture_pixelated": "선명한 픽셀",
 "rp_picture_pixelated_hint": "부드럽게 하지 않고 각진 가장자리로 확대합니다: 레트로 게임용.",
 "rp_picture_reset": "화면 초기화",

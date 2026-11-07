@@ -6676,7 +6676,7 @@ library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour
 "rp_picture_contrast": "Contraste",
 "rp_picture_saturation": "Couleur",
 "rp_picture_crop": "Recadrer en 21:9",
-"rp_picture_crop_hint": "Coupe les bandes noires d'un jeu fait pour les écrans ultralarges, pour qu'il remplisse un tel écran.",
+"rp_picture_crop_hint": "Coupe le haut et le bas de l'image pour la passer en 21:9. Uniquement pour les jeux faits pour les écrans ultralarges, qui ont des bandes noires à cet endroit : tout autre jeu perd une partie de son image.",
 "rp_picture_pixelated": "Pixels nets",
 "rp_picture_pixelated_hint": "Agrandit avec des bords nets au lieu de lisser : pour les jeux rétro.",
 "rp_picture_reset": "Réinitialiser l'image",

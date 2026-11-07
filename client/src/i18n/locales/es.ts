@@ -6613,7 +6613,7 @@ library_compressed_hint: "Las imágenes comprimidas necesitan ShadowMount+ para 
 "rp_picture_contrast": "Contraste",
 "rp_picture_saturation": "Color",
 "rp_picture_crop": "Recortar a 21:9",
-"rp_picture_crop_hint": "Quita las barras negras de un juego hecho para pantallas ultrapanorámicas, para que llene una de ellas.",
+"rp_picture_crop_hint": "Corta la parte superior e inferior de la imagen para dejarla en 21:9. Solo para juegos hechos para pantallas ultrapanorámicas, que ahí tienen barras negras: cualquier otro juego pierde parte de la imagen.",
 "rp_picture_pixelated": "Píxeles nítidos",
 "rp_picture_pixelated_hint": "Escala con bordes duros en vez de suavizar: para juegos retro.",
 "rp_picture_reset": "Restablecer la imagen",

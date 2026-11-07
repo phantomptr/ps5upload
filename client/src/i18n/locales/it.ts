@@ -6613,7 +6613,7 @@ library_compressed_hint: "Le immagini compresse richiedono ShadowMount+ per gioc
 "rp_picture_contrast": "Contrasto",
 "rp_picture_saturation": "Colore",
 "rp_picture_crop": "Ritaglia a 21:9",
-"rp_picture_crop_hint": "Toglie le bande nere di un gioco fatto per schermi ultrawide, così riempie uno schermo ultrawide.",
+"rp_picture_crop_hint": "Taglia la parte alta e bassa dell'immagine per portarla a 21:9. Solo per i giochi fatti per schermi ultrawide, che lì hanno bande nere: qualsiasi altro gioco perde parte dell'immagine.",
 "rp_picture_pixelated": "Pixel netti",
 "rp_picture_pixelated_hint": "Scala con bordi netti invece di sfumare: per i giochi retro.",
 "rp_picture_reset": "Ripristina l'immagine",

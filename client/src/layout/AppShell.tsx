@@ -1777,13 +1777,16 @@ export default function AppShell() {
           <NotificationInbox align="right" placement="below" variant="orb" />
         </div>
       </div>
-      <HelperVersionBanner />
-      <SessionBanner />
-      <RemotePlayBanner />
-      <MovedConsoleBanner />
-      <EngineDownBanner />
-      <AndroidLocalNetworkBanner />
-      <AndroidStorageAccessBanner />
+      {/* Clear of a column of system icons, as the page is (an iPhone Duo folded, #675). */}
+      <div className="shell-safe-x shrink-0">
+        <HelperVersionBanner />
+        <SessionBanner />
+        <RemotePlayBanner />
+        <MovedConsoleBanner />
+        <EngineDownBanner />
+        <AndroidLocalNetworkBanner />
+        <AndroidStorageAccessBanner />
+      </div>
 
       {/* Desktop: the sidebar runs to the window edge, the content beside it. */}
       <div className="shell-safe-x flex min-h-0 flex-1">

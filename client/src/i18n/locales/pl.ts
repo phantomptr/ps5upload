@@ -6901,7 +6901,7 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "rp_picture_contrast": "Kontrast",
 "rp_picture_saturation": "Kolor",
 "rp_picture_crop": "Przytnij do 21:9",
-"rp_picture_crop_hint": "Obcina czarne pasy gry stworzonej dla ekranów ultrawide, by wypełniła taki ekran.",
+"rp_picture_crop_hint": "Obcina górę i dół obrazu do proporcji 21:9. Tylko dla gier stworzonych dla ekranów ultrawide, które mają tam czarne pasy: każda inna gra traci część obrazu.",
 "rp_picture_pixelated": "Ostre piksele",
 "rp_picture_pixelated_hint": "Skaluje z ostrymi krawędziami zamiast wygładzać: do gier retro.",
 "rp_picture_reset": "Przywróć obraz",

@@ -6667,7 +6667,7 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "rp_picture_contrast": "Kontrast",
 "rp_picture_saturation": "Renk",
 "rp_picture_crop": "21:9'a kırp",
-"rp_picture_crop_hint": "Ultra geniş ekranlar için yapılmış bir oyunun siyah bantlarını keser, böylece ultra geniş ekranı doldurur.",
+"rp_picture_crop_hint": "Görüntünün üstünü ve altını keserek 21:9 yapar. Yalnızca ultra geniş ekranlar için yapılmış, orada siyah bantları olan oyunlar için: başka her oyun görüntüsünün bir kısmını kaybeder.",
 "rp_picture_pixelated": "Keskin pikseller",
 "rp_picture_pixelated_hint": "Yumuşatmak yerine sert kenarlarla ölçekler: retro oyunlar için.",
 "rp_picture_reset": "Görüntüyü sıfırla",

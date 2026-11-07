@@ -6956,7 +6956,7 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "rp_picture_contrast": "Kontraszt",
 "rp_picture_saturation": "Szín",
 "rp_picture_crop": "Vágás 21:9-re",
-"rp_picture_crop_hint": "Levágja az ultraszéles kijelzőkre készült játék fekete sávjait, hogy kitöltse az ilyen kijelzőt.",
+"rp_picture_crop_hint": "Levágja a kép tetejét és alját, hogy 21:9 legyen. Csak ultraszéles kijelzőkre készült játékokhoz, amelyeknél ott fekete sávok vannak: minden más játék a képe egy részét elveszíti.",
 "rp_picture_pixelated": "Éles pixelek",
 "rp_picture_pixelated_hint": "Simítás helyett éles szélekkel nagyít: retró játékokhoz.",
 "rp_picture_reset": "Kép visszaállítása",

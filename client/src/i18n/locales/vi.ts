@@ -6662,7 +6662,7 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "rp_picture_contrast": "Độ tương phản",
 "rp_picture_saturation": "Màu sắc",
 "rp_picture_crop": "Cắt về 21:9",
-"rp_picture_crop_hint": "Cắt bỏ viền đen của trò làm cho màn hình siêu rộng, để nó lấp đầy màn hình siêu rộng.",
+"rp_picture_crop_hint": "Cắt phần trên và dưới của hình để thành 21:9. Chỉ dành cho trò làm cho màn hình siêu rộng, vốn có viền đen ở đó: mọi trò khác sẽ mất một phần hình.",
 "rp_picture_pixelated": "Điểm ảnh sắc nét",
 "rp_picture_pixelated_hint": "Phóng to với cạnh sắc thay vì làm mịn: cho trò chơi cổ điển.",
 "rp_picture_reset": "Đặt lại hình ảnh",

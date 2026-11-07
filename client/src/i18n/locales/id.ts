@@ -6669,7 +6669,7 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "rp_picture_contrast": "Kontras",
 "rp_picture_saturation": "Warna",
 "rp_picture_crop": "Pangkas ke 21:9",
-"rp_picture_crop_hint": "Memotong bilah hitam game yang dibuat untuk layar ultrawide, agar memenuhi layar ultrawide.",
+"rp_picture_crop_hint": "Memotong bagian atas dan bawah gambar menjadi 21:9. Hanya untuk game yang dibuat untuk layar ultrawide, yang punya bilah hitam di sana: game lain kehilangan sebagian gambarnya.",
 "rp_picture_pixelated": "Piksel tajam",
 "rp_picture_pixelated_hint": "Memperbesar dengan tepi tegas, bukan dihaluskan: untuk game retro.",
 "rp_picture_reset": "Atur ulang gambar",
