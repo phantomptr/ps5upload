@@ -115,6 +115,7 @@ mod web_pages;
 mod webui;
 mod win_net;
 mod workshop_api;
+mod zstd_packs;
 
 #[cfg(test)]
 mod api_surface_tests;

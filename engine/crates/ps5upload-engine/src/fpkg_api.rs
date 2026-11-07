@@ -667,6 +667,17 @@ pub(crate) struct ExfatBuildReq {
     /// it fails to start from an image. On unless turned off.
     #[serde(default = "default_add_ampr_emu")]
     add_ampr_emu: bool,
+    /// Pack the game's files into zstd asset packs for ampr-emu-ng, which goes in the image: a
+    /// plain image of any format, not with LZ4 packs. A game in LZ4 packs is decoded on the way.
+    #[serde(default)]
+    ampr_zstd: Option<AmprZstdReq>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct AmprZstdReq {
+    /// 1 to 22; 5 when absent.
+    #[serde(default)]
+    level: Option<u8>,
 }
 
 fn default_add_ampr_emu() -> bool {
@@ -877,6 +888,26 @@ pub(crate) async fn exfat_build_handler(
             Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
         },
     };
+    let zstd_level =
+        match &req.ampr_zstd {
+            None => None,
+            Some(_) if compress || packs.is_some() || edited.is_some() => return json_err(
+                StatusCode::BAD_REQUEST,
+                "zstd asset packs go into a plain image, without .ffpfsc compression or LZ4 packs",
+            )
+            .into_response(),
+            Some(r) => {
+                let level = r.level.unwrap_or(5);
+                if !(1..=22).contains(&level) {
+                    return json_err(
+                        StatusCode::BAD_REQUEST,
+                        format!("zstd level {level} is not 1 to 22"),
+                    )
+                    .into_response();
+                }
+                Some(level)
+            }
+        };
     let named = match req.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
         Some(n) => {
             if let Some(why) = crate::folder_build::name_problem(n) {
@@ -960,7 +991,35 @@ pub(crate) async fn exfat_build_handler(
         if let Some(line) = signing.describe() {
             crate::log_info!("image build: {line}");
         }
-        if !check_packs && add_ampr_emu {
+        if zstd_level.is_some() {
+            if !ps5upload_fpkg::source::imports_ampr(&mut *tree, "eboot.bin") {
+                return Err(
+                    "this game does not read its files through AMPR, so nothing could serve \
+                     asset packs; compress it into a .ffpfsc instead"
+                        .to_string(),
+                );
+            }
+            // A packed game goes straight into the new packs.
+            tree = match ps5upload_fpkg::ampr_pack::image::Lz4Unpacked::open(tree)
+                .map_err(|e| format!("reading the game's LZ4 packs: {e}"))?
+            {
+                ps5upload_fpkg::ampr_pack::image::Unpacking::Decoded(decoded) => decoded,
+                ps5upload_fpkg::ampr_pack::image::Unpacking::NotPacked(plain) => plain,
+            };
+            if ps5_dump_forge_zstd::reader::detect(&*tree) {
+                tree = Box::new(
+                    ps5_dump_forge_zstd::reader::unpack(tree)
+                        .map_err(|e| format!("reading the game's zstd packs: {e}"))?,
+                );
+            }
+        } else if check_packs && ps5_dump_forge_zstd::reader::detect(&*tree) {
+            // The other way: the zstd packs decoded, for LZ4 packs to be made from them.
+            tree = Box::new(
+                ps5_dump_forge_zstd::reader::unpack(tree)
+                    .map_err(|e| format!("reading the game's zstd packs: {e}"))?,
+            );
+        }
+        if !check_packs && zstd_level.is_none() && add_ampr_emu {
             // A libSceAmpr game with no emulator fails to start from an image, and ShadowMount+
             // doesn't add one. Packs have their own choice below.
             if let Some(module) = ps5upload_fpkg::ampr_pack::image::emulator_needed_at(&mut *tree) {
@@ -1027,7 +1086,7 @@ pub(crate) async fn exfat_build_handler(
     // An uncompressed image is at least as large as the game: refused before the first write
     // rather than filling the drive and failing near the end. A compressed one or LZ4 packs may
     // well fit in less, so the screen warns and it goes ahead.
-    if !compress && packs.is_none() {
+    if !compress && packs.is_none() && zstd_level.is_none() {
         if let Some(why) = build::free_bytes(&out_dir)
             .and_then(|free| crate::folder_build::shortfall(free, total, &out_dir))
         {
@@ -1115,7 +1174,7 @@ pub(crate) async fn exfat_build_handler(
         sweep_output_leftovers(&out_dir);
         let mut tree = tree;
         // With LZ4 packs the build packs first; the stage list says so.
-        let stages: &[&str] = if packs.is_some() {
+        let stages: &[&str] = if packs.is_some() || zstd_level.is_some() {
             &["pack", "plan", "write", "verify"]
         } else {
             &["plan", "write", "verify"]
@@ -1146,6 +1205,16 @@ pub(crate) async fn exfat_build_handler(
             };
         let outcome = match (source_tree, &packs) {
             (Err(e), _) => Err(e),
+            (Ok(tree), None) if zstd_level.is_some() => crate::zstd_packs::build(
+                format,
+                zstd_level.unwrap_or(5),
+                tree,
+                &output,
+                mode,
+                verify_chunk,
+                &cancel,
+                &mut report,
+            ),
             (Ok(tree), Some(packs)) => crate::image_build::build_packed(
                 format,
                 tree,

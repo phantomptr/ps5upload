@@ -911,6 +911,7 @@ export async function browserInvoke<T>(
         keep_both: args["keepBoth"] ?? false,
         rebuild_ampr_index: args["rebuildAmprIndex"] ?? false,
         add_ampr_emu: args["addAmprEmu"] ?? true,
+        ampr_zstd: args["amprZstd"],
       });
     }
     case "folder_build": {

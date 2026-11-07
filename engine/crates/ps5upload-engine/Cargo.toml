@@ -41,6 +41,7 @@ ps5upload-pkg = { path = "../ps5upload-pkg" }
 ps5upload-fpkg = { path = "../ps5upload-fpkg" }
 ps5-dump-forge-ufs2 = { path = "../ps5-dump-forge-ufs2" }
 ps5-dump-forge-pfs = { path = "../ps5-dump-forge-pfs" }
+ps5-dump-forge-zstd = { path = "../ps5-dump-forge-zstd" }
 # Unpacks .lz4 links on their way to the console (link_lz4); same version and features as ps5upload-fpkg.
 lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }
 rust-embed = { version = "8", optional = true }

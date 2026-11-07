@@ -2404,6 +2404,8 @@ pub async fn exfat_build(
     rebuild_ampr_index: Option<bool>,
     // Add ampr_emu to a libSceAmpr game with no emulator; the engine's default (on) when absent.
     add_ampr_emu: Option<bool>,
+    // zstd asset packs: {level}. A plain image, not with ampr_lz4.
+    ampr_zstd: Option<JsonValue>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/exfat/build");
@@ -2423,6 +2425,7 @@ pub async fn exfat_build(
             "keep_both": keep_both.unwrap_or(false),
             "rebuild_ampr_index": rebuild_ampr_index.unwrap_or(false),
             "add_ampr_emu": add_ampr_emu.unwrap_or(true),
+            "ampr_zstd": ampr_zstd,
         }),
     )
     .await

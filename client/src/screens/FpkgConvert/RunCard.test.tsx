@@ -11,7 +11,7 @@ vi.mock("../../state/lang", () => ({
 }));
 
 import type { Pipeline } from "../../state/fpkgConversion";
-import { ImageChoice } from "./ImageOptions";
+import { ImageChoice, packOptions } from "./ImageOptions";
 import {
   RunCard,
   deleteLabel,
@@ -472,6 +472,10 @@ describe("RunCard", () => {
       onProfile: noop,
       installRuntime: false,
       onInstallRuntime: noop,
+      kind: "lz4",
+      onKind: noop,
+      zstdLevel: 5,
+      onZstdLevel: noop,
       ...over,
     });
     // The image's options live under ③ (ImageChoice); the run card only runs.
@@ -506,6 +510,23 @@ describe("RunCard", () => {
       expect(button(named, "Use the built-in profile")).not.toBeNull();
       expect(lz4Active("exfat", lz4({ on: true }))).toBe(true);
       expect(lz4Active("ffpkg", lz4({ on: true }))).toBe(false);
+    });
+
+    it("offers zstd on any plain image, needing no emulator of the game's own", () => {
+      const noEmulator = { runtime_version: null, refusal: "no emulator", kind: "runtime" as const };
+      const zstd = lz4({ on: true, kind: "zstd", readiness: noEmulator });
+      expect(lz4Active("ffpkg", zstd)).toBe(true);
+      expect(lz4Active("ffpkg", lz4({ on: true }))).toBe(false);
+      expect(idle("ffpkg", zstd)).toContain("zstd asset packs");
+      expect(idle("ffpkg", zstd)).not.toContain("AMPR LZ4 asset packs");
+      expect(checkbox(idle("exfat", zstd), "AMPR LZ4 asset packs")?.checked).toBe(false);
+      expect(checkbox(idle("exfat", zstd), "zstd asset packs")?.checked).toBe(true);
+      const notAmpr = lz4({ kind: "zstd", on: true, readiness: { refusal: "no", kind: "no_ampr" } });
+      expect(lz4Active("ffpkg", notAmpr)).toBe(false);
+      expect(idle("ffpkg", notAmpr)).not.toContain("zstd asset packs");
+      expect(packOptions("ffpkg", zstd)).toEqual({ zstdLevel: 5 });
+      expect(packOptions("ffpkg", lz4({ on: true }))).toBeUndefined();
+      expect(packOptions("exfat", lz4({ on: true }), "t")).toEqual({ profileToml: "t", installRuntime: false });
     });
 
     it("says why, and cannot be turned on, when the game's ampr_emu cannot serve packs", () => {

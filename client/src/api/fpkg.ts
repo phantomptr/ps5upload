@@ -76,6 +76,9 @@ export interface AmprLz4Options {
   profileToml?: string;
   /** Put ampr_emu 0.4.2.1 into the image when the game's own is missing or too old. */
   installRuntime?: boolean;
+  /** zstd packs at this level in place of LZ4 ones, in a plain image of any format; ampr-emu-ng
+   *  goes in the image. */
+  zstdLevel?: number;
 }
 
 export interface FpkgBuildRequest {
@@ -171,7 +174,8 @@ export const fpkg = {
       outputDir,
       format,
       compress,
-      amprLz4: lz4
+      amprZstd: lz4?.zstdLevel ? { level: lz4.zstdLevel } : undefined,
+      amprLz4: lz4 && !lz4.zstdLevel
         ? { level: lz4.level, profile_toml: lz4.profileToml, install_runtime: lz4.installRuntime ?? false }
         : undefined,
       verifyChunkKib,

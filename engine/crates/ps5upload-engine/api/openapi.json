@@ -408,6 +408,19 @@
         },
         "type": "object"
       },
+      "AmprZstdReq": {
+        "properties": {
+          "level": {
+            "description": "1 to 22; 5 when absent.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "AnnounceReq": {
         "properties": {
           "addr": {
@@ -3396,6 +3409,17 @@
               }
             ],
             "description": "Pack the game's files into AMPR LZ4 asset packs first (exFAT only, not with `compress`)."
+          },
+          "ampr_zstd": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AmprZstdReq"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pack the game's files into zstd asset packs for ampr-emu-ng, which goes in the image: a\nplain image of any format, not with LZ4 packs. A game in LZ4 packs is decoded on the way."
           },
           "compress": {
             "description": "Write the image straight into a `.ffpfsc` container (no uncompressed copy on disk).",

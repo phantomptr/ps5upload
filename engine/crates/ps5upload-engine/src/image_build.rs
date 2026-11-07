@@ -1258,6 +1258,72 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A game in LZ4 packs reads back as the game it was, a piece at a time as an image writer
+    /// and the zstd packer read it: what switching pack formats rests on.
+    #[test]
+    fn an_lz4_packed_image_reads_as_the_game_it_was() {
+        use ps5upload_fpkg::ampr_pack::image::{Lz4Unpacked, Unpacking};
+        let root = std::env::temp_dir().join(format!("ps5upload-imgu-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let src = ampr_game(&root);
+        let out = root.join("PPSA99999-app.exfat");
+        let mut tree = FolderSource::open(&src).unwrap();
+        build_packed(
+            ImageFormat::Exfat,
+            &mut tree,
+            &out,
+            &Lz4Packs {
+                profile: Some(ps5upload_fpkg::ampr_pack::default_profile(9, 16)),
+                level: 9,
+                block_shift: 16,
+            },
+            VerifyMode::Fast {
+                seed: 1,
+                seam: false,
+            },
+            DEFAULT_VERIFY_CHUNK,
+            &AtomicBool::new(false),
+            &mut |_, _, _| {},
+        )
+        .unwrap();
+        let image: Box<dyn SourceTree> =
+            Box::new(ps5upload_fpkg::exfat::ExFatSource::open(&out).unwrap());
+        let Unpacking::Decoded(mut game) = Lz4Unpacked::open(image).unwrap() else {
+            panic!("the image has packs");
+        };
+        let names: Vec<String> = game.files().iter().map(|f| f.path.clone()).collect();
+        assert!(
+            !names.iter().any(|n| n.starts_with("ampr_assets.")),
+            "{names:?}"
+        );
+        let mut source = FolderSource::open(&src).unwrap();
+        for f in source.files().to_vec() {
+            if f.path == ps5upload_fpkg::ampr_index::NAME {
+                continue;
+            }
+            let want = source.read(&f.path).unwrap();
+            let listed = game.files().iter().find(|g| g.path == f.path);
+            assert_eq!(listed.map(|g| g.size), Some(f.size), "{}", f.path);
+            assert_eq!(game.read(&f.path).unwrap(), want, "{}", f.path);
+            // Across a chunk's edge (64 KiB), in small pieces, as the packer's reads go.
+            let mut pieces = Vec::new();
+            let mut at = 0u64;
+            while at < f.size {
+                let piece = game.read_range(&f.path, at, 40_000).unwrap();
+                assert!(!piece.is_empty(), "{} at {at}", f.path);
+                at += piece.len() as u64;
+                pieces.extend(piece);
+            }
+            assert_eq!(pieces, want, "{} in pieces", f.path);
+        }
+        let plain: Box<dyn SourceTree> = Box::new(FolderSource::open(&src).unwrap());
+        assert!(matches!(
+            Lz4Unpacked::open(plain).unwrap(),
+            Unpacking::NotPacked(_)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// A PS4 game's image holds the param.json ShadowMount+ needs, and it survives the read-back
     /// (Alembic's console test: without it the game mounts and then won't start).
     #[test]

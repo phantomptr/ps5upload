@@ -243,6 +243,17 @@ pub(crate) fn release_runtime() -> Result<Vec<u8>, String> {
     )
 }
 
+/// ampr-emu-ng's release, which reads zstd packs.
+pub(crate) fn ng_runtime() -> Result<Vec<u8>, String> {
+    use crate::zstd_packs::{NG_SHA256, NG_URL, NG_VERSION};
+    fetch_pinned(
+        NG_URL,
+        NG_SHA256,
+        &format!("ampr-emu-ng-{NG_VERSION}-libSceAmpr.sprx"),
+        "ampr-emu-ng",
+    )
+}
+
 /// A file from the data dir's cache, fetched once and only kept or used when its SHA-256
 /// matches `sha`: what goes onto a console or into an image is exactly what was reviewed.
 fn fetch_pinned(url: &str, sha: &str, cache_name: &str, what: &str) -> Result<Vec<u8>, String> {

@@ -206,12 +206,11 @@ fn attach_console_image(addr: &str, image: &Path) -> Result<AmprEmuOutcome, Stri
     })
 }
 
+/// Writes files in the folder the game is in.
+type Put = dyn Fn(&[(String, Vec<u8>)]) -> Result<Vec<String>, String>;
+
 /// A folder on the console, or on this computer: in place.
-fn attach_folder(
-    source: &Path,
-    put: &dyn Fn(&[(String, Vec<u8>)]) -> Result<Vec<String>, String>,
-    folder: String,
-) -> Result<AmprEmuOutcome, String> {
+fn attach_folder(source: &Path, put: &Put, folder: String) -> Result<AmprEmuOutcome, String> {
     let mut tree = ps5upload_fpkg::source::open(source).map_err(|e| e.to_string())?;
     let module = needed(tree.as_mut())?;
     let runtime = crate::ampr_trace::release_runtime()?;

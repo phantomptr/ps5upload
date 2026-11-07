@@ -1,5 +1,5 @@
 import { Button, Toggle } from "../../components";
-import type { AmprPacksReadiness, FfpfscLevel, ImageFormat } from "../../api/fpkg";
+import type { AmprLz4Options, AmprPacksReadiness, FfpfscLevel, ImageFormat } from "../../api/fpkg";
 import { DEFAULT_VERIFY_CHUNK_KIB, VERIFY_CHUNK_KIB, useConvertPrefs } from "../../state/convertPrefs";
 import { useTr } from "../../state/lang";
 
@@ -19,33 +19,109 @@ export interface Lz4Choice {
   /** Install ampr_emu 0.4.2.1 into the image (offered when `readiness.kind` is `runtime`). */
   installRuntime: boolean;
   onInstallRuntime: (on: boolean) => void;
+  /** Which packs: LZ4 (plain exFAT only, the game's own emulator) or zstd (any plain image,
+   *  with ampr-emu-ng). */
+  kind: "lz4" | "zstd";
+  onKind: (kind: "lz4" | "zstd") => void;
+  zstdLevel: number;
+  onZstdLevel: (level: number) => void;
 }
+
+/** The zstd levels offered, as ps5-dump-forge offers them. */
+const ZSTD_LEVELS = [1, 5, 19];
 
 /** Packs are refused for this game unless the engine installs the runtime, which is on. */
 export function lz4Refused(lz4: Lz4Choice): string | null {
   if (!lz4.readiness.refusal) return null;
+  // zstd packs bring their own emulator: only a game that doesn't read through AMPR is out.
+  if (lz4.kind === "zstd" && lz4.readiness.kind !== "no_ampr") return null;
   if (lz4.readiness.kind === "runtime" && lz4.installRuntime) return null;
   return lz4.readiness.refusal;
 }
 
-/** Packing replaces .ffpfsc compression: the packs are already compressed, and the engine
- *  writes them into a plain exFAT image only. */
+/** What the build is told when packs are on, or nothing. Packing replaces .ffpfsc compression:
+ *  the packs are already compressed, so the image holding them is a plain one. */
+export function packOptions(
+  format: ImageFormat,
+  lz4: Lz4Choice | undefined,
+  profileToml?: string,
+): AmprLz4Options | undefined {
+  if (!lz4 || !lz4Active(format, lz4)) return undefined;
+  return lz4.kind === "zstd"
+    ? { zstdLevel: lz4.zstdLevel }
+    : { profileToml, installRuntime: lz4.installRuntime };
+}
+
+/** Whether a pack format is on for this image. */
 export function lz4Active(format: ImageFormat, lz4: Lz4Choice | undefined): boolean {
-  return format === "exfat" && !!lz4?.on && !lz4Refused(lz4);
+  return !!lz4?.on && (format === "exfat" || lz4.kind === "zstd") && !lz4Refused(lz4);
+}
+
+/** zstd packs, for any plain image of a game that reads through AMPR. */
+function ZstdOption({ lz4 }: { lz4: Lz4Choice }) {
+  const tr = useTr();
+  const on = lz4.on && lz4.kind === "zstd";
+  return (
+    <div className="space-y-1" data-testid="zstd-option">
+      <label className="flex cursor-pointer items-start gap-2.5 text-xs">
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={(e) => {
+            lz4.onKind("zstd");
+            lz4.onToggle(e.target.checked);
+          }}
+          className="checkbox mt-px h-4 w-4 shrink-0"
+        />
+        <span className="min-w-0">
+          <span className="block font-medium text-[var(--color-text)]">
+            {tr("fpkg.image.zstd", undefined, "zstd asset packs (smallest, for ShadowMount+)")}
+          </span>
+          <span className="mt-0.5 block leading-relaxed text-[var(--color-muted)]">
+            {tr(
+              "fpkg.image.zstd_body",
+              undefined,
+              "Packs all but the game's system files into zstd packs, written straight into the image with no temporary copy. The image gets quer3q's ampr-emu-ng 0.3.2 as its emulator, fetched once and checked against a known digest. A game already in LZ4 packs is switched over. Turn off update_emulators in ShadowMount+, or it can swap the emulator for one that can't read them.",
+            )}
+          </span>
+        </span>
+      </label>
+      {on && (
+        <label className="ms-6 flex items-center gap-2 text-xs">
+          <span>{tr("fpkg.image.zstd_level", undefined, "Compression level")}</span>
+          <select
+            value={lz4.zstdLevel}
+            onChange={(e) => lz4.onZstdLevel(Number(e.target.value))}
+            className="select w-auto!"
+            data-testid="zstd-level"
+          >
+            {ZSTD_LEVELS.map((l) => (
+              <option key={l} value={l}>
+                {l}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+    </div>
+  );
 }
 
 function Lz4Option({ lz4 }: { lz4: Lz4Choice }) {
   const tr = useTr();
-  const refusal = lz4Refused(lz4);
+  const refusal = lz4Refused({ ...lz4, kind: "lz4" });
   const kind = lz4.readiness.kind ?? (lz4.readiness.refusal ? "runtime" : "ok");
   return (
     <div className="space-y-1" data-testid="lz4-option">
       <label className="flex cursor-pointer items-start gap-2.5 text-xs">
         <input
           type="checkbox"
-          checked={lz4.on && !refusal}
+          checked={lz4.on && lz4.kind === "lz4" && !refusal}
           disabled={!!refusal}
-          onChange={(e) => lz4.onToggle(e.target.checked)}
+          onChange={(e) => {
+            lz4.onKind("lz4");
+            lz4.onToggle(e.target.checked);
+          }}
           className="checkbox mt-px h-4 w-4 shrink-0"
         />
         <span className="min-w-0">
@@ -115,7 +191,7 @@ function Lz4Option({ lz4 }: { lz4: Lz4Choice }) {
           </div>
         )
       )}
-      {lz4.on && !refusal && (
+      {lz4.on && lz4.kind === "lz4" && !refusal && (
         <div className="text-xs text-[var(--color-muted)]" data-testid="lz4-placement-note">
           {tr(
             "fpkg.image.lz4_placement_note",
@@ -124,7 +200,7 @@ function Lz4Option({ lz4 }: { lz4: Lz4Choice }) {
           )}
         </div>
       )}
-      {lz4.on && !refusal && (
+      {lz4.on && lz4.kind === "lz4" && !refusal && (
         <div className="flex flex-wrap items-center gap-2 text-xs">
           {lz4.profileName ? (
             <>
@@ -271,6 +347,7 @@ export function ImageChoice({
       {compress && !packing && <FfpfscLevelOption own={level} />}
       {lz4?.readiness.emulator_missing && !packing && <AmprEmuOption />}
       {lz4 && format === "exfat" && <Lz4Option lz4={lz4} />}
+      {lz4 && lz4.readiness.kind !== "no_ampr" && <ZstdOption lz4={lz4} />}
       <VerifyChunkOption />
     </div>
   );

@@ -114,6 +114,22 @@ fn readiness_for_packs(tree: &mut dyn SourceTree) -> Option<Readiness> {
     })
 }
 
+/// Where a game's emulator goes when a new one takes the place of any it has: its `fakelib2` when
+/// it has one, else its `fakelib`, in the game's own spelling.
+pub fn emulator_home(tree: &dyn SourceTree) -> String {
+    for dir in ["fakelib2", "fakelib"] {
+        let prefix = format!("{dir}/");
+        for file in tree.files() {
+            if let Some(found) = file.path.get(..prefix.len()) {
+                if found.eq_ignore_ascii_case(&prefix) {
+                    return format!("{found}libSceAmpr.sprx");
+                }
+            }
+        }
+    }
+    RUNTIME_MODULE.to_string()
+}
+
 /// Where an AMPR emulator has to go for a game that reads its files through libSceAmpr and ships
 /// no emulator; `None` for any other game. Without one the game fails to start from an image or
 /// folder (Alembic's console test: `APR_FATAL_ERROR_ASYNC`, or an abort in eboot.bin), and
@@ -122,6 +138,10 @@ pub fn emulator_needed_at(tree: &mut dyn SourceTree) -> Option<String> {
     if !crate::source::imports_ampr(tree, "eboot.bin") {
         return None;
     }
+    emulator_place(&*tree)
+}
+
+fn emulator_place(tree: &dyn SourceTree) -> Option<String> {
     let mut home = None;
     for dir in ["fakelib2", "fakelib"] {
         let prefix = format!("{dir}/");
@@ -140,6 +160,123 @@ pub fn emulator_needed_at(tree: &mut dyn SourceTree) -> Option<String> {
     }
     let home = home.unwrap_or_else(|| "fakelib/".to_string());
     Some(format!("{home}libSceAmpr.sprx"))
+}
+
+/// A game in LZ4 asset packs read as the game it was: every packed file by its own name, decoded
+/// chunk by chunk from the volumes, which are hidden with the rest of the pack set. Lets a packed
+/// game go straight into another pack format, with no copy on disk.
+pub struct Lz4Unpacked {
+    inner: Box<dyn SourceTree>,
+    reader: super::read::Reader,
+    files: Vec<SourceFile>,
+    packed: HashMap<String, usize>,
+    /// The chunk read last: reads run in small pieces, chunks in larger ones.
+    last: Option<(usize, u32, Vec<u8>)>,
+}
+
+/// What [`Lz4Unpacked::open`] made of a game.
+pub enum Unpacking {
+    Decoded(Box<Lz4Unpacked>),
+    /// It has no pack set: the game as it was given.
+    NotPacked(Box<dyn SourceTree>),
+}
+
+impl Lz4Unpacked {
+    /// `inner` decoded, when it has a pack set.
+    pub fn open(mut inner: Box<dyn SourceTree>) -> Result<Unpacking> {
+        let index_name = Config::default().index_name;
+        if !crate::source::lz4_packed(inner.as_mut())? {
+            return Ok(Unpacking::NotPacked(inner));
+        }
+        let reader = super::read::Reader::open(inner.as_mut(), &index_name)?;
+        let m = &reader.manifest;
+        let mut packed = HashMap::new();
+        let mut names = BTreeSet::new();
+        for id in 0..m.packs.len() {
+            names.insert(m.pack_name(id)?.to_ascii_lowercase());
+        }
+        let mut files: Vec<SourceFile> = inner
+            .files()
+            .iter()
+            .filter(|f| {
+                let lower = f.path.to_ascii_lowercase();
+                !names.contains(&lower) && !lower.starts_with(&index_name.to_ascii_lowercase())
+            })
+            .cloned()
+            .collect();
+        for (i, f) in m.files.iter().enumerate() {
+            if !f.packed() {
+                continue;
+            }
+            let path = m.path(i)?;
+            let path = path.strip_prefix("/app0/").unwrap_or(&path).to_string();
+            if !files
+                .iter()
+                .any(|known| known.path.eq_ignore_ascii_case(&path))
+            {
+                files.push(SourceFile {
+                    path: path.clone(),
+                    size: f.logical_size,
+                });
+                packed.insert(path, i);
+            }
+        }
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(Unpacking::Decoded(Box::new(Self {
+            inner,
+            reader,
+            files,
+            packed,
+            last: None,
+        })))
+    }
+}
+
+impl SourceTree for Lz4Unpacked {
+    fn files(&self) -> &[SourceFile] {
+        &self.files
+    }
+    fn empty_dirs(&self) -> &[String] {
+        self.inner.empty_dirs()
+    }
+    fn read(&mut self, path: &str) -> Result<Vec<u8>> {
+        match self.packed.get(path) {
+            Some(&i) => self.reader.read_file(i, self.inner.as_mut(), ""),
+            None => self.inner.read(path),
+        }
+    }
+    fn read_range(&mut self, path: &str, offset: u64, len: usize) -> Result<Vec<u8>> {
+        let Some(&i) = self.packed.get(path) else {
+            return self.inner.read_range(path, offset, len);
+        };
+        let f = &self.reader.manifest.files[i];
+        let size = f.logical_size;
+        let chunk_size = 1u64 << f.block_shift;
+        let end = offset.saturating_add(len as u64).min(size);
+        let mut out = Vec::with_capacity(end.saturating_sub(offset) as usize);
+        let mut at = offset;
+        while at < end {
+            let local = (at / chunk_size) as u32;
+            if !matches!(&self.last, Some((file, chunk, _)) if *file == i && *chunk == local) {
+                let raw = self.reader.read_chunk(i, local, self.inner.as_mut(), "")?;
+                self.last = Some((i, local, raw));
+            }
+            let Some((_, _, raw)) = &self.last else {
+                break;
+            };
+            let from = (at % chunk_size) as usize;
+            let take = raw.len().saturating_sub(from).min((end - at) as usize);
+            if take == 0 {
+                break;
+            }
+            out.extend_from_slice(&raw[from..from + take]);
+            at += take as u64;
+        }
+        Ok(out)
+    }
+    fn describe(&self) -> String {
+        format!("{} (LZ4 packs read)", self.inner.describe())
+    }
 }
 
 /// A game with the release ampr_emu in place of its own `fakelib/libSceAmpr.sprx` (kept as

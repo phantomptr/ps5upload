@@ -49,6 +49,7 @@ import { BROWSE_IMAGE_EXTENSIONS } from "../LocalImage/imageTypes";
 import { isRemotePath } from "../../lib/remotePath";
 import { MakeCard } from "./MakeCard";
 import { OptionsCard } from "./OptionsCard";
+import { packOptions } from "./ImageOptions";
 import { OutputChoice, RunCard, idleRun, lz4Active, type Lz4Choice, type RunCardProps } from "./RunCard";
 import { outputFor } from "../../lib/outputPlace";
 import { SwapJournals } from "./SwapJournals";
@@ -173,6 +174,8 @@ export default function WorkshopScreen() {
   const [lz4On, setLz4On] = useState(false);
   const [lz4Profile, setLz4Profile] = useState<{ name: string; text: string } | null>(null);
   const [lz4InstallRuntime, setLz4InstallRuntime] = useState(false);
+  const [packKind, setPackKind] = useState<"lz4" | "zstd">("lz4");
+  const [zstdLevel, setZstdLevel] = useState(5);
   const build: ConvertBuild =
     make === "image"
       ? { kind: "image", format: imageFormat, compress: imageCompress }
@@ -496,9 +499,7 @@ export default function WorkshopScreen() {
               deleteAfter,
             }
           : undefined,
-        lz4Active(build.format, lz4Choice)
-          ? { profileToml: lz4Profile?.text, installRuntime: lz4InstallRuntime }
-          : undefined,
+        packOptions(build.format, lz4Choice, lz4Profile?.text),
         password || undefined,
         out.keepBoth,
       );
@@ -618,6 +619,10 @@ export default function WorkshopScreen() {
         onProfile: setLz4Profile,
         installRuntime: lz4InstallRuntime,
         onInstallRuntime: setLz4InstallRuntime,
+        kind: packKind,
+        onKind: setPackKind,
+        zstdLevel,
+        onZstdLevel: setZstdLevel,
       }
     : undefined;
 
@@ -967,9 +972,7 @@ export default function WorkshopScreen() {
               const r = queueAdd(
                 source.trim(),
                 isLocalFolder,
-                build.kind === "image" && lz4Active(build.format, lz4Choice)
-                  ? { profileToml: lz4Profile?.text, installRuntime: lz4InstallRuntime }
-                  : undefined,
+                build.kind === "image" ? packOptions(build.format, lz4Choice, lz4Profile?.text) : undefined,
               );
               if (r === "not-image" || r === "not-folder" || r === "later-part") setError(skippedText(r, 1));
               else if (!r) setError(tr("cq_already", undefined, "This game is already in the queue."));

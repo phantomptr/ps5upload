@@ -12,6 +12,7 @@ members = [
   "crates/ps5upload-unrar",
   "crates/ps5-dump-forge-ufs2",
   "crates/ps5-dump-forge-pfs",
+  "crates/ps5-dump-forge-zstd",
 ]
 resolver = "2"
 
