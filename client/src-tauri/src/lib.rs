@@ -452,6 +452,7 @@ pub fn run() {
             commands::game_inspect_files,
             commands::fpkg_build,
             commands::fpkg_delete,
+            commands::fpkg_ampr_emu,
             commands::fpkg_ampr_index,
             commands::fpkg_estimate,
             commands::ps5_elfldr_health,
@@ -527,6 +528,7 @@ pub fn run() {
             // into the console. We never write SMP's files. See
             // commands/smp.rs.
             commands::smp_status,
+            commands::smp_rescan,
             // Edit sessions: check an image out of ShadowMount+ so its
             // contents can be changed, then put it back. See
             // `ps5upload_core::smp_checkout` for why an image has to be moved

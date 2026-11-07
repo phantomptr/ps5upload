@@ -41,6 +41,7 @@ ps5upload-pkg = { path = "../ps5upload-pkg" }
 ps5upload-fpkg = { path = "../ps5upload-fpkg" }
 ps5-dump-forge-ufs2 = { path = "../ps5-dump-forge-ufs2" }
 ps5-dump-forge-pfs = { path = "../ps5-dump-forge-pfs" }
+ps5-dump-forge-zstd = { path = "../ps5-dump-forge-zstd" }
 # Unpacks .lz4 links on their way to the console (link_lz4); same version and features as ps5upload-fpkg.
 lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }
 rust-embed = { version = "8", optional = true }
@@ -59,12 +60,13 @@ tower-http.workspace = true
 tower = { version = "0.5", default-features = false, features = ["util"] }
 uuid.workspace = true
 unicode-normalization = "0.1.25"
-suppaftp = { version = "12", default-features = false, features = ["tokio-rustls-ring"] }
+suppaftp = { version = "12", default-features = false, features = ["tokio-rustls-ring", "deprecated"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 # Public roots for the Play Together relay's wss:// (already in the tree through ureq).
 webpki-roots = "1"
 sha2 = "0.11"
+md-5 = "0.11"
 # Gzips the web UI and the guest pages (web_pages.rs). Already in the tree through russh.
 flate2 = "1"
 # Unpacks the pinned ffmpeg for Linux (BtbN's .tar.xz) for Go live (ffmpeg_tool.rs). Already in

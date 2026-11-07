@@ -239,10 +239,25 @@ pub fn open(path: &Path) -> Result<Box<dyn SourceTree>> {
             Box::new(std::fs::File::open(path)?),
             format!("ffpfs {}", path.display()),
         ),
-        "pkg" => Ok(Box::new(crate::pkg_source::open(
-            path,
-            crate::crypto::DEFAULT_PASSCODE,
-        )?)),
+        "pkg" => {
+            let mut magic = [0u8; 4];
+            let mut file = std::fs::File::open(path)?;
+            let ps4 = std::io::Read::read_exact(&mut file, &mut magic).is_ok()
+                && crate::ps4_pkg::is_ps4_magic(&magic);
+            if ps4 {
+                let len = file.metadata()?.len();
+                return Ok(Box::new(crate::ps4_pkg::Ps4Package::open(
+                    Box::new(file),
+                    len,
+                    crate::crypto::DEFAULT_PASSCODE,
+                    format!("pkg {}", path.display()),
+                )?));
+            }
+            Ok(Box::new(crate::pkg_source::open(
+                path,
+                crate::crypto::DEFAULT_PASSCODE,
+            )?))
+        }
         _ => format_err(format!(
             "{} is neither a folder nor a supported image (.exfat, .ffpkg, .ffpfs, .ffpfsc) or debug package (.pkg)",
             path.display()

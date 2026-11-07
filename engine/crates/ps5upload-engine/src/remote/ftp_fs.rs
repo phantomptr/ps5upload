@@ -268,19 +268,53 @@ impl rustls::client::danger::ServerCertVerifier for Tofu {
     }
 }
 
+/// The fingerprint of the certificate a TLS server at `addr` (`host:port`) shows. The handshake
+/// stops there, before anything is sent.
+pub(super) async fn certificate_fingerprint(addr: &str) -> Result<String, RemoteError> {
+    let seen = Arc::new(StdMutex::new(None));
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let config = rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
+        .with_safe_default_protocol_versions()
+        .map_err(|e| RemoteError::Io(e.to_string()))?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(Tofu {
+            accepted: None,
+            seen: Arc::clone(&seen),
+            provider,
+        }))
+        .with_no_client_auth();
+    let host = addr.rsplit_once(':').map_or(addr, |(h, _)| h);
+    let host = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
+    let name = rustls::pki_types::ServerName::try_from(host)
+        .map_err(|e| RemoteError::Io(format!("{addr}: {e}")))?;
+    let attempt = async {
+        let tcp = tokio::net::TcpStream::connect(addr)
+            .await
+            .map_err(|e| RemoteError::Unreachable(format!("{addr}: {e}")))?;
+        // It fails at the verifier, on purpose: all this wants is what it was shown.
+        let _ = tokio_rustls::TlsConnector::from(Arc::new(config))
+            .connect(name, tcp)
+            .await;
+        Ok(())
+    };
+    tokio::time::timeout(STEP, attempt)
+        .await
+        .map_err(|_| RemoteError::Io(format!("{addr}: no answer to TLS after 30 s")))??;
+    let shown = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    shown.ok_or_else(|| RemoteError::Io(format!("{addr}: the server showed no certificate")))
+}
+
+/// The port implicit FTPS listens on: TLS from the first byte, where other ports start in the
+/// clear and ask for it.
+const IMPLICIT_FTPS_PORT: u16 = 990;
+
 async fn sign_in(t: &Target) -> Result<Ftp, RemoteError> {
     let addr = addr_of(&t.conn);
-    let mut ftp = timed(&addr, "connecting", async {
-        Ftp::connect(addr.as_str())
-            .await
-            .map_err(|e| RemoteError::Unreachable(format!("{addr}: {e}")))
-    })
-    .await?;
-    // A NAS behind a router often names its private address for passive data; use the one
-    // we connected to instead.
-    ftp.set_passive_nat_workaround(true);
-    if t.tls {
-        let seen = Arc::new(StdMutex::new(None));
+    let seen: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
+    let connector = |seen: &Arc<StdMutex<Option<String>>>| -> Result<_, RemoteError> {
         let provider = Arc::new(rustls::crypto::ring::default_provider());
         // TLS 1.2: vsftpd (behind many NAS FTP servers) requires each data connection to resume
         // the control connection's TLS session, and that check fails under TLS 1.3 — curl
@@ -291,33 +325,63 @@ async fn sign_in(t: &Target) -> Result<Ftp, RemoteError> {
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(Tofu {
                 accepted: t.conn.host_key.clone(),
-                seen: Arc::clone(&seen),
+                seen: Arc::clone(seen),
                 provider,
             }))
             .with_no_client_auth();
-        let connector = suppaftp::tokio::AsyncRustlsConnector::from(
+        Ok(suppaftp::tokio::AsyncRustlsConnector::from(
             tokio_rustls::TlsConnector::from(Arc::new(config)),
-        );
-        let domain = addr.rsplit_once(':').map(|(h, _)| h).unwrap_or(&addr);
-        let domain = domain
-            .trim_start_matches('[')
-            .trim_end_matches(']')
-            .to_string();
-        let secured = tokio::time::timeout(STEP, ftp.into_secure(connector, &domain))
+        ))
+    };
+    let domain = addr.rsplit_once(':').map(|(h, _)| h).unwrap_or(&addr);
+    let domain = domain
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
+    // What a failed handshake means: a certificate to accept, or just a failure.
+    let tls_failed = |e: FtpError| {
+        let shown = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        match shown {
+            Some(fp) => host_key::check_host_key(t.conn.host_key.as_deref(), &fp)
+                .err()
+                .unwrap_or_else(|| RemoteError::Io(e.to_string())),
+            None => RemoteError::Io(format!("TLS: {e}")),
+        }
+    };
+    let implicit = t.tls && t.conn.port == IMPLICIT_FTPS_PORT;
+    let mut ftp = if implicit {
+        let connecting = Ftp::connect_secure_implicit(addr.as_str(), connector(&seen)?, &domain);
+        tokio::time::timeout(STEP, connecting)
+            .await
+            .map_err(|_| RemoteError::Unreachable(format!("{addr}: no answer after 30 s")))?
+            .map_err(tls_failed)?
+    } else {
+        timed(&addr, "connecting", async {
+            Ftp::connect(addr.as_str())
+                .await
+                .map_err(|e| RemoteError::Unreachable(format!("{addr}: {e}")))
+        })
+        .await?
+    };
+    // A NAS behind a router often names its private address for passive data; use the one
+    // we connected to instead.
+    ftp.set_passive_nat_workaround(true);
+    if implicit {
+        // The library secures only the control connection here; the data connections want this.
+        for command in ["PBSZ 0", "PROT P"] {
+            timed(&addr, "securing data", async {
+                ftp.custom_command(command, &[suppaftp::Status::CommandOk])
+                    .await
+                    .map_err(|e| map_err(&addr, e))
+            })
+            .await?;
+        }
+    }
+    if t.tls && !implicit {
+        let secured = tokio::time::timeout(STEP, ftp.into_secure(connector(&seen)?, &domain))
             .await
             .map_err(|_| RemoteError::Io(format!("{addr}: no answer to TLS after 30 s")))?;
-        ftp = match secured {
-            Ok(f) => f,
-            Err(e) => {
-                let shown = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                return Err(match shown {
-                    Some(fp) => host_key::check_host_key(t.conn.host_key.as_deref(), &fp)
-                        .err()
-                        .unwrap_or_else(|| RemoteError::Io(e.to_string())),
-                    None => RemoteError::Io(format!("TLS: {e}")),
-                });
-            }
-        };
+        ftp = secured.map_err(tls_failed)?;
     }
     let (user, pass) = if t.conn.user.is_empty() {
         ("anonymous".to_string(), "anonymous@".to_string())

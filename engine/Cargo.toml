@@ -12,13 +12,14 @@ members = [
   "crates/ps5upload-unrar",
   "crates/ps5-dump-forge-ufs2",
   "crates/ps5-dump-forge-pfs",
+  "crates/ps5-dump-forge-zstd",
 ]
 resolver = "2"
 
 [workspace.package]
 edition = "2021"
 license = "GPL-3.0-or-later"
-version = "11.3.0"
+version = "11.4.0"
 
 [workspace.dependencies]
 # AVA1 (github.com/phantomptr/ava1): the Rust crate from crates.io; the payload builds the C side

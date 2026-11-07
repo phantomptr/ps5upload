@@ -429,6 +429,14 @@ pub(crate) fn build(
     let mtime = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
+    // A PS4 game's folder needs the param.json ShadowMount+ reads, as its image does. The
+    // read-back adds the same file to the source opened again.
+    let mut ps4 =
+        ps5upload_fpkg::ps4_param::Ps4Params::wrap(&mut *tree).map_err(|e| e.to_string())?;
+    let tree: &mut dyn SourceTree = match ps4.as_mut() {
+        Some(p) => p,
+        None => tree,
+    };
     if let Some(mut indexed) = crate::image_build::AmprIndexed::wrap_at(&mut *tree, mtime)? {
         return build_tree(
             &mut indexed,
@@ -498,13 +506,19 @@ fn build_tree(
         }
 
         let mut fresh = reopen()?;
+        let mut ps4 =
+            ps5upload_fpkg::ps4_param::Ps4Params::wrap(&mut *fresh).map_err(|e| e.to_string())?;
+        let plain: &mut dyn SourceTree = match ps4.as_mut() {
+            Some(p) => p,
+            None => &mut *fresh,
+        };
         let mut indexed = match index_mtime {
-            Some(m) => crate::image_build::AmprIndexed::wrap_at(&mut *fresh, m)?,
+            Some(m) => crate::image_build::AmprIndexed::wrap_at(&mut *plain, m)?,
             None => None,
         };
         let source: &mut dyn SourceTree = match indexed.as_mut() {
             Some(i) => i,
-            None => &mut *fresh,
+            None => plain,
         };
         let summary = verify(
             &partial,

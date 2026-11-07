@@ -78,7 +78,7 @@ fn is_unsigned(head: &[u8]) -> bool {
 
 /// The executables (by extension) that are unsigned PS5 ELFs, in `files()` order; `fakelib/`
 /// and `fakelib2/` included, the loader loads them too.
-fn unsigned(tree: &mut dyn SourceTree) -> Vec<String> {
+pub fn unsigned(tree: &mut dyn SourceTree) -> Vec<String> {
     let paths: Vec<String> = tree
         .files()
         .iter()

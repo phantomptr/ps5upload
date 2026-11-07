@@ -323,6 +323,54 @@
         ],
         "type": "object"
       },
+      "AmprEmuOutcome": {
+        "properties": {
+          "folder": {
+            "description": "Where the files went.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "`folder`: added to the game's own folder. `backport`: a backport folder for an image.",
+            "type": "string"
+          },
+          "rescanned": {
+            "description": "Whether ShadowMount+ was asked to scan again (a console's image only).",
+            "type": "boolean"
+          },
+          "written": {
+            "description": "What was written, relative to `folder`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "folder",
+          "written",
+          "rescanned"
+        ],
+        "type": "object"
+      },
+      "AmprEmuReq": {
+        "properties": {
+          "build": {
+            "description": "Which emulator: `ampr_emu` (the default) or `ampr-emu-ng`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "type": "object"
+      },
       "AmprIndexReq": {
         "properties": {
           "source": {
@@ -361,6 +409,19 @@
             "description": "A profile in drakmor's `ampr_pack` TOML format, used in place of the built-in one.",
             "type": [
               "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "AmprZstdReq": {
+        "properties": {
+          "level": {
+            "description": "1 to 22; 5 when absent.",
+            "minimum": 0,
+            "type": [
+              "integer",
               "null"
             ]
           }
@@ -3341,6 +3402,17 @@
       },
       "ExfatBuildReq": {
         "properties": {
+          "add_ampr_emu": {
+            "description": "Add ampr_emu to a game that reads through libSceAmpr and ships no emulator: without one\nit fails to start from an image. On unless turned off.",
+            "type": "boolean"
+          },
+          "ampr_emu_build": {
+            "description": "Which emulator: `ampr_emu` (the default) or `ampr-emu-ng`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "ampr_lz4": {
             "anyOf": [
               {
@@ -3351,6 +3423,17 @@
               }
             ],
             "description": "Pack the game's files into AMPR LZ4 asset packs first (exFAT only, not with `compress`)."
+          },
+          "ampr_zstd": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AmprZstdReq"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pack the game's files into zstd asset packs for ampr-emu-ng, which goes in the image: a\nplain image of any format, not with LZ4 packs. A game in LZ4 packs is decoded on the way."
           },
           "compress": {
             "description": "Write the image straight into a `.ffpfsc` container (no uncompressed copy on disk).",
@@ -5905,6 +5988,13 @@
               "null"
             ]
           },
+          "content_version": {
+            "description": "The version it says it is: `contentVersion`, or a PS4 game's `APP_VER`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "files": {
             "minimum": 0,
             "type": "integer"
@@ -5922,6 +6012,10 @@
             "minimum": 0,
             "type": "integer"
           },
+          "ps4_game": {
+            "description": "A PS4 game: it becomes an image or a folder, not a PS5 package.",
+            "type": "boolean"
+          },
           "required_firmware": {
             "type": [
               "string",
@@ -5936,6 +6030,11 @@
               "string",
               "null"
             ]
+          },
+          "unsigned_executables": {
+            "description": "How many of its executables are plain ELF files, which a build fake-signs.",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
@@ -5948,7 +6047,10 @@
           "planned_size",
           "output_free",
           "checks",
-          "ampr_packs"
+          "ampr_packs",
+          "unsigned_executables",
+          "ps4_game",
+          "content_version"
         ],
         "type": "object"
       },
@@ -9590,7 +9692,8 @@
           "ftps",
           "sftp",
           "webdav",
-          "webdavs"
+          "webdavs",
+          "nfs"
         ],
         "type": "string"
       },
@@ -9845,6 +9948,10 @@
       "Readiness": {
         "description": "Whether a libSceAmpr title can be packed, as the Convert screen shows it.",
         "properties": {
+          "emulator_missing": {
+            "description": "The game reads through AMPR and ships no emulator at all: it may not start from an image\nor folder without one, packs or not ([`emulator_needed_at`]).",
+            "type": "boolean"
+          },
           "kind": {
             "description": "`ok`; `runtime` (the game's ampr_emu is missing or too old: installing\n[`RUNTIME_VERSION`] into the image makes packs possible); `no_ampr` (the game does not\nread through AMPR, so nothing could serve packs: .ffpfsc is its compression).",
             "type": "string"
@@ -9867,7 +9974,8 @@
         "required": [
           "runtime_version",
           "refusal",
-          "kind"
+          "kind",
+          "emulator_missing"
         ],
         "type": "object"
       },
@@ -19592,6 +19700,53 @@
             "id_field": "job_id",
             "status": "/api/jobs/{id}"
           },
+          "response_schema": "struct"
+        }
+      }
+    },
+    "/api/fpkg/ampr-emu": {
+      "post": {
+        "description": "POST /api/fpkg/ampr-emu `{source}`: the emulator added to a game where it stands.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AmprEmuReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AmprEmuOutcome"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The emulator added to a game where it stands",
+        "tags": [
+          "workshop"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
           "response_schema": "struct"
         }
       }
@@ -36973,6 +37128,74 @@
             "required": true
           },
           "response_schema": "struct"
+        }
+      }
+    },
+    "/api/ps5/smp/rescan": {
+      "post": {
+        "description": "POST /api/ps5/smp/rescan?addr= — ask ShadowMount+ to scan again now, with its retry counters\ncleared, so a new image of a game is picked up without deleting the game from the home screen.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Ask ShadowMount+ to scan again now, with its retry counters cleared, so a new image of a game is picked up without deleting the game from the home screen",
+        "tags": [
+          "shadowmount"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "literal"
         }
       }
     },

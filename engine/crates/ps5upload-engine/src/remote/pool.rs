@@ -78,6 +78,7 @@ impl Connector for RealConnector {
             Protocol::Webdav | Protocol::Webdavs => Ok(Arc::new(
                 super::webdav_fs::WebdavFs::connect(conn, secret).await?,
             )),
+            Protocol::Nfs => Ok(Arc::new(super::nfs_fs::NfsFs::connect(conn).await?)),
         }
     }
 }

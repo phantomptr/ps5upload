@@ -79,7 +79,7 @@ test("phone width: row names show, ⋮ opens the row's actions, the selection ba
 
   // Rename from the menu opens the row's rename field, as the desktop button does.
   await more.click();
-  await menu.getByRole("menuitem", { name: "Rename" }).click();
+  await menu.getByRole("menuitem", { name: "Rename", exact: true }).click();
   await expect(main.locator(`input[value="${LONG}"]`)).toBeVisible();
   await page.keyboard.press("Escape");
 

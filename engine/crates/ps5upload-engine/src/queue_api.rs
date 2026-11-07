@@ -2,7 +2,8 @@
 //!
 //! One line per console, kept in `<data dir>/engine-queue.json`, shared by every client of this
 //! engine. An item is one call of an existing route (`/api/transfer/*`, `/api/link/download`,
-//! `/api/pkg/install`) followed through `/api/jobs/{id}`, so there is no second way to move bytes.
+//! `/api/pkg/install`, and Convert's `/api/exfat/build`, `/api/fpkg/build`, `/api/folder/build`, so
+//! a chain of convert-then-send runs unattended) followed through `/api/jobs/{id}`, so there is no second way to move bytes.
 //!
 //! Rules a client can rely on:
 //! - In order, one at a time per console; different consoles run side by side.
@@ -80,11 +81,18 @@ pub(crate) enum ItemKind {
     Download,
     #[serde(rename = "install")]
     Install,
+    #[serde(rename = "image_build")]
+    ImageBuild,
+    #[serde(rename = "package_build")]
+    PackageBuild,
+    #[serde(rename = "folder_build")]
+    FolderBuild,
 }
 
 /// The kinds, by the names a client uses.
 const KIND_NAMES: &str = "upload_file, upload_dir, upload_zip, upload_7z, upload_rar, \
-                          upload_file_list, link_download, download, install";
+                          upload_file_list, link_download, download, install, image_build, \
+                          package_build, folder_build";
 
 impl ItemKind {
     fn parse(name: &str) -> Option<Self> {
@@ -102,6 +110,9 @@ impl ItemKind {
             ItemKind::LinkDownload => "/api/link/download",
             ItemKind::Download => "/api/transfer/download",
             ItemKind::Install => "/api/pkg/install",
+            ItemKind::ImageBuild => "/api/exfat/build",
+            ItemKind::PackageBuild => "/api/fpkg/build",
+            ItemKind::FolderBuild => "/api/folder/build",
         }
     }
 
@@ -115,7 +126,14 @@ impl ItemKind {
 
     /// The route takes a `tx_id`, so a stopped run picks up where it was.
     fn resumes(self) -> bool {
-        !matches!(self, ItemKind::Install | ItemKind::Download)
+        !matches!(
+            self,
+            ItemKind::Install
+                | ItemKind::Download
+                | ItemKind::ImageBuild
+                | ItemKind::PackageBuild
+                | ItemKind::FolderBuild
+        )
     }
 
     /// The route's own request type reads it. A mistake is refused when the item is added, not
@@ -139,6 +157,9 @@ impl ItemKind {
             ItemKind::LinkDownload => reads::<crate::LinkDownloadReq>(body),
             ItemKind::Download => reads::<crate::TransferDownloadReq>(body),
             ItemKind::Install => reads::<crate::install::InstallRequest>(body),
+            ItemKind::ImageBuild => reads::<crate::fpkg_api::ExfatBuildReq>(body),
+            ItemKind::PackageBuild => reads::<crate::fpkg_api::BuildReq>(body),
+            ItemKind::FolderBuild => reads::<crate::fpkg_api::FolderBuildReq>(body),
         }
     }
 }
@@ -324,6 +345,7 @@ fn default_label(kind: ItemKind, body: &Value) -> String {
         ItemKind::UploadFileList => field("dest_root"),
         ItemKind::LinkDownload => field("url"),
         ItemKind::Download => field("src_path"),
+        ItemKind::ImageBuild | ItemKind::PackageBuild | ItemKind::FolderBuild => field("source"),
     }
     .unwrap_or("");
     let plain = whole.strip_suffix("?...").unwrap_or(whole);
@@ -1198,7 +1220,8 @@ fn job_end(state: &Value) -> Option<End> {
         "done" => Some(End::with_status(Status::Done)),
         "failed" => {
             let error = field("error").unwrap_or("the job failed");
-            if error == "transfer_cancelled" {
+            // A build's own word for it.
+            if error == "transfer_cancelled" || error == "cancelled" {
                 return Some(End {
                     code: Some("cancelled".to_string()),
                     ..End::with_status(Status::Cancelled)

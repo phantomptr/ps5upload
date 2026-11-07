@@ -15,6 +15,7 @@
 //! The API is the route table in `build_app`, plus the sub-routers it merges.
 
 mod activity;
+mod ampr_emu_api;
 mod ampr_index_api;
 mod ampr_trace;
 mod api_errors;
@@ -114,6 +115,7 @@ mod web_pages;
 mod webui;
 mod win_net;
 mod workshop_api;
+mod zstd_packs;
 
 #[cfg(test)]
 mod api_surface_tests;
@@ -4762,6 +4764,32 @@ async fn ps5_smp_status(
             .and_then(|r| r);
     match r {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+/// POST /api/ps5/smp/rescan?addr= — ask ShadowMount+ to scan again now, with its retry counters
+/// cleared, so a new image of a game is picked up without deleting the game from the home screen.
+async fn ps5_smp_rescan(
+    State(state): State<AppState>,
+    Query(q): Query<AddrQuery>,
+) -> impl IntoResponse {
+    let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
+    let done = tokio::task::spawn_blocking(move || {
+        let (api, _) = ps5upload_core::smp_api::SmpApi::probe(&addr).ok_or_else(|| {
+            anyhow::anyhow!(
+                "ShadowMount+'s API doesn't answer from this computer: it needs ShadowMount+ \
+                 1.7 or later running, with api_enabled on and api_bind_address open to the \
+                 network in /data/shadowmount/config.ini"
+            )
+        })?;
+        api.rescan()
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r);
+    match done {
+        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
@@ -11750,6 +11778,7 @@ fn build_app_and_mcp(
         .route("/api/fpkg/inspect", post(fpkg_api::fpkg_inspect_handler))
         .route("/api/fpkg/build", post(fpkg_api::fpkg_build_handler))
         .route("/api/fpkg/delete", post(fpkg_api::fpkg_delete_handler))
+        .route("/api/fpkg/ampr-emu", post(ampr_emu_api::ampr_emu_handler))
         .route(
             "/api/fpkg/ampr-index",
             post(ampr_index_api::ampr_index_handler),
@@ -12292,6 +12321,7 @@ fn build_app_and_mcp(
         .route("/api/ps5/screenshots/list", get(ps5_screenshots_list))
         .route("/api/ps5/videos/list", get(ps5_videos_list))
         .route("/api/ps5/smp/status", get(ps5_smp_status))
+        .route("/api/ps5/smp/rescan", post(ps5_smp_rescan))
         .route("/api/ps5/smp/checkout", get(ps5_smp_checkout_status))
         .route("/api/ps5/smp/checkout/begin", post(ps5_smp_checkout_begin))
         .route(

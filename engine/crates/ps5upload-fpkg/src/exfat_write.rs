@@ -598,6 +598,21 @@ pub fn write_exfat<W: Write>(
     on_progress: &mut dyn FnMut(u64, u64),
     cancelled: &dyn Fn() -> bool,
 ) -> Result<u64> {
+    write_exfat_after(plan, source, w, 0, on_progress, cancelled)
+}
+
+/// [`write_exfat`] for a writer that drops the image's first `skip` bytes because they are on disk
+/// already: a file that ends before them isn't read, only stands in as zeros, so going on after a
+/// crash costs what is left. The image is the same bytes: its layout and serial follow from the
+/// files alone.
+pub fn write_exfat_after<W: Write>(
+    plan: &ExfatPlan,
+    source: &mut dyn SourceTree,
+    w: &mut W,
+    skip: u64,
+    on_progress: &mut dyn FnMut(u64, u64),
+    cancelled: &dyn Fn() -> bool,
+) -> Result<u64> {
     let (tree, l, used) = (&plan.tree, &plan.l, plan.used);
     let total = plan.data_bytes;
     let boot = boot_region(l, tree.nodes[0].first_cluster, used);
@@ -657,6 +672,16 @@ pub fn write_exfat<W: Write>(
     for &f in &l.files {
         let (src, size) = (tree.nodes[f].src.clone(), tree.nodes[f].size);
         let mut at = 0u64;
+        if skip > 0 && size > 0 {
+            let first = u64::from(tree.nodes[f].first_cluster);
+            let start = l.heap_sectors * SECTOR + (first - u64::from(FIRST_CLUSTER)) * l.cluster;
+            if start + tree.nodes[f].clusters * l.cluster <= skip {
+                zeros(w, tree.nodes[f].clusters * l.cluster)?;
+                done += size;
+                on_progress(done, total);
+                continue;
+            }
+        }
         while at < size {
             if cancelled() {
                 return Err(Error::Cancelled);

@@ -260,6 +260,24 @@ export function GameCard(props: GameCardProps) {
               {fw ? " · " : ""}
               {tr("fpkg.checksPassed", { count: passed.length }, "{count} checks passed")}
             </div>
+            {inspection.ps4_game && (
+              <div className="text-xs text-[var(--color-muted)]" data-testid="ps4-game-note">
+                {tr(
+                  "fpkg.ps4_game_note",
+                  undefined,
+                  "A PS4 game. It converts to a game image or a folder, and gets the param.json ShadowMount+ needs. It can't become a PS5 package.",
+                )}
+              </div>
+            )}
+            {!!inspection.unsigned_executables && (
+              <div className="text-xs text-[var(--color-muted)]" data-testid="fake-sign-note">
+                {tr(
+                  "fpkg.fake_sign_note",
+                  { count: inspection.unsigned_executables },
+                  "{count} plain (unsigned) executables in this game get fake-signed as it converts, or it wouldn't start. The source isn't changed.",
+                )}
+              </div>
+            )}
             {warnings.map((c) => (
               <div key={c.name} className="text-[var(--color-warn)]">
                 {c.name}: {c.detail}

@@ -16,7 +16,7 @@
 //! so it is normally read once.
 
 use std::collections::HashMap;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Seek as _, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -741,6 +741,104 @@ impl Planned {
     }
 }
 
+/// How much of a plain exFAT image gets written between checkpoints.
+const CHECKPOINT: u64 = 1 << 30;
+
+/// A checkpoint older than this is given up on: its partial image goes in the next sweep.
+pub(crate) const RESUME_KEPT: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 3600);
+
+/// What a build left to go on from after a crash, `<output>.partial.resume`. Only a plain exFAT
+/// image: its layout follows from the files alone and it is written front to back. A cancel or a
+/// failed build removes it with the partial file; only a crash or a killed engine leaves one.
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+struct Checkpoint {
+    /// The files and the layout; another game or another plan starts over.
+    key: String,
+    /// The bytes on disk for certain.
+    done: u64,
+}
+
+pub(crate) fn checkpoint_path(partial: &Path) -> PathBuf {
+    let mut name = partial.file_name().unwrap_or_default().to_os_string();
+    name.push(".resume");
+    partial.with_file_name(name)
+}
+
+fn plan_key(sizes: &HashMap<String, u64>, image_size: u64) -> String {
+    let mut rows: Vec<_> = sizes.iter().collect();
+    rows.sort();
+    let mut h = blake3::Hasher::new();
+    h.update(&image_size.to_le_bytes());
+    for (path, size) in rows {
+        h.update(path.as_bytes());
+        h.update(&size.to_le_bytes());
+    }
+    h.finalize().to_hex().to_string()
+}
+
+/// Where to go on from, when the partial file holds what its checkpoint says for this plan.
+fn resume_point(partial: &Path, key: &str) -> Option<u64> {
+    let saved: Checkpoint =
+        serde_json::from_slice(&std::fs::read(checkpoint_path(partial)).ok()?).ok()?;
+    let on_disk = std::fs::metadata(partial).ok()?.len();
+    (saved.key == key && saved.done > 0 && saved.done <= on_disk).then_some(saved.done)
+}
+
+/// Drops the first `skip` bytes it is given, writes the rest, and every [`CHECKPOINT`] makes them
+/// durable and says so in the checkpoint file.
+struct CheckpointWriter<'a> {
+    out: BufWriter<&'a mut std::fs::File>,
+    skip: u64,
+    pos: u64,
+    since: u64,
+    path: PathBuf,
+    key: String,
+    every: u64,
+}
+
+impl CheckpointWriter<'_> {
+    fn checkpoint(&mut self) -> std::io::Result<()> {
+        self.out.flush()?;
+        self.out.get_ref().sync_data()?;
+        self.since = 0;
+        // Only worth having, not needed: a locked file costs a later resume, not this build.
+        let saved = serde_json::to_vec(&Checkpoint {
+            key: self.key.clone(),
+            done: self.pos,
+        })
+        .map_err(std::io::Error::other)
+        .and_then(|bytes| {
+            let tmp = self.path.with_extension("resume.tmp");
+            std::fs::write(&tmp, bytes)?;
+            std::fs::rename(&tmp, &self.path)
+        });
+        if let Err(e) = saved {
+            crate::log_warn!("image build: no checkpoint at {} bytes: {e}", self.pos);
+        }
+        Ok(())
+    }
+}
+
+impl Write for CheckpointWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.pos < self.skip {
+            let n = (self.skip - self.pos).min(buf.len() as u64) as usize;
+            self.pos += n as u64;
+            return Ok(n);
+        }
+        let n = self.out.write(buf)?;
+        self.pos += n as u64;
+        self.since += n as u64;
+        if self.since >= self.every {
+            self.checkpoint()?;
+        }
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.out.flush()
+    }
+}
+
 /// Builds `source` as an image at `output`: planned, written to `<output>.partial` (straight
 /// into a `.ffpfsc` container when `inner_name` is given), read back and hash-checked, then
 /// renamed. `stage(id, done, total)` reports `plan`, `write` (or `compress`) and `verify`.
@@ -783,6 +881,92 @@ pub(crate) fn build_at(
     cancel: &AtomicBool,
     stage: &mut dyn FnMut(&str, u64, u64),
 ) -> Result<ImageBuilt, String> {
+    build_any(
+        format,
+        inner_name,
+        level,
+        source,
+        output,
+        mode,
+        verify_chunk,
+        cancel,
+        stage,
+        false,
+    )
+}
+
+/// [`build_at`] that goes on from a crash's checkpoint, for a plain exFAT image of a source that
+/// gives the same bytes each time. Not for packs: their archive IDs are new each run. An index in
+/// the source takes its time from [`index_stamp`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_resumable(
+    format: ImageFormat,
+    level: Level,
+    source: &mut dyn SourceTree,
+    output: &Path,
+    mode: VerifyMode,
+    verify_chunk: u64,
+    cancel: &AtomicBool,
+    stage: &mut dyn FnMut(&str, u64, u64),
+) -> Result<ImageBuilt, String> {
+    build_any(
+        format,
+        None,
+        level,
+        source,
+        output,
+        mode,
+        verify_chunk,
+        cancel,
+        stage,
+        true,
+    )
+}
+
+/// The time a generated `ampr_emu.index` carries in the image at `partial`: the one the crashed
+/// build used, so going on gives the same bytes, else now, saved for the next try.
+pub(crate) fn index_stamp(partial: &Path) -> i64 {
+    let path = stamp_path(partial);
+    if checkpoint_path(partial).is_file() {
+        if let Some(saved) = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|t| t.trim().parse().ok())
+        {
+            return saved;
+        }
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let _ = std::fs::write(&path, now.to_string());
+    now
+}
+
+fn stamp_path(partial: &Path) -> PathBuf {
+    let mut name = partial.file_name().unwrap_or_default().to_os_string();
+    name.push(".stamp");
+    partial.with_file_name(name)
+}
+
+/// A build's checkpoint and what goes with it.
+pub(crate) fn remove_checkpoint(partial: &Path) {
+    let _ = std::fs::remove_file(checkpoint_path(partial));
+    let _ = std::fs::remove_file(stamp_path(partial));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_any(
+    format: ImageFormat,
+    inner_name: Option<&str>,
+    level: Level,
+    source: &mut dyn SourceTree,
+    output: &Path,
+    mode: VerifyMode,
+    verify_chunk: u64,
+    cancel: &AtomicBool,
+    stage: &mut dyn FnMut(&str, u64, u64),
+    resumable: bool,
+) -> Result<ImageBuilt, String> {
     if source.files().is_empty() {
         return Err(format!("{} has no files in it", source.describe()));
     }
@@ -800,13 +984,49 @@ pub(crate) fn build_at(
     // The caller has claimed this name (`fpkg_api::Writing`), clearing any leftover; a file
     // here now is another build's, and `create_new` refuses it rather than wreck it.
     let partial = PathBuf::from(format!("{}.partial", output.display()));
+    // Going on from a crash: only a plain exFAT image, when the checkpoint fits this plan.
+    let checkpointed = resumable && format == ImageFormat::Exfat && inner_name.is_none();
+    let key = plan_key(&want_sizes, planned.image_size());
+    let resume = checkpointed.then(|| resume_point(&partial, &key)).flatten();
+    // The key can't see a file edited to the same size: going on, every byte gets checked.
+    let mode = if resume.is_some() {
+        VerifyMode::Full
+    } else {
+        mode
+    };
+    if resume.is_none() {
+        // A checkpoint for something else: its partial file is this name's leftover.
+        if checkpoint_path(&partial).is_file() {
+            let _ = std::fs::remove_file(&partial);
+            let _ = std::fs::remove_file(checkpoint_path(&partial));
+        }
+    }
     // Opened before the cleanup below applies: a file that is not ours is never removed.
-    let mut file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(&partial)
-        .map_err(|e| format!("{}: {e}", partial.display()))?;
+    let mut file = if let Some(done) = resume {
+        crate::engine_log::record(
+            "info",
+            format!(
+                "image build: going on from {done} bytes in {}",
+                partial.display()
+            ),
+        );
+        let mut f = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&partial)
+            .map_err(|e| format!("{}: {e}", partial.display()))?;
+        f.set_len(done).map_err(|e| e.to_string())?;
+        f.seek(std::io::SeekFrom::Start(done))
+            .map_err(|e| e.to_string())?;
+        f
+    } else {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&partial)
+            .map_err(|e| format!("{}: {e}", partial.display()))?
+    };
     let result = (|| -> Result<ImageBuilt, String> {
         let planned_at = started.elapsed();
         let mut hashing = HashingTree::new(source);
@@ -818,6 +1038,31 @@ pub(crate) fn build_at(
         let mut report = |done: u64, total: u64| stage(write_stage, done, total);
         let wrap_opts = ps5_dump_forge_pfs::WrapOptions::at(level);
         let (image_bytes, stored, wrapped) = match inner_name {
+            None if checkpointed => {
+                let Planned::Exfat(plan) = &planned else {
+                    return Err("an exFAT build without an exFAT plan".to_string());
+                };
+                let mut out = CheckpointWriter {
+                    out: BufWriter::with_capacity(8 << 20, &mut file),
+                    skip: resume.unwrap_or(0),
+                    pos: 0,
+                    since: 0,
+                    path: checkpoint_path(&partial),
+                    key: key.clone(),
+                    every: CHECKPOINT,
+                };
+                let n = ps5upload_fpkg::exfat_write::write_exfat_after(
+                    plan,
+                    &mut hashing,
+                    &mut out,
+                    resume.unwrap_or(0),
+                    &mut report,
+                    &|| ps5upload_fpkg::workshop::checkpoint(cancel),
+                )
+                .map_err(|e| e.to_string())?;
+                out.flush().map_err(|e| e.to_string())?;
+                (n, n, None)
+            }
             None => {
                 let mut out = BufWriter::with_capacity(8 << 20, &mut file);
                 let n = planned
@@ -858,6 +1103,7 @@ pub(crate) fn build_at(
         )?;
         drop(image);
         std::fs::rename(&partial, output).map_err(|e| e.to_string())?;
+        remove_checkpoint(&partial);
         crate::engine_log::record("info", format!("verify: {}", log_line(&summary)));
         crate::engine_log::record("info", format!(
             "image build: format={} compressed={} files={} data_bytes={} output_bytes={} plan_ms={} write_ms={} read_ms={} verify_ms={} verify_mode={mode:?}",
@@ -898,7 +1144,16 @@ pub(crate) fn build_at(
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&partial);
+        remove_checkpoint(&partial);
     }
+    // What was on disk from before a crash didn't check out: gone now, so the next try starts over.
+    let result = match (result, resume) {
+        (Err(e), Some(_)) if !cancel.load(Ordering::Relaxed) => Err(format!(
+            "going on from an interrupted build failed: {e}. The partial image is removed, so \
+             building it again starts from the beginning"
+        )),
+        (r, _) => r,
+    };
     settle(result, cancel.load(Ordering::Relaxed))
 }
 
@@ -1252,6 +1507,268 @@ mod tests {
                     "{format:?} compress={compress}"
                 );
                 assert!(out.is_file() && !root.join(format!("{name}.partial")).exists());
+                let _ = std::fs::remove_file(&out);
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A game in LZ4 packs reads back as the game it was, a piece at a time as an image writer
+    /// and the zstd packer read it: what switching pack formats rests on.
+    #[test]
+    fn an_lz4_packed_image_reads_as_the_game_it_was() {
+        use ps5upload_fpkg::ampr_pack::image::{Lz4Unpacked, Unpacking};
+        let root = std::env::temp_dir().join(format!("ps5upload-imglz4-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let src = ampr_game(&root);
+        let out = root.join("PPSA99999-app.exfat");
+        let mut tree = FolderSource::open(&src).unwrap();
+        build_packed(
+            ImageFormat::Exfat,
+            &mut tree,
+            &out,
+            &Lz4Packs {
+                profile: Some(ps5upload_fpkg::ampr_pack::default_profile(9, 16)),
+                level: 9,
+                block_shift: 16,
+            },
+            VerifyMode::Fast {
+                seed: 1,
+                seam: false,
+            },
+            DEFAULT_VERIFY_CHUNK,
+            &AtomicBool::new(false),
+            &mut |_, _, _| {},
+        )
+        .unwrap();
+        let image: Box<dyn SourceTree> =
+            Box::new(ps5upload_fpkg::exfat::ExFatSource::open(&out).unwrap());
+        let Unpacking::Decoded(mut game) = Lz4Unpacked::open(image).unwrap() else {
+            panic!("the image has packs");
+        };
+        let names: Vec<String> = game.files().iter().map(|f| f.path.clone()).collect();
+        assert!(
+            !names.iter().any(|n| n.starts_with("ampr_assets.")),
+            "{names:?}"
+        );
+        let mut source = FolderSource::open(&src).unwrap();
+        for f in source.files().to_vec() {
+            if f.path == ps5upload_fpkg::ampr_index::NAME {
+                continue;
+            }
+            let want = source.read(&f.path).unwrap();
+            let listed = game.files().iter().find(|g| g.path == f.path);
+            assert_eq!(listed.map(|g| g.size), Some(f.size), "{}", f.path);
+            assert_eq!(game.read(&f.path).unwrap(), want, "{}", f.path);
+            // Across a chunk's edge (64 KiB), in small pieces, as the packer's reads go.
+            let mut pieces = Vec::new();
+            let mut at = 0u64;
+            while at < f.size {
+                let piece = game.read_range(&f.path, at, 40_000).unwrap();
+                assert!(!piece.is_empty(), "{} at {at}", f.path);
+                at += piece.len() as u64;
+                pieces.extend(piece);
+            }
+            assert_eq!(pieces, want, "{} in pieces", f.path);
+        }
+        let plain: Box<dyn SourceTree> = Box::new(FolderSource::open(&src).unwrap());
+        assert!(matches!(
+            Lz4Unpacked::open(plain).unwrap(),
+            Unpacking::NotPacked(_)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A crash partway: the next build goes on from the checkpoint without reading the files
+    /// already on disk, and the image comes out the same bytes. Any other game starts over.
+    #[test]
+    fn a_plain_exfat_goes_on_from_a_checkpoint() {
+        let root = std::env::temp_dir().join(format!("ps5upload-imgres-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let src = root.join("game");
+        std::fs::create_dir_all(src.join("sce_sys")).unwrap();
+        std::fs::write(
+            src.join("sce_sys/param.json"),
+            b"{\"titleId\":\"PPSA99999\"}",
+        )
+        .unwrap();
+        std::fs::write(src.join("a.bin"), vec![1u8; 3 << 20]).unwrap();
+        std::fs::write(src.join("b.bin"), vec![2u8; 3 << 20]).unwrap();
+        std::fs::write(src.join("c.bin"), vec![3u8; 3 << 20]).unwrap();
+        let cancel = AtomicBool::new(false);
+        let run = |out: &Path| {
+            let mut tree = FolderSource::open(&src).unwrap();
+            build_resumable(
+                ImageFormat::Exfat,
+                Level::default(),
+                &mut tree,
+                out,
+                VerifyMode::Full,
+                DEFAULT_VERIFY_CHUNK,
+                &cancel,
+                &mut |_, _, _| {},
+            )
+        };
+        let whole = root.join("whole.exfat");
+        run(&whole).unwrap();
+        let bytes = std::fs::read(&whole).unwrap();
+
+        // What a crash leaves: most of the image, junk past the checkpoint, and the checkpoint.
+        let out = root.join("resumed.exfat");
+        let partial = PathBuf::from(format!("{}.partial", out.display()));
+        let filled_with = |b: u8| {
+            bytes
+                .chunks(4096)
+                .position(|c| c.iter().all(|x| *x == b))
+                .expect("the file's data is in the image")
+                * 4096
+        };
+        // Partway through the last file, with the two before it behind the checkpoint.
+        let done = (filled_with(3) + (1 << 20)) as u64;
+        let mut left = bytes[..done as usize].to_vec();
+        left.extend_from_slice(&[0xEE; 4096]);
+        std::fs::write(&partial, &left).unwrap();
+        let tree = FolderSource::open(&src).unwrap();
+        let sizes: HashMap<String, u64> = tree
+            .files()
+            .iter()
+            .map(|f| (f.path.clone(), f.size))
+            .collect();
+        let plan = Planned::plan(ImageFormat::Exfat, &tree, &cancel).unwrap();
+        let key = plan_key(&sizes, plan.image_size());
+        let saved = |key: &str, done: u64| {
+            serde_json::to_vec(&Checkpoint {
+                key: key.to_string(),
+                done,
+            })
+            .unwrap()
+        };
+        std::fs::write(checkpoint_path(&partial), saved(&key, done)).unwrap();
+        run(&out).unwrap();
+        assert!(std::fs::read(&out).unwrap() == bytes, "the same image");
+        assert!(!partial.exists() && !checkpoint_path(&partial).exists());
+
+        // A checkpoint of something else: from the start, and still right.
+        let other = root.join("other.exfat");
+        let partial = PathBuf::from(format!("{}.partial", other.display()));
+        std::fs::write(&partial, vec![9u8; 1 << 20]).unwrap();
+        std::fs::write(checkpoint_path(&partial), saved("another game", 1 << 19)).unwrap();
+        run(&other).unwrap();
+        assert!(std::fs::read(&other).unwrap() == bytes);
+
+        // Bytes that changed behind the checkpoint: the read-back refuses the image.
+        let bad = root.join("bad.exfat");
+        let partial = PathBuf::from(format!("{}.partial", bad.display()));
+        let mut wrong = bytes[..done as usize].to_vec();
+        wrong[filled_with(2) + 100] ^= 0xFF;
+        std::fs::write(&partial, &wrong).unwrap();
+        std::fs::write(checkpoint_path(&partial), saved(&key, done)).unwrap();
+        let refused = run(&bad).err().expect("a damaged partial must not pass");
+        assert!(refused.contains("building it again starts"), "{refused}");
+        assert!(!partial.exists() && !checkpoint_path(&partial).exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A generated index keeps its time across a crash, which going on depends on; a build with
+    /// no checkpoint behind it gets a new one.
+    #[test]
+    fn an_index_stamp_lasts_only_as_long_as_its_checkpoint() {
+        let root = std::env::temp_dir().join(format!("ps5upload-imgstamp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let partial = root.join("x.exfat.partial");
+        std::fs::write(stamp_path(&partial), "123").unwrap();
+        assert_ne!(index_stamp(&partial), 123, "no checkpoint: a new one");
+        std::fs::write(stamp_path(&partial), "123").unwrap();
+        std::fs::write(checkpoint_path(&partial), "{}").unwrap();
+        assert_eq!(index_stamp(&partial), 123);
+        remove_checkpoint(&partial);
+        assert!(!stamp_path(&partial).exists() && !checkpoint_path(&partial).exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The writer drops what is on disk already, whichever way the writes are cut.
+    #[test]
+    fn the_checkpoint_writer_skips_then_writes_and_records() {
+        let root = std::env::temp_dir().join(format!("ps5upload-imgckw-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("x.partial");
+        let mut file = std::fs::File::create(&path).unwrap();
+        let mut w = CheckpointWriter {
+            out: BufWriter::new(&mut file),
+            skip: 5,
+            pos: 0,
+            since: 0,
+            path: checkpoint_path(&path),
+            key: "k".into(),
+            every: 4,
+        };
+        w.write_all(b"abc").unwrap();
+        w.write_all(b"defgh").unwrap();
+        w.write_all(b"ij").unwrap();
+        w.flush().unwrap();
+        drop(w);
+        assert_eq!(std::fs::read(&path).unwrap(), b"fghij");
+        let saved: Checkpoint =
+            serde_json::from_slice(&std::fs::read(checkpoint_path(&path)).unwrap()).unwrap();
+        assert_eq!(
+            saved,
+            Checkpoint {
+                key: "k".into(),
+                done: 10
+            }
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A PS4 game's image holds the param.json ShadowMount+ needs, and it survives the read-back
+    /// (Alembic's console test: without it the game mounts and then won't start).
+    #[test]
+    fn a_ps4_game_gets_its_param_json_in_every_format() {
+        let root = std::env::temp_dir().join(format!("ps5upload-imgb-ps4-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let src = root.join("CUSA00000-app");
+        std::fs::create_dir_all(src.join("sce_sys")).unwrap();
+        std::fs::write(src.join("eboot.bin"), vec![7u8; 90_000]).unwrap();
+        let (key, value) = (b"TITLE_ID\0", b"CUSA00000\0");
+        let mut sfo = b"\0PSF\x01\x01\0\0".to_vec();
+        sfo.extend_from_slice(&36u32.to_le_bytes());
+        sfo.extend_from_slice(&(36 + key.len() as u32).to_le_bytes());
+        sfo.extend_from_slice(&1u32.to_le_bytes());
+        sfo.extend_from_slice(&0u16.to_le_bytes());
+        sfo.extend_from_slice(&0x0204u16.to_le_bytes());
+        sfo.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        sfo.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        sfo.extend_from_slice(&0u32.to_le_bytes());
+        sfo.extend_from_slice(key);
+        sfo.extend_from_slice(value);
+        std::fs::write(src.join("sce_sys/param.sfo"), sfo).unwrap();
+        for format in [ImageFormat::Exfat, ImageFormat::Ffpkg, ImageFormat::Ffpfs] {
+            for compress in [false, true] {
+                let (name, inner) = output_names(&src, format, compress);
+                let out = root.join(&name);
+                let mut tree = FolderSource::open(&src).unwrap();
+                let mut with = ps5upload_fpkg::ps4_param::Ps4Params::wrap(&mut tree)
+                    .unwrap()
+                    .expect("a PS4 game");
+                let built = build(
+                    format,
+                    inner.as_deref(),
+                    &mut with,
+                    &out,
+                    VerifyMode::Full,
+                    DEFAULT_VERIFY_CHUNK,
+                    &AtomicBool::new(false),
+                    &mut |_, _, _| {},
+                )
+                .unwrap_or_else(|e| panic!("{format:?} compress={compress}: {e}"));
+                assert_eq!(built.files, 3, "{format:?}");
+                let mut image = ps5upload_fpkg::source::open(&out).unwrap();
+                let json = image.read("sce_sys/param.json").unwrap();
+                let v: serde_json::Value = serde_json::from_slice(&json).unwrap();
+                assert_eq!(v["titleId"], "CUSA00000", "{format:?}");
+                drop(image);
                 let _ = std::fs::remove_file(&out);
             }
         }

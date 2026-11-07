@@ -326,6 +326,17 @@ pub(crate) async fn fpkg_build_handler(
 
     // Without param.json there is no PS5 title to package (#596): the build would stop at the
     // content id, or, given one, write a package the console cannot launch.
+    if inspection.ps4_game {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "{} is a PS4 game, which can't become a PS5 package. Make a game image or a \
+                 folder of it instead.",
+                source_path.display()
+            ),
+        )
+        .into_response();
+    }
     if inspection
         .checks
         .iter()
@@ -663,6 +674,28 @@ pub(crate) struct ExfatBuildReq {
     /// refused for a compressed image or a game that does not read through libSceAmpr.
     #[serde(default)]
     rebuild_ampr_index: bool,
+    /// Add ampr_emu to a game that reads through libSceAmpr and ships no emulator: without one
+    /// it fails to start from an image. On unless turned off.
+    #[serde(default = "default_add_ampr_emu")]
+    add_ampr_emu: bool,
+    /// Which emulator: `ampr_emu` (the default) or `ampr-emu-ng`.
+    #[serde(default)]
+    ampr_emu_build: Option<String>,
+    /// Pack the game's files into zstd asset packs for ampr-emu-ng, which goes in the image: a
+    /// plain image of any format, not with LZ4 packs. A game in LZ4 packs is decoded on the way.
+    #[serde(default)]
+    ampr_zstd: Option<AmprZstdReq>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct AmprZstdReq {
+    /// 1 to 22; 5 when absent.
+    #[serde(default)]
+    level: Option<u8>,
+}
+
+fn default_add_ampr_emu() -> bool {
+    true
 }
 
 /// One change for an edited copy of an image: `{"op":"delete","path":…}` removes a file or
@@ -869,6 +902,26 @@ pub(crate) async fn exfat_build_handler(
             Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
         },
     };
+    let zstd_level =
+        match &req.ampr_zstd {
+            None => None,
+            Some(_) if compress || packs.is_some() || edited.is_some() => return json_err(
+                StatusCode::BAD_REQUEST,
+                "zstd asset packs go into a plain image, without .ffpfsc compression or LZ4 packs",
+            )
+            .into_response(),
+            Some(r) => {
+                let level = r.level.unwrap_or(5);
+                if !(1..=22).contains(&level) {
+                    return json_err(
+                        StatusCode::BAD_REQUEST,
+                        format!("zstd level {level} is not 1 to 22"),
+                    )
+                    .into_response();
+                }
+                Some(level)
+            }
+        };
     let named = match req.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
         Some(n) => {
             if let Some(why) = crate::folder_build::name_problem(n) {
@@ -933,6 +986,8 @@ pub(crate) async fn exfat_build_handler(
     let scan_source = source.clone();
     let check_packs = packs.is_some();
     let install_runtime = req.ampr_lz4.as_ref().is_some_and(|r| r.install_runtime);
+    let add_ampr_emu = req.add_ampr_emu;
+    let ampr_emu_build = req.ampr_emu_build.clone();
     let edited_tree = edited.map(|e| e.tree);
     let scanned = tokio::task::spawn_blocking(move || {
         // An edited copy keeps the image's own names: only the user's changes are made.
@@ -950,6 +1005,58 @@ pub(crate) async fn exfat_build_handler(
         }
         if let Some(line) = signing.describe() {
             crate::log_info!("image build: {line}");
+        }
+        if zstd_level.is_some() {
+            if !ps5upload_fpkg::source::imports_ampr(&mut *tree, "eboot.bin") {
+                return Err(
+                    "this game does not read its files through AMPR, so nothing could serve \
+                     asset packs; compress it into a .ffpfsc instead"
+                        .to_string(),
+                );
+            }
+            // A packed game goes straight into the new packs.
+            tree = match ps5upload_fpkg::ampr_pack::image::Lz4Unpacked::open(tree)
+                .map_err(|e| format!("reading the game's LZ4 packs: {e}"))?
+            {
+                ps5upload_fpkg::ampr_pack::image::Unpacking::Decoded(decoded) => decoded,
+                ps5upload_fpkg::ampr_pack::image::Unpacking::NotPacked(plain) => plain,
+            };
+            if ps5_dump_forge_zstd::reader::detect(&*tree) {
+                tree = Box::new(
+                    ps5_dump_forge_zstd::reader::unpack(tree)
+                        .map_err(|e| format!("reading the game's zstd packs: {e}"))?,
+                );
+            }
+        } else if check_packs && ps5_dump_forge_zstd::reader::detect(&*tree) {
+            // The other way: the zstd packs decoded, for LZ4 packs to be made from them.
+            tree = Box::new(
+                ps5_dump_forge_zstd::reader::unpack(tree)
+                    .map_err(|e| format!("reading the game's zstd packs: {e}"))?,
+            );
+        }
+        if !check_packs && zstd_level.is_none() && add_ampr_emu {
+            // Some libSceAmpr games with no emulator fail to start from an image, and
+            // ShadowMount+ doesn't add one. Packs have their own choice below.
+            if let Some(module) = ps5upload_fpkg::ampr_pack::image::emulator_needed_at(&mut *tree) {
+                let bytes =
+                    crate::ampr_trace::emulator(ampr_emu_build.as_deref()).map_err(|e| {
+                        format!(
+                            "this game may need an AMPR emulator to start from an image, and it \
+                         could not be fetched: {e}. Connect to the internet, or turn off \
+                         \"Add the AMPR emulator\" in Convert's options"
+                        )
+                    })?;
+                tree = Box::new(
+                    ps5upload_fpkg::ampr_pack::image::RuntimeInstalled::new_at(
+                        tree, bytes, &module,
+                    )
+                    .map_err(|e| e.to_string())?,
+                );
+                crate::log_info!(
+                    "image build: {} added as {module}",
+                    ampr_emu_build.as_deref().unwrap_or("ampr_emu")
+                );
+            }
         }
         if check_packs && install_runtime {
             // The game's own ampr_emu is missing or too old for packs: the image gets the
@@ -998,7 +1105,7 @@ pub(crate) async fn exfat_build_handler(
     // An uncompressed image is at least as large as the game: refused before the first write
     // rather than filling the drive and failing near the end. A compressed one or LZ4 packs may
     // well fit in less, so the screen warns and it goes ahead.
-    if !compress && packs.is_none() {
+    if !compress && packs.is_none() && zstd_level.is_none() {
         if let Some(why) = build::free_bytes(&out_dir)
             .and_then(|free| crate::folder_build::shortfall(free, total, &out_dir))
         {
@@ -1086,7 +1193,7 @@ pub(crate) async fn exfat_build_handler(
         sweep_output_leftovers(&out_dir);
         let mut tree = tree;
         // With LZ4 packs the build packs first; the stage list says so.
-        let stages: &[&str] = if packs.is_some() {
+        let stages: &[&str] = if packs.is_some() || zstd_level.is_some() {
             &["pack", "plan", "write", "verify"]
         } else {
             &["plan", "write", "verify"]
@@ -1107,10 +1214,29 @@ pub(crate) async fn exfat_build_handler(
                 total,
             });
         };
-        let outcome = match &packs {
-            Some(packs) => crate::image_build::build_packed(
+        // A PS4 game's image needs the param.json ShadowMount+ reads, which only PS5 games ship.
+        let mut ps4 = ps5upload_fpkg::ps4_param::Ps4Params::wrap(&mut *tree);
+        let source_tree: Result<&mut dyn ps5upload_fpkg::source::SourceTree, String> =
+            match ps4.as_mut() {
+                Ok(Some(p)) => Ok(p),
+                Ok(None) => Ok(&mut *tree),
+                Err(e) => Err(format!("param.sfo: {e}")),
+            };
+        let outcome = match (source_tree, &packs) {
+            (Err(e), _) => Err(e),
+            (Ok(tree), None) if zstd_level.is_some() => crate::zstd_packs::build(
                 format,
-                &mut *tree,
+                zstd_level.unwrap_or(5),
+                tree,
+                &output,
+                mode,
+                verify_chunk,
+                &cancel,
+                &mut report,
+            ),
+            (Ok(tree), Some(packs)) => crate::image_build::build_packed(
+                format,
+                tree,
                 &output,
                 packs,
                 mode,
@@ -1119,7 +1245,37 @@ pub(crate) async fn exfat_build_handler(
                 &mut report,
             ),
             // A libSceAmpr game gets a fresh ampr_emu.index (#449), as a package does.
-            None => match crate::image_build::AmprIndexed::wrap(&mut *tree) {
+            // A plain exFAT image can go on after a crash: same files, same bytes, as long as the
+            // regenerated index keeps its time.
+            (Ok(tree), None)
+                if inner_name.is_none() && format == crate::image_build::ImageFormat::Exfat =>
+            {
+                let stamp = crate::image_build::index_stamp(&partial_out);
+                match crate::image_build::AmprIndexed::wrap_at(&mut *tree, stamp) {
+                    Ok(Some(mut indexed)) => crate::image_build::build_resumable(
+                        format,
+                        level,
+                        &mut indexed,
+                        &output,
+                        mode,
+                        verify_chunk,
+                        &cancel,
+                        &mut report,
+                    ),
+                    Ok(None) => crate::image_build::build_resumable(
+                        format,
+                        level,
+                        tree,
+                        &output,
+                        mode,
+                        verify_chunk,
+                        &cancel,
+                        &mut report,
+                    ),
+                    Err(e) => Err(format!("ampr_emu.index: {e}")),
+                }
+            }
+            (Ok(tree), None) => match crate::image_build::AmprIndexed::wrap(&mut *tree) {
                 Ok(Some(mut indexed)) => crate::image_build::build_at(
                     format,
                     inner_name.as_deref(),
@@ -1135,7 +1291,7 @@ pub(crate) async fn exfat_build_handler(
                     format,
                     inner_name.as_deref(),
                     level,
-                    &mut *tree,
+                    tree,
                     &output,
                     mode,
                     verify_chunk,
@@ -1671,9 +1827,11 @@ impl Writing {
         if active.contains(&path) {
             return None;
         }
+        // A leftover with a checkpoint is what the build goes on from (`image_build`).
+        let checkpointed = crate::image_build::checkpoint_path(&path).is_file();
         if path.is_dir() {
             let _ = std::fs::remove_dir_all(&path);
-        } else if path.is_file() {
+        } else if path.is_file() && !checkpointed {
             let _ = std::fs::remove_file(&path);
         }
         active.insert(path.clone());
@@ -1730,6 +1888,22 @@ fn has_download_sidecar(partial: &Path) -> bool {
     partial.with_file_name(name).is_file()
 }
 
+/// A crashed image build's partial file, kept for a while for the same build to go on from. An old
+/// one goes, with its checkpoint, or a game never built again would hold its space for good.
+fn has_fresh_checkpoint(partial: &Path) -> bool {
+    let checkpoint = crate::image_build::checkpoint_path(partial);
+    let Ok(modified) = std::fs::metadata(&checkpoint).and_then(|m| m.modified()) else {
+        return false;
+    };
+    let fresh = modified
+        .elapsed()
+        .is_ok_and(|age| age < crate::image_build::RESUME_KEPT);
+    if !fresh {
+        crate::image_build::remove_checkpoint(partial);
+    }
+    fresh
+}
+
 /// Removes a file, trying again for a few seconds while something holds it: on Windows an
 /// antivirus or the indexer often has a just-written file open, and one failed attempt left a
 /// failed build's whole image on the drive (#432).
@@ -1768,7 +1942,9 @@ pub(crate) fn sweep_output_leftovers(out: &Path) {
                     // A link download writes `<name>.pkg.partial` with a `.partial.json`
                     // resume sidecar beside it; that one is resumable and not ours to sweep.
                     Ok(t) if t.is_file() => {
-                        is_our_partial(&name) && !has_download_sidecar(&e.path())
+                        is_our_partial(&name)
+                            && !has_download_sidecar(&e.path())
+                            && !has_fresh_checkpoint(&e.path())
                     }
                     // An LZ4 image build's pack volumes, `<name>.exfat.lz4spool/`, and a
                     // folder build's unfinished folder (marked, so a user's own is kept).

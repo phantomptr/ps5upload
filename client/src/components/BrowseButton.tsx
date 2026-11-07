@@ -21,6 +21,7 @@ const PROTOCOL: Record<Connection["protocol"], string> = {
   sftp: "SFTP",
   webdav: "WebDAV",
   webdavs: "WebDAV (HTTPS)",
+  nfs: "NFS",
 };
 
 export interface BrowseButtonProps {

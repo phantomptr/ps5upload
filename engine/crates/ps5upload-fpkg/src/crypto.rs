@@ -102,6 +102,24 @@ pub fn aes128_cbc_encrypt(key: &[u8; 16], iv: [u8; 16], data: &mut [u8]) {
     }
 }
 
+/// AES-128-CBC decryption in place; `data` must be whole 16-byte blocks.
+pub fn aes128_cbc_decrypt(key: &[u8; 16], iv: [u8; 16], data: &mut [u8]) {
+    use aes::cipher::{BlockCipherDecrypt, KeyInit as _};
+    debug_assert!(data.len().is_multiple_of(16));
+    let cipher = aes::Aes128::new(&(*key).into());
+    let mut prev = iv;
+    for chunk in data.as_chunks_mut::<16>().0 {
+        let stored = *chunk;
+        let mut blk = aes::Block::from(*chunk);
+        cipher.decrypt_block(&mut blk);
+        chunk.copy_from_slice(&blk);
+        for (b, p) in chunk.iter_mut().zip(prev) {
+            *b ^= p;
+        }
+        prev = stored;
+    }
+}
+
 /// The PFS image key for a debug package, from its content id and passcode.
 pub fn derive_ekpfs(content_id: &str, passcode: &str) -> [u8; 32] {
     derive_pfs_key(content_id, passcode, 1)

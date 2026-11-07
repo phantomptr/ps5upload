@@ -2159,6 +2159,11 @@ export async function smpStatus(addr: string): Promise<SmpStatus> {
   return invoke<SmpStatus>("smp_status", { addr });
 }
 
+/** Ask ShadowMount+ to scan again now, with its retry counters cleared. */
+export async function smpRescan(addr: string): Promise<void> {
+  await invoke<unknown>("smp_rescan", { addr });
+}
+
 // ─── ShadowMount+ edit sessions ───────────────────────────────────────
 //
 // ShadowMount+ mounts every image it manages READ-ONLY and re-attaches any

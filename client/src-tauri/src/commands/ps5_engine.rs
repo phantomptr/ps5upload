@@ -2330,6 +2330,17 @@ pub async fn fpkg_delete(path: String) -> Result<JsonValue, String> {
 /// Rebuild a libSceAmpr game folder's `ampr_emu.index` where it is (this computer or a
 /// `ps5://` folder); runs as an engine job. POST /api/fpkg/ampr-index.
 #[tauri::command]
+pub async fn fpkg_ampr_emu(source: String, build: Option<String>) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/fpkg/ampr-emu");
+    post_json(
+        &url,
+        &serde_json::json!({ "source": source, "build": build }),
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn fpkg_ampr_index(source: String) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/fpkg/ampr-index");
@@ -2395,6 +2406,12 @@ pub async fn exfat_build(
     keep_both: Option<bool>,
     // An edited copy whose one change is a regenerated ampr_emu.index (#621).
     rebuild_ampr_index: Option<bool>,
+    // Add ampr_emu to a libSceAmpr game with no emulator; the engine's default (on) when absent.
+    add_ampr_emu: Option<bool>,
+    // zstd asset packs: {level}. A plain image, not with ampr_lz4.
+    ampr_zstd: Option<JsonValue>,
+    // Which emulator add_ampr_emu adds: ampr_emu, the default, or ampr-emu-ng.
+    ampr_emu_build: Option<String>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/exfat/build");
@@ -2413,6 +2430,9 @@ pub async fn exfat_build(
             "edits": edits.unwrap_or_else(|| serde_json::json!([])),
             "keep_both": keep_both.unwrap_or(false),
             "rebuild_ampr_index": rebuild_ampr_index.unwrap_or(false),
+            "add_ampr_emu": add_ampr_emu.unwrap_or(true),
+            "ampr_zstd": ampr_zstd,
+            "ampr_emu_build": ampr_emu_build,
         }),
     )
     .await

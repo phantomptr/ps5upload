@@ -143,7 +143,7 @@ function PictureToolsSetting() {
         hint={tr(
           "rp_picture_crop_hint",
           undefined,
-          "Cuts the black bars off a game made for ultrawide screens, so it fills an ultrawide screen.",
+          "Cuts the top and bottom off the picture to make it 21:9. Only for a game made for ultrawide screens, which has black bars there: any other game loses part of its picture.",
         )}
       />
       <Toggle

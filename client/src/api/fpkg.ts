@@ -6,6 +6,7 @@
 // browser build reaches the same routes through lib/browserInvoke.ts.
 
 import { invoke } from "../lib/invokeLogged";
+import { useConvertPrefs } from "../state/convertPrefs";
 
 /** The game image filesystems the engine writes: UFS2 (`.ffpkg`, what ShadowMount+
  *  recommends), exFAT, or PFS (`.ffpfs`, experimental in ShadowMount+ 1.7). */
@@ -51,6 +52,12 @@ export interface FpkgInspection {
   /** Present for a title that reads its files through libSceAmpr: whether a game image can
    *  carry AMPR LZ4 asset packs, which the game's own ampr_emu (fakelib) must serve. */
   ampr_packs?: AmprPacksReadiness | null;
+  /** How many of its executables are plain ELF files, which a build fake-signs. */
+  unsigned_executables?: number;
+  /** A PS4 game: it becomes an image or a folder, not a PS5 package. */
+  ps4_game?: boolean;
+  /** The version it says it is: param.json's contentVersion, or param.sfo's APP_VER. */
+  content_version?: string | null;
 }
 
 export interface AmprPacksReadiness {
@@ -61,6 +68,8 @@ export interface AmprPacksReadiness {
   /** `ok`; `runtime` (installing ampr_emu 0.4.2.1 into the image makes packs possible);
    *  `no_ampr` (the game does not read through AMPR: .ffpfsc is its compression). */
   kind?: "ok" | "runtime" | "no_ampr";
+  /** The game reads through AMPR and ships no emulator: it won't start from an image without one. */
+  emulator_missing?: boolean;
 }
 
 /** Pack a game image's files into AMPR LZ4 asset packs first (exFAT images only). */
@@ -71,6 +80,9 @@ export interface AmprLz4Options {
   profileToml?: string;
   /** Put ampr_emu 0.4.2.1 into the image when the game's own is missing or too old. */
   installRuntime?: boolean;
+  /** zstd packs at this level in place of LZ4 ones, in a plain image of any format; ampr-emu-ng
+   *  goes in the image. */
+  zstdLevel?: number;
 }
 
 export interface FpkgBuildRequest {
@@ -166,7 +178,8 @@ export const fpkg = {
       outputDir,
       format,
       compress,
-      amprLz4: lz4
+      amprZstd: lz4?.zstdLevel ? { level: lz4.zstdLevel } : undefined,
+      amprLz4: lz4 && !lz4.zstdLevel
         ? { level: lz4.level, profile_toml: lz4.profileToml, install_runtime: lz4.installRuntime ?? false }
         : undefined,
       verifyChunkKib,
@@ -174,6 +187,8 @@ export const fpkg = {
       name,
       ffpfscLevel: compress ? ffpfscLevel : undefined,
       keepBoth,
+      addAmprEmu: useConvertPrefs.getState().addAmprEmu,
+      amprEmuBuild: useConvertPrefs.getState().amprEmuBuild,
     }),
   /** Unpack a game image (.exfat, .ffpkg, .ffpfs, .ffpfsc) or a package made with the debug
    *  key into a plain folder in the output folder, named after the source (or `name`). One
@@ -201,6 +216,9 @@ export const fpkg = {
    *  PS5 (`ps5://`), the game's own kept once as `ampr_emu.index.bak` (#621). A job: its stage
    *  is `list`, `check` or `write`; done, `dest` is the index and `commit_ack` the
    *  {@link AmprIndexOutcome}. */
+  /** The AMPR emulator added to a game where it stands: in a folder, or as a backport folder for
+   *  an image on the PS5. */
+  addAmprEmu: (source: string) => invoke<AmprEmuOutcome>("fpkg_ampr_emu", { source, build: useConvertPrefs.getState().amprEmuBuild }),
   rebuildAmprIndex: (source: string) => invoke<{ job_id: string }>("fpkg_ampr_index", { source }),
   /** An edited copy of a game image whose one change is a regenerated `ampr_emu.index` (#621),
    *  named `<name>-edited` next to it (`<name>-edited (2)` when a rebuild already made one).
@@ -208,6 +226,14 @@ export const fpkg = {
   rebuildImageAmprIndex: (source: string) =>
     invoke<{ job_id: string }>("exfat_build", { source, edits: [], rebuildAmprIndex: true, keepBoth: true }),
 };
+
+/** What adding the AMPR emulator to a game did. */
+export interface AmprEmuOutcome {
+  kind: "folder" | "backport";
+  folder: string;
+  written: string[];
+  rescanned: boolean;
+}
 
 /** What a folder's index rebuild did. */
 export interface AmprIndexOutcome {

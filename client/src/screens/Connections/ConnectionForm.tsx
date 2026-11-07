@@ -33,6 +33,7 @@ export const DEFAULT_PORT: Record<Protocol, number> = {
   sftp: 22,
   webdav: 80,
   webdavs: 443,
+  nfs: 2049,
 };
 
 /** The protocols whose paths can start at the server's "/" or at the sign-in folder. */
@@ -68,7 +69,11 @@ export function emptyForm(): FormValue {
 /** A new protocol brings its default port, unless the user had typed their own. */
 export function switchProtocol(v: FormValue, protocol: Protocol): FormValue {
   const port = v.port === DEFAULT_PORT[v.protocol] ? DEFAULT_PORT[protocol] : v.port;
-  return { ...v, protocol, port, authKind: protocol === "sftp" ? v.authKind : "password" };
+  const next = { ...v, protocol, port, authKind: protocol === "sftp" ? v.authKind : ("password" as const) };
+  // NFS's user is a user and group ID and its share an export: neither carries over.
+  return (protocol === "nfs") !== (v.protocol === "nfs")
+    ? { ...next, user: "", share: "", password: "", guest: false }
+    : next;
 }
 
 const SMB_SCHEME = /^(smb|cifs):\/\//i;
@@ -118,14 +123,14 @@ export function toRequest(form: FormValue): { connection: ConnectionInput; secre
     protocol: v.protocol,
     host: v.host.trim(),
     port: v.port,
-    share: v.protocol === "smb" ? v.share.trim() : "",
-    user: v.guest ? "" : v.user.trim(),
+    share: v.protocol === "smb" || v.protocol === "nfs" ? v.share.trim() : "",
+    user: v.guest && v.protocol !== "nfs" ? "" : v.user.trim(),
     start_path: v.startPath.trim(),
     from_root: hasServerRoot(v.protocol) && v.fromRoot,
     insecure_tls: v.protocol === "webdavs" && v.insecureTls,
   };
   const secret: SecretInput = {};
-  if (!v.guest) {
+  if (!v.guest && v.protocol !== "nfs") {
     if (v.protocol === "sftp" && v.authKind === "key") {
       if (v.keyPem) secret.key_pem = v.keyPem;
       if (v.keyPassphrase) secret.key_passphrase = v.keyPassphrase;
@@ -187,6 +192,7 @@ export function ConnectionFormView(p: ConnectionFormProps) {
           { value: "sftp", label: "SFTP" },
           { value: "webdav", label: "WebDAV" },
           { value: "webdavs", label: "WebDAV (HTTPS)" },
+          { value: "nfs", label: "NFS" },
         ]}
         value={v.protocol}
         onChange={(pr) => p.onChange(switchProtocol(v, pr as Protocol))}
@@ -245,6 +251,14 @@ export function ConnectionFormView(p: ConnectionFormProps) {
             onChange={(e) => set({ port: parseInt(e.target.value, 10) || DEFAULT_PORT[v.protocol] })}
           />
         </div>
+        {v.protocol === "nfs" && (
+          <Input
+            label={tr("conn_nfs_export", undefined, "Export (empty: all of them)")}
+            value={v.share}
+            placeholder="/volume1/games"
+            onChange={(e) => set({ share: e.target.value })}
+          />
+        )}
         {v.protocol === "smb" && (
           <div>
             <Input
@@ -332,11 +346,26 @@ export function ConnectionFormView(p: ConnectionFormProps) {
         />
       )}
 
-      {v.protocol !== "sftp" && (
+      {v.protocol !== "sftp" && v.protocol !== "nfs" && (
         <Toggle checked={v.guest} onChange={(guest) => set({ guest })} label={guestLabel} />
       )}
 
-      {!v.guest && (
+      {v.protocol === "nfs" && (
+        <Input
+          label={tr("conn_nfs_ids", undefined, "User and group ID")}
+          value={v.user}
+          placeholder="1000:1000"
+          autoComplete="off"
+          hint={tr(
+            "conn_nfs_ids_hint",
+            undefined,
+            "NFS has no passwords: the server trusts these IDs, and the export decides who may connect. Exports marked \"secure\" also need a port only an administrator can open, so mark yours \"insecure\" if it refuses this computer.",
+          )}
+          onChange={(e) => set({ user: e.target.value })}
+        />
+      )}
+
+      {!v.guest && v.protocol !== "nfs" && (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           <Input
             label={tr("conn_user", undefined, "User")}

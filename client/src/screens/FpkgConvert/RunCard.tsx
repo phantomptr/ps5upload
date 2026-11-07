@@ -47,7 +47,7 @@ const LABEL: Record<PipelineStage, [string, string]> = {
   copy: ["fpkg.stage.copy", "Copy from server"],
   extract: ["fpkg.stage.extract", "Unpack archive"],
   check: ["fpkg.stage.check", "Check source"],
-  pack: ["fpkg.stage.pack", "Pack LZ4 assets"],
+  pack: ["fpkg.stage.pack", "Pack assets"],
   plan: ["fpkg.stage.plan", "Plan package"],
   compress: ["fpkg.stage.compress", "Compress"],
   write: ["fpkg.stage.write", "Write package"],

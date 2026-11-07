@@ -18,6 +18,8 @@ pub enum Protocol {
     Webdav,
     /// WebDAV over HTTPS.
     Webdavs,
+    /// NFSv3. `share` is the export; `user` a user and group ID, `1000:1000`.
+    Nfs,
 }
 
 pub fn default_port(p: &Protocol) -> u16 {
@@ -27,6 +29,7 @@ pub fn default_port(p: &Protocol) -> u16 {
         Protocol::Sftp => 22,
         Protocol::Webdav => 80,
         Protocol::Webdavs => 443,
+        Protocol::Nfs => 2049,
     }
 }
 

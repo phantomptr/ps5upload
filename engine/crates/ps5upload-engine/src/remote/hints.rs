@@ -24,8 +24,6 @@ pub fn hint_for(error: &str) -> Option<&'static str> {
         Some("The server's TLS certificate was not accepted. For a NAS with a self-signed certificate over WebDAV, turn on \"Accept a self-signed certificate\".")
     } else if has(&["propfind", "not a webdav"]) {
         Some("Put the server's WebDAV root in Start folder, e.g. /remote.php/dav/files/USER for Nextcloud or /dav for Alist, and check the port.")
-    } else if has(&["only basic authentication"]) {
-        Some("The server wants a sign-in method other than Basic. Turn Basic authentication on for WebDAV on the server, or use another protocol.")
     } else if has(&[
         "refused",
         "timed out",

@@ -877,6 +877,9 @@ export async function browserInvoke<T>(
     case "fpkg_delete": {
       return postJson<T>("/api/fpkg/delete", { path: args["path"] });
     }
+    case "fpkg_ampr_emu": {
+      return postJson<T>("/api/fpkg/ampr-emu", { source: args["source"], build: args["build"] });
+    }
     case "fpkg_ampr_index": {
       return postJson<T>("/api/fpkg/ampr-index", { source: args["source"] });
     }
@@ -907,6 +910,9 @@ export async function browserInvoke<T>(
         edits: args["edits"] ?? [],
         keep_both: args["keepBoth"] ?? false,
         rebuild_ampr_index: args["rebuildAmprIndex"] ?? false,
+        add_ampr_emu: args["addAmprEmu"] ?? true,
+        ampr_zstd: args["amprZstd"],
+        ampr_emu_build: args["amprEmuBuild"],
       });
     }
     case "folder_build": {
@@ -1204,6 +1210,9 @@ export async function browserInvoke<T>(
 
     case "smp_status":
       return getJson<T>(addrUrl("/api/ps5/smp/status", args["addr"]));
+
+    case "smp_rescan":
+      return postJson<T>(addrUrl("/api/ps5/smp/rescan", args["addr"]), {});
 
     // Small-file write. The desktop app has this as a Tauri command; without
     // the browser counterpart anything that writes a config file to the
