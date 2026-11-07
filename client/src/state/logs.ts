@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 
 import { LEVEL_RANK, currentMinRank } from "./diagSettings";
+import { scrubSecrets } from "../lib/redaction";
 
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error";
 
@@ -96,14 +97,19 @@ export const useLogsStore = create<LogsState>((set, get) => ({
   appendMany: (items) => {
     if (items.length === 0) return;
     const now = Date.now();
-    const added: LogEntry[] = items.map((i) => ({
-      id: nextId++,
-      timestamp: now,
-      level: i.level,
-      source: i.source,
-      message: i.message,
-      detail: stringifyDetail(i.detail),
-    }));
+    // Secrets are taken out where a line is written, so neither the Logs tab, the disk log nor a
+    // crash report ever holds one (an older helper's PIN line comes through the engine).
+    const added: LogEntry[] = items.map((i) => {
+      const detail = stringifyDetail(i.detail);
+      return {
+        id: nextId++,
+        timestamp: now,
+        level: i.level,
+        source: i.source,
+        message: scrubSecrets(i.message),
+        detail: detail === undefined ? undefined : scrubSecrets(detail),
+      };
+    });
     const { entries: current, errorCount } = get();
     let merged = [...current, ...added];
     let quiet = 0;
@@ -190,7 +196,7 @@ let diskTimer: ReturnType<typeof setInterval> | null = null;
 
 function recordToDisk(e: LogEntry): void {
   if (!diskEnabled) return;
-  if (LEVEL_RANK[e.level] < currentMinRank()) return;
+  if (LEVEL_RANK[e.level] < currentMinRank(Date.now(), e.source)) return;
   const obj: Record<string, unknown> = {
     ts: e.timestamp,
     level: e.level,

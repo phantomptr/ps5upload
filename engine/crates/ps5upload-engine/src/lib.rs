@@ -74,6 +74,7 @@ mod link;
 mod link_lz4;
 mod local_fs;
 mod log_dedup;
+mod log_levels;
 mod mcp;
 mod mesh_api;
 mod mesh_drive;
@@ -734,7 +735,12 @@ async fn log_requests(req: Request, next: Next) -> axum::response::Response {
     // failure still gets through: only this debug line is skipped, and the 5xx
     // path below is untouched.
     if !is_constant_poll(&path) {
-        log_debug!("{method} {path} -> {status} ({ms}ms)");
+        // The access log: always kept (engine.log is the crash trace), whatever the level says.
+        engine_log::record_cat(
+            "debug",
+            "api",
+            format!("{method} {path} -> {status} ({ms}ms)"),
+        );
     }
 
     // A console that is switched off answers every status poll with 502,
@@ -1772,6 +1778,31 @@ pub(crate) fn set_job(
             let _ = events_tx.send(msg.to_string());
         }
     }
+    // A job's end at info (what a report needs), every other change at trace (a ticker updates a
+    // running job often). Only its state, reason and counters: never the file list.
+    let field = |k: &str| json.get(k).cloned().unwrap_or(serde_json::Value::Null);
+    if terminal {
+        log_at!(
+            Info,
+            "transfer",
+            "job {job_id}: {} after {} ms: reason {} error {} bytes {} files {}",
+            field("status"),
+            field("elapsed_ms"),
+            field("error_reason"),
+            field("error"),
+            field("bytes_sent"),
+            field("files_sent")
+        );
+    } else {
+        log_at!(
+            Trace,
+            "transfer",
+            "job {job_id}: {} bytes {} of {}",
+            field("status"),
+            field("bytes_sent"),
+            field("total_bytes")
+        );
+    }
     if terminal {
         activity::transfer_ended(&job_id.to_string(), &json);
         telemetry::on_state(job_id, &json);
@@ -2625,7 +2656,11 @@ async fn ps5_fs_delete(
     let path = req.path;
     let op_id = req.op_id;
     let started = std::time::Instant::now();
-    crate::log_info!("fs_delete: addr={addr} path={path} op_id={op_id}");
+    crate::log_at!(
+        Info,
+        "files",
+        "fs_delete: addr={addr} path={path} op_id={op_id}"
+    );
     let (check_addr, check_path) = (addr.clone(), path.clone());
     if let Ok(Some(title)) =
         tokio::task::spawn_blocking(move || running_title_from(&check_addr, &check_path)).await
@@ -2656,7 +2691,9 @@ async fn ps5_fs_delete(
     .and_then(|r| r)
     {
         Ok(()) => {
-            crate::log_info!(
+            crate::log_at!(
+                Info,
+                "files",
                 "fs_delete ok: {path_for_log} in {} ms",
                 started.elapsed().as_millis()
             );
@@ -2669,13 +2706,17 @@ async fn ps5_fs_delete(
             // real delete failure (different banner, different log).
             let msg = e.to_string();
             if msg == "cancelled" {
-                crate::log_info!(
+                crate::log_at!(
+                    Info,
+                    "files",
                     "fs_delete cancelled: {path_for_log} in {} ms",
                     started.elapsed().as_millis()
                 );
                 return json_err(StatusCode::CONFLICT, "cancelled").into_response();
             }
-            crate::log_warn!(
+            crate::log_at!(
+                Warn,
+                "files",
                 "fs_delete failed: {path_for_log} in {} ms: {e}",
                 started.elapsed().as_millis()
             );
@@ -2697,7 +2738,11 @@ async fn ps5_fs_unpack(
     };
     let (path, op_id) = (req.path, req.op_id);
     let started = std::time::Instant::now();
-    crate::log_info!("fs_unpack: addr={addr} path={path} op_id={op_id}");
+    crate::log_at!(
+        Info,
+        "files",
+        "fs_unpack: addr={addr} path={path} op_id={op_id}"
+    );
     let path_for_log = path.clone();
     // A 136 GB image inflates for many minutes; the job is followed, not timed out.
     let deadline = std::time::Duration::from_secs(12 * 60 * 60);
@@ -2711,7 +2756,9 @@ async fn ps5_fs_unpack(
     .and_then(|r| r)
     {
         Ok(done) => {
-            crate::log_info!(
+            crate::log_at!(
+                Info,
+                "files",
                 "fs_unpack ok: {path_for_log} -> {} ({} bytes) in {} ms",
                 done.path,
                 done.size,
@@ -2724,7 +2771,7 @@ async fn ps5_fs_unpack(
             json_err(StatusCode::CONFLICT, "cancelled").into_response()
         }
         Err(e) => {
-            crate::log_warn!("fs_unpack failed: {path_for_log}: {e:#}");
+            crate::log_at!(Warn, "files", "fs_unpack failed: {path_for_log}: {e:#}");
             json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response()
         }
     }
@@ -2768,7 +2815,9 @@ async fn ps5_fs_extract(
         replace: req.replace,
     };
     let started = std::time::Instant::now();
-    crate::log_info!(
+    crate::log_at!(
+        Info,
+        "files",
         "fs_extract: addr={addr} path={} dest={} merge={} replace={} password={} op_id={op_id}",
         x.path,
         x.dest,
@@ -2789,7 +2838,7 @@ async fn ps5_fs_extract(
     .and_then(|r| r)
     {
         Ok(done) => {
-            crate::log_info!(
+            crate::log_at!(Info, "files", 
                 "fs_extract ok: {path_for_log} -> {} ({} files, {} bytes, {} skipped, {} unsafe, {} links) in {} ms",
                 done.path,
                 done.files,
@@ -2815,7 +2864,7 @@ async fn ps5_fs_extract(
             json_err(StatusCode::CONFLICT, "cancelled").into_response()
         }
         Err(e) => {
-            crate::log_warn!("fs_extract failed: {path_for_log}: {e:#}");
+            crate::log_at!(Warn, "files", "fs_extract failed: {path_for_log}: {e:#}");
             json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response()
         }
     }
@@ -2832,7 +2881,7 @@ async fn ps5_fs_move(
     let from = req.from;
     let to = req.to;
     let started = std::time::Instant::now();
-    crate::log_info!("fs_move: addr={addr} from={from} to={to}");
+    crate::log_at!(Info, "files", "fs_move: addr={addr} from={from} to={to}");
     let from_for_log = from.clone();
     let to_for_log = to.clone();
     // 1-hour deadline: an intra-volume fs_move returns in milliseconds
@@ -2866,7 +2915,9 @@ async fn ps5_fs_move(
     .and_then(|r| r)
     {
         Ok(()) => {
-            crate::log_info!(
+            crate::log_at!(
+                Info,
+                "files",
                 "fs_move ok: {from_for_log} -> {to_for_log} in {} ms",
                 started.elapsed().as_millis()
             );
@@ -2874,13 +2925,17 @@ async fn ps5_fs_move(
         }
         Err(e) => {
             if e.to_string() == "cancelled" {
-                crate::log_info!(
+                crate::log_at!(
+                    Info,
+                    "files",
                     "fs_move cancelled: {from_for_log} -> {to_for_log} in {} ms",
                     started.elapsed().as_millis()
                 );
                 return json_err(StatusCode::CONFLICT, "cancelled").into_response();
             }
-            crate::log_warn!(
+            crate::log_at!(
+                Warn,
+                "files",
                 "fs_move failed: {from_for_log} -> {to_for_log} in {} ms: {e}",
                 started.elapsed().as_millis()
             );
@@ -2914,7 +2969,7 @@ async fn ps5_fs_copy(
     let from = req.from;
     let to = req.to;
     let started = std::time::Instant::now();
-    crate::log_info!("fs_copy: addr={addr} from={from} to={to}");
+    crate::log_at!(Info, "files", "fs_copy: addr={addr} from={from} to={to}");
     let from_for_log = from.clone();
     let to_for_log = to.clone();
     // The copy runs on the console as a job (`job.copy`): the engine polls it, so a connection
@@ -2937,7 +2992,9 @@ async fn ps5_fs_copy(
     .and_then(|r| r)
     {
         Ok(()) => {
-            crate::log_info!(
+            crate::log_at!(
+                Info,
+                "files",
                 "fs_copy ok: {from_for_log} -> {to_for_log} in {} ms",
                 started.elapsed().as_millis()
             );
@@ -2950,13 +3007,17 @@ async fn ps5_fs_copy(
             // FS_COPY failure (different banner, different log).
             let msg = e.to_string();
             if msg == "cancelled" {
-                crate::log_info!(
+                crate::log_at!(
+                    Info,
+                    "files",
                     "fs_copy cancelled: {from_for_log} -> {to_for_log} in {} ms",
                     started.elapsed().as_millis()
                 );
                 return json_err(StatusCode::CONFLICT, "cancelled").into_response();
             }
-            crate::log_warn!(
+            crate::log_at!(
+                Warn,
+                "files",
                 "fs_copy failed: {from_for_log} -> {to_for_log} in {} ms: {e}",
                 started.elapsed().as_millis()
             );
@@ -2992,7 +3053,7 @@ async fn ps5_fs_mount(Json(req): Json<FsMountReq>) -> impl IntoResponse {
     let mount_point = req.mount_point;
     let read_only = req.read_only.unwrap_or(false);
     let started = std::time::Instant::now();
-    crate::log_info!(
+    crate::log_at!(Info, "files", 
         "fs_mount: addr={addr} image_path={image_path} mount_name={:?} mount_point={:?} read_only={read_only}",
         mount_name,
         mount_point,
@@ -3013,7 +3074,9 @@ async fn ps5_fs_mount(Json(req): Json<FsMountReq>) -> impl IntoResponse {
     .and_then(|r| r);
     match result {
         Ok(r) => {
-            crate::log_info!(
+            crate::log_at!(
+                Info,
+                "files",
                 "fs_mount ok: {image_for_log} -> {} ({}, {}) in {} ms",
                 r.mount_point,
                 r.dev_node,
@@ -3023,7 +3086,9 @@ async fn ps5_fs_mount(Json(req): Json<FsMountReq>) -> impl IntoResponse {
             (StatusCode::OK, Json(r)).into_response()
         }
         Err(e) => {
-            crate::log_warn!(
+            crate::log_at!(
+                Warn,
+                "files",
                 "fs_mount failed: {image_for_log} in {} ms: {e}",
                 started.elapsed().as_millis()
             );
@@ -3057,7 +3122,7 @@ async fn ps5_app_launch(Json(req): Json<AppLaunchReq>) -> impl IntoResponse {
     };
     let title_id = req.title_id;
     let started = std::time::Instant::now();
-    crate::log_info!("app_launch: addr={addr} title_id={title_id}");
+    crate::log_at!(Info, "files", "app_launch: addr={addr} title_id={title_id}");
     let title_for_log = title_id.clone();
     match tokio::task::spawn_blocking(move || app_launch(&addr, &title_id))
         .await
@@ -3065,14 +3130,18 @@ async fn ps5_app_launch(Json(req): Json<AppLaunchReq>) -> impl IntoResponse {
         .and_then(|r| r)
     {
         Ok(()) => {
-            crate::log_info!(
+            crate::log_at!(
+                Info,
+                "files",
                 "app_launch ok: {title_for_log} in {} ms",
                 started.elapsed().as_millis()
             );
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
         }
         Err(e) => {
-            crate::log_warn!(
+            crate::log_at!(
+                Warn,
+                "files",
                 "app_launch failed: {title_for_log} in {} ms: {e}",
                 started.elapsed().as_millis()
             );
@@ -3110,7 +3179,9 @@ async fn ps5_app_register(
     let src_path = req.src_path;
     let patch_drm_type = req.patch_drm_type.unwrap_or(false);
     let started = std::time::Instant::now();
-    crate::log_info!(
+    crate::log_at!(
+        Info,
+        "files",
         "app_register: addr={addr} src_path={src_path} patch_drm_type={patch_drm_type}"
     );
     let path_for_log = src_path.clone();
@@ -3123,7 +3194,9 @@ async fn ps5_app_register(
     .and_then(|r| r)
     {
         Ok(result) => {
-            crate::log_info!(
+            crate::log_at!(
+                Info,
+                "files",
                 "app_register ok: {path_for_log} -> {} ({}) in {} ms",
                 result.title_id,
                 result.title_name,
@@ -3132,7 +3205,9 @@ async fn ps5_app_register(
             (StatusCode::OK, Json::<RegisterResult>(result)).into_response()
         }
         Err(e) => {
-            crate::log_warn!(
+            crate::log_at!(
+                Warn,
+                "files",
                 "app_register failed: {path_for_log} in {} ms: {e}",
                 started.elapsed().as_millis()
             );
@@ -3163,7 +3238,11 @@ async fn ps5_app_unregister(
     };
     let title_id = req.title_id;
     let started = std::time::Instant::now();
-    crate::log_info!("app_unregister: addr={addr} title_id={title_id}");
+    crate::log_at!(
+        Info,
+        "files",
+        "app_unregister: addr={addr} title_id={title_id}"
+    );
     let title_for_log = title_id.clone();
     // Uninstalling changes which artwork exists, so drop this console's
     // cached images now rather than letting them age out — the user would
@@ -3183,7 +3262,9 @@ async fn ps5_app_unregister(
             // 0x80B21B02 refusal masquerade as a successful uninstall while
             // the title stayed in Settings → Storage.
             if outcome.sony_refused() && !outcome.refusal_stands() {
-                crate::log_warn!(
+                crate::log_at!(
+                    Warn,
+                    "files",
                     "app_unregister: {title_for_log} — sceAppInstUtilAppUninstall refused with \
                      rc=0x{:08X}, but our registration is gone and the title is no longer listed \
                      ({} ms)",
@@ -3191,7 +3272,9 @@ async fn ps5_app_unregister(
                     started.elapsed().as_millis()
                 );
             } else if outcome.sony_refused() {
-                crate::log_warn!(
+                crate::log_at!(
+                    Warn,
+                    "files",
                     "app_unregister: {title_for_log} — our teardown ok in {} ms, but \
                      sceAppInstUtilAppUninstall REFUSED with rc=0x{:08X}; the title may \
                      remain in Settings → Storage",
@@ -3200,13 +3283,17 @@ async fn ps5_app_unregister(
                 );
             } else if outcome.still_present == Some(true) {
                 // WARN so a bug report carries it: the game is still listed (#476).
-                crate::log_warn!(
+                crate::log_at!(
+                    Warn,
+                    "files",
                     "app_unregister: {title_for_log} — Sony accepted in {} ms, but the \
                      title's folders are still on the console",
                     started.elapsed().as_millis()
                 );
             } else {
-                crate::log_info!(
+                crate::log_at!(
+                    Info,
+                    "files",
                     "app_unregister ok: {title_for_log} in {} ms",
                     started.elapsed().as_millis()
                 );
@@ -3223,7 +3310,9 @@ async fn ps5_app_unregister(
                 .into_response()
         }
         Err(e) => {
-            crate::log_warn!(
+            crate::log_at!(
+                Warn,
+                "files",
                 "app_unregister failed: {title_for_log} in {} ms: {e}",
                 started.elapsed().as_millis()
             );
@@ -3241,7 +3330,11 @@ async fn ps5_fs_unmount(
     };
     let mount_point = req.mount_point;
     let started = std::time::Instant::now();
-    crate::log_info!("fs_unmount: addr={addr} mount_point={mount_point}");
+    crate::log_at!(
+        Info,
+        "files",
+        "fs_unmount: addr={addr} mount_point={mount_point}"
+    );
     let mp_for_log = mount_point.clone();
     match tokio::task::spawn_blocking(move || fs_unmount(&addr, &mount_point))
         .await
@@ -3249,14 +3342,18 @@ async fn ps5_fs_unmount(
         .and_then(|r| r)
     {
         Ok(()) => {
-            crate::log_info!(
+            crate::log_at!(
+                Info,
+                "files",
                 "fs_unmount ok: {mp_for_log} in {} ms",
                 started.elapsed().as_millis()
             );
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
         }
         Err(e) => {
-            crate::log_warn!(
+            crate::log_at!(
+                Warn,
+                "files",
                 "fs_unmount failed: {mp_for_log} in {} ms: {e}",
                 started.elapsed().as_millis()
             );
@@ -3276,7 +3373,11 @@ async fn ps5_fs_chmod(
     let mode = req.mode;
     let recursive = req.recursive;
     let started = std::time::Instant::now();
-    crate::log_info!("fs_chmod: addr={addr} path={path} mode={mode} recursive={recursive}");
+    crate::log_at!(
+        Info,
+        "files",
+        "fs_chmod: addr={addr} path={path} mode={mode} recursive={recursive}"
+    );
     let path_for_log = path.clone();
     // Recursive chmod on a 20k-file game folder routinely runs past the
     // default 30 s socket timeout — the payload walks the tree serially
@@ -3299,14 +3400,18 @@ async fn ps5_fs_chmod(
     .and_then(|r| r)
     {
         Ok(()) => {
-            crate::log_info!(
+            crate::log_at!(
+                Info,
+                "files",
                 "fs_chmod ok: {path_for_log} in {} ms",
                 started.elapsed().as_millis()
             );
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
         }
         Err(e) => {
-            crate::log_warn!(
+            crate::log_at!(
+                Warn,
+                "files",
                 "fs_chmod failed: {path_for_log} in {} ms: {e}",
                 started.elapsed().as_millis()
             );
@@ -3398,7 +3503,7 @@ struct FsOpCancelReq {
 /// Stops a console file operation: this engine's own job if it runs one with that id, else the
 /// helper's. False when nothing with that id is running.
 async fn cancel_fs_op(addr: String, op_id: u64) -> anyhow::Result<bool> {
-    crate::log_info!("fs_op_cancel: op_id={op_id}");
+    crate::log_at!(Info, "files", "fs_op_cancel: op_id={op_id}");
     if ps5upload_ava1::copy::op_cancel(op_id) {
         return Ok(true);
     }
@@ -3428,7 +3533,7 @@ async fn ps5_fs_mkdir(Json(req): Json<FsPathReq>) -> impl IntoResponse {
     };
     let path = req.path;
     let started = std::time::Instant::now();
-    crate::log_info!("fs_mkdir: addr={addr} path={path}");
+    crate::log_at!(Info, "files", "fs_mkdir: addr={addr} path={path}");
     let path_for_log = path.clone();
     match tokio::task::spawn_blocking(move || fs_mkdir(&addr, &path))
         .await
@@ -3436,14 +3541,18 @@ async fn ps5_fs_mkdir(Json(req): Json<FsPathReq>) -> impl IntoResponse {
         .and_then(|r| r)
     {
         Ok(()) => {
-            crate::log_info!(
+            crate::log_at!(
+                Info,
+                "files",
                 "fs_mkdir ok: {path_for_log} in {} ms",
                 started.elapsed().as_millis()
             );
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
         }
         Err(e) => {
-            crate::log_warn!(
+            crate::log_at!(
+                Warn,
+                "files",
                 "fs_mkdir failed: {path_for_log} in {} ms: {e}",
                 started.elapsed().as_millis()
             );
@@ -4565,6 +4674,17 @@ async fn ps5_power_wake_login(Json(mut req): Json<PowerWakeLoginReq>) -> impl In
         if !credential.trim().is_empty() {
             ps5upload_core::ddp::wake(&host, &credential)?;
         }
+        log_at!(
+            Debug,
+            "wake",
+            "wake-login {host}: {} then waiting for the session port to sign in",
+            if credential.trim().is_empty() {
+                "no wake credential, not woken,"
+            } else {
+                "woken,"
+            }
+        );
+
         ps5upload_core::rp_session::login_session_when_ready(
             &host,
             &creds,
@@ -4582,11 +4702,25 @@ async fn ps5_power_wake_login(Json(mut req): Json<PowerWakeLoginReq>) -> impl In
 
 async fn ps5_power_wake(Json(req): Json<PowerWakeReq>) -> impl IntoResponse {
     let host = consoles_api::resolve(&req.host);
-    let cred = if req.credential.trim().is_empty() {
-        consoles_api::wake_credential(&host).unwrap_or_default()
-    } else {
+    let from_request = !req.credential.trim().is_empty();
+    let cred = if from_request {
         req.credential.clone()
+    } else {
+        consoles_api::wake_credential(&host).unwrap_or_default()
     };
+    // Where the key came from, never the key.
+    log_at!(
+        Debug,
+        "wake",
+        "power/wake {host}: credential {}",
+        if from_request {
+            "from the request"
+        } else if cred.is_empty() {
+            "missing (none saved for this console)"
+        } else {
+            "from the saved console"
+        }
+    );
     match tokio::task::spawn_blocking(move || ps5upload_core::ddp::wake(&host, &cred)).await {
         Ok(Ok(())) => (
             StatusCode::OK,
@@ -11531,8 +11665,11 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // (reconcile per-parent progress, transfer retries, etc.) without
     // having to install a separate pipe for core diagnostics.
     ps5upload_core::log::set_sink(|msg| engine_log::record("info", msg.to_string()));
-    // core_debug! lines (written only while "Detailed logs" is on) land at debug.
-    ps5upload_core::log::set_debug_sink(|msg| engine_log::record("debug", msg.to_string()));
+    // clog!/core_debug! lines, with their level and category. The level setting comes off disk
+    // first, so a raise made before a restart is still in force (until it runs out).
+    ps5upload_core::log::set_leveled_sink(engine_log::core_sink);
+    log_levels::load_saved();
+    diag_api::mark_started();
     // The bug-report journal: every crate's events (ps5upload_core::events) land on disk here.
     event_journal::install();
     ps5upload_core::events::emit(
@@ -12513,6 +12650,11 @@ fn build_app_and_mcp(
             get(diag_api::log_level_get).post(diag_api::log_level_set),
         )
         .route("/api/diag/features", get(diag_api::features))
+        .route(
+            "/api/logs/level",
+            get(log_levels::get_level).put(log_levels::put_level),
+        )
+        .route("/api/logs/recent", get(log_levels::recent))
         .route("/api/event-journal", get(event_journal::events_handler))
         .route(
             "/api/ps5/helper-log-ftp",

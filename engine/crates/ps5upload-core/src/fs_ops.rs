@@ -1183,7 +1183,7 @@ fn acquire_reconcile_gate(keys: Vec<String>, block: bool) -> Result<ReconcileGat
             break;
         }
         if !block {
-            crate::core_log!(
+            crate::clog!(Info, "transfer", 
                 "reconcile: a reconcile/preview sharing this console or source is already running — skipping this preview before the local walk to protect the source + mgmt port",
             );
             return Err(anyhow::anyhow!(
@@ -1249,7 +1249,9 @@ fn list_remote_scoped(
         };
         parent_rels.insert(parent);
     }
-    crate::core_log!(
+    crate::clog!(
+        Info,
+        "transfer",
         "list_remote_scoped: {} unique parent dir(s) to list under {}",
         parent_rels.len(),
         dest_root,
@@ -1258,7 +1260,7 @@ fn list_remote_scoped(
     // Safety valve for pathologically large trees: skip reconcile and let
     // the caller (re)send everything rather than spend minutes walking.
     if parent_rels.len() > MAX_RECONCILE_PARENT_DIRS {
-        crate::core_log!(
+        crate::clog!(Info, "transfer", 
             "list_remote_scoped: {} parent dir(s) exceeds cap {} — skipping reconcile; all files will be (re)sent",
             parent_rels.len(),
             MAX_RECONCILE_PARENT_DIRS,
@@ -1299,7 +1301,7 @@ fn list_remote_scoped(
                 || es.contains("no such")
                 || is_enoent_errno(&es)
             {
-                crate::core_log!(
+                crate::clog!(Info, "transfer", 
                     "list_remote_scoped: dest_root {} does not exist on PS5 — treating as empty, skipping {} per-parent list_dir call(s)",
                     dest_root,
                     parent_rels.len(),
@@ -1310,7 +1312,7 @@ fn list_remote_scoped(
             // malformed response) — surface immediately. There's no
             // point attempting N per-parent calls when the first
             // round-trip already told us the mgmt service is unwell.
-            crate::core_log!(
+            crate::clog!(Info, "transfer", 
                 "list_remote_scoped: dest_root probe failed ({}) — aborting reconcile instead of attempting {} per-parent list_dir call(s)",
                 e,
                 parent_rels.len(),
@@ -1334,7 +1336,9 @@ fn list_remote_scoped(
         let mut entries_seen = 0u64;
         let mut offset = 0u64;
         loop {
-            crate::core_log!(
+            crate::clog!(
+                Info,
+                "transfer",
                 "list_remote_scoped: [{}/{}] list_dir({}) offset={} limit=256",
                 i + 1,
                 parent_rels.len(),
@@ -1356,7 +1360,9 @@ fn list_remote_scoped(
                             || es.contains("no such")
                             || is_enoent_errno(&es))
                     {
-                        crate::core_log!(
+                        crate::clog!(
+                            Info,
+                            "transfer",
                             "list_remote_scoped: [{}/{}] {} missing on PS5 — treating as empty",
                             i + 1,
                             parent_rels.len(),
@@ -1364,7 +1370,9 @@ fn list_remote_scoped(
                         );
                         break;
                     }
-                    crate::core_log!(
+                    crate::clog!(
+                        Info,
+                        "transfer",
                         "list_remote_scoped: [{}/{}] list_dir({}) offset={} ERROR: {}",
                         i + 1,
                         parent_rels.len(),
@@ -1403,7 +1411,9 @@ fn list_remote_scoped(
                 break;
             }
         }
-        crate::core_log!(
+        crate::clog!(
+            Info,
+            "transfer",
             "list_remote_scoped: [{}/{}] {} done — {} entries in {} page(s), {} ms",
             i + 1,
             parent_rels.len(),
@@ -1413,7 +1423,9 @@ fn list_remote_scoped(
             started.elapsed().as_millis(),
         );
     }
-    crate::core_log!(
+    crate::clog!(
+        Info,
+        "transfer",
         "list_remote_scoped: total {} remote file(s) across {} parent dir(s)",
         out.len(),
         parent_rels.len(),
@@ -1454,16 +1466,25 @@ pub fn reconcile(
     let yield_now = || !block_for_gate && reconcile_wanted(&keys);
 
     let t_local = std::time::Instant::now();
-    crate::core_log!("reconcile: walking local {} …", src.display(),);
+    crate::clog!(
+        Info,
+        "transfer",
+        "reconcile: walking local {} …",
+        src.display(),
+    );
     let local = walk_local_inventory_until(src, excludes, &yield_now)?;
-    crate::core_log!(
+    crate::clog!(
+        Info,
+        "transfer",
         "reconcile: local walk {} files ({} ms)",
         local.len(),
         t_local.elapsed().as_millis(),
     );
     let t_remote = std::time::Instant::now();
     let remote = list_remote_scoped(addr, dest_root, &local, &yield_now)?;
-    crate::core_log!(
+    crate::clog!(
+        Info,
+        "transfer",
         "reconcile: remote inventory built ({} ms, mode={:?}) — starting diff",
         t_remote.elapsed().as_millis(),
         mode,
@@ -1489,17 +1510,18 @@ pub fn reconcile(
                 // worst case of treating-as-unverified is one extra
                 // file in the to-send list; the upload still progresses.
                 let local_path = src.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
-                let local_hash_opt = match blake3_file(&local_path) {
-                    Ok(h) => Some(h),
-                    Err(e) => {
-                        crate::core_log!(
+                let local_hash_opt =
+                    match blake3_file(&local_path) {
+                        Ok(h) => Some(h),
+                        Err(e) => {
+                            crate::clog!(Info, "transfer", 
                             "reconcile: blake3 failed for local {} ({}); treating as must-resend",
                             local_path.display(),
                             e,
                         );
-                        None
-                    }
-                };
+                            None
+                        }
+                    };
                 if let Some(local_hash) = local_hash_opt {
                     let remote_path = format!("{dest_root}/{rel}");
                     // 10 s per-file deadline so a single hung PS5 doesn't
@@ -1510,7 +1532,7 @@ pub fn reconcile(
                     match hash_remote_waiting_out_busy(addr, &remote_path)? {
                         Ok(r) => local_hash != r.hash,
                         Err(e) => {
-                            crate::core_log!(
+                            crate::clog!(Info, "transfer", 
                                 "reconcile: fs_hash failed for remote {} ({}); treating as must-resend",
                                 remote_path,
                                 e,

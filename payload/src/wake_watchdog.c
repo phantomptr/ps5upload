@@ -9,6 +9,7 @@
  */
 
 #include "wake_watchdog.h"
+#include "plog.h"
 #include "kernel_rw_lock.h"
 #include "proc_identity.h"
 #include "config.h"
@@ -97,12 +98,16 @@ static void *wake_watchdog_thread_fn(void *arg) {
         int64_t real_elapsed = (int64_t)real1.tv_sec - (int64_t)real0.tv_sec;
         int64_t mono_elapsed = (int64_t)mono1.tv_sec - (int64_t)mono0.tv_sec;
 
+        PLOG(PLOG_TRACE, PLOG_WAKE, "wake_watchdog: slept %llds (monotonic %llds)", (long long)real_elapsed,
+             (long long)mono_elapsed);
         /* Normal case: we slept roughly WAKE_POLL_S. */
         if (!wake_watchdog_should_look(real_elapsed, mono_elapsed)) continue;
 
         /* A jump is a cue, not proof: a clock correction or a throttled thread
          * looks the same as a rest. The ucred decides. */
         int state = ucred_state();
+        PLOG(PLOG_DEBUG, PLOG_WAKE, "wake_watchdog: clocks apart (%llds vs %llds), ucred state %d",
+             (long long)real_elapsed, (long long)mono_elapsed, state);
         if (!wake_watchdog_should_recover(real_elapsed, mono_elapsed, state)) {
             fprintf(stderr,
                     "wake_watchdog: clocks jumped %llds (monotonic %llds), ucred %s; "

@@ -249,6 +249,37 @@ curl -N http://127.0.0.1:19113/api/events
 
 `GET /api/event-journal?since_seq=&limit=` reads the same journal as a list.
 
+## Log levels
+
+The app, the engine and the PS5 helper share one setting: a level (`error`, `warn`, `info`,
+`debug`, `trace`) for everything, plus per-category overrides. The categories are `general`, `api`,
+`connection`, `helper`, `rp` (Remote Play), `pairing`, `wake`, `transfer`, `install`, `cleanup`,
+`files`, `convert`, `together`, `golive`, `mesh` and `ui`. A line is written when its level is at
+most its category's.
+
+Anything above `info` is a raise and ends by itself: after `minutes` (default 60) or at `until_ms`,
+never more than a day. Levels at `info` or below stay until changed. The engine keeps the setting
+on disk, the app follows it, and the engine hands it to each helper it talks to (a helper from
+before 11.5 keeps its own fixed level).
+
+```sh
+curl http://127.0.0.1:19113/api/logs/level
+# Remote Play and the helper at trace for 30 minutes, the rest unchanged:
+curl -X PUT http://127.0.0.1:19113/api/logs/level -H 'Content-Type: application/json' \
+  -d '{"categories":{"rp":"trace","helper":"trace"},"merge":true,"minutes":30}'
+# Back to info everywhere:
+curl -X PUT http://127.0.0.1:19113/api/logs/level -H 'Content-Type: application/json' -d '{"reset":true}'
+# The engine's newest Remote Play lines at debug or more severe, from the last 10 minutes:
+curl "http://127.0.0.1:19113/api/logs/recent?level=debug&category=rp&since_ms=$(( ($(date +%s) - 600) * 1000 ))"
+```
+
+`/api/logs/recent` answers `{lines: [{seq, ts_ms, level, cat, msg}], count, next_seq, levels}`; pass
+`since_seq=<next_seq>` to read on. Every line has its secrets taken out where it is written
+(passwords in URLs, secret-named fields, bearer tokens, pairing PINs). The engine's request log
+(one `debug` line per call, category `api`) is always kept in `engine.log`, whatever the level, as
+the trace for a crash. `POST /api/diag/log-level` (Detailed logs) still works: on raises the global
+level to `debug`.
+
 ## Route families
 
 Each operation's first tag is its family. `GET /api/openapi.json` has every route; these are the
@@ -256,7 +287,7 @@ places to start.
 
 | Family | Routes | What it's for |
 |---|---|---|
-| `engine` | `/api/version`, `/api/events`, `/api/event-journal`, `/api/engine-logs`, `/api/diag/*`, `/api/metrics`, `/api/openapi.json`, `/api/mgmt/call` | The engine itself. `/api/mgmt/call` is the raw helper call, for when nothing else fits. |
+| `engine` | `/api/version`, `/api/events`, `/api/event-journal`, `/api/engine-logs`, `/api/logs/*`, `/api/diag/*`, `/api/metrics`, `/api/openapi.json`, `/api/mgmt/call` | The engine itself. `/api/mgmt/call` is the raw helper call, for when nothing else fits. |
 | `consoles` | `/api/consoles`, `/api/discover`, `/api/ps5/status`, `/api/ps5/readiness`, `/api/ps5/volumes` | Which consoles there are and how they stand. |
 | `console-files` | `/api/ps5/list-dir`, `/api/ps5/fs/*`, `/api/ps5/disk-usage`, `/api/ps5/console-shares` | Files on the console. |
 | `transfer` | `/api/transfer/*`, `/api/files/upload`, `/api/link/*`, `/api/zip/*`, `/api/7z/*`, `/api/rar/*` | Uploads and downloads. |

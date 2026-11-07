@@ -4953,6 +4953,8 @@ export interface EngineLogEntry {
   ts_ms: number;
   level: "info" | "warn" | "error" | string;
   msg: string;
+  /** The line's category (engines from 11.5 on): rp, install, helper, ... ("general" when none). */
+  cat?: string;
 }
 
 export interface EngineLogsTail {

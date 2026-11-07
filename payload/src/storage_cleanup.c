@@ -13,6 +13,7 @@
  *     by deleting files, and the removal is watched for minutes (installs are asynchronous);
  *   - deletes are unlink/rmdir in place: nothing is moved, nothing is renamed across mounts. */
 #include "storage_cleanup.h"
+#include "plog.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -395,7 +396,9 @@ static void item_size(sc_item_t *it) {
 static void set_phase(const char *p) {
     pthread_mutex_lock(&g_mu);
     G.phase = p;
+    int n = G.n_items;
     pthread_mutex_unlock(&g_mu);
+    PLOG(PLOG_DEBUG, PLOG_CLEANUP, "[cleanup] scan phase %s (%d items so far)", p, n);
 }
 
 /* ---- A / B: installed updates ---- */
@@ -997,6 +1000,10 @@ static void finish_item(sc_item_t *it, int res, const char *reason, uint32_t rc)
     it->rc = rc;
     if (res == 1) G.freed += it->alloc;
     pthread_mutex_unlock(&g_mu);
+    /* res: 1 removed, 2 skipped, 3 failed (failures at info): the reason
+     * and Sony's code are what a report about "Clean-up did nothing" needs. */
+    PLOG(res == 3 ? PLOG_INFO : PLOG_DEBUG, PLOG_CLEANUP, "[cleanup] item %c %s: result %d %s rc=0x%08X", it->cat,
+         it->path, res, reason ? reason : "", (unsigned)rc);
 }
 
 static void set_apply_phase(int cur, const char *phase) {

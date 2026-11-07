@@ -2,12 +2,16 @@ import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import {
   LEVEL_RANK,
   LOG_LEVELS,
+  LOG_CATEGORIES,
   DEFAULT_LOG_LEVEL,
+  categoryOf,
   currentMinRank,
+  effectiveLevel,
+  levelsSummary,
+  logEnabled,
+  raiseActive,
   useDiagSettingsStore,
-  DETAILED_LOGS_MS,
-  KEY_DETAILED_UNTIL,
-  detailedActive,
+  type EngineLevels,
 } from "./diagSettings";
 import { installWindowStub } from "../test-utils/storage";
 
@@ -34,48 +38,71 @@ describe("diagSettings level ranks", () => {
   });
 });
 
+describe("categories of app log sources", () => {
+  it("map the app's sources onto the engine's categories", () => {
+    expect(categoryOf("remote-play")).toBe("rp");
+    expect(categoryOf("upload")).toBe("transfer");
+    expect(categoryOf("install")).toBe("install");
+    expect(categoryOf("console")).toBe("ui");
+    expect(categoryOf("engine")).toBe("general");
+    expect(categoryOf("engine:rp")).toBe("rp");
+    expect(categoryOf("engine:nope")).toBe("general");
+    expect(categoryOf("something-else")).toBe("general");
+    for (const s of ["remote-play", "upload", "install", "cleanup", "wake"])
+      expect(LOG_CATEGORIES).toContain(categoryOf(s));
+  });
+});
+
 describe("diagSettings store", () => {
+  const now = 1_800_000_000_000;
   beforeEach(() => {
     installWindowStub();
-    useDiagSettingsStore.setState({ logLevel: DEFAULT_LOG_LEVEL, detailedUntil: null });
+    useDiagSettingsStore.setState({ logLevel: DEFAULT_LOG_LEVEL, engine: null });
   });
 
   afterEach(() => {
     delete (globalThis as { window?: unknown }).window;
   });
 
-  it("currentMinRank reflects the store", () => {
-    useDiagSettingsStore.getState().setLogLevel("trace");
-    expect(currentMinRank()).toBe(LEVEL_RANK.trace);
+  it("without the engine's levels the local level gates, never above info", () => {
     useDiagSettingsStore.getState().setLogLevel("error");
     expect(currentMinRank()).toBe(LEVEL_RANK.error);
+    // A raise needs an end, which only the engine keeps: the local level stays at info.
+    useDiagSettingsStore.getState().setLogLevel("trace");
+    expect(currentMinRank()).toBe(LEVEL_RANK.info);
+    expect(levelsSummary().source).toBe("app");
   });
 
   it("persists non-default levels and clears the key on default", () => {
-    useDiagSettingsStore.getState().setLogLevel("debug");
-    expect(window.localStorage.getItem("ps5upload.log_level")).toBe("debug");
-    // Returning to the default removes the key (absence = default).
+    useDiagSettingsStore.getState().setLogLevel("warn");
+    expect(window.localStorage.getItem("ps5upload.log_level")).toBe("warn");
     useDiagSettingsStore.getState().setLogLevel("info");
     expect(window.localStorage.getItem("ps5upload.log_level")).toBeNull();
   });
 
-  it("Detailed logs record debug lines for a day, then stop by themselves", () => {
-    const now = 1_800_000_000_000;
-    useDiagSettingsStore.getState().setDetailed(true, now);
-    const until = useDiagSettingsStore.getState().detailedUntil;
-    expect(until).toBe(now + DETAILED_LOGS_MS);
-    expect(window.localStorage.getItem(KEY_DETAILED_UNTIL)).toBe(String(now + DETAILED_LOGS_MS));
-    // info is the chosen level, but debug lines are recorded while it is on…
-    expect(currentMinRank(now + 1000)).toBe(LEVEL_RANK.debug);
-    // …and a more verbose choice stays.
-    useDiagSettingsStore.getState().setLogLevel("trace");
-    expect(currentMinRank(now + 1000)).toBe(LEVEL_RANK.trace);
-    useDiagSettingsStore.getState().setLogLevel("info");
-    // Its time is up: back to the chosen level even before the timer turns it off.
-    expect(detailedActive(until, now + DETAILED_LOGS_MS)).toBe(false);
-    expect(currentMinRank(now + DETAILED_LOGS_MS + 1)).toBe(LEVEL_RANK.info);
-    useDiagSettingsStore.getState().setDetailed(false);
-    expect(useDiagSettingsStore.getState().detailedUntil).toBeNull();
-    expect(window.localStorage.getItem(KEY_DETAILED_UNTIL)).toBeNull();
+  it("the engine's levels gate by category, and a raise ends on time", () => {
+    const levels: EngineLevels = { level: "warn", categories: { rp: "trace" }, until_ms: now + 60_000 };
+    useDiagSettingsStore.getState().setEngineLevels(levels);
+    expect(currentMinRank(now, "remote-play")).toBe(LEVEL_RANK.trace);
+    expect(currentMinRank(now, "upload")).toBe(LEVEL_RANK.warn);
+    expect(logEnabled("debug", "engine:rp", now)).toBe(true);
+    expect(logEnabled("info", "install", now)).toBe(false);
+    expect(raiseActive(levels, now)).toBe(true);
+    // The raise ran out: rp writes info again; the lowered global level stays.
+    expect(effectiveLevel(levels, "rp", now + 60_000)).toBe("info");
+    expect(effectiveLevel(levels, "install", now + 60_000)).toBe("warn");
+    expect(raiseActive(levels, now + 60_000)).toBe(false);
+  });
+
+  it("a report says which levels were in force", () => {
+    useDiagSettingsStore.getState().setEngineLevels({
+      level: "debug",
+      categories: {},
+      until_ms: now + 1000,
+    });
+    const s = levelsSummary(now);
+    expect(s).toMatchObject({ level: "debug", raised: true, source: "engine" });
+    expect(s.until).toBe(new Date(now + 1000).toISOString());
+    expect(levelsSummary(now + 2000).raised).toBe(false);
   });
 });

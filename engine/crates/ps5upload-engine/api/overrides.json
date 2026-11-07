@@ -203,6 +203,14 @@
   "GET /api/local/storage-roots": {
    "summary": "The drives and places on this computer to browse from"
   },
+  "GET /api/logs/level": {
+   "summary": "The log levels: global, per category, and what is in force now",
+   "description": "One level model for the app, the engine and the PS5 helper: error, warn, info, debug, trace. `level` is the global level, `categories` the per-category overrides, `effective` what each category writes now, `until_ms` when a raise above info ends (null when nothing is raised), `category_list` every category with what it covers."
+  },
+  "GET /api/logs/recent": {
+   "summary": "The engine's newest log lines, by level, category and time",
+   "description": "Oldest first. `level=debug` keeps debug and everything more severe; `category` takes names separated by commas; `since_ms` (Unix ms) and `since_seq` (a line's `seq`, as `next_seq` answers) keep only newer lines; `limit` keeps the newest (default 200, at most 2000). Secrets are taken out of every line when it is written."
+  },
   "GET /api/mesh/doc": {
    "summary": "Read a shared document kept on the console"
   },
@@ -500,7 +508,7 @@
    "summary": "Stop the collection scan"
   },
   "POST /api/diag/log-level": {
-   "summary": "Turn detailed logging on or off, until a set time"
+   "summary": "Turn detailed logging on or off, until a set time (older apps; see /api/logs/level)"
   },
   "POST /api/discover": {
    "summary": "Find consoles on the network, by mDNS and by sweeping each /24 for the helper's port"
@@ -935,6 +943,10 @@
   },
   "PUT /api/consoles": {
    "summary": "Replace the saved console list"
+  },
+  "PUT /api/logs/level": {
+   "summary": "Set the log levels: global, per category, and how long a raise lasts",
+   "description": "Anything above info (globally or for a category) is a raise: it lasts `minutes` (default 60) or until `until_ms`, at most a day, then falls back to info by itself. `categories` replaces the overrides, or with `merge: true` changes only the categories named (null drops one). `reset: true` starts from info with no overrides. The engine keeps the setting on disk and hands it to the app and every helper it talks to."
   },
   "PUT /api/ps5/vinput": {
    "summary": "Turn virtual keyboard and mouse on or off"

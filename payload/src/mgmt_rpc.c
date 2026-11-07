@@ -7,6 +7,7 @@
 #include <time.h>
 
 #include "mgmt_page_keep.h"
+#include "plog.h"
 
 #include "ava1_app_gen.h"
 #include "ava1_wire.h"
@@ -306,10 +307,12 @@ static int op_entry_run(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t
     cx.out = cause;
     cx.cap = MGMT_CAUSE_MAX;
     if (G.enter) G.enter(e->legacy_frame);
+    PLOG(PLOG_DEBUG, PLOG_HELPER, "op: frame %u starts (%zu bytes in)", (unsigned)e->legacy_frame, n);
     g_op_cur = c;
     rc = legacy_call(&cx, e->fn, (const char *)args, n, AVA1_OP_RESULT_MAX, &rep, LC_KEEP);
     g_op_cur = NULL;
     if (G.leave) G.leave();
+    PLOG(PLOG_DEBUG, PLOG_HELPER, "op: frame %u ends: status %d", (unsigned)e->legacy_frame, rc);
     if (rc != AVA1_STATUS_OK) {
         cause[cx.out_len] = '\0';
         ava1_op_message(c, "%s", (const char *)cause);
@@ -746,6 +749,7 @@ int mgmt_rpc_dispatch(uint16_t method, const uint8_t *body, uint32_t len, uint8_
         size_t n = sizeof u - 1 < cap ? sizeof u - 1 : cap;
         memcpy(out, u, n);
         *out_len = n;
+        PLOG(PLOG_DEBUG, PLOG_HELPER, "mgmt: method %u: unknown", (unsigned)method);
         return AVA1_ERR_UNKNOWN_METHOD;
     }
     memset(&cx, 0, sizeof cx);
@@ -753,9 +757,22 @@ int mgmt_rpc_dispatch(uint16_t method, const uint8_t *body, uint32_t len, uint8_
     cx.out = out;
     cx.cap = cap;
     cx.entry = e;
+    /* Timed only while someone wants the line: the clock read is the cost. */
+    int timed = PLOG_DEBUG <= plog_ceiling && plog_on(PLOG_DEBUG, PLOG_HELPER);
+    struct timespec t0;
+    if (timed) clock_gettime(CLOCK_MONOTONIC, &t0);
+    PLOG(PLOG_TRACE, PLOG_HELPER, "mgmt: method %u (frame %u) in %u bytes", (unsigned)method,
+         (unsigned)e->legacy_frame, (unsigned)len);
     if (G.enter) G.enter(e->legacy_frame);
     rc = e->run(body, len, &cx);
     if (G.leave) G.leave();
     *out_len = cx.out_len;
+    if (timed) {
+        struct timespec t1;
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        long long ms = (long long)(t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+        PLOG(PLOG_DEBUG, PLOG_HELPER, "mgmt: method %u (frame %u): status %d, %u bytes in, %zu out, %lld ms",
+             (unsigned)method, (unsigned)e->legacy_frame, rc, (unsigned)len, cx.out_len, ms);
+    }
     return rc;
 }

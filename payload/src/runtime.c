@@ -35,6 +35,7 @@
 #include "webui_api.h"
 #include "webui_smb.h"
 #include "runtime.h"
+#include "plog.h"
 #include "sandbox_unmount.h"
 #include "image_mount.h"
 #include "instance_verdict.h"
@@ -358,6 +359,9 @@
 #define MGMT_FRAME_CONSOLE_TASKS_ACK 361u
 #define MGMT_FRAME_CONSOLE_TASK_CANCEL 362u
 #define MGMT_FRAME_CONSOLE_TASK_CANCEL_ACK 363u
+/* the log levels the engine hands the helper (plog.c) */
+#define MGMT_FRAME_LOG_LEVEL 364u
+#define MGMT_FRAME_LOG_LEVEL_ACK 365u
 #define MGMT_FRAME_SDK_SCAN 214u
 #define MGMT_FRAME_SDK_SCAN_ACK 215u
 #define MGMT_FRAME_SDK_PATCH 216u
@@ -8421,6 +8425,26 @@ static int handle_console_task_cancel(runtime_state_t *state, const char *body, 
     if (!state || body_len > 1024u) return mgmt_reply(MGMT_FRAME_ERROR, "bad_request", 11);
     n = webui_console_task_cancel(body ? body : "", (size_t)body_len, out, sizeof out);
     return mgmt_reply(MGMT_FRAME_CONSOLE_TASK_CANCEL_ACK, out, (uint64_t)(n > 0 ? n : 0));
+}
+
+/* log.level: the engine's log level setting for this helper (plog.h). An empty body only reads. */
+static int handle_log_level(runtime_state_t *state, const char *body, uint64_t body_len) {
+    char out[512];
+    uint64_t now = plog_now_s();
+    if (!state || body_len > 2048u) return mgmt_reply(MGMT_FRAME_ERROR, "bad_request", 11);
+    if (body_len > 0) {
+        char before[512];
+        int had = plog_describe(before, sizeof before, now);
+        if (plog_apply(body, (size_t)body_len, now) != 0) {
+            const char *err = "{\"ok\":false,\"err\":\"bad_request\"}";
+            return mgmt_reply(MGMT_FRAME_LOG_LEVEL_ACK, err, strlen(err));
+        }
+        int n = plog_describe(out, sizeof out, now);
+        if (n > 0 && (had <= 0 || strcmp(before, out) != 0)) fprintf(stderr, "[log] levels now %s\n", out);
+    }
+    int n = plog_describe(out, sizeof out, now);
+    if (n < 0) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
+    return mgmt_reply(MGMT_FRAME_LOG_LEVEL_ACK, out, (uint64_t)n);
 }
 
 /* ── The devices that use this console (mesh.c) ─────────────────────────

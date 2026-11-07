@@ -299,6 +299,72 @@ impl Misses {
     }
 }
 
+/// What one console's helper was told of the log levels (`log.level`, log_levels.rs). A helper
+/// that restarts starts again at info and begins a new stderr.log, so its log's first bytes (the
+/// mirror's `Cursor::head`) name the helper run: a new head means telling it again.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct LevelPush {
+    /// The level setting's generation and the helper run it was sent to.
+    pub sent: Option<(u64, Vec<u8>)>,
+    /// The helper run that answered "unknown method" (an older helper): not asked again.
+    pub unsupported: Option<Vec<u8>>,
+}
+
+/// What to do about the levels for a helper run (`head`) given the setting's `generation`.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PushPlan {
+    /// Up to date, or an older helper.
+    Nothing,
+    /// A new helper run and the setting is the default: it already is at info.
+    NoteOnly,
+    Send,
+}
+
+pub fn push_plan(p: &LevelPush, generation: u64, head: &[u8], is_default: bool) -> PushPlan {
+    if head.is_empty() || p.unsupported.as_deref() == Some(head) {
+        return PushPlan::Nothing;
+    }
+    match &p.sent {
+        Some((g, h)) if *g == generation && h == head => PushPlan::Nothing,
+        Some((_, h)) if h == head => PushPlan::Send,
+        _ if is_default => PushPlan::NoteOnly,
+        _ => PushPlan::Send,
+    }
+}
+
+/// Tells one helper the level setting if it needs telling (blocking: on the mirror's own thread).
+fn push_levels(mgmt: &str, host: &str, push: &mut LevelPush, head: &[u8]) {
+    let generation = ps5upload_core::log::generation();
+    let is_default = ps5upload_core::log::levels() == ps5upload_core::log::Levels::default();
+    match push_plan(push, generation, head, is_default) {
+        PushPlan::Nothing => {}
+        PushPlan::NoteOnly => push.sent = Some((generation, head.to_vec())),
+        PushPlan::Send => {
+            let config = crate::log_levels::helper_config();
+            match ps5upload_core::helper_log_level::set(mgmt, &config) {
+                Ok(Some(answer)) => {
+                    crate::log_at!(
+                        Debug,
+                        "helper",
+                        "log levels to {host}: {config} -> {answer}"
+                    );
+                    push.sent = Some((generation, head.to_vec()));
+                }
+                Ok(None) => {
+                    crate::log_at!(
+                        Debug,
+                        "helper",
+                        "log levels to {host}: this helper has no log.level; it logs as before"
+                    );
+                    push.unsupported = Some(head.to_vec());
+                }
+                // Tried again on the next tick.
+                Err(e) => crate::log_at!(Debug, "helper", "log levels to {host}: {e:#}"),
+            }
+        }
+    }
+}
+
 /// Whether the engine is using a console's management port for real work right now.
 pub type BusyCheck = Arc<dyn Fn() -> bool + Send + Sync>;
 
@@ -312,6 +378,7 @@ pub fn spawn(busy: BusyCheck) {
         let mut cursors: HashMap<String, Cursor> = HashMap::new();
         let mut carries: HashMap<String, Vec<u8>> = HashMap::new();
         let mut misses = Misses::default();
+        let mut pushes: HashMap<String, LevelPush> = HashMap::new();
         let mut tick_no: u64 = 0;
         loop {
             tokio::time::sleep(TICK).await;
@@ -337,24 +404,31 @@ pub fn spawn(busy: BusyCheck) {
                 .map(|host| {
                     let mut cur = cursors.get(&host).cloned().unwrap_or_default();
                     let mut carry = carries.remove(&host).unwrap_or_default();
+                    let mut push = pushes.remove(&host).unwrap_or_default();
                     tokio::task::spawn_blocking(move || {
                         let src = ConsoleLog {
                             mgmt: crate::pkg_install::normalize_mgmt_addr(&host),
                         };
                         let r =
                             mirror_pass(&src, &host, &mut cur, &mut carry, &mut |e| emit_event(e));
-                        (host, r.is_ok(), cur, carry)
+                        // The helper answered: the moment to bring its log levels up to date.
+                        // Still inside the tick, so a transfer that starts later is never waited on.
+                        if r.is_ok() {
+                            push_levels(&src.mgmt, &host, &mut push, &cur.head);
+                        }
+                        (host, r.is_ok(), cur, carry, push)
                     })
                 })
                 .collect();
             for pass in passes {
-                let Ok((host, answered, cur, carry)) = pass.await else {
+                let Ok((host, answered, cur, carry, push)) = pass.await else {
                     continue;
                 };
                 // The cursor moves only past what was copied, so a console that stopped
                 // answering half way picks up exactly there on its next answer.
                 cursors.insert(host.clone(), cur);
                 carries.insert(host.clone(), carry);
+                pushes.insert(host.clone(), push);
                 if misses.record(&host, answered) {
                     consoles()
                         .lock()
@@ -362,6 +436,7 @@ pub fn spawn(busy: BusyCheck) {
                         .remove(&host);
                     cursors.remove(&host);
                     carries.remove(&host);
+                    pushes.remove(&host);
                 }
             }
         }
@@ -443,6 +518,29 @@ pub async fn ftp_log_handler(Query(q): Query<FtpLogQuery>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn levels_go_to_each_helper_run_once_per_change() {
+        let run1 = b"run one".to_vec();
+        let run2 = b"run two".to_vec();
+        let mut p = LevelPush::default();
+        // A new helper and the default setting: nothing to send, it is at info already.
+        assert_eq!(push_plan(&p, 1, &run1, true), PushPlan::NoteOnly);
+        p.sent = Some((1, run1.clone()));
+        assert_eq!(push_plan(&p, 1, &run1, true), PushPlan::Nothing);
+        // The setting changed: send, even back to the default.
+        assert_eq!(push_plan(&p, 2, &run1, false), PushPlan::Send);
+        assert_eq!(push_plan(&p, 2, &run1, true), PushPlan::Send);
+        p.sent = Some((2, run1.clone()));
+        // The helper restarted (a new log) with a raise in force: send again.
+        assert_eq!(push_plan(&p, 2, &run2, false), PushPlan::Send);
+        // An older helper is not asked again until it restarts.
+        p.unsupported = Some(run2.clone());
+        assert_eq!(push_plan(&p, 3, &run2, false), PushPlan::Nothing);
+        assert_eq!(push_plan(&p, 3, b"run three", false), PushPlan::Send);
+        // No head yet (the log was never read): nothing.
+        assert_eq!(push_plan(&p, 3, b"", false), PushPlan::Nothing);
+    }
 
     /// A console's two log files in memory; `fail_log` makes reads of the live log fail.
     struct Fake {

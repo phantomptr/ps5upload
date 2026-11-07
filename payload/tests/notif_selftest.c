@@ -27,8 +27,10 @@ static int failures = 0;
 
 pthread_mutex_t sony_api_lock = PTHREAD_MUTEX_INITIALIZER;
 static int g_toasts;
+static char g_shown[256];
 int sceNotificationSend(int32_t type, const char *msg) {
-    (void)type, (void)msg;
+    (void)type;
+    snprintf(g_shown, sizeof g_shown, "%s", msg);
     g_toasts++;
     return 0;
 }
@@ -114,6 +116,19 @@ static void test_round_trip(void) {
 
 /* since_seq filters, and the counter never rewinds across a restart or a clear: a client holding a
  * high watermark would go silent. */
+/* A PIN is shown on the TV, but the ring and its file keep the message without it. */
+static void test_kept_differs_from_shown(void) {
+    wipe();
+    restart();
+    CHECK(notif_send_kept("Remote Play PIN: 14928144", "Remote Play PIN: (shown on the TV)", NOTIF_LEVEL_INFO) == 0);
+    CHECK(strcmp(g_shown, "Remote Play PIN: 14928144") == 0);
+    size_t n = 0;
+    char *store = read_store(&n);
+    CHECK(store && !strstr(store, "14928144") && strstr(store, "(shown on the TV)"));
+    free(store);
+    CHECK(!strstr(list_since(0), "14928144"));
+}
+
 static void test_sequence_never_rewinds(void) {
     wipe();
     notif_send("one", NOTIF_LEVEL_INFO);
@@ -286,6 +301,7 @@ int main(void) {
     test_nothing_saved();
     test_round_trip();
     test_sequence_never_rewinds();
+    test_kept_differs_from_shown();
     test_ring_wraps();
     test_long_message();
     test_small_buffers();

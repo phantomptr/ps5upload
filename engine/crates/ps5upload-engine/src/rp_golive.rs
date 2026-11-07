@@ -239,7 +239,13 @@ impl Run {
     }
 
     fn fail(&self, p: Problem) {
-        crate::log_warn!("golive: stopped: {} ({})", p.message, p.code);
+        crate::log_at!(
+            Warn,
+            "golive",
+            "golive: stopped: {} ({})",
+            p.message,
+            p.code
+        );
         self.set(|s| {
             s.phase = "failed";
             s.error = Some(p);
@@ -394,7 +400,9 @@ fn start_run_with(
     });
     *slot = Some(r.clone());
     drop(slot);
-    crate::log_info!(
+    crate::log_at!(
+        Info,
+        "golive",
         "golive: going live to {}",
         r.dests
             .iter()
@@ -485,7 +493,11 @@ async fn run(r: Arc<Run>) {
             break;
         }
         if exit.session_ended {
-            crate::log_info!("golive: the Remote Play session ended; waiting for a new one");
+            crate::log_at!(
+                Info,
+                "golive",
+                "golive: the Remote Play session ended; waiting for a new one"
+            );
             continue;
         }
         if exit.rejoin {
@@ -498,7 +510,9 @@ async fn run(r: Arc<Run>) {
         );
         match backoff.after(f, exit.ran, Instant::now()) {
             Next::Retry(d) => {
-                crate::log_info!(
+                crate::log_at!(
+                    Info,
+                    "golive",
                     "golive: ffmpeg stopped ({f:?} after {:.0} s); again in {} s",
                     exit.ran.as_secs_f64(),
                     d.as_secs()
@@ -551,7 +565,9 @@ async fn run(r: Arc<Run>) {
         }
         s.live_since = None;
     });
-    crate::log_info!(
+    crate::log_at!(
+        Info,
+        "golive",
         "golive: ended after {:.0} s, {} MB sent",
         r.started.elapsed().as_secs_f64(),
         r.sent.load(Ordering::Relaxed) / 1_000_000
@@ -678,7 +694,7 @@ async fn run_ffmpeg(r: &Arc<Run>, mut reader: live_feed::FeedReader, idx: &[usiz
                 }
                 if logged < 40 {
                     logged += 1;
-                    crate::log_info!("golive: ffmpeg: {clean}");
+                    crate::log_at!(Info, "golive", "golive: ffmpeg: {clean}");
                 }
                 let kind = gf::classify(&line);
                 // Which output a tee line is about (by its number, or its URL).
@@ -798,7 +814,7 @@ async fn run_ffmpeg(r: &Arc<Run>, mut reader: live_feed::FeedReader, idx: &[usiz
                 if session_ended.load(Ordering::Relaxed) {
                     let since = *session_over.get_or_insert(now);
                     if now.saturating_duration_since(since) >= grace {
-                        crate::log_info!("golive: ffmpeg did not finish after the session ended; stopping it");
+                        crate::log_at!(Info, "golive", "golive: ffmpeg did not finish after the session ended; stopping it");
                         let _ = child.kill().await;
                         break child.wait().await.ok();
                     }
@@ -807,7 +823,7 @@ async fn run_ffmpeg(r: &Arc<Run>, mut reader: live_feed::FeedReader, idx: &[usiz
                 if now.saturating_duration_since(moved.1) >= limit
                     && !session_ended.load(Ordering::Relaxed)
                 {
-                    crate::log_info!(
+                    crate::log_at!(Info, "golive",
                         "golive: no progress for {} s: the connection is gone, starting again",
                         limit.as_secs()
                     );
@@ -822,7 +838,7 @@ async fn run_ffmpeg(r: &Arc<Run>, mut reader: live_feed::FeedReader, idx: &[usiz
                 }
                 let due = rejoin_at.lock().ok().and_then(|g| *g).is_some_and(|t| now >= t);
                 if due {
-                    crate::log_info!("golive: letting a dropped destination back in (short restart)");
+                    crate::log_at!(Info, "golive", "golive: letting a dropped destination back in (short restart)");
                     rejoin = true;
                     break finish(&mut child, &writer, grace).await;
                 }
@@ -841,7 +857,9 @@ async fn run_ffmpeg(r: &Arc<Run>, mut reader: live_feed::FeedReader, idx: &[usiz
     let ran = started.elapsed();
     let ok = status.is_some_and(|s| s.success());
     let failure = failure.lock().ok().and_then(|g| *g);
-    crate::log_info!(
+    crate::log_at!(
+        Info,
+        "golive",
         "golive: ffmpeg exited ({}) after {:.0} s",
         status.map_or("killed".to_string(), |s| s.to_string()),
         ran.as_secs_f64()
@@ -1072,7 +1090,7 @@ pub async fn stop(
     match current() {
         Some(r) => {
             r.request_stop();
-            crate::log_info!("golive: stop asked");
+            crate::log_at!(Info, "golive", "golive: stop asked");
             Json(serde_json::json!({ "ok": true })).into_response()
         }
         None => Json(serde_json::json!({ "ok": true, "live": null })).into_response(),
@@ -1166,7 +1184,13 @@ pub async fn add_destination(
     };
     match store.add(&inp) {
         Ok(v) => {
-            crate::log_info!("golive: destination {} ({}) added", v.dest.id, v.name);
+            crate::log_at!(
+                Info,
+                "golive",
+                "golive: destination {} ({}) added",
+                v.dest.id,
+                v.name
+            );
             Json(v).into_response()
         }
         Err(e) => invalid(e),
@@ -1207,7 +1231,7 @@ pub async fn remove_destination(
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, "store", e),
     };
     if store.remove(&id) {
-        crate::log_info!("golive: destination {id} removed");
+        crate::log_at!(Info, "golive", "golive: destination {id} removed");
         Json(serde_json::json!({"ok": true})).into_response()
     } else {
         err(StatusCode::NOT_FOUND, "not_found", "No such destination.")

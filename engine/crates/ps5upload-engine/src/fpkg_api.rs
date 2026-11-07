@@ -1013,13 +1013,15 @@ pub(crate) async fn exfat_build_handler(
         let (mut tree, renamed, signing) =
             ps5upload_fpkg::module_case::open(&scan_source).map_err(|e| e.to_string())?;
         if !renamed.is_empty() {
-            crate::log_info!(
+            crate::log_at!(
+                Info,
+                "convert",
                 "image build: renamed to the eboot's spelling: {}",
                 ps5upload_fpkg::module_case::describe(&renamed)
             );
         }
         if let Some(line) = signing.describe() {
-            crate::log_info!("image build: {line}");
+            crate::log_at!(Info, "convert", "image build: {line}");
         }
         if zstd_level.is_some() {
             // A packed game goes straight into the new packs.
@@ -1049,7 +1051,9 @@ pub(crate) async fn exfat_build_handler(
                     )
                     .map_err(|e| e.to_string())?,
                 );
-                crate::log_info!(
+                crate::log_at!(
+                    Info,
+                    "convert",
                     "image build: {} added as {module}",
                     ampr_emu_build.as_deref().unwrap_or("ampr_emu")
                 );
@@ -1226,7 +1230,9 @@ pub(crate) async fn exfat_build_handler(
             (Ok(tree), None) if zstd_level.is_some() => {
                 let (level, choice) = zstd_level.unwrap_or_default();
                 crate::zstd_runtime::pack_runtime(choice).and_then(|r| {
-                    crate::log_info!(
+                    crate::log_at!(
+                        Info,
+                        "convert",
                         "zstd packs: {} goes into {}",
                         r.describe(),
                         output.display()
@@ -1468,13 +1474,15 @@ fn open_for_packing(source: &Path) -> Result<Box<dyn ps5upload_fpkg::source::Sou
     let (tree, renamed, signing) =
         ps5upload_fpkg::module_case::open(source).map_err(|e| e.to_string())?;
     if !renamed.is_empty() {
-        crate::log_info!(
+        crate::log_at!(
+            Info,
+            "convert",
             "packed folder build: renamed to the eboot's spelling: {}",
             ps5upload_fpkg::module_case::describe(&renamed)
         );
     }
     if let Some(line) = signing.describe() {
-        crate::log_info!("packed folder build: {line}");
+        crate::log_at!(Info, "convert", "packed folder build: {line}");
     }
     crate::zstd_packs::readable_for_packing(tree)
 }
@@ -1639,13 +1647,15 @@ pub(crate) async fn folder_build_handler(
         let (tree, renamed, signing) =
             ps5upload_fpkg::module_case::open(&scan_source).map_err(|e| e.to_string())?;
         if !renamed.is_empty() {
-            crate::log_info!(
+            crate::log_at!(
+                Info,
+                "convert",
                 "folder build: renamed to the eboot's spelling: {}",
                 ps5upload_fpkg::module_case::describe(&renamed)
             );
         }
         if let Some(line) = signing.describe() {
-            crate::log_info!("folder build: {line}");
+            crate::log_at!(Info, "convert", "folder build: {line}");
         }
         Ok::<_, String>(Unpacked::Tree(tree))
     })
@@ -1790,7 +1800,9 @@ pub(crate) async fn folder_build_handler(
         let outcome = match unpacked {
             Unpacked::Tree(mut tree) => match zstd {
                 Some((level, choice)) => crate::zstd_runtime::pack_runtime(choice).and_then(|r| {
-                    crate::log_info!(
+                    crate::log_at!(
+                        Info,
+                        "convert",
                         "zstd packs: {} goes into {}",
                         r.describe(),
                         target.display()

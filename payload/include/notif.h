@@ -22,6 +22,11 @@ int notif_list(uint64_t since_seq, char *buf, size_t cap,
 
 int notif_send(const char *msg, int level);
 
+/* notif_send that shows `shown` on the TV but keeps `kept` in the ring (and its file, which the
+ * apps' inbox and bug reports read): for a message with a secret only the person at the TV may
+ * see, such as a Remote Play PIN. */
+int notif_send_kept(const char *shown, const char *kept, int level);
+
 /* notif_send plus the sony_api_lock it needs for sceNotificationSend. notif_send itself takes no lock
  * (Remote Play calls it with the lock already held, and the mutex is not recursive); every other caller
  * uses this one. Do not call it with sony_api_lock held. */

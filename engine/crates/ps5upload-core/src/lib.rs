@@ -24,6 +24,8 @@ pub mod fw_spoof;
 pub mod game_meta;
 pub mod health;
 pub mod hearbridge;
+pub mod helper_log_level;
+pub mod host_info;
 pub mod hw;
 pub mod installer_client;
 pub mod local_image;

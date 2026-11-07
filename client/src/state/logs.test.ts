@@ -11,6 +11,16 @@ const line = (level: LogInput["level"], message = "m"): LogInput => ({
 describe("logs store", () => {
   beforeEach(() => useLogsStore.getState().clear());
 
+  it("takes secrets out where a line is written", () => {
+    useLogsStore.getState().appendMany([
+      { level: "info", source: "engine:helper", message: "[remoteplay] Remote Play PIN: 14928144" },
+      { level: "warn", source: "pair", message: "x", detail: { rp_key: "abcdef0123", n: 1 } },
+    ]);
+    const [a, b] = useLogsStore.getState().entries;
+    expect(a.message).toBe("[remoteplay] Remote Play PIN: <removed>");
+    expect(b.detail).not.toContain("abcdef0123");
+  });
+
   it("appendMany adds a batch in one update", () => {
     let updates = 0;
     const unsub = useLogsStore.subscribe(() => updates++);

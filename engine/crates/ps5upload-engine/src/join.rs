@@ -926,7 +926,7 @@ fn apply(console: &str, fx: Vec<Effect>) {
                 let _ = tx.try_send(out);
             }
             Effect::Link(c) => link::send(console, c),
-            Effect::Log(s) => crate::log_info!("{s}"),
+            Effect::Log(s) => crate::log_at!(Info, "together", "{s}"),
             Effect::SeatPad(state) => crate::rp_stream_api::push_guest_pad(console, state),
             Effect::Seat(on) => crate::rp_stream_api::guest_seat(console, on),
         }
@@ -1297,7 +1297,9 @@ async fn guest_session(mut socket: WebSocket, ip: IpAddr) {
     let name = clean_name(hello.name.as_deref());
     let t0 = Instant::now();
     // What the guest came with, never the credential itself.
-    crate::log_detail!(
+    crate::log_at!(
+        Debug,
+        "together",
         "join: guest {ip} ({name}) says hello: resume={} invite={} code={}",
         hello.resume.as_deref().is_some_and(|t| !t.is_empty()),
         hello.invite.as_deref().is_some_and(|k| !k.is_empty()),
@@ -1335,16 +1337,28 @@ async fn guest_session(mut socket: WebSocket, ip: IpAddr) {
     let ms = t0.elapsed().as_millis();
     let (console, id) = match admit {
         Admit::Refused(why) => {
-            crate::log_detail!("join: guest {ip} ({name}) refused: {why} after {ms} ms");
+            crate::log_at!(
+                Debug,
+                "together",
+                "join: guest {ip} ({name}) refused: {why} after {ms} ms"
+            );
             let _ = socket.send(refused(why)).await;
             return;
         }
         Admit::Resume(c, id) => {
-            crate::log_detail!("join: guest {ip} ({name}) resumed on {c} after {ms} ms");
+            crate::log_at!(
+                Debug,
+                "together",
+                "join: guest {ip} ({name}) resumed on {c} after {ms} ms"
+            );
             (c, id)
         }
         Admit::New(c, id) => {
-            crate::log_detail!("join: guest {ip} ({name}) let in on {c} after {ms} ms");
+            crate::log_at!(
+                Debug,
+                "together",
+                "join: guest {ip} ({name}) let in on {c} after {ms} ms"
+            );
             (c, id)
         }
     };
@@ -1360,12 +1374,18 @@ async fn resume(socket: &mut WebSocket, token: &str) -> Option<Admit> {
         })
     });
     let Some((key, console, id)) = found else {
-        crate::log_detail!("join: a resume matched no guest (expired or never issued)");
+        crate::log_at!(
+            Debug,
+            "together",
+            "join: a resume matched no guest (expired or never issued)"
+        );
         return Some(Admit::Refused("expired"));
     };
     // While the host restarts Play, the guest waits here.
     if with_party(&key, |p| p.host_gone.is_some()).unwrap_or(false) {
-        crate::log_detail!(
+        crate::log_at!(
+            Debug,
+            "together",
             "join: guest {id} resumes on {console}; waiting for the host to play again"
         );
         if socket
@@ -1404,7 +1424,9 @@ async fn resume(socket: &mut WebSocket, token: &str) -> Option<Admit> {
     if !open && player != STREAM_SEAT {
         // The pad was removed while the host was away: make it again (the console asks who
         // they are again).
-        crate::log_detail!(
+        crate::log_at!(
+            Debug,
+            "together",
             "join: guest {id} resumes on {console}: making Player {player}'s pad again"
         );
         match open_slot(&console, player, &token).await {
@@ -1452,7 +1474,9 @@ async fn open_slot(console: &str, slot: u8, token: &str) -> link::OpenResult {
         Ok(Ok(r)) => r,
         _ => link::OpenResult::Failed("timeout".into()),
     };
-    crate::log_detail!(
+    crate::log_at!(
+        Debug,
+        "together",
         "join: helper pad for Player {slot} on {console}: {r:?} in {} ms",
         t0.elapsed().as_millis()
     );
@@ -1541,8 +1565,8 @@ async fn ask(socket: &mut WebSocket, entry: Entry, name: &str, ip: IpAddr) -> Op
         return Some(Admit::Refused(why));
     }
     // By number in the log: a bug report is posted in public, and names are the host's friends.
-    crate::log_info!("join: a guest asks to play on {console}");
-    crate::log_detail!("join: {name} asks to play on {console}");
+    crate::log_at!(Info, "together", "join: a guest asks to play on {console}");
+    crate::log_at!(Debug, "together", "join: {name} asks to play on {console}");
     if socket
         .send(say(serde_json::json!({"stage": "asking"})))
         .await
@@ -1559,7 +1583,9 @@ async fn ask(socket: &mut WebSocket, entry: Entry, name: &str, ip: IpAddr) -> Op
         _ = closed(socket) => { gave_up = true; Some(Decision::Deny) }
     };
     with_party(&key, |p| p.pending.retain(|a| a.id != id));
-    crate::log_detail!(
+    crate::log_at!(
+        Debug,
+        "together",
         "join: {name}'s ask on {console}: {} after {} ms",
         if gave_up {
             "the guest gave up".to_string()
@@ -1607,8 +1633,16 @@ async fn ask(socket: &mut WebSocket, entry: Entry, name: &str, ip: IpAddr) -> Op
                 return Some(Admit::Refused("closed"));
             }
             crate::rp_stream_api::guest_seat(&console, true);
-            crate::log_info!("join: a guest has the stream's controller on {console}");
-            crate::log_detail!("join: {name} has the stream's controller on {console}");
+            crate::log_at!(
+                Info,
+                "together",
+                "join: a guest has the stream's controller on {console}"
+            );
+            crate::log_at!(
+                Debug,
+                "together",
+                "join: {name} has the stream's controller on {console}"
+            );
             return Some(Admit::New(console, gid));
         }
         let r = open_slot(&console, player, &pad_token).await;
@@ -1628,15 +1662,25 @@ async fn ask(socket: &mut WebSocket, entry: Entry, name: &str, ip: IpAddr) -> Op
                 link::send(&console, link::Cmd::Close { slot: player });
                 return Some(Admit::Refused("closed"));
             }
-            crate::log_info!("join: a guest is Player {player} on {console}");
-            crate::log_detail!("join: {name} is Player {player} on {console}");
+            crate::log_at!(
+                Info,
+                "together",
+                "join: a guest is Player {player} on {console}"
+            );
+            crate::log_at!(
+                Debug,
+                "together",
+                "join: {name} is Player {player} on {console}"
+            );
             return Some(Admit::New(console, gid));
         }
         // Not made: this guest record goes (quietly: they never played).
         with_party(&key, |p| p.guests.retain(|g| g.id != gid));
         match r {
             link::OpenResult::Busy => {
-                crate::log_detail!(
+                crate::log_at!(
+                    Debug,
+                    "together",
                     "join: Player {player} on {console} is held elsewhere; trying the next"
                 );
                 tried.push(player)
@@ -1821,7 +1865,9 @@ async fn play(mut socket: WebSocket, console: String, id: u64, ip: IpAddr) {
     let feed =
         crate::rp_stream_api::add_player(spect, &console, PLAYER_QUEUE, stats.skipped.clone());
     let hevc = feed.as_ref().map(|f| f.hevc).unwrap_or(false);
-    crate::log_detail!(
+    crate::log_at!(
+        Debug,
+        "together",
         "join: Player {player} on {console} connected (socket {gen}): picture {}, hevc {hevc}",
         if feed.is_some() {
             "on"
@@ -1895,13 +1941,13 @@ async fn play(mut socket: WebSocket, console: String, id: u64, ip: IpAddr) {
                         // most once a KEY_ASK_GAP so a guest can't flood the host's stream.
                         if m.keyframe {
                             if key_ask.take(Instant::now()) {
-                                crate::log_detail!(
+                                crate::log_at!(Debug, "together",
                                     "join: Player {player} on {console} asks for a keyframe ({} pictures skipped so far)",
                                     stats.skipped.load(Ordering::Relaxed)
                                 );
                                 crate::rp_stream_api::request_keyframe(&console, spect);
                             } else {
-                                crate::log_detail!("join: Player {player} on {console}: keyframe ask held back (one a second)");
+                                crate::log_at!(Debug, "together", "join: Player {player} on {console}: keyframe ask held back (one a second)");
                             }
                         }
                         if let Some(p) = m.ping {
@@ -1977,7 +2023,7 @@ async fn play(mut socket: WebSocket, console: String, id: u64, ip: IpAddr) {
         }
     }
     crate::rp_stream_api::remove_spectator(spect);
-    crate::log_detail!(
+    crate::log_at!(Debug, "together", 
         "join: Player {player} on {console} socket {gen} closed ({}): rtt now {:?} ms, {} pictures skipped, {} pad frames",
         if left { "left" } else { "disconnected" },
         stats.rtt_now(),
@@ -2190,7 +2236,7 @@ pub async fn open(
     if created {
         let now = Instant::now();
         with_party(&key, |p| p.invite(false, now));
-        crate::log_info!("join: Play Together open on {}", b.addr);
+        crate::log_at!(Info, "together", "join: Play Together open on {}", b.addr);
         spawn_watch(key);
     }
     Json(state_json(&b.addr)).into_response()

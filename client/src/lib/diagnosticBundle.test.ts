@@ -55,7 +55,7 @@ describe("buildDiagnosticBundle (crash-report enrichment)", () => {
       redact: true,
       trigger: "uncaught-error: boom",
     });
-    expect(b.schema).toBe(4);
+    expect(b.schema).toBe(5);
     expect(b.app_version).toBe("9.9.9");
     expect(b.redacted).toBe(true);
     expect(b.trigger).toBe("uncaught-error: boom");
@@ -142,22 +142,29 @@ describe("buildDiagnosticBundle (schema 3 triage fields)", () => {
   });
 });
 
-describe("buildDiagnosticBundle (schema 4: detailed logs, app links)", () => {
-  it("says whether Detailed logs were on, and until when", () => {
-    useDiagSettingsStore.setState({ detailedUntil: null });
-    expect(buildDiagnosticBundle({ appVersion: "1", redact: true }).settings.detailed_logs).toEqual({
-      on: false,
+describe("buildDiagnosticBundle (schema 5: log levels, app links)", () => {
+  it("says which log levels were in force, and until when", () => {
+    useDiagSettingsStore.setState({ engine: null });
+    expect(buildDiagnosticBundle({ appVersion: "1", redact: true }).settings.log_levels).toMatchObject({
+      raised: false,
       until: null,
+      source: "app",
     });
     const until = Date.now() + 60_000;
-    useDiagSettingsStore.setState({ detailedUntil: until });
+    useDiagSettingsStore.setState({ engine: { level: "info", categories: { rp: "trace" }, until_ms: until } });
     const b = buildDiagnosticBundle({ appVersion: "1", redact: true });
-    expect(b.schema).toBe(4);
-    expect(b.settings.detailed_logs).toEqual({ on: true, until: new Date(until).toISOString() });
-    // An end time already past reads as off.
-    useDiagSettingsStore.setState({ detailedUntil: Date.now() - 1 });
-    expect(buildDiagnosticBundle({ appVersion: "1", redact: true }).settings.detailed_logs.on).toBe(false);
-    useDiagSettingsStore.setState({ detailedUntil: null });
+    expect(b.schema).toBe(5);
+    expect(b.settings.log_levels).toMatchObject({
+      level: "info",
+      categories: { rp: "trace" },
+      raised: true,
+      until: new Date(until).toISOString(),
+      source: "engine",
+    });
+    // An end time already past reads as not raised.
+    useDiagSettingsStore.setState({ engine: { level: "debug", categories: {}, until_ms: Date.now() - 1 } });
+    expect(buildDiagnosticBundle({ appVersion: "1", redact: true }).settings.log_levels.raised).toBe(false);
+    useDiagSettingsStore.setState({ engine: null });
   });
 
   it("names the kind of ps5upload:// link taken, never the link or its key", () => {

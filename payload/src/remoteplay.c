@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "notif.h"
+#include "plog.h"
 #include "proc_list.h"
 #include "sony_api_lock.h"
 #include "sys_registry.h"
@@ -562,14 +563,19 @@ static int rp_cb_device_count(void *ctx) {
     (void)ctx;
     int n = 0;
     for (uint32_t slot = 1; slot <= 32; slot++) n += rp_device_slot(slot, NULL, NULL);
+    PLOG(PLOG_DEBUG, PLOG_PAIRING, "[remoteplay] %d paired device(s)", n);
     return n;
 }
 
 static void rp_cb_notify(void *ctx, const char *msg, int level) {
     (void)ctx;
     int lv = level == 2 ? NOTIF_LEVEL_ERROR : level == 1 ? NOTIF_LEVEL_WARN : NOTIF_LEVEL_INFO;
-    fprintf(stderr, "[remoteplay] %s\n", msg);
-    notif_send(msg, lv);
+    /* Only the TV shows the PIN: stderr.log and the notification ring (the apps' inbox, bug
+     * reports) keep the message without it. */
+    char kept[160];
+    plog_without_pin(msg, kept, sizeof kept);
+    fprintf(stderr, "[remoteplay] %s\n", kept);
+    notif_send_kept(msg, kept, lv);
 }
 
 /* Every op. Only for callers that hold sony_api_lock. */
@@ -725,9 +731,12 @@ int remoteplay_request(const char *manual_account_id) {
     snprintf(g_rp_account_id, sizeof(g_rp_account_id), "%s", account_id);
     pthread_mutex_unlock(&g_rp_acct_mtx);
 
+    PLOG(PLOG_DEBUG, PLOG_PAIRING, "[remoteplay] pairing asked for (account id %s)",
+         manual_account_id && manual_account_id[0] ? "given" : account_id[0] ? "found" : "missing");
     rp_pair_ops_t ops = rp_full_ops();
     int rc = rp_pair_request(&g_pair, &ops, rp_mono_ms());
     pthread_mutex_unlock(&sony_api_lock);
+    PLOG(PLOG_DEBUG, PLOG_PAIRING, "[remoteplay] pairing request: %s", rc == 0 ? "PIN made" : "failed");
     return rc;
 }
 
@@ -742,6 +751,9 @@ int remoteplay_get_status(char *buf, size_t cap) {
     rp_pair_view_t v;
     rp_pair_view(&g_pair, rp_mono_ms(), &v);
     rp_format_status(&v, buf, cap);
+    PLOG(PLOG_TRACE, PLOG_PAIRING, "[remoteplay] pairing state %d, %ds left, rc=0x%08X status=%u err=0x%08X, %u probes",
+         v.state, v.seconds_left, (unsigned)v.last_rc, (unsigned)v.last_status, (unsigned)v.last_err,
+         (unsigned)v.probes);
     return 0;
 }
 

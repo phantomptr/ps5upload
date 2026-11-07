@@ -899,11 +899,13 @@ async fn pad_session(mut socket: WebSocket, q: PadQuery, ip: std::net::IpAddr) {
         return;
     }
     // By number at this level: a bug report is posted in public (names under Detailed logs).
-    crate::log_info!(
+    crate::log_at!(
+        Info,
+        "together",
         "pad_link: phone {id} joined as {}",
         if watch { "watcher" } else { "controller" }
     );
-    crate::log_detail!("pad_link: phone {id} is {name}");
+    crate::log_at!(Debug, "together", "pad_link: phone {id} is {name}");
     let mut tick = tokio::time::interval(STATE_EVERY);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // Rounds since anything came from the phone (counted, not timed: see rp_stream_api's page).
@@ -930,7 +932,7 @@ async fn pad_session(mut socket: WebSocket, q: PadQuery, ip: std::net::IpAddr) {
             _ = tick.tick() => {
                 quiet += 1;
                 if quiet > crate::rp_stream_api::PEER_QUIET_PINGS {
-                    crate::log_info!("pad_link: phone {id} went silent; letting it go");
+                    crate::log_at!(Info, "together", "pad_link: phone {id} went silent; letting it go");
                     break;
                 }
                 let s = crate::rp_stream_api::live_state();
@@ -997,7 +999,7 @@ async fn pad_session(mut socket: WebSocket, q: PadQuery, ip: std::net::IpAddr) {
     }
     release(id, watch);
     with_link(|l| l.pads.retain(|p| p.id != id));
-    crate::log_info!("pad_link: phone {id} left");
+    crate::log_at!(Info, "together", "pad_link: phone {id} left");
 }
 
 #[derive(serde::Deserialize)]

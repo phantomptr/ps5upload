@@ -121,6 +121,7 @@ const NATIVE_ONLY: Record<string, string> = {
   app_events_append: "native: the app event journal file; the browser keeps it in IndexedDB",
   app_events_read: "native: the app event journal file; the browser keeps it in IndexedDB",
   host_platform: "native: the OS and CPU the desktop app was built for; the browser reports the web UI",
+  host_system_info: "native: the OS version, model, CPU, memory and web view version of the computer the app runs on; the browser report takes the engine's host instead",
   diag_log_open_dir: "native: opens a host file manager",
 
   // Desktop-side persistence (browser uses localStorage)

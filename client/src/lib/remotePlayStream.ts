@@ -370,6 +370,13 @@ export { avcCodecString, isKeyframe, supportedHevc } from "./rpCodec";
 import { avcCodecString, isKeyframe, noPictureStep, supportedHevc } from "./rpCodec";
 import { avcDescription, lengthPrefixed } from "./fmp4";
 import { MsePlayer, MseSound } from "../pad/watchPlayer";
+import {
+  beginRpClientSession,
+  videoConfigFacts,
+  webcodecsPath,
+  type RpClientSessionHandle,
+  type RpDecoderEvent,
+} from "./rpClientSessions";
 
 function sameBytes(a: Uint8Array | null, b: Uint8Array): boolean {
   return !!a && a.length === b.length && a.every((x, i) => x === b[i]);
@@ -719,6 +726,12 @@ export class RemotePlayStream {
   private header: Uint8Array | null = null;
   private hevc = false;
   private codecChoice: StreamCodec = "h264";
+  /** This session in the report's list of the page's sessions (lib/rpClientSessions). */
+  private diag: RpClientSessionHandle | null = null;
+  /** The config the video decoder was given last, for its failures' report. */
+  private lastVideoCfg: VideoDecoderConfig | null = null;
+  /** Why the session ended, when something said (the first one counts). */
+  private endReason: string | null = null;
   private sawKey = false;
   private ts = 0;
   private queued: EncodedVideoChunk[] = [];
@@ -1028,17 +1041,23 @@ export class RemotePlayStream {
   /** The drawer for the next frame, made on first use. */
   private pickDrawer(): NonNullable<RemotePlayStream["drawer"]> {
     if (linuxApp() && sharpens(this.tools)) this.picturePassOff("linux");
-    if (this.hdr && !this.hdr.lost && this.hdr.canvas === this.cv) return (this.drawer = { kind: "hdr", hdr: this.hdr });
+    if (this.hdr && !this.hdr.lost && this.hdr.canvas === this.cv) {
+      this.diag?.set({ draw_path: "hdr" });
+      return (this.drawer = { kind: "hdr", hdr: this.hdr });
+    }
     if (!this.noGl) {
       try {
         const pass = new PicturePass(this.cv);
         this.watchGl(this.cv);
+        this.diag?.set({ draw_path: "gl" });
         return (this.drawer = { kind: "gl", pass });
       } catch (e) {
         log.warn("remote-play", `no WebGL 2 for the picture (${String(e)}): drawing with the 2D canvas`);
+        this.diag?.fallback(`no WebGL 2: 2D canvas (${String(e)})`);
         this.noGl = true;
       }
     }
+    this.diag?.set({ draw_path: "2d" });
     let ctx = this.cv.getContext("2d", { alpha: false });
     if (!ctx) {
       // The canvas already holds another kind of context (WebGL made, then a shader failed).
@@ -1077,6 +1096,7 @@ export class RemotePlayStream {
   /** WebGL cannot draw the picture: the 2D canvas from now on, on a new canvas element. */
   private glFailed(why: string): void {
     log.warn("remote-play", `the picture could not be drawn with WebGL (${why}): drawing with the 2D canvas`);
+    this.diag?.fallback(`WebGL failed: 2D canvas (${why})`);
     this.noGl = true;
     this.replaceCanvas();
   }
@@ -1085,6 +1105,7 @@ export class RemotePlayStream {
    *  browser converts it to SDR); the next start asks for SDR (the store sets that). */
   private hdrFailed(why: string): void {
     log.warn("remote-play", `HDR could not be shown (${why}): showing the picture as SDR`);
+    this.diag?.fallback(`HDR display failed: SDR (${why})`);
     this.hdr?.dispose();
     this.hdr = null;
     this.replaceCanvas();
@@ -1292,6 +1313,7 @@ export class RemotePlayStream {
     }
     if (this.pictureOn) this.openSound();
     const pref = this.o.codec ?? "auto";
+    this.diag = beginRpClientSession(pref);
     const [hevc, hdr] = await Promise.all([
       pref === "h264" ? Promise.resolve(false) : chooseCodec(width, height).then((c) => c === "h265"),
       pref === "hdr" ? hdrSupport(width, height) : Promise.resolve(null),
@@ -1312,11 +1334,15 @@ export class RemotePlayStream {
     }
     if (hdrOff) {
       log.warn("remote-play", `HDR was asked for but is not used (${hdrOff}): streaming ${codec}`);
+      this.diag?.fallback(`HDR not used (${hdrOff}): ${codec}`);
       this.o.onHdrOff?.(hdrOff, false);
     }
+    this.diag?.set({ codec_asked: codec, hdr: codec === "h265_hdr" });
     if (codec === "h264" && !(await canDecodeAvc(width, height))) {
       // Found before the console is woken or asked to stream.
       if (this.ended) return;
+      this.decoderEvent({ event: "no_decoder", codec: "avc1", coded_width: width, coded_height: height });
+      this.endReason ??= "no H.264 decoder";
       this.o.onError({ code: "no_decoder", detail: "" });
       this.finish();
       return;
@@ -1515,6 +1541,8 @@ export class RemotePlayStream {
     const w = this.audioWorker;
     if (!w) return;
     log.warn("remote-play", `sound: the decoding worker failed (${why}): decoded on the page from now on`);
+    this.decoderEvent({ event: "audio_error", path: "worker", codec: "opus", error: why });
+    this.diag?.fallback(`sound worker failed: decoded on the page (${why})`);
     this.audioWorker = null;
     w.onmessage = null;
     w.onerror = null;
@@ -1562,6 +1590,7 @@ export class RemotePlayStream {
           }
           this.soundUnavailable = true;
           log.warn("remote-play", "sound: this device can't decode the stream's Opus sound, so there is none");
+          this.decoderEvent({ event: "audio_error", path: "page", codec: "opus", error: "no Opus decoder" });
         },
       );
     }
@@ -1964,6 +1993,13 @@ export class RemotePlayStream {
   private finish(): void {
     if (this.ended) return;
     this.ended = true;
+    if (this.diag) {
+      if (!this.mseAudio && !this.mseSound) {
+        this.diag.set({ audio_path: this.soundUnavailable ? "none" : this.audioHealth.path });
+      }
+      this.diag.set({ frames_decoded: this.decoded });
+      this.diag.end(this.endReason ?? (this.stopping ? "stopped" : this.engineEnded ? "ended" : "closed"));
+    }
     this.stopMse();
     this.stopMseAudio();
     this.endDecoderStart();
@@ -2121,12 +2157,14 @@ export class RemotePlayStream {
         // The player's own Stop needs no word; anything else does, or the picture just goes.
         if (this.stopping) break;
         const why = typeof s.reason === "string" ? s.reason : "";
+        this.endReason ??= why ? `console: ${why}` : "ended";
         if (why === "no session") this.o.onError({ code: "no_session", detail: "" });
         else if (why) this.o.onError({ code: "console_ended", detail: why });
         break;
       }
       case "error":
         this.engineEnded = true;
+        this.endReason ??= `error ${s.code ?? "other"}${s.error ? `: ${s.error}` : ""}`;
         this.o.onError({
           code: s.code ?? "other",
           retryS: s.retry_s ?? undefined,
@@ -2516,6 +2554,7 @@ export class RemotePlayStream {
       error: (e) => {
         if (video !== this.video) return;
         if (this.decoderStart === start) this.endDecoderStart();
+        this.videoDecoderEvent("decode_error", String(e));
         if (isNoDecoderError(e)) {
           // Starting over would fail the same way, forever: end the session instead.
           this.video = null;
@@ -2546,16 +2585,22 @@ export class RemotePlayStream {
       };
       await start.ready;
       if (video !== this.video) return;
+      const asked = cfg.hardwareAcceleration;
       try {
         if (!(await VideoDecoder.isConfigSupported(cfg)).supported) cfg = base;
       } catch {
         cfg = base;
       }
       if (video !== this.video) return;
+      if (cfg === base) this.diag?.fallback(`${codec} ${asked} not supported: the browser's default decoder`);
       this.codec = codec;
+      this.lastVideoCfg = cfg;
       try {
         video.configure(cfg);
+        this.diag?.set({ video_path: webcodecsPath(cfg.hardwareAcceleration) });
+        this.videoDecoderEvent("configure");
       } catch (e) {
+        this.videoDecoderEvent("configure_error", String(e));
         this.video = null;
         this.o.onError({ code: isNoDecoderError(e) ? "no_decoder" : "decode", detail: String(e) });
         this.stop();
@@ -2618,12 +2663,15 @@ export class RemotePlayStream {
       // Software in the AVC form first, the one software decoders (WebKitGTK's) take.
       this.annexB = false;
       log.warn("remote-play", `no picture from the hardware decoder (${detail}): decoding in software`);
+      this.diag?.fallback(`no picture in hardware: software (${detail})`);
       this.softwareAfterBadFrame = true;
       this.noPictureFails = 0;
       return true;
     }
     if (step === "h264") {
       log.warn("remote-play", `no picture from HEVC (${detail}): ending the stream, the next start asks for H.264`);
+      this.diag?.fallback(`no picture from HEVC: the next start asks for H.264 (${detail})`);
+      this.endReason ??= "no picture from HEVC";
       this.o.onHevcFailed?.();
       this.stop();
       return false;
@@ -2641,6 +2689,11 @@ export class RemotePlayStream {
     const parent = this.cv.parentElement;
     if (!parent) return false;
     log.warn("remote-play", `no picture with WebCodecs (${detail}): playing through the system's media player (MSE)`);
+    const managed = typeof (globalThis as { MediaSource?: unknown }).MediaSource !== "function";
+    const path = managed ? "managed-mse" : "mse";
+    this.diag?.fallback(`no picture with WebCodecs: ${path} (${detail})`);
+    this.diag?.set({ video_path: path });
+    this.decoderEvent({ event: "mse", path, codec: this.hevc ? "hevc" : "avc1", error: detail });
     this.endDecoderStart();
     try {
       this.video?.close();
@@ -2718,6 +2771,8 @@ export class RemotePlayStream {
     const ms = new MseSound("player", () => {
       failed = true;
       log.warn("remote-play", "sound: the system's media player can't play Opus either, so there is none");
+      this.decoderEvent({ event: "audio_error", path: "mse", codec: "opus", error: "no Opus in the media player" });
+      this.diag?.set({ audio_path: "none" });
       this.stopMseAudio();
       this.soundUnavailable = true;
     });
@@ -2729,6 +2784,10 @@ export class RemotePlayStream {
     if (this.audioHeader) ms.setHeader(this.audioHeader);
     ms.start();
     log.warn("remote-play", "sound: no Opus decoder here, playing it through the system's media player");
+    if (!failed) {
+      this.diag?.set({ audio_path: "mse" });
+      this.decoderEvent({ event: "audio_decoder", path: "mse", codec: "opus" });
+    }
     return !failed;
   }
 
@@ -2757,9 +2816,39 @@ export class RemotePlayStream {
     this.cv.style.visibility = "";
   }
 
+  /** A decoder decision or failure: kept for the report (rpClientSessions), logged, and told to the
+   *  engine, which keeps it with its own record of the session. Rare: never per frame. */
+  private decoderEvent(ev: RpDecoderEvent): void {
+    this.diag?.event(ev);
+    const text = JSON.stringify(ev);
+    if (ev.error !== undefined) log.warn("remote-play", `decoder ${ev.event}: ${text}`);
+    else log.debug("remote-play", `decoder ${ev.event}: ${text}`);
+    const ws = this.ws;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify({ decoder: ev }));
+      } catch {
+        // The socket is closing: the record above is enough.
+      }
+    }
+  }
+
+  /** [`decoderEvent`] for the video decoder, with the config it was given last. */
+  private videoDecoderEvent(event: string, error?: string): void {
+    const cfg = this.lastVideoCfg;
+    const facts = cfg
+      ? videoConfigFacts(cfg, { width: this.o.width, height: this.o.height })
+      : { codec: this.codec || this.codecChoice };
+    const ev: RpDecoderEvent = { event, path: webcodecsPath(cfg?.hardwareAcceleration), ...facts };
+    if (error !== undefined) ev.error = error;
+    this.decoderEvent(ev);
+  }
+
   /** No decoder will ever take this stream: said, and the session ends rather than go on streaming
    *  to nothing (with its frames piling up). */
   private cannotDecode(detail: string): void {
+    this.decoderEvent({ event: "cannot_decode", codec: this.codecChoice, error: detail });
+    this.endReason ??= `cannot decode: ${detail}`;
     this.o.onError({ code: "decode", detail });
     this.stop();
   }

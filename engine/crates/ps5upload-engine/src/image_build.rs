@@ -813,7 +813,12 @@ impl CheckpointWriter<'_> {
             std::fs::rename(&tmp, &self.path)
         });
         if let Err(e) = saved {
-            crate::log_warn!("image build: no checkpoint at {} bytes: {e}", self.pos);
+            crate::log_at!(
+                Warn,
+                "convert",
+                "image build: no checkpoint at {} bytes: {e}",
+                self.pos
+            );
         }
         Ok(())
     }
@@ -1261,7 +1266,9 @@ pub(crate) fn build_packed(
     let mtime = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
-    crate::log_info!(
+    crate::log_at!(
+        Info,
+        "convert",
         "lz4 packs: profile={profile_name} chosen for {} files ({} rules) -> {}",
         source.files().len(),
         config.rules.len(),
@@ -1294,13 +1301,17 @@ pub(crate) fn build_packed(
     let (mut built, report) = result?;
     let s = &report.stats;
     if s.files_packed == 0 {
-        crate::log_warn!(
+        crate::log_at!(
+            Warn,
+            "convert",
             "lz4 packs: profile={profile_name} packed no files ({} loose) for {}",
             s.files_loose,
             output.display()
         );
     } else {
-        crate::log_info!(
+        crate::log_at!(
+            Info,
+            "convert",
             "lz4 packs: profile={profile_name} packed {} files ({} loose) for {}",
             s.files_packed,
             s.files_loose,

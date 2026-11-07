@@ -59,7 +59,8 @@
       "remote_play",
       "smp_meta_json",
       "mcp_api_nav",
-      "mcp_tab_api"
+      "mcp_tab_api",
+      "logs_cat_rp"
     ]
   },
   "es": {
@@ -81,7 +82,8 @@
       "processes_pid",
       "remote_play",
       "smp_meta_json",
-      "mcp_tab_api"
+      "mcp_tab_api",
+      "logs_cat_rp"
     ]
   },
   "fa": {
@@ -97,7 +99,8 @@
       "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
       "remote_play",
-      "mcp_tab_api"
+      "mcp_tab_api",
+      "logs_cat_rp"
     ]
   },
   "fr": {
@@ -162,7 +165,8 @@
       "screenshots_png_hdr",
       "screenshots_png_sdr",
       "smp_meta_json",
-      "mcp_tab_api"
+      "mcp_tab_api",
+      "logs_cat_rp"
     ]
   },
   "id": {
@@ -188,7 +192,8 @@
       "status_helper_version",
       "task_dump",
       "mcp_api_nav",
-      "mcp_tab_api"
+      "mcp_tab_api",
+      "logs_cat_rp"
     ]
   },
   "it": {
@@ -217,7 +222,8 @@
       "shortcuts_sec_filesystem",
       "smp_meta_json",
       "status_helper_version",
-      "mcp_tab_api"
+      "mcp_tab_api",
+      "logs_cat_rp"
     ]
   },
   "ja": {
@@ -275,7 +281,8 @@
       "processes_pid",
       "remote_play",
       "smp_meta_json",
-      "mcp_tab_api"
+      "mcp_tab_api",
+      "logs_cat_rp"
     ]
   },
   "pt-BR": {
@@ -339,7 +346,8 @@
       "processes_pid",
       "remote_play",
       "smp_meta_json",
-      "mcp_tab_api"
+      "mcp_tab_api",
+      "logs_cat_rp"
     ]
   },
   "tr": {
@@ -361,7 +369,8 @@
       "screenshots_png_hdr",
       "screenshots_png_sdr",
       "smp_meta_json",
-      "mcp_tab_api"
+      "mcp_tab_api",
+      "logs_cat_rp"
     ]
   },
   "vi": {
@@ -383,7 +392,8 @@
       "remote_play",
       "smp_meta_json",
       "task_dump",
-      "mcp_tab_api"
+      "mcp_tab_api",
+      "logs_cat_rp"
     ]
   },
   "zh-CN": {

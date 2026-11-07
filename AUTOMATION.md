@@ -464,6 +464,22 @@ same `code`, and one of the failure codes.
 | `unreachable`, `tls`, `rejected`, `codec_not_allowed`, `dropped`, `stopped` | in the run | Why a site stopped: can't be reached, certificate, refused key, wrong codec, dropped, other |
 | `all_failed`, `ffmpeg_failed`, `play_ended` | in the run | No site took it, ffmpeg can't start, Remote Play stayed off for two minutes |
 
+## When a stream misbehaves: log levels
+
+Raise Remote Play's log level before you reproduce a problem, and read the lines afterwards:
+
+```sh
+curl -X PUT http://127.0.0.1:19113/api/logs/level -H 'Content-Type: application/json' \
+  -d '{"categories":{"rp":"trace","pairing":"debug"},"merge":true,"minutes":30}'
+# ... start the stream, reproduce ...
+curl "http://127.0.0.1:19113/api/logs/recent?category=rp&level=debug&limit=500"
+```
+
+Every stage of a session, the console's refusal codes, why it ended and what the page's decoder chose
+(and each decoder failure with its configuration) are logged in `rp`; the last eight sessions, with
+the same detail, are in `GET /api/diag/features` under `remote_play.sessions`. The raise ends by
+itself after the minutes given. See [API.md](API.md#log-levels) for the whole model.
+
 ## An MCP adapter
 
 PS5Upload ships one, inside the engine: see [MCP.md](MCP.md). The `rp_session`, `rp_start`, `rp_stop`,

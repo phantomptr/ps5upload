@@ -261,7 +261,9 @@ impl PkgInstallState {
     pub fn restored() -> Self {
         let sessions = persist::load();
         if !sessions.is_empty() {
-            crate::log_info!(
+            crate::log_at!(
+                Info,
+                "install",
                 "pkg-host: resumed {} install session(s) from before the engine restarted",
                 sessions.len()
             );
@@ -361,7 +363,11 @@ mod persist {
         };
         let tmp = path.with_extension("json.tmp");
         if let Err(e) = std::fs::write(&tmp, json).and_then(|()| std::fs::rename(&tmp, path)) {
-            crate::log_warn!("pkg-host: could not save install sessions: {e}");
+            crate::log_at!(
+                Warn,
+                "install",
+                "pkg-host: could not save install sessions: {e}"
+            );
         }
     }
 
@@ -788,14 +794,14 @@ async fn payload_restore_handler(Json(req): Json<PayloadRestoreRequest>) -> Resp
     .await;
     match res {
         Ok(Ok(bytes)) => {
-            crate::log_info!("payload-restore: sent {bytes} bytes");
+            crate::log_at!(Info, "install", "payload-restore: sent {bytes} bytes");
             json_response(
                 StatusCode::OK,
                 serde_json::json!({"ok": true, "bytes": bytes}),
             )
         }
         Ok(Err(e)) => {
-            crate::log_warn!("payload-restore: {e}");
+            crate::log_at!(Warn, "install", "payload-restore: {e}");
             json_response(
                 StatusCode::OK,
                 serde_json::json!({"ok": false, "bytes": 0, "error": e}),
@@ -1958,7 +1964,9 @@ pub(crate) async fn install_start_handler(
         rival_info
     };
     if let Some((rid, served, total, reqs)) = rival {
-        crate::log_warn!(
+        crate::log_at!(
+            Warn,
+            "install",
             "install start refused: a live session for this exact package is \
              already serving (session={} served={}/{} bytes over {} requests). \
              A second session leaves the console able to fetch a URL we may \
@@ -1988,7 +1996,7 @@ pub(crate) async fn install_start_handler(
     // now live and the unified install state machine hands the URL to the
     // installer daemon. The in-process InstallByPackage cascade that used to
     // follow here is gone (on FW < 11 it hung the payload on an http:// URL).
-    crate::log_info!(
+    crate::log_at!(Info, "install", 
         "pkg_install serve-only: addr={} session={} url={} content_id={} title={:?} — skipping in-process install; DPI daemon will pull",
         req.ps5_addr,
         session_id,
@@ -2624,7 +2632,9 @@ async fn serve_handler(
         && !console_host.is_empty()
         && !peer_is_console(&console_host, peer.ip()).await
     {
-        crate::log_warn!(
+        crate::log_at!(
+            Warn,
+            "install",
             "pkg-host fetch REJECTED: peer={} expected={} (is {:?}) session={} \
              (set PS5UPLOAD_ALLOW_IP to this peer if the console is behind NAT)",
             peer.ip(),
@@ -2652,7 +2662,7 @@ async fn serve_handler(
         {
             Ok(Ok(Some(src))) => src,
             Ok(Ok(None)) => {
-                crate::log_info!(
+                crate::log_at!(Info, "install", 
                     "pkg-host crc: no playgo-chunk.crc in the package or beside it: session={} name={}",
                     session.id,
                     filename,
@@ -2726,7 +2736,7 @@ async fn serve_handler(
             if now_s.saturating_sub(active.last_rate_log_unix) >= SERVE_RATE_LOG_SECS {
                 active.last_rate_log_unix = now_s;
                 let secs = now_s.saturating_sub(active.created_at_unix).max(1);
-                crate::log_info!(
+                crate::log_at!(Info, "install", 
                     "pkg-host serve rate: session={} served={} of {} bytes over {} requests in {}s = {:.1} MB/s average",
                     active.id,
                     active.bytes_served,
@@ -3040,7 +3050,9 @@ pub(crate) async fn open_remote_package(
     .map_err(|e| format!("could not open the package on the server: {e}"))?;
     let total_size = source.total_size();
     // Server host only; the path can name a user's folders.
-    crate::log_info!(
+    crate::log_at!(
+        Info,
+        "install",
         "remote install: host={} bytes={}",
         source.host(),
         total_size
