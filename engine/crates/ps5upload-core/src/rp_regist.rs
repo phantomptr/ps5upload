@@ -348,8 +348,8 @@ fn unreadable_reply(len: usize) -> String {
         format!("The PS5 sent a reply the app can't read ({len} bytes)")
     };
     format!(
-        "{what}. Its Remote Play may be stuck on an earlier session: close Remote Play on any other \
-         device, restart the PS5 and try again"
+        "{what}, before saying anything about the PIN. Close Remote Play on any other device and \
+         try again"
     )
 }
 
@@ -408,6 +408,44 @@ fn reason_text(code: &str) -> &'static str {
     }
 }
 
+/// Sends the request on a new connection and reads what comes back until the console hangs up (a
+/// reply followed by a console that doesn't hang up is still a reply). `half_close`: end our
+/// sending side once it's sent.
+fn exchange(
+    addr: std::net::SocketAddr,
+    req: &[u8],
+    half_close: bool,
+    wait: Duration,
+) -> Result<Vec<u8>> {
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(10)).map_err(|e| {
+        // Refused: nothing takes pairings on 9295 now, and trying again will not change
+        // that. Anything else (a timeout, a reset) may pass on the next try.
+        if e.kind() == std::io::ErrorKind::ConnectionRefused {
+            anyhow::Error::new(NotAnswering {
+                detail: format!("{addr} refused the connection: {e}"),
+            })
+        } else {
+            anyhow!("connecting to {addr}: {e}")
+        }
+    })?;
+    stream.set_read_timeout(Some(wait))?;
+    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
+    stream
+        .write_all(req)
+        .map_err(|e| anyhow!("sending the registration request: {e}"))?;
+    stream.flush().ok();
+    if half_close {
+        let _ = stream.shutdown(Shutdown::Write);
+    }
+    let mut raw = Vec::new();
+    if let Err(e) = stream.read_to_end(&mut raw) {
+        if raw.is_empty() {
+            return Err(anyhow!("reading the console's reply: {e}"));
+        }
+    }
+    Ok(raw)
+}
+
 /// Register with a console and come back with its regist key.
 ///
 /// `account_id_b64` and `pin` both come from the payload — see
@@ -433,20 +471,6 @@ pub fn register(host: &str, account_id_b64: &str, pin: u32) -> Result<Registrati
     let req_built = build_request_body(account_id_b64.trim(), pin, &nonce);
 
     let addr = resolve(host, REGIST_PORT)?;
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(10)).map_err(|e| {
-        // Refused: nothing takes pairings on 9295 now, and trying again will not change
-        // that. Anything else (a timeout, a reset) may pass on the next try.
-        if e.kind() == std::io::ErrorKind::ConnectionRefused {
-            anyhow::Error::new(NotAnswering {
-                detail: format!("{addr} refused the connection: {e}"),
-            })
-        } else {
-            anyhow!("connecting to {addr}: {e}")
-        }
-    })?;
-    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
-
     let mut req = format!(
         "POST {REGIST_PATH} HTTP/1.1\r\n\
          HOST: 10.0.2.15\r\n\
@@ -458,16 +482,15 @@ pub fn register(host: &str, account_id_b64: &str, pin: u32) -> Result<Registrati
     )
     .into_bytes();
     req.extend_from_slice(&req_built.body);
-    stream
-        .write_all(&req)
-        .map_err(|e| anyhow!("sending the registration request: {e}"))?;
-    stream.flush().ok();
-    let _ = stream.shutdown(Shutdown::Write);
 
-    let mut raw = Vec::new();
-    stream
-        .read_to_end(&mut raw)
-        .map_err(|e| anyhow!("reading the console's reply: {e}"))?;
+    // Keeping our side open until the console answers, as real clients do. Consoles have paired
+    // for years with us hanging up our sending side right after the request, though, so one that
+    // gives nothing back this way gets that too, on a new connection with the same PIN (#704).
+    let raw = match exchange(addr, &req, false, Duration::from_secs(10)) {
+        Ok(raw) if !raw.is_empty() => raw,
+        Err(e) if e.downcast_ref::<NotAnswering>().is_some() => return Err(e),
+        _ => exchange(addr, &req, true, Duration::from_secs(30))?,
+    };
 
     let reply = split_http(&raw)?;
     if reply.code >= 300 {
@@ -877,7 +900,7 @@ pub fn pair_with_console(mgmt_addr: &str, host: &str) -> Result<PairResult> {
     // finished attempt's state). Cancel makes no Sony call that can block.
     // Done in the attempt below.
 
-    let reg = with_pending_retries(PENDING_TRIES, PENDING_WAIT, || {
+    let attempt = with_pending_retries(PENDING_TRIES, PENDING_WAIT, || {
         // A retry's old PIN goes first, as above.
         let _ = crate::remoteplay::remoteplay_cancel(mgmt_addr);
         // The PIN comes back in the ack. It must NOT be fetched by polling
@@ -896,12 +919,13 @@ pub fn pair_with_console(mgmt_addr: &str, host: &str) -> Result<PairResult> {
             .map_err(|_| anyhow!("the console produced a PIN we cannot read: {pin:?}"))?;
 
         register(host, &account_id, pin_num)
-    })?;
-    let credential = credential_from_regist_key(&reg.regist_key)?;
-
-    // Best effort: the PIN has been consumed, so clear the waiting state
-    // rather than leave the console counting down.
+    });
+    // Best effort, and whichever way it went: the PIN is used or no use, so clear the waiting
+    // state. A failed try that left it behind looks like the cause of the console then saying
+    // another user is using Remote Play (#704; not measured).
     let _ = crate::remoteplay::remoteplay_cancel(mgmt_addr);
+    let reg = attempt?;
+    let credential = credential_from_regist_key(&reg.regist_key)?;
 
     Ok(PairResult {
         credential: credential.to_string(),
@@ -966,7 +990,9 @@ fn is_transport_failure(e: &anyhow::Error) -> bool {
     !m.starts_with("registration failed")
         && (m.starts_with("connecting to")
             || m.starts_with("sending the registration request")
-            || m.starts_with("reading the console's reply"))
+            || m.starts_with("reading the console's reply")
+            // Hung up with nothing said (#704): the same dropped connection as #609's.
+            || m.starts_with("The PS5 closed the connection"))
 }
 
 /// `attempt` up to `tries` times while it fails on the way, `wait` apart. The last failure is
@@ -1029,6 +1055,34 @@ pub fn pair_with_pin(host: &str, account_id_b64: &str, pin: &str) -> Result<Pair
 mod manual_pin_tests {
     use super::*;
 
+    /// A console that waits for the sender to finish before it answers still gets an answer read,
+    /// and a reply is read while our side stays open.
+    #[test]
+    fn a_reply_is_read_with_our_side_open_and_a_half_close_still_works() {
+        use std::net::TcpListener;
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        let t = std::thread::spawn(move || {
+            // Answers without waiting for the end of the stream.
+            let (mut s, _) = l.accept().unwrap();
+            let mut b = [0u8; 16];
+            let _ = s.read(&mut b).unwrap();
+            s.write_all(b"HTTP/1.1 403 x\r\n\r\n").unwrap();
+            drop(s);
+            // Reads to the end before it answers: only a half-close lets it.
+            let (mut s, _) = l.accept().unwrap();
+            let mut all = Vec::new();
+            s.read_to_end(&mut all).unwrap();
+            s.write_all(b"HTTP/1.1 200 x\r\n\r\n").unwrap();
+        });
+        let quick = Duration::from_secs(5);
+        let first = exchange(addr, b"hello", false, quick).unwrap();
+        assert!(first.starts_with(b"HTTP/1.1 403"));
+        let second = exchange(addr, b"hello", true, quick).unwrap();
+        assert!(second.starts_with(b"HTTP/1.1 200"));
+        t.join().unwrap();
+    }
+
     #[test]
     fn a_dropped_connection_is_tried_again_and_a_refusal_is_not() {
         use std::cell::Cell;
@@ -1066,6 +1120,20 @@ mod manual_pin_tests {
             m.contains("3 times") && m.contains("Press Pair again"),
             "{m}"
         );
+    }
+
+    #[test]
+    fn a_console_that_hangs_up_without_answering_is_tried_again() {
+        let quick = Duration::from_millis(0);
+        let n = std::cell::Cell::new(0);
+        let r = with_retries(3, quick, || {
+            n.set(n.get() + 1);
+            if n.get() == 1 {
+                return split_http(b"").map(|_| 0);
+            }
+            Ok(7)
+        });
+        assert_eq!((r.unwrap(), n.get()), (7, 2));
     }
 
     #[test]

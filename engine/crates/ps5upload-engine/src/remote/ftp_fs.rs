@@ -43,18 +43,91 @@ async fn timed<T>(
     })
 }
 
+/// A listing line the library refused, read for its name, kind and size alone. None when it isn't
+/// a line of a listing at all.
+fn plain_listing_line(line: &str, mlsd: bool) -> Option<Entry> {
+    if mlsd {
+        let (facts, name) = line.split_once(' ')?;
+        let fact = |key: &str| {
+            facts.split(';').find_map(|f| {
+                let (k, v) = f.split_once('=')?;
+                k.eq_ignore_ascii_case(key).then_some(v)
+            })
+        };
+        let kind = fact("type")?.to_ascii_lowercase();
+        if kind == "cdir" || kind == "pdir" || name.is_empty() {
+            return None;
+        }
+        let is_dir = kind == "dir";
+        return Some(Entry {
+            name: name.to_string(),
+            is_dir,
+            size: if is_dir {
+                0
+            } else {
+                fact("size").and_then(|v| v.parse().ok()).unwrap_or(0)
+            },
+            mtime: None,
+        });
+    }
+    // `ls -l`: mode, links, owner, [group], size, three parts of a date, then the name, which may
+    // hold any spaces. Split by hand, so the name comes out as it is.
+    let mut rest = line.trim_start();
+    let mut fields: Vec<&str> = Vec::with_capacity(8);
+    while fields.len() < 8 {
+        let end = rest.find(char::is_whitespace)?;
+        fields.push(&rest[..end]);
+        rest = rest[end..].trim_start();
+    }
+    let mode = fields[0];
+    if mode.len() < 10 || !matches!(mode.as_bytes()[0], b'-' | b'd' | b'l') {
+        return None;
+    }
+    let numeric = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let (size, name) = if numeric(fields[4]) {
+        (fields[4], rest)
+    } else if numeric(fields[3]) {
+        // No group column: the date ends a field sooner, and the eighth field starts the name.
+        let start = line.find(fields[7])?;
+        (fields[3], &line[start..])
+    } else {
+        return None;
+    };
+    let name = name.split(" -> ").next().unwrap_or(name).trim_end();
+    if name.is_empty() {
+        return None;
+    }
+    let is_dir = mode.starts_with('d');
+    Some(Entry {
+        name: name.to_string(),
+        is_dir,
+        size: if is_dir { 0 } else { size.parse().unwrap_or(0) },
+        mtime: None,
+    })
+}
+
 /// Turn a directory listing into entries: MLSD lines when the server speaks it, else the
 /// Unix `ls -l` or Windows `DIR` lines `LIST` returns. `.` and `..` are dropped.
 pub fn parse_listing(lines: &[String], mlsd: bool) -> Vec<Entry> {
+    let mut unread = 0usize;
     let mut out: Vec<Entry> = lines
         .iter()
         .filter_map(|l| {
-            let f = if mlsd {
-                ListParser::parse_mlsd(l).ok()?
+            let parsed = if mlsd {
+                ListParser::parse_mlsd(l).ok()
             } else {
                 ListParser::parse_posix(l)
                     .or_else(|_| ListParser::parse_dos(l))
-                    .ok()?
+                    .ok()
+            };
+            let Some(f) = parsed else {
+                // The library wants a date it can read (an English month, a real day), and a line
+                // it refuses was a file that just wasn't there: name and size are all we need.
+                let e = plain_listing_line(l, mlsd);
+                if e.is_none() && !l.trim().is_empty() && !l.starts_with("total ") {
+                    unread += 1;
+                }
+                return e.filter(|e| e.name != "." && e.name != "..");
             };
             let name = f.name().to_string();
             if name.is_empty() || name == "." || name == ".." {
@@ -74,6 +147,11 @@ pub fn parse_listing(lines: &[String], mlsd: bool) -> Vec<Entry> {
             })
         })
         .collect();
+    if unread > 0 {
+        crate::log_warn!(
+            "remote ftp: {unread} listing lines could not be read, so those files don't show"
+        );
+    }
     out.sort_by_key(|e| e.name.to_lowercase());
     out
 }
@@ -795,6 +873,58 @@ mod tests {
 
     fn lines(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_line_the_library_refuses_still_shows_its_file() {
+        // Russian months, a day that doesn't exist this year, no group column: name and size are
+        // all a listing needs. (#Discord: a .ffpfsc seen over SMB and not over FTP.)
+        let got = parse_listing(
+            &lines(&[
+                "-rw-r--r-- 1 root root 53687091200 ноя 6 12:00 Hell blade [RUS] v1.ffpfsc",
+                "-rw-r--r-- 1 root root 12 Feb 30 12:00 odd date.bin",
+                "-rw-r--r-- 1 root 34 ноя 6 12:00 no group.bin",
+                "drwxr-xr-x 2 root root 4096 ноя 6 12:00 папка",
+                "lrwxrwxrwx 1 root root 7 ноя 6 12:00 link -> elsewhere",
+                "total 12",
+                "not a listing line",
+            ]),
+            false,
+        );
+        let got: Vec<(&str, bool, u64)> = got
+            .iter()
+            .map(|e| (e.name.as_str(), e.is_dir, e.size))
+            .collect();
+        assert!(
+            got.contains(&("Hell blade [RUS] v1.ffpfsc", false, 53_687_091_200)),
+            "{got:?}"
+        );
+        assert!(got.contains(&("odd date.bin", false, 12)), "{got:?}");
+        assert!(got.contains(&("no group.bin", false, 34)), "{got:?}");
+        assert!(got.contains(&("папка", true, 0)), "{got:?}");
+        assert!(got.contains(&("link", false, 7)), "{got:?}");
+        assert_eq!(got.len(), 5, "{got:?}");
+    }
+
+    #[test]
+    fn an_mlsd_line_with_a_bad_date_still_shows_its_file() {
+        let got = parse_listing(
+            &lines(&[
+                "type=file;size=53687091200;modify=00000000000000; game [v1].ffpfsc",
+                "type=dir;modify=bad; folder name",
+                "type=cdir; .",
+            ]),
+            true,
+        );
+        let got: Vec<(&str, bool, u64)> = got
+            .iter()
+            .map(|e| (e.name.as_str(), e.is_dir, e.size))
+            .collect();
+        assert!(
+            got.contains(&("game [v1].ffpfsc", false, 53_687_091_200)),
+            "{got:?}"
+        );
+        assert!(got.contains(&("folder name", true, 0)), "{got:?}");
     }
 
     fn ent(name: &str) -> Entry {

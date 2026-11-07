@@ -890,6 +890,33 @@
         ],
         "type": "object"
       },
+      "BackupBody": {
+        "properties": {
+          "addr": {
+            "type": "string",
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "dir": {
+            "description": "A folder on the computer the engine runs on; the backup is a new folder inside it.",
+            "type": "string"
+          },
+          "groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "addr",
+          "dir",
+          "groups"
+        ],
+        "type": "object"
+      },
       "BackupDeleteReq": {
         "properties": {
           "addr": {
@@ -1038,6 +1065,23 @@
         "required": [
           "tag",
           "path"
+        ],
+        "type": "object"
+      },
+      "BackupUser": {
+        "description": "A user on the console when the backup was made, for matching them to a user on a reset console.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "uid": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "uid",
+          "name"
         ],
         "type": "object"
       },
@@ -2457,6 +2501,41 @@
         ],
         "type": "object"
       },
+      "CopyConsoleBody": {
+        "properties": {
+          "from": {
+            "description": "The console the save is on.",
+            "type": "string"
+          },
+          "from_path": {
+            "description": "The save folder on `from` (from the saves list).",
+            "type": "string"
+          },
+          "to": {
+            "description": "The console it goes to.",
+            "type": "string"
+          },
+          "to_path": {
+            "description": "An emulator's save: the folder on `to`. Left out, the same path.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "to_user": {
+            "description": "A PS5 save: the user there. An emulator's: who the folder there belongs to.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "from_path",
+          "to_user"
+        ],
+        "type": "object"
+      },
       "Crc32FileResult": {
         "properties": {
           "crc32": {
@@ -3787,6 +3866,28 @@
         ],
         "type": "object"
       },
+      "Folder": {
+        "description": "A folder of a group, with what the scan measured.",
+        "properties": {
+          "bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "files": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "bytes",
+          "files"
+        ],
+        "type": "object"
+      },
       "FolderBuildReq": {
         "properties": {
           "entry": {
@@ -4554,6 +4655,35 @@
         },
         "required": [
           "title_id"
+        ],
+        "type": "object"
+      },
+      "Group": {
+        "properties": {
+          "bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "folders": {
+            "items": {
+              "$ref": "#/components/schemas/Folder"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "items": {
+            "description": "Files, or saves for the saves group.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "bytes",
+          "items",
+          "folders"
         ],
         "type": "object"
       },
@@ -5705,17 +5835,6 @@
             ]
           }
         },
-        "type": "object"
-      },
-      "InspectBody": {
-        "properties": {
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "path"
-        ],
         "type": "object"
       },
       "InspectResp": {
@@ -7213,38 +7332,6 @@
         ],
         "type": "object"
       },
-      "Manifest": {
-        "properties": {
-          "libraries": {
-            "items": {
-              "$ref": "#/components/schemas/LibraryEntry"
-            },
-            "type": "array"
-          },
-          "next_set_number": {
-            "description": "Next set number to hand out. Persisted rather than derived from the\nhighest live set, because deleting the newest set would otherwise let\nthe next one reuse its id — and a backport record refers to a set by id,\nso reuse would point an undo at unrelated libraries.",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "schema": {
-            "minimum": 0,
-            "type": "integer"
-          },
-          "sets": {
-            "items": {
-              "$ref": "#/components/schemas/SetEntry"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "schema",
-          "libraries",
-          "sets",
-          "next_set_number"
-        ],
-        "type": "object"
-      },
       "MeSet": {
         "properties": {
           "name": {
@@ -8050,38 +8137,6 @@
             "description": "Uploaded by the user as one pack."
           }
         ]
-      },
-      "Outcome": {
-        "properties": {
-          "action": {
-            "description": "`upgraded`, `recovered`, `current` or `skipped`.",
-            "type": "string"
-          },
-          "health": {
-            "$ref": "#/components/schemas/Health"
-          },
-          "pid": {
-            "description": "The elfldr running afterwards, when known.",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "reason": {
-            "description": "Why it was skipped.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "action",
-          "health",
-          "reason",
-          "pid"
-        ],
-        "type": "object"
       },
       "PairResult": {
         "description": "What a successful pairing leaves us with.",
@@ -10180,40 +10235,6 @@
         ],
         "type": "object"
       },
-      "RestoreBody": {
-        "properties": {
-          "addr": {
-            "description": "The console (bare IP).",
-            "type": "string",
-            "x-aliases": [
-              "console",
-              "host"
-            ]
-          },
-          "file": {
-            "type": "string"
-          },
-          "save_path": {
-            "description": "The save folder on the console (from the saves list).",
-            "type": "string"
-          },
-          "title_id": {
-            "type": "string"
-          },
-          "user_id": {
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "addr",
-          "title_id",
-          "file",
-          "save_path",
-          "user_id"
-        ],
-        "type": "object"
-      },
       "RestoreFileBody": {
         "properties": {
           "addr": {
@@ -10502,6 +10523,53 @@
         "required": [
           "reason",
           "bundle"
+        ],
+        "type": "object"
+      },
+      "SavedGame": {
+        "description": "One save in a backup.",
+        "properties": {
+          "bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "file": {
+            "description": "The zip, under `saves/<title_id>/`.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The save folder on the console it came from.",
+            "type": "string"
+          },
+          "title_id": {
+            "type": "string"
+          },
+          "user_id": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "title_id",
+          "user_id",
+          "path",
+          "file",
+          "bytes"
+        ],
+        "type": "object"
+      },
+      "ScanBody": {
+        "properties": {
+          "addr": {
+            "type": "string",
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          }
+        },
+        "required": [
+          "addr"
         ],
         "type": "object"
       },
@@ -13125,6 +13193,38 @@
         ],
         "type": "object"
       },
+      "core.fakelibs.Manifest": {
+        "properties": {
+          "libraries": {
+            "items": {
+              "$ref": "#/components/schemas/LibraryEntry"
+            },
+            "type": "array"
+          },
+          "next_set_number": {
+            "description": "Next set number to hand out. Persisted rather than derived from the\nhighest live set, because deleting the newest set would otherwise let\nthe next one reuse its id — and a backport record refers to a set by id,\nso reuse would point an undo at unrelated libraries.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sets": {
+            "items": {
+              "$ref": "#/components/schemas/SetEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema",
+          "libraries",
+          "sets",
+          "next_set_number"
+        ],
+        "type": "object"
+      },
       "core.health.CheckStatus": {
         "enum": [
           "pass",
@@ -13280,6 +13380,146 @@
         ],
         "type": "object"
       },
+      "engine.console_backup.InspectBody": {
+        "properties": {
+          "dir": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dir"
+        ],
+        "type": "object"
+      },
+      "engine.console_backup.Manifest": {
+        "properties": {
+          "app_version": {
+            "type": "string"
+          },
+          "complete": {
+            "description": "False until the last folder is done: a backup cut short says so.",
+            "type": "boolean"
+          },
+          "console": {
+            "description": "The PS5 it was made on (its host-id), if it said: saves open only on that one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "failed": {
+            "description": "What couldn't be copied.",
+            "items": {
+              "$ref": "#/components/schemas/engine.console_backup.Outcome"
+            },
+            "type": "array"
+          },
+          "format": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/Group"
+            },
+            "type": "array"
+          },
+          "host": {
+            "type": "string"
+          },
+          "made_at_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "saves": {
+            "items": {
+              "$ref": "#/components/schemas/SavedGame"
+            },
+            "type": "array"
+          },
+          "users": {
+            "items": {
+              "$ref": "#/components/schemas/BackupUser"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "format",
+          "app_version",
+          "made_at_ms",
+          "host",
+          "console",
+          "complete",
+          "groups",
+          "saves",
+          "users",
+          "failed"
+        ],
+        "type": "object"
+      },
+      "engine.console_backup.Outcome": {
+        "description": "What became of one folder or save.",
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "group": {
+            "type": "string"
+          },
+          "item": {
+            "description": "The console path, or a game's title id.",
+            "type": "string"
+          },
+          "result": {
+            "description": "`done`, `failed`, or `needs_save`: that user has no save of the game to put it in yet.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "group",
+          "item",
+          "result"
+        ],
+        "type": "object"
+      },
+      "engine.console_backup.RestoreBody": {
+        "properties": {
+          "addr": {
+            "type": "string",
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "dir": {
+            "type": "string"
+          },
+          "groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "users": {
+            "additionalProperties": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "description": "For saves: the user number in the backup to the user here it goes to.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "addr",
+          "dir",
+          "groups"
+        ],
+        "type": "object"
+      },
       "engine.console_cleanup_api.AddrBody": {
         "properties": {
           "addr": {
@@ -13356,6 +13596,38 @@
         },
         "required": [
           "path"
+        ],
+        "type": "object"
+      },
+      "engine.elfldr_guard.Outcome": {
+        "properties": {
+          "action": {
+            "description": "`upgraded`, `recovered`, `current` or `skipped`.",
+            "type": "string"
+          },
+          "health": {
+            "$ref": "#/components/schemas/Health"
+          },
+          "pid": {
+            "description": "The elfldr running afterwards, when known.",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "Why it was skipped.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "action",
+          "health",
+          "reason",
+          "pid"
         ],
         "type": "object"
       },
@@ -13548,6 +13820,17 @@
         ],
         "type": "object"
       },
+      "engine.remote.api.InspectBody": {
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
       "engine.rp_golive.StartReq": {
         "properties": {
           "audio_kbps": {
@@ -13674,6 +13957,40 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "engine.save_backup.RestoreBody": {
+        "properties": {
+          "addr": {
+            "description": "The console (bare IP).",
+            "type": "string",
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "file": {
+            "type": "string"
+          },
+          "save_path": {
+            "description": "The save folder on the console (from the saves list).",
+            "type": "string"
+          },
+          "title_id": {
+            "type": "string"
+          },
+          "user_id": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "addr",
+          "title_id",
+          "file",
+          "save_path",
+          "user_id"
+        ],
         "type": "object"
       },
       "engine.wake_login_api.PasscodeReq": {
@@ -16362,6 +16679,366 @@
         }
       }
     },
+    "/api/console-backup/backup": {
+      "post": {
+        "description": "`POST /api/console-backup/backup` `{addr, dir, groups}`.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {}
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "console-backup"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/console-backup/cancel": {
+      "post": {
+        "description": "`POST /api/console-backup/cancel`: stops after what's copying now is told to.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Stops after what's copying now is told to",
+        "tags": [
+          "console-backup"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/console-backup/inspect": {
+      "post": {
+        "description": "`POST /api/console-backup/inspect` `{dir}`: what a backup folder holds.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/engine.console_backup.InspectBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/engine.console_backup.Manifest"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {}
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "What a backup folder holds",
+        "tags": [
+          "console-backup"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "struct"
+        }
+      }
+    },
+    "/api/console-backup/restore": {
+      "post": {
+        "description": "`POST /api/console-backup/restore` `{addr, dir, groups, users}`.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/engine.console_backup.RestoreBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {}
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "console-backup"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/console-backup/scan": {
+      "post": {
+        "description": "`POST /api/console-backup/scan` `{addr}`: what could be backed up, and how big. Follow it on\n`/status`.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScanBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {}
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "What could be backed up, and how big",
+        "tags": [
+          "console-backup"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/console-backup/status": {
+      "get": {
+        "description": "`GET /api/console-backup/status`.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "console-backup"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      }
+    },
     "/api/console-snapshots/forget": {
       "post": {
         "description": "`POST /api/console-snapshots/forget` — forgets these consoles (removed from a roster, or at a\nnew IP). Named one by one: one client's short list says nothing about another's consoles.",
@@ -18349,7 +19026,7 @@
                 "schema": {
                   "properties": {
                     "manifest": {
-                      "$ref": "#/components/schemas/Manifest"
+                      "$ref": "#/components/schemas/core.fakelibs.Manifest"
                     },
                     "root": {
                       "type": "string"
@@ -27764,7 +28441,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Outcome"
+                  "$ref": "#/components/schemas/engine.elfldr_guard.Outcome"
                 }
               }
             },
@@ -38752,7 +39429,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/InspectBody"
+                "$ref": "#/components/schemas/engine.remote.api.InspectBody"
               }
             }
           },
@@ -39130,6 +39807,141 @@
             "required": true
           },
           "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/save-backup/copy-console": {
+      "post": {
+        "description": "`POST /api/save-backup/copy-console` `{from, to, from_path, to_user, to_path?}` (#709).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CopyConsoleBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "missing": {}
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "(#709)",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/save-backup/copy-console/targets": {
+      "get": {
+        "description": "`GET /api/save-backup/copy-console/targets?to=&title_id=`: that console's saves of the game,\nof every kind, and its users, for picking where a save goes.",
+        "parameters": [
+          {
+            "description": "The console to copy to.",
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "title_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "saves": {
+                      "items": {
+                        "$ref": "#/components/schemas/SaveEntry"
+                      },
+                      "type": "array"
+                    },
+                    "users": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "That console's saves of the game, of every kind, and its users, for picking where a save goes",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
         }
       }
     },
@@ -39513,7 +40325,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RestoreBody"
+                "$ref": "#/components/schemas/engine.save_backup.RestoreBody"
               }
             }
           },
@@ -39891,7 +40703,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RestoreBody"
+                "$ref": "#/components/schemas/engine.save_backup.RestoreBody"
               }
             }
           },
@@ -42702,6 +43514,9 @@
     {
       "description": "Game folders on this computer and their tidying.",
       "name": "collection"
+    },
+    {
+      "name": "console-backup"
     },
     {
       "description": "Files and folders on the console.",

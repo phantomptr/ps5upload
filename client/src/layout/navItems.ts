@@ -38,6 +38,7 @@ import {
   WandSparkles,
   Eraser,
   FolderSync,
+  ArchiveRestore,
 } from "lucide-react";
 
 export interface NavItem {
@@ -166,6 +167,13 @@ export const NAV_ITEMS: NavItem[] = [
     key: "accounts_title",
     fallback: "Accounts",
     icon: CircleUserRound,
+  },
+  // What to keep before a reset, and how to get through one (#707).
+  {
+    to: "/console-backup",
+    key: "cb_title",
+    fallback: "Backup & Restore",
+    icon: ArchiveRestore,
   },
 
   // Reaching the console: connecting, the devices that use it, and checking the link.
