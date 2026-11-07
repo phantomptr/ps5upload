@@ -36,6 +36,7 @@
 #include "webui_smb.h"
 #include "runtime.h"
 #include "sandbox_unmount.h"
+#include "image_mount.h"
 #include "instance_verdict.h"
 
 #include "content_db.h"
@@ -1887,13 +1888,20 @@ static int is_user_storage_path(const char *path) {
 }
 
 /* fs.freespace's policy (mgmt_fs_policy_t): the mount holding `path` is an attached disk image. Its
- * source is an LVD/MD device, or for a nullfs of one (a title's /system_ex/app link) its mount point. */
+ * source is an LVD/MD device, or for a nullfs of one (a title's /system_ex/app link) the mount it
+ * views, followed to the image wherever that is mounted (image_mount.h). */
 static int mount_is_disk_image(const char *path) {
     struct statfs s;
-    if (statfs(path, &s) != 0) return 0;
-    return strncmp(s.f_mntfromname, "/dev/lvd", 8) == 0 || strncmp(s.f_mntfromname, "/dev/md", 7) == 0 ||
-           strncmp(s.f_mntfromname, "/mnt/shadowmnt/", 15) == 0 ||
-           strncmp(s.f_mntfromname, "/mnt/ps5upload/", 15) == 0;
+    char at[sizeof s.f_mntfromname];
+    snprintf(at, sizeof at, "%s", path);
+    for (int hop = 0; hop <= IMAGE_MOUNT_MAX_HOPS; hop++) {
+        if (statfs(at, &s) != 0) return 0;
+        int kind = image_mount_kind(s.f_fstypename, s.f_mntfromname);
+        if (kind != IMAGE_MOUNT_FOLLOW) return kind == IMAGE_MOUNT_YES;
+        if (strcmp(at, s.f_mntfromname) == 0) return 0;
+        snprintf(at, sizeof at, "%s", s.f_mntfromname);
+    }
+    return 0;
 }
 
 static int handle_fs_list_volumes(runtime_state_t *state) {
