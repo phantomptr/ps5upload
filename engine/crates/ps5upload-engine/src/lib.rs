@@ -74,6 +74,7 @@ mod link;
 mod link_lz4;
 mod local_fs;
 mod log_dedup;
+mod log_levels;
 mod mcp;
 mod mesh_api;
 mod mesh_drive;
@@ -734,7 +735,12 @@ async fn log_requests(req: Request, next: Next) -> axum::response::Response {
     // failure still gets through: only this debug line is skipped, and the 5xx
     // path below is untouched.
     if !is_constant_poll(&path) {
-        log_debug!("{method} {path} -> {status} ({ms}ms)");
+        // The access log: always kept (engine.log is the crash trace), whatever the level says.
+        engine_log::record_cat(
+            "debug",
+            "api",
+            format!("{method} {path} -> {status} ({ms}ms)"),
+        );
     }
 
     // A console that is switched off answers every status poll with 502,
@@ -11531,8 +11537,11 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // (reconcile per-parent progress, transfer retries, etc.) without
     // having to install a separate pipe for core diagnostics.
     ps5upload_core::log::set_sink(|msg| engine_log::record("info", msg.to_string()));
-    // core_debug! lines (written only while "Detailed logs" is on) land at debug.
-    ps5upload_core::log::set_debug_sink(|msg| engine_log::record("debug", msg.to_string()));
+    // clog!/core_debug! lines, with their level and category. The level setting comes off disk
+    // first, so a raise made before a restart is still in force (until it runs out).
+    ps5upload_core::log::set_leveled_sink(engine_log::core_sink);
+    log_levels::load_saved();
+    diag_api::mark_started();
     // The bug-report journal: every crate's events (ps5upload_core::events) land on disk here.
     event_journal::install();
     ps5upload_core::events::emit(
@@ -12513,6 +12522,11 @@ fn build_app_and_mcp(
             get(diag_api::log_level_get).post(diag_api::log_level_set),
         )
         .route("/api/diag/features", get(diag_api::features))
+        .route(
+            "/api/logs/level",
+            get(log_levels::get_level).put(log_levels::put_level),
+        )
+        .route("/api/logs/recent", get(log_levels::recent))
         .route("/api/event-journal", get(event_journal::events_handler))
         .route(
             "/api/ps5/helper-log-ftp",

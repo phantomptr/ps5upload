@@ -6834,6 +6834,55 @@
         ],
         "type": "object"
       },
+      "LevelReq": {
+        "properties": {
+          "categories": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": "Per-category levels; a category set to null loses its override. Replaces the overrides\nwhen given (with `merge: true`, only the named categories change).",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "level": {
+            "description": "The global level: error, warn, info, debug or trace.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "merge": {
+            "description": "Change only the categories named, keeping the other overrides.",
+            "type": "boolean"
+          },
+          "minutes": {
+            "description": "How long a raise lasts from now, in minutes (instead of `until_ms`).",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reset": {
+            "description": "Start from the default (info, no overrides) before the rest.",
+            "type": "boolean"
+          },
+          "until_ms": {
+            "description": "When a raise ends, Unix ms.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "LibraryEntry": {
         "properties": {
           "builds": {
@@ -7346,6 +7395,10 @@
       },
       "LogEntry": {
         "properties": {
+          "cat": {
+            "description": "The line's category (`ps5upload_core::log::CATEGORIES`).",
+            "type": "string"
+          },
           "level": {
             "type": "string"
           },
@@ -7365,6 +7418,7 @@
           "seq",
           "ts_ms",
           "level",
+          "cat",
           "msg"
         ],
         "type": "object"
@@ -17579,7 +17633,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "Turn detailed logging on or off, until a set time",
+        "summary": "Turn detailed logging on or off, until a set time (older apps; see /api/logs/level)",
         "tags": [
           "engine"
         ],
@@ -22263,6 +22317,191 @@
         "x-ps5upload": {
           "access": "loopback",
           "response_schema": "struct"
+        }
+      }
+    },
+    "/api/logs/level": {
+      "get": {
+        "description": "One level model for the app, the engine and the PS5 helper: error, warn, info, debug, trace. `level` is the global level, `categories` the per-category overrides, `effective` what each category writes now, `until_ms` when a raise above info ends (null when nothing is raised), `category_list` every category with what it covers.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The log levels: global, per category, and what is in force now",
+        "tags": [
+          "logs"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      },
+      "put": {
+        "description": "Anything above info (globally or for a category) is a raise: it lasts `minutes` (default 60) or until `until_ms`, at most a day, then falls back to info by itself. `categories` replaces the overrides, or with `merge: true` changes only the categories named (null drops one). `reset: true` starts from info with no overrides. The engine keeps the setting on disk and hands it to the app and every helper it talks to.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LevelReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Set the log levels: global, per category, and how long a raise lasts",
+        "tags": [
+          "logs"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/logs/recent": {
+      "get": {
+        "description": "Oldest first. `level=debug` keeps debug and everything more severe; `category` takes names separated by commas; `since_ms` (Unix ms) and `since_seq` (a line's `seq`, as `next_seq` answers) keep only newer lines; `limit` keeps the newest (default 200, at most 2000). Secrets are taken out of every line when it is written.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "level",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "since_ms",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "since_seq",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "count": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "levels": {},
+                    "lines": {
+                      "items": {
+                        "$ref": "#/components/schemas/LogEntry"
+                      },
+                      "type": "array"
+                    },
+                    "next_seq": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The engine's newest log lines, by level, category and time",
+        "tags": [
+          "logs"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
         }
       }
     },
@@ -44091,6 +44330,9 @@
     {
       "description": "Watch and stop jobs, long calls and tasks started on the console.",
       "name": "jobs"
+    },
+    {
+      "name": "logs"
     },
     {
       "description": "The MCP endpoint.",

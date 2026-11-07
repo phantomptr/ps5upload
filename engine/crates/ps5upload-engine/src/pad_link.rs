@@ -903,7 +903,7 @@ async fn pad_session(mut socket: WebSocket, q: PadQuery, ip: std::net::IpAddr) {
         "pad_link: phone {id} joined as {}",
         if watch { "watcher" } else { "controller" }
     );
-    crate::log_detail!("pad_link: phone {id} is {name}");
+    crate::log_at!(Debug, "together", "pad_link: phone {id} is {name}");
     let mut tick = tokio::time::interval(STATE_EVERY);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // Rounds since anything came from the phone (counted, not timed: see rp_stream_api's page).

@@ -223,6 +223,10 @@ struct ClientMsg {
     /// The picture on this device on or off (see the module's top).
     #[serde(default)]
     picture: Option<bool>,
+    /// What the page's video or sound decoder did: the path it chose, a failure with its
+    /// config. Kept with the session for a bug report (`note_decoder`).
+    #[serde(default)]
+    decoder: Option<serde_json::Value>,
 }
 
 /// A passcode as the page sent it: never printed, not even in a debug dump.
@@ -426,20 +430,72 @@ static LIVE: Mutex<Option<Arc<Live>>> = Mutex::new(None);
 #[cfg(test)]
 pub(crate) static LIVE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// The last session's start: what was asked, each handshake stage with its time, and how it
-/// ended. For a bug report (`/api/diag/features`): a refusal like 80108b26 is gone from the page
-/// once it is closed. No key, no address (the console is named by the report's own fields).
-static LAST_SESSION: Mutex<Option<serde_json::Value>> = Mutex::new(None);
+/// The last sessions' starts, oldest first: what was asked, each handshake stage with its time,
+/// what the page's decoder did (`decoder`: the path it chose, each failure with its config), and
+/// how it ended. For a bug report (`/api/diag/features`): a refusal like 80108b26 is gone from the
+/// page once it is closed, and a problem is often only clear next to the sessions before it. No
+/// key, no address (the console is named by the report's own fields).
+static SESSIONS: Mutex<std::collections::VecDeque<serde_json::Value>> =
+    Mutex::new(std::collections::VecDeque::new());
 
-/// Most handshake stages kept in [`LAST_SESSION`] (a session has about eight).
+/// How many sessions [`SESSIONS`] keeps.
+const KEPT_SESSIONS: usize = 8;
+
+/// Most handshake stages kept per session (a session has about eight).
 const LAST_STAGES: usize = 16;
 
+/// Most decoder events kept per session (a choice, a few failures, a fallback).
+const DECODER_EVENTS: usize = 24;
+
 fn note_last(f: impl FnOnce(&mut serde_json::Value)) {
-    if let Ok(mut g) = LAST_SESSION.lock() {
-        if let Some(v) = g.as_mut() {
+    if let Ok(mut g) = SESSIONS.lock() {
+        if let Some(v) = g.back_mut() {
             f(v);
         }
     }
+}
+
+/// The newest session, as `last_session` has always been.
+pub(super) fn last_session() -> Option<serde_json::Value> {
+    SESSIONS.lock().ok().and_then(|g| g.back().cloned())
+}
+
+/// Every kept session, oldest first.
+fn sessions() -> Vec<serde_json::Value> {
+    SESSIONS
+        .lock()
+        .map(|g| g.iter().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// What the page said its decoder did (`{"decoder": {...}}` on the session's socket): kept with
+/// the session and logged. Only plain facts are kept: names, codec strings, sizes, error text.
+fn note_decoder(host: &str, page: u64, mut ev: serde_json::Value) {
+    if !ev.is_object() {
+        return;
+    }
+    ps5upload_core::secret_text::value_without_secrets(&mut ev);
+    let text = ev.to_string();
+    if text.len() > 2048 {
+        return;
+    }
+    let failed = ev
+        .get("event")
+        .and_then(|e| e.as_str())
+        .is_some_and(|e| e.contains("error") || e.contains("fail"));
+    if failed {
+        crate::log_at!(Warn, "rp", "rp_stream: {host}: page {page} decoder: {text}");
+    } else {
+        crate::log_at!(Info, "rp", "rp_stream: {host}: page {page} decoder: {text}");
+    }
+    ev["unix_ms"] = unix_ms().into();
+    note_last(|v| {
+        if let Some(a) = v["decoder"].as_array_mut() {
+            if a.len() < DECODER_EVENTS {
+                a.push(ev);
+            }
+        }
+    });
 }
 
 fn unix_ms() -> u64 {
@@ -479,7 +535,9 @@ pub(crate) fn diag_summary() -> serde_json::Value {
     });
     serde_json::json!({
         "live": live,
-        "last_session": LAST_SESSION.lock().ok().and_then(|g| g.clone()),
+        "last_session": last_session(),
+        // The last few, oldest first (the newest is `last_session`).
+        "sessions": sessions(),
     })
 }
 
@@ -1288,7 +1346,8 @@ impl StreamSink for Sink {
             }
         };
         if v["stage"] != "stats" {
-            crate::log_detail!("rp_stream: {}: stage {v}", self.live.host);
+            // Every stage at info: a session has about eight, and they are what a report needs.
+            crate::log_at!(Info, "rp", "rp_stream: {}: stage {v}", self.live.host);
             let stage = v.clone();
             note_last(|l| {
                 if let Some(a) = l["stages"].as_array_mut() {
@@ -1489,11 +1548,7 @@ pub async fn current(
         control::add_details(&mut v, live.as_deref());
         // How the last session started and ended (stages, frames, sound frames, loss): what an
         // agent checks after a stream it ran, without a bug report. This computer only.
-        v["last_session"] = LAST_SESSION
-            .lock()
-            .ok()
-            .and_then(|g| g.clone())
-            .unwrap_or_default();
+        v["last_session"] = last_session().unwrap_or_default();
     }
     Json(v)
 }
@@ -1588,12 +1643,21 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
         "low_latency": start.low_latency,
         "picture": start.picture,
     });
-    crate::log_detail!("rp_stream: {}: starting a session: {asked}", start.host);
-    if let Ok(mut g) = LAST_SESSION.lock() {
-        *g = Some(serde_json::json!({
+    crate::log_at!(
+        Info,
+        "rp",
+        "rp_stream: {}: starting a session: {asked}",
+        start.host
+    );
+    if let Ok(mut g) = SESSIONS.lock() {
+        if g.len() >= KEPT_SESSIONS {
+            g.pop_front();
+        }
+        g.push_back(serde_json::json!({
             "started_unix_ms": unix_ms(),
             "asked": asked,
             "stages": [],
+            "decoder": [],
             "end": null,
         }));
     }
@@ -1900,6 +1964,9 @@ async fn session(mut socket: WebSocket) {
                         }
                         if m.passcode_cancel {
                             live.answer_passcode(id, Passcode::Cancel);
+                        }
+                        if let Some(d) = m.decoder {
+                            note_decoder(&live.host, id, d);
                         }
                     }
                 }

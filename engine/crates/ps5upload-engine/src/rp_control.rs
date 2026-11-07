@@ -48,7 +48,7 @@ use base64::Engine as _;
 use ps5upload_core::rp_stream::{valid_passcode, MicInput, Passcode};
 use serde_json::{json, Value};
 
-use super::{Live, Secret, StartReq, LAST_SESSION, LIVE, MAX_KEEP_ALIVE, MIC_QUEUE};
+use super::{last_session, Live, Secret, StartReq, LIVE, MAX_KEEP_ALIVE, MIC_QUEUE};
 
 /// A session started here waits this long for the next call when nobody watches it.
 /// How long a start waits for a session that was just stopped to go.
@@ -424,20 +424,14 @@ async fn wait_for_picture(live: &Arc<Live>, wait: Duration) -> Option<Value> {
 
 /// How the last session ended, when it has.
 fn last_end() -> Option<Value> {
-    LAST_SESSION
-        .lock()
-        .ok()?
-        .as_ref()?
-        .get("end")
-        .filter(|e| !e.is_null())
-        .cloned()
+    last_session()?.get("end").filter(|e| !e.is_null()).cloned()
 }
 
 /// What a local script sees beyond the session's id, for `GET /api/ps5/rp/session`: there is no page
 /// to tell it each stage. Nothing secret: no keys, no passcode, and the typed text is what the
 /// console's own keyboard already shows.
 pub(super) fn add_details(v: &mut Value, live: Option<&Live>) {
-    let last = LAST_SESSION.lock().ok().and_then(|g| g.clone());
+    let last = last_session();
     let Some(l) = live else {
         if let Some(end) = last_end() {
             v["last_end"] = end;
