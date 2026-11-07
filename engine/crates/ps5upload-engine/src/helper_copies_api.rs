@@ -131,7 +131,11 @@ fn replace(
         console.write(&previous_path(path), &old)?;
     }
     console.write(path, bytes)?;
-    follow_version(console, path, env!("CARGO_PKG_VERSION"));
+    // A kept copy is found beside the file by its name (restore_previous): renaming the file to
+    // the new version would leave it behind under the old name.
+    if !keep_previous {
+        follow_version(console, path, env!("CARGO_PKG_VERSION"));
+    }
     Ok(Outcome::Updated(bytes.len()))
 }
 

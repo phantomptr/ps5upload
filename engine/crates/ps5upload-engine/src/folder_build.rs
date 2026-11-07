@@ -621,8 +621,10 @@ pub(crate) fn verify_trees(
         .collect();
     have.sort();
     if have != listed {
-        let missing = listed.iter().find(|f| !have.contains(f));
-        let extra = have.iter().find(|f| !listed.contains(f));
+        // Both sorted: a binary search each, not a scan of one list per entry of the other
+        // (hundreds of thousands of files).
+        let missing = listed.iter().find(|f| have.binary_search(f).is_err());
+        let extra = have.iter().find(|f| listed.binary_search(f).is_err());
         return Err(match (missing, extra) {
             (Some((p, s)), _) => format!("{p} ({s} bytes) did not read back"),
             (None, Some((p, s))) => format!("{p} ({s} bytes) read back but is not in the source"),

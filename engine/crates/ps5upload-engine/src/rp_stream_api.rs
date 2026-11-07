@@ -1693,7 +1693,9 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
         };
         // A session that reached the console holds its slot for a while after: remembered, so a
         // start refused meanwhile is told apart from another device's session.
-        if end["code"] != "busy" && end["code"] != "in_use" {
+        // Only a session that got as far as the console's slot: an end, or one lost mid-stream
+        // (an unreachable or refused start never held it).
+        if end["stage"] == "ended" || end["code"] == "lost" {
             if let Ok(mut g) = SESSION_ENDED.lock() {
                 g.insert(l.host.clone(), std::time::Instant::now());
             }
