@@ -15,13 +15,12 @@ import {
   type LogEntry,
   type LogLevel,
 } from "../../state/logs";
-import { useDiagSettingsStore, LOG_LEVELS, detailedActive } from "../../state/diagSettings";
-import { EmptyState, Button, Callout, Toggle } from "../../components";
+import { EmptyState, Button, Callout } from "../../components";
 import { useTr } from "../../state/lang";
 import { writeClipboard } from "../../lib/clipboard";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { browserDownloadText } from "../../lib/browserDownload";
-import { formatDate } from "../../lib/formatDate";
+import LogLevelsCard from "./LogLevelsCard";
 
 const LEVEL_ORDER: LogLevel[] = ["error", "warn", "info", "debug", "trace"];
 
@@ -77,11 +76,6 @@ export default function AppLogsPanel() {
   const filter = useLogsStore((s) => s.filter);
   const setFilter = useLogsStore((s) => s.setFilter);
   const clearLogs = useLogsStore((s) => s.clear);
-  const logLevel = useDiagSettingsStore((s) => s.logLevel);
-  const setLogLevel = useDiagSettingsStore((s) => s.setLogLevel);
-  const detailedUntil = useDiagSettingsStore((s) => s.detailedUntil);
-  const setDetailed = useDiagSettingsStore((s) => s.setDetailed);
-  const detailedOn = detailedActive(detailedUntil);
 
   // Transient button feedback. A silent success looked identical to a silent
   // failure, which is why Copy/Download read as "not working".
@@ -241,60 +235,19 @@ export default function AppLogsPanel() {
         </Button>
       </div>
 
-      {/* "Detailed logs": extra engine lines for the hard-to-diagnose paths (Remote Play
-          start-up, Play Together) and debug lines recorded, for a day at most (lib/detailedLogs).
-          Every platform: it changes what the engine writes, which the browser build reads too. */}
-      <div className="mb-3 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-4 py-2.5 text-xs shadow-[var(--edge-highlight)]">
-        <Toggle
-          checked={detailedOn}
-          onChange={(on) => setDetailed(on)}
-          label={tr("logs_detailed", undefined, "Detailed logs")}
-          hint={
-            detailedOn && detailedUntil !== null
-              ? tr("logs_detailed_on_until", { time: formatDate(detailedUntil) }, "On until {time}. Turns itself off then.")
-              : tr(
-                  "logs_detailed_hint",
-                  undefined,
-                  "Records extra detail about Remote Play start-up and Play Together to help find a problem. Never keys, codes or passwords. Turns itself off after 24 hours.",
-                )
-          }
-        />
-      </div>
+      {/* Log levels: one setting for the app, the engine and the PS5 helper, per category;
+          a level above Info goes back by itself (state/diagSettings, lib/logLevels). Every
+          platform: it changes what the engine and the helper write, which the browser reads too. */}
+      <LogLevelsCard />
 
-      {/* Persistent disk-log controls. These logs are written to
-          ~/.ps5upload/logs/ so a bug report can package a time window; the
-          level here gates the MINIMUM severity recorded (not what's shown
-          above). The browser build has no disk log (diag_log_append is
-          desktop-only), so the level would change nothing there. */}
+      {/* The app's own log is saved to ~/.ps5upload/logs/ for bug reports (desktop only: the
+          browser build has no disk log). */}
       {isTauriEnv() && (
-      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-4 py-2.5 text-xs shadow-[var(--edge-highlight)]">
-        <span className="text-[var(--color-muted)]">
-          {tr(
-            "logs_disk_hint",
-            undefined,
-            "Saved to disk for bug reports. Recording level:",
-          )}
-        </span>
-        <select
-          value={logLevel}
-          onChange={(e) => setLogLevel(e.target.value as LogLevel)}
-          className="select !w-auto !py-1 text-xs max-md:min-h-11"
-        >
-          {LOG_LEVELS.map((l) => (
-            <option key={l} value={l}>
-              {tr(`log_level_${l}`, undefined, l[0].toUpperCase() + l.slice(1))}
-            </option>
-          ))}
-        </select>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="ms-auto"
-          onClick={() => void openLogsDir()}
-        >
-          {tr("logs_open_folder", undefined, "Open logs folder")}
-        </Button>
-      </div>
+        <div className="mb-3 flex justify-end">
+          <Button variant="ghost" size="sm" onClick={() => void openLogsDir()}>
+            {tr("logs_open_folder", undefined, "Open logs folder")}
+          </Button>
+        </div>
       )}
       {openDirError && (
         <Callout

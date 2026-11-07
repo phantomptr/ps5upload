@@ -14,7 +14,9 @@ import { buildPs5Snapshot } from "./ps5Snapshot";
 import { reportMarkdown, type ReportForm } from "./reportOutputs";
 import { fetchTimeline, filterCats, formatLine } from "./reportTimeline";
 import { getEngineUrl } from "../state/engine";
+import { levelsSummary } from "../state/diagSettings";
 import { invoke } from "./invokeLogged";
+import { collectMedia, collectPayloads, collectRpClientSessions, collectSystem } from "./reportExtras";
 
 export type SourceId =
   | "app_journal"
@@ -26,7 +28,10 @@ export type SourceId =
   | "helper_ftp"
   | "console_logs"
   | "jobs"
-  | "settings";
+  | "settings"
+  | "system"
+  | "media"
+  | "payloads";
 export const SOURCE_IDS: readonly SourceId[] = [
   "app_journal",
   "engine_journal",
@@ -38,12 +43,52 @@ export const SOURCE_IDS: readonly SourceId[] = [
   "console_logs",
   "jobs",
   "settings",
+  "system",
+  "media",
+  "payloads",
 ];
 
 /** Milliseconds each source may take. The console snapshot makes several calls, so it gets longer. */
-export const TIMEOUTS = { snapshot: 12_000, ftp: 9_000, engine: 5_000 } as const;
-/** Above this the oldest timeline lines are dropped (the zip cap is 64 MB). */
-const TIMELINE_MAX_BYTES = 40 << 20;
+export const TIMEOUTS = { snapshot: 12_000, ftp: 9_000, engine: 5_000, probe: 6_000 } as const;
+/** Above this the oldest timeline lines are dropped. Every file is capped so the zip stays well
+ *  under the engine's 64 MB limit and a report can be posted. */
+const TIMELINE_MAX_BYTES = 16 << 20;
+/** The most of one log the report keeps (the newest part). The desktop builder caps the files it
+ *  reads from disk itself (bug_report.rs), with the same note in MISSING.txt. */
+export const LOG_MAX_BYTES = 4 << 20;
+
+/** The newest `max` characters of `text`, starting on a line, and how much was left out. */
+export function keepNewest(text: string, max: number): { text: string; cut: number } {
+  if (text.length <= max) return { text, cut: 0 };
+  let start = text.length - max;
+  const nl = text.indexOf("\n", start);
+  if (nl !== -1 && nl - start < 4096) start = nl + 1;
+  return { text: text.slice(start), cut: start };
+}
+
+/** report.md's extra environment lines: the OS as the OS says it, the web view, the log levels. */
+export function envLines(
+  levels: ReturnType<typeof levelsSummary>,
+  system: Awaited<ReturnType<typeof collectSystem>> | null,
+): string[] {
+  const out: string[] = [];
+  if (system?.os_name || system?.os_version)
+    out.push(
+      `OS: ${[system.os_name, system.os_version].filter(Boolean).join(" ")}${system.machine_model ? ` on ${system.machine_model}` : ""}`,
+    );
+  if (system?.webview_version) out.push(`Web view: ${system.webview_version}`);
+  const cats = Object.entries(levels.categories)
+    .map(([c, l]) => `${c}=${l}`)
+    .join(", ");
+  out.push(
+    `Log levels: ${levels.level}${cats ? ` (${cats})` : ""}${levels.raised && levels.until ? `, raised until ${levels.until}` : ""}`,
+  );
+  return out;
+}
+
+function mib(n: number): string {
+  return `${(n / (1 << 20)).toFixed(1)} MiB`;
+}
 
 export interface BuildOptions {
   form: ReportForm;
@@ -160,17 +205,28 @@ report.json       The same, machine-readable, plus engine and console state, and
                   round trip, skipped pictures; phone controllers and watch party; Go live
                   destinations as service + host; saved remote connections; the mesh),
                   ps5.features (Hush, the cheats engine, the console's network shares),
-                  diagnostic.app_links (ps5upload:// links) and whether Detailed logs
-                  were on (diagnostic.settings.detailed_logs).
+                  diagnostic.app_links (ps5upload:// links).
+                  log_levels: the log levels in force (global, per category, a raise and
+                  its end). system: the OS's real name and version, the machine's model,
+                  CPU and memory, the web view's version, uptimes. media: what this web
+                  view can decode (H.264, HEVC, Opus, the media player, WebGL 2).
+                  remote_play_client: the page's last Remote Play sessions (decoder path,
+                  failures with their config, fallbacks); engine.features.remote_play.sessions
+                  has the engine's side of the same sessions (stages, refusals, the end).
+                  engine.features.host: the engine's computer, with its network interfaces
+                  by kind and MTU. payloads: what runs on the console as a payload and what
+                  Payload Manager stores, with versions.
 timeline.txt      App, engine and PS5 helper events for the chosen time range, oldest first.
 timeline.jsonl    The same events, one JSON object per line.
-MISSING.txt       Everything that was asked for but could not be read, and why.
+MISSING.txt       Everything that was asked for but could not be read, and why, and every log
+                  that was cut to fit (the newest part is kept).
 console/          Logs read from the PS5: the helper's stderr.log, klog, syslog.
 logs/             The app's and the engine's own logs.
 screenshots/      Pictures the reporter attached.
 
 Addresses, MAC addresses, home folders and serials are replaced when redaction is on
-(<ip-1> is the same console in every file); pairing keys and tokens are always removed.
+(<ip-1> is the same console in every file); pairing keys, pairing PINs and tokens are always
+removed.
 Feature states are counts and names only: never stream keys or URLs, invite keys or codes,
 resume tokens, phone link keys, passcodes, share passwords or user names.
 `;
@@ -293,6 +349,25 @@ export async function buildReport(o: BuildOptions): Promise<BuiltReport> {
     }),
   );
 
+  // Where the app runs, what it can decode, what the console has loaded.
+  const system = want("system") ? await run("system", TIMEOUTS.probe, () => collectSystem()) : null;
+  const media = want("media") ? await run("media", TIMEOUTS.probe, () => collectMedia()) : null;
+  const payloads =
+    want("payloads") && o.consoles[0]
+      ? await run("payloads", TIMEOUTS.engine, () => collectPayloads(o.consoles[0]))
+      : null;
+
+  // Every log is capped, the newest part kept; what was cut is said in MISSING.txt.
+  const truncated: string[] = [];
+  for (const e of entries) {
+    if (e.text === undefined || e.path.startsWith("timeline.") || e.path === "settings.json") continue;
+    const { text, cut } = keepNewest(e.text, LOG_MAX_BYTES);
+    if (cut > 0) {
+      truncated.push(`${e.path}: kept the newest ${mib(text.length)} of ${mib(e.text.length)}`);
+      e.text = text;
+    }
+  }
+
   const diagnostic = buildDiagnosticBundle({ appVersion: o.form.appVersion, redact: false, logLimit: 200 });
   if (o.platform === "desktop" && diagnostic.app_links) {
     // The shell's side of ps5upload:// links: the scheme's registration, what arrived.
@@ -309,18 +384,28 @@ export async function buildReport(o: BuildOptions): Promise<BuiltReport> {
     categories: [...o.cats],
     sources: [...o.sources],
     dropped,
+    // The levels in force while it was recorded: a report at info may lack debug detail.
+    log_levels: levelsSummary(),
+    system,
+    media,
+    remote_play_client: collectRpClientSessions(),
+    payloads,
     diagnostic,
     engine,
     ps5,
   };
   entries.unshift(
     { path: "README.txt", text: README },
-    { path: "report.md", text: reportMarkdown(o.form, problemLines) },
+    { path: "report.md", text: reportMarkdown(o.form, problemLines, envLines(manifest.log_levels, system)) },
     { path: "report.json", text: JSON.stringify(manifest, null, 2) },
   );
+  const missingLines = [
+    ...missing.map((m) => `${m.source}: ${m.reason}`),
+    ...truncated.map((t) => `cut to fit: ${t}`),
+  ];
   entries.push({
     path: "MISSING.txt",
-    text: missing.length ? missing.map((m) => `${m.source}: ${m.reason}`).join("\n") : "Nothing missing.",
+    text: missingLines.length ? missingLines.join("\n") : "Nothing missing.",
   });
 
   return {

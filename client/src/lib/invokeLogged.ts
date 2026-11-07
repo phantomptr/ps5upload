@@ -4,7 +4,7 @@ import {
   type InvokeOptions,
 } from "@tauri-apps/api/core";
 
-import { LEVEL_RANK, currentMinRank } from "../state/diagSettings";
+import { logEnabled } from "../state/diagSettings";
 import { log } from "../state/logs";
 import { isTauriEnv } from "./tauriEnv";
 import { browserInvoke } from "./browserInvoke";
@@ -74,7 +74,7 @@ export async function invoke<T>(
     // file lists), and the point of the breadcrumb is the sequence of calls. Only when someone
     // asked for trace, and never for reading the log itself: that would write a line per second
     // about the line it just read.
-    if (cmd !== "engine_logs_tail" && currentMinRank() <= LEVEL_RANK.trace) log.trace("cmd", cmd);
+    if (cmd !== "engine_logs_tail" && logEnabled("trace", "cmd")) log.trace("cmd", cmd);
     const recovered = observeInvokeOutcome(cmd, undefined, Date.now());
     if (recovered.kind === "recovered") {
       log.warn(

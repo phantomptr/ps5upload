@@ -140,6 +140,13 @@ const SECRET_KEYS: &[&str] = &[
     "wake_credential",
     "wake_regist_key",
     "wake_rp_key",
+    "pin",
+    "morning",
+    "passcode",
+    "credential",
+    "launch_token",
+    "stream_key",
+    "pad_token",
 ];
 
 fn is_word(b: u8) -> bool {
@@ -267,6 +274,40 @@ fn replace_kv_values(s: &str, keys: &[&str], with: &str) -> String {
             }
         }
         i += 1;
+    }
+    out.push_str(&s[cursor..]);
+    out
+}
+
+/// A pairing PIN after the word `PIN` (not inside a longer word): `Remote Play PIN: 14928144`,
+/// `"pin":"14928144"`, `"pin": 14928144`. One to eight of `: = " \`, space or tab, then four or
+/// more digits, which become `<removed>`. Helpers before 11.5 wrote the PIN to stderr.log.
+fn replace_pins(s: &str) -> String {
+    let b = s.as_bytes();
+    let lower = s.to_ascii_lowercase();
+    let mut out = String::with_capacity(s.len());
+    let mut cursor = 0;
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find("pin") {
+        let at = from + rel;
+        from = at + 3;
+        if (at > 0 && is_word(b[at - 1])) || b.get(at + 3).is_some_and(|c| is_word(*c)) {
+            continue;
+        }
+        let mut i = at + 3;
+        while i < b.len()
+            && i - (at + 3) < 8
+            && matches!(b[i], b':' | b'=' | b'"' | b'\\' | b' ' | b'\t')
+        {
+            i += 1;
+        }
+        let digits = b[i..].iter().take_while(|c| c.is_ascii_digit()).count();
+        if i > at + 3 && digits >= 4 {
+            out.push_str(&s[cursor..i]);
+            out.push_str("<removed>");
+            cursor = i + digits;
+            from = cursor;
+        }
     }
     out.push_str(&s[cursor..]);
     out
@@ -462,7 +503,8 @@ impl Redactor {
     }
 
     pub(crate) fn text(&mut self, s: &str) -> String {
-        let out = replace_json_values(s, SECRET_KEYS, "<removed>");
+        let out = replace_pins(s);
+        let out = replace_json_values(&out, SECRET_KEYS, "<removed>");
         let out = replace_escaped_json_values(&out, SECRET_KEYS, "<removed>");
         let out = replace_kv_values(&out, SECRET_KEYS, "<removed>");
         if !self.redact {
@@ -581,6 +623,9 @@ fn assemble_zip_at(
 
     // One redactor for the whole report: an address is <ip-N> with the same N in every file.
     let mut red = Redactor::new(args.redact);
+    // Every log that was cut to fit, for MISSING.txt.
+    let mut truncated: Vec<String> = Vec::new();
+    let mut engine_bytes = 0u64;
 
     // 1. Manifest — always.
     let report_json = red.text(&args.report_json);
@@ -598,7 +643,25 @@ fn assemble_zip_at(
         } else {
             now_ms.saturating_sub(args.window_minutes.saturating_mul(60_000))
         };
-        let lines = super::diag_log::window_lines(&dirs.logs, since);
+        let mut lines = super::diag_log::window_lines(&dirs.logs, since);
+        // The newest lines that fit APP_LOG_MAX_BYTES: a day at trace can be far more.
+        let total: usize = lines.iter().map(|l| l.len() + 1).sum();
+        if total > APP_LOG_MAX_BYTES {
+            let mut kept = 0usize;
+            let mut start = lines.len();
+            while start > 0 && kept + lines[start - 1].len() < APP_LOG_MAX_BYTES {
+                start -= 1;
+                kept += lines[start].len() + 1;
+            }
+            truncated.push(format!(
+                "logs/app.jsonl: kept the newest {} of {} lines ({} of {})",
+                lines.len() - start,
+                lines.len(),
+                mib(kept as u64),
+                mib(total as u64)
+            ));
+            lines.drain(..start);
+        }
         log_lines = lines.len();
         let mut body = lines.join("\n");
         body.push('\n');
@@ -631,7 +694,26 @@ fn assemble_zip_at(
                 "logs/update.log",
             ),
         ] {
-            if let Some(data) = read_tail(&src, ENGINE_LOG_TAIL_BYTES) {
+            // All the engine's logs together stay under ENGINE_LOGS_TOTAL_BYTES: the newest first,
+            // so an older part is the one left out.
+            let left = ENGINE_LOGS_TOTAL_BYTES.saturating_sub(engine_bytes);
+            let size = std::fs::metadata(&src).map(|m| m.len()).unwrap_or(0);
+            if size > 0 && left < 256 * 1024 {
+                truncated.push(format!(
+                    "{name}: left out ({}), the newer engine logs filled the report's share",
+                    mib(size)
+                ));
+                continue;
+            }
+            if let Some(data) = read_tail(&src, ENGINE_LOG_TAIL_BYTES.min(left)) {
+                if size > data.len() as u64 {
+                    truncated.push(format!(
+                        "{name}: kept the newest {} of {}",
+                        mib(data.len() as u64),
+                        mib(size)
+                    ));
+                }
+                engine_bytes += data.len() as u64;
                 let text = red.text(&String::from_utf8_lossy(&data));
                 write_entry(&mut zw, name, text.as_bytes())?;
                 entries += 1;
@@ -641,14 +723,30 @@ fn assemble_zip_at(
 
     // 5. Auto-collected crash reports.
     if args.include.crash_reports {
-        for p in super::crash_reports::list_report_files(&dirs.reports) {
+        let files = super::crash_reports::list_report_files(&dirs.reports);
+        if files.len() > CRASH_REPORTS_MAX {
+            truncated.push(format!(
+                "crash-reports/: {} of {} reports (the rest left out)",
+                CRASH_REPORTS_MAX,
+                files.len()
+            ));
+        }
+        for p in files.into_iter().take(CRASH_REPORTS_MAX) {
             let leaf = p
                 .file_name()
                 .and_then(|s| s.to_str())
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| format!("report-{crash_reports}.json"));
             let leaf = red.text(&leaf);
-            if let Ok(data) = std::fs::read(&p) {
+            if let Some(data) = read_tail(&p, CRASH_REPORT_MAX_BYTES) {
+                let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+                if size > data.len() as u64 {
+                    truncated.push(format!(
+                        "crash-reports/{leaf}: kept the last {} of {}",
+                        mib(data.len() as u64),
+                        mib(size)
+                    ));
+                }
                 let text = red.text(&String::from_utf8_lossy(&data));
                 write_entry(&mut zw, &format!("crash-reports/{leaf}"), text.as_bytes())?;
                 entries += 1;
@@ -659,17 +757,14 @@ fn assemble_zip_at(
 
     // 6. PS5 kernel logs (passed in from the renderer snapshot).
     if args.include.ps5_logs {
-        if let Some(t) = &args.klog_text {
-            if !t.is_empty() {
-                let text = red.text(t);
-                write_entry(&mut zw, "ps5/klog.txt", text.as_bytes())?;
-                entries += 1;
-            }
-        }
-        if let Some(t) = &args.syslog_text {
-            if !t.is_empty() {
-                let text = red.text(t);
-                write_entry(&mut zw, "ps5/syslog.txt", text.as_bytes())?;
+        for (t, name) in [
+            (&args.klog_text, "ps5/klog.txt"),
+            (&args.syslog_text, "ps5/syslog.txt"),
+        ] {
+            if let Some(t) = t.as_deref().filter(|t| !t.is_empty()) {
+                let kept = keep_newest(t, CONSOLE_LOG_MAX_BYTES, name, &mut truncated);
+                let text = red.text(kept);
+                write_entry(&mut zw, name, text.as_bytes())?;
                 entries += 1;
             }
         }
@@ -680,12 +775,14 @@ fn assemble_zip_at(
                 continue;
             }
             let leaf = red.text(&safe_leaf(&pl.name, "log"));
-            let text = red.text(&pl.text);
-            write_entry(
-                &mut zw,
-                &format!("ps5/payload-logs/{:02}_{leaf}", i + 1),
-                text.as_bytes(),
-            )?;
+            let name = format!("ps5/payload-logs/{:02}_{leaf}", i + 1);
+            let text = red.text(keep_newest(
+                &pl.text,
+                CONSOLE_LOG_MAX_BYTES,
+                &name,
+                &mut truncated,
+            ));
+            write_entry(&mut zw, &name, text.as_bytes())?;
             entries += 1;
         }
     }
@@ -714,14 +811,39 @@ fn assemble_zip_at(
             .map(|e| format!("{}: invalid path", e.path))
             .collect();
         let mut missing_written = false;
-        for e in args.extra_entries.iter().filter(|e| extra_path_ok(&e.path)) {
+        // MISSING.txt last: the other files' cuts are named in it.
+        let ordered = args
+            .extra_entries
+            .iter()
+            .filter(|e| extra_path_ok(&e.path) && e.path != "MISSING.txt")
+            .chain(
+                args.extra_entries
+                    .iter()
+                    .filter(|e| extra_path_ok(&e.path) && e.path == "MISSING.txt"),
+            );
+        for e in ordered {
             let body: Vec<u8> = if let Some(t) = &e.text {
-                let mut t = red.text(t);
-                if e.path == "MISSING.txt" && !rejected.is_empty() {
-                    t.push_str(&format!("\n{}\n", rejected.join("\n")));
+                if e.path == "MISSING.txt" {
+                    let notes: Vec<String> = rejected
+                        .iter()
+                        .cloned()
+                        .chain(truncated.iter().map(|t| format!("cut to fit: {t}")))
+                        .collect();
+                    let mut t = red.text(t);
+                    if !notes.is_empty() {
+                        if t.trim() == "Nothing missing." {
+                            t.clear();
+                        } else {
+                            t.push('\n');
+                        }
+                        t.push_str(&format!("{}\n", notes.join("\n")));
+                    }
                     missing_written = true;
+                    t.into_bytes()
+                } else {
+                    let kept = keep_newest(t, EXTRA_TEXT_MAX_BYTES, &e.path, &mut truncated);
+                    red.text(kept).into_bytes()
                 }
-                t.into_bytes()
             } else if let Some(b) = &e.base64 {
                 match base64::engine::general_purpose::STANDARD.decode(b) {
                     Ok(v) => v,
@@ -734,8 +856,13 @@ fn assemble_zip_at(
                 entries += 1;
             }
         }
-        if !rejected.is_empty() && !missing_written {
-            write_entry(&mut zw, "MISSING.txt", rejected.join("\n").as_bytes())?;
+        if !missing_written && (!rejected.is_empty() || !truncated.is_empty()) {
+            let notes: Vec<String> = rejected
+                .iter()
+                .cloned()
+                .chain(truncated.iter().map(|t| format!("cut to fit: {t}")))
+                .collect();
+            write_entry(&mut zw, "MISSING.txt", notes.join("\n").as_bytes())?;
             entries += 1;
         }
     }
@@ -760,6 +887,42 @@ fn assemble_zip_at(
 /// a rotation can fail (a lock on the .old file on Windows), and a report must not read a file
 /// of hundreds of MB whole and then redact several copies of it.
 const ENGINE_LOG_TAIL_BYTES: u64 = 4 * 1024 * 1024;
+/// All the engine's logs together (engine.log, its older parts, update.log).
+const ENGINE_LOGS_TOTAL_BYTES: u64 = 12 * 1024 * 1024;
+/// The app's log for the window (a day at trace is far more).
+const APP_LOG_MAX_BYTES: usize = 8 * 1024 * 1024;
+/// Each console log: klog, syslog, each of the helper's own logs.
+const CONSOLE_LOG_MAX_BYTES: usize = 4 * 1024 * 1024;
+/// Crash reports: how many, and how much of each.
+const CRASH_REPORTS_MAX: usize = 30;
+const CRASH_REPORT_MAX_BYTES: u64 = 1024 * 1024;
+/// Each file the report builder assembled (the timeline is the big one).
+const EXTRA_TEXT_MAX_BYTES: usize = 16 * 1024 * 1024;
+
+fn mib(n: u64) -> String {
+    format!("{:.1} MiB", n as f64 / (1024.0 * 1024.0))
+}
+
+/// The newest `max` bytes of `text`, from a line start (and on a char boundary); a cut is noted
+/// in `truncated` under `name`.
+fn keep_newest<'a>(text: &'a str, max: usize, name: &str, truncated: &mut Vec<String>) -> &'a str {
+    if text.len() <= max {
+        return text;
+    }
+    let mut start = text.len() - max;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    if let Some(nl) = text[start..].find('\n').filter(|n| *n < 4096) {
+        start += nl + 1;
+    }
+    truncated.push(format!(
+        "{name}: kept the newest {} of {}",
+        mib((text.len() - start) as u64),
+        mib(text.len() as u64)
+    ));
+    &text[start..]
+}
 
 /// The last `max` bytes of `path` (the whole file when it is smaller), starting at a line
 /// boundary when the file was cut. `None` when the file cannot be read.
@@ -808,8 +971,12 @@ diagnostics to help debug an issue — no games or app data.\n\
                        console's add-ons (ps5.features: Hush, cheats engine,\n\
                        the console's network shares); ps5upload:// links\n\
                        (diagnostic.app_links: registered?, the last kind);\n\
-                       and whether Detailed logs were on\n\
-                       (diagnostic.settings.detailed_logs).\n\
+                       the log levels in force (log_levels); this computer\n\
+                       (system: the OS's real version, model, CPU, memory, web\n\
+                       view); what the web view can decode (media); the page's\n\
+                       last Remote Play sessions (remote_play_client) beside\n\
+                       the engine's (engine.features.remote_play.sessions);\n\
+                       the console's payloads with versions (payloads).\n\
   logs/app.jsonl       The app's unified log for the selected time window\n\
                        (one JSON object per line: ts, level, source, message).\n\
   logs/engine.log      Full transfer-engine log (crash-survivable); .old and\n\
@@ -825,9 +992,12 @@ diagnostics to help debug an issue — no games or app data.\n\
                        report.json, and ps5.helper_lost_during for the request\n\
                        it stopped answering on.\n\
   images/              Screenshots you attached.\n\
+  MISSING.txt          What could not be read, and every log cut to fit (each\n\
+                       keeps its newest part, so the zip stays a size you can\n\
+                       post).\n\
 \n\
 IP addresses (numbered, the same number in every file), MAC addresses, home\n\
-folders and the console serial are redacted by default; pairing keys, tokens\n\
+folders and the console serial are redacted by default; pairing keys, PINs, tokens\n\
 and account ids are always removed. Feature states are counts and names only:\n\
 never stream keys or stream URLs, invite keys or codes, resume tokens, phone\n\
 link keys, passcodes, share passwords or user names. Review screenshots before\n\
@@ -1138,6 +1308,87 @@ mod tests {
         assert!(read("MISSING.txt").contains("../escape.txt: invalid path"));
         assert!(zip.by_name("screenshots/a.png").is_ok());
         assert!(zip.by_name("../escape.txt").is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Each log keeps its newest part within its cap, and MISSING.txt names every cut; an older
+    /// helper's PIN line is gone.
+    #[test]
+    fn logs_are_capped_and_cuts_named() {
+        let root = std::env::temp_dir().join(format!("ps5up-bugreport-cap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("e")).unwrap();
+        // Four engine logs of 5 MiB each: three fit at 4 MiB (the 12 MiB total), the oldest is left out.
+        let line = "x".repeat(99) + "\n";
+        let five = line.repeat(5 * 1024 * 1024 / 100);
+        for f in [
+            "engine.log",
+            "engine.log.old",
+            "engine.log.old.2",
+            "engine.log.old.3",
+        ] {
+            std::fs::write(root.join("e").join(f), &five).unwrap();
+        }
+        let dest = root.join("out.zip");
+        let mut klog = "old\n".repeat(2 * 1024 * 1024);
+        klog.push_str("[remoteplay] [ps5upload] Remote Play PIN: 14928144\n");
+        let args = BugReportArgs {
+            dest: dest.to_string_lossy().into_owned(),
+            dest_filename: None,
+            report_json: "{}".to_string(),
+            redact: true,
+            window_minutes: 0,
+            since_ms: 0,
+            klog_text: Some(klog),
+            syslog_text: None,
+            payload_logs: vec![],
+            image_paths: vec![],
+            include: BugReportInclude {
+                app_logs: false,
+                engine_log: true,
+                crash_reports: false,
+                ps5_logs: true,
+                images: false,
+            },
+            extra_entries: vec![ExtraEntry {
+                path: "MISSING.txt".into(),
+                text: Some("Nothing missing.".into()),
+                base64: None,
+            }],
+        };
+        let dirs = BundleDirs {
+            logs: root.join("l"),
+            engine: root.join("e"),
+            reports: root.join("r"),
+        };
+        assemble_zip(&args, &dirs, 1_780_000_000_000).unwrap();
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(&dest).unwrap()).unwrap();
+        let mut read = |name: &str| {
+            let mut s = String::new();
+            std::io::Read::read_to_string(&mut zip.by_name(name).unwrap(), &mut s).unwrap();
+            s
+        };
+        let k = read("ps5/klog.txt");
+        assert!(k.len() <= CONSOLE_LOG_MAX_BYTES);
+        assert!(
+            k.ends_with("Remote Play PIN: <removed>\n"),
+            "{}",
+            &k[k.len() - 60..]
+        );
+        assert!(read("logs/engine.log").len() as u64 <= ENGINE_LOG_TAIL_BYTES);
+        let missing = read("MISSING.txt");
+        assert!(!missing.contains("Nothing missing."), "{missing}");
+        assert!(missing.contains("cut to fit: ps5/klog.txt"), "{missing}");
+        assert!(
+            missing.contains("cut to fit: logs/engine.log: kept the newest"),
+            "{missing}"
+        );
+        assert!(
+            missing.contains("logs/engine.log.old.3: left out"),
+            "{missing}"
+        );
+        drop(read);
+        assert!(zip.by_name("logs/engine.log.old.3").is_err());
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -92,7 +92,7 @@ function reproText(f: ReportForm): string {
 }
 
 /** The full report, nothing cut: report.md in the zip. */
-export function reportMarkdown(f: ReportForm, problemLines: string[]): string {
+export function reportMarkdown(f: ReportForm, problemLines: string[], env: string[] = []): string {
   const pinned = pinnedLines(f);
   return [
     `# ${reportTitle(f)}`,
@@ -108,6 +108,7 @@ export function reportMarkdown(f: ReportForm, problemLines: string[]): string {
       `- Console: ${f.console ?? "not console-related"}`,
       `- Firmware: ${firmwareLine(f) || "unknown"}`,
       `- Other payloads: ${f.payloads.trim() || "unknown"}`,
+      ...env.map((l) => `- ${l}`),
     ].join("\n"),
     problemLines.length ? `## Recent warnings and errors\n\n\`\`\`\n${problemLines.join("\n")}\n\`\`\`` : "",
   ]
