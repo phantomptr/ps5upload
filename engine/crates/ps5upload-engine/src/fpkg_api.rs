@@ -1966,6 +1966,14 @@ fn active_partials() -> &'static std::sync::Mutex<std::collections::HashSet<Path
 /// leaves it alone, and a second build of the same output is refused.
 pub(crate) struct Writing(PathBuf);
 
+/// A path this engine writes and may clear: a `.partial` output or an `.lz4spool` beside one.
+fn is_own_leftover(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.to_ascii_lowercase())
+        .is_some_and(|n| n.ends_with(".partial") || n.ends_with(".lz4spool"))
+}
+
 impl Writing {
     /// Claims `path` for one build. `None` when another running build already writes it: two
     /// builds of one output would wreck each other's file. A leftover at `path` from a build
@@ -1978,10 +1986,14 @@ impl Writing {
         }
         // A leftover with a checkpoint is what the build goes on from (`image_build`).
         let checkpointed = crate::image_build::checkpoint_path(&path).is_file();
-        if path.is_dir() {
-            let _ = std::fs::remove_dir_all(&path);
-        } else if path.is_file() && !checkpointed {
-            let _ = std::fs::remove_file(&path);
+        // Only ever our own leftovers: a `.partial` output or an `.lz4spool`, whatever path a
+        // caller hands in.
+        if is_own_leftover(&path) {
+            if path.is_dir() {
+                let _ = std::fs::remove_dir_all(&path);
+            } else if path.is_file() && !checkpointed {
+                let _ = std::fs::remove_file(&path);
+            }
         }
         active.insert(path.clone());
         Some(Writing(path))
@@ -2496,6 +2508,12 @@ mod extract_tests {
         );
         drop(first);
         assert!(Writing::claim(out.join("A.pkg.partial")).is_some());
+        // Anything not ours is never cleared, whatever path is handed in.
+        let game = out.join("Game.exfat");
+        std::fs::write(&game, b"x").unwrap();
+        let w = Writing::claim(game.clone()).unwrap();
+        assert!(game.is_file());
+        drop(w);
         let _ = std::fs::remove_dir_all(&out);
     }
 
