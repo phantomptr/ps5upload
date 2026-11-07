@@ -89,7 +89,6 @@ import {
   autoRedeployDecision,
   liveHelperDecision,
   loaderSettled,
-  LOADER_SETTLE_MS,
   MAX_REDEPLOYS_WITHOUT_RECOVERY,
   redeployAction,
   type RedeployAction,
@@ -127,6 +126,8 @@ import {
 } from "../state/fsUploadRuntime";
 import { isDragOutCopy } from "../lib/dragOut";
 import { keepMinionOff } from "../state/minionMemory";
+import { syncHelperAtBootNow } from "../state/helperAtBootRuntime";
+import { helperAtBootSettleMs, loadBootRecord } from "../lib/helperAtBoot";
 import { startRosterShare } from "../state/rosterShare";
 import { startStagedRelease } from "../lib/browserStaging";
 import { startSharedPrefs } from "../lib/sharedPrefs";
@@ -907,10 +908,13 @@ function useAutoRedeployDownHelpers() {
           (await portCheck(hostOf(host) || host, PS5_LOADER_PORT).catch(() => false)) ||
           (await portCheck(hostOf(host) || host, PAYLOAD_MANAGER_PORT).catch(() => false));
         if (cancelled) return;
+        // Payload Manager starts the helper at boot here: give its boot list time first.
+        const settleMs = helperAtBootSettleMs(loadBootRecord(host));
         const settle = loaderSettled({
           loaderOpen,
           firstOpenAt: loaderFirstOpenRef.current[key],
           now: Date.now(),
+          settleMs,
         });
         if (settle === "closed") {
           delete loaderFirstOpenRef.current[key];
@@ -921,7 +925,7 @@ function useAutoRedeployDownHelpers() {
             loaderFirstOpenRef.current[key] = Date.now();
             log.info(
               "connection",
-              `auto-redeploy: ${host}'s loader just came up — waiting ${Math.round(LOADER_SETTLE_MS / 1000)}s for the console to finish booting before sending the helper`,
+              `auto-redeploy: ${host}'s loader just came up — waiting ${Math.round(settleMs / 1000)}s for the console to finish booting before sending the helper`,
             );
           }
           return;
@@ -1190,6 +1194,23 @@ function useKeepPs5Awake() {
     const id = window.setInterval(tickAll, KEEP_PS5_AWAKE_TICK_MS);
     return () => window.clearInterval(id);
   }, [active]);
+}
+
+/** The helper copy Payload Manager starts at boot (lib/helperAtBoot): judged or brought up to
+ *  date once per helper connection, after the connection settles (a send that brought the
+ *  helper up has recorded itself by then). */
+function useHelperAtBootSync() {
+  const host = useConnectionStore((s) => s.host);
+  const up = useConnectionStore((s) => s.payloadStatus === "up");
+  useEffect(() => {
+    if (!host || !up) return;
+    const t = window.setTimeout(() => {
+      if (useConnectionStore.getState().payloadStatus !== "up") return;
+      if (transferScreenBusy(host)) return;
+      void syncHelperAtBootNow(host);
+    }, 20_000);
+    return () => window.clearTimeout(t);
+  }, [host, up]);
 }
 
 /** A console this computer turned Minion off on stays off when it loses its settings
@@ -1664,6 +1685,7 @@ export default function AppShell() {
   useWindowStatePersistence();
   usePkgAutoRoute();
   useKeepMinionOff();
+  useHelperAtBootSync();
   // Schedule runner — fires while window open. Browser-side; for
   // true cron behaviour the user needs an external scheduler.
   useScheduleRunner(runScheduleAction);

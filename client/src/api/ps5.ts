@@ -4987,11 +4987,18 @@ export async function helperReplaceCopy(
   host: string,
   path: string,
   localPath?: string | null,
+  /** Keep the copy being replaced beside it as `<path>.prev` (lib/helperAtBoot). */
+  keepPrevious = false,
 ): Promise<"updated" | "unchanged" | "not_found"> {
   const res = await fetch(`${getEngineUrl()}/api/ps5/helper/replace-copy`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ addr: host, path, local_path: localPath ?? null }),
+    body: JSON.stringify({
+      addr: host,
+      path,
+      local_path: localPath ?? null,
+      ...(keepPrevious ? { keep_previous: true } : {}),
+    }),
     signal: AbortSignal.timeout(120_000),
   });
   const body = (await res.json().catch(() => ({}))) as {
@@ -5004,6 +5011,57 @@ export async function helperReplaceCopy(
   if (body.ok) return "updated";
   if (body.error === "not_found") return "not_found";
   throw new Error(body.error || "the copy was not replaced");
+}
+
+/** Put back the copy a `keepPrevious` replace kept beside `path` (lib/helperAtBoot). */
+export async function helperRestorePrevious(
+  host: string,
+  path: string,
+): Promise<"restored" | "unchanged" | "not_found"> {
+  const res = await fetch(`${getEngineUrl()}/api/ps5/helper/restore-previous`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ addr: host, path }),
+    signal: AbortSignal.timeout(120_000),
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    status?: string;
+    error?: string;
+  };
+  if (!res.ok) throw new Error(body.error || `request failed (${res.status})`);
+  if (body.ok && body.status === "unchanged") return "unchanged";
+  if (body.ok) return "restored";
+  if (body.error === "not_found") return "not_found";
+  throw new Error(body.error || "the previous copy was not restored");
+}
+
+/** Store this app's helper in Payload Manager as `ps5upload.elf` (the engine stamps it like
+ *  every stored copy). Without `confirmed`, an existing `ps5upload` folder is reported back
+ *  first: storing into it removes that folder's other files. */
+export async function helperStoreInPldmgr(
+  host: string,
+  localPath: string | null,
+  confirmed: boolean,
+): Promise<{ stored: true } | { stored: false; folder: string; fileExists: boolean }> {
+  const res = await fetch(`${getEngineUrl()}/api/ps5/helper/store-in-pldmgr`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ addr: host, local_path: localPath, confirmed }),
+    signal: AbortSignal.timeout(120_000),
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    needs_confirm?: boolean;
+    folder?: string;
+    file_exists?: boolean;
+    error?: string;
+  };
+  if (!res.ok) throw new Error(body.error || `request failed (${res.status})`);
+  if (body.ok) return { stored: true };
+  if (body.needs_confirm)
+    return { stored: false, folder: body.folder ?? "", fileExists: !!body.file_exists };
+  throw new Error(body.error || "the helper was not stored");
 }
 
 /** Same as `bundledPayloadPath` but returns the file's size + mtime

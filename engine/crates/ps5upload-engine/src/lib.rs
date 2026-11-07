@@ -12117,6 +12117,14 @@ fn build_app_and_mcp(
             "/api/ps5/helper/replace-copy",
             post(helper_copies_api::replace_copy_handler),
         )
+        .route(
+            "/api/ps5/helper/restore-previous",
+            post(helper_copies_api::restore_previous_handler),
+        )
+        .route(
+            "/api/ps5/helper/store-in-pldmgr",
+            post(helper_copies_api::store_in_pldmgr_handler),
+        )
         .route("/api/ps5/pldmgr", get(pldmgr_api::overview))
         .route("/api/ps5/pldmgr/launch", post(pldmgr_api::launch))
         .route("/api/ps5/pldmgr/delete", post(pldmgr_api::delete))

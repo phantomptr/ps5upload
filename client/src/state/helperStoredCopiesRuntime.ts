@@ -14,6 +14,7 @@ import { isTauriEnv } from "../lib/tauriEnv";
 import type { Translator } from "./lang";
 import { pushNotification } from "./notifications";
 import { decodeBase64Text } from "../lib/base64Text";
+import { isBootCopy } from "../lib/helperAtBoot";
 
 export const liveCopyDeps: CopyDeps = {
   pmOverview,
@@ -29,7 +30,10 @@ function liveReplaceDeps(): ReplaceDeps {
     (local ??= isTauriEnv() ? bundledPayloadPath().catch(() => null) : Promise.resolve(null));
   return {
     ...liveCopyDeps,
-    replace: async (host, path) => helperReplaceCopy(host, path, await localPath()),
+    replace: async (host, path) =>
+      // "Load the helper at boot" keeps its own copy, with the previous one beside it
+      // (lib/helperAtBoot): writing over it here would lose the copy to fall back to.
+      isBootCopy(host, path) ? "unchanged" : helperReplaceCopy(host, path, await localPath()),
   };
 }
 
