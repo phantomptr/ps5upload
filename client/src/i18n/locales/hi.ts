@@ -6632,6 +6632,7 @@ library_compressed_hint: "संपीड़ित इमेज चलाने 
 "rp_decoding_auto": "ग्राफ़िक्स कार्ड (अपने-आप)",
 "rp_decoding_hint": "अगर इस डिवाइस पर तस्वीर कटी या गलत दिखे, तो सॉफ़्टवेयर या H.264 आज़माएँ। अगली बार शुरू करने पर लागू होगा।",
 "rp_decoding_software": "सॉफ़्टवेयर",
+"rp_decoding_mse": "सिस्टम मीडिया प्लेयर",
 "play_setup_button_progress": "खेलें सेट अप करें · {done}/{total}",
 "saves_use_shared_confirm_label": "इस्तेमाल करें",
 "v5_tab_play": "खेलें",

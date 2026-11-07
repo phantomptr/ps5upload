@@ -6626,6 +6626,7 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "rp_decoding_auto": "Grafikkarte (automatisch)",
 "rp_decoding_hint": "Wenn das Bild auf diesem Gerät abgeschnitten oder falsch aussieht, versuche Software oder H.264. Gilt ab dem nächsten Start.",
 "rp_decoding_software": "Software",
+"rp_decoding_mse": "System-Mediaplayer",
 "play_setup_button_progress": "Spielen einrichten · {done}/{total}",
 "saves_use_shared_confirm_label": "Verwenden",
 "v5_tab_play": "Spielen",

@@ -6627,6 +6627,7 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "rp_decoding_auto": "Kartu grafis (otomatis)",
 "rp_decoding_hint": "Jika gambar terpotong atau salah di perangkat ini, coba Perangkat lunak atau H.264. Berlaku saat mulai berikutnya.",
 "rp_decoding_software": "Perangkat lunak",
+"rp_decoding_mse": "Pemutar media sistem",
 "play_setup_button_progress": "Siapkan Main · {done}/{total}",
 "saves_use_shared_confirm_label": "Pakai",
 "v5_tab_play": "Main",

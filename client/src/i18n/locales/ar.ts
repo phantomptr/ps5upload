@@ -6618,6 +6618,7 @@ library_compressed_hint: "تحتاج الصور المضغوطة إلى ShadowMo
 "rp_decoding_auto": "بطاقة الرسومات (تلقائي)",
 "rp_decoding_hint": "إذا ظهرت الصورة مقطوعة أو خاطئة على هذا الجهاز، فجرّب «برمجي» أو H.264. يُطبَّق عند البدء التالي.",
 "rp_decoding_software": "برمجي",
+"rp_decoding_mse": "مشغل الوسائط في النظام",
 "play_setup_button_progress": "إعداد «العب» · {done}/{total}",
 "saves_use_shared_confirm_label": "استخدمه",
 "v5_tab_play": "العب",

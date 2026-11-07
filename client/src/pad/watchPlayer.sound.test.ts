@@ -173,7 +173,8 @@ describe("players without WebCodecs sound", () => {
     expect(() => p.onMessage(msg.buffer)).not.toThrow();
     p.startSound();
     expect(play).toHaveBeenCalledTimes(1);
-    expect(asked).toEqual([OPUS_MP4]);
+    // Asked once to choose MSE over the WebAssembly decoder (#720), then by the track it opens.
+    expect(new Set(asked)).toEqual(new Set([OPUS_MP4]));
     // An Opus frame goes to MSE, not a decoder that is not there.
     expect(() => p.onMessage(new Uint8Array([4, 0xfc, 1, 2]).buffer)).not.toThrow();
   });

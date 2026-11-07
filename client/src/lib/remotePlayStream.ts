@@ -25,6 +25,7 @@ import { decoderVerdict, FED_RECENT_MS, MAX_REBUILDS } from "./rpDecoderWatch";
 import type { RpKeyboardMsg, RpKeyboardSend } from "./rpKeyboard";
 import { parseSnapshotRequest, takeSnapshot } from "./rpSnapshot";
 import { OpusPipe } from "./rpAudioPipe";
+import { wasmOpusCodecs } from "./rpOpusWasm";
 import { relayoutElement, watchRestore } from "./repaintOnRestore";
 // A file of the app's own: the apps' Content-Security-Policy refuses a worklet from a blob: URL.
 import audioWorkletUrl from "./rpAudioWorklet.js?url&no-inline";
@@ -369,7 +370,7 @@ export function playRumble(
 export { avcCodecString, isKeyframe, supportedHevc } from "./rpCodec";
 import { avcCodecString, isKeyframe, noPictureStep, supportedHevc } from "./rpCodec";
 import { avcDescription, lengthPrefixed } from "./fmp4";
-import { MsePlayer, MseSound } from "../pad/watchPlayer";
+import { MsePlayer, MseSound, mseOpusSupported } from "../pad/watchPlayer";
 import {
   beginRpClientSession,
   videoConfigFacts,
@@ -481,6 +482,27 @@ export function tagRecord(kind: number, payload: Uint8Array): ArrayBuffer {
 export function mseAvailable(): boolean {
   const w = globalThis as { MediaSource?: unknown; ManagedMediaSource?: unknown };
   return typeof w.MediaSource === "function" || typeof w.ManagedMediaSource === "function";
+}
+
+/** The least time between two "media player: <problem>" log lines (#720: a failing player logged
+ *  thousands a second); the ones in between are counted into the next. */
+export const MSE_PROBLEM_LOG_GAP_MS = 5000;
+
+/** A line to log now, or null while within `gapMs` of the last one (those are counted). */
+export function rateLimitedLine(gapMs: number, now: () => number = () => performance.now()): (line: string) => string | null {
+  let last = -Infinity;
+  let held = 0;
+  return (line) => {
+    const t = now();
+    if (t - last < gapMs) {
+      held++;
+      return null;
+    }
+    last = t;
+    const out = held ? `${line} (${held} more since the last)` : line;
+    held = 0;
+    return out;
+  };
 }
 
 /** Seconds of picture with no sound before the stream says so. */
@@ -633,8 +655,9 @@ export interface StreamOptions {
   dualSense?: DualSenseSink;
   /** Picture tools to start with (rpPicture.ts). */
   picture?: PictureTools;
-  /** "software": never the hardware decoder (Settings › Video decoding). */
-  decoding?: "auto" | "software";
+  /** "software": never the hardware decoder; "mse": the system's media player from the start,
+   *  WebCodecs never tried (Settings › Video decoding). */
+  decoding?: "auto" | "software" | "mse";
   /** "h264": never ask for HEVC; "hdr": the console's HDR stream where it can be shown in HDR
    *  here (Settings › Video format). */
   codec?: CodecPref;
@@ -787,6 +810,9 @@ export class RemotePlayStream {
   /** This device can't decode Opus itself (an older Safari or WebKit): the sound goes through
    *  the system's media player instead, while the picture stays on WebCodecs. */
   private mseAudio: MseSound | null = null;
+  /** Neither WebCodecs nor the media player has Opus here (Safari 16, #720): the page's pipe
+   *  decodes with the WebAssembly decoder (lib/rpOpusWasm) into the same worklet or schedule. */
+  private wasmAudio = false;
   /** No worklet: when the next scheduled buffer starts (AudioContext time). */
   private audioNext = 0;
   private audioMs = 0;
@@ -1582,19 +1608,40 @@ export class RemotePlayStream {
         undefined,
         () => {
           if (this.startMseAudio()) return;
-          if (this.mse && !this.mseSound) {
+          if (this.mse && !this.mseSound && mseOpusSupported()) {
             this.mseSound = true;
             this.mse.startSound();
             if (this.audioHeader) this.mse.onMessage(tagRecord(3, this.audioHeader));
             return;
           }
-          this.soundUnavailable = true;
-          log.warn("remote-play", "sound: this device can't decode the stream's Opus sound, so there is none");
-          this.decoderEvent({ event: "audio_error", path: "page", codec: "opus", error: "no Opus decoder" });
+          this.startWasmAudio();
         },
       );
     }
     return this.audioPipe;
+  }
+
+  /** The sound decoded by the WebAssembly Opus decoder, for a device with no Opus in WebCodecs or
+   *  its media player. The same pipe (order, FEC, concealment) and the same worklet or schedule
+   *  as WebCodecs' sound, so it counts as played the same way. */
+  private startWasmAudio(): void {
+    if (this.wasmAudio || this.ended) return;
+    this.wasmAudio = true;
+    log.warn("remote-play", "sound: no Opus decoder in WebCodecs or the media player here: decoding it with WebAssembly");
+    this.audioPipe?.reset();
+    this.audioPipe = new OpusPipe(
+      (planes, scale) => this.play(planes, scale),
+      wasmOpusCodecs,
+      () => {
+        this.soundUnavailable = true;
+        log.warn("remote-play", "sound: this device can't decode the stream's Opus sound, so there is none");
+        this.decoderEvent({ event: "audio_error", path: "wasm", codec: "opus", error: "no Opus decoder" });
+        this.diag?.set({ audio_path: "none" });
+      },
+    );
+    this.diag?.set({ audio_path: "wasm" });
+    this.decoderEvent({ event: "audio_decoder", path: "wasm", codec: "opus" });
+    if (this.audioHeader) this.audioPipe.header(this.audioHeader);
   }
 
   /** The sound's parts go: worker, worklet, context (the worklet's port would otherwise keep
@@ -1994,7 +2041,7 @@ export class RemotePlayStream {
     if (this.ended) return;
     this.ended = true;
     if (this.diag) {
-      if (!this.mseAudio && !this.mseSound) {
+      if (!this.mseAudio && !this.mseSound && !(this.wasmAudio && !this.soundUnavailable)) {
         this.diag.set({ audio_path: this.soundUnavailable ? "none" : this.audioHealth.path });
       }
       this.diag.set({ frames_decoded: this.decoded });
@@ -2251,6 +2298,8 @@ export class RemotePlayStream {
   private watchDecoder(): void {
     // Nothing goes in while the picture is off here: that is the point, not a stall.
     if (this.gaveUp || !this.pictureOn) return;
+    // The media player shows the stream: it watches itself (MsePlayer gives up on its own).
+    if (this.mse) return;
     const verdict = decoderVerdict({
       now: performance.now(),
       haveHeader: !!this.header,
@@ -2517,6 +2566,10 @@ export class RemotePlayStream {
   }
 
   private openVideo(): void {
+    // The media player shows the stream: no WebCodecs decoder beside it.
+    if (this.mse) return;
+    // Settings › Video decoding › System media player: straight to MSE, WebCodecs never tried.
+    if (this.o.decoding === "mse" && this.startMse("chosen in Settings › Video decoding", true)) return;
     // A new decoder: its wait for a picture starts with its first frame.
     this.waitingSince = 0;
     // Linux: the GL display WebKitGTK needs first, and the crash marker until the first picture.
@@ -2684,14 +2737,15 @@ export class RemotePlayStream {
 
   /** The system's media player (MSE), when WebCodecs gave no picture with any decoder. False
    *  when this device has none either, or it was tried already. */
-  private startMse(detail: string): boolean {
+  private startMse(detail: string, chosen = false): boolean {
     if (this.mse || !mseAvailable()) return false;
     const parent = this.cv.parentElement;
     if (!parent) return false;
-    log.warn("remote-play", `no picture with WebCodecs (${detail}): playing through the system's media player (MSE)`);
+    if (chosen) log.info("remote-play", "Settings › Video decoding: playing through the system's media player (MSE)");
+    else log.warn("remote-play", `no picture with WebCodecs (${detail}): playing through the system's media player (MSE)`);
     const managed = typeof (globalThis as { MediaSource?: unknown }).MediaSource !== "function";
     const path = managed ? "managed-mse" : "mse";
-    this.diag?.fallback(`no picture with WebCodecs: ${path} (${detail})`);
+    if (!chosen) this.diag?.fallback(`no picture with WebCodecs: ${path} (${detail})`);
     this.diag?.set({ video_path: path });
     this.decoderEvent({ event: "mse", path, codec: this.hevc ? "hevc" : "avc1", error: detail });
     this.endDecoderStart();
@@ -2701,15 +2755,23 @@ export class RemotePlayStream {
       // Already closed.
     }
     this.video = null;
+    const problemLine = rateLimitedLine(MSE_PROBLEM_LOG_GAP_MS);
     const mse = new MsePlayer(
       (p) => {
-        if (p) log.warn("remote-play", `media player: ${p}`);
+        const line = p ? problemLine(`media player: ${p}`) : null;
+        if (line) log.warn("remote-play", line);
       },
       "player",
       () => this.ws?.send(JSON.stringify({ keyframe: true })),
     );
     mse.setHevc(this.hevc);
     mse.onSoundFail = () => log.warn("remote-play", "media player: no sound on this device either");
+    // The media player failed too, again and again: no decoder here shows this stream.
+    mse.onGiveUp = () => {
+      if (this.mse !== mse) return;
+      log.warn("remote-play", "media player: it failed every time it was opened: giving up");
+      this.cannotDecode(`${detail}; the system's media player failed too`);
+    };
     const el = mse.element;
     el.classList.add("pointer-events-none", "absolute", "inset-0");
     el.dataset.testid = "rp-mse";
@@ -2767,28 +2829,34 @@ export class RemotePlayStream {
    *  Opus. False when it has no MSE either, or MSE has no Opus in MP4. */
   private startMseAudio(): boolean {
     if (this.mseAudio || this.mse || !mseAvailable()) return false;
+    // No Opus in MP4 here (Safari 16, #720): straight to the WebAssembly decoder.
+    if (!mseOpusSupported()) {
+      log.info("remote-play", "sound: the system's media player takes no Opus here");
+      return false;
+    }
     let failed = false;
+    let starting = true;
     const ms = new MseSound("player", () => {
       failed = true;
-      log.warn("remote-play", "sound: the system's media player can't play Opus either, so there is none");
+      log.warn("remote-play", "sound: the system's media player can't play Opus either");
       this.decoderEvent({ event: "audio_error", path: "mse", codec: "opus", error: "no Opus in the media player" });
-      this.diag?.set({ audio_path: "none" });
       this.stopMseAudio();
-      this.soundUnavailable = true;
+      // Failed later, mid-session: the WebAssembly decoder takes over (while starting, the
+      // caller goes on to it).
+      if (!starting) this.startWasmAudio();
     });
-    if (failed) return false;
     ms.el.hidden = true;
     ms.el.volume = this.volume;
     document.body.append(ms.el);
     this.mseAudio = ms;
     if (this.audioHeader) ms.setHeader(this.audioHeader);
     ms.start();
+    starting = false;
+    if (failed) return false;
     log.warn("remote-play", "sound: no Opus decoder here, playing it through the system's media player");
-    if (!failed) {
-      this.diag?.set({ audio_path: "mse" });
-      this.decoderEvent({ event: "audio_decoder", path: "mse", codec: "opus" });
-    }
-    return !failed;
+    this.diag?.set({ audio_path: "mse" });
+    this.decoderEvent({ event: "audio_decoder", path: "mse", codec: "opus" });
+    return true;
   }
 
   private stopMseAudio(): void {

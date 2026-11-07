@@ -6635,6 +6635,7 @@ library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가
 "rp_decoding_auto": "그래픽카드(자동)",
 "rp_decoding_hint": "이 기기에서 화면이 잘리거나 이상하게 보이면 소프트웨어나 H.264를 사용해 보세요. 다음 시작부터 적용됩니다.",
 "rp_decoding_software": "소프트웨어",
+"rp_decoding_mse": "시스템 미디어 플레이어",
 "play_setup_button_progress": "플레이 설정 · {done}/{total}",
 "saves_use_shared_confirm_label": "사용",
 "v5_tab_play": "플레이",

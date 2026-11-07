@@ -6625,6 +6625,7 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "rp_decoding_auto": "Ekran kartı (otomatik)",
 "rp_decoding_hint": "Görüntü bu cihazda kesik veya yanlış görünüyorsa Yazılım veya H.264'ü dene. Bir sonraki başlatmada geçerli olur.",
 "rp_decoding_software": "Yazılım",
+"rp_decoding_mse": "Sistem medya oynatıcısı",
 "play_setup_button_progress": "Oyna'yı kur · {done}/{total}",
 "saves_use_shared_confirm_label": "Kullan",
 "v5_tab_play": "Oyna",

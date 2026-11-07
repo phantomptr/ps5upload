@@ -6571,6 +6571,7 @@ library_compressed_hint: "Las imágenes comprimidas necesitan ShadowMount+ para 
 "rp_decoding_auto": "Tarjeta gráfica (automático)",
 "rp_decoding_hint": "Si la imagen se ve cortada o mal en este dispositivo, prueba Software o H.264. Se aplican la próxima vez que empieces.",
 "rp_decoding_software": "Software",
+"rp_decoding_mse": "Reproductor multimedia del sistema",
 "play_setup_button_progress": "Configurar Jugar · {done}/{total}",
 "saves_use_shared_confirm_label": "Usarla",
 "v5_tab_play": "Jugar",

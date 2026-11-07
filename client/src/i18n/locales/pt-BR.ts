@@ -6633,6 +6633,7 @@ library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para joga
 "rp_decoding_auto": "Placa de vídeo (automático)",
 "rp_decoding_hint": "Se a imagem aparecer cortada ou errada neste aparelho, tente Software ou H.264. Valem a partir do próximo início.",
 "rp_decoding_software": "Software",
+"rp_decoding_mse": "Player de mídia do sistema",
 "play_setup_button_progress": "Configurar Jogar · {done}/{total}",
 "saves_use_shared_confirm_label": "Usar",
 "v5_tab_play": "Jogar",

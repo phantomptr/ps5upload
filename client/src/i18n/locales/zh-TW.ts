@@ -6571,6 +6571,7 @@ library_compressed_hint: "壓縮映像需要 ShadowMount+ 才能遊玩。如需�
 "rp_decoding_auto": "顯示卡（自動）",
 "rp_decoding_hint": "如果在此裝置上畫面被裁切或顯示不對，請試試「軟體」或 H.264。下次開始時生效。",
 "rp_decoding_software": "軟體",
+"rp_decoding_mse": "系統媒體播放器",
 "play_setup_button_progress": "設定暢玩 · {done}/{total}",
 "saves_use_shared_confirm_label": "使用",
 "v5_tab_play": "暢玩",

@@ -6900,6 +6900,7 @@ library_compressed_hint: "برای اجرای ایمیج فشرده به ShadowM
 "rp_decoding_auto": "کارت گرافیک (خودکار)",
 "rp_decoding_hint": "اگر تصویر روی این دستگاه بریده یا نادرست دیده می‌شود، «نرم‌افزاری» یا H.264 را امتحان کنید. از شروع بعدی اعمال می‌شود.",
 "rp_decoding_software": "نرم‌افزاری",
+"rp_decoding_mse": "پخش‌کننده رسانه سیستم",
 "play_setup_button_progress": "راه‌اندازی «بازی» · {done}/{total}",
 "saves_use_shared_confirm_label": "استفاده",
 "v5_tab_play": "بازی",

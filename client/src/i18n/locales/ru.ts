@@ -6571,6 +6571,7 @@ library_compressed_hint: "Для запуска сжатых образов ну
 "rp_decoding_auto": "Видеокарта (авто)",
 "rp_decoding_hint": "Если картинка на этом устройстве обрезана или искажена, попробуйте «Программно» или H.264. Применяется при следующем запуске.",
 "rp_decoding_software": "Программно",
+"rp_decoding_mse": "Системный медиаплеер",
 "play_setup_button_progress": "Настройка «Игры» · {done}/{total}",
 "saves_use_shared_confirm_label": "Использовать",
 "v5_tab_play": "Игра",

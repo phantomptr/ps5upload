@@ -6625,6 +6625,7 @@ library_compressed_hint: "อิมเมจที่บีบอัดต้อ
 "rp_decoding_auto": "การ์ดจอ (อัตโนมัติ)",
 "rp_decoding_hint": "ถ้าภาพถูกตัดหรือแสดงผิดบนอุปกรณ์นี้ ลองใช้ซอฟต์แวร์หรือ H.264 มีผลในการเริ่มครั้งถัดไป",
 "rp_decoding_software": "ซอฟต์แวร์",
+"rp_decoding_mse": "เครื่องเล่นสื่อของระบบ",
 "play_setup_button_progress": "ตั้งค่าเล่น · {done}/{total}",
 "saves_use_shared_confirm_label": "ใช้",
 "v5_tab_play": "เล่น",
