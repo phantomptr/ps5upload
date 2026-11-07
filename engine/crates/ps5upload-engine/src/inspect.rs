@@ -59,6 +59,9 @@ pub struct Identity {
     pub concept_id: Option<String>,
     /// `ps4`, `ps5` or empty.
     pub platform: String,
+    /// `ps4` or `ps5` as `eboot.bin`'s process param says (its SDK words), when it has one
+    /// that can be read. `platform` falls back to it when the title id says nothing.
+    pub exe_platform: Option<String>,
     pub category: String,
     /// `game`, `update`, `dlc`, `app` or `other`.
     pub content_type: String,
@@ -303,6 +306,8 @@ pub(crate) fn finish(g: &mut GameInspection) {
     if g.identity.platform.is_empty() {
         if let Some(p) = platform_from_title_id(&g.identity.title_id) {
             g.identity.platform = p.to_string();
+        } else if let Some(p) = &g.identity.exe_platform {
+            g.identity.platform = p.clone();
         }
     }
     g.identity.region = region_of(&g.identity.content_id);
@@ -540,8 +545,22 @@ fn inspect_tree(path: &Path, format: &str) -> Result<GameInspection> {
         g.warnings.push(format!("{p} is too large to show"));
     }
     g.specs.file_count = Some(files.len() as u64);
+    if has("eboot.bin") {
+        g.identity.exe_platform = eboot_platform(tree.as_mut()).map(str::to_string);
+    }
     finish(&mut g);
     Ok(g)
+}
+
+/// `ps4` or `ps5` from `eboot.bin`'s process param: its header places the param block and the
+/// block's SDK words say which console it was built for. `None` for an encrypted or unreadable
+/// eboot.
+fn eboot_platform(tree: &mut dyn ps5upload_fpkg::source::SourceTree) -> Option<&'static str> {
+    use ps5upload_core::fakelibs::{param_site_from_header, platform_of_sdk_pair, sdk_pair_at};
+    let head = tree.read_range("eboot.bin", 0, 0x1_0000).ok()?;
+    let site = param_site_from_header(&head)?;
+    let chunk = tree.read_range("eboot.bin", site as u64, 0x18).ok()?;
+    platform_of_sdk_pair(sdk_pair_at(&chunk)?)
 }
 
 /// One of [`IMAGE_NAMES`] from an inspected source.
@@ -1049,6 +1068,62 @@ mod tests {
         let g = inspect_local(&dir).unwrap();
         assert!(g.partial);
         assert!(g.warnings.iter().any(|w| w.contains("not a game folder")));
+    }
+
+    /// The smallest eboot the param walk reads: an ELF header, one PT_SCE_PROCPARAM program
+    /// header, and the param block with its magic at +0x08 and the SDK u64 at +0x10.
+    fn eboot(ps4: u32, ps5: u32) -> Vec<u8> {
+        let mut e = vec![0u8; 0x200];
+        e[0..4].copy_from_slice(b"\x7fELF");
+        e[0x20..0x28].copy_from_slice(&0x40u64.to_le_bytes()); // e_phoff
+        e[0x36..0x38].copy_from_slice(&56u16.to_le_bytes()); // e_phentsize
+        e[0x38..0x3A].copy_from_slice(&1u16.to_le_bytes()); // e_phnum
+        e[0x40..0x44].copy_from_slice(&0x6100_0001u32.to_le_bytes()); // PT_SCE_PROCPARAM
+        e[0x48..0x50].copy_from_slice(&0x100u64.to_le_bytes()); // p_offset
+        e[0x60..0x68].copy_from_slice(&0x40u64.to_le_bytes()); // p_filesz
+        e[0x100..0x108].copy_from_slice(&0x40u64.to_le_bytes()); // size
+        e[0x108..0x10C].copy_from_slice(&0x4942_524Fu32.to_le_bytes()); // "ORBI"
+        let sdk = u64::from(ps4) | (u64::from(ps5) << 32);
+        e[0x110..0x118].copy_from_slice(&sdk.to_le_bytes());
+        e
+    }
+
+    #[test]
+    fn the_eboot_says_ps4_or_ps5_when_the_title_id_does_not() {
+        let dir = test_fixtures::scratch();
+        let sys = dir.join("sce_sys");
+        std::fs::create_dir_all(&sys).unwrap();
+        // A homebrew PS4 folder: param.sfo with no title id the prefix rule knows.
+        std::fs::write(
+            sys.join("param.sfo"),
+            test_fixtures::sfo(&[("TITLE", "Homebrew"), ("TITLE_ID", "LAPY12345")]),
+        )
+        .unwrap();
+        std::fs::write(dir.join("eboot.bin"), eboot(0x0450_8001, 0)).unwrap();
+        let g = inspect_local(&dir).unwrap();
+        assert_eq!(g.identity.exe_platform.as_deref(), Some("ps4"));
+        assert_eq!(g.identity.platform, "ps4");
+
+        // The same folder with a PS5 eboot (FW 4 pair).
+        std::fs::write(dir.join("eboot.bin"), eboot(0x0904_0001, 0x0400_0031)).unwrap();
+        let g = inspect_local(&dir).unwrap();
+        assert_eq!(g.identity.exe_platform.as_deref(), Some("ps5"));
+        assert_eq!(g.identity.platform, "ps5");
+
+        // A title id the prefix rule knows wins; the eboot is still reported.
+        std::fs::write(
+            sys.join("param.sfo"),
+            test_fixtures::sfo(&[("TITLE", "Game"), ("TITLE_ID", "CUSA00001")]),
+        )
+        .unwrap();
+        let g = inspect_local(&dir).unwrap();
+        assert_eq!(g.identity.platform, "ps4");
+        assert_eq!(g.identity.exe_platform.as_deref(), Some("ps5"));
+
+        // An eboot whose param cannot be found says nothing.
+        std::fs::write(dir.join("eboot.bin"), b"\x7fELF not really").unwrap();
+        let g = inspect_local(&dir).unwrap();
+        assert_eq!(g.identity.exe_platform, None);
     }
 
     #[test]

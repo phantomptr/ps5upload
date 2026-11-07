@@ -41,6 +41,8 @@ import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 import { humanizeCaught } from "../../lib/humanizeError";
+import { listsHelper, loadBootRecord, storedHelper } from "../../lib/helperAtBoot";
+import { turnOffHelperAtBoot, turnOnHelperAtBoot } from "../../state/helperAtBootRuntime";
 
 /** Move `name` within an autoload list, keeping pauses (`!ms`) where they are. */
 export function moveEntry(list: string[], name: string, dir: -1 | 1): string[] {
@@ -285,6 +287,40 @@ export default function PayloadManagerPanel() {
       tr("pm_autoload_failed", undefined, "Couldn't update the autoload list"),
     );
 
+  /** "Load the PS5Upload helper at boot" (lib/helperAtBoot). */
+  const setHelperAtBoot = (on: boolean) =>
+    run(
+      "helper-boot",
+      async () => {
+        if (!on) {
+          await turnOffHelperAtBoot(host);
+          return;
+        }
+        const done = await turnOnHelperAtBoot(host, (folder) =>
+          confirm({
+            title: tr(
+              "payloads_pm_store_confirm_title",
+              { folder },
+              `Replace Payload Manager's "${folder}" folder?`,
+            ),
+            message: tr(
+              "payloads_pm_store_confirm_other",
+              { folder },
+              `Payload Manager already has a "${folder}" folder. Storing into it removes the other files there (an older version, usually).`,
+            ),
+            confirmLabel: tr("payloads_pm_store", undefined, "Store in Payload Manager"),
+            destructive: true,
+          }),
+        );
+        if (done)
+          pushNotification(
+            "success",
+            withConsolePrefix(host, tr("helper_boot_on_title", undefined, "The helper now loads at boot")),
+          );
+      },
+      tr("helper_boot_failed", undefined, "Couldn't change whether the helper loads at boot"),
+    );
+
   if (!host.trim()) {
     return (
       <ErrorCard title={tr("payloads_no_host", undefined, "No PS5 host set. Connect on the Connection screen first.")} />
@@ -315,11 +351,21 @@ export default function PayloadManagerPanel() {
           undefined,
           "Payload Manager (itsPLK) keeps payloads on the console and can load them at boot. Send it from the Catalog tab, or start it on the PS5, then come back here.",
         )}
+        <p className="mt-1">
+          {tr(
+            "helper_boot_needs_pm",
+            undefined,
+            "Loading the PS5Upload helper at boot needs Payload Manager: it is what starts the helper when the PS5 starts.",
+          )}
+        </p>
       </Callout>
     );
   }
 
   const autoload = view.autoload;
+  const helperCopy = storedHelper(view.payloads);
+  const helperListed = !!helperCopy && listsHelper(autoload, autoloadKey(helperCopy));
+  const bootRecord = loadBootRecord(host);
   const inList = (p: PmStoredPayload) => !!autoload?.list.includes(autoloadKey(p));
   const stored = view.payloads.filter((p) => p.path.startsWith("/data/pldmgr/"));
   const onUsb = view.payloads.filter((p) => !p.path.startsWith("/data/pldmgr/"));
@@ -513,6 +559,40 @@ export default function PayloadManagerPanel() {
             detail={view.autoloadError}
           />
         )
+      )}
+
+      {autoload && (
+        <section className="surface-panel space-y-2 p-4">
+          <Toggle
+            checked={helperListed}
+            disabled={busy !== null}
+            onChange={(on) => void setHelperAtBoot(on)}
+            label={tr("helper_boot_label", undefined, "Load the PS5Upload helper at boot")}
+            hint={tr(
+              "helper_boot_hint",
+              undefined,
+              "Payload Manager starts the helper after everything above it in its boot list, so Minion and this app work after a restart with no PC. Each time this app connects it brings that copy up to its own helper and keeps the previous one; if a new copy does not start after a restart, the previous one is put back.",
+            )}
+          />
+          {helperListed && !autoload.enabled && (
+            <p className="text-xs text-[var(--color-warn)]">
+              {tr(
+                "helper_boot_list_off",
+                undefined,
+                "Payload Manager's boot list is turned off above, so nothing starts at boot until you turn it on.",
+              )}
+            </p>
+          )}
+          {helperListed && bootRecord?.badVersion && (
+            <p className="text-xs text-[var(--color-muted)]">
+              {tr(
+                "helper_boot_bad_version",
+                { version: bootRecord.badVersion },
+                `Helper ${bootRecord.badVersion} did not start at boot on this PS5, so the previous copy was put back. A newer app version tries again.`,
+              )}
+            </p>
+          )}
+        </section>
       )}
 
       <section className="surface-panel space-y-3 p-4">

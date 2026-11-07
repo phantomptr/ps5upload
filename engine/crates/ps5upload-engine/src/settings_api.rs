@@ -329,6 +329,21 @@ const SETTINGS: &[Setting] = &[
             "The consoles whose Minion page was turned off from here: a list of addresses.",
     },
     Setting {
+        name: "minion_off_for_new",
+        key: "ps5upload.minion_off_for_new",
+        kind: TRUE_FALSE,
+        default: Default_::Bool(false),
+        description: "Turn Minion off once on each console that connects for the first time.",
+    },
+    Setting {
+        name: "minion_default_done",
+        key: "ps5upload.minionDefaultDone",
+        kind: Kind::Doc,
+        default: Default_::Null,
+        description:
+            "The consoles minion_off_for_new has been applied to, or chosen for by hand: a list of addresses.",
+    },
+    Setting {
         name: "c2c_routes",
         key: "ps5upload.c2c.routes.v1",
         kind: Kind::Doc,

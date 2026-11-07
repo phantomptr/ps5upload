@@ -11,14 +11,59 @@ import { hostOf } from "../../lib/addr";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
-import { rememberMinion } from "../../state/minionMemory";
+import {
+  markMinionHandled,
+  minionOffForNew,
+  rememberMinion,
+  setMinionOffForNew,
+} from "../../state/minionMemory";
+import { useRosterStore } from "../../state/roster";
 
 type Tr = ReturnType<typeof useTr>;
 
 export function MinionSettings() {
   const host = useConnectionStore((s) => s.host);
   const up = useConnectionStore((s) => s.payloadStatus === "up");
-  return <MinionTileControl key={`${host}:${up}`} host={host} up={up} />;
+  return (
+    <div className="space-y-3">
+      <MinionTileControl key={`${host}:${up}`} host={host} up={up} />
+      <MinionDefaults />
+    </div>
+  );
+}
+
+/** This computer's choices for every console: Minion off on consoles added from now on (#715). */
+function MinionDefaults() {
+  const tr = useTr();
+  const [offForNew, setOffForNew] = useState(minionOffForNew);
+  return (
+    <div className="space-y-2 border-t border-[var(--glass-edge)] pt-3 text-sm">
+      <Toggle
+        checked={offForNew}
+        onChange={(on) => {
+          const known = useRosterStore
+            .getState()
+            .profiles.map((p) => (p.host ?? "").trim())
+            .filter(Boolean);
+          setMinionOffForNew(on, known);
+          setOffForNew(on);
+        }}
+        label={tr("minion_off_for_new_label", undefined, "Keep Minion off on consoles I add")}
+        hint={tr(
+          "minion_off_for_new_hint",
+          undefined,
+          "When a console connects to this app for the first time, Minion is turned off on it once. Consoles you already have stay as they are, and turning Minion back on for one console keeps it on.",
+        )}
+      />
+      <p className="text-xs text-[var(--color-muted)]">
+        {tr(
+          "minion_boot_helper_note",
+          undefined,
+          "Minion needs the helper running. To start it with the PS5, turn on Payloads → Payload Manager → Load the PS5Upload helper at boot.",
+        )}
+      </p>
+    </div>
+  );
 }
 
 /** The line under the controls: what the helper last did, in words. */
@@ -297,6 +342,9 @@ function MinionTileControl({ host, up }: { host: string; up: boolean }) {
       if (next.supported && change.remove) rememberMinion(host, true);
       else if (next.supported && change.enabled !== undefined)
         rememberMinion(host, !change.enabled);
+      // Chosen by hand: "Keep Minion off on consoles I add" never changes it again.
+      if (next.supported && (change.remove || change.enabled !== undefined))
+        markMinionHandled(host);
     } catch (e) {
       setError(String(e));
     } finally {

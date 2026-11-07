@@ -292,6 +292,19 @@ pub fn sdk_pair_at(chunk: &[u8]) -> Option<(u32, u32)> {
     Some((u32le(chunk, 0x10)?, u32le(chunk, 0x14)?))
 }
 
+/// The console an executable was built for, from its param block's SDK words (the u64 at +0x10:
+/// the PS4 SDK in its low half, the PS5 SDK in its high half). A PS5 title declares both; a PS4
+/// one has nothing in the high half. `None` when neither half is set.
+pub fn platform_of_sdk_pair((ps4, ps5): (u32, u32)) -> Option<&'static str> {
+    if ps5 != 0 {
+        Some("ps5")
+    } else if ps4 != 0 {
+        Some("ps4")
+    } else {
+        None
+    }
+}
+
 /// The FW4 pair a backport targets: `(ps4, ps5)`.
 pub const BACKPORT_SDK_PAIR: (u32, u32) = (0x0904_0001, 0x0400_0031);
 
@@ -1444,5 +1457,29 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&p);
         p
+    }
+}
+
+#[cfg(test)]
+mod platform_tests {
+    use super::*;
+
+    #[test]
+    fn the_high_half_says_ps5_the_low_half_alone_ps4() {
+        // Every known pair is a PS5 title's.
+        for pair in SDK_PAIRS {
+            assert_eq!(platform_of_sdk_pair(pair), Some("ps5"), "{pair:x?}");
+        }
+        assert_eq!(platform_of_sdk_pair((0x0450_8001, 0)), Some("ps4"));
+        assert_eq!(platform_of_sdk_pair((0, 0)), None);
+        // Read from a param block: magic at +0x08, PS4 word at +0x10, PS5 at +0x14.
+        let mut block = vec![0u8; 0x18];
+        block[8..12].copy_from_slice(&PROC_MAGIC.to_le_bytes());
+        block[0x10..0x18].copy_from_slice(&0x0400_0031_0904_0001u64.to_le_bytes());
+        assert_eq!(sdk_pair_at(&block), Some((0x0904_0001, 0x0400_0031)));
+        assert_eq!(
+            platform_of_sdk_pair(sdk_pair_at(&block).unwrap()),
+            Some("ps5")
+        );
     }
 }
