@@ -50,7 +50,10 @@ async function build(item: ConvertItem) {
   }
   if (item.build?.kind === "folder") {
     // A plain folder from an image or package: kept here, nothing to hand on.
-    await conv.buildFolder(item.source, outputOf(item), item.keepBoth, { fullVerify: item.fullVerify });
+    await conv.buildFolder(item.source, outputOf(item), item.keepBoth, {
+      fullVerify: item.fullVerify,
+      zstd: item.build.zstd,
+    });
     await whenIdle();
     return outcome(true);
   }

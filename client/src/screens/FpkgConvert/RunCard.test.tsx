@@ -11,7 +11,7 @@ vi.mock("../../state/lang", () => ({
 }));
 
 import type { Pipeline } from "../../state/fpkgConversion";
-import { ImageChoice, packOptions } from "./ImageOptions";
+import { ImageChoice, ZstdOption, folderPackOptions, folderPacks, packOptions } from "./ImageOptions";
 import {
   RunCard,
   deleteLabel,
@@ -524,9 +524,27 @@ describe("RunCard", () => {
       const notAmpr = lz4({ kind: "zstd", on: true, readiness: { refusal: "no", kind: "no_ampr" } });
       expect(lz4Active("ffpkg", notAmpr)).toBe(false);
       expect(idle("ffpkg", notAmpr)).not.toContain("zstd asset packs");
-      expect(packOptions("ffpkg", zstd)).toEqual({ zstdLevel: 5 });
+      // The runtime choice goes with it: the newest release unless the tested one is chosen.
+      expect(packOptions("ffpkg", zstd)).toEqual({ zstdLevel: 5, zstdRuntime: "latest" });
       expect(packOptions("ffpkg", lz4({ on: true }))).toBeUndefined();
       expect(packOptions("exfat", lz4({ on: true }), "t")).toEqual({ profileToml: "t", installRuntime: false });
+      expect(idle("ffpkg", zstd)).toContain("Newest release (default)");
+      expect(idle("ffpkg", zstd)).toContain("Tested 0.3.2");
+    });
+
+    it("packs a folder in zstd only, with the runtime chosen", () => {
+      const zstd = lz4({ on: true, kind: "zstd" });
+      expect(folderPacks(zstd)).toBe(true);
+      expect(folderPackOptions(zstd)).toEqual({ level: 5, runtime: "latest" });
+      // LZ4 packs are for .exfat images: a folder gets none.
+      expect(folderPacks(lz4({ on: true }))).toBe(false);
+      expect(folderPackOptions(lz4({ on: true }))).toBeUndefined();
+      expect(folderPackOptions(undefined)).toBeUndefined();
+      const notAmpr = lz4({ kind: "zstd", on: true, readiness: { refusal: "no", kind: "no_ampr" } });
+      expect(folderPacks(notAmpr)).toBe(false);
+      const html = renderToStaticMarkup(<ZstdOption lz4={zstd} folder />);
+      expect(html).toContain("LZ4 packs are not offered here");
+      expect(html).toContain('data-testid="zstd-runtime"');
     });
 
     it("says why, and cannot be turned on, when the game's ampr_emu cannot serve packs", () => {

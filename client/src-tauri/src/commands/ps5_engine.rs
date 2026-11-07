@@ -2449,6 +2449,8 @@ pub async fn folder_build(
     entry: Option<String>,
     // A name already taken in the output folder is numbered instead of refused.
     keep_both: Option<bool>,
+    // zstd asset packs: {level, runtime}. The source may then also be a game folder.
+    ampr_zstd: Option<JsonValue>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/folder/build");
@@ -2461,6 +2463,7 @@ pub async fn folder_build(
             "full_verify": full_verify.unwrap_or(false),
             "entry": entry,
             "keep_both": keep_both.unwrap_or(false),
+            "ampr_zstd": ampr_zstd,
         }),
     )
     .await

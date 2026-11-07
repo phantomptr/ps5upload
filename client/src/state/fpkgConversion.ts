@@ -13,7 +13,15 @@ import { useConvertPrefs, type AmprEmuBuild } from "./convertPrefs";
 import { imageUploadItem, resolveImagePlan, type ImageUploadPlan } from "../lib/imageUpload";
 import { useUploadQueueStore } from "./uploadQueue";
 
-import { fpkg, type AmprLz4Options, type FfpfscLevel, type FpkgBuildRequest, type ImageFormat, type WorkshopRun } from "../api/fpkg";
+import {
+  fpkg,
+  type AmprLz4Options,
+  type FfpfscLevel,
+  type FpkgBuildRequest,
+  type ImageFormat,
+  type WorkshopRun,
+  type ZstdPacks,
+} from "../api/fpkg";
 import { jobCancel, jobPause, jobResume, jobStatus } from "../api/ps5";
 import { useConnectionStore } from "./connection";
 import { useRosterStore } from "./roster";
@@ -172,8 +180,9 @@ export interface ConversionState {
     source: string,
     outputDir: string | undefined,
     keepBoth?: boolean,
-    /** This game's own choice (a queued game keeps what it was added with); else the setting. */
-    own?: { fullVerify?: boolean },
+    /** This game's own choice (a queued game keeps what it was added with); else the setting.
+     *  `zstd`: the folder's files in zstd packs. */
+    own?: { fullVerify?: boolean; zstd?: ZstdPacks },
   ) => Promise<void>;
   /** Put the finished image in the Upload queue. */
   uploadImage: (plan: ImageUploadPlan) => void;
@@ -949,7 +958,9 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
   buildFolder: async (source, outputDir, keepBoth, own) => {
     if (get().pipeline.phase === "running") return;
     pendingImageUpload = null;
-    beginRun("folder", source, null, "write");
+    // Packs are made before the folder is written.
+    const first = own?.zstd ? "pack" : "write";
+    beginRun("folder", source, null, first);
     try {
       const { job_id } = await fpkg.buildFolder(
         source,
@@ -958,11 +969,12 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         own?.fullVerify ?? useConvertPrefs.getState().fullVerify,
         undefined,
         keepBoth,
+        own?.zstd,
       );
       update({ jobId: job_id });
       poll(job_id, null);
     } catch (error) {
-      fail("write", error instanceof Error ? error.message : String(error), null);
+      fail(first, error instanceof Error ? error.message : String(error), null);
     }
   },
 

@@ -10,7 +10,7 @@ import type { MakeKind } from "../../state/convertPrefs";
 import type { OutputPlace } from "../../lib/outputPlace";
 import { useTr } from "../../state/lang";
 import { CompressionTiles } from "./CompressionTiles";
-import { FullVerifyOption, ImageChoice, type Lz4Choice } from "./ImageOptions";
+import { FullVerifyOption, ImageChoice, ZstdOption, type Lz4Choice } from "./ImageOptions";
 import { NextGameNote } from "./MakeCard";
 import { prettyBytes } from "./RunCard";
 
@@ -159,11 +159,18 @@ export function OptionsCard(props: OptionsCardProps) {
             )}
           </div>
         ) : props.make === "folder" ? (
-          <div className="text-xs text-[var(--color-muted)]" data-testid="options-folder">
-            {tr(
-              "fpkg.folder.what",
-              undefined,
-              "The folder is named after the image or package, in the output folder. Nothing is compressed, and nothing reaches the PS5.",
+          <div className="flex flex-col gap-2" data-testid="options-folder">
+            <div className="text-xs text-[var(--color-muted)]">
+              {tr(
+                "fpkg.folder.what",
+                undefined,
+                "The folder is named after the image or package, in the output folder. Nothing is compressed, and nothing reaches the PS5.",
+              )}
+            </div>
+            {/* A game that reads through AMPR can have its folder in zstd packs (LZ4 packs are
+                for .exfat images only). */}
+            {props.image?.lz4 && props.image.lz4.readiness.kind !== "no_ampr" && (
+              <ZstdOption lz4={props.image.lz4} folder />
             )}
           </div>
         ) : (

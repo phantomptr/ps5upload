@@ -424,6 +424,10 @@
               "integer",
               "null"
             ]
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/RuntimeChoice",
+            "description": "Which ampr-emu-ng goes in: `latest` (the default: the newest GitHub release, used only\nwhen its download matches the SHA-256 GitHub publishes for it, else the tested one) or\n`pinned` (the tested release). The job's `commit_ack.ampr_runtime` says which went in."
           }
         },
         "type": "object"
@@ -3973,6 +3977,17 @@
       },
       "FolderBuildReq": {
         "properties": {
+          "ampr_zstd": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AmprZstdReq"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Write the game with its files in zstd asset packs for ampr-emu-ng, as an image build's\n`ampr_zstd` does, as a plain folder: the packs, the files that stay loose, and the\nemulator in `fakelib/libSceAmpr.sprx`. The source may then also be a game folder (on\nthis computer, a saved server or a console). Not with `entry`."
+          },
           "entry": {
             "description": "Save only this file or folder of the image (#479, the image browser's Save), by its\npath inside the image: a folder becomes a folder named after it, a file a file. Its\nname is the entry's own unless `name` says otherwise.",
             "type": [
@@ -10566,6 +10581,14 @@
           "app_id"
         ],
         "type": "object"
+      },
+      "RuntimeChoice": {
+        "description": "Which ampr-emu-ng goes into a packed game.",
+        "enum": [
+          "latest",
+          "pinned"
+        ],
+        "type": "string"
       },
       "SameConsoleReq": {
         "properties": {
@@ -19704,7 +19727,7 @@
     },
     "/api/folder/build": {
       "post": {
-        "description": "POST /api/folder/build — unpack a game image or a debug-key package into a plain folder\n(#469). Runs as a job like an image build: stages `write` and `verify`, the folder written\nas `<name>.partial/` and renamed only once it reads back. Done's `dest` is the folder.",
+        "description": "POST /api/folder/build — unpack a game image or a debug-key package into a plain folder\n(#469). Runs as a job like an image build: stages `write` and `verify`, the folder written\nas `<name>.partial/` and renamed only once it reads back. Done's `dest` is the folder. With\n`ampr_zstd` the game's files go into zstd packs (stage `pack` first), from an image,\npackage or game folder; `commit_ack.ampr_runtime` names the emulator that went in.",
         "requestBody": {
           "content": {
             "application/json": {

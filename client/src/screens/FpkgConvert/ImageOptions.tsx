@@ -1,9 +1,10 @@
 import { Button, Toggle } from "../../components";
-import type { AmprLz4Options, AmprPacksReadiness, FfpfscLevel, ImageFormat } from "../../api/fpkg";
+import type { AmprLz4Options, AmprPacksReadiness, FfpfscLevel, ImageFormat, ZstdPacks } from "../../api/fpkg";
 import {
   DEFAULT_VERIFY_CHUNK_KIB,
   VERIFY_CHUNK_KIB,
   parseAmprEmuBuild,
+  parseZstdRuntime,
   useConvertPrefs,
   type AmprEmuBuild,
 } from "../../state/convertPrefs";
@@ -54,7 +55,7 @@ export function packOptions(
 ): AmprLz4Options | undefined {
   if (!lz4 || !lz4Active(format, lz4)) return undefined;
   return lz4.kind === "zstd"
-    ? { zstdLevel: lz4.zstdLevel }
+    ? { zstdLevel: lz4.zstdLevel, zstdRuntime: useConvertPrefs.getState().zstdRuntime }
     : { profileToml, installRuntime: lz4.installRuntime };
 }
 
@@ -63,8 +64,58 @@ export function lz4Active(format: ImageFormat, lz4: Lz4Choice | undefined): bool
   return !!lz4?.on && (format === "exfat" || lz4.kind === "zstd") && !lz4Refused(lz4);
 }
 
-/** zstd packs, for any plain image of a game that reads through AMPR. */
-function ZstdOption({ lz4 }: { lz4: Lz4Choice }) {
+/** Whether a folder build packs: zstd only (LZ4 packs go into an .exfat image). */
+export function folderPacks(lz4: Lz4Choice | undefined): boolean {
+  return !!lz4?.on && lz4.kind === "zstd" && !lz4Refused(lz4);
+}
+
+/** What a folder build is told when zstd packs are on, or nothing. */
+export function folderPackOptions(lz4: Lz4Choice | undefined): ZstdPacks | undefined {
+  return lz4 && folderPacks(lz4)
+    ? { level: lz4.zstdLevel, runtime: useConvertPrefs.getState().zstdRuntime }
+    : undefined;
+}
+
+/** The tested ampr-emu-ng release, as the engine pins it (zstd_packs.rs). */
+const NG_TESTED = "0.3.2";
+
+/** Which ampr-emu-ng goes in with zstd packs: the newest release or the tested one. */
+function ZstdRuntimeChoice() {
+  const tr = useTr();
+  const runtime = useConvertPrefs((s) => s.zstdRuntime);
+  const set = useConvertPrefs((s) => s.setZstdRuntime);
+  return (
+    <div className="ms-6 space-y-0.5 text-xs">
+      <label className="flex items-center gap-2">
+        <span>{tr("fpkg.image.zstd_runtime", undefined, "Pack runtime")}</span>
+        <select
+          value={runtime}
+          onChange={(e) => set(parseZstdRuntime(e.target.value))}
+          className="select w-auto!"
+          data-testid="zstd-runtime"
+        >
+          <option value="latest">
+            {tr("fpkg.image.zstd_runtime_latest", undefined, "Newest release (default)")}
+          </option>
+          <option value="pinned">
+            {tr("fpkg.image.zstd_runtime_pinned", { version: NG_TESTED }, "Tested {version}")}
+          </option>
+        </select>
+      </label>
+      <div className="leading-relaxed text-[var(--color-muted)]">
+        {tr(
+          "fpkg.image.zstd_runtime_body",
+          { version: NG_TESTED },
+          "Newest uses the latest ampr-emu-ng release on GitHub only when it matches the SHA-256 GitHub publishes for it; otherwise, or offline, the tested {version} goes in. Tested always uses {version}.",
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** zstd packs, for any plain image of a game that reads through AMPR, or for a plain folder
+ *  (`folder`), the only packs a folder gets. */
+export function ZstdOption({ lz4, folder }: { lz4: Lz4Choice; folder?: boolean }) {
   const tr = useTr();
   const on = lz4.on && lz4.kind === "zstd";
   return (
@@ -84,14 +135,21 @@ function ZstdOption({ lz4 }: { lz4: Lz4Choice }) {
             {tr("fpkg.image.zstd", undefined, "zstd asset packs (smallest, for ShadowMount+)")}
           </span>
           <span className="mt-0.5 block leading-relaxed text-[var(--color-muted)]">
-            {tr(
-              "fpkg.image.zstd_body",
-              undefined,
-              "Packs all but the game's system files into zstd packs, written straight into the image with no temporary copy. The image gets quer3q's ampr-emu-ng 0.3.2 as its emulator, fetched once and checked against a known digest. A game already in LZ4 packs is switched over. Turn off update_emulators in ShadowMount+, or it can swap the emulator for one that can't read them.",
-            )}
+            {folder
+              ? tr(
+                  "fpkg.folder.zstd_body",
+                  undefined,
+                  "Writes the game as a plain folder with all but its system files in zstd packs, and quer3q's ampr-emu-ng as fakelib/libSceAmpr.sprx. A game folder can be the source too. LZ4 packs are not offered here: they go into an .exfat image only. Turn off update_emulators in ShadowMount+, or it can swap the emulator for one that can't read them.",
+                )
+              : tr(
+                  "fpkg.image.zstd_body",
+                  undefined,
+                  "Packs all but the game's system files into zstd packs, written straight into the image with no temporary copy. The image gets quer3q's ampr-emu-ng as its emulator, checked against a published digest before it is used. A game already in LZ4 packs is switched over. Turn off update_emulators in ShadowMount+, or it can swap the emulator for one that can't read them.",
+                )}
           </span>
         </span>
       </label>
+      {on && <ZstdRuntimeChoice />}
       {on && (
         <label className="ms-6 flex items-center gap-2 text-xs">
           <span>{tr("fpkg.image.zstd_level", undefined, "Compression level")}</span>

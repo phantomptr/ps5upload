@@ -923,6 +923,7 @@ export async function browserInvoke<T>(
         full_verify: args["fullVerify"] ?? false,
         entry: args["entry"],
         keep_both: args["keepBoth"] ?? false,
+        ampr_zstd: args["amprZstd"],
       });
     }
     case "image_browse": {

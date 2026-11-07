@@ -23,6 +23,8 @@ const BUILD: readonly PipelineStage[] = ["check", "plan", "compress", "write", "
 const PACKED_BUILD: readonly PipelineStage[] = ["check", "pack", "plan", "compress", "write", "verify"];
 /** A plain folder from an image or package: written, then read back. */
 const FOLDER: readonly PipelineStage[] = ["write", "verify"];
+/** A folder whose files go into zstd packs first. */
+const PACKED_FOLDER: readonly PipelineStage[] = ["pack", "write", "verify"];
 const INSTALL: readonly PipelineStage[] = ["send", "install"];
 /** A console dump is set aside, then its package installs (see lib/dumpSwap.ts). */
 const SWAP: readonly PipelineStage[] = ["park", "install"];
@@ -44,7 +46,7 @@ const WEIGHT: Record<PipelineStage, number> = {
 
 function stagesFor(mode: PipelineMode, source: string, packs: boolean): readonly PipelineStage[] {
   // The engine reads the image or package in place, wherever it is.
-  if (mode === "folder") return FOLDER;
+  if (mode === "folder") return packs ? PACKED_FOLDER : FOLDER;
   const copy: PipelineStage[] = [];
   // A build reads a server folder or image in place; a server archive, or an image being
   // compressed (which reads local disk), is copied first.
@@ -70,7 +72,7 @@ function installStage(task: Task | null): PipelineStage {
 
 export function stageRows(p: Pipeline, installTask: Task | null): StageRow[] {
   if (p.phase === "idle") return [];
-  // Only an LZ4 image build packs; it shows the row once it has entered that stage.
+  // Only a packed image or folder build packs; it shows the row once it has entered that stage.
   const packs = ("stage" in p && p.stage === "pack") || p.stageMs.pack !== undefined;
   const stages = stagesFor(p.mode, p.source, packs);
   const withMs = (stage: PipelineStage, state: RowState): StageRow =>

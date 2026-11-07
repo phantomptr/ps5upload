@@ -13,7 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Folder, FolderSearch, HardDrive, Hammer, Send } from "lucide-react";
 
-import { fpkg, type AmprLz4Options, type FpkgEstimates, type FpkgInspection } from "../../api/fpkg";
+import { fpkg, type AmprLz4Options, type FpkgEstimates, type FpkgInspection, type ZstdPacks } from "../../api/fpkg";
 import { appLaunch } from "../../api/ps5";
 import { Button, Callout, Card, PageHeader } from "../../components";
 import { FakeGameFirmwareNotice } from "../../components/FakeGameFirmwareNotice";
@@ -49,7 +49,7 @@ import { BROWSE_IMAGE_EXTENSIONS } from "../LocalImage/imageTypes";
 import { isRemotePath } from "../../lib/remotePath";
 import { MakeCard } from "./MakeCard";
 import { OptionsCard } from "./OptionsCard";
-import { packOptions } from "./ImageOptions";
+import { folderPackOptions, folderPacks, packOptions } from "./ImageOptions";
 import { OutputChoice, RunCard, idleRun, lz4Active, type Lz4Choice, type RunCardProps } from "./RunCard";
 import { outputFor } from "../../lib/outputPlace";
 import { SwapJournals } from "./SwapJournals";
@@ -185,17 +185,19 @@ export default function WorkshopScreen() {
         : { kind: "pkg" };
   const then = thenFor(build.kind, thenChoice, canInstall);
   /** A skip says which build the source cannot become: an image needs a game folder, image,
-   *  package or archive (unpacked first); a folder needs an image or package. */
+   *  package or archive (unpacked first); a folder needs an image or package, or a game folder
+   *  when it is made in zstd packs (`zstd`, this game's own choice). */
   const queueAdd = (
     src: string,
     isFolder: boolean,
     lz4?: AmprLz4Options,
+    zstd?: ZstdPacks,
   ): boolean | QueueSkip => {
     // A later part of a multi-part archive is read through its first part.
     if (isRarLaterVolume(src)) return "later-part";
     if (build.kind === "image" && !isFolder && !isFolderableSource(src) && !isArchiveSource(src))
       return "not-image";
-    if (build.kind === "folder" && !isFolderableSource(src)) return "not-folder";
+    if (build.kind === "folder" && !isFolderableSource(src) && !(isFolder && zstd)) return "not-folder";
     const u = useUploadStore.getState();
     const out = outFor(src);
     const prefs = useConvertPrefs.getState();
@@ -209,7 +211,12 @@ export default function WorkshopScreen() {
       outputDir: out.outputDir,
       keepBoth: out.keepBoth || undefined,
       compression,
-      build: build.kind === "image" ? imageBuildWith(build, lz4) : build,
+      build:
+        build.kind === "image"
+          ? imageBuildWith(build, lz4)
+          : build.kind === "folder" && zstd
+            ? { ...build, zstd }
+            : build,
       imageDest:
         build.kind === "image"
           ? { volume: u.destinationVolume, subpath: u.destinationSubpath || DEFAULT_IMAGE_SUBPATH }
@@ -506,7 +513,7 @@ export default function WorkshopScreen() {
     setError(null);
     const out = outFor(src);
     if (build.kind === "folder") {
-      void buildFolder(src, out.outputDir, out.keepBoth);
+      void buildFolder(src, out.outputDir, out.keepBoth, { zstd: folderPackOptions(lz4Choice) });
       return;
     }
     if (build.kind === "image") {
@@ -606,9 +613,8 @@ export default function WorkshopScreen() {
   // as a package run does.
   const canImage = isLocalFolder || (src !== "" && isArchiveSource(src));
   // A game image or a package can be unpacked into a plain folder, wherever it is; a folder is
-  // one already, and an archive is unpacked first.
-  const canFolder = src !== "" && isFolderableSource(src);
-  const isFolderSource = src !== "" && !canFolder && !isArchiveSource(src);
+  // one already (it can become a folder in zstd packs, below), and an archive is unpacked first.
+  const unpackable = src !== "" && isFolderableSource(src);
   // A profile measured from play (the game page's Measure how it plays) is the LZ4 default
   // for this title; a file picked by hand replaces it.
   const measuredFor = titleIdOf(inspection?.content_id);
@@ -650,6 +656,10 @@ export default function WorkshopScreen() {
         onZstdLevel: setZstdLevel,
       }
     : undefined;
+  // A folder in zstd packs can be made of a game folder too.
+  const packsFolder = folderPacks(lz4Choice);
+  const canFolder = unpackable || (isLocalFolder && packsFolder);
+  const isFolderSource = src !== "" && !unpackable && !isArchiveSource(src) && !packsFolder;
 
   // ④, and whether it is on screen: while it is scrolled away, a slim bar at the bottom of the
   // window offers its main button (the user asked for the main actions without scrolling).
@@ -699,7 +709,7 @@ export default function WorkshopScreen() {
   // What else this source can be, besides converted: looked inside, written out as a folder, or
   // opened as a drive.
   const lookable = !locked && canLookInside(source);
-  const folderable = !locked && canFolder;
+  const folderable = !locked && unpackable;
   const mountable = drives.canMount && !locked && isDriveImage(source) && !source.startsWith("ps5://") && !isRemotePath(source);
   // #621: a libSceAmpr game's ampr_emu.index made again from its files, without converting.
   const indexable = !inside && amprIndexPlan(source, inspection) !== "hidden";
@@ -1002,6 +1012,7 @@ export default function WorkshopScreen() {
                 source.trim(),
                 isLocalFolder,
                 build.kind === "image" ? packOptions(build.format, lz4Choice, lz4Profile?.text) : undefined,
+                build.kind === "folder" ? folderPackOptions(lz4Choice) : undefined,
               );
               if (r === "not-image" || r === "not-folder" || r === "later-part") setError(skippedText(r, 1));
               else if (!r) setError(tr("cq_already", undefined, "This game is already in the queue."));
