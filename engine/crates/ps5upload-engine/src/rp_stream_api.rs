@@ -579,8 +579,15 @@ pub(crate) fn stream_seat_free(host: &str) -> bool {
     live_on(host).is_some_and(|l| l.seat_free())
 }
 
-/// A guest has the stream's controller, or no longer. The page stays off it meanwhile, also with
-/// its picture back on, so two people never share one player.
+/// A guest on the stream's controller may keep it: the session runs for `host`, its picture is
+/// still off here and no linked phone plays (else the host's side needs it back, #720).
+pub(crate) fn stream_seat_kept(host: &str) -> bool {
+    live_on(host).is_some_and(|l| l.seat_kept_given(crate::pad_link::phones_playing()))
+}
+
+/// A guest has the stream's controller, or no longer. The page stays off it meanwhile; the
+/// picture back on takes it back from the guest ([`Live::set_picture`]), so two people never share
+/// one player.
 pub(crate) fn guest_seat(host: &str, on: bool) {
     if let Some(l) = live_on(host) {
         l.set_guest_seat(on);
@@ -1084,6 +1091,12 @@ impl Live {
             if was_on {
                 return;
             }
+            // The host's controller plays again at once: a friend on it moves to a pad of
+            // their own (join.rs), never sharing Player 1 with the host (#720).
+            if self.guest_seat.load(Ordering::Relaxed) {
+                self.set_guest_seat(false);
+                crate::join::seat_needed(&self.host, "the picture is back on");
+            }
             if let Some(h) = self.video_header.lock().ok().and_then(|g| g.clone()) {
                 self.send_ctl(bin(0, &h));
             }
@@ -1110,7 +1123,21 @@ impl Live {
     }
 
     fn seat_free(&self) -> bool {
-        self.picture_off() && !self.guest_seat.load(Ordering::Relaxed) && self.sources.is_empty()
+        self.seat_free_given(crate::pad_link::phones_playing())
+    }
+
+    /// Free for a guest: the picture off here, no guest on it, nothing held on it, and no
+    /// linked phone playing (`phones_playing`: one quiet a moment still merges into it, #720).
+    fn seat_free_given(&self, phones_playing: bool) -> bool {
+        self.seat_kept_given(phones_playing)
+            && !self.guest_seat.load(Ordering::Relaxed)
+            && self.sources.is_empty()
+    }
+
+    /// The guest on the stream's controller may keep it: the picture is still off here and no
+    /// linked phone plays.
+    fn seat_kept_given(&self, phones_playing: bool) -> bool {
+        self.picture_off() && !phones_playing
     }
 
     fn set_guest_seat(&self, on: bool) {
@@ -2303,10 +2330,11 @@ mod tests {
     fn a_guest_on_the_stream_controller_keeps_the_page_off_it() {
         let l = Live::new("10.0.0.7".into(), false, Duration::from_secs(60));
         l.playing.store(true, Ordering::Relaxed);
-        assert!(!l.seat_free(), "the page uses it");
+        // (No phone linked: the link is engine-wide, so its tests' phones are kept out of this.)
+        assert!(!l.seat_free_given(false), "the page uses it");
         assert!(l.page_pad_open());
         l.set_picture(false);
-        assert!(l.seat_free(), "the picture is off: it sits idle");
+        assert!(l.seat_free_given(false), "the picture is off: it sits idle");
 
         l.set_guest_seat(true);
         assert!(!l.seat_free(), "one guest has it");
@@ -2317,19 +2345,21 @@ mod tests {
         l.push_pad(GUEST_SEAT_SOURCE, Some(cross));
         assert_eq!(l.pad.lock().unwrap().back().map(|p| p.buttons), Some(1));
 
+        assert!(!l.page_pad_open());
+
+        // The picture back on: the host's controller plays again at once (#720), and what the
+        // guest held is let go.
         l.set_picture(true);
         assert!(
-            !l.page_pad_open(),
-            "picture back, the guest keeps the controller"
+            l.page_pad_open(),
+            "picture back: the stream's controller is the host's"
         );
-
-        l.set_guest_seat(false);
+        assert!(!l.guest_seat.load(Ordering::Relaxed));
         assert_eq!(
             l.pad.lock().unwrap().back().map(|p| p.buttons),
             Some(0),
             "what they held is let go"
         );
-        assert!(l.page_pad_open());
     }
 
     #[test]
@@ -2337,9 +2367,18 @@ mod tests {
         let l = Live::new("10.0.0.7".into(), false, Duration::from_secs(60));
         l.set_picture(false);
         l.push_pad(1, Some(ControllerState::default()));
-        assert!(!l.seat_free());
+        assert!(!l.seat_free_given(false));
         l.push_pad(1, None);
-        assert!(l.seat_free());
+        assert!(l.seat_free_given(false));
+        // A linked phone that went quiet a moment (its pad let go) still plays on it (#720).
+        assert!(!l.seat_free_given(true));
+        assert!(l.seat_kept_given(false));
+        assert!(
+            !l.seat_kept_given(true),
+            "a phone playing takes it back from a guest"
+        );
+        l.set_picture(true);
+        assert!(!l.seat_kept_given(false), "so does the picture back on");
     }
 
     #[test]

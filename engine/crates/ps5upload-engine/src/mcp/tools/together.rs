@@ -77,14 +77,22 @@ pub(super) fn tools() -> Vec<ToolDef> {
         ToolDef {
             name: "together_settings",
             title: "Play Together settings",
-            description: "How many guests may join (1 to 3), and whether PS and Create are taken \
-                          from guests who are playing. One set for every console.",
+            description: "How many guests may join (1 to 3), whether PS and Create are taken \
+                          from guests who are playing, and whether a guest may play on the \
+                          stream's own controller as the host's PS5 user. One set for every \
+                          console.",
             kind: Kind::Write { idempotent: true },
             schema: object(
                 json!({
                     "max_players": whole("Guests at most, 1 to 3."),
                     "block_system_buttons": flag(
                         "Take PS and Create from guests who are playing.",
+                    ),
+                    "stream_seat": flag(
+                        "Let a guest play as the host on Player 1 (the stream's own controller, \
+                         signed in as the host's PS5 user) while the host's device shows no \
+                         picture and no phone plays. Off: every guest gets their own controller \
+                         and picks a user on the TV.",
                     ),
                 }),
                 &[],

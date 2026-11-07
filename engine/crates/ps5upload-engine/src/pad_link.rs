@@ -780,9 +780,26 @@ fn ask_kbm_caps(host: String, tx: mpsc::WeakSender<Message>) {
     });
 }
 
+impl Pad {
+    /// A watcher plays only while it holds the controller.
+    fn plays(&self) -> bool {
+        !self.watch || self.control
+    }
+}
+
 /// A watcher plays only while it holds the controller.
 fn plays(id: u64) -> bool {
-    with_link(|l| l.pads.iter().any(|x| x.id == id && (!x.watch || x.control)))
+    with_link(|l| l.pads.iter().any(|x| x.id == id && x.plays()))
+}
+
+/// A linked phone plays on the stream's controller (a controller, or a watcher handed it), quiet
+/// or not: a Play Together guest never gets that controller from under it (join.rs, #720).
+pub(crate) fn phones_playing() -> bool {
+    with_link(|l| any_playing(&l.pads))
+}
+
+fn any_playing(pads: &[Pad]) -> bool {
+    pads.iter().any(Pad::plays)
 }
 
 async fn pad_session(mut socket: WebSocket, q: PadQuery, ip: std::net::IpAddr) {
@@ -1767,6 +1784,26 @@ mod tests {
             serde_json::json!({"id": 2, "on": true, "mouse": true, "keyboard": false})
         );
         assert_eq!(kbm_left(2), serde_json::json!({"id": 2, "left": true}));
+    }
+
+    #[test]
+    fn a_linked_phone_plays_quiet_or_not_and_a_watcher_only_with_the_controller() {
+        let pad = |watch: bool, control: bool| Pad {
+            id: 1,
+            name: String::new(),
+            device: None,
+            since_ms: 0,
+            tx: mpsc::channel(1).0,
+            watch,
+            control,
+        };
+        assert!(!any_playing(&[]));
+        assert!(
+            any_playing(&[pad(false, false)]),
+            "a controller, whatever it sent lately"
+        );
+        assert!(!any_playing(&[pad(true, false)]), "a watcher only watches");
+        assert!(any_playing(&[pad(true, false), pad(true, true)]));
     }
 
     #[test]
