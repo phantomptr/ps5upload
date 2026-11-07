@@ -18,6 +18,7 @@ Play Together (#720):
 
 Also:
 
+- Installing an add-on (DLC) is no longer refused with "move the game out of the scan folder" when its base game runs from a ShadowMount+ image. A package already on the PS5 came with no category, and the check took it for a full game. (#721)
 - A build only ever clears its own leftover files (.partial, .lz4spool) before starting.
 
 ## 11.5.1
