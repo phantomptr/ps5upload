@@ -57,6 +57,7 @@ const GameHubScreen = lazyWithReload(() => import("./screens/GameHub"));
 const PayloadsScreen = lazyWithReload(() => import("./screens/Payloads"));
 const FirstRunScreen = lazyWithReload(() => import("./screens/FirstRun"));
 const SavesScreen = lazyWithReload(() => import("./screens/Saves"));
+const ConsoleBackupScreen = lazyWithReload(() => import("./screens/ConsoleBackup"));
 const ProcessesScreen = lazyWithReload(() => import("./screens/Processes"));
 const CapturesScreen = lazyWithReload(() => import("./screens/Captures"));
 const ShellScreen = lazyWithReload(() => import("./screens/Shell"));
@@ -466,6 +467,14 @@ function AppRoutes({ location }: { location: Location }) {
                 <FirstRunScreen />
               </Suspense>
             </NativeOnlyRoute>
+          }
+        />
+        <Route
+          path="/console-backup"
+          element={
+            <Suspense fallback={<ScreenLoader />}>
+              <ConsoleBackupScreen />
+            </Suspense>
           }
         />
         <Route

@@ -1631,7 +1631,7 @@ fn hosts_with(mut hosts: Vec<String>, add: Vec<String>, remove: &[String]) -> Ve
 }
 
 /// Whether the engine can write `dir` (made if missing).
-fn writable(dir: &str) -> Result<(), String> {
+pub(crate) fn writable(dir: &str) -> Result<(), String> {
     let p = Path::new(dir);
     if !p.is_absolute() {
         return Err(format!("{dir} is not a full path"));

@@ -4,6 +4,12 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.3.0
+
+- New: Backup & Restore (Console section). Choose what to keep on your computer: saves, payload settings, screenshots and clips, homebrew and other folders in /data, each with its size. It says what it leaves out and why: installed games, because copying them back doesn't install them, and the console's own system files. (#707)
+- Restoring after a reset: settings and folders go straight back. A save goes into that user's own save of the game, so start each game once and save; any that aren't ready are listed, and running the restore again is safe. Saves only open on the PS5 that made them. (#707)
+- New guide, "If your PS5 won't start": the Safe Mode options in the order to try them, which ones erase your data, how to set up the USB drive, and why reinstalling from Sony's file can end a jailbreak. (#707)
+
 ## 11.2.9
 
 - iPhone Duo: with the phone open and sideways, the stream now uses the whole height it can. Large system insets at the top and bottom cut the picture to a band across the middle, losing the top and bottom of the game. (#675)

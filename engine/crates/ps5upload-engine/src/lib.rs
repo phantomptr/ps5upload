@@ -27,6 +27,7 @@ mod collection;
 mod collection_api;
 mod collection_check_api;
 mod collection_tidy_api;
+mod console_backup;
 mod console_cleanup_api;
 mod console_files_api;
 mod console_move;
@@ -11794,6 +11795,27 @@ fn build_app_and_mcp(
             post(collection_check_api::post_check_cancel),
         )
         .route("/api/games/installed", get(games_api::list_installed))
+        .route("/api/console-backup/scan", post(console_backup::post_scan))
+        .route(
+            "/api/console-backup/backup",
+            post(console_backup::post_backup),
+        )
+        .route(
+            "/api/console-backup/inspect",
+            post(console_backup::post_inspect),
+        )
+        .route(
+            "/api/console-backup/restore",
+            post(console_backup::post_restore),
+        )
+        .route(
+            "/api/console-backup/status",
+            get(console_backup::get_status),
+        )
+        .route(
+            "/api/console-backup/cancel",
+            post(console_backup::post_cancel),
+        )
         .route(
             "/api/save-backup",
             get(save_backup::get_view).put(save_backup::put_settings),
