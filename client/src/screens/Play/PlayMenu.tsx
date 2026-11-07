@@ -157,7 +157,8 @@ export function PlayMenu({
           </button>
         </div>
       )}
-      <div className="grid grid-cols-3 gap-2">
+      {/* Four across when sideways: a phone has no height for a third row. */}
+      <div className={`grid gap-2 ${inFull ? "grid-cols-3 landscape:grid-cols-4" : "grid-cols-3"}`}>
         {inFull && (
           <Tile
             label={tr("rp_exit_fullscreen", undefined, "Leave full screen")}
