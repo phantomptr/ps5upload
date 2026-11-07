@@ -35,6 +35,8 @@ Saves:
 
 Workshop and Convert:
 
+- zstd packs into a folder: Convert writes a packed game as a plain folder too, from an image, a package or a game folder, and reads every file back through the packs.
+- The zstd pack runtime (ampr-emu-ng) follows its newest release, checked against the SHA-256 GitHub publishes for it, so its fixes reach packed games without waiting for us. It falls back to the tested 0.3.2 when that can't be checked, and Convert can be set to always use 0.3.2. The game's job says which went in.
 - A .pkg dropped onto Workshop is taken; several go into the queue. (#716)
 - A queued game keeps the AMPR emulator choice it was added with.
 - PS4 packages: a package whose image has an empty folder that the container fills (Resident Evil 2) no longer fails its read-back check. A real PS4 game converted this way was installed by ShadowMount+ and ran to its title screen.
