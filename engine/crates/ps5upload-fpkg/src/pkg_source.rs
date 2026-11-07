@@ -23,8 +23,8 @@
 //! tree is the game folder the package was built from, not just the image's share of it.
 //!
 //! Only packages made with the debug key open: a retail package, a native-mode one built with
-//! another passcode, a PS4 package and a layout this reader does not know are each refused with
-//! the reason in plain words.
+//! another passcode and a layout this reader does not know are each refused with the reason in
+//! plain words. A PS4 package is [`crate::ps4_pkg`]'s.
 
 use std::collections::HashSet;
 use std::path::Path;

@@ -5991,6 +5991,10 @@
             "minimum": 0,
             "type": "integer"
           },
+          "ps4_game": {
+            "description": "A PS4 game: it becomes an image or a folder, not a PS5 package.",
+            "type": "boolean"
+          },
           "required_firmware": {
             "type": [
               "string",
@@ -6023,7 +6027,8 @@
           "output_free",
           "checks",
           "ampr_packs",
-          "unsigned_executables"
+          "unsigned_executables",
+          "ps4_game"
         ],
         "type": "object"
       },

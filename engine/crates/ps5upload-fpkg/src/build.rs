@@ -1209,6 +1209,8 @@ pub struct Inspection {
     pub ampr_packs: Option<crate::ampr_pack::image::Readiness>,
     /// How many of its executables are plain ELF files, which a build fake-signs.
     pub unsigned_executables: usize,
+    /// A PS4 game: it becomes an image or a folder, not a PS5 package.
+    pub ps4_game: bool,
 }
 
 impl Inspection {
@@ -1421,7 +1423,36 @@ pub fn estimate(source_path: &Path, output_dir: Option<&Path>) -> Result<Estimat
 pub fn inspect(source_path: &Path, output_dir: &Path) -> Result<Inspection> {
     let mut tree = source::open(source_path)?;
     let files: Vec<SourceFile> = tree.files().to_vec();
-    let checks = source::readiness(tree.as_mut()).checks;
+    let mut checks = source::readiness(tree.as_mut()).checks;
+    // A PS4 game: param.sfo, no param.json. What a PS5 package needs is no warning for it.
+    let has = |name: &str| files.iter().any(|f| f.path.eq_ignore_ascii_case(name));
+    let ps4_game = has("sce_sys/param.sfo") && !has("sce_sys/param.json");
+    let sfo = if ps4_game {
+        tree.read("sce_sys/param.sfo")
+            .ok()
+            .and_then(|b| ps5upload_pkg::sfo_params(&b).ok())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let sfo_text = |key: &str| {
+        sfo.iter().find_map(|(k, v)| match v {
+            ps5upload_pkg::SfoValue::Text(t) if k == key && !t.trim().is_empty() => {
+                Some(t.trim().to_string())
+            }
+            _ => None,
+        })
+    };
+    if ps4_game {
+        const PS5_ONLY: [&str; 5] = [
+            "param.json present",
+            "no param.sfo",
+            "content id",
+            "icon0.png and icon0.dds present",
+            "sce_sys/about/right.sprx present",
+        ];
+        checks.retain(|c| !PS5_ONLY.contains(&c.name.as_str()));
+    }
     let param = tree.read("sce_sys/param.json").unwrap_or_default();
     let json: Option<serde_json::Value> = serde_json::from_slice(
         std::str::from_utf8(&param)
@@ -1430,7 +1461,10 @@ pub fn inspect(source_path: &Path, output_dir: &Path) -> Result<Inspection> {
             .as_bytes(),
     )
     .ok();
-    let title = json.as_ref().and_then(title_of);
+    let title = json
+        .as_ref()
+        .and_then(title_of)
+        .or_else(|| sfo_text("TITLE"));
     let required_firmware = json.as_ref().and_then(firmware_version);
     let planned_size = if files.is_empty() {
         0
@@ -1441,7 +1475,7 @@ pub fn inspect(source_path: &Path, output_dir: &Path) -> Result<Inspection> {
         source: tree.describe(),
         files: files.len(),
         bytes: files.iter().map(|f| f.size).sum(),
-        content_id: source::content_id(&param),
+        content_id: source::content_id(&param).or_else(|| sfo_text("CONTENT_ID")),
         title,
         required_firmware,
         planned_size,
@@ -1449,5 +1483,6 @@ pub fn inspect(source_path: &Path, output_dir: &Path) -> Result<Inspection> {
         checks,
         ampr_packs: crate::ampr_pack::image::readiness(tree.as_mut()),
         unsigned_executables: crate::fself::unsigned(tree.as_mut()).len(),
+        ps4_game,
     })
 }

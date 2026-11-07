@@ -6668,6 +6668,7 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "rp_picture_saturation": "Renk",
 "rp_picture_crop": "21:9'a kırp",
 "rp_picture_crop_hint": "Görüntünün üstünü ve altını keserek 21:9 yapar. Yalnızca ultra geniş ekranlar için yapılmış, orada siyah bantları olan oyunlar için: başka her oyun görüntüsünün bir kısmını kaybeder.",
+"fpkg.ps4_game_note": "Bir PS4 oyunu. Oyun kalıbına veya klasöre dönüştürülür ve ShadowMount+'ın gerektirdiği param.json'u alır. PS5 paketine dönüştürülemez.",
 "fpkg.image.zstd": "zstd varlık paketleri (en küçük, ShadowMount+ için)",
 "fpkg.image.zstd_body": "Oyunun sistem dosyaları dışındaki her şeyi zstd paketlerine koyar, geçici kopya olmadan doğrudan kalıba yazar. Kalıp, öykünücü olarak quer3q'nun ampr-emu-ng 0.3.2 sürümünü alır; bir kez indirilir ve bilinen bir özetle denetlenir. LZ4 paketli oyun dönüştürülür. ShadowMount+'ta update_emulators'ı kapatın, yoksa öykünücüyü bunları okuyamayan biriyle değiştirebilir.",
 "fpkg.image.zstd_level": "Sıkıştırma düzeyi",

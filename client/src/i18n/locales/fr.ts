@@ -6677,6 +6677,7 @@ library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour
 "rp_picture_saturation": "Couleur",
 "rp_picture_crop": "Recadrer en 21:9",
 "rp_picture_crop_hint": "Coupe le haut et le bas de l'image pour la passer en 21:9. Uniquement pour les jeux faits pour les écrans ultralarges, qui ont des bandes noires à cet endroit : tout autre jeu perd une partie de son image.",
+"fpkg.ps4_game_note": "Un jeu PS4. Il se convertit en image de jeu ou en dossier et reçoit le param.json dont ShadowMount+ a besoin. Il ne peut pas devenir un paquet PS5.",
 "fpkg.image.zstd": "Packs de ressources zstd (les plus petits, pour ShadowMount+)",
 "fpkg.image.zstd_body": "Empaquette tout sauf les fichiers système du jeu en packs zstd, écrits directement dans l'image sans copie temporaire. L'image reçoit ampr-emu-ng 0.3.2 de quer3q comme émulateur, téléchargé une fois et contrôlé avec une empreinte connue. Un jeu déjà en packs LZ4 est converti. Désactivez update_emulators dans ShadowMount+, sinon il peut remplacer l'émulateur par un autre qui ne les lit pas.",
 "fpkg.image.zstd_level": "Niveau de compression",

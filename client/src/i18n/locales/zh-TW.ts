@@ -6614,6 +6614,7 @@ library_compressed_hint: "壓縮映像需要 ShadowMount+ 才能遊玩。如需�
 "rp_picture_saturation": "色彩",
 "rp_picture_crop": "裁切為 21:9",
 "rp_picture_crop_hint": "裁掉畫面的頂部和底部，使其變為 21:9。僅適用於為超寬螢幕製作、上下有黑邊的遊戲：其他遊戲會缺少部分畫面。",
+"fpkg.ps4_game_note": "這是 PS4 遊戲。它可轉換為遊戲映像檔或資料夾，並會取得 ShadowMount+ 需要的 param.json。它不能變成 PS5 套件。",
 "fpkg.image.zstd": "zstd 資源包（最小，用於 ShadowMount+）",
 "fpkg.image.zstd_body": "將遊戲系統檔案以外的所有內容打包為 zstd 資源包，直接寫入映像檔，不產生暫存副本。映像檔會使用 quer3q 的 ampr-emu-ng 0.3.2 作為模擬器，只下載一次並依已知摘要校驗。已是 LZ4 資源包的遊戲會直接轉換。請在 ShadowMount+ 中關閉 update_emulators，否則它可能把模擬器換成無法讀取這些包的版本。",
 "fpkg.image.zstd_level": "壓縮等級",

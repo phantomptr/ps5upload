@@ -6680,6 +6680,7 @@ library_compressed_hint: "圧縮イメージのプレイには ShadowMount+ が�
 "rp_picture_saturation": "色",
 "rp_picture_crop": "21:9 に切り抜く",
 "rp_picture_crop_hint": "映像の上下を切り取って 21:9 にします。上下に黒帯があるウルトラワイド向けのゲーム専用です。それ以外のゲームでは映像の一部が欠けます。",
+"fpkg.ps4_game_note": "PS4 ゲームです。ゲームイメージまたはフォルダーに変換でき、ShadowMount+ に必要な param.json が追加されます。PS5 パッケージにはできません。",
 "fpkg.image.zstd": "zstd アセットパック（最小、ShadowMount+ 用）",
 "fpkg.image.zstd_body": "ゲームのシステムファイル以外をすべて zstd パックにまとめ、一時コピーなしでイメージへ直接書き込みます。イメージには quer3q の ampr-emu-ng 0.3.2 がエミュレーターとして入ります。一度だけ取得し、既知のダイジェストで確認します。LZ4 パック済みのゲームは切り替えられます。ShadowMount+ の update_emulators をオフにしてください。オンのままだと、これらを読めないエミュレーターに置き換えられることがあります。",
 "fpkg.image.zstd_level": "圧縮レベル",

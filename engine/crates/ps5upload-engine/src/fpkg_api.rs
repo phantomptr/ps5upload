@@ -326,6 +326,17 @@ pub(crate) async fn fpkg_build_handler(
 
     // Without param.json there is no PS5 title to package (#596): the build would stop at the
     // content id, or, given one, write a package the console cannot launch.
+    if inspection.ps4_game {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "{} is a PS4 game, which can't become a PS5 package. Make a game image or a \
+                 folder of it instead.",
+                source_path.display()
+            ),
+        )
+        .into_response();
+    }
     if inspection
         .checks
         .iter()

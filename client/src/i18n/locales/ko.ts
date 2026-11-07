@@ -6678,6 +6678,7 @@ library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가
 "rp_picture_saturation": "색",
 "rp_picture_crop": "21:9로 자르기",
 "rp_picture_crop_hint": "화면의 위아래를 잘라 21:9로 만듭니다. 위아래에 검은 띠가 있는 울트라와이드 화면용 게임에만 쓰세요. 다른 게임은 화면 일부가 잘립니다.",
+"fpkg.ps4_game_note": "PS4 게임입니다. 게임 이미지나 폴더로 변환되며 ShadowMount+에 필요한 param.json이 추가됩니다. PS5 패키지로는 만들 수 없습니다.",
 "fpkg.image.zstd": "zstd 에셋 팩(가장 작음, ShadowMount+용)",
 "fpkg.image.zstd_body": "게임의 시스템 파일을 제외한 모든 것을 zstd 팩으로 묶어 임시 복사본 없이 이미지에 바로 씁니다. 이미지에는 quer3q의 ampr-emu-ng 0.3.2가 에뮬레이터로 들어갑니다. 한 번 받아 알려진 다이제스트로 확인합니다. LZ4 팩 게임은 전환됩니다. ShadowMount+의 update_emulators를 끄세요. 켜 두면 이를 읽지 못하는 에뮬레이터로 바뀔 수 있습니다.",
 "fpkg.image.zstd_level": "압축 수준",

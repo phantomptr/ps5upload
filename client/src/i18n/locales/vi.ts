@@ -6663,6 +6663,7 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "rp_picture_saturation": "Màu sắc",
 "rp_picture_crop": "Cắt về 21:9",
 "rp_picture_crop_hint": "Cắt phần trên và dưới của hình để thành 21:9. Chỉ dành cho trò làm cho màn hình siêu rộng, vốn có viền đen ở đó: mọi trò khác sẽ mất một phần hình.",
+"fpkg.ps4_game_note": "Đây là trò PS4. Nó được chuyển thành ảnh trò chơi hoặc thư mục và có param.json mà ShadowMount+ cần. Nó không thể thành gói PS5.",
 "fpkg.image.zstd": "Gói tài nguyên zstd (nhỏ nhất, cho ShadowMount+)",
 "fpkg.image.zstd_body": "Đóng gói mọi thứ trừ tệp hệ thống của trò vào gói zstd, ghi thẳng vào ảnh không cần bản sao tạm. Ảnh dùng ampr-emu-ng 0.3.2 của quer3q làm trình giả lập, tải một lần và kiểm tra theo mã băm đã biết. Trò đã ở gói LZ4 sẽ được chuyển đổi. Hãy tắt update_emulators trong ShadowMount+, nếu không nó có thể đổi trình giả lập sang bản không đọc được các gói này.",
 "fpkg.image.zstd_level": "Mức nén",

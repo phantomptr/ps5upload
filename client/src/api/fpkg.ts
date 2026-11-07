@@ -54,6 +54,8 @@ export interface FpkgInspection {
   ampr_packs?: AmprPacksReadiness | null;
   /** How many of its executables are plain ELF files, which a build fake-signs. */
   unsigned_executables?: number;
+  /** A PS4 game: it becomes an image or a folder, not a PS5 package. */
+  ps4_game?: boolean;
 }
 
 export interface AmprPacksReadiness {

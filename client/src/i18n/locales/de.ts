@@ -6669,6 +6669,7 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "rp_picture_saturation": "Farbe",
 "rp_picture_crop": "Auf 21:9 zuschneiden",
 "rp_picture_crop_hint": "Schneidet oben und unten vom Bild ab, sodass es 21:9 wird. Nur für Spiele für Ultrawide-Bildschirme, die dort schwarze Balken haben: Bei allen anderen Spielen fehlt dann ein Teil des Bildes.",
+"fpkg.ps4_game_note": "Ein PS4-Spiel. Es wird in ein Spiel-Image oder einen Ordner konvertiert und erhält die param.json, die ShadowMount+ braucht. Ein PS5-Paket kann daraus nicht werden.",
 "fpkg.image.zstd": "zstd-Asset-Packs (am kleinsten, für ShadowMount+)",
 "fpkg.image.zstd_body": "Packt alles außer den Systemdateien des Spiels in zstd-Packs, direkt ins Image und ohne temporäre Kopie. Das Image erhält quer3qs ampr-emu-ng 0.3.2 als Emulator, einmalig geladen und gegen eine bekannte Prüfsumme geprüft. Ein Spiel in LZ4-Packs wird umgestellt. Schalte update_emulators in ShadowMount+ aus, sonst kann es den Emulator gegen einen tauschen, der sie nicht lesen kann.",
 "fpkg.image.zstd_level": "Komprimierungsstufe",

@@ -6670,6 +6670,7 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "rp_picture_saturation": "Warna",
 "rp_picture_crop": "Pangkas ke 21:9",
 "rp_picture_crop_hint": "Memotong bagian atas dan bawah gambar menjadi 21:9. Hanya untuk game yang dibuat untuk layar ultrawide, yang punya bilah hitam di sana: game lain kehilangan sebagian gambarnya.",
+"fpkg.ps4_game_note": "Game PS4. Bisa dikonversi menjadi image game atau folder, dan mendapat param.json yang dibutuhkan ShadowMount+. Tidak bisa menjadi paket PS5.",
 "fpkg.image.zstd": "Paket aset zstd (terkecil, untuk ShadowMount+)",
 "fpkg.image.zstd_body": "Mengemas semua kecuali berkas sistem game ke paket zstd, ditulis langsung ke image tanpa salinan sementara. Image mendapat ampr-emu-ng 0.3.2 milik quer3q sebagai emulator, diunduh sekali dan dicek dengan digest yang dikenal. Game yang sudah di paket LZ4 akan dialihkan. Matikan update_emulators di ShadowMount+, atau emulatornya bisa diganti dengan yang tidak bisa membacanya.",
 "fpkg.image.zstd_level": "Tingkat kompresi",

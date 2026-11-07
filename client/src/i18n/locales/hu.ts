@@ -6957,6 +6957,7 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "rp_picture_saturation": "Szín",
 "rp_picture_crop": "Vágás 21:9-re",
 "rp_picture_crop_hint": "Levágja a kép tetejét és alját, hogy 21:9 legyen. Csak ultraszéles kijelzőkre készült játékokhoz, amelyeknél ott fekete sávok vannak: minden más játék a képe egy részét elveszíti.",
+"fpkg.ps4_game_note": "Ez egy PS4-játék. Játék-képfájllá vagy mappává alakítható, és megkapja a ShadowMount+-hoz szükséges param.json fájlt. PS5-csomag nem lehet belőle.",
 "fpkg.image.zstd": "zstd elemcsomagok (a legkisebb, ShadowMount+-hoz)",
 "fpkg.image.zstd_body": "A játék rendszerfájljain kívül mindent zstd csomagokba tesz, közvetlenül a képfájlba írva, ideiglenes másolat nélkül. A képfájl emulátorként quer3q ampr-emu-ng 0.3.2 verzióját kapja, egyszer letöltve, ismert kivonattal ellenőrizve. Az LZ4 csomagos játék át lesz alakítva. Kapcsold ki az update_emulators beállítást a ShadowMount+-ban, különben olyanra cserélheti az emulátort, amely nem olvassa ezeket.",
 "fpkg.image.zstd_level": "Tömörítési szint",

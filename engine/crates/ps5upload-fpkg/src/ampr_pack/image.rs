@@ -200,7 +200,7 @@ impl Lz4Unpacked {
             .iter()
             .filter(|f| {
                 let lower = f.path.to_ascii_lowercase();
-                !names.contains(&lower) && !lower.starts_with(&index_name.to_ascii_lowercase())
+                !names.contains(&lower) && !lower.starts_with(&index_name)
             })
             .cloned()
             .collect();
