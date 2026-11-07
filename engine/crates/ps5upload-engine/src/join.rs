@@ -27,6 +27,11 @@
 //!   free)}` (the socket then closes). The engine also sends a
 //!   WebSocket ping every second; the browser's automatic pong gives the guest's round trip.
 //!
+//! **Internet guests** ([`crate::join_net`]) carry the same messages over a WebRTC data channel
+//! labelled `"join"` instead of the socket: the guest session ([`guest_session`]) runs over
+//! [`GuestSocket`], which both implement. Binary messages are cut into pieces there
+//! (`join_net::chunk`), and a ping goes as a framed message the page answers.
+//!
 //! The `token` is the guest's resume credential: a guest whose socket drops keeps their player
 //! (and the console keeps their controller and their signed-in user: the engine keeps heart-
 //! beating the helper's slot) for [`RESUME_WINDOW`], and comes back with `{"hello": {"resume":
@@ -209,7 +214,7 @@ pub(crate) fn parse_pad(b: &[u8]) -> Option<(u32, PadState)> {
 // ── State ────────────────────────────────────────────────────────────────────────────────────────
 
 /// The host's choices (one set for every console).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Settings {
     /// Take PS and Create from guests who are playing (they keep them while picking a user).
     /// On unless the host turns it off: a friend's PS could quit the game, or update the console
@@ -222,6 +227,34 @@ pub(crate) struct Settings {
     /// turns it on: a friend otherwise always gets their own controller and picks a user (#720).
     #[serde(default)]
     pub stream_seat: bool,
+    /// The host may make internet invites (a room on the signalling hub, WebRTC to the guest:
+    /// crate::join_net). On unless the host turns it off.
+    #[serde(default = "yes")]
+    pub internet_invites: bool,
+    /// The signalling hub (`wss://`; `ws://` only to this computer).
+    #[serde(default = "default_hub")]
+    pub hub_url: String,
+    /// STUN servers (`host:port`) the engine asks for its outside address.
+    #[serde(default = "default_stun")]
+    pub stun: Vec<String>,
+    /// Ask the router for a port (UPnP-IGD, NAT-PMP / PCP) while an internet invite is open.
+    #[serde(default = "yes")]
+    pub upnp: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn default_hub() -> String {
+    crate::join_net::DEFAULT_HUB.to_string()
+}
+
+fn default_stun() -> Vec<String> {
+    crate::join_net::DEFAULT_STUN
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
 }
 
 impl Default for Settings {
@@ -230,16 +263,21 @@ impl Default for Settings {
             block_system_buttons: true,
             max_players: MAX_GUESTS,
             stream_seat: false,
+            internet_invites: true,
+            hub_url: default_hub(),
+            stun: default_stun(),
+            upnp: true,
         }
     }
 }
 
 static SETTINGS: Mutex<Option<Settings>> = Mutex::new(None);
 
-fn settings() -> Settings {
+pub(crate) fn settings() -> Settings {
     SETTINGS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
+        .clone()
         .unwrap_or_default()
 }
 
@@ -312,6 +350,8 @@ pub(crate) struct Guest {
     slot_open: bool,
     joined_at: Instant,
     stats: Arc<Stats>,
+    /// An internet guest's peer connection (their last one), None on the LAN.
+    net: Option<Arc<crate::join_net::PeerInfo>>,
 }
 
 /// A guest on [`STREAM_SEAT`] giving it back to the host's side.
@@ -449,6 +489,8 @@ pub(crate) struct Party {
     settings: Settings,
     /// Where guests reach this engine, as the host's last request said.
     pub(crate) reach: Reach,
+    /// The internet invite's room on the hub (closed when this goes).
+    internet: Option<crate::join_net::hub::Room>,
 }
 
 /// How guests reach this engine.
@@ -479,6 +521,7 @@ impl Party {
             guests: Vec::new(),
             settings,
             reach: Reach::default(),
+            internet: None,
         }
     }
 
@@ -503,6 +546,12 @@ impl Party {
                 code: i.code.clone(),
                 until: i.until,
             })
+    }
+
+    /// The internet half of the invite `inv` (None without a room or an invite).
+    fn internet_json(&self, inv: Option<&InviteInfo>) -> Option<serde_json::Value> {
+        let inv = inv?;
+        self.internet.as_ref().map(|r| r.json(&inv.key))
     }
 
     fn key_ok(&self, key: &str, now: Instant) -> bool {
@@ -587,6 +636,7 @@ impl Party {
             slot_open: false,
             joined_at: now,
             stats: Arc::default(),
+            net: None,
         });
         self.guests.last()
     }
@@ -893,6 +943,11 @@ impl Party {
                     "why": g.left.map(|(_, w)| w),
                     // On the stream's own controller: plays as the host's PS5 user.
                     "stream_seat": g.on_seat(),
+                    // "lan", or "internet" with the connection's path ("direct", "failed", …)
+                    // and ICE's own round trip.
+                    "via": if g.net.is_some() { "internet" } else { "lan" },
+                    "path": g.net.as_ref().map(|n| n.path()),
+                    "ice_rtt_ms": g.net.as_ref().and_then(|n| n.rtt_ms()),
                 })
             })
             .collect();
@@ -907,6 +962,11 @@ impl Party {
             "pending": self.pending.iter().map(|a| serde_json::json!({"id": a.id, "name": a.name, "state": "asking"})).collect::<Vec<_>>(),
             "settings": self.settings,
             "max_guests": MAX_GUESTS,
+            // Internet guests' connections, those not in yet (connecting, failed) too.
+            "internet": self.internet.as_ref().map(|r| serde_json::json!({
+                "room": r.id(),
+                "peers": crate::join_net::peers_json(&r.id()),
+            })),
         })
     }
 
@@ -1330,7 +1390,7 @@ fn holds_a_place(ip: IpAddr) -> bool {
 
 /// At most [`CONNECTS_PER_MIN`] guest sockets per address per minute (this computer itself, or an
 /// address with a guest in the game, [`LOOPBACK_CONNECTS_PER_MIN`]).
-fn connect_allowed(ip: IpAddr, now: Instant) -> bool {
+pub(crate) fn connect_allowed(ip: IpAddr, now: Instant) -> bool {
     connect_allowed_in(&CONNECTS, ip, now)
 }
 
@@ -1408,6 +1468,29 @@ fn refused(why: &str) -> Message {
     say(serde_json::json!({"stage": "refused", "why": why}))
 }
 
+/// What a guest session runs over: the LAN WebSocket (`/api/join/ws`), or an internet guest's
+/// WebRTC data channel ([`crate::join_net`]), which carries the same messages. The session sees
+/// WebSocket messages either way: text, binary, ping and pong, close.
+pub(crate) trait GuestSocket: Send + 'static {
+    /// Err when the guest is gone.
+    fn send(&mut self, m: Message) -> impl std::future::Future<Output = Result<(), ()>> + Send;
+    /// None (or an Err) when the guest is gone.
+    fn recv(&mut self) -> impl std::future::Future<Output = Option<Result<Message, ()>>> + Send;
+    /// An internet guest's connection, for the host's panel (None on the LAN).
+    fn net(&self) -> Option<Arc<crate::join_net::PeerInfo>> {
+        None
+    }
+}
+
+impl GuestSocket for WebSocket {
+    async fn send(&mut self, m: Message) -> Result<(), ()> {
+        WebSocket::send(self, m).await.map_err(|_| ())
+    }
+    async fn recv(&mut self) -> Option<Result<Message, ()>> {
+        WebSocket::recv(self).await.map(|r| r.map_err(|_| ()))
+    }
+}
+
 #[derive(serde::Deserialize, Default)]
 struct Hello {
     #[serde(default)]
@@ -1438,7 +1521,7 @@ fn clean_name(n: Option<&str>) -> String {
     n.trim().to_string()
 }
 
-async fn read_hello(socket: &mut WebSocket) -> Option<Hello> {
+async fn read_hello<S: GuestSocket>(socket: &mut S) -> Option<Hello> {
     let deadline = tokio::time::sleep(HELLO_WAIT);
     tokio::pin!(deadline);
     loop {
@@ -1458,7 +1541,7 @@ async fn read_hello(socket: &mut WebSocket) -> Option<Hello> {
 }
 
 /// Waits for the socket to close (or anything that ends it), for selects that only need that.
-async fn closed(socket: &mut WebSocket) {
+async fn closed<S: GuestSocket>(socket: &mut S) {
     loop {
         match socket.recv().await {
             Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
@@ -1517,7 +1600,7 @@ enum Admit {
     New(String, u64),
 }
 
-async fn guest_session(mut socket: WebSocket, ip: IpAddr) {
+pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
     let Some(hello) = read_hello(&mut socket).await else {
         let _ = socket.send(refused("hello")).await;
         return;
@@ -1594,7 +1677,7 @@ async fn guest_session(mut socket: WebSocket, ip: IpAddr) {
 }
 
 /// A guest coming back with `token`: None when the socket closed while waiting for the host.
-async fn resume(socket: &mut WebSocket, token: &str) -> Option<Admit> {
+async fn resume<S: GuestSocket>(socket: &mut S, token: &str) -> Option<Admit> {
     let found = with_parties(|m| {
         m.iter().find_map(|(k, p)| {
             p.by_token(token)
@@ -1783,7 +1866,12 @@ async fn open_slot(console: &str, slot: u8, token: &str) -> link::OpenResult {
 
 /// A new guest with an invite: checks, asks the host, makes their pad. None when the socket
 /// closed while asking.
-async fn ask(socket: &mut WebSocket, entry: Entry, name: &str, ip: IpAddr) -> Option<Admit> {
+async fn ask<S: GuestSocket>(
+    socket: &mut S,
+    entry: Entry,
+    name: &str,
+    ip: IpAddr,
+) -> Option<Admit> {
     let now = Instant::now();
     if matches!(entry, Entry::Code(_)) && !code_tries_left(ip, now) {
         return Some(Admit::Refused("slow_down"));
@@ -2131,15 +2219,17 @@ fn now_ms() -> u64 {
 }
 
 /// A guest who is in: picture and sound out, pad states in, until they leave or are let go.
-async fn play(mut socket: WebSocket, console: String, id: u64, ip: IpAddr) {
+async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAddr) {
     static GEN: AtomicU64 = AtomicU64::new(1);
     let gen = GEN.fetch_add(1, Ordering::Relaxed);
     let key = host_key(&console);
     let (tx, mut rx) = mpsc::channel::<Out>(64);
+    let net = socket.net();
     let Some((fx, player, token, stats)) = with_party(&key, |p| {
         let fx = p.attach(id, gen, tx);
         let g = p.guest_mut(id)?;
         g.ip = Some(ip);
+        g.net = net;
         Some((fx, g.player, g.token.clone(), g.stats.clone()))
     })
     .flatten() else {
@@ -2385,6 +2475,7 @@ fn invite_json(
     console: &str,
     reach: &Reach,
     inv: Option<InviteInfo>,
+    internet: Option<serde_json::Value>,
     now: Instant,
 ) -> serde_json::Value {
     let Some(inv) = inv else {
@@ -2404,6 +2495,10 @@ fn invite_json(
         // This computer's Tailscale address (one of `urls`), for the page to label.
         "tailscale": crate::pad_link::tailscale_ip().map(|ip| ip.to_string()),
         "expires_in_s": inv.until.saturating_duration_since(now).as_secs(),
+        // The internet invite, when the host made one: `url` (the link to share), `room`, `hub`,
+        // `fp` (this engine's DTLS fingerprint), `state` on the hub, `router` (the port the router
+        // mapped), `peers` (each internet guest's connection).
+        "internet": internet,
     })
 }
 
@@ -2411,16 +2506,19 @@ fn state_json(console: &str) -> serde_json::Value {
     let key = host_key(console);
     let now = Instant::now();
     let snap = with_party(&key, |p| {
+        let inv = p.current_invite(now);
+        let net = p.internet_json(inv.as_ref());
         (
             p.console.clone(),
             p.reach.clone(),
-            p.current_invite(now),
+            inv,
+            net,
             p.snapshot(now, serde_json::Value::Null),
         )
     });
     match snap {
-        Some((c, reach, inv, mut v)) => {
-            v["invite"] = invite_json(&c, &reach, inv, now);
+        Some((c, reach, inv, net, mut v)) => {
+            v["invite"] = invite_json(&c, &reach, inv, net, now);
             // The next friend allowed in gets the stream's controller (Player 1, as the host's
             // PS5 user): the Allow prompt says so.
             v["seat_next"] = (v["settings"]["stream_seat"] == true
@@ -2556,10 +2654,18 @@ pub struct InviteBody {
     /// A new key (the old link stops working).
     #[serde(default)]
     new: bool,
+    /// Also an internet invite: a room on the signalling hub (`invite.internet.url`).
+    #[serde(default)]
+    internet: bool,
 }
 
-/// `POST /api/join/invite {addr, new?}`: `{key, code, code_display, url, urls, expires_in_s}`.
-/// The same invite again until it expires, unless `new` (the old link and code stop working).
+/// `POST /api/join/invite {addr, new?, internet?}`: `{key, code, code_display, url, urls,
+/// expires_in_s, internet}`. The same invite again until it expires, unless `new` (the old link and
+/// code stop working). With `internet`, also a link for friends anywhere (`internet.url`): the
+/// engine opens a room on the signalling hub in the settings and the guest's browser connects to
+/// it peer to peer (409 `internet_off` when the settings turned internet invites off, 409
+/// `hub_url` when the hub address is not a `wss://` one). The room stays open while the invite
+/// lasts or an internet guest is in.
 pub async fn invite(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
@@ -2568,15 +2674,45 @@ pub async fn invite(
     if let Some(r) = guard(&peer, &headers) {
         return r;
     }
+    let s = settings();
+    if b.internet {
+        if !s.internet_invites {
+            return bad(StatusCode::CONFLICT, "internet_off");
+        }
+        if !crate::join_net::hub_url_ok(&s.hub_url) {
+            return bad(StatusCode::CONFLICT, "hub_url");
+        }
+        if crate::join_net::fingerprint().is_none() {
+            return bad(StatusCode::INTERNAL_SERVER_ERROR, "no_certificate");
+        }
+    }
     let now = Instant::now();
     touch_reach(&b.addr, &headers);
-    match with_party(&host_key(&b.addr), |p| {
-        (p.invite(b.new, now), p.console.clone(), p.reach.clone())
+    let key = host_key(&b.addr);
+    match with_party(&key, |p| {
+        let inv = p.invite(b.new, now);
+        if b.internet && inv.is_some() && p.internet.as_ref().is_none_or(|r| r.url() != s.hub_url) {
+            p.internet = crate::join_net::hub::Room::start(key.clone(), s.hub_url.clone());
+        }
+        let net = p.internet_json(inv.as_ref());
+        (inv, net, p.console.clone(), p.reach.clone())
     }) {
         None => bad(StatusCode::CONFLICT, "closed"),
-        Some((None, _, _)) => bad(StatusCode::INTERNAL_SERVER_ERROR, "no_random"),
-        Some((inv, c, reach)) => Json(invite_json(&c, &reach, inv, now)).into_response(),
+        Some((None, ..)) => bad(StatusCode::INTERNAL_SERVER_ERROR, "no_random"),
+        Some((inv, net, c, reach)) => Json(invite_json(&c, &reach, inv, net, now)).into_response(),
     }
+}
+
+/// The Play Together `key` still wants its internet room: open, with the invite current or an
+/// internet guest still in (one coming back needs the hub to reconnect).
+pub(crate) fn internet_wanted(key: &str) -> bool {
+    let now = Instant::now();
+    with_party(key, |p| {
+        p.internet.is_some()
+            && (p.current_invite(now).is_some()
+                || p.guests.iter().any(|g| g.active() && g.net.is_some()))
+    })
+    .unwrap_or(false)
 }
 
 #[derive(serde::Deserialize)]
@@ -2671,11 +2807,37 @@ pub struct SettingsBody {
     max_players: Option<u8>,
     #[serde(default)]
     stream_seat: Option<bool>,
+    #[serde(default)]
+    internet_invites: Option<bool>,
+    #[serde(default)]
+    hub_url: Option<String>,
+    #[serde(default)]
+    stun: Option<Vec<String>>,
+    #[serde(default)]
+    upnp: Option<bool>,
 }
 
-/// `POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?}`: the host's
-/// choices (every console). Fewer players lets nobody go; it only stops new ones. `stream_seat`
-/// off moves a friend on the stream's controller to a pad of their own.
+/// A STUN server as the settings take it: `host:port`, a name or an address, nothing else.
+fn stun_server_ok(s: &str) -> bool {
+    let Some((host, port)) = s.rsplit_once(':') else {
+        return false;
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    port.parse::<u16>().is_ok_and(|p| p > 0)
+        && !host.is_empty()
+        && host.len() <= 253
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':'))
+}
+
+/// `POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,
+/// internet_invites?, hub_url?, stun?, upnp?}`: the host's choices (every console). Fewer players
+/// lets nobody go; it only stops new ones. `stream_seat` off moves a friend on the stream's
+/// controller to a pad of their own. `internet_invites` off closes the internet rooms (guests
+/// already in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`
+/// otherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none), `upnp` whether the
+/// router is asked for a port.
 pub async fn set_settings(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
@@ -2694,11 +2856,38 @@ pub async fn set_settings(
     if let Some(v) = b.stream_seat {
         s.stream_seat = v;
     }
-    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(s);
+    if let Some(v) = b.internet_invites {
+        s.internet_invites = v;
+    }
+    if let Some(v) = b.hub_url {
+        let v = v.trim().to_string();
+        if !crate::join_net::hub_url_ok(&v) {
+            return bad(StatusCode::BAD_REQUEST, "hub_url");
+        }
+        s.hub_url = v;
+    }
+    if let Some(v) = b.stun {
+        let v: Vec<String> = v
+            .iter()
+            .map(|x| x.trim().trim_start_matches("stun:").to_string())
+            .filter(|x| !x.is_empty())
+            .collect();
+        if v.len() > 8 || v.iter().any(|x| !stun_server_ok(x)) {
+            return bad(StatusCode::BAD_REQUEST, "stun");
+        }
+        s.stun = v;
+    }
+    if let Some(v) = b.upnp {
+        s.upnp = v;
+    }
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(s.clone());
     let fx = with_parties(|m| {
         m.values_mut()
             .map(|p| {
-                p.settings = s;
+                p.settings = s.clone();
+                if !s.internet_invites {
+                    p.internet = None;
+                }
                 let fx = if s.stream_seat {
                     Vec::new()
                 } else {
@@ -5784,5 +5973,10 @@ mod tests {
             .as_mut()
             .unwrap()
             .remove(&key);
+    }
+
+    // Internet invites (join_net): the same session over a WebRTC data channel.
+    mod internet {
+        include!("join_net/join_tests.rs");
     }
 }
