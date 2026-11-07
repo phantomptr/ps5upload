@@ -44,6 +44,8 @@ const NOT_SUPPORTED: u32 = 10004;
 const STALE: u32 = 70;
 const STEP: Duration = Duration::from_secs(30);
 const MAX_RECORD: usize = 64 << 20;
+/// The most entries a folder listing takes: a server that never ends one isn't waited for.
+const MAX_LISTED: usize = 2_000_000;
 
 fn status_text(s: u32) -> String {
     match s {
@@ -447,11 +449,19 @@ impl Inner {
     async fn nfs_call(&self, proc: u32, args: Xdr) -> Result<Vec<u8>, RemoteError> {
         let mut s = self.state.lock().await;
         match s.nfs.call(proc, &args).await {
-            // A server that dropped an idle connection: once more on a new one. Every call here
-            // gives the same result when repeated or fails harmlessly with "already exists".
-            Err(RemoteError::Io(_)) => {
+            Err(RemoteError::Io(m)) => {
                 s.nfs = Rpc::open(&self.host, self.port, NFS, 3, self.uid, self.gid).await?;
-                s.nfs.call(proc, &args).await
+                // A server that dropped an idle connection: once more on a new one, for a call
+                // that gives the same answer twice. One that changes something may have been done
+                // already, with only its reply lost, so saying it failed is all that can be said.
+                if matches!(
+                    proc,
+                    GETATTR | LOOKUP | READ | WRITE | READDIR | READDIRPLUS | FSINFO | COMMIT
+                ) {
+                    s.nfs.call(proc, &args).await
+                } else {
+                    Err(RemoteError::Io(m))
+                }
             }
             other => other,
         }
@@ -666,6 +676,7 @@ impl Inner {
         let mut out = Vec::new();
         let (mut cookie, mut verf) = (0u64, [0u8; 8]);
         loop {
+            let before = cookie;
             let args = Xdr::default()
                 .opaque(handle)
                 .u64(cookie)
@@ -692,7 +703,17 @@ impl Inner {
                     i.opaque(64);
                 }
                 if name != "." && name != ".." {
-                    let a = attr.unwrap_or_default();
+                    // Linux leaves these out for an entry that is another mount.
+                    let a = match attr {
+                        Some(a) => a,
+                        None => {
+                            let (h, found) = self.lookup(handle, &name).await?;
+                            match found {
+                                Some(a) => a,
+                                None => self.getattr(&h).await?,
+                            }
+                        }
+                    };
                     out.push(Entry {
                         name,
                         is_dir: a.kind == TYPE_DIR,
@@ -708,6 +729,11 @@ impl Inner {
             if eof {
                 return Ok(out);
             }
+            if cookie == before || out.len() > MAX_LISTED {
+                return Err(RemoteError::Io(
+                    "NFS: a folder listing doesn't end".to_string(),
+                ));
+            }
         }
     }
 
@@ -715,6 +741,7 @@ impl Inner {
         let mut names = Vec::new();
         let (mut cookie, mut verf) = (0u64, [0u8; 8]);
         loop {
+            let before = cookie;
             let args = Xdr::default()
                 .opaque(handle)
                 .u64(cookie)
@@ -742,6 +769,11 @@ impl Inner {
             }
             if eof {
                 break;
+            }
+            if cookie == before || names.len() > MAX_LISTED {
+                return Err(RemoteError::Io(
+                    "NFS: a folder listing doesn't end".to_string(),
+                ));
             }
         }
         let mut out = Vec::with_capacity(names.len());

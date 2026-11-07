@@ -165,7 +165,8 @@ impl WebdavFs {
             )
         };
         let mut fs = Self {
-            agent: timed(10),
+            // A pinned connection doesn't verify, so a redirect could lead reads anywhere.
+            agent: timed(if pinned { 0 } else { 10 }),
             dav: timed(0),
             put: ureq::Agent::new_with_config(put_limits(builder(0)).build()),
             base: format!("{scheme}://{hostport}"),
@@ -812,6 +813,10 @@ impl RemoteFs for WebdavFs {
         src: &std::path::Path,
         progress: &super::PutProgress,
     ) -> Result<(), RemoteError> {
+        // A body is too much to send twice: this renews a Digest nonce that has aged out first.
+        let _ = self
+            .propfind(path.rsplit_once('/').map_or("/", |(dir, _)| dir), 0)
+            .await;
         let agent = self.put.clone();
         let url = self.url(&normal(path));
         let auth = self.auth.clone();

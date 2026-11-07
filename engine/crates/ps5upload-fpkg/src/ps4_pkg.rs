@@ -44,6 +44,10 @@ const INDIRECT_AT: usize = 0x214;
 const SIG_STRIDE: usize = 36;
 const PFSC_MAGIC: u32 = 0x4353_4650;
 const NAMES_ID: u32 = 0x200;
+/// 1 GiB of inodes, over a million files: more is a damaged package, not a bigger game.
+const MAX_INODE_BLOCKS: u64 = 1 << 14;
+/// The root folder holds a few names; this is already generous.
+const MAX_ROOT_FOLDER: u64 = 64 << 20;
 
 fn le16(b: &[u8], at: usize) -> u16 {
     u16::from_le_bytes([b[at], b[at + 1]])
@@ -472,8 +476,10 @@ impl Ps4Package {
             .count() as u64;
         let (inode_count, inode_blocks) = (le64(&sb, 0x30), le64(&sb, 0x40));
         let first = 1 + indirect;
+        // These sizes come from the file, and the keys that sign them are public.
         if inode_count < 3
             || inode_blocks == 0
+            || inode_blocks > MAX_INODE_BLOCKS
             || first + inode_blocks > u64::from(blocks)
             || inode_count > inode_blocks * (BLOCK / INODE as u64)
         {
@@ -492,8 +498,14 @@ impl Ps4Package {
         if le16(uroot, 0) & 0xF000 != 0x4000 {
             return format_err("the PS4 package's image has no root folder");
         }
+        if le64(uroot, 8) > MAX_ROOT_FOLDER {
+            return format_err("the PS4 package's root folder is too large");
+        }
         let mut dir = Vec::new();
         for b in outer.file_blocks(uroot)? {
+            if dir.len() as u64 >= le64(uroot, 8) {
+                break;
+            }
             dir.extend(outer.block(b)?);
         }
         let dir_len = (le64(uroot, 8) as usize).min(dir.len());

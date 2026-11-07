@@ -9949,7 +9949,7 @@
         "description": "Whether a libSceAmpr title can be packed, as the Convert screen shows it.",
         "properties": {
           "emulator_missing": {
-            "description": "The game reads through AMPR and ships no emulator at all: it won't start from an image\nor folder without one, packs or not ([`emulator_needed_at`]).",
+            "description": "The game reads through AMPR and ships no emulator at all: it may not start from an image\nor folder without one, packs or not ([`emulator_needed_at`]).",
             "type": "boolean"
           },
           "kind": {

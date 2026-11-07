@@ -228,8 +228,11 @@ pub(crate) fn build(
     };
     // What the emulator will check: the index and every volume's header, as the image holds them.
     let image = ps5upload_fpkg::source::open(output).map_err(|e| e.to_string())?;
-    ps5_dump_forge_zstd::reader::unpack(image)
-        .map_err(|e| format!("reading the zstd packs back from the image: {e}"))?;
+    if let Err(e) = ps5_dump_forge_zstd::reader::unpack(image) {
+        // Finished and named by now, and no use: it doesn't stay looking like a good image.
+        let _ = std::fs::remove_file(output);
+        return Err(format!("reading the zstd packs back from the image: {e}"));
+    }
     Ok(built)
 }
 

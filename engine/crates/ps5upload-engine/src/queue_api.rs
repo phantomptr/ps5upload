@@ -1220,7 +1220,8 @@ fn job_end(state: &Value) -> Option<End> {
         "done" => Some(End::with_status(Status::Done)),
         "failed" => {
             let error = field("error").unwrap_or("the job failed");
-            if error == "transfer_cancelled" {
+            // A build's own word for it.
+            if error == "transfer_cancelled" || error == "cancelled" {
                 return Some(End {
                     code: Some("cancelled".to_string()),
                     ..End::with_status(Status::Cancelled)

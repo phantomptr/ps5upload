@@ -800,15 +800,21 @@ impl CheckpointWriter<'_> {
     fn checkpoint(&mut self) -> std::io::Result<()> {
         self.out.flush()?;
         self.out.get_ref().sync_data()?;
-        let bytes = serde_json::to_vec(&Checkpoint {
+        self.since = 0;
+        // Only worth having, not needed: a locked file costs a later resume, not this build.
+        let saved = serde_json::to_vec(&Checkpoint {
             key: self.key.clone(),
             done: self.pos,
         })
-        .map_err(std::io::Error::other)?;
-        let tmp = self.path.with_extension("resume.tmp");
-        std::fs::write(&tmp, bytes)?;
-        std::fs::rename(&tmp, &self.path)?;
-        self.since = 0;
+        .map_err(std::io::Error::other)
+        .and_then(|bytes| {
+            let tmp = self.path.with_extension("resume.tmp");
+            std::fs::write(&tmp, bytes)?;
+            std::fs::rename(&tmp, &self.path)
+        });
+        if let Err(e) = saved {
+            crate::log_warn!("image build: no checkpoint at {} bytes: {e}", self.pos);
+        }
         Ok(())
     }
 }
@@ -875,6 +881,92 @@ pub(crate) fn build_at(
     cancel: &AtomicBool,
     stage: &mut dyn FnMut(&str, u64, u64),
 ) -> Result<ImageBuilt, String> {
+    build_any(
+        format,
+        inner_name,
+        level,
+        source,
+        output,
+        mode,
+        verify_chunk,
+        cancel,
+        stage,
+        false,
+    )
+}
+
+/// [`build_at`] that goes on from a crash's checkpoint, for a plain exFAT image of a source that
+/// gives the same bytes each time. Not for packs: their archive IDs are new each run. An index in
+/// the source takes its time from [`index_stamp`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_resumable(
+    format: ImageFormat,
+    level: Level,
+    source: &mut dyn SourceTree,
+    output: &Path,
+    mode: VerifyMode,
+    verify_chunk: u64,
+    cancel: &AtomicBool,
+    stage: &mut dyn FnMut(&str, u64, u64),
+) -> Result<ImageBuilt, String> {
+    build_any(
+        format,
+        None,
+        level,
+        source,
+        output,
+        mode,
+        verify_chunk,
+        cancel,
+        stage,
+        true,
+    )
+}
+
+/// The time a generated `ampr_emu.index` carries in the image at `partial`: the one the crashed
+/// build used, so going on gives the same bytes, else now, saved for the next try.
+pub(crate) fn index_stamp(partial: &Path) -> i64 {
+    let path = stamp_path(partial);
+    if checkpoint_path(partial).is_file() {
+        if let Some(saved) = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|t| t.trim().parse().ok())
+        {
+            return saved;
+        }
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let _ = std::fs::write(&path, now.to_string());
+    now
+}
+
+fn stamp_path(partial: &Path) -> PathBuf {
+    let mut name = partial.file_name().unwrap_or_default().to_os_string();
+    name.push(".stamp");
+    partial.with_file_name(name)
+}
+
+/// A build's checkpoint and what goes with it.
+pub(crate) fn remove_checkpoint(partial: &Path) {
+    let _ = std::fs::remove_file(checkpoint_path(partial));
+    let _ = std::fs::remove_file(stamp_path(partial));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_any(
+    format: ImageFormat,
+    inner_name: Option<&str>,
+    level: Level,
+    source: &mut dyn SourceTree,
+    output: &Path,
+    mode: VerifyMode,
+    verify_chunk: u64,
+    cancel: &AtomicBool,
+    stage: &mut dyn FnMut(&str, u64, u64),
+    resumable: bool,
+) -> Result<ImageBuilt, String> {
     if source.files().is_empty() {
         return Err(format!("{} has no files in it", source.describe()));
     }
@@ -893,9 +985,15 @@ pub(crate) fn build_at(
     // here now is another build's, and `create_new` refuses it rather than wreck it.
     let partial = PathBuf::from(format!("{}.partial", output.display()));
     // Going on from a crash: only a plain exFAT image, when the checkpoint fits this plan.
-    let checkpointed = format == ImageFormat::Exfat && inner_name.is_none();
+    let checkpointed = resumable && format == ImageFormat::Exfat && inner_name.is_none();
     let key = plan_key(&want_sizes, planned.image_size());
     let resume = checkpointed.then(|| resume_point(&partial, &key)).flatten();
+    // The key can't see a file edited to the same size: going on, every byte gets checked.
+    let mode = if resume.is_some() {
+        VerifyMode::Full
+    } else {
+        mode
+    };
     if resume.is_none() {
         // A checkpoint for something else: its partial file is this name's leftover.
         if checkpoint_path(&partial).is_file() {
@@ -1005,7 +1103,7 @@ pub(crate) fn build_at(
         )?;
         drop(image);
         std::fs::rename(&partial, output).map_err(|e| e.to_string())?;
-        let _ = std::fs::remove_file(checkpoint_path(&partial));
+        remove_checkpoint(&partial);
         crate::engine_log::record("info", format!("verify: {}", log_line(&summary)));
         crate::engine_log::record("info", format!(
             "image build: format={} compressed={} files={} data_bytes={} output_bytes={} plan_ms={} write_ms={} read_ms={} verify_ms={} verify_mode={mode:?}",
@@ -1046,8 +1144,16 @@ pub(crate) fn build_at(
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&partial);
-        let _ = std::fs::remove_file(checkpoint_path(&partial));
+        remove_checkpoint(&partial);
     }
+    // What was on disk from before a crash didn't check out: gone now, so the next try starts over.
+    let result = match (result, resume) {
+        (Err(e), Some(_)) if !cancel.load(Ordering::Relaxed) => Err(format!(
+            "going on from an interrupted build failed: {e}. The partial image is removed, so \
+             building it again starts from the beginning"
+        )),
+        (r, _) => r,
+    };
     settle(result, cancel.load(Ordering::Relaxed))
 }
 
@@ -1492,9 +1598,9 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let run = |out: &Path| {
             let mut tree = FolderSource::open(&src).unwrap();
-            build(
+            build_resumable(
                 ImageFormat::Exfat,
-                None,
+                Level::default(),
                 &mut tree,
                 out,
                 VerifyMode::Full,
@@ -1557,8 +1663,27 @@ mod tests {
         wrong[filled_with(2) + 100] ^= 0xFF;
         std::fs::write(&partial, &wrong).unwrap();
         std::fs::write(checkpoint_path(&partial), saved(&key, done)).unwrap();
-        assert!(run(&bad).is_err(), "a damaged partial must not pass");
+        let refused = run(&bad).err().expect("a damaged partial must not pass");
+        assert!(refused.contains("building it again starts"), "{refused}");
         assert!(!partial.exists() && !checkpoint_path(&partial).exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A generated index keeps its time across a crash, which going on depends on; a build with
+    /// no checkpoint behind it gets a new one.
+    #[test]
+    fn an_index_stamp_lasts_only_as_long_as_its_checkpoint() {
+        let root = std::env::temp_dir().join(format!("ps5upload-imgstamp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let partial = root.join("x.exfat.partial");
+        std::fs::write(stamp_path(&partial), "123").unwrap();
+        assert_ne!(index_stamp(&partial), 123, "no checkpoint: a new one");
+        std::fs::write(stamp_path(&partial), "123").unwrap();
+        std::fs::write(checkpoint_path(&partial), "{}").unwrap();
+        assert_eq!(index_stamp(&partial), 123);
+        remove_checkpoint(&partial);
+        assert!(!stamp_path(&partial).exists() && !checkpoint_path(&partial).exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 

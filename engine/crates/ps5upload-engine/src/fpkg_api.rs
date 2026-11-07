@@ -1245,6 +1245,36 @@ pub(crate) async fn exfat_build_handler(
                 &mut report,
             ),
             // A libSceAmpr game gets a fresh ampr_emu.index (#449), as a package does.
+            // A plain exFAT image can go on after a crash: same files, same bytes, as long as the
+            // regenerated index keeps its time.
+            (Ok(tree), None)
+                if inner_name.is_none() && format == crate::image_build::ImageFormat::Exfat =>
+            {
+                let stamp = crate::image_build::index_stamp(&partial_out);
+                match crate::image_build::AmprIndexed::wrap_at(&mut *tree, stamp) {
+                    Ok(Some(mut indexed)) => crate::image_build::build_resumable(
+                        format,
+                        level,
+                        &mut indexed,
+                        &output,
+                        mode,
+                        verify_chunk,
+                        &cancel,
+                        &mut report,
+                    ),
+                    Ok(None) => crate::image_build::build_resumable(
+                        format,
+                        level,
+                        tree,
+                        &output,
+                        mode,
+                        verify_chunk,
+                        &cancel,
+                        &mut report,
+                    ),
+                    Err(e) => Err(format!("ampr_emu.index: {e}")),
+                }
+            }
             (Ok(tree), None) => match crate::image_build::AmprIndexed::wrap(&mut *tree) {
                 Ok(Some(mut indexed)) => crate::image_build::build_at(
                     format,
@@ -1869,7 +1899,7 @@ fn has_fresh_checkpoint(partial: &Path) -> bool {
         .elapsed()
         .is_ok_and(|age| age < crate::image_build::RESUME_KEPT);
     if !fresh {
-        let _ = std::fs::remove_file(&checkpoint);
+        crate::image_build::remove_checkpoint(partial);
     }
     fresh
 }

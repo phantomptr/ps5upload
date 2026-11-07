@@ -204,16 +204,15 @@ impl Lz4Unpacked {
             })
             .cloned()
             .collect();
+        let mut known: BTreeSet<String> =
+            files.iter().map(|f| f.path.to_ascii_lowercase()).collect();
         for (i, f) in m.files.iter().enumerate() {
             if !f.packed() {
                 continue;
             }
             let path = m.path(i)?;
             let path = path.strip_prefix("/app0/").unwrap_or(path).to_string();
-            if !files
-                .iter()
-                .any(|known| known.path.eq_ignore_ascii_case(&path))
-            {
+            if known.insert(path.to_ascii_lowercase()) {
                 files.push(SourceFile {
                     path: path.clone(),
                     size: f.logical_size,

@@ -225,8 +225,10 @@ impl Auth {
         }
     }
 
-    /// After a 401: take a new nonce the server asks for. True when the request is worth sending
-    /// again, which a stale nonce is and a wrong password isn't.
+    /// After a 401: take the new nonce it offers. True when the request is worth sending again:
+    /// the server says the old one is stale, or simply offers another, as servers that never say
+    /// `stale` do. A wrong password with the same nonce isn't; one with a new nonce each time costs
+    /// one more request, and fails then.
     pub(super) fn renew<'a>(&self, challenges: impl Iterator<Item = &'a str>) -> bool {
         let Self::Digest { state, .. } = self else {
             return false;
@@ -234,10 +236,10 @@ impl Auth {
         let Some(fresh) = best_challenge(challenges) else {
             return false;
         };
-        if !fresh.stale {
+        let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+        if !fresh.stale && fresh.nonce == s.challenge.nonce {
             return false;
         }
-        let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
         s.challenge = fresh;
         s.nc = 0;
         true
@@ -327,10 +329,14 @@ mod tests {
             .contains("nc=00000002"));
         assert!(a.header("GET", "http://nas").unwrap().contains("uri=\"/\""));
         assert!(
-            !a.renew(["Digest realm=\"r\", nonce=\"m\""].into_iter()),
+            !a.renew(["Digest realm=\"r\", nonce=\"n\""].into_iter()),
             "a wrong password"
         );
-        assert!(a.renew(["Digest realm=\"r\", nonce=\"m\", stale=true"].into_iter()));
+        assert!(a.renew(["Digest realm=\"r\", nonce=\"n\", stale=true"].into_iter()));
+        assert!(
+            a.renew(["Digest realm=\"r\", nonce=\"m\""].into_iter()),
+            "a new nonce"
+        );
         let next = a.header("GET", "http://nas/").unwrap();
         assert!(
             next.contains("nonce=\"m\"") && next.contains("response="),
