@@ -220,6 +220,9 @@ export default function WorkshopScreen() {
       deleteAfterInstall: then !== "keep" && deleteAfter,
       fullVerify: prefs.fullVerify,
       imageLevel: build.kind === "image" && build.compress && !lz4 ? prefs.imageLevel : undefined,
+      // The AMPR emulator choice as it is now: changing it later is for games added later.
+      addAmprEmu: prefs.addAmprEmu,
+      amprEmuBuild: prefs.amprEmuBuild,
     });
   };
   /** Queue what was picked or found, then say what was left out. */

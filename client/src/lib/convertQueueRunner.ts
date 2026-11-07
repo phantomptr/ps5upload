@@ -75,7 +75,12 @@ async function build(item: ConvertItem) {
       item.build.lz4,
       item.password,
       item.keepBoth,
-      { fullVerify: item.fullVerify, imageLevel: item.imageLevel },
+      {
+        fullVerify: item.fullVerify,
+        imageLevel: item.imageLevel,
+        addAmprEmu: item.addAmprEmu,
+        amprEmuBuild: item.amprEmuBuild,
+      },
     );
     await whenIdle();
     // Handed to the Upload queue (or kept): nothing more for this queue to do.

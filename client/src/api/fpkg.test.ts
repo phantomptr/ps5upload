@@ -30,3 +30,25 @@ describe("fpkg.rebuildImageAmprIndex", () => {
     });
   });
 });
+
+describe("fpkg.buildImage", () => {
+  // A queued game is built with the AMPR emulator choice it was added with, not whatever is set
+  // when its turn comes; with none of its own, the current setting.
+  it("sends the build's own AMPR emulator choice over the setting", async () => {
+    const { useConvertPrefs } = await import("../state/convertPrefs");
+    useConvertPrefs.setState({ addAmprEmu: true, amprEmuBuild: "ampr_emu" });
+    await fpkg.buildImage("/games/G", "/out", "exfat", false, undefined, undefined, false, undefined, undefined, false, {
+      add: false,
+      build: "ampr-emu-ng",
+    });
+    expect(invoke).toHaveBeenLastCalledWith(
+      "exfat_build",
+      expect.objectContaining({ addAmprEmu: false, amprEmuBuild: "ampr-emu-ng" }),
+    );
+    await fpkg.buildImage("/games/G", "/out");
+    expect(invoke).toHaveBeenLastCalledWith(
+      "exfat_build",
+      expect.objectContaining({ addAmprEmu: true, amprEmuBuild: "ampr_emu" }),
+    );
+  });
+});
