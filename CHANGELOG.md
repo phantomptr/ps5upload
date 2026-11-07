@@ -16,6 +16,11 @@ Play Together (#720):
 - Player 1 (a friend on this stream's own controller, playing as your PS5 user) is now a setting, off by default. With it on, the Allow prompt and the player card say so, and the friend's page says they play as your user. Turning the picture back on, restarting Play or a friend rejoining gives the controller back to you at once, moving the friend to their own controller. A phone linked as a controller keeps the seat even while it's idle.
 - Clearer steps for friends: they press PS on their own controller and pick Quick Play or their user on the TV; the host does nothing.
 
+iPhone and iPad (#722):
+
+- Full screen hides the status bar (the clock), and brings it back when you leave.
+- The Controller/Touchpad switch fades out in full screen and comes back for a moment on a tap on the picture. Settings › Play: "Show the Controller/Touchpad switch in full screen" hides it there altogether.
+
 Also:
 
 - Installing an add-on (DLC) is no longer refused with "move the game out of the scan folder" when its base game runs from a ShadowMount+ image. A package already on the PS5 came with no category, and the check took it for a full game. (#721)

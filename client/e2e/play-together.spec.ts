@@ -315,7 +315,7 @@ test("a friend's browser joins, plays as Player 2, and survives a dropped connec
   allow();
   await expect(page.getByTestId("join-player")).toHaveText("You are Player 2");
   await expect(page.getByTestId("join-picking")).toHaveText("Press PS, then pick Quick Play on the TV");
-  await expect(page.getByTestId("join-guide")).toContainText("Press PS on your controller");
+  await expect(page.getByTestId("join-guide")).toContainText("On your controller, press PS once");
   await expect(page.getByTestId("join-pad")).toHaveText("Your controller is ready");
   await expect.poll(() => page.getByTestId("watch-canvas").evaluate((c) => (c as HTMLCanvasElement).width)).toBe(320);
   await expect(page.getByTestId("join-delay")).toBeVisible({ timeout: 5_000 });
