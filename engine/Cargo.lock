@@ -2298,6 +2298,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ps5upload-hub"
+version = "11.5.2"
+dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "futures-util",
+ "getrandom 0.4.3",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+]
+
+[[package]]
 name = "ps5upload-lab"
 version = "11.5.2"
 dependencies = [
