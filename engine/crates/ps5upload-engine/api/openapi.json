@@ -3341,6 +3341,10 @@
       },
       "ExfatBuildReq": {
         "properties": {
+          "add_ampr_emu": {
+            "description": "Add ampr_emu to a game that reads through libSceAmpr and ships no emulator: without one\nit fails to start from an image. On unless turned off.",
+            "type": "boolean"
+          },
           "ampr_lz4": {
             "anyOf": [
               {
@@ -9845,6 +9849,10 @@
       "Readiness": {
         "description": "Whether a libSceAmpr title can be packed, as the Convert screen shows it.",
         "properties": {
+          "emulator_missing": {
+            "description": "The game reads through AMPR and ships no emulator at all: it won't start from an image\nor folder without one, packs or not ([`emulator_needed_at`]).",
+            "type": "boolean"
+          },
           "kind": {
             "description": "`ok`; `runtime` (the game's ampr_emu is missing or too old: installing\n[`RUNTIME_VERSION`] into the image makes packs possible); `no_ampr` (the game does not\nread through AMPR, so nothing could serve packs: .ffpfsc is its compression).",
             "type": "string"
@@ -9867,7 +9875,8 @@
         "required": [
           "runtime_version",
           "refusal",
-          "kind"
+          "kind",
+          "emulator_missing"
         ],
         "type": "object"
       },
@@ -36973,6 +36982,74 @@
             "required": true
           },
           "response_schema": "struct"
+        }
+      }
+    },
+    "/api/ps5/smp/rescan": {
+      "post": {
+        "description": "POST /api/ps5/smp/rescan?addr= — ask ShadowMount+ to scan again now, with its retry counters\ncleared, so a new image of a game is picked up without deleting the game from the home screen.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Ask ShadowMount+ to scan again now, with its retry counters cleared, so a new image of a game is picked up without deleting the game from the home screen",
+        "tags": [
+          "shadowmount"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "literal"
         }
       }
     },

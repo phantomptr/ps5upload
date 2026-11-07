@@ -29,6 +29,9 @@ pub struct Readiness {
     /// [`RUNTIME_VERSION`] into the image makes packs possible); `no_ampr` (the game does not
     /// read through AMPR, so nothing could serve packs: .ffpfsc is its compression).
     pub kind: &'static str,
+    /// The game reads through AMPR and ships no emulator at all: it won't start from an image
+    /// or folder without one, packs or not ([`emulator_needed_at`]).
+    pub emulator_missing: bool,
 }
 
 /// The ampr_emu release the engine can put into an image (`fakelib/libSceAmpr.sprx`) when the
@@ -46,6 +49,14 @@ pub const RUNTIME_MODULE_ORIG: &str = "fakelib/libSceAmpr.sprx.orig";
 /// older `ampr_emu` (0.3) would find every packed file missing. The module is recognised by
 /// its own strings (see [`runtime_support`]).
 pub fn readiness(tree: &mut dyn SourceTree) -> Option<Readiness> {
+    let emulator_missing = emulator_needed_at(tree).is_some();
+    readiness_for_packs(tree).map(|r| Readiness {
+        emulator_missing,
+        ..r
+    })
+}
+
+fn readiness_for_packs(tree: &mut dyn SourceTree) -> Option<Readiness> {
     if !crate::source::imports_ampr(tree, "eboot.bin") {
         return Some(Readiness {
             runtime_version: None,
@@ -55,6 +66,7 @@ pub fn readiness(tree: &mut dyn SourceTree) -> Option<Readiness> {
                     .into(),
             ),
             kind: "no_ampr",
+            emulator_missing: false,
         });
     }
     let Some(module) = tree
@@ -70,6 +82,7 @@ pub fn readiness(tree: &mut dyn SourceTree) -> Option<Readiness> {
                  {RUNTIME_MODULE}, and the folder has none"
             )),
             kind: "runtime",
+            emulator_missing: false,
         });
     };
     let support = match tree.read(&module) {
@@ -79,6 +92,7 @@ pub fn readiness(tree: &mut dyn SourceTree) -> Option<Readiness> {
                 runtime_version: None,
                 refusal: Some(format!("{module} could not be read: {e}")),
                 kind: "runtime",
+                emulator_missing: false,
             })
         }
     };
@@ -94,9 +108,38 @@ pub fn readiness(tree: &mut dyn SourceTree) -> Option<Readiness> {
     });
     Some(Readiness {
         kind: if refusal.is_some() { "runtime" } else { "ok" },
+        emulator_missing: false,
         runtime_version: support.version,
         refusal,
     })
+}
+
+/// Where an AMPR emulator has to go for a game that reads its files through libSceAmpr and ships
+/// no emulator; `None` for any other game. Without one the game fails to start from an image or
+/// folder (Alembic's console test: `APR_FATAL_ERROR_ASYNC`, or an abort in eboot.bin), and
+/// ShadowMount+ doesn't add one. A game with a `fakelib2` loads from there, in its own spelling.
+pub fn emulator_needed_at(tree: &mut dyn SourceTree) -> Option<String> {
+    if !crate::source::imports_ampr(tree, "eboot.bin") {
+        return None;
+    }
+    let mut home = None;
+    for dir in ["fakelib2", "fakelib"] {
+        let prefix = format!("{dir}/");
+        for file in tree.files() {
+            let Some(found) = file.path.get(..prefix.len()) else {
+                continue;
+            };
+            if !found.eq_ignore_ascii_case(&prefix) {
+                continue;
+            }
+            if file.path[prefix.len()..].eq_ignore_ascii_case("libSceAmpr.sprx") {
+                return None;
+            }
+            home.get_or_insert_with(|| found.to_string());
+        }
+    }
+    let home = home.unwrap_or_else(|| "fakelib/".to_string());
+    Some(format!("{home}libSceAmpr.sprx"))
 }
 
 /// A game with the release ampr_emu in place of its own `fakelib/libSceAmpr.sprx` (kept as
@@ -106,10 +149,22 @@ pub struct RuntimeInstalled {
     files: Vec<crate::source::SourceFile>,
     runtime: Vec<u8>,
     orig_path: Option<String>,
+    module: String,
+    orig_name: String,
 }
 
 impl RuntimeInstalled {
     pub fn new(inner: Box<dyn SourceTree>, runtime: Vec<u8>) -> crate::Result<Self> {
+        Self::new_at(inner, runtime, RUNTIME_MODULE)
+    }
+
+    /// [`Self::new`] at `module`: a game with a `fakelib2` keeps its emulator there.
+    pub fn new_at(
+        inner: Box<dyn SourceTree>,
+        runtime: Vec<u8>,
+        module: &str,
+    ) -> crate::Result<Self> {
+        let orig_name = format!("{module}.orig");
         let support = runtime_support(&runtime);
         if !support.packs {
             return Err(crate::Error::Format(
@@ -119,14 +174,13 @@ impl RuntimeInstalled {
         let orig_path = inner
             .files()
             .iter()
-            .find(|f| f.path.eq_ignore_ascii_case(RUNTIME_MODULE))
+            .find(|f| f.path.eq_ignore_ascii_case(module))
             .map(|f| f.path.clone());
         let mut files: Vec<crate::source::SourceFile> = inner
             .files()
             .iter()
             .filter(|f| {
-                !f.path.eq_ignore_ascii_case(RUNTIME_MODULE)
-                    && !f.path.eq_ignore_ascii_case(RUNTIME_MODULE_ORIG)
+                !f.path.eq_ignore_ascii_case(module) && !f.path.eq_ignore_ascii_case(&orig_name)
             })
             .cloned()
             .collect();
@@ -137,12 +191,12 @@ impl RuntimeInstalled {
                 .find(|f| &f.path == orig)
                 .map_or(0, |f| f.size);
             files.push(crate::source::SourceFile {
-                path: RUNTIME_MODULE_ORIG.to_string(),
+                path: orig_name.clone(),
                 size,
             });
         }
         files.push(crate::source::SourceFile {
-            path: RUNTIME_MODULE.to_string(),
+            path: module.to_string(),
             size: runtime.len() as u64,
         });
         files.sort_by(|a, b| a.path.cmp(&b.path));
@@ -151,11 +205,13 @@ impl RuntimeInstalled {
             files,
             runtime,
             orig_path,
+            module: module.to_string(),
+            orig_name,
         })
     }
 
     fn resolve(&self, path: &str) -> Option<&str> {
-        if path.eq_ignore_ascii_case(RUNTIME_MODULE_ORIG) {
+        if path.eq_ignore_ascii_case(&self.orig_name) {
             return self.orig_path.as_deref();
         }
         None
@@ -170,7 +226,7 @@ impl SourceTree for RuntimeInstalled {
         self.inner.empty_dirs()
     }
     fn read(&mut self, path: &str) -> crate::Result<Vec<u8>> {
-        if path.eq_ignore_ascii_case(RUNTIME_MODULE) {
+        if path.eq_ignore_ascii_case(&self.module) {
             return Ok(self.runtime.clone());
         }
         if let Some(orig) = self.resolve(path).map(str::to_string) {
@@ -179,7 +235,7 @@ impl SourceTree for RuntimeInstalled {
         self.inner.read(path)
     }
     fn read_range(&mut self, path: &str, offset: u64, len: usize) -> crate::Result<Vec<u8>> {
-        if path.eq_ignore_ascii_case(RUNTIME_MODULE) {
+        if path.eq_ignore_ascii_case(&self.module) {
             let start = (offset as usize).min(self.runtime.len());
             let end = start.saturating_add(len).min(self.runtime.len());
             return Ok(self.runtime[start..end].to_vec());
@@ -518,6 +574,7 @@ mod tests {
                 runtime_version: Some("0.4.2.1".into()),
                 refusal: None,
                 kind: "ok",
+                emulator_missing: false,
             })
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -525,6 +582,51 @@ mod tests {
 
     /// The release runtime goes in as the game's module, the game's own kept as `.orig`;
     /// a game that had none just gains it.
+    #[test]
+    fn the_emulator_goes_where_the_game_loads_it() {
+        struct Files(Vec<SourceFile>);
+        impl SourceTree for Files {
+            fn files(&self) -> &[SourceFile] {
+                &self.0
+            }
+            fn read(&mut self, path: &str) -> crate::Result<Vec<u8>> {
+                Ok(
+                    if path == "eboot.bin" && self.0.iter().any(|f| f.path == path) {
+                        b"..libSceAmpr.prx..".to_vec()
+                    } else {
+                        Vec::new()
+                    },
+                )
+            }
+            fn describe(&self) -> String {
+                "test".into()
+            }
+        }
+        let at = |paths: &[&str]| {
+            let files = paths
+                .iter()
+                .map(|p| SourceFile {
+                    path: (*p).to_string(),
+                    size: 18,
+                })
+                .collect();
+            emulator_needed_at(&mut Files(files))
+        };
+        let need = |p: &str| Some(p.to_string());
+        assert_eq!(at(&["eboot.bin"]), need("fakelib/libSceAmpr.sprx"));
+        assert_eq!(
+            at(&["eboot.bin", "fakelib/libA.sprx"]),
+            need("fakelib/libSceAmpr.sprx")
+        );
+        assert_eq!(
+            at(&["eboot.bin", "fakelib/libA.sprx", "FakeLib2/libB.sprx"]),
+            need("FakeLib2/libSceAmpr.sprx")
+        );
+        assert_eq!(at(&["eboot.bin", "fakelib/LIBSCEAMPR.SPRX"]), None);
+        assert_eq!(at(&["eboot.bin", "fakelib2/libSceAmpr.sprx"]), None);
+        assert_eq!(at(&["other.bin"]), None, "no eboot, no AMPR");
+    }
+
     #[test]
     fn installing_the_runtime_replaces_and_keeps_the_original() {
         use crate::source::SourceTree;

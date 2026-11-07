@@ -6,6 +6,7 @@
 // browser build reaches the same routes through lib/browserInvoke.ts.
 
 import { invoke } from "../lib/invokeLogged";
+import { useConvertPrefs } from "../state/convertPrefs";
 
 /** The game image filesystems the engine writes: UFS2 (`.ffpkg`, what ShadowMount+
  *  recommends), exFAT, or PFS (`.ffpfs`, experimental in ShadowMount+ 1.7). */
@@ -61,6 +62,8 @@ export interface AmprPacksReadiness {
   /** `ok`; `runtime` (installing ampr_emu 0.4.2.1 into the image makes packs possible);
    *  `no_ampr` (the game does not read through AMPR: .ffpfsc is its compression). */
   kind?: "ok" | "runtime" | "no_ampr";
+  /** The game reads through AMPR and ships no emulator: it won't start from an image without one. */
+  emulator_missing?: boolean;
 }
 
 /** Pack a game image's files into AMPR LZ4 asset packs first (exFAT images only). */
@@ -174,6 +177,7 @@ export const fpkg = {
       name,
       ffpfscLevel: compress ? ffpfscLevel : undefined,
       keepBoth,
+      addAmprEmu: useConvertPrefs.getState().addAmprEmu,
     }),
   /** Unpack a game image (.exfat, .ffpkg, .ffpfs, .ffpfsc) or a package made with the debug
    *  key into a plain folder in the output folder, named after the source (or `name`). One

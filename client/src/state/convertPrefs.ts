@@ -15,6 +15,7 @@ const KEY_PLACE = "ps5upload.convert.output_place";
 const KEY_LEVEL = "ps5upload.convert.compression";
 const KEY_VERIFY_CHUNK = "ps5upload.convert.verify_chunk_kib";
 const KEY_FULL_VERIFY = "ps5upload.convert.full_verify";
+const KEY_ADD_AMPR_EMU = "ps5upload.convert.add_ampr_emu";
 const KEY_MAKE = "ps5upload.convert.make";
 const KEY_IMAGE_FORMAT = "ps5upload.convert.image_format";
 const KEY_IMAGE_COMPRESS = "ps5upload.convert.image_compress";
@@ -44,6 +45,8 @@ interface ConvertPrefs {
   /** Re-read every byte of the output to check it. Off (the default) is the fast check:
    *  structure, small files and a random sample. */
   fullVerify: boolean;
+  /** Add ampr_emu to a libSceAmpr game with no emulator (on unless turned off). */
+  addAmprEmu: boolean;
   /** What Convert makes, and which image: remembered so leaving the screen mid-build and
    *  coming back shows the build that is running, not the default. */
   make: MakeKind;
@@ -63,6 +66,7 @@ interface ConvertPrefs {
   setCompression: (c: FpkgCompression) => void;
   setVerifyChunkKib: (kib: number) => void;
   setFullVerify: (full: boolean) => void;
+  setAddAmprEmu: (on: boolean) => void;
 }
 
 function storedLevel(): FpkgCompression {
@@ -102,6 +106,7 @@ export const useConvertPrefs = create<ConvertPrefs>((set) => ({
   compression: storedLevel(),
   verifyChunkKib: parseVerifyChunkKib(safeGetItem(KEY_VERIFY_CHUNK)),
   fullVerify: parseFullVerify(safeGetItem(KEY_FULL_VERIFY)),
+  addAmprEmu: safeGetItem(KEY_ADD_AMPR_EMU) !== "0",
   make: parseMake(safeGetItem(KEY_MAKE)),
   imageFormat: parseImageFormat(safeGetItem(KEY_IMAGE_FORMAT)),
   imageCompress: safeGetItem(KEY_IMAGE_COMPRESS) === "1",
@@ -139,6 +144,10 @@ export const useConvertPrefs = create<ConvertPrefs>((set) => ({
     safeSetItem(KEY_FULL_VERIFY, full ? "1" : "0");
     set({ fullVerify: full });
   },
+  setAddAmprEmu: (on) => {
+    safeSetItem(KEY_ADD_AMPR_EMU, on ? "1" : "0");
+    set({ addAmprEmu: on });
+  },
 }));
 
 // A change synced from another device shows at once (lib/liveSettings).
@@ -151,6 +160,7 @@ registerSettingReload(
       compression: storedLevel(),
       verifyChunkKib: parseVerifyChunkKib(safeGetItem(KEY_VERIFY_CHUNK)),
       fullVerify: parseFullVerify(safeGetItem(KEY_FULL_VERIFY)),
+      addAmprEmu: safeGetItem(KEY_ADD_AMPR_EMU) !== "0",
       make: parseMake(safeGetItem(KEY_MAKE)),
       imageFormat: parseImageFormat(safeGetItem(KEY_IMAGE_FORMAT)),
       imageCompress: safeGetItem(KEY_IMAGE_COMPRESS) === "1",

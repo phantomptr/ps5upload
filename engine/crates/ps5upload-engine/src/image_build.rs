@@ -1258,6 +1258,59 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A PS4 game's image holds the param.json ShadowMount+ needs, and it survives the read-back
+    /// (Alembic's console test: without it the game mounts and then won't start).
+    #[test]
+    fn a_ps4_game_gets_its_param_json_in_every_format() {
+        let root = std::env::temp_dir().join(format!("ps5upload-imgb-ps4-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let src = root.join("CUSA00000-app");
+        std::fs::create_dir_all(src.join("sce_sys")).unwrap();
+        std::fs::write(src.join("eboot.bin"), vec![7u8; 90_000]).unwrap();
+        let (key, value) = (b"TITLE_ID\0", b"CUSA00000\0");
+        let mut sfo = b"\0PSF\x01\x01\0\0".to_vec();
+        sfo.extend_from_slice(&36u32.to_le_bytes());
+        sfo.extend_from_slice(&(36 + key.len() as u32).to_le_bytes());
+        sfo.extend_from_slice(&1u32.to_le_bytes());
+        sfo.extend_from_slice(&0u16.to_le_bytes());
+        sfo.extend_from_slice(&0x0204u16.to_le_bytes());
+        sfo.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        sfo.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        sfo.extend_from_slice(&0u32.to_le_bytes());
+        sfo.extend_from_slice(key);
+        sfo.extend_from_slice(value);
+        std::fs::write(src.join("sce_sys/param.sfo"), sfo).unwrap();
+        for format in [ImageFormat::Exfat, ImageFormat::Ffpkg, ImageFormat::Ffpfs] {
+            for compress in [false, true] {
+                let (name, inner) = output_names(&src, format, compress);
+                let out = root.join(&name);
+                let mut tree = FolderSource::open(&src).unwrap();
+                let mut with = ps5upload_fpkg::ps4_param::Ps4Params::wrap(&mut tree)
+                    .unwrap()
+                    .expect("a PS4 game");
+                let built = build(
+                    format,
+                    inner.as_deref(),
+                    &mut with,
+                    &out,
+                    VerifyMode::Full,
+                    DEFAULT_VERIFY_CHUNK,
+                    &AtomicBool::new(false),
+                    &mut |_, _, _| {},
+                )
+                .unwrap_or_else(|e| panic!("{format:?} compress={compress}: {e}"));
+                assert_eq!(built.files, 3, "{format:?}");
+                let mut image = ps5upload_fpkg::source::open(&out).unwrap();
+                let json = image.read("sce_sys/param.json").unwrap();
+                let v: serde_json::Value = serde_json::from_slice(&json).unwrap();
+                assert_eq!(v["titleId"], "CUSA00000", "{format:?}");
+                drop(image);
+                let _ = std::fs::remove_file(&out);
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// Another build's `.partial` under the same name is neither written into nor removed;
     /// and a cancel that lands after the image was finished does not turn it into a failure.
     #[test]

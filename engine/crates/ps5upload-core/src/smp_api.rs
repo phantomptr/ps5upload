@@ -142,6 +142,13 @@ impl SmpApi {
         Ok(())
     }
 
+    /// Queues a full rescan, clearing the retry counters: a title whose earlier images failed to
+    /// mount is otherwise skipped, and a new image of it is never tried.
+    pub fn rescan(&self) -> Result<()> {
+        self.call("scan", json!({ "reset_attempts": true }))?;
+        Ok(())
+    }
+
     pub fn unmount(&self, title_id: &str) -> Result<()> {
         self.call("games/unmount", json!({ "title_id": title_id }))?;
         Ok(())

@@ -23,6 +23,22 @@ pub async fn smp_status(addr: String) -> Result<SmpStatus, String> {
         .map_err(|e| format!("{e:#}"))
 }
 
+/// Ask ShadowMount+ to scan again now, with its retry counters cleared.
+#[tauri::command]
+pub async fn smp_rescan(addr: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let (api, _) = ps5upload_core::smp_api::SmpApi::probe(&addr).ok_or_else(|| {
+            "ShadowMount+'s API doesn't answer from this computer: it needs ShadowMount+ 1.7 or \
+             later running, with api_enabled on and api_bind_address open to the network in \
+             /data/shadowmount/config.ini"
+                .to_string()
+        })?;
+        api.rescan().map_err(|e| format!("{e:#}"))
+    })
+    .await
+    .map_err(|e| format!("smp_rescan task: {e}"))?
+}
+
 // ─── Edit sessions (checkout / check-in) ─────────────────────────────────
 //
 // ShadowMount+ mounts everything read-only and re-attaches any image whose

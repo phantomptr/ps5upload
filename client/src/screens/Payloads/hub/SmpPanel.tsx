@@ -8,7 +8,7 @@ import {
   Activity,
   HardDrive,
 } from "lucide-react";
-import { smpStatus, type SmpStatus } from "../../../api/ps5";
+import { smpRescan, smpStatus, type SmpStatus } from "../../../api/ps5";
 import { Button, ErrorCard, Spinner } from "../../../components";
 import { useTr } from "../../../state/lang";
 import { humanizeCaught } from "../../../lib/humanizeError";
@@ -32,6 +32,7 @@ export default function SmpPanel({ mgmtAddr }: { mgmtAddr: string | null }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const [rescan, setRescan] = useState<"idle" | "busy" | "done">("idle");
 
   // Tracks whether we've already auto-expanded on first install
   // detection. Using a ref (vs. reading `status === null` inside the
@@ -141,6 +142,37 @@ export default function SmpPanel({ mgmtAddr }: { mgmtAddr: string | null }) {
       {expanded && (
         <div className="space-y-3 border-t border-[var(--color-border)] p-4 text-xs">
           {error && <ErrorCard title={error} />}
+
+          {status?.running && (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                disabled={rescan === "busy"}
+                data-testid="smp-rescan"
+                onClick={() => {
+                  setRescan("busy");
+                  setError(null);
+                  smpRescan(mgmtAddr)
+                    .then(() => setRescan("done"))
+                    .catch((e: unknown) => {
+                      setRescan("idle");
+                      setError(String(e));
+                    });
+                }}
+              >
+                {tr("smp_rescan", undefined, "Scan now")}
+              </Button>
+              {rescan === "done" && (
+                <span className="text-[var(--color-muted)]" data-testid="smp-rescan-done">
+                  {tr(
+                    "smp_rescan_done",
+                    undefined,
+                    "ShadowMount+ is scanning. It picks up new images, and games that failed to mount get another try.",
+                  )}
+                </span>
+              )}
+            </div>
+          )}
 
           {status?.mounted_images.length ? (
             <SmpSection title={tr("smp_section_mounts", undefined, "Mounted images")}>

@@ -2395,6 +2395,8 @@ pub async fn exfat_build(
     keep_both: Option<bool>,
     // An edited copy whose one change is a regenerated ampr_emu.index (#621).
     rebuild_ampr_index: Option<bool>,
+    // Add ampr_emu to a libSceAmpr game with no emulator; the engine's default (on) when absent.
+    add_ampr_emu: Option<bool>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/exfat/build");
@@ -2413,6 +2415,7 @@ pub async fn exfat_build(
             "edits": edits.unwrap_or_else(|| serde_json::json!([])),
             "keep_both": keep_both.unwrap_or(false),
             "rebuild_ampr_index": rebuild_ampr_index.unwrap_or(false),
+            "add_ampr_emu": add_ampr_emu.unwrap_or(true),
         }),
     )
     .await

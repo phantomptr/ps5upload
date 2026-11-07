@@ -663,6 +663,14 @@ pub(crate) struct ExfatBuildReq {
     /// refused for a compressed image or a game that does not read through libSceAmpr.
     #[serde(default)]
     rebuild_ampr_index: bool,
+    /// Add ampr_emu to a game that reads through libSceAmpr and ships no emulator: without one
+    /// it fails to start from an image. On unless turned off.
+    #[serde(default = "default_add_ampr_emu")]
+    add_ampr_emu: bool,
+}
+
+fn default_add_ampr_emu() -> bool {
+    true
 }
 
 /// One change for an edited copy of an image: `{"op":"delete","path":…}` removes a file or
@@ -933,6 +941,7 @@ pub(crate) async fn exfat_build_handler(
     let scan_source = source.clone();
     let check_packs = packs.is_some();
     let install_runtime = req.ampr_lz4.as_ref().is_some_and(|r| r.install_runtime);
+    let add_ampr_emu = req.add_ampr_emu;
     let edited_tree = edited.map(|e| e.tree);
     let scanned = tokio::task::spawn_blocking(move || {
         // An edited copy keeps the image's own names: only the user's changes are made.
@@ -950,6 +959,26 @@ pub(crate) async fn exfat_build_handler(
         }
         if let Some(line) = signing.describe() {
             crate::log_info!("image build: {line}");
+        }
+        if !check_packs && add_ampr_emu {
+            // A libSceAmpr game with no emulator fails to start from an image, and ShadowMount+
+            // doesn't add one. Packs have their own choice below.
+            if let Some(module) = ps5upload_fpkg::ampr_pack::image::emulator_needed_at(&mut *tree) {
+                let bytes = crate::ampr_trace::release_runtime().map_err(|e| {
+                    format!(
+                        "this game needs an AMPR emulator to start from an image, and it could \
+                         not be fetched: {e}. Connect to the internet, or turn off \
+                         \"Add the AMPR emulator\" in Convert's options"
+                    )
+                })?;
+                tree = Box::new(
+                    ps5upload_fpkg::ampr_pack::image::RuntimeInstalled::new_at(
+                        tree, bytes, &module,
+                    )
+                    .map_err(|e| e.to_string())?,
+                );
+                crate::log_info!("image build: ampr_emu 0.4.2.1 added as {module}");
+            }
         }
         if check_packs && install_runtime {
             // The game's own ampr_emu is missing or too old for packs: the image gets the
@@ -1107,10 +1136,19 @@ pub(crate) async fn exfat_build_handler(
                 total,
             });
         };
-        let outcome = match &packs {
-            Some(packs) => crate::image_build::build_packed(
+        // A PS4 game's image needs the param.json ShadowMount+ reads, which only PS5 games ship.
+        let mut ps4 = ps5upload_fpkg::ps4_param::Ps4Params::wrap(&mut *tree);
+        let source_tree: Result<&mut dyn ps5upload_fpkg::source::SourceTree, String> =
+            match ps4.as_mut() {
+                Ok(Some(p)) => Ok(p),
+                Ok(None) => Ok(&mut *tree),
+                Err(e) => Err(format!("param.sfo: {e}")),
+            };
+        let outcome = match (source_tree, &packs) {
+            (Err(e), _) => Err(e),
+            (Ok(tree), Some(packs)) => crate::image_build::build_packed(
                 format,
-                &mut *tree,
+                tree,
                 &output,
                 packs,
                 mode,
@@ -1119,7 +1157,7 @@ pub(crate) async fn exfat_build_handler(
                 &mut report,
             ),
             // A libSceAmpr game gets a fresh ampr_emu.index (#449), as a package does.
-            None => match crate::image_build::AmprIndexed::wrap(&mut *tree) {
+            (Ok(tree), None) => match crate::image_build::AmprIndexed::wrap(&mut *tree) {
                 Ok(Some(mut indexed)) => crate::image_build::build_at(
                     format,
                     inner_name.as_deref(),
@@ -1135,7 +1173,7 @@ pub(crate) async fn exfat_build_handler(
                     format,
                     inner_name.as_deref(),
                     level,
-                    &mut *tree,
+                    tree,
                     &output,
                     mode,
                     verify_chunk,

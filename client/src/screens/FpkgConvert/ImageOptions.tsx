@@ -116,6 +116,15 @@ function Lz4Option({ lz4 }: { lz4: Lz4Choice }) {
         )
       )}
       {lz4.on && !refusal && (
+        <div className="text-xs text-[var(--color-muted)]" data-testid="lz4-placement-note">
+          {tr(
+            "fpkg.image.lz4_placement_note",
+            undefined,
+            "Keep a packed image on the console's internal storage: one has been reported to hang on a black screen from USB. Turn off update_emulators in ShadowMount+, or it can swap the emulator for one that can't read packs.",
+          )}
+        </div>
+      )}
+      {lz4.on && !refusal && (
         <div className="flex flex-wrap items-center gap-2 text-xs">
           {lz4.profileName ? (
             <>
@@ -143,6 +152,28 @@ function Lz4Option({ lz4 }: { lz4: Lz4Choice }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** A libSceAmpr game with no emulator fails to start from an image, and ShadowMount+ doesn't add
+ *  one. On by default; packs have their own choice. */
+function AmprEmuOption() {
+  const tr = useTr();
+  const on = useConvertPrefs((s) => s.addAmprEmu);
+  const set = useConvertPrefs((s) => s.setAddAmprEmu);
+  return (
+    <div data-testid="ampr-emu-option">
+      <Toggle
+        checked={on}
+        onChange={set}
+        label={tr("fpkg.image.ampr_emu", undefined, "Add the AMPR emulator")}
+        hint={tr(
+          "fpkg.image.ampr_emu_body",
+          undefined,
+          "This game reads its files through AMPR and has no emulator, so it would fail to start from an image. Adds drakmor's ampr_emu 0.4.2.1 as fakelib/libSceAmpr.sprx, fetched once from its GitHub release and checked against a known digest.",
+        )}
+      />
     </div>
   );
 }
@@ -238,6 +269,7 @@ export function ImageChoice({
         </span>
       </label>
       {compress && !packing && <FfpfscLevelOption own={level} />}
+      {lz4?.readiness.emulator_missing && !packing && <AmprEmuOption />}
       {lz4 && format === "exfat" && <Lz4Option lz4={lz4} />}
       <VerifyChunkOption />
     </div>
