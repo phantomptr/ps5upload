@@ -37,7 +37,9 @@ const REPO_FILES = "https://github.com/phantomptr/ps5upload/blob/main/";
 
 /** The address a link in the docs really goes to. */
 export function resolveDocLink(url: string): string {
-  if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return url;
+  // Only web and mail links leave the app: release notes fetched from GitHub land here too.
+  if (/^(?:https?|mailto):/i.test(url)) return url;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return "#";
   return REPO_FILES + url.replace(/^(?:\.?\/)+/, "");
 }
 

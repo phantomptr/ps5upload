@@ -19,8 +19,10 @@ const POLL_MS = 1000;
 /** No status read answered for this long: the helper died or the console went away (#714). A
  *  helper that is slow for a while still answers well inside it. */
 export const MAX_SILENT_MS = 90_000;
-/** After Stop, how long the helper has to say the run ended before the following ends anyway. */
+/** After Stop, how long a helper that has stopped answering is given before the following ends. */
 export const STOP_GRACE_MS = 10_000;
+/** After Stop, how long a helper that still answers "running" is followed before the following ends. */
+export const STOP_ANSWERING_GRACE_MS = 60_000;
 /** `CleanupError.reason` when the helper stopped answering. */
 export const HELPER_SILENT = "helper_silent";
 /** `CleanupError.reason` when Stop was asked and the helper never said the run ended. */
@@ -108,8 +110,13 @@ export async function followApply(
         return;
       }
     }
+    // Stop with the helper still answering "running": it is finishing the item it was on, so the
+    // run is followed a while longer, showing Stopping. An older helper waits out an update's
+    // removal (minutes) without looking at Stop (#714): past the longer grace the following ends
+    // anyway, saying the item may still finish. A helper that stopped answering ends it sooner.
     const asked = stopAsked.get(key);
-    if (asked !== undefined && clock() - asked >= STOP_GRACE_MS) {
+    const silentSince = clock() - lastAnswer >= STOP_GRACE_MS;
+    if (asked !== undefined && clock() - asked >= (silentSince ? STOP_GRACE_MS : STOP_ANSWERING_GRACE_MS)) {
       end(new CleanupError("stop not confirmed", STOP_UNCONFIRMED, 0));
       return;
     }
@@ -117,8 +124,9 @@ export async function followApply(
   }
 }
 
-/** Stop: asks the helper to stop after the current item, and makes sure the following ends either
- *  way within {@link STOP_GRACE_MS}. The helper may be gone, so the ask is not waited on. */
+/** Stop: asks the helper to stop after the current item. The following goes on while the helper
+ *  answers (it finishes that item), and ends within {@link STOP_GRACE_MS} once it doesn't. The
+ *  helper may be gone, so the ask is not waited on. */
 export function stopCleanupApply(host: string, clock: () => number = Date.now): void {
   const run = cleanupRunOf(useCleanupRuns.getState(), host);
   if (!run.applying) return;

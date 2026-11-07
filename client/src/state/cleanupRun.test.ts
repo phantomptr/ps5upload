@@ -27,7 +27,7 @@ import {
   followApply,
   HELPER_SILENT,
   MAX_SILENT_MS,
-  STOP_GRACE_MS,
+  STOP_ANSWERING_GRACE_MS,
   STOP_UNCONFIRMED,
   stopCleanupApply,
   useCleanupRuns,
@@ -129,14 +129,16 @@ describe("following a Clean-up Remove", () => {
         stopCleanupApply("10.0.0.2", () => t);
         stopping = now().stopping;
       }
-      if (t > 60_000) throw new Error("still following");
+      if (t > 120_000) throw new Error("still following");
     }, () => t);
     expect(stopping).toBe(true);
     expect(cancel).toHaveBeenCalledWith("10.0.0.2", 7);
     expect(now().applying).toBeNull();
     expect(now().stopping).toBe(false);
     expect((now().error as { reason?: string }).reason).toBe(STOP_UNCONFIRMED);
-    expect(t).toBeLessThanOrEqual(3000 + STOP_GRACE_MS + 1000);
+    // The helper still answers "running": followed for the longer grace, then ended.
+    expect(t).toBeGreaterThanOrEqual(3000 + STOP_ANSWERING_GRACE_MS);
+    expect(t).toBeLessThanOrEqual(3000 + STOP_ANSWERING_GRACE_MS + 1000);
   });
 
   it("takes the helper's own word when it stops in time", async () => {

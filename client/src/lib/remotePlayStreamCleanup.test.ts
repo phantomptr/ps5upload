@@ -532,9 +532,10 @@ describe("RemotePlayStream with a decoder that never shows a picture (#683)", ()
       ["prefer-hardware", false],
       ["prefer-hardware", false],
       ["prefer-hardware", false],
-      ["prefer-software", false],
-      ["prefer-software", false],
-      ["prefer-software", false],
+      // Software in AVC form again (WebKitGTK's software decoder takes only that).
+      ["prefer-software", true],
+      ["prefer-software", true],
+      ["prefer-software", true],
     ]);
     expect(errors).toEqual(["decode"]);
     expect(o.phases[o.phases.length - 1]).toBe("ended");

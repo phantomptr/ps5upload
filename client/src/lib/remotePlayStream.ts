@@ -1224,6 +1224,8 @@ export class RemotePlayStream {
   /** Everything that works for this device's picture and sound goes. The codec headers stay. */
   private dropPicture(): void {
     this.ticking = false;
+    // Its sound goes too; the next header decides again how this device plays it.
+    this.stopMseAudio();
     try {
       this.rafWin.cancelAnimationFrame(this.raf);
     } catch {
@@ -2613,6 +2615,8 @@ export class RemotePlayStream {
       return true;
     }
     if (step === "software") {
+      // Software in the AVC form first, the one software decoders (WebKitGTK's) take.
+      this.annexB = false;
       log.warn("remote-play", `no picture from the hardware decoder (${detail}): decoding in software`);
       this.softwareAfterBadFrame = true;
       this.noPictureFails = 0;
@@ -2698,6 +2702,8 @@ export class RemotePlayStream {
     }
     if ((kind === 3 || kind === 4) && this.mseSound) {
       if (kind === 3) this.audioHeader = b.slice(1);
+      // Sound through the media player counts as played: the no-sound notice is not for it.
+      else if (mse.sound) this.soundEverPlayed = true;
       mse.onMessage(whole);
       return true;
     }
