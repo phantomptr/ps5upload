@@ -85,8 +85,10 @@ export interface RpPrefs {
   /** On a phone, screenshots and clips go to the photo library (lib/rpCapture.ts saveCapture). */
   toPhotos: boolean;
   /** Decode on the graphics card when there is one (auto), or always in software: a way out
-   *  of a graphics driver's decoder bug (Windows' hardware HEVC, #538/#575). */
-  decoding: "auto" | "software";
+   *  of a graphics driver's decoder bug (Windows' hardware HEVC, #538/#575), or the system's
+   *  media player (MSE) with WebCodecs never tried ("mse": an older Mac whose WebCodecs says yes
+   *  and decodes nothing, #720). */
+  decoding: "auto" | "software" | "mse";
   /** The video format asked of the console: HEVC where this device decodes it (auto), always
    *  H.264, or HDR (HEVC Main10) where this device can show it in HDR (lib/rpHdr.ts). */
   codec: CodecPref;
@@ -178,7 +180,7 @@ export function loadRpPrefs(): RpPrefs {
       fps: one(p.fps, [60, 30], DEFAULT_RP_PREFS.fps),
       fit: one(p.fit, FIT_ORDER, DEFAULT_RP_PREFS.fit),
       touchSize: one(p.touchSize, ["s", "m", "l"], DEFAULT_RP_PREFS.touchSize),
-      decoding: one(p.decoding, ["auto", "software"], DEFAULT_RP_PREFS.decoding),
+      decoding: one(p.decoding, ["auto", "software", "mse"], DEFAULT_RP_PREFS.decoding),
       codec,
       bitrateKbps,
       touchMode,

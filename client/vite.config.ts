@@ -102,6 +102,11 @@ export default defineConfig({
           // WebView. Its own chunk is fetched only when a replay is saved, so there only that
           // fails.
           if (/[\\/]node_modules[\\/]mediabunny[\\/]/.test(id)) return "mediabunny";
+          // The WebAssembly Opus decoder (lib/rpOpusWasm, #720): ~90 kB fetched only on a device
+          // with no Opus in WebCodecs or MSE, never in the shared vendor chunk every screen loads.
+          if (/[\\/]node_modules[\\/](opus-decoder|@wasm-audio-decoders|simple-yenc|@eshaz[\\/]web-worker)[\\/]/.test(id)) {
+            return "opus-decoder";
+          }
           return "vendor";
         },
       },

@@ -6620,6 +6620,7 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "rp_decoding_auto": "Card đồ họa (tự động)",
 "rp_decoding_hint": "Nếu hình bị cắt hoặc sai trên thiết bị này, hãy thử Phần mềm hoặc H.264. Áp dụng từ lần bắt đầu sau.",
 "rp_decoding_software": "Phần mềm",
+"rp_decoding_mse": "Trình phát đa phương tiện của hệ thống",
 "play_setup_button_progress": "Thiết lập Chơi · {done}/{total}",
 "saves_use_shared_confirm_label": "Dùng",
 "v5_tab_play": "Chơi",

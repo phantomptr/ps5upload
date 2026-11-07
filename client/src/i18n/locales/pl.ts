@@ -6859,6 +6859,7 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "rp_decoding_auto": "Karta graficzna (automatycznie)",
 "rp_decoding_hint": "Jeśli obraz na tym urządzeniu jest ucięty lub zły, spróbuj Programowo lub H.264. Działa od następnego uruchomienia.",
 "rp_decoding_software": "Programowo",
+"rp_decoding_mse": "Systemowy odtwarzacz multimediów",
 "play_setup_button_progress": "Skonfiguruj Graj · {done}/{total}",
 "saves_use_shared_confirm_label": "Użyj",
 "v5_tab_play": "Graj",

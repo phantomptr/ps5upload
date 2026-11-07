@@ -6914,6 +6914,7 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "rp_decoding_auto": "Videókártya (automatikus)",
 "rp_decoding_hint": "Ha a kép ezen az eszközön levágva vagy hibásan látszik, próbáld a Szoftveres vagy a H.264 beállítást. A következő indításkor lép életbe.",
 "rp_decoding_software": "Szoftveres",
+"rp_decoding_mse": "Rendszer médialejátszó",
 "play_setup_button_progress": "A Játék beállítása · {done}/{total}",
 "saves_use_shared_confirm_label": "Használat",
 "v5_tab_play": "Játék",

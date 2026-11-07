@@ -30,9 +30,21 @@ describe("the app's content security policy", () => {
     expect(directive(conf.app.security.csp, "media-src")).toContain("data:");
   });
 
-  it("still allows scripts from the app alone", () => {
+  /* #720: the media player fallback (MSE) puts its MediaSource on the element as a blob: URL where
+     the WebView takes no MediaSource as srcObject (WebKit before 17): without blob: here it is
+     refused, the element errors, and no picture or sound ever comes. */
+  for (const key of ["csp", "devCsp"] as const) {
+    it(`${key} lets the media player play a MediaSource's blob: URL`, () => {
+      expect(directive(conf.app.security[key], "media-src")).toContain("blob:");
+    });
+  }
+
+  /* #720: the WebAssembly Opus decoder (lib/rpOpusWasm) is the sound where neither WebCodecs nor
+     MSE has Opus. Compiling WebAssembly is allowed, eval is not. */
+  it("still allows scripts from the app alone, plus compiling WebAssembly", () => {
     const csp = conf.app.security.csp;
     expect(directive(csp, "default-src")).toEqual(["'self'"]);
-    expect(directive(csp, "script-src")).toEqual([]);
+    expect(directive(csp, "script-src")).toEqual(["'self'", "'wasm-unsafe-eval'"]);
+    expect(directive(conf.app.security.devCsp, "script-src")).toContain("'wasm-unsafe-eval'");
   });
 });

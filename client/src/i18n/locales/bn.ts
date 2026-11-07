@@ -6618,6 +6618,7 @@ library_compressed_hint: "সংকুচিত ইমেজ চালাতে 
 "rp_decoding_auto": "গ্রাফিক্স কার্ড (স্বয়ংক্রিয়)",
 "rp_decoding_hint": "এই ডিভাইসে ছবি কাটা বা ভুল দেখালে সফটওয়্যার বা H.264 চেষ্টা করুন। পরের বার শুরু করলে প্রযোজ্য হবে।",
 "rp_decoding_software": "সফটওয়্যার",
+"rp_decoding_mse": "সিস্টেমের মিডিয়া প্লেয়ার",
 "play_setup_button_progress": "খেলুন সেট আপ করুন · {done}/{total}",
 "saves_use_shared_confirm_label": "ব্যবহার করুন",
 "v5_tab_play": "খেলুন",

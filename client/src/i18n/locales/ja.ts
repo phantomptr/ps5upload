@@ -6637,6 +6637,7 @@ library_compressed_hint: "圧縮イメージのプレイには ShadowMount+ が�
 "rp_decoding_auto": "グラフィックカード（自動）",
 "rp_decoding_hint": "この端末で映像が切れたりおかしく表示される場合は、ソフトウェアか H.264 を試してください。次回の開始から適用されます。",
 "rp_decoding_software": "ソフトウェア",
+"rp_decoding_mse": "システムのメディアプレーヤー",
 "play_setup_button_progress": "プレイを設定 · {done}/{total}",
 "saves_use_shared_confirm_label": "使う",
 "v5_tab_play": "プレイ",
