@@ -152,6 +152,13 @@ describe("what the guest is told", () => {
     expect(endText(tr, { kind: "ended", why: "no_room" }, "Ann")).toContain("Ask Ann for a new link");
   });
 
+  it("a channel dropped while waiting: the internet advice, not the LAN's", () => {
+    expect(endText(tr, { kind: "ended", why: "lost" }, "Ann", true)).toBe(
+      "The connection to Ann dropped. Check your internet connection, then ask again.",
+    );
+    expect(endText(tr, { kind: "ended", why: "lost" }, "Ann")).toContain("same network");
+  });
+
   it("a close carries its reason only with the transport's code", () => {
     expect(netFailure({ code: NET_CLOSE, reason: "net:no_direct" })).toBe("no_direct");
     expect(netFailure({ code: 1006, reason: "net:no_direct" })).toBeNull();

@@ -21,6 +21,38 @@ export interface JoinGuest {
   behind: boolean;
   /** On this stream's own controller (Player 1): plays as the host's PS5 user. */
   streamSeat: boolean;
+  /** How they reached this computer: the home network, or an internet invite (WebRTC). */
+  via: "lan" | "internet";
+  /** An internet guest's connection: "direct", "connecting", "failed", "closed" (null on the LAN). */
+  path: string | null;
+}
+
+/** An internet guest's connection the engine knows of, in the game or not (yet). */
+export interface NetPeer {
+  gid: string;
+  /** "connecting", "direct", "failed" or "closed". */
+  path: string;
+  rttMs: number | null;
+}
+
+/** The internet half of an invite (POST /api/join/invite with `internet`). */
+export interface NetInvite {
+  /** The link to share (null until the engine has its certificate). */
+  url: string | null;
+  /** The engine's link to the signalling hub: "connecting", "hosted", "reconnecting", "error",
+   *  "closed". */
+  hubState: string | null;
+  /** Why the hub can't be reached, in the engine's words. */
+  hubError: string | null;
+}
+
+/** The host's Play Together choices for internet invites (every console). */
+export interface NetSettings {
+  /** Internet invites allowed; null: an engine from before internet invites (none offered). */
+  internetInvites: boolean | null;
+  hubUrl: string;
+  stun: string[];
+  upnp: boolean;
 }
 
 export interface JoinHostState {
@@ -32,10 +64,14 @@ export interface JoinHostState {
     urls: string[];
     /** This computer's Tailscale address (one of `urls`), while Tailscale is connected. */
     tailscale: string | null;
+    /** The internet invite, when the host made one. */
+    internet: NetInvite | null;
   } | null;
   guests: JoinGuest[];
   asks: Array<{ id: number; name: string }>;
-  settings: { blockSystemButtons: boolean; maxPlayers: number; streamSeat: boolean };
+  settings: { blockSystemButtons: boolean; maxPlayers: number; streamSeat: boolean } & NetSettings;
+  /** Internet guests' connections, those not in the game yet (connecting, failed) too. */
+  netPeers: NetPeer[];
   /** The next friend allowed in gets this stream's controller (Player 1, as the host's PS5 user). */
   seatNext: boolean;
   helperOk: boolean;
@@ -49,7 +85,8 @@ export const EMPTY_JOIN: JoinHostState = {
   invite: null,
   guests: [],
   asks: [],
-  settings: { blockSystemButtons: true, maxPlayers: 3, streamSeat: false },
+  settings: { blockSystemButtons: true, maxPlayers: 3, streamSeat: false, internetInvites: null, hubUrl: "", stun: [], upnp: true },
+  netPeers: [],
   seatNext: false,
   helperOk: true,
   reason: null,
@@ -60,6 +97,21 @@ const STATES: ReadonlySet<string> = new Set(["asking", "picking_user", "playing"
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 /** A guest's state; an unknown one counts as in the game (never hides a friend). */
 const stateOf = (v: unknown): GuestState => (typeof v === "string" && STATES.has(v) ? v : "playing") as GuestState;
+const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
+
+/** An invite's internet half (`invite.internet`), or null. */
+function readNetInvite(v: unknown): NetInvite | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  return { url: str(o.url), hubState: str(o.state), hubError: str(o.error) };
+}
+
+/** The engine's internet peers (`internet.peers`, or the invite's own list). */
+function readPeers(v: unknown): NetPeer[] {
+  return (Array.isArray(v) ? v : [])
+    .filter((p): p is Record<string, unknown> => !!p && typeof p === "object" && typeof p.gid === "string")
+    .map((p) => ({ gid: p.gid as string, path: str(p.path) ?? "connecting", rttMs: num(p.rtt_ms) }));
+}
 
 /** The engine's answer, checked field by field (an older or odd one never breaks the page). */
 export function readJoinState(v: unknown): JoinHostState {
@@ -75,6 +127,7 @@ export function readJoinState(v: unknown): JoinHostState {
           // Every address of this computer a friend may reach, best first (multi-network).
           urls: Array.isArray(inv.urls) ? inv.urls.filter((u): u is string => typeof u === "string") : [],
           tailscale: typeof inv.tailscale === "string" ? inv.tailscale : null,
+          internet: readNetInvite(inv.internet),
         }
       : null;
   const guests = (Array.isArray(o.guests) ? o.guests : [])
@@ -88,11 +141,15 @@ export function readJoinState(v: unknown): JoinHostState {
       // The engine's field is `state` (`status` kept for an older one).
       status: stateOf(g.state ?? g.status),
       reconnectingLeftS: num(g.reconnect_left_s) ?? num(g.reconnecting_left_s),
-      rttMs: num(g.rtt_ms),
+      // An internet guest's own round trip, else ICE's.
+      rttMs: num(g.rtt_ms) ?? num(g.ice_rtt_ms),
       connected: g.connected !== false,
       behind: g.behind === true,
       // An older engine says nothing: Player 1 was the stream's controller there.
       streamSeat: typeof g.stream_seat === "boolean" ? g.stream_seat : num(g.player) === 1,
+      // An older engine says nothing: the home network.
+      via: g.via === "internet" ? ("internet" as const) : ("lan" as const),
+      path: str(g.path),
     }))
     .sort((a, b) => a.player - b.player);
   // Friends asking to join: the engine's `pending` (`asks` kept for an older one).
@@ -109,7 +166,12 @@ export function readJoinState(v: unknown): JoinHostState {
       blockSystemButtons: s.block_system_buttons === true,
       maxPlayers: num(s.max_players) ?? 3,
       streamSeat: s.stream_seat === true,
+      internetInvites: typeof s.internet_invites === "boolean" ? s.internet_invites : null,
+      hubUrl: typeof s.hub_url === "string" ? s.hub_url : "",
+      stun: Array.isArray(s.stun) ? s.stun.filter((x): x is string => typeof x === "string") : [],
+      upnp: s.upnp !== false,
     },
+    netPeers: readPeers((o.internet as Record<string, unknown> | null | undefined)?.peers ?? (inv?.internet as Record<string, unknown> | null | undefined)?.peers),
     seatNext: o.seat_next === true,
     helperOk: o.helper_ok !== false,
     reason: typeof o.reason === "string" && o.reason ? o.reason : null,
@@ -254,9 +316,65 @@ async function change(path: string, addr: string, body: object): Promise<JoinHos
   return read(addr);
 }
 
-/** The body of an invite call: `new` only for a fresh link. */
-export function inviteBody(renew: boolean): { new?: true } {
-  return renew ? { new: true } : {};
+/** The body of an invite call: `new` only for a fresh link, `internet` only for an internet one. */
+export function inviteBody(renew: boolean, internet = false): { new?: true; internet?: true } {
+  return { ...(renew ? { new: true as const } : {}), ...(internet ? { internet: true as const } : {}) };
+}
+
+/** Like `change`, but a refusal says why (`internet_off`, `hub_url`, `stun`…). */
+async function changeOrWhy(path: string, addr: string, body: object): Promise<JoinReply> {
+  try {
+    const r = await request(path, { addr, ...body });
+    if (!r.ok) return { error: errorOf(r.json) };
+  } catch {
+    return { error: "engine" };
+  }
+  const s = await read(addr);
+  return s ? { state: s } : { error: "engine" };
+}
+
+/** The settings of internet invites, as POST /api/join/settings takes them. */
+export interface NetSettingsBody {
+  internet_invites?: boolean;
+  hub_url?: string;
+  stun?: string[];
+  upnp?: boolean;
+}
+
+/** A hub address the engine takes: `wss://`, or `ws://` only to this computer (join_net::hub_url_ok). */
+export function hubUrlOk(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url.trim());
+  } catch {
+    return false;
+  }
+  if (!u.hostname) return false;
+  if (u.protocol === "wss:") return true;
+  if (u.protocol !== "ws:") return false;
+  const h = u.hostname.replace(/^\[|\]$/g, "");
+  return h === "localhost" || h === "::1" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h);
+}
+
+/** At most this many STUN servers (the engine's limit). */
+export const MAX_STUN = 8;
+
+/** STUN servers typed one per line: the list, or null when one is not `host:port` or there are
+ *  too many (join.rs stun_server_ok). A `stun:` prefix is dropped, empty lines skipped. */
+export function parseStun(text: string): string[] | null {
+  const list = text
+    .split(/\r?\n/)
+    .map((l) => l.trim().replace(/^stun:/, ""))
+    .filter(Boolean);
+  if (list.length > MAX_STUN) return null;
+  const ok = (s: string) => {
+    const i = s.lastIndexOf(":");
+    if (i <= 0) return false;
+    const host = s.slice(0, i).replace(/^\[/, "").replace(/\]$/, "");
+    const port = Number(s.slice(i + 1));
+    return /^\d+$/.test(s.slice(i + 1)) && port > 0 && port < 65536 && host.length <= 253 && /^[A-Za-z0-9.:-]+$/.test(host);
+  };
+  return list.every(ok) ? list : null;
 }
 
 export const joinApi = {
@@ -267,10 +385,17 @@ export const joinApi = {
    *  even then, and the old link and code stop working (#657: without `new` the engine hands
    *  back the same invite, so "New link" changed nothing). */
   invite: (addr: string, renew = false) => change("/api/join/invite", addr, inviteBody(renew)),
+  /** The invite with its internet link (`invite.internet.url`): friends anywhere join peer to
+   *  peer. A refusal says why: `internet_off` (off in the settings), `hub_url` (no usable hub
+   *  address), `closed`… An engine from before internet invites ignores `internet`: the state
+   *  then has no `invite.internet`. */
+  inviteInternet: (addr: string, renew = false) => changeOrWhy("/api/join/invite", addr, inviteBody(renew, true)),
   decide: (addr: string, id: number, allow: boolean) => change("/api/join/decide", addr, { id, allow }),
   kick: (addr: string, player: number) => change("/api/join/kick", addr, { player }),
   settings: (addr: string, s: { block_system_buttons?: boolean; max_players?: number; stream_seat?: boolean }) =>
     change("/api/join/settings", addr, s),
+  /** Internet invite settings; a refusal says which (`hub_url`, `stun`). */
+  netSettings: (addr: string, s: NetSettingsBody) => changeOrWhy("/api/join/settings", addr, s),
 };
 
 /** The engine's Play Together state for a console: every second while it is open (the delays

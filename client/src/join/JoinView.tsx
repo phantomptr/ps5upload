@@ -36,8 +36,9 @@ function seatTakenText(tr: Tr, host: string): string {
   );
 }
 
-/** The message for a guest who is not (or no longer) in the game. */
-export function endText(tr: Tr, stage: JoinStage, host: string): string {
+/** The message for a guest who is not (or no longer) in the game. `internet`: an internet invite
+ *  (WebRTC), where "the same network" is not the advice. */
+export function endText(tr: Tr, stage: JoinStage, host: string, internet = false): string {
   if (stage.kind === "refused") {
     switch (stage.why) {
       case "key":
@@ -87,6 +88,8 @@ export function endText(tr: Tr, stage: JoinStage, host: string): string {
       case "gave_up":
         return tr("join_ended_gave_up", { host }, `The connection to ${host} didn't come back in time.`);
       case "lost":
+        if (internet)
+          return tr("join_net_lost", { host }, `The connection to ${host} dropped. Check your internet connection, then ask again.`);
         return tr("join_ended_lost", { host }, `Couldn't reach ${host}. Check that you're on the same network.`);
       case "left":
         return tr("join_ended_left", undefined, "You left the game.");
@@ -406,7 +409,7 @@ export function JoinView({
       >
         <Users size={28} className="text-white/60" />
         <p className="max-w-sm text-base" data-testid="join-ended-text">
-          {endText(tr, stage, host)}
+          {endText(tr, stage, host, !!session.opts.transport)}
         </p>
         <div className="flex flex-wrap justify-center gap-2">
           {again && (
