@@ -265,35 +265,8 @@ pub(crate) fn ng_runtime() -> Result<Vec<u8>, String> {
 /// A file from the data dir's cache, fetched once and only kept or used when its SHA-256
 /// matches `sha`: what goes onto a console or into an image is exactly what was reviewed.
 fn fetch_pinned(url: &str, sha: &str, cache_name: &str, what: &str) -> Result<Vec<u8>, String> {
-    let cache = data_dir()?.join("cache");
-    let path = cache.join(cache_name);
-    let check = |bytes: &[u8]| -> bool {
-        use sha2::Digest;
-        let d = sha2::Sha256::digest(bytes);
-        let hex: String = d.iter().map(|b| format!("{b:02x}")).collect();
-        hex == sha
-    };
-    if let Ok(bytes) = std::fs::read(&path) {
-        if check(&bytes) {
-            return Ok(bytes);
-        }
-    }
-    let bytes = ureq::get(url)
-        .call()
-        .map_err(|e| format!("fetching {what}: {e}"))?
-        .body_mut()
-        .with_config()
-        .limit(16 << 20)
-        .read_to_vec()
-        .map_err(|e| format!("reading {what}: {e}"))?;
-    if !check(&bytes) {
-        return Err(format!(
-            "{what} downloaded does not match the digest this app expects; not used"
-        ));
-    }
-    std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
-    std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
-    Ok(bytes)
+    let path = data_dir()?.join("cache").join(cache_name);
+    crate::zstd_runtime::fetch_checked(&crate::zstd_runtime::http_get, url, sha, &path, what)
 }
 
 fn join(dir: &str, name: &str) -> String {

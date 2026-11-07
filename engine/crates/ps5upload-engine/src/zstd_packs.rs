@@ -19,8 +19,10 @@ use ps5upload_fpkg::sample::VerifyMode;
 use ps5upload_fpkg::source::{SourceFile, SourceTree};
 
 use crate::image_build::{ImageBuilt, ImageFormat};
+use crate::zstd_runtime::PackRuntime;
 
-/// ampr-emu-ng's release: fetched once, and only kept or used when its SHA-256 matches.
+/// ampr-emu-ng's tested release: fetched once, and only kept or used when its SHA-256 matches.
+/// What a pack build falls back to when the newest release can't be used (`zstd_runtime`).
 pub(crate) const NG_VERSION: &str = "0.3.2";
 pub(crate) const NG_URL: &str =
     "https://github.com/quer3q/ampr-emu-ng/releases/download/v0.3.2/libSceAmpr.sprx";
@@ -168,32 +170,58 @@ fn prepare<'a>(
     ))
 }
 
-/// Builds `source` as a plain image at `output` with its files in zstd packs at `level`:
-/// measured (stage `pack`), then written and read back as any image, then the packs read
-/// back through the same checks the emulator makes.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn build(
-    format: ImageFormat,
+/// A game read for packing: refused unless its eboot reads through AMPR (nothing else could
+/// serve packs), a game in LZ4 or zstd packs decoded, so the new packs are made from its files.
+/// The image and folder builds open their source through this, and a folder build's read-back
+/// opens it again the same way.
+pub(crate) fn readable_for_packing(
+    mut tree: Box<dyn SourceTree>,
+) -> Result<Box<dyn SourceTree>, String> {
+    if !ps5upload_fpkg::source::imports_ampr(&mut *tree, "eboot.bin") {
+        return Err(
+            "this game does not read its files through AMPR, so nothing could serve asset \
+             packs; compress it into a .ffpfsc instead"
+                .to_string(),
+        );
+    }
+    tree = match ps5upload_fpkg::ampr_pack::image::Lz4Unpacked::open(tree)
+        .map_err(|e| format!("reading the game's LZ4 packs: {e}"))?
+    {
+        ps5upload_fpkg::ampr_pack::image::Unpacking::Decoded(decoded) => decoded,
+        ps5upload_fpkg::ampr_pack::image::Unpacking::NotPacked(plain) => plain,
+    };
+    if ps5_dump_forge_zstd::reader::detect(&*tree) {
+        tree = Box::new(
+            ps5_dump_forge_zstd::reader::unpack(tree)
+                .map_err(|e| format!("reading the game's zstd packs: {e}"))?,
+        );
+    }
+    Ok(tree)
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
+/// The measure pass (stage `pack`): every packed chunk's codec and size, so the packs can be
+/// made on demand from the source.
+fn measure(
+    prepared: &mut Prepared,
+    packed: &[SourceFile],
     level: u8,
-    source: &mut dyn SourceTree,
-    output: &Path,
-    mode: VerifyMode,
-    verify_chunk: u64,
+    to: &Path,
     cancel: &AtomicBool,
     stage: &mut dyn FnMut(&str, u64, u64),
-) -> Result<ImageBuilt, String> {
-    let runtime = crate::ampr_trace::ng_runtime()?;
-    let mtime = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64);
-    let (mut prepared, packed) = prepare(source, runtime, mtime)?;
+) -> Result<ps5_dump_forge_zstd::Index, String> {
     let raw: u64 = packed.iter().map(|f| f.size).sum();
     // Each file counts twice in the writer's progress: one pass counted as two.
     let total = raw.saturating_mul(2);
     stage("pack", 0, total);
     let index = ps5_dump_forge_zstd::writer::measure(
-        &mut prepared,
-        &packed,
+        prepared,
+        packed,
         level,
         0,
         &mut |done| stage("pack", done.min(total), total),
@@ -210,8 +238,28 @@ pub(crate) fn build(
         "zstd packs: {} files, {raw} bytes to {stored} in {} volumes, level {level} -> {}",
         index.files.len(),
         index.volume_sizes.len(),
-        output.display()
+        to.display()
     );
+    Ok(index)
+}
+
+/// Builds `source` as a plain image at `output` with its files in zstd packs at `level`, and
+/// `runtime` as its emulator: measured (stage `pack`), then written and read back as any image,
+/// then the packs read back through the same checks the emulator makes.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build(
+    format: ImageFormat,
+    level: u8,
+    runtime: &PackRuntime,
+    source: &mut dyn SourceTree,
+    output: &Path,
+    mode: VerifyMode,
+    verify_chunk: u64,
+    cancel: &AtomicBool,
+    stage: &mut dyn FnMut(&str, u64, u64),
+) -> Result<ImageBuilt, String> {
+    let (mut prepared, packed) = prepare(source, runtime.bytes.clone(), now_secs())?;
+    let index = measure(&mut prepared, &packed, level, output, cancel, stage)?;
     let built = {
         let mut tree =
             PackedTree::new(&mut prepared, &index, 0, cancel).map_err(|e| e.to_string())?;
@@ -234,6 +282,70 @@ pub(crate) fn build(
         return Err(format!("reading the zstd packs back from the image: {e}"));
     }
     Ok(built)
+}
+
+/// Builds `source` as a plain folder `target` with its files in zstd packs at `level` and
+/// `runtime` as its emulator: what [`build`] puts in an image, as files. Measured (stage
+/// `pack`), then the packs made on demand from the source as the folder is written (`write`),
+/// then read back (`verify`): the index and every volume header through the emulator's checks,
+/// and every file of the game, read through the packs, against the source `reopen` opens
+/// afresh (SHA-256, of a sample or all of it as `mode` says). The caller has claimed the
+/// folder's `.partial`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_folder(
+    level: u8,
+    runtime: &PackRuntime,
+    source: &mut dyn SourceTree,
+    reopen: &dyn Fn() -> Result<Box<dyn SourceTree>, String>,
+    target: &Path,
+    mode: VerifyMode,
+    cancel: &AtomicBool,
+    stage: &mut dyn FnMut(&str, u64, u64),
+) -> Result<crate::folder_build::FolderBuilt, String> {
+    // A PS4 game gets the param.json ShadowMount+ reads, as its folder and image do.
+    let mut ps4 = ps5upload_fpkg::ps4_param::Ps4Params::wrap(&mut *source)
+        .map_err(|e| format!("param.sfo: {e}"))?;
+    let source: &mut dyn SourceTree = match ps4.as_mut() {
+        Some(p) => p,
+        None => source,
+    };
+    // The read-back makes the same index, so it keeps this time.
+    let mtime = now_secs();
+    let (mut prepared, packed) = prepare(source, runtime.bytes.clone(), mtime)?;
+    let index = measure(&mut prepared, &packed, level, target, cancel, stage)?;
+    let mut tree = PackedTree::new(&mut prepared, &index, 0, cancel).map_err(|e| e.to_string())?;
+    crate::folder_build::write_checked(
+        &mut tree,
+        target,
+        cancel,
+        stage,
+        &mut |partial, _, _, stage| {
+            stage("verify", 0, 0);
+            let written = ps5upload_fpkg::source::FolderSource::open(partial)
+                .map_err(|e| format!("the folder could not be read back: {e}"))?;
+            let mut game = ps5_dump_forge_zstd::reader::unpack(Box::new(written))
+                .map_err(|e| format!("reading the zstd packs back from the folder: {e}"))?;
+            let (packs, volumes) = (game.index().files.len(), game.index().volume_sizes.len());
+            let mut fresh = reopen()?;
+            let mut ps4 = ps5upload_fpkg::ps4_param::Ps4Params::wrap(&mut *fresh)
+                .map_err(|e| format!("param.sfo: {e}"))?;
+            let fresh: &mut dyn SourceTree = match ps4.as_mut() {
+                Some(p) => p,
+                None => &mut *fresh,
+            };
+            let (mut want, _) = prepare(fresh, runtime.bytes.clone(), mtime)?;
+            let checked = crate::folder_build::verify_trees(
+                &mut game,
+                &mut want,
+                mode,
+                cancel,
+                &mut |d, t| stage("verify", d, t),
+            )?;
+            Ok(format!(
+                "{packs} files in {volumes} zstd volumes read back through the packs, {checked}"
+            ))
+        },
+    )
 }
 
 #[cfg(test)]
@@ -348,6 +460,160 @@ mod tests {
             assert!(game.read("ampr_emu.log").is_err(), "{format:?}");
             let _ = std::fs::remove_file(&out);
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn runtime() -> PackRuntime {
+        PackRuntime {
+            name: "ampr-emu-ng",
+            version: "9.9.9".into(),
+            source: "pinned",
+            fallback_reason: None,
+            bytes: b"EMULATOR".to_vec(),
+        }
+    }
+
+    fn open_game(dir: &Path) -> Result<Box<dyn SourceTree>, String> {
+        let tree = FolderSource::open(dir).map_err(|e| e.to_string())?;
+        readable_for_packing(Box::new(tree))
+    }
+
+    /// A game folder packed into a folder: packs, loose system files and the emulator on disk;
+    /// the folder detects as zstd-packed and every file reads back through the packs as it was.
+    /// That folder packed again (its packs decoded first) gives the same game.
+    #[test]
+    fn a_game_folder_packs_into_a_folder_that_reads_back() {
+        let root =
+            std::env::temp_dir().join(format!("ps5upload-zstd-folder-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let src = game(&root);
+        let cancel = AtomicBool::new(false);
+        let target = root.join("packed");
+        let mut stages: Vec<String> = Vec::new();
+        let mut tree = open_game(&src).unwrap();
+        let built = build_folder(
+            5,
+            &runtime(),
+            &mut *tree,
+            &|| open_game(&src),
+            &target,
+            VerifyMode::Full,
+            &cancel,
+            &mut |id, _, _| {
+                if stages.last().map(String::as_str) != Some(id) {
+                    stages.push(id.to_string());
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(stages, ["pack", "write", "verify"]);
+        assert!(built.detail.contains("zstd volumes"), "{}", built.detail);
+        assert!(!crate::folder_build::partial_of(&target).exists());
+
+        // On disk: the packs, what stays loose, the emulator; the packed data and the run's log
+        // are not there as files.
+        assert!(target.join("ampr_zstd.index").is_file());
+        assert!(target.join("ampr_zstd-000.pak").is_file());
+        assert!(target.join("ampr_emu.index").is_file());
+        assert_eq!(
+            std::fs::read(target.join("fakelib/libSceAmpr.sprx")).unwrap(),
+            b"EMULATOR"
+        );
+        assert_eq!(
+            std::fs::read(target.join("eboot.bin")).unwrap(),
+            std::fs::read(src.join("eboot.bin")).unwrap()
+        );
+        assert!(target.join("sce_sys/param.json").is_file());
+        assert!(!target.join("data/sub/table.bin").exists());
+        assert!(!target.join("data/settings.json").exists());
+        assert!(!target.join("ampr_emu.log").exists());
+        assert!(!target.join(crate::folder_build::MARKER).exists());
+
+        let check = |dir: &Path| {
+            let folder = FolderSource::open(dir).unwrap();
+            assert!(
+                ps5_dump_forge_zstd::reader::detect(&folder),
+                "{}",
+                dir.display()
+            );
+            let mut game = ps5_dump_forge_zstd::reader::unpack(Box::new(folder)).unwrap();
+            for name in [
+                "eboot.bin",
+                "sce_sys/param.json",
+                "data/sub/table.bin",
+                "data/settings.json",
+                "data/empty.bin",
+            ] {
+                assert_eq!(
+                    game.read(name).unwrap(),
+                    std::fs::read(src.join(name)).unwrap(),
+                    "{name} in {}",
+                    dir.display()
+                );
+            }
+            assert_eq!(game.read("fakelib/libSceAmpr.sprx").unwrap(), b"EMULATOR");
+            assert!(game.read("ampr_emu.log").is_err());
+        };
+        check(&target);
+
+        // The packed folder as the source: decoded, packed again at another level.
+        let again = root.join("packed-again");
+        let mut tree = open_game(&target).unwrap();
+        build_folder(
+            1,
+            &runtime(),
+            &mut *tree,
+            &|| open_game(&target),
+            &again,
+            VerifyMode::from_full(false, false),
+            &cancel,
+            &mut |_, _, _| {},
+        )
+        .unwrap();
+        check(&again);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The read-back compares the game read through the packs with the source opened again: a
+    /// source that reads differently the second time fails the build and leaves nothing.
+    #[test]
+    fn a_folder_that_does_not_read_back_as_the_source_is_not_kept() {
+        let root =
+            std::env::temp_dir().join(format!("ps5upload-zstd-folder-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let src = game(&root);
+        let changed = root.join("changed");
+        std::fs::create_dir_all(&changed).unwrap();
+        // The same game with one byte of a packed file different.
+        let copy = |from: &Path, to: &Path| {
+            for f in FolderSource::open(from).unwrap().files() {
+                let dest = to.join(&f.path);
+                std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+                std::fs::copy(from.join(&f.path), dest).unwrap();
+            }
+        };
+        copy(&src, &changed);
+        let mut table = std::fs::read(changed.join("data/sub/table.bin")).unwrap();
+        table[5] ^= 1;
+        std::fs::write(changed.join("data/sub/table.bin"), table).unwrap();
+        let target = root.join("packed");
+        let mut tree = open_game(&src).unwrap();
+        let err = build_folder(
+            5,
+            &runtime(),
+            &mut *tree,
+            &|| open_game(&changed),
+            &target,
+            VerifyMode::Full,
+            &AtomicBool::new(false),
+            &mut |_, _, _| {},
+        )
+        .unwrap_err();
+        assert!(err.contains("data/sub/table.bin"), "{err}");
+        assert!(!target.exists());
+        assert!(!crate::folder_build::partial_of(&target).exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 }

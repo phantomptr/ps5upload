@@ -461,6 +461,70 @@ fn build_tree(
     cancel: &AtomicBool,
     stage: &mut dyn FnMut(&str, u64, u64),
 ) -> Result<FolderBuilt, String> {
+    write_checked(
+        tree,
+        target,
+        cancel,
+        stage,
+        &mut |partial, listed, empty_dirs, stage| {
+            let mut fresh = reopen()?;
+            let mut ps4 = ps5upload_fpkg::ps4_param::Ps4Params::wrap(&mut *fresh)
+                .map_err(|e| e.to_string())?;
+            let plain: &mut dyn SourceTree = match ps4.as_mut() {
+                Some(p) => p,
+                None => &mut *fresh,
+            };
+            let mut indexed = match index_mtime {
+                Some(m) => crate::image_build::AmprIndexed::wrap_at(&mut *plain, m)?,
+                None => None,
+            };
+            let source: &mut dyn SourceTree = match indexed.as_mut() {
+                Some(i) => i,
+                None => plain,
+            };
+            let summary = verify(
+                partial,
+                listed,
+                empty_dirs,
+                source,
+                mode,
+                cancel,
+                &mut |d, t| stage("verify", d, t),
+            )?;
+            Ok(describe(&summary))
+        },
+    )
+}
+
+/// How a read-back went, for the job's detail.
+fn describe(summary: &VerifySummary) -> String {
+    match summary.mode {
+        VerifyMode::Full => "SHA-256 checked in full".to_string(),
+        VerifyMode::Fast { .. } => summary.describe(),
+    }
+}
+
+/// The read-back of a folder [`write_checked`] wrote: given the `.partial` folder, the files
+/// written (path, size), the empty folders and the stage reporter, the check's description or
+/// why it failed.
+pub(crate) type Check<'a> = dyn FnMut(
+        &Path,
+        &[(String, u64)],
+        &[String],
+        &mut dyn FnMut(&str, u64, u64),
+    ) -> Result<String, String>
+    + 'a;
+
+/// Writes `tree` as the folder `target`: its paths checked, written into `<target>.partial/`,
+/// `check`ed there, then renamed. `stage` reports `write` (and whatever `check` reports). The
+/// caller has claimed the `.partial`; on any failure it is removed here.
+pub(crate) fn write_checked(
+    tree: &mut dyn SourceTree,
+    target: &Path,
+    cancel: &AtomicBool,
+    stage: &mut dyn FnMut(&str, u64, u64),
+    check: &mut Check,
+) -> Result<FolderBuilt, String> {
     if tree.files().is_empty() {
         return Err(format!("{} has no files in it", tree.describe()));
     }
@@ -505,31 +569,7 @@ fn build_tree(
             return Err("cancelled".into());
         }
 
-        let mut fresh = reopen()?;
-        let mut ps4 =
-            ps5upload_fpkg::ps4_param::Ps4Params::wrap(&mut *fresh).map_err(|e| e.to_string())?;
-        let plain: &mut dyn SourceTree = match ps4.as_mut() {
-            Some(p) => p,
-            None => &mut *fresh,
-        };
-        let mut indexed = match index_mtime {
-            Some(m) => crate::image_build::AmprIndexed::wrap_at(&mut *plain, m)?,
-            None => None,
-        };
-        let source: &mut dyn SourceTree = match indexed.as_mut() {
-            Some(i) => i,
-            None => plain,
-        };
-        let summary = verify(
-            &partial,
-            &listed,
-            &empty_dirs,
-            source,
-            mode,
-            cancel,
-            &mut |d, t| stage("verify", d, t),
-        )?;
-        drop(fresh);
+        let checked = check(&partial, &listed, &empty_dirs, stage)?;
         std::fs::remove_file(partial.join(MARKER)).map_err(|e| e.to_string())?;
         if target.exists() {
             return Err(format!(
@@ -542,13 +582,9 @@ fn build_tree(
             files: listed.len() as u64,
             bytes: total,
             detail: format!(
-                "{} files, {} empty folders, {total} bytes, {}",
+                "{} files, {} empty folders, {total} bytes, {checked}",
                 listed.len(),
                 empty_dirs.len(),
-                match summary.mode {
-                    VerifyMode::Full => "SHA-256 checked in full".to_string(),
-                    VerifyMode::Fast { .. } => summary.describe(),
-                }
             ),
         })
     })();
@@ -559,6 +595,77 @@ fn build_tree(
         Err(_) if cancel.load(Ordering::Relaxed) => Err("cancelled".into()),
         r => r,
     }
+}
+
+/// Compares two trees: `got` must hold exactly `want`'s files at their sizes (a file named
+/// [`MARKER`] in `got` aside), and the SHA-256 of what `mode` samples (or of every byte) must
+/// match. `progress(done, total)` as [`verify`] reports it. The description of the check.
+pub(crate) fn verify_trees(
+    got: &mut dyn SourceTree,
+    want: &mut dyn SourceTree,
+    mode: VerifyMode,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64, u64),
+) -> Result<String, String> {
+    let mut listed: Vec<(String, u64)> = want
+        .files()
+        .iter()
+        .map(|f| (f.path.clone(), f.size))
+        .collect();
+    listed.sort();
+    let mut have: Vec<(String, u64)> = got
+        .files()
+        .iter()
+        .filter(|f| f.path != MARKER)
+        .map(|f| (f.path.clone(), f.size))
+        .collect();
+    have.sort();
+    if have != listed {
+        let missing = listed.iter().find(|f| !have.contains(f));
+        let extra = have.iter().find(|f| !listed.contains(f));
+        return Err(match (missing, extra) {
+            (Some((p, s)), _) => format!("{p} ({s} bytes) did not read back"),
+            (None, Some((p, s))) => format!("{p} ({s} bytes) read back but is not in the source"),
+            (None, None) => "the files read back differ from the source".to_string(),
+        });
+    }
+    let summary = sample::summary(&listed, mode);
+    let pieces: Vec<(usize, u64, u64)> = match mode {
+        VerifyMode::Full => listed
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.1 > 0)
+            .map(|(i, f)| (i, 0, f.1))
+            .collect(),
+        VerifyMode::Fast { seed, seam } => sample::plan(&listed, seed, seam)
+            .into_iter()
+            .map(|s| {
+                let (at, len) = s.range(listed[s.file_idx].1);
+                (s.file_idx, at, len)
+            })
+            .collect(),
+    };
+    let total = summary.checked_bytes;
+    let mut done = 0u64;
+    progress(0, total);
+    for (i, at, len) in pieces {
+        let path = &listed[i].0;
+        let (a, b) = {
+            let mut sides = BothSides::new(done, total, &mut *progress);
+            let a = hash_source(want, path, at, len, cancel, &mut |n| sides.read(n))?;
+            let b = hash_source(got, path, at, len, cancel, &mut |n| sides.read(n))?;
+            (a, b)
+        };
+        if a != b {
+            return Err(format!(
+                "{path} (bytes {at}..{}) reads back differently from the source",
+                at + len
+            ));
+        }
+        done += len;
+        progress(done, total);
+    }
+    Ok(describe(&summary))
 }
 
 /// Saves the one file `path` (`size` bytes) of `tree` as the file `target` (#479, the image

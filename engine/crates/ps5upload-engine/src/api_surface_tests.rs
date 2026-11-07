@@ -919,3 +919,71 @@ async fn every_name_for_the_console_works_on_the_routes_that_lacked_them() {
     let text = json_of(resp).await["error"].as_str().unwrap().to_string();
     assert!(text.contains("duplicate field"), "{text}");
 }
+
+/// A packed folder build: a game folder is a source only with `ampr_zstd`, and the request is
+/// refused before any job when its options cannot work. Nothing here starts a build.
+#[tokio::test]
+async fn a_folder_build_with_zstd_packs_takes_a_game_folder_and_refuses_what_cannot_work() {
+    let app = app();
+    let root = std::env::temp_dir().join(format!("ps5upload-zstd-req-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let game = root.join("PPSA99996-app");
+    std::fs::create_dir_all(game.join("sce_sys")).unwrap();
+    std::fs::write(game.join("sce_sys/param.json"), b"{}").unwrap();
+    std::fs::write(game.join("eboot.bin"), b"eboot").unwrap();
+    let not_game = root.join("photos");
+    std::fs::create_dir_all(&not_game).unwrap();
+    let out = root.join("out");
+    let body = |source: &std::path::Path, extra: &Value| {
+        let mut v = json!({ "source": source, "output_dir": out });
+        v.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        v.to_string()
+    };
+    async fn refused(resp: HttpResponse<Body>, status: StatusCode) -> String {
+        assert_eq!(resp.status(), status);
+        json_of(resp).await["error"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    // Without packs a folder is a folder already.
+    let r = post_json(&app, "/api/folder/build", &body(&game, &json!({}))).await;
+    let text = refused(r, StatusCode::BAD_REQUEST).await;
+    assert!(text.contains("already a folder"), "{text}");
+    // A level out of range, a part of a game, a folder that is no game, packs inside the game.
+    for (source, extra, want) in [
+        (
+            &game,
+            json!({ "ampr_zstd": { "level": 30 } }),
+            "zstd level 30",
+        ),
+        (
+            &game,
+            json!({ "ampr_zstd": { "level": 5 }, "entry": "sce_sys" }),
+            "whole game",
+        ),
+        (&not_game, json!({ "ampr_zstd": {} }), "param"),
+        (
+            &game,
+            json!({ "ampr_zstd": {}, "output_dir": game.join("packed") }),
+            "inside the game folder",
+        ),
+    ] {
+        let r = post_json(&app, "/api/folder/build", &body(source, &extra)).await;
+        let text = refused(r, StatusCode::BAD_REQUEST).await;
+        assert!(text.contains(want), "{extra}: {text}");
+    }
+    // The runtime is one of two words.
+    let r = post_json(
+        &app,
+        "/api/folder/build",
+        &body(&game, &json!({ "ampr_zstd": { "runtime": "nightly" } })),
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(!out.exists(), "nothing was written");
+    let _ = std::fs::remove_dir_all(&root);
+}
