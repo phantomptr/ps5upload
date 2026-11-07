@@ -167,7 +167,7 @@ export const useConvertPrefs = create<ConvertPrefs>((set) => ({
 
 // A change synced from another device shows at once (lib/liveSettings).
 registerSettingReload(
-  [KEY_DIR, KEY_PLACE, KEY_VERIFY_CHUNK, KEY_FULL_VERIFY, KEY_MAKE, KEY_IMAGE_FORMAT, KEY_IMAGE_COMPRESS, KEY_IMAGE_LEVEL, "ps5upload.convert.compression"],
+  [KEY_DIR, KEY_PLACE, KEY_VERIFY_CHUNK, KEY_FULL_VERIFY, KEY_ADD_AMPR_EMU, KEY_AMPR_EMU_BUILD, KEY_MAKE, KEY_IMAGE_FORMAT, KEY_IMAGE_COMPRESS, KEY_IMAGE_LEVEL, "ps5upload.convert.compression"],
   () =>
     useConvertPrefs.setState({
       outputDir: safeGetItem(KEY_DIR) ?? "",

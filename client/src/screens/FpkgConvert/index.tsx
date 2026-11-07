@@ -175,6 +175,7 @@ export default function WorkshopScreen() {
   const [lz4Profile, setLz4Profile] = useState<{ name: string; text: string } | null>(null);
   const [lz4InstallRuntime, setLz4InstallRuntime] = useState(false);
   const [packKind, setPackKind] = useState<"lz4" | "zstd">("lz4");
+  const [emuAddedTo, setEmuAddedTo] = useState<string | null>(null);
   const [zstdLevel, setZstdLevel] = useState(5);
   const build: ConvertBuild =
     make === "image"
@@ -278,6 +279,10 @@ export default function WorkshopScreen() {
   }, []);
   const [source, setSource] = useState(pipeline.phase === "idle" ? "" : pipeline.source);
   const [inspection, setInspection] = useState<FpkgInspection | null>(null);
+  // A PS4 game can't become a PS5 package: the build this screen offers next is an image.
+  useEffect(() => {
+    if (inspection?.ps4_game && make === "pkg") setMake("image");
+  }, [inspection?.ps4_game, make, setMake]);
   // "pending" while the sample runs; null when it failed or there is no game.
   const [estimates, setEstimates] = useState<FpkgEstimates | "pending" | null>(null);
   // Only the newest check (and its estimate) may land: a slow check of an earlier game must not
@@ -678,7 +683,8 @@ export default function WorkshopScreen() {
   const mountable = drives.canMount && !locked && isDriveImage(source) && !source.startsWith("ps5://") && !isRemotePath(source);
   // #621: a libSceAmpr game's ampr_emu.index made again from its files, without converting.
   const indexable = !inside && amprIndexPlan(source, inspection) !== "hidden";
-  const emulatable = !inside && amprEmuOffered(source, inspection);
+  // Kept on screen after adding it, when the check no longer offers it: it says what it did.
+  const emulatable = !inside && (amprEmuOffered(source, inspection) || emuAddedTo === source);
   /** A .ffpfsc's index is renewed by making a fresh .ffpfsc of it. */
   const convertAgain = () => {
     if (!src || locked) return;
@@ -728,7 +734,10 @@ export default function WorkshopScreen() {
           <AmprEmuTool
             source={source}
             locked={locked}
-            onAdded={() => void recheckQuietly(source)}
+            onAdded={() => {
+              setEmuAddedTo(source);
+              void recheckQuietly(source);
+            }}
           />
         )}
         {indexable && (

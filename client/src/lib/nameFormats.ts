@@ -197,7 +197,9 @@ function safeName(s: string): string {
     // eslint-disable-next-line no-control-regex
     .replace(/[/\\*?"<>|\u0000-\u001f]/g, "")
     .replace(/ {2,}/g, " ")
-    .trim();
+    .trim()
+    // A leading dot would hide the game from ShadowMount+'s scan.
+    .replace(/^[. ]+/, "");
 }
 
 /** The name without extension, or null when a needed value is missing or the format is bad. */

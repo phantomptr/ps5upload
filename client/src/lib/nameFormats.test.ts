@@ -40,6 +40,11 @@ describe("name formats", () => {
     expect(nameFormatProblem("{title} [USA]")).toBeNull();
   });
 
+  it("doesn't hide a game whose title starts with a dot", () => {
+    expect(suggestedName("{title}", { title: ".hack//G.U." }, "a.exfat", false)).toBe("hackG.U..exfat");
+    expect(suggestedName("{title}", { title: ".hack" }, ".a.exfat", false)).toBe(".hack.exfat");
+  });
+
   it("keeps a hidden name hidden and a file's extension", () => {
     expect(suggestedName("{id}", v, ".old.exfat", false)).toBe(".PPSA00000.exfat");
     expect(suggestedName("{id}", v, "my.folder", true)).toBe("PPSA00000");

@@ -69,7 +69,11 @@ export function emptyForm(): FormValue {
 /** A new protocol brings its default port, unless the user had typed their own. */
 export function switchProtocol(v: FormValue, protocol: Protocol): FormValue {
   const port = v.port === DEFAULT_PORT[v.protocol] ? DEFAULT_PORT[protocol] : v.port;
-  return { ...v, protocol, port, authKind: protocol === "sftp" ? v.authKind : "password" };
+  const next = { ...v, protocol, port, authKind: protocol === "sftp" ? v.authKind : ("password" as const) };
+  // NFS's user is a user and group ID and its share an export: neither carries over.
+  return (protocol === "nfs") !== (v.protocol === "nfs")
+    ? { ...next, user: "", share: "", password: "", guest: false }
+    : next;
 }
 
 const SMB_SCHEME = /^(smb|cifs):\/\//i;

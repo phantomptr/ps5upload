@@ -50,7 +50,7 @@ export function AmprEmuTool({
         variant="secondary"
         leftIcon={<PackagePlus size={14} />}
         data-testid="ampr-emu-add"
-        disabled={locked || busy}
+        disabled={locked || busy || !!done}
         title={tr(
           "ampr_emu_add_hint",
           undefined,
