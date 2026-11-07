@@ -41,6 +41,7 @@ import {
   stopEngineSession,
   touchAt,
   FIT_ORDER,
+  PadButton,
   type PictureFit,
   type StreamError,
   type StreamStats,
@@ -58,6 +59,7 @@ import {
   COMPACT_QUERY,
   docFullscreen,
   focusForControllers,
+  holdControllerHome,
   holdPageStill,
   inAndroidApp,
   isPhoneSized,
@@ -484,6 +486,18 @@ export function StreamPanel() {
   // whenever a stream starts here.
   useEffect(() => {
     focusForControllers();
+  }, [running]);
+  // iOS: the PS button goes to the console during a stream, not to the system's Games overlay
+  // (#675). A controller paired later gets the same.
+  useEffect(() => {
+    if (!running) return;
+    const hold = () => holdControllerHome(true);
+    hold();
+    window.addEventListener("gamepadconnected", hold);
+    return () => {
+      window.removeEventListener("gamepadconnected", hold);
+      holdControllerHome(false);
+    };
   }, [running]);
   // The phone's motion sensors as the controller's, while it plays and motion controls are on.
   useEffect(() => {
@@ -1049,6 +1063,16 @@ export function StreamPanel() {
     pipKind,
     onClose: () => setMenuOpen(false),
     onExitFull: exitFull,
+    // Always reachable, whatever the system does with a controller's own PS button (#675).
+    onPsButton: () => {
+      setMenuOpen(false);
+      rpInput.touchPad = { ...rpInput.touchPad, buttons: rpInput.touchPad.buttons | PadButton.PS };
+      stream?.sendPad();
+      window.setTimeout(() => {
+        rpInput.touchPad = { ...rpInput.touchPad, buttons: rpInput.touchPad.buttons & ~PadButton.PS };
+        stream?.sendPad();
+      }, 150);
+    },
     onPip: () => {
       setMenuOpen(false);
       void togglePip();
@@ -1122,11 +1146,11 @@ export function StreamPanel() {
                   ? {
                       // Both sides by the same amount, so the picture stays in the middle: a notch
                       // has the same inset each side, and an iPhone Duo's column of system icons
-                      // is on one side only and can sit over the picture.
+                      // is on one side only and can sit over the picture. Nothing top and bottom:
+                      // an open Duo held sideways has large insets there, and they left the picture
+                      // far shorter than the screen (#675). A video player draws under them too.
                       paddingLeft: PICTURE_SIDE,
                       paddingRight: PICTURE_SIDE,
-                      paddingTop: "env(safe-area-inset-top)",
-                      paddingBottom: "env(safe-area-inset-bottom)",
                     }
                   : undefined
             }

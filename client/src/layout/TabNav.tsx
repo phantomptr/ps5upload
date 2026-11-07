@@ -1,5 +1,6 @@
 // Tabs are Links, not NavLinks: a NavLink sets aria-current from its own path alone, so the
 // Games tab told screen readers nothing while Collection, Saves or Captures was open.
+import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router";
 import {
   LayoutDashboard,
@@ -126,6 +127,48 @@ function PlayingDot() {
   );
 }
 
+/** The smallest column of system icons worth moving the tabs into. A notch has about the same
+ *  inset on both sides, and on phones it's under this while the width is a phone's. */
+const RAIL_MIN_INSET = 56;
+
+/** Which side has a column of its own for the tabs: an iPhone Duo folded has its system icons in a
+ *  column down one side, with empty room below them (#675). */
+export function railSide(left: number, right: number): "left" | "right" | null {
+  const wide = Math.max(left, right);
+  if (wide < RAIL_MIN_INSET || Math.min(left, right) > wide / 2) return null;
+  return right >= left ? "right" : "left";
+}
+
+/** The side the tabs go down, if any. The whole shell follows `html[data-tab-rail]` (index.css). */
+function useSideRail() {
+  const [side, setSide] = useState<"left" | "right" | null>(null);
+  const el = useRef<HTMLSpanElement | null>(null);
+  useEffect(() => {
+    const measure = () => {
+      const p = el.current;
+      if (!p) return;
+      const c = getComputedStyle(p);
+      setSide(railSide(parseFloat(c.paddingLeft) || 0, parseFloat(c.paddingRight) || 0));
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    window.addEventListener("orientationchange", measure);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("orientationchange", measure);
+    };
+  }, []);
+  useEffect(() => {
+    const root = document.documentElement;
+    if (side) root.dataset.tabRail = side;
+    else delete root.dataset.tabRail;
+    return () => {
+      delete root.dataset.tabRail;
+    };
+  }, [side]);
+  return [side, el] as const;
+}
+
 function useActiveTab(): string | null {
   return tabForPath(useLocation().pathname);
 }
@@ -138,11 +181,15 @@ export function TabBottomNav() {
   const tr = useTr();
   const activeTab = useActiveTab();
   const playing = useAnyGameRunning();
+  const [railAt, railProbe] = useSideRail();
 
   return (
     <>
+      {/* Measures the insets (useSideRail). */}
+      <span ref={railProbe} aria-hidden className="tab-rail-probe" />
       <nav
         data-bottom-nav
+        data-rail={railAt ?? undefined}
         aria-label={tr("v5_tab_primary_nav", undefined, "Primary")}
         // Floats above the gesture bar: the safe area is a margin here, not
         // padding, so the pill keeps its shape on every phone.

@@ -98,6 +98,13 @@ export function focusForControllers(): void {
   if (isTauriEnv() && isIOS()) void invoke("focus_webview").catch(() => {});
 }
 
+/** The iOS app: ask for the controller's PS button for the page rather than the system. The
+ *  system only agrees when the user's Home button setting allows it; otherwise the menu's PS
+ *  button is the way. */
+export function holdControllerHome(on: boolean): void {
+  if (isTauriEnv() && isIOS()) void invoke("hold_controller_home", { on }).catch(() => {});
+}
+
 /** Test hook: forget what the Android app was asked for. */
 export function resetAndroidUiForTest(): void {
   androidUi.immersive = false;
