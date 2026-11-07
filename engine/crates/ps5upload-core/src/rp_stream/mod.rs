@@ -71,7 +71,8 @@ pub use self::proto::Resolution;
 pub use self::video::{FrameAssembler, VideoStats};
 
 const STREAM_PORT: u16 = 9296;
-const MTU: u32 = 1454;
+#[cfg(test)]
+const MTU: u32 = takion::MTU_LAN;
 const RTT_MS: u32 = 1;
 /// Takion protocol version a PS5 speaks.
 const TAKION_VERSION_PS5: u32 = 12;
@@ -176,6 +177,14 @@ pub struct LiveStats {
     /// see `Takion::rtt`). Absent until measured.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub console_rtt_ms: Option<f64>,
+    /// Sound since the start: Opus frames passed on, packets in a format we don't play (and the
+    /// last such codec), and whether the stream's info carried a sound header. With video
+    /// flowing, these say whether the PS5 sends no sound or sound this app can't play.
+    pub audio_frames_total: u64,
+    pub audio_other_codec: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_last_other_codec: Option<u8>,
+    pub audio_header: bool,
     /// The console's last connection-quality report, raw (see `proto::ConnectionQuality`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quality: Option<proto::ConnectionQuality>,
@@ -618,7 +627,7 @@ fn ctrl_msg(kind: u16) -> [u8; 8] {
     h
 }
 
-fn launch_spec(cfg: &StreamConfig, handshake_key: &[u8; HANDSHAKE_KEY_SIZE]) -> String {
+fn launch_spec(cfg: &StreamConfig, handshake_key: &[u8; HANDSHAKE_KEY_SIZE], mtu: u32) -> String {
     let codec = if cfg.codec.is_hevc() { "hevc" } else { "avc" };
     let range = if cfg.codec == Codec::H265Hdr {
         "HDR"
@@ -640,7 +649,7 @@ fn launch_spec(cfg: &StreamConfig, handshake_key: &[u8; HANDSHAKE_KEY_SIZE]) -> 
         h = cfg.height,
         fps = cfg.fps,
         bw = cfg.bitrate_kbps,
-        mtu = MTU,
+        mtu = mtu,
         rtt = RTT_MS,
         hk = b64(handshake_key),
     )
@@ -793,6 +802,9 @@ pub struct StreamReport {
     pub av_packets: u64,
     pub av_bad_mac: u64,
     pub audio_frames: u64,
+    /// Audio packets in a format other than Opus, and whether the stream info had a header.
+    pub audio_other_codec: u64,
+    pub audio_header: bool,
     pub av_dropped_on_purpose: u64,
     /// Units the congestion reports covered, lost as seen, and lost as reported.
     pub units_seen: u64,
@@ -930,7 +942,7 @@ pub fn run_stream(
 
     // The launch spec is XORed with the ctrl cipher's keystream at counter 0
     // (chiaki encrypts zeros, then XORs), NUL terminator included.
-    let mut spec = launch_spec(&cfg, &handshake_key).into_bytes();
+    let mut spec = launch_spec(&cfg, &handshake_key, takion.mtu).into_bytes();
     spec.push(0);
     let ks = auth_encrypt(&brt, &amb, 0, &vec![0u8; spec.len()]);
     for (b, k) in spec.iter_mut().zip(ks) {
@@ -1020,7 +1032,11 @@ pub fn run_stream(
     }
     let mut mic_sender = mic::AudioSender::new();
     let (mut mic_connected, mut mic_live) = (false, false);
-    if !si.audio_header.is_empty() {
+    // Without a header the player never sets up its decoder, and every frame after is dropped
+    // with no word: if Opus frames come anyway, the standard header is sent before the first.
+    let mut audio_header_sent = AudioHeader::parse(&si.audio_header).is_some();
+    let audio_header_from_console = audio_header_sent;
+    if audio_header_sent {
         sink.audio(&si.audio_header, true);
     }
     let mut audio = AudioAssembler::default();
@@ -1152,6 +1168,10 @@ pub fn run_stream(
                 units: std::mem::take(&mut second_units),
                 units_lost: std::mem::take(&mut second_units_lost),
                 console_rtt_ms: takion.rtt().map(|d| d.as_secs_f64() * 1000.0),
+                audio_frames_total: audio.frames,
+                audio_other_codec: audio.other_codec,
+                audio_last_other_codec: audio.last_other_codec,
+                audio_header: audio_header_from_console,
                 quality,
             }));
             stats_prev = now;
@@ -1274,7 +1294,12 @@ pub fn run_stream(
                 }
             }
             Event::Av(p) => {
-                for (idx, frame) in audio.push(&p) {
+                let frames = audio.push(&p);
+                if !audio_header_sent && !frames.is_empty() {
+                    audio_header_sent = true;
+                    sink.audio(&AudioHeader::default_bytes(), true);
+                }
+                for (idx, frame) in frames {
                     let mut f = Vec::with_capacity(2 + frame.len());
                     f.extend_from_slice(&idx.to_be_bytes());
                     f.extend_from_slice(&frame);
@@ -1293,6 +1318,8 @@ pub fn run_stream(
     report.av_packets = takion.av_received;
     report.av_bad_mac = takion.av_bad_mac;
     report.audio_frames = audio.frames;
+    report.audio_other_codec = audio.other_codec;
+    report.audio_header = audio_header_from_console;
     report.av_dropped_on_purpose = takion.av_dropped_on_purpose;
     report.bytes_received = takion.bytes_received;
     report.data_resent = takion.data_resent;
@@ -1345,7 +1372,7 @@ mod tests {
 
     #[test]
     fn launch_spec_is_valid_json() {
-        let s = launch_spec(&StreamConfig::default(), &[0u8; 16]);
+        let s = launch_spec(&StreamConfig::default(), &[0u8; 16], MTU);
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();
         assert_eq!(v["videoCodec"], "avc");
         assert_eq!(v["network"]["mtu"], 1454);
@@ -1361,7 +1388,7 @@ mod tests {
                 codec,
                 ..Default::default()
             };
-            serde_json::from_str::<serde_json::Value>(&launch_spec(&cfg, &[0u8; 16])).unwrap()
+            serde_json::from_str::<serde_json::Value>(&launch_spec(&cfg, &[0u8; 16], MTU)).unwrap()
         };
         let hdr = spec(Codec::H265Hdr);
         assert_eq!(hdr["videoCodec"], "hevc");
@@ -1402,8 +1429,8 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            launch_spec(&on, &[0u8; 16]),
-            launch_spec(&StreamConfig::default(), &[0u8; 16])
+            launch_spec(&on, &[0u8; 16], MTU),
+            launch_spec(&StreamConfig::default(), &[0u8; 16], MTU)
         );
         assert!(!StreamConfig::default().mic);
         assert!(!StreamConfig::default().dualsense);
@@ -1426,8 +1453,8 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            launch_spec(&on, &[0u8; 16]),
-            launch_spec(&StreamConfig::default(), &[0u8; 16])
+            launch_spec(&on, &[0u8; 16], MTU),
+            launch_spec(&StreamConfig::default(), &[0u8; 16], MTU)
         );
     }
 

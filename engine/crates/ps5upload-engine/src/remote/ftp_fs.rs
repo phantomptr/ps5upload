@@ -70,6 +70,9 @@ fn plain_listing_line(line: &str, mlsd: bool) -> Option<Entry> {
             mtime: None,
         });
     }
+    if let Some(e) = plain_dos_line(line) {
+        return Some(e);
+    }
     // `ls -l`: mode, links, owner, [group], size, three parts of a date, then the name, which may
     // hold any spaces. Split by hand, so the name comes out as it is.
     let mut rest = line.trim_start();
@@ -102,6 +105,54 @@ fn plain_listing_line(line: &str, mlsd: bool) -> Option<Entry> {
         name: name.to_string(),
         is_dir,
         size: if is_dir { 0 } else { size.parse().unwrap_or(0) },
+        mtime: None,
+    })
+}
+
+/// A Windows (IIS) `DIR` line the library refuses: it reads only `MM-DD-YY  HH:MMAM`, and IIS set
+/// to four-digit years or a 24-hour clock writes `11-06-2026  14:00`. Date, time, an optional
+/// AM/PM, then `<DIR>` or the size (commas allowed), then the name, spaces and all.
+fn plain_dos_line(line: &str) -> Option<Entry> {
+    fn token(s: &str) -> Option<(&str, &str)> {
+        let s = s.trim_start();
+        let end = s.find(char::is_whitespace)?;
+        Some((&s[..end], &s[end..]))
+    }
+    let (date, rest) = token(line)?;
+    let parts: Vec<&str> = date.split(['-', '/', '.']).collect();
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if parts.len() != 3 || !parts.iter().all(|p| digits(p) && p.len() <= 4) {
+        return None;
+    }
+    let (time, mut rest) = token(rest)?;
+    let time_core = time.trim_end_matches(|c: char| c.is_ascii_alphabetic());
+    let (h, m) = time_core.split_once(':')?;
+    if !digits(h) || !digits(m) {
+        return None;
+    }
+    if let Some((ampm, after)) = token(rest) {
+        if ampm.eq_ignore_ascii_case("AM") || ampm.eq_ignore_ascii_case("PM") {
+            rest = after;
+        }
+    }
+    let (size, rest) = token(rest)?;
+    let name = rest.trim_start().trim_end_matches(['\r', '\n']);
+    if name.is_empty() {
+        return None;
+    }
+    let is_dir = size.eq_ignore_ascii_case("<DIR>");
+    let bytes: String = size.chars().filter(|c| *c != ',' && *c != '.').collect();
+    if !is_dir && !digits(&bytes) {
+        return None;
+    }
+    Some(Entry {
+        name: name.to_string(),
+        is_dir,
+        size: if is_dir {
+            0
+        } else {
+            bytes.parse().unwrap_or(0)
+        },
         mtime: None,
     })
 }
@@ -515,10 +566,17 @@ impl FtpFs {
         let host = self.host.as_str();
         let mlsd = self.mlsd;
         timed(host, "a folder listing", async move {
+            // Into the folder, then list it with no argument (as FileZilla does): many servers
+            // (Pure-FTPd, a Keenetic router's) read a LIST/MLSD argument as a pattern, so a
+            // folder named "[PS5] Hellblade [RUS text, …]" listed by its path matched nothing
+            // and showed empty (Discord: its .ffpfsc showed over SMB, not FTP). Every
+            // other command here names an absolute path, so the working folder is free to move.
+            let here = s.cwd(dir).await.is_ok();
+            let arg = if here { None } else { Some(dir) };
             let listed = if mlsd {
-                s.mlsd(Some(dir)).await
+                s.mlsd(arg).await
             } else {
-                s.list(Some(dir)).await
+                s.list(arg).await
             };
             match listed {
                 Ok(lines) => Ok(parse_listing(&lines, mlsd)),
@@ -989,6 +1047,103 @@ mod tests {
             "{got:?}"
         );
         assert!(got.contains(&("folder name", true, 0)), "{got:?}");
+    }
+
+    fn triples(got: &[Entry]) -> Vec<(&str, bool, u64)> {
+        got.iter()
+            .map(|e| (e.name.as_str(), e.is_dir, e.size))
+            .collect()
+    }
+
+    #[test]
+    fn real_servers_listings_show_every_file() {
+        const BIG: u64 = 53_687_091_200;
+        // vsftpd (numeric ids, padded columns, this year's time and an older year).
+        let vsftpd = parse_listing(
+            &lines(&[
+                "-rw-r--r--    1 1000     1000     53687091200 Nov 06 12:00 Hellblade [RUS] v1.ffpfsc",
+                "-rw-r--r--    1 1000     1000         1024 Jan 02  2024 notes (copy).txt",
+                "drwxr-xr-x    2 1000     1000         4096 Nov 06 12:00 Games [EU]",
+                "lrwxrwxrwx    1 1000     1000           14 Nov 06 12:00 latest -> Games [EU]",
+            ]),
+            false,
+        );
+        let v = triples(&vsftpd);
+        assert!(
+            v.contains(&("Hellblade [RUS] v1.ffpfsc", false, BIG)),
+            "{v:?}"
+        );
+        assert!(v.contains(&("notes (copy).txt", false, 1024)), "{v:?}");
+        assert!(v.contains(&("Games [EU]", true, 0)), "{v:?}");
+        assert!(v.iter().any(|e| e.0 == "latest"), "{v:?}");
+        assert_eq!(v.len(), 4, "{v:?}");
+
+        // ProFTPD MLSD with UNIX facts, a symlink type the library doesn't know, and a name with
+        // "; " in it.
+        let proftpd = parse_listing(
+            &lines(&[
+                "modify=20261106120000;perm=adfrw;size=53687091200;type=file;unique=FD01U2;UNIX.group=100;UNIX.mode=0644;UNIX.owner=1000; Hellblade [RUS] v1.ffpfsc",
+                "modify=20261106120000;perm=flcdmpe;type=dir;unique=FD01U3;UNIX.group=100;UNIX.mode=0755;UNIX.owner=1000; Games [EU]",
+                "modify=20261106120000;perm=adfrw;size=14;type=OS.unix=symlink;unique=FD01U4;UNIX.mode=0777; latest",
+                "modify=20261106120000;perm=adfrw;size=10;type=file;UNIX.mode=0644; a; b.txt",
+                "modify=20261106120000;perm=flcdmpe;type=cdir;unique=FD01U1; .",
+                "modify=20261106120000;perm=flcdmpe;type=pdir;unique=FD01U0; ..",
+            ]),
+            true,
+        );
+        let p = triples(&proftpd);
+        assert!(
+            p.contains(&("Hellblade [RUS] v1.ffpfsc", false, BIG)),
+            "{p:?}"
+        );
+        assert!(p.contains(&("Games [EU]", true, 0)), "{p:?}");
+        assert!(p.iter().any(|e| e.0 == "latest"), "{p:?}");
+        assert!(p.contains(&("a; b.txt", false, 10)), "{p:?}");
+        assert_eq!(p.len(), 4, "{p:?}");
+
+        // Windows IIS: the default two-digit year with AM/PM, four-digit years, a 24-hour clock,
+        // and sizes with thousands separators.
+        let iis = parse_listing(
+            &lines(&[
+                "11-06-26  12:00PM          53687091200 Hellblade [RUS] v1.ffpfsc",
+                "11-06-2026  02:15PM       <DIR>          Games [EU]",
+                "11-06-2026  14:15            1,048,576 big file.pkg",
+                "06.11.2026  14:15       53.687.091.200 dotted.ffpfsc",
+            ]),
+            false,
+        );
+        let i = triples(&iis);
+        assert!(
+            i.contains(&("Hellblade [RUS] v1.ffpfsc", false, BIG)),
+            "{i:?}"
+        );
+        assert!(i.contains(&("Games [EU]", true, 0)), "{i:?}");
+        assert!(i.contains(&("big file.pkg", false, 1_048_576)), "{i:?}");
+        assert!(i.contains(&("dotted.ffpfsc", false, BIG)), "{i:?}");
+        assert_eq!(i.len(), 4, "{i:?}");
+
+        // Synology DSM: ACL `+` after the mode, named owner and group, and the MLSD form.
+        let syno = parse_listing(
+            &lines(&[
+                "-rwxrwxrwx+  1 admin    users    53687091200 Nov  6 12:00 Hellblade [RUS] v1.ffpfsc",
+                "drwxrwxrwx+  3 admin    users           4096 Nov  6 12:00 #recycle",
+            ]),
+            false,
+        );
+        let s = triples(&syno);
+        assert!(
+            s.contains(&("Hellblade [RUS] v1.ffpfsc", false, BIG)),
+            "{s:?}"
+        );
+        assert!(s.contains(&("#recycle", true, 0)), "{s:?}");
+        let syno_mlsd = parse_listing(
+            &lines(&["type=file;size=53687091200;modify=20261106120000;UNIX.mode=0777;UNIX.owner=admin;UNIX.group=users; Hellblade [RUS] v1.ffpfsc"]),
+            true,
+        );
+        assert_eq!(
+            triples(&syno_mlsd),
+            [("Hellblade [RUS] v1.ffpfsc", false, BIG)]
+        );
     }
 
     fn ent(name: &str) -> Entry {

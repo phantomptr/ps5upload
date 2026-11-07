@@ -132,6 +132,20 @@ export default function AutoBackupCard() {
           className="w-20 justify-self-start rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1 text-sm text-[var(--color-text)] sm:justify-self-end"
         />
       </div>
+      {desktop && dir.trim() && (
+        <p className="mt-2 text-xs text-[var(--color-muted)]" data-testid="auto-save-backup-manual">
+          {tr("saves_auto_manual_note", undefined, "Backups you make by hand go to this folder too.")}
+        </p>
+      )}
+      {(settings.old_dirs?.length ?? 0) > 0 && (
+        <p className="mt-2 break-all text-xs text-[var(--color-muted)]" data-testid="auto-save-backup-old-dirs">
+          {tr(
+            "saves_auto_old_dirs",
+            { dirs: settings.old_dirs!.join(", ") },
+            "Backups in folders used before still show and can be restored: {dirs}",
+          )}
+        </p>
+      )}
       <label className="mt-3 flex items-center gap-2 border-t border-[var(--color-border)] pt-3 text-sm">
         <input
           type="checkbox"

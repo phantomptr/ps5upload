@@ -24,11 +24,21 @@ const SECRET_KEYS = [
   "wake_credential",
   "wake_regist_key",
   "wake_rp_key",
+  "pin",
+  "morning",
+  "passcode",
+  "credential",
+  "launch_token",
+  "stream_key",
+  "pad_token",
 ].join("|");
 const SECRET_JSON = new RegExp(`("(?:${SECRET_KEYS})"\\s*:\\s*")([^"]*)(")`, "gi");
 // The same, inside JSON stored as a string (localStorage values): `\"key\":\"value\"`.
 const SECRET_JSON_ESCAPED = new RegExp(`(\\\\"(?:${SECRET_KEYS})\\\\"\\s*:\\s*\\\\")((?:(?!\\\\").)*)(\\\\")`, "gi");
 const SECRET_KV = new RegExp(`\\b((?:${SECRET_KEYS})=)([^\\s&"]+)`, "gi");
+// A pairing PIN after the word PIN, in any spelling a log has used: "Remote Play PIN: 14928144",
+// "pin":"14928144", "pin": 14928144. Helpers before 11.5 wrote it to stderr.log.
+const PIN = /(^|[^A-Za-z0-9_])(pin)([:="\\ \t]{1,8})(\d{4,})/gi;
 const SERIAL_JSON = /("serial"\s*:\s*")([^"]*)(")/gi;
 const HOME_POSIX = /\/(?:Users|home)\/[^/\s"\\]+/g;
 // The separator is one backslash, or the same run of them on both sides of `Users` when the path
@@ -53,6 +63,7 @@ export function createRedactor(opts: { redact: boolean }): Redactor {
   return {
     text(s: string): string {
       let out = s
+        .replace(PIN, "$1$2$3<removed>")
         .replace(SECRET_JSON, "$1<removed>$3")
         .replace(SECRET_JSON_ESCAPED, "$1<removed>$3")
         .replace(SECRET_KV, "$1<removed>");
@@ -67,4 +78,12 @@ export function createRedactor(opts: { redact: boolean }): Redactor {
       return out;
     },
   };
+}
+
+const secretsOnly = createRedactor({ redact: false });
+
+/** Secrets out of a log line where it is written (state/logs.ts): keys, tokens, passwords, pairing
+ *  PINs. Addresses stay; a report numbers them when it is made. */
+export function scrubSecrets(s: string): string {
+  return secretsOnly.text(s);
 }

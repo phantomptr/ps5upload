@@ -2715,6 +2715,41 @@ async fn the_recent_events_are_the_newest_within_the_limit() {
 }
 
 #[tokio::test]
+async fn the_log_tools_reach_their_routes() {
+    let set = route_of(
+        &echo_server(),
+        "logs_level_set",
+        json!({"categories": {"rp": "trace"}, "minutes": 30, "merge": true}),
+    )
+    .await;
+    assert_eq!(set["method"], "PUT");
+    assert_eq!(set["path"], "/api/logs/level");
+    let read = route_of(&echo_server(), "logs_level_get", json!({})).await;
+    assert_eq!(read["path"], "/api/logs/level");
+
+    let api = Router::new().route(
+        "/api/logs/recent",
+        get(|Query(q): Query<HashMap<String, String>>| async move {
+            Json(json!({"lines": [], "count": 0, "next_seq": 0, "asked": q}))
+        }),
+    );
+    let result = server_with(api, false)
+        .tool(
+            "logs_recent",
+            json!({"level": "debug", "category": "rp", "minutes": 10}),
+        )
+        .await;
+    let asked = &result["structuredContent"]["asked"];
+    assert_eq!(asked["level"], "debug");
+    assert_eq!(asked["category"], "rp");
+    let since: u64 = asked["since_ms"].as_str().unwrap().parse().unwrap();
+    assert!(crate::now_ms() - since >= 10 * 60_000);
+    // A level outside the five is refused before any call.
+    let bad = server().tool("logs_recent", json!({"level": "loud"})).await;
+    assert_eq!(bad["isError"], true);
+}
+
+#[tokio::test]
 async fn the_route_search_is_a_tool_too() {
     let result = server()
         .tool("api_catalog", json!({"search": "pkg install status"}))

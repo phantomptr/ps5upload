@@ -73,6 +73,8 @@ export const SHARED_KEYS: readonly string[] = [
   // Facts about each console.
   "ps5upload.helperStopped",
   "ps5upload.minionOff",
+  "ps5upload.minion_off_for_new",
+  "ps5upload.minionDefaultDone",
   "ps5upload.c2c.routes.v1",
 ];
 
@@ -96,7 +98,12 @@ export const MESH_KEYS: readonly string[] = SHARED_KEYS.filter(
     // address it uses: another device's routes mean nothing here.
     k !== "ps5upload.c2c.routes.v1" &&
     // "This computer turned Minion off" (kept off by this device): per device by design.
-    k !== "ps5upload.minionOff",
+    k !== "ps5upload.minionOff" &&
+    // "Keep Minion off on consoles I add" and the consoles it has handled go together, and the
+    // list is this device's: shared alone, the switch reached a device whose list was empty, and
+    // it turned Minion off on every console that device already used.
+    k !== "ps5upload.minion_off_for_new" &&
+    k !== "ps5upload.minionDefaultDone",
 );
 
 /** Which keys a sync covers and where it keeps its own bookkeeping. */

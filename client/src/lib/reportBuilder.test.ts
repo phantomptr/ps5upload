@@ -200,6 +200,41 @@ describe("buildReport", () => {
   });
 });
 
+describe("bounded logs and the new sections", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+    timeline.mockResolvedValue({ events: [], engineDropped: 0, appDropped: 0, engineError: null });
+  });
+
+  it("keepNewest keeps the end, from a line start", async () => {
+    const { keepNewest } = await import("./reportBuilder");
+    expect(keepNewest("abc", 10)).toEqual({ text: "abc", cut: 0 });
+    const r = keepNewest("old line\nmiddle\nnewest\n", 12);
+    expect(r.text).toBe("newest\n");
+    expect(r.cut).toBeGreaterThan(0);
+  });
+
+  it("a console log over the cap keeps its newest part, and MISSING.txt says so", async () => {
+    const { LOG_MAX_BYTES } = await import("./reportBuilder");
+    const big = "old\n".repeat(LOG_MAX_BYTES / 2) + "the last line\n";
+    snapshot.mockResolvedValue({ snapshot: {}, klog: big, syslog: null, payload_logs: [] });
+    const r = await buildReport(opts({ sources: new Set<SourceId>(["console_logs"]) }));
+    const klog = r.entries.find((e) => e.path === "console/klog.txt")?.text ?? "";
+    expect(klog.length).toBeLessThanOrEqual(LOG_MAX_BYTES);
+    expect(klog.endsWith("the last line\n")).toBe(true);
+    expect(r.entries.find((e) => e.path === "MISSING.txt")?.text).toContain("cut to fit: console/klog.txt");
+  });
+
+  it("report.json says which log levels were in force and carries the client's Remote Play sessions", async () => {
+    const r = await buildReport(opts({ sources: new Set<SourceId>(["system"]) }));
+    const report = JSON.parse(r.entries.find((e) => e.path === "report.json")?.text ?? "{}");
+    expect(report.log_levels).toMatchObject({ level: expect.any(String), raised: expect.any(Boolean) });
+    expect(Array.isArray(report.remote_play_client)).toBe(true);
+    // The browser build: what the page itself can see.
+    expect(report.system).toMatchObject({ source: "browser" });
+  });
+});
+
 describe("scrubUrls", () => {
   it("keeps a link's host and path, never its query or fragment", async () => {
     const { scrubUrls } = await import("./reportBuilder");

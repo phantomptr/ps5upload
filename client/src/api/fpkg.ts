@@ -6,7 +6,7 @@
 // browser build reaches the same routes through lib/browserInvoke.ts.
 
 import { invoke } from "../lib/invokeLogged";
-import { useConvertPrefs } from "../state/convertPrefs";
+import { useConvertPrefs, type AmprEmuBuild, type ZstdRuntime } from "../state/convertPrefs";
 
 /** The game image filesystems the engine writes: UFS2 (`.ffpkg`, what ShadowMount+
  *  recommends), exFAT, or PFS (`.ffpfs`, experimental in ShadowMount+ 1.7). */
@@ -83,6 +83,21 @@ export interface AmprLz4Options {
   /** zstd packs at this level in place of LZ4 ones, in a plain image of any format; ampr-emu-ng
    *  goes in the image. */
   zstdLevel?: number;
+  /** Which ampr-emu-ng goes in with zstd packs; Convert's setting when absent. */
+  zstdRuntime?: ZstdRuntime;
+}
+
+/** zstd packs for a plain folder (the engine's `ampr_zstd`). */
+export interface ZstdPacks {
+  level: number;
+  /** The newest ampr-emu-ng release (checked against GitHub's digest) or the tested one. */
+  runtime?: ZstdRuntime;
+}
+
+/** The engine's `ampr_zstd` body: the level and the runtime choice (Convert's setting unless
+ *  given). */
+function amprZstd(level: number, runtime: ZstdRuntime | undefined) {
+  return { level, runtime: runtime ?? useConvertPrefs.getState().zstdRuntime };
 }
 
 export interface FpkgBuildRequest {
@@ -172,13 +187,15 @@ export const fpkg = {
     ffpfscLevel?: FfpfscLevel,
     /** When the image's name is taken in the output folder, add " (2)" instead of refusing. */
     keepBoth = false,
+    /** The AMPR emulator choice for this build (a queued game's own); the settings when absent. */
+    amprEmu?: { add: boolean; build: AmprEmuBuild },
   ) =>
     invoke<{ job_id: string }>("exfat_build", {
       source,
       outputDir,
       format,
       compress,
-      amprZstd: lz4?.zstdLevel ? { level: lz4.zstdLevel } : undefined,
+      amprZstd: lz4?.zstdLevel ? amprZstd(lz4.zstdLevel, lz4.zstdRuntime) : undefined,
       amprLz4: lz4 && !lz4.zstdLevel
         ? { level: lz4.level, profile_toml: lz4.profileToml, install_runtime: lz4.installRuntime ?? false }
         : undefined,
@@ -187,8 +204,8 @@ export const fpkg = {
       name,
       ffpfscLevel: compress ? ffpfscLevel : undefined,
       keepBoth,
-      addAmprEmu: useConvertPrefs.getState().addAmprEmu,
-      amprEmuBuild: useConvertPrefs.getState().amprEmuBuild,
+      addAmprEmu: amprEmu?.add ?? useConvertPrefs.getState().addAmprEmu,
+      amprEmuBuild: amprEmu?.build ?? useConvertPrefs.getState().amprEmuBuild,
     }),
   /** Unpack a game image (.exfat, .ffpkg, .ffpfs, .ffpfsc) or a package made with the debug
    *  key into a plain folder in the output folder, named after the source (or `name`). One
@@ -204,8 +221,19 @@ export const fpkg = {
     entry?: string,
     /** When the folder's name is taken in the output folder, add " (2)" instead of refusing. */
     keepBoth = false,
+    /** Write the game with its files in zstd packs (ampr-emu-ng goes in too); the source may
+     *  then also be a game folder. */
+    zstd?: ZstdPacks,
   ) =>
-    invoke<{ job_id: string }>("folder_build", { source, outputDir, name, fullVerify, entry, keepBoth }),
+    invoke<{ job_id: string }>("folder_build", {
+      source,
+      outputDir,
+      name,
+      fullVerify,
+      entry,
+      keepBoth,
+      amprZstd: zstd ? amprZstd(zstd.level, zstd.runtime) : undefined,
+    }),
   /** Write an edited COPY of a game image (#479): the image's files with `edits` applied,
    *  as the same kind of image (.exfat, .ffpkg, .ffpfs or .ffpfsc), read back and checked,
    *  named `<name>-edited` next to it unless `outputDir`/`name` say otherwise. The image

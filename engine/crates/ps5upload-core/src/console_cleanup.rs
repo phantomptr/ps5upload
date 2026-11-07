@@ -14,8 +14,41 @@ use serde_json::Value;
 use crate::mgmt::{self, m};
 
 fn call_json(addr: &str, method: mgmt::Method, body: &Value) -> Result<Value> {
-    let bytes = mgmt::call(addr, method, &serde_json::to_vec(body)?)?;
-    serde_json::from_slice(&bytes).with_context(|| format!("{} reply", method.label))
+    let r = mgmt::call(addr, method, &serde_json::to_vec(body)?).and_then(|bytes| {
+        serde_json::from_slice(&bytes).with_context(|| format!("{} reply", method.label))
+    });
+    match &r {
+        Ok(v) => crate::clog!(
+            Debug,
+            "cleanup",
+            "{} {addr} {body}: {}",
+            method.label,
+            summary(v)
+        ),
+        Err(e) => crate::clog!(
+            Debug,
+            "cleanup",
+            "{} {addr} {body}: failed: {e:#}",
+            method.label
+        ),
+    }
+    r
+}
+
+/// A reply in a line: its state and counts, never the item list itself (paths of every file).
+fn summary(v: &Value) -> String {
+    let mut out = Vec::new();
+    if let Some(o) = v.as_object() {
+        for (k, val) in o {
+            match val {
+                Value::Array(a) => out.push(format!("{k}=[{}]", a.len())),
+                Value::Object(_) => out.push(format!("{k}={{..}}")),
+                Value::String(s) if s.len() > 80 => out.push(format!("{k}=<{} chars>", s.len())),
+                other => out.push(format!("{k}={other}")),
+            }
+        }
+    }
+    out.join(" ")
 }
 
 /// Starts a scan: `{"ok":true,"scan_id":N}`.

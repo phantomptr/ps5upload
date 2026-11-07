@@ -16,7 +16,8 @@ import { getEngineUrl } from "../state/engine";
 import { hostOf } from "../lib/addr";
 import { fetchConsoleStat } from "./consoleFiles";
 import { readWithRetries } from "../lib/pollRead";
-import { ENGINE_LONG_TIMEOUT_MS, ENGINE_TIMEOUT_MS, engineFetch } from "../lib/engineFetch";
+import { ENGINE_LONG_TIMEOUT_MS, ENGINE_TIMEOUT_MS, engineFetch, engineLongPost } from "../lib/engineFetch";
+import { WORDED_ERROR_CODES } from "../lib/payloadErrors";
 // Logging wrapper: every command leaves a trace breadcrumb + logs failures at
 // warn. See lib/invokeLogged.ts. (Channel still comes straight from core.)
 import { isTauriEnv } from "../lib/tauriEnv";
@@ -1242,15 +1243,25 @@ function patternToRegex(pattern: string): RegExp {
 // (/data/**, /user/**, /mnt/ext*/**, /mnt/usb*/**) — other paths return
 // a `*_path_not_allowed` error surfaced here as an Error thrown to the UI.
 
+/** A console file operation's route, followed to its end however long it runs (#712): a large
+ *  tree takes far longer than one request may stay open. Throws the route's error as the engine
+ *  worded it (a code the app words itself stays in front, as through the other transports). */
+async function fsLongOp(route: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const ans = await engineLongPost(getEngineUrl(), route, body);
+  if (ans.ok) return ans.body;
+  const error = ans.body.error;
+  if (typeof error !== "string") throw new Error(`engine HTTP ${ans.status}`);
+  const code = ans.body.code;
+  throw new Error(typeof code === "string" && WORDED_ERROR_CODES.has(code) ? `${code}: ${error}` : error);
+}
+
 export async function fsDelete(
   transferAddr: string,
   path: string,
   opId?: number,
 ): Promise<void> {
   const addr = toMgmtAddr(transferAddr);
-  await invoke("ps5_fs_delete", {
-    req: { addr, path, op_id: opId ?? 0 },
-  });
+  await fsLongOp("/api/ps5/fs/delete", { addr, path, op_id: opId ?? 0 });
 }
 
 /** Decompress a `.ffpfsc` on the console into the image it holds, beside it (#453). Resolves
@@ -1262,13 +1273,10 @@ export async function fsUnpack(
   path: string,
   opId: number,
 ): Promise<{ path: string; size: number }> {
-  const res = await engineFetch(`${getEngineUrl()}/api/ps5/fs/unpack`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ addr: toMgmtAddr(transferAddr), path, op_id: opId }),
-  });
-  const body = (await res.json().catch(() => ({}))) as { path?: string; size?: number; error?: string };
-  if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+  const body = (await fsLongOp("/api/ps5/fs/unpack", { addr: toMgmtAddr(transferAddr), path, op_id: opId })) as {
+    path?: string;
+    size?: number;
+  };
   return { path: body.path ?? "", size: body.size ?? 0 };
 }
 
@@ -1295,14 +1303,8 @@ export async function fsExtract(
   if (opts.password) body.password = opts.password;
   if (opts.merge) body.merge = true;
   if (opts.replace) body.replace = true;
-  const res = await engineFetch(`${getEngineUrl()}/api/ps5/fs/extract`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const out = (await res.json().catch(() => ({}))) as Record<string, unknown> & { error?: string };
-  if (!res.ok) throw new Error(typeof out.error === "string" ? out.error : `HTTP ${res.status}`);
-  return toExtractResult(out);
+  // Thousands of files take far longer than a minute (#712): followed to the end, not timed out.
+  return toExtractResult(await fsLongOp("/api/ps5/fs/extract", body));
 }
 
 export interface FsDirEntry {
@@ -1383,9 +1385,7 @@ export async function fsMove(
   overwrite?: boolean,
 ): Promise<void> {
   const addr = toMgmtAddr(transferAddr);
-  await invoke("ps5_fs_move", {
-    req: { addr, from, to, op_id: opId ?? 0, overwrite: overwrite ?? false },
-  });
+  await fsLongOp("/api/ps5/fs/move", { addr, from, to, op_id: opId ?? 0, overwrite: overwrite ?? false });
 }
 
 export async function fsChmod(
@@ -1467,9 +1467,7 @@ export async function fsCopy(
   overwrite = false,
 ): Promise<void> {
   const addr = toMgmtAddr(transferAddr);
-  await invoke("ps5_fs_copy", {
-    req: { addr, from, to, op_id: opId ?? 0, overwrite },
-  });
+  await fsLongOp("/api/ps5/fs/copy", { addr, from, to, op_id: opId ?? 0, overwrite });
 }
 
 /** Snapshot the in-flight FS op identified by `opId`. Returns the
@@ -2453,6 +2451,8 @@ export interface PairForWakeResult {
   account_id_b64: string;
   /** "foreground" | "login-list" — how the console picked the account. */
   account_via: string;
+  /** The paired user's name on the console, when the engine could read it (or was told it). */
+  user_name?: string;
 }
 
 /** Pair with a console so it can be woken later.
@@ -2470,7 +2470,7 @@ export async function pairForWake(
   /** Pair with the PIN the PS5 shows (Settings › System › Remote Play › Link Device) instead:
    *  the engine registers on its own, no helper needed. `accountIdB64`: the user's PSN account
    *  id, base64 of its 8 bytes. */
-  manual?: { pin: string; accountIdB64: string },
+  manual?: { pin: string; accountIdB64: string; userName?: string },
 ): Promise<PairForWakeResult> {
   const res = await engineFetch(`${getEngineUrl()}/api/ps5/power/pair`, {
     // Asks the helper, then registers with the console: it may take a while.
@@ -2478,7 +2478,9 @@ export async function pairForWake(
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(
-      manual ? { host, addr, pin: manual.pin, account_id: manual.accountIdB64 } : { host, addr },
+      manual
+        ? { host, addr, pin: manual.pin, account_id: manual.accountIdB64, user_name: manual.userName || undefined }
+        : { host, addr },
     ),
   });
   const body = (await res.json().catch(() => ({}))) as PairForWakeResult & {
@@ -4951,6 +4953,8 @@ export interface EngineLogEntry {
   ts_ms: number;
   level: "info" | "warn" | "error" | string;
   msg: string;
+  /** The line's category (engines from 11.5 on): rp, install, helper, ... ("general" when none). */
+  cat?: string;
 }
 
 export interface EngineLogsTail {
@@ -4987,11 +4991,18 @@ export async function helperReplaceCopy(
   host: string,
   path: string,
   localPath?: string | null,
+  /** Keep the copy being replaced beside it as `<path>.prev` (lib/helperAtBoot). */
+  keepPrevious = false,
 ): Promise<"updated" | "unchanged" | "not_found"> {
   const res = await fetch(`${getEngineUrl()}/api/ps5/helper/replace-copy`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ addr: host, path, local_path: localPath ?? null }),
+    body: JSON.stringify({
+      addr: host,
+      path,
+      local_path: localPath ?? null,
+      ...(keepPrevious ? { keep_previous: true } : {}),
+    }),
     signal: AbortSignal.timeout(120_000),
   });
   const body = (await res.json().catch(() => ({}))) as {
@@ -5004,6 +5015,57 @@ export async function helperReplaceCopy(
   if (body.ok) return "updated";
   if (body.error === "not_found") return "not_found";
   throw new Error(body.error || "the copy was not replaced");
+}
+
+/** Put back the copy a `keepPrevious` replace kept beside `path` (lib/helperAtBoot). */
+export async function helperRestorePrevious(
+  host: string,
+  path: string,
+): Promise<"restored" | "unchanged" | "not_found"> {
+  const res = await fetch(`${getEngineUrl()}/api/ps5/helper/restore-previous`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ addr: host, path }),
+    signal: AbortSignal.timeout(120_000),
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    status?: string;
+    error?: string;
+  };
+  if (!res.ok) throw new Error(body.error || `request failed (${res.status})`);
+  if (body.ok && body.status === "unchanged") return "unchanged";
+  if (body.ok) return "restored";
+  if (body.error === "not_found") return "not_found";
+  throw new Error(body.error || "the previous copy was not restored");
+}
+
+/** Store this app's helper in Payload Manager as `ps5upload.elf` (the engine stamps it like
+ *  every stored copy). Without `confirmed`, an existing `ps5upload` folder is reported back
+ *  first: storing into it removes that folder's other files. */
+export async function helperStoreInPldmgr(
+  host: string,
+  localPath: string | null,
+  confirmed: boolean,
+): Promise<{ stored: true } | { stored: false; folder: string; fileExists: boolean }> {
+  const res = await fetch(`${getEngineUrl()}/api/ps5/helper/store-in-pldmgr`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ addr: host, local_path: localPath, confirmed }),
+    signal: AbortSignal.timeout(120_000),
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    needs_confirm?: boolean;
+    folder?: string;
+    file_exists?: boolean;
+    error?: string;
+  };
+  if (!res.ok) throw new Error(body.error || `request failed (${res.status})`);
+  if (body.ok) return { stored: true };
+  if (body.needs_confirm)
+    return { stored: false, folder: body.folder ?? "", fileExists: !!body.file_exists };
+  throw new Error(body.error || "the helper was not stored");
 }
 
 /** Same as `bundledPayloadPath` but returns the file's size + mtime

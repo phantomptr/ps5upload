@@ -5,10 +5,12 @@
 //! `host_is_local`), unless the operator opened it with `PS5UPLOAD_ALLOW_AUTOMATION`.
 //!
 //! * `POST /api/ps5/rp/start {host, width?, height?, fps?, bitrate_kbps?, codec?, keep_alive_s?,
-//!   mic?, dualsense?, keyboard?, replay_s?, wait_s?, regist_key?, rp_key?}`: starts the session,
-//!   or joins the one running for that console. `host` may be a console's address, id or name.
-//!   The keys come from the engine's store (`consoles_api`, filled by pairing) unless sent here.
-//!   Answers `{ok, started, host, session, keep_alive_s, playing, passcode}` at once, or with
+//!   mic?, dualsense?, keyboard?, replay_s?, wait_s?, user?, regist_key?, rp_key?}`: starts the
+//!   session, or joins the one running for that console. `host` may be a console's address, id or
+//!   name. The keys come from the engine's store (`consoles_api`, filled by pairing) unless sent
+//!   here: the chosen PS5 user's, or with `user` another paired user's (`rp_users` in
+//!   `GET /api/consoles`). Answers `{ok, started, host, session, keep_alive_s, playing, passcode,
+//!   user}` at once, or with
 //!   `wait_s` (at most 60) once the first picture came, the console asks for the passcode, or the
 //!   start failed. Progress and how it ended are in `GET /api/ps5/rp/session`.
 //!
@@ -28,7 +30,8 @@
 //!   is attached keeps sending its own.
 //!
 //! Errors are JSON `{"error": code, "message"}`: local_only, host_not_local (403), bad_request
-//! (400), no_session (404), stale_session, busy_other, no_credentials, restart_needed,
+//! (400), no_session (404), stale_session, busy_other, busy_user, no_credentials, no_such_user,
+//! restart_needed,
 //! no_passcode_asked, keyboard_not_enabled, keyboard_closed, mic_not_enabled (409),
 //! start_failed (502, with `end`).
 
@@ -45,7 +48,7 @@ use base64::Engine as _;
 use ps5upload_core::rp_stream::{valid_passcode, MicInput, Passcode};
 use serde_json::{json, Value};
 
-use super::{Live, Secret, StartReq, LAST_SESSION, LIVE, MAX_KEEP_ALIVE, MIC_QUEUE};
+use super::{last_session, Live, Secret, StartReq, LIVE, MAX_KEEP_ALIVE, MIC_QUEUE};
 
 /// A session started here waits this long for the next call when nobody watches it.
 /// How long a start waits for a session that was just stopped to go.
@@ -135,6 +138,13 @@ pub struct StartBody {
     regist_key: Option<String>,
     #[serde(default)]
     rp_key: Option<String>,
+    /// Which PS5 user to play as, when the console has more than one paired: an account id, a name
+    /// as `GET /api/consoles` lists it under `rp_users` (any case), or its number there (1, 2, …).
+    /// Left out, the chosen user: the one picked last in Play, else the last paired. The console
+    /// signs that user in when the session starts. A session already running for the console as
+    /// another user answers 409 `busy_user`: stop it first.
+    #[serde(default)]
+    user: Option<String>,
     #[serde(default)]
     width: Option<u32>,
     #[serde(default)]
@@ -163,13 +173,26 @@ pub struct StartBody {
 fn keys_for(host: &str, b: &StartBody) -> Result<(String, String), Box<Response>> {
     match (b.regist_key.as_deref(), b.rp_key.as_deref()) {
         (Some(r), Some(k)) => Ok((r.to_string(), k.to_string())),
-        (None, None) => crate::consoles_api::rp_keys(host).ok_or_else(|| {
-            Box::new(fail(
-                StatusCode::CONFLICT,
-                "no_credentials",
-                "This console has no Remote Play keys here. Pair it first with POST /api/ps5/power/pair.",
-            ))
-        }),
+        (None, None) => {
+            crate::consoles_api::rp_keys_for(host, b.user.as_deref()).map_err(|e| {
+                Box::new(match e {
+                    crate::consoles_api::NoKeys::NotPaired => fail(
+                        StatusCode::CONFLICT,
+                        "no_credentials",
+                        "This console has no Remote Play keys here. Pair it first with POST /api/ps5/power/pair.",
+                    ),
+                    crate::consoles_api::NoKeys::NoSuchUser(names) => (
+                        StatusCode::CONFLICT,
+                        Json(json!({
+                            "error": "no_such_user",
+                            "message": "No paired PS5 user of this console goes by that. Pair that user first (sign in to it on the PS5, then POST /api/ps5/power/pair).",
+                            "users": names,
+                        })),
+                    )
+                        .into_response(),
+                })
+            })
+        }
         _ => Err(Box::new(fail(
             StatusCode::BAD_REQUEST,
             "bad_request",
@@ -178,7 +201,9 @@ fn keys_for(host: &str, b: &StartBody) -> Result<(String, String), Box<Response>
     }
 }
 
-/// `POST /api/ps5/rp/start`.
+/// `POST /api/ps5/rp/start`. With `user`, as that paired PS5 user (`rp_users` in
+/// `GET /api/consoles`); the console signs that user in as the session starts. The answer's `user`
+/// names the user the session signed in.
 pub async fn start(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
@@ -208,14 +233,19 @@ pub async fn start(
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     let running = super::live().filter(|l| joinable(l, &host));
-    let creds = if running.is_some() {
+    // A user asked for by name is looked up even to join: the running session must be that user's.
+    let user_asked = b.user.as_deref().is_some_and(|u| !u.trim().is_empty());
+    let keys = if running.is_some() && !user_asked {
         None
     } else {
-        let (r, k) = match keys_for(&host, &b) {
-            Ok(v) => v,
+        match keys_for(&host, &b) {
+            Ok(v) => Some(v),
             Err(e) => return *e,
-        };
-        match ps5upload_core::rp_session::SessionCreds::from_hex(&r, &k) {
+        }
+    };
+    let want_user = keys.as_ref().filter(|_| user_asked).map(|(r, _)| r.clone());
+    let creds = match (&running, &keys) {
+        (None, Some((r, k))) => match ps5upload_core::rp_session::SessionCreds::from_hex(r, k) {
             Ok(c) => Some(c),
             Err(e) => {
                 return fail(
@@ -224,7 +254,8 @@ pub async fn start(
                     &format!("the keys are not usable: {e:#}"),
                 )
             }
-        }
+        },
+        _ => None,
     };
     let keep = b
         .keep_alive_s
@@ -256,12 +287,25 @@ pub async fn start(
             )
         }
     };
-    let (live, started) =
-        {
-            let Ok(mut g) = LIVE.lock() else {
-                return fail(StatusCode::INTERNAL_SERVER_ERROR, "internal", "lock");
-            };
-            match g.as_ref() {
+    let (live, started) = {
+        let Ok(mut g) = LIVE.lock() else {
+            return fail(StatusCode::INTERNAL_SERVER_ERROR, "internal", "lock");
+        };
+        match g.as_ref() {
+                Some(l)
+                    if joinable(l, &host)
+                        && want_user.as_deref().is_some_and(|r| !l.same_user(r)) =>
+                {
+                    return (
+                        StatusCode::CONFLICT,
+                        Json(json!({
+                            "error": "busy_user",
+                            "user": l.user_name(),
+                            "message": "Remote Play is already streaming this console as another PS5 user. Stop it first, then start as this one.",
+                        })),
+                    )
+                        .into_response()
+                }
                 Some(l) if joinable(l, &host) => (l.clone(), false),
                 Some(l) if same_console(&l.host, &host) => return (
                     StatusCode::CONFLICT,
@@ -296,7 +340,7 @@ pub async fn start(
                     (l, true)
                 }
             }
-        };
+    };
     if started {
         adopt(&live);
     } else {
@@ -326,6 +370,7 @@ pub async fn start(
         "keep_alive_s": live.keep_alive.as_secs(),
         "playing": live.playing.load(Ordering::Relaxed),
         "passcode": live.passcode_ask.lock().map(|g| g.is_some()).unwrap_or(false),
+        "user": live.user_name(),
     }))
     .into_response()
 }
@@ -379,20 +424,14 @@ async fn wait_for_picture(live: &Arc<Live>, wait: Duration) -> Option<Value> {
 
 /// How the last session ended, when it has.
 fn last_end() -> Option<Value> {
-    LAST_SESSION
-        .lock()
-        .ok()?
-        .as_ref()?
-        .get("end")
-        .filter(|e| !e.is_null())
-        .cloned()
+    last_session()?.get("end").filter(|e| !e.is_null()).cloned()
 }
 
 /// What a local script sees beyond the session's id, for `GET /api/ps5/rp/session`: there is no page
 /// to tell it each stage. Nothing secret: no keys, no passcode, and the typed text is what the
 /// console's own keyboard already shows.
 pub(super) fn add_details(v: &mut Value, live: Option<&Live>) {
-    let last = LAST_SESSION.lock().ok().and_then(|g| g.clone());
+    let last = last_session();
     let Some(l) = live else {
         if let Some(end) = last_end() {
             v["last_end"] = end;
@@ -420,6 +459,8 @@ pub(super) fn add_details(v: &mut Value, live: Option<&Live>) {
         .and_then(|g| *g)
         .map(Value::from)
         .unwrap_or(Value::Null);
+    // Which paired PS5 user the session signed in, by name (null: keys sent with the start).
+    v["user"] = l.user_name().map(Value::from).unwrap_or(Value::Null);
     v["mic_enabled"] = l.mic_enabled.load(Ordering::Relaxed).into();
     v["mic_on"] = l.mic_on.load(Ordering::Relaxed).into();
     v["keyboard_enabled"] = l.keyboard.enabled.load(Ordering::Relaxed).into();
@@ -462,6 +503,13 @@ pub async fn stop(
         Ok(l) => l,
         Err(e) => return *e,
     };
+    crate::log_at!(
+        Info,
+        "rp",
+        "rp_stream: {}: stopped through the API (session {})",
+        live.host,
+        live.session
+    );
     live.stop.store(true, Ordering::Relaxed);
     Json(json!({"ok": true, "host": live.host, "session": live.session})).into_response()
 }

@@ -88,5 +88,23 @@
     "redact": true,
     "in": "\"ps5upload.dest\": \"{\\\"dir\\\":\\\"C:\\\\\\\\Users\\\\\\\\bob\\\\\\\\x\\\"}\"",
     "out": "\"ps5upload.dest\": \"{\\\"dir\\\":\\\"~\\\\\\\\x\\\"}\""
+  },
+  {
+    "name": "an older helper's Remote Play PIN line",
+    "redact": false,
+    "in": "[remoteplay] [ps5upload] Remote Play PIN: 14928144\n[remoteplay] Remote Play PIN expired",
+    "out": "[remoteplay] [ps5upload] Remote Play PIN: <removed>\n[remoteplay] Remote Play PIN expired"
+  },
+  {
+    "name": "a PIN in JSON, as a string and as a number",
+    "redact": false,
+    "in": "{\"pin\":\"14928144\",\"n\":1} {\"pin\": 14928144} {\"pinned\":\"12345678\"}",
+    "out": "{\"pin\":\"<removed>\",\"n\":1} {\"pin\": <removed>} {\"pinned\":\"12345678\"}"
+  },
+  {
+    "name": "Remote Play morning and a passcode by name",
+    "redact": false,
+    "in": "{\"morning\":\"0a1b2c3d\",\"passcode\":\"1234\"} morning=0a1b2c3d",
+    "out": "{\"morning\":\"<removed>\",\"passcode\":\"<removed>\"} morning=<removed>"
   }
 ]

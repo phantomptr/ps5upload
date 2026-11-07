@@ -1127,6 +1127,12 @@ test-payload: payload
 		$(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
 	@$(RUN_LIMITED) /tmp/ps5upload-console-tasks-selftest
 	@echo "✓ the apps see what the page started, how it ended and that it was cancelled, and nothing a PC started"
+	@echo "Running helper log levels self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
+		-o $(SELFTEST_DIR)/ps5upload-plog-selftest \
+		$(PAYLOAD_DIR)/tests/plog_selftest.c $(PAYLOAD_DIR)/src/plog.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-plog-selftest
+	@echo "✓ per-category levels gate lines, a raise ends on time, bad settings change nothing"
 	@echo "Running Show on TV / Show on PC handoff self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
 		-o $(SELFTEST_DIR)/ps5upload-files-handoff-selftest \
@@ -1276,6 +1282,12 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/cleanup_rules_selftest.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-cleanup-rules-selftest
 	@echo "✓ clean-up removes only its categories' paths: never the package library, saves, installed games or another drive's system folders"
+	@echo "Running attached-image mount self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o $(SELFTEST_DIR)/ps5upload-image-mount-selftest \
+		$(PAYLOAD_DIR)/tests/image_mount_selftest.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-image-mount-selftest
+	@echo "✓ a title's nullfs link to a disk image keeps no drive margin, so edits to the game fit its spare room"
 	@echo "Checking per-console isolation..."
 	@./scripts/check-per-console-isolation.sh
 	@echo "✓ one console's data cannot be shown under another's name"

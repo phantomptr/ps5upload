@@ -12,6 +12,7 @@ import { usePlaySetupMarks } from "../../../state/playSetup";
 import { blockerNames } from "../../../state/rpBlockers";
 import { payloadCardLink } from "../../Payloads/payloadTabs";
 import { NpSignInSection } from "../../Accounts/NpSignInSection";
+import { PairedUsers } from "./PairedUsers";
 import { PinPairForm } from "./PinPairForm";
 import { SETUP_ORDER, type SetupKey, type SetupState } from "./playSetup";
 import { usePlaySetup } from "./usePlaySetup";
@@ -167,6 +168,7 @@ export default function PlaySetupScreen() {
       // Needs no helper, so it is there whatever the steps above say.
       always: s.profileId ? (
         <div className="space-y-2">
+          <PairedUsers profileId={s.profileId} />
           {error?.step === "pair" && (
             <p className="text-xs" data-testid="play-setup-pair-fallback">
               {tr(

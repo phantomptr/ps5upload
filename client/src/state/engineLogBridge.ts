@@ -42,7 +42,8 @@ const LEVELS: ReadonlySet<string> = new Set(["error", "warn", "debug", "trace"])
 export function toLogInputs(entries: EngineLogEntry[]): LogInput[] {
   return entries.map((entry) => ({
     level: (LEVELS.has(entry.level) ? entry.level : "info") as LogLevel,
-    source: "engine",
+    // The category rides in the source ("engine:rp"), so the disk log gates it by its category.
+    source: entry.cat && entry.cat !== "general" ? `engine:${entry.cat}` : "engine",
     // Strip the `[engine:<level>]` prefix the sidecar's stderr tagging
     // adds — we're already rendering the level as a badge in the Log UI,
     // so duplicating it in the message text is noise.

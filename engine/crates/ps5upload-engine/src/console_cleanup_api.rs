@@ -107,7 +107,7 @@ where
 
 pub(crate) async fn scan(State(state): State<AppState>, Json(req): Json<AddrBody>) -> Response {
     let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
-    crate::log_info!("cleanup scan: addr={addr}");
+    crate::log_at!(Info, "cleanup", "cleanup scan: addr={addr}");
     run(move || cc::scan_start(&addr)).await
 }
 
@@ -146,7 +146,9 @@ pub(crate) async fn apply(
         )
             .into_response();
     }
-    crate::log_info!(
+    crate::log_at!(
+        Info,
+        "cleanup",
         "cleanup apply: addr={addr} scan={id} items={}",
         req.item_ids.len()
     );
@@ -168,6 +170,7 @@ pub(crate) async fn cancel(Json(req): Json<CancelBody>) -> Response {
         return crate::missing_console_addr();
     };
     let id = req.id;
+    crate::log_at!(Info, "cleanup", "cleanup cancel: addr={addr} id={id}");
     run(move || cc::cancel(&addr, id)).await
 }
 

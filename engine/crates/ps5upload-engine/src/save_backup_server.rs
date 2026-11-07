@@ -882,7 +882,7 @@ fn restore(
             let (fs, folder) = open_target(&s.target).await?;
             fetch_backup(fs.as_ref(), &folder, title_id, file, &zip).await
         })?;
-        local::restore_zip(host, title_id, &zip, save_path, user_id)
+        local::restore_zip_any_user(host, title_id, &zip, save_path, user_id, None)
     })();
     let _ = cleanup_temp_dir(&tmp_s);
     if result.is_ok() {

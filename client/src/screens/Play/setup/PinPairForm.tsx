@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 
-import { remoteplayReadiness } from "../../../api/ps5";
+import { profileInfo, remoteplayReadiness } from "../../../api/ps5";
 import { Button, Callout } from "../../../components";
-import { transferAddr } from "../../../lib/addr";
+import { mgmtAddr, transferAddr } from "../../../lib/addr";
 import { humanizePs5Error } from "../../../lib/humanizeError";
 import { pairConsole } from "../../../lib/pairConsole";
 import { accountIdToHex, accountIdToPairingB64 } from "../../../lib/remoteplay";
@@ -44,16 +44,24 @@ export function PinPairForm({
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
 
-  // No id handed in: ask the helper once, quietly (without it the user types the id).
+  // The signed-in user the helper reports, and its name: a pairing for that account is kept under
+  // the name (the console's paired users are told apart by it).
+  const [known, setKnown] = useState<{ b64: string; name: string } | null>(null);
+
+  // Ask the helper once, quietly: the account id when none was handed in (without it the user
+  // types the id), and that user's name.
   useEffect(() => {
-    if (accountIdB64 || !host) return;
+    if (!host) return;
     let live = true;
-    remoteplayReadiness(transferAddr(host))
-      .then((r) => {
-        const hex = accountIdToHex(r.account_id_b64 ?? "");
-        if (live && hex) setAccount((a) => a || hex);
-      })
-      .catch(() => {});
+    void (async () => {
+      const r = await remoteplayReadiness(transferAddr(host)).catch(() => null);
+      if (!live || !r) return;
+      const hex = accountIdToHex(r.account_id_b64 ?? "");
+      if (!accountIdB64 && hex) setAccount((a) => a || hex);
+      const info = await profileInfo(mgmtAddr(host)).catch(() => null);
+      const name = info?.users?.find((u) => u.uid === r.account_uid)?.username?.trim() ?? "";
+      if (live && name && r.account_id_b64) setKnown({ b64: r.account_id_b64, name });
+    })();
     return () => {
       live = false;
     };
@@ -65,7 +73,8 @@ export function PinPairForm({
     setBusy(true);
     setError(null);
     try {
-      const name = await pairConsole(host, profileId, undefined, { pin, accountIdB64: b64 });
+      const userName = known && known.b64 === b64 ? known.name : undefined;
+      const name = await pairConsole(host, profileId, undefined, { pin, accountIdB64: b64, userName });
       setDone(true);
       setPin("");
       onPaired?.(name);

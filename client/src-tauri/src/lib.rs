@@ -131,6 +131,8 @@ pub fn screenshot_decoder_child() -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // The app's uptime in a bug report counts from here.
+    commands::host_platform::mark_started();
     // Before anything that can fail, so that it leaves a word behind (#672). Phones have theirs
     // in mobile_log.
     #[cfg(desktop)]
@@ -602,6 +604,7 @@ pub fn run() {
             commands::app_events::app_events_append,
             commands::app_events::app_events_read,
             commands::host_platform::host_platform,
+            commands::host_platform::host_system_info,
             commands::diag_log::diag_log_append,
             commands::diag_log::diag_log_open_dir,
             // ── Bug-report bundle (zip: logs + ps5 snapshot + images) ─

@@ -16,7 +16,7 @@ pub fn is_secret_name(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
     matches!(
         name.as_str(),
-        "key" | "pass" | "pwd" | "auth" | "sig" | "streamid" | "invite"
+        "key" | "pass" | "pwd" | "auth" | "sig" | "streamid" | "invite" | "pin" | "morning" | "psk"
     ) || [
         "_key",
         "-key",
@@ -29,6 +29,8 @@ pub fn is_secret_name(name: &str) -> bool {
         "credential",
         "signature",
         "authorization",
+        "account_id",
+        "_pin",
     ]
     .iter()
     .any(|end| name.ends_with(end))
@@ -202,10 +204,51 @@ fn in_fields(text: &str) -> String {
     out
 }
 
+/// A pairing PIN after the word `PIN`: `Remote Play PIN: 14928144`, `"pin":"14928144"`,
+/// `"pin": 14928144`, `pin=1234`. Four or more digits, after at most a few `: = " \` and spaces.
+/// Older helpers write the PIN to their log, so it is taken out wherever their lines go.
+fn in_pins(text: &str) -> Cow<'_, str> {
+    let b = text.as_bytes();
+    let lower = text.to_ascii_lowercase();
+    let mut out = String::new();
+    let mut copied = 0;
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find("pin") {
+        let at = from + rel;
+        from = at + 3;
+        let word_start = at == 0 || !(b[at - 1].is_ascii_alphanumeric() || b[at - 1] == b'_');
+        let word_end = b
+            .get(at + 3)
+            .is_none_or(|c| !c.is_ascii_alphanumeric() && *c != b'_');
+        if !word_start || !word_end {
+            continue;
+        }
+        let mut i = at + 3;
+        while i < b.len()
+            && i - (at + 3) < 8
+            && matches!(b[i], b':' | b'=' | b'"' | b'\\' | b' ' | b'\t')
+        {
+            i += 1;
+        }
+        let digits = b[i..].iter().take_while(|c| c.is_ascii_digit()).count();
+        if digits >= 4 && i > at + 3 {
+            out.push_str(&text[copied..i]);
+            out.push_str(MARK);
+            copied = i + digits;
+            from = copied;
+        }
+    }
+    if copied == 0 {
+        return Cow::Borrowed(text);
+    }
+    out.push_str(&text[copied..]);
+    Cow::Owned(out)
+}
+
 /// `text` with what looks like a secret replaced. Borrowed when there is nothing to replace, which
 /// is nearly always: this runs on every log line.
 pub fn without_secrets(text: &str) -> Cow<'_, str> {
-    let cleaned = in_fields(&in_urls(text));
+    let cleaned = in_fields(&in_urls(&in_pins(text)));
     if cleaned == text {
         Cow::Borrowed(text)
     } else {
@@ -324,6 +367,41 @@ mod tests {
             without_secrets("rtmp://live.example/app"),
             Cow::Borrowed(_)
         ));
+    }
+
+    #[test]
+    fn pairing_pins_go() {
+        for line in [
+            "[remoteplay] [ps5upload] Remote Play PIN: 14928144",
+            r#"{"pin":"14928144","expires":300}"#,
+            r#"{"pin": 14928144}"#,
+            r#"body: "{\"pin\":\"14928144\"}""#,
+            "pair: pin=14928144 ok",
+            "Remote Play PIN 14928144",
+        ] {
+            let out = without_secrets(line);
+            assert!(!out.contains("14928144"), "{line} -> {out}");
+            assert!(out.contains(MARK), "{out}");
+        }
+        assert_eq!(
+            without_secrets("[ps5upload] Remote Play PIN: 14928144 (5 min)"),
+            "[ps5upload] Remote Play PIN: •••• (5 min)"
+        );
+        for line in [
+            "Remote Play PIN expired",
+            "pinned: 12345678",
+            "spin=12345678",
+            "pin=true",
+            "a morning=true",
+        ] {
+            assert!(
+                matches!(without_secrets(line), Cow::Borrowed(_)),
+                "{line} -> {}",
+                without_secrets(line)
+            );
+        }
+        gone(&format!("morning={S}"));
+        gone(&format!(r#"{{"psn_account_id":"{S}"}}"#));
     }
 
     #[test]

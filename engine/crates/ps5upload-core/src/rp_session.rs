@@ -59,6 +59,12 @@ use crate::rp_login_pin::{
 };
 use crate::rp_regist::{generate_iv, resolve, split_http};
 
+/// Session init closed with no reply: the console does this while its Remote Play is in use, by
+/// another device or by a session that ended moments ago and is still being let go (12-30 s).
+/// Not the pairing message about a PIN, which this used to read as.
+pub const SESSION_INIT_CLOSED: &str = "the PS5 closed the session start without answering: \
+     its Remote Play is still in use, by another device or by a session that just ended";
+
 /// How a Wake & sign in ended, when it did not fail.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignIn {
@@ -224,6 +230,13 @@ pub(crate) fn session_init(host: &str, regist_key: &[u8; KEY_SIZE]) -> Result<[u
         );
         anyhow!("reading session init reply: {e}")
     })?;
+    if raw.is_empty() {
+        crate::core_debug!(
+            "rp session init: {host}: closed with no reply after {} ms",
+            t0.elapsed().as_millis()
+        );
+        bail!("{SESSION_INIT_CLOSED}");
+    }
     let reply = split_http(&raw)?;
     crate::core_debug!(
         "rp session init: {host}: {} in {} ms",

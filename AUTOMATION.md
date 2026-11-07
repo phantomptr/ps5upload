@@ -76,16 +76,21 @@ The answer also has `stage` (how far the start got), `started_by` (`api` or `pag
 | `mic`, `keyboard`, `dualsense` | Set the session up for those. |
 | `replay_s` | Keep this many seconds for Instant Replay. |
 | `wait_s` | Answer once the first picture came, the console asks for the passcode, or the start failed (at most 60). Without it the answer comes at once. |
+| `user` | The PS5 user to play as, when the console is paired as more than one: a name from `rp_users` in `GET /api/consoles`, its number there (1, 2, …), or the user's account id. Left out, the user chosen in the app (else the last one paired). |
 | `regist_key`, `rp_key` | The keys, if the engine does not have them. |
 
 The keys come from pairing: `POST /api/ps5/power/pair` stores them, and so does the app when you
-pair there. Without keys the answer is `409 no_credentials`. A session for the same console is
-joined rather than started (`"started": false`); a session for another console answers
+pair there. A pairing is one PS5 user's: pairing while another user is signed in on the console
+adds that user, and pairing a user again replaces that user's keys. The console signs in the user
+whose keys start the session. Without keys the answer is `409 no_credentials`; a `user` that is not
+paired answers `409 no_such_user` with the names of those that are. A session for the same console
+is joined rather than started (`"started": false`), unless it signed in another user than the
+`user` asked for (`409 busy_user`: stop it first); a session for another console answers
 `409 busy_other`.
 
 ```json
 {"ok": true, "started": true, "host": "192.168.1.100", "session": 4, "keep_alive_s": 300,
- "playing": true, "passcode": false}
+ "playing": true, "passcode": false, "user": "Alice"}
 ```
 
 ### `POST /api/ps5/rp/stop`: end it
@@ -458,6 +463,22 @@ same `code`, and one of the failure codes.
 | `checksum`, `download`, `unpack` | in `ffmpeg.install` | The ffmpeg download |
 | `unreachable`, `tls`, `rejected`, `codec_not_allowed`, `dropped`, `stopped` | in the run | Why a site stopped: can't be reached, certificate, refused key, wrong codec, dropped, other |
 | `all_failed`, `ffmpeg_failed`, `play_ended` | in the run | No site took it, ffmpeg can't start, Remote Play stayed off for two minutes |
+
+## When a stream misbehaves: log levels
+
+Raise Remote Play's log level before you reproduce a problem, and read the lines afterwards:
+
+```sh
+curl -X PUT http://127.0.0.1:19113/api/logs/level -H 'Content-Type: application/json' \
+  -d '{"categories":{"rp":"trace","pairing":"debug"},"merge":true,"minutes":30}'
+# ... start the stream, reproduce ...
+curl "http://127.0.0.1:19113/api/logs/recent?category=rp&level=debug&limit=500"
+```
+
+Every stage of a session, the console's refusal codes, why it ended and what the page's decoder chose
+(and each decoder failure with its configuration) are logged in `rp`; the last eight sessions, with
+the same detail, are in `GET /api/diag/features` under `remote_play.sessions`. The raise ends by
+itself after the minutes given. See [API.md](API.md#log-levels) for the whole model.
 
 ## An MCP adapter
 

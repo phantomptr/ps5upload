@@ -63,7 +63,11 @@ struct ChannelPrompt {
 
 impl PasscodePrompt for ChannelPrompt {
     fn passcode_needed(&mut self, retry: bool) {
-        crate::log_info!("wake_login: the console asks for the user's passcode (retry {retry})");
+        crate::log_at!(
+            Info,
+            "wake",
+            "wake_login: the console asks for the user's passcode (retry {retry})"
+        );
         if self.events.send(Event::Passcode { retry }).is_err() {
             self.gone = true;
         }

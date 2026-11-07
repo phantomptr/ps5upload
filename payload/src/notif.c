@@ -227,7 +227,11 @@ int notif_clear(void) {
 }
 
 int notif_send(const char *msg, int level) {
-    if (!msg) return -1;
+    return notif_send_kept(msg, msg, level);
+}
+
+int notif_send_kept(const char *shown, const char *msg, int level) {
+    if (!msg || !shown) return -1;
     if (!valid_level(level)) level = NOTIF_LEVEL_INFO;
 
     size_t msg_len = strlen(msg);
@@ -250,7 +254,7 @@ int notif_send(const char *msg, int level) {
     notif_persist_locked();
     pthread_mutex_unlock(&s_ring_mtx);
 
-    sceNotificationSend((int32_t)level, msg);
+    sceNotificationSend((int32_t)level, shown);
     return 0;
 }
 

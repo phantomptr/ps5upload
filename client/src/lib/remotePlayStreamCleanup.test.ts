@@ -516,7 +516,7 @@ describe("RemotePlayStream with a decoder that never shows a picture (#683)", ()
     p.openVideo();
   };
 
-  it("on H.264: hardware a few times, software a few times, then one error and the end", async () => {
+  it("on H.264: hardware a few times, then as Annex B, software a few times, then one error and the end", async () => {
     const made = failingDecoders();
     const errors: string[] = [];
     const o = { ...options(), onError: (e: { code: string }) => errors.push(e.code) };
@@ -524,13 +524,18 @@ describe("RemotePlayStream with a decoder that never shows a picture (#683)", ()
     await s.start();
     open(s, false);
     await settle();
-    expect(made.map((c) => c.hardwareAcceleration)).toEqual([
-      "prefer-hardware",
-      "prefer-hardware",
-      "prefer-hardware",
-      "prefer-software",
-      "prefer-software",
-      "prefer-software",
+    expect(made.map((c) => [c.hardwareAcceleration, !!c.description])).toEqual([
+      ["prefer-hardware", true],
+      ["prefer-hardware", true],
+      ["prefer-hardware", true],
+      // Annex B: no description.
+      ["prefer-hardware", false],
+      ["prefer-hardware", false],
+      ["prefer-hardware", false],
+      // Software in AVC form again (WebKitGTK's software decoder takes only that).
+      ["prefer-software", true],
+      ["prefer-software", true],
+      ["prefer-software", true],
     ]);
     expect(errors).toEqual(["decode"]);
     expect(o.phases[o.phases.length - 1]).toBe("ended");

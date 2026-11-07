@@ -566,6 +566,10 @@ name = "METHOD_CONSOLE_TASK_CANCEL"
 ty = "u16"
 value = 196
 [[const]]
+name = "METHOD_LOG_LEVEL"
+ty = "u16"
+value = 197
+[[const]]
 name = "JOB_OP_DELETE"
 ty = "u8"
 value = 1

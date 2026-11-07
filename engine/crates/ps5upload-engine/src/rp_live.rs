@@ -428,7 +428,7 @@ fn codec_name(c: Codec) -> &'static str {
 
 fn log_reader(what: &str, r: &Reader) {
     let s = &r.stats;
-    crate::log_info!(
+    crate::log_at!(Info, "rp", 
         "rp_live: reader {} ({}) {what} after {:.0} s: {} bytes, {} frames, {} keyframes, {} held after loss, {} dropped (slow reader)",
         r.id,
         r.peer,
@@ -484,7 +484,9 @@ impl ReaderMux {
                         self.stats.keyframes.fetch_add(1, Ordering::Relaxed);
                         if !self.first_key_logged {
                             self.first_key_logged = true;
-                            crate::log_info!(
+                            crate::log_at!(
+                                Info,
+                                "rp",
                                 "rp_live: reader {} playing: first keyframe after {} ms{}",
                                 self.id,
                                 self.origin.elapsed().as_millis(),
@@ -609,7 +611,12 @@ pub(crate) fn open_reader(who: &str) -> Option<FeedReader> {
     let live = super::live()?;
     let feed = live.feed.clone();
     let (id, rx, stats) = feed.add(who.to_string(), true)?;
-    crate::log_info!("rp_live: reader {id} ({who}) connected to {}", live.host);
+    crate::log_at!(
+        Info,
+        "rp",
+        "rp_live: reader {id} ({who}) connected to {}",
+        live.host
+    );
     let mux = ReaderMux::new(&feed, id, stats.clone());
     Some(FeedReader {
         rx,
@@ -651,7 +658,9 @@ pub async fn live_ts(
             "Too many players are reading the live feed.",
         );
     };
-    crate::log_info!(
+    crate::log_at!(
+        Info,
+        "rp",
         "rp_live: reader {id} ({peer}) connected to {} ({} reading)",
         live.host,
         feed.readers()

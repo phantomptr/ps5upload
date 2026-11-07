@@ -668,10 +668,20 @@ impl MgmtTransport for AvaTransport {
         body: &[u8],
         timeout: Duration,
     ) -> Result<Option<Vec<u8>>> {
-        run_blocking(|| {
+        let t0 = std::time::Instant::now();
+        ps5upload_core::clog!(
+            Trace,
+            "helper",
+            "mgmt {addr}: {label} -> ({} bytes, timeout {} ms)",
+            body.len(),
+            timeout.as_millis()
+        );
+        let r = run_blocking(|| {
             self.ensure(addr, label)?;
             crate::block_on(self.run(addr, method, label, body, timeout))
-        })
+        });
+        log_outcome(addr, label, t0, &r);
+        r
     }
 
     fn run_job(
@@ -682,7 +692,15 @@ impl MgmtTransport for AvaTransport {
         body: &[u8],
         call: &JobCall<'_>,
     ) -> Result<Option<Vec<u8>>> {
-        run_blocking(|| {
+        let t0 = std::time::Instant::now();
+        ps5upload_core::clog!(
+            Debug,
+            "helper",
+            "mgmt {addr}: job {label} starts ({} bytes, deadline {} s)",
+            body.len(),
+            call.deadline.as_secs()
+        );
+        let r = run_blocking(|| {
             self.ensure(addr, label)?;
             let r = crate::block_on(self.run_job_async(addr, op, label, body, call));
             if is_unknown_method(&r) {
@@ -691,7 +709,9 @@ impl MgmtTransport for AvaTransport {
                 return Ok(None);
             }
             r
-        })
+        });
+        log_outcome(addr, label, t0, &r);
+        r
     }
 
     fn job_progress(&self, addr: &str, op_id: u64) -> Result<Option<Option<JobProgress>>> {
@@ -706,6 +726,39 @@ impl MgmtTransport for AvaTransport {
             self.ensure(addr, "JOB_CANCEL")?;
             crate::block_on(self.job_cancel_async(addr, op_id)).map(Some)
         })
+    }
+}
+
+/// One helper call's outcome: its time and reply size at trace, a refusal or failure at debug
+/// (the caller decides whether it is worth a warning; many refusals are answers).
+fn log_outcome(addr: &str, label: &str, t0: std::time::Instant, r: &Result<Option<Vec<u8>>>) {
+    let ms = t0.elapsed().as_millis();
+    match r {
+        Ok(Some(reply)) => ps5upload_core::clog!(
+            Trace,
+            "helper",
+            "mgmt {addr}: {label} <- {} bytes in {ms} ms",
+            reply.len()
+        ),
+        Ok(None) => ps5upload_core::clog!(
+            Debug,
+            "helper",
+            "mgmt {addr}: {label}: the helper does not know this call ({ms} ms)"
+        ),
+        Err(e) => match e.downcast_ref::<MgmtError>() {
+            Some(m) => ps5upload_core::clog!(
+                Debug,
+                "helper",
+                "mgmt {addr}: {label} refused in {ms} ms: status {} ({})",
+                m.status,
+                m.cause
+            ),
+            None => ps5upload_core::clog!(
+                Debug,
+                "helper",
+                "mgmt {addr}: {label} failed in {ms} ms: {e:#}"
+            ),
+        },
     }
 }
 

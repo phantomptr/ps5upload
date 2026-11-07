@@ -41,8 +41,13 @@ pub(super) fn tools() -> Vec<ToolDef> {
             name: "rp_session",
             title: "Remote Play session",
             description: "What Remote Play is streaming now: `host` and `session` (null when \
-                          nothing streams), `playing`, and `attached`, whether an app page shows \
-                          it. rp_start starts a stream.",
+                          nothing streams), `playing`, `attached`, whether an app page shows \
+                          it, `user`, the paired PS5 user it signed in (by name), and `stats`, \
+                          the last second of the stream: frames, loss, round trip, and sound \
+                          (`audio_frames_total` 0 with frames flowing means no sound came; \
+                          `audio_other_codec` and `audio_header` say why). rp_start starts a \
+                          stream. `last_session` is how the last one started and ended: its \
+                          stages with times, and at the end frames, `audio_frames` and loss.",
             kind: Kind::Read,
             schema: object(json!({}), &[]),
             run: |ctx, args| Box::pin(session(ctx, args)),
@@ -53,7 +58,10 @@ pub(super) fn tools() -> Vec<ToolDef> {
             description: "Starts a Remote Play stream from a paired console, or joins the one \
                           running there. A console has one Remote Play slot, so only when the user \
                           asked for it. With no app page showing it, it ends after `keep_alive_s` \
-                          without a call. `no_credentials` means the console is not paired yet.",
+                          without a call. `no_credentials` means the console is not paired yet. \
+                          A console can have several PS5 users paired (consoles_list shows their \
+                          names as `rp_users`): `user` picks one, and the console signs that user \
+                          in; left out, the user chosen in the app.",
             kind: Kind::Write { idempotent: true },
             schema: object(
                 json!({
@@ -61,6 +69,12 @@ pub(super) fn tools() -> Vec<ToolDef> {
                         "type": "string",
                         "description": "The console: its address, id or name.",
                     },
+                    "user": text(
+                        "The PS5 user to play as: a name from the console's `rp_users` in \
+                         consoles_list, or its number there (1, 2, …). Left out, the user chosen \
+                         in the app. A stream already running as another user answers \
+                         `busy_user`: rp_stop it first, if the user asked for that.",
+                    ),
                     "width": whole("Picture width. Left out, the engine's default."),
                     "height": whole("Picture height. Left out, the engine's default."),
                     "fps": whole("Frames a second. Left out, the engine's default."),
@@ -283,8 +297,13 @@ async fn session(ctx: ToolCtx, _args: Args) -> ToolResult {
         Some(host) => {
             let session = answer.get("session").cloned().unwrap_or(Value::Null);
             let attached = answer.get("attached").and_then(Value::as_bool) == Some(true);
+            let user = answer
+                .get("user")
+                .and_then(Value::as_str)
+                .map(|u| format!(" as {u}"))
+                .unwrap_or_default();
             format!(
-                "Streaming from {host}, session {session}. {}",
+                "Streaming from {host}{user}, session {session}. {}",
                 if attached {
                     "An app page shows it."
                 } else {

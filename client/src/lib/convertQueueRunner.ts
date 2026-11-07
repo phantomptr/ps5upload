@@ -50,7 +50,10 @@ async function build(item: ConvertItem) {
   }
   if (item.build?.kind === "folder") {
     // A plain folder from an image or package: kept here, nothing to hand on.
-    await conv.buildFolder(item.source, outputOf(item), item.keepBoth, { fullVerify: item.fullVerify });
+    await conv.buildFolder(item.source, outputOf(item), item.keepBoth, {
+      fullVerify: item.fullVerify,
+      zstd: item.build.zstd,
+    });
     await whenIdle();
     return outcome(true);
   }
@@ -75,7 +78,12 @@ async function build(item: ConvertItem) {
       item.build.lz4,
       item.password,
       item.keepBoth,
-      { fullVerify: item.fullVerify, imageLevel: item.imageLevel },
+      {
+        fullVerify: item.fullVerify,
+        imageLevel: item.imageLevel,
+        addAmprEmu: item.addAmprEmu,
+        amprEmuBuild: item.amprEmuBuild,
+      },
     );
     await whenIdle();
     // Handed to the Upload queue (or kept): nothing more for this queue to do.

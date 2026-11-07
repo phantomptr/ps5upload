@@ -4,7 +4,7 @@ import { Copy, Sparkles, X } from "lucide-react";
 import { useTr } from "../state/lang";
 import { getEngineUrl } from "../state/engine";
 import { Modal } from "../components/Modal";
-import { MarkdownView } from "../components/MarkdownView";
+import { ReleaseNotesBody } from "./ReleaseNotesBody";
 import { Button } from "../components/Button";
 import { writeClipboard } from "../lib/clipboard";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
@@ -123,7 +123,7 @@ export function WebUpdateToast() {
                 </p>
               )}
             </div>
-            {update.notes?.trim() ? <MarkdownView source={update.notes} /> : null}
+            <ReleaseNotesBody version={version} notes={update.notes ?? ""} />
           </div>
         </Modal>
       )}

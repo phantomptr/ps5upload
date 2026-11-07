@@ -223,6 +223,10 @@ struct ClientMsg {
     /// The picture on this device on or off (see the module's top).
     #[serde(default)]
     picture: Option<bool>,
+    /// What the page's video or sound decoder did: the path it chose, a failure with its
+    /// config. Kept with the session for a bug report (`note_decoder`).
+    #[serde(default)]
+    decoder: Option<serde_json::Value>,
 }
 
 /// A passcode as the page sent it: never printed, not even in a debug dump.
@@ -289,6 +293,8 @@ struct Live {
     alone_since: Mutex<Option<Instant>>,
     video_header: Mutex<Option<Vec<u8>>>,
     audio_header: Mutex<Option<Vec<u8>>>,
+    /// The stream's last once-a-second stats (frames, loss, sound arrived), for rp_session.
+    stats: Mutex<Option<serde_json::Value>>,
     playing: AtomicBool,
     /// The page cannot use a frame until the next keyframe.
     need_key: AtomicBool,
@@ -319,6 +325,9 @@ struct Live {
     auto: automation::AutoState,
     /// The live feed's readers (rp_live.rs, OBS).
     feed: Arc<live_feed::LiveFeed>,
+    /// The regist key (hex) the session was started with: which paired PS5 user it signed in
+    /// (consoles_api's `rp_users`). Never shown or logged; `user_name` names it.
+    regist_hex: std::sync::OnceLock<String>,
 }
 
 /// A watcher's queue. `need_key`: it cannot use a frame until the next keyframe (it just
@@ -421,19 +430,82 @@ static LIVE: Mutex<Option<Arc<Live>>> = Mutex::new(None);
 #[cfg(test)]
 pub(crate) static LIVE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// The last session's start: what was asked, each handshake stage with its time, and how it
-/// ended. For a bug report (`/api/diag/features`): a refusal like 80108b26 is gone from the page
-/// once it is closed. No key, no address (the console is named by the report's own fields).
-static LAST_SESSION: Mutex<Option<serde_json::Value>> = Mutex::new(None);
+/// The last sessions' starts, oldest first: what was asked, each handshake stage with its time,
+/// what the page's decoder did (`decoder`: the path it chose, each failure with its config), and
+/// how it ended. For a bug report (`/api/diag/features`): a refusal like 80108b26 is gone from the
+/// page once it is closed, and a problem is often only clear next to the sessions before it. No
+/// key, no address (the console is named by the report's own fields).
+static SESSIONS: Mutex<std::collections::VecDeque<serde_json::Value>> =
+    Mutex::new(std::collections::VecDeque::new());
 
-/// Most handshake stages kept in [`LAST_SESSION`] (a session has about eight).
+/// How many sessions [`SESSIONS`] keeps.
+const KEPT_SESSIONS: usize = 8;
+
+/// Most handshake stages kept per session (a session has about eight).
 const LAST_STAGES: usize = 16;
 
+/// Most decoder events kept per session (a choice, a few failures, a fallback).
+const DECODER_EVENTS: usize = 24;
+
 fn note_last(f: impl FnOnce(&mut serde_json::Value)) {
-    if let Ok(mut g) = LAST_SESSION.lock() {
-        if let Some(v) = g.as_mut() {
+    if let Ok(mut g) = SESSIONS.lock() {
+        if let Some(v) = g.back_mut() {
             f(v);
         }
+    }
+}
+
+/// The newest session, as `last_session` has always been.
+pub(super) fn last_session() -> Option<serde_json::Value> {
+    SESSIONS.lock().ok().and_then(|g| g.back().cloned())
+}
+
+/// Every kept session, oldest first.
+fn sessions() -> Vec<serde_json::Value> {
+    SESSIONS
+        .lock()
+        .map(|g| g.iter().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// What the page said its decoder did (`{"decoder": {...}}` on the session's socket): kept with
+/// the session and logged. Only plain facts are kept: names, codec strings, sizes, error text.
+fn note_decoder(host: &str, page: u64, mut ev: serde_json::Value) {
+    if !ev.is_object() {
+        return;
+    }
+    ps5upload_core::secret_text::value_without_secrets(&mut ev);
+    let text = ev.to_string();
+    if text.len() > 2048 {
+        return;
+    }
+    ev["unix_ms"] = unix_ms().into();
+    let failed = ev
+        .get("event")
+        .and_then(|e| e.as_str())
+        .is_some_and(|e| e.contains("error") || e.contains("fail"));
+    // Logged only while the session's list has room: a page that kept sending (one failing on
+    // every frame) would otherwise fill the log, and push the handshake out of the debug ring.
+    let mut kept = false;
+    note_last(|v| kept = keep_decoder_event(v, ev));
+    if !kept {
+        return;
+    }
+    if failed {
+        crate::log_at!(Warn, "rp", "rp_stream: {host}: page {page} decoder: {text}");
+    } else {
+        crate::log_at!(Info, "rp", "rp_stream: {host}: page {page} decoder: {text}");
+    }
+}
+
+/// Adds `ev` to a session's decoder list while it holds fewer than [`DECODER_EVENTS`]; true when added.
+fn keep_decoder_event(session: &mut serde_json::Value, ev: serde_json::Value) -> bool {
+    match session["decoder"].as_array_mut() {
+        Some(a) if a.len() < DECODER_EVENTS => {
+            a.push(ev);
+            true
+        }
+        _ => false,
     }
 }
 
@@ -474,7 +546,9 @@ pub(crate) fn diag_summary() -> serde_json::Value {
     });
     serde_json::json!({
         "live": live,
-        "last_session": LAST_SESSION.lock().ok().and_then(|g| g.clone()),
+        "last_session": last_session(),
+        // The last few, oldest first (the newest is `last_session`).
+        "sessions": sessions(),
     })
 }
 
@@ -842,6 +916,7 @@ impl Live {
             alone_since: Mutex::new(None),
             video_header: Mutex::new(None),
             audio_header: Mutex::new(None),
+            stats: Mutex::new(None),
             playing: AtomicBool::new(false),
             need_key: AtomicBool::new(false),
             want_key: AtomicBool::new(false),
@@ -859,7 +934,20 @@ impl Live {
             passcode_answer: Mutex::new(None),
             auto: Default::default(),
             feed: Arc::new(live_feed::LiveFeed::new(hevc)),
+            regist_hex: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Whether the session signs in the user these keys are (hex).
+    fn same_user(&self, regist_hex: &str) -> bool {
+        self.regist_hex
+            .get()
+            .is_some_and(|r| r.eq_ignore_ascii_case(regist_hex.trim()))
+    }
+
+    /// The paired user the session signed in, by name, when it is one of the console's.
+    fn user_name(&self) -> Option<String> {
+        crate::consoles_api::user_name_of(&self.host, self.regist_hex.get()?)
     }
 
     /// What the page is told while the console waits for the passcode.
@@ -873,6 +961,12 @@ impl Live {
 
     /// The console asks for the passcode: ask the page (and any page that attaches meanwhile).
     fn ask_passcode(&self, retry: bool) {
+        crate::log_at!(
+            Info,
+            "rp",
+            "rp_stream: {}: the console asks for the user's passcode (again: {retry})",
+            self.host
+        );
         if let Ok(mut a) = self.passcode_answer.lock() {
             *a = None;
         }
@@ -901,6 +995,18 @@ impl Live {
         }
         match self.passcode_answer.lock() {
             Ok(mut a) => {
+                // Never the digits: only that an answer came.
+                crate::log_at!(
+                    Debug,
+                    "rp",
+                    "rp_stream: {}: page {id} answered the passcode ask ({})",
+                    self.host,
+                    if matches!(answer, Passcode::Cancel) {
+                        "cancel"
+                    } else {
+                        "digits"
+                    }
+                );
                 *a = Some(answer);
                 true
             }
@@ -965,7 +1071,9 @@ impl Live {
     pub(crate) fn set_picture(&self, on: bool) {
         let was_on = !self.page_off.swap(!on, Ordering::Relaxed);
         if was_on != on {
-            crate::log_info!(
+            crate::log_at!(
+                Info,
+                "rp",
                 "rp_stream: {}: the picture on this device is {}",
                 self.host,
                 if on { "on" } else { "off" }
@@ -1009,7 +1117,9 @@ impl Live {
         if self.guest_seat.swap(on, Ordering::Relaxed) == on {
             return;
         }
-        crate::log_info!(
+        crate::log_at!(
+            Info,
+            "rp",
             "rp_stream: {}: a guest {} the stream's controller",
             self.host,
             if on { "has" } else { "left" }
@@ -1132,6 +1242,13 @@ impl Live {
         if g.as_ref().is_some_and(|v| v.id == id) {
             *g = None;
             drop(g);
+            crate::log_at!(
+                Debug,
+                "rp",
+                "rp_stream: {}: page {id} left; the session waits {} s for another",
+                self.host,
+                self.keep_alive.as_secs()
+            );
             if let Ok(mut a) = self.alone_since.lock() {
                 *a = Some(Instant::now());
             }
@@ -1177,6 +1294,9 @@ impl Live {
             "picture": !self.picture_off(),
             // Told to stop, and finishing (a wake or handshake takes a moment to cut short).
             "stopping": self.stop.load(Ordering::Relaxed),
+            // The last second's stats while streaming: frames, loss, round trip, and sound
+            // (audio_frames_total; audio_other_codec, audio_header say why there is none).
+            "stats": self.stats.lock().ok().and_then(|g| g.clone()),
         })
     }
 }
@@ -1247,7 +1367,12 @@ impl StreamSink for Sink {
         let ms = self.t0.elapsed().as_millis() as u64;
         let v = match p {
             Progress::Waking => serde_json::json!({"stage": "waking", "ms": ms}),
-            Progress::Stats(s) => serde_json::json!({"stage": "stats", "stats": s}),
+            Progress::Stats(s) => {
+                if let Ok(mut g) = self.live.stats.lock() {
+                    *g = serde_json::to_value(s).ok();
+                }
+                serde_json::json!({"stage": "stats", "stats": s})
+            }
             Progress::Nonce => serde_json::json!({"stage": "nonce", "ms": ms}),
             Progress::SessionId => serde_json::json!({"stage": "session", "ms": ms}),
             Progress::TakionConnected => serde_json::json!({"stage": "takion", "ms": ms}),
@@ -1261,7 +1386,8 @@ impl StreamSink for Sink {
             }
         };
         if v["stage"] != "stats" {
-            crate::log_detail!("rp_stream: {}: stage {v}", self.live.host);
+            // Every stage at info: a session has about eight, and they are what a report needs.
+            crate::log_at!(Info, "rp", "rp_stream: {}: stage {v}", self.live.host);
             let stage = v.clone();
             note_last(|l| {
                 if let Some(a) = l["stages"].as_array_mut() {
@@ -1352,7 +1478,17 @@ impl StreamSink for Sink {
         if self.live.stop.load(Ordering::Relaxed) {
             return true;
         }
-        self.live.alone_too_long()
+        let alone = self.live.alone_too_long();
+        if alone {
+            crate::log_at!(
+                Info,
+                "rp",
+                "rp_stream: {}: no page for {} s and nothing holds the session: ending it",
+                self.live.host,
+                self.live.keep_alive.as_secs()
+            );
+        }
+        alone
     }
     fn wants_keyframe(&mut self) -> bool {
         let page = self.live.want_key.swap(false, Ordering::Relaxed);
@@ -1380,11 +1516,43 @@ impl StreamSink for Sink {
         self.live.keyboard.next()
     }
     fn passcode_needed(&mut self, retry: bool) {
-        crate::log_info!("rp_stream: the console asks for the user's passcode (retry {retry})");
         self.live.ask_passcode(retry);
     }
     fn passcode(&mut self) -> Option<Passcode> {
         self.live.take_passcode()
+    }
+}
+
+/// When this engine's last session with each console ended.
+static SESSION_ENDED: std::sync::LazyLock<
+    Mutex<std::collections::HashMap<String, std::time::Instant>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+/// How long a console holds Remote Play after a session ends (12-30 s seen), with a margin.
+const SLOT_HOLD: Duration = Duration::from_secs(40);
+
+/// Session init closed with no reply: "busy" with the wait left when our own session with this
+/// console ended moments ago (the player waits it out and starts again by itself), otherwise "in
+/// use" by another device. None for any other error.
+fn slot_held_status(host: &str, e: &anyhow::Error) -> Option<serde_json::Value> {
+    let text = format!("{e:#}");
+    if !text.contains(ps5upload_core::rp_session::SESSION_INIT_CLOSED) {
+        return None;
+    }
+    let since = SESSION_ENDED
+        .lock()
+        .ok()
+        .and_then(|g| g.get(host).map(|t| t.elapsed()));
+    Some(slot_held_value(since, &text))
+}
+
+fn slot_held_value(since_ours: Option<Duration>, text: &str) -> serde_json::Value {
+    match since_ours {
+        Some(d) if d < SLOT_HOLD => {
+            let left = (SLOT_HOLD - d).as_secs().max(3);
+            serde_json::json!({"stage": "error", "code": "busy", "retry_s": left, "error": text})
+        }
+        _ => serde_json::json!({"stage": "error", "code": "in_use", "retry_s": 10, "error": text}),
     }
 }
 
@@ -1460,6 +1628,9 @@ pub async fn current(
     let mut v = current_for(live.as_ref().map(|l| l.snapshot()), local);
     if local {
         control::add_details(&mut v, live.as_deref());
+        // How the last session started and ended (stages, frames, sound frames, loss): what an
+        // agent checks after a stream it ran, without a bug report. This computer only.
+        v["last_session"] = last_session().unwrap_or_default();
     }
     Json(v)
 }
@@ -1554,12 +1725,21 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
         "low_latency": start.low_latency,
         "picture": start.picture,
     });
-    crate::log_detail!("rp_stream: {}: starting a session: {asked}", start.host);
-    if let Ok(mut g) = LAST_SESSION.lock() {
-        *g = Some(serde_json::json!({
+    crate::log_at!(
+        Info,
+        "rp",
+        "rp_stream: {}: starting a session: {asked}",
+        start.host
+    );
+    if let Ok(mut g) = SESSIONS.lock() {
+        if g.len() >= KEPT_SESSIONS {
+            g.pop_front();
+        }
+        g.push_back(serde_json::json!({
             "started_unix_ms": unix_ms(),
             "asked": asked,
             "stages": [],
+            "decoder": [],
             "end": null,
         }));
     }
@@ -1572,6 +1752,13 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
             .unwrap_or(DEFAULT_KEEP_ALIVE)
             .min(MAX_KEEP_ALIVE),
     ));
+    let _ = live.regist_hex.set(
+        creds
+            .regist_key
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+    );
     live.mic_enabled.store(cfg.mic, Ordering::Relaxed);
     live.keyboard.enabled.store(cfg.keyboard, Ordering::Relaxed);
     live.set_replay(start.replay_s);
@@ -1602,6 +1789,8 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
                 "dropped": rep.video.frames_dropped,
                 "rebuilt": rep.video.frames_recovered,
                 "audio_frames": rep.audio_frames,
+                "audio_other_codec": rep.audio_other_codec,
+                "audio_header": rep.audio_header,
                 "units_seen": rep.units_seen,
                 "loss_seen": rep.loss_seen,
                 "loss_reported": rep.loss_reported,
@@ -1613,9 +1802,23 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
                 "ws_dropped": l.dropped.load(Ordering::Relaxed),
                 "reason": rep.disconnect_reason,
             }),
-            Err(e) => error_status(&e),
+            Err(e) => slot_held_status(&l.host, &e).unwrap_or_else(|| error_status(&e)),
         };
-        crate::log_info!("rp_stream: {end}");
+        // A session that reached the console holds its slot for a while after: remembered, so a
+        // start refused meanwhile is told apart from another device's session. Only a session
+        // that got as far as the console's slot: an end, or one lost mid-stream (an unreachable
+        // or refused start never held it).
+        if end["stage"] == "ended" || end["code"] == "lost" {
+            if let Ok(mut g) = SESSION_ENDED.lock() {
+                g.insert(l.host.clone(), std::time::Instant::now());
+            }
+        }
+        // The end and why, with the console's words for a refusal (80108b26 and the like).
+        if end["stage"] == "error" {
+            crate::log_at!(Warn, "rp", "rp_stream: {}: session ended: {end}", l.host);
+        } else {
+            crate::log_at!(Info, "rp", "rp_stream: {}: session ended: {end}", l.host);
+        }
         let end_note = end.clone();
         note_last(|v| {
             v["end"] = end_note;
@@ -1832,6 +2035,7 @@ async fn session(mut socket: WebSocket) {
                             }
                         }
                         if m.stop {
+                            crate::log_at!(Info, "rp", "rp_stream: {}: page {id} stops the session", live.host);
                             live.stop.store(true, Ordering::Relaxed);
                         }
                         if let Some(on) = m.mic {
@@ -1857,6 +2061,9 @@ async fn session(mut socket: WebSocket) {
                         }
                         if m.passcode_cancel {
                             live.answer_passcode(id, Passcode::Cancel);
+                        }
+                        if let Some(d) = m.decoder {
+                            note_decoder(&live.host, id, d);
                         }
                     }
                 }
@@ -1935,8 +2142,51 @@ pub(crate) mod test_live {
 }
 
 #[cfg(test)]
+mod slot_held_tests {
+    use super::*;
+
+    #[test]
+    fn a_closed_start_right_after_our_session_waits_it_out() {
+        let v = slot_held_value(Some(Duration::from_secs(10)), "x");
+        assert_eq!(
+            (v["code"].as_str(), v["retry_s"].as_u64()),
+            (Some("busy"), Some(30))
+        );
+        let v = slot_held_value(Some(Duration::from_secs(39)), "x");
+        assert_eq!(v["retry_s"], 3);
+        let v = slot_held_value(Some(Duration::from_secs(90)), "x");
+        assert_eq!(v["code"], "in_use");
+        assert_eq!(slot_held_value(None, "x")["code"], "in_use");
+        let e = anyhow::anyhow!("{}", ps5upload_core::rp_session::SESSION_INIT_CLOSED);
+        assert!(slot_held_status("10.9.9.9", &e).is_some());
+        assert!(slot_held_status("10.9.9.9", &anyhow::anyhow!("other")).is_none());
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_session_keeps_and_logs_only_its_first_decoder_events() {
+        let mut session = serde_json::json!({"decoder": []});
+        for i in 0..DECODER_EVENTS {
+            assert!(keep_decoder_event(
+                &mut session,
+                serde_json::json!({"event": "decode_error", "n": i})
+            ));
+        }
+        assert!(!keep_decoder_event(
+            &mut session,
+            serde_json::json!({"event": "decode_error"})
+        ));
+        assert_eq!(session["decoder"].as_array().unwrap().len(), DECODER_EVENTS);
+        // A session record without the list keeps nothing.
+        assert!(!keep_decoder_event(
+            &mut serde_json::json!({}),
+            serde_json::json!({"event": "configure"})
+        ));
+    }
 
     /// The session id (for a local script) is left out for a request not addressed to
     /// localhost; the rest, which the app reads, stays.

@@ -6,9 +6,10 @@
 import { hostOf } from "../lib/addr";
 import { create } from "zustand";
 
-import type { AmprLz4Options, FfpfscLevel, FpkgCompression, ImageFormat } from "../api/fpkg";
+import type { AmprLz4Options, FfpfscLevel, FpkgCompression, ImageFormat, ZstdPacks } from "../api/fpkg";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { useUploadSettingsStore } from "./uploadSettings";
+import type { AmprEmuBuild } from "./convertPrefs";
 
 export type ConvertThen = "keep" | "stream" | "upload";
 export type ConvertStatus = "pending" | "running" | "installing" | "handed" | "done" | "failed" | "cancelled";
@@ -16,11 +17,12 @@ export type ConvertStatus = "pending" | "running" | "installing" | "handed" | "d
 /** What a queued game becomes: an installable package, a game image (compressed into a
  *  .ffpfsc when `compress`), or a plain folder (#469: from a game image or a debug-key
  *  package). `lz4`: pack the game's data into AMPR LZ4 asset packs (an .exfat of a game that
- *  reads through libSceAmpr). */
+ *  reads through libSceAmpr). A folder's `zstd`: its files in zstd packs (then a game folder
+ *  can be the source too). */
 export type ConvertBuild =
   | { kind: "pkg" }
   | { kind: "image"; format: ImageFormat; compress: boolean; lz4?: AmprLz4Options }
-  | { kind: "folder" };
+  | { kind: "folder"; zstd?: ZstdPacks };
 
 /** The file a build makes, by its extension: what the queue row and the add button say. A
  *  folder has none; its row says "folder". */
@@ -78,6 +80,10 @@ export interface ConvertItem {
   fullVerify?: boolean;
   /** How hard a .ffpfsc is compressed, likewise. */
   imageLevel?: FfpfscLevel;
+  /** An image of a libSceAmpr game with no emulator gets the AMPR emulator, and which one: as
+   *  set when the game was added (absent on older items: the current settings at run time). */
+  addAmprEmu?: boolean;
+  amprEmuBuild?: AmprEmuBuild;
   status: ConvertStatus;
   packagePath?: string;
   error?: string;

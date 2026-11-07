@@ -558,21 +558,22 @@ impl Store {
             let bytes = std::fs::read(&path).with_context(reading)?;
             let shape: FileShape = serde_json::from_slice(&bytes).with_context(reading)?;
             for st in shape.destinations {
-                let secret = match st.secret {
-                    None => Secret::default(),
-                    Some(blob) => decrypt(&key, &blob).unwrap_or_else(|| {
-                        // Not this key's (the key file was replaced): the user adds the site
-                        // again, or puts the old key file back. Never the key itself in a log.
-                        crate::log_warn!(
+                let secret =
+                    match st.secret {
+                        None => Secret::default(),
+                        Some(blob) => decrypt(&key, &blob).unwrap_or_else(|| {
+                            // Not this key's (the key file was replaced): the user adds the site
+                            // again, or puts the old key file back. Never the key itself in a log.
+                            crate::log_at!(Warn, "golive", 
                             "golive: the saved stream key of {} can't be read; add the site again",
                             st.dest.id
                         );
-                        Secret {
-                            sealed: Some(blob),
-                            ..Default::default()
-                        }
-                    }),
-                };
+                            Secret {
+                                sealed: Some(blob),
+                                ..Default::default()
+                            }
+                        }),
+                    };
                 state.push((st.dest, secret));
             }
         }
@@ -708,7 +709,11 @@ fn store_from(
         }
         Err(e) => {
             if last.as_deref() != Some(e.as_str()) {
-                crate::log_warn!("golive: the saved destinations can't be read: {e}");
+                crate::log_at!(
+                    Warn,
+                    "golive",
+                    "golive: the saved destinations can't be read: {e}"
+                );
                 *last = Some(e.clone());
             }
             Err(e)

@@ -692,6 +692,28 @@ pub(crate) struct AmprZstdReq {
     /// 1 to 22; 5 when absent.
     #[serde(default)]
     level: Option<u8>,
+    /// Which ampr-emu-ng goes in: `latest` (the default: the newest GitHub release, used only
+    /// when its download matches the SHA-256 GitHub publishes for it, else the tested one) or
+    /// `pinned` (the tested release). The job's `commit_ack.ampr_runtime` says which went in.
+    #[serde(default)]
+    runtime: crate::zstd_runtime::RuntimeChoice,
+}
+
+impl AmprZstdReq {
+    /// The level, or why it is unusable.
+    fn level(&self) -> Result<u8, String> {
+        let level = self.level.unwrap_or(5);
+        if (1..=22).contains(&level) {
+            Ok(level)
+        } else {
+            Err(format!("zstd level {level} is not 1 to 22"))
+        }
+    }
+}
+
+/// What a zstd pack job ends with in its `commit_ack`: the emulator that went into the game.
+fn runtime_ack(runtime: &crate::zstd_runtime::PackRuntime) -> serde_json::Value {
+    serde_json::json!({ "ampr_runtime": runtime })
 }
 
 fn default_add_ampr_emu() -> bool {
@@ -910,17 +932,10 @@ pub(crate) async fn exfat_build_handler(
                 "zstd asset packs go into a plain image, without .ffpfsc compression or LZ4 packs",
             )
             .into_response(),
-            Some(r) => {
-                let level = r.level.unwrap_or(5);
-                if !(1..=22).contains(&level) {
-                    return json_err(
-                        StatusCode::BAD_REQUEST,
-                        format!("zstd level {level} is not 1 to 22"),
-                    )
-                    .into_response();
-                }
-                Some(level)
-            }
+            Some(r) => match r.level() {
+                Ok(level) => Some((level, r.runtime)),
+                Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
+            },
         };
     let named = match req.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
         Some(n) => {
@@ -998,35 +1013,19 @@ pub(crate) async fn exfat_build_handler(
         let (mut tree, renamed, signing) =
             ps5upload_fpkg::module_case::open(&scan_source).map_err(|e| e.to_string())?;
         if !renamed.is_empty() {
-            crate::log_info!(
+            crate::log_at!(
+                Info,
+                "convert",
                 "image build: renamed to the eboot's spelling: {}",
                 ps5upload_fpkg::module_case::describe(&renamed)
             );
         }
         if let Some(line) = signing.describe() {
-            crate::log_info!("image build: {line}");
+            crate::log_at!(Info, "convert", "image build: {line}");
         }
         if zstd_level.is_some() {
-            if !ps5upload_fpkg::source::imports_ampr(&mut *tree, "eboot.bin") {
-                return Err(
-                    "this game does not read its files through AMPR, so nothing could serve \
-                     asset packs; compress it into a .ffpfsc instead"
-                        .to_string(),
-                );
-            }
             // A packed game goes straight into the new packs.
-            tree = match ps5upload_fpkg::ampr_pack::image::Lz4Unpacked::open(tree)
-                .map_err(|e| format!("reading the game's LZ4 packs: {e}"))?
-            {
-                ps5upload_fpkg::ampr_pack::image::Unpacking::Decoded(decoded) => decoded,
-                ps5upload_fpkg::ampr_pack::image::Unpacking::NotPacked(plain) => plain,
-            };
-            if ps5_dump_forge_zstd::reader::detect(&*tree) {
-                tree = Box::new(
-                    ps5_dump_forge_zstd::reader::unpack(tree)
-                        .map_err(|e| format!("reading the game's zstd packs: {e}"))?,
-                );
-            }
+            tree = crate::zstd_packs::readable_for_packing(tree)?;
         } else if check_packs && ps5_dump_forge_zstd::reader::detect(&*tree) {
             // The other way: the zstd packs decoded, for LZ4 packs to be made from them.
             tree = Box::new(
@@ -1052,7 +1051,9 @@ pub(crate) async fn exfat_build_handler(
                     )
                     .map_err(|e| e.to_string())?,
                 );
-                crate::log_info!(
+                crate::log_at!(
+                    Info,
+                    "convert",
                     "image build: {} added as {module}",
                     ampr_emu_build.as_deref().unwrap_or("ampr_emu")
                 );
@@ -1222,18 +1223,33 @@ pub(crate) async fn exfat_build_handler(
                 Ok(None) => Ok(&mut *tree),
                 Err(e) => Err(format!("param.sfo: {e}")),
             };
+        // zstd packs: the emulator that goes in, fetched here (off the request) and recorded.
+        let mut runtime = None;
         let outcome = match (source_tree, &packs) {
             (Err(e), _) => Err(e),
-            (Ok(tree), None) if zstd_level.is_some() => crate::zstd_packs::build(
-                format,
-                zstd_level.unwrap_or(5),
-                tree,
-                &output,
-                mode,
-                verify_chunk,
-                &cancel,
-                &mut report,
-            ),
+            (Ok(tree), None) if zstd_level.is_some() => {
+                let (level, choice) = zstd_level.unwrap_or_default();
+                crate::zstd_runtime::pack_runtime(choice).and_then(|r| {
+                    crate::log_at!(
+                        Info,
+                        "convert",
+                        "zstd packs: {} goes into {}",
+                        r.describe(),
+                        output.display()
+                    );
+                    crate::zstd_packs::build(
+                        format,
+                        level,
+                        runtime.insert(r),
+                        tree,
+                        &output,
+                        mode,
+                        verify_chunk,
+                        &cancel,
+                        &mut report,
+                    )
+                })
+            }
             (Ok(tree), Some(packs)) => crate::image_build::build_packed(
                 format,
                 tree,
@@ -1317,12 +1333,16 @@ pub(crate) async fn exfat_build_handler(
                 crate::engine_log::record(
                     "info",
                     format!(
-                        "image: {} -> {} ({} files, {} bytes, {}, read back)",
+                        "image: {} -> {} ({} files, {} bytes, {}, read back){}",
                         source.display(),
                         output.display(),
                         built.files,
                         built.image_bytes,
-                        built.detail
+                        built.detail,
+                        runtime
+                            .as_ref()
+                            .map(|r| format!("; emulator {}", r.describe()))
+                            .unwrap_or_default()
                     ),
                 );
                 set_job(
@@ -1339,7 +1359,7 @@ pub(crate) async fn exfat_build_handler(
                         files_sent: built.files,
                         skipped_files: 0,
                         skipped_bytes: 0,
-                        commit_ack: None,
+                        commit_ack: runtime.as_ref().map(runtime_ack),
                     },
                 );
             }
@@ -1396,6 +1416,12 @@ pub(crate) struct FolderBuildReq {
     /// refusing (see `BuildReq::keep_both`).
     #[serde(default)]
     keep_both: bool,
+    /// Write the game with its files in zstd asset packs for ampr-emu-ng, as an image build's
+    /// `ampr_zstd` does, as a plain folder: the packs, the files that stay loose, and the
+    /// emulator in `fakelib/libSceAmpr.sprx`. The source may then also be a game folder (on
+    /// this computer, a saved server or a console). Not with `entry`.
+    #[serde(default)]
+    ampr_zstd: Option<AmprZstdReq>,
 }
 
 /// What a folder build reads: the whole image, one folder of it, or one file.
@@ -1426,9 +1452,46 @@ fn open_entry(source: &Path, entry: &str) -> Result<Unpacked, String> {
     }
 }
 
+/// `path` with links resolved, for a folder that may not exist yet: its nearest existing parent
+/// resolved, the rest as given.
+async fn resolved(path: &Path) -> Option<PathBuf> {
+    let mut rest = Vec::new();
+    let mut at = path;
+    loop {
+        if let Ok(real) = tokio::fs::canonicalize(at).await {
+            return Some(rest.iter().rev().fold(real, |p, c| p.join(c)));
+        }
+        rest.push(at.file_name()?.to_os_string());
+        at = at.parent()?;
+    }
+}
+
+/// The game at `source` (a folder, image or package anywhere) read for zstd packs: modules in
+/// the eboot's spelling, as an image or folder build reads it, then
+/// [`crate::zstd_packs::readable_for_packing`]. A packed folder build's read-back opens it the
+/// same way.
+fn open_for_packing(source: &Path) -> Result<Box<dyn ps5upload_fpkg::source::SourceTree>, String> {
+    let (tree, renamed, signing) =
+        ps5upload_fpkg::module_case::open(source).map_err(|e| e.to_string())?;
+    if !renamed.is_empty() {
+        crate::log_at!(
+            Info,
+            "convert",
+            "packed folder build: renamed to the eboot's spelling: {}",
+            ps5upload_fpkg::module_case::describe(&renamed)
+        );
+    }
+    if let Some(line) = signing.describe() {
+        crate::log_at!(Info, "convert", "packed folder build: {line}");
+    }
+    crate::zstd_packs::readable_for_packing(tree)
+}
+
 /// POST /api/folder/build — unpack a game image or a debug-key package into a plain folder
 /// (#469). Runs as a job like an image build: stages `write` and `verify`, the folder written
-/// as `<name>.partial/` and renamed only once it reads back. Done's `dest` is the folder.
+/// as `<name>.partial/` and renamed only once it reads back. Done's `dest` is the folder. With
+/// `ampr_zstd` the game's files go into zstd packs (stage `pack` first), from an image,
+/// package or game folder; `commit_ack.ampr_runtime` names the emulator that went in.
 pub(crate) async fn folder_build_handler(
     State(state): State<AppState>,
     Json(req): Json<FolderBuildReq>,
@@ -1436,10 +1499,38 @@ pub(crate) async fn folder_build_handler(
     use crate::folder_build;
     let source = resolve_engine_path(&req.source);
     let remote = ps5upload_fpkg::remote_source::is_remote(&source);
-    if !remote && tokio::fs::metadata(&source).await.is_ok_and(|m| m.is_dir()) {
+    let zstd = match &req.ampr_zstd {
+        None => None,
+        Some(_)
+            if req
+                .entry
+                .as_deref()
+                .is_some_and(|e| !e.trim().trim_matches('/').is_empty()) =>
+        {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                "zstd packs are made of a whole game, not one file or folder of it",
+            )
+            .into_response()
+        }
+        Some(r) => match r.level() {
+            Ok(level) => Some((level, r.runtime)),
+            Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
+        },
+    };
+    let local_dir = !remote && tokio::fs::metadata(&source).await.is_ok_and(|m| m.is_dir());
+    if local_dir && zstd.is_none() {
         return json_err(
             StatusCode::BAD_REQUEST,
             format!("{} is already a folder", source.display()),
+        )
+        .into_response();
+    }
+    // A game folder on this computer has to be a game, as for an image (#596).
+    if local_dir && !has_title_param(&source).await {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            missing_param_message(&source, false),
         )
         .into_response();
     }
@@ -1449,7 +1540,8 @@ pub(crate) async fn folder_build_handler(
     } else {
         crate::image_build::is_image_file(&source)
     };
-    if !named_as_image {
+    // Packs are made of a game folder anywhere too.
+    if !named_as_image && !(zstd.is_some() && (local_dir || remote)) {
         return json_err(
             StatusCode::BAD_REQUEST,
             format!("{} is not a game image or package", source.display()),
@@ -1515,6 +1607,22 @@ pub(crate) async fn folder_build_handler(
         )
         .into_response();
     }
+    // A game folder's packs never go inside it: the read-back would list them as the game's.
+    if local_dir {
+        if let (Ok(src), Some(out)) = (
+            tokio::fs::canonicalize(&source).await,
+            resolved(&out_dir).await,
+        ) {
+            if out.starts_with(&src) {
+                return json_err(
+                    StatusCode::BAD_REQUEST,
+                    "the packed folder would be written inside the game folder: pick another \
+                     output folder",
+                )
+                .into_response();
+            }
+        }
+    }
     if let Err(e) = tokio::fs::create_dir_all(&out_dir).await {
         return json_err(
             StatusCode::BAD_REQUEST,
@@ -1524,10 +1632,14 @@ pub(crate) async fn folder_build_handler(
     }
     let scan_source = source.clone();
     let scan_entry = entry.clone();
+    let packing = zstd.is_some();
     let scanned = tokio::task::spawn_blocking(move || {
         if let Some(entry) = scan_entry {
             // A part of the image is saved as the image spells it, as the browser listed it.
             return open_entry(&scan_source, &entry);
+        }
+        if packing {
+            return open_for_packing(&scan_source).map(Unpacked::Tree);
         }
         // An image ignores letter case and /data does not: a Unity dump whose
         // Il2cppUserAssemblies.prx the eboot loads as Il2CppUserAssemblies.prx plays from the
@@ -1535,13 +1647,15 @@ pub(crate) async fn folder_build_handler(
         let (tree, renamed, signing) =
             ps5upload_fpkg::module_case::open(&scan_source).map_err(|e| e.to_string())?;
         if !renamed.is_empty() {
-            crate::log_info!(
+            crate::log_at!(
+                Info,
+                "convert",
                 "folder build: renamed to the eboot's spelling: {}",
                 ps5upload_fpkg::module_case::describe(&renamed)
             );
         }
         if let Some(line) = signing.describe() {
-            crate::log_info!("folder build: {line}");
+            crate::log_at!(Info, "convert", "folder build: {line}");
         }
         Ok::<_, String>(Unpacked::Tree(tree))
     })
@@ -1570,8 +1684,10 @@ pub(crate) async fn folder_build_handler(
         }
         Unpacked::File { size, .. } => *size,
     };
+    // Packs may well fit in less, as for an image: no refusal before the first write.
     if let Some(why) = build::free_bytes(&out_dir)
         .and_then(|free| crate::folder_build::shortfall(free, total, &out_dir))
+        .filter(|_| zstd.is_none())
     {
         return json_err(StatusCode::BAD_REQUEST, why).into_response();
     }
@@ -1647,16 +1763,21 @@ pub(crate) async fn folder_build_handler(
         if sweep {
             sweep_output_leftovers(&out_dir);
         }
-        const STAGES: [&str; 2] = ["write", "verify"];
+        // Packs are made first: the stage list says so.
+        let stages: &[&str] = if zstd.is_some() {
+            &["pack", "write", "verify"]
+        } else {
+            &["write", "verify"]
+        };
         let mut report = |id: &str, done: u64, total: u64| {
-            if id == "write" {
+            if id != "verify" {
                 bytes.store(done, Ordering::Relaxed);
             }
-            let index = STAGES.iter().position(|s| *s == id).unwrap_or(0) as u32;
+            let index = stages.iter().position(|s| *s == id).unwrap_or(0) as u32;
             *current.lock().unwrap_or_else(|e| e.into_inner()) = Some(JobStage {
                 id: id.to_string(),
                 index,
-                count: STAGES.len() as u32,
+                count: stages.len() as u32,
                 done,
                 total,
             });
@@ -1664,19 +1785,43 @@ pub(crate) async fn folder_build_handler(
         let reopen_source = source.clone();
         let reopen_entry = entry.clone();
         // Verification reads the source afresh by the folder's names, so with the same renames
-        // (or, for a part of the image, the same part).
+        // (or, for a part of the image, the same part; for packs, decoded the same way).
         let reopen = move || match &reopen_entry {
             Some(e) => open_entry(&reopen_source, e).map(|u| match u {
                 Unpacked::Tree(t) | Unpacked::File { tree: t, .. } => t,
             }),
+            None if packing => open_for_packing(&reopen_source),
             None => ps5upload_fpkg::module_case::open(&reopen_source)
                 .map(|(t, _, _)| t)
                 .map_err(|e| e.to_string()),
         };
+        // zstd packs: the emulator that goes in, fetched here (off the request) and recorded.
+        let mut runtime = None;
         let outcome = match unpacked {
-            Unpacked::Tree(mut tree) => {
-                folder_build::build(&mut *tree, &reopen, &target, mode, &cancel, &mut report)
-            }
+            Unpacked::Tree(mut tree) => match zstd {
+                Some((level, choice)) => crate::zstd_runtime::pack_runtime(choice).and_then(|r| {
+                    crate::log_at!(
+                        Info,
+                        "convert",
+                        "zstd packs: {} goes into {}",
+                        r.describe(),
+                        target.display()
+                    );
+                    crate::zstd_packs::build_folder(
+                        level,
+                        runtime.insert(r),
+                        &mut *tree,
+                        &reopen,
+                        &target,
+                        mode,
+                        &cancel,
+                        &mut report,
+                    )
+                }),
+                None => {
+                    folder_build::build(&mut *tree, &reopen, &target, mode, &cancel, &mut report)
+                }
+            },
             Unpacked::File {
                 mut tree,
                 path,
@@ -1702,10 +1847,14 @@ pub(crate) async fn folder_build_handler(
                 crate::engine_log::record(
                     "info",
                     format!(
-                        "folder: {} -> {} ({}, read back)",
+                        "folder: {} -> {} ({}, read back){}",
                         source.display(),
                         target.display(),
-                        built.detail
+                        built.detail,
+                        runtime
+                            .as_ref()
+                            .map(|r| format!("; zstd packs, emulator {}", r.describe()))
+                            .unwrap_or_default()
                     ),
                 );
                 set_job(
@@ -1722,7 +1871,7 @@ pub(crate) async fn folder_build_handler(
                         files_sent: built.files,
                         skipped_files: 0,
                         skipped_bytes: 0,
-                        commit_ack: None,
+                        commit_ack: runtime.as_ref().map(runtime_ack),
                     },
                 );
             }

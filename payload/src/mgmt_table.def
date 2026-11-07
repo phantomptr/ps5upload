@@ -171,6 +171,8 @@ MGMT_H1(AVA1_METHOD_SMB_SHARES_REMOVE, MGMT_FRAME_SMB_SHARES_REMOVE, MGMT_FRAME_
 /* ---- tasks started on the console page, for the apps' Activity (console_tasks.c, #658) ---- */
 MGMT_H0(AVA1_METHOD_CONSOLE_TASKS, MGMT_FRAME_CONSOLE_TASKS, MGMT_FRAME_CONSOLE_TASKS_ACK, 0, handle_console_tasks, mgmt_call_text)
 MGMT_H1(AVA1_METHOD_CONSOLE_TASK_CANCEL, MGMT_FRAME_CONSOLE_TASK_CANCEL, MGMT_FRAME_CONSOLE_TASK_CANCEL_ACK, 0, handle_console_task_cancel, mgmt_call_text)
+/* ---- the log levels the engine hands the helper (plog.c) ---- */
+MGMT_H1(AVA1_METHOD_LOG_LEVEL, MGMT_FRAME_LOG_LEVEL, MGMT_FRAME_LOG_LEVEL_ACK, 0, handle_log_level, mgmt_call_text)
 /* ---- the devices that use this console and what they share (mesh.c) ---- */
 MGMT_H1(AVA1_METHOD_MESH_HELLO, MGMT_FRAME_MESH_HELLO, MGMT_FRAME_MESH_HELLO_ACK, 0, handle_mesh_hello, mgmt_call_text)
 MGMT_H1(AVA1_METHOD_MESH_STATE, MGMT_FRAME_MESH_STATE, MGMT_FRAME_MESH_STATE_ACK, 0, handle_mesh_state, mgmt_call_text)

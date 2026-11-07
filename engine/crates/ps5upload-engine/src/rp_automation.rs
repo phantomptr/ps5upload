@@ -418,7 +418,7 @@ async fn frame_from_feed(
     {
         Ok(i) => i,
         Err(e) => {
-            crate::log_warn!("rp_automation: {e}");
+            crate::log_at!(Warn, "rp", "rp_automation: {e}");
             return fail_with(
                 StatusCode::BAD_GATEWAY,
                 serde_json::json!({"error": "decode_failed", "detail": e}),

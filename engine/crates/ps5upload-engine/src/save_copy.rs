@@ -54,6 +54,8 @@ use crate::save_backup::{
 
 /// The tag of the backup taken of a save before a backup of another user's replaced it.
 pub const BEFORE_COPY_TAG: &str = "beforecopy";
+/// The `parts` answer of Load a save file when the file was a backup, put back whole.
+pub const RESTORED_WHOLE: &str = "restored-backup";
 /// The manifest `kind` of a shared save holding every image of the game, one folder each. A
 /// version before 10.6.0 refuses it ("only PS5 saves can be shared") instead of misreading it.
 pub const SHARE_KIND: &str = "ps5-saves";
@@ -559,10 +561,7 @@ fn wrapper_of(zip: &Path, title_id: &str) -> Option<String> {
 /// sealed images, which only the PS5 that made it can use), and a folder per part named as the
 /// target's `images` (a shared save whose manifest was lost, zipped again by hand) is taken.
 fn unlabelled_parts(zip: &Path, dir: &Path, images: &[String]) -> Result<Vec<Part>, String> {
-    let noted = ps5upload_core::save_archive::zip_comment(zip)
-        .ok()
-        .and_then(|c| serde_json::from_str::<Value>(&c).ok())
-        .is_some_and(|n| n.get("ps5upload").and_then(Value::as_str) == Some("save-backup"));
+    let noted = local::noted_backup(zip);
     let entries: Vec<(String, bool)> = std::fs::read_dir(dir)
         .map(|d| {
             d.flatten()
@@ -1392,6 +1391,25 @@ pub async fn post_use_shared(Query(q): Query<UseSharedQuery>, body: axum::body::
                 .map(String::from);
             let user_id = user_of_folder(&folder, q.user_id)?;
             let host = q.addr.trim().to_string();
+            // A backup this app made, picked here (after a reset its user is gone, and Load a
+            // save file is where a person with a backup .zip goes): put back as Restore does,
+            // into this user's save even when it was another user's. The console it was made on
+            // is still checked, and the save there now is kept first.
+            if local::noted_backup(&incoming) {
+                let title_id = title_of_folder(folder.trim_end_matches('/'))?;
+                let beside = crate::remote::store::data_dir()
+                    .map(|d| d.join("save-backups").join("before-restore"));
+                local::restore_zip_any_user(
+                    &host,
+                    &title_id,
+                    &incoming,
+                    folder.trim_end_matches('/'),
+                    user_id,
+                    beside,
+                )?;
+                crate::log_info!("save backup: a backup loaded as a save file into {folder}");
+                return Ok(vec![RESTORED_WHOLE.to_string()]);
+            }
             import_as(
                 &Live::new(&host),
                 &folder,
@@ -1620,12 +1638,8 @@ pub async fn post_restore_to_user(Json(b): Json<RestoreToUserBody>) -> Response 
                 let _ = cleanup_temp_dir(&tmp.to_string_lossy());
                 r?
             } else {
-                let zip = Path::new(&local::settings().dir)
-                    .join(&title_id)
-                    .join(&file);
-                if !zip.is_file() {
-                    return Err(format!("no backup {}", zip.display()).into());
-                }
+                let zip = local::find_backup(&local::settings().read_dirs(), &title_id, &file)
+                    .ok_or_else(|| format!("no backup {file}"))?;
                 restore_to_user(&live, &title_id, &file, &zip, b.to_user)?
             };
             crate::log_info!("save backup: {} restored into {}", d.from, d.to);

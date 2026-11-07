@@ -1,5 +1,6 @@
 /* Filesystem operations as AVA1 jobs: see include/fs_jobs.h. */
 #include "fs_jobs.h"
+#include "plog.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -648,7 +649,11 @@ static int op_delete(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t n)
                 cf.first, cf.what, cf.err ? strerror(cf.err) : "-");
     ava1_op_set_total(c, files, bytes);
     ava1_op_message(c, "deleting");
+    PLOG(PLOG_DEBUG, PLOG_FILES, "[fs_jobs] delete %s: %llu files, %llu bytes", path, (unsigned long long)files,
+         (unsigned long long)bytes);
     rc = fsj_rm_rf(path, 0, &h);
+    PLOG(PLOG_DEBUG, PLOG_FILES, "[fs_jobs] delete %s: rc %d, %llu left (first %s: %s)", path, rc, (unsigned long long)f.n,
+         f.n && f.first[0] ? f.first : "-", f.err ? strerror(f.err) : "-");
     if (rc == -2) {
         ava1_op_message(c, "fs_delete_cancelled");
         return AVA1_ERR_CANCELLED;

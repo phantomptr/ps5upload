@@ -2120,7 +2120,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-pfs"
-version = "11.4.0"
+version = "11.5.0"
 dependencies = [
  "flate2",
  "ps5-dump-forge-ufs2",
@@ -2129,7 +2129,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-ufs2"
-version = "11.4.0"
+version = "11.5.0"
 dependencies = [
  "ps5upload-fpkg",
  "ps5upload-pkg",
@@ -2138,7 +2138,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-zstd"
-version = "11.4.0"
+version = "11.5.0"
 dependencies = [
  "crc32fast",
  "getrandom 0.4.3",
@@ -2149,7 +2149,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-apidoc"
-version = "11.4.0"
+version = "11.5.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2159,7 +2159,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-ava1"
-version = "11.4.0"
+version = "11.5.0"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2180,7 +2180,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-core"
-version = "11.4.0"
+version = "11.5.0"
 dependencies = [
  "aes 0.9.4",
  "aes-gcm 0.11.1",
@@ -2206,7 +2206,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-ctest"
-version = "11.4.0"
+version = "11.5.0"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2222,7 +2222,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-engine"
-version = "11.4.0"
+version = "11.5.0"
 dependencies = [
  "aes-gcm 0.11.1",
  "anyhow",
@@ -2275,7 +2275,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-fpkg"
-version = "11.4.0"
+version = "11.5.0"
 dependencies = [
  "aes 0.9.4",
  "blake3",
@@ -2299,7 +2299,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-lab"
-version = "11.4.0"
+version = "11.5.0"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2317,7 +2317,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-pkg"
-version = "11.4.0"
+version = "11.5.0"
 dependencies = [
  "aes 0.9.4",
  "blake3",
@@ -2329,7 +2329,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-tests"
-version = "11.4.0"
+version = "11.5.0"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2347,7 +2347,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-unrar"
-version = "11.4.0"
+version = "11.5.0"
 dependencies = [
  "serde",
  "serde_json",

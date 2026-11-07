@@ -17,6 +17,9 @@ export interface GameInspection {
     content_id: string;
     concept_id: string | null;
     platform: string;
+    /** `ps4` / `ps5` from eboot.bin's process param (its SDK words); `platform` falls back to
+     *  it when the title id says nothing. Absent from an older engine. */
+    exe_platform?: string | null;
     category: string;
     content_type: string;
     region: string | null;

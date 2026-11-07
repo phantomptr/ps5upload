@@ -117,10 +117,13 @@ export function loaderSettled(input: {
   loaderOpen: boolean;
   firstOpenAt: number | undefined;
   now: number;
+  /** How long to wait; longer on a console whose Payload Manager starts the helper at boot
+   *  (lib/helperAtBoot), so this loop does not send a second one while that one is coming. */
+  settleMs?: number;
 }): "send" | "settle" | "closed" {
   if (!input.loaderOpen) return "closed";
   const since = input.firstOpenAt ?? input.now;
-  return input.now - since >= LOADER_SETTLE_MS ? "send" : "settle";
+  return input.now - since >= (input.settleMs ?? LOADER_SETTLE_MS) ? "send" : "settle";
 }
 
 /** What the loop sends to a down console whose loader has settled.

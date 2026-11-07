@@ -1,11 +1,10 @@
-//! Diagnostics: the "Detailed logs" switch and the feature summary a bug report carries.
+//! Diagnostics: the old "Detailed logs" switch and the feature summary a bug report carries.
 //!
 //! * `GET  /api/diag/log-level` -> `{detailed, until_ms, max_hours}`
-//! * `POST /api/diag/log-level` `{detailed, until_ms?}` -> the same. On turns extra debug lines on
-//!   (`log_detail!`, `core_debug!`: the Remote Play handshake, Play Together) until `until_ms`
-//!   (Unix ms), at most [`MAX_DETAILED`] from now and a day when it is left out, so nobody stays
-//!   verbose by accident. The engine keeps it in memory; the app keeps the time and sets it again
-//!   when the engine restarts.
+//! * `POST /api/diag/log-level` `{detailed, until_ms?}` -> the same. The switch from before log
+//!   levels (`/api/logs/level`, log_levels.rs), kept for older apps: on raises the global level to
+//!   `debug` until `until_ms` (Unix ms), at most [`MAX_DETAILED`] from now and a day when it is
+//!   left out; off drops the raise.
 //! * `GET  /api/diag/features` -> what each feature is doing now, as counts and states: Play
 //!   Together, phone controllers and the watch party, Go live, Remote Play (the running session
 //!   and the last one's start and end), saved remote connections, the mesh. Built to be posted in
@@ -57,6 +56,7 @@ pub struct LogLevelReq {
 }
 
 pub async fn log_level_set(Json(req): Json<LogLevelReq>) -> Response {
+    let before = ps5upload_core::log::levels();
     let was = ps5upload_core::log::verbose();
     if req.detailed {
         let now = now_ms();
@@ -64,7 +64,7 @@ pub async fn log_level_set(Json(req): Json<LogLevelReq>) -> Response {
         ps5upload_core::log::set_verbose_until(until);
         if until > now && !was {
             crate::log_info!(
-                "detailed logs on for {} min (Remote Play handshake, Play Together)",
+                "detailed logs on for {} min (the global level at debug)",
                 (until - now) / 60_000
             );
         }
@@ -74,7 +74,133 @@ pub async fn log_level_set(Json(req): Json<LogLevelReq>) -> Response {
             crate::log_info!("detailed logs off");
         }
     }
+    // Saved and announced like a PUT /api/logs/level, so a restart keeps it and the app hears.
+    crate::log_levels::changed(&before, &ps5upload_core::log::levels());
     Json(level_json()).into_response()
+}
+
+fn started() -> &'static std::time::Instant {
+    static T: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    T.get_or_init(std::time::Instant::now)
+}
+
+/// Note the engine's start (its uptime counts from here). Called once at startup.
+pub(crate) fn mark_started() {
+    let _ = started();
+}
+
+/// How long the engine has run, in seconds.
+pub(crate) fn uptime_s() -> u64 {
+    started().elapsed().as_secs()
+}
+
+/// This computer for a bug report: OS and its version, CPU, memory, uptime of the machine and the
+/// engine, network interfaces by kind and MTU (never an address or a MAC). Each value is null when
+/// it can't be read.
+pub(crate) fn host_json() -> Value {
+    let mut v = serde_json::to_value(ps5upload_core::host_info::host_info()).unwrap_or_default();
+    v["engine_uptime_s"] = json!(uptime_s());
+    v["in_container"] = json!(crate::pkg_install::in_container());
+    v["network_interfaces"] = json!(net_interfaces());
+    v
+}
+
+/// The network interfaces by kind, each once, with its MTU where it can be read and whether it
+/// has an IPv4 / IPv6 address. Never the name's number, an address or a MAC.
+pub(crate) fn net_interfaces() -> Vec<Value> {
+    use std::collections::BTreeMap;
+    let mut by_name: BTreeMap<String, (bool, bool, bool)> = BTreeMap::new();
+    for i in if_addrs::get_if_addrs().unwrap_or_default() {
+        let e = by_name.entry(i.name.clone()).or_default();
+        e.0 |= i.is_loopback();
+        e.1 |= i.ip().is_ipv4();
+        e.2 |= i.ip().is_ipv6();
+    }
+    let mtus = interface_mtus();
+    by_name
+        .into_iter()
+        .map(|(name, (lo, v4, v6))| {
+            json!({
+                "kind": if lo { "loopback" } else { interface_kind(&name) },
+                "mtu": mtus.get(&name),
+                "ipv4": v4,
+                "ipv6": v6,
+            })
+        })
+        .collect()
+}
+
+/// What an interface is, from its name: `en0` is "ethernet_or_wifi", `utun3` is "vpn".
+pub(crate) fn interface_kind(name: &str) -> &'static str {
+    let n = name.to_ascii_lowercase();
+    let starts = |p: &[&str]| p.iter().any(|x| n.starts_with(x));
+    if starts(&["lo"]) {
+        "loopback"
+    } else if starts(&[
+        "utun",
+        "tun",
+        "tap",
+        "wg",
+        "tailscale",
+        "zt",
+        "ppp",
+        "ipsec",
+    ]) {
+        "vpn"
+    } else if starts(&[
+        "docker", "veth", "br-", "bridge", "virbr", "vmnet", "vboxnet", "awdl", "llw", "anpi", "ap",
+    ]) {
+        "virtual"
+    } else if starts(&["wl", "wifi", "wi-fi", "wireless"]) {
+        "wifi"
+    } else if starts(&["eth", "enp", "eno", "ens", "enx", "ethernet"]) {
+        "ethernet"
+    } else if starts(&["en"]) {
+        // macOS: en0 is Wi-Fi on a laptop and Ethernet on a desktop.
+        "ethernet_or_wifi"
+    } else if starts(&["rmnet", "ccmni", "pdp", "wwan"]) {
+        "cellular"
+    } else {
+        "other"
+    }
+}
+
+/// MTU per interface name: sysfs on Linux and Android, `ifconfig` on the BSDs and macOS.
+fn interface_mtus() -> std::collections::HashMap<String, u32> {
+    let mut out = std::collections::HashMap::new();
+    if cfg!(any(target_os = "linux", target_os = "android")) {
+        if let Ok(dir) = std::fs::read_dir("/sys/class/net") {
+            for e in dir.flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if let Some(m) = std::fs::read_to_string(e.path().join("mtu"))
+                    .ok()
+                    .and_then(|s| s.trim().parse().ok())
+                {
+                    out.insert(name, m);
+                }
+            }
+        }
+    } else if cfg!(target_os = "macos") {
+        if let Ok(o) = std::process::Command::new("/sbin/ifconfig")
+            .arg("-a")
+            .output()
+        {
+            out = parse_ifconfig_mtus(&String::from_utf8_lossy(&o.stdout));
+        }
+    }
+    out
+}
+
+/// `en0: flags=8863<UP,...> mtu 1500` lines out of `ifconfig -a`.
+pub(crate) fn parse_ifconfig_mtus(text: &str) -> std::collections::HashMap<String, u32> {
+    text.lines()
+        .filter(|l| !l.starts_with(char::is_whitespace))
+        .filter_map(|l| {
+            let (name, rest) = l.split_once(':')?;
+            let mtu = rest.split_whitespace().skip_while(|w| *w != "mtu").nth(1)?;
+            Some((name.to_string(), mtu.parse().ok()?))
+        })
+        .collect()
 }
 
 /// The feature summary (see the module docs).
@@ -83,8 +209,11 @@ pub(crate) fn features_json() -> Value {
         "engine": {
             "version": env!("CARGO_PKG_VERSION"),
             "kind": crate::mesh_api::kind(),
+            "uptime_s": uptime_s(),
         },
         "detailed_logs": level_json(),
+        "log_levels": crate::log_levels::levels_json(),
+        "host": host_json(),
         "remote_play": crate::rp_stream_api::diag_summary(),
         "play_together": crate::join::diag_summary(),
         "pad_link": crate::pad_link::diag_summary(),
@@ -183,8 +312,30 @@ mod tests {
             "go_live",
             "remote_connections",
             "mesh",
+            "log_levels",
+            "host",
         ] {
             assert!(v.get(s).is_some(), "{s} missing");
         }
+        // Interfaces by kind, never by address.
+        for i in v["host"]["network_interfaces"].as_array().unwrap() {
+            assert!(i.get("kind").is_some() && i.get("name").is_none(), "{i}");
+        }
+    }
+
+    #[test]
+    fn interfaces_by_kind_and_mtu() {
+        assert_eq!(interface_kind("en0"), "ethernet_or_wifi");
+        assert_eq!(interface_kind("utun4"), "vpn");
+        assert_eq!(interface_kind("wlan0"), "wifi");
+        assert_eq!(interface_kind("enp3s0"), "ethernet");
+        assert_eq!(interface_kind("docker0"), "virtual");
+        assert_eq!(interface_kind("lo0"), "loopback");
+        let m = parse_ifconfig_mtus(
+            "lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST> mtu 16384\n\toptions=1203<RXCSUM>\nen0: flags=8863<UP,BROADCAST> mtu 1500\n\tether aa:bb:cc:dd:ee:ff\n",
+        );
+        assert_eq!(m.get("lo0"), Some(&16384));
+        assert_eq!(m.get("en0"), Some(&1500));
+        assert_eq!(m.len(), 2);
     }
 }

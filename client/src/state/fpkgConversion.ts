@@ -8,12 +8,20 @@ import { create } from "zustand";
 import { t as translate } from "../i18n";
 import { ps5FakeGameUnplayableFirmware } from "../lib/ps5Firmware";
 import { useLangStore } from "./lang";
-import { useConvertPrefs } from "./convertPrefs";
+import { useConvertPrefs, type AmprEmuBuild } from "./convertPrefs";
 
 import { imageUploadItem, resolveImagePlan, type ImageUploadPlan } from "../lib/imageUpload";
 import { useUploadQueueStore } from "./uploadQueue";
 
-import { fpkg, type AmprLz4Options, type FfpfscLevel, type FpkgBuildRequest, type ImageFormat, type WorkshopRun } from "../api/fpkg";
+import {
+  fpkg,
+  type AmprLz4Options,
+  type FfpfscLevel,
+  type FpkgBuildRequest,
+  type ImageFormat,
+  type WorkshopRun,
+  type ZstdPacks,
+} from "../api/fpkg";
 import { jobCancel, jobPause, jobResume, jobStatus } from "../api/ps5";
 import { useConnectionStore } from "./connection";
 import { useRosterStore } from "./roster";
@@ -164,7 +172,7 @@ export interface ConversionState {
     /** Number the image's name when it is taken in `outputDir`, instead of refusing. */
     keepBoth?: boolean,
     /** This game's own choices (a queued game keeps what it was added with); else the settings. */
-    own?: { fullVerify?: boolean; imageLevel?: FfpfscLevel },
+    own?: { fullVerify?: boolean; imageLevel?: FfpfscLevel; addAmprEmu?: boolean; amprEmuBuild?: AmprEmuBuild },
   ) => Promise<void>;
   /** Unpack a game image or a debug-key package into a plain folder in `outputDir`; with
    *  `keepBoth`, a name already taken there is numbered instead of refused. */
@@ -172,8 +180,9 @@ export interface ConversionState {
     source: string,
     outputDir: string | undefined,
     keepBoth?: boolean,
-    /** This game's own choice (a queued game keeps what it was added with); else the setting. */
-    own?: { fullVerify?: boolean },
+    /** This game's own choice (a queued game keeps what it was added with); else the setting.
+     *  `zstd`: the folder's files in zstd packs. */
+    own?: { fullVerify?: boolean; zstd?: ZstdPacks },
   ) => Promise<void>;
   /** Put the finished image in the Upload queue. */
   uploadImage: (plan: ImageUploadPlan) => void;
@@ -889,6 +898,10 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
     const verifyChunkKib = prefs.verifyChunkKib;
     const fullVerify = own?.fullVerify ?? prefs.fullVerify;
     const imageLevel = own?.imageLevel ?? prefs.imageLevel;
+    const amprEmu = {
+      add: own?.addAmprEmu ?? prefs.addAmprEmu,
+      build: own?.amprEmuBuild ?? prefs.amprEmuBuild,
+    };
     // One engine job: compressing happens as the image is written, so no uncompressed copy
     // is ever on disk.
     // The console it goes to, when it is sent once built: another console's view of this
@@ -913,6 +926,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
             name,
             imageLevel,
             keepBoth,
+            amprEmu,
           ),
         null,
         password,
@@ -932,6 +946,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         undefined,
         imageLevel,
         keepBoth,
+        amprEmu,
       );
       update({ jobId: job_id });
       poll(job_id, null);
@@ -943,7 +958,9 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
   buildFolder: async (source, outputDir, keepBoth, own) => {
     if (get().pipeline.phase === "running") return;
     pendingImageUpload = null;
-    beginRun("folder", source, null, "write");
+    // Packs are made before the folder is written.
+    const first = own?.zstd ? "pack" : "write";
+    beginRun("folder", source, null, first);
     try {
       const { job_id } = await fpkg.buildFolder(
         source,
@@ -952,11 +969,12 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         own?.fullVerify ?? useConvertPrefs.getState().fullVerify,
         undefined,
         keepBoth,
+        own?.zstd,
       );
       update({ jobId: job_id });
       poll(job_id, null);
     } catch (error) {
-      fail("write", error instanceof Error ? error.message : String(error), null);
+      fail(first, error instanceof Error ? error.message : String(error), null);
     }
   },
 
