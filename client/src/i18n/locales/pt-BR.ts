@@ -8032,6 +8032,14 @@ engine_op_lost: "O mecanismo reiniciou enquanto isto rodava, então não se sabe
 cleanup_err_helper_silent: "O auxiliar no PS5 parou de responder enquanto removia, então o app parou de esperar. Envie o auxiliar de novo (Atualizar auxiliar) e verifique de novo para ver o que sobrou.",
 cleanup_err_stop_unconfirmed: "Parado. O PS5 não confirmou, então ele ainda pode terminar o item em que estava. Verifique de novo para ver o que sobrou.",
 update_notes_unavailable: "Não foi possível ler no GitHub as notas da v{version}.",
+rp_play_as: "Jogar como",
+rp_user_n: "Usuário {n}",
+rp_users_title: "Usuários do PS5 pareados",
+rp_users_chosen: "Joga como este usuário",
+rp_users_remove: "Esquecer",
+rp_users_remove_confirm: "Esquecer o pareamento de {name}?",
+rp_users_remove_body: "Jogar não poderá mais iniciar como este usuário até você pareá-lo de novo. O PS5 mantém este app na lista de dispositivos vinculados até você removê-lo lá.",
+rp_users_add_hint: "Para jogar também como outro usuário, entre com esse usuário no PS5 e pareie de novo: cada usuário é mantido, e Jogar › Iniciar deixa você escolher um.",
 };
 
 export default pt_BR;

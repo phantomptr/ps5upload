@@ -838,6 +838,27 @@ pub struct PairResult {
     /// passed through from readiness so the UI can name it.
     pub account_id_b64: String,
     pub account_via: String,
+    /// The paired user's name on the console, when it could be read (the helper's user list), for
+    /// telling a console's paired users apart. Empty when not known.
+    #[serde(default)]
+    pub user_name: String,
+}
+
+/// The name of the console user `uid`, from the helper's user list. Empty when it can't be read:
+/// a name is only for showing, so its absence never fails a pairing.
+fn user_name_of(mgmt_addr: &str, uid: i64) -> String {
+    if uid <= 0 {
+        return String::new();
+    }
+    crate::profile::profile_info(mgmt_addr)
+        .ok()
+        .and_then(|info| {
+            info.users
+                .into_iter()
+                .find(|u| i64::from(u.uid) == uid)
+                .map(|u| u.username.trim().to_string())
+        })
+        .unwrap_or_default()
 }
 
 /// Pair with a console end to end, with nothing asked of the user.
@@ -935,6 +956,7 @@ pub fn pair_with_console(mgmt_addr: &str, host: &str) -> Result<PairResult> {
         mac: reg.mac,
         account_id_b64: account_id,
         account_via: readiness.account_via,
+        user_name: user_name_of(mgmt_addr, readiness.account_uid),
     })
 }
 
@@ -1048,6 +1070,8 @@ pub fn pair_with_pin(host: &str, account_id_b64: &str, pin: &str) -> Result<Pair
         mac: reg.mac,
         account_id_b64: account_id_b64.trim().to_string(),
         account_via: "manual_pin".into(),
+        // The caller names the user, when it knows the name.
+        user_name: String::new(),
     })
 }
 

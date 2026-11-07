@@ -8258,6 +8258,14 @@ engine_op_lost: "Silnik uruchomił się ponownie w trakcie operacji, więc nie w
 cleanup_err_helper_silent: "Pomocnik na PS5 przestał odpowiadać podczas usuwania, więc aplikacja przestała czekać. Wyślij pomocnika ponownie (Aktualizuj pomocnika), a potem przeskanuj ponownie, aby zobaczyć, co zostało.",
 cleanup_err_stop_unconfirmed: "Zatrzymano. PS5 tego nie potwierdziła, więc może jeszcze dokończyć bieżący element. Przeskanuj ponownie, aby zobaczyć, co zostało.",
 update_notes_unavailable: "Nie udało się odczytać z GitHuba informacji o v{version}.",
+rp_play_as: "Graj jako",
+rp_user_n: "Użytkownik {n}",
+rp_users_title: "Sparowani użytkownicy PS5",
+rp_users_chosen: "Gra jako ten użytkownik",
+rp_users_remove: "Zapomnij",
+rp_users_remove_confirm: "Zapomnieć parowanie dla {name}?",
+rp_users_remove_body: "Graj nie uruchomi się już jako ten użytkownik, dopóki nie sparujesz go ponownie. PS5 trzyma tę aplikację na liście połączonych urządzeń, dopóki jej tam nie usuniesz.",
+rp_users_add_hint: "Aby grać także jako inny użytkownik, zaloguj się na nim na PS5 i sparuj ponownie: każdy użytkownik zostaje zachowany, a w Graj › Start wybierasz jednego.",
 };
 
 export default pl;

@@ -8026,6 +8026,14 @@ engine_op_lost: "Engine dimulai ulang saat ini berjalan, jadi tidak diketahui ba
 cleanup_err_helper_silent: "Helper di PS5 berhenti menjawab saat menghapus, jadi aplikasi berhenti menunggu. Kirim helper lagi (Perbarui helper), lalu pindai lagi untuk melihat apa yang tersisa.",
 cleanup_err_stop_unconfirmed: "Dihentikan. PS5 tidak mengonfirmasinya, jadi mungkin masih menyelesaikan item yang sedang dikerjakan. Pindai lagi untuk melihat apa yang tersisa.",
 update_notes_unavailable: "Catatan v{version} tidak dapat dibaca dari GitHub.",
+rp_play_as: "Main sebagai",
+rp_user_n: "Pengguna {n}",
+rp_users_title: "Pengguna PS5 yang dipasangkan",
+rp_users_chosen: "Bermain sebagai pengguna ini",
+rp_users_remove: "Lupakan",
+rp_users_remove_confirm: "Lupakan pemasangan untuk {name}?",
+rp_users_remove_body: "Main tidak bisa lagi dimulai sebagai pengguna ini sampai Anda memasangkannya lagi. PS5 tetap menyimpan aplikasi ini di daftar perangkat tertautnya sampai Anda menghapusnya di sana.",
+rp_users_add_hint: "Untuk bermain juga sebagai pengguna lain, masuk ke pengguna itu di PS5 lalu pasangkan lagi: setiap pengguna disimpan, dan Main › Mulai memungkinkan Anda memilih salah satunya.",
 };
 
 export default id;

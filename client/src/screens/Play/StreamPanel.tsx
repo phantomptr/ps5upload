@@ -33,6 +33,8 @@ import { useTr } from "../../state/lang";
 import { phaseText } from "../../lib/rpPhaseText";
 import { useAndroidPipStore } from "../../lib/androidPip";
 import { useRosterStore } from "../../state/roster";
+import { chosenRpUser, rpUsersOf } from "../../lib/rpUsers";
+import { rpUserLabel } from "./setup/PairedUsers";
 import { deviceName, meshFor, othersRemotePlaying, remotePlayPads, useMeshStore } from "../../state/mesh";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { isLinuxDesktop, isMobile } from "../../lib/platform";
@@ -460,6 +462,11 @@ export function StreamPanel() {
 
   const profile = useMemo(() => profiles.find((p) => p.id === profileId) ?? null, [profiles, profileId]);
   const paired = !!(profile?.wake_regist_key && profile?.wake_rp_key);
+  // The PS5 users this console is paired as: with more than one, Start says which to play as
+  // (the choice stays with the console, and Wake signs in the same user).
+  const rpUsers = useMemo(() => rpUsersOf(profile), [profile]);
+  const rpUser = chosenRpUser(profile);
+  const chooseRpUser = useRosterStore((s) => s.chooseRpUser);
   // One stream at a time, for whichever console it plays. This page shows the selected console:
   // the stream when it is that console's, otherwise that console's own Start, with the other
   // stream offered (show it, or stop it and play this one).
@@ -1583,6 +1590,17 @@ export function StreamPanel() {
               ? tr("rp_switch_start", undefined, "Stop the other stream and start")
               : tr("rp_start", undefined, "Start")}
           </Button>
+          {profile && rpUsers.length > 1 && (
+            <Select
+              label={tr("rp_play_as", undefined, "Play as")}
+              block={false}
+              className="w-40"
+              value={rpUser ?? ""}
+              onChange={(e) => chooseRpUser(profile.id, e.target.value)}
+              options={rpUsers.map((u, i) => ({ value: u.wake_regist_key, label: rpUserLabel(u, i, tr) }))}
+              data-testid="rp-play-as"
+            />
+          )}
           <Select
             label={tr("rp_quality", undefined, "Picture")}
             block={false}

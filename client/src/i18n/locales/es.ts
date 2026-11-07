@@ -7970,6 +7970,14 @@ engine_op_lost: "El motor se reinició mientras esto se ejecutaba, así que no s
 cleanup_err_helper_silent: "El ayudante de la PS5 dejó de responder mientras eliminaba, así que la app dejó de esperar. Envía el ayudante de nuevo (Actualizar ayudante) y vuelve a escanear para ver qué queda.",
 cleanup_err_stop_unconfirmed: "Detenido. La PS5 no lo confirmó, así que puede que aún termine el elemento en el que estaba. Vuelve a escanear para ver qué queda.",
 update_notes_unavailable: "No se pudieron leer de GitHub las notas de la v{version}.",
+rp_play_as: "Jugar como",
+rp_user_n: "Usuario {n}",
+rp_users_title: "Usuarios de PS5 vinculados",
+rp_users_chosen: "Juega como este usuario",
+rp_users_remove: "Olvidar",
+rp_users_remove_confirm: "¿Olvidar la vinculación de {name}?",
+rp_users_remove_body: "Jugar ya no podrá iniciar como este usuario hasta que lo vincules de nuevo. La PS5 mantiene esta app en su lista de dispositivos vinculados hasta que la quites allí.",
+rp_users_add_hint: "Para jugar también como otro usuario, inicia sesión con ese usuario en la PS5 y vincula de nuevo: cada usuario se conserva y en Jugar › Iniciar eliges uno.",
 };
 
 export default es;

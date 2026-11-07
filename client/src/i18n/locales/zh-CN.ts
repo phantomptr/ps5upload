@@ -7976,6 +7976,14 @@ engine_op_lost: "运行期间引擎重新启动了，因此无法得知结果。
 cleanup_err_helper_silent: "删除期间 PS5 上的助手停止响应，因此应用不再等待。请重新发送助手（更新助手），然后重新扫描以查看剩余内容。",
 cleanup_err_stop_unconfirmed: "已停止。PS5 未确认，因此它可能仍会完成正在处理的项目。请重新扫描以查看剩余内容。",
 update_notes_unavailable: "无法从 GitHub 读取 v{version} 的更新说明。",
+rp_play_as: "以此用户游玩",
+rp_user_n: "用户 {n}",
+rp_users_title: "已配对的 PS5 用户",
+rp_users_chosen: "以此用户游玩中",
+rp_users_remove: "忘记",
+rp_users_remove_confirm: "要忘记 {name} 的配对吗？",
+rp_users_remove_body: "在重新配对之前，畅玩将无法以此用户开始。PS5 会把此应用保留在已链接设备列表中，直到你在那里移除它。",
+rp_users_add_hint: "若也想以其他用户游玩，请在 PS5 上登录该用户并再次配对：每个用户都会保留，在 畅玩 › 开始 中可以选择其一。",
 };
 
 export default zh_CN;

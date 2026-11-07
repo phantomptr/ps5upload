@@ -8274,6 +8274,10 @@
           },
           "rp_key": {
             "type": "string"
+          },
+          "user_name": {
+            "description": "The paired user's name on the console, when it could be read (the helper's user list), for\ntelling a console's paired users apart. Empty when not known.",
+            "type": "string"
           }
         },
         "required": [
@@ -8283,7 +8287,8 @@
           "nickname",
           "mac",
           "account_id_b64",
-          "account_via"
+          "account_via",
+          "user_name"
         ],
         "type": "object"
       },
@@ -9036,6 +9041,13 @@
               "string",
               "null"
             ]
+          },
+          "user_name": {
+            "description": "The paired user's name, for telling a console's paired users apart. Left out, the helper's\nname for the user is used when it can be read. Pairing another user adds to the console's\npaired users; pairing one again replaces that user's keys.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -9133,6 +9145,13 @@
           },
           "rp_key": {
             "type": "string"
+          },
+          "user": {
+            "description": "Which of the console's paired PS5 users to sign in (an account id, a name as\n`GET /api/consoles` lists it under `rp_users`, or its number there), when the keys are left\nout. Left out, the chosen user (the one Play starts as).",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -12159,6 +12178,13 @@
             ]
           },
           "rp_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user": {
+            "description": "Which PS5 user to play as, when the console has more than one paired: an account id, a name\nas `GET /api/consoles` lists it under `rp_users` (any case), or its number there (1, 2, …).\nLeft out, the chosen user: the one picked last in Play, else the last paired. The console\nsigns that user in when the session starts. A session already running for the console as\nanother user answers 409 `busy_user`: stop it first.",
             "type": [
               "string",
               "null"
@@ -17307,7 +17333,7 @@
     },
     "/api/consoles": {
       "get": {
-        "description": "`GET /api/consoles`.",
+        "description": "`GET /api/consoles`. Each console says whether it has keys (`has_rp_credentials`,\n`has_wake_credential`) and lists the PS5 users it is paired as, by name only: `rp_users:\n[{name, chosen}]`, `chosen` being the one Remote Play starts as when `POST /api/ps5/rp/start`\nnames no `user`. A user paired without a known name is \"user N\" (its place, from 1).",
         "responses": {
           "200": {
             "content": {
@@ -36015,7 +36041,7 @@
     },
     "/api/ps5/rp/start": {
       "post": {
-        "description": "`POST /api/ps5/rp/start`.",
+        "description": "`POST /api/ps5/rp/start`. With `user`, as that paired PS5 user (`rp_users` in\n`GET /api/consoles`); the console signs that user in as the session starts. The answer's `user`\nnames the user the session signed in.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -36042,7 +36068,13 @@
                     },
                     "playing": {},
                     "session": {},
-                    "started": {}
+                    "started": {},
+                    "user": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
                   },
                   "type": "object"
                 }
@@ -36092,6 +36124,23 @@
                         "message": {
                           "type": "string"
                         },
+                        "user": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
                         "retry_s": {}
                       },
                       "type": "object"
@@ -36105,6 +36154,18 @@
                         "message": {
                           "type": "string"
                         }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "users": {}
                       },
                       "type": "object"
                     }

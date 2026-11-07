@@ -8024,6 +8024,14 @@ engine_op_lost: "Bu işlem sürerken motor yeniden başladı, bu yüzden nasıl 
 cleanup_err_helper_silent: "PS5'teki yardımcı kaldırma sırasında yanıt vermeyi bıraktı, bu yüzden uygulama beklemeyi bıraktı. Yardımcıyı yeniden gönderin (Yardımcıyı güncelle), sonra neyin kaldığını görmek için yeniden tarayın.",
 cleanup_err_stop_unconfirmed: "Durduruldu. PS5 bunu onaylamadı, bu yüzden üzerinde çalıştığı öğeyi yine de bitirebilir. Neyin kaldığını görmek için yeniden tarayın.",
 update_notes_unavailable: "v{version} sürüm notları GitHub'dan okunamadı.",
+rp_play_as: "Şu kullanıcıyla oyna",
+rp_user_n: "Kullanıcı {n}",
+rp_users_title: "Eşlenmiş PS5 kullanıcıları",
+rp_users_chosen: "Bu kullanıcıyla oynar",
+rp_users_remove: "Unut",
+rp_users_remove_confirm: "{name} için eşleme unutulsun mu?",
+rp_users_remove_body: "Yeniden eşleyene kadar Oyna bu kullanıcıyla başlayamaz. PS5, siz oradan kaldırana kadar bu uygulamayı bağlı cihazlar listesinde tutar.",
+rp_users_add_hint: "Başka bir kullanıcıyla da oynamak için PS5'te o kullanıcıyla oturum açıp yeniden eşleyin: her kullanıcı saklanır ve Oyna › Başlat'ta birini seçersiniz.",
 };
 
 export default tr;

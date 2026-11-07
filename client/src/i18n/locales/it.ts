@@ -7970,6 +7970,14 @@ engine_op_lost: "Il motore si è riavviato durante l'operazione, quindi non si s
 cleanup_err_helper_silent: "L'helper sulla PS5 ha smesso di rispondere durante la rimozione, quindi l'app ha smesso di attendere. Invia di nuovo l'helper (Aggiorna helper), poi esegui di nuovo la scansione per vedere cosa resta.",
 cleanup_err_stop_unconfirmed: "Interrotto. La PS5 non l'ha confermato, quindi potrebbe ancora completare l'elemento in corso. Esegui di nuovo la scansione per vedere cosa resta.",
 update_notes_unavailable: "Non è stato possibile leggere da GitHub le note della v{version}.",
+rp_play_as: "Gioca come",
+rp_user_n: "Utente {n}",
+rp_users_title: "Utenti PS5 associati",
+rp_users_chosen: "Gioca come questo utente",
+rp_users_remove: "Dimentica",
+rp_users_remove_confirm: "Dimenticare l’associazione di {name}?",
+rp_users_remove_body: "Gioca non potrà più avviarsi come questo utente finché non lo associ di nuovo. La PS5 tiene questa app nell’elenco dei dispositivi collegati finché non la rimuovi lì.",
+rp_users_add_hint: "Per giocare anche come un altro utente, accedi con quell’utente sulla PS5 e associa di nuovo: ogni utente viene conservato e Gioca › Avvia ti lascia sceglierne uno.",
 };
 
 export default it;

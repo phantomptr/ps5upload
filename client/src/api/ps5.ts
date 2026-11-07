@@ -2451,6 +2451,8 @@ export interface PairForWakeResult {
   account_id_b64: string;
   /** "foreground" | "login-list" — how the console picked the account. */
   account_via: string;
+  /** The paired user's name on the console, when the engine could read it (or was told it). */
+  user_name?: string;
 }
 
 /** Pair with a console so it can be woken later.
@@ -2468,7 +2470,7 @@ export async function pairForWake(
   /** Pair with the PIN the PS5 shows (Settings › System › Remote Play › Link Device) instead:
    *  the engine registers on its own, no helper needed. `accountIdB64`: the user's PSN account
    *  id, base64 of its 8 bytes. */
-  manual?: { pin: string; accountIdB64: string },
+  manual?: { pin: string; accountIdB64: string; userName?: string },
 ): Promise<PairForWakeResult> {
   const res = await engineFetch(`${getEngineUrl()}/api/ps5/power/pair`, {
     // Asks the helper, then registers with the console: it may take a while.
@@ -2476,7 +2478,9 @@ export async function pairForWake(
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(
-      manual ? { host, addr, pin: manual.pin, account_id: manual.accountIdB64 } : { host, addr },
+      manual
+        ? { host, addr, pin: manual.pin, account_id: manual.accountIdB64, user_name: manual.userName || undefined }
+        : { host, addr },
     ),
   });
   const body = (await res.json().catch(() => ({}))) as PairForWakeResult & {

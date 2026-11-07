@@ -8036,6 +8036,14 @@ engine_op_lost: "実行中にエンジンが再起動したため、どう終わ
 cleanup_err_helper_silent: "削除中にPS5のヘルパーが応答しなくなったため、アプリは待つのをやめました。ヘルパーをもう一度送信（ヘルパーを更新）してから、再スキャンして残っているものを確認してください。",
 cleanup_err_stop_unconfirmed: "停止しました。PS5から確認がなかったため、処理中の項目はまだ完了する可能性があります。再スキャンして残っているものを確認してください。",
 update_notes_unavailable: "v{version} のリリースノートを GitHub から読み込めませんでした。",
+rp_play_as: "プレイするユーザー",
+rp_user_n: "ユーザー {n}",
+rp_users_title: "ペアリング済みの PS5 ユーザー",
+rp_users_chosen: "このユーザーでプレイ",
+rp_users_remove: "削除",
+rp_users_remove_confirm: "{name} のペアリングを削除しますか？",
+rp_users_remove_body: "もう一度ペアリングするまで、プレイはこのユーザーで開始できなくなります。PS5 側で削除するまで、このアプリは PS5 のリンク済み機器の一覧に残ります。",
+rp_users_add_hint: "別のユーザーでもプレイするには、PS5 でそのユーザーにサインインしてもう一度ペアリングしてください。各ユーザーは保持され、プレイ › 開始で選べます。",
 };
 
 export default ja;

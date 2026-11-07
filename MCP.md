@@ -289,7 +289,9 @@ With the picture off on this device (`POST /api/ps5/rp/picture`), `rp_frame` ans
 until it's back on.
 
 **Starting a session.** `rp_start` needs a console paired for Remote Play in the app, because that is
-where its keys live.
+where its keys live. A console can be paired as several PS5 users (one pairing each): `consoles_list`
+shows their names as `rp_users`, and `rp_start` takes `user` to pick one. Left out, it uses the user
+chosen in the app. `rp_session` says which user a stream signed in.
 
 **Going live.** `golive_start` needs ffmpeg and a running session. Add destinations and their stream
 keys in the app.

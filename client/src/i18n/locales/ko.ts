@@ -8034,6 +8034,14 @@ engine_op_lost: "실행 중에 엔진이 다시 시작되어 어떻게 끝났는
 cleanup_err_helper_silent: "삭제 중에 PS5의 헬퍼가 응답을 멈춰서 앱이 기다리기를 멈췄습니다. 헬퍼를 다시 보낸 다음(헬퍼 업데이트) 다시 스캔해 남은 항목을 확인하세요.",
 cleanup_err_stop_unconfirmed: "중지했습니다. PS5가 확인하지 않아 진행 중이던 항목은 계속 완료될 수 있습니다. 다시 스캔해 남은 항목을 확인하세요.",
 update_notes_unavailable: "GitHub에서 v{version}의 릴리스 노트를 읽지 못했습니다.",
+rp_play_as: "플레이할 사용자",
+rp_user_n: "사용자 {n}",
+rp_users_title: "페어링된 PS5 사용자",
+rp_users_chosen: "이 사용자로 플레이",
+rp_users_remove: "삭제",
+rp_users_remove_confirm: "{name}의 페어링을 삭제할까요?",
+rp_users_remove_body: "다시 페어링할 때까지 플레이를 이 사용자로 시작할 수 없습니다. PS5에서 제거하기 전까지 이 앱은 PS5의 연결된 기기 목록에 남아 있습니다.",
+rp_users_add_hint: "다른 사용자로도 플레이하려면 PS5에서 그 사용자로 로그인한 뒤 다시 페어링하세요. 각 사용자가 유지되며 플레이 › 시작에서 고를 수 있습니다.",
 };
 
 export default ko;

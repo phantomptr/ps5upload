@@ -8033,6 +8033,14 @@ engine_op_lost: "Le moteur a redémarré pendant l'opération, on ne sait donc p
 cleanup_err_helper_silent: "L'assistant sur la PS5 a cessé de répondre pendant la suppression, l'app a donc arrêté d'attendre. Renvoyez l'assistant (Mettre à jour l'assistant), puis analysez à nouveau pour voir ce qui reste.",
 cleanup_err_stop_unconfirmed: "Arrêté. La PS5 ne l'a pas confirmé, elle peut donc encore terminer l'élément en cours. Analysez à nouveau pour voir ce qui reste.",
 update_notes_unavailable: "Les notes de la v{version} n'ont pas pu être lues depuis GitHub.",
+rp_play_as: "Jouer en tant que",
+rp_user_n: "Utilisateur {n}",
+rp_users_title: "Utilisateurs PS5 associés",
+rp_users_chosen: "Joue avec cet utilisateur",
+rp_users_remove: "Oublier",
+rp_users_remove_confirm: "Oublier l’association de {name} ?",
+rp_users_remove_body: "Jouer ne pourra plus démarrer avec cet utilisateur tant que vous ne l’aurez pas associé à nouveau. La PS5 garde cette app dans sa liste d’appareils liés tant que vous ne l’y retirez pas.",
+rp_users_add_hint: "Pour jouer aussi avec un autre utilisateur, connectez-vous à cet utilisateur sur la PS5 et associez à nouveau : chaque utilisateur est conservé, et Jouer › Démarrer vous laisse en choisir un.",
 };
 
 export default fr;

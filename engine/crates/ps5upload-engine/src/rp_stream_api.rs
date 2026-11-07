@@ -321,6 +321,9 @@ struct Live {
     auto: automation::AutoState,
     /// The live feed's readers (rp_live.rs, OBS).
     feed: Arc<live_feed::LiveFeed>,
+    /// The regist key (hex) the session was started with: which paired PS5 user it signed in
+    /// (consoles_api's `rp_users`). Never shown or logged; `user_name` names it.
+    regist_hex: std::sync::OnceLock<String>,
 }
 
 /// A watcher's queue. `need_key`: it cannot use a frame until the next keyframe (it just
@@ -862,7 +865,20 @@ impl Live {
             passcode_answer: Mutex::new(None),
             auto: Default::default(),
             feed: Arc::new(live_feed::LiveFeed::new(hevc)),
+            regist_hex: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Whether the session signs in the user these keys are (hex).
+    fn same_user(&self, regist_hex: &str) -> bool {
+        self.regist_hex
+            .get()
+            .is_some_and(|r| r.eq_ignore_ascii_case(regist_hex.trim()))
+    }
+
+    /// The paired user the session signed in, by name, when it is one of the console's.
+    fn user_name(&self) -> Option<String> {
+        crate::consoles_api::user_name_of(&self.host, self.regist_hex.get()?)
     }
 
     /// What the page is told while the console waits for the passcode.
@@ -1590,6 +1606,13 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
             .unwrap_or(DEFAULT_KEEP_ALIVE)
             .min(MAX_KEEP_ALIVE),
     ));
+    let _ = live.regist_hex.set(
+        creds
+            .regist_key
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+    );
     live.mic_enabled.store(cfg.mic, Ordering::Relaxed);
     live.keyboard.enabled.store(cfg.keyboard, Ordering::Relaxed);
     live.set_replay(start.replay_s);

@@ -8322,6 +8322,14 @@ engine_op_lost: "The engine restarted while this was running, so how it ended is
 cleanup_err_helper_silent: "The helper on the PS5 stopped answering while it was removing, so the app stopped waiting. Send the helper again (Update helper), then scan again to see what is left.",
 cleanup_err_stop_unconfirmed: "Stopped. The PS5 did not confirm it, so it may still finish the item it was on. Scan again to see what is left.",
 update_notes_unavailable: "The notes of v{version} could not be read from GitHub.",
+rp_play_as: "Play as",
+rp_user_n: "User {n}",
+rp_users_title: "Paired PS5 users",
+rp_users_chosen: "Plays as this user",
+rp_users_remove: "Forget",
+rp_users_remove_confirm: "Forget the pairing for {name}?",
+rp_users_remove_body: "Play can no longer start as this user until you pair it again. The PS5 keeps this app on its list of linked devices until you remove it there.",
+rp_users_add_hint: "To play as another user too, sign in to that user on the PS5 and pair again: each user is kept, and Play › Start lets you pick one.",
 };
 
 export default en;

@@ -35,7 +35,7 @@ const OWN_KEYS = new Set([
  *  holds only that console's (`forConsole`), so a wiped device can still wake and sign in
  *  (`buildBackupBundle`). A restore keeps the ones this app holds. */
 const ROSTER_KEY = "ps5upload.roster.v1";
-const PAIRING_FIELDS = ["wake_credential", "wake_regist_key", "wake_rp_key"] as const;
+const PAIRING_FIELDS = ["wake_credential", "wake_regist_key", "wake_rp_key", "rp_users"] as const;
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** Before-sync backups at most this often (a busy sync must not rotate the daily ones out). */
 const BEFORE_SYNC_EVERY_MS = 60 * 60 * 1000;

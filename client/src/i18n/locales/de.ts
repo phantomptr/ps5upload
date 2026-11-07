@@ -8025,6 +8025,14 @@ engine_op_lost: "Die Engine wurde während des Vorgangs neu gestartet, daher ist
 cleanup_err_helper_silent: "Der Helfer auf der PS5 hat beim Entfernen nicht mehr geantwortet, daher wartet die App nicht länger. Sende den Helfer erneut (Helfer aktualisieren) und scanne dann erneut, um zu sehen, was übrig ist.",
 cleanup_err_stop_unconfirmed: "Gestoppt. Die PS5 hat es nicht bestätigt, daher beendet sie eventuell noch das aktuelle Element. Scanne erneut, um zu sehen, was übrig ist.",
 update_notes_unavailable: "Die Hinweise zu v{version} konnten nicht von GitHub gelesen werden.",
+rp_play_as: "Spielen als",
+rp_user_n: "Benutzer {n}",
+rp_users_title: "Gekoppelte PS5-Benutzer",
+rp_users_chosen: "Spielt als dieser Benutzer",
+rp_users_remove: "Vergessen",
+rp_users_remove_confirm: "Kopplung für {name} vergessen?",
+rp_users_remove_body: "Spielen kann dann nicht mehr als dieser Benutzer starten, bis du ihn erneut koppelst. Die PS5 führt diese App weiter in ihrer Liste verknüpfter Geräte, bis du sie dort entfernst.",
+rp_users_add_hint: "Um auch als anderer Benutzer zu spielen, melde dich auf der PS5 bei diesem Benutzer an und kopple erneut: Jeder Benutzer bleibt erhalten, und unter Spielen › Start wählst du einen aus.",
 };
 
 export default de;

@@ -19,7 +19,9 @@ use crate::mcp::{ApiReply, Caller, McpState};
 const LIST_DESCRIPTION: &str =
     "The consoles this engine knows, each with where that knowledge comes from, and the default a \
      read falls back to when it names no console. When the one you need is not here, \
-     consoles_discover looks for it on the network, or ask the user for its address.";
+     consoles_discover looks for it on the network, or ask the user for its address. A console \
+     paired for Remote Play lists its paired PS5 users by name as `rp_users` (`rp_user` is the one \
+     rp_start uses when it names none).";
 
 pub(super) fn tools() -> Vec<ToolDef> {
     vec![
@@ -145,6 +147,9 @@ struct Known {
     can_wake: bool,
     /// Remote Play keys are saved for it, so `rp_start` can start a stream. Never shown either.
     can_stream: bool,
+    /// The PS5 users paired for Remote Play, by name only, and the one a start uses by default.
+    rp_users: Vec<String>,
+    rp_user: Option<String>,
     sources: BTreeSet<&'static str>,
 }
 
@@ -170,6 +175,20 @@ pub(crate) async fn known(state: &McpState, caller: &Caller) -> Value {
                 .and_then(Value::as_str)
                 .is_some_and(|credential| !credential.is_empty());
         console.can_stream = says("has_rp_credentials");
+        for user in profile
+            .get("rp_users")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(name) = user.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            if user.get("chosen").and_then(Value::as_bool) == Some(true) {
+                console.rp_user = Some(name.to_string());
+            }
+            console.rp_users.push(name.to_string());
+        }
     }
     for address in &saved.paired_not_listed {
         let console = note_source(&mut consoles, address, "paired");
@@ -208,6 +227,12 @@ pub(crate) async fn known(state: &McpState, caller: &Caller) -> Value {
             }
             if console.can_stream {
                 out["can_stream"] = json!(true);
+            }
+            if !console.rp_users.is_empty() {
+                out["rp_users"] = json!(console.rp_users);
+            }
+            if let Some(user) = &console.rp_user {
+                out["rp_user"] = json!(user);
             }
             out
         })

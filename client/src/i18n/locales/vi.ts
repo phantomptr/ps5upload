@@ -8019,6 +8019,14 @@ engine_op_lost: "Engine đã khởi động lại khi việc này đang chạy, 
 cleanup_err_helper_silent: "Trình trợ giúp trên PS5 đã ngừng phản hồi khi đang xóa, nên ứng dụng ngừng chờ. Hãy gửi lại trình trợ giúp (Cập nhật trình trợ giúp), rồi quét lại để xem còn lại gì.",
 cleanup_err_stop_unconfirmed: "Đã dừng. PS5 chưa xác nhận, nên có thể nó vẫn hoàn tất mục đang xử lý. Hãy quét lại để xem còn lại gì.",
 update_notes_unavailable: "Không đọc được ghi chú của v{version} từ GitHub.",
+rp_play_as: "Chơi với tư cách",
+rp_user_n: "Người dùng {n}",
+rp_users_title: "Người dùng PS5 đã ghép nối",
+rp_users_chosen: "Chơi bằng người dùng này",
+rp_users_remove: "Quên",
+rp_users_remove_confirm: "Quên ghép nối của {name}?",
+rp_users_remove_body: "Chơi sẽ không thể bắt đầu bằng người dùng này cho đến khi bạn ghép nối lại. PS5 vẫn giữ ứng dụng này trong danh sách thiết bị được liên kết cho đến khi bạn xóa nó ở đó.",
+rp_users_add_hint: "Để chơi bằng cả người dùng khác, hãy đăng nhập người dùng đó trên PS5 rồi ghép nối lại: mỗi người dùng đều được giữ, và Chơi › Bắt đầu cho bạn chọn một người.",
 };
 
 export default vi;
