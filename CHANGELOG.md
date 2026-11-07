@@ -19,6 +19,14 @@ Remote Play:
 - Play as: pair more than one PS5 user on a console and choose which one Remote Play signs in as. Pairing another user adds them instead of replacing the first, and Wake & sign in follows the choice. Pairing a second user from this app's side isn't tried on a console yet.
 - For agents: rp_session shows the stream's last second (frames, loss, sound) and how the last session started and ended.
 
+Logs and bug reports:
+
+- One set of log levels for the app, the engine and the PS5 helper: error to trace, for everything or per area (Remote Play, pairing, transfers, installs, Clean-up and more). Settings › Logs sets them; a raised level goes back to Info by itself after the time you choose. Detailed logs is now part of this.
+- Bug report: "Record more for 30 minutes" turns on detailed logging while you reproduce a problem, then you send the report.
+- Bug reports now include the real system version (macOS, Windows, Linux, Android), the computer model, which video and sound formats this device can decode, the last several Remote Play sessions with what the player tried, and the console's loaded payloads. Logs are capped in size, and what was cut is listed.
+- The Remote Play pairing PIN no longer reaches logs or bug reports.
+- For agents and scripts: GET/PUT /api/logs/level and GET /api/logs/recent, and the MCP tools logs_level_get, logs_level_set and logs_recent.
+
 Files and transfers:
 
 - Extracting a big archive on the console no longer fails after 60 seconds while it carries on. Long copies, moves, deletes and extracts follow the work to the end. (#712)
