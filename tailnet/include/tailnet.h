@@ -1,0 +1,212 @@
+/*
+ * tailnet: a small, gaming-only Tailscale node (control, DERP, disco, WireGuard; IPv4).
+ *
+ * This header is the whole public API. One tn_ctx holds all state; there is no
+ * other global mutable state. All memory is allocated once in tn_create(), sized
+ * by the caps in tn_config, and freed in tn_destroy().
+ *
+ * Threading: tn_start() runs the node on one internal thread (the "loop thread"),
+ * which blocks in poll() and never spins. The event callback is called on that
+ * thread; a tn_netmap pointer passed to it is only valid during the call.
+ * tn_stop(), tn_pause() and tn_resume() may be called from any thread.
+ *
+ * Milestone M1 implements control only: keys, /key, ts2021 (Noise IK + HTTP/2),
+ * register (pre-auth key or interactive login URL) and the map long-poll.
+ */
+#ifndef TAILNET_H
+#define TAILNET_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* The capability version we claim to control (spec 3.7). One constant, used in the
+ * Noise prologue and header, /key?v=, RegisterRequest and MapRequest. */
+#define TN_CAPVER 130
+
+/* Fixed per-record sizes (the counts of peers, regions, rules are tn_config caps). */
+#define TN_NAME_MAX 64       /* peer/self DNS name, truncated */
+#define TN_HOST_MAX 64       /* DERP host name */
+#define TN_PEER_ALLOWED_MAX 8
+#define TN_PEER_EP_MAX 12
+#define TN_DERP_NODES_MAX 6
+#define TN_FILTER_SRC_MAX 16
+#define TN_FILTER_DST_MAX 16
+#define TN_FILTER_PROTO_MAX 6
+
+/* Error codes (negative). */
+enum {
+	TN_OK = 0,
+	TN_E_IO = -1,       /* socket error or peer closed */
+	TN_E_PROTO = -2,    /* malformed or unexpected data from the network */
+	TN_E_TIMEOUT = -3,
+	TN_E_WAKE = -4,     /* interrupted by stop/pause (internal) */
+	TN_E_NOMEM = -5,
+	TN_E_CRYPTO = -6,   /* authentication failed */
+	TN_E_TLS = -7,
+	TN_E_HTTP = -8,     /* unexpected HTTP status */
+	TN_E_AUTH = -9,     /* control refused registration */
+	TN_E_TOOBIG = -10,  /* a message exceeds a configured cap */
+	TN_E_ARG = -11,
+	TN_E_STATE = -12,   /* state dir unreadable/unwritable */
+	TN_E_DNS = -13,
+	TN_E_SIGNED_OUT = -14 /* node deleted or expired at control */
+};
+
+typedef enum {
+	TN_ST_STOPPED = 0,
+	TN_ST_CONNECTING,   /* dialing control / handshaking */
+	TN_ST_NEEDS_LOGIN,  /* a login URL was issued; waiting for the user */
+	TN_ST_WAIT_APPROVAL,/* registered, but control has not authorized the machine */
+	TN_ST_RUNNING,      /* map poll is up */
+	TN_ST_PAUSED,       /* tn_pause() (rest mode) or network down */
+	TN_ST_BACKOFF,      /* waiting before a retry */
+	TN_ST_SIGNED_OUT    /* node expired or deleted; a new login is needed */
+} tn_state;
+
+typedef struct { uint32_t addr; uint8_t bits; } tn_prefix4;   /* addr in host order */
+typedef struct { uint32_t ip; uint16_t port; } tn_ep4;        /* host order */
+
+typedef struct {
+	int64_t id;
+	char name[TN_NAME_MAX];
+	uint8_t key[32];        /* node key: WireGuard static + DERP identity */
+	uint8_t disco[32];
+	uint8_t has_disco;
+	uint8_t wg_only;        /* IsWireGuardOnly: not usable by us */
+	int8_t online;          /* 1, 0, or -1 unknown */
+	uint8_t expired;
+	uint32_t addr4;         /* the peer's tailnet IPv4 (0 if none) */
+	uint8_t n_allowed;
+	tn_prefix4 allowed[TN_PEER_ALLOWED_MAX]; /* IPv4 AllowedIPs (Addresses if absent) */
+	uint8_t n_ep;
+	tn_ep4 ep[TN_PEER_EP_MAX];               /* IPv4 UDP endpoints */
+	int32_t home_derp;      /* region id, 0 = none */
+	int64_t key_expiry;     /* unix seconds, 0 = never */
+} tn_peer;
+
+typedef struct {
+	char name[16];
+	char host[TN_HOST_MAX];
+	char cert_name[TN_HOST_MAX];
+	uint32_t ipv4;          /* 0 = resolve host */
+	int32_t stun_port;      /* -1 = no STUN */
+	int32_t derp_port;
+	uint8_t stun_only, insecure_for_tests, can_port80;
+} tn_derp_node;
+
+typedef struct {
+	int32_t id;
+	char code[16];
+	char name[48];
+	uint8_t avoid, no_measure_no_home;
+	uint8_t n_nodes;
+	tn_derp_node nodes[TN_DERP_NODES_MAX];
+} tn_derp_region;
+
+typedef struct { uint32_t lo, hi; } tn_range4;
+
+typedef struct {
+	uint8_t set;            /* index of the named PacketFilters set this rule came from */
+	uint8_t n_src, n_dst, n_proto;
+	tn_range4 src[TN_FILTER_SRC_MAX];        /* IPv4 ranges; IPv6 and cap: sources skipped */
+	struct { tn_range4 ip; uint16_t port_lo, port_hi; } dst[TN_FILTER_DST_MAX];
+	uint8_t proto[TN_FILTER_PROTO_MAX];      /* empty = TCP, UDP, ICMP */
+} tn_filter_rule;
+
+typedef struct {
+	/* self */
+	int64_t self_id;
+	char self_name[TN_NAME_MAX];
+	uint32_t self_addr4;
+	int32_t self_home_derp;
+	int64_t self_key_expiry;
+	uint8_t self_expired;
+	/* peers, DERP map, inbound packet filter */
+	uint32_t n_peers;
+	tn_peer *peers;
+	uint32_t n_regions;
+	tn_derp_region *regions;
+	uint32_t n_rules;
+	tn_filter_rule *rules;
+	uint8_t filter_known;   /* 0 until control sent a filter */
+	int64_t control_time;   /* unix seconds from control, 0 if never sent */
+	uint32_t updates;       /* MapResponses applied (keep-alives excluded) */
+} tn_netmap;
+
+typedef enum {
+	TN_EV_STATE = 1,    /* state changed: ev.state */
+	TN_EV_LOGIN_URL,    /* ev.text = URL the user must open */
+	TN_EV_NETMAP,       /* ev.netmap updated */
+	TN_EV_LOG,          /* ev.text = diagnostic line */
+	TN_EV_ERROR         /* ev.err + ev.text; the node retries by itself */
+} tn_event_type;
+
+typedef struct {
+	tn_event_type type;
+	tn_state state;
+	int err;
+	const char *text;
+	const tn_netmap *netmap;
+} tn_event;
+
+typedef void (*tn_event_cb)(void *user, const tn_event *ev);
+
+typedef enum {
+	TN_TRANSPORT_AUTO = 0, /* http:// URL: plain; https:// URL: port 80 first, then TLS 443 */
+	TN_TRANSPORT_PLAIN,
+	TN_TRANSPORT_TLS
+} tn_transport;
+
+typedef struct {
+	const char *state_dir;   /* required; keys and the control key cache live here */
+	const char *control_url; /* e.g. "https://controlplane.tailscale.com" */
+	const char *auth_key;    /* optional pre-auth key; NULL for the interactive login URL */
+	const char *hostname;    /* Hostinfo.Hostname */
+	const char *os;          /* Hostinfo.OS, e.g. "ps5", "macOS" */
+	const char *app;         /* Hostinfo.App, default "ps5upload" */
+	const char *ca_file;     /* optional extra PEM trust anchors (private control servers) */
+	tn_transport transport;
+	int ephemeral;
+	int verbose;             /* TN_EV_LOG detail: 0 quiet, 1 info, 2 debug */
+	tn_event_cb cb;
+	void *user;
+	/* Memory caps; 0 = default. */
+	uint32_t max_peers;      /* default 256 */
+	uint32_t max_regions;    /* default 64 */
+	uint32_t max_rules;      /* default 128 */
+	uint32_t map_msg_max;    /* largest MapResponse in bytes, default 4 MiB */
+	uint32_t json_tokens_max;/* JSON tokens per message, default 65536 (16 bytes each) */
+	/* Test hook: dump each raw MapResponse JSON to this directory (NULL = off). */
+	const char *dump_dir;
+} tn_config;
+
+typedef struct tn_ctx tn_ctx;
+
+/* Allocate everything; load or create keys in state_dir. */
+int tn_create(const tn_config *cfg, tn_ctx **out);
+/* Run the node on its own thread. */
+int tn_start(tn_ctx *ctx);
+/* Stop the loop thread and wait for it. Safe to call twice. */
+void tn_stop(tn_ctx *ctx);
+/* Rest mode: drop all connections and stay idle until tn_resume(). Keys and the
+ * netmap stay in memory. Resume runs the wake sequence (new control session). */
+void tn_pause(tn_ctx *ctx);
+void tn_resume(tn_ctx *ctx);
+/* Free everything (calls tn_stop first). */
+void tn_destroy(tn_ctx *ctx);
+
+/* Bytes allocated by tn_create for this config (for budgeting). */
+size_t tn_memory_footprint(const tn_ctx *ctx);
+const char *tn_strerror(int err);
+const char *tn_state_name(tn_state st);
+/* "a.b.c.d" for a host-order IPv4 address; buf must hold 16 bytes. */
+const char *tn_ip4_str(uint32_t ip, char buf[16]);
+
+#ifdef __cplusplus
+}
+#endif
+#endif
