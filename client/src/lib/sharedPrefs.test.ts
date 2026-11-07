@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import settingsApiRs from "../../../engine/crates/ps5upload-engine/src/settings_api.rs?raw";
 
-import { asDoc, mergeEntries, plan, SHARED_KEYS, syncOnce, type Doc, type Entries, type PrefsApi } from "./sharedPrefs";
+import { asDoc, MESH_KEYS, mergeEntries, plan, SHARED_KEYS, syncOnce, type Doc, type Entries, type PrefsApi } from "./sharedPrefs";
 
 const PIN = "ps5upload.desktop-sidebar.pinned.v1";
 const CAP = "ps5upload.bandwidth_cap_mbps";
@@ -43,6 +43,20 @@ describe("the engine's typed settings (settings_api.rs)", () => {
   it("know every shared key", () => {
     const missing = SHARED_KEYS.filter((k) => !settingsApiRs.includes(`"${k}"`));
     expect(missing).toEqual([]);
+  });
+});
+
+describe("MESH_KEYS", () => {
+  it("never shares the Minion switch for new consoles without the list of consoles it handled", () => {
+    // Both are this device's: the switch with another device's (or no) list would turn Minion off
+    // on consoles this device already used.
+    expect(MESH_KEYS).not.toContain("ps5upload.minion_off_for_new");
+    expect(MESH_KEYS).not.toContain("ps5upload.minionDefaultDone");
+    expect(MESH_KEYS).not.toContain("ps5upload.minionOff");
+    // The Docker engine's browsers still share all three, together.
+    expect(SHARED_KEYS).toEqual(
+      expect.arrayContaining(["ps5upload.minion_off_for_new", "ps5upload.minionDefaultDone", "ps5upload.minionOff"]),
+    );
   });
 });
 

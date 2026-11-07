@@ -99,7 +99,10 @@ export const MESH_KEYS: readonly string[] = SHARED_KEYS.filter(
     k !== "ps5upload.c2c.routes.v1" &&
     // "This computer turned Minion off" (kept off by this device): per device by design.
     k !== "ps5upload.minionOff" &&
-    // Which consoles this device has met, for "Keep Minion off on consoles I add".
+    // "Keep Minion off on consoles I add" and the consoles it has handled go together, and the
+    // list is this device's: shared alone, the switch reached a device whose list was empty, and
+    // it turned Minion off on every console that device already used.
+    k !== "ps5upload.minion_off_for_new" &&
     k !== "ps5upload.minionDefaultDone",
 );
 

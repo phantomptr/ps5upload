@@ -10,7 +10,8 @@
 
 /** Sessions kept. */
 export const RP_CLIENT_SESSIONS = 8;
-const MAX_EVENTS = 32;
+/** Decoder events kept (and logged and sent to the engine) per session. */
+export const MAX_EVENTS = 32;
 const MAX_FALLBACKS = 16;
 const MAX_TEXT = 300;
 
@@ -52,7 +53,9 @@ export interface RpClientSession {
 
 export interface RpClientSessionHandle {
   set(fields: Partial<Pick<RpClientSession, "codec_asked" | "video_path" | "draw_path" | "hdr" | "audio_path" | "frames_decoded">>): void;
-  event(ev: RpDecoderEvent): void;
+  /** False once the session holds MAX_EVENTS: the event is dropped, and the caller neither logs
+   *  nor sends it (a decoder failing on every frame would otherwise flood both). */
+  event(ev: RpDecoderEvent): boolean;
   fallback(text: string): void;
   /** The first reason given wins; later calls only stamp nothing. */
   end(reason: string): void;
@@ -83,10 +86,11 @@ export function beginRpClientSession(codecAsked: string | null, now = Date.now()
       Object.assign(s, fields);
     },
     event(ev) {
-      if (s.events.length >= MAX_EVENTS) return;
+      if (s.events.length >= MAX_EVENTS) return false;
       const e = { ...ev, t: Date.now() };
       if (e.error !== undefined) e.error = cut(e.error);
       s.events.push(e);
+      return true;
     },
     fallback(text) {
       if (s.fallbacks.length < MAX_FALLBACKS) s.fallbacks.push(cut(text));

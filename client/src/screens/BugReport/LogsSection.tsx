@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import { useTr } from "../../state/lang";
 import { raiseActive, useDiagSettingsStore } from "../../state/diagSettings";
-import { changeLevels, raiseAllForReproducing } from "../../lib/logLevels";
+import { raiseAllForReproducing, stopRaising } from "../../lib/logLevels";
 import { formatDate } from "../../lib/formatDate";
 import { Button } from "../../components";
 import { RANGE_KEYS, type RangeKey, type ReportDraft } from "./draft";
@@ -102,7 +102,7 @@ function ReproduceHelper() {
             )}
           </p>
           <div>
-            <Button size="sm" variant="ghost" disabled={busy} onClick={() => void run(() => changeLevels({ reset: true }))}>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => void run(() => stopRaising())}>
               {tr("br_repro_stop", undefined, "Stop recording more")}
             </Button>
           </div>

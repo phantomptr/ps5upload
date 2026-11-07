@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
+  MAX_EVENTS,
   RP_CLIENT_SESSIONS,
   beginRpClientSession,
   resetRpClientSessions,
@@ -18,6 +19,16 @@ describe("rpClientSessions", () => {
     expect(all).toHaveLength(RP_CLIENT_SESSIONS);
     expect(all[0].codec_asked).toBe("c3");
     expect(all[all.length - 1].codec_asked).toBe(`c${RP_CLIENT_SESSIONS + 2}`);
+  });
+
+  it("stops taking decoder events once a session holds MAX_EVENTS, and says so", () => {
+    const s = beginRpClientSession("h264");
+    for (let i = 0; i < MAX_EVENTS; i++) expect(s.event({ event: "decode_error", error: `e${i}` })).toBe(true);
+    expect(s.event({ event: "decode_error", error: "one too many" })).toBe(false);
+    const [r] = rpClientSessions();
+    expect(r.events).toHaveLength(MAX_EVENTS);
+    // A new session starts with room again.
+    expect(beginRpClientSession("h264").event({ event: "configure" })).toBe(true);
   });
 
   it("records choices, failures with their config, fallbacks and the end", () => {

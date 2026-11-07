@@ -9,15 +9,18 @@
  */
 
 import {
+  DEFAULT_LOG_LEVEL,
   KEY_DETAILED_UNTIL,
+  LEVEL_RANK,
   MAX_RAISE_MS,
   isLevel,
+  isRaise,
   useDiagSettingsStore,
   type EngineLevels,
   type LevelsChange,
 } from "../state/diagSettings";
 import { getEngineUrl } from "../state/engine";
-import { log } from "../state/logs";
+import { log, type LogLevel } from "../state/logs";
 import { safeGetItem, safeRemoveItem } from "./safeStorage";
 
 /** How often the engine's setting is read again. */
@@ -85,9 +88,35 @@ export async function changeLevels(change: LevelsChange, fetchImpl: typeof fetch
   return levels;
 }
 
+/** The per-category overrides below info (a noisy category someone quietened). The reproduce
+ *  button and its stop keep them: they are a choice, not part of a raise. */
+export function loweredOverrides(cur: EngineLevels | null): Partial<Record<string, LogLevel>> {
+  const out: Partial<Record<string, LogLevel>> = {};
+  for (const [c, l] of Object.entries(cur?.categories ?? {})) if (l && LEVEL_RANK[l] > LEVEL_RANK.info) out[c] = l;
+  return out;
+}
+
+/** What the reproduce button asks: everything at debug for `minutes`, the quietened categories
+ *  as they are. */
+export function reproduceChange(cur: EngineLevels | null, minutes: number): LevelsChange {
+  return { level: "debug", categories: loweredOverrides(cur), minutes };
+}
+
+/** What "Stop recording more" asks: only what is above info comes down; a quieter global level
+ *  and the quietened categories stay. */
+export function stopRaiseChange(cur: EngineLevels | null): LevelsChange {
+  const level = cur && !isRaise(cur.level) ? cur.level : DEFAULT_LOG_LEVEL;
+  return { level, categories: loweredOverrides(cur) };
+}
+
 /** Everything at debug for `minutes`: the report screen's "while reproducing" button. */
 export function raiseAllForReproducing(minutes = 30, fetchImpl: typeof fetch = fetch): Promise<EngineLevels> {
-  return changeLevels({ level: "debug", categories: {}, minutes }, fetchImpl);
+  return changeLevels(reproduceChange(useDiagSettingsStore.getState().engine, minutes), fetchImpl);
+}
+
+/** The reproduce button's stop: the raise ends now, everything else stays. */
+export function stopRaising(fetchImpl: typeof fetch = fetch): Promise<EngineLevels> {
+  return changeLevels(stopRaiseChange(useDiagSettingsStore.getState().engine), fetchImpl);
 }
 
 /** A "Detailed logs" switch left on by an older version: the same as a debug raise until then. */

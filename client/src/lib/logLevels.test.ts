@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { DEFAULT_LOG_LEVEL, useDiagSettingsStore } from "../state/diagSettings";
 import { installWindowStub } from "../test-utils/storage";
-import { changeLevels, parseLevels, raiseAllForReproducing, refreshLevels } from "./logLevels";
+import { changeLevels, parseLevels, raiseAllForReproducing, refreshLevels, stopRaising } from "./logLevels";
 
 type Call = { url: string; method: string; body: unknown };
 
@@ -60,6 +60,41 @@ describe("logLevels", () => {
     expect(useDiagSettingsStore.getState().engine?.level).toBe("debug");
     // The local fallback never keeps a raise.
     expect(useDiagSettingsStore.getState().logLevel).toBe("info");
+  });
+
+  it("the reproduce button and its stop keep the categories someone quietened", async () => {
+    useDiagSettingsStore.setState({
+      engine: {
+        level: "info",
+        categories: { rp: "trace", install: "error", mesh: "warn" },
+        until_ms: Date.now() + 60_000,
+        raised: true,
+        effective: {},
+      },
+    });
+    const calls: Call[] = [];
+    const answer = () => ({ status: 200, json: { ...LEVELS, level: "debug", categories: { install: "error", mesh: "warn" } } });
+    await raiseAllForReproducing(30, engine(calls, answer));
+    expect(calls[0].body).toEqual({ level: "debug", categories: { install: "error", mesh: "warn" }, minutes: 30 });
+    // Stop: only the raise comes down.
+    useDiagSettingsStore.setState({
+      engine: {
+        level: "debug",
+        categories: { rp: "trace", install: "error" },
+        until_ms: Date.now() + 60_000,
+        raised: true,
+        effective: {},
+      },
+    });
+    await stopRaising(engine(calls, () => ({ status: 200, json: { ...LEVELS, level: "info", categories: { install: "error" } } })));
+    expect(calls[1]).toMatchObject({ method: "PUT" });
+    expect(calls[1].body).toEqual({ level: "info", categories: { install: "error" } });
+    // A quieter global level stays too.
+    useDiagSettingsStore.setState({
+      engine: { level: "warn", categories: { rp: "debug" }, until_ms: null, raised: true, effective: {} },
+    });
+    await stopRaising(engine(calls, () => ({ status: 200, json: { ...LEVELS, level: "warn", categories: {} } })));
+    expect(calls[2].body).toEqual({ level: "warn", categories: {} });
   });
 
   it("a refusal says why", async () => {

@@ -2817,9 +2817,11 @@ export class RemotePlayStream {
   }
 
   /** A decoder decision or failure: kept for the report (rpClientSessions), logged, and told to the
-   *  engine, which keeps it with its own record of the session. Rare: never per frame. */
+   *  engine, which keeps it with its own record of the session. Rare: never per frame. Once the
+   *  session's record is full (MAX_EVENTS) the rest go nowhere: a decoder that fails on every
+   *  frame does not flood the log or the socket. */
   private decoderEvent(ev: RpDecoderEvent): void {
-    this.diag?.event(ev);
+    if (this.diag && !this.diag.event(ev)) return;
     const text = JSON.stringify(ev);
     if (ev.error !== undefined) log.warn("remote-play", `decoder ${ev.event}: ${text}`);
     else log.debug("remote-play", `decoder ${ev.event}: ${text}`);
