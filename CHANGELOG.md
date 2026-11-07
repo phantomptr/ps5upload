@@ -6,15 +6,35 @@ What's new in ps5upload, written for humans.
 
 ## 11.4.0
 
-- New: zstd asset packs in Convert, smaller than LZ4 and for any plain image (.ffpkg, .exfat, .ffpfs), with levels 1, 5 and 19. They're written straight into the image with no temporary copy, and the image gets ampr-emu-ng as its emulator. A game already in LZ4 packs can switch to zstd, or back, without its original files.
-- PS4 games: an image or folder of a PS4 game now gets the sce_sys/param.json ShadowMount+ reads. Without it the game has been reported to mount and then refuse to start (NP-103270-3).
-- Games that read through AMPR and have no emulator: Convert now adds ampr_emu to a plain image too, because they fail to start without one. It's on by default, with a switch in the options. A new Add the AMPR emulator button does it for a game you already have: in the folder, or as a ShadowMount+ backport folder for an image on the PS5, .ffpfsc included.
-- ShadowMount+ panel: Scan now picks up a new image without deleting the game from the home screen, and gives games that failed to mount another try.
+Games and formats:
+
+- New: zstd asset packs in Convert, smaller than LZ4 and for any plain image (.ffpkg, .exfat, .ffpfs), with levels 1, 5 and 19. They're written straight into the image with no temporary copy, and the image gets ampr-emu-ng as its emulator. A game already in LZ4 packs can switch to zstd, or back, without its original files. Tried on a PS5: a 29.9 GB game became 15.9 GB and reached its main menu.
+- New: PS4 fake packages open in Convert and become a game image or a folder, with no key file needed. Only packages with the usual all-zero passcode; updates and add-ons aren't covered, and a PS4 game can't become a PS5 package.
+- PS4 games: an image or folder now gets the sce_sys/param.json ShadowMount+ reads. Without it a game has been reported to mount and then refuse to start (NP-103270-3). ShadowMount+ installed a test image of ours, but no real PS4 game has been started from one yet.
+- Games that read through AMPR and have no emulator: Convert now adds one to a plain image, because some such games won't start without it. It's on by default, with a switch and a choice of ampr_emu or ampr-emu-ng. A new Add the AMPR emulator button does it for a game you already have: in the folder, or as a ShadowMount+ backport folder for an image on the PS5, .ffpfsc included.
+- A plain .exfat build goes on after a crash or a killed engine, instead of starting over. Every byte is read back afterwards. Other image formats still start over.
 - Convert says beforehand how many plain executables will be fake-signed, and where an LZ4-packed image belongs.
+
+Files and ShadowMount+:
+
+- ShadowMount+ panel: Scan now picks up a new image without deleting the game from the home screen, and gives games that failed to mount another try.
+- Files: Rename from title offers names from a game's title, title ID, version and format, with your own format too. A name too long for ShadowMount+ to mount is flagged, with a shortened one offered, and a typed one asks first.
+- Files: Hide from ShadowMount+ renames with a dot in front, so it uses another copy of the game, and Show puts it back.
+
+Servers:
+
+- New: NFS exports (NFSv3), to read games from and write to. Tested against rclone's server, not yet a NAS or Linux server.
+- WebDAV: Digest sign-in, and a NAS's self-signed certificate over HTTPS can be accepted on first use, as with FTPS.
+- FTPS: implicit TLS on port 990.
+
+Also:
+
+- Automation: the engine's queue takes conversions (image_build, package_build, folder_build), so convert-then-send can run unattended.
+- A stored helper in Payload Manager named with its version now follows the new version, so the slot stops showing the old one.
 - Crop to 21:9 now says what it cuts: the top and bottom of any game not made for ultrawide screens. (#675)
 - Phones: banners no longer run under a side column of system icons, as on a folded iPhone Duo, which hid Stop. (#675)
 
-These follow findings and code from Alembic and PS5 Dump Forge. None of it has been run on a console yet, so please say if a game doesn't start.
+Parts of this follow findings and code from Alembic and PS5 Dump Forge.
 
 ## 11.3.0
 
