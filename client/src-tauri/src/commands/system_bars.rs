@@ -72,6 +72,44 @@ pub fn focus_webview(window: tauri::WebviewWindow) -> Result<(), String> {
     }
 }
 
+/// The iOS app: hide the status bar (the clock, battery and signal) while Remote Play fills the
+/// screen, and show it again on leaving (#722). The window's root view controller is tao's, whose
+/// `prefersStatusBarHidden` is a property it keeps; its `setPrefersStatusBarHidden:` setter also
+/// calls `setNeedsStatusBarAppearanceUpdate`. Every other platform: a no-op.
+#[tauri::command]
+pub fn set_status_bar_hidden(window: tauri::WebviewWindow, hidden: bool) -> Result<(), String> {
+    #[cfg(target_os = "ios")]
+    {
+        window
+            .with_webview(move |wv| {
+                use objc2::runtime::{AnyObject, Bool, Sel};
+                let vc = wv.view_controller() as *mut AnyObject;
+                if vc.is_null() {
+                    return;
+                }
+                let setter = Sel::register(c"setPrefersStatusBarHidden:");
+                // SAFETY: view_controller() is the window's live root UIViewController, and
+                // with_webview runs on the main thread, the only one allowed to touch UIKit. The
+                // setter is checked for before it is sent (tao's controller has it).
+                unsafe {
+                    let has: bool = objc2::msg_send![vc, respondsToSelector: setter];
+                    if has {
+                        let _: () =
+                            objc2::msg_send![vc, setPrefersStatusBarHidden: Bool::new(hidden)];
+                    } else {
+                        eprintln!("[system-ui] the root view controller has no status bar setter");
+                    }
+                }
+            })
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        let _ = (window, hidden);
+        Ok(())
+    }
+}
+
 /// The iOS app: whether the controllers' Home button (the PS button) is the app's or the system's.
 /// By default iOS opens its Games overlay and the page never sees the press (#675). iOS only honours
 /// this when the user's in-app Home button setting defers to the app. Every other platform: a no-op.

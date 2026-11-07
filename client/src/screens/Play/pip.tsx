@@ -421,7 +421,7 @@ function MiniPlayer({ win, onBack }: { win: Window; onBack: () => void }) {
           one larger than this window: the picture was cut on the right and bottom (#566). */}
       <div ref={canvasHost} className="rp-place pointer-events-none absolute inset-0 z-0 flex items-center justify-center" />
       <PadAsks pending={padLink.pending} />
-      <JoinAsks addr={target?.host ?? null} asks={join.asks} />
+      <JoinAsks addr={target?.host ?? null} asks={join.asks} seatNext={join.seatNext} />
       {passcode && (
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/80 px-3 text-center text-sm text-white" role="alert" data-testid="rp-pip-passcode">
           {tr("rp_passcode_title", undefined, "Enter this PS5 user's passcode")}

@@ -97,9 +97,24 @@ function friendName(tr: ReturnType<typeof useTr>, name: string): string {
   return name || tr("pt_friend_fallback", undefined, "Friend");
 }
 
+/** Under an ask, when allowing it gives the friend this stream's controller (#720). */
+function SeatNextNote({ name, className = "text-xs text-[var(--color-muted)]" }: { name: string; className?: string }) {
+  const tr = useTr();
+  return (
+    <p className={className} data-testid="pt-ask-seat">
+      {tr(
+        "pt_ask_seat_stream",
+        { name },
+        `If you allow ${name}, they get this stream's controller as Player 1 and play as your PS5 user.`,
+      )}
+    </p>
+  );
+}
+
 function PlayerCard({ addr, player, guest }: { addr: string; player: number; guest: JoinGuest | null }) {
   const tr = useTr();
   const tone = delayTone(guest?.rttMs);
+  const onSeat = !!guest && guest.streamSeat && guest.status !== "left";
   return (
     <li
       className={`flex min-w-0 flex-1 basis-40 flex-col gap-1.5 rounded-lg border p-3 ${
@@ -109,13 +124,24 @@ function PlayerCard({ addr, player, guest }: { addr: string; player: number; gue
     >
       <div className="flex items-center gap-2 text-xs text-[var(--color-muted)]">
         <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: rgb(playerColor(player)) }} />
-        {tr("pt_player", { n: player }, `Player ${player}`)}
+        {onSeat
+          ? tr("pt_player_stream_seat", undefined, "Player 1 – plays as your PS5 user")
+          : tr("pt_player", { n: player }, `Player ${player}`)}
       </div>
       {guest ? (
         <>
           <div className="truncate text-sm font-semibold" data-testid="pt-player-name">
             {friendName(tr, guest.name)}
           </div>
+          {onSeat && (
+            <p className="text-xs text-[var(--color-muted)]" data-testid="pt-player-stream-seat">
+              {tr(
+                "pt_seat_stream",
+                { name: friendName(tr, guest.name) },
+                `${friendName(tr, guest.name)} is using this stream's controller and plays as your PS5 user`,
+              )}
+            </p>
+          )}
           <div className="flex flex-wrap items-center gap-1.5">
             <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${CHIP[guest.status]}`} data-testid="pt-player-status">
               {guestStatusText(tr, guest)}
@@ -314,7 +340,7 @@ export function PlayTogetherPanel({
         />
       )}
       {helperOk && !failed && !pictureHere && <PlayOnTvNote />}
-      {helperOk && !failed && pictureHere && state && streamSeatFriend(state) && (
+      {helperOk && !failed && pictureHere && state && streamSeatFriend(state)?.streamSeat && (
         <p className="text-xs text-[var(--color-muted)]" data-testid="pt-stream-seat-note">
           {tr(
             "pt_stream_seat_note",
@@ -422,11 +448,16 @@ export function PlayTogetherPanel({
                 ))}
               </ul>
             )}
+            {state.asks.length > 0 && state.seatNext && <SeatNextNote name={friendName(tr, state.asks[0].name)} />}
           </Step>
           <Step n={3} title={tr("pt_step_tv", undefined, "On the TV")}>
             <TvHint />
             <p className="text-xs text-[var(--color-muted)]">
-              {tr("pt_step_tv_body", undefined, "Your friend presses PS on their controller and picks Quick Play (or their own user).")}
+              {tr(
+                "pt_step_tv_body",
+                undefined,
+                "Nothing to do on your side. Your friend presses PS on their own controller (on their screen) and picks Quick Play or their user on the TV.",
+              )}
             </p>
             <p className="text-xs text-[var(--color-muted)]">
               {tr(
@@ -475,7 +506,25 @@ export function PlayTogetherPanel({
               void joinApi.settings(addr, { block_system_buttons: on }).then((s) => s && onState(s));
             }}
             label={tr("pt_block", undefined, "Block PS & Create for friends")}
-            hint={tr("pt_block_hint", undefined, "Friends can still press PS once to pick a user on the TV.")}
+            hint={tr(
+              "pt_block_hint",
+              undefined,
+              "Friends get one press of PS to pick a user when they join; after that PS and Create are off.",
+            )}
+          />
+        </div>
+      )}
+
+      {helperOk && !failed && (
+        <div data-testid="pt-stream-seat">
+          <Toggle
+            checked={state.settings.streamSeat}
+            onChange={(on) => {
+              onState({ ...state, settings: { ...state.settings, streamSeat: on } });
+              void joinApi.settings(addr, { stream_seat: on }).then((s) => s && onState(s));
+            }}
+            label={tr("pt_stream_seat", undefined, "A friend can play as me on Player 1 (when this device shows no picture)")}
+            hint={tr("pt_stream_seat_hint", undefined, "Off: friends always get their own controller and pick a user on the TV.")}
           />
         </div>
       )}
@@ -512,13 +561,24 @@ export function PlayTogetherPanel({
 }
 
 /** A friend asking to play: shown over the picture, full screen included. */
-export function JoinAsks({ addr, asks }: { addr: string | null; asks: JoinHostState["asks"] }) {
+export function JoinAsks({
+  addr,
+  asks,
+  seatNext = false,
+}: {
+  addr: string | null;
+  asks: JoinHostState["asks"];
+  /** Allowing the first one gives them this stream's controller (Player 1, as the host's user). */
+  seatNext?: boolean;
+}) {
   const tr = useTr();
   if (!asks.length || !addr) return null;
   const a = asks[0];
   return (
     <div
-      className="pointer-events-auto absolute left-1/2 top-28 z-40 flex -translate-x-1/2 flex-wrap items-center gap-2 rounded-full bg-black/85 px-4 py-2 text-sm text-white shadow-lg"
+      className={`pointer-events-auto absolute left-1/2 top-28 z-40 flex max-w-[min(32rem,calc(100%-2rem))] -translate-x-1/2 flex-wrap items-center gap-2 bg-black/85 px-4 py-2 text-sm text-white shadow-lg ${
+        seatNext ? "rounded-2xl" : "rounded-full"
+      }`}
       data-testid="pt-ask"
       onClick={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
@@ -526,6 +586,7 @@ export function JoinAsks({ addr, asks }: { addr: string | null; asks: JoinHostSt
     >
       <Users size={14} />
       <span>{tr("pt_asks", { name: friendName(tr, a.name) }, `${friendName(tr, a.name)} wants to play with you`)}</span>
+      {seatNext && <SeatNextNote name={friendName(tr, a.name)} className="order-last w-full text-xs text-white/75" />}
       <button
         type="button"
         className="rounded-full bg-white px-3 py-1 text-xs font-medium text-black"

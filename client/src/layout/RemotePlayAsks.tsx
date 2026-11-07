@@ -35,7 +35,7 @@ export default function RemotePlayAsks({ host, floating }: { host: string; float
   return (
     <div className="pointer-events-none fixed inset-x-0 top-0 z-50 h-0" data-testid="rp-asks-host">
       <PadAsks pending={pad.pending} />
-      <JoinAsks addr={host} asks={join.asks} />
+      <JoinAsks addr={host} asks={join.asks} seatNext={join.seatNext} />
     </div>
   );
 }

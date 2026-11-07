@@ -8,7 +8,7 @@ import { isMobile } from "../../lib/platform";
 import { androidPipAvailable } from "../../lib/androidPip";
 import { appSavesToPhotos } from "../../lib/rpCapture";
 import { gameModeKind } from "../../lib/gameMode";
-import { keysFor, rebind, PAD_ACTIONS, type KeyAction } from "../../lib/remotePlayStream";
+import { keysFor, mseAvailable, rebind, PAD_ACTIONS, type KeyAction } from "../../lib/remotePlayStream";
 import { RP_BITRATES, useRemotePlayStore, type RpPrefs, padsCannotVibrate } from "../../state/remotePlay";
 import { askMotion, motionAvailable } from "../../lib/motion";
 import { dualSenseBlocked, dualSenseCapable } from "../../lib/dualSense";
@@ -347,6 +347,11 @@ export function SettingsBody({ tab, running }: { tab: SettingsTab; running: bool
             options={[
               { value: "auto", label: tr("rp_decoding_auto", undefined, "Graphics card (auto)") },
               { value: "software", label: tr("rp_decoding_software", undefined, "Software") },
+              // Straight to MSE, WebCodecs never tried (#720). Only where there is one (or already
+              // chosen, to show what is set).
+              ...(mseAvailable() || prefs.decoding === "mse"
+                ? [{ value: "mse", label: tr("rp_decoding_mse", undefined, "System media player") }]
+                : []),
             ]}
           />
           <Select
@@ -651,6 +656,22 @@ export function SettingsBody({ tab, running }: { tab: SettingsTab; running: bool
               />
             </label>
           </div>
+        )}
+        {prefs.touchControls !== "off" && (
+          <Toggle
+            checked={prefs.touchModeSwitchFull}
+            onChange={(v) => setPrefs({ touchModeSwitchFull: v })}
+            label={tr(
+              "rp_touch_mode_switch_full",
+              undefined,
+              "Show the Controller/Touchpad switch in full screen",
+            )}
+            hint={tr(
+              "rp_touch_mode_switch_full_hint",
+              undefined,
+              "It hides with the stream's controls; tap the picture to bring it back.",
+            )}
+          />
         )}
         <Hint>
           {tr(

@@ -15,14 +15,16 @@
 //!   (a guest coming back while the host restarts Play), then `{"stage": "joined", "player": n,
 //!   "token": t, "hevc": bool}` or `{"stage": "refused", "why": "key" | "expired" | "full" |
 //!   "denied" | "no_answer" (the host did not answer in time) | "closed" | "not_playing" |
-//!   "old_helper" | "unreachable" | "slow_down" (5 wrong codes in a minute)}`.
+//!   "old_helper" | "unreachable" | "slow_down" (5 wrong codes in a minute) | "seat_taken" (a
+//!   resume to the stream's controller, which the host needs back, with no pad free)}`.
 //! * guest → engine: binary pad frames ([`parse_pad`]), `{"ping": t}` (answered `{"pong": t}`),
 //!   `{"leave": 1}`.
 //! * engine → guest: the session's picture and sound exactly as the watch party gets them (same
 //!   binary kinds, `rp_stream_api::add_player`), `{"status": {...}}` every second,
 //!   `{"rumble": [l, r], "light": [r, g, b]}` when the game changes them, `{"bye": "kicked" |
 //!   "closed" | "replaced" | "host_stopped" | "lost" (the console no longer has their
-//!   controller)}` (the socket then closes). The engine also sends a
+//!   controller) | "seat_taken" (the host needed the stream's controller back and no pad was
+//!   free)}` (the socket then closes). The engine also sends a
 //!   WebSocket ping every second; the browser's automatic pong gives the guest's round trip.
 //!
 //! The `token` is the guest's resume credential: a guest whose socket drops keeps their player
@@ -215,6 +217,11 @@ pub(crate) struct Settings {
     pub block_system_buttons: bool,
     /// Guests at most (1-3).
     pub max_players: u8,
+    /// A friend may get the stream's own controller (Player 1, signed in as the host's PS5 user)
+    /// while this device shows no picture and no phone plays on it (#687). Off unless the host
+    /// turns it on: a friend otherwise always gets their own controller and picks a user (#720).
+    #[serde(default)]
+    pub stream_seat: bool,
 }
 
 impl Default for Settings {
@@ -222,6 +229,7 @@ impl Default for Settings {
         Settings {
             block_system_buttons: true,
             max_players: MAX_GUESTS,
+            stream_seat: false,
         }
     }
 }
@@ -298,13 +306,30 @@ pub(crate) struct Guest {
     picking_since: Instant,
     /// On [`STREAM_SEAT`]: when their last state arrived, while one is held on the controller.
     seat_input_at: Option<Instant>,
+    /// Leaving the stream's controller for a helper pad (the host's side needs it back).
+    seat_move: SeatMove,
     /// The helper has the pad (closed while the host is away).
     slot_open: bool,
     joined_at: Instant,
     stats: Arc<Stats>,
 }
 
+/// A guest on [`STREAM_SEAT`] giving it back to the host's side.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum SeatMove {
+    #[default]
+    No,
+    /// The seat is let go; a helper pad is made once they are back (their socket is gone).
+    Wanted,
+    /// A helper pad is being made for them ([`move_off_seat`]).
+    Running,
+}
+
 impl Guest {
+    /// On the stream's controller, and keeping it.
+    fn on_seat(&self) -> bool {
+        self.active() && self.player == STREAM_SEAT && self.seat_move == SeatMove::No
+    }
     fn state(&self) -> &'static str {
         if self.left.is_some() {
             "left"
@@ -406,6 +431,8 @@ pub(crate) enum Effect {
     SeatPad(Option<ControllerState>),
     /// Whether a guest has the stream's controller, so the host's page is kept off it.
     Seat(bool),
+    /// Move this guest off the stream's controller onto a helper pad ([`move_off_seat`]).
+    MoveOff(u64),
 }
 
 /// Play Together for one console.
@@ -504,13 +531,15 @@ impl Party {
         })
     }
 
-    /// The next guest's player number: the stream's controller when `seat_free` says nobody on
-    /// the host's side uses it, else a helper pad. Never more guests than the host allows.
+    /// The next guest's player number: the stream's controller when the host allows it
+    /// ([`Settings::stream_seat`]) and `seat_free` says nobody on the host's side uses it, else a
+    /// helper pad. Never more guests than the host allows.
     fn next_player(&self, tried: &[u8], seat_free: bool) -> Option<u8> {
         if self.guests_in() >= usize::from(self.settings.max_players.clamp(1, MAX_GUESTS)) {
             return None;
         }
         if seat_free
+            && self.settings.stream_seat
             && !self
                 .guests
                 .iter()
@@ -554,6 +583,7 @@ impl Party {
             playing: false,
             picking_since: now,
             seat_input_at: None,
+            seat_move: SeatMove::No,
             slot_open: false,
             joined_at: now,
             stats: Arc::default(),
@@ -609,6 +639,7 @@ impl Party {
                 "kicked" => Some("kicked"),
                 "closed" => Some("closed"),
                 "lost" => Some("lost"),
+                "seat_taken" => Some("seat_taken"),
                 _ => None,
             };
             if let Some(b) = bye {
@@ -619,11 +650,13 @@ impl Party {
             g.slot_open = false;
             fx.push(Effect::Link(link::Cmd::Close { slot: g.player }));
         }
-        if g.player == STREAM_SEAT {
+        // (One moving off it already let it go.)
+        if g.player == STREAM_SEAT && g.seat_move == SeatMove::No {
             g.seat_input_at = None;
             fx.push(Effect::SeatPad(None));
             fx.push(Effect::Seat(false));
         }
+        g.seat_move = SeatMove::No;
         let s = &g.stats;
         let n = s.rtt_n.load(Ordering::Relaxed);
         let avg = s.rtt_sum.load(Ordering::Relaxed).checked_div(n);
@@ -676,6 +709,9 @@ impl Party {
     /// The bits to take from the guest's input now (None: they are not in).
     fn strip_mask(&self, id: u64) -> Option<(u8, u32)> {
         let g = self.guests.iter().find(|g| g.id == id && g.active())?;
+        if g.seat_move != SeatMove::No {
+            return None; // between the stream's controller and their pad: nowhere to go yet
+        }
         let strip = if self.settings.block_system_buttons && g.playing {
             vpad::button::SYSTEM
         } else {
@@ -684,9 +720,47 @@ impl Party {
         Some((g.player, strip))
     }
 
+    /// The stream's controller goes back to the host's side, at once: the guest on it stops
+    /// driving it, and moves to a helper pad of their own ([`move_off_seat`], now when their
+    /// socket is up, else when they come back) or, with none free, is let go (`seat_taken`).
+    fn give_back_seat(&mut self, why: &str) -> Vec<Effect> {
+        let mut fx = Vec::new();
+        let host_here = self.host_gone.is_none();
+        let console = self.console.clone();
+        for g in self.guests.iter_mut().filter(|g| g.on_seat()) {
+            g.seat_input_at = None;
+            g.playing = false;
+            g.seat_move = if g.conn.is_some() && host_here {
+                fx.push(Effect::MoveOff(g.id));
+                SeatMove::Running
+            } else {
+                SeatMove::Wanted
+            };
+            fx.push(Effect::SeatPad(None));
+            fx.push(Effect::Seat(false));
+            fx.push(Effect::Log(format!(
+                "join: the stream's controller on {console} goes back to the host ({why}); its guest moves to a pad of their own"
+            )));
+        }
+        fx
+    }
+
     /// Time passes; `live` is the host's running session on this console, if any. Returns what
     /// to do, and false once Play Together has closed.
+    #[cfg(test)]
     pub(crate) fn tick(&mut self, now: Instant, live: Option<u64>) -> (Vec<Effect>, bool) {
+        self.tick_seat(now, live, true)
+    }
+
+    /// [`Party::tick`], `seat_kept` saying the stream's controller is still free on the host's
+    /// side ([`crate::rp_stream_api::stream_seat_kept`]): when it is not, a guest on it gives it
+    /// back.
+    pub(crate) fn tick_seat(
+        &mut self,
+        now: Instant,
+        live: Option<u64>,
+        seat_kept: bool,
+    ) -> (Vec<Effect>, bool) {
         let mut fx = Vec::new();
         match (live, self.host_gone) {
             (Some(s), None) if s == self.session => {}
@@ -701,6 +775,9 @@ impl Party {
                     }
                     g.away_since = Some(now);
                 }
+                // A new session is the host's again: the stream's controller is not carried over
+                // (their page attaches to it, #720).
+                fx.extend(self.give_back_seat("a new session"));
                 if gone.is_some() {
                     fx.push(Effect::Log(format!(
                         "join: the host plays {} again; guests may come back",
@@ -750,6 +827,14 @@ impl Party {
         if self.invite.as_ref().is_some_and(|i| i.until <= now) {
             self.invite = None;
         }
+        // The picture back on, a phone playing, or the host turned the seat off: it is theirs.
+        if live.is_some() && (!seat_kept || !self.settings.stream_seat) {
+            fx.extend(self.give_back_seat(if seat_kept {
+                "the host turned it off"
+            } else {
+                "the host's side uses it"
+            }));
+        }
         let mut gone = Vec::new();
         for g in self.guests.iter_mut().filter(|g| g.active()) {
             if self.host_gone.is_none()
@@ -771,10 +856,11 @@ impl Party {
                 g.seat_input_at = None;
                 fx.push(Effect::SeatPad(None));
             }
-            // Also claims it on a session that replaced the old one.
-            if g.player == STREAM_SEAT && live.is_some() {
-                fx.push(Effect::Seat(true));
-            }
+        }
+        // Held while a guest keeps it (also on a session that replaced the old one), and let go
+        // when none does: a claim racing a give-back (the picture back on) heals here.
+        if live.is_some() {
+            fx.push(Effect::Seat(self.guests.iter().any(|g| g.on_seat())));
         }
         for id in gone {
             fx.extend(self.leave(id, "timeout", now));
@@ -805,6 +891,8 @@ impl Party {
                     "behind": g.stats.behind.load(Ordering::Relaxed),
                     "since_s": now.duration_since(g.joined_at).as_secs(),
                     "why": g.left.map(|(_, w)| w),
+                    // On the stream's own controller: plays as the host's PS5 user.
+                    "stream_seat": g.on_seat(),
                 })
             })
             .collect();
@@ -831,6 +919,8 @@ impl Party {
             "rtt_ms": g.stats.rtt_now(),
             "host": self.host_name,
             "block_system": self.settings.block_system_buttons && g.playing,
+            // On the stream's own controller: they play as the host's PS5 user, nothing to pick.
+            "stream_seat": g.on_seat(),
             "queue": g.stats.queue.load(Ordering::Relaxed),
             "skipped": g.stats.skipped.load(Ordering::Relaxed),
         }}))
@@ -857,6 +947,8 @@ impl Party {
                     "skipped_pictures": s.skipped.load(Ordering::Relaxed),
                     "pad_frames": s.pad_frames.load(Ordering::Relaxed),
                     "slot_open": g.slot_open,
+                    "stream_seat": g.on_seat(),
+                    "seat_move": format!("{:?}", g.seat_move),
                 })
             })
             .collect();
@@ -929,8 +1021,120 @@ fn apply(console: &str, fx: Vec<Effect>) {
             Effect::Log(s) => crate::log_at!(Info, "together", "{s}"),
             Effect::SeatPad(state) => crate::rp_stream_api::push_guest_pad(console, state),
             Effect::Seat(on) => crate::rp_stream_api::guest_seat(console, on),
+            Effect::MoveOff(id) => match tokio::runtime::Handle::try_current() {
+                Ok(h) => {
+                    h.spawn(move_off_seat(console.to_string(), id));
+                }
+                Err(_) => {
+                    // No runtime here: the guest waits for their next resume to be moved.
+                    with_party(&host_key(console), |p| {
+                        if let Some(g) = p.guest_mut(id) {
+                            if g.seat_move == SeatMove::Running {
+                                g.seat_move = SeatMove::Wanted;
+                            }
+                        }
+                    });
+                }
+            },
         }
     }
+}
+
+/// The host's side needs the stream's controller now (their picture came back on): the guest on
+/// it gives it back at once ([`Party::give_back_seat`]) instead of at the next look.
+pub(crate) fn seat_needed(console: &str, why: &str) {
+    let fx = with_party(&host_key(console), |p| p.give_back_seat(why)).unwrap_or_default();
+    apply(console, fx);
+}
+
+/// What a move off the stream's controller tries next.
+enum SeatStep {
+    /// The guest is out (or no longer moving): nothing to do.
+    Done,
+    /// No helper pad is free for them.
+    NoPad,
+    /// Make Player `n`'s pad with this owner token.
+    Try(u8, String),
+}
+
+/// A guest leaves the stream's controller for a helper pad of their own (the lowest free player,
+/// skipping busy slots): the console asks them who they are, as for any guest. With none free,
+/// or the helper unable, they are let go with `seat_taken`. True when they have a pad now.
+async fn move_off_seat(console: String, id: u64) -> bool {
+    let key = host_key(&console);
+    let mut tried = Vec::new();
+    loop {
+        let step = with_party(&key, |p| {
+            let free = p.free_player(&tried);
+            let Some(g) = p.guest_mut(id).filter(|g| g.active()) else {
+                return SeatStep::Done;
+            };
+            if g.seat_move != SeatMove::Running {
+                return SeatStep::Done;
+            }
+            match free {
+                // Taken now, so a guest let in meanwhile does not get the same one.
+                Some(n) => {
+                    g.player = n;
+                    SeatStep::Try(n, g.pad_token.clone())
+                }
+                None => SeatStep::NoPad,
+            }
+        })
+        .unwrap_or(SeatStep::Done);
+        let (player, token) = match step {
+            SeatStep::Done => return false,
+            SeatStep::NoPad => break,
+            SeatStep::Try(n, t) => (n, t),
+        };
+        let r = open_slot(&console, player, &token).await;
+        if r == link::OpenResult::Busy {
+            tried.push(player);
+            continue;
+        }
+        if r != link::OpenResult::Ok {
+            break;
+        }
+        let now = Instant::now();
+        let ok = with_party(&key, |p| {
+            p.guest_mut(id)
+                .filter(|g| g.active() && g.seat_move == SeatMove::Running)
+                .map(|g| {
+                    g.slot_open = true;
+                    g.playing = false;
+                    g.picking_since = now;
+                    g.seat_move = SeatMove::No;
+                })
+        })
+        .flatten()
+        .is_some();
+        if !ok {
+            // Out while the pad was made: nobody will close it later.
+            link::send(&console, link::Cmd::Close { slot: player });
+            return false;
+        }
+        crate::log_at!(
+            Info,
+            "together",
+            "join: the guest who had the stream's controller on {console} is Player {player} now"
+        );
+        return true;
+    }
+    let now = Instant::now();
+    let fx = with_party(&key, |p| {
+        if let Some(g) = p.guest_mut(id).filter(|g| g.active()) {
+            g.player = STREAM_SEAT; // the place they had, on the host's list
+        }
+        p.leave(id, "seat_taken", now)
+    })
+    .unwrap_or_default();
+    apply(&console, fx);
+    crate::log_at!(
+        Info,
+        "together",
+        "join: no pad was free for the guest who had the stream's controller on {console}: let go"
+    );
+    false
 }
 
 // ── Seams: the host's session and the helper ─────────────────────────────────────────────────────
@@ -950,6 +1154,29 @@ fn session_of(console: &str) -> Option<u64> {
         }
     }
     crate::rp_stream_api::live_session(console)
+}
+
+#[cfg(test)]
+static FAKE_SEAT_TAKEN: Mutex<Option<std::collections::HashSet<String>>> = Mutex::new(None);
+
+/// The stream's controller on `console` is still free on the host's side (a guest may keep it).
+fn seat_kept(console: &str) -> bool {
+    #[cfg(test)]
+    {
+        let g = FAKE_SEAT_TAKEN.lock().unwrap_or_else(|e| e.into_inner());
+        if g.as_ref().is_some_and(|s| s.contains(&host_key(console))) {
+            return false;
+        }
+        if FAKE_LIVE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(|m| m.contains_key(&host_key(console)))
+        {
+            return true;
+        }
+    }
+    crate::rp_stream_api::stream_seat_kept(console)
 }
 
 /// What the stream's controller rumbles goes to the guest who has it.
@@ -1032,10 +1259,11 @@ fn spawn_watch(key: String) {
                 None => return,
             };
             let live = session_of(&console);
+            let seat_kept = seat_kept(&console);
             let now = Instant::now();
             let r = with_parties(|m| {
                 let p = m.get_mut(&key)?;
-                let (fx, keep) = p.tick(now, live);
+                let (fx, keep) = p.tick_seat(now, live, seat_kept);
                 if !keep {
                     m.remove(&key);
                 }
@@ -1412,11 +1640,69 @@ async fn resume(socket: &mut WebSocket, token: &str) -> Option<Admit> {
             }
         }
     }
+    // Coming back to the stream's controller: only while it is still free on the host's side
+    // and the host still allows it (#720); else to a helper pad of their own.
+    let kept = seat_kept(&console);
+    let mv = with_party(&key, |p| {
+        let allowed = p.settings.stream_seat;
+        let g = p
+            .guests
+            .iter_mut()
+            .find(|g| g.id == id && g.active() && g.player == STREAM_SEAT)?;
+        let start =
+            g.seat_move == SeatMove::Wanted || (g.seat_move == SeatMove::No && !(kept && allowed));
+        if !start {
+            return None;
+        }
+        let fx = if g.seat_move == SeatMove::No {
+            g.seat_input_at = None;
+            g.playing = false;
+            vec![Effect::SeatPad(None), Effect::Seat(false)]
+        } else {
+            Vec::new()
+        };
+        g.seat_move = SeatMove::Running;
+        Some(fx)
+    })
+    .flatten();
+    if let Some(fx) = mv {
+        apply(&console, fx);
+        crate::log_at!(
+            Debug,
+            "together",
+            "join: guest {id} resumes on {console}: the stream's controller is the host's, making a pad"
+        );
+        if !move_off_seat(console.clone(), id).await {
+            return Some(Admit::Refused("seat_taken"));
+        }
+    } else {
+        // A move started elsewhere (the tick, the picture coming on) still making their pad: wait
+        // for it, so "joined" names the player they end up on, not Player 1.
+        for _ in 0..150 {
+            let running = with_party(&key, |p| {
+                p.guests
+                    .iter()
+                    .any(|g| g.id == id && g.active() && g.seat_move == SeatMove::Running)
+            })
+            .unwrap_or(false);
+            if !running {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
     let Some((player, token, open)) = with_party(&key, |p| {
         p.guests
             .iter()
             .find(|g| g.id == id && g.active())
-            .map(|g| (g.player, g.pad_token.clone(), g.slot_open))
+            // A move off the stream's controller still running makes their pad itself.
+            .map(|g| {
+                (
+                    g.player,
+                    g.pad_token.clone(),
+                    g.slot_open || g.seat_move != SeatMove::No,
+                )
+            })
     })
     .flatten() else {
         return Some(Admit::Refused("expired"));
@@ -2135,6 +2421,11 @@ fn state_json(console: &str) -> serde_json::Value {
     match snap {
         Some((c, reach, inv, mut v)) => {
             v["invite"] = invite_json(&c, &reach, inv, now);
+            // The next friend allowed in gets the stream's controller (Player 1, as the host's
+            // PS5 user): the Allow prompt says so.
+            v["seat_next"] = (v["settings"]["stream_seat"] == true
+                && crate::rp_stream_api::stream_seat_free(&c))
+            .into();
             // the LAN socket guests connect to (nearby apps get it from the mesh presence): an
             // address when there is one, which an app's relay can use as it is
             let prefix = crate::host_guard::base_path();
@@ -2378,10 +2669,13 @@ pub struct SettingsBody {
     block_system_buttons: Option<bool>,
     #[serde(default)]
     max_players: Option<u8>,
+    #[serde(default)]
+    stream_seat: Option<bool>,
 }
 
-/// `POST /api/join/settings {block_system_buttons?, max_players?}`: the host's choices (every
-/// console). Fewer players lets nobody go; it only stops new ones.
+/// `POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?}`: the host's
+/// choices (every console). Fewer players lets nobody go; it only stops new ones. `stream_seat`
+/// off moves a friend on the stream's controller to a pad of their own.
 pub async fn set_settings(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
@@ -2397,12 +2691,26 @@ pub async fn set_settings(
     if let Some(v) = b.max_players {
         s.max_players = v.clamp(1, MAX_GUESTS);
     }
+    if let Some(v) = b.stream_seat {
+        s.stream_seat = v;
+    }
     *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(s);
-    with_parties(|m| {
-        for p in m.values_mut() {
-            p.settings = s;
-        }
+    let fx = with_parties(|m| {
+        m.values_mut()
+            .map(|p| {
+                p.settings = s;
+                let fx = if s.stream_seat {
+                    Vec::new()
+                } else {
+                    p.give_back_seat("the host turned it off")
+                };
+                (p.console.clone(), fx)
+            })
+            .collect::<Vec<_>>()
     });
+    for (console, fx) in fx {
+        apply(&console, fx);
+    }
     Json(serde_json::json!({ "settings": s })).into_response()
 }
 
@@ -3765,6 +4073,13 @@ mod tests {
     fn the_first_guest_takes_the_stream_controller_only_when_it_is_free() {
         let now = Instant::now();
         let mut p = party();
+        assert!(!p.settings.stream_seat, "off unless the host turns it on");
+        assert_eq!(
+            p.next_player(&[], true),
+            Some(2),
+            "off: a friend gets their own controller even with it free"
+        );
+        p.settings.stream_seat = true;
         assert_eq!(
             p.next_player(&[], false),
             Some(2),
@@ -3782,7 +4097,7 @@ mod tests {
     #[test]
     fn a_guest_on_the_stream_controller_lets_go_when_quiet_or_gone() {
         let t = Instant::now();
-        let mut p = party();
+        let mut p = seat_party();
         let id = p.admit("a", STREAM_SEAT, t).unwrap().id;
         let session = p.session;
         let seat_pads = |fx: &[Effect]| {
@@ -3805,6 +4120,147 @@ mod tests {
             !fx.iter().any(|e| matches!(e, Effect::Link(_))),
             "no helper pad was ever made for it"
         );
+    }
+
+    /// A party whose host allows the stream's controller.
+    fn seat_party() -> Party {
+        let mut p = party();
+        p.settings.stream_seat = true;
+        p
+    }
+
+    /// A guest on the stream's controller, playing (as `ask` leaves them), socket attached.
+    fn seated(p: &mut Party, t: Instant) -> (u64, mpsc::Receiver<Out>) {
+        let id = p.admit("a", STREAM_SEAT, t).unwrap().id;
+        p.guest_mut(id).unwrap().playing = true;
+        let (tx, rx) = conn();
+        p.attach(id, 1, tx);
+        (id, rx)
+    }
+
+    fn moves(fx: &[Effect]) -> Vec<u64> {
+        fx.iter()
+            .filter_map(|e| match e {
+                Effect::MoveOff(id) => Some(*id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn seat_claims(fx: &[Effect]) -> Vec<bool> {
+        fx.iter()
+            .filter_map(|e| match e {
+                Effect::Seat(on) => Some(*on),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_stream_seat_guest_has_ps_and_create_taken_when_the_block_is_on() {
+        use ps5upload_core::rp_stream::button as rp;
+        let t = Instant::now();
+        let mut p = seat_party();
+        assert!(p.settings.block_system_buttons);
+        let (id, _rx) = seated(&mut p, t);
+        let (slot, strip) = p.strip_mask(id).unwrap();
+        assert_eq!(
+            (slot, strip),
+            (STREAM_SEAT, vpad::button::SYSTEM),
+            "no user to pick: blocked from the start"
+        );
+        let mut st = PadState {
+            buttons: vpad::button::PS | vpad::button::CREATE | vpad::button::CROSS,
+            ..PadState::NEUTRAL
+        };
+        st.buttons &= !strip;
+        assert_eq!(
+            controller_state(&st).buttons,
+            rp::CROSS,
+            "PS and Create never reach the stream's controller"
+        );
+        p.settings.block_system_buttons = false;
+        assert_eq!(p.strip_mask(id), Some((STREAM_SEAT, 0)));
+    }
+
+    #[test]
+    fn the_stream_seat_goes_back_when_the_host_side_needs_it() {
+        let t = Instant::now();
+        let mut p = seat_party();
+        let (id, _rx) = seated(&mut p, t);
+        let s = p.session;
+        let (fx, _) = p.tick_seat(t, Some(s), true);
+        assert_eq!(seat_claims(&fx), vec![true], "free: they keep it");
+        assert!(moves(&fx).is_empty());
+
+        // The picture back on (or a phone playing): the host's controller plays again at once,
+        // the guest moves to a pad of their own.
+        let (fx, _) = p.tick_seat(t, Some(s), false);
+        assert_eq!(moves(&fx), vec![id]);
+        assert!(fx.iter().any(|e| matches!(e, Effect::SeatPad(None))));
+        assert_eq!(
+            seat_claims(&fx),
+            vec![false, false],
+            "let go, and not claimed again"
+        );
+        let g = p.guest_mut(id).unwrap();
+        assert_eq!(g.seat_move, SeatMove::Running);
+        assert!(!g.on_seat() && !g.playing);
+        assert_eq!(
+            p.strip_mask(id),
+            None,
+            "their input goes nowhere while moving"
+        );
+        assert_eq!(
+            p.snapshot(t, serde_json::Value::Null)["guests"][0]["stream_seat"],
+            false
+        );
+        // Once only.
+        let (fx, _) = p.tick_seat(t, Some(s), false);
+        assert!(moves(&fx).is_empty());
+        assert_eq!(seat_claims(&fx), vec![false]);
+    }
+
+    #[test]
+    fn the_stream_seat_goes_back_when_the_host_turns_it_off_or_restarts_play() {
+        let t = Instant::now();
+        let mut p = seat_party();
+        let (id, _rx) = seated(&mut p, t);
+        p.settings.stream_seat = false;
+        let (fx, _) = p.tick_seat(t, Some(p.session), true);
+        assert_eq!(moves(&fx), vec![id], "turned off: they move");
+
+        // A new session (the host restarted Play): their socket goes, so the pad is made when
+        // they come back (resume).
+        let mut p = seat_party();
+        let (id, _rx) = seated(&mut p, t);
+        let (fx, _) = p.tick_seat(t, Some(p.session + 1), true);
+        assert!(moves(&fx).is_empty());
+        assert_eq!(byes(fx), vec!["host_stopped"]);
+        let g = p.guest_mut(id).unwrap();
+        assert_eq!(g.seat_move, SeatMove::Wanted);
+        assert!(!g.on_seat());
+
+        // A guest away when it is needed waits for their resume too.
+        let mut p = seat_party();
+        let (id, _rx) = seated(&mut p, t);
+        p.detach(id, 1, t);
+        let fx = p.give_back_seat("test");
+        assert!(moves(&fx).is_empty());
+        assert_eq!(p.guest_mut(id).unwrap().seat_move, SeatMove::Wanted);
+        // Leaving then changes nothing on the stream's controller twice.
+        let fx = p.leave(id, "left", t);
+        assert!(seat_claims(&fx).is_empty());
+    }
+
+    #[test]
+    fn a_guest_let_go_off_the_stream_seat_is_told_why() {
+        let t = Instant::now();
+        let mut p = seat_party();
+        let (id, _rx) = seated(&mut p, t);
+        let (tx, _rx2) = conn();
+        p.attach(id, 2, tx);
+        assert_eq!(byes(p.leave(id, "seat_taken", t)), vec!["seat_taken"]);
     }
 
     #[test]
@@ -5218,5 +5674,115 @@ mod tests {
             }),
         )
         .await;
+    }
+
+    fn seat_settings() -> Settings {
+        Settings {
+            stream_seat: true,
+            ..Settings::default()
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_guest_off_the_stream_seat_gets_a_pad_or_is_let_go() {
+        let _turn = PARTY_TESTS.lock().await;
+        let console = "10.77.0.31";
+        let key = host_key(console);
+        let f = Arc::new(FakeHelper::default());
+        f.busy.lock().unwrap().push(2);
+        set_helper(console, f.clone());
+        let t = Instant::now();
+        let mut p = Party::new(console, 1, "Desk".into(), seat_settings());
+        let (a, _ra) = seated(&mut p, t);
+        assert_eq!(moves(&p.give_back_seat("test")), vec![a]);
+        with_parties(|m| m.insert(key.clone(), p));
+
+        // Player 2 is held elsewhere: the next free one.
+        assert!(move_off_seat(console.into(), a).await);
+        let got = with_party(&key, |p| {
+            let g = p.guest_mut(a).unwrap();
+            (g.player, g.slot_open, g.seat_move, g.state())
+        })
+        .unwrap();
+        assert_eq!(got, (3, true, SeatMove::No, "picking_user"));
+        assert_eq!(
+            with_party(&key, |p| p.strip_mask(a)).unwrap(),
+            Some((3, 0)),
+            "PS answers 'Who's using this controller?'"
+        );
+        assert!(f.log().contains(&"open3".to_string()), "{:?}", f.log());
+
+        // No pad free (two guests at most, 2 busy, 3 is theirs): let go, and told why.
+        let (b, mut rb) = with_party(&key, |p| {
+            p.settings.max_players = 2;
+            let (b, rb) = seated(p, t);
+            p.give_back_seat("test");
+            (b, rb)
+        })
+        .unwrap();
+        assert!(!move_off_seat(console.into(), b).await);
+        let why = with_party(&key, |p| p.guest_mut(b).unwrap().left.map(|(_, w)| w)).unwrap();
+        assert_eq!(why, Some("seat_taken"));
+        let mut byes_b = Vec::new();
+        while let Ok(o) = rb.try_recv() {
+            if let Out::Bye(w) = o {
+                byes_b.push(w);
+            }
+        }
+        assert_eq!(byes_b, vec!["seat_taken"]);
+        with_parties(|m| m.remove(&key));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_guest_resuming_to_a_stream_seat_the_host_needs_gets_a_pad() {
+        let _turn = PARTY_TESTS.lock().await;
+        let console = "10.77.0.32";
+        let key = host_key(console);
+        let f = Arc::new(FakeHelper::default());
+        set_helper(console, f.clone());
+        set_live(console, 1);
+        // The host's side uses the stream's controller now (picture on, or a phone playing).
+        FAKE_SEAT_TAKEN
+            .lock()
+            .unwrap()
+            .get_or_insert_with(Default::default)
+            .insert(key.clone());
+        let url = serve().await;
+        let t = Instant::now();
+        let mut p = Party::new(console, 1, "Desk".into(), seat_settings());
+        let away = |p: &mut Party| {
+            let id = p.admit("a", STREAM_SEAT, t).unwrap().id;
+            let g = p.guest_mut(id).unwrap();
+            g.playing = true;
+            (id, g.token.clone())
+        };
+        let (a, token) = away(&mut p);
+        with_parties(|m| m.insert(key.clone(), p));
+
+        let mut g = guest(&url, serde_json::json!({"hello": {"resume": token}})).await;
+        let j = next(&mut g).await;
+        assert_eq!(j["stage"], "joined", "{j}");
+        assert_eq!(
+            j["player"], 2,
+            "a pad of their own, not the host's controller"
+        );
+        assert!(f.log().contains(&"open2".to_string()));
+        let st = with_party(&key, |p| p.guest_mut(a).unwrap().state()).unwrap();
+        assert_eq!(st, "picking_user", "they pick a user on the TV now");
+
+        // With no pad free, the resume is refused with the reason.
+        f.busy.lock().unwrap().extend([3, 4]);
+        let (_b, token_b) = with_party(&key, |p| away(p)).unwrap();
+        let mut g2 = guest(&url, serde_json::json!({"hello": {"resume": token_b}})).await;
+        assert_eq!(next(&mut g2).await["why"], "seat_taken");
+
+        drop(g);
+        with_parties(|m| m.remove(&key));
+        FAKE_SEAT_TAKEN
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .remove(&key);
     }
 }

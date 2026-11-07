@@ -50,6 +50,20 @@ describe("loadRpPrefs", () => {
     vi.restoreAllMocks();
   });
 
+  it("shows the Controller/Touchpad switch in full screen unless it was turned off (#722)", () => {
+    stored({});
+    expect(loadRpPrefs().touchModeSwitchFull).toBe(true);
+    stored({ touchModeSwitchFull: false });
+    expect(loadRpPrefs().touchModeSwitchFull).toBe(false);
+    vi.restoreAllMocks();
+  });
+
+  it("keeps the system media player as the video decoding (#720)", () => {
+    stored({ decoding: "mse" });
+    expect(loadRpPrefs().decoding).toBe("mse");
+    vi.restoreAllMocks();
+  });
+
   it("keeps a button map and HDR, and drops what it does not know", () => {
     stored({ codec: "hdr", buttonMap: { cross: "circle", nope: "cross" } });
     expect(loadRpPrefs()).toMatchObject({ codec: "hdr", buttonMap: { cross: "circle" } });

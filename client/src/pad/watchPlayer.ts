@@ -5,7 +5,8 @@
 
 import { avcDescription, lengthPrefixed, opusInit, opusSamples, opusSegment, videoInit, videoSegment } from "../lib/fmp4";
 import { avcCodecString, isKeyframe, supportedHevc } from "../lib/rpCodec";
-import { OpusPipe } from "../lib/rpAudioPipe";
+import { type AudioCodecs, OpusPipe } from "../lib/rpAudioPipe";
+import { wasmOpusCodecs } from "../lib/rpOpusWasm";
 import { hevcCodecString, spsVisibleRect } from "../lib/rpSps";
 
 export type WatchProblem = "no_hevc" | "decode";
@@ -230,6 +231,8 @@ export class WatchPlayer {
   /** The sound through MSE where this page has VideoDecoder but no AudioDecoder (Safari before
    *  26 on a secure page, the iPhone app among them). */
   private mseSound: MseSound | null = null;
+  /** The last audio header (the WebAssembly decoder starts from it when MSE fails later). */
+  private audioHeader: Uint8Array | null = null;
   /** The sound cannot play on this device. */
   onSoundFail: (() => void) | null = null;
 
@@ -240,8 +243,11 @@ export class WatchPlayer {
   ) {
     this.keyAsk = new KeyAsker(onNeedKey);
     this.clock = new SoundClock(latency === "player" ? 0.05 : 0.08);
-    // Made now, so the tap that starts the sound also starts this element (iPhone).
-    if (typeof AudioDecoder === "undefined") this.mseSound = new MseSound(latency, () => this.onSoundFail?.());
+    // Made now, so the tap that starts the sound also starts this element (iPhone). Where MSE
+    // takes no Opus either (Safari 16, #720) the WebAssembly decoder plays it through Web Audio.
+    if (typeof AudioDecoder === "undefined" && mseOpusSupported()) {
+      this.mseSound = new MseSound(latency, () => this.mseSoundFailed());
+    }
     this.canvas.className = "block h-full w-full object-contain";
     this.canvas.dataset.testid = "watch-canvas";
   }
@@ -259,6 +265,11 @@ export class WatchPlayer {
       this.mseSound.start();
       return;
     }
+    this.openContext();
+  }
+
+  /** The Web Audio output (made in the tap where it can be: a browser starts it then). */
+  private openContext(): void {
     try {
       if (!this.actx) {
         const ctx = new AudioContext({ latencyHint: "interactive" });
@@ -429,13 +440,14 @@ export class WatchPlayer {
     this.pipe?.reset();
     this.pipe = null;
     this.clock.reset();
+    this.audioHeader = header;
     if (this.mseSound) return this.mseSound.setHeader(header);
     const channels = header[0];
     const rate = new DataView(header.buffer, header.byteOffset, header.byteLength).getUint32(2);
     void decodesOpus(rate, channels).then((ok) => {
       if (gen !== this.audioGen) return;
-      // No Opus in this decoder: MSE plays it, if it can.
-      if (!ok) return this.soundThroughMse(header);
+      // No Opus in this decoder: MSE plays it, if it can, else the WebAssembly decoder.
+      if (!ok) return mseOpusSupported() ? this.soundThroughMse(header) : this.soundThroughWasm(header);
       const pipe = new OpusPipe((planes, scale) => this.play(planes, scale, pipe.sampleRate));
       try {
         pipe.header(pipeHeader(header));
@@ -449,10 +461,40 @@ export class WatchPlayer {
   private soundThroughMse(header: Uint8Array): void {
     this.pipe = null;
     if (!this.mseSound) {
-      this.mseSound = new MseSound(this.latency, () => this.onSoundFail?.());
+      this.mseSound = new MseSound(this.latency, () => this.mseSoundFailed());
       if (this.soundOn) this.mseSound.start();
     }
     this.mseSound.setHeader(header);
+  }
+
+  /** The sound decoded by the WebAssembly Opus decoder (lib/rpOpusWasm), played as WebCodecs'
+   *  would be: no AudioDecoder Opus here and no Opus in MSE (Safari 16, #720). */
+  private soundThroughWasm(header: Uint8Array): void {
+    this.pipe?.reset();
+    const pipe = new OpusPipe(
+      (planes, scale) => this.play(planes, scale, pipe.sampleRate),
+      wasmOpusCodecs,
+      () => {
+        if (this.pipe === pipe) this.pipe = null;
+        this.onSoundFail?.();
+      },
+    );
+    this.pipe = pipe;
+    pipe.header(pipeHeader(header));
+  }
+
+  /** MSE could not play the sound after all: the WebAssembly decoder plays it instead. */
+  private mseSoundFailed(): void {
+    const ms = this.mseSound;
+    if (!ms) return;
+    this.mseSound = null;
+    ms.stop();
+    if (this.soundOn) {
+      this.openContext();
+      // Made outside a tap when MSE failed mid-stream: the next tap starts it.
+      if (this.actx && this.actx.state !== "running") this.armResume();
+    }
+    if (this.audioHeader) this.soundThroughWasm(this.audioHeader);
   }
 
   private onAudio(frame: Uint8Array): void {
@@ -520,6 +562,12 @@ function mseSupports(MS: MseCtor, mime: string): boolean {
 export const OPUS_MP4 = 'audio/mp4; codecs="Opus"';
 /** The spelling 11.0.2 asked for, tried next (a browser that knows only it). */
 export const OPUS_MP4_LOWER = 'audio/mp4; codecs="opus"';
+
+/** Whether this page's media player (MSE) takes Opus in MP4. Safari 16 does not (#720). */
+export function mseOpusSupported(): boolean {
+  const MS = typeof window === "undefined" ? null : mediaSourceCtor();
+  return !!MS && (mseSupports(MS, OPUS_MP4) || mseSupports(MS, OPUS_MP4_LOWER));
+}
 
 /**
  * The sound through Media Source Extensions: an <audio> element fed Opus in fragmented MP4.
@@ -618,6 +666,162 @@ export class MseSound {
   }
 }
 
+/**
+ * The sound decoded by the WebAssembly Opus decoder (lib/rpOpusWasm) and played with Web Audio,
+ * for a page with neither an Opus AudioDecoder nor Opus in MSE (Safari 16 on an http:// guest
+ * page, #720). Frames go through OpusPipe (order, FEC copies, a lost one covered) and are
+ * scheduled on a SoundClock, as WatchPlayer schedules WebCodecs' output. start() is the tap: the
+ * AudioContext is made there, so the browser lets it play. `onFail` says no sound can play here.
+ */
+export class WasmSound {
+  private actx: AudioContext | null = null;
+  private pipe: OpusPipe | null = null;
+  private header: Uint8Array | null = null;
+  private clock: SoundClock;
+  private on = false;
+  private failed = false;
+  private muted = false;
+  private unarm: (() => void) | null = null;
+  /** Some decoded sound was scheduled to play. */
+  played = false;
+
+  constructor(
+    latency: Latency,
+    private readonly onFail: () => void,
+    private readonly codecs: AudioCodecs = wasmOpusCodecs,
+  ) {
+    this.clock = new SoundClock(latency === "player" ? 0.05 : 0.08);
+  }
+
+  get playing(): boolean {
+    return this.on && !this.failed;
+  }
+
+  /** What the sound has done (a session's health, tests). */
+  get stats(): { decoded: number; concealed: number; underruns: number; dropped: number } {
+    return {
+      decoded: this.pipe?.decoded ?? 0,
+      concealed: this.pipe?.concealed ?? 0,
+      underruns: this.clock.underruns,
+      dropped: this.clock.dropped,
+    };
+  }
+
+  /** The tap: the output is made and started inside it. */
+  start(): void {
+    if (this.failed) return;
+    this.on = true;
+    playThroughSilentSwitch();
+    try {
+      if (!this.actx) {
+        const ctx = new AudioContext({ latencyHint: "interactive" });
+        this.actx = ctx;
+        ctx.onstatechange = () => {
+          if (this.actx === ctx && ctx.state !== "running" && ctx.state !== "closed") this.armResume();
+        };
+      }
+      void this.actx.resume().catch(() => {});
+      // Started outside a tap (the media player's sound failing mid-stream): the context stays
+      // suspended with no state change to arm on, so the next tap or key starts it.
+      if (this.actx.state !== "running") this.armResume();
+    } catch {
+      return this.fail();
+    }
+    if (this.header && !this.pipe) this.open();
+  }
+
+  /** The codec header (channels, rate) arrived. */
+  setHeader(header: Uint8Array): void {
+    if (header.length < 6) return;
+    this.header = header;
+    this.pipe?.reset();
+    this.pipe = null;
+    this.clock.reset();
+    if (this.on) this.open();
+  }
+
+  /** One sound frame as the engine sends it ([u16 index][Opus packet]). */
+  frame(payload: Uint8Array): void {
+    if (!this.on || this.failed) return;
+    this.pipe?.packet(payload);
+  }
+
+  setMuted(m: boolean): void {
+    this.muted = m;
+  }
+
+  /** The page is back: an output suspended meanwhile starts again. */
+  resume(): void {
+    const ctx = this.actx;
+    if (!this.playing || !ctx || ctx.state === "running" || ctx.state === "closed") return;
+    this.clock.reset();
+    void ctx.resume().catch(() => {});
+    this.armResume();
+  }
+
+  stop(): void {
+    this.on = false;
+    this.pipe?.reset();
+    this.pipe = null;
+    this.unarm?.();
+    void this.actx?.close().catch(() => {});
+    this.actx = null;
+  }
+
+  private open(): void {
+    const h = this.header;
+    if (!h || this.failed) return;
+    const pipe = new OpusPipe((planes, scale) => this.play(planes, scale, pipe.sampleRate), this.codecs, () => {
+      if (this.pipe === pipe) this.fail();
+    });
+    this.pipe = pipe;
+    pipe.header(pipeHeader(h));
+  }
+
+  private play(planes: Float32Array[], scale: number, rate: number): void {
+    const ctx = this.actx;
+    if (!ctx || ctx.state !== "running" || !planes.length) return;
+    const n = planes[0].length;
+    const at = this.clock.at(ctx.currentTime, n / rate);
+    if (at === null) return;
+    const buf = ctx.createBuffer(planes.length, n, rate);
+    const k = this.muted ? 0 : scale;
+    planes.forEach((p, c) => buf.copyToChannel((k === 1 ? p : p.map((v) => v * k)) as Float32Array<ArrayBuffer>, c));
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.start(at);
+    this.played = true;
+  }
+
+  private armResume(): void {
+    if (this.unarm || typeof window === "undefined" || !window.addEventListener) return;
+    const go = () => {
+      const ctx = this.actx;
+      if (!ctx || ctx.state === "closed") return this.unarm?.();
+      this.clock.reset();
+      void ctx
+        .resume()
+        .then(() => {
+          if (ctx.state === "running") this.unarm?.();
+        })
+        .catch(() => {});
+    };
+    for (const e of GESTURES) window.addEventListener(e, go, true);
+    this.unarm = () => {
+      for (const e of GESTURES) window.removeEventListener(e, go, true);
+      this.unarm = null;
+    };
+  }
+
+  private fail(): void {
+    if (this.failed) return;
+    this.failed = true;
+    this.stop();
+    this.onFail();
+  }
+}
+
 /** The MediaSource this browser has: ManagedMediaSource on iPhones, MediaSource elsewhere. */
 function mediaSourceCtor(): MseCtor | null {
   const w = window as unknown as { ManagedMediaSource?: MseCtor; MediaSource?: MseCtor };
@@ -696,12 +900,13 @@ export class MseTrack {
     if ("ManagedMediaSource" in window && MS === (window as unknown as { ManagedMediaSource: MseCtor }).ManagedMediaSource) {
       // iPhone: a managed source needs remote playback off and srcObject.
       this.el.disableRemotePlayback = true;
-      (this.el as HTMLMediaElement & { srcObject: unknown }).srcObject = ms;
-    } else {
-      this.el.src = URL.createObjectURL(ms);
     }
+    this.attached = attachSource(this.el, ms);
     return true;
   }
+
+  /** How the open source was put on the element. */
+  private attached: "object" | "url" | null = null;
 
   nextSeq(): number {
     return this.seq++;
@@ -779,8 +984,60 @@ export class MseTrack {
         // Already ending.
       }
     }
-    if (this.el.src.startsWith("blob:")) URL.revokeObjectURL(this.el.src);
+    if (this.attached === "object") {
+      try {
+        (this.el as HTMLMediaElement & { srcObject: unknown }).srcObject = null;
+      } catch {
+        // Gone with the element.
+      }
+    }
+    this.attached = null;
+    if (this.el.src?.startsWith("blob:")) URL.revokeObjectURL(this.el.src);
     this.el.removeAttribute("src");
+  }
+}
+
+/** Puts a MediaSource on an element: as its srcObject where the element takes one (Safari 17+,
+ *  and what an iPhone's ManagedMediaSource needs), else as a blob: URL. WebKit before 17 throws a
+ *  TypeError for a srcObject that is not a MediaStream. A blob: media URL under the app's own
+ *  custom-scheme origin is the likely reason the macOS app's media player showed nothing on
+ *  WebKit 18615 while Safari on the same Mac played it (#720), so srcObject goes first. */
+export function attachSource(el: HTMLMediaElement, ms: MediaSource): "object" | "url" {
+  if ("srcObject" in el) {
+    try {
+      (el as HTMLMediaElement & { srcObject: unknown }).srcObject = ms;
+      return "object";
+    } catch {
+      // Not a MediaSource here: the URL below.
+    }
+  }
+  el.src = URL.createObjectURL(ms);
+  return "url";
+}
+
+/** Failed opens of the media player within MSE_FAIL_WINDOW_MS before it gives up (#720: an
+ *  element that fails on every open used to be opened again at once, thousands of times). */
+export const MSE_MAX_FAILS = 3;
+export const MSE_FAIL_WINDOW_MS = 10_000;
+
+/** Counts failures in a sliding window: true once `max` have come within `windowMs`. */
+export class FailWindow {
+  private at: number[] = [];
+  constructor(
+    private readonly max = MSE_MAX_FAILS,
+    private readonly windowMs = MSE_FAIL_WINDOW_MS,
+    private readonly now: () => number = () => performance.now(),
+  ) {}
+  /** One more failure: whether that makes too many. */
+  fail(): boolean {
+    const t = this.now();
+    this.at = this.at.filter((x) => t - x < this.windowMs);
+    this.at.push(t);
+    return this.at.length >= this.max;
+  }
+  /** It worked (a picture played): the count starts over. */
+  clear(): void {
+    this.at = [];
   }
 }
 
@@ -788,6 +1045,16 @@ export class MseTrack {
 export class MsePlayer {
   private video: MseTrack;
   private audio: MseSound;
+  /** The sound through the WebAssembly decoder where MSE takes no Opus (Safari 16, #720). */
+  private wasm: WasmSound | null = null;
+  private audioHeader: Uint8Array | null = null;
+  private muted = false;
+  private fails: FailWindow;
+  /** Too many failed opens: the media player gave up on this stream (a new one tries again). */
+  private gaveUp = false;
+  /** An open is under way: an error it raises is counted, not answered with another open. */
+  private reopening = false;
+  private failedWhileOpening = false;
   private wrap = document.createElement("div");
   private hevc = false;
   private header: Uint8Array | null = null;
@@ -799,42 +1066,84 @@ export class MsePlayer {
   private soundOn = false;
   /** The sound cannot play on this device. */
   onSoundFail: (() => void) | null = null;
+  /** The picture failed MSE_MAX_FAILS times within MSE_FAIL_WINDOW_MS and the player stopped
+   *  trying; said once (the "decode" problem stays on show). */
+  onGiveUp: (() => void) | null = null;
 
   constructor(
     private onProblem: (p: WatchProblem | null) => void,
     private latency: Latency = "watch",
     onNeedKey?: () => void,
+    now?: () => number,
   ) {
     this.keyAsk = new KeyAsker(onNeedKey);
+    this.fails = new FailWindow(MSE_MAX_FAILS, MSE_FAIL_WINDOW_MS, now);
     const v = document.createElement("video");
     v.muted = true;
     v.autoplay = true;
     v.playsInline = true;
     v.className = "block h-full w-full object-contain";
     v.dataset.testid = "watch-video";
-    this.audio = new MseSound(latency, () => this.onSoundFail?.());
+    this.audio = new MseSound(latency, () => this.soundThroughWasm());
     this.wrap.className = "h-full w-full";
     this.wrap.append(v, this.audio.el);
-    this.video = new MseTrack(v, () => this.onProblem("decode"), latency, () => this.keyAsk.waiting());
+    this.video = new MseTrack(v, () => this.showProblem(), latency, () => this.keyAsk.waiting());
     // A decode error closes the source, and every segment after it would be dropped in silence.
     v.addEventListener("error", () => this.restartVideo());
     v.addEventListener("playing", () => {
+      this.fails.clear();
       if (!this.problemShown) return;
       this.problemShown = false;
       this.onProblem(null);
     });
   }
 
-  /** The element failed: open it again from the init segment and wait for the next keyframe. */
-  private restartVideo(): void {
+  /** The "decode" problem, said once until the picture is back. */
+  private showProblem(): void {
+    if (this.problemShown) return;
     this.problemShown = true;
     this.onProblem("decode");
+  }
+
+  /** The element failed: open it again from the init segment and wait for the next keyframe, unless
+   *  it keeps failing (then the player gives up, and says so once). */
+  private restartVideo(): void {
+    if (this.gaveUp) return;
+    // An error raised by the open below: never another open from inside this one. It is taken
+    // up once that open is done.
+    if (this.reopening) {
+      this.failedWhileOpening = true;
+      return;
+    }
+    this.showProblem();
+    if (this.fails.fail()) {
+      this.gaveUp = true;
+      this.video.close();
+      this.onGiveUp?.();
+      return;
+    }
     const h = this.header;
     if (!h) return;
     this.header = null;
-    this.openVideo(h);
+    this.reopening = true;
+    this.failedWhileOpening = false;
+    try {
+      this.openVideo(h);
+    } finally {
+      this.reopening = false;
+    }
     this.sawKey = false;
     this.keyAsk.waiting();
+    // The new open failed as it was made: counted as one more (at most MSE_MAX_FAILS deep).
+    if (this.failedWhileOpening) {
+      this.failedWhileOpening = false;
+      this.restartVideo();
+    }
+  }
+
+  /** Whether the media player stopped trying (MSE_MAX_FAILS failed opens). */
+  get failed(): boolean {
+    return this.gaveUp;
   }
 
   get element(): HTMLElement {
@@ -847,17 +1156,40 @@ export class MsePlayer {
 
   startSound(): void {
     this.soundOn = true;
+    if (this.wasm) return this.wasm.start();
+    // No Opus in this MSE: the WebAssembly decoder, its output made in this tap.
+    if (!mseOpusSupported()) return this.soundThroughWasm();
     this.audio.start();
+  }
+
+  /** MSE can't play the sound: the WebAssembly decoder plays it through Web Audio. */
+  private soundThroughWasm(): void {
+    if (this.wasm) return;
+    this.audio.stop();
+    const w = new WasmSound(this.latency, () => this.onSoundFail?.());
+    this.wasm = w;
+    w.setMuted(this.muted);
+    if (this.audioHeader) w.setHeader(this.audioHeader);
+    if (this.soundOn) w.start();
   }
 
   /** The page is back (visible, focused): sound the browser paused meanwhile plays again. */
   resumeSound(): void {
-    if (this.soundOn) this.audio.resume();
+    if (!this.soundOn) return;
+    if (this.wasm) this.wasm.resume();
+    else this.audio.resume();
   }
 
   /** Sound muted by the guest. */
   setMuted(m: boolean): void {
+    this.muted = m;
     this.audio.setMuted(m);
+    this.wasm?.setMuted(m);
+  }
+
+  /** Whether the sound plays: MSE's element, or sound the WebAssembly decoder scheduled. */
+  get soundPlaying(): boolean {
+    return this.wasm ? this.wasm.played : this.audio.playing;
   }
 
   get sound(): boolean {
@@ -871,13 +1203,21 @@ export class MsePlayer {
     const payload = b.subarray(1);
     if (kind === 0) this.openVideo(payload.slice());
     else if (kind === 1) this.onVideo(payload);
-    else if (kind === 3) this.audio.setHeader(payload.slice());
-    else if (kind === 4) this.audio.frame(payload);
+    else if (kind === 3) {
+      this.audioHeader = payload.slice();
+      (this.wasm ?? this.audio).setHeader(this.audioHeader);
+    } else if (kind === 4) (this.wasm ?? this.audio).frame(payload);
   }
 
   private openVideo(header: Uint8Array): void {
-    const same = this.header && this.header.length === header.length && this.header.every((x, i) => x === header[i]);
+    const same = !!this.header && this.header.length === header.length && this.header.every((x, i) => x === header[i]);
     if (same && this.video.ready) return;
+    if (this.gaveUp) {
+      // Given up on this stream; a new one (another header) gets a fresh try.
+      if (same) return;
+      this.gaveUp = false;
+      this.fails.clear();
+    }
     this.header = header;
     const rect = spsVisibleRect(header, this.hevc) ?? { w: 1920, h: 1080 };
     const v = videoInit(header, this.hevc, rect);
@@ -917,6 +1257,7 @@ export class MsePlayer {
   stop(): void {
     this.video.close();
     this.audio.stop();
+    this.wasm?.stop();
   }
 }
 

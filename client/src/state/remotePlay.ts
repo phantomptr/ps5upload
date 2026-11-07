@@ -85,8 +85,10 @@ export interface RpPrefs {
   /** On a phone, screenshots and clips go to the photo library (lib/rpCapture.ts saveCapture). */
   toPhotos: boolean;
   /** Decode on the graphics card when there is one (auto), or always in software: a way out
-   *  of a graphics driver's decoder bug (Windows' hardware HEVC, #538/#575). */
-  decoding: "auto" | "software";
+   *  of a graphics driver's decoder bug (Windows' hardware HEVC, #538/#575), or the system's
+   *  media player (MSE) with WebCodecs never tried ("mse": an older Mac whose WebCodecs says yes
+   *  and decodes nothing, #720). */
+  decoding: "auto" | "software" | "mse";
   /** The video format asked of the console: HEVC where this device decodes it (auto), always
    *  H.264, or HDR (HEVC Main10) where this device can show it in HDR (lib/rpHdr.ts). */
   codec: CodecPref;
@@ -101,6 +103,9 @@ export interface RpPrefs {
   escHoldRelease: boolean;
   /** On a touch screen: the on-screen controller, or the screen as the PS5 mouse's touchpad. */
   touchMode: "controller" | "touchpad";
+  /** Full screen: the Controller/Touchpad switch over the picture (it hides with the stream's
+   *  controls and a tap brings it back). Off, it shows only outside full screen (#722). */
+  touchModeSwitchFull: boolean;
   /** How far the PS5's pointer moves for a finger's movement on the touchpad. */
   touchpadSpeed: number;
   /** On other screens of the app, the picture in a small floating window (layout/RemotePlayMini). */
@@ -142,6 +147,7 @@ export const DEFAULT_RP_PREFS: RpPrefs = {
   kbmChip: true,
   escHoldRelease: true,
   touchMode: "controller",
+  touchModeSwitchFull: true,
   touchpadSpeed: 1.5,
   miniPlayer: true,
   systemPip: true,
@@ -178,10 +184,11 @@ export function loadRpPrefs(): RpPrefs {
       fps: one(p.fps, [60, 30], DEFAULT_RP_PREFS.fps),
       fit: one(p.fit, FIT_ORDER, DEFAULT_RP_PREFS.fit),
       touchSize: one(p.touchSize, ["s", "m", "l"], DEFAULT_RP_PREFS.touchSize),
-      decoding: one(p.decoding, ["auto", "software"], DEFAULT_RP_PREFS.decoding),
+      decoding: one(p.decoding, ["auto", "software", "mse"], DEFAULT_RP_PREFS.decoding),
       codec,
       bitrateKbps,
       touchMode,
+      touchModeSwitchFull: p.touchModeSwitchFull !== false,
       touchpadSpeed,
       picture: readPicture(p.picture),
       buttonMap: readButtonMap(p.buttonMap),

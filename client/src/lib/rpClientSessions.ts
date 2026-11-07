@@ -43,7 +43,7 @@ export interface RpClientSession {
   /** How the picture is drawn: "gl", "2d", "hdr". */
   draw_path: string | null;
   hdr: boolean | null;
-  /** The sound's path: "worker", "page", "scheduled" (no worklet), "mse", "none". */
+  /** The sound's path: "worker", "page", "scheduled" (no worklet), "mse", "wasm" (the WebAssembly decoder), "none". */
   audio_path: string | null;
   frames_decoded: number | null;
   events: (RpDecoderEvent & { t: number })[];

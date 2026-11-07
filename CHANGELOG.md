@@ -4,6 +4,28 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.5.2
+
+Remote Play on older Macs (#720, #683):
+
+- Picture: the system media player fallback now works inside the app. The app's own security rules blocked it, so it failed and retried in a loop; that's fixed, a player that still fails gives up after three tries with one error, and Settings › Video decoding has a new choice, System media player, to go straight to it.
+- Sound: where the system can't decode the PS5's Opus sound (macOS 13 and older Safari), the app now decodes it itself (opus-decoder, WebAssembly), in the app and for Play Together friends in Safari. Not yet confirmed on a macOS 13 Mac.
+
+Play Together (#720):
+
+- Player 1 (a friend on this stream's own controller, playing as your PS5 user) is now a setting, off by default. With it on, the Allow prompt and the player card say so, and the friend's page says they play as your user. Turning the picture back on, restarting Play or a friend rejoining gives the controller back to you at once, moving the friend to their own controller. A phone linked as a controller keeps the seat even while it's idle.
+- Clearer steps for friends: they press PS on their own controller and pick Quick Play or their user on the TV; the host does nothing.
+
+iPhone and iPad (#722):
+
+- Full screen hides the status bar (the clock), and brings it back when you leave.
+- The Controller/Touchpad switch fades out in full screen and comes back for a moment on a tap on the picture. Settings › Play: "Show the Controller/Touchpad switch in full screen" hides it there altogether.
+
+Also:
+
+- Installing an add-on (DLC) is no longer refused with "move the game out of the scan folder" when its base game runs from a ShadowMount+ image. A package already on the PS5 came with no category, and the check took it for a full game. (#721)
+- A build only ever clears its own leftover files (.partial, .lz4spool) before starting.
+
 ## 11.5.1
 
 - Keyboard & mouse in Play: a double click in a game no longer switches full screen and drops the mouse; only one started from the free cursor does. Ctrl+R and F5 reach the game instead of being swallowed (the app still never reloads). In a window, Esc gives the mouse back (the browser always does that); the stream now says so and suggests full screen, where a quick Esc goes to the game.

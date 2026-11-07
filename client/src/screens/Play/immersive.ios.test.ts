@@ -17,6 +17,10 @@ describe("Remote Play full screen in the iOS app", () => {
     await setWindowFullscreen(true);
     await setWindowFullscreen(false);
     expect(requestFullscreen).not.toHaveBeenCalled();
-    expect(invoke).not.toHaveBeenCalled();
+    // Only the status bar (the clock) is hidden and given back, natively (#722).
+    expect(invoke.mock.calls).toEqual([
+      ["set_status_bar_hidden", { hidden: true }],
+      ["set_status_bar_hidden", { hidden: false }],
+    ]);
   });
 });

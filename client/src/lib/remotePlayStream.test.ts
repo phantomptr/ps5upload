@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   avcCodecString,
   canDecodeAvc,
+  MSE_PROBLEM_LOG_GAP_MS,
+  rateLimitedLine,
   isNoDecoderError,
   canvasClass,
   DEFAULT_KEYMAP,
@@ -179,5 +181,19 @@ describe("noPictureStep (#683)", () => {
     expect(noPictureStep(NO_PICTURE_TRIES, { hevc: true, software: true })).toBe("h264");
     expect(noPictureStep(NO_PICTURE_TRIES, hw)).toBe("software");
     expect(noPictureStep(NO_PICTURE_TRIES, { hevc: false, software: true })).toBe("give_up");
+  });
+});
+
+describe("the media player's problem log (#720)", () => {
+  it("says a problem at most once a gap, counting the rest into the next line", () => {
+    let t = 0;
+    const line = rateLimitedLine(MSE_PROBLEM_LOG_GAP_MS, () => t);
+    expect(line("media player: decode")).toBe("media player: decode");
+    // Thousands in the same millisecond: none logged.
+    for (let i = 0; i < 5000; i++) expect(line("media player: decode")).toBeNull();
+    t = MSE_PROBLEM_LOG_GAP_MS;
+    expect(line("media player: decode")).toBe("media player: decode (5000 more since the last)");
+    t += MSE_PROBLEM_LOG_GAP_MS;
+    expect(line("media player: decode")).toBe("media player: decode");
   });
 });

@@ -22,6 +22,8 @@ export type RefuseWhy =
   | "unreachable"
   | "address"
   | "slow_down"
+  /** A resume to the stream's controller, which the host needed back, with no controller free. */
+  | "seat_taken"
   | "refused";
 
 /** How a joined guest's game ended, from the engine (`{"bye": …}`). */
@@ -32,7 +34,9 @@ export type ByeWhy =
   /** The same place was opened in another tab or on another device. */
   | "replaced"
   /** The console no longer has this guest's controller (`{"bye": "lost"}`). */
-  | "pad_lost";
+  | "pad_lost"
+  /** The host needed their stream's controller back and no other controller was free. */
+  | "seat_taken";
 
 /** What a guest is doing on the host's console, as the host's engine sees it. */
 export type GuestState = "asking" | "picking_user" | "playing" | "reconnecting" | "left";
@@ -44,6 +48,8 @@ export interface JoinStatus {
   rttMs: number | null;
   host: string | null;
   blockSystem: boolean;
+  /** On the host's stream's own controller (Player 1): playing as the host's PS5 user. */
+  streamSeat: boolean;
 }
 
 export type ServerMessage =
@@ -69,12 +75,14 @@ const REFUSE: ReadonlySet<string> = new Set([
   "unreachable",
   "slow_down",
   "address",
+  "seat_taken",
 ]);
 const BYE: Readonly<Record<string, ByeWhy>> = {
   kicked: "kicked",
   host_stopped: "host_stopped",
   replaced: "replaced",
   lost: "pad_lost",
+  seat_taken: "seat_taken",
 };
 const GUEST_STATES: ReadonlySet<string> = new Set(["asking", "picking_user", "playing", "reconnecting", "left"]);
 
@@ -114,6 +122,7 @@ export function readServerMessage(text: string): ServerMessage | null {
         rttMs: typeof s.rtt_ms === "number" ? s.rtt_ms : null,
         host: typeof s.host === "string" && s.host ? s.host : null,
         blockSystem: s.block_system === true,
+        streamSeat: s.stream_seat === true,
       },
     };
   }

@@ -105,6 +105,12 @@ export function holdControllerHome(on: boolean): void {
   if (isTauriEnv() && isIOS()) void invoke("hold_controller_home", { on }).catch(() => {});
 }
 
+/** The iOS app: hide the status bar (the clock) while the picture fills the screen, and show it
+ *  again after (#722). Elsewhere a no-op: the browser and the other apps have their own way. */
+export function setIosStatusBarHidden(hidden: boolean): void {
+  if (inIosApp()) void invoke("set_status_bar_hidden", { hidden }).catch(() => {});
+}
+
 /** Test hook: forget what the Android app was asked for. */
 export function resetAndroidUiForTest(): void {
   androidUi.immersive = false;
@@ -128,7 +134,10 @@ export async function setWindowFullscreen(on: boolean): Promise<void> {
       await setAndroidUi(on, on && androidUi.landscape);
       return;
     }
-    if (inIosApp()) return;
+    if (inIosApp()) {
+      setIosStatusBarHidden(on);
+      return;
+    }
     if (isTauriEnv() && !isMobile()) {
       const { getCurrentWindow } = await import("@tauri-apps/api/window");
       await getCurrentWindow().setFullscreen(on);
