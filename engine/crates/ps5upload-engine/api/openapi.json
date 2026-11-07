@@ -5974,6 +5974,13 @@
               "null"
             ]
           },
+          "content_version": {
+            "description": "The version it says it is: `contentVersion`, or a PS4 game's `APP_VER`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "files": {
             "minimum": 0,
             "type": "integer"
@@ -6028,7 +6035,8 @@
           "checks",
           "ampr_packs",
           "unsigned_executables",
-          "ps4_game"
+          "ps4_game",
+          "content_version"
         ],
         "type": "object"
       },

@@ -8,6 +8,8 @@ import { ExtractDialog, type ExtractAfter, type ExtractChoice } from "./ExtractD
 import { extractCause, isExtractableArchive, needsPassword } from "../../lib/archiveName";
 import { extractedNext } from "../../lib/extractNext";
 import { SendToConsoleDialog } from "./SendToConsoleDialog";
+import { RenameFromTitleDialog } from "./RenameFromTitleDialog";
+import { hiddenName, nameOverLimit, shownName } from "../../lib/nameFormats";
 import {
   RowActionButtons,
   RowActionsMenu,
@@ -1112,8 +1114,10 @@ export default function FileSystemScreen() {
     }
   };
 
-  const runRename = async (oldName: string) => {
-    const newName = renameDraft.trim();
+  const [titleRename, setTitleRename] = useState<{ name: string; folder: boolean } | null>(null);
+
+  const runRename = async (oldName: string, chosen?: string) => {
+    const newName = (chosen ?? renameDraft).trim();
     if (!newName || newName === oldName) {
       setRenaming(null);
       return;
@@ -1126,6 +1130,21 @@ export default function FileSystemScreen() {
           'Name can\'t contain / or \\ and can\'t be "." or "..".',
         ),
       );
+      return;
+    }
+    // A typed name ShadowMount+ wouldn't mount is asked about; the name is still the user's.
+    const over = chosen === undefined ? nameOverLimit(newName) : 0;
+    if (
+      over > 0 &&
+      !(await confirmDialog({
+        title: tr(
+          "fs_name_too_long_smp",
+          { over },
+          "{over} bytes too long for ShadowMount+ to mount. It won't show up on the console under this name.",
+        ),
+        confirmLabel: tr("fs_name_too_long_confirm", undefined, "Rename anyway"),
+      }))
+    ) {
       return;
     }
     // Say so before asking the console, which would refuse an existing name anyway
@@ -2922,6 +2941,9 @@ export default function FileSystemScreen() {
     properties: openProperties,
     viewable: viewableEntry,
     download: (e, asZip) => void runDownload(e, asZip),
+    renameFromTitle: (e) => setTitleRename({ name: e.name, folder: e.kind === "dir" }),
+    toggleHidden: (e) =>
+      void runRename(e.name, e.name.startsWith(".") ? shownName(e.name) : hiddenName(e.name)),
     rename: (e) => {
       setRenaming(e.name);
       setRenameDraft(e.name);
@@ -3150,6 +3172,19 @@ export default function FileSystemScreen() {
           ctx={rowActionsCtx}
           anchor={actionsMenu.anchor}
           onClose={() => setActionsMenu(null)}
+        />
+      )}
+      {titleRename && (
+        <RenameFromTitleDialog
+          source={`ps5://${hostOf(host)}${joinPath(path, titleRename.name)}`}
+          name={titleRename.name}
+          folder={titleRename.folder}
+          onCancel={() => setTitleRename(null)}
+          onRename={(newName) => {
+            const from = titleRename.name;
+            setTitleRename(null);
+            void runRename(from, newName);
+          }}
         />
       )}
       {rowMenu && !menuEntry && (

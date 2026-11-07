@@ -675,7 +675,11 @@ mod tests {
         // A licence comes out of its protected entry whole, at its own size.
         let licence = p.read("sce_sys/license.dat").unwrap();
         assert_eq!(licence.len(), 1024);
-        assert_eq!(&licence[..4], b"RIF\0", "a licence's header, not ciphertext");
+        assert_eq!(
+            &licence[..4],
+            b"RIF\0",
+            "a licence's header, not ciphertext"
+        );
 
         // Any other passcode is refused in words.
         let e = Ps4Package::open(

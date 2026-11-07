@@ -1211,6 +1211,8 @@ pub struct Inspection {
     pub unsigned_executables: usize,
     /// A PS4 game: it becomes an image or a folder, not a PS5 package.
     pub ps4_game: bool,
+    /// The version it says it is: `contentVersion`, or a PS4 game's `APP_VER`.
+    pub content_version: Option<String>,
 }
 
 impl Inspection {
@@ -1466,6 +1468,12 @@ pub fn inspect(source_path: &Path, output_dir: &Path) -> Result<Inspection> {
         .and_then(title_of)
         .or_else(|| sfo_text("TITLE"));
     let required_firmware = json.as_ref().and_then(firmware_version);
+    let content_version = json
+        .as_ref()
+        .and_then(|j| j.get("contentVersion"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .or_else(|| sfo_text("APP_VER"));
     let planned_size = if files.is_empty() {
         0
     } else {
@@ -1484,5 +1492,6 @@ pub fn inspect(source_path: &Path, output_dir: &Path) -> Result<Inspection> {
         ampr_packs: crate::ampr_pack::image::readiness(tree.as_mut()),
         unsigned_executables: crate::fself::unsigned(tree.as_mut()).len(),
         ps4_game,
+        content_version,
     })
 }

@@ -12,6 +12,7 @@ import {
   BadgeCheck,
   Download,
   Eye,
+  EyeOff,
   FileArchive,
   Hash,
   Info,
@@ -31,6 +32,9 @@ import { menuKeyAction } from "../../lib/menuKeys";
 import { isInstallPackagePath } from "../../lib/pkgDropDedupe";
 import { isExtractableArchive } from "../../lib/archiveName";
 import type { Translator } from "../../state/lang";
+
+/** A file Rename from title can read a title from. */
+const GAME_FILE = /\.(pkg|exfat|ffpkg|ffpfs|ffpfsc)$/i;
 
 type IconType = ComponentType<{ size?: number; className?: string }>;
 
@@ -103,6 +107,10 @@ export interface RowActionsContext {
   viewable: (name: string, isDir: boolean) => boolean;
   download: (e: RowEntry, asZip?: boolean) => void;
   rename: (e: RowEntry) => void;
+  /** Rename a game from its title (absent: not offered). */
+  renameFromTitle?: (e: RowEntry) => void;
+  /** Rename to .name, which ShadowMount+'s scan skips, or back (absent: not offered). */
+  toggleHidden?: (e: RowEntry) => void;
   replace: (e: RowEntry) => void;
   properties?: (e: RowEntry) => void;
   view: (e: RowEntry) => void;
@@ -182,6 +190,31 @@ export function buildRowActions(e: RowEntry, ctx: RowActionsContext): RowAction[
     label: tr("fs_rename", undefined, "Rename"),
     run: () => ctx.rename(e),
   });
+  if (ctx.renameFromTitle && (e.kind === "dir" || GAME_FILE.test(e.name)))
+    actions.push({
+      id: "rename-title",
+      icon: Pencil,
+      label: tr("fs_rename_from_title", undefined, "Rename from title"),
+      run: () => ctx.renameFromTitle?.(e),
+      disabled: !ctx.hasHost,
+      menuOnly: true,
+    });
+  if (ctx.toggleHidden && e.name !== "." && e.name !== "..")
+    actions.push({
+      id: "toggle-hidden",
+      icon: e.name.startsWith(".") ? Eye : EyeOff,
+      label: e.name.startsWith(".")
+        ? tr("fs_unhide", undefined, "Show to ShadowMount+")
+        : tr("fs_hide", undefined, "Hide from ShadowMount+"),
+      title: tr(
+        "fs_hide_hint",
+        undefined,
+        "Renames it with a dot in front, which ShadowMount+'s scan skips, so it uses another copy of the game.",
+      ),
+      run: () => ctx.toggleHidden?.(e),
+      disabled: !ctx.hasHost,
+      menuOnly: true,
+    });
   if (ctx.properties) actions.push({
     id: "properties",
     icon: Info,
