@@ -11,6 +11,8 @@ Remote Play:
 - No sound? The stream now says why after a few seconds: the PS5 is sending none, it sends a format the app can't play, or it arrives and this device plays none of it. The log says which, so a bug report shows it. Both of our consoles send sound normally.
 - A device that can't decode the stream's Opus sound now plays it through the system's media player instead of staying silent.
 - A device where no video decoder gives a picture now plays the stream through the system's media player instead of ending. This is for older Macs whose Safari can't decode it, and it's untested on such a Mac. (#683)
+- Starting again right after a stream ended no longer says to close Remote Play on another device. The PS5 holds Remote Play for up to half a minute after a session ends; the app now says so and starts by itself once it's free. A pairing PIN refused for the same reason (0x80FC0101) says so too.
+- No picture from H.264: before falling back to software, the app tries the hardware decoder with the stream in its other form (Annex B), which an older macOS WebKit needed, then the system's media player.
 - Streaming over a VPN on cellular: a console reached through a tunnel or another network now streams with smaller packets. The full-size first message was dropped in a WireGuard tunnel on cellular, and the stream never started. (#713)
 - iOS refusing to start the sound output (another app or a call holding it) is no longer logged as a crash. (#713)
 - Pairing refused, or Remote Play greyed out on the PS5: the message now mentions that a PS5 switched to the sp-int NP environment does this.
