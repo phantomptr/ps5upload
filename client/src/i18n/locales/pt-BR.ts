@@ -8010,6 +8010,8 @@ saves_copy_console_title: "Copiar para outro console",
 saves_copy_console_asking: "Perguntando a {console} o que ele tem…",
 saves_copy_console_pick: "Copiar o save de {game} de {source} para:",
 engine_op_lost: "O mecanismo reiniciou enquanto isto rodava, então não se sabe como terminou. Confira os arquivos no console antes de iniciar de novo.",
+cleanup_err_helper_silent: "O auxiliar no PS5 parou de responder enquanto removia, então o app parou de esperar. Envie o auxiliar de novo (Atualizar auxiliar) e verifique de novo para ver o que sobrou.",
+cleanup_err_stop_unconfirmed: "Parado. O PS5 não confirmou, então ele ainda pode terminar o item em que estava. Verifique de novo para ver o que sobrou.",
 };
 
 export default pt_BR;

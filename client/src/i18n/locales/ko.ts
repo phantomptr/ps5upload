@@ -8012,6 +8012,8 @@ saves_copy_console_title: "다른 콘솔로 복사",
 saves_copy_console_asking: "{console}에 무엇이 있는지 확인하는 중…",
 saves_copy_console_pick: "{source}의 {game} 세이브를 복사할 대상:",
 engine_op_lost: "실행 중에 엔진이 다시 시작되어 어떻게 끝났는지 알 수 없습니다. 다시 시작하기 전에 콘솔의 파일을 확인하세요.",
+cleanup_err_helper_silent: "삭제 중에 PS5의 헬퍼가 응답을 멈춰서 앱이 기다리기를 멈췄습니다. 헬퍼를 다시 보낸 다음(헬퍼 업데이트) 다시 스캔해 남은 항목을 확인하세요.",
+cleanup_err_stop_unconfirmed: "중지했습니다. PS5가 확인하지 않아 진행 중이던 항목은 계속 완료될 수 있습니다. 다시 스캔해 남은 항목을 확인하세요.",
 };
 
 export default ko;

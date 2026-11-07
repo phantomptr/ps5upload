@@ -8002,6 +8002,8 @@ saves_copy_console_title: "Başka konsola kopyala",
 saves_copy_console_asking: "{console} konsoluna neleri olduğu soruluyor…",
 saves_copy_console_pick: "{source} kullanıcısının {game} kaydını şuraya kopyala:",
 engine_op_lost: "Bu işlem sürerken motor yeniden başladı, bu yüzden nasıl bittiği bilinmiyor. Yeniden başlatmadan önce konsoldaki dosyalara bakın.",
+cleanup_err_helper_silent: "PS5'teki yardımcı kaldırma sırasında yanıt vermeyi bıraktı, bu yüzden uygulama beklemeyi bıraktı. Yardımcıyı yeniden gönderin (Yardımcıyı güncelle), sonra neyin kaldığını görmek için yeniden tarayın.",
+cleanup_err_stop_unconfirmed: "Durduruldu. PS5 bunu onaylamadı, bu yüzden üzerinde çalıştığı öğeyi yine de bitirebilir. Neyin kaldığını görmek için yeniden tarayın.",
 };
 
 export default tr;

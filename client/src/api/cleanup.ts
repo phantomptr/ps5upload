@@ -89,12 +89,16 @@ export class CleanupError extends Error {
   }
 }
 
-async function request<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+/** A status read or a Stop: the helper answers these at once, even while it waits on Sony. One
+ *  that hangs means the helper is gone, and the follower should hear so soon (#714). */
+const QUICK_TIMEOUT_MS = 15_000;
+
+async function request<T>(method: "GET" | "POST", path: string, body?: unknown, timeoutMs = 60_000): Promise<T> {
   const res = await fetch(`${getEngineUrl()}${path}`, {
     method,
     headers: body === undefined ? undefined : { "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(60_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const json = (await res.json().catch(() => ({}))) as T & { error?: string; reason?: string };
   if (!res.ok) {
@@ -119,9 +123,14 @@ export function cleanupApply(host: string, scanId: number, itemIds: number[]): P
 }
 
 export function cleanupApplyStatus(host: string, applyId: number): Promise<CleanupApplyStatus> {
-  return request("GET", `/api/ps5/cleanup/apply/${applyId}?addr=${encodeURIComponent(mgmtAddr(host))}`);
+  return request(
+    "GET",
+    `/api/ps5/cleanup/apply/${applyId}?addr=${encodeURIComponent(mgmtAddr(host))}`,
+    undefined,
+    QUICK_TIMEOUT_MS,
+  );
 }
 
 export function cleanupCancel(host: string, id: number): Promise<unknown> {
-  return request("POST", "/api/ps5/cleanup/cancel", { addr: mgmtAddr(host), id });
+  return request("POST", "/api/ps5/cleanup/cancel", { addr: mgmtAddr(host), id }, QUICK_TIMEOUT_MS);
 }

@@ -8291,6 +8291,8 @@ saves_copy_console_title: "Másolás másik konzolra",
 saves_copy_console_asking: "{console} lekérdezése, mi van rajta…",
 saves_copy_console_pick: "{source} {game} mentésének másolása ide:",
 engine_op_lost: "A motor újraindult a művelet közben, ezért nem tudni, hogyan ért véget. Nézd meg a fájlokat a konzolon, mielőtt újraindítod.",
+cleanup_err_helper_silent: "A PS5 segédprogramja nem válaszolt az eltávolítás közben, ezért az alkalmazás nem vár tovább. Küldd el újra a segédprogramot (Segédprogram frissítése), majd keress újra, hogy lásd, mi maradt.",
+cleanup_err_stop_unconfirmed: "Leállítva. A PS5 nem erősítette meg, ezért még befejezheti az aktuális elemet. Keress újra, hogy lásd, mi maradt.",
 };
 
 export default hu;

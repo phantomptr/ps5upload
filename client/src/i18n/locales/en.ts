@@ -8300,6 +8300,8 @@ saves_copy_console_title: "Copy to another console",
 saves_copy_console_asking: "Asking {console} what it has…",
 saves_copy_console_pick: "Copy {source}'s save of {game} to:",
 engine_op_lost: "The engine restarted while this was running, so how it ended is unknown. Look at the files on the console before you start it again.",
+cleanup_err_helper_silent: "The helper on the PS5 stopped answering while it was removing, so the app stopped waiting. Send the helper again (Update helper), then scan again to see what is left.",
+cleanup_err_stop_unconfirmed: "Stopped. The PS5 did not confirm it, so it may still finish the item it was on. Scan again to see what is left.",
 };
 
 export default en;

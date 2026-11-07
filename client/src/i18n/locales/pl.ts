@@ -8236,6 +8236,8 @@ saves_copy_console_title: "Kopiuj na inną konsolę",
 saves_copy_console_asking: "Pytanie konsoli {console}, co zawiera…",
 saves_copy_console_pick: "Kopiuj zapis {game} użytkownika {source} do:",
 engine_op_lost: "Silnik uruchomił się ponownie w trakcie operacji, więc nie wiadomo, jak się zakończyła. Sprawdź pliki na konsoli, zanim uruchomisz ją ponownie.",
+cleanup_err_helper_silent: "Pomocnik na PS5 przestał odpowiadać podczas usuwania, więc aplikacja przestała czekać. Wyślij pomocnika ponownie (Aktualizuj pomocnika), a potem przeskanuj ponownie, aby zobaczyć, co zostało.",
+cleanup_err_stop_unconfirmed: "Zatrzymano. PS5 tego nie potwierdziła, więc może jeszcze dokończyć bieżący element. Przeskanuj ponownie, aby zobaczyć, co zostało.",
 };
 
 export default pl;
