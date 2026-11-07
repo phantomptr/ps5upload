@@ -11323,6 +11323,12 @@
               "integer",
               "null"
             ]
+          },
+          "stream_seat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
           }
         },
         "type": "object"
@@ -13939,11 +13945,16 @@
             "description": "Guests at most (1-3).",
             "minimum": 0,
             "type": "integer"
+          },
+          "stream_seat": {
+            "description": "A friend may get the stream's own controller (Player 1, signed in as the host's PS5 user)\nwhile this device shows no picture and no phone plays on it (#687). Off unless the host\nturns it on: a friend otherwise always gets their own controller and picks a user (#720).",
+            "type": "boolean"
           }
         },
         "required": [
           "block_system_buttons",
-          "max_players"
+          "max_players",
+          "stream_seat"
         ],
         "type": "object"
       },
@@ -21667,7 +21678,7 @@
     },
     "/api/join/settings": {
       "post": {
-        "description": "`POST /api/join/settings {block_system_buttons?, max_players?}`: the host's choices (every\nconsole). Fewer players lets nobody go; it only stops new ones.",
+        "description": "`POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?}`: the host's\nchoices (every console). Fewer players lets nobody go; it only stops new ones. `stream_seat`\noff moves a friend on the stream's controller to a pad of their own.",
         "requestBody": {
           "content": {
             "application/json": {

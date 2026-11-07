@@ -300,6 +300,35 @@ describe("join client", () => {
     }
   });
 
+  it("moves to the player the engine says, off the host's stream's controller (#720)", () => {
+    const c = client();
+    joinNow(c, 1);
+    expect(stages[stages.length - 1]).toEqual({ kind: "joined", player: 1, hevc: false });
+    last().say({ status: { player: 1, state: "playing", stream_seat: true } });
+    expect(stages[stages.length - 1]).toMatchObject({ kind: "joined", player: 1 });
+    last().say({ status: { player: 2, state: "picking_user" } });
+    expect(stages[stages.length - 1]).toEqual({ kind: "joined", player: 2, hevc: false });
+    // a reconnect keeps the new place
+    last().drop();
+    expect(stages[stages.length - 1]).toMatchObject({ kind: "reconnecting", player: 2 });
+  });
+
+  it("explains a seat the host needed back, also after waiting for the host", () => {
+    const c = client();
+    joinNow(c, 1);
+    last().say({ bye: "seat_taken" });
+    expect(stages[stages.length - 1]).toEqual({ kind: "ended", why: "seat_taken" });
+    // Coming back after the host restarted Play, with no controller free.
+    stages = [];
+    const d = client();
+    joinNow(d, 1);
+    last().say({ bye: "host_stopped" });
+    advance(250);
+    last().open();
+    last().say({ stage: "refused", why: "seat_taken" });
+    expect(stages[stages.length - 1]).toEqual({ kind: "refused", why: "seat_taken" });
+  });
+
   it("waits for a host who stopped playing, keeps the place, and plays on when they start again", () => {
     const c = client();
     joinNow(c);

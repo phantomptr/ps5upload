@@ -19,6 +19,8 @@ export interface JoinGuest {
   connected: boolean;
   /** Pictures were skipped in the last few seconds: their connection can't keep up. */
   behind: boolean;
+  /** On this stream's own controller (Player 1): plays as the host's PS5 user. */
+  streamSeat: boolean;
 }
 
 export interface JoinHostState {
@@ -33,7 +35,9 @@ export interface JoinHostState {
   } | null;
   guests: JoinGuest[];
   asks: Array<{ id: number; name: string }>;
-  settings: { blockSystemButtons: boolean; maxPlayers: number };
+  settings: { blockSystemButtons: boolean; maxPlayers: number; streamSeat: boolean };
+  /** The next friend allowed in gets this stream's controller (Player 1, as the host's PS5 user). */
+  seatNext: boolean;
   helperOk: boolean;
   reason: string | null;
   /** The guest socket friends connect to (`ws`, else made from the invite's address). */
@@ -45,7 +49,8 @@ export const EMPTY_JOIN: JoinHostState = {
   invite: null,
   guests: [],
   asks: [],
-  settings: { blockSystemButtons: true, maxPlayers: 3 },
+  settings: { blockSystemButtons: true, maxPlayers: 3, streamSeat: false },
+  seatNext: false,
   helperOk: true,
   reason: null,
   ws: null,
@@ -86,6 +91,8 @@ export function readJoinState(v: unknown): JoinHostState {
       rttMs: num(g.rtt_ms),
       connected: g.connected !== false,
       behind: g.behind === true,
+      // An older engine says nothing: Player 1 was the stream's controller there.
+      streamSeat: typeof g.stream_seat === "boolean" ? g.stream_seat : num(g.player) === 1,
     }))
     .sort((a, b) => a.player - b.player);
   // Friends asking to join: the engine's `pending` (`asks` kept for an older one).
@@ -101,7 +108,9 @@ export function readJoinState(v: unknown): JoinHostState {
     settings: {
       blockSystemButtons: s.block_system_buttons === true,
       maxPlayers: num(s.max_players) ?? 3,
+      streamSeat: s.stream_seat === true,
     },
+    seatNext: o.seat_next === true,
     helperOk: o.helper_ok !== false,
     reason: typeof o.reason === "string" && o.reason ? o.reason : null,
     ws: typeof o.ws === "string" && /^wss?:\/\//.test(o.ws) ? o.ws : invite ? socketOf(invite.url) : null,
@@ -260,7 +269,7 @@ export const joinApi = {
   invite: (addr: string, renew = false) => change("/api/join/invite", addr, inviteBody(renew)),
   decide: (addr: string, id: number, allow: boolean) => change("/api/join/decide", addr, { id, allow }),
   kick: (addr: string, player: number) => change("/api/join/kick", addr, { player }),
-  settings: (addr: string, s: { block_system_buttons?: boolean; max_players?: number }) =>
+  settings: (addr: string, s: { block_system_buttons?: boolean; max_players?: number; stream_seat?: boolean }) =>
     change("/api/join/settings", addr, s),
 };
 

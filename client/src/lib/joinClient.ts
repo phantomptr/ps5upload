@@ -232,7 +232,8 @@ export class JoinClient {
         // A resume the engine no longer knows: the place is gone, not this invite's fault.
         this.forgetToken();
         // Waiting for the host, the place went with Play Together: they did not play again.
-        if (this.hostAway) this.finish({ kind: "ended", why: "host_stopped" });
+        // (Not when the host came back and needed their stream's controller: that says so.)
+        if (this.hostAway && m.why !== "seat_taken") this.finish({ kind: "ended", why: "host_stopped" });
         else this.finish({ kind: "refused", why: m.why });
         return;
       case "bye":
@@ -246,6 +247,12 @@ export class JoinClient {
         this.finish({ kind: "ended", why: m.why });
         return;
       case "status":
+        // Moved to another player while in (off the host's stream's controller onto a
+        // controller of their own, #720): the place is the new one.
+        if (this.stage.kind === "joined" && m.status.player > 0 && m.status.player !== this.stage.player) {
+          this.player = m.status.player;
+          this.setStage({ ...this.stage, player: m.status.player });
+        }
         this.o.onStatus?.(m.status);
         return;
       case "feedback":

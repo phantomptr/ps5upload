@@ -103,8 +103,15 @@ describe("engine messages", () => {
       readServerMessage('{"status":{"player":3,"state":"picking_user","rtt_ms":42,"host":"Ann","block_system":true}}'),
     ).toEqual({
       kind: "status",
-      status: { player: 3, state: "picking_user", rttMs: 42, host: "Ann", blockSystem: true },
+      status: { player: 3, state: "picking_user", rttMs: 42, host: "Ann", blockSystem: true, streamSeat: false },
     });
+    // On the host's stream's own controller (#687): playing as the host's PS5 user.
+    expect(readServerMessage('{"status":{"player":1,"state":"playing","stream_seat":true}}')).toMatchObject({
+      status: { player: 1, streamSeat: true },
+    });
+    // The host needed it back, with no controller free (#720): said, as a bye and as a refusal.
+    expect(readServerMessage('{"bye":"seat_taken"}')).toEqual({ kind: "bye", why: "seat_taken" });
+    expect(readServerMessage('{"stage":"refused","why":"seat_taken"}')).toEqual({ kind: "refused", why: "seat_taken" });
     expect(readServerMessage('{"rumble":[300,-1],"light":[1,2,3]}')).toEqual({
       kind: "feedback",
       rumble: [255, 0],
