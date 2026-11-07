@@ -6678,6 +6678,8 @@ library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가
 "rp_picture_saturation": "색",
 "rp_picture_crop": "21:9로 자르기",
 "rp_picture_crop_hint": "화면의 위아래를 잘라 21:9로 만듭니다. 위아래에 검은 띠가 있는 울트라와이드 화면용 게임에만 쓰세요. 다른 게임은 화면 일부가 잘립니다.",
+"fpkg.image.ampr_emu_build_drakmor": "ampr_emu 0.4.2.1",
+"fpkg.image.ampr_emu_build_ng": "ampr-emu-ng 0.3.2",
 "fpkg.image.ampr_emu_build": "에뮬레이터",
 "conn_nfs_export": "내보내기(비우면 전체)",
 "conn_nfs_ids": "사용자 및 그룹 ID",

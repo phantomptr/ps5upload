@@ -6902,6 +6902,8 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "rp_picture_saturation": "Kolor",
 "rp_picture_crop": "Przytnij do 21:9",
 "rp_picture_crop_hint": "Obcina górę i dół obrazu do proporcji 21:9. Tylko dla gier stworzonych dla ekranów ultrawide, które mają tam czarne pasy: każda inna gra traci część obrazu.",
+"fpkg.image.ampr_emu_build_drakmor": "ampr_emu 0.4.2.1",
+"fpkg.image.ampr_emu_build_ng": "ampr-emu-ng 0.3.2",
 "fpkg.image.ampr_emu_build": "Emulator",
 "conn_nfs_export": "Eksport (puste: wszystkie)",
 "conn_nfs_ids": "ID użytkownika i grupy",

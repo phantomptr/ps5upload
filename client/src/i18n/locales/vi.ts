@@ -6663,6 +6663,8 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "rp_picture_saturation": "Màu sắc",
 "rp_picture_crop": "Cắt về 21:9",
 "rp_picture_crop_hint": "Cắt phần trên và dưới của hình để thành 21:9. Chỉ dành cho trò làm cho màn hình siêu rộng, vốn có viền đen ở đó: mọi trò khác sẽ mất một phần hình.",
+"fpkg.image.ampr_emu_build_drakmor": "ampr_emu 0.4.2.1",
+"fpkg.image.ampr_emu_build_ng": "ampr-emu-ng 0.3.2",
 "fpkg.image.ampr_emu_build": "Trình giả lập",
 "conn_nfs_export": "Export (để trống: tất cả)",
 "conn_nfs_ids": "ID người dùng và nhóm",

@@ -6669,6 +6669,8 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "rp_picture_saturation": "Farbe",
 "rp_picture_crop": "Auf 21:9 zuschneiden",
 "rp_picture_crop_hint": "Schneidet oben und unten vom Bild ab, sodass es 21:9 wird. Nur für Spiele für Ultrawide-Bildschirme, die dort schwarze Balken haben: Bei allen anderen Spielen fehlt dann ein Teil des Bildes.",
+"fpkg.image.ampr_emu_build_drakmor": "ampr_emu 0.4.2.1",
+"fpkg.image.ampr_emu_build_ng": "ampr-emu-ng 0.3.2",
 "fpkg.image.ampr_emu_build": "Emulator",
 "conn_nfs_export": "Export (leer: alle)",
 "conn_nfs_ids": "Benutzer- und Gruppen-ID",

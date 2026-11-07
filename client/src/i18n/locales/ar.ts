@@ -6661,6 +6661,8 @@ library_compressed_hint: "تحتاج الصور المضغوطة إلى ShadowMo
 "rp_picture_saturation": "الألوان",
 "rp_picture_crop": "قص إلى 21:9",
 "rp_picture_crop_hint": "يقص أعلى الصورة وأسفلها لتصبح 21:9. فقط للألعاب المصممة للشاشات فائقة العرض التي فيها أشرطة سوداء هناك: أي لعبة أخرى تفقد جزءًا من صورتها.",
+"fpkg.image.ampr_emu_build_drakmor": "ampr_emu 0.4.2.1",
+"fpkg.image.ampr_emu_build_ng": "ampr-emu-ng 0.3.2",
 "fpkg.image.ampr_emu_build": "المحاكي",
 "conn_nfs_export": "التصدير (فارغ: الكل)",
 "conn_nfs_ids": "معرّف المستخدم والمجموعة",

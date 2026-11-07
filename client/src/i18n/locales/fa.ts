@@ -6943,6 +6943,8 @@ library_compressed_hint: "برای اجرای ایمیج فشرده به ShadowM
 "rp_picture_saturation": "رنگ",
 "rp_picture_crop": "برش به 21:9",
 "rp_picture_crop_hint": "بالا و پایین تصویر را می‌بُرد تا ۲۱:۹ شود. فقط برای بازی‌های ساخته‌شده برای نمایشگرهای فوق‌عریض که آنجا نوار سیاه دارند: هر بازی دیگری بخشی از تصویرش را از دست می‌دهد.",
+"fpkg.image.ampr_emu_build_drakmor": "ampr_emu 0.4.2.1",
+"fpkg.image.ampr_emu_build_ng": "ampr-emu-ng 0.3.2",
 "fpkg.image.ampr_emu_build": "شبیه‌ساز",
 "conn_nfs_export": "Export (خالی: همه)",
 "conn_nfs_ids": "شناسهٔ کاربر و گروه",

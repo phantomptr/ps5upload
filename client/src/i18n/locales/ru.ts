@@ -6614,6 +6614,8 @@ library_compressed_hint: "Для запуска сжатых образов ну
 "rp_picture_saturation": "Цвет",
 "rp_picture_crop": "Обрезать до 21:9",
 "rp_picture_crop_hint": "Обрезает изображение сверху и снизу до 21:9. Только для игр для сверхшироких экранов, где там чёрные полосы: любая другая игра теряет часть изображения.",
+"fpkg.image.ampr_emu_build_drakmor": "ampr_emu 0.4.2.1",
+"fpkg.image.ampr_emu_build_ng": "ampr-emu-ng 0.3.2",
 "fpkg.image.ampr_emu_build": "Эмулятор",
 "conn_nfs_export": "Экспорт (пусто: все)",
 "conn_nfs_ids": "ID пользователя и группы",

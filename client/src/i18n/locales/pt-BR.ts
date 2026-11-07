@@ -6676,6 +6676,8 @@ library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para joga
 "rp_picture_saturation": "Cor",
 "rp_picture_crop": "Recortar para 21:9",
 "rp_picture_crop_hint": "Corta a parte de cima e de baixo da imagem para deixá-la em 21:9. Só para jogos feitos para telas ultrawide, que têm faixas pretas ali: qualquer outro jogo perde parte da imagem.",
+"fpkg.image.ampr_emu_build_drakmor": "ampr_emu 0.4.2.1",
+"fpkg.image.ampr_emu_build_ng": "ampr-emu-ng 0.3.2",
 "fpkg.image.ampr_emu_build": "Emulador",
 "conn_nfs_export": "Export (vazio: todos)",
 "conn_nfs_ids": "ID de usuário e grupo",

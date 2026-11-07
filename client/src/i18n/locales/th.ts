@@ -6668,6 +6668,8 @@ library_compressed_hint: "อิมเมจที่บีบอัดต้อ
 "rp_picture_saturation": "สี",
 "rp_picture_crop": "ครอปเป็น 21:9",
 "rp_picture_crop_hint": "ตัดภาพด้านบนและด้านล่างออกให้เป็น 21:9 ใช้กับเกมที่ทำมาสำหรับจอกว้างพิเศษซึ่งมีแถบดำตรงนั้นเท่านั้น เกมอื่นจะเสียภาพบางส่วนไป",
+"fpkg.image.ampr_emu_build_drakmor": "ampr_emu 0.4.2.1",
+"fpkg.image.ampr_emu_build_ng": "ampr-emu-ng 0.3.2",
 "fpkg.image.ampr_emu_build": "อีมูเลเตอร์",
 "conn_nfs_export": "Export (ว่าง: ทั้งหมด)",
 "conn_nfs_ids": "ID ผู้ใช้และกลุ่ม",

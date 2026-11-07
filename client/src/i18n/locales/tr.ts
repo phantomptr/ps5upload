@@ -6668,6 +6668,8 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "rp_picture_saturation": "Renk",
 "rp_picture_crop": "21:9'a kırp",
 "rp_picture_crop_hint": "Görüntünün üstünü ve altını keserek 21:9 yapar. Yalnızca ultra geniş ekranlar için yapılmış, orada siyah bantları olan oyunlar için: başka her oyun görüntüsünün bir kısmını kaybeder.",
+"fpkg.image.ampr_emu_build_drakmor": "ampr_emu 0.4.2.1",
+"fpkg.image.ampr_emu_build_ng": "ampr-emu-ng 0.3.2",
 "fpkg.image.ampr_emu_build": "Öykünücü",
 "conn_nfs_export": "Export (boş: tümü)",
 "conn_nfs_ids": "Kullanıcı ve grup kimliği",

@@ -281,8 +281,8 @@ export function AmprEmuBuildChoice({
         className="select w-auto!"
         data-testid="ampr-emu-build"
       >
-        <option value="ampr_emu">ampr_emu 0.4.2.1</option>
-        <option value="ampr-emu-ng">ampr-emu-ng 0.3.2</option>
+        <option value="ampr_emu">{tr("fpkg.image.ampr_emu_build_drakmor", undefined, "ampr_emu 0.4.2.1")}</option>
+        <option value="ampr-emu-ng">{tr("fpkg.image.ampr_emu_build_ng", undefined, "ampr-emu-ng 0.3.2")}</option>
       </select>
     </label>
   );

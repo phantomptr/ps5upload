@@ -6620,6 +6620,8 @@ library_compressed_hint: "压缩镜像需要 ShadowMount+ 才能游玩。如需�
 "rp_picture_saturation": "色彩",
 "rp_picture_crop": "裁剪为 21:9",
 "rp_picture_crop_hint": "裁掉画面的顶部和底部，使其变为 21:9。仅适用于为超宽屏制作、上下带黑边的游戏：其他游戏会缺失部分画面。",
+"fpkg.image.ampr_emu_build_drakmor": "ampr_emu 0.4.2.1",
+"fpkg.image.ampr_emu_build_ng": "ampr-emu-ng 0.3.2",
 "fpkg.image.ampr_emu_build": "模拟器",
 "conn_nfs_export": "导出目录（留空：全部）",
 "conn_nfs_ids": "用户和组 ID",

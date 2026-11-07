@@ -6680,6 +6680,8 @@ library_compressed_hint: "圧縮イメージのプレイには ShadowMount+ が�
 "rp_picture_saturation": "色",
 "rp_picture_crop": "21:9 に切り抜く",
 "rp_picture_crop_hint": "映像の上下を切り取って 21:9 にします。上下に黒帯があるウルトラワイド向けのゲーム専用です。それ以外のゲームでは映像の一部が欠けます。",
+"fpkg.image.ampr_emu_build_drakmor": "ampr_emu 0.4.2.1",
+"fpkg.image.ampr_emu_build_ng": "ampr-emu-ng 0.3.2",
 "fpkg.image.ampr_emu_build": "エミュレーター",
 "conn_nfs_export": "エクスポート（空欄：すべて）",
 "conn_nfs_ids": "ユーザー ID とグループ ID",

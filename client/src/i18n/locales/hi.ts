@@ -6675,6 +6675,8 @@ library_compressed_hint: "संपीड़ित इमेज चलाने 
 "rp_picture_saturation": "रंग",
 "rp_picture_crop": "21:9 पर काटें",
 "rp_picture_crop_hint": "तस्वीर का ऊपर और नीचे का हिस्सा काटकर उसे 21:9 बनाता है। केवल अल्ट्रावाइड स्क्रीन के लिए बने गेम के लिए, जिनमें वहाँ काली पट्टियाँ होती हैं: किसी और गेम की तस्वीर का कुछ हिस्सा कट जाता है।",
+"fpkg.image.ampr_emu_build_drakmor": "ampr_emu 0.4.2.1",
+"fpkg.image.ampr_emu_build_ng": "ampr-emu-ng 0.3.2",
 "fpkg.image.ampr_emu_build": "एमुलेटर",
 "conn_nfs_export": "Export (खाली: सभी)",
 "conn_nfs_ids": "यूज़र और ग्रुप आईडी",
