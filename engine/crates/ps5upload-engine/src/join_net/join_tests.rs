@@ -368,3 +368,77 @@ async fn the_settings_check_the_hub_and_stun_addresses() {
     assert_eq!(old, Settings::default());
     *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
+
+/// The engine for the guest page's Playwright test (client/e2e/play-together-internet.spec.ts),
+/// not a test of its own: it runs only when the spec starts it with `PS5UPLOAD_E2E_HUB` (the real
+/// hub on this computer). Play Together's real routes (`router`) on 127.0.0.1, a pretend session
+/// on a pretend console (the fakes above: no PS5), no STUN and no router mapping (nothing leaves
+/// this computer), and ICE on this computer's real interfaces as a running engine has them.
+/// `POST /e2e/stream` with `[kind, key, ...data]` hands the session's stream a message (0: the
+/// codec header, 1: a picture); `POST /e2e/stop` ends it. It prints
+/// `E2E_ENGINE=http://127.0.0.1:<port> E2E_CONSOLE=<console>` when ready.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "the Playwright spec's engine; run by client/e2e/play-together-internet.spec.ts"]
+async fn e2e_internet_guest_fixture() {
+    let Ok(hub_url) = std::env::var("PS5UPLOAD_E2E_HUB") else {
+        return;
+    };
+    let _turn = PARTY_TESTS.lock().await;
+    let _live_turn = crate::rp_stream_api::LIVE_TEST_LOCK.lock().await;
+    crate::join_net::rtc::TEST_REAL_IPS.store(true, std::sync::atomic::Ordering::Relaxed);
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings {
+        hub_url,
+        stun: Vec::new(),
+        upnp: false,
+        ..Settings::default()
+    });
+    let console = "10.77.0.60";
+    set_helper(console, Arc::new(FakeHelper::default()));
+    set_live(console, 1);
+    let live = Arc::new(crate::rp_stream_api::test_live::Session::start(console));
+    let stop = Arc::new(tokio::sync::Notify::new());
+
+    use axum::routing::post;
+    let (l, s) = (live.clone(), stop.clone());
+    let app = router::<()>()
+        .route(
+            "/e2e/stream",
+            post(move |b: axum::body::Bytes| {
+                let l = l.clone();
+                async move {
+                    if b.len() < 2 {
+                        return StatusCode::BAD_REQUEST;
+                    }
+                    l.send(b[0], &b[2..], b[1] == 1);
+                    StatusCode::NO_CONTENT
+                }
+            }),
+        )
+        .route(
+            "/e2e/stop",
+            post(move || {
+                let s = s.clone();
+                async move {
+                    s.notify_one();
+                    StatusCode::NO_CONTENT
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    println!("E2E_ENGINE=http://127.0.0.1:{port} E2E_CONSOLE={console}");
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+    let served = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
+        // At most ten minutes, whatever happens to the spec.
+        let _ = tokio::time::timeout(Duration::from_secs(600), stop.notified()).await;
+    });
+    let _ = served.await;
+    close_party(console).await;
+    set_live(console, 0);
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}

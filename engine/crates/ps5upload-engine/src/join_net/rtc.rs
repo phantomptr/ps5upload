@@ -106,10 +106,17 @@ pub(crate) async fn net() -> Option<Arc<Net>> {
     Some(n)
 }
 
+/// The tests' engine for the guest page's Playwright test (a browser does not pair with a loopback
+/// candidate): the real interfaces, as a running engine has them.
+#[cfg(test)]
+pub(crate) static TEST_REAL_IPS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// The addresses the sockets go on: every IPv4 interface but loopback and link-local (the tests:
 /// loopback only).
 fn local_ips() -> Vec<Ipv4Addr> {
-    if cfg!(test) {
+    #[cfg(test)]
+    if !TEST_REAL_IPS.load(Ordering::Relaxed) {
         return vec![Ipv4Addr::LOCALHOST];
     }
     let mut v: Vec<Ipv4Addr> = if_addrs::get_if_addrs()
