@@ -1041,10 +1041,10 @@ pub(crate) async fn exfat_build_handler(
                 let bytes =
                     crate::ampr_trace::emulator(ampr_emu_build.as_deref()).map_err(|e| {
                         format!(
-                        "this game may need an AMPR emulator to start from an image, and it \
+                            "this game may need an AMPR emulator to start from an image, and it \
                          could not be fetched: {e}. Connect to the internet, or turn off \
                          \"Add the AMPR emulator\" in Convert's options"
-                    )
+                        )
                     })?;
                 tree = Box::new(
                     ps5upload_fpkg::ampr_pack::image::RuntimeInstalled::new_at(
@@ -1797,9 +1797,11 @@ impl Writing {
         if active.contains(&path) {
             return None;
         }
+        // A leftover with a checkpoint is what the build goes on from (`image_build`).
+        let checkpointed = crate::image_build::checkpoint_path(&path).is_file();
         if path.is_dir() {
             let _ = std::fs::remove_dir_all(&path);
-        } else if path.is_file() {
+        } else if path.is_file() && !checkpointed {
             let _ = std::fs::remove_file(&path);
         }
         active.insert(path.clone());
@@ -1856,6 +1858,22 @@ fn has_download_sidecar(partial: &Path) -> bool {
     partial.with_file_name(name).is_file()
 }
 
+/// A crashed image build's partial file, kept for a while for the same build to go on from. An old
+/// one goes, with its checkpoint, or a game never built again would hold its space for good.
+fn has_fresh_checkpoint(partial: &Path) -> bool {
+    let checkpoint = crate::image_build::checkpoint_path(partial);
+    let Ok(modified) = std::fs::metadata(&checkpoint).and_then(|m| m.modified()) else {
+        return false;
+    };
+    let fresh = modified
+        .elapsed()
+        .is_ok_and(|age| age < crate::image_build::RESUME_KEPT);
+    if !fresh {
+        let _ = std::fs::remove_file(&checkpoint);
+    }
+    fresh
+}
+
 /// Removes a file, trying again for a few seconds while something holds it: on Windows an
 /// antivirus or the indexer often has a just-written file open, and one failed attempt left a
 /// failed build's whole image on the drive (#432).
@@ -1894,7 +1912,9 @@ pub(crate) fn sweep_output_leftovers(out: &Path) {
                     // A link download writes `<name>.pkg.partial` with a `.partial.json`
                     // resume sidecar beside it; that one is resumable and not ours to sweep.
                     Ok(t) if t.is_file() => {
-                        is_our_partial(&name) && !has_download_sidecar(&e.path())
+                        is_our_partial(&name)
+                            && !has_download_sidecar(&e.path())
+                            && !has_fresh_checkpoint(&e.path())
                     }
                     // An LZ4 image build's pack volumes, `<name>.exfat.lz4spool/`, and a
                     // folder build's unfinished folder (marked, so a user's own is kept).
