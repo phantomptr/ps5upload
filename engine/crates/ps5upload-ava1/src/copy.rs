@@ -484,7 +484,13 @@ fn copy_job(
     }
     .to_bytes()?;
     let jobref = JobRef { job_id: id }.to_bytes()?;
-    crate::block_on(async {
+    ps5upload_core::clog!(
+        Debug,
+        "files",
+        "ava1 {kind} op {op_id} on {console}: {from} -> {to} (overwrite {overwrite})"
+    );
+    let t0 = Instant::now();
+    let outcome = crate::block_on(async {
         SessionGate::identity(pool)?;
         let mut backoff = Duration::from_millis(250);
         let mut gate = SessionGate::default();
@@ -654,7 +660,22 @@ fn copy_job(
             }
             nap(POLL, &cancel).await;
         }
-    })
+    });
+    match &outcome {
+        Ok(()) => ps5upload_core::clog!(
+            Debug,
+            "files",
+            "ava1 {kind} op {op_id}: done in {} ms",
+            t0.elapsed().as_millis()
+        ),
+        Err(e) => ps5upload_core::clog!(
+            Debug,
+            "files",
+            "ava1 {kind} op {op_id}: ended after {} ms: {e:#}",
+            t0.elapsed().as_millis()
+        ),
+    }
+    outcome
 }
 
 #[cfg(test)]

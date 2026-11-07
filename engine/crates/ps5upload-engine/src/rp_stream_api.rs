@@ -950,6 +950,12 @@ impl Live {
 
     /// The console asks for the passcode: ask the page (and any page that attaches meanwhile).
     fn ask_passcode(&self, retry: bool) {
+        crate::log_at!(
+            Info,
+            "rp",
+            "rp_stream: {}: the console asks for the user's passcode (again: {retry})",
+            self.host
+        );
         if let Ok(mut a) = self.passcode_answer.lock() {
             *a = None;
         }
@@ -978,6 +984,18 @@ impl Live {
         }
         match self.passcode_answer.lock() {
             Ok(mut a) => {
+                // Never the digits: only that an answer came.
+                crate::log_at!(
+                    Debug,
+                    "rp",
+                    "rp_stream: {}: page {id} answered the passcode ask ({})",
+                    self.host,
+                    if matches!(answer, Passcode::Cancel) {
+                        "cancel"
+                    } else {
+                        "digits"
+                    }
+                );
                 *a = Some(answer);
                 true
             }
@@ -1042,7 +1060,9 @@ impl Live {
     pub(crate) fn set_picture(&self, on: bool) {
         let was_on = !self.page_off.swap(!on, Ordering::Relaxed);
         if was_on != on {
-            crate::log_info!(
+            crate::log_at!(
+                Info,
+                "rp",
                 "rp_stream: {}: the picture on this device is {}",
                 self.host,
                 if on { "on" } else { "off" }
@@ -1086,7 +1106,9 @@ impl Live {
         if self.guest_seat.swap(on, Ordering::Relaxed) == on {
             return;
         }
-        crate::log_info!(
+        crate::log_at!(
+            Info,
+            "rp",
             "rp_stream: {}: a guest {} the stream's controller",
             self.host,
             if on { "has" } else { "left" }
@@ -1209,6 +1231,13 @@ impl Live {
         if g.as_ref().is_some_and(|v| v.id == id) {
             *g = None;
             drop(g);
+            crate::log_at!(
+                Debug,
+                "rp",
+                "rp_stream: {}: page {id} left; the session waits {} s for another",
+                self.host,
+                self.keep_alive.as_secs()
+            );
             if let Ok(mut a) = self.alone_since.lock() {
                 *a = Some(Instant::now());
             }
@@ -1438,7 +1467,17 @@ impl StreamSink for Sink {
         if self.live.stop.load(Ordering::Relaxed) {
             return true;
         }
-        self.live.alone_too_long()
+        let alone = self.live.alone_too_long();
+        if alone {
+            crate::log_at!(
+                Info,
+                "rp",
+                "rp_stream: {}: no page for {} s and nothing holds the session: ending it",
+                self.live.host,
+                self.live.keep_alive.as_secs()
+            );
+        }
+        alone
     }
     fn wants_keyframe(&mut self) -> bool {
         let page = self.live.want_key.swap(false, Ordering::Relaxed);
@@ -1466,7 +1505,6 @@ impl StreamSink for Sink {
         self.live.keyboard.next()
     }
     fn passcode_needed(&mut self, retry: bool) {
-        crate::log_info!("rp_stream: the console asks for the user's passcode (retry {retry})");
         self.live.ask_passcode(retry);
     }
     fn passcode(&mut self) -> Option<Passcode> {
@@ -1722,7 +1760,12 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
             }),
             Err(e) => error_status(&e),
         };
-        crate::log_info!("rp_stream: {end}");
+        // The end and why, with the console's words for a refusal (80108b26 and the like).
+        if end["stage"] == "error" {
+            crate::log_at!(Warn, "rp", "rp_stream: {}: session ended: {end}", l.host);
+        } else {
+            crate::log_at!(Info, "rp", "rp_stream: {}: session ended: {end}", l.host);
+        }
         let end_note = end.clone();
         note_last(|v| {
             v["end"] = end_note;
@@ -1939,6 +1982,7 @@ async fn session(mut socket: WebSocket) {
                             }
                         }
                         if m.stop {
+                            crate::log_at!(Info, "rp", "rp_stream: {}: page {id} stops the session", live.host);
                             live.stop.store(true, Ordering::Relaxed);
                         }
                         if let Some(on) = m.mic {

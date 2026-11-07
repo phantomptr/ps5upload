@@ -714,6 +714,18 @@ pub fn upload_with_seq_in(
         .iter()
         .filter(|e| e.kind == gen::ENTRY_FILE)
         .count() as u64;
+    ps5upload_core::clog!(
+        Debug,
+        "transfer",
+        "ava1 send {} to {console}:{}: {} entries, {manifest_files} files, {} bytes, {} reader(s), sequential source {}",
+        hex(&job_id),
+        opts.root,
+        manifest.entries.len(),
+        manifest.entries.iter().map(|e| e.size).sum::<u64>(),
+        opts.readers,
+        seq.is_some() || opts.seq.is_some()
+    );
+    let job_started = Instant::now();
     let manifest = Arc::new(manifest);
     let progress = Arc::new(Progress::default());
     let cancel = cfg
@@ -734,7 +746,7 @@ pub fn upload_with_seq_in(
         progress.clone(),
         resumed.clone(),
     );
-    crate::block_on(async {
+    let outcome = crate::block_on(async {
         SessionGate::identity(pool)?;
         let _bridge = Bridge::start_resumed(progress.clone(), cfg, resumed.clone());
         let mut backoff = Duration::from_millis(250);
@@ -766,6 +778,13 @@ pub fn upload_with_seq_in(
                 }
             };
             gate.connected();
+            ps5upload_core::clog!(
+                Debug,
+                "transfer",
+                "ava1 send {}: session up, {} bytes durable so far",
+                hex(&job_id),
+                progress.bytes_durable.load(Ordering::Relaxed)
+            );
             progress.telemetry.lock().unwrap().peer_key = Some(session.peer_key());
             let mut link = session.job(job_id);
             let o = SendOptions {
@@ -907,7 +926,25 @@ pub fn upload_with_seq_in(
                 Err(e) => return Err(anyhow!(e)),
             }
         }
-    })
+    });
+    match &outcome {
+        Ok(r) => ps5upload_core::clog!(
+            Debug,
+            "transfer",
+            "ava1 send {}: done in {} ms: {}",
+            hex(&job_id),
+            job_started.elapsed().as_millis(),
+            r.commit_ack_body
+        ),
+        Err(e) => ps5upload_core::clog!(
+            Debug,
+            "transfer",
+            "ava1 send {}: ended after {} ms: {e:#}",
+            hex(&job_id),
+            job_started.elapsed().as_millis()
+        ),
+    }
+    outcome
 }
 
 /// The first wait after a connection that was doing real work.

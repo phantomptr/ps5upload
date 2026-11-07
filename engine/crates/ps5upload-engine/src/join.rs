@@ -926,7 +926,7 @@ fn apply(console: &str, fx: Vec<Effect>) {
                 let _ = tx.try_send(out);
             }
             Effect::Link(c) => link::send(console, c),
-            Effect::Log(s) => crate::log_info!("{s}"),
+            Effect::Log(s) => crate::log_at!(Info, "together", "{s}"),
             Effect::SeatPad(state) => crate::rp_stream_api::push_guest_pad(console, state),
             Effect::Seat(on) => crate::rp_stream_api::guest_seat(console, on),
         }
@@ -1565,7 +1565,7 @@ async fn ask(socket: &mut WebSocket, entry: Entry, name: &str, ip: IpAddr) -> Op
         return Some(Admit::Refused(why));
     }
     // By number in the log: a bug report is posted in public, and names are the host's friends.
-    crate::log_info!("join: a guest asks to play on {console}");
+    crate::log_at!(Info, "together", "join: a guest asks to play on {console}");
     crate::log_at!(Debug, "together", "join: {name} asks to play on {console}");
     if socket
         .send(say(serde_json::json!({"stage": "asking"})))
@@ -1633,7 +1633,11 @@ async fn ask(socket: &mut WebSocket, entry: Entry, name: &str, ip: IpAddr) -> Op
                 return Some(Admit::Refused("closed"));
             }
             crate::rp_stream_api::guest_seat(&console, true);
-            crate::log_info!("join: a guest has the stream's controller on {console}");
+            crate::log_at!(
+                Info,
+                "together",
+                "join: a guest has the stream's controller on {console}"
+            );
             crate::log_at!(
                 Debug,
                 "together",
@@ -1658,7 +1662,11 @@ async fn ask(socket: &mut WebSocket, entry: Entry, name: &str, ip: IpAddr) -> Op
                 link::send(&console, link::Cmd::Close { slot: player });
                 return Some(Admit::Refused("closed"));
             }
-            crate::log_info!("join: a guest is Player {player} on {console}");
+            crate::log_at!(
+                Info,
+                "together",
+                "join: a guest is Player {player} on {console}"
+            );
             crate::log_at!(
                 Debug,
                 "together",
@@ -2228,7 +2236,7 @@ pub async fn open(
     if created {
         let now = Instant::now();
         with_party(&key, |p| p.invite(false, now));
-        crate::log_info!("join: Play Together open on {}", b.addr);
+        crate::log_at!(Info, "together", "join: Play Together open on {}", b.addr);
         spawn_watch(key);
     }
     Json(state_json(&b.addr)).into_response()

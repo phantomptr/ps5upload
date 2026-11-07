@@ -617,7 +617,12 @@ fn confirm_away(addr: &str, e: &anyhow::Error) -> Option<AwayWhy> {
 fn mark_away(addr: &str, why: AwayWhy) {
     let mut m = aways().lock().unwrap_or_else(|e| e.into_inner());
     let a = m.entry(addr.to_string()).or_insert_with(|| {
-        crate::log_info!("mesh drive: {addr} is away ({})", why.as_str());
+        crate::log_at!(
+            Info,
+            "mesh",
+            "mesh drive: {addr} is away ({})",
+            why.as_str()
+        );
         Away {
             why,
             since: now_ms(),
@@ -645,7 +650,9 @@ fn mark_back(addr: &str) {
         .unwrap_or_else(|e| e.into_inner())
         .remove(addr);
     if let Some(a) = was {
-        crate::log_info!(
+        crate::log_at!(
+            Info,
+            "mesh",
             "mesh drive: {addr} is back after {} s",
             now_ms().saturating_sub(a.since) / 1000
         );
@@ -864,7 +871,12 @@ fn walk_local(root: &Path) -> Result<Walk> {
                 return Err(e).with_context(|| format!("read {}", dir.display()));
             }
             Err(e) => {
-                crate::log_info!("mesh drive: cannot read {}: {e}", dir.display());
+                crate::log_at!(
+                    Info,
+                    "mesh",
+                    "mesh drive: cannot read {}: {e}",
+                    dir.display()
+                );
                 out.unread.push(rel);
                 continue;
             }
@@ -877,7 +889,12 @@ fn walk_local(root: &Path) -> Result<Walk> {
                 }
                 // No name to go by: the rest of this folder is unknown.
                 Err(err) => {
-                    crate::log_info!("mesh drive: cannot read {}: {err}", dir.display());
+                    crate::log_at!(
+                        Info,
+                        "mesh",
+                        "mesh drive: cannot read {}: {err}",
+                        dir.display()
+                    );
                     out.unread.push(rel.clone());
                     break;
                 }
@@ -1352,7 +1369,11 @@ fn prune_console_dir(addr: &str, root: &str, rel: &str, today: &str) -> bool {
     ) {
         Ok(l) => l,
         Err(e) => {
-            crate::log_info!("mesh drive: kept {dir}: cannot list it ({e:#})");
+            crate::log_at!(
+                Info,
+                "mesh",
+                "mesh drive: kept {dir}: cannot list it ({e:#})"
+            );
             return false;
         }
     };
@@ -1361,7 +1382,12 @@ fn prune_console_dir(addr: &str, root: &str, rel: &str, today: &str) -> bool {
         .iter()
         .find(|e| e.name != "." && e.name != ".." && !is_os_clutter(&e.name))
     {
-        crate::log_info!("mesh drive: kept {dir}: it still holds {}", e.name);
+        crate::log_at!(
+            Info,
+            "mesh",
+            "mesh drive: kept {dir}: it still holds {}",
+            e.name
+        );
         return false;
     }
     let day = join_hub(&join_hub(root, TRASH), today);
@@ -1371,7 +1397,11 @@ fn prune_console_dir(addr: &str, root: &str, rel: &str, today: &str) -> bool {
     );
     if let Some(parent) = to.rsplit_once('/').map(|(d, _)| d) {
         if let Err(e) = fs_ops::fs_mkdir(addr, parent) {
-            crate::log_info!("mesh drive: kept {dir}: cannot make {parent} ({e:#})");
+            crate::log_at!(
+                Info,
+                "mesh",
+                "mesh drive: kept {dir}: cannot make {parent} ({e:#})"
+            );
             return false;
         }
     }
@@ -1383,7 +1413,11 @@ fn prune_console_dir(addr: &str, root: &str, rel: &str, today: &str) -> bool {
     match moved {
         Ok(()) => true,
         Err(e) => {
-            crate::log_info!("mesh drive: kept {dir}: cannot move it to the trash ({e:#})");
+            crate::log_at!(
+                Info,
+                "mesh",
+                "mesh drive: kept {dir}: cannot move it to the trash ({e:#})"
+            );
             false
         }
     }
@@ -1723,7 +1757,11 @@ impl Watchdog {
                         if last_asked.elapsed() >= WANTED_EVERY {
                             last_asked = std::time::Instant::now();
                             if !wanted() {
-                                crate::log_info!("mesh drive: no longer wanted; its copy stops");
+                                crate::log_at!(
+                                    Info,
+                                    "mesh",
+                                    "mesh drive: no longer wanted; its copy stops"
+                                );
                                 wanted_stop.store(true, Ordering::SeqCst);
                                 cancel.store(true, Ordering::SeqCst);
                                 return;
@@ -1739,7 +1777,9 @@ impl Watchdog {
                     });
                     misses = if answers { 0 } else { misses + 1 };
                     if misses >= 2 {
-                        crate::log_info!(
+                        crate::log_at!(
+                            Info,
+                            "mesh",
                             "mesh drive: a console stopped answering mid-pass; its copy stops"
                         );
                         cancel.store(true, Ordering::SeqCst);
@@ -2162,7 +2202,9 @@ impl Pass<'_> {
         }
         if !ops.is_empty() {
             let shown: Vec<String> = ops.iter().take(12).map(|o| format!("{o:?}")).collect();
-            crate::log_info!(
+            crate::log_at!(
+                Info,
+                "mesh",
                 "mesh drive {} ({}): {} change(s): {}",
                 self.drive.name,
                 member_id,
@@ -2226,7 +2268,7 @@ impl Pass<'_> {
                         Ok(true) => batched.extend(chunk),
                         Ok(false) => batching = false,
                         Err(e) => {
-                            crate::log_warn!("mesh drive {}: {e:#}", self.drive.name);
+                            crate::log_at!(Warn, "mesh", "mesh drive {}: {e:#}", self.drive.name);
                             batching = false;
                         }
                     }
@@ -2362,7 +2404,9 @@ impl Pass<'_> {
                     if let Some((addr, why)) = self.gone(&e) {
                         // Not this file's fault: it is not counted, and nothing else is tried
                         // (each would wait out the same silence).
-                        crate::log_info!(
+                        crate::log_at!(
+                            Info,
+                            "mesh",
                             "mesh drive {}: {addr} went away mid-pass ({}); stopping",
                             self.drive.name,
                             why.as_str()
@@ -2371,7 +2415,7 @@ impl Pass<'_> {
                         went = Some(addr);
                         break;
                     }
-                    crate::log_warn!("mesh drive {}: {e:#}", self.drive.name);
+                    crate::log_at!(Warn, "mesh", "mesh drive {}: {e:#}", self.drive.name);
                     first_error.get_or_insert_with(|| Said::of(&e));
                     with_runtime(member_id, |rt| {
                         let f = rt
@@ -2688,7 +2732,9 @@ fn sync_member(lm: &LocalMember, me: &str) -> Result<()> {
     // folder removed, from another device): forget it here too, so the folder can be used again.
     // Its files stay where they are.
     let Some(drive) = doc.drives.iter().find(|d| d.id == lm.drive) else {
-        crate::log_info!(
+        crate::log_at!(
+            Info,
+            "mesh",
             "mesh drive {}: deleted on the console; this folder stops syncing",
             lm.drive
         );
@@ -2699,7 +2745,9 @@ fn sync_member(lm: &LocalMember, me: &str) -> Result<()> {
         .iter()
         .find(|m| m.id == lm.member && m.device == me)
     else {
-        crate::log_info!(
+        crate::log_at!(
+            Info,
+            "mesh",
             "mesh drive {}: this folder was removed from it; it stops syncing",
             drive.name
         );
@@ -2752,7 +2800,7 @@ fn sync_member(lm: &LocalMember, me: &str) -> Result<()> {
     }
     let hub_changed = r.as_ref().is_ok_and(|c| c.hub);
     if let Err(e) = report(addr, drive, member, &lm.member, hub_changed) {
-        crate::log_warn!("mesh drive {}: report: {e:#}", drive.name);
+        crate::log_at!(Warn, "mesh", "mesh drive {}: report: {e:#}", drive.name);
     }
     r.map(|_| ())
 }
@@ -2885,8 +2933,10 @@ fn sync_links(me: &str) {
                     run_link(&drive.id, lo, hi)
                 }));
                 match r {
-                    Ok(Err(e)) => crate::log_warn!("mesh drive link {lo}-{hi}: {e:#}"),
-                    Err(_) => crate::log_warn!("mesh drive link {lo}-{hi}: the pass panicked"),
+                    Ok(Err(e)) => crate::log_at!(Warn, "mesh", "mesh drive link {lo}-{hi}: {e:#}"),
+                    Err(_) => {
+                        crate::log_at!(Warn, "mesh", "mesh drive link {lo}-{hi}: the pass panicked")
+                    }
                     Ok(Ok(())) => {}
                 }
             }
@@ -2978,7 +3028,7 @@ fn run_link(id: &str, lo: &str, hi: &str) -> Result<()> {
             Ok(())
         });
         if let Err(e) = r {
-            crate::log_warn!("mesh drive link {lo}-{hi}: password: {e:#}");
+            crate::log_at!(Warn, "mesh", "mesh drive link {lo}-{hi}: password: {e:#}");
         }
     }
     if to_hi.allow_deletes || to_lo.allow_deletes {
@@ -3142,7 +3192,7 @@ fn set_link_state(
         Ok(true)
     });
     if let Err(e) = r {
-        crate::log_warn!("mesh drive link {at}->{other}: {e:#}");
+        crate::log_at!(Warn, "mesh", "mesh drive link {at}->{other}: {e:#}");
     }
 }
 
@@ -3280,16 +3330,16 @@ fn start_worker(key: String, job: impl FnOnce() + Send + 'static) {
             job();
         });
     if let Err(e) = spawned {
-        crate::log_warn!("mesh drive: no thread for a round: {e}");
+        crate::log_at!(Warn, "mesh", "mesh drive: no thread for a round: {e}");
     }
 }
 
 fn sync_one(lm: &LocalMember, me: &str) {
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sync_member(lm, me)));
     match r {
-        Ok(Err(e)) => crate::log_warn!("mesh drive {}: {e:#}", lm.drive),
+        Ok(Err(e)) => crate::log_at!(Warn, "mesh", "mesh drive {}: {e:#}", lm.drive),
         Err(_) => {
-            crate::log_warn!("mesh drive {}: the pass panicked", lm.drive);
+            crate::log_at!(Warn, "mesh", "mesh drive {}: the pass panicked", lm.drive);
             set_status(&lm.member, |s| {
                 s.state = "error".into();
                 s.say(Said::coded(

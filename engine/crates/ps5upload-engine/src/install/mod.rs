@@ -608,7 +608,11 @@ async fn recycle_daemon(ip: &str) {
     let _ = tokio::task::spawn_blocking(move || {
         // Forced: a plain stop is refused for exactly the job this is clearing.
         if let Err(e) = ic::stop_forced(&ip_s) {
-            crate::log_warn!("installer daemon on {ip_s} did not stop: {e}");
+            crate::log_at!(
+                Warn,
+                "install",
+                "installer daemon on {ip_s} did not stop: {e}"
+            );
             return;
         }
         use ps5upload_core::payload_lifecycle as pl;
@@ -1083,7 +1087,12 @@ async fn ended_by_stop(
     if !state.jobs.is_cancelled(job) {
         return false;
     }
-    crate::log_info!("{}: stopped by the user", correlation_tag(job));
+    crate::log_at!(
+        Info,
+        "install",
+        "{}: stopped by the user",
+        correlation_tag(job)
+    );
     if let Some(sid) = session {
         crate::pkg_install::release_serve_session(&state.sessions, sid);
     }
@@ -1174,7 +1183,9 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             );
         }
     }
-    crate::log_info!(
+    crate::log_at!(
+        Info,
+        "install",
         "{tag}: install start ps5={ip} source={} content_id={} category={} app_ver={}",
         req.source.kind(),
         req.content_id,
@@ -1196,6 +1207,13 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         Delivery::Loopback => Route::Loopback,
         Delivery::Stream => Route::Stream,
     };
+    crate::log_at!(
+        Debug,
+        "install",
+        "{tag}: first route {route:?}; category {category:?}, patch check {}, title id {}",
+        patch_ver.is_some(),
+        title_id.as_deref().unwrap_or("-")
+    );
     state.jobs.update(&job, |s| {
         s.content_id = req.content_id.clone();
         s.title_id = title_id.clone();
@@ -1359,7 +1377,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                 // through the helper, one job, one result.
                 match staged_retry_through_engine(&r) {
                     Some(code) => {
-                        crate::log_info!(
+                        crate::log_at!(Info, "install", 
                             "{tag}: the console refused its own copy (0x{code:08X}); serving it from this engine instead"
                         );
                         // A network refusal stays with Sony's library for the life of the
@@ -1388,7 +1406,9 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                                 (r2, Some(sid), false)
                             }
                             Err(e) => {
-                                crate::log_warn!(
+                                crate::log_at!(
+                                    Warn,
+                                    "install",
                                     "{tag}: could not serve the console's copy: {}",
                                     e.message
                                 );
@@ -1441,9 +1461,13 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                         if STAGED_ROUTE_REFUSALS.contains(code) =>
                     {
                         if proxied {
-                            crate::log_info!("{tag}: streaming the link through this engine");
+                            crate::log_at!(
+                                Info,
+                                "install",
+                                "{tag}: streaming the link through this engine"
+                            );
                         } else {
-                            crate::log_info!(
+                            crate::log_at!(Info, "install", 
                                 "{tag}: the console refused the link (0x{code:08X}); proxying it through this engine instead"
                             );
                         }
@@ -1459,7 +1483,12 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                                 (r2, Some(sid), false)
                             }
                             Err(e) => {
-                                crate::log_warn!("{tag}: could not proxy the link: {}", e.message);
+                                crate::log_at!(
+                                    Warn,
+                                    "install",
+                                    "{tag}: could not proxy the link: {}",
+                                    e.message
+                                );
                                 // When the proxy was the only thing asked for, its own
                                 // failure is the answer, not a made-up refusal code.
                                 if proxied {
@@ -1522,7 +1551,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             already_installed,
             unreachable,
         ) {
-            crate::log_info!(
+            crate::log_at!(Info, "install", 
                 "{tag}: the console cannot fetch from this engine (0x{code:08X}); last resort: installing its own copy by file path"
             );
             if let Some(sid) = session_id.take() {
@@ -1544,7 +1573,11 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         (&reply, &req.source)
     {
         if session_id.is_none() && (via == "path" || via == "file") {
-            crate::log_warn!("{tag}: the daemon installed by file path ({via}) by itself");
+            crate::log_at!(
+                Warn,
+                "install",
+                "{tag}: the daemon installed by file path ({via}) by itself"
+            );
             route = Route::Path;
             via_plain_path = true;
             state.jobs.update(&job, |s| s.route = Some(Route::Path));
@@ -1553,6 +1586,11 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
     let deliver_ms = deliver_started.elapsed().as_millis() as u64;
 
     // interpret the daemon reply.
+    crate::log_at!(
+        Debug,
+        "install",
+        "{tag}: the installer daemon answered after {deliver_ms} ms on route {route:?} (plain path {via_plain_path}): {reply:?}"
+    );
     let (accepted, code, hint) = match &reply {
         Ok(ic::InstallReply::Accepted { .. }) => (true, 0u32, None),
         Ok(ic::InstallReply::Busy { job: j }) => (
@@ -1637,8 +1675,13 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         // A link the console fetches by itself has no session and never counts as fetched, and it
         // poisons Sony's library just the same.
         let nothing_fetched = fetched.is_none_or(|(served, _)| served == 0);
+        crate::log_at!(
+            Info,
+            "install",
+            "{tag}: refused on route {route:?}: Sony code 0x{code:08X}, nothing fetched {nothing_fetched}, hint {hint:?}"
+        );
         if should_recycle_daemon(route == Route::Stream, nothing_fetched, code) {
-            crate::log_warn!(
+            crate::log_at!(Warn, "install", 
                 "{tag}: network-class refusal 0x{code:08X} before any fetch — recycling the installer daemon so the next install starts clean"
             );
             recycle_daemon(&ip).await;
@@ -1768,7 +1811,11 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         // engine cannot see (the console just stops asking for data). The stream source is
         // already released above; a daemon still serving a staged copy is recycled so the
         // next install is not refused as busy.
-        crate::log_info!("{tag}: stopped by the user at {last_served} bytes");
+        crate::log_at!(
+            Info,
+            "install",
+            "{tag}: stopped by the user at {last_served} bytes"
+        );
         if session_id.is_none() && install_job_id.is_some() {
             recycle_daemon(&ip).await;
         }
@@ -1784,7 +1831,11 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         return;
     }
     if link_changed {
-        crate::log_warn!("{tag}: the file behind the link changed at {last_served} bytes");
+        crate::log_at!(
+            Warn,
+            "install",
+            "{tag}: the file behind the link changed at {last_served} bytes"
+        );
         state.jobs.update(&job, |s| {
             s.phase = Phase::Failed;
             s.verdict = Some(Verdict::Failed);
@@ -1797,7 +1848,9 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         return;
     }
     if delivery == DeliveryProgress::Stalled {
-        crate::log_warn!(
+        crate::log_at!(
+            Warn,
+            "install",
             "{tag}: delivery stalled at {last_served} bytes — source kept, reporting failed"
         );
         // A daemon serving this job is left alone too: it gives way to the next install by itself
@@ -1821,7 +1874,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                     never_reached,
                 )
             {
-                crate::log_info!(
+                crate::log_at!(Info, "install", 
                     "{tag}: the console never fetched from this engine; last resort: installing its own copy by file path"
                 );
                 if let Some(sid) = &session_id {
@@ -1966,39 +2019,40 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
     // Sony's "accepted" is not proof there: one form of it returned 0 and left a tile with no
     // content. So this route is only "installed" once the content is on a drive.
     let mut no_content_hint: Option<String> = None;
-    let verdict = match (&title_id, via_plain_path && route == Route::Path) {
-        (Some(t), true) => {
-            let (m, t) = (mgmt.clone(), t.clone());
-            let (st, jb) = (state.clone(), job.clone());
-            let present = tokio::task::spawn_blocking(move || {
-                let deadline = std::time::Instant::now() + PLAIN_PATH_CONTENT_WAIT;
-                loop {
-                    if crate::pkg_install::base_content_present(&m, &t) {
-                        return true;
+    let verdict =
+        match (&title_id, via_plain_path && route == Route::Path) {
+            (Some(t), true) => {
+                let (m, t) = (mgmt.clone(), t.clone());
+                let (st, jb) = (state.clone(), job.clone());
+                let present = tokio::task::spawn_blocking(move || {
+                    let deadline = std::time::Instant::now() + PLAIN_PATH_CONTENT_WAIT;
+                    loop {
+                        if crate::pkg_install::base_content_present(&m, &t) {
+                            return true;
+                        }
+                        if std::time::Instant::now() >= deadline || st.jobs.is_cancelled(&jb) {
+                            return false;
+                        }
+                        std::thread::sleep(std::time::Duration::from_secs(1));
                     }
-                    if std::time::Instant::now() >= deadline || st.jobs.is_cancelled(&jb) {
-                        return false;
-                    }
-                    std::thread::sleep(std::time::Duration::from_secs(1));
+                })
+                .await
+                .unwrap_or(false);
+                if ended_by_stop(&state, &job, &req, started, None).await {
+                    return;
                 }
-            })
-            .await
-            .unwrap_or(false);
-            if ended_by_stop(&state, &job, &req, started, None).await {
-                return;
-            }
-            if present {
-                verdict
-            } else {
-                crate::log_warn!(
+                if present {
+                    verdict
+                } else {
+                    crate::log_at!(Warn, "install", 
                     "{tag}: the console accepted the package by file path but no content appeared"
                 );
-                no_content_hint = Some(PLAIN_PATH_NO_CONTENT_HINT.to_string());
-                Verdict::Failed
+                    no_content_hint = Some(PLAIN_PATH_NO_CONTENT_HINT.to_string());
+                    Verdict::Failed
+                }
             }
-        }
-        _ => verdict,
-    };
+            _ => verdict,
+        };
     let verify_ms = verify_started.elapsed().as_millis() as u64;
 
     // metrics: served bytes + throughput.
@@ -2258,7 +2312,9 @@ async fn finalize(
     _started: std::time::Instant,
 ) {
     if let Some(st) = state.jobs.get(job) {
-        crate::log_info!(
+        crate::log_at!(
+            Info,
+            "install",
             "{}: done phase={:?} verdict={:?} route={:?} code=0x{:08X} served={} MB/s={:.1}",
             correlation_tag(job),
             st.phase,

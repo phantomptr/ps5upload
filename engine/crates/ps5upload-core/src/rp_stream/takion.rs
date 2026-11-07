@@ -321,7 +321,9 @@ impl Takion {
         .unwrap();
         let sock = UdpSocket::bind(bind).context("binding the stream socket")?;
         let granted = set_recv_buffer(&sock, RECV_BUFFER);
-        crate::core_log!(
+        crate::clog!(
+            Info,
+            "rp",
             "rp_stream: UDP receive buffer {} KiB asked, {} granted",
             RECV_BUFFER >> 10,
             granted.map_or("none reported".to_string(), |g| format!("{} KiB", g >> 10))
@@ -331,7 +333,9 @@ impl Takion {
             .local_addr()
             .map(|l| path_mtu(l.ip(), addr.ip()))
             .unwrap_or(MTU_LAN);
-        crate::core_log!(
+        crate::clog!(
+            Info,
+            "rp",
             "rp_stream: packet size {mtu} ({})",
             if mtu == MTU_LAN {
                 "same network"

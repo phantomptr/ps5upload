@@ -464,7 +464,17 @@ pub fn register(host: &str, account_id_b64: &str, pin: u32) -> Result<Registrati
         bail!("account id should decode to 8 bytes, got {}", decoded.len());
     }
 
+    crate::clog!(
+        Debug,
+        "pairing",
+        "rp_regist: {host}: searching for the console (SRC3)"
+    );
     regist_search(host, Duration::from_secs(5))?;
+    crate::clog!(
+        Debug,
+        "pairing",
+        "rp_regist: {host}: it answered; sending the registration"
+    );
 
     let mut nonce = [0u8; NONCE_LEN];
     getrandom_bytes(&mut nonce)?;
@@ -493,6 +503,13 @@ pub fn register(host: &str, account_id_b64: &str, pin: u32) -> Result<Registrati
     };
 
     let reply = split_http(&raw)?;
+    crate::clog!(
+        Debug,
+        "pairing",
+        "rp_regist: {host}: the console answered HTTP {} ({} bytes)",
+        reply.code,
+        reply.body.len()
+    );
     if reply.code >= 300 {
         // Sony's reason code says what actually went wrong; without it the
         // status alone is nearly useless for diagnosis, so fall back to
@@ -513,6 +530,12 @@ pub fn register(host: &str, account_id_b64: &str, pin: u32) -> Result<Registrati
                     .join("; ")
             ),
         };
+        crate::clog!(
+            Info,
+            "pairing",
+            "rp_regist: {host}: registration refused (HTTP {}): {reason}",
+            reply.code
+        );
         bail!("registration failed (HTTP {}): {reason}", reply.code);
     }
     if reply.body.is_empty() {
@@ -875,6 +898,18 @@ fn user_name_of(mgmt_addr: &str, uid: i64) -> String {
 pub fn pair_with_console(mgmt_addr: &str, host: &str) -> Result<PairResult> {
     let mut readiness = crate::remoteplay::remoteplay_readiness(mgmt_addr)
         .context("asking the console whether it can pair")?;
+    crate::clog!(
+        Debug,
+        "pairing",
+        "rp_regist: {host}: readiness: registry_err {}, symbols {}, user {}, activated {}, service on {}, per-user {} (on {})",
+        readiness.registry_err,
+        readiness.symbols_ok,
+        readiness.account_uid > 0,
+        readiness.activated(),
+        readiness.service_on(),
+        readiness.needs_per_user(),
+        readiness.user_on()
+    );
 
     // Check preconditions here rather than let registration fail with a
     // generic refusal — each of these has a different fix.
@@ -901,10 +936,20 @@ pub fn pair_with_console(mgmt_addr: &str, host: &str) -> Result<PairResult> {
     // while the account in use is not permitted, which pairs fine and then
     // refuses every session.
     if !readiness.service_on() {
+        crate::clog!(
+            Debug,
+            "pairing",
+            "rp_regist: {host}: turning Remote Play on"
+        );
         readiness = crate::remoteplay::remoteplay_enable(mgmt_addr, "service")
             .context("turning Remote Play on")?;
     }
     if readiness.needs_per_user() && !readiness.user_on() {
+        crate::clog!(
+            Debug,
+            "pairing",
+            "rp_regist: {host}: allowing this user Remote Play"
+        );
         readiness = crate::remoteplay::remoteplay_enable(mgmt_addr, "user")
             .context("allowing this user to use Remote Play")?;
     }
@@ -930,6 +975,13 @@ pub fn pair_with_console(mgmt_addr: &str, host: &str) -> Result<PairResult> {
         // then refused (measured: HTTP 403, reason 80108b03).
         // Its error already says what failed (the payload's Sony call and code).
         let snap = crate::remoteplay::remoteplay_request(mgmt_addr, None)?;
+        // Never the PIN itself: only that one came.
+        crate::clog!(
+            Debug,
+            "pairing",
+            "rp_regist: {host}: the helper made a pairing PIN ({} digits)",
+            snap.pin.trim().len()
+        );
 
         let pin = snap.pin.trim().to_string();
         if pin.is_empty() {
@@ -945,8 +997,17 @@ pub fn pair_with_console(mgmt_addr: &str, host: &str) -> Result<PairResult> {
     // state. A failed try that left it behind looks like the cause of the console then saying
     // another user is using Remote Play (#704; not measured).
     let _ = crate::remoteplay::remoteplay_cancel(mgmt_addr);
+    if let Err(e) = &attempt {
+        crate::clog!(Info, "pairing", "rp_regist: {host}: pairing failed: {e:#}");
+    }
     let reg = attempt?;
     let credential = credential_from_regist_key(&reg.regist_key)?;
+    crate::clog!(
+        Info,
+        "pairing",
+        "rp_regist: {host}: paired (via {})",
+        readiness.account_via
+    );
 
     Ok(PairResult {
         credential: credential.to_string(),
@@ -976,7 +1037,11 @@ fn with_pending_retries<T>(
         n += 1;
         match attempt() {
             Err(e) if n < tries && e.to_string().to_ascii_lowercase().contains("80108b03") => {
-                crate::core_log!("rp_regist: pairing try {n}: a registration is pending; again");
+                crate::clog!(
+                    Info,
+                    "pairing",
+                    "rp_regist: pairing try {n}: a registration is pending; again"
+                );
                 std::thread::sleep(wait);
             }
             r => return r,
@@ -1030,7 +1095,9 @@ fn with_retries<T>(
         match attempt() {
             Ok(v) => return Ok(v),
             Err(e) if is_transport_failure(&e) && n < tries => {
-                crate::core_log!(
+                crate::clog!(
+                    Info,
+                    "pairing",
                     "rp_regist: pairing try {n} failed on the way ({e}); trying again"
                 );
                 std::thread::sleep(wait);
@@ -1054,8 +1121,20 @@ pub fn pair_with_pin(host: &str, account_id_b64: &str, pin: &str) -> Result<Pair
     if account_id_b64.trim().is_empty() {
         bail!("pairing with the PS5's PIN needs the account ID of the user on the console");
     }
+    crate::clog!(
+        Debug,
+        "pairing",
+        "rp_regist: {host}: pairing with the PIN the PS5 shows"
+    );
     let reg = with_retries(PIN_TRIES, PIN_RETRY_WAIT, || {
         register(host, account_id_b64, pin)
+    })
+    .inspect_err(|e| {
+        crate::clog!(
+            Info,
+            "pairing",
+            "rp_regist: {host}: pairing with a PIN failed: {e:#}"
+        )
     })
     .map_err(|e| match e.downcast_ref::<NotAnswering>() {
         Some(n) => pin_not_answering(&n.detail),

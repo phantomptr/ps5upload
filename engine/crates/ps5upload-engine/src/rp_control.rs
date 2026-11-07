@@ -503,6 +503,13 @@ pub async fn stop(
         Ok(l) => l,
         Err(e) => return *e,
     };
+    crate::log_at!(
+        Info,
+        "rp",
+        "rp_stream: {}: stopped through the API (session {})",
+        live.host,
+        live.session
+    );
     live.stop.store(true, Ordering::Relaxed);
     Json(json!({"ok": true, "host": live.host, "session": live.session})).into_response()
 }

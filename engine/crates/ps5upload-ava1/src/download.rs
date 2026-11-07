@@ -613,7 +613,14 @@ fn run(
     let cancel = cancel.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
     let jobs_dir = pool.ava_dir().join("jobs");
     let _live = pool.live_job(&job_id); // the journal sweep leaves a running job alone
-    crate::block_on(async {
+    ps5upload_core::clog!(
+        Debug,
+        "transfer",
+        "ava1 download {} from {console}:{src}: flags {flags:#x}, fresh per attempt {fresh_per_attempt}",
+        crate::upload::hex(&job_id)
+    );
+    let t0 = Instant::now();
+    let outcome = crate::block_on(async {
         SessionGate::identity(pool)?;
         let mut sink = make_sink();
         let mut backoff = Duration::from_millis(250);
@@ -651,6 +658,12 @@ fn run(
             };
             gate.connected();
             let id = attempt_id(job_id, attempt);
+            ps5upload_core::clog!(
+                Debug,
+                "transfer",
+                "ava1 download {}: session up, attempt {attempt}, {base_bytes} bytes already done",
+                crate::upload::hex(&job_id)
+            );
             let _live_attempt = pool.live_job(&id);
             let mut link = session.job(id);
             let _ticker = Ticker::start(progress.clone(), counters, base_bytes, base_files);
@@ -725,7 +738,24 @@ fn run(
                 wait(&mut backoff, &format!("{why} ({durable} bytes durable)")).await;
             }
         }
-    })
+    });
+    match &outcome {
+        Ok(bytes) => ps5upload_core::clog!(
+            Debug,
+            "transfer",
+            "ava1 download {}: done, {bytes} bytes in {} ms",
+            crate::upload::hex(&job_id),
+            t0.elapsed().as_millis()
+        ),
+        Err(e) => ps5upload_core::clog!(
+            Debug,
+            "transfer",
+            "ava1 download {}: ended after {} ms: {e:#}",
+            crate::upload::hex(&job_id),
+            t0.elapsed().as_millis()
+        ),
+    }
+    outcome
 }
 
 #[allow(clippy::too_many_arguments)]
