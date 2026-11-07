@@ -4,6 +4,12 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.2.9
+
+- iPhone Duo: with the phone open and sideways, the stream now uses the whole height it can. Large system insets at the top and bottom cut the picture to a band across the middle, losing the top and bottom of the game. (#675)
+- iPhone Duo: when folded, the tabs move into the empty column under the system icons, which gives the page its height back. (#675)
+- iPhone and iPad app: during a stream the app asks iOS to send the controller's PS button to the console instead of opening the Games overlay. iOS only agrees if your controller's Home button setting lets the app decide. The menu in full screen also has a PS button now, which always works. (#675)
+
 ## 11.2.8
 
 - Convert: a game whose executables are plain unsigned ELFs now gets them fake-signed in the package, image or game folder you make, because the console won't start a plain ELF. Your source isn't changed. A game folder sent as it is stays as it is.

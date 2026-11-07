@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  CircleDot,
   Gamepad2,
   Minimize,
   Monitor,
@@ -111,6 +112,7 @@ export function PlayMenu({
   onSettings,
   onStop,
   onGame,
+  onPsButton,
   onTogether,
 }: {
   inFull: boolean;
@@ -122,6 +124,7 @@ export function PlayMenu({
   onStop: () => void;
   /** The Game panel (the running game, its cheats, the console). */
   onGame: () => void;
+  onPsButton?: () => void;
   /** Play Together (#641): friends as Player 2–4. */
   onTogether?: () => void;
 }) {
@@ -200,6 +203,14 @@ export function PlayMenu({
             onClick={onPip}
             testId="rp-pip"
             active={!!pip}
+          />
+        )}
+        {inFull && onPsButton && (
+          <Tile
+            label={tr("rp_action_ps", undefined, "PS button")}
+            icon={<CircleDot size={18} />}
+            onClick={onPsButton}
+            testId="rp-menu-ps"
           />
         )}
         <Tile

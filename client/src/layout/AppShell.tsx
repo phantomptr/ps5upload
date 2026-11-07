@@ -1828,7 +1828,7 @@ export default function AppShell() {
                 guarantees scroll position resets per screen. Same-path query
                 changes (e.g. /payloads?tab=send) keep the node, so tab
                 switches inside a screen don't re-animate. */}
-            <KeptScreens pathname={location.pathname} className="anim-screen flex-1 overflow-y-auto overflow-x-hidden pb-[calc(88px+var(--safe-bottom))] md:pb-0 [overscroll-behavior:contain]" />
+            <KeptScreens pathname={location.pathname} className="tab-room anim-screen flex-1 overflow-y-auto overflow-x-hidden pb-[calc(88px+var(--safe-bottom))] md:pb-0 [overscroll-behavior:contain]" />
           </main>
         </div>
       </div>

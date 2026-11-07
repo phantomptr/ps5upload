@@ -145,3 +145,48 @@ test.describe("a dialog and the notifications, folded", () => {
     expect(box.x + box.width).toBeLessThanOrEqual(466 - 93 + 1);
   });
 });
+
+// Read off a real one (#675): an open Duo held sideways has large insets top and bottom, which cut
+// the picture to a band across the middle.
+test.describe("an open Duo held sideways", () => {
+  test.use({ viewport: { width: 951, height: 669 }, hasTouch: true, isMobile: true });
+
+  test("shows the whole picture at the screen's full width", async ({ page }) => {
+    await mockConsole(page);
+    await insets(page, { top: 156, right: 0, bottom: 109, left: 0 });
+    await playFull(page);
+    const box = (await page.locator('[data-testid="rp-stage"] canvas').first().boundingBox())!;
+    expect(box.width).toBeCloseTo(951, 0);
+    expect(box.height).toBeCloseTo((951 * 9) / 16, 0);
+    expect(box.y).toBeCloseTo((669 - (951 * 9) / 16) / 2, 0);
+  });
+});
+
+test.describe("the tabs on a folded Duo", () => {
+  test.use({ viewport: { width: 466, height: 678 }, hasTouch: true, isMobile: true });
+
+  test("go down the empty column, under the system's icons", async ({ page }) => {
+    await mockConsole(page);
+    await insets(page, { top: 44, right: 93, bottom: 20, left: 0 });
+    await page.goto("/home", { waitUntil: "domcontentloaded" });
+    const nav = page.locator("[data-bottom-nav]");
+    await expect(nav).toHaveAttribute("data-rail", "right");
+    const box = (await nav.boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(466 - 93);
+    expect(box.x + box.width).toBeLessThanOrEqual(466);
+    expect(box.y).toBeGreaterThanOrEqual(44 + 100);
+    expect(box.y + box.height).toBeLessThanOrEqual(678 - 20);
+    const tabs = await nav.locator("a").all();
+    expect(tabs.length).toBe(6);
+    for (const t of tabs) expect((await t.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await page.screenshot({ path: "../output/playwright/rp-screens/Duo folded tabs.png" });
+  });
+
+  test("stay along the bottom on a phone with no column", async ({ page }) => {
+    await mockConsole(page);
+    await insets(page, { top: 59, right: 0, bottom: 34, left: 0 });
+    await page.goto("/home", { waitUntil: "domcontentloaded" });
+    await expect(page.locator("[data-bottom-nav]")).toBeVisible();
+    await expect(page.locator("[data-bottom-nav]")).not.toHaveAttribute("data-rail");
+  });
+});

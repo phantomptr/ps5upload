@@ -72,6 +72,82 @@ pub fn focus_webview(window: tauri::WebviewWindow) -> Result<(), String> {
     }
 }
 
+/// The iOS app: whether the controllers' Home button (the PS button) is the app's or the system's.
+/// By default iOS opens its Games overlay and the page never sees the press (#675). iOS only honours
+/// this when the user's in-app Home button setting defers to the app. Every other platform: a no-op.
+#[tauri::command]
+pub fn hold_controller_home(window: tauri::WebviewWindow, on: bool) -> Result<(), String> {
+    #[cfg(target_os = "ios")]
+    {
+        window
+            .with_webview(move |_| ios_home::set(on))
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        let _ = (window, on);
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "ios")]
+mod ios_home {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+    use std::os::raw::c_char;
+
+    // Loaded for GCController: WebKit only pulls the framework in once a page asks for gamepads.
+    #[link(name = "GameController", kind = "framework")]
+    extern "C" {}
+
+    /// `GCSystemGestureStateEnabled`.
+    const GESTURE_ENABLED: isize = 0;
+    /// `GCSystemGestureStateDisabled`: "input is passed directly to the app".
+    const GESTURE_DISABLED: isize = 2;
+
+    /// Runs on the main thread (`with_webview`). Objects come back autoreleased.
+    pub fn set(on: bool) {
+        let (Some(controllers), Some(strings)) =
+            (AnyClass::get(c"GCController"), AnyClass::get(c"NSString"))
+        else {
+            return;
+        };
+        let state = if on {
+            GESTURE_DISABLED
+        } else {
+            GESTURE_ENABLED
+        };
+        // SAFETY: documented GameController and Foundation selectors, on the main thread, each
+        // result checked for nil before use. `GCInputButtonHome` is the string "Button Home".
+        unsafe {
+            let name: *mut AnyObject = msg_send![
+                strings,
+                stringWithUTF8String: c"Button Home".as_ptr() as *const c_char
+            ];
+            let list: *mut AnyObject = msg_send![controllers, controllers];
+            if list.is_null() || name.is_null() {
+                return;
+            }
+            let count: usize = msg_send![list, count];
+            for i in 0..count {
+                let controller: *mut AnyObject = msg_send![list, objectAtIndex: i];
+                let profile: *mut AnyObject = msg_send![controller, physicalInputProfile];
+                if profile.is_null() {
+                    continue;
+                }
+                let buttons: *mut AnyObject = msg_send![profile, buttons];
+                if buttons.is_null() {
+                    continue;
+                }
+                let home: *mut AnyObject = msg_send![buttons, objectForKey: name];
+                if !home.is_null() {
+                    let _: () = msg_send![home, setPreferredSystemGestureState: state];
+                }
+            }
+        }
+    }
+}
+
 #[cfg(target_os = "android")]
 mod android {
     use jni::objects::{JObject, JValue};
