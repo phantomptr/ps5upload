@@ -16,6 +16,7 @@ mod games;
 mod hw;
 mod install;
 mod jobs;
+mod logs;
 mod mesh;
 mod more_files;
 mod notifications;
@@ -88,6 +89,7 @@ fn all() -> &'static [ToolDef] {
     TOOLS.get_or_init(|| {
         [
             engine::tools(),
+            logs::tools(),
             consoles::tools(),
             jobs::tools(),
             files::tools(),

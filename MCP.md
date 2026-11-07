@@ -19,7 +19,7 @@ More than 120 tools, all of them thin layers over [the engine's API](API.md):
 
 | Area | Tools (prefix) | For example |
 |---|---|---|
-| The engine | `engine_*` | Version, status, recent events |
+| The engine | `engine_*`, `logs_*` | Version, status, recent events; log levels per category and the newest log lines |
 | Consoles | `consoles_*` | The known ones, find them on the network, how one stands, make sure the helper runs |
 | Files | `files_*` | List, read, write, copy, move, delete, hash, extract, mount, eject |
 | Moving things | `upload_*`, `queue_*`, `files_download`, `sources_*`, `jobs_*` | Send a file or folder or archive, line work up per console, follow it, pause or stop it, fetch from a NAS |
@@ -264,9 +264,17 @@ host still approves who joins.
 
 **Logs.** Engine log lines and journal events are cleaned where they are written, and again when an
 older journal line is read: a password in a URL, a field or `name=value` named as a key, token, password
-or secret, a bearer token, and the key at the end of an `rtmp://` address. The console's kernel log and
+or secret, a bearer token, a pairing PIN, and the key at the end of an `rtmp://` address. The console's kernel log and
 syslog are cleaned the same way when read, and so are the error messages in any tool's answer. This goes
 by shape, so a key with no name beside it can't be recognised: the app never logs one.
+
+**Looking into a problem.** `logs_level_get` shows how much each category (`rp`, `install`,
+`transfer`, `files`, `cleanup`, `convert`, `pairing`, `wake`, `helper`, `connection` and the rest)
+writes. `logs_level_set` raises one or more, for example `{"categories": {"rp": "trace"}, "merge":
+true, "minutes": 30}`; anything above `info` falls back to `info` by itself when the minutes are up,
+on the engine, in the app and on the console's helper. Then reproduce the problem and read
+`logs_recent` with `level`, `category` and `minutes` (or `since_seq` to read on). `{"reset": true}`
+puts everything back. The same is in the app under Settings › Logs and on the report screen.
 
 **The console's own files.** File tools reach what the helper does, which includes everything under
 `/user` and `/data`: saves, game data, the console's account data. That is your console's data, not this
