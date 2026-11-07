@@ -7288,6 +7288,8 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "rp_touch_size_m": "Orta",
 "rp_touch_size_l": "Büyük",
 "rp_touch_opacity": "Kumanda opaklığı",
+"rp_touch_mode_switch_full": "Tam ekranda Kumanda/Dokunmatik yüzey anahtarını göster",
+"rp_touch_mode_switch_full_hint": "Yayın denetimleriyle birlikte gizlenir; geri getirmek için görüntüye dokunun.",
 "rp_menu": "Menü",
 "rp_menu_close": "Menüyü kapat",
 "rp_more": "Daha fazla",

@@ -7296,6 +7296,8 @@ library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para joga
 "rp_touch_size_m": "Médio",
 "rp_touch_size_l": "Grande",
 "rp_touch_opacity": "Opacidade do controle",
+"rp_touch_mode_switch_full": "Mostrar o seletor Controle/Touchpad em tela cheia",
+"rp_touch_mode_switch_full_hint": "Ele some junto com os controles da transmissão; toque na imagem para trazê-lo de volta.",
 "rp_menu": "Menu",
 "rp_menu_close": "Fechar o menu",
 "rp_more": "Mais",

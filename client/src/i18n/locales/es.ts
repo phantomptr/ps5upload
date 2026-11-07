@@ -7234,6 +7234,8 @@ library_compressed_hint: "Las imágenes comprimidas necesitan ShadowMount+ para 
 "rp_touch_size_m": "Mediano",
 "rp_touch_size_l": "Grande",
 "rp_touch_opacity": "Opacidad del mando",
+"rp_touch_mode_switch_full": "Mostrar el selector Mando/Panel táctil en pantalla completa",
+"rp_touch_mode_switch_full_hint": "Se oculta con los controles de la transmisión; toca la imagen para que vuelva.",
 "rp_menu": "Menú",
 "rp_menu_close": "Cerrar el menú",
 "rp_more": "Más",

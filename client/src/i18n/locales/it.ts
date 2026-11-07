@@ -7234,6 +7234,8 @@ library_compressed_hint: "Le immagini compresse richiedono ShadowMount+ per gioc
 "rp_touch_size_m": "Medio",
 "rp_touch_size_l": "Grande",
 "rp_touch_opacity": "Opacità del controller",
+"rp_touch_mode_switch_full": "Mostra il selettore Controller/Touchpad a schermo intero",
+"rp_touch_mode_switch_full_hint": "Si nasconde con i controlli dello stream; tocca l'immagine per farlo riapparire.",
 "rp_menu": "Menu",
 "rp_menu_close": "Chiudi il menu",
 "rp_more": "Altro",

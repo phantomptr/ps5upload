@@ -7240,6 +7240,8 @@ library_compressed_hint: "压缩镜像需要 ShadowMount+ 才能游玩。如需�
 "rp_touch_size_m": "中",
 "rp_touch_size_l": "大",
 "rp_touch_opacity": "手柄不透明度",
+"rp_touch_mode_switch_full": "全屏时显示手柄/触摸板切换",
+"rp_touch_mode_switch_full_hint": "它会随串流控件一起隐藏；轻点画面即可重新显示。",
 "rp_menu": "菜单",
 "rp_menu_close": "关闭菜单",
 "rp_more": "更多",

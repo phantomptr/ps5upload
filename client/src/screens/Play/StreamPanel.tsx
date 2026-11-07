@@ -67,6 +67,7 @@ import {
   isPhoneSized,
   lockLandscape,
   PHONE_LANDSCAPE_QUERY,
+  setIosStatusBarHidden,
   setWindowFullscreen,
   unlockOrientation,
   useMedia,
@@ -687,6 +688,13 @@ export function StreamPanel() {
     return () => window.removeEventListener("focus", onFocus);
   }, [phase, stream]);
 
+  const showChrome = useCallback(() => {
+    setChrome(true);
+    window.clearTimeout(hideTimer.current);
+    hideTimer.current = window.setTimeout(() => setChrome(false), 2500);
+  }, []);
+  useEffect(() => () => window.clearTimeout(hideTimer.current), []);
+
   const leaveFullLayout = useCallback(() => {
     setFull(false);
     setMenuOpen(false);
@@ -793,9 +801,12 @@ export function StreamPanel() {
       if (menuOpen) return;
       const t = e.target as Element | null;
       if (t?.closest?.('[data-testid="rp-menu-handle"],[data-testid="rp-menu-backdrop"],[role="dialog"]')) return;
+      // A finger on the picture (not on the on-screen controller's buttons, which are the
+      // game's) brings back the controls hidden in full screen: the Controller/Touchpad switch.
+      if (full && e.pointerType !== "mouse" && !t?.closest?.('[data-testid="rp-touch"]')) showChrome();
       if (full && coarse && !docFullscreen() && canDocFullscreen()) void setWindowFullscreen(true);
     },
-    [full, coarse, menuOpen],
+    [full, coarse, menuOpen, showChrome],
   );
   // Into or out of full screen the stage is a new element: keep the keyboard on it.
   useEffect(() => {
@@ -803,13 +814,17 @@ export function StreamPanel() {
   }, [full]);
   // Leaving the screen leaves full screen.
   useEffect(() => () => void setWindowFullscreen(false), []);
-
-  const showChrome = useCallback(() => {
-    setChrome(true);
-    window.clearTimeout(hideTimer.current);
-    hideTimer.current = window.setTimeout(() => setChrome(false), 2500);
-  }, []);
-  useEffect(() => () => window.clearTimeout(hideTimer.current), []);
+  // The iOS app: no status bar (the clock) over the picture in full screen, however it started
+  // (the button or the phone turned sideways), and back on leaving (#722).
+  useEffect(() => {
+    if (!full) return;
+    setIosStatusBarHidden(true);
+    return () => setIosStatusBarHidden(false);
+  }, [full]);
+  // Into full screen: the controls (and the Controller/Touchpad switch) show, then hide.
+  useEffect(() => {
+    if (full) showChrome();
+  }, [full, showChrome]);
 
   const start = useCallback(
     async (attach = false, host?: string) => {
@@ -1498,8 +1513,10 @@ export function StreamPanel() {
               onMenu={touchMenu ? () => setMenuOpen(true) : undefined}
             />
           )}
-          {touchHere && playing && (
+          {touchHere && playing && (!full || prefs.touchModeSwitchFull) && (
             <TouchModeToggle
+              // Full screen: it hides with the stream's controls; a tap on the picture shows both.
+              hidden={full && !chrome}
               mode={touchpadOn ? "touchpad" : "controller"}
               onChange={(m) => setPrefs({ touchMode: m })}
               blocked={kbm.hostCaps?.mouse ? null : kbmBlockText(tr, kbmBlockReason(kbm.hostCaps))}

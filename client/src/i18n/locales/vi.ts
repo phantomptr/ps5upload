@@ -7283,6 +7283,8 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "rp_touch_size_m": "Vừa",
 "rp_touch_size_l": "Lớn",
 "rp_touch_opacity": "Độ mờ đục của tay cầm",
+"rp_touch_mode_switch_full": "Hiện công tắc Tay cầm/Bàn di chuột khi toàn màn hình",
+"rp_touch_mode_switch_full_hint": "Công tắc ẩn cùng các nút điều khiển luồng; chạm vào hình để hiện lại.",
 "rp_menu": "Menu",
 "rp_menu_close": "Đóng menu",
 "rp_more": "Thêm",

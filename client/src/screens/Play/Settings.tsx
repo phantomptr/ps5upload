@@ -657,6 +657,22 @@ export function SettingsBody({ tab, running }: { tab: SettingsTab; running: bool
             </label>
           </div>
         )}
+        {prefs.touchControls !== "off" && (
+          <Toggle
+            checked={prefs.touchModeSwitchFull}
+            onChange={(v) => setPrefs({ touchModeSwitchFull: v })}
+            label={tr(
+              "rp_touch_mode_switch_full",
+              undefined,
+              "Show the Controller/Touchpad switch in full screen",
+            )}
+            hint={tr(
+              "rp_touch_mode_switch_full_hint",
+              undefined,
+              "It hides with the stream's controls; tap the picture to bring it back.",
+            )}
+          />
+        )}
         <Hint>
           {tr(
             "rp_controls_hint",

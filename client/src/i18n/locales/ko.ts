@@ -7298,6 +7298,8 @@ library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가
 "rp_touch_size_m": "보통",
 "rp_touch_size_l": "크게",
 "rp_touch_opacity": "컨트롤러 불투명도",
+"rp_touch_mode_switch_full": "전체 화면에서 컨트롤러/터치패드 전환 표시",
+"rp_touch_mode_switch_full_hint": "스트림 컨트롤과 함께 숨겨집니다. 화면을 탭하면 다시 나타납니다.",
 "rp_menu": "메뉴",
 "rp_menu_close": "메뉴 닫기",
 "rp_more": "더 보기",

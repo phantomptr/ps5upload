@@ -7586,6 +7586,8 @@ err_display_crashed: "The app's display hit an error while this ran (React #185)
 "rp_touch_size_m": "Medium",
 "rp_touch_size_l": "Large",
 "rp_touch_opacity": "Controller opacity",
+"rp_touch_mode_switch_full": "Show the Controller/Touchpad switch in full screen",
+"rp_touch_mode_switch_full_hint": "It hides with the stream's controls; tap the picture to bring it back.",
 "rp_menu": "Menu",
 "rp_menu_close": "Close the menu",
 "rp_more": "More",

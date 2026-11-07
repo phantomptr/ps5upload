@@ -7289,6 +7289,8 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "rp_touch_size_m": "Mittel",
 "rp_touch_size_l": "Groß",
 "rp_touch_opacity": "Controller-Deckkraft",
+"rp_touch_mode_switch_full": "Controller/Touchpad-Schalter im Vollbild anzeigen",
+"rp_touch_mode_switch_full_hint": "Er blendet sich mit den Stream-Steuerelementen aus; tippe auf das Bild, um ihn zurückzuholen.",
 "rp_menu": "Menü",
 "rp_menu_close": "Menü schließen",
 "rp_more": "Mehr",

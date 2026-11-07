@@ -7577,6 +7577,8 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "rp_touch_size_m": "Közepes",
 "rp_touch_size_l": "Nagy",
 "rp_touch_opacity": "Kontroller átlátszatlansága",
+"rp_touch_mode_switch_full": "A Kontroller/Érintőpad kapcsoló megjelenítése teljes képernyőn",
+"rp_touch_mode_switch_full_hint": "A közvetítés vezérlőivel együtt elrejtőzik; koppints a képre, hogy visszahozd.",
 "rp_menu": "Menü",
 "rp_menu_close": "Menü bezárása",
 "rp_more": "Továbbiak",

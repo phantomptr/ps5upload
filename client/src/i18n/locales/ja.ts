@@ -7300,6 +7300,8 @@ library_compressed_hint: "圧縮イメージのプレイには ShadowMount+ が�
 "rp_touch_size_m": "中",
 "rp_touch_size_l": "大",
 "rp_touch_opacity": "コントローラーの不透明度",
+"rp_touch_mode_switch_full": "全画面でコントローラー/タッチパッドの切り替えを表示",
+"rp_touch_mode_switch_full_hint": "ストリームの操作ボタンと一緒に隠れます。画像をタップすると戻ります。",
 "rp_menu": "メニュー",
 "rp_menu_close": "メニューを閉じる",
 "rp_more": "その他",
