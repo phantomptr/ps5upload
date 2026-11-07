@@ -9,6 +9,7 @@ import { create } from "zustand";
 import type { AmprLz4Options, FfpfscLevel, FpkgCompression, ImageFormat } from "../api/fpkg";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { useUploadSettingsStore } from "./uploadSettings";
+import type { AmprEmuBuild } from "./convertPrefs";
 
 export type ConvertThen = "keep" | "stream" | "upload";
 export type ConvertStatus = "pending" | "running" | "installing" | "handed" | "done" | "failed" | "cancelled";
@@ -78,6 +79,10 @@ export interface ConvertItem {
   fullVerify?: boolean;
   /** How hard a .ffpfsc is compressed, likewise. */
   imageLevel?: FfpfscLevel;
+  /** An image of a libSceAmpr game with no emulator gets the AMPR emulator, and which one: as
+   *  set when the game was added (absent on older items: the current settings at run time). */
+  addAmprEmu?: boolean;
+  amprEmuBuild?: AmprEmuBuild;
   status: ConvertStatus;
   packagePath?: string;
   error?: string;

@@ -704,6 +704,20 @@ mod tests {
         );
         let (c, _) = parse_body(smb_form("nas", "/XXX/YYY/", "")).ok().unwrap();
         assert_eq!((c.share.as_str(), c.start_path.as_str()), ("XXX", "/YYY"));
+        // Discord: `share/sub/folder` (either slash) failed with BAD_NETWORK_NAME in other tools'
+        // style; the first name is the share and the rest goes in front of Start folder.
+        for typed in [
+            "share/sub/folder",
+            "share\\sub\\folder",
+            "share\\sub/folder\\",
+        ] {
+            let (c, _) = parse_body(smb_form("nas", typed, "/inner")).ok().unwrap();
+            assert_eq!(
+                (c.share.as_str(), c.start_path.as_str()),
+                ("share", "/sub/folder/inner"),
+                "{typed}"
+            );
+        }
         assert!(parse_body(smb_form("nas", "", "")).is_err());
         assert!(parse_body(smb_form("smb://nas/", " / ", "")).is_err());
     }

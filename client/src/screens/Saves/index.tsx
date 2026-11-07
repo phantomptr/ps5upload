@@ -1,6 +1,6 @@
 import { consoleAddr, hostOf } from "../../lib/addr";
 import { isAndroid } from "../../lib/platform";
-import { backupStamp } from "./backupStamp";
+import { backupStamp, inBackupFolder } from "./backupStamp";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 // useEffect is consumed inside SaveThumbnail below.
 import { Link, useLocation, useNavigate } from "react-router";
@@ -103,6 +103,8 @@ import { pickPath } from "../../lib/pickPath";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 import { isTauriEnv } from "../../lib/tauriEnv";
+import { useAutoSaveBackupStore } from "../../state/autoSaveBackup";
+import { engineIsOnThisDevice } from "../../state/engine";
 import AutoBackupCard from "./AutoBackupCard";
 import ServerBackupCard from "./ServerBackupCard";
 import MoveFromPs4 from "./MoveFromPs4";
@@ -545,7 +547,11 @@ export default function SavesScreen() {
       const destZip = android
         ? ""
         : await saveDialog({
-            defaultPath: destZipName,
+            // The save backup folder, where the automatic ones are (on this computer only).
+            defaultPath: inBackupFolder(
+              engineIsOnThisDevice() ? useAutoSaveBackupStore.getState().settings?.dir : null,
+              destZipName,
+            ),
             filters: [{ name: tr("saves_zip_filter", undefined, "ZIP archive"), extensions: ["zip"] }],
             title: tr("saves_download_picker", undefined, "Save backup as…"),
           });

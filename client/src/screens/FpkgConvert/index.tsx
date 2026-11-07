@@ -25,7 +25,7 @@ import { isIOS } from "../../lib/platform";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { engineIsOnThisDevice } from "../../state/engine";
 import { profileNameForHost, useRosterStore } from "../../state/roster";
-import { useWebviewDrop } from "../../lib/useWebviewDrop";
+import { useWebviewDropAll } from "../../lib/useWebviewDrop";
 import { useConnectionStore } from "../../state/connection";
 import { useConvertPrefs } from "../../state/convertPrefs";
 import {
@@ -220,6 +220,9 @@ export default function WorkshopScreen() {
       deleteAfterInstall: then !== "keep" && deleteAfter,
       fullVerify: prefs.fullVerify,
       imageLevel: build.kind === "image" && build.compress && !lz4 ? prefs.imageLevel : undefined,
+      // The AMPR emulator choice as it is now: changing it later is for games added later.
+      addAmprEmu: prefs.addAmprEmu,
+      amprEmuBuild: prefs.amprEmuBuild,
     });
   };
   /** Queue what was picked or found, then say what was left out. */
@@ -380,7 +383,24 @@ export default function WorkshopScreen() {
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
   };
 
-  const dropActive = useWebviewDrop(chooseOrQueue, true);
+  /** A drop: one game is chosen (or queued while one is being made); several go into the queue,
+   *  each looked at as a handed path is. A .pkg is a game here like an image (#716). */
+  const dropPaths = (paths: string[]) => {
+    if (paths.length === 1) {
+      chooseOrQueue(paths[0]);
+      return;
+    }
+    Promise.all(paths.map((p) => sourcesForPath(p)))
+      .then((found) =>
+        queueAll(
+          found.flatMap((f) => f.sources),
+          found.reduce((n, f) => n + f.skipped, 0),
+        ),
+      )
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+  };
+
+  const dropActive = useWebviewDropAll(dropPaths, true);
 
   // A game handed over from elsewhere (the viewer's Convert… on a drop).
   const location = useLocation();

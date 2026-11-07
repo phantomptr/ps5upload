@@ -10,6 +10,8 @@ export interface SaveBackupSettings {
   keep: number;
   /** Consoles to back up (bare IPs). */
   hosts: string[];
+  /** Backup folders used before `dir`: their backups still list and restore. */
+  old_dirs?: string[];
 }
 
 export interface SaveBackupStatus {

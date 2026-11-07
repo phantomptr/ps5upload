@@ -6,7 +6,7 @@
 // browser build reaches the same routes through lib/browserInvoke.ts.
 
 import { invoke } from "../lib/invokeLogged";
-import { useConvertPrefs } from "../state/convertPrefs";
+import { useConvertPrefs, type AmprEmuBuild } from "../state/convertPrefs";
 
 /** The game image filesystems the engine writes: UFS2 (`.ffpkg`, what ShadowMount+
  *  recommends), exFAT, or PFS (`.ffpfs`, experimental in ShadowMount+ 1.7). */
@@ -172,6 +172,8 @@ export const fpkg = {
     ffpfscLevel?: FfpfscLevel,
     /** When the image's name is taken in the output folder, add " (2)" instead of refusing. */
     keepBoth = false,
+    /** The AMPR emulator choice for this build (a queued game's own); the settings when absent. */
+    amprEmu?: { add: boolean; build: AmprEmuBuild },
   ) =>
     invoke<{ job_id: string }>("exfat_build", {
       source,
@@ -187,8 +189,8 @@ export const fpkg = {
       name,
       ffpfscLevel: compress ? ffpfscLevel : undefined,
       keepBoth,
-      addAmprEmu: useConvertPrefs.getState().addAmprEmu,
-      amprEmuBuild: useConvertPrefs.getState().amprEmuBuild,
+      addAmprEmu: amprEmu?.add ?? useConvertPrefs.getState().addAmprEmu,
+      amprEmuBuild: amprEmu?.build ?? useConvertPrefs.getState().amprEmuBuild,
     }),
   /** Unpack a game image (.exfat, .ffpkg, .ffpfs, .ffpfsc) or a package made with the debug
    *  key into a plain folder in the output folder, named after the source (or `name`). One
