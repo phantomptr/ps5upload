@@ -4,6 +4,18 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.4.0
+
+- New: zstd asset packs in Convert, smaller than LZ4 and for any plain image (.ffpkg, .exfat, .ffpfs), with levels 1, 5 and 19. They're written straight into the image with no temporary copy, and the image gets ampr-emu-ng as its emulator. A game already in LZ4 packs can switch to zstd, or back, without its original files.
+- PS4 games: an image or folder of a PS4 game now gets the sce_sys/param.json ShadowMount+ reads. Without it the game has been reported to mount and then refuse to start (NP-103270-3).
+- Games that read through AMPR and have no emulator: Convert now adds ampr_emu to a plain image too, because they fail to start without one. It's on by default, with a switch in the options. A new Add the AMPR emulator button does it for a game you already have: in the folder, or as a ShadowMount+ backport folder for an image on the PS5, .ffpfsc included.
+- ShadowMount+ panel: Scan now picks up a new image without deleting the game from the home screen, and gives games that failed to mount another try.
+- Convert says beforehand how many plain executables will be fake-signed, and where an LZ4-packed image belongs.
+- Crop to 21:9 now says what it cuts: the top and bottom of any game not made for ultrawide screens. (#675)
+- Phones: banners no longer run under a side column of system icons, as on a folded iPhone Duo, which hid Stop. (#675)
+
+These follow findings and code from Alembic and PS5 Dump Forge. None of it has been run on a console yet, so please say if a game doesn't start.
+
 ## 11.3.0
 
 - New: Backup & Restore (Console section). Choose what to keep on your computer: saves, payload settings, screenshots and clips, homebrew and other folders in /data, each with its size. It says what it leaves out and why: installed games, because copying them back doesn't install them, and the console's own system files. (#707)
