@@ -323,6 +323,47 @@
         ],
         "type": "object"
       },
+      "AmprEmuOutcome": {
+        "properties": {
+          "folder": {
+            "description": "Where the files went.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "`folder`: added to the game's own folder. `backport`: a backport folder for an image.",
+            "type": "string"
+          },
+          "rescanned": {
+            "description": "Whether ShadowMount+ was asked to scan again (a console's image only).",
+            "type": "boolean"
+          },
+          "written": {
+            "description": "What was written, relative to `folder`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "folder",
+          "written",
+          "rescanned"
+        ],
+        "type": "object"
+      },
+      "AmprEmuReq": {
+        "properties": {
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "type": "object"
+      },
       "AmprIndexReq": {
         "properties": {
           "source": {
@@ -5940,6 +5981,11 @@
               "string",
               "null"
             ]
+          },
+          "unsigned_executables": {
+            "description": "How many of its executables are plain ELF files, which a build fake-signs.",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
@@ -5952,7 +5998,8 @@
           "planned_size",
           "output_free",
           "checks",
-          "ampr_packs"
+          "ampr_packs",
+          "unsigned_executables"
         ],
         "type": "object"
       },
@@ -19601,6 +19648,53 @@
             "id_field": "job_id",
             "status": "/api/jobs/{id}"
           },
+          "response_schema": "struct"
+        }
+      }
+    },
+    "/api/fpkg/ampr-emu": {
+      "post": {
+        "description": "POST /api/fpkg/ampr-emu `{source}`: the emulator added to a game where it stands.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AmprEmuReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AmprEmuOutcome"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The emulator added to a game where it stands",
+        "tags": [
+          "workshop"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
           "response_schema": "struct"
         }
       }

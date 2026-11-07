@@ -1207,6 +1207,8 @@ pub struct Inspection {
     /// For a libSceAmpr title, whether an image can carry LZ4 asset packs (see
     /// [`crate::ampr_pack::image::readiness`]); `None` for any other title.
     pub ampr_packs: Option<crate::ampr_pack::image::Readiness>,
+    /// How many of its executables are plain ELF files, which a build fake-signs.
+    pub unsigned_executables: usize,
 }
 
 impl Inspection {
@@ -1446,5 +1448,6 @@ pub fn inspect(source_path: &Path, output_dir: &Path) -> Result<Inspection> {
         output_free: free_bytes(output_dir),
         checks,
         ampr_packs: crate::ampr_pack::image::readiness(tree.as_mut()),
+        unsigned_executables: crate::fself::unsigned(tree.as_mut()).len(),
     })
 }

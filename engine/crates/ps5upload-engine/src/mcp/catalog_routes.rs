@@ -275,6 +275,7 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/files/upload"),
     ("DELETE", "/api/files/upload/{id}"),
     ("POST", "/api/folder/build"),
+    ("POST", "/api/fpkg/ampr-emu"),
     ("POST", "/api/fpkg/ampr-index"),
     ("POST", "/api/fpkg/build"),
     ("POST", "/api/fpkg/delete"),

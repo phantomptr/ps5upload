@@ -260,6 +260,15 @@ export function GameCard(props: GameCardProps) {
               {fw ? " · " : ""}
               {tr("fpkg.checksPassed", { count: passed.length }, "{count} checks passed")}
             </div>
+            {!!inspection.unsigned_executables && (
+              <div className="text-xs text-[var(--color-muted)]" data-testid="fake-sign-note">
+                {tr(
+                  "fpkg.fake_sign_note",
+                  { count: inspection.unsigned_executables },
+                  "{count} plain (unsigned) executables in this game get fake-signed as it converts, or it wouldn't start. The source isn't changed.",
+                )}
+              </div>
+            )}
             {warnings.map((c) => (
               <div key={c.name} className="text-[var(--color-warn)]">
                 {c.name}: {c.detail}

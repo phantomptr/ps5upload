@@ -54,6 +54,7 @@ import { outputFor } from "../../lib/outputPlace";
 import { SwapJournals } from "./SwapJournals";
 import { nameOf, QueueCard } from "./QueueCard";
 import { isRarLaterVolume } from "../../lib/rarVolumes";
+import { AmprEmuTool, amprEmuOffered } from "./AmprEmuTool";
 import { AmprIndexTool, amprIndexPlan } from "./AmprIndexTool";
 import {
   imageBuildWith,
@@ -672,6 +673,7 @@ export default function WorkshopScreen() {
   const mountable = drives.canMount && !locked && isDriveImage(source) && !source.startsWith("ps5://") && !isRemotePath(source);
   // #621: a libSceAmpr game's ampr_emu.index made again from its files, without converting.
   const indexable = !inside && amprIndexPlan(source, inspection) !== "hidden";
+  const emulatable = !inside && amprEmuOffered(source, inspection);
   /** A .ffpfsc's index is renewed by making a fresh .ffpfsc of it. */
   const convertAgain = () => {
     if (!src || locked) return;
@@ -683,7 +685,7 @@ export default function WorkshopScreen() {
     setTimeout(showRun, 50);
   };
   const tools =
-    lookable || mountable || folderable || indexable ? (
+    lookable || mountable || folderable || indexable || emulatable ? (
       <div className="flex flex-wrap gap-2 border-t border-[var(--color-border)] pt-2.5">
         {lookable && !inside && (
           <Button size="sm" variant="secondary" leftIcon={<FolderSearch size={14} />} onClick={() => setInside(true)}>
@@ -716,6 +718,13 @@ export default function WorkshopScreen() {
           >
             {tr("workshop_open_as_drive", undefined, "Open as a Drive")}
           </Button>
+        )}
+        {emulatable && (
+          <AmprEmuTool
+            source={source}
+            locked={locked}
+            onAdded={() => void recheckQuietly(source)}
+          />
         )}
         {indexable && (
           <AmprIndexTool

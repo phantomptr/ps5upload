@@ -2330,6 +2330,13 @@ pub async fn fpkg_delete(path: String) -> Result<JsonValue, String> {
 /// Rebuild a libSceAmpr game folder's `ampr_emu.index` where it is (this computer or a
 /// `ps5://` folder); runs as an engine job. POST /api/fpkg/ampr-index.
 #[tauri::command]
+pub async fn fpkg_ampr_emu(source: String) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/fpkg/ampr-emu");
+    post_json(&url, &serde_json::json!({ "source": source })).await
+}
+
+#[tauri::command]
 pub async fn fpkg_ampr_index(source: String) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/fpkg/ampr-index");

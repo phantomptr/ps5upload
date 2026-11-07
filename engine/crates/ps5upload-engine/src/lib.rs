@@ -15,6 +15,7 @@
 //! The API is the route table in `build_app`, plus the sub-routers it merges.
 
 mod activity;
+mod ampr_emu_api;
 mod ampr_index_api;
 mod ampr_trace;
 mod api_errors;
@@ -11776,6 +11777,7 @@ fn build_app_and_mcp(
         .route("/api/fpkg/inspect", post(fpkg_api::fpkg_inspect_handler))
         .route("/api/fpkg/build", post(fpkg_api::fpkg_build_handler))
         .route("/api/fpkg/delete", post(fpkg_api::fpkg_delete_handler))
+        .route("/api/fpkg/ampr-emu", post(ampr_emu_api::ampr_emu_handler))
         .route(
             "/api/fpkg/ampr-index",
             post(ampr_index_api::ampr_index_handler),

@@ -877,6 +877,9 @@ export async function browserInvoke<T>(
     case "fpkg_delete": {
       return postJson<T>("/api/fpkg/delete", { path: args["path"] });
     }
+    case "fpkg_ampr_emu": {
+      return postJson<T>("/api/fpkg/ampr-emu", { source: args["source"] });
+    }
     case "fpkg_ampr_index": {
       return postJson<T>("/api/fpkg/ampr-index", { source: args["source"] });
     }

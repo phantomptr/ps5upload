@@ -52,6 +52,8 @@ export interface FpkgInspection {
   /** Present for a title that reads its files through libSceAmpr: whether a game image can
    *  carry AMPR LZ4 asset packs, which the game's own ampr_emu (fakelib) must serve. */
   ampr_packs?: AmprPacksReadiness | null;
+  /** How many of its executables are plain ELF files, which a build fake-signs. */
+  unsigned_executables?: number;
 }
 
 export interface AmprPacksReadiness {
@@ -205,6 +207,9 @@ export const fpkg = {
    *  PS5 (`ps5://`), the game's own kept once as `ampr_emu.index.bak` (#621). A job: its stage
    *  is `list`, `check` or `write`; done, `dest` is the index and `commit_ack` the
    *  {@link AmprIndexOutcome}. */
+  /** The AMPR emulator added to a game where it stands: in a folder, or as a backport folder for
+   *  an image on the PS5. */
+  addAmprEmu: (source: string) => invoke<AmprEmuOutcome>("fpkg_ampr_emu", { source }),
   rebuildAmprIndex: (source: string) => invoke<{ job_id: string }>("fpkg_ampr_index", { source }),
   /** An edited copy of a game image whose one change is a regenerated `ampr_emu.index` (#621),
    *  named `<name>-edited` next to it (`<name>-edited (2)` when a rebuild already made one).
@@ -212,6 +217,14 @@ export const fpkg = {
   rebuildImageAmprIndex: (source: string) =>
     invoke<{ job_id: string }>("exfat_build", { source, edits: [], rebuildAmprIndex: true, keepBoth: true }),
 };
+
+/** What adding the AMPR emulator to a game did. */
+export interface AmprEmuOutcome {
+  kind: "folder" | "backport";
+  folder: string;
+  written: string[];
+  rescanned: boolean;
+}
 
 /** What a folder's index rebuild did. */
 export interface AmprIndexOutcome {
