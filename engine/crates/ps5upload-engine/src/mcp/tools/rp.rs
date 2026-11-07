@@ -41,8 +41,12 @@ pub(super) fn tools() -> Vec<ToolDef> {
             name: "rp_session",
             title: "Remote Play session",
             description: "What Remote Play is streaming now: `host` and `session` (null when \
-                          nothing streams), `playing`, and `attached`, whether an app page shows \
-                          it. rp_start starts a stream.",
+                          nothing streams), `playing`, `attached`, whether an app page shows \
+                          it, and `stats`, the last second of the stream: frames, loss, round \
+                          trip, and sound (`audio_frames_total` 0 with frames flowing means no \
+                          sound came; `audio_other_codec` and `audio_header` say why). rp_start \
+                          starts a stream. `last_session` is how the last one started and ended: its \
+                          stages with times, and at the end frames, `audio_frames` and loss.",
             kind: Kind::Read,
             schema: object(json!({}), &[]),
             run: |ctx, args| Box::pin(session(ctx, args)),

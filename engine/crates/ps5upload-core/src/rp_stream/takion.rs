@@ -100,6 +100,9 @@ pub enum Event {
 
 pub struct Takion {
     sock: UdpSocket,
+    /// The largest packet for this path ([`path_mtu`]): ours split to it, and the console is
+    /// asked for it in the launch spec.
+    pub mtu: u32,
     tag_local: u32,
     tag_remote: u32,
     seq_local: u32,
@@ -277,6 +280,35 @@ fn is_no_buffer_space(code: i32) -> bool {
     }
 }
 
+/// chiaki's packet size when its MTU probe (Senkusha) is skipped: fits a plain 1500-byte LAN.
+pub const MTU_LAN: u32 = 1454;
+/// For a console reached through a router or tunnel (WireGuard, Tailscale, a VPN on cellular):
+/// a tunnel takes 60-80 bytes of each packet and cellular networks drop the fragments a full
+/// size packet becomes there, so the stream died at BIG (#713). 1200 fits a 1280-byte tunnel.
+pub const MTU_ROUTED: u32 = 1200;
+
+/// The packet size for a stream from `local` (this device's address on the way) to `peer`:
+/// the full LAN size only when both are on one local network.
+pub fn path_mtu(local: std::net::IpAddr, peer: std::net::IpAddr) -> u32 {
+    use std::net::IpAddr;
+    let same_lan = match (local, peer) {
+        (_, p) if p.is_loopback() => true,
+        (IpAddr::V4(l), IpAddr::V4(p)) => {
+            l.is_private() && p.is_private() && l.octets()[..3] == p.octets()[..3]
+        }
+        (IpAddr::V6(l), IpAddr::V6(p)) => {
+            let link_local = |a: &std::net::Ipv6Addr| (a.segments()[0] & 0xffc0) == 0xfe80;
+            (link_local(&l) && link_local(&p)) || l.segments()[..4] == p.segments()[..4]
+        }
+        _ => false,
+    };
+    if same_lan {
+        MTU_LAN
+    } else {
+        MTU_ROUTED
+    }
+}
+
 impl Takion {
     /// Connect and run the INIT / COOKIE handshake.
     pub fn connect(addr: SocketAddr) -> Result<Self> {
@@ -295,11 +327,24 @@ impl Takion {
             granted.map_or("none reported".to_string(), |g| format!("{} KiB", g >> 10))
         );
         sock.connect(addr).context("connecting the stream socket")?;
+        let mtu = sock
+            .local_addr()
+            .map(|l| path_mtu(l.ip(), addr.ip()))
+            .unwrap_or(MTU_LAN);
+        crate::core_log!(
+            "rp_stream: packet size {mtu} ({})",
+            if mtu == MTU_LAN {
+                "same network"
+            } else {
+                "routed: VPN, tunnel or another network"
+            }
+        );
         let mut tag = [0u8; 4];
         getrandom::fill(&mut tag).map_err(|e| anyhow!("random: {e}"))?;
         let tag_local = u32::from_le_bytes(tag) | 1;
         let mut t = Self {
             sock,
+            mtu,
             tag_local,
             tag_remote: 0,
             seq_local: tag_local,
@@ -558,14 +603,14 @@ impl Takion {
 
     /// A protobuf message, split across DATA chunks the way chiaki splits BIG.
     pub fn send_message(&mut self, channel: u16, msg: &[u8]) -> Result<()> {
-        const MTU: usize = 1454 - 50;
-        if msg.len() + 26 <= MTU {
+        let mtu = self.mtu as usize - 50;
+        if msg.len() + 26 <= mtu {
             return self.send_data(1, channel, msg, true);
         }
         let mut pos = 0;
         let mut first = true;
         loop {
-            let room = if first { MTU - 26 } else { MTU - 25 };
+            let room = if first { mtu - 26 } else { mtu - 25 };
             let rest = msg.len() - pos;
             if rest <= room {
                 return self.send_data(1, channel, &msg[pos..], first);
@@ -887,6 +932,28 @@ fn halvings(from: usize, min: usize) -> impl Iterator<Item = usize> {
 }
 
 #[cfg(test)]
+mod path_mtu_tests {
+    use super::*;
+
+    #[test]
+    fn full_size_only_on_one_local_network() {
+        let ip = |s: &str| s.parse::<std::net::IpAddr>().unwrap();
+        assert_eq!(path_mtu(ip("192.168.86.20"), ip("192.168.86.100")), MTU_LAN);
+        assert_eq!(path_mtu(ip("127.0.0.1"), ip("127.0.0.1")), MTU_LAN);
+        // WireGuard on a phone: a tunnel address reaching the home LAN.
+        assert_eq!(path_mtu(ip("10.8.0.2"), ip("192.168.86.100")), MTU_ROUTED);
+        // Tailscale.
+        assert_eq!(path_mtu(ip("100.101.1.2"), ip("100.90.3.4")), MTU_ROUTED);
+        // Another subnet behind a router.
+        assert_eq!(
+            path_mtu(ip("192.168.1.5"), ip("192.168.86.100")),
+            MTU_ROUTED
+        );
+        assert_eq!(path_mtu(ip("fe80::1"), ip("fe80::2")), MTU_LAN);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1026,6 +1093,7 @@ mod tests {
         let ours = UdpSocket::bind("127.0.0.1:0").unwrap();
         ours.connect(console.local_addr().unwrap()).unwrap();
         let mut t = Takion {
+            mtu: MTU_LAN,
             sock: ours,
             tag_local: 1,
             tag_remote: 2,

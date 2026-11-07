@@ -289,6 +289,8 @@ struct Live {
     alone_since: Mutex<Option<Instant>>,
     video_header: Mutex<Option<Vec<u8>>>,
     audio_header: Mutex<Option<Vec<u8>>>,
+    /// The stream's last once-a-second stats (frames, loss, sound arrived), for rp_session.
+    stats: Mutex<Option<serde_json::Value>>,
     playing: AtomicBool,
     /// The page cannot use a frame until the next keyframe.
     need_key: AtomicBool,
@@ -842,6 +844,7 @@ impl Live {
             alone_since: Mutex::new(None),
             video_header: Mutex::new(None),
             audio_header: Mutex::new(None),
+            stats: Mutex::new(None),
             playing: AtomicBool::new(false),
             need_key: AtomicBool::new(false),
             want_key: AtomicBool::new(false),
@@ -1177,6 +1180,9 @@ impl Live {
             "picture": !self.picture_off(),
             // Told to stop, and finishing (a wake or handshake takes a moment to cut short).
             "stopping": self.stop.load(Ordering::Relaxed),
+            // The last second's stats while streaming: frames, loss, round trip, and sound
+            // (audio_frames_total; audio_other_codec, audio_header say why there is none).
+            "stats": self.stats.lock().ok().and_then(|g| g.clone()),
         })
     }
 }
@@ -1247,7 +1253,12 @@ impl StreamSink for Sink {
         let ms = self.t0.elapsed().as_millis() as u64;
         let v = match p {
             Progress::Waking => serde_json::json!({"stage": "waking", "ms": ms}),
-            Progress::Stats(s) => serde_json::json!({"stage": "stats", "stats": s}),
+            Progress::Stats(s) => {
+                if let Ok(mut g) = self.live.stats.lock() {
+                    *g = serde_json::to_value(s).ok();
+                }
+                serde_json::json!({"stage": "stats", "stats": s})
+            }
             Progress::Nonce => serde_json::json!({"stage": "nonce", "ms": ms}),
             Progress::SessionId => serde_json::json!({"stage": "session", "ms": ms}),
             Progress::TakionConnected => serde_json::json!({"stage": "takion", "ms": ms}),
@@ -1460,6 +1471,13 @@ pub async fn current(
     let mut v = current_for(live.as_ref().map(|l| l.snapshot()), local);
     if local {
         control::add_details(&mut v, live.as_deref());
+        // How the last session started and ended (stages, frames, sound frames, loss): what an
+        // agent checks after a stream it ran, without a bug report. This computer only.
+        v["last_session"] = LAST_SESSION
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+            .unwrap_or_default();
     }
     Json(v)
 }
@@ -1602,6 +1620,8 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
                 "dropped": rep.video.frames_dropped,
                 "rebuilt": rep.video.frames_recovered,
                 "audio_frames": rep.audio_frames,
+                "audio_other_codec": rep.audio_other_codec,
+                "audio_header": rep.audio_header,
                 "units_seen": rep.units_seen,
                 "loss_seen": rep.loss_seen,
                 "loss_reported": rep.loss_reported,

@@ -461,12 +461,32 @@ export function streamRefusal(): "insecure_page" | "no_decoder" | null {
   return typeof window !== "undefined" && window.isSecureContext === false ? "insecure_page" : "no_decoder";
 }
 
+/** Seconds of picture with no sound before the stream says so. */
+export const SOUND_MISSING_AFTER_S = 6;
+
+/** Whether the engine's stats say no sound reaches this device, and why. Engines before 11.5
+ *  don't report it (no audio_frames_total), and then nothing is said. */
+export function soundMissingFrom(
+  st: Record<string, unknown>,
+  silentSeconds: number,
+  played = true,
+): "none" | "format" | "device" | undefined {
+  if (typeof st.audio_frames_total !== "number") return undefined;
+  if (silentSeconds < SOUND_MISSING_AFTER_S) return undefined;
+  // Sound reaches this device, but none of it ever got to the speakers.
+  if (st.audio_frames_total > 0) return played ? undefined : "device";
+  return typeof st.audio_other_codec === "number" && st.audio_other_codec > 0 ? "format" : "none";
+}
+
 export interface StreamStats {
   /** The browser holds the sound back until the page is clicked or a key pressed (autoplay
    *  rules: the session started without a click right before it). */
   soundBlocked?: boolean;
   /** This device can't decode the stream's sound, so there is none. */
   soundUnavailable?: boolean;
+  /** Seconds of picture went by and no sound reached this device: the PS5 sends none ("none")
+   *  or sends it in a format the engine doesn't play ("format"). Unset while sound comes. */
+  soundMissing?: "none" | "format" | "device";
   fps: number;
   mbps: number;
   decodeMs: number;
@@ -725,6 +745,12 @@ export class RemotePlayStream {
   /** The last audio header, for the page to take over if the worker fails. */
   private audioHeader: Uint8Array | null = null;
   private soundUnavailable = false;
+  /** Seconds with picture and no sound played yet, and what that means: the engine got no
+   *  sound frame (none, format), or got them and this device played none (device). */
+  private silentSeconds = 0;
+  private soundMissing: "none" | "format" | "device" | undefined;
+  /** Some sound was buffered for the speakers at some point this session. */
+  private soundEverPlayed = false;
   /** No worklet: when the next scheduled buffer starts (AudioContext time). */
   private audioNext = 0;
   private audioMs = 0;
@@ -1276,6 +1302,7 @@ export class RemotePlayStream {
       this.o.onStats({
         soundBlocked: this.soundBlocked(),
         soundUnavailable: this.soundUnavailable,
+        soundMissing: this.soundMissing,
         fps: this.decoded - lastDecoded,
         mbps: ((this.bytes - lastBytes) * 8) / 1e6,
         decodeMs: this.decodeMs,
@@ -2030,6 +2057,14 @@ export class RemotePlayStream {
         };
         this.consoleRttMs = typeof st.console_rtt_ms === "number" && Number.isFinite(st.console_rtt_ms) ? st.console_rtt_ms : null;
         if (st.quality && typeof st.quality === "object") this.quality = st.quality;
+        if (this.audioMs > 0) this.soundEverPlayed = true;
+        const silent = num(st.audio_frames_total) === 0 || !this.soundEverPlayed;
+        this.silentSeconds = num(st.frames) > 0 && silent && this.pictureOn ? this.silentSeconds + 1 : 0;
+        const missing = soundMissingFrom(st, this.silentSeconds, this.soundEverPlayed);
+        if (missing && missing !== this.soundMissing) {
+          log.warn("remote-play", `no sound (${missing}): engine ${num(st.audio_frames_total)} sound frames, ${num(st.audio_other_codec)} in another format, header ${st.audio_header === true ? "yes" : "no"}`);
+        }
+        this.soundMissing = missing;
         break;
       }
       case "moved":
