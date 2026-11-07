@@ -38,7 +38,9 @@ test("Accounts backs up the user information as a text file", async ({ page }) =
   await page.goto("/accounts", { waitUntil: "domcontentloaded" });
   const button = page.getByTestId("accounts-backup");
   await expect(button).toBeVisible({ timeout: 30_000 });
-  // The page reads sign-in state on its own; count only what the backup asks.
+  // The page reads sign-in state on its own; count only what the backup asks. Its own read can
+  // land after the button shows on a busy runner, so it is waited for first.
+  await expect.poll(() => npAsked.length, { timeout: 30_000 }).toBeGreaterThan(0);
   npAsked.length = 0;
   const download = page.waitForEvent("download");
   await button.click();
