@@ -195,7 +195,10 @@ export default function CopyToUserDialog({
   run,
   onClose,
   onDone,
+  title,
 }: {
+  /** Instead of the usual title (another console, not another user). */
+  title?: string;
   game: string;
   source: CopySource;
   targets: CopyTarget[];
@@ -225,9 +228,9 @@ export default function CopyToUserDialog({
       onClose={() => state.step !== "busy" && onClose()}
       closeOnScrim={state.step !== "busy"}
       title={
-        source.kind === "save"
+        title ?? (source.kind === "save"
           ? tr("saves_copy_title", undefined, "Copy to another user")
-          : tr("save_backup_restore_to_user_title", undefined, "Restore to another user")
+          : tr("save_backup_restore_to_user_title", undefined, "Restore to another user"))
       }
       size="md"
       bodyClassName="p-4 sm:p-5"

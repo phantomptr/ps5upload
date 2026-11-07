@@ -7975,6 +7975,14 @@ cb_erases: "Apaga seus dados",
 cb_sony_link: "Página da Sony sobre o Modo de Segurança",
 cb_usb_title: "Se você precisar do pendrive",
 cb_after_title: "Depois de uma redefinição",
+saves_action_failed: "Não funcionou",
+saves_copy_to_console: "Outro console",
+saves_copy_to_console_desc: "Coloque este save no save de um usuário do jogo no seu outro PS5.",
+saves_copy_same_place: "O mesmo lugar nesse console",
+saves_copy_console_title_to: "Copiar para {console}",
+saves_copy_console_title: "Copiar para outro console",
+saves_copy_console_asking: "Perguntando a {console} o que ele tem…",
+saves_copy_console_pick: "Copiar o save de {game} de {source} para:",
 };
 
 export default pt_BR;

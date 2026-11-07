@@ -8242,6 +8242,14 @@ cb_erases: "داده‌هایتان را پاک می‌کند",
 cb_sony_link: "صفحه‌ی حالت ایمن Sony",
 cb_usb_title: "اگر به درایو USB نیاز دارید",
 cb_after_title: "بعد از ریست",
+saves_action_failed: "انجام نشد",
+saves_copy_to_console: "کنسول دیگر",
+saves_copy_to_console_desc: "این ذخیره را در ذخیره‌ی یک کاربر برای این بازی در PS5 دیگرتان بگذارید.",
+saves_copy_same_place: "همان جا در آن کنسول",
+saves_copy_console_title_to: "کپی به {console}",
+saves_copy_console_title: "کپی به کنسول دیگر",
+saves_copy_console_asking: "در حال پرسیدن از {console} که چه دارد…",
+saves_copy_console_pick: "کپی ذخیره‌ی {source} از {game} به:",
 };
 
 export default fa;

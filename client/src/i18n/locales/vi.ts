@@ -7962,6 +7962,14 @@ cb_erases: "Xóa dữ liệu của bạn",
 cb_sony_link: "Trang Chế độ an toàn của Sony",
 cb_usb_title: "Nếu bạn cần ổ USB",
 cb_after_title: "Sau khi đặt lại",
+saves_action_failed: "Không được",
+saves_copy_to_console: "Máy console khác",
+saves_copy_to_console_desc: "Đặt bản lưu này vào bản lưu của một người dùng cho trò chơi trên PS5 khác của bạn.",
+saves_copy_same_place: "Cùng vị trí trên máy đó",
+saves_copy_console_title_to: "Sao chép sang {console}",
+saves_copy_console_title: "Sao chép sang máy console khác",
+saves_copy_console_asking: "Đang hỏi {console} xem có gì…",
+saves_copy_console_pick: "Sao chép bản lưu {game} của {source} sang:",
 };
 
 export default vi;

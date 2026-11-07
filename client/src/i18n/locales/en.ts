@@ -8265,6 +8265,14 @@ cb_erases: "Erases your data",
 cb_sony_link: "Sony's Safe Mode page",
 cb_usb_title: "If you need the USB drive",
 cb_after_title: "After a reset",
+saves_action_failed: "That didn't work",
+saves_copy_to_console: "Another console",
+saves_copy_to_console_desc: "Put this save into a user's save of the game on your other PS5.",
+saves_copy_same_place: "The same place on that console",
+saves_copy_console_title_to: "Copy to {console}",
+saves_copy_console_title: "Copy to another console",
+saves_copy_console_asking: "Asking {console} what it has…",
+saves_copy_console_pick: "Copy {source}'s save of {game} to:",
 };
 
 export default en;

@@ -7979,6 +7979,14 @@ cb_erases: "データが消去されます",
 cb_sony_link: "Sonyのセーフモードのページ",
 cb_usb_title: "USBドライブが必要な場合",
 cb_after_title: "リセット後",
+saves_action_failed: "うまくいきませんでした",
+saves_copy_to_console: "別のコンソール",
+saves_copy_to_console_desc: "このセーブを、もう1台の PS5 にあるこのゲームのユーザーのセーブに入れます。",
+saves_copy_same_place: "そのコンソールの同じ場所",
+saves_copy_console_title_to: "{console} にコピー",
+saves_copy_console_title: "別のコンソールにコピー",
+saves_copy_console_asking: "{console} の内容を確認中…",
+saves_copy_console_pick: "{source} の {game} のセーブのコピー先:",
 };
 
 export default ja;

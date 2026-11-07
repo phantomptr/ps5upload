@@ -7968,6 +7968,14 @@ cb_erases: "Löscht deine Daten",
 cb_sony_link: "Sonys Seite zum abgesicherten Modus",
 cb_usb_title: "Wenn du den USB-Stick brauchst",
 cb_after_title: "Nach einem Reset",
+saves_action_failed: "Das hat nicht geklappt",
+saves_copy_to_console: "Andere Konsole",
+saves_copy_to_console_desc: "Diesen Spielstand in den Spielstand eines Benutzers für das Spiel auf deiner anderen PS5 legen.",
+saves_copy_same_place: "Derselbe Ort auf dieser Konsole",
+saves_copy_console_title_to: "Nach {console} kopieren",
+saves_copy_console_title: "Auf andere Konsole kopieren",
+saves_copy_console_asking: "{console} wird gefragt, was vorhanden ist…",
+saves_copy_console_pick: "Spielstand von {source} für {game} kopieren nach:",
 };
 
 export default de;

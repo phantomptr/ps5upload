@@ -2501,6 +2501,41 @@
         ],
         "type": "object"
       },
+      "CopyConsoleBody": {
+        "properties": {
+          "from": {
+            "description": "The console the save is on.",
+            "type": "string"
+          },
+          "from_path": {
+            "description": "The save folder on `from` (from the saves list).",
+            "type": "string"
+          },
+          "to": {
+            "description": "The console it goes to.",
+            "type": "string"
+          },
+          "to_path": {
+            "description": "An emulator's save: the folder on `to`. Left out, the same path.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "to_user": {
+            "description": "A PS5 save: the user there. An emulator's: who the folder there belongs to.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "from_path",
+          "to_user"
+        ],
+        "type": "object"
+      },
       "Crc32FileResult": {
         "properties": {
           "crc32": {
@@ -39772,6 +39807,141 @@
             "required": true
           },
           "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/save-backup/copy-console": {
+      "post": {
+        "description": "`POST /api/save-backup/copy-console` `{from, to, from_path, to_user, to_path?}` (#709).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CopyConsoleBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "missing": {}
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "(#709)",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/save-backup/copy-console/targets": {
+      "get": {
+        "description": "`GET /api/save-backup/copy-console/targets?to=&title_id=`: that console's saves of the game,\nof every kind, and its users, for picking where a save goes.",
+        "parameters": [
+          {
+            "description": "The console to copy to.",
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "title_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "saves": {
+                      "items": {
+                        "$ref": "#/components/schemas/SaveEntry"
+                      },
+                      "type": "array"
+                    },
+                    "users": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "That console's saves of the game, of every kind, and its users, for picking where a save goes",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
         }
       }
     },

@@ -7974,6 +7974,14 @@ cb_erases: "आपका डेटा मिटाता है",
 cb_sony_link: "Sony का सेफ़ मोड पेज",
 cb_usb_title: "अगर आपको USB ड्राइव चाहिए",
 cb_after_title: "रीसेट के बाद",
+saves_action_failed: "यह काम नहीं किया",
+saves_copy_to_console: "दूसरा कंसोल",
+saves_copy_to_console_desc: "यह सेव आपके दूसरे PS5 पर किसी यूज़र के उस गेम के सेव में रखें।",
+saves_copy_same_place: "उस कंसोल पर वही जगह",
+saves_copy_console_title_to: "{console} पर कॉपी करें",
+saves_copy_console_title: "दूसरे कंसोल पर कॉपी करें",
+saves_copy_console_asking: "{console} से पूछा जा रहा है कि उसमें क्या है…",
+saves_copy_console_pick: "{game} का {source} वाला सेव यहाँ कॉपी करें:",
 };
 
 export default hi;

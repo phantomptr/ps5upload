@@ -13,7 +13,7 @@ const folder = (u: number) => `/user/home/${u.toString(16)}/savedata_prospero/${
 const BACKUP = `${T}_user10000000_2026-10-30_120000.zip`;
 
 function mockEngine() {
-  const calls = { copy: [] as unknown[], restoreTo: [] as unknown[], now: [] as unknown[], open: [] as unknown[] };
+  const calls = { copyConsole: [] as unknown[], copy: [] as unknown[], restoreTo: [] as unknown[], now: [] as unknown[], open: [] as unknown[] };
   let backedUp = false;
   const handler = async (route: Route) => {
     const req = route.request();
@@ -89,6 +89,17 @@ function mockEngine() {
       case "/api/save-backup/restore-to-user":
         calls.restoreTo.push(req.postDataJSON());
         return json({ ok: true, from: BACKUP, to: folder(BEN), parts: ["sdimg_STARBOARD"] });
+      case "/api/save-backup/copy-console/targets":
+        return json({
+          saves: [{ title_id: T, user_id: BEN, path: folder(BEN), size: 1, mtime: 1, kind: "ps5" }],
+          users: [
+            { uid: BEN, uid_hex: "20000000", username: "Ben there" },
+            { uid: CY, uid_hex: "30000000", username: "Cy there" },
+          ],
+        });
+      case "/api/save-backup/copy-console":
+        calls.copyConsole.push(req.postDataJSON());
+        return json({ ok: true, from: folder(ANN), to: folder(BEN), parts: ["sdimg_STARBOARD"] });
       case "/api/save-backup/switch":
         return json({ running: null, saves: [] });
       case "/api/save-backup/ps2":
@@ -181,4 +192,33 @@ test("a single-user console offers no Copy to another user", async ({ page }) =>
   await expect(page.getByTestId("save-share")).toBeVisible();
   await expect(page.getByTestId("save-copy-to-user")).toHaveCount(0);
   await expect(page.getByTestId("saves-copy-tip")).toHaveCount(0);
+});
+
+test("Copy to another console: pick the console, then a user there with a save of the game", async ({ page }) => {
+  const { calls, handler } = mockEngine();
+  await page.addInitScript((h) => {
+    window.localStorage.setItem(
+      "ps5upload.roster.v1",
+      JSON.stringify({
+        active_id: "a",
+        profiles: [
+          { id: "a", name: "Home", host: h },
+          { id: "b", name: "Away", host: "100.64.0.2" },
+        ],
+      }),
+    );
+  }, HOST);
+  await page.route((url) => url.pathname.startsWith("/api/"), handler);
+  await page.goto("/saves", { waitUntil: "domcontentloaded" });
+  const ann = page.getByTestId("save-row").filter({ hasText: "Ann" });
+  await ann.getByRole("button", { name: "Move or share this save" }).click({ timeout: 30_000 });
+  await page.getByTestId("save-copy-to-console").click();
+  await page.getByTestId("copy-console-target").filter({ hasText: "Away" }).click();
+  const targets = page.getByTestId("copy-user-target");
+  await expect(targets.filter({ hasText: "Cy there" })).toBeDisabled();
+  await targets.filter({ hasText: "Ben there" }).click();
+  await page.getByTestId("copy-user-replace").click();
+  await expect
+    .poll(() => calls.copyConsole)
+    .toEqual([{ from: HOST, to: "100.64.0.2", from_path: folder(ANN), to_user: BEN }]);
 });

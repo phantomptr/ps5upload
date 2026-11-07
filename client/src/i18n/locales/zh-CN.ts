@@ -7919,6 +7919,14 @@ cb_erases: "会删除你的数据",
 cb_sony_link: "Sony 的安全模式页面",
 cb_usb_title: "如果你需要 U 盘",
 cb_after_title: "重置之后",
+saves_action_failed: "操作没有成功",
+saves_copy_to_console: "另一台主机",
+saves_copy_to_console_desc: "把这个存档放进你另一台 PS5 上某个用户的该游戏存档中。",
+saves_copy_same_place: "那台主机上的同一位置",
+saves_copy_console_title_to: "复制到 {console}",
+saves_copy_console_title: "复制到另一台主机",
+saves_copy_console_asking: "正在询问 {console} 里有什么…",
+saves_copy_console_pick: "把 {source} 的 {game} 存档复制到：",
 };
 
 export default zh_CN;

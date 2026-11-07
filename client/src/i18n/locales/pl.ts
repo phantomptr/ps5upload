@@ -8201,6 +8201,14 @@ cb_erases: "Usuwa Twoje dane",
 cb_sony_link: "Strona Sony o trybie awaryjnym",
 cb_usb_title: "Jeśli potrzebujesz dysku USB",
 cb_after_title: "Po resecie",
+saves_action_failed: "To nie zadziałało",
+saves_copy_to_console: "Inna konsola",
+saves_copy_to_console_desc: "Umieść ten zapis w zapisie użytkownika tej gry na drugiej konsoli PS5.",
+saves_copy_same_place: "To samo miejsce na tej konsoli",
+saves_copy_console_title_to: "Kopiuj do: {console}",
+saves_copy_console_title: "Kopiuj na inną konsolę",
+saves_copy_console_asking: "Pytanie konsoli {console}, co zawiera…",
+saves_copy_console_pick: "Kopiuj zapis {game} użytkownika {source} do:",
 };
 
 export default pl;

@@ -7969,6 +7969,14 @@ cb_erases: "Menghapus data Anda",
 cb_sony_link: "Halaman Safe Mode Sony",
 cb_usb_title: "Jika Anda butuh drive USB",
 cb_after_title: "Setelah reset",
+saves_action_failed: "Gagal",
+saves_copy_to_console: "Konsol lain",
+saves_copy_to_console_desc: "Taruh save ini ke save milik satu pengguna untuk game ini di PS5 Anda yang lain.",
+saves_copy_same_place: "Tempat yang sama di konsol itu",
+saves_copy_console_title_to: "Salin ke {console}",
+saves_copy_console_title: "Salin ke konsol lain",
+saves_copy_console_asking: "Menanyakan isi {console}…",
+saves_copy_console_pick: "Salin save {game} milik {source} ke:",
 };
 
 export default id;

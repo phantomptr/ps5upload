@@ -7913,6 +7913,14 @@ cb_erases: "Cancella i tuoi dati",
 cb_sony_link: "Pagina Sony sulla Modalità provvisoria",
 cb_usb_title: "Se ti serve l'unità USB",
 cb_after_title: "Dopo un ripristino",
+saves_action_failed: "Non ha funzionato",
+saves_copy_to_console: "Un'altra console",
+saves_copy_to_console_desc: "Metti questo salvataggio in quello di un utente per il gioco sull'altra PS5.",
+saves_copy_same_place: "Lo stesso posto su quella console",
+saves_copy_console_title_to: "Copia su {console}",
+saves_copy_console_title: "Copia su un'altra console",
+saves_copy_console_asking: "Chiedo a {console} cosa contiene…",
+saves_copy_console_pick: "Copia il salvataggio di {game} di {source} in:",
 };
 
 export default it;

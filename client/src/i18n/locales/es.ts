@@ -7913,6 +7913,14 @@ cb_erases: "Borra tus datos",
 cb_sony_link: "Página de Sony sobre el modo seguro",
 cb_usb_title: "Si necesitas la unidad USB",
 cb_after_title: "Después de un restablecimiento",
+saves_action_failed: "No funcionó",
+saves_copy_to_console: "Otra consola",
+saves_copy_to_console_desc: "Pon esta partida en la partida de un usuario del juego en tu otra PS5.",
+saves_copy_same_place: "El mismo lugar en esa consola",
+saves_copy_console_title_to: "Copiar a {console}",
+saves_copy_console_title: "Copiar a otra consola",
+saves_copy_console_asking: "Preguntando a {console} qué tiene…",
+saves_copy_console_pick: "Copiar la partida de {source} de {game} a:",
 };
 
 export default es;

@@ -8256,6 +8256,14 @@ cb_erases: "Törli az adataidat",
 cb_sony_link: "A Sony Csökkentett mód oldala",
 cb_usb_title: "Ha szükséged van az USB-meghajtóra",
 cb_after_title: "Alaphelyzetbe állítás után",
+saves_action_failed: "Ez nem sikerült",
+saves_copy_to_console: "Másik konzol",
+saves_copy_to_console_desc: "Tedd ezt a mentést egy felhasználó játékmentésébe a másik PS5-ödön.",
+saves_copy_same_place: "Ugyanaz a hely azon a konzolon",
+saves_copy_console_title_to: "Másolás ide: {console}",
+saves_copy_console_title: "Másolás másik konzolra",
+saves_copy_console_asking: "{console} lekérdezése, mi van rajta…",
+saves_copy_console_pick: "{source} {game} mentésének másolása ide:",
 };
 
 export default hu;

@@ -7967,6 +7967,14 @@ cb_erases: "Verilerinizi siler",
 cb_sony_link: "Sony'nin Güvenli Mod sayfası",
 cb_usb_title: "USB sürücüye ihtiyacınız varsa",
 cb_after_title: "Sıfırlamadan sonra",
+saves_action_failed: "Bu işe yaramadı",
+saves_copy_to_console: "Başka konsol",
+saves_copy_to_console_desc: "Bu kaydı diğer PS5'inizdeki oyunun bir kullanıcı kaydına koyun.",
+saves_copy_same_place: "O konsolda aynı yer",
+saves_copy_console_title_to: "{console} konsoluna kopyala",
+saves_copy_console_title: "Başka konsola kopyala",
+saves_copy_console_asking: "{console} konsoluna neleri olduğu soruluyor…",
+saves_copy_console_pick: "{source} kullanıcısının {game} kaydını şuraya kopyala:",
 };
 
 export default tr;

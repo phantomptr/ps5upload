@@ -573,6 +573,8 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/save-backup"),
     ("PUT", "/api/save-backup"),
     ("POST", "/api/save-backup/copy"),
+    ("POST", "/api/save-backup/copy-console"),
+    ("GET", "/api/save-backup/copy-console/targets"),
     ("POST", "/api/save-backup/import-ps4"),
     ("GET", "/api/save-backup/latest"),
     ("GET", "/api/save-backup/list"),

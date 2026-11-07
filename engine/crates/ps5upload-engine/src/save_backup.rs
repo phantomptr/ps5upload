@@ -1753,6 +1753,22 @@ pub struct RestoreFileBody {
     pub user_id: u32,
 }
 
+/// A backup's name as `restore_to_user` wants it: its own, or one built from the user it notes when
+/// the file was renamed.
+fn backup_file_name(zip: &Path, title_id: &str) -> String {
+    let own = zip
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if parse_backup_name(title_id, &own).is_some() && plain(&own) {
+        return own;
+    }
+    format!(
+        "{title_id}_user{:08x}_restored.zip",
+        backup_user(zip, title_id).unwrap_or(0)
+    )
+}
+
 /// `POST /api/save-backup/restore-file` — puts a backup `.zip` from this computer back, with the
 /// refusals, the backup first and the putting back on failure of `restore`.
 pub async fn post_restore_file(Json(b): Json<RestoreFileBody>) -> Response {
@@ -1765,13 +1781,30 @@ pub async fn post_restore_file(Json(b): Json<RestoreFileBody>) -> Response {
         );
     }
     let r = tokio::task::spawn_blocking(move || {
-        restore_zip(
-            b.addr.trim(),
-            &b.title_id.trim().to_ascii_uppercase(),
-            &zip,
-            b.save_path.trim(),
-            b.user_id,
-        )
+        let host = b.addr.trim();
+        let title_id = b.title_id.trim().to_ascii_uppercase();
+        match restore_zip(host, &title_id, &zip, b.save_path.trim(), b.user_id) {
+            // A reset console has new users, so a backup made before it is "another user's". The
+            // way that works is the one Restore to another user uses, and this person has already
+            // chosen the save it goes into: no second place to go and find.
+            Err(e) if e == OTHER_USER_ERROR => {
+                let file = backup_file_name(&zip, &title_id);
+                let beside = zip
+                    .parent()
+                    .map(|d| d.join("before-restore"))
+                    .unwrap_or_default();
+                crate::save_copy::restore_to_user(
+                    &crate::save_copy::Live::keeping_in(host, beside),
+                    &title_id,
+                    &file,
+                    &zip,
+                    b.user_id,
+                )
+                .map(|_| ())
+                .map_err(|e| e.msg)
+            }
+            r => r,
+        }
     })
     .await;
     match r {

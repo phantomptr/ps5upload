@@ -7967,6 +7967,14 @@ cb_erases: "ลบข้อมูลของคุณ",
 cb_sony_link: "หน้าเซฟโหมดของ Sony",
 cb_usb_title: "ถ้าคุณต้องใช้ไดรฟ์ USB",
 cb_after_title: "หลังรีเซ็ต",
+saves_action_failed: "ไม่สำเร็จ",
+saves_copy_to_console: "คอนโซลเครื่องอื่น",
+saves_copy_to_console_desc: "ใส่เซฟนี้ลงในเซฟของผู้ใช้สำหรับเกมนี้บน PS5 อีกเครื่อง",
+saves_copy_same_place: "ตำแหน่งเดียวกันบนคอนโซลนั้น",
+saves_copy_console_title_to: "คัดลอกไปยัง {console}",
+saves_copy_console_title: "คัดลอกไปยังคอนโซลเครื่องอื่น",
+saves_copy_console_asking: "กำลังถาม {console} ว่ามีอะไรบ้าง…",
+saves_copy_console_pick: "คัดลอกเซฟ {game} ของ {source} ไปยัง:",
 };
 
 export default th;

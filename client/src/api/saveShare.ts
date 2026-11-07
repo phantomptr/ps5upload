@@ -3,6 +3,7 @@
 // another), which the console then keeps as theirs. Copy to another user and Restore to another
 // user do the same in the engine, with no file through this computer (#612).
 
+import type { ProfileUser, SaveEntry } from "./ps5";
 import { getEngineUrl } from "../state/engine";
 import { ENGINE_LONG_TIMEOUT_MS, engineFetch } from "../lib/engineFetch";
 
@@ -84,6 +85,29 @@ export function copySaveToUser(
     from_user: req.from_user >>> 0,
     to_user: req.to_user >>> 0,
   });
+}
+
+/** That console's saves of a game, of every kind, and its users (#709). */
+export async function copyConsoleTargets(
+  to: string,
+  titleId: string,
+): Promise<{ saves: SaveEntry[]; users: ProfileUser[] }> {
+  const r = await engineFetch(
+    `${getEngineUrl()}/api/save-backup/copy-console/targets?to=${encodeURIComponent(to)}&title_id=${encodeURIComponent(titleId)}`,
+  );
+  if (!r.ok) return failed(r);
+  return (await r.json()) as { saves: SaveEntry[]; users: ProfileUser[] };
+}
+
+/** Copy a save to another console (#709). */
+export function copySaveToConsole(req: {
+  from: string;
+  to: string;
+  from_path: string;
+  to_user: number;
+  to_path?: string;
+}): Promise<CopyDone> {
+  return postJson("/api/save-backup/copy-console", { ...req, to_user: req.to_user >>> 0 });
 }
 
 /** Put a backup of one user's save into another user's save of the game (#612). */

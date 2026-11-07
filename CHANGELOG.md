@@ -10,6 +10,12 @@ What's new in ps5upload, written for humans.
 - Restoring after a reset: settings and folders go straight back. A save goes into that user's own save of the game, so start each game once and save; any that aren't ready are listed, and running the restore again is safe. Saves only open on the PS5 that made them. (#707)
 - New guide, "If your PS5 won't start": the Safe Mode options in the order to try them, which ones erase your data, how to set up the USB drive, and why reinstalling from Sony's file can end a jailbreak. (#707)
 
+- Saves: restoring a backup made before a reset no longer stops at "this backup is another user's save". Restore from a zip now puts it into the save you picked, the way Restore to another user does, and works with no automatic backup folder set: the save it replaces is kept next to the backup. Start the game once as that user first.
+- Saves: a failed restore or copy no longer shows under "Couldn't list saves".
+- Saves: Copy to › Another console, for PS5 saves and the Switch, PS2 and PS1 emulators' saves. Pick the console, then the user or folder there. The save there is backed up first and put back if anything fails, and it won't run while the game is running on either console. Not for PS4-format saves yet. (#709)
+- Sources: an FTP server's listing no longer hides files with a date the app couldn't read, such as a month in another language, and the log now says if a line still can't be read.
+- Remote Play pairing: a failed Pair now clears the PIN it asked the PS5 for, a PS5 that hangs up without answering gets tried again, and the app asks in the way other clients do before falling back to how it asked before. This may not be enough for everyone hitting "closed the connection". (#704)
+
 ## 11.2.9
 
 - iPhone Duo: with the phone open and sideways, the stream now uses the whole height it can. Large system insets at the top and bottom cut the picture to a band across the middle, losing the top and bottom of the game. (#675)

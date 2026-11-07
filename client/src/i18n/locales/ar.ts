@@ -7960,6 +7960,14 @@ cb_erases: "يمسح بياناتك",
 cb_sony_link: "صفحة الوضع الآمن من Sony",
 cb_usb_title: "إذا احتجت إلى قرص USB",
 cb_after_title: "بعد إعادة الضبط",
+saves_action_failed: "لم تنجح العملية",
+saves_copy_to_console: "وحدة تحكم أخرى",
+saves_copy_to_console_desc: "ضع هذا الحفظ في حفظ مستخدم لهذه اللعبة على جهاز PS5 الآخر.",
+saves_copy_same_place: "نفس المكان على تلك الوحدة",
+saves_copy_console_title_to: "نسخ إلى {console}",
+saves_copy_console_title: "نسخ إلى وحدة تحكم أخرى",
+saves_copy_console_asking: "جارٍ سؤال {console} عمّا لديها…",
+saves_copy_console_pick: "نسخ حفظ {source} للعبة {game} إلى:",
 };
 
 export default ar;

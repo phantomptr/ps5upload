@@ -11869,6 +11869,14 @@ fn build_app_and_mcp(
             post(save_copy::post_restore_to_user),
         )
         .route(
+            "/api/save-backup/copy-console",
+            post(save_copy::post_copy_console),
+        )
+        .route(
+            "/api/save-backup/copy-console/targets",
+            get(save_copy::get_copy_targets),
+        )
+        .route(
             "/api/shared/{name}",
             get(shared_state::get_doc).put(shared_state::put_doc),
         )

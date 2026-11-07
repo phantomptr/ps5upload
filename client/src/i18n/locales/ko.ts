@@ -7977,6 +7977,14 @@ cb_erases: "데이터가 삭제됩니다",
 cb_sony_link: "Sony의 안전 모드 페이지",
 cb_usb_title: "USB 드라이브가 필요할 때",
 cb_after_title: "초기화 후",
+saves_action_failed: "작동하지 않았습니다",
+saves_copy_to_console: "다른 콘솔",
+saves_copy_to_console_desc: "이 세이브를 다른 PS5에 있는 사용자의 해당 게임 세이브에 넣습니다.",
+saves_copy_same_place: "그 콘솔의 같은 위치",
+saves_copy_console_title_to: "{console}(으)로 복사",
+saves_copy_console_title: "다른 콘솔로 복사",
+saves_copy_console_asking: "{console}에 무엇이 있는지 확인하는 중…",
+saves_copy_console_pick: "{source}의 {game} 세이브를 복사할 대상:",
 };
 
 export default ko;

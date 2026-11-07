@@ -7960,6 +7960,14 @@ cb_erases: "আপনার ডেটা মুছে ফেলে",
 cb_sony_link: "Sony-র সেফ মোড পেজ",
 cb_usb_title: "USB ড্রাইভ লাগলে",
 cb_after_title: "রিসেটের পর",
+saves_action_failed: "এটা কাজ করেনি",
+saves_copy_to_console: "অন্য কনসোল",
+saves_copy_to_console_desc: "এই সেভটি আপনার অন্য PS5-এ গেমটির কোনো ব্যবহারকারীর সেভে রাখুন।",
+saves_copy_same_place: "ওই কনসোলের একই জায়গা",
+saves_copy_console_title_to: "{console}-এ কপি করুন",
+saves_copy_console_title: "অন্য কনসোলে কপি করুন",
+saves_copy_console_asking: "{console}-এর কাছে জানতে চাওয়া হচ্ছে…",
+saves_copy_console_pick: "{game}-এর {source}-এর সেভ কপি করুন:",
 };
 
 export default bn;

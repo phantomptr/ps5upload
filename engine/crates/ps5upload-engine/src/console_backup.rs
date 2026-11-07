@@ -746,7 +746,7 @@ fn restore(
         return Ok(());
     }
     let here: Vec<u32> = users_of(host).iter().map(|u| u.uid).collect();
-    let live = save_copy::Live::new(host);
+    let live = save_copy::Live::keeping_in(host, root.join("before-restore"));
     for s in saves {
         stopped()?;
         step += 1;

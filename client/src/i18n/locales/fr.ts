@@ -7976,6 +7976,14 @@ cb_erases: "Efface vos données",
 cb_sony_link: "Page Sony sur le mode sans échec",
 cb_usb_title: "Si vous avez besoin de la clé USB",
 cb_after_title: "Après une réinitialisation",
+saves_action_failed: "Ça n'a pas marché",
+saves_copy_to_console: "Une autre console",
+saves_copy_to_console_desc: "Placez cette sauvegarde dans celle d'un utilisateur pour ce jeu sur votre autre PS5.",
+saves_copy_same_place: "Le même emplacement sur cette console",
+saves_copy_console_title_to: "Copier vers {console}",
+saves_copy_console_title: "Copier vers une autre console",
+saves_copy_console_asking: "Demande à {console} ce qu'elle contient…",
+saves_copy_console_pick: "Copier la sauvegarde de {source} pour {game} vers :",
 };
 
 export default fr;

@@ -7913,6 +7913,14 @@ cb_erases: "Стирает ваши данные",
 cb_sony_link: "Страница Sony о безопасном режиме",
 cb_usb_title: "Если нужен USB-накопитель",
 cb_after_title: "После сброса",
+saves_action_failed: "Не получилось",
+saves_copy_to_console: "Другая консоль",
+saves_copy_to_console_desc: "Поместить это сохранение в сохранение пользователя для игры на другой PS5.",
+saves_copy_same_place: "То же место на той консоли",
+saves_copy_console_title_to: "Копировать на {console}",
+saves_copy_console_title: "Копировать на другую консоль",
+saves_copy_console_asking: "Запрашиваем у {console} список…",
+saves_copy_console_pick: "Копировать сохранение {game} пользователя {source} в:",
 };
 
 export default ru;
