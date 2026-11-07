@@ -7234,6 +7234,8 @@ library_compressed_hint: "壓縮映像需要 ShadowMount+ 才能遊玩。如需�
 "rp_touch_size_m": "中",
 "rp_touch_size_l": "大",
 "rp_touch_opacity": "控制器不透明度",
+"rp_touch_mode_switch_full": "全螢幕時顯示控制器/觸控板切換",
+"rp_touch_mode_switch_full_hint": "它會隨串流控制項一起隱藏；輕點畫面即可重新顯示。",
 "rp_menu": "選單",
 "rp_menu_close": "關閉選單",
 "rp_more": "更多",

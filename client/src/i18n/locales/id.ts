@@ -7290,6 +7290,8 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "rp_touch_size_m": "Sedang",
 "rp_touch_size_l": "Besar",
 "rp_touch_opacity": "Opasitas kontroler",
+"rp_touch_mode_switch_full": "Tampilkan sakelar Kontroler/Touchpad di layar penuh",
+"rp_touch_mode_switch_full_hint": "Sakelar ini tersembunyi bersama kontrol streaming; ketuk gambar untuk memunculkannya lagi.",
 "rp_menu": "Menu",
 "rp_menu_close": "Tutup menu",
 "rp_more": "Lainnya",

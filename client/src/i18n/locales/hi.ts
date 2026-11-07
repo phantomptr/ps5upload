@@ -7295,6 +7295,8 @@ library_compressed_hint: "संपीड़ित इमेज चलाने 
 "rp_touch_size_m": "मध्यम",
 "rp_touch_size_l": "बड़ा",
 "rp_touch_opacity": "कंट्रोलर की अपारदर्शिता",
+"rp_touch_mode_switch_full": "फ़ुल स्क्रीन में कंट्रोलर/टचपैड स्विच दिखाएँ",
+"rp_touch_mode_switch_full_hint": "यह स्ट्रीम के कंट्रोल के साथ छिप जाता है; वापस लाने के लिए तस्वीर पर टैप करें।",
 "rp_menu": "मेनू",
 "rp_menu_close": "मेनू बंद करें",
 "rp_more": "और",

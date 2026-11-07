@@ -7297,6 +7297,8 @@ library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour
 "rp_touch_size_m": "Moyenne",
 "rp_touch_size_l": "Grande",
 "rp_touch_opacity": "Opacité de la manette",
+"rp_touch_mode_switch_full": "Afficher le sélecteur Manette/Pavé tactile en plein écran",
+"rp_touch_mode_switch_full_hint": "Il se masque avec les commandes du flux ; touchez l'image pour le faire revenir.",
 "rp_menu": "Menu",
 "rp_menu_close": "Fermer le menu",
 "rp_more": "Plus",

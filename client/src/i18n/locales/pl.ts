@@ -7522,6 +7522,8 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "rp_touch_size_m": "Średni",
 "rp_touch_size_l": "Duży",
 "rp_touch_opacity": "Krycie kontrolera",
+"rp_touch_mode_switch_full": "Pokazuj przełącznik Kontroler/Touchpad na pełnym ekranie",
+"rp_touch_mode_switch_full_hint": "Chowa się razem z elementami sterowania transmisją; dotknij obrazu, aby go przywrócić.",
 "rp_menu": "Menu",
 "rp_menu_close": "Zamknij menu",
 "rp_more": "Więcej",

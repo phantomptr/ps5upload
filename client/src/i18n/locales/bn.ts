@@ -7281,6 +7281,8 @@ library_compressed_hint: "সংকুচিত ইমেজ চালাতে 
 "rp_touch_size_m": "মাঝারি",
 "rp_touch_size_l": "বড়",
 "rp_touch_opacity": "কন্ট্রোলারের অস্বচ্ছতা",
+"rp_touch_mode_switch_full": "ফুল স্ক্রিনে কন্ট্রোলার/টাচপ্যাড সুইচ দেখান",
+"rp_touch_mode_switch_full_hint": "এটি স্ট্রিমের কন্ট্রোলগুলোর সাথে লুকিয়ে যায়; ফিরিয়ে আনতে ছবিতে ট্যাপ করুন।",
 "rp_menu": "মেনু",
 "rp_menu_close": "মেনু বন্ধ করুন",
 "rp_more": "আরও",

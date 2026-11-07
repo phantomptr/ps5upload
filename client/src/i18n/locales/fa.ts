@@ -7563,6 +7563,8 @@ library_compressed_hint: "برای اجرای ایمیج فشرده به ShadowM
 "rp_touch_size_m": "متوسط",
 "rp_touch_size_l": "بزرگ",
 "rp_touch_opacity": "کدورت دسته",
+"rp_touch_mode_switch_full": "نمایش کلید دسته/تاچ‌پد در حالت تمام‌صفحه",
+"rp_touch_mode_switch_full_hint": "همراه با کنترل‌های پخش پنهان می‌شود؛ برای برگرداندن آن روی تصویر ضربه بزنید.",
 "rp_menu": "منو",
 "rp_menu_close": "بستن منو",
 "rp_more": "بیشتر",

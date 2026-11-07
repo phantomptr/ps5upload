@@ -7288,6 +7288,8 @@ library_compressed_hint: "อิมเมจที่บีบอัดต้อ
 "rp_touch_size_m": "กลาง",
 "rp_touch_size_l": "ใหญ่",
 "rp_touch_opacity": "ความทึบของคอนโทรลเลอร์",
+"rp_touch_mode_switch_full": "แสดงสวิตช์คอนโทรลเลอร์/ทัชแพดในโหมดเต็มหน้าจอ",
+"rp_touch_mode_switch_full_hint": "สวิตช์จะซ่อนไปพร้อมกับปุ่มควบคุมสตรีม แตะที่ภาพเพื่อให้กลับมา",
 "rp_menu": "เมนู",
 "rp_menu_close": "ปิดเมนู",
 "rp_more": "เพิ่มเติม",

@@ -103,6 +103,9 @@ export interface RpPrefs {
   escHoldRelease: boolean;
   /** On a touch screen: the on-screen controller, or the screen as the PS5 mouse's touchpad. */
   touchMode: "controller" | "touchpad";
+  /** Full screen: the Controller/Touchpad switch over the picture (it hides with the stream's
+   *  controls and a tap brings it back). Off, it shows only outside full screen (#722). */
+  touchModeSwitchFull: boolean;
   /** How far the PS5's pointer moves for a finger's movement on the touchpad. */
   touchpadSpeed: number;
   /** On other screens of the app, the picture in a small floating window (layout/RemotePlayMini). */
@@ -144,6 +147,7 @@ export const DEFAULT_RP_PREFS: RpPrefs = {
   kbmChip: true,
   escHoldRelease: true,
   touchMode: "controller",
+  touchModeSwitchFull: true,
   touchpadSpeed: 1.5,
   miniPlayer: true,
   systemPip: true,
@@ -184,6 +188,7 @@ export function loadRpPrefs(): RpPrefs {
       codec,
       bitrateKbps,
       touchMode,
+      touchModeSwitchFull: p.touchModeSwitchFull !== false,
       touchpadSpeed,
       picture: readPicture(p.picture),
       buttonMap: readButtonMap(p.buttonMap),

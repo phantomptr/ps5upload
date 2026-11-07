@@ -48,6 +48,7 @@ const NATIVE_ONLY: Record<string, string> = {
   android_system_ui: "Android app only: hides the system bars and locks landscape for Remote Play full screen",
   focus_webview: "iOS app only: makes the WKWebView the first responder so controllers reach the page",
   hold_controller_home: "iOS app only: asks for the controller's PS button during a stream, instead of the system's Games overlay",
+  set_status_bar_hidden: "iOS app only: hides the status bar while Remote Play fills the screen",
   game_mode_set: "the app asks its OS for game mode while Remote Play plays; a browser tab cannot (lib/gameMode.ts skips it)",
   pad_touchpad_set: "the app reads a DualSense's touchpad over HID while Remote Play plays; a browser uses WebHID instead (lib/padTouchpad.ts)",
   pad_dualsense_info: "the app looks for a DualSense over HID to start Remote Play in DualSense mode; a browser never does (lib/dualSense.ts)",

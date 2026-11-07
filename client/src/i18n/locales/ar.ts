@@ -7281,6 +7281,8 @@ library_compressed_hint: "تحتاج الصور المضغوطة إلى ShadowMo
 "rp_touch_size_m": "متوسط",
 "rp_touch_size_l": "كبير",
 "rp_touch_opacity": "عتامة وحدة التحكم",
+"rp_touch_mode_switch_full": "إظهار مفتاح وحدة التحكم/لوحة اللمس في وضع ملء الشاشة",
+"rp_touch_mode_switch_full_hint": "يختفي مع عناصر تحكم البث؛ انقر على الصورة لإظهاره مجددًا.",
 "rp_menu": "القائمة",
 "rp_menu_close": "إغلاق القائمة",
 "rp_more": "المزيد",

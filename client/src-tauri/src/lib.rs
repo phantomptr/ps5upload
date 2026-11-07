@@ -673,6 +673,7 @@ pub fn run() {
             commands::android_system_ui,
             commands::focus_webview,
             commands::hold_controller_home,
+            commands::set_status_bar_hidden,
             // Remote Play playing: the OS's game mode where an app can ask for one.
             commands::game_mode_set,
             // Remote Play playing: a DualSense's touchpad, which the Gamepad API never gives.
