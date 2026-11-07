@@ -1415,6 +1415,39 @@ impl StreamSink for Sink {
     }
 }
 
+/// When this engine's last session with each console ended.
+static SESSION_ENDED: std::sync::LazyLock<
+    Mutex<std::collections::HashMap<String, std::time::Instant>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+/// How long a console holds Remote Play after a session ends (12-30 s seen), with a margin.
+const SLOT_HOLD: Duration = Duration::from_secs(40);
+
+/// Session init closed with no reply: "busy" with the wait left when our own session with this
+/// console ended moments ago (the player waits it out and starts again by itself), otherwise "in
+/// use" by another device. None for any other error.
+fn slot_held_status(host: &str, e: &anyhow::Error) -> Option<serde_json::Value> {
+    let text = format!("{e:#}");
+    if !text.contains(ps5upload_core::rp_session::SESSION_INIT_CLOSED) {
+        return None;
+    }
+    let since = SESSION_ENDED
+        .lock()
+        .ok()
+        .and_then(|g| g.get(host).map(|t| t.elapsed()));
+    Some(slot_held_value(since, &text))
+}
+
+fn slot_held_value(since_ours: Option<Duration>, text: &str) -> serde_json::Value {
+    match since_ours {
+        Some(d) if d < SLOT_HOLD => {
+            let left = (SLOT_HOLD - d).as_secs().max(3);
+            serde_json::json!({"stage": "error", "code": "busy", "retry_s": left, "error": text})
+        }
+        _ => serde_json::json!({"stage": "error", "code": "in_use", "retry_s": 10, "error": text}),
+    }
+}
+
 /// An error as the player shows it: a stable `code` to pick the plain-English
 /// message from, plus the raw text for the details line.
 fn error_status(e: &anyhow::Error) -> serde_json::Value {
@@ -1656,8 +1689,15 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
                 "ws_dropped": l.dropped.load(Ordering::Relaxed),
                 "reason": rep.disconnect_reason,
             }),
-            Err(e) => error_status(&e),
+            Err(e) => slot_held_status(&l.host, &e).unwrap_or_else(|| error_status(&e)),
         };
+        // A session that reached the console holds its slot for a while after: remembered, so a
+        // start refused meanwhile is told apart from another device's session.
+        if end["code"] != "busy" && end["code"] != "in_use" {
+            if let Ok(mut g) = SESSION_ENDED.lock() {
+                g.insert(l.host.clone(), std::time::Instant::now());
+            }
+        }
         crate::log_info!("rp_stream: {end}");
         let end_note = end.clone();
         note_last(|v| {
@@ -1974,6 +2014,28 @@ pub(crate) mod test_live {
         fn drop(&mut self) {
             *LIVE.lock().unwrap() = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod slot_held_tests {
+    use super::*;
+
+    #[test]
+    fn a_closed_start_right_after_our_session_waits_it_out() {
+        let v = slot_held_value(Some(Duration::from_secs(10)), "x");
+        assert_eq!(
+            (v["code"].as_str(), v["retry_s"].as_u64()),
+            (Some("busy"), Some(30))
+        );
+        let v = slot_held_value(Some(Duration::from_secs(39)), "x");
+        assert_eq!(v["retry_s"], 3);
+        let v = slot_held_value(Some(Duration::from_secs(90)), "x");
+        assert_eq!(v["code"], "in_use");
+        assert_eq!(slot_held_value(None, "x")["code"], "in_use");
+        let e = anyhow::anyhow!("{}", ps5upload_core::rp_session::SESSION_INIT_CLOSED);
+        assert!(slot_held_status("10.9.9.9", &e).is_some());
+        assert!(slot_held_status("10.9.9.9", &anyhow::anyhow!("other")).is_none());
     }
 }
 

@@ -826,6 +826,10 @@ export class RemotePlayStream {
   private loggedVisibleFix = false;
   /** The hardware decoder gave a picture that could not be put right: software from now on. */
   private softwareAfterBadFrame = false;
+  /** H.264 fed as Annex B (start codes, parameter sets in each keyframe, no description): the
+   *  next try when the usual AVC form gave no picture. An older WebKit on macOS (#683, an M1 Pro
+   *  on an older macOS) failed every decode of the AVC form. */
+  private annexB = false;
   /** Decoder failures in a row before any picture came. */
   private noPictureFails = 0;
 
@@ -2166,7 +2170,7 @@ export class RemotePlayStream {
     if (!this.sawKey && !key) return;
     this.sawKey = true;
     let data = payload;
-    if (!this.hevc) {
+    if (!this.hevc && !this.annexB) {
       // AVC form (length-prefixed, parameter sets in the description): the Linux app's
       // WebKitGTK decodes no H.264 given as Annex B ("Decode error", a black picture).
       data = lengthPrefixed(payload, false, true);
@@ -2588,7 +2592,8 @@ export class RemotePlayStream {
       });
     } else if (this.header) {
       const description = avcDescription(this.header);
-      if (description) void configure(avcCodecString(this.header), description);
+      if (this.annexB) void configure(avcCodecString(this.header));
+      else if (description) void configure(avcCodecString(this.header), description);
       else this.cannotDecode("The stream's H.264 header has no SPS/PPS.");
     }
   }
@@ -2600,6 +2605,13 @@ export class RemotePlayStream {
     const software = this.o.decoding === "software" || this.softwareAfterBadFrame || linuxSoftwareVideo();
     const step = noPictureStep(this.noPictureFails, { hevc: this.hevc, software });
     if (step === "retry") return true;
+    if (step === "software" && !this.hevc && !this.annexB) {
+      // The hardware decoder once more, fed Annex B, before software.
+      log.warn("remote-play", `no picture from H.264 in AVC form (${detail}): trying Annex B`);
+      this.annexB = true;
+      this.noPictureFails = 0;
+      return true;
+    }
     if (step === "software") {
       log.warn("remote-play", `no picture from the hardware decoder (${detail}): decoding in software`);
       this.softwareAfterBadFrame = true;
