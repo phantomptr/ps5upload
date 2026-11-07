@@ -6400,6 +6400,10 @@
               "host"
             ]
           },
+          "internet": {
+            "description": "Also an internet invite: a room on the signalling hub (`invite.internet.url`).",
+            "type": "boolean"
+          },
           "new": {
             "description": "A new key (the old link stops working).",
             "type": "boolean"
@@ -11317,6 +11321,18 @@
               "null"
             ]
           },
+          "hub_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "internet_invites": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "max_players": {
             "minimum": 0,
             "type": [
@@ -11325,6 +11341,21 @@
             ]
           },
           "stream_seat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "stun": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "upnp": {
             "type": [
               "boolean",
               "null"
@@ -13941,6 +13972,14 @@
             "description": "Take PS and Create from guests who are playing (they keep them while picking a user).\nOn unless the host turns it off: a friend's PS could quit the game, or update the console\npast its exploit (#649).",
             "type": "boolean"
           },
+          "hub_url": {
+            "description": "The signalling hub (`wss://`; `ws://` only to this computer).",
+            "type": "string"
+          },
+          "internet_invites": {
+            "description": "The host may make internet invites (a room on the signalling hub, WebRTC to the guest:\ncrate::join_net). On unless the host turns it off.",
+            "type": "boolean"
+          },
           "max_players": {
             "description": "Guests at most (1-3).",
             "minimum": 0,
@@ -13949,12 +13988,27 @@
           "stream_seat": {
             "description": "A friend may get the stream's own controller (Player 1, signed in as the host's PS5 user)\nwhile this device shows no picture and no phone plays on it (#687). Off unless the host\nturns it on: a friend otherwise always gets their own controller and picks a user (#720).",
             "type": "boolean"
+          },
+          "stun": {
+            "description": "STUN servers (`host:port`) the engine asks for its outside address.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "upnp": {
+            "description": "Ask the router for a port (UPnP-IGD, NAT-PMP / PCP) while an internet invite is open.",
+            "type": "boolean"
           }
         },
         "required": [
           "block_system_buttons",
           "max_players",
-          "stream_seat"
+          "stream_seat",
+          "internet_invites",
+          "hub_url",
+          "stun",
+          "upnp"
         ],
         "type": "object"
       },
@@ -21409,7 +21463,7 @@
     },
     "/api/join/invite": {
       "post": {
-        "description": "`POST /api/join/invite {addr, new?}`: `{key, code, code_display, url, urls, expires_in_s}`.\nThe same invite again until it expires, unless `new` (the old link and code stop working).",
+        "description": "`POST /api/join/invite {addr, new?, internet?}`: `{key, code, code_display, url, urls,\nexpires_in_s, internet}`. The same invite again until it expires, unless `new` (the old link and\ncode stop working). With `internet`, also a link for friends anywhere (`internet.url`): the\nengine opens a room on the signalling hub in the settings and the guest's browser connects to\nit peer to peer (409 `internet_off` when the settings turned internet invites off, 409\n`hub_url` when the hub address is not a `wss://` one). The room stays open while the invite\nlasts or an internet guest is in.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -21678,7 +21732,7 @@
     },
     "/api/join/settings": {
       "post": {
-        "description": "`POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?}`: the host's\nchoices (every console). Fewer players lets nobody go; it only stops new ones. `stream_seat`\noff moves a friend on the stream's controller to a pad of their own.",
+        "description": "`POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,\ninternet_invites?, hub_url?, stun?, upnp?}`: the host's choices (every console). Fewer players\nlets nobody go; it only stops new ones. `stream_seat` off moves a friend on the stream's\ncontroller to a pad of their own. `internet_invites` off closes the internet rooms (guests\nalready in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`\notherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none), `upnp` whether the\nrouter is asked for a port.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -21704,6 +21758,10 @@
               }
             },
             "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
           },
           "403": {
             "$ref": "#/components/responses/Error",
