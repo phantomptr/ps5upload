@@ -1675,6 +1675,21 @@ async fn resume(socket: &mut WebSocket, token: &str) -> Option<Admit> {
         if !move_off_seat(console.clone(), id).await {
             return Some(Admit::Refused("seat_taken"));
         }
+    } else {
+        // A move started elsewhere (the tick, the picture coming on) still making their pad: wait
+        // for it, so "joined" names the player they end up on, not Player 1.
+        for _ in 0..150 {
+            let running = with_party(&key, |p| {
+                p.guests
+                    .iter()
+                    .any(|g| g.id == id && g.active() && g.seat_move == SeatMove::Running)
+            })
+            .unwrap_or(false);
+            if !running {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
     let Some((player, token, open)) = with_party(&key, |p| {
         p.guests

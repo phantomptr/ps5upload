@@ -107,6 +107,14 @@ impl PadSources {
         self.0.lock().map(|g| g.is_empty()).unwrap_or(true)
     }
 
+    /// Whether `source` has a state recorded.
+    pub fn contains(&self, source: u64) -> bool {
+        self.0
+            .lock()
+            .map(|g| g.contains_key(&source))
+            .unwrap_or(false)
+    }
+
     /// Record `source`'s state (None: it left) and return the merged pad.
     pub fn set(&self, source: u64, state: Option<ControllerState>) -> ControllerState {
         let Ok(mut g) = self.0.lock() else {

@@ -721,6 +721,9 @@ export class WasmSound {
         };
       }
       void this.actx.resume().catch(() => {});
+      // Started outside a tap (the media player's sound failing mid-stream): the context stays
+      // suspended with no state change to arm on, so the next tap or key starts it.
+      if (this.actx.state !== "running") this.armResume();
     } catch {
       return this.fail();
     }

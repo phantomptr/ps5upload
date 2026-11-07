@@ -1142,6 +1142,12 @@ impl Live {
 
     fn set_guest_seat(&self, on: bool) {
         if self.guest_seat.swap(on, Ordering::Relaxed) == on {
+            // Off and already off: a guest's last state pushed just after the give-back (its
+            // frame raced the seat being taken back) would otherwise stay held on the host's
+            // controller for good. The tick says off every 250 ms, so this clears it.
+            if !on && self.sources.contains(GUEST_SEAT_SOURCE) {
+                self.push_pad(GUEST_SEAT_SOURCE, None);
+            }
             return;
         }
         crate::log_at!(
@@ -1287,6 +1293,20 @@ impl Live {
 
     /// One controller changed (None: it left): the console gets every controller merged.
     fn push_pad(&self, source: u64, state: Option<ControllerState>) {
+        // A phone playing on the stream's controller while a friend holds it: the friend gives it
+        // back now, not at the next look (#720). On a task: this may run under the link's lock,
+        // and giving the seat back reads the linked phones.
+        if state.is_some()
+            && source != PAGE_SOURCE
+            && source != GUEST_SEAT_SOURCE
+            && self.guest_seat.load(Ordering::Relaxed)
+        {
+            self.set_guest_seat(false);
+            let host = self.host.clone();
+            if let Ok(rt) = tokio::runtime::Handle::try_current() {
+                rt.spawn(async move { crate::join::seat_needed(&host, "a phone plays") });
+            }
+        }
         let merged = self.sources.set(source, state);
         if let Ok(mut g) = self.pad.lock() {
             if !self.playing.load(Ordering::Relaxed) {
