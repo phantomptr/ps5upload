@@ -1215,7 +1215,9 @@ export function StreamPanel() {
               🔇{" "}
               {stats.soundMissing === "format"
                 ? tr("rp_sound_format", undefined, "The PS5 sends its sound in a format PS5Upload can't play yet. A bug report from now tells us which.")
-                : tr("rp_sound_none", undefined, "The PS5 isn't sending any sound to this stream. Stop and start the stream again; if it stays silent, check where the PS5 plays its sound (Settings › Sound › Audio Output) and send a bug report.")}
+                : stats.soundMissing === "device"
+                  ? tr("rp_sound_device", undefined, "The PS5's sound reaches this device, but none of it plays. Check this device's sound output and volume, then stop and start the stream. Still silent? Send a bug report.")
+                  : tr("rp_sound_none", undefined, "The PS5 isn't sending any sound to this stream. Stop and start the stream again; if it stays silent, check where the PS5 plays its sound (Settings › Sound › Audio Output) and send a bug report.")}
             </div>
           )}
           {playing && kbm.pointerHeld && prefs.kbmChip && !settingsOpen && !pip && !kbm.hint && (
