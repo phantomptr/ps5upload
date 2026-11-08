@@ -38,6 +38,35 @@ export type ByeWhy =
   /** The host needed their stream's controller back and no other controller was free. */
   | "seat_taken";
 
+/** Why an internet invite's connection could not be made (or was refused), join/rtcTransport. */
+export type NetWhy =
+  /** The answer's certificate is not the link's: someone in the middle, or an old link. */
+  | "mismatch"
+  /** ICE failed or did not finish in time: no direct path between the two networks. */
+  | "no_direct"
+  /** The hub has no such room (the invite closed, or the host is away). */
+  | "no_room"
+  /** The room (hub) or the host's engine has no space for another guest now. */
+  | "net_full"
+  /** The hub could not be reached, or dropped the page while connecting. */
+  | "no_hub"
+  /** The host's engine would not take this browser's offer. */
+  | "offer"
+  /** This browser has no WebRTC. */
+  | "no_webrtc";
+
+const NET_WHYS: readonly NetWhy[] = ["mismatch", "no_direct", "no_room", "net_full", "no_hub", "offer", "no_webrtc"];
+
+/** The close code a failed internet connection closes with (its reason `net:<why>`). */
+export const NET_CLOSE = 4100;
+
+/** The NetWhy a transport's close carried, or null (an ordinary close or drop). */
+export function netFailure(e: { code?: number; reason?: string } | null | undefined): NetWhy | null {
+  if (!e || e.code !== NET_CLOSE || typeof e.reason !== "string" || !e.reason.startsWith("net:")) return null;
+  const w = e.reason.slice(4) as NetWhy;
+  return NET_WHYS.includes(w) ? w : null;
+}
+
 /** What a guest is doing on the host's console, as the host's engine sees it. */
 export type GuestState = "asking" | "picking_user" | "playing" | "reconnecting" | "left";
 

@@ -1224,7 +1224,7 @@ async fn connect_lan(host: &str, port: u16) -> Result<tokio::net::TcpStream, Rel
 
 /// TLS for a `wss://` engine behind a proxy, checked against the public roots as any browser's
 /// visit would be. A private CA's certificate is refused here; the host's LAN address still works.
-fn relay_tls() -> Option<tokio_rustls::TlsConnector> {
+pub(crate) fn relay_tls() -> Option<tokio_rustls::TlsConnector> {
     let mut roots = rustls::RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(

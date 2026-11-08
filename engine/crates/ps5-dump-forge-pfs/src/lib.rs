@@ -34,7 +34,7 @@ mod read;
 mod wrap;
 
 pub use read::{FfpfscInfo, PfsHeader, PfsSource, open_ffpfsc};
-pub use wrap::{Stream, WrapOptions, WrapReport, container_size_max, wrap};
+pub use wrap::{Resume, Stream, WrapOptions, WrapReport, container_size_max, wrap, wrap_resumable};
 
 /// The PFS block size this crate writes, and the PFSC block size of every container.
 pub const BLOCK: u64 = 0x10000;
@@ -100,6 +100,20 @@ pub fn write<W: Write + Seek>(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<Report> {
+    write_after(tree, layout, out, 0, cancel, progress)
+}
+
+/// [`write`] for a build going on from a crash, whose output drops the first `skip` bytes it is
+/// given (they are on disk already): file data that ends by then is not read, zeros stand in
+/// for it. Every byte from `skip` on is what [`write`] writes.
+pub fn write_after<W: Write + Seek>(
+    tree: &mut dyn SourceTree,
+    layout: &Layout,
+    out: &mut W,
+    skip: u64,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64, u64),
+) -> Result<Report> {
     check_cancel(cancel)?;
     // The plan holds the tree's paths and sizes; a different tree would write wrong data.
     if fingerprint(tree) != layout.source {
@@ -122,6 +136,13 @@ pub fn write<W: Write + Seek>(
         while at < node.size {
             check_cancel(cancel)?;
             let want = (node.size - at).min(CHUNK);
+            if sink.pos + want <= skip {
+                sink.zeros_to(sink.pos + want)?;
+                at += want;
+                done += want;
+                progress(done, layout.data_bytes);
+                continue;
+            }
             let buf = tree.read_range(&node.path, at, want as usize)?;
             // Sources may return short reads; none may return nothing or too much.
             if buf.is_empty() || buf.len() as u64 > want {

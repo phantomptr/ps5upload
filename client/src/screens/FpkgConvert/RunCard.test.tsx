@@ -193,6 +193,52 @@ describe("RunCard", () => {
       expect(button(out, "Add this game to the queue")?.disabled).toBe(false);
     });
 
+    it("saves an image to this computer or straight to the PS5", () => {
+      const img = { make: "image" as const, onSaveTo: noop };
+      expect(options(idle(img, { canImage: true }), "Save to")).toEqual([
+        "This computer",
+        "The PS5, straight (nothing stored here)",
+      ]);
+      // A package has no such choice.
+      expect(idle({ onSaveTo: noop })).not.toContain("Save to");
+      const toPs5 = idle({ ...img, saveTo: "ps5" }, { canImage: true });
+      expect(toPs5).not.toContain("After converting");
+      expect(toPs5).toContain("goes on where it stopped");
+      expect(button(toPs5, "Make game image")?.disabled).toBe(false);
+      // An image that can't stream there says why and runs nothing.
+      const refused = idle({ ...img, saveTo: "ps5", ps5Refusal: "Save this one to this computer." }, { canImage: true });
+      expect(refused).toContain("Save this one to this computer.");
+      expect(button(refused, "Make game image")?.disabled).toBe(true);
+      // Nor with no console to send to.
+      const noPs5 = idle({ ...img, saveTo: "ps5", canInstall: false }, { canImage: true });
+      expect(button(noPs5, "Make game image")?.disabled).toBe(true);
+    });
+
+    it("says a finished image is on the PS5, with nothing to upload", () => {
+      const out = html(
+        {
+          phase: "done",
+          mode: "image",
+          source: "/g",
+          host: "10.0.0.2",
+          packagePath: "/data/homebrew/G.exfat",
+          packageBytes: 9,
+          convertMs: 1,
+          installMs: 0,
+          stageMs: {},
+          deleted: false,
+          titleId: null,
+          onConsole: true,
+        },
+        { canInstall: true },
+        { onUploadImage: noop },
+      );
+      expect(out).toContain("written straight to the PS5");
+      expect(out).toContain("/data/homebrew/G.exfat");
+      expect(button(out, "Upload to PS5")).toBeNull();
+      expect(button(out, "Show in folder")).toBeNull();
+    });
+
     it("names the action after the choice", () => {
       expect(button(idle({}), "Convert only")).not.toBeNull();
       expect(button(idle({ then: "stream" }), "Convert & install")).not.toBeNull();
@@ -517,13 +563,14 @@ describe("RunCard", () => {
       const zstd = lz4({ on: true, kind: "zstd", readiness: noEmulator });
       expect(lz4Active("ffpkg", zstd)).toBe(true);
       expect(lz4Active("ffpkg", lz4({ on: true }))).toBe(false);
-      expect(idle("ffpkg", zstd)).toContain("zstd asset packs");
+      expect(checkbox(idle("ffpkg", zstd), "zstd asset packs")).not.toBeNull();
       expect(idle("ffpkg", zstd)).not.toContain("AMPR LZ4 asset packs");
       expect(checkbox(idle("exfat", zstd), "AMPR LZ4 asset packs")?.checked).toBe(false);
       expect(checkbox(idle("exfat", zstd), "zstd asset packs")?.checked).toBe(true);
       const notAmpr = lz4({ kind: "zstd", on: true, readiness: { refusal: "no", kind: "no_ampr" } });
       expect(lz4Active("ffpkg", notAmpr)).toBe(false);
-      expect(idle("ffpkg", notAmpr)).not.toContain("zstd asset packs");
+      // The resume note also names zstd asset packs, so look for the option itself.
+      expect(checkbox(idle("ffpkg", notAmpr), "zstd asset packs")).toBeNull();
       // The runtime choice goes with it: the newest release unless the tested one is chosen.
       expect(packOptions("ffpkg", zstd)).toEqual({ zstdLevel: 5, zstdRuntime: "latest" });
       expect(packOptions("ffpkg", lz4({ on: true }))).toBeUndefined();

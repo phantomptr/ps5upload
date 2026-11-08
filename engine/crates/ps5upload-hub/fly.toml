@@ -1,0 +1,54 @@
+# Fly.io app for the Play Together hub (deploy/FLY.md has the steps).
+#
+# One machine only: rooms live in that machine's memory, so a second machine would split them
+# (a guest could land on a machine that never saw the room). Deploy with `--ha=false` and keep
+# `fly scale count 1`.
+
+app = "ps5upload-hub"
+primary_region = "iad"
+# The hub closes every socket cleanly on SIGTERM (code 1001), so hosts reconnect and reclaim.
+kill_signal = "SIGTERM"
+kill_timeout = "10s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  HUB_HTTP_LISTEN = "0.0.0.0:8080"
+  # /metrics on its own port, reachable only over Fly's private network (Fly scrapes it; the
+  # owner reads it with `fly proxy 9091`). The public port serves /ws and /health only.
+  HUB_METRICS_LISTEN = "[::]:9091"
+  # Fly's proxy is the only way in from the internet and it puts the client's address in
+  # Fly-Client-IP. The proxy's own addresses are not fixed, so every peer is trusted for that
+  # header; see FLY.md.
+  HUB_TRUSTED_PROXIES = "0.0.0.0/0,::/0"
+  HUB_CLIENT_IP_HEADER = "fly-client-ip"
+  # No HUB_STUN_LISTEN: clients use public STUN servers, so no UDP and no dedicated IPv4.
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 1500
+    hard_limit = 2000
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/health"
+    timeout = "5s"
+
+[metrics]
+  port = 9091
+  path = "/metrics"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

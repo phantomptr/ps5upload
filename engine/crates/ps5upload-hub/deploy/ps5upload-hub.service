@@ -1,0 +1,38 @@
+# /etc/systemd/system/ps5upload-hub.service (VPS setup, see README.md)
+[Unit]
+Description=PS5Upload Play Together hub (signalling)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ps5upload-hub
+EnvironmentFile=/etc/ps5upload-hub.env
+Restart=always
+RestartSec=2
+# SIGTERM closes every socket with 1001 so hosts reconnect and reclaim their rooms.
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+# A throwaway unprivileged user; the hub writes nothing to disk.
+DynamicUser=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+MemoryMax=256M
+LimitNOFILE=16384
+
+[Install]
+WantedBy=multi-user.target

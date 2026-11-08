@@ -2178,6 +2178,27 @@ ShadowMount+ 1.7, a game image made by the app in each of `.exfat`, `.ffpkg`, `.
 compressed `.ffpfsc` mounted, registered and ran its game. A folder that is on the console or on
 a saved server cannot be made into an image from here; copy it to this computer first.
 
+**Q: Can I convert a PS4 update or add-on (DLC)?**
+An update, yes, by merging it into its game; an add-on with files becomes a folder; an add-on
+that is only a licence has nothing in it to convert. Only fake packages with the usual all-zero
+passcode open, as for PS4 games.
+
+- **An update** (a `.pkg` whose PARAM.SFO category is `gp`) holds only the files that changed,
+  and the console normally lays it over the installed game. ShadowMount+ mounts one image or
+  folder per game and has no such layer, so an update goes into its game: pick the update (or the
+  game) under **① Game**, then the other half under **Merge into the game**, and make an image or a
+  folder. The app checks that both are for the same title ID and that the update's version is
+  newer than the game's. The result is the game at the update's version: the game's files with
+  every file the update carries in place of the game's own, the files it adds, and the update's
+  PARAM.SFO (made a game's again). This is how merged backups are made. The game can be a PS4
+  package, an image or a folder; an update that stores differences instead of files (a delta
+  update) is refused. An update on its own can't become an image or folder: it isn't a game.
+- **An add-on with files** (category `ac`) becomes a folder of its files only, never an image or a
+  package. ShadowMount+ doesn't mount add-ons, so a game reads them only where it looks for them
+  itself, for example a folder inside the game.
+- **An add-on that is a licence** unlocks something the game already has and holds no files.
+- Not yet tried on a console: a merged game, and an add-on folder in use.
+
 **Q: Can I add games to Workshop's queue while one is converting?**
 Yes. While a game is being made, pick or drop more under **① Game** (also **On the PS5…**, or
 **Convert first** from elsewhere): they go into **⑤ Queue** and are made one at a time after it,

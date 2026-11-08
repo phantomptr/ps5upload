@@ -16,13 +16,20 @@
 //! so it is normally read once.
 
 use std::collections::HashMap;
-use std::io::{BufWriter, Seek as _, Write};
+use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use ps5upload_fpkg::ffpfsc_block::Level;
 use ps5upload_fpkg::sample::{self, VerifyMode, VerifySummary, SLICE};
 use ps5upload_fpkg::source::{SourceFile, SourceTree};
+
+mod to_console;
+#[cfg(test)]
+pub(crate) use to_console::tests as to_console_tests;
+pub(crate) use to_console::{
+    console_stamp, forget_console_stamp, stream_to_console, ConsoleTarget, Streamed,
+};
 
 /// The filesystems a game image can have.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -584,6 +591,7 @@ pub(crate) struct AmprIndexed<'a> {
 impl<'a> AmprIndexed<'a> {
     /// `None` when the game does not read through libSceAmpr and ships no index: nothing to
     /// regenerate, the folder goes in as it is.
+    #[cfg(test)]
     pub(crate) fn wrap(inner: &'a mut dyn SourceTree) -> Result<Option<Self>, String> {
         let mtime = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -683,9 +691,11 @@ enum Planned {
 }
 
 impl Planned {
+    /// `time`: what a PFS image's inodes carry; `None` is now.
     fn plan(
         format: ImageFormat,
         tree: &dyn SourceTree,
+        time: Option<i64>,
         cancel: &AtomicBool,
     ) -> Result<Self, String> {
         let e = |e: ps5upload_fpkg::Error| e.to_string();
@@ -697,7 +707,8 @@ impl Planned {
                 ps5_dump_forge_ufs2::plan(tree, &Default::default(), cancel).map_err(e)?,
             ),
             ImageFormat::Ffpfs => {
-                Self::Ffpfs(ps5_dump_forge_pfs::plan(tree, &Default::default(), cancel).map_err(e)?)
+                let opts = ps5_dump_forge_pfs::Options { time };
+                Self::Ffpfs(ps5_dump_forge_pfs::plan(tree, &opts, cancel).map_err(e)?)
             }
         })
     }
@@ -718,44 +729,56 @@ impl Planned {
         }
     }
 
-    fn write<W: Write + std::io::Seek>(
+    /// Writes the image into `out`, which drops the first `skip` bytes (on disk already, from a
+    /// crashed build): file data that ends by then is not read from the source.
+    fn write<W: Write + Seek>(
         &self,
         tree: &mut dyn SourceTree,
         out: &mut W,
+        skip: u64,
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(u64, u64),
     ) -> ps5upload_fpkg::Result<u64> {
         match self {
-            Self::Exfat(p) => {
-                ps5upload_fpkg::exfat_write::write_exfat(p, tree, out, progress, &|| {
-                    ps5upload_fpkg::workshop::checkpoint(cancel)
-                })
-            }
+            Self::Exfat(p) => ps5upload_fpkg::exfat_write::write_exfat_after(
+                p,
+                tree,
+                out,
+                skip,
+                progress,
+                &|| ps5upload_fpkg::workshop::checkpoint(cancel),
+            ),
             Self::Ffpkg(l) => {
-                ps5_dump_forge_ufs2::write(tree, l, out, cancel, progress).map(|r| r.image_size)
+                ps5_dump_forge_ufs2::write_after(tree, l, out, skip, cancel, progress)
+                    .map(|r| r.image_size)
             }
-            Self::Ffpfs(l) => {
-                ps5_dump_forge_pfs::write(tree, l, out, cancel, progress).map(|r| r.image_size)
-            }
+            Self::Ffpfs(l) => ps5_dump_forge_pfs::write_after(tree, l, out, skip, cancel, progress)
+                .map(|r| r.image_size),
         }
     }
 }
 
-/// How much of a plain exFAT image gets written between checkpoints.
+/// How much of an image gets written between checkpoints (of a `.ffpfsc`, of the container).
 const CHECKPOINT: u64 = 1 << 30;
 
 /// A checkpoint older than this is given up on: its partial image goes in the next sweep.
 pub(crate) const RESUME_KEPT: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 3600);
 
-/// What a build left to go on from after a crash, `<output>.partial.resume`. Only a plain exFAT
-/// image: its layout follows from the files alone and it is written front to back. A cancel or a
-/// failed build removes it with the partial file; only a crash or a killed engine leaves one.
+/// What a build left to go on from after a crash, `<output>.partial.resume`. Any format, plain or
+/// in a `.ffpfsc`: each writer lays its image out from the files alone, writes it front to back,
+/// and pins what would differ from one run to the next (a PFS image's time, a generated index's
+/// mtime) to the stamp beside the checkpoint ([`index_stamp`]). A cancel or a failed build
+/// removes it with the partial file; only a crash or a killed engine leaves one.
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
 struct Checkpoint {
-    /// The files and the layout; another game or another plan starts over.
+    /// The files, the layout, the format and its options; anything else starts over.
     key: String,
     /// The bytes on disk for certain.
     done: u64,
+    /// Of a `.ffpfsc`: the inner image's 64 KiB blocks stored in those bytes, whose offsets are in
+    /// the container's table in the file.
+    #[serde(default)]
+    blocks: u64,
 }
 
 pub(crate) fn checkpoint_path(partial: &Path) -> PathBuf {
@@ -764,10 +787,27 @@ pub(crate) fn checkpoint_path(partial: &Path) -> PathBuf {
     partial.with_file_name(name)
 }
 
-fn plan_key(sizes: &HashMap<String, u64>, image_size: u64) -> String {
+/// What a checkpoint must match to be gone on from: this engine's writers, the format and its
+/// options, the time pinned into the image, every file at its size and the image's size.
+fn resume_key(
+    format: ImageFormat,
+    inner_name: Option<&str>,
+    level: Level,
+    time: Option<i64>,
+    sizes: &HashMap<String, u64>,
+    image_size: u64,
+) -> String {
     let mut rows: Vec<_> = sizes.iter().collect();
     rows.sort();
     let mut h = blake3::Hasher::new();
+    h.update(env!("CARGO_PKG_VERSION").as_bytes());
+    h.update(format.extension().as_bytes());
+    if let Some(name) = inner_name {
+        h.update(b"\0ffpfsc\0");
+        h.update(name.as_bytes());
+        h.update(level.name().as_bytes());
+    }
+    h.update(&time.unwrap_or(0).to_le_bytes());
     h.update(&image_size.to_le_bytes());
     for (path, size) in rows {
         h.update(path.as_bytes());
@@ -777,23 +817,78 @@ fn plan_key(sizes: &HashMap<String, u64>, image_size: u64) -> String {
 }
 
 /// Where to go on from, when the partial file holds what its checkpoint says for this plan.
-fn resume_point(partial: &Path, key: &str) -> Option<u64> {
+fn resume_point(partial: &Path, key: &str) -> Option<Checkpoint> {
     let saved: Checkpoint =
         serde_json::from_slice(&std::fs::read(checkpoint_path(partial)).ok()?).ok()?;
     let on_disk = std::fs::metadata(partial).ok()?.len();
-    (saved.key == key && saved.done > 0 && saved.done <= on_disk).then_some(saved.done)
+    (saved.key == key && saved.done > 0 && saved.done <= on_disk).then_some(saved)
 }
 
-/// Drops the first `skip` bytes it is given, writes the rest, and every [`CHECKPOINT`] makes them
-/// durable and says so in the checkpoint file.
+/// Says in the checkpoint file that `done` bytes (`blocks` of a `.ffpfsc`) are on disk. Only
+/// worth having, not needed: a locked file costs a later resume, not this build.
+fn save_checkpoint(path: &Path, key: &str, done: u64, blocks: u64) {
+    let saved = serde_json::to_vec(&Checkpoint {
+        key: key.to_string(),
+        done,
+        blocks,
+    })
+    .map_err(std::io::Error::other)
+    .and_then(|bytes| {
+        let tmp = path.with_extension("resume.tmp");
+        std::fs::write(&tmp, bytes)?;
+        std::fs::rename(&tmp, path)
+    });
+    if let Err(e) = saved {
+        crate::log_at!(
+            Warn,
+            "convert",
+            "image build: no checkpoint at {done} bytes: {e}"
+        );
+    }
+}
+
+/// How a resumable build makes checkpoints: every `every` bytes, and in a test, a crash once
+/// `stop_after` bytes are written (the partial file and its checkpoint are left as a killed
+/// engine leaves them).
+pub(crate) struct Checkpoints {
+    every: u64,
+    stop_after: Option<u64>,
+    stopped: AtomicBool,
+}
+
+impl Checkpoints {
+    fn new() -> Self {
+        Self {
+            every: CHECKPOINT,
+            stop_after: None,
+            stopped: AtomicBool::new(false),
+        }
+    }
+
+    /// The crash a test asked for, once `at` bytes are out.
+    fn crash(&self, at: u64) -> std::io::Result<()> {
+        if self.stop_after.is_some_and(|n| at >= n) {
+            self.stopped.store(true, Ordering::Relaxed);
+            return Err(std::io::Error::other("stopped as a crash would (test)"));
+        }
+        Ok(())
+    }
+}
+
+/// Drops the first `skip` bytes it is given, writes the rest, and every `every` bytes makes them
+/// durable and says so in the checkpoint file. It seeks forward only, as the writers do: a seek
+/// that lands at or before `skip` moves nothing in the file, which already sits there.
 struct CheckpointWriter<'a> {
     out: BufWriter<&'a mut std::fs::File>,
     skip: u64,
     pos: u64,
+    /// The furthest byte written: the end a writer that checks it starts empty sees.
+    end: u64,
     since: u64,
     path: PathBuf,
     key: String,
     every: u64,
+    crash: Option<&'a Checkpoints>,
 }
 
 impl CheckpointWriter<'_> {
@@ -801,38 +896,30 @@ impl CheckpointWriter<'_> {
         self.out.flush()?;
         self.out.get_ref().sync_data()?;
         self.since = 0;
-        // Only worth having, not needed: a locked file costs a later resume, not this build.
-        let saved = serde_json::to_vec(&Checkpoint {
-            key: self.key.clone(),
-            done: self.pos,
-        })
-        .map_err(std::io::Error::other)
-        .and_then(|bytes| {
-            let tmp = self.path.with_extension("resume.tmp");
-            std::fs::write(&tmp, bytes)?;
-            std::fs::rename(&tmp, &self.path)
-        });
-        if let Err(e) = saved {
-            crate::log_at!(
-                Warn,
-                "convert",
-                "image build: no checkpoint at {} bytes: {e}",
-                self.pos
-            );
-        }
+        save_checkpoint(&self.path, &self.key, self.pos, 0);
         Ok(())
     }
 }
 
 impl Write for CheckpointWriter<'_> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if let Some(c) = self
+            .crash
+            .filter(|c| c.stop_after.is_some_and(|n| self.pos >= n))
+        {
+            // What the page cache held when the engine died: on disk, past the checkpoint.
+            self.out.flush()?;
+            c.crash(self.pos)?;
+        }
         if self.pos < self.skip {
             let n = (self.skip - self.pos).min(buf.len() as u64) as usize;
             self.pos += n as u64;
+            self.end = self.end.max(self.pos);
             return Ok(n);
         }
         let n = self.out.write(buf)?;
         self.pos += n as u64;
+        self.end = self.end.max(self.pos);
         self.since += n as u64;
         if self.since >= self.every {
             self.checkpoint()?;
@@ -841,6 +928,27 @@ impl Write for CheckpointWriter<'_> {
     }
     fn flush(&mut self) -> std::io::Result<()> {
         self.out.flush()
+    }
+}
+
+impl Seek for CheckpointWriter<'_> {
+    fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
+        let target = match to {
+            SeekFrom::Start(p) => Some(p),
+            SeekFrom::Current(d) => self.pos.checked_add_signed(d),
+            SeekFrom::End(d) => self.end.checked_add_signed(d),
+        };
+        let Some(t) = target.filter(|t| *t >= self.pos) else {
+            return Err(std::io::Error::other(
+                "an image going on from a checkpoint is written forward only",
+            ));
+        };
+        // The file sits at the furthest of `pos` and `skip`; it moves only to go past both.
+        if t > self.pos.max(self.skip) {
+            self.out.seek(SeekFrom::Start(t))?;
+        }
+        self.pos = t;
+        Ok(t)
     }
 }
 
@@ -890,23 +998,27 @@ pub(crate) fn build_at(
         format,
         inner_name,
         level,
+        None,
         source,
         output,
         mode,
         verify_chunk,
         cancel,
         stage,
-        false,
+        None,
     )
 }
 
-/// [`build_at`] that goes on from a crash's checkpoint, for a plain exFAT image of a source that
-/// gives the same bytes each time. Not for packs: their archive IDs are new each run. An index in
-/// the source takes its time from [`index_stamp`].
+/// [`build_at`] that goes on from a crash's checkpoint, for a source that gives the same bytes
+/// each time, in any format, plain or compressed. Not for packs: their archive IDs are new each
+/// run. `time` is [`index_stamp`]'s: a generated index in the source and a PFS image's inodes
+/// carry it, so going on gives the same bytes.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_resumable(
     format: ImageFormat,
+    inner_name: Option<&str>,
     level: Level,
+    time: i64,
     source: &mut dyn SourceTree,
     output: &Path,
     mode: VerifyMode,
@@ -916,20 +1028,21 @@ pub(crate) fn build_resumable(
 ) -> Result<ImageBuilt, String> {
     build_any(
         format,
-        None,
+        inner_name,
         level,
+        Some(time),
         source,
         output,
         mode,
         verify_chunk,
         cancel,
         stage,
-        true,
+        Some(&Checkpoints::new()),
     )
 }
 
-/// The time a generated `ampr_emu.index` carries in the image at `partial`: the one the crashed
-/// build used, so going on gives the same bytes, else now, saved for the next try.
+/// The time a generated `ampr_emu.index` and a PFS image carry in the image at `partial`: the one
+/// the crashed build used, so going on gives the same bytes, else now, saved for the next try.
 pub(crate) fn index_stamp(partial: &Path) -> i64 {
     let path = stamp_path(partial);
     if checkpoint_path(partial).is_file() {
@@ -959,25 +1072,97 @@ pub(crate) fn remove_checkpoint(partial: &Path) {
     let _ = std::fs::remove_file(stamp_path(partial));
 }
 
+/// One build, and a second from the start when going on from a checkpoint failed: the source
+/// changed behind it in a way the key cannot see (a file edited to the same size), or the bytes
+/// on disk were not what the checkpoint said. The full read-back after going on is what finds it.
 #[allow(clippy::too_many_arguments)]
 fn build_any(
     format: ImageFormat,
     inner_name: Option<&str>,
     level: Level,
+    time: Option<i64>,
     source: &mut dyn SourceTree,
     output: &Path,
     mode: VerifyMode,
     verify_chunk: u64,
     cancel: &AtomicBool,
     stage: &mut dyn FnMut(&str, u64, u64),
-    resumable: bool,
+    checkpoints: Option<&Checkpoints>,
 ) -> Result<ImageBuilt, String> {
+    let (result, resumed) = build_once(
+        format,
+        inner_name,
+        level,
+        time,
+        source,
+        output,
+        mode,
+        verify_chunk,
+        cancel,
+        stage,
+        checkpoints,
+    );
+    let stopped = checkpoints.is_some_and(|c| c.stopped.load(Ordering::Relaxed));
+    match result {
+        Err(e) if resumed && !stopped && !cancel.load(Ordering::Relaxed) => {
+            crate::log_at!(
+                Warn,
+                "convert",
+                "image build: {e}. Building {} again now",
+                output.display()
+            );
+            // The time stays the one the image was planned with; a crash in this build goes
+            // on with it.
+            let partial = PathBuf::from(format!("{}.partial", output.display()));
+            if let Some(t) = time {
+                let _ = std::fs::write(stamp_path(&partial), t.to_string());
+            }
+            build_once(
+                format,
+                inner_name,
+                level,
+                time,
+                source,
+                output,
+                mode,
+                verify_chunk,
+                cancel,
+                stage,
+                checkpoints,
+            )
+            .0
+        }
+        r => r,
+    }
+}
+
+/// [`build_any`]'s one try, and whether it went on from a checkpoint.
+#[allow(clippy::too_many_arguments)]
+fn build_once(
+    format: ImageFormat,
+    inner_name: Option<&str>,
+    level: Level,
+    time: Option<i64>,
+    source: &mut dyn SourceTree,
+    output: &Path,
+    mode: VerifyMode,
+    verify_chunk: u64,
+    cancel: &AtomicBool,
+    stage: &mut dyn FnMut(&str, u64, u64),
+    checkpoints: Option<&Checkpoints>,
+) -> (Result<ImageBuilt, String>, bool) {
     if source.files().is_empty() {
-        return Err(format!("{} has no files in it", source.describe()));
+        return (
+            Err(format!("{} has no files in it", source.describe())),
+            false,
+        );
     }
     let started = std::time::Instant::now();
     stage("plan", 0, 0);
-    let planned = Planned::plan(format, &*source, cancel)?;
+    let planned = match Planned::plan(format, &*source, time, cancel) {
+        Ok(p) => p,
+        Err(e) => return (settle(Err(e), cancel.load(Ordering::Relaxed)), false),
+    };
     let want_sizes: HashMap<String, u64> = source
         .files()
         .iter()
@@ -989,10 +1174,18 @@ fn build_any(
     // The caller has claimed this name (`fpkg_api::Writing`), clearing any leftover; a file
     // here now is another build's, and `create_new` refuses it rather than wreck it.
     let partial = PathBuf::from(format!("{}.partial", output.display()));
-    // Going on from a crash: only a plain exFAT image, when the checkpoint fits this plan.
-    let checkpointed = resumable && format == ImageFormat::Exfat && inner_name.is_none();
-    let key = plan_key(&want_sizes, planned.image_size());
-    let resume = checkpointed.then(|| resume_point(&partial, &key)).flatten();
+    let key = resume_key(
+        format,
+        inner_name,
+        level,
+        time,
+        &want_sizes,
+        planned.image_size(),
+    );
+    let resume = checkpoints
+        .and_then(|_| resume_point(&partial, &key))
+        // A `.ffpfsc` goes on from whole blocks.
+        .filter(|c| inner_name.is_none() || c.blocks > 0);
     // The key can't see a file edited to the same size: going on, every byte gets checked.
     let mode = if resume.is_some() {
         VerifyMode::Full
@@ -1006,32 +1199,42 @@ fn build_any(
             let _ = std::fs::remove_file(checkpoint_path(&partial));
         }
     }
+    let resumed = resume.is_some();
     // Opened before the cleanup below applies: a file that is not ours is never removed.
-    let mut file = if let Some(done) = resume {
+    let opened = if let Some(c) = &resume {
         crate::engine_log::record(
             "info",
             format!(
-                "image build: going on from {done} bytes in {}",
+                "image build: going on from {} bytes in {}",
+                c.done,
                 partial.display()
             ),
         );
-        let mut f = std::fs::OpenOptions::new()
+        std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .open(&partial)
-            .map_err(|e| format!("{}: {e}", partial.display()))?;
-        f.set_len(done).map_err(|e| e.to_string())?;
-        f.seek(std::io::SeekFrom::Start(done))
-            .map_err(|e| e.to_string())?;
-        f
+            .and_then(|mut f| {
+                // A `.ffpfsc` cuts its own file where its table says.
+                if inner_name.is_none() {
+                    f.set_len(c.done)?;
+                    f.seek(SeekFrom::Start(c.done))?;
+                }
+                Ok(f)
+            })
     } else {
         std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .create_new(true)
             .open(&partial)
-            .map_err(|e| format!("{}: {e}", partial.display()))?
     };
+    let mut file = match opened {
+        Ok(f) => f,
+        Err(e) => return (Err(format!("{}: {e}", partial.display())), false),
+    };
+    let skip = resume.as_ref().map_or(0, |c| c.done);
+    let skip_blocks = resume.as_ref().map_or(0, |c| c.blocks);
     let result = (|| -> Result<ImageBuilt, String> {
         let planned_at = started.elapsed();
         let mut hashing = HashingTree::new(source);
@@ -1041,49 +1244,67 @@ fn build_any(
             "write"
         };
         let mut report = |done: u64, total: u64| stage(write_stage, done, total);
-        let wrap_opts = ps5_dump_forge_pfs::WrapOptions::at(level);
-        let (image_bytes, stored, wrapped) = match inner_name {
-            None if checkpointed => {
-                let Planned::Exfat(plan) = &planned else {
-                    return Err("an exFAT build without an exFAT plan".to_string());
-                };
+        let mut wrap_opts = ps5_dump_forge_pfs::WrapOptions::at(level);
+        wrap_opts.time = time;
+        let (image_bytes, stored, wrapped) = match (inner_name, checkpoints) {
+            (None, Some(c)) => {
                 let mut out = CheckpointWriter {
                     out: BufWriter::with_capacity(8 << 20, &mut file),
-                    skip: resume.unwrap_or(0),
+                    skip,
                     pos: 0,
+                    end: 0,
                     since: 0,
                     path: checkpoint_path(&partial),
                     key: key.clone(),
-                    every: CHECKPOINT,
+                    every: c.every,
+                    crash: c.stop_after.is_some().then_some(c),
                 };
-                let n = ps5upload_fpkg::exfat_write::write_exfat_after(
-                    plan,
-                    &mut hashing,
-                    &mut out,
-                    resume.unwrap_or(0),
-                    &mut report,
-                    &|| ps5upload_fpkg::workshop::checkpoint(cancel),
-                )
-                .map_err(|e| e.to_string())?;
-                out.flush().map_err(|e| e.to_string())?;
-                (n, n, None)
-            }
-            None => {
-                let mut out = BufWriter::with_capacity(8 << 20, &mut file);
                 let n = planned
-                    .write(&mut hashing, &mut out, cancel, &mut report)
+                    .write(&mut hashing, &mut out, skip, cancel, &mut report)
                     .map_err(|e| e.to_string())?;
                 out.flush().map_err(|e| e.to_string())?;
                 (n, n, None)
             }
-            Some(name) => {
+            (None, None) => {
+                let mut out = BufWriter::with_capacity(8 << 20, &mut file);
+                let n = planned
+                    .write(&mut hashing, &mut out, 0, cancel, &mut report)
+                    .map_err(|e| e.to_string())?;
+                out.flush().map_err(|e| e.to_string())?;
+                (n, n, None)
+            }
+            (Some(name), Some(c)) => {
+                let path = checkpoint_path(&partial);
+                let saved = |blocks: u64, done: u64| {
+                    save_checkpoint(&path, &key, done, blocks);
+                    c.crash(done)
+                };
+                let resume = ps5_dump_forge_pfs::Resume {
+                    blocks: skip_blocks,
+                    every: c.every,
+                    saved: &saved,
+                };
+                let inner_skip = skip_blocks * ps5_dump_forge_pfs::BLOCK;
+                let (n, wrapped) = ps5_dump_forge_pfs::wrap_resumable(
+                    name,
+                    planned.image_size(),
+                    &mut file,
+                    &wrap_opts,
+                    cancel,
+                    &resume,
+                    |s| planned.write(&mut hashing, s, inner_skip, cancel, &mut report),
+                )
+                .map_err(|e| e.to_string())?;
+                (n, wrapped.image_size, Some(wrapped))
+            }
+            (Some(name), None) => {
                 let (n, wrapped) = ps5_dump_forge_pfs::wrap(
                     name,
                     planned.image_size(),
                     &mut file,
                     &wrap_opts,
                     cancel,
-                    |s| planned.write(&mut hashing, s, cancel, &mut report),
+                    |s| planned.write(&mut hashing, s, 0, cancel, &mut report),
                 )
                 .map_err(|e| e.to_string())?;
                 (n, wrapped.image_size, Some(wrapped))
@@ -1111,7 +1332,7 @@ fn build_any(
         remove_checkpoint(&partial);
         crate::engine_log::record("info", format!("verify: {}", log_line(&summary)));
         crate::engine_log::record("info", format!(
-            "image build: format={} compressed={} files={} data_bytes={} output_bytes={} plan_ms={} write_ms={} read_ms={} verify_ms={} verify_mode={mode:?}",
+            "image build: format={} compressed={} files={} data_bytes={} output_bytes={} plan_ms={} write_ms={} read_ms={} verify_ms={} verify_mode={mode:?} resumed_from={skip}",
             format.extension(), inner_name.is_some(), want_sizes.len(), data, stored,
             planned_at.as_millis(), (written_at - planned_at).as_millis(), read_time.as_millis(),
             (started.elapsed() - written_at).as_millis(),
@@ -1141,25 +1362,32 @@ fn build_any(
         if inner_name.is_some() {
             detail.push_str(&format!(", {image_bytes} bytes before compression"));
         }
+        if resumed {
+            detail.push_str(&format!(
+                ", went on from {skip} bytes after an interruption"
+            ));
+        }
         Ok(ImageBuilt {
             image_bytes: stored,
             files: want_sizes.len() as u64,
             detail,
         })
     })();
-    if result.is_err() {
+    // A crash a test asked for leaves everything as a killed engine would.
+    let stopped = checkpoints.is_some_and(|c| c.stopped.load(Ordering::Relaxed));
+    if result.is_err() && !stopped {
         let _ = std::fs::remove_file(&partial);
         remove_checkpoint(&partial);
     }
     // What was on disk from before a crash didn't check out: gone now, so the next try starts over.
-    let result = match (result, resume) {
-        (Err(e), Some(_)) if !cancel.load(Ordering::Relaxed) => Err(format!(
+    let result = match result {
+        Err(e) if resumed && !cancel.load(Ordering::Relaxed) => Err(format!(
             "going on from an interrupted build failed: {e}. The partial image is removed, so \
              building it again starts from the beginning"
         )),
-        (r, _) => r,
+        r => r,
     };
-    settle(result, cancel.load(Ordering::Relaxed))
+    (settle(result, cancel.load(Ordering::Relaxed)), resumed)
 }
 
 /// What the log says of a `.ffpfsc` stream: how it was encoded, what each block became, and
@@ -1611,7 +1839,9 @@ mod tests {
             let mut tree = FolderSource::open(&src).unwrap();
             build_resumable(
                 ImageFormat::Exfat,
+                None,
                 Level::default(),
+                STAMP,
                 &mut tree,
                 out,
                 VerifyMode::Full,
@@ -1645,12 +1875,20 @@ mod tests {
             .iter()
             .map(|f| (f.path.clone(), f.size))
             .collect();
-        let plan = Planned::plan(ImageFormat::Exfat, &tree, &cancel).unwrap();
-        let key = plan_key(&sizes, plan.image_size());
+        let plan = Planned::plan(ImageFormat::Exfat, &tree, Some(STAMP), &cancel).unwrap();
+        let key = resume_key(
+            ImageFormat::Exfat,
+            None,
+            Level::default(),
+            Some(STAMP),
+            &sizes,
+            plan.image_size(),
+        );
         let saved = |key: &str, done: u64| {
             serde_json::to_vec(&Checkpoint {
                 key: key.to_string(),
                 done,
+                blocks: 0,
             })
             .unwrap()
         };
@@ -1667,16 +1905,227 @@ mod tests {
         run(&other).unwrap();
         assert!(std::fs::read(&other).unwrap() == bytes);
 
-        // Bytes that changed behind the checkpoint: the read-back refuses the image.
+        // Bytes that changed behind the checkpoint: the read-back refuses what is on disk, and the
+        // image is built again from the start.
         let bad = root.join("bad.exfat");
         let partial = PathBuf::from(format!("{}.partial", bad.display()));
         let mut wrong = bytes[..done as usize].to_vec();
         wrong[filled_with(2) + 100] ^= 0xFF;
         std::fs::write(&partial, &wrong).unwrap();
         std::fs::write(checkpoint_path(&partial), saved(&key, done)).unwrap();
-        let refused = run(&bad).err().expect("a damaged partial must not pass");
-        assert!(refused.contains("building it again starts"), "{refused}");
+        let built = run(&bad).expect("built again from the start");
+        assert!(!built.detail.contains("went on from"), "{}", built.detail);
+        assert!(std::fs::read(&bad).unwrap() == bytes);
         assert!(!partial.exists() && !checkpoint_path(&partial).exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The time a resumable test build pins into its image.
+    const STAMP: i64 = 1_700_000_000;
+
+    /// A game whose data deflate cannot shrink, so a `.ffpfsc` of it is about its size and a
+    /// crash lands partway through its files in every format.
+    fn noisy_game(root: &Path) -> PathBuf {
+        let src = root.join("PPSA99998-app");
+        std::fs::create_dir_all(src.join("sce_sys")).unwrap();
+        std::fs::write(
+            src.join("sce_sys/param.json"),
+            b"{\"titleId\":\"PPSA99998\"}",
+        )
+        .unwrap();
+        let mut x = 0x2545_F491u32;
+        for (name, size) in [("a.bin", 3 << 20), ("b.bin", 3 << 20), ("c.bin", 5 << 20)] {
+            let bytes: Vec<u8> = (0..size)
+                .map(|_| {
+                    x ^= x << 13;
+                    x ^= x >> 17;
+                    x ^= x << 5;
+                    x as u8
+                })
+                .collect();
+            std::fs::write(src.join(name), bytes).unwrap();
+        }
+        std::fs::write(src.join("d.bin"), vec![4u8; 1 << 20]).unwrap();
+        src
+    }
+
+    /// A resumable build of `src` as `format` (in a `.ffpfsc` when `compress`), checkpointing
+    /// every MiB and stopping like a crash once `stop_after` bytes are out.
+    fn resumable_build(
+        format: ImageFormat,
+        compress: bool,
+        src: &Path,
+        out: &Path,
+        stop_after: Option<u64>,
+    ) -> Result<ImageBuilt, String> {
+        let (_, inner) = output_names(src, format, compress);
+        let mut tree = FolderSource::open(src).unwrap();
+        let checkpoints = Checkpoints {
+            every: 1 << 20,
+            stop_after,
+            stopped: AtomicBool::new(false),
+        };
+        build_any(
+            format,
+            inner.as_deref(),
+            Level::default(),
+            Some(STAMP),
+            &mut tree,
+            out,
+            VerifyMode::Full,
+            DEFAULT_VERIFY_CHUNK,
+            &AtomicBool::new(false),
+            &mut |_, _, _| {},
+            Some(&checkpoints),
+        )
+    }
+
+    fn saved_checkpoint(partial: &Path) -> Checkpoint {
+        serde_json::from_slice(&std::fs::read(checkpoint_path(partial)).unwrap()).unwrap()
+    }
+
+    const EVERY_KIND: [(ImageFormat, bool); 6] = [
+        (ImageFormat::Exfat, false),
+        (ImageFormat::Ffpkg, false),
+        (ImageFormat::Ffpfs, false),
+        (ImageFormat::Exfat, true),
+        (ImageFormat::Ffpkg, true),
+        (ImageFormat::Ffpfs, true),
+    ];
+
+    /// Every format, plain and in a `.ffpfsc`: a build stopped partway (its partial file and
+    /// checkpoint left as a killed engine leaves them) goes on from the checkpoint, and the image
+    /// is byte for byte the one an uninterrupted build makes.
+    #[test]
+    fn every_format_goes_on_from_a_crash_byte_for_byte() {
+        let root = std::env::temp_dir().join(format!("ps5upload-imgcrash-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let src = noisy_game(&root);
+        for (format, compress) in EVERY_KIND {
+            let what = format!("{format:?} compress={compress}");
+            let ext = if compress {
+                "ffpfsc"
+            } else {
+                format.extension()
+            };
+            let whole = root.join(format!("whole.{ext}"));
+            resumable_build(format, compress, &src, &whole, None)
+                .unwrap_or_else(|e| panic!("{what}: {e}"));
+            let want = std::fs::read(&whole).unwrap();
+
+            let out = root.join(format!("resumed.{ext}"));
+            let partial = PathBuf::from(format!("{}.partial", out.display()));
+            let stopped = resumable_build(format, compress, &src, &out, Some(6 << 20));
+            assert!(stopped.is_err(), "{what}: the build should have stopped");
+            assert!(partial.is_file() && !out.exists(), "{what}");
+            let saved = saved_checkpoint(&partial);
+            assert!(saved.done >= 1 << 20, "{what}: {saved:?}");
+            assert_eq!(saved.blocks > 0, compress, "{what}: {saved:?}");
+
+            let built = resumable_build(format, compress, &src, &out, None)
+                .unwrap_or_else(|e| panic!("{what}: going on: {e}"));
+            assert!(
+                built
+                    .detail
+                    .contains(&format!("went on from {}", saved.done)),
+                "{what}: {}",
+                built.detail
+            );
+            assert!(
+                std::fs::read(&out).unwrap() == want,
+                "{what}: the same image"
+            );
+            assert!(
+                !partial.exists() && !checkpoint_path(&partial).exists(),
+                "{what}"
+            );
+            let _ = std::fs::remove_file(&whole);
+            let _ = std::fs::remove_file(&out);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A source that changed between the crash and the next build is not gone on from: another
+    /// size changes the key and the build starts over; a file edited to the same size behind the
+    /// checkpoint fails the full read-back and the build starts over. Either way the image is
+    /// the new source's, byte for byte.
+    #[test]
+    fn a_changed_source_refuses_the_resume_and_rebuilds() {
+        let root = std::env::temp_dir().join(format!("ps5upload-imgchg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (format, compress) in EVERY_KIND {
+            let what = format!("{format:?} compress={compress}");
+            let ext = if compress {
+                "ffpfsc"
+            } else {
+                format.extension()
+            };
+            for edit in ["size", "same size"] {
+                let _ = std::fs::remove_dir_all(&root);
+                let src = noisy_game(&root);
+                let out = root.join(format!("out.{ext}"));
+                let partial = PathBuf::from(format!("{}.partial", out.display()));
+                assert!(resumable_build(format, compress, &src, &out, Some(6 << 20)).is_err());
+                assert!(checkpoint_path(&partial).is_file(), "{what}");
+                // a.bin is laid out first in every format: behind the checkpoint.
+                let mut a = std::fs::read(src.join("a.bin")).unwrap();
+                match edit {
+                    "size" => a.truncate(a.len() - 1000),
+                    _ => a[100] ^= 0xFF,
+                }
+                std::fs::write(src.join("a.bin"), &a).unwrap();
+
+                let built = resumable_build(format, compress, &src, &out, None)
+                    .unwrap_or_else(|e| panic!("{what} {edit}: {e}"));
+                assert!(
+                    !built.detail.contains("went on from"),
+                    "{what} {edit}: {}",
+                    built.detail
+                );
+                let fresh = root.join(format!("fresh.{ext}"));
+                resumable_build(format, compress, &src, &fresh, None).unwrap();
+                assert!(
+                    std::fs::read(&out).unwrap() == std::fs::read(&fresh).unwrap(),
+                    "{what} {edit}: the new source's image"
+                );
+                assert!(!partial.exists() && !checkpoint_path(&partial).exists());
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The writer seeks forward the way the UFS2 writer does: a seek inside what is on disk moves
+    /// nothing, one past it leaves a hole, and going back is refused.
+    #[test]
+    fn the_checkpoint_writer_seeks_forward_over_what_is_on_disk() {
+        let root = std::env::temp_dir().join(format!("ps5upload-imgcks-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("x.partial");
+        std::fs::write(&path, b"ABCDEF").unwrap();
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.seek(SeekFrom::Start(6)).unwrap();
+        let mut w = CheckpointWriter {
+            out: BufWriter::new(&mut file),
+            skip: 6,
+            pos: 0,
+            end: 0,
+            since: 0,
+            path: checkpoint_path(&path),
+            key: "k".into(),
+            every: 1 << 20,
+            crash: None,
+        };
+        assert_eq!(w.seek(SeekFrom::End(0)).unwrap(), 0, "starts empty");
+        w.write_all(b"ab").unwrap();
+        assert_eq!(w.seek(SeekFrom::Start(4)).unwrap(), 4);
+        w.write_all(b"efgh").unwrap();
+        assert_eq!(w.seek(SeekFrom::Start(10)).unwrap(), 10);
+        w.write_all(b"k").unwrap();
+        assert!(w.seek(SeekFrom::Start(3)).is_err());
+        w.flush().unwrap();
+        drop(w);
+        assert_eq!(std::fs::read(&path).unwrap(), b"ABCDEFgh\0\0k");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1710,10 +2159,12 @@ mod tests {
             out: BufWriter::new(&mut file),
             skip: 5,
             pos: 0,
+            end: 0,
             since: 0,
             path: checkpoint_path(&path),
             key: "k".into(),
             every: 4,
+            crash: None,
         };
         w.write_all(b"abc").unwrap();
         w.write_all(b"defgh").unwrap();
@@ -1727,7 +2178,8 @@ mod tests {
             saved,
             Checkpoint {
                 key: "k".into(),
-                done: 10
+                done: 10,
+                blocks: 0,
             }
         );
         let _ = std::fs::remove_dir_all(&root);

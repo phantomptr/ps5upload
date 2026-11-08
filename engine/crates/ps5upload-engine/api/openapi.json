@@ -3443,6 +3443,17 @@
             "description": "Write the image straight into a `.ffpfsc` container (no uncompressed copy on disk).",
             "type": "boolean"
           },
+          "destination": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageDestinationReq"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where the image goes: `{\"kind\":\"local\"}` (the default: `output_dir` on this computer) or\n`{\"kind\":\"console\",\"addr\":…,\"dir\":…}`: straight into that PS5's folder `dir` over AVA1,\nsent as it is written, so the image is never stored on this computer. The job's `dest` is\nthen the image's path on the PS5, and the read-back runs there. For `.exfat`, `.ffpkg`\nand `.ffpfs` images, and `.exfat` with `ampr_zstd` packs; a `.ffpfsc` (`compress`), LZ4\npacks and edited copies are refused for it."
+          },
           "edits": {
             "description": "Write an edited COPY of the image `source` (#479): its files with these changes, as an\nimage of the same kind (format and compression are the source's; `format`/`compress`\nare ignored), named `<name>-edited` and put next to it unless `name`/`output_dir` say\notherwise. The source image is only read.",
             "items": {
@@ -3493,6 +3504,13 @@
           "source": {
             "description": "A game folder on this computer (one with `sce_sys` in it).",
             "type": "string"
+          },
+          "update": {
+            "description": "A PS4 update (a package, image or folder) merged into the PS4 game `source`: the image\nis the game at the update's version (`ps5upload_fpkg::ps4_merge`). Not with `edits`.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "verify_chunk_kib": {
             "description": "How much of a file the read-back check reads per call, in KiB (1024 to 65536); 8192\nwhen absent, which measured fastest.",
@@ -4019,6 +4037,13 @@
           "source": {
             "description": "A game image (`.exfat`, `.ffpkg`/`.ufs2`, `.ffpfs`, `.ffpfsc`) or a debug-key `.pkg`,\non this computer, a saved server (`remote://`) or a console (`ps5://`).",
             "type": "string"
+          },
+          "update": {
+            "description": "A PS4 update merged into the PS4 game `source`, as an image build's `update`; the game\nmay then also be a folder. Not with `entry`.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -5705,6 +5730,54 @@
         ],
         "type": "object"
       },
+      "ImageDestinationReq": {
+        "description": "Where an image build puts the image.",
+        "oneOf": [
+          {
+            "description": "This computer: `output_dir`.",
+            "properties": {
+              "kind": {
+                "const": "local"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "console"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "addr": {
+                    "type": "string"
+                  },
+                  "dir": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "addr",
+                  "dir"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "A PS5: `addr` (its address) and `dir` (an absolute folder on it, made when missing). A\ndropped connection goes on where it stopped, and so does the same build started again."
+          }
+        ]
+      },
       "ImageEditReq": {
         "description": "One change for an edited copy of an image: `{\"op\":\"delete\",\"path\":…}` removes a file or\nfolder; `{\"op\":\"put\",\"path\":…,\"from\":…}` puts a file (or a folder's contents) from this\ncomputer at `path`, replacing what is there.",
         "oneOf": [
@@ -6035,9 +6108,45 @@
             "minimum": 0,
             "type": "integer"
           },
+          "ps4_addon_data": {
+            "description": "An add-on: whether it holds files (`false`: a licence, nothing to convert).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "ps4_game": {
-            "description": "A PS4 game: it becomes an image or a folder, not a PS5 package.",
+            "description": "A PS4 game, update or add-on: it becomes an image or a folder, not a PS5 package.",
             "type": "boolean"
+          },
+          "ps4_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Ps4Kind"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What a PS4 source is: `game`, `patch` (an update, which goes into its game: see\n[`crate::ps4_merge`]) or `addon`. Absent for a PS5 one."
+          },
+          "ps4_merge": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MergeInfo"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Inspected with an update merged in: what the merge is."
+          },
+          "ps4_title_id": {
+            "description": "The PS4 title it is or belongs to (`CUSA…`): an update's or add-on's game.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "required_firmware": {
             "type": [
@@ -6073,7 +6182,11 @@
           "ampr_packs",
           "unsigned_executables",
           "ps4_game",
-          "content_version"
+          "content_version",
+          "ps4_kind",
+          "ps4_title_id",
+          "ps4_addon_data",
+          "ps4_merge"
         ],
         "type": "object"
       },
@@ -6399,6 +6512,10 @@
               "console",
               "host"
             ]
+          },
+          "internet": {
+            "description": "Also an internet invite: a room on the signalling hub (`invite.internet.url`).",
+            "type": "boolean"
           },
           "new": {
             "description": "A new key (the old link stops working).",
@@ -7559,6 +7676,45 @@
         },
         "required": [
           "drive"
+        ],
+        "type": "object"
+      },
+      "MergeInfo": {
+        "description": "What a merge is: for the screen and the log.",
+        "properties": {
+          "added": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "game_version": {
+            "description": "The game's `APP_VER` and the update's.",
+            "type": "string"
+          },
+          "replaced": {
+            "description": "Files of the game the update replaces, and files it adds.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title_id": {
+            "type": "string"
+          },
+          "update_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title_id",
+          "title",
+          "game_version",
+          "update_version",
+          "replaced",
+          "added"
         ],
         "type": "object"
       },
@@ -9794,6 +9950,15 @@
         ],
         "type": "string"
       },
+      "Ps4Kind": {
+        "description": "What a PS4 package is: see the module docs.",
+        "enum": [
+          "game",
+          "patch",
+          "addon"
+        ],
+        "type": "string"
+      },
       "Ps5ToPs5Req": {
         "properties": {
           "adopt": {
@@ -11317,6 +11482,18 @@
               "null"
             ]
           },
+          "hub_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "internet_invites": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "max_players": {
             "minimum": 0,
             "type": [
@@ -11325,6 +11502,21 @@
             ]
           },
           "stream_seat": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "stun": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "upnp": {
             "type": [
               "boolean",
               "null"
@@ -13876,6 +14068,13 @@
           "source": {
             "description": "A game folder, or a `.exfat` / `.ffpkg` / `.ffpfsc` mount image.",
             "type": "string"
+          },
+          "update": {
+            "description": "A PS4 update to look at merged into the game `source` (see `ps5upload_fpkg::ps4_merge`):\nthe answer is the merged game's, or why the two don't go together.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -13941,6 +14140,14 @@
             "description": "Take PS and Create from guests who are playing (they keep them while picking a user).\nOn unless the host turns it off: a friend's PS could quit the game, or update the console\npast its exploit (#649).",
             "type": "boolean"
           },
+          "hub_url": {
+            "description": "The signalling hub (`wss://`; `ws://` only to this computer).",
+            "type": "string"
+          },
+          "internet_invites": {
+            "description": "The host may make internet invites (a room on the signalling hub, WebRTC to the guest:\ncrate::join_net). On unless the host turns it off.",
+            "type": "boolean"
+          },
           "max_players": {
             "description": "Guests at most (1-3).",
             "minimum": 0,
@@ -13949,12 +14156,27 @@
           "stream_seat": {
             "description": "A friend may get the stream's own controller (Player 1, signed in as the host's PS5 user)\nwhile this device shows no picture and no phone plays on it (#687). Off unless the host\nturns it on: a friend otherwise always gets their own controller and picks a user (#720).",
             "type": "boolean"
+          },
+          "stun": {
+            "description": "STUN servers (`host:port`) the engine asks for its outside address.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "upnp": {
+            "description": "Ask the router for a port (UPnP-IGD, NAT-PMP / PCP) while an internet invite is open.",
+            "type": "boolean"
           }
         },
         "required": [
           "block_system_buttons",
           "max_players",
-          "stream_seat"
+          "stream_seat",
+          "internet_invites",
+          "hub_url",
+          "stun",
+          "upnp"
         ],
         "type": "object"
       },
@@ -21409,7 +21631,7 @@
     },
     "/api/join/invite": {
       "post": {
-        "description": "`POST /api/join/invite {addr, new?}`: `{key, code, code_display, url, urls, expires_in_s}`.\nThe same invite again until it expires, unless `new` (the old link and code stop working).",
+        "description": "`POST /api/join/invite {addr, new?, internet?}`: `{key, code, code_display, url, urls,\nexpires_in_s, internet}`. The same invite again until it expires, unless `new` (the old link and\ncode stop working). With `internet`, also a link for friends anywhere (`internet.url`): the\nengine opens a room on the signalling hub in the settings and the guest's browser connects to\nit peer to peer (409 `internet_off` when the settings turned internet invites off, 409\n`hub_url` when the hub address is not a `wss://` one). The room stays open while the invite\nlasts or an internet guest is in.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -21678,7 +21900,7 @@
     },
     "/api/join/settings": {
       "post": {
-        "description": "`POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?}`: the host's\nchoices (every console). Fewer players lets nobody go; it only stops new ones. `stream_seat`\noff moves a friend on the stream's controller to a pad of their own.",
+        "description": "`POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,\ninternet_invites?, hub_url?, stun?, upnp?}`: the host's choices (every console). Fewer players\nlets nobody go; it only stops new ones. `stream_seat` off moves a friend on the stream's\ncontroller to a pad of their own. `internet_invites` off closes the internet rooms (guests\nalready in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`\notherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none), `upnp` whether the\nrouter is asked for a port.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -21704,6 +21926,10 @@
               }
             },
             "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
           },
           "403": {
             "$ref": "#/components/responses/Error",

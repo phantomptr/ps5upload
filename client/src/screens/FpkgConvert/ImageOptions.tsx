@@ -446,6 +446,13 @@ export function ImageChoice({
       {lz4 && format === "exfat" && <Lz4Option lz4={lz4} />}
       {lz4 && lz4.readiness.kind !== "no_ampr" && <ZstdOption lz4={lz4} />}
       <VerifyChunkOption />
+      <p className="text-xs leading-relaxed text-[var(--color-muted)]">
+        {tr(
+          "fpkg.image.resume_note",
+          undefined,
+          "If the app or the engine stops while an image is being made, making it again goes on from where it stopped and then reads every byte back. An image with LZ4 or zstd asset packs starts over.",
+        )}
+      </p>
     </div>
   );
 }

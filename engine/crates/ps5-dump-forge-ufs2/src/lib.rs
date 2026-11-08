@@ -243,6 +243,20 @@ pub fn write<W: Write + Seek>(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<Report> {
+    write_after(tree, layout, out, 0, cancel, progress)
+}
+
+/// [`write`] for a build going on from a crash, whose output drops the first `skip` bytes it is
+/// given (they are on disk already): file data that ends by then is not read, zeros stand in
+/// for it. Every byte from `skip` on is what [`write`] writes.
+pub fn write_after<W: Write + Seek>(
+    tree: &mut dyn SourceTree,
+    layout: &Layout,
+    out: &mut W,
+    skip: u64,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64, u64),
+) -> Result<Report> {
     check_cancel(cancel)?;
     // The plan indexes the tree's file list; a different list would write wrong data.
     if fingerprint(tree) != layout.source {
@@ -272,6 +286,11 @@ pub fn write<W: Write + Seek>(
     });
     let total = layout.file_bytes;
     let mut done = 0u64;
+    let zeros = if skip > 0 {
+        vec![0u8; CHUNK as usize]
+    } else {
+        Vec::new()
+    };
     progress(0, total);
 
     let g = &layout.geom;
@@ -301,6 +320,10 @@ pub fn write<W: Write + Seek>(
                         let len = (n * BSIZE).min(node.size - off) as usize;
                         if let Some(bytes) = &dir_bytes {
                             w.data(p, &bytes[off as usize..off as usize + len])?;
+                        } else if p * BSIZE + len as u64 <= skip {
+                            w.data(p, &zeros[..len])?;
+                            done += len as u64;
+                            progress(done, total);
                         } else {
                             let buf = tree.read_range(&path, off, len)?;
                             if buf.len() != len {

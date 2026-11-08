@@ -1,0 +1,29 @@
+[package]
+name = "ps5upload-hub"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Play Together signalling hub: introduces a host's engine to a guest's browser (WebRTC signalling and STUN). No media, no relay, no disk state."
+
+[lib]
+name = "ps5upload_hub"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ps5upload-hub"
+path = "src/main.rs"
+
+# Every dependency below is already in the engine workspace's Cargo.lock at these versions. axum
+# is named without the workspace entry so the hub does not pull in multipart.
+[dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "ws"] }
+base64 = "0.23"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+getrandom = "0.4"
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.11"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "time", "sync"] }
+
+[dev-dependencies]
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }

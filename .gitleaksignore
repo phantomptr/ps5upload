@@ -45,3 +45,9 @@ a7f6919cf47a2f33d631c74de56bbeecd02a37af:client/src/screens/Play/playTogetherSta
 f01db54acdadef02d8cd956c783356c7c2298f17:engine/crates/ps5upload-engine/src/golive_dest_tests.rs:generic-api-key:275
 f01db54acdadef02d8cd956c783356c7c2298f17:engine/crates/ps5upload-engine/src/rp_golive_tests.rs:generic-api-key:449
 71ba65ee0f45e43ce8465a081182587a5867117c:scripts/install-llvm-apt.sh:generic-api-key:14
+# Made-up invite key (00112233…eeff) in the Play Together internet tests
+33814e282aaff390b52c89541d6050fa494239ad:client/e2e/play-together-internet-ui.spec.ts:generic-api-key:9
+89000a35bf76d65d07091140da129c87bc4658f6:client/src/join/rtcTransport.test.ts:generic-api-key:28
+# The same made-up invite keys after #725 was squash-merged
+03b6ae995d2991fc510b698b2da716abaed46d0e:client/e2e/play-together-internet-ui.spec.ts:generic-api-key:9
+03b6ae995d2991fc510b698b2da716abaed46d0e:client/src/join/rtcTransport.test.ts:generic-api-key:28

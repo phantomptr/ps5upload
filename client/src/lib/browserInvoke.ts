@@ -840,10 +840,11 @@ export async function browserInvoke<T>(
       return { base64: btoa(bin) } as T;
     }
     case "fpkg_inspect": {
-      // TS caller: { source, outputDir }
+      // TS caller: { source, outputDir, update }
       return postJson<T>("/api/fpkg/inspect", {
         source: args["source"],
         output_dir: args["outputDir"],
+        update: args["update"],
       }, true);
     }
     case "fpkg_build": {
@@ -913,6 +914,8 @@ export async function browserInvoke<T>(
         add_ampr_emu: args["addAmprEmu"] ?? true,
         ampr_zstd: args["amprZstd"],
         ampr_emu_build: args["amprEmuBuild"],
+        destination: args["destination"],
+        update: args["update"],
       });
     }
     case "folder_build": {
@@ -924,6 +927,7 @@ export async function browserInvoke<T>(
         entry: args["entry"],
         keep_both: args["keepBoth"] ?? false,
         ampr_zstd: args["amprZstd"],
+        update: args["update"],
       });
     }
     case "image_browse": {

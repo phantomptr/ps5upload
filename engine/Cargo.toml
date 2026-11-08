@@ -6,6 +6,7 @@ members = [
   "crates/ps5upload-apidoc",
   "crates/ps5upload-ava1",
   "crates/ps5upload-engine",
+  "crates/ps5upload-hub",
   "crates/ps5upload-pkg",
   "crates/ps5upload-fpkg",
   "crates/ps5upload-tests",
