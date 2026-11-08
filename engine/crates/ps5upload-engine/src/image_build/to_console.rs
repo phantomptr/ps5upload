@@ -451,13 +451,13 @@ fn no_room(refusal: ps5upload_ava1::space::SpaceRefusal) -> anyhow::Error {
 /// Plans `source` as a `format` image and streams it to `target.path` on the console, then reads
 /// it back there and compares it with the source (`mode`, `verify_chunk` as for a local build).
 /// `time` pins a PFS image's inode time (and must be the time any generated index in `source`
-/// carries), so every run gives the same bytes; `salt` adds what else the bytes depend on to the
+/// carries), so every run gives the same bytes; `extra` adds what else the bytes depend on to the
 /// job id (a zstd build's level and emulator). `stage` reports `plan`, `write` and `verify`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn stream_to_console(
     format: ImageFormat,
     time: Option<i64>,
-    salt: &str,
+    extra: &str,
     source: &mut dyn SourceTree,
     target: &ConsoleTarget,
     mode: VerifyMode,
@@ -488,7 +488,7 @@ pub(crate) fn stream_to_console(
         room_check(size, held, room).map_err(no_room)?;
     }
     let key = format!(
-        "{}\0{salt}",
+        "{}\0{extra}",
         resume_key(format, None, Level::default(), time, &want_sizes, size)
     );
     let job = job_id(&target.console, &target.path, &key);
