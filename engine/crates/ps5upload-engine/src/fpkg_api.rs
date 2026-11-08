@@ -685,6 +685,192 @@ pub(crate) struct ExfatBuildReq {
     /// plain image of any format, not with LZ4 packs. A game in LZ4 packs is decoded on the way.
     #[serde(default)]
     ampr_zstd: Option<AmprZstdReq>,
+    /// Where the image goes: `{"kind":"local"}` (the default: `output_dir` on this computer) or
+    /// `{"kind":"console","addr":…,"dir":…}`: straight into that PS5's folder `dir` over AVA1,
+    /// sent as it is written, so the image is never stored on this computer. The job's `dest` is
+    /// then the image's path on the PS5, and the read-back runs there. For `.exfat`, `.ffpkg`
+    /// and `.ffpfs` images, and `.exfat` with `ampr_zstd` packs; a `.ffpfsc` (`compress`), LZ4
+    /// packs and edited copies are refused for it.
+    #[serde(default)]
+    destination: Option<ImageDestinationReq>,
+}
+
+/// Where an image build puts the image.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum ImageDestinationReq {
+    /// This computer: `output_dir`.
+    Local,
+    /// A PS5: `addr` (its address) and `dir` (an absolute folder on it, made when missing). A
+    /// dropped connection goes on where it stopped, and so does the same build started again.
+    Console { addr: String, dir: String },
+}
+
+/// Why an image build cannot go straight to the console, in a sentence for the user; `None`
+/// when it can. First version: plain `.exfat`, `.ffpkg` and `.ffpfs`, and `.exfat` with zstd
+/// packs.
+pub(crate) fn console_refusal(
+    format: crate::image_build::ImageFormat,
+    compress: bool,
+    lz4_packs: bool,
+    zstd_packs: bool,
+    edited: bool,
+) -> Option<&'static str> {
+    if edited {
+        return Some(
+            "an edited copy of an image is written next to it on this computer, not straight to \
+             the PS5",
+        );
+    }
+    if compress {
+        return Some(
+            "a .ffpfsc can't be written straight to the PS5 yet: save it to this computer, or \
+             choose a plain .exfat, .ffpkg or .ffpfs image",
+        );
+    }
+    if lz4_packs {
+        return Some(
+            "an image with LZ4 asset packs can't be written straight to the PS5 yet: save it to \
+             this computer, or choose zstd packs",
+        );
+    }
+    if zstd_packs && format != crate::image_build::ImageFormat::Exfat {
+        return Some(
+            "zstd asset packs go straight to the PS5 in an .exfat image only: choose exFAT, or \
+             save it to this computer",
+        );
+    }
+    None
+}
+
+/// How an image build ended: on this computer, or streamed to a console.
+enum Ended {
+    Local(Result<crate::image_build::ImageBuilt, String>),
+    Console(anyhow::Result<crate::image_build::Streamed>),
+}
+
+/// The job of an image build straight to the console at `addr`, the image at `path` there: the
+/// console must answer over AVA1, the name must be free, then the image is planned, its size
+/// checked against the drive's room, streamed and read back (`image_build::stream_to_console`).
+#[allow(clippy::too_many_arguments)]
+fn to_console_job(
+    addr: &str,
+    path: &str,
+    format: crate::image_build::ImageFormat,
+    zstd_level: Option<(u8, crate::zstd_runtime::RuntimeChoice)>,
+    runtime: &mut Option<crate::zstd_runtime::PackRuntime>,
+    tree: &mut dyn ps5upload_fpkg::source::SourceTree,
+    mode: ps5upload_fpkg::sample::VerifyMode,
+    verify_chunk: u64,
+    cancel: &Arc<std::sync::atomic::AtomicBool>,
+    job_id: Uuid,
+    stage: &mut dyn FnMut(&str, u64, u64),
+) -> anyhow::Result<crate::image_build::Streamed> {
+    use ps5upload_core::fs_ops;
+    let _busy = crate::helper_stop::enter(addr);
+    ps5upload_ava1::console::require_ava1(addr)
+        .map_err(|f| anyhow::Error::from(ps5upload_ava1::upload::ConsoleFailure::on(addr, f)))?;
+    match fs_ops::fs_stat(addr, path) {
+        Ok(_) => anyhow::bail!(
+            "{path} already exists on the PS5: delete it there or give the image another name"
+        ),
+        Err(e) if fs_ops::is_not_found(&format!("{e:#}")) => {}
+        Err(e) => return Err(e.context(format!("looking for {path} on the PS5"))),
+    }
+    let dir = path.rsplit_once('/').map_or("/", |(d, _)| d);
+    if let Err(e) = fs_ops::fs_mkdir(addr, dir) {
+        crate::log_at!(Warn, "convert", "to console: making {dir}: {e:#}");
+    }
+    let room = ps5upload_ava1::space::volumes_probe()(addr, dir);
+    let mut cfg = crate::make_transfer_config(addr);
+    cfg.cancel = Some(cancel.clone());
+    cfg.progress_bytes = Some(Arc::new(AtomicU64::new(0)));
+    cfg.progress_bytes_finalized = Some(Arc::new(AtomicU64::new(0)));
+    crate::attach_live_notes(&mut cfg, job_id);
+    let send = |m: ava1::manifest::Manifest,
+                src: Arc<dyn ava1::source::Source>,
+                seq: Arc<dyn ava1::seq::SeqSource>,
+                job: [u8; 16]| {
+        let mut opts = ava1::send::SendOptions::upload(path);
+        opts.flags = ps5upload_ava1::gen::JF_SINGLE_FILE;
+        ps5upload_ava1::upload::upload_with_seq_in(
+            ps5upload_ava1::pool(),
+            addr,
+            job,
+            m,
+            src,
+            Some(seq),
+            opts,
+            &cfg,
+        )
+    };
+    let remove = |p: &str| fs_ops::fs_delete(addr, p);
+    let target = crate::image_build::ConsoleTarget {
+        console: addr.to_string(),
+        path: path.to_string(),
+        send: &send,
+        files: Arc::new(crate::console_read::ConsoleFiles {
+            addr: addr.to_string(),
+            label: format!("the PS5 at {addr}"),
+        }),
+        remove: &remove,
+        room,
+    };
+    let data = crate::remote::store::data_dir();
+    let stamp = crate::image_build::console_stamp(data.as_deref(), addr, path);
+    let streamed = match zstd_level {
+        Some((level, choice)) => {
+            let r = crate::zstd_runtime::pack_runtime(choice).map_err(anyhow::Error::msg)?;
+            crate::log_at!(
+                Info,
+                "convert",
+                "zstd packs: {} goes into {path} on the PS5",
+                r.describe()
+            );
+            crate::zstd_packs::stream_to_console(
+                format,
+                level,
+                runtime.insert(r),
+                tree,
+                stamp,
+                &target,
+                mode,
+                verify_chunk,
+                cancel,
+                stage,
+            )
+        }
+        // A libSceAmpr game gets a fresh ampr_emu.index (#449), as a local build does.
+        None => match crate::image_build::AmprIndexed::wrap_at(&mut *tree, stamp) {
+            Ok(Some(mut indexed)) => crate::image_build::stream_to_console(
+                format,
+                Some(stamp),
+                "",
+                &mut indexed,
+                &target,
+                mode,
+                verify_chunk,
+                cancel,
+                stage,
+            ),
+            Ok(None) => crate::image_build::stream_to_console(
+                format,
+                Some(stamp),
+                "",
+                tree,
+                &target,
+                mode,
+                verify_chunk,
+                cancel,
+                stage,
+            ),
+            Err(e) => Err(anyhow::anyhow!("ampr_emu.index: {e}")),
+        },
+    };
+    if streamed.is_ok() {
+        crate::image_build::forget_console_stamp(data.as_deref(), addr, path);
+    }
+    streamed
 }
 
 #[derive(Debug, Deserialize)]
@@ -937,6 +1123,29 @@ pub(crate) async fn exfat_build_handler(
                 Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
             },
         };
+    // Straight to a console: (its address, the folder there).
+    let to_console = match req.destination.take() {
+        None | Some(ImageDestinationReq::Local) => None,
+        Some(ImageDestinationReq::Console { addr, dir }) => {
+            if let Some(why) = console_refusal(
+                format,
+                compress,
+                packs.is_some(),
+                zstd_level.is_some(),
+                edited.is_some(),
+            ) {
+                return json_err(StatusCode::BAD_REQUEST, why).into_response();
+            }
+            let dir = match crate::link::valid_console_dir(&dir) {
+                Ok(d) => d,
+                Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
+            };
+            let Some(addr) = crate::required_console_addr(Some(addr)) else {
+                return crate::missing_console_addr();
+            };
+            Some((addr, dir))
+        }
+    };
     let named = match req.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
         Some(n) => {
             if let Some(why) = crate::folder_build::name_problem(n) {
@@ -961,7 +1170,8 @@ pub(crate) async fn exfat_build_handler(
             .map_or_else(default_output_dir, Path::to_path_buf),
         _ => output_dir(req.output_dir.as_deref()),
     };
-    let named = if req.keep_both {
+    // On a console, a name already taken is refused when the job starts (the console is asked).
+    let named = if req.keep_both && to_console.is_none() {
         let taken = |stem: &str| {
             let (name, _) = crate::image_build::output_names(Path::new(stem), format, compress);
             crate::folder_build::name_in_use(&out_dir.join(name))
@@ -972,8 +1182,11 @@ pub(crate) async fn exfat_build_handler(
         named
     };
     let (out_name, inner_name) = crate::image_build::output_names(&named, format, compress);
-    let output = out_dir.join(out_name);
-    if !remote
+    // On a console: (its address, the image's path there).
+    let to_console = to_console.map(|(addr, dir)| (addr, format!("{dir}/{out_name}")));
+    let output = out_dir.join(&out_name);
+    if to_console.is_none()
+        && !remote
         && image_file
         && tokio::fs::canonicalize(&output).await.ok()
             == tokio::fs::canonicalize(&source).await.ok()
@@ -984,14 +1197,16 @@ pub(crate) async fn exfat_build_handler(
         )
         .into_response();
     }
-    if tokio::fs::try_exists(&output).await.unwrap_or(false) {
+    if to_console.is_none() && tokio::fs::try_exists(&output).await.unwrap_or(false) {
         return json_err(
             StatusCode::CONFLICT,
             format!("{} already exists", output.display()),
         )
         .into_response();
     }
-    if let Err(e) = tokio::fs::create_dir_all(&out_dir).await {
+    if to_console.is_some() {
+        // Nothing is written on this computer.
+    } else if let Err(e) = tokio::fs::create_dir_all(&out_dir).await {
         return json_err(
             StatusCode::BAD_REQUEST,
             format!("{}: {e}", out_dir.display()),
@@ -1106,7 +1321,8 @@ pub(crate) async fn exfat_build_handler(
     // An uncompressed image is at least as large as the game: refused before the first write
     // rather than filling the drive and failing near the end. A compressed one or LZ4 packs may
     // well fit in less, so the screen warns and it goes ahead.
-    if !compress && packs.is_none() && zstd_level.is_none() {
+    // Straight to a console, the console's own room is checked once the image's size is planned.
+    if to_console.is_none() && !compress && packs.is_none() && zstd_level.is_none() {
         if let Some(why) = build::free_bytes(&out_dir)
             .and_then(|free| crate::folder_build::shortfall(free, total, &out_dir))
         {
@@ -1115,18 +1331,35 @@ pub(crate) async fn exfat_build_handler(
     }
 
     let partial_out = PathBuf::from(format!("{}.partial", output.display()));
-    let Some(writing) = Writing::claim_off_thread(partial_out.clone()).await else {
-        return already_building(&partial_out);
+    // Two builds into one console path would wreck each other's job, as two into one file would.
+    let claimed = match &to_console {
+        Some((addr, path)) => PathBuf::from(format!("ps5://{addr}{path}")),
+        None => partial_out.clone(),
     };
-    let spool = crate::image_build::lz4_spool(&output);
-    let Some(spooling) = Writing::claim_off_thread(spool.clone()).await else {
-        return already_building(&spool);
+    let Some(writing) = Writing::claim_off_thread(claimed.clone()).await else {
+        return already_building(&claimed);
+    };
+    let spooling = match to_console {
+        Some(_) => None,
+        None => {
+            let spool = crate::image_build::lz4_spool(&output);
+            let Some(s) = Writing::claim_off_thread(spool.clone()).await else {
+                return already_building(&spool);
+            };
+            Some(s)
+        }
     };
 
     let job_id = Uuid::new_v4();
     crate::workshop_api::note_run(job_id, "image", &source);
     let scaffold = Scaffold::of(&source);
-    let cancel = register_workshop_job(job_id);
+    // Straight to a console the job can be cancelled, not paused: a writer held for minutes
+    // would leave the console's job without data until it gives up (AVA1's stall limit).
+    let cancel = if to_console.is_some() {
+        crate::register_transfer_cancel(job_id)
+    } else {
+        register_workshop_job(job_id)
+    };
     let bytes = Arc::new(AtomicU64::new(0));
     let started_at_ms = now_ms();
     set_job(
@@ -1191,7 +1424,9 @@ pub(crate) async fn exfat_build_handler(
             job_id,
             started_at_ms,
         );
-        sweep_output_leftovers(&out_dir);
+        if to_console.is_none() {
+            sweep_output_leftovers(&out_dir);
+        }
         let mut tree = tree;
         // With LZ4 packs the build packs first; the stage list says so.
         let stages: &[&str] = if packs.is_some() || zstd_level.is_some() {
@@ -1225,82 +1460,155 @@ pub(crate) async fn exfat_build_handler(
             };
         // zstd packs: the emulator that goes in, fetched here (off the request) and recorded.
         let mut runtime = None;
-        let outcome = match (source_tree, &packs) {
-            (Err(e), _) => Err(e),
-            (Ok(tree), None) if zstd_level.is_some() => {
-                let (level, choice) = zstd_level.unwrap_or_default();
-                crate::zstd_runtime::pack_runtime(choice).and_then(|r| {
-                    crate::log_at!(
-                        Info,
-                        "convert",
-                        "zstd packs: {} goes into {}",
-                        r.describe(),
-                        output.display()
-                    );
-                    crate::zstd_packs::build(
-                        format,
-                        level,
-                        runtime.insert(r),
-                        tree,
-                        &output,
-                        mode,
-                        verify_chunk,
-                        &cancel,
-                        &mut report,
-                    )
-                })
-            }
-            (Ok(tree), Some(packs)) => crate::image_build::build_packed(
+        // Straight to a console: its own job, failing with the transfer's reasons.
+        let ended = match (source_tree, &to_console) {
+            (Ok(tree), Some((addr, path))) => Ended::Console(to_console_job(
+                addr,
+                path,
                 format,
+                zstd_level,
+                &mut runtime,
                 tree,
-                &output,
-                packs,
                 mode,
                 verify_chunk,
                 &cancel,
+                job_id,
                 &mut report,
-            ),
-            // A libSceAmpr game gets a fresh ampr_emu.index (#449), as a package does.
-            // Any image without packs can go on after a crash: same files, same bytes, as long as
-            // the regenerated index and a PFS image keep their time.
-            (Ok(tree), None) => {
-                let stamp = crate::image_build::index_stamp(&partial_out);
-                match crate::image_build::AmprIndexed::wrap_at(&mut *tree, stamp) {
-                    Ok(Some(mut indexed)) => crate::image_build::build_resumable(
-                        format,
-                        inner_name.as_deref(),
-                        level,
-                        stamp,
-                        &mut indexed,
-                        &output,
-                        mode,
-                        verify_chunk,
-                        &cancel,
-                        &mut report,
-                    ),
-                    Ok(None) => crate::image_build::build_resumable(
-                        format,
-                        inner_name.as_deref(),
-                        level,
-                        stamp,
-                        tree,
-                        &output,
-                        mode,
-                        verify_chunk,
-                        &cancel,
-                        &mut report,
-                    ),
-                    Err(e) => Err(format!("ampr_emu.index: {e}")),
+            )),
+            (Err(e), Some(_)) => Ended::Console(Err(anyhow::anyhow!(e))),
+            (source_tree, None) => Ended::Local(match (source_tree, &packs) {
+                (Err(e), _) => Err(e),
+                (Ok(tree), None) if zstd_level.is_some() => {
+                    let (level, choice) = zstd_level.unwrap_or_default();
+                    crate::zstd_runtime::pack_runtime(choice).and_then(|r| {
+                        crate::log_at!(
+                            Info,
+                            "convert",
+                            "zstd packs: {} goes into {}",
+                            r.describe(),
+                            output.display()
+                        );
+                        crate::zstd_packs::build(
+                            format,
+                            level,
+                            runtime.insert(r),
+                            tree,
+                            &output,
+                            mode,
+                            verify_chunk,
+                            &cancel,
+                            &mut report,
+                        )
+                    })
                 }
-            }
+                (Ok(tree), Some(packs)) => crate::image_build::build_packed(
+                    format,
+                    tree,
+                    &output,
+                    packs,
+                    mode,
+                    verify_chunk,
+                    &cancel,
+                    &mut report,
+                ),
+                // A libSceAmpr game gets a fresh ampr_emu.index (#449), as a package does.
+                // Any image without packs can go on after a crash: same files, same bytes, as long as
+                // the regenerated index and a PFS image keep their time.
+                (Ok(tree), None) => {
+                    let stamp = crate::image_build::index_stamp(&partial_out);
+                    match crate::image_build::AmprIndexed::wrap_at(&mut *tree, stamp) {
+                        Ok(Some(mut indexed)) => crate::image_build::build_resumable(
+                            format,
+                            inner_name.as_deref(),
+                            level,
+                            stamp,
+                            &mut indexed,
+                            &output,
+                            mode,
+                            verify_chunk,
+                            &cancel,
+                            &mut report,
+                        ),
+                        Ok(None) => crate::image_build::build_resumable(
+                            format,
+                            inner_name.as_deref(),
+                            level,
+                            stamp,
+                            tree,
+                            &output,
+                            mode,
+                            verify_chunk,
+                            &cancel,
+                            &mut report,
+                        ),
+                        Err(e) => Err(format!("ampr_emu.index: {e}")),
+                    }
+                }
+            }),
         };
         drop(writing);
         drop(spooling);
-        if outcome.is_err() {
+        if matches!(ended, Ended::Local(Err(_))) {
             sweep_output_leftovers(&out_dir);
         }
         let completed_at_ms = now_ms();
         drop(ticker);
+        let outcome = match ended {
+            Ended::Local(outcome) => outcome,
+            Ended::Console(streamed) => {
+                let path = to_console.as_ref().map_or("", |(_, p)| p.as_str());
+                let state = match streamed {
+                    Ok(s) => {
+                        crate::engine_log::record(
+                            "info",
+                            format!(
+                                "image: {} -> PS5 {path} ({} files, {} bytes, {}, read back on the PS5){}",
+                                source.display(),
+                                s.built.files,
+                                s.built.image_bytes,
+                                s.built.detail,
+                                runtime
+                                    .as_ref()
+                                    .map(|r| format!("; emulator {}", r.describe()))
+                                    .unwrap_or_default()
+                            ),
+                        );
+                        let mut ack: serde_json::Value =
+                            serde_json::from_str(&s.transfer.commit_ack_body)
+                                .unwrap_or_else(|_| serde_json::json!({}));
+                        if let (Some(o), Some(r)) = (ack.as_object_mut(), runtime.as_ref()) {
+                            o.insert("ampr_runtime".into(), serde_json::json!(r));
+                        }
+                        if let Some(o) = ack.as_object_mut() {
+                            o.insert("to_console".into(), true.into());
+                            o.insert("passes".into(), s.passes.into());
+                        }
+                        JobState::Done {
+                            started_at_ms,
+                            completed_at_ms,
+                            elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                            tx_id_hex: s.transfer.tx_id_hex,
+                            bytes_sent: s.built.image_bytes,
+                            dest: path.to_string(),
+                            files_sent: s.built.files,
+                            skipped_files: 0,
+                            skipped_bytes: 0,
+                            commit_ack: Some(ack),
+                        }
+                    }
+                    Err(e) => {
+                        crate::engine_log::record(
+                            "warn",
+                            format!("image: to the PS5 failed: {e:#}"),
+                        );
+                        crate::job_failed_from_err(started_at_ms, completed_at_ms, &e)
+                    }
+                };
+                set_job(&state_for_job.jobs, &state_for_job.events_tx, job_id, state);
+                fail.mark_succeeded();
+                return;
+            }
+        };
         match outcome {
             Ok(built) => {
                 built_packages()
@@ -2562,6 +2870,54 @@ mod extract_tests {
         assert!(out.join("F.exfat.lz4spool").exists());
         drop(spooling);
         let _ = std::fs::remove_dir_all(&out);
+    }
+
+    /// Straight to the console: plain .exfat, .ffpkg and .ffpfs, and .exfat with zstd packs.
+    /// Everything else is refused with the reason, before a job exists.
+    #[test]
+    fn only_the_formats_that_stream_go_straight_to_the_console() {
+        use crate::image_build::ImageFormat::{Exfat, Ffpfs, Ffpkg};
+        for f in [Exfat, Ffpkg, Ffpfs] {
+            assert_eq!(
+                console_refusal(f, false, false, false, false),
+                None,
+                "{f:?}"
+            );
+            assert!(console_refusal(f, true, false, false, false)
+                .unwrap()
+                .contains(".ffpfsc"));
+            assert!(console_refusal(f, false, false, false, true).is_some());
+        }
+        assert_eq!(console_refusal(Exfat, false, false, true, false), None);
+        assert!(console_refusal(Ffpkg, false, false, true, false)
+            .unwrap()
+            .contains("zstd"));
+        assert!(console_refusal(Exfat, false, true, false, false)
+            .unwrap()
+            .contains("LZ4"));
+    }
+
+    /// The request's `destination`, as the client and the API send it.
+    #[test]
+    fn the_destination_reads_as_local_or_a_console() {
+        let req: ExfatBuildReq = serde_json::from_value(serde_json::json!({
+            "source": "/g",
+            "destination": {"kind": "console", "addr": "10.0.0.2", "dir": "/data/homebrew"}
+        }))
+        .unwrap();
+        assert!(matches!(
+            req.destination,
+            Some(ImageDestinationReq::Console { ref addr, ref dir })
+                if addr == "10.0.0.2" && dir == "/data/homebrew"
+        ));
+        let req: ExfatBuildReq = serde_json::from_value(
+            serde_json::json!({"source": "/g", "destination": {"kind": "local"}}),
+        )
+        .unwrap();
+        assert!(matches!(req.destination, Some(ImageDestinationReq::Local)));
+        let req: ExfatBuildReq =
+            serde_json::from_value(serde_json::json!({"source": "/g"})).unwrap();
+        assert!(req.destination.is_none());
     }
 
     #[test]

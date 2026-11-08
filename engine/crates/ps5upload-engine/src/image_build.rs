@@ -24,6 +24,13 @@ use ps5upload_fpkg::ffpfsc_block::Level;
 use ps5upload_fpkg::sample::{self, VerifyMode, VerifySummary, SLICE};
 use ps5upload_fpkg::source::{SourceFile, SourceTree};
 
+mod to_console;
+#[cfg(test)]
+pub(crate) use to_console::tests as to_console_tests;
+pub(crate) use to_console::{
+    console_stamp, forget_console_stamp, stream_to_console, ConsoleTarget, Streamed,
+};
+
 /// The filesystems a game image can have.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ImageFormat {

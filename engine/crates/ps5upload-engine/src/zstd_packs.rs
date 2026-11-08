@@ -284,6 +284,87 @@ pub(crate) fn build(
     Ok(built)
 }
 
+/// Replaces the measure pass's random archive ID (what ties the volumes to their index) with
+/// one derived from the index itself: the same packs get the same ID, so a stream that starts
+/// over in another engine process gives the same bytes and goes on from what the console holds.
+fn pin_archive_id(index: &mut ps5_dump_forge_zstd::Index) -> Result<(), String> {
+    index.archive_id = [0; 16];
+    let bytes = ps5_dump_forge_zstd::encode_index(index).map_err(|e| e.to_string())?;
+    let mut h = blake3::Hasher::new();
+    h.update(b"ps5upload zstd archive id\0");
+    h.update(&bytes);
+    index
+        .archive_id
+        .copy_from_slice(&h.finalize().as_bytes()[..16]);
+    Ok(())
+}
+
+/// [`build`] straight to the console (`image_build::stream_to_console`): the packs made the
+/// same way, with `mtime` pinned on the index so a stream that has to start over gives the same
+/// bytes, and the packs read back from the console's copy through the emulator's checks. An
+/// image that fails them is removed from the console.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn stream_to_console(
+    format: ImageFormat,
+    level: u8,
+    runtime: &PackRuntime,
+    source: &mut dyn SourceTree,
+    mtime: i64,
+    target: &crate::image_build::ConsoleTarget,
+    mode: VerifyMode,
+    verify_chunk: u64,
+    cancel: &AtomicBool,
+    stage: &mut dyn FnMut(&str, u64, u64),
+) -> anyhow::Result<crate::image_build::Streamed> {
+    let (mut prepared, packed) =
+        prepare(source, runtime.bytes.clone(), mtime).map_err(anyhow::Error::msg)?;
+    let mut index = measure(
+        &mut prepared,
+        &packed,
+        level,
+        Path::new(&target.path),
+        cancel,
+        stage,
+    )
+    .map_err(anyhow::Error::msg)?;
+    pin_archive_id(&mut index).map_err(anyhow::Error::msg)?;
+    let streamed = {
+        let mut tree = PackedTree::new(&mut prepared, &index, 0, cancel)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        // The bytes also follow the level and the emulator: a different one is a different job.
+        let salt = format!(
+            "zstd level {level} emulator {}",
+            blake3::hash(&runtime.bytes).to_hex()
+        );
+        crate::image_build::stream_to_console(
+            format,
+            Some(mtime),
+            &salt,
+            &mut tree,
+            target,
+            mode,
+            verify_chunk,
+            cancel,
+            stage,
+        )?
+    };
+    let unpacked = ps5upload_fpkg::remote_source::open_remote(target.files.clone(), &target.path)
+        .map_err(|e| e.to_string())
+        .and_then(|image| {
+            ps5_dump_forge_zstd::reader::unpack(image)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        });
+    if let Err(e) = unpacked {
+        let removed = match (target.remove)(&target.path) {
+            Ok(()) => "it was removed from the PS5".to_string(),
+            Err(r) => format!("removing it from the PS5 failed too ({r:#}): delete it by hand"),
+        };
+        anyhow::bail!("reading the zstd packs back from the image on the PS5: {e}; {removed}");
+    }
+    Ok(streamed)
+}
+
 /// Builds `source` as a plain folder `target` with its files in zstd packs at `level` and
 /// `runtime` as its emulator: what [`build`] puts in an image, as files. Measured (stage
 /// `pack`), then the packs made on demand from the source as the folder is written (`write`),
@@ -615,5 +696,80 @@ mod tests {
         assert!(!target.exists());
         assert!(!crate::folder_build::partial_of(&target).exists());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// An .exfat with zstd packs streamed to the console is the image a local build writes, and
+    /// its packs read back there.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_packed_exfat_streams_to_the_console_as_built_here() {
+        use crate::image_build::to_console_tests::{cfg, Loopback};
+        let lb = Loopback::start("zstd", None).await;
+        let src = game(&lb.dir);
+        let cancel = AtomicBool::new(false);
+        let local = lb.dir.join("local.exfat");
+        {
+            let mut tree = FolderSource::open(&src).unwrap();
+            let (mut prepared, packed) = prepare(&mut tree, runtime().bytes, 7).unwrap();
+            let mut index = ps5_dump_forge_zstd::writer::measure(
+                &mut prepared,
+                &packed,
+                5,
+                0,
+                &mut |_| {},
+                &cancel,
+            )
+            .unwrap();
+            // The measure pass draws a random ID; pinned, the same packs have the same one.
+            let drawn = index.archive_id;
+            pin_archive_id(&mut index).unwrap();
+            let pinned = index.archive_id;
+            pin_archive_id(&mut index).unwrap();
+            assert_eq!(index.archive_id, pinned);
+            assert_ne!(pinned, drawn);
+            let mut packs = PackedTree::new(&mut prepared, &index, 0, &cancel).unwrap();
+            crate::image_build::build(
+                ImageFormat::Exfat,
+                None,
+                &mut packs,
+                &local,
+                VerifyMode::Full,
+                crate::image_build::DEFAULT_VERIFY_CHUNK,
+                &cancel,
+                &mut |_, _, _| {},
+            )
+            .unwrap();
+        }
+        let want = std::fs::read(&local).unwrap();
+        let c = cfg();
+        let mut stages: Vec<String> = Vec::new();
+        let r = tokio::task::block_in_place(|| {
+            let mut tree = FolderSource::open(&src).unwrap();
+            lb.with_target(&c, "dst/G.exfat", |t| {
+                stream_to_console(
+                    ImageFormat::Exfat,
+                    5,
+                    &runtime(),
+                    &mut tree,
+                    7,
+                    t,
+                    VerifyMode::Full,
+                    crate::image_build::DEFAULT_VERIFY_CHUNK,
+                    &cancel,
+                    &mut |s, _, _| {
+                        if stages.last().map(String::as_str) != Some(s) {
+                            stages.push(s.to_string());
+                        }
+                    },
+                )
+            })
+        })
+        .unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(stages, ["pack", "plan", "write", "verify"]);
+        assert_eq!(r.built.image_bytes, want.len() as u64);
+        let got = std::fs::read(lb.share().join("dst/G.exfat")).unwrap();
+        assert!(
+            got == want,
+            "the console's packed image differs from the local build"
+        );
     }
 }
