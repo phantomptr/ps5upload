@@ -1362,4 +1362,138 @@ mod tests {
         );
         assert_eq!(listings - before.1, 0, "listed a folder to open a file");
     }
+
+    /// The folder and file of the Discord report (title id changed), as Pure-FTPd lists them.
+    const GLOB_DIR: &str =
+        "/torrents/[PS5] Hellblade - Senua’s Sacrifice [RUS text, RUS sound, USA, v01.003.000, ffpfsc]";
+    const GLOB_FILE: &str = "PPSA00000_Game_v01.003.000_FW10.ffpfsc";
+    const GLOB_SIZE: u64 = 13_851_336_704;
+
+    /// A server that, like Pure-FTPd (and the Keenetic router's FTP server of the report), reads a
+    /// LIST argument as a glob: `[PS5]` is a character class, so listing the folder by its path
+    /// matches nothing and answers an empty listing with success. Speaks no FEAT, so no MLSD.
+    async fn globbing_server() -> u16 {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let ctl = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = ctl.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((sock, _)) = ctl.accept().await {
+                tokio::spawn(async move {
+                    let (rd, mut wr) = sock.into_split();
+                    let mut rd = BufReader::new(rd);
+                    let mut cwd = "/".to_string();
+                    let mut data: Option<tokio::net::TcpListener> = None;
+                    wr.write_all(b"220 Welcome to Pure-FTPd.\r\n").await.ok();
+                    let mut line = String::new();
+                    while matches!(rd.read_line(&mut line).await, Ok(n) if n > 0) {
+                        let l = line.trim_end_matches(['\r', '\n']).to_string();
+                        line.clear();
+                        let (cmd, arg) = l.split_once(' ').unwrap_or((l.as_str(), ""));
+                        let reply = match cmd.to_ascii_uppercase().as_str() {
+                            "USER" => "331 Password required".to_string(),
+                            "PASS" => "230 OK".into(),
+                            "TYPE" => "200 TYPE is now 8-bit binary".into(),
+                            "PWD" => format!("257 \"{cwd}\" is your current location"),
+                            "CWD" if arg == GLOB_DIR || arg == "/" || arg == "/torrents" => {
+                                cwd = arg.to_string();
+                                "250 OK".into()
+                            }
+                            "CWD" => "550 No such directory".into(),
+                            "PASV" => {
+                                let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                                let p = l.local_addr().unwrap().port();
+                                data = Some(l);
+                                format!(
+                                    "227 Entering Passive Mode (127,0,0,1,{},{})",
+                                    p / 256,
+                                    p % 256
+                                )
+                            }
+                            "LIST" => {
+                                let Some(l) = data.take() else {
+                                    wr.write_all(b"425 No data connection\r\n").await.ok();
+                                    continue;
+                                };
+                                wr.write_all(b"150 Accepted data connection\r\n").await.ok();
+                                let (mut d, _) = l.accept().await.unwrap();
+                                // A path argument is a pattern: one with `[` matches nothing.
+                                let at = if arg.is_empty() { cwd.as_str() } else { arg };
+                                if at == GLOB_DIR && !arg.contains('[') {
+                                    let row = format!(
+                                        "-rw-r--r--    1 1000       1000              {GLOB_SIZE} Nov  8 04:11 {GLOB_FILE}\r\n"
+                                    );
+                                    d.write_all(row.as_bytes()).await.ok();
+                                }
+                                drop(d);
+                                "226 Options: -l".into()
+                            }
+                            "QUIT" => {
+                                wr.write_all(b"221 Goodbye\r\n").await.ok();
+                                break;
+                            }
+                            _ => "500 Unknown command".into(),
+                        };
+                        wr.write_all(format!("{reply}\r\n").as_bytes()).await.ok();
+                    }
+                });
+            }
+        });
+        port
+    }
+
+    /// Discord (11.2.6): a .ffpfsc in a folder named with `[…]` showed over SMB but the folder
+    /// was empty over FTP, because the folder's path went to LIST as an argument and the server
+    /// globbed it. Listing from inside the folder shows the file, with its size past 4 GiB.
+    #[tokio::test]
+    async fn a_folder_named_with_brackets_lists_on_a_server_that_globs() {
+        let port = globbing_server().await;
+        let mut conn = crate::remote::store::conn("t", crate::remote::store::Protocol::Ftp);
+        conn.host = "127.0.0.1".into();
+        conn.port = port;
+        conn.user = "t".into();
+        let secret = Secret::Password {
+            password: "t".into(),
+        };
+        let fs = FtpFs::connect(&conn, &secret, false).await.unwrap();
+        assert!(!fs.mlsd);
+        let page = fs.list(GLOB_DIR, None).await.unwrap();
+        assert_eq!(
+            triples(&page.entries),
+            [(GLOB_FILE, false, GLOB_SIZE)],
+            "the folder listed empty"
+        );
+        let e = fs.stat(&format!("{GLOB_DIR}/{GLOB_FILE}")).await.unwrap();
+        assert_eq!((e.is_dir, e.size), (false, GLOB_SIZE));
+        // A folder the server won't enter falls back to listing by its path.
+        assert!(fs.list("/nope", None).await.unwrap().entries.is_empty());
+    }
+
+    /// The same against a real Pure-FTPd: in `<dir>`, make the report's folder
+    /// ([`GLOB_DIR`]) holding a sparse [`GLOB_FILE`] of [`GLOB_SIZE`] bytes (`truncate -s`), then
+    /// `docker run -d -p 2122:21 -p 30000-30009:30000-30009 -v <dir>:/home/t alpine:3.20 sh -c
+    /// 'apk add -q pure-ftpd && (echo t; echo t) | pure-pw useradd t -u 1000 -g 1000 -d /home/t -m
+    /// && exec pure-ftpd -l puredb:/etc/pureftpd.pdb -E -P 127.0.0.1 -p 30000:30009'`
+    /// and `PS5UPLOAD_PUREFTPD_TEST=127.0.0.1:2122`.
+    #[tokio::test]
+    #[ignore = "needs a Pure-FTPd server; see the doc comment"]
+    async fn pure_ftpd_lists_and_reads_a_folder_named_with_brackets() {
+        let Ok(addr) = std::env::var("PS5UPLOAD_PUREFTPD_TEST") else {
+            return;
+        };
+        let (host, port) = addr.split_once(':').unwrap();
+        let mut conn = crate::remote::store::conn("t", crate::remote::store::Protocol::Ftp);
+        conn.host = host.into();
+        conn.port = port.parse().unwrap();
+        conn.user = "t".into();
+        let secret = Secret::Password {
+            password: "t".into(),
+        };
+        let fs = FtpFs::connect(&conn, &secret, false).await.unwrap();
+        let page = fs.list(GLOB_DIR, None).await.unwrap();
+        assert_eq!(triples(&page.entries), [(GLOB_FILE, false, GLOB_SIZE)]);
+        let f = fs.open(&format!("{GLOB_DIR}/{GLOB_FILE}")).await.unwrap();
+        assert_eq!(f.size(), GLOB_SIZE);
+        let tail = f.read_at(GLOB_SIZE - 4096, 4096).await.unwrap();
+        assert_eq!(tail.len(), 4096);
+    }
 }
