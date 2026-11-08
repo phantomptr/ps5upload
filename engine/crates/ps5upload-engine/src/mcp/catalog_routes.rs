@@ -509,6 +509,7 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/ps5/rp/pad-link"),
     ("POST", "/api/ps5/rp/pad-link/control"),
     ("POST", "/api/ps5/rp/pad-link/decide"),
+    ("POST", "/api/ps5/rp/pad-link/internet"),
     ("POST", "/api/ps5/rp/pad-link/kick"),
     ("GET", "/api/ps5/rp/pad-relay"),
     ("POST", "/api/ps5/rp/passcode"),
