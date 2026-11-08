@@ -6511,6 +6511,25 @@
         ],
         "type": "object"
       },
+      "InternetReq": {
+        "properties": {
+          "console": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "addr",
+              "host"
+            ]
+          },
+          "new": {
+            "description": "A new room and key: the old internet link stops working.",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
       "InviteBody": {
         "properties": {
           "addr": {
@@ -35969,7 +35988,7 @@
     },
     "/api/ps5/rp/pad-link/control": {
       "post": {
-        "description": "`POST /api/ps5/rp/pad-link/control {id, on}`: hand a watcher the controller, or take it back.",
+        "description": "`POST /api/ps5/rp/pad-link/control {id, on}`: hand a watcher the controller, or take it back.\nNot one watching over the internet (`ok: false`): those only watch.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -36058,6 +36077,64 @@
         "x-ps5upload": {
           "access": "loopback",
           "response_schema": "literal"
+        }
+      }
+    },
+    "/api/ps5/rp/pad-link/internet": {
+      "post": {
+        "description": "`POST /api/ps5/rp/pad-link/internet {new?, console?}`: the link for a phone anywhere\n(`internet.url` in the answer, the status as `GET` has it; the link opens too). A room on the\nsignalling hub in Play Together's settings, with a key of its own; the same one again unless\n`new`, which closes the old room (its link stops working; phones already in keep playing).\n409 `internet_off` when the settings turned internet invites off, 409 `hub_url` when the hub\naddress is not a `wss://` one.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InternetReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The link for a phone anywhere (`internet.url` in the answer, the status as `GET` has it; the link opens too)",
+        "tags": [
+          "remote-play"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "addr",
+              "host"
+            ],
+            "in": "body",
+            "name": "console",
+            "required": false
+          },
+          "response_schema": "json-unknown"
         }
       }
     },

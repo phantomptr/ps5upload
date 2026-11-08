@@ -30,6 +30,12 @@
 //! [`RtcSocket`]. When the channel's buffer passes [`HIGH_WATER`], the session stops taking
 //! pictures, its shallow queue fills and the stream skips this guest to the next keyframe: the
 //! slow-guest rule of the LAN socket.
+//!
+//! **The phone link** (pad_link.rs: a phone as a controller, or a device that watches) has rooms of
+//! its own ([`Kind::Pad`]): the link `https://ps5upload.phantomptr.com/pad/#room=…&k=…&fp=…&hub=…`
+//! (`&w=1` to watch), a data channel labelled `"pad"`, and on it the messages of `/api/pad/ws`
+//! after a first `{"hello": {"t": key, "name", "d", "w"}}` (the LAN socket's query). A room's
+//! peers get only its own kind's session: a channel with the other label is ignored.
 
 pub(crate) mod chunk;
 pub(crate) mod crypto;
@@ -50,6 +56,35 @@ use tokio::sync::{mpsc, Notify};
 
 /// The guest page that reads an internet invite.
 pub(crate) const PAGE: &str = "https://ps5upload.phantomptr.com/join/";
+/// The phone page that reads an internet phone link (a controller, or `&w=1` to watch).
+pub(crate) const PAD_PAGE: &str = "https://ps5upload.phantomptr.com/pad/";
+
+/// What a room's peers come for, and so which session their channel gets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Kind {
+    /// Play Together (join.rs).
+    Join,
+    /// The phone link (pad_link.rs): a controller or a watcher.
+    Pad,
+}
+
+impl Kind {
+    /// The label of the data channel the page opens.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Kind::Join => "join",
+            Kind::Pad => "pad",
+        }
+    }
+
+    /// The website's page its links open.
+    pub(crate) fn page(self) -> &'static str {
+        match self {
+            Kind::Join => PAGE,
+            Kind::Pad => PAD_PAGE,
+        }
+    }
+}
 pub(crate) const DEFAULT_HUB: &str = "wss://hub.phantomptr.com/ws";
 /// Public STUN servers the engine (and the guest page) ask by default. The hub's own STUN at
 /// `hub.phantomptr.com:3478` is used only when the settings name it.
@@ -271,9 +306,9 @@ pub(crate) fn hub_url_ok(url: &str) -> bool {
     }
 }
 
-/// The guest's link for an internet invite.
-pub(crate) fn invite_link(room: &str, key: &str, fp: &str, hub: &str) -> String {
-    format!("{PAGE}#room={room}&k={key}&fp={fp}&hub={hub}")
+/// A room's link (an internet invite, or the phone link's), on the website's page for its kind.
+pub(crate) fn link_for(kind: Kind, room: &str, key: &str, fp: &str, hub: &str) -> String {
+    format!("{}#room={room}&k={key}&fp={fp}&hub={hub}", kind.page())
 }
 
 /// `n` random bytes as base64url without padding (16 → 22 characters, 32 → 43).

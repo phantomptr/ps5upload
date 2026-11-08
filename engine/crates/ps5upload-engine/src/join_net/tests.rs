@@ -263,6 +263,11 @@ impl TestGuest {
 /// Joins `room` on the hub at `hub_url` and connects to its host over WebRTC on loopback, with a
 /// "join" data channel. Returns once the channel is open.
 pub(crate) async fn connect_guest(hub_url: &str, room: &str) -> TestGuest {
+    connect_guest_on(hub_url, room, "join").await
+}
+
+/// [`connect_guest`] with a data channel labelled `label` ("pad": a phone, pad_link.rs).
+pub(crate) async fn connect_guest_on(hub_url: &str, room: &str, label: &str) -> TestGuest {
     let (mut hub, _) = tokio_tungstenite::connect_async(hub_url).await.unwrap();
     hub.send(TMsg::Text(
         serde_json::json!({"v": 1, "t": "join", "room": room})
@@ -281,7 +286,7 @@ pub(crate) async fn connect_guest(hub_url: &str, room: &str) -> TestGuest {
         .build(Instant::now());
     rtc.add_local_candidate(Candidate::host(local, "udp").unwrap());
     let mut api = rtc.sdp_api();
-    let cid = api.add_channel("join".into());
+    let cid = api.add_channel(label.into());
     let (offer, pending): (_, SdpPendingOffer) = api.apply().unwrap();
     let signal = |data: serde_json::Value| {
         TMsg::Text(
@@ -480,8 +485,17 @@ fn links_and_hub_addresses() {
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     assert_eq!(
-        super::invite_link("R", "K", "AA:BB", "hub.example"),
+        super::link_for(super::Kind::Join, "R", "K", "AA:BB", "hub.example"),
         "https://ps5upload.phantomptr.com/join/#room=R&k=K&fp=AA:BB&hub=hub.example"
+    );
+    // The phone link's: the website's controller page, its own channel label.
+    assert_eq!(
+        super::link_for(super::Kind::Pad, "R", "K", "AA:BB", "hub.example"),
+        "https://ps5upload.phantomptr.com/pad/#room=R&k=K&fp=AA:BB&hub=hub.example"
+    );
+    assert_eq!(
+        (super::Kind::Join.label(), super::Kind::Pad.label()),
+        ("join", "pad")
     );
     // One certificate per run: the fingerprint never changes.
     let fp = super::fingerprint().unwrap();

@@ -2692,7 +2692,12 @@ pub async fn invite(
     match with_party(&key, |p| {
         let inv = p.invite(b.new, now);
         if b.internet && inv.is_some() && p.internet.as_ref().is_none_or(|r| r.url() != s.hub_url) {
-            p.internet = crate::join_net::hub::Room::start(key.clone(), s.hub_url.clone());
+            let k = key.clone();
+            p.internet = crate::join_net::hub::Room::start(
+                crate::join_net::Kind::Join,
+                Box::new(move || internet_wanted(&k)),
+                s.hub_url.clone(),
+            );
         }
         let net = p.internet_json(inv.as_ref());
         (inv, net, p.console.clone(), p.reach.clone())
@@ -2899,6 +2904,10 @@ pub async fn set_settings(
     });
     for (console, fx) in fx {
         apply(&console, fx);
+    }
+    if !s.internet_invites {
+        // The phone link's internet link too (phones already in keep playing).
+        crate::pad_link::internet_off();
     }
     Json(serde_json::json!({ "settings": s })).into_response()
 }
@@ -5978,5 +5987,10 @@ mod tests {
     // Internet invites (join_net): the same session over a WebRTC data channel.
     mod internet {
         include!("join_net/join_tests.rs");
+    }
+
+    // The phone link over the internet (pad_link.rs on join_net): here for the settings and turns.
+    mod pad_internet {
+        include!("join_net/pad_tests.rs");
     }
 }

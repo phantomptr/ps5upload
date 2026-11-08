@@ -410,10 +410,11 @@ const PEER_SEND_STALL: Duration = Duration::from_secs(if cfg!(test) { 1 } else {
 /// What a page may send at once: a snapshot's picture, its metadata and its kind.
 const PAGE_MSG_MAX: usize = automation::MAX_SNAPSHOT_BYTES + 64 * 1024;
 
-/// Sends `m`; false when the socket is gone or stuck.
-pub(crate) async fn send_limited(socket: &mut WebSocket, m: Message) -> bool {
+/// Sends `m` (on a LAN WebSocket, or an internet peer's data channel); false when the socket is
+/// gone or stuck.
+pub(crate) async fn send_limited<S: crate::join::GuestSocket>(socket: &mut S, m: Message) -> bool {
     matches!(
-        tokio::time::timeout(PEER_SEND_STALL, socket.send(m)).await,
+        tokio::time::timeout(PEER_SEND_STALL, crate::join::GuestSocket::send(socket, m)).await,
         Ok(Ok(()))
     )
 }
