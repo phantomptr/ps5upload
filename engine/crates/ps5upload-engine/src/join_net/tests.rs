@@ -513,13 +513,31 @@ fn links_and_hub_addresses() {
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     assert_eq!(
-        super::link_for(super::Kind::Join, "R", "K", "AA:BB", "hub.example"),
+        super::link_for(super::Kind::Join, "R", "K", "AA:BB", "hub.example", None),
         "https://ps5upload.phantomptr.com/join/#room=R&k=K&fp=AA:BB&hub=hub.example"
     );
     // The phone link's: the website's controller page, its own channel label.
     assert_eq!(
-        super::link_for(super::Kind::Pad, "R", "K", "AA:BB", "hub.example"),
+        super::link_for(super::Kind::Pad, "R", "K", "AA:BB", "hub.example", None),
         "https://ps5upload.phantomptr.com/pad/#room=R&k=K&fp=AA:BB&hub=hub.example"
+    );
+    // The home network's page as a hint (percent-encoded: it is a fragment value).
+    assert_eq!(
+        super::link_for(
+            super::Kind::Join,
+            "R",
+            "K",
+            "AA:BB",
+            "hub.example",
+            Some("http://192.168.1.10:19113/join")
+        ),
+        "https://ps5upload.phantomptr.com/join/#room=R&k=K&fp=AA:BB&hub=hub.example\
+         &lan=http%3A%2F%2F192.168.1.10%3A19113%2Fjoin"
+    );
+    // Only an http(s) page is a hint.
+    assert!(
+        !super::link_for(super::Kind::Pad, "R", "K", "F", "h", Some("javascript:x"))
+            .contains("lan=")
     );
     assert_eq!(
         (super::Kind::Join.label(), super::Kind::Pad.label()),

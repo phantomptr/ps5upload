@@ -11773,6 +11773,8 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     };
     // "Use less of this computer" as it was last set (#632).
     workshop_api::load();
+    // Play Together's "Invites work" as it was last set.
+    join::load_invites();
 
     // The Collection's automatic refresh (a no-op until a folder is added).
     collection_api::spawn_auto_refresh();

@@ -238,7 +238,7 @@ pub(crate) static TEST_REAL_IPS: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// The addresses the sockets go on: every IPv4 interface but loopback and link-local (the tests:
-/// loopback only).
+/// loopback only), the home network's first ([`by_reach`]).
 fn local_ips() -> Vec<Ipv4Addr> {
     #[cfg(test)]
     if !TEST_REAL_IPS.load(Ordering::Relaxed) {
@@ -252,9 +252,66 @@ fn local_ips() -> Vec<Ipv4Addr> {
             _ => None,
         })
         .collect();
-    v.sort();
+    v.sort_by_key(|ip| (reach_rank(IpAddr::V4(*ip)), *ip));
     v.dedup();
     v
+}
+
+/// Which network an address is on, best first for a guest: 0 the home network (RFC 1918,
+/// link-local, IPv6 ULA and link-local; loopback too), 1 Tailscale (100.64.0.0/10, fd7a:115c:a1e0::/48), 2
+/// anything else (a public address).
+///
+/// ICE ranks this engine's host candidates by the order they are added (str0m gives each its local
+/// preference from a counter: is::default_local_preference), so the sockets are kept in this order
+/// and their candidates added in it ([`add_host_candidates`]): a guest on the same Wi-Fi as a
+/// computer that also runs Tailscale pairs with the home network's address, not the tailnet's
+/// (sorted by address, 100.x came before 192.168.x).
+pub(crate) fn reach_rank(ip: IpAddr) -> u8 {
+    match ip {
+        IpAddr::V4(a) => {
+            let o = a.octets();
+            if a.is_private() || a.is_link_local() || a.is_loopback() {
+                0
+            } else if o[0] == 100 && (64..128).contains(&o[1]) {
+                1
+            } else {
+                2
+            }
+        }
+        IpAddr::V6(a) => {
+            let s = a.segments();
+            if s[0] == 0xfd7a && s[1] == 0x115c && s[2] == 0xa1e0 {
+                1
+            } else if (s[0] & 0xfe00) == 0xfc00 || (s[0] & 0xffc0) == 0xfe80 || a.is_loopback() {
+                0
+            } else {
+                2
+            }
+        }
+    }
+}
+
+/// The way a connection goes, from its selected candidate pair (this engine's socket, the guest's
+/// address as packets come from it): `"tailscale"` when either end is on the tailnet, `"lan"` when
+/// the guest's address is on the home network, else `"internet"` (straight through both routers).
+pub(crate) fn path_of(local: SocketAddr, remote: SocketAddr) -> &'static str {
+    match (reach_rank(local.ip()), reach_rank(remote.ip())) {
+        (1, _) | (_, 1) => "tailscale",
+        (_, 0) => "lan",
+        _ => "internet",
+    }
+}
+
+/// This engine's host candidates on `rtc`, the home network's first (their ICE priority follows
+/// the order: [`reach_rank`]).
+pub(crate) fn add_host_candidates(rtc: &mut Rtc, addrs: impl IntoIterator<Item = SocketAddr>) {
+    let mut v: Vec<SocketAddr> = addrs.into_iter().collect();
+    v.sort_by_key(|a| reach_rank(a.ip()));
+    for a in v {
+        if let Ok(c) = Candidate::host(a, "udp") {
+            rtc.add_local_candidate(c);
+        }
+    }
 }
 
 async fn start() -> Option<Arc<Net>> {
@@ -686,11 +743,7 @@ impl Driver {
             b = with_track(b);
         }
         let mut rtc = b.build(now);
-        for (_, a) in &self.socks {
-            if let Ok(c) = Candidate::host(*a, "udp") {
-                rtc.add_local_candidate(c);
-            }
-        }
+        add_host_candidates(&mut rtc, self.socks.iter().map(|(_, a)| *a));
         for c in &self.extra {
             rtc.add_local_candidate(c.clone());
         }
@@ -1051,6 +1104,12 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
             p.info.track_with(|t| t.estimate(kbps, Instant::now()));
         }
         Event::PeerStats(s) => {
+            // The pair ICE sends on now (this engine's socket, the guest's address): the way the
+            // connection goes, for the host's panel.
+            if let Some(c) = s.selected_candidate_pair.as_ref() {
+                let pair = (c.local.addr, c.remote.addr);
+                p.info.with(|st| st.pair = Some(pair));
+            }
             if let Some(rtt) = s
                 .selected_candidate_pair
                 .as_ref()
