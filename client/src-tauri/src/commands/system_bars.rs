@@ -110,25 +110,28 @@ pub fn set_status_bar_hidden(window: tauri::WebviewWindow, hidden: bool) -> Resu
     }
 }
 
-/// The iOS app: whether the controllers' Home button (the PS button) is the app's or the system's.
-/// By default iOS opens its Games overlay and the page never sees the press (#675). iOS only honours
-/// this when the user's in-app Home button setting defers to the app. Every other platform: a no-op.
+/// The iOS and macOS apps: whether the controllers' Home button (the PS button) is the app's or the
+/// system's. By default iOS opens its Games overlay and macOS its Games overlay or Launchpad, and the
+/// page never sees the press (#675; on the Mac the PS button stopped reaching the PS5 while every
+/// other button worked). iOS only honours this when the user's in-app Home button setting defers to
+/// the app. Every other platform: a no-op.
 #[tauri::command]
 pub fn hold_controller_home(window: tauri::WebviewWindow, on: bool) -> Result<(), String> {
-    #[cfg(target_os = "ios")]
+    #[cfg(any(target_os = "ios", target_os = "macos"))]
     {
         window
             .with_webview(move |_| ios_home::set(on))
             .map_err(|e| e.to_string())
     }
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
     {
         let _ = (window, on);
         Ok(())
     }
 }
 
-#[cfg(target_os = "ios")]
+/// GameController's Home button switch, the same API on iOS and macOS (11 and later).
+#[cfg(any(target_os = "ios", target_os = "macos"))]
 mod ios_home {
     use objc2::msg_send;
     use objc2::runtime::{AnyClass, AnyObject};

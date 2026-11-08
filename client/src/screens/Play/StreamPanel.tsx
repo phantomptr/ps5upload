@@ -521,7 +521,7 @@ export function StreamPanel({
   useEffect(() => {
     focusForControllers();
   }, [running]);
-  // iOS: the PS button goes to the console during a stream, not to the system's Games overlay
+  // iOS and the Mac app: the PS button goes to the console during a stream, not to the system's Games overlay
   // (#675). A controller paired later gets the same.
   useEffect(() => {
     if (!running) return;
