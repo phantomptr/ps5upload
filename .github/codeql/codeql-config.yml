@@ -19,3 +19,4 @@ paths-ignore:
   - "engine/crates/ps5upload-engine/src/join_page.html"
   - "engine/crates/ps5upload-engine/src/pad_page.html"
   - "site/join/index.html"
+  - "site/pad/index.html"
