@@ -9,8 +9,8 @@ export interface AppLinkDiag {
   taken: number;
   /** Of those, links that led somewhere (a well-formed invite or controller link). */
   routed: number;
-  /** "join", "pad" or "unknown" for the last one taken. */
-  last_kind: "join" | "pad" | "unknown" | null;
+  /** "join", "pad", "receive" or "unknown" for the last one taken. */
+  last_kind: "join" | "pad" | "receive" | "unknown" | null;
   last_at_ms: number | null;
 }
 

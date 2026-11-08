@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="referrer" content="no-referrer" />
+    <link rel="icon" href="data:," />
+    <title>PS5Upload · Share</title>
+    <!--
+      The page a friend's Share link opens (https://ps5upload.phantomptr.com/share/#room=…). The
+      link's details are after the #, so they never reach this website's server. Files go between
+      the two PS5Upload apps directly; this page only hands the link to the app, or to the sender's
+      own page on the same Wi-Fi. No scripts or fonts from anywhere else.
+    -->
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f5f5f7;
+        --card: #ffffff;
+        --text: #1d1d1f;
+        --muted: #6e6e73;
+        --accent: #0071e3;
+        --edge: rgba(0, 0, 0, 0.08);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #000000;
+          --card: #1c1c1e;
+          --text: #f5f5f7;
+          --muted: #a1a1a6;
+          --accent: #2997ff;
+          --edge: rgba(255, 255, 255, 0.12);
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 16px;
+        background: var(--bg);
+        color: var(--text);
+        font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      }
+      main {
+        width: 100%;
+        max-width: 28rem;
+        background: var(--card);
+        border: 1px solid var(--edge);
+        border-radius: 20px;
+        padding: 28px 24px;
+      }
+      h1 { font-size: 1.5rem; margin: 0 0 8px; letter-spacing: -0.02em; }
+      p { margin: 0 0 16px; color: var(--muted); }
+      .actions { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; }
+      a.button {
+        display: block;
+        text-align: center;
+        padding: 12px 16px;
+        border-radius: 999px;
+        text-decoration: none;
+        font-weight: 600;
+        border: 1px solid var(--edge);
+        color: var(--text);
+      }
+      a.button.primary { background: var(--accent); border-color: transparent; color: #fff; }
+      .note { font-size: 0.85rem; margin-top: 20px; margin-bottom: 0; }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1 data-s="title">A friend shared something with you</h1>
+      <p data-s="lead">Open this link in PS5Upload to see what's shared and accept it. Nothing is sent until you accept and your friend allows it.</p>
+      <p id="bad" hidden data-s="bad">This link is incomplete. Ask your friend to send it again.</p>
+      <div class="actions" id="actions">
+        <a class="button primary" id="open-app" href="#" data-s="open">Open in PS5Upload</a>
+        <a class="button" id="open-lan" href="#" hidden data-s="lan">Open on this Wi-Fi</a>
+        <a class="button" href="../#download" data-s="get">Get PS5Upload</a>
+      </div>
+      <p class="note" data-s="note">Files go straight between your PS5Upload and your friend's. This website never sees them.</p>
+    </main>
+    <script>
+      (function () {
+        // English here; the other languages are filled in from the app's translations.
+        var S = {
+          en: {
+            title: "A friend shared something with you",
+            lead: "Open this link in PS5Upload to see what's shared and accept it. Nothing is sent until you accept and your friend allows it.",
+            bad: "This link is incomplete. Ask your friend to send it again.",
+            open: "Open in PS5Upload",
+            lan: "Open on this Wi-Fi",
+            get: "Get PS5Upload",
+            note: "Files go straight between your PS5Upload and your friend's. This website never sees them."
+          }
+        };
+        var langs = (navigator.languages || [navigator.language || "en"]).map(function (l) { return String(l); });
+        var words = S.en;
+        for (var i = 0; i < langs.length; i++) {
+          var l = langs[i];
+          var hit = S[l] || S[l.split("-")[0]] || (l.toLowerCase().indexOf("zh") === 0 && (/tw|hk|hant/i.test(l) ? S["zh-TW"] : S["zh-CN"]));
+          if (hit) { words = hit; document.documentElement.lang = l; break; }
+        }
+        document.querySelectorAll("[data-s]").forEach(function (el) {
+          var s = words[el.getAttribute("data-s")];
+          if (s) el.textContent = s;
+        });
+
+        var frag = location.hash.replace(/^#/, "");
+        var q = new URLSearchParams(frag);
+        var room = q.get("room") || "";
+        if (!/^[A-Za-z0-9_-]{8,64}$/.test(room) || !q.get("fp")) {
+          document.getElementById("bad").hidden = false;
+          document.getElementById("open-app").hidden = true;
+          return;
+        }
+        // The app checks the link again before it does anything with it.
+        document.getElementById("open-app").href = "ps5upload://receive?link=" + encodeURIComponent(location.href);
+
+        // The sender's own page on the same Wi-Fi: only a plain http page on a private address.
+        var lan = q.get("lan") || "";
+        try {
+          var u = new URL(lan);
+          var h = u.hostname;
+          var priv = /^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || /^169\.254\./.test(h) || /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(h);
+          if (u.protocol === "http:" && priv && /\/share\/?$/.test(u.pathname)) {
+            q.delete("lan");
+            var b = document.getElementById("open-lan");
+            b.href = u.origin + u.pathname + "#" + q.toString();
+            b.hidden = false;
+          }
+        } catch (e) {
+          /* no Wi-Fi page in this link */
+        }
+      })();
+    </script>
+  </body>
+</html>
