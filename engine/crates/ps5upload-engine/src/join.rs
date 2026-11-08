@@ -13,7 +13,8 @@
 //!   nearby" join from the mesh presence; every new guest asks the host); answers
 //!   `{"stage": "asking"}` (waiting for the host), `{"stage": "waiting", "why": "host_stopped"}`
 //!   (a guest coming back while the host restarts Play), then `{"stage": "joined", "player": n,
-//!   "token": t, "hevc": bool}` or `{"stage": "refused", "why": "key" | "expired" | "full" |
+//!   "token": t, "hevc": bool, "track": bool}` (`track`: an internet guest's pictures come on the
+//!   RTP video track its page offered, not on the channel; join_net/rtc.rs) or `{"stage": "refused", "why": "key" | "expired" | "full" |
 //!   "denied" | "no_answer" (the host did not answer in time) | "closed" | "not_playing" |
 //!   "old_helper" | "unreachable" | "slow_down" (5 wrong codes in a minute) | "seat_taken" (a
 //!   resume to the stream's controller, which the host needs back, with no pad free)}`.
@@ -240,6 +241,12 @@ pub(crate) struct Settings {
     /// Ask the router for a port (UPnP-IGD, NAT-PMP / PCP) while an internet invite is open.
     #[serde(default = "yes")]
     pub upnp: bool,
+    /// Internet guests whose page offers it get the picture as an RTP video track (the browser's
+    /// own jitter buffer, retransmission and decoder: crate::join_net::rtc), not on the data
+    /// channel. On unless the host turns it off; off, or a page that offers no track, keeps the
+    /// data channel.
+    #[serde(default = "yes")]
+    pub video_track: bool,
 }
 
 fn yes() -> bool {
@@ -267,6 +274,7 @@ impl Default for Settings {
             hub_url: default_hub(),
             stun: default_stun(),
             upnp: true,
+            video_track: true,
         }
     }
 }
@@ -455,8 +463,14 @@ pub(crate) struct PageReport {
     worst_stall_ms: u64,
     /// Times the picture waited for a keyframe.
     key_waits: u64,
-    /// "webcodecs" or "mse".
+    /// "webcodecs" or "mse" (the picture on the data channel), "track" (the video track: the
+    /// numbers are the browser's own, `getStats` inbound-rtp).
     decoder: Option<&'static str>,
+    /// The video track's: the browser's jitter buffer delay (average, ms), and the NACKs and PLIs
+    /// it sent.
+    jitter_ms: Option<f64>,
+    nacks: Option<u64>,
+    plis: Option<u64>,
     /// Stalled time since the report before (ms), and when this one came.
     stall_ms_recent: u64,
     at: Option<Instant>,
@@ -487,8 +501,12 @@ impl PageReport {
             decoder: match o.get("decoder").and_then(|d| d.as_str()) {
                 Some("webcodecs") => Some("webcodecs"),
                 Some("mse") => Some("mse"),
+                Some("track") => Some("track"),
                 _ => None,
             },
+            jitter_ms: n("jitter_ms").map(|x| (x.min(60_000.0) * 10.0).round() / 10.0),
+            nacks: n("nacks").map(|x| x as u64),
+            plis: n("plis").map(|x| x as u64),
             ..PageReport::default()
         })
     }
@@ -518,6 +536,9 @@ impl PageReport {
             "worst_stall_ms": self.worst_stall_ms,
             "key_waits": self.key_waits,
             "decoder": self.decoder,
+            "jitter_ms": self.jitter_ms,
+            "nacks": self.nacks,
+            "plis": self.plis,
             "stall_ms_recent": self.stall_ms_recent,
             "age_s": self.at.map(|t| now.saturating_duration_since(t).as_secs()),
             "quality": self.quality(now),
@@ -1882,6 +1903,18 @@ pub(crate) trait GuestSocket: Send + 'static {
     fn net(&self) -> Option<Arc<crate::join_net::PeerInfo>> {
         None
     }
+    /// The session's pictures (`hevc`, at `stream_kbps`) go on an internet guest's RTP video
+    /// track, which their page offered ([`Self::send_video`]); false: on this socket with the rest.
+    fn video_track(&mut self, _hevc: bool, _stream_kbps: u32) -> bool {
+        false
+    }
+    /// A picture or the codec header for the video track.
+    fn send_video(
+        &mut self,
+        m: Message,
+    ) -> impl std::future::Future<Output = Result<(), ()>> + Send {
+        self.send(m)
+    }
 }
 
 impl GuestSocket for WebSocket {
@@ -2693,14 +2726,19 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
         internet,
     );
     let hevc = feed.as_ref().map(|f| f.hevc).unwrap_or(false);
+    // An internet guest whose page offered a video track gets the pictures there (join_net::rtc).
+    let track = match &feed {
+        Some(f) => socket.video_track(f.hevc, f.kbps),
+        None => false,
+    };
     crate::log_at!(
         Debug,
         "together",
         "join: Player {player} on {console} connected (socket {gen}): picture {}, hevc {hevc}",
-        if feed.is_some() {
-            "on"
-        } else {
-            "none (no session)"
+        match (&feed, track) {
+            (None, _) => "none (no session)",
+            (Some(_), true) => "on the video track",
+            (Some(_), false) => "on",
         }
     );
     let (mut video, mut other) = match feed {
@@ -2710,6 +2748,8 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
     let ended = socket
         .send(say(serde_json::json!({
             "stage": "joined", "player": player, "token": token, "hevc": hevc,
+            // The pictures come on the video track (an internet page that offered one), not here.
+            "track": track,
         })))
         .await
         .is_err();
@@ -2824,7 +2864,8 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
                     if let Some(r) = video.as_ref() {
                         stats.queue.store(r.len(), Ordering::Relaxed);
                     }
-                    if socket.send(m).await.is_err() { break }
+                    let sent = if track { socket.send_video(m).await } else { socket.send(m).await };
+                    if sent.is_err() { break }
                 }
                 None => video = None,
             },
@@ -3326,6 +3367,8 @@ pub struct SettingsBody {
     stun: Option<Vec<String>>,
     #[serde(default)]
     upnp: Option<bool>,
+    #[serde(default)]
+    video_track: Option<bool>,
 }
 
 /// A STUN server as the settings take it: `host:port`, a name or an address, nothing else.
@@ -3343,12 +3386,13 @@ fn stun_server_ok(s: &str) -> bool {
 }
 
 /// `POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,
-/// internet_invites?, hub_url?, stun?, upnp?}`: the host's choices (every console). Fewer players
+/// internet_invites?, hub_url?, stun?, upnp?, video_track?}`: the host's choices (every console). Fewer players
 /// lets nobody go; it only stops new ones. `stream_seat` off moves a friend on the stream's
 /// controller to a pad of their own. `internet_invites` off closes the internet rooms (guests
 /// already in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`
 /// otherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none), `upnp` whether the
-/// router is asked for a port.
+/// router is asked for a port, `video_track` whether internet guests get the picture as a video
+/// track (new connections; the data channel otherwise).
 ///
 /// `guest_profiles` with `addr` ("Guests play as" on that console): each guest's player gets the
 /// profile the host chose (`{player: 2-4, user, name, owner}`; a player left out: the TV asks).
@@ -3419,6 +3463,9 @@ pub async fn set_settings(
     }
     if let Some(v) = b.upnp {
         s.upnp = v;
+    }
+    if let Some(v) = b.video_track {
+        s.video_track = v;
     }
     // Everything checked: the profiles take effect with the rest (each pad made from now on).
     if let Some((addr, v)) = &seats {
@@ -7203,6 +7250,7 @@ mod tests {
                     hub_url: None,
                     stun: None,
                     upnp: None,
+                    video_track: None,
                 }),
             )
             .await

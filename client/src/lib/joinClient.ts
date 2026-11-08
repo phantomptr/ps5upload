@@ -19,6 +19,7 @@ import {
   type ByeWhy,
   type JoinStatus,
   type NetWhy,
+  type TrackMedia,
   type RefuseWhy,
 } from "./joinProtocol";
 import { IDLE_PAD, type PadState } from "./remotePlayStream";
@@ -58,7 +59,9 @@ export interface JoinClientOptions {
   /** Round trip measured by this page's own pings, in ms. */
   onRtt?: (ms: number) => void;
   onFrame?: (data: ArrayBuffer) => void;
-  onCodec?: (hevc: boolean) => void;
+  /** The session's codec, and its video track when the pictures come on one (an internet socket
+   *  that has it, and the engine said `track`); null: they come on the socket. */
+  onCodec?: (hevc: boolean, track: TrackMedia | null) => void;
   onRumble?: (strong: number, weak: number) => void;
   onLight?: (rgb: [number, number, number]) => void;
   /** The picture's numbers (drawn, dropped, stalls…), sent to the host every STATS_EVERY_PINGS
@@ -244,7 +247,7 @@ export class JoinClient {
         } catch {
           // Private mode: a reload asks again.
         }
-        this.o.onCodec?.(m.hevc);
+        this.o.onCodec?.(m.hevc, (m.track && (this.ws as { media?: TrackMedia | null } | null)?.media) || null);
         this.setStage({ kind: "joined", player: m.player, hevc: m.hevc });
         this.sendPad(true);
         return;

@@ -22,6 +22,7 @@ import {
   rtcTransport,
   sdpFingerprint,
   STUN_SERVERS,
+  trackCodecs,
   type InternetInvite,
 } from "./rtcTransport";
 
@@ -255,8 +256,16 @@ class FakePC {
   closed = false;
   onicecandidate: ((e: { candidate: { candidate: string; sdpMid: string | null } | null }) => void) | null = null;
   oniceconnectionstatechange: (() => void) | null = null;
+  ontrack: ((e: unknown) => void) | null = null;
+  /** The video transceivers the page added: kind, init, the codecs it preferred. */
+  transceivers: Array<{ kind: string; init: unknown; prefs: unknown[] | null }> = [];
   constructor(readonly config: RTCConfiguration) {
     FakePC.all.push(this);
+  }
+  addTransceiver(kind: string, init: unknown) {
+    const t = { kind, init, prefs: null as unknown[] | null };
+    this.transceivers.push(t);
+    return { setCodecPreferences: (c: unknown[]) => (t.prefs = c) };
   }
   createDataChannel(label: string, init?: RTCDataChannelInit) {
     this.channel = new FakeChannel(label, init);
@@ -286,10 +295,11 @@ class FakePC {
 const INV: InternetInvite = { room: ROOM, key: KEY, fp: FP, hub: "127.0.0.1:8787" };
 const answer = (fp = FP) => ({ type: "answer", sdp: `v=0\r\na=fingerprint:sha-256 ${fp}\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n` });
 
-function transport() {
+function transport(video = false) {
   return rtcTransport(INV, {
     WebSocketImpl: FakeHub as unknown as typeof WebSocket,
     PeerConnection: FakePC as unknown as typeof RTCPeerConnection,
+    video,
   });
 }
 
@@ -551,6 +561,89 @@ describe("the WebRTC transport", () => {
     expect(again.dc.texts[0]).toEqual({ hello: { name: "Ben", invite: KEY, resume: "TOKEN-1" } });
     again.dc.recv(JSON.stringify({ stage: "joined", player: 2, token: "TOKEN-1", hevc: false }));
     expect(stages[stages.length - 1]).toEqual({ kind: "joined", player: 2, hevc: false });
+    c.stop();
+  });
+});
+
+describe("the picture as a video track", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    FakeHub.all = [];
+    FakePC.all = [];
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("prefers H.264, then H.265, with their resends; nothing else", () => {
+    const c = (mimeType: string) => ({ mimeType, clockRate: 90000 });
+    const caps = { codecs: [c("video/VP8"), c("video/rtx"), c("video/H265"), c("video/H264"), c("video/AV1")], headerExtensions: [] };
+    expect(trackCodecs(caps).map((x) => x.mimeType)).toEqual(["video/H264", "video/H265", "video/rtx"]);
+    expect(trackCodecs(null)).toEqual([]);
+  });
+
+  /** A session over a transport that offers the track (`video`), up to the channel's open. */
+  async function joinOver(video: boolean) {
+    const got: Array<{ hevc: boolean; track: unknown }> = [];
+    const c = new JoinClient({
+      url: "ws://127.0.0.1:8787/ws",
+      invite: KEY,
+      name: "Ben",
+      readPad: () => ({ ...IDLE_PAD }),
+      onStage: () => {},
+      onCodec: (hevc, track) => got.push({ hevc, track }),
+      storage: new MemStorage(),
+      WebSocketImpl: transport(video),
+      now: () => Date.now(),
+      raf: () => 0,
+      cancelRaf: () => {},
+    });
+    c.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const hub = FakeHub.all[0];
+    hub.open();
+    hub.say({ t: "joined", gid: "G" });
+    await vi.advanceTimersByTimeAsync(0);
+    const pc = FakePC.all[0];
+    hub.say({ t: "signal", from: "host", data: answer() });
+    await vi.advanceTimersByTimeAsync(0);
+    return { c, pc, dc: pc.channel!, got };
+  }
+
+  it("offers a receive-only video section, and a newer engine's track plays it", async () => {
+    const { c, pc, dc, got } = await joinOver(true);
+    expect(pc.transceivers.map((t) => [t.kind, t.init])).toEqual([["video", { direction: "recvonly" }]]);
+    // The answer's track: the browser's stream and receiver.
+    const stream = { id: "S" };
+    const receiver = { getStats: async () => new Map() };
+    pc.ontrack?.({ streams: [stream], track: {}, receiver });
+    dc.open();
+    dc.recv(JSON.stringify({ stage: "joined", player: 2, token: "T", hevc: false, track: true }));
+    expect(got).toEqual([{ hevc: false, track: { stream, receiver } }]);
+    c.stop();
+  });
+
+  it("an older engine (no `track` in joined) keeps the pictures on the channel, track or not", async () => {
+    const { c, pc, dc, got } = await joinOver(true);
+    // An older engine still answers the video section (str0m takes it) but never sends on it.
+    pc.ontrack?.({ streams: [{ id: "S" }], track: {}, receiver: {} });
+    dc.open();
+    dc.recv(JSON.stringify({ stage: "joined", player: 2, token: "T", hevc: false }));
+    expect(got).toEqual([{ hevc: false, track: null }]);
+    c.stop();
+  });
+
+  it("an engine that says `track` with no track here (none answered) gets the channel's", async () => {
+    const { c, dc, got } = await joinOver(true);
+    dc.open();
+    dc.recv(JSON.stringify({ stage: "joined", player: 2, token: "T", hevc: false, track: true }));
+    expect(got).toEqual([{ hevc: false, track: null }]);
+    c.stop();
+  });
+
+  it("the phone link's transport (no `video`) offers no track, as before", async () => {
+    const { c, pc } = await joinOver(false);
+    expect(pc.transceivers).toEqual([]);
     c.stop();
   });
 });

@@ -26,6 +26,7 @@ import { rpInput } from "../state/remotePlay";
 import { setScreenWakeReason } from "../lib/androidScreenWake";
 import { setPadForwardReason } from "../lib/androidPadBridge";
 import type { JoinTransport } from "./rtcTransport";
+import { TrackPlayer } from "./trackPlayer";
 
 export interface JoinSnapshot {
   stage: JoinStage;
@@ -109,7 +110,7 @@ export function devicePad(): PadState {
 
 export class JoinSession {
   readonly client: JoinClient;
-  private player: WatchPlayer | MsePlayer | null = null;
+  private player: WatchPlayer | MsePlayer | TrackPlayer | null = null;
   private snap: JoinSnapshot;
   private listeners = new Set<() => void>();
   private cleanups: Array<() => void> = [];
@@ -142,7 +143,11 @@ export class JoinSession {
       onFrame: (d) => this.picture().onMessage(d),
       // How the picture looks here, for the host's panel (none before the first picture).
       readStats: () => (this.player && this.player.stats.frames > 0 ? this.player.stats.snapshot() : null),
-      onCodec: (h) => this.picture().setHevc(h),
+      onCodec: (h, track) => {
+        const p = this.picture();
+        p.setHevc(h);
+        if (p instanceof TrackPlayer) p.setTrack(track);
+      },
       onRumble: (strong, weak) => {
         const pads = gamepadsOf(typeof navigator === "undefined" ? undefined : navigator);
         playRumble(pads, strong, weak);
@@ -153,14 +158,16 @@ export class JoinSession {
     });
   }
 
-  /** The picture's player, made on first use (needs a document). */
-  picture(): WatchPlayer | MsePlayer {
+  /** The picture's player, made on first use (needs a document). An internet invite's may take
+   *  the pictures as a video track (trackPlayer.ts). */
+  picture(): WatchPlayer | MsePlayer | TrackPlayer {
     if (!this.player) {
-      this.player = makeWatchPlayer(
+      const p = makeWatchPlayer(
         (problem) => this.set({ problem }),
         "player",
         () => this.client.askKeyframe(),
       );
+      this.player = this.opts.transport ? new TrackPlayer(p) : p;
       this.player.onSoundFail = () => this.set({ noSound: true });
       this.player.setMuted(this.snap.muted);
     }

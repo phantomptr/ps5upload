@@ -85,11 +85,19 @@ export interface JoinStatus {
   seatNote: string | null;
 }
 
+/** The picture as an internet connection's video track (join/rtcTransport): the browser's own
+ *  stream, and its receiver for the numbers (getStats). */
+export interface TrackMedia {
+  stream: MediaStream;
+  receiver: RTCRtpReceiver;
+}
+
 export type ServerMessage =
   | { kind: "asking" }
   /** A resume held until the host plays again (`{"stage":"waiting","why":"host_stopped"}`). */
   | { kind: "waiting" }
-  | { kind: "joined"; player: number; token: string; hevc: boolean }
+  /** `track`: the pictures come on the internet connection's video track (join/rtcTransport). */
+  | { kind: "joined"; player: number; token: string; hevc: boolean; track: boolean }
   | { kind: "refused"; why: RefuseWhy }
   | { kind: "status"; status: JoinStatus }
   | { kind: "feedback"; rumble: [number, number] | null; light: [number, number, number] | null }
@@ -135,7 +143,7 @@ export function readServerMessage(text: string): ServerMessage | null {
   if (v.stage === "asking") return { kind: "asking" };
   if (v.stage === "waiting") return { kind: "waiting" };
   if (v.stage === "joined" && typeof v.player === "number" && typeof v.token === "string") {
-    return { kind: "joined", player: v.player, token: v.token, hevc: v.hevc === true };
+    return { kind: "joined", player: v.player, token: v.token, hevc: v.hevc === true, track: v.track === true };
   }
   if (v.stage === "refused") {
     const why = String(v.why ?? "");

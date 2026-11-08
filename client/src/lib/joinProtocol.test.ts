@@ -80,7 +80,10 @@ describe("engine messages", () => {
       player: 2,
       token: "abc",
       hevc: true,
+      track: false,
     });
+    // The pictures on the internet connection's video track.
+    expect(readServerMessage('{"stage":"joined","player":2,"token":"abc","hevc":false,"track":true}')).toMatchObject({ track: true });
     for (const why of ["key", "full", "denied", "closed", "old_helper", "not_playing"]) {
       expect(readServerMessage(JSON.stringify({ stage: "refused", why }))).toEqual({ kind: "refused", why });
     }

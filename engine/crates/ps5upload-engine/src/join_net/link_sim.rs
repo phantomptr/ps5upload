@@ -23,6 +23,7 @@ use std::collections::{BinaryHeap, VecDeque};
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
+use str0m::bwe::{Bitrate, BweKind};
 use str0m::change::{SdpAnswer, SdpOffer};
 use str0m::channel::ChannelId;
 use str0m::format::Codec;
@@ -89,6 +90,12 @@ pub(crate) struct Policy {
     /// for a keyframe), the data channel keeping sound, status and pads; false: the picture on the
     /// data channel with everything else, as the engine sends it.
     pub rtp_video: bool,
+    /// The track as the engine sets it up (rtc.rs `with_track`: H.264/H.265 only, its send
+    /// buffer, the bandwidth estimate aimed at the stream's bitrate, the codec header in front of a
+    /// keyframe); false: str0m's defaults (the prototype in #762's table).
+    pub rtp_engine: bool,
+    /// …with its bandwidth estimate (and so str0m's pacer); false: measured without.
+    pub rtp_bwe: bool,
 }
 
 impl Policy {
@@ -106,6 +113,8 @@ impl Policy {
             idr_ask_kept: false,
             guest_backlog: 4,
             rtp_video: false,
+            rtp_engine: false,
+            rtp_bwe: true,
         }
     }
 
@@ -123,6 +132,8 @@ impl Policy {
             idr_ask_kept: true,
             guest_backlog: 4,
             rtp_video: false,
+            rtp_engine: false,
+            rtp_bwe: true,
         }
     }
 }
@@ -151,12 +162,45 @@ pub(crate) struct Report {
     pub goodput_kbps: f64,
     /// The host's backlog at its largest (driver + channel, bytes).
     pub max_backlog: usize,
+    /// The track: NACKs and PLIs the host got, the bandwidth estimate's median and lowest
+    /// (kbit/s, past the first estimates; 0 without one).
+    pub nacks: u64,
+    pub plis: u64,
+    pub bwe_p50: u32,
+    pub bwe_min: u32,
 }
 
 impl Report {
+    /// The runs' average (the counts too, rounded).
+    pub(crate) fn mean(v: &[Report]) -> Report {
+        let n = v.len().max(1) as f64;
+        let f = |g: fn(&Report) -> f64| v.iter().map(g).sum::<f64>() / n;
+        let u = |g: fn(&Report) -> f64| (v.iter().map(g).sum::<f64>() / n).round();
+        Report {
+            secs: f(|r| r.secs),
+            fps: f(|r| r.fps),
+            stalls: u(|r| r.stalls as f64) as u32,
+            stall_ms: f(|r| r.stall_ms),
+            worst_stall_ms: v.iter().map(|r| r.worst_stall_ms).fold(0.0, f64::max),
+            jitter_ms: f(|r| r.jitter_ms),
+            lat_p50: f(|r| r.lat_p50),
+            lat_p95: f(|r| r.lat_p95),
+            lat_p99: f(|r| r.lat_p99),
+            host_skips: u(|r| r.host_skips as f64) as u64,
+            guest_drops: u(|r| r.guest_drops as f64) as u64,
+            keyframes: u(|r| r.keyframes as f64) as u64,
+            goodput_kbps: f(|r| r.goodput_kbps),
+            max_backlog: v.iter().map(|r| r.max_backlog).max().unwrap_or(0),
+            nacks: u(|r| r.nacks as f64) as u64,
+            plis: u(|r| r.plis as f64) as u64,
+            bwe_p50: u(|r| r.bwe_p50 as f64) as u32,
+            bwe_min: v.iter().map(|r| r.bwe_min).min().unwrap_or(0),
+        }
+    }
+
     pub(crate) fn row(&self) -> String {
         format!(
-            "{:3.0}s {:5.1} fps | {:3} stalls {:6.0} ms (worst {:5.0}) | jitter {:5.1} ms | lat p50 {:5.0} p95 {:5.0} p99 {:5.0} | skips host {:4} guest {:4} | keys {:3} | {:6.0} kbps | backlog max {:4} KiB",
+            "{:3.0}s {:5.1} fps | {:3} stalls {:6.0} ms (worst {:5.0}) | jitter {:5.1} ms | lat p50 {:5.0} p95 {:5.0} p99 {:5.0} | skips host {:4} guest {:4} | keys {:3} | {:6.0} kbps | backlog max {:4} KiB | nacks {:5} plis {:3} | bwe p50 {:6} min {:6}",
             self.secs,
             self.fps,
             self.stalls,
@@ -170,7 +214,11 @@ impl Report {
             self.guest_drops,
             self.keyframes,
             self.goodput_kbps,
-            self.max_backlog / 1024
+            self.max_backlog / 1024,
+            self.nacks,
+            self.plis,
+            self.bwe_p50,
+            self.bwe_min
         )
     }
 }
@@ -194,12 +242,15 @@ struct Way {
     last_at: Instant,
 }
 
+/// A packet on the link: (arrival, seq, to_host, bytes).
+type InFlight = (Instant, u64, bool, Vec<u8>);
+
 struct Link {
     cfg: LinkCfg,
     rng: Rng,
     ways: [Way; 2],
     /// (arrival, seq) → (to_host, bytes)
-    q: BinaryHeap<Reverse<(Instant, u64, bool, Vec<u8>)>>,
+    q: BinaryHeap<Reverse<InFlight>>,
     seq: u64,
 }
 
@@ -270,6 +321,12 @@ struct Host {
     skips: u64,
     keyframes: u64,
     max_backlog: usize,
+    /// The stream's bitrate (the estimate is aimed at it), and what the track's stats said: the
+    /// bandwidth estimates (kbit/s), NACKs and PLIs received.
+    kbps: u32,
+    bwe: Vec<u32>,
+    nacks: u64,
+    plis: u64,
 }
 
 /// The guest's page.
@@ -314,12 +371,18 @@ pub(crate) fn run(link: LinkCfg, stream: StreamCfg, pol: Policy, secs: u64, seed
         .then(|| api.add_media(MediaKind::Video, Direction::RecvOnly, None, None, None));
     let (offer, pending) = api.apply().unwrap();
     let (cert, _) = super::rtc::cert().unwrap();
-    let mut h = Rtc::builder()
+    let mut hb = Rtc::builder()
         .set_crypto_provider(super::crypto::provider())
         .set_dtls_cert(cert.clone())
         .set_stats_interval(Some(Duration::from_secs(1)))
-        .set_sctp_max_buffered_amount(pol.sctp_buffer)
-        .build(t0);
+        .set_sctp_max_buffered_amount(pol.sctp_buffer);
+    if pol.rtp_engine {
+        hb = super::rtc::with_track(hb);
+        if !pol.rtp_bwe {
+            hb = hb.enable_bwe(None);
+        }
+    }
+    let mut h = hb.build(t0);
     h.add_local_candidate(Candidate::host(host_addr, "udp").unwrap());
     let answer = h
         .sdp_api()
@@ -370,6 +433,10 @@ pub(crate) fn run(link: LinkCfg, stream: StreamCfg, pol: Policy, secs: u64, seed
         skips: 0,
         keyframes: 0,
         max_backlog: 0,
+        kbps: stream.kbps,
+        bwe: Vec::new(),
+        nacks: 0,
+        plis: 0,
     };
     let mut guest = Guest {
         rtc: g,
@@ -660,6 +727,17 @@ fn drain_host(h: &mut Host, net: &mut Link, now: Instant, pol: &Policy) -> Optio
                             h.cid = Some(id);
                         }
                     }
+                    Event::MediaAdded(m) if pol.rtp_engine => {
+                        // rtc.rs: the payload type for the stream's profile, the estimate aimed
+                        // at its bitrate.
+                        h.mid = Some(m.mid);
+                        h.pt = super::rtc::TrackPts::of(&mut h.rtc, m.mid).h264_for(Some(0x64));
+                        let k = h.kbps as u64;
+                        h.rtc.bwe().reset(Bitrate::kbps(k));
+                        h.rtc
+                            .bwe()
+                            .set_bitrate(Bitrate::kbps(0), Bitrate::kbps(k * 5 / 4));
+                    }
                     Event::MediaAdded(m) => {
                         h.mid = Some(m.mid);
                         h.pt = h.rtc.writer(m.mid).and_then(|w| {
@@ -668,11 +746,18 @@ fn drain_host(h: &mut Host, net: &mut Link, now: Instant, pol: &Policy) -> Optio
                                 .map(|p| p.pt())
                         });
                     }
-                    Event::MediaEgressStats(s) if std::env::var_os("LINK_SIM_TRACE").is_some() => {
-                        eprintln!(
-                            "egress: packets {} nacks {} plis {} rtt {:?} loss {:?}",
-                            s.packets, s.nacks, s.plis, s.rtt, s.loss
-                        );
+                    Event::EgressBitrateEstimate(BweKind::Twcc { estimate, .. }) => {
+                        h.bwe.push((estimate.as_f64() / 1000.0) as u32);
+                    }
+                    Event::MediaEgressStats(s) => {
+                        h.nacks = s.nacks;
+                        h.plis = s.plis;
+                        if std::env::var_os("LINK_SIM_TRACE").is_some() {
+                            eprintln!(
+                                "egress: packets {} nacks {} plis {} rtt {:?} loss {:?}",
+                                s.packets, s.nacks, s.plis, s.rtt, s.loss
+                            );
+                        }
                     }
                     // The guest's PLI: the same gates as its keyframe ask.
                     Event::KeyframeRequest(_) => {
@@ -683,16 +768,16 @@ fn drain_host(h: &mut Host, net: &mut Link, now: Instant, pol: &Policy) -> Optio
                             lag_ask(h, pol, now);
                         }
                     }
-                    Event::ChannelData(d) if !d.binary => {
-                        // The page's {"keyframe": true}: join.rs KeyAsk, then lag_ask.
-                        if d.data.windows(8).any(|w| w == b"keyframe")
+                    // The page's {"keyframe": true}: join.rs KeyAsk, then lag_ask.
+                    Event::ChannelData(d)
+                        if !d.binary
+                            && d.data.windows(8).any(|w| w == b"keyframe")
                             && h.guest_ask.is_none_or(|t| {
                                 now.saturating_duration_since(t) >= Duration::from_secs(1)
-                            })
-                        {
-                            h.guest_ask = Some(now);
-                            lag_ask(h, pol, now);
-                        }
+                            }) =>
+                    {
+                        h.guest_ask = Some(now);
+                        lag_ask(h, pol, now);
                     }
                     _ => {}
                 },
@@ -891,8 +976,21 @@ fn report(h: &Host, g: &Guest, start: Instant, end: Instant, period: Duration) -
                 .as_secs_f64()
                 .max(0.001),
         max_backlog: h.max_backlog,
+        nacks: h.nacks,
+        plis: h.plis,
         ..Report::default()
     };
+    // The estimates past the first few (it starts at the stream's bitrate and probes).
+    let mut est: Vec<f64> = h
+        .bwe
+        .iter()
+        .skip(h.bwe.len() / 15)
+        .map(|&k| k as f64)
+        .collect();
+    if !est.is_empty() {
+        r.bwe_min = est.iter().copied().fold(f64::INFINITY, f64::min) as u32;
+        r.bwe_p50 = pct(&mut est, 0.5) as u32;
+    }
     // Stalls: no new picture for over 100 ms (the end of the run counts too).
     let mut last = from;
     for (t, _) in shown.iter().chain(std::iter::once(&(end, 0))) {
@@ -942,7 +1040,9 @@ pub(crate) fn links() -> Vec<(&'static str, LinkCfg)> {
         ("30ms 0.5%", l(30, 5, 0.005, 0)),
         ("30ms 1%", l(30, 5, 0.01, 0)),
         ("30ms 2%", l(30, 5, 0.02, 0)),
+        ("80ms 0.5%", l(80, 10, 0.005, 0)),
         ("80ms 1%", l(80, 10, 0.01, 0)),
+        ("80ms 2%", l(80, 10, 0.02, 0)),
         ("30ms 25M up", l(30, 5, 0.0, 25_000)),
         ("30ms 12M up", l(30, 5, 0.0, 12_000)),
         ("30ms 0.5% 25M", l(30, 5, 0.005, 25_000)),
@@ -977,6 +1077,11 @@ fn link_sim_table() {
         .map(|s| s.split(',').filter_map(|k| k.parse().ok()).collect())
         .unwrap_or_else(|| vec![StreamCfg::DEFAULT.kbps]);
     let only = std::env::var("LINK_SIM_POLICY").ok();
+    let seeds: u64 = std::env::var("LINK_SIM_SEEDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1)
+        .max(1);
     let deep = Policy {
         player_queue: 60,
         high_water: 4 << 20,
@@ -996,9 +1101,29 @@ fn link_sim_table() {
             },
         ),
         (
+            // #762's prototype: str0m's defaults.
             "rtp",
             Policy {
                 rtp_video: true,
+                ..Policy::now()
+            },
+        ),
+        (
+            // The engine's track (rtc.rs with_track).
+            "track",
+            Policy {
+                rtp_video: true,
+                rtp_engine: true,
+                ..Policy::now()
+            },
+        ),
+        (
+            // …without the bandwidth estimate and its pacer (measured, not shipped).
+            "track-nobwe",
+            Policy {
+                rtp_video: true,
+                rtp_engine: true,
+                rtp_bwe: false,
                 ..Policy::now()
             },
         ),
@@ -1020,8 +1145,11 @@ fn link_sim_table() {
                 if link_only.as_deref().is_some_and(|l| l != lname) {
                     continue;
                 }
-                let r = run(link, stream, pol, secs, 42);
-                println!("{lname:>14} | {}", r.row());
+                // LINK_SIM_SEEDS runs: one loss pattern can hit a keyframe or miss it.
+                let runs: Vec<Report> = (0..seeds)
+                    .map(|i| run(link, stream, pol, secs, 42 + i * 1000))
+                    .collect();
+                println!("{lname:>14} | {}", Report::mean(&runs).row());
             }
         }
     }
