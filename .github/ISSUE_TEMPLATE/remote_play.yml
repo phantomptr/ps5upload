@@ -1,0 +1,93 @@
+name: Remote Play or Play Together problem
+description: Picture, sound, controller, pairing, stutter, or a friend who can't join
+labels: ["bug", "remote-play"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please attach the zip from **Bug Report** (in the app's sidebar), made right after the problem (while the stream is still open is best). It has the stream's numbers and nothing private.
+  - type: checkboxes
+    id: symptoms
+    attributes:
+      label: What goes wrong?
+      options:
+        - label: Can't pair / can't start (please put the error code below)
+        - label: No picture, or a black or frozen picture
+        - label: No sound, or crackling sound
+        - label: Stutter, freezes or skips
+        - label: Input lag
+        - label: Controller buttons wrong, or a button doesn't work
+        - label: Disconnects
+        - label: A friend can't join, or joins but can't play
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Error messages and codes exactly as shown (e.g. 80108b03). A short video helps with stutter.
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: How were you playing?
+      options:
+        - Remote Play on the same network as the PS5
+        - Remote Play from outside the home (Tailscale)
+        - Play Together, friend on the same network
+        - Play Together, friend over the internet
+        - Phone as a controller / watch link
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: PS5Upload version
+      placeholder: "e.g. 12.0.0 (Help › About)"
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: The device playing (or hosting)
+      placeholder: "e.g. MacBook Air M2, macOS 15 / Windows 11 PC / Pixel 8"
+    validations:
+      required: true
+  - type: input
+    id: friend
+    attributes:
+      label: The friend's device and browser (Play Together only)
+      placeholder: "e.g. iPhone 15, Safari / Asus ROG Phone 7, Chrome"
+  - type: input
+    id: controller
+    attributes:
+      label: Controller
+      placeholder: "e.g. DualSense over Bluetooth / 8BitDo Pro 2 / keyboard"
+  - type: dropdown
+    id: network
+    attributes:
+      label: Network
+      multiple: true
+      options:
+        - PS5 on a cable
+        - PS5 on Wi-Fi
+        - Player on a cable
+        - Player on Wi-Fi
+        - Player on mobile data
+  - type: input
+    id: settings
+    attributes:
+      label: Stream settings
+      placeholder: "e.g. 1080p, 60 fps, HEVC"
+  - type: dropdown
+    id: model
+    attributes:
+      label: PS5 model
+      options:
+        - PS5 (original / "phat")
+        - PS5 Slim
+        - PS5 Pro
+  - type: input
+    id: firmware
+    attributes:
+      label: PS5 firmware
+      placeholder: "e.g. 13.60"

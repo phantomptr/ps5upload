@@ -1,23 +1,54 @@
 name: Feature request
-description: Suggest an idea for ps5upload
+description: An idea or improvement for PS5Upload
 labels: ["enhancement"]
 body:
   - type: textarea
     id: problem
     attributes:
-      label: What problem does this solve?
-      description: Describe the use case or pain point. "I can't do X because..."
+      label: What would you like to do?
+      description: The thing you're trying to get done, and what gets in the way today. "I want to ..., but ..."
     validations:
       required: true
   - type: textarea
     id: solution
     attributes:
-      label: What would you like to see?
-      description: Describe the feature or change you'd like.
+      label: How would you like it to work?
+      description: What you'd press and what you'd see. A sketch or screenshot is welcome.
     validations:
       required: true
-  - type: textarea
-    id: alternatives
+  - type: dropdown
+    id: area
     attributes:
-      label: Alternatives considered
-      description: Have you tried any workarounds? Are there other tools that do this?
+      label: Part of the app
+      options:
+        - Uploads and installs
+        - Games library
+        - Convert
+        - Remote Play
+        - Play Together
+        - Files
+        - Saves
+        - Payloads
+        - Cheats
+        - Console page on the PS5
+        - Tailscale
+        - Web UI / phone apps
+        - AI agents (MCP)
+        - Something else
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Where you'd use it
+      multiple: true
+      options:
+        - macOS
+        - Windows
+        - Linux
+        - Android
+        - iOS / iPadOS
+        - Browser
+  - type: textarea
+    id: today
+    attributes:
+      label: How do you manage today?
+      description: Any workaround you use now, if there is one.

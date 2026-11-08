@@ -1,0 +1,92 @@
+name: Install, upload or Convert problem
+description: A game, update or add-on won't upload, install, convert or launch
+labels: ["bug", "install"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please attach the zip from **Bug Report** (in the app's sidebar), made right after it failed. Please don't attach game files or links to them.
+  - type: dropdown
+    id: task
+    attributes:
+      label: What were you doing?
+      options:
+        - Uploading a game folder
+        - Installing a .pkg (game, update or add-on)
+        - Converting (to .exfat, .ffpkg, .ffpfs, a PS4 package, ...)
+        - Saving a conversion to the PS5 or to a server
+        - Launching a game after it installed
+        - Backporting
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: The error message or code exactly as shown (e.g. 0x80B2116F), and where it stopped (percent, step).
+    validations:
+      required: true
+  - type: input
+    id: game
+    attributes:
+      label: Which game, update or add-on?
+      placeholder: "Title and title ID if you know it, e.g. PPSA01234, and its size"
+  - type: dropdown
+    id: source
+    attributes:
+      label: Where the files came from
+      options:
+        - This computer
+        - A USB drive
+        - A network share or NAS (SMB, NFS, FTP, ...)
+        - A link (URL)
+        - Already on the PS5
+  - type: dropdown
+    id: destination
+    attributes:
+      label: Where it went on the PS5
+      options:
+        - Internal drive
+        - M.2 drive
+        - USB extended storage
+        - USB drive
+        - Not sure
+  - type: input
+    id: version
+    attributes:
+      label: PS5Upload version
+      placeholder: "e.g. 12.0.0 (Help › About)"
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: The app runs on
+      options:
+        - macOS
+        - Windows
+        - Linux
+        - Android
+        - iOS / iPadOS
+        - Browser (web UI or Docker engine)
+    validations:
+      required: true
+  - type: dropdown
+    id: model
+    attributes:
+      label: PS5 model
+      options:
+        - PS5 (original / "phat")
+        - PS5 Slim
+        - PS5 Pro
+  - type: input
+    id: firmware
+    attributes:
+      label: PS5 firmware
+      placeholder: "e.g. 13.60"
+  - type: textarea
+    id: payloads
+    attributes:
+      label: Other payloads running on the PS5
+      description: kstuff, etaHEN, ShadowMount+, Payload Manager, ... with versions if you know them.

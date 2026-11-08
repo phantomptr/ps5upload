@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Question
+  - name: Questions and help
     url: https://discord.gg/fzK3xddtrM
-    about: Ask on Discord. The FAQ is in the app under Help, and in FAQ.md.
+    about: Ask on Discord.
+  - name: FAQ
+    url: https://ps5upload.phantomptr.com/faq/
+    about: Common questions, also in the app under Help.

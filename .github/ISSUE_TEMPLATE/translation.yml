@@ -1,0 +1,57 @@
+name: Translation fix
+description: A word or sentence in your language is wrong, awkward or still in English
+labels: ["translation"]
+body:
+  - type: dropdown
+    id: language
+    attributes:
+      label: Language
+      options:
+        - العربية (Arabic)
+        - বাংলা (Bengali)
+        - Deutsch (German)
+        - Español (Spanish)
+        - فارسی (Persian)
+        - Français (French)
+        - हिन्दी (Hindi)
+        - Magyar (Hungarian)
+        - Bahasa Indonesia (Indonesian)
+        - Italiano (Italian)
+        - 日本語 (Japanese)
+        - 한국어 (Korean)
+        - Polski (Polish)
+        - Português do Brasil (Brazilian Portuguese)
+        - Русский (Russian)
+        - ไทย (Thai)
+        - Türkçe (Turkish)
+        - Tiếng Việt (Vietnamese)
+        - 简体中文 (Chinese, Simplified)
+        - 繁體中文 (Chinese, Traditional)
+        - English
+    validations:
+      required: true
+  - type: input
+    id: where
+    attributes:
+      label: Where is it?
+      placeholder: "e.g. Play › Play Together, the Invite button; or the website's FAQ"
+    validations:
+      required: true
+  - type: textarea
+    id: now
+    attributes:
+      label: What it says now
+      description: Copy the text, or attach a screenshot.
+    validations:
+      required: true
+  - type: textarea
+    id: better
+    attributes:
+      label: What it should say
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: PS5Upload version
+      placeholder: "e.g. 12.0.0"
