@@ -37,12 +37,6 @@ export const useRestAfterUploadStore = create<RestAfterUploadState>((set) => ({
   },
 }));
 
-/** Non-hook accessor for the upload-queue drain hook, which runs outside a
- *  React render and just needs the current value. */
-export function restAfterUploadEnabled(): boolean {
-  return useRestAfterUploadStore.getState().enabled;
-}
-
 // A change synced from another device shows at once (lib/liveSettings).
 registerSettingReload(["ps5upload.rest_after_upload"], () =>
   useRestAfterUploadStore.setState({ enabled: loadPersisted() }),
