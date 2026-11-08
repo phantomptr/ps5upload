@@ -1,24 +1,64 @@
 name: Bug report
-description: Something isn't working as expected
+description: Something in PS5Upload isn't working (for Remote Play, Play Together and installs there are forms of their own)
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to file a bug report!
-        The app's **Bug Report** in the sidebar fills this in for you and saves a zip with the logs: drag that zip into this issue.
+        Thanks for reporting! The fastest way to a fix: open **Bug Report** in the app's sidebar, press the button, and drag the zip it saves into this issue. It has the logs and your setup, and nothing private (no keys or passwords).
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where in the app?
+      options:
+        - Connecting to the PS5 / the helper payload
+        - Games library / launching / stopping games
+        - Files (browse, copy, move, delete, mount)
+        - Saves (backup, restore, copy)
+        - Payloads (send, autoload, updates, Payload Manager)
+        - Cheats
+        - Console page on the PS5 (PS5Upload tile)
+        - Hardware / temperatures / fan / power
+        - Tailscale
+        - Web UI (browser)
+        - Phone app (Android / iOS)
+        - AI agents (MCP)
+        - Settings / updates / language
+        - Something else
+    validations:
+      required: true
   - type: textarea
     id: what-happened
     attributes:
-      label: What happened?
-      description: A clear description of the bug. What did you expect? What actually happened?
-      placeholder: "When I ..."
+      label: What happened, and what did you expect?
+      description: Include any error message or code exactly as shown (e.g. 0x80B2116F). A screenshot helps.
+      placeholder: "When I ..., I expected ..., but ..."
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to make it happen again
+      placeholder: "1. ...\n2. ...\n3. ..."
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: How often?
+      options:
+        - Every time
+        - Sometimes
+        - Once
+  - type: input
+    id: version
+    attributes:
+      label: PS5Upload version
+      placeholder: "e.g. 12.0.0 (Help › About)"
     validations:
       required: true
   - type: dropdown
     id: platform
     attributes:
-      label: Platform
+      label: The app runs on
       options:
         - macOS (Apple Silicon)
         - macOS (Intel)
@@ -27,44 +67,32 @@ body:
         - Linux (x64)
         - Linux (ARM64)
         - Android
-        - iOS
-        - Browser / self-hosted web UI
+        - iOS / iPadOS
+        - Browser (web UI or Docker engine)
     validations:
       required: true
-  - type: input
-    id: version
+  - type: dropdown
+    id: model
     attributes:
-      label: App version
-      placeholder: "e.g. 11.0.8 (see Help → About)"
-    validations:
-      required: true
+      label: PS5 model
+      options:
+        - PS5 (original / "phat")
+        - PS5 Slim
+        - PS5 Pro
+        - Not sure
   - type: input
     id: firmware
     attributes:
       label: PS5 firmware
-      placeholder: "e.g. 9.60, 5.10"
+      placeholder: "e.g. 13.60"
   - type: textarea
     id: payloads
     attributes:
-      label: Other payloads loaded
-      description: Anything else running on the console (kstuff, ShadowMount+, etaHEN, ftpsrv, Payload Manager, ...), with versions if you know them.
+      label: Other payloads running on the PS5
+      description: How you jailbroke, and anything else loaded (kstuff, etaHEN, ShadowMount+, Payload Manager, ftpsrv, ...), with versions if you know them.
   - type: textarea
     id: logs
     attributes:
-      label: Relevant logs
-      description: Paste any error messages from the Logs tab or browser console. No need for the full log dump — just the error and a few lines of context.
+      label: Logs (if you have no bug report zip)
+      description: The error and a few lines around it from Activity & Logs.
       render: shell
-  - type: textarea
-    id: repro
-    attributes:
-      label: Steps to reproduce
-      description: If the bug is reproducible, list the exact steps.
-      placeholder: "1. ...\n2. ...\n3. ..."
-  - type: dropdown
-    id: frequency
-    attributes:
-      label: How often does it happen?
-      options:
-        - Once
-        - Sometimes
-        - Every time
