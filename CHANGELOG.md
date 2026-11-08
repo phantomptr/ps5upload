@@ -37,6 +37,12 @@ Agents (MCP):
 
 Fixes and smaller changes:
 
+- Remote Play: L2 and R2 are real triggers again. A half pull reached the PS5 as a full press in the app, browsers, phones, the Windows DualSense reader and Android; now the PS5 gets how far you pull.
+- Pairing refused (80108b03): the message now says what to check (the PS5 shows you signed in, Remote Play is on) and points to pairing with the PIN the PS5 shows.
+- Tailscale: turning it off or changing its settings just as a connection error came in could hang the helper on the PS5. Fixed.
+- Play Together over the internet: when the invite server restarts, friends are told to reconnect instead of being told the room ended, and a friend still joining tries again by itself.
+- The invite server uses far less memory per connection, limits how many connections one address can hold, and closes connections that never say who they are.
+- Translations: every new string was checked in all 21 languages, and many were corrected.
 - Web UI: add files from the device you're browsing on (#730), and Go live works from an iPhone's Safari (#731).
 - Saves: saves whose file names Windows can't hold (such as RDR2) now copy and restore (#729).
 - Install: a PS5 add-on is no longer taken for the game when the game runs from an image (#724).
