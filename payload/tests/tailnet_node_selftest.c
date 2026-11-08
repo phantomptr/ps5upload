@@ -102,6 +102,14 @@ int main(void) {
         CHECK(call("{\"op\":\"enable\"}") > 0 && boolean("enabled") == 1);
         CHECK(call("{\"op\":\"disable\"}") > 0 && boolean("enabled") == 0);
     }
+    /* A stop that meets the node's "connection error" (its thread reports it while the stop
+     * waits for that thread) must not wedge: stop at a spread of moments after a start, so some
+     * land on the error from the closed port. */
+    for (int i = 0; i < 200; i++) {
+        CHECK(call("{\"op\":\"enable\"}") > 0 && boolean("enabled") == 1);
+        usleep((useconds_t)(i % 40) * 100);
+        CHECK(call("{\"op\":\"disable\"}") > 0 && boolean("enabled") == 0);
+    }
     tailnet_node_shutdown();
 
     unlink(path);

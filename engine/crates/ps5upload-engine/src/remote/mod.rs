@@ -446,6 +446,11 @@ impl MemFs {
         self.down.store(down, Ordering::SeqCst);
     }
 
+    /// Whether the server is away now.
+    pub fn is_down(&self) -> bool {
+        self.down.load(Ordering::SeqCst)
+    }
+
     fn check_up(&self) -> Result<(), RemoteError> {
         if self.down.load(Ordering::SeqCst) {
             Err(RemoteError::Io("connection reset".into()))

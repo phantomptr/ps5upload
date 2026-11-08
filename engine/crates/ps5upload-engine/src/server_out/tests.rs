@@ -345,8 +345,13 @@ async fn a_dropped_connection_is_tried_again_within_the_job() {
     let want = local_build(&src, ImageFormat::Exfat, &nas.dir.join("l.exfat"));
     nas.mem.go_down_after_writes(4);
     let mem = nas.mem.share();
+    // Back once it has gone down, not after a fixed time: on a slow machine a timer can bring
+    // it back before the fourth write takes it away, and then nothing brings it back.
     let back = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(30));
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !mem.is_down() && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         mem.set_down(false);
     });
     let r = tokio::task::block_in_place(|| {

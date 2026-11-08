@@ -622,6 +622,21 @@ mod tests {
             path
         }
 
+        /// `run`, tried again while Linux says the script is busy: another test thread that
+        /// forks while this one still has the script open for writing holds it open in its child
+        /// until that child execs, and running it then fails with ETXTBSY.
+        fn run_written(program: &Path, dir: &Path, limit: Duration) -> Result<RunOutput, String> {
+            for _ in 0..50 {
+                match run(program, &[], None, dir, limit) {
+                    Err(e) if e.contains("Text file busy") => {
+                        std::thread::sleep(Duration::from_millis(20))
+                    }
+                    other => return other,
+                }
+            }
+            run(program, &[], None, dir, limit)
+        }
+
         #[test]
         fn a_program_is_found_only_if_it_can_run() {
             let dir = scratch("find");
@@ -639,7 +654,7 @@ mod tests {
             let dir = scratch("hang");
             let program = script(&dir, "slow", "sleep 30");
             let started = Instant::now();
-            let answer = run(&program, &[], None, &dir, Duration::from_millis(200));
+            let answer = run_written(&program, &dir, Duration::from_millis(200));
             assert_eq!(answer.unwrap_err(), "timed_out");
             assert!(started.elapsed() < Duration::from_secs(10));
             let _ = std::fs::remove_dir_all(&dir);
@@ -649,7 +664,7 @@ mod tests {
         fn output_and_exit_status_come_back() {
             let dir = scratch("out");
             let program = script(&dir, "says", "echo out; echo err >&2; exit 3");
-            let answer = run(&program, &[], None, &dir, Duration::from_secs(10)).unwrap();
+            let answer = run_written(&program, &dir, Duration::from_secs(10)).unwrap();
             assert!(!answer.succeeded);
             assert_eq!(answer.stdout.trim(), "out");
             assert_eq!(answer.stderr.trim(), "err");
