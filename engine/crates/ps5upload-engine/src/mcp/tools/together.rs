@@ -13,7 +13,9 @@ pub(super) fn tools() -> Vec<ToolDef> {
             name: "together_status",
             title: "Play Together",
             description: "Whether Play Together is open on a console, who is in, and who is \
-                          waiting to be let in.",
+                          waiting to be let in. Internet guests show `via: internet` with their \
+                          connection's `path` (direct, or failed with the ICE state) and round \
+                          trip; `internet.peers` lists those still connecting too.",
             kind: Kind::Read,
             schema: object(json!({ "console": console_required() }), &["console"]),
             run: route!(path: "/api/join", done: "Play Together on that console."),
@@ -32,13 +34,18 @@ pub(super) fn tools() -> Vec<ToolDef> {
             title: "Invite a friend",
             description: "The invite link and code for friends to join. The same invite comes \
                           back until it expires. With `new`, a new one, and the old link and code \
-                          stop working. Whoever has the link can ask to join: share it only as the \
-                          user says.",
+                          stop working. With `internet`, also a link for friends outside the home \
+                          network (`internet.url`), through the signalling hub in the settings. \
+                          Whoever has a link can ask to join: share it only as the user says.",
             kind: Kind::Write { idempotent: false },
             schema: object(
                 json!({
                     "console": console_required(),
                     "new": flag("Make a new invite; the old link and code stop working."),
+                    "internet": flag(
+                        "Also an internet invite: friends anywhere join peer to peer, with the \
+                         hub only introducing them.",
+                    ),
                 }),
                 &["console"],
             ),
@@ -79,8 +86,9 @@ pub(super) fn tools() -> Vec<ToolDef> {
             title: "Play Together settings",
             description: "How many guests may join (1 to 3), whether PS and Create are taken \
                           from guests who are playing, and whether a guest may play on the \
-                          stream's own controller as the host's PS5 user. One set for every \
-                          console.",
+                          stream's own controller as the host's PS5 user; and internet invites: \
+                          on or off, the signalling hub, the STUN servers, asking the router for \
+                          a port (UPnP). One set for every console.",
             kind: Kind::Write { idempotent: true },
             schema: object(
                 json!({
@@ -93,6 +101,17 @@ pub(super) fn tools() -> Vec<ToolDef> {
                          signed in as the host's PS5 user) while the host's device shows no \
                          picture and no phone plays. Off: every guest gets their own controller \
                          and picks a user on the TV.",
+                    ),
+                    "internet_invites": flag("Allow internet invites (on by default)."),
+                    "hub_url": text("The signalling hub, a wss:// address."),
+                    "stun": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "STUN servers as host:port (at most 8; empty: none).",
+                    },
+                    "upnp": flag(
+                        "Ask the router for a port (UPnP, NAT-PMP) while an internet invite is \
+                         open.",
                     ),
                 }),
                 &[],

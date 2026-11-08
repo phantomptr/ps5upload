@@ -837,9 +837,10 @@ jobs:
         working-directory: client
         run: npm run build:vite
 
-      # The engine embeds these two built pages, committed as files; a source edit without a
-      # rebuild would pass everything else and never reach a phone.
-      - name: Embedded guest and pad pages match their sources
+      # The engine embeds these two built pages, committed as files (and the website carries the
+      # guest page, site/join/index.html); a source edit without a rebuild would pass everything
+      # else and never reach a phone.
+      - name: Embedded guest and pad pages (and the site's guest page) match their sources
         run: node scripts/check-embedded-pages.mjs
 
       - name: Install Playwright Chromium

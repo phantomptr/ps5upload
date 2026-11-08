@@ -81,6 +81,22 @@ russh-sftp = "3"
 # metadata. rustls + ring, as suppaftp/russh above, so Android builds it too.
 ureq = { version = "3.5", features = ["rustls"] }  # 3.5: timeout_per_read (ffmpeg_tool.rs)
 if-addrs = "0.15"
+# Play Together internet invites (join_net/): a WebRTC data channel to each guest's browser. Sans-IO.
+# No crypto feature: str0m's own "rust-crypto" turns on dimpl's rcgen, which builds aws-lc (C) on
+# every target. join_net/crypto.rs is that provider on dimpl's RustCrypto backend instead, with the
+# certificate made by rcgen on ring (already in the tree through rustls).
+# 0.25 / dimpl 0.9: the RustCrypto 0.14 elliptic curves (0.13's crypto-bigint 0.5 is RUSTSEC-2026-0387).
+# The RustCrypto crates below are the versions dimpl 0.9 uses (AES-GCM and SHA-256: aes-gcm, sha2 above).
+str0m = { version = "0.25", default-features = false }
+dimpl = { version = "0.9", default-features = false, features = ["rust-crypto"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring"] }
+aes = "0.9"
+ctr = "0.10"
+hmac = "0.13"
+sha1 = "0.11"
+# The router's port for those guests (join_net/nat.rs): UPnP-IGD, then NAT-PMP/PCP.
+igd-next = { version = "0.17.1", default-features = false, features = ["aio_tokio"] }
+crab_nat = { version = "0.8.1", default-features = false }
 
 # The Collection's "Move to Trash": the OS trash on macOS, Windows and Linux desktops.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]

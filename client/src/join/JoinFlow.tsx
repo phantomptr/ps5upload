@@ -7,6 +7,7 @@ import { joinAppLink } from "../lib/joinProtocol";
 import { OpenInAppGate } from "../components/OpenInAppGate";
 import { JoinView } from "./JoinView";
 import { holdWhileJoined, JoinSession } from "./session";
+import type { JoinTransport } from "./rtcTransport";
 import { defaultName, lastName, rememberName } from "./guestName";
 
 export { NAME_KEY, defaultName } from "./guestName";
@@ -38,7 +39,18 @@ async function pageFullscreen(on: boolean): Promise<void> {
  * The /join page a friend opens from the host's QR code or link: their name, then the wait for
  * the host's yes, then the game (JoinView).
  */
-export function JoinFlow({ url, invite, host }: { url: string; invite: string | null; host: string | null }) {
+export function JoinFlow({
+  url,
+  invite,
+  host,
+  transport,
+}: {
+  url: string;
+  invite: string | null;
+  host: string | null;
+  /** An internet invite's WebRTC transport (rtcTransport.ts); absent: the LAN WebSocket. */
+  transport?: JoinTransport;
+}) {
   const tr = useTr();
   const [name, setName] = useState(() => lastName(defaultName(typeof navigator === "undefined" ? "" : navigator.userAgent)));
   const [session, setSession] = useState<JoinSession | null>(null);
@@ -48,7 +60,7 @@ export function JoinFlow({ url, invite, host }: { url: string; invite: string | 
     // Remembered on this device: the next invite has it filled in.
     const clean = rememberName(n);
     if (!clean) return;
-    const s = new JoinSession({ url, invite, name: clean, host });
+    const s = new JoinSession({ url, invite, name: clean, host, transport });
     setSession(s);
     setRound((r) => r + 1);
     s.start();
@@ -128,6 +140,7 @@ export function JoinFlow({ url, invite, host }: { url: string; invite: string | 
       </form>
     </div>
   );
-  // A link opened in a browser: offer the app first (Slack-style); a typed code has no link.
-  return invite ? <OpenInAppGate appLink={joinAppLink(location.href)}>{nameStep}</OpenInAppGate> : nameStep;
+  // A link opened in a browser: offer the app first (Slack-style); a typed code has no link. An
+  // internet invite is played in the browser (the app joins LAN links).
+  return invite && !transport ? <OpenInAppGate appLink={joinAppLink(location.href)}>{nameStep}</OpenInAppGate> : nameStep;
 }
