@@ -36,8 +36,8 @@ log:
   level: info
   format: text
 policy:
-  mode: file
-  path: ""
+  mode: database
+  path: ""  # database mode: m3-check.sh sets ACLs with `headscale policy set`
 dns:
   magic_dns: true
   base_domain: tnbed.internal

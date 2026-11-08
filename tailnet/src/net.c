@@ -272,7 +272,8 @@ static int low_write(void *ctx, const unsigned char *buf, size_t len)
 	return r;
 }
 
-int tn_tr_dial(tn_tr *tr, const char *host, int port, tn_tls *tls, int wake_fd, int64_t deadline)
+int tn_tr_dial(tn_tr *tr, const char *host, const char *addr, int port, tn_tls *tls, int wake_fd,
+	       int64_t deadline)
 {
 	struct sockaddr_in sa = {.sin_family = AF_INET, .sin_port = htons((uint16_t)port)};
 	memset(tr, 0, sizeof *tr);
@@ -282,10 +283,12 @@ int tn_tr_dial(tn_tr *tr, const char *host, int port, tn_tls *tls, int wake_fd, 
 	if (inet_pton(AF_INET, host, &sa.sin_addr) != 1) {
 		/* Not wakeable; only the control host is ever looked up (DERP nodes carry IPs). */
 		struct addrinfo hints = {.ai_family = AF_INET, .ai_socktype = SOCK_STREAM}, *res = NULL;
-		if (getaddrinfo(host, NULL, &hints, &res) != 0 || !res)
+		if (getaddrinfo(host, NULL, &hints, &res) == 0 && res) {
+			sa.sin_addr = ((struct sockaddr_in *)res->ai_addr)->sin_addr;
+			freeaddrinfo(res);
+		} else if (!addr || !*addr || inet_pton(AF_INET, addr, &sa.sin_addr) != 1) {
 			return TN_E_DNS;
-		sa.sin_addr = ((struct sockaddr_in *)res->ai_addr)->sin_addr;
-		freeaddrinfo(res);
+		}
 	}
 	tr->fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (tr->fd < 0)

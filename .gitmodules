@@ -4,3 +4,6 @@
 [submodule "third_party/bearssl"]
 	path = third_party/bearssl
 	url = https://www.bearssl.org/git/BearSSL
+[submodule "third_party/lwip"]
+	path = third_party/lwip
+	url = https://github.com/lwip-tcpip/lwip.git

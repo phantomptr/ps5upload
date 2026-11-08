@@ -39,4 +39,10 @@ Specifications
   HPACK: RFC 7541. HTTP/2: the current HTTP/2 RFC (successor of RFC 7540). ChaCha20-Poly1305: RFC 8439. X25519: RFC 7748.
 
 JSON: src/json.c is our own bounded tokenizer (no cJSON).
-lwIP is not used yet (M4).
+lwIP 2.2.1 (third_party/lwip, git submodule) — BSD-3-Clause, Swedish Institute of
+  Computer Science and contributors. Compiled unmodified (IPv4 + TCP, NO_SYS); our
+  options are in lwip-port/.
+
+wireguard-go (MIT, WireGuard LLC): src/wg.c follows device/noise-protocol.go, cookie.go
+  and replay/replay.go. tailscale (BSD-3-Clause): src/derp.c, src/disco.c, src/dp.c
+  follow derp/, disco/, net/stun/ and wgengine/magicsock/ (wire formats and timers).

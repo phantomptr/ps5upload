@@ -290,7 +290,7 @@ size_t tn_wg_seal(tn_wg_keypair *kp, uint8_t *out, const uint8_t *pt, size_t n)
 	tn_put_le32(out + 12, (uint32_t)(ctr >> 32));
 	memcpy(nonce + 4, out + 8, 8);
 	/* pad in place: the plaintext area of out is the ciphertext area */
-	if (pt != out + 16)
+	if (n && pt != out + 16)
 		memmove(out + 16, pt, n);
 	memset(out + 16 + n, 0, padded - n);
 	tn_aead_seal(out + 16, kp->send_key, nonce, NULL, 0, out + 16, padded);

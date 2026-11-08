@@ -89,7 +89,9 @@ typedef struct {
 
 int tn_url_parse(tn_url *u, const char *url);
 int tn_tls_init(tn_tls *t, const char *ca_file);
-int tn_tr_dial(tn_tr *tr, const char *host, int port, tn_tls *tls, int wake_fd, int64_t deadline);
+/* addr: optional IPv4 literal used when `host` does not resolve (no DNS on the PS5). */
+int tn_tr_dial(tn_tr *tr, const char *host, const char *addr, int port, tn_tls *tls, int wake_fd,
+	       int64_t deadline);
 int tn_tr_read(tn_tr *tr, void *buf, size_t n);       /* > 0 bytes, or TN_E_* */
 int tn_tr_read_full(tn_tr *tr, void *buf, size_t n);
 int tn_tr_write(tn_tr *tr, const void *buf, size_t n); /* all, then flush */
@@ -406,6 +408,8 @@ typedef struct {
 } tn_report;
 
 typedef struct tn_dp tn_dp;
+/* Send an IPv4 packet to the peer owning its destination; dp_mu held (data-plane thread). */
+int tn_dp_output(tn_ctx *c, const uint8_t *pkt, size_t n);
 int tn_dp_create(tn_ctx *c);
 void tn_dp_destroy(tn_ctx *c);
 int tn_dp_start(tn_ctx *c);
@@ -413,11 +417,27 @@ void tn_dp_stop(tn_ctx *c);
 void tn_dp_wake(tn_ctx *c);
 void tn_dp_rewake(tn_ctx *c, tn_dp *d);
 
+/* ---------- fwd.c: the forwarder (serve rules), on the data-plane thread ---------- */
+typedef struct tn_fwd tn_fwd;
+struct pollfd;
+int tn_fwd_create(tn_ctx *c);
+void tn_fwd_destroy(tn_ctx *c);
+void tn_fwd_reset(tn_ctx *c);
+void tn_fwd_set_addr(tn_ctx *c, uint32_t addr);
+/* An inbound packet for a served port (already filtered). 1 = consumed. */
+int tn_fwd_input(tn_ctx *c, const uint8_t *pkt, const tn_ip_info *ip, int64_t now);
+int tn_fwd_has_udp_flow(tn_ctx *c, uint32_t rip, uint16_t rport, uint16_t port);
+int tn_fwd_pollfds(tn_ctx *c, struct pollfd *pf, int cap);
+void tn_fwd_io(tn_ctx *c, int fd, short revents, int64_t now);
+void tn_fwd_tick(tn_ctx *c, int64_t now);
+int tn_fwd_sleep_ms(tn_ctx *c);
+void tn_fwd_stats(tn_ctx *c, uint32_t *udp_flows, uint32_t *tcp_conns);
+
 /* ---------- the context (tailnet.c, control.c) ---------- */
 struct tn_ctx {
 	tn_config cfg;
 	char state_dir[512], control_url[256], auth_key[256], hostname[64], os[32], app[32];
-	char ca_file[512], dump_dir[512];
+	char ca_file[512], dump_dir[512], control_addr[64];
 	tn_url url;
 	tn_keys keys;
 
@@ -461,6 +481,9 @@ struct tn_ctx {
 	int dp_started;
 	int dp_wake_r, dp_wake_w;
 	tn_dp *dp;
+	tn_serve serve[TN_SERVE_MAX]; /* copied from the config */
+	uint32_t n_serve;
+	tn_fwd *fwd;
 };
 
 void tn_emit(tn_ctx *c, tn_event_type type, int err, const char *text);

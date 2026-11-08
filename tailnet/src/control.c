@@ -32,7 +32,7 @@ int tn_fetch_control_key(tn_ctx *c)
 	char req[512], hdr[4096], body[4096], v[80];
 	tn_tr *tr = &c->tr;
 	int tls = c->url.https && c->cfg.transport != TN_TRANSPORT_PLAIN;
-	int r = tn_tr_dial(tr, c->url.host, ctl_port(c, tls), tls ? c->tls : NULL, c->wake_r,
+	int r = tn_tr_dial(tr, c->url.host, c->control_addr, ctl_port(c, tls), tls ? c->tls : NULL, c->wake_r,
 			   deadline_in(CONNECT_TIMEOUT_MS));
 	if (r < 0)
 		return r;
@@ -118,7 +118,7 @@ static int ctl_connect_one(tn_ctx *c, int tls)
 	int port = ctl_port(c, tls), r;
 
 	tn_logf(c, 1, "dialing %s:%d (%s)", c->url.host, port, tls ? "tls" : "plain");
-	if ((r = tn_tr_dial(tr, c->url.host, port, tls ? c->tls : NULL, c->wake_r, deadline_in(CONNECT_TIMEOUT_MS))) < 0)
+	if ((r = tn_tr_dial(tr, c->url.host, c->control_addr, port, tls ? c->tls : NULL, c->wake_r, deadline_in(CONNECT_TIMEOUT_MS))) < 0)
 		return r;
 	tr->deadline = deadline_in(REQUEST_TIMEOUT_MS);
 	if ((r = tn_noise_initiate(&hs, init, TN_CAPVER, c->keys.machine_priv, c->keys.control_key, NULL)) < 0)

@@ -16,7 +16,7 @@ tailnet/testbed/tb.sh up      # Headscale on http://127.0.0.1:18080, peer "linux
 tailnet/testbed/tb.sh status  # the peer's `tailscale status`
 tailnet/testbed/tb.sh nodes   # `headscale nodes list`
 tailnet/testbed/tb.sh down    # stop and remove the containers (state is kept)
-tailnet/testbed/tb.sh build-linux   # tnctl (ASan+UBSan) + udpecho, built in the tn box
+tailnet/testbed/tb.sh build-linux   # tnctl (ASan+UBSan) + tnecho, built in the tn box
 tailnet/testbed/tb.sh block on|off  # drop UDP between the peer and the tn box (forces DERP)
 tailnet/testbed/tb.sh reset   # down, then move .state/ aside for a clean bed
 ```
@@ -48,6 +48,12 @@ tailnet/testbed/tb.sh register hskey-authreq-…
 ```
 
 ## Checks
+
+- `m3-check.sh`: our node as the PS5 helper runs it (`--serve tcp:9295,tcp:9120,udp:9296,
+  udp:9302`): TCP through lwIP to local echo services (round trips, 50 MiB bulk), UDP
+  relay, RST for a closed local port, allow-list drops, 4 parallel connections, the
+  Headscale ACL enforced (policy in database mode), the same over DERP, pause/resume.
+- `tb.sh test-linux`: the unit tests on glibc (its UBSan catches what macOS libc does not).
 
 - `m2-check.sh`: the M2 acceptance run, tnctl (Linux, ASan+UBSan) against the stock
   peer: ICMP ping and UDP echo direct and over DERP with RTTs, the peer's `tailscale ping`

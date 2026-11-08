@@ -169,6 +169,23 @@ typedef void (*tn_event_cb)(void *user, const tn_event *ev);
  * Called on the data-plane thread; may call tn_send_ip(). */
 typedef void (*tn_packet_cb)(void *user, const uint8_t *pkt, size_t len);
 
+/* Serve a tailnet port from a local one (the PS5 helper: Remote Play and the helper's
+ * own port). With any serve rule set, the node accepts inbound traffic ONLY for these
+ * (protocol, port) pairs, AND only what the tailnet's packet filter from control allows
+ * (new TCP connections and new UDP flows; replies pass). UDP is relayed datagram by
+ * datagram to 127.0.0.1:local_port; TCP is terminated in lwIP and spliced to a TCP
+ * connection to 127.0.0.1:local_port. ICMP echo is answered if the filter allows the
+ * source. Everything else is dropped, and packet_cb sees nothing. */
+#define TN_SERVE_MAX 8
+typedef struct {
+	uint8_t proto;          /* 6 = TCP, 17 = UDP */
+	uint16_t port;          /* tailnet port */
+	uint16_t local_port;    /* 127.0.0.1 port; 0 = the same */
+} tn_serve;
+
+/* Optional hook run first on each internal thread ("control", "data"), e.g. to name it. */
+typedef void (*tn_thread_cb)(void *user, const char *role);
+
 typedef enum {
 	TN_TRANSPORT_AUTO = 0, /* http:// URL: plain; https:// URL: port 80 first, then TLS 443 */
 	TN_TRANSPORT_PLAIN,
@@ -183,6 +200,7 @@ typedef struct {
 	const char *os;          /* Hostinfo.OS, e.g. "ps5", "macOS" */
 	const char *app;         /* Hostinfo.App, default "ps5upload" */
 	const char *ca_file;     /* optional extra PEM trust anchors (private control servers) */
+	const char *control_addr;/* optional IPv4 literal for the control host when DNS fails (PS5) */
 	tn_transport transport;
 	int ephemeral;
 	int verbose;             /* TN_EV_LOG detail: 0 quiet, 1 info, 2 debug */
@@ -200,6 +218,10 @@ typedef struct {
 	uint16_t udp_port;       /* local UDP port for WireGuard/disco/STUN; 0 = 41641 */
 	tn_packet_cb packet_cb;  /* inbound packets; NULL = dropped (pings still answered) */
 	int no_direct;           /* debug: never use direct UDP paths (DERP only) */
+	const tn_serve *serve;   /* inbound allow-list + forwarding; copied by tn_create */
+	uint32_t n_serve;        /* 0 = no forwarder, no inbound filter (a client) */
+	tn_thread_cb thread_cb;
+	size_t thread_stack;     /* bytes for each internal thread; 0 = 256 KiB */
 } tn_config;
 
 typedef struct tn_ctx tn_ctx;
@@ -253,6 +275,9 @@ typedef struct {
 	tn_ep4 endpoints[8];        /* what we advertise (local + STUN) */
 	int64_t key_expiry;         /* unix seconds, 0 = never */
 	uint32_t n_peers;
+	uint32_t fwd_udp_flows;     /* forwarder: open UDP relay flows */
+	uint32_t fwd_tcp_conns;     /* forwarder: spliced TCP connections */
+	char login_url[256];        /* while state == NEEDS_LOGIN */
 } tn_status;
 
 /* Snapshot of the node; peers (may be NULL) gets up to cap entries. */

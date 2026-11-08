@@ -12,7 +12,8 @@
 #   tb.sh hs ARGS...      run any headscale CLI command
 #   tb.sh peer ARGS...    run any command in the peer container
 #   tb.sh tn ARGS...      run any command in the tnctl container (tailnet/ is at /src/tailnet)
-#   tb.sh build-linux     build tnctl (ASan+UBSan) and udpecho for Linux in the tn container
+#   tb.sh build-linux     build tnctl (ASan+UBSan) and tnecho for Linux in the tn container
+#   tb.sh test-linux      the unit tests (ASan+UBSan) on Linux/glibc in the tn container
 #   tb.sh block on|off    drop/allow UDP between the peer and the tn container (forces DERP)
 #   tb.sh reset           down, then move .state/ aside (to .state.old-<time>) for a clean bed
 set -eu
@@ -108,7 +109,9 @@ up() {
 			--entrypoint /usr/local/bin/derper "$TS_IMAGE" \
 			-hostname derper -certmode manual -certdir /certs -a :443 -http-port -1 -stun-port 3478 >/dev/null
 	fi
+	hs_new=0
 	if ! running "$HS"; then
+		hs_new=1
 		docker rm -f "$HS" >/dev/null 2>&1 || true
 		sed "s#http://127.0.0.1:18080#http://127.0.0.1:$HS_PORT#" "$HERE/headscale.yaml" >"$STATE/headscale/config.yaml"
 		cat >"$STATE/headscale/derp.yaml" <<EOF
@@ -135,6 +138,14 @@ EOF
 	fi
 	wait_hs
 	echo "headscale: http://127.0.0.1:$HS_PORT ($HS_IMAGE); derper: https://derper ($DERP_IP), STUN 3478"
+	# A stock tailscaled whose control server was recreated can stay stuck on "forcing port
+	# 443 dial due to recent noise dial" for an http:// URL, even across its own restart:
+	# re-join it with fresh state (the old state is moved aside, not deleted).
+	if [ $hs_new = 1 ] && docker inspect "$PEER" >/dev/null 2>&1; then
+		docker rm -f "$PEER" >/dev/null
+		[ -d "$STATE/peer" ] && mv "$STATE/peer" "$STATE/peer.old-$(date +%Y%m%d%H%M%S)"
+		mkdir -p "$STATE/peer"
+	fi
 	if ! running "$PEER"; then
 		docker rm -f "$PEER" >/dev/null 2>&1 || true
 		key=$(authkey)
@@ -166,8 +177,8 @@ EOF
 build_linux() {
 	# Separate build dirs so host (macOS) objects are never mixed in.
 	docker exec -w /src/tailnet "$TN" make -s SAN=1 BUILD=build/linux-asan build/linux-asan/tnctl >/dev/null
-	docker exec -w /src/tailnet "$TN" sh -c 'mkdir -p testbed/.state/bin && cc -O2 -static -o testbed/.state/bin/udpecho testbed/udpecho.c'
-	echo "built build/linux-asan/tnctl and .state/bin/udpecho"
+	docker exec -w /src/tailnet "$TN" sh -c 'mkdir -p testbed/.state/bin && cc -O2 -static -pthread -o testbed/.state/bin/tnecho testbed/tnecho.c'
+	echo "built build/linux-asan/tnctl and .state/bin/tnecho"
 }
 
 block() {
@@ -206,7 +217,8 @@ hs) hs "$@" ;;
 peer) docker exec "$PEER" "$@" ;;
 tn) docker exec "$TN" "$@" ;;
 build-linux) build_linux ;;
+test-linux) docker exec -w /src/tailnet "$TN" make -s SAN=1 BUILD=build/linux-asan run-tests ;;
 block) block "${1:-}" ;;
 reset) down; [ -d "$STATE" ] && mv "$STATE" "$STATE.old-$(date +%Y%m%d%H%M%S)"; echo "state moved aside" ;;
-*) sed -n '2,19p' "$0"; exit 2 ;;
+*) sed -n '2,20p' "$0"; exit 2 ;;
 esac

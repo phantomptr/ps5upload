@@ -126,9 +126,13 @@ struct tn_dp {
 	int64_t eps_at;
 	/* packets waiting for a handshake */
 	struct { int peer; uint16_t len; uint8_t data[TN_MTU]; } stage[STAGE_MAX];
-	uint8_t buf[PKT_BUF], buf2[PKT_BUF];
+	uint8_t buf[PKT_BUF], buf2[PKT_BUF], sbuf[PKT_BUF]; /* receive, seal, staged send */
+	/* the packet filter from control (inbound, spec 9) */
+	tn_filter_rule *rules;
+	uint32_t n_rules, cap_rules;
+	uint8_t filter_known;
 	int paused;
-	int64_t udp_retry_at, last_wall_check, wall_off;
+	int64_t udp_retry_at, last_wall_check, wall_off, last_tick;
 	uint32_t nm_gen;
 	int64_t now;
 };
@@ -384,6 +388,11 @@ static void sync_netmap(tn_ctx *c, tn_dp *d)
 	uint32_t nr = nm->n_regions < d->cap_regions ? nm->n_regions : d->cap_regions;
 	memcpy(d->regions, nm->regions, nr * sizeof *d->regions);
 	d->n_regions = nr;
+	nr = nm->n_rules < d->cap_rules ? nm->n_rules : d->cap_rules;
+	memcpy(d->rules, nm->rules, nr * sizeof *d->rules);
+	d->n_rules = nr;
+	d->filter_known = nm->filter_known;
+	tn_fwd_set_addr(c, d->self_addr4);
 	for (uint32_t i = 0; i < d->n_peers; i++)
 		d->peers[i].present = 0;
 	for (uint32_t i = 0; i < nm->n_peers; i++) {
@@ -780,12 +789,64 @@ static void flush_stage(tn_ctx *c, tn_dp *d, dp_peer *p)
 		if (d->stage[i].len && d->stage[i].peer == idx) {
 			uint16_t len = d->stage[i].len;
 			d->stage[i].len = 0;
-			memcpy(d->buf, d->stage[i].data, len);
-			wg_send(c, d, p, d->buf, len);
+			memcpy(d->sbuf, d->stage[i].data, len);
+			wg_send(c, d, p, d->sbuf, len);
 			sent = 1;
 		}
 	if (!sent && p->wg.cur.valid && p->wg.cur.initiator)
 		wg_send(c, d, p, NULL, 0); /* confirm the session to the responder (receive.go:409) */
+}
+
+static int range_has(const tn_range4 *r, uint32_t ip) { return ip >= r->lo && ip <= r->hi; }
+
+/* Does the tailnet's packet filter let `src` open `proto`/`port` on us? (spec 9; Go
+ * wgengine/filter: IPv4 sources and destinations, port ranges, protocol lists.) */
+static int filter_allows(const tn_dp *d, uint32_t src, uint8_t proto, uint16_t port)
+{
+	if (!d->filter_known)
+		return 0; /* no filter from control yet: allow nothing (Go: NewAllowNone) */
+	for (uint32_t i = 0; i < d->n_rules; i++) {
+		const tn_filter_rule *r = &d->rules[i];
+		int ok = 0;
+		if (r->n_proto) {
+			for (uint8_t k = 0; k < r->n_proto && !ok; k++)
+				ok = r->proto[k] == proto;
+		} else {
+			ok = proto == TN_IPPROTO_TCP || proto == TN_IPPROTO_UDP || proto == TN_IPPROTO_ICMP;
+		}
+		if (!ok)
+			continue;
+		ok = 0;
+		for (uint8_t k = 0; k < r->n_src && !ok; k++)
+			ok = range_has(&r->src[k], src);
+		if (!ok)
+			continue;
+		for (uint8_t k = 0; k < r->n_dst; k++)
+			if (range_has(&r->dst[k].ip, d->self_addr4) &&
+			    (proto == TN_IPPROTO_ICMP || (port >= r->dst[k].port_lo && port <= r->dst[k].port_hi)))
+				return 1;
+	}
+	return 0;
+}
+
+/* With serve rules: the hard allow-list AND the tailnet filter for new flows. */
+static int inbound_ok(tn_ctx *c, const tn_dp *d, const tn_ip_info *ip)
+{
+	if (!c->n_serve)
+		return 1;
+	if (ip->proto == TN_IPPROTO_ICMP)
+		return ip->icmp_type == 8 && filter_allows(d, ip->src, ip->proto, 0);
+	int listed = 0;
+	for (uint32_t i = 0; i < c->n_serve && !listed; i++)
+		listed = c->serve[i].proto == ip->proto && c->serve[i].port == ip->dport;
+	if (!listed)
+		return 0;
+	if (ip->proto == TN_IPPROTO_TCP) /* only a SYN opens a connection */
+		return (ip->tcp_flags & 0x12) != 0x02 || filter_allows(d, ip->src, ip->proto, ip->dport);
+	if (ip->proto == TN_IPPROTO_UDP)
+		return tn_fwd_has_udp_flow(c, ip->src, ip->sport, ip->dport) ||
+		       filter_allows(d, ip->src, ip->proto, ip->dport);
+	return 0;
 }
 
 static void deliver(tn_ctx *c, tn_dp *d, dp_peer *p, uint8_t *pkt, size_t n)
@@ -793,6 +854,8 @@ static void deliver(tn_ctx *c, tn_dp *d, dp_peer *p, uint8_t *pkt, size_t n)
 	tn_ip_info ip;
 	if (tn_ip_parse(pkt, n, &ip) < 0 || ip.dst != d->self_addr4 || !peer_allows(p, ip.src))
 		return; /* cryptokey routing + our address only (spec 10) */
+	if (!inbound_ok(c, d, &ip))
+		return;
 	if (ip.proto == TN_IPPROTO_ICMP && ip.icmp_type == 8) {
 		/* Echo request: answer in the core (a cheap diagnostic). */
 		size_t m = tn_ip_build_icmp_echo(d->buf, sizeof d->buf, ip.dst, ip.src, 0, ip.sport, ip.dport,
@@ -800,6 +863,10 @@ static void deliver(tn_ctx *c, tn_dp *d, dp_peer *p, uint8_t *pkt, size_t n)
 		if (m)
 			wg_send(c, d, p, d->buf, m);
 		return;
+	}
+	if (c->n_serve) {
+		tn_fwd_input(c, pkt, &ip, d->now);
+		return; /* a forwarder node hands nothing to packet_cb */
 	}
 	if (c->cfg.packet_cb)
 		c->cfg.packet_cb(c->cfg.user, pkt, ip.len);
@@ -1265,8 +1332,9 @@ static void tick(tn_ctx *c, tn_dp *d)
 
 /* ---------------- wake / pause ---------------- */
 
-static void drop_sessions(tn_dp *d)
+static void drop_sessions(tn_ctx *c, tn_dp *d)
 {
+	tn_fwd_reset(c);
 	for (uint32_t i = 0; i < d->n_peers; i++)
 		if (d->peers[i].used) {
 			tn_wg_reset(&d->peers[i].wg);
@@ -1292,7 +1360,7 @@ static void close_all(tn_dp *d)
 void tn_dp_rewake(tn_ctx *c, tn_dp *d)
 {
 	close_all(d);
-	drop_sessions(d);
+	drop_sessions(c, d);
 	d->udp_retry_at = 0;
 	d->nc_running = 0;
 	d->nc_next = 0;
@@ -1314,8 +1382,12 @@ static void *dp_loop(void *arg)
 {
 	tn_ctx *c = arg;
 	tn_dp *d = c->dp;
-	struct pollfd pf[2 + DERP_CONNS];
-	tn_derpc *pk[2 + DERP_CONNS];
+	if (c->cfg.thread_cb)
+		c->cfg.thread_cb(c->cfg.user, "data");
+	enum { DP_POLL_MAX = 2 + DERP_CONNS + 64 };
+	struct pollfd pf[DP_POLL_MAX];
+	tn_derpc *pk[DP_POLL_MAX];
+	int kind[DP_POLL_MAX]; /* 0 wake, 1 udp, 2 derp, 3 forwarder */
 	pthread_mutex_lock(&c->dp_mu);
 	d->now = tn_now_ms();
 	while (!atomic_load(&c->req_stop)) {
@@ -1324,7 +1396,7 @@ static void *dp_loop(void *arg)
 			if (!d->paused) {
 				tn_logf(c, 1, "data plane paused");
 				close_all(d);
-				drop_sessions(d);
+				drop_sessions(c, d);
 				d->paused = 1;
 			}
 		} else if (d->paused) {
@@ -1342,22 +1414,44 @@ static void *dp_loop(void *arg)
 					initiate(c, d, p);
 			}
 		}
-		if (!d->paused)
-			tick(c, d);
+		int timeout = TICK_MS;
+		if (!d->paused) {
+			if (d->now - d->last_tick >= TICK_MS) {
+				tick(c, d);
+				d->last_tick = d->now;
+			}
+			tn_fwd_tick(c, d->now);
+			int fs = tn_fwd_sleep_ms(c);
+			int64_t to_tick = TICK_MS - (tn_now_ms() - d->last_tick);
+			timeout = to_tick < 1 ? 1 : (int)to_tick;
+			if (fs >= 0 && fs < timeout)
+				timeout = fs < 1 ? 1 : fs;
+		}
 		int n = 0;
 		pf[n] = (struct pollfd){.fd = c->dp_wake_r, .events = POLLIN};
+		kind[n] = 0;
 		pk[n++] = NULL;
 		if (!d->paused && d->udp >= 0) {
 			pf[n] = (struct pollfd){.fd = d->udp, .events = POLLIN};
+			kind[n] = 1;
 			pk[n++] = NULL;
 		}
 		for (int i = 0; !d->paused && i < DERP_CONNS; i++)
 			if (d->conns[i].fd >= 0) {
 				pf[n] = (struct pollfd){.fd = d->conns[i].fd, .events = tn_derpc_events(&d->conns[i])};
+				kind[n] = 2;
 				pk[n++] = &d->conns[i];
 			}
+		if (!d->paused) {
+			int m = tn_fwd_pollfds(c, pf + n, DP_POLL_MAX - n);
+			for (int i = 0; i < m; i++) {
+				kind[n + i] = 3;
+				pk[n + i] = NULL;
+			}
+			n += m;
+		}
 		pthread_mutex_unlock(&c->dp_mu);
-		int r = poll(pf, (nfds_t)n, d->paused ? -1 : TICK_MS);
+		int r = poll(pf, (nfds_t)n, d->paused ? -1 : timeout);
 		pthread_mutex_lock(&c->dp_mu);
 		d->now = tn_now_ms();
 		if (r <= 0)
@@ -1365,11 +1459,13 @@ static void *dp_loop(void *arg)
 		for (int i = 0; i < n; i++) {
 			if (!pf[i].revents)
 				continue;
-			if (pf[i].fd == c->dp_wake_r) {
+			if (kind[i] == 0) {
 				drain(c->dp_wake_r);
-			} else if (!pk[i]) {
+			} else if (kind[i] == 1) {
 				if (pf[i].fd == d->udp)
 					on_udp(c, d);
+			} else if (kind[i] == 3) {
+				tn_fwd_io(c, pf[i].fd, pf[i].revents, d->now);
 			} else if (pk[i]->fd == pf[i].fd) {
 				int e = tn_derpc_io(pk[i], pf[i].revents, on_derp_frame, c, d->now);
 				if (e < 0)
@@ -1391,11 +1487,14 @@ int tn_dp_create(tn_ctx *c)
 		return TN_E_NOMEM;
 	d->cap = c->nms.max_peers;
 	d->cap_regions = c->nms.max_regions;
+	d->cap_rules = c->nms.max_rules;
 	d->peers = calloc(d->cap, sizeof *d->peers);
 	d->regions = calloc(d->cap_regions, sizeof *d->regions);
-	if (!d->peers || !d->regions) {
+	d->rules = calloc(d->cap_rules, sizeof *d->rules);
+	if (!d->peers || !d->regions || !d->rules) {
 		free(d->peers);
 		free(d->regions);
+		free(d->rules);
 		free(d);
 		return TN_E_NOMEM;
 	}
@@ -1405,7 +1504,8 @@ int tn_dp_create(tn_ctx *c)
 	for (int i = 0; i < DERP_CONNS; i++)
 		d->conns[i].fd = -1;
 	c->dp = d;
-	c->footprint += sizeof *d + d->cap * sizeof *d->peers + d->cap_regions * sizeof *d->regions;
+	c->footprint += sizeof *d + d->cap * sizeof *d->peers + d->cap_regions * sizeof *d->regions +
+			d->cap_rules * sizeof *d->rules;
 	return TN_OK;
 }
 
@@ -1416,6 +1516,7 @@ void tn_dp_destroy(tn_ctx *c)
 		return;
 	free(d->peers);
 	free(d->regions);
+	free(d->rules);
 	tn_wipe(d, sizeof *d);
 	free(d);
 	c->dp = NULL;
@@ -1430,7 +1531,12 @@ int tn_dp_start(tn_ctx *c)
 	memcpy(d->dkeys.node_pub, c->keys.node_pub, 32);
 	memcpy(d->disco_priv, c->keys.disco_priv, 32);
 	memcpy(d->disco_pub, c->keys.disco_pub, 32);
-	if (pthread_create(&c->dp_thread, NULL, dp_loop, c) != 0)
+	pthread_attr_t at;
+	pthread_attr_init(&at);
+	pthread_attr_setstacksize(&at, c->cfg.thread_stack ? c->cfg.thread_stack : 256 * 1024);
+	int r = pthread_create(&c->dp_thread, &at, dp_loop, c);
+	pthread_attr_destroy(&at);
+	if (r != 0)
 		return TN_E_NOMEM;
 	c->dp_started = 1;
 	return TN_OK;
@@ -1443,6 +1549,15 @@ void tn_dp_stop(tn_ctx *c)
 	tn_dp_wake(c);
 	pthread_join(c->dp_thread, NULL);
 	c->dp_started = 0;
+}
+
+int tn_dp_output(tn_ctx *c, const uint8_t *pkt, size_t n)
+{
+	tn_dp *d = c->dp;
+	if (n > TN_MTU || n < 20)
+		return TN_E_TOOBIG;
+	dp_peer *p = peer_by_ip(d, tn_be32(pkt + 16));
+	return p ? wg_send(c, d, p, pkt, n) : TN_E_ARG;
 }
 
 int tn_send_ip(tn_ctx *c, const uint8_t *pkt, size_t len)
@@ -1505,9 +1620,12 @@ int tn_get_status(tn_ctx *c, tn_status *st, tn_peer_status *ps, uint32_t cap)
 			n++;
 		}
 		st->n_peers = n;
+		tn_fwd_stats(c, &st->fwd_udp_flows, &st->fwd_tcp_conns);
 	}
 	pthread_mutex_unlock(&c->dp_mu);
 	pthread_mutex_lock(&c->mu);
+	if (c->state == TN_ST_NEEDS_LOGIN)
+		tn_strlcpy(st->login_url, c->last_url, sizeof st->login_url);
 	st->key_expiry = c->nms.nm.self_key_expiry;
 	if (!st->self_addr4) {
 		st->self_addr4 = c->nms.nm.self_addr4;

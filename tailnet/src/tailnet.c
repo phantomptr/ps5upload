@@ -134,6 +134,7 @@ int tn_create(const tn_config *cfg, tn_ctx **out)
 	copy_opt(c->app, sizeof c->app, cfg->app, "ps5upload");
 	copy_opt(c->ca_file, sizeof c->ca_file, cfg->ca_file, "");
 	copy_opt(c->dump_dir, sizeof c->dump_dir, cfg->dump_dir, "");
+	copy_opt(c->control_addr, sizeof c->control_addr, cfg->control_addr, "");
 	/* point cfg strings at our copies; the caller's may go away */
 	c->cfg.state_dir = c->state_dir;
 	c->cfg.control_url = c->control_url;
@@ -169,7 +170,16 @@ int tn_create(const tn_config *cfg, tn_ctx **out)
 		r = TN_E_IO;
 		goto fail;
 	}
-	if ((r = tn_dp_create(c)) < 0)
+	if (cfg->n_serve > TN_SERVE_MAX) {
+		r = TN_E_ARG;
+		goto fail;
+	}
+	if (cfg->n_serve) {
+		memcpy(c->serve, cfg->serve, cfg->n_serve * sizeof *c->serve);
+		c->n_serve = cfg->n_serve;
+	}
+	c->cfg.serve = c->serve;
+	if ((r = tn_dp_create(c)) < 0 || (r = tn_fwd_create(c)) < 0)
 		goto fail;
 	if ((r = tn_state_load(&c->keys, c->state_dir, c->control_url)) < 0)
 		goto fail;
@@ -221,6 +231,8 @@ static int nap(tn_ctx *c, int64_t ms)
 static void *loop(void *arg)
 {
 	tn_ctx *c = arg;
+	if (c->cfg.thread_cb)
+		c->cfg.thread_cb(c->cfg.user, "control");
 	while (!atomic_load(&c->req_stop)) {
 		drain(c);
 		if (atomic_load(&c->req_pause)) {
@@ -263,7 +275,12 @@ int tn_start(tn_ctx *c)
 	int r = tn_dp_start(c);
 	if (r < 0)
 		return r;
-	if (pthread_create(&c->thread, NULL, loop, c) != 0) {
+	pthread_attr_t at;
+	pthread_attr_init(&at);
+	pthread_attr_setstacksize(&at, c->cfg.thread_stack ? c->cfg.thread_stack : 256 * 1024);
+	r = pthread_create(&c->thread, &at, loop, c);
+	pthread_attr_destroy(&at);
+	if (r != 0) {
 		tn_stop(c);
 		return TN_E_NOMEM;
 	}
@@ -307,6 +324,7 @@ void tn_destroy(tn_ctx *c)
 	if (!c)
 		return;
 	tn_stop(c);
+	tn_fwd_destroy(c);
 	tn_dp_destroy(c);
 	int fds[] = {c->wake_r, c->wake_w, c->kick_r, c->kick_w, c->dp_wake_r, c->dp_wake_w};
 	for (size_t i = 0; i < sizeof fds / sizeof fds[0]; i++)

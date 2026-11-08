@@ -15,6 +15,7 @@
 TARGET ?= host
 MONO_DIR ?= ../third_party/ava1/c/third_party/monocypher
 BEARSSL_DIR ?= ../third_party/bearssl
+LWIP_DIR ?= ../third_party/lwip
 
 ifeq ($(TARGET),ps5)
   ifndef PS5_PAYLOAD_SDK
@@ -28,6 +29,8 @@ ifeq ($(TARGET),ps5)
   # No /dev/urandom or getentropy assumptions on the console: we inject entropy
   # from kern.arandom into every TLS engine (src/net.c).
   BR_DEFS := -DBR_USE_URANDOM=0 -DBR_USE_GETENTROPY=0
+  # lwIP's asserts abort(); on the console a bad assert must not kill the helper.
+  LWIP_DEFS := -DLWIP_NOASSERT
   SIZE ?= $(firstword $(wildcard /opt/homebrew/opt/llvm/bin/llvm-size) llvm-size)
 else
   CC ?= cc
@@ -46,21 +49,27 @@ endif
 
 # Same warning policy as payload/Makefile (-Wall -Wextra -Werror).
 WARN := -Wall -Wextra -Werror
-CFLAGS_OURS := -std=c11 -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE $(WARN) $(OPT) $(SANFLAGS) \
-	-Iinclude -Isrc -I$(MONO_DIR) -I$(BEARSSL_DIR)/inc
-CFLAGS_3P := -std=c11 -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE -w -O2 $(SANFLAGS) $(BR_DEFS) \
-	-I$(BEARSSL_DIR)/inc -I$(BEARSSL_DIR)/src -I$(MONO_DIR)
+LWIP_INC := -Ilwip-port -I$(LWIP_DIR)/src/include
+CFLAGS_OURS := -std=c11 -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE $(WARN) $(OPT) $(SANFLAGS) $(LWIP_DEFS) \
+	-Iinclude -Isrc -I$(MONO_DIR) -I$(BEARSSL_DIR)/inc $(LWIP_INC)
+CFLAGS_3P := -std=c11 -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE -w -O2 $(SANFLAGS) $(BR_DEFS) $(LWIP_DEFS) \
+	-I$(BEARSSL_DIR)/inc -I$(BEARSSL_DIR)/src -I$(MONO_DIR) $(LWIP_INC)
 TN_LDFLAGS := $(SANFLAGS) -lpthread
 
-SRCS := src/crypto.c src/json.c src/util.c src/keys.c src/net.c src/noise.c src/hpack.c src/wg.c src/disco.c src/ip.c src/derp.c src/dp.c \
+SRCS := src/crypto.c src/json.c src/util.c src/keys.c src/net.c src/noise.c src/hpack.c src/wg.c src/disco.c src/ip.c src/derp.c src/dp.c src/fwd.c \
 	src/h2.c src/netmap.c src/control.c src/tailnet.c
 OBJS := $(patsubst src/%.c,$(BUILD)/%.o,$(SRCS))
 MONO_OBJ := $(if $(filter 1,$(WITH_MONO)),$(BUILD)/3p/monocypher.o)
 BR_SRCS := $(sort $(wildcard $(BEARSSL_DIR)/src/*/*.c))
 BR_OBJS := $(patsubst $(BEARSSL_DIR)/src/%.c,$(BUILD)/3p/bearssl/%.o,$(BR_SRCS))
+# lwIP 2.2.1 (BSD-3-Clause): IPv4 + TCP only, NO_SYS (lwip-port/lwipopts.h).
+LWIP_SRCS := $(addprefix $(LWIP_DIR)/src/core/,init.c def.c inet_chksum.c ip.c mem.c memp.c netif.c pbuf.c \
+	tcp.c tcp_in.c tcp_out.c timeouts.c ipv4/ip4.c ipv4/ip4_addr.c)
+LWIP_OBJS := $(patsubst $(LWIP_DIR)/src/core/%.c,$(BUILD)/3p/lwip/%.o,$(LWIP_SRCS))
 
 LIB := $(BUILD)/libtailnet.a
 BRLIB := $(BUILD)/libbearssl.a
+LWLIB := $(BUILD)/liblwip.a
 TNCTL := $(BUILD)/tnctl
 TESTS := test_crypto test_hpack test_noise test_netmap test_dp
 TEST_BINS := $(addprefix $(BUILD)/,$(TESTS))
@@ -72,13 +81,14 @@ all: lib
 else
 all: lib $(TNCTL)
 endif
-lib: check-bearssl $(LIB) $(BRLIB)
+lib: check-bearssl $(LIB) $(BRLIB) $(LWLIB)
 
 check-bearssl:
 	@test -f $(BEARSSL_DIR)/inc/bearssl.h || { echo "BearSSL missing: git submodule update --init third_party/bearssl"; exit 1; }
 	@test -f $(MONO_DIR)/monocypher.h || { echo "Monocypher missing: git submodule update --init third_party/ava1"; exit 1; }
+	@test -f $(LWIP_DIR)/src/include/lwip/tcp.h || { echo "lwIP missing: git submodule update --init third_party/lwip"; exit 1; }
 
-$(BUILD)/%.o: src/%.c include/tailnet.h src/tn.h src/crypto.h src/json.h Makefile
+$(BUILD)/%.o: src/%.c include/tailnet.h src/tn.h src/crypto.h src/json.h lwip-port/lwipopts.h Makefile
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS_OURS) -c -o $@ $<
 
@@ -98,11 +108,19 @@ $(BRLIB): $(BR_OBJS)
 	rm -f $@
 	$(AR) rcs $@ $^
 
-$(TNCTL): tools/tnctl.c $(LIB) $(BRLIB)
-	$(CC) $(CFLAGS_OURS) -o $@ $< $(LIB) $(BRLIB) $(TN_LDFLAGS)
+$(BUILD)/3p/lwip/%.o: $(LWIP_DIR)/src/core/%.c lwip-port/lwipopts.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(CFLAGS_3P) -c -o $@ $<
 
-$(BUILD)/test_%: tests/test_%.c tests/tt.h tests/vectors_go.h $(LIB) $(BRLIB)
-	$(CC) $(CFLAGS_OURS) -Itests -o $@ $< $(LIB) $(BRLIB) $(TN_LDFLAGS)
+$(LWLIB): $(LWIP_OBJS)
+	rm -f $@
+	$(AR) rcs $@ $^
+
+$(TNCTL): tools/tnctl.c $(LIB) $(BRLIB) $(LWLIB)
+	$(CC) $(CFLAGS_OURS) -o $@ $< $(LIB) $(LWLIB) $(BRLIB) $(TN_LDFLAGS)
+
+$(BUILD)/test_%: tests/test_%.c tests/tt.h tests/vectors_go.h $(LIB) $(BRLIB) $(LWLIB)
+	$(CC) $(CFLAGS_OURS) -Itests -o $@ $< $(LIB) $(LWLIB) $(BRLIB) $(TN_LDFLAGS)
 
 ifeq ($(SAN),1)
 run-tests: $(TEST_BINS)
@@ -120,8 +138,8 @@ ps5-link:
 	$(MAKE) TARGET=ps5 WITH_MONO=1 BUILD=build/ps5-link build/ps5-link/tnctl.elf
 
 ifeq ($(TARGET),ps5)
-$(BUILD)/tnctl.elf: tools/tnctl.c $(LIB) $(BRLIB)
-	$(CC) $(CFLAGS_OURS) -o $@ $< $(LIB) $(BRLIB) -lpthread
+$(BUILD)/tnctl.elf: tools/tnctl.c $(LIB) $(BRLIB) $(LWLIB)
+	$(CC) $(CFLAGS_OURS) -o $@ $< $(LIB) $(LWLIB) $(BRLIB) -lpthread
 endif
 
 size: lib
@@ -129,5 +147,5 @@ size: lib
 	@$(SIZE) $(OBJS) | awk 'NR>1 {t+=$$1; d+=$$2} END {print "our objects: text " t ", data " d " bytes"}'
 
 clean:
-	rm -f $(OBJS) $(LIB) $(BRLIB) $(TNCTL) $(TEST_BINS)
+	rm -f $(OBJS) $(LIB) $(BRLIB) $(LWLIB) $(TNCTL) $(TEST_BINS)
 	@echo "third-party objects kept under $(BUILD)/3p (remove the build/ directory by hand if needed)"

@@ -4,7 +4,10 @@
  *               [--transport auto|plain|tls] [--once] [--timeout SEC] [--dump DIR] [-v|-vv]
  *               [--port UDP] [--no-direct]
  *               [--ping 100.x.y.z] [--udp-echo 100.x.y.z:PORT] [--count N] [--interval MS]
- *               [--wait-direct SEC]
+ *               [--wait-direct SEC] [--serve tcp:PORT[:LOCAL],udp:PORT[:LOCAL],...]
+ *
+ * --serve makes this node a forwarder like the PS5 helper: only the listed tailnet
+ * ports are accepted, relayed (UDP) or spliced (TCP) to 127.0.0.1:LOCAL.
  *
  * Prints the login URL (interactive) or registers with the key, then streams a
  * netmap summary each time it changes. --once exits after the first netmap.
@@ -328,7 +331,7 @@ static int usage(void)
 			"                   [--ca-file PEM] [--transport auto|plain|tls] [--once]\n"
 			"                   [--timeout SEC] [--dump DIR] [-v|-vv] [--port UDP] [--no-direct]\n"
 			"                   [--ping IP | --udp-echo IP:PORT] [--count N] [--interval MS]\n"
-			"                   [--wait-direct SEC]\n");
+			"                   [--wait-direct SEC] [--serve tcp:PORT[:LOCAL],udp:PORT[:LOCAL]]\n");
 	return 2;
 }
 
@@ -336,6 +339,7 @@ int main(int argc, char **argv)
 {
 	tn_config cfg = {0};
 	int timeout = 0, count = 5, interval = 1000, wait_direct = 0, probe = 0;
+	static tn_serve serve[TN_SERVE_MAX];
 	if (argc < 2 || strcmp(argv[1], "login") != 0)
 		return usage();
 	for (int i = 2; i < argc; i++) {
@@ -371,6 +375,22 @@ int main(int argc, char **argv)
 		else if (!strcmp(a, "--count")) count = atoi(v);
 		else if (!strcmp(a, "--interval")) interval = atoi(v);
 		else if (!strcmp(a, "--wait-direct")) wait_direct = atoi(v);
+		else if (!strcmp(a, "--serve")) {
+			char spec[256];
+			snprintf(spec, sizeof spec, "%s", v);
+			for (char *tok = strtok(spec, ","); tok; tok = strtok(NULL, ",")) {
+				unsigned port = 0, local = 0;
+				char proto[8] = "";
+				if (sscanf(tok, "%7[a-z]:%u:%u", proto, &port, &local) < 2 || !port || port > 65535 ||
+				    local > 65535 || cfg.n_serve >= TN_SERVE_MAX || (strcmp(proto, "tcp") && strcmp(proto, "udp")))
+					return usage();
+				serve[cfg.n_serve].proto = !strcmp(proto, "tcp") ? 6 : 17;
+				serve[cfg.n_serve].port = (uint16_t)port;
+				serve[cfg.n_serve].local_port = (uint16_t)local;
+				cfg.n_serve++;
+			}
+			cfg.serve = serve;
+		}
 		else if (!strcmp(a, "--ping") || !strcmp(a, "--udp-echo")) {
 			char host[64];
 			snprintf(host, sizeof host, "%s", v);
