@@ -272,11 +272,16 @@ export const STANDARD_PROFILE: PadProfile = {
   ry: { a: 3 },
 };
 
-/** How far (0-1) a source is pressed on `g`. */
-export function sourceValue(g: Gamepad, src: PadSource): number {
+/** How far (0-1) a source is pressed on `g`. `analog`: read for a trigger, where a button's
+ *  value is how far it is pulled. Browsers set `pressed` on an analog trigger from about a tenth
+ *  of the way (Chromium at 30/255), so taken as all the way it made every pull a full one; a
+ *  button that says pressed with no value (a digital one some browsers report so) is all the way. */
+export function sourceValue(g: Gamepad, src: PadSource, analog = false): number {
   if ("b" in src) {
     const b = g.buttons[src.b];
-    return b ? Math.max(b.pressed ? 1 : 0, b.value) : 0;
+    if (!b) return 0;
+    if (analog && b.value > 0) return Math.min(1, b.value);
+    return Math.max(b.pressed ? 1 : 0, b.value);
   }
   if ("h" in src) {
     const at = hatPosition(g.axes[src.h] ?? 9);
@@ -331,8 +336,8 @@ export function padFromGamepads(
     if (!g || !g.connected) continue;
     const prof = profileOf(g);
     for (const [bit, src] of prof.buttons) if (sourceValue(g, src) > 0.5) p.buttons |= bit;
-    if (prof.l2) p.l2 = Math.max(p.l2, Math.round(sourceValue(g, prof.l2) * 255));
-    if (prof.r2) p.r2 = Math.max(p.r2, Math.round(sourceValue(g, prof.r2) * 255));
+    if (prof.l2) p.l2 = Math.max(p.l2, Math.round(sourceValue(g, prof.l2, true) * 255));
+    if (prof.r2) p.r2 = Math.max(p.r2, Math.round(sourceValue(g, prof.r2, true) * 255));
     p.lx = pick(p.lx, stick(g, prof.lx));
     p.ly = pick(p.ly, stick(g, prof.ly));
     p.rx = pick(p.rx, stick(g, prof.rx));
@@ -717,6 +722,9 @@ export interface StreamOptions {
   onPasscode?: (ask: PasscodeAsk | null) => void;
   /** The pad state to send; polled every animation frame and on key events. */
   readPad: () => PadState;
+  /** What feeds the pad (the controllers read, their mapping and reader, the inputs used), for
+   *  the engine's `GET /api/ps5/rp/controller`: sent along with a pad only when it changed. */
+  padFrom?: () => { key: string; value: unknown } | null;
   /** The controllers rumble is played on (default: this page's). A picture-in-picture window
    *  has its own list where the engine gives controllers only to the window in front. */
   gamepads?: () => ReadonlyArray<Gamepad | null>;
@@ -839,6 +847,7 @@ export class RemotePlayStream {
   private workerConcealed = 0;
   private volume = 1;
   private lastPad = "";
+  private lastPadFrom = "";
   private raf = 0;
   /** The window whose animation frames poll the pad: this page's, or a picture-in-picture
    *  window's, which keeps them coming while this page is hidden or minimized. */
@@ -1309,6 +1318,7 @@ export class RemotePlayStream {
     this.replaceCanvas();
     this.laidOut = "";
     this.lastPad = "";
+    this.lastPadFrom = "";
     for (const w of [...this.frameWaiters]) w();
   }
 
@@ -1729,6 +1739,7 @@ export class RemotePlayStream {
     this.ws = ws;
     // The engine let go of this page's pad when its last socket left: what is held goes again.
     this.lastPad = "";
+    this.lastPadFrom = "";
     if (!attachOnly) this.setPhase("connecting");
     ws.onopen = () => {
       this.socketOpened = true;
@@ -1975,6 +1986,12 @@ export class RemotePlayStream {
     const s = JSON.stringify(p);
     if (s === this.lastPad) return;
     this.lastPad = s;
+    const from = this.o.padFrom?.();
+    if (from && from.key !== this.lastPadFrom) {
+      this.lastPadFrom = from.key;
+      ws.send(JSON.stringify({ pad: p, pad_from: from.value }));
+      return;
+    }
     ws.send(JSON.stringify({ pad: p }));
   }
 

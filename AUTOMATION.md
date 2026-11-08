@@ -61,6 +61,21 @@ The answer also has `stage` (how far the start got), `started_by` (`api` or `pag
 `passcode_retry`, `mic_enabled`, `mic_on`, `keyboard_enabled`, `keyboard` (`{open, text}`),
 `keep_alive_s`, `alone_s` and `video` (codec, size, frame rate, bitrate).
 
+### `GET /api/ps5/rp/controller`: what the controller sends
+
+For the running session (or the last one, `running: false`): each controller's last state under
+`sources` (`page` is the app's own, with `from` saying which controllers it reads, their mapping and
+reader, and the inputs used; `phone N`, `guest`, `automation`), with `pressed` buttons by name,
+`l2`/`r2` from 0 to 255 and the sticks, `peak_l2`/`peak_r2` since the session started, and
+`triggers_analog` (false when only 0 or 255 ever came). `sent` is all of them merged, as the console
+gets it. Held in memory and read only when asked.
+
+### `GET /api/ps5/rp/pair/attempts`: the last pairing tries
+
+The last 5 pairing tries, newest last: `at_unix_ms`, `host`, `with` (`helper` or `pin`), `ok`, the
+console's refusal `code` (such as `80108b03`) and `reason`, and `console`, what the PS5 last said
+about its Remote Play switch and signed-in user (null when it was not checked). Never a PIN or a key.
+
 ### `POST /api/ps5/rp/start`: start a stream
 
 ```json

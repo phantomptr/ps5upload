@@ -227,6 +227,10 @@ struct ClientMsg {
     /// config. Kept with the session for a bug report (`note_decoder`).
     #[serde(default)]
     decoder: Option<serde_json::Value>,
+    /// What feeds the page's controller: the controllers it reads (name, mapping, which reader)
+    /// and the inputs in use, sent when it changes (rp_diag.rs `page_from`).
+    #[serde(default)]
+    pad_from: Option<serde_json::Value>,
 }
 
 /// A passcode as the page sent it: never printed, not even in a debug dump.
@@ -547,6 +551,9 @@ pub(crate) fn diag_summary() -> serde_json::Value {
     });
     serde_json::json!({
         "live": live,
+        // What the console's controller was sent, and the last pairing tries (rp_diag.rs).
+        "controller": crate::rp_diag::controller_json(self::live().map(|l| l.session), source_label),
+        "pair_attempts": crate::rp_diag::pair_attempts(),
         "last_session": last_session(),
         // The last few, oldest first (the newest is `last_session`).
         "sessions": sessions(),
@@ -555,6 +562,29 @@ pub(crate) fn diag_summary() -> serde_json::Value {
 
 /// The page's controller among the session's controllers (phones are 1 and up).
 const PAGE_SOURCE: u64 = 0;
+
+/// A controller source as `GET /api/ps5/rp/controller` names it.
+fn source_label(source: u64) -> String {
+    match source {
+        PAGE_SOURCE => "page".to_string(),
+        GUEST_SEAT_SOURCE => "guest".to_string(),
+        automation::AUTOMATION_SOURCE => "automation".to_string(),
+        n => format!("phone {n}"),
+    }
+}
+
+/// `GET /api/ps5/rp/controller` — what Remote Play sends the console's controller: for the running
+/// session (or the last one, `running: false`), each controller's last state (`page`: this
+/// device's, which says what feeds it in `from`; `phone N`; `guest`; `automation`) with its
+/// buttons by name, L2/R2 0-255 and sticks, the trigger peaks since the session started, and
+/// `triggers_analog` (false: only 0 or 255 ever came). `sent` is every controller merged, as the
+/// console gets it. No keys, nothing typed.
+pub async fn controller() -> Json<serde_json::Value> {
+    Json(crate::rp_diag::controller_json(
+        live().map(|l| l.session),
+        source_label,
+    ))
+}
 /// A Play Together guest on the stream's own controller (join.rs `STREAM_SEAT`).
 const GUEST_SEAT_SOURCE: u64 = u64::MAX - 1;
 
@@ -1309,6 +1339,7 @@ impl Live {
             }
         }
         let merged = self.sources.set(source, state);
+        crate::rp_diag::pad_seen(self.session, &self.host, source, state.as_ref(), &merged);
         if let Ok(mut g) = self.pad.lock() {
             if !self.playing.load(Ordering::Relaxed) {
                 // Nothing reads these during a wake and the handshake. Replayed at the start they
@@ -2133,6 +2164,9 @@ async fn session(mut socket: WebSocket) {
                     if let Ok(m) = serde_json::from_str::<ClientMsg>(t.as_str()) {
                         if let Some(p) = pong(&m) {
                             let _ = pong_tx.try_send(p);
+                        }
+                        if let Some(from) = &m.pad_from {
+                            crate::rp_diag::page_from(live.session, &live.host, from);
                         }
                         if let Some(p) = m
                             .pad

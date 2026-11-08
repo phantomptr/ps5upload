@@ -52,6 +52,30 @@ describe("padFromGamepads", () => {
     expect(padFromGamepads([pad({ axes: [0, 0, 0, 0, 0] })], () => prof).l2).toBe(128);
     expect(padFromGamepads([pad({ axes: [0, 0, 0, 0, 1] })], () => prof).l2).toBe(255);
   });
+  it("sends a half-pressed trigger as half, though the browser already calls it pressed", () => {
+    // Browsers set `pressed` on an analog trigger from about a tenth of the way: read as pressed,
+    // every pull reached the PS5 as 255, a trigger that worked like a button.
+    const half = (v: number) => {
+      const g = pad();
+      const buttons = [...g.buttons];
+      buttons[6] = { pressed: true, touched: true, value: v } as GamepadButton;
+      buttons[7] = { pressed: true, touched: true, value: v } as GamepadButton;
+      return { ...g, buttons } as Gamepad;
+    };
+    expect(padFromGamepads([half(0.5)]).l2).toBe(128);
+    expect(padFromGamepads([half(0.5)]).r2).toBe(128);
+    expect(padFromGamepads([half(0.2)]).r2).toBe(51);
+    expect(padFromGamepads([half(1)]).l2).toBe(255);
+    // A trigger mapped by hand to a button keeps its pull too.
+    const mapped = { ...STANDARD_PROFILE, l2: { b: 7 }, r2: { b: 6 } };
+    expect(padFromGamepads([half(0.3)], () => mapped).l2).toBe(77);
+  });
+  it("sends a button that says pressed with no value as all the way", () => {
+    const g = pad();
+    const buttons = [...g.buttons];
+    buttons[7] = { pressed: true, touched: true, value: 0 } as GamepadButton;
+    expect(padFromGamepads([{ ...g, buttons } as Gamepad]).r2).toBe(255);
+  });
 });
 
 describe("mapping a controller", () => {
@@ -106,6 +130,24 @@ describe("a controller forwarded by the Android app", () => {
     // The browser sees one itself: that one only, never both.
     const real = pad({ id: "Backbone One" });
     expect(gamepadsOf(nav([real]))).toEqual([real]);
+    resetNativePad();
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps a forwarded trigger's pull (Linux, Windows and Android apps)", async () => {
+    const { gamepadsOf, installNativePad, resetNativePad } = await import("./nativePad");
+    resetNativePad();
+    vi.stubGlobal("window", { dispatchEvent: () => true });
+    installNativePad();
+    const nav = { getGamepads: () => [null] } as unknown as Navigator;
+    const buttons = new Array(17).fill(0);
+    // Past half way the forwarded button reads as pressed: it still sends how far it is pulled.
+    buttons[6] = 0.7;
+    buttons[7] = 0.3;
+    window.__ps5uNativePad!({ id: "DualSense", buttons, axes: [0, 0, 0, 0] });
+    const p = padFromGamepads(gamepadsOf(nav));
+    expect(p.l2).toBe(179);
+    expect(p.r2).toBe(77);
     resetNativePad();
     vi.unstubAllGlobals();
   });
