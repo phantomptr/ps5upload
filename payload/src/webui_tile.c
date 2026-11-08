@@ -173,7 +173,7 @@ int webui_tile_ensure_with(const webui_tile_ensure_ops_t *o, webui_tile_action_t
     listed = changed > 0 ? -1 : o->listed(o->ctx);
     a = webui_tile_plan(changed > 0, o->mount_live(o->ctx), o->lnk_ours(o->ctx), o->appmeta(o->ctx), listed);
     if (done) *done = a;
-    if (a == WEBUI_TILE_REBIND && o->rebind(o->ctx, &err) != 0) a = WEBUI_TILE_REGISTER; /* fall back */
+    if (a == WEBUI_TILE_REBIND && o->remount(o->ctx, &err) != 0) a = WEBUI_TILE_REGISTER; /* fall back */
     if (a == WEBUI_TILE_REGISTER) {
         err = NULL;
         full = 1;
@@ -514,7 +514,7 @@ static int en_listed(void *ctx) {
     return webui_tile_install_record(&seen);
 }
 
-static int en_rebind(void *ctx, const char **err) {
+static int en_remount(void *ctx, const char **err) {
     (void)ctx;
     /* Still registered with Sony from an earlier boot: re-mount only, no Sony call. */
     if (register_remount_nullfs(WEBUI_TILE_TITLE_ID, WEBUI_TILE_DIR, err) == 0) {
@@ -546,7 +546,7 @@ static const char *tile_action_name(webui_tile_action_t a) {
 
 int webui_tile_ensure(uint16_t port, const char **why) {
     webui_tile_ensure_ops_t ops = {
-        &port, en_write_files, en_mount_live, en_lnk_ours, en_appmeta, en_listed, en_rebind, en_register_full,
+        &port, en_write_files, en_mount_live, en_lnk_ours, en_appmeta, en_listed, en_remount, en_register_full,
         en_sleep_s,
     };
     webui_tile_action_t a = WEBUI_TILE_NONE;

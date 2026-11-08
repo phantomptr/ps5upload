@@ -65,7 +65,7 @@ typedef struct {
     int (*lnk_ours)(void *ctx);
     int (*appmeta)(void *ctx);
     int (*listed)(void *ctx);                         /* app.db install record: 1 / 0 / -1 unreadable */
-    int (*rebind)(void *ctx, const char **err);       /* register_remount_nullfs: 0 / -1 */
+    int (*remount)(void *ctx, const char **err);       /* register_remount_nullfs: 0 / -1 */
     int (*register_full)(void *ctx, const char **err); /* register_title_from_path: 0 / -1 */
     void (*sleep_s)(void *ctx, unsigned seconds);
 } webui_tile_ensure_ops_t;
@@ -74,7 +74,7 @@ typedef struct {
  * moment after it returns: two records 2.2 s apart on FW 13.60 through AppInstallAll). */
 #define WEBUI_TILE_LISTED_WAIT_S 10
 
-/* write_files, webui_tile_plan, then nothing / rebind (a full register when that fails) / a full
+/* write_files, webui_tile_plan, then nothing / remount (a full register when that fails) / a full
  * register; after a full register, app.db must list the tile within WEBUI_TILE_LISTED_WAIT_S
  * (unreadable counts as fine: never guess). 0, or -1 with *why set to a short reason code:
  * "write_failed", the register's own err (e.g. "register_install_api_error"), or "not_listed"
