@@ -412,7 +412,8 @@ to install. The engine, in the desktop app or the Docker image, serves all of th
 
 There is no password, by design: it answers only the engine's own computer unless you open it with
 `PS5UPLOAD_ALLOW_IP`. An agent can do whatever you can on your console, including delete files, so
-`PS5UPLOAD_MCP_READ_ONLY=1` is there if you only want it to look.
+"Agents can change things" under MCP & API (or `PS5UPLOAD_MCP_READ_ONLY=1`) is there if you only want
+it to look.
 
 ## FAQ
 

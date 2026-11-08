@@ -308,6 +308,42 @@
         },
         "type": "object"
       },
+      "AgentAccessChange": {
+        "additionalProperties": false,
+        "properties": {
+          "read_only": {
+            "description": "`true`: agents can only look. `false`: they can change things too.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "read_only"
+        ],
+        "type": "object"
+      },
+      "AgentAccessState": {
+        "description": "What `/api/mcp/access` answers.",
+        "properties": {
+          "locked": {
+            "description": "`PS5UPLOAD_MCP_READ_ONLY` in the engine's environment holds it read-only, whatever the\nswitch says.",
+            "type": "boolean"
+          },
+          "read_only": {
+            "description": "In force now: agents can only look.",
+            "type": "boolean"
+          },
+          "setting": {
+            "description": "The app's switch (\"Agents can change things\" is its opposite).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "read_only",
+          "setting",
+          "locked"
+        ],
+        "type": "object"
+      },
       "AllowFirewallRequest": {
         "properties": {
           "confirm": {
@@ -22767,6 +22803,106 @@
         "x-ps5upload": {
           "access": "loopback",
           "response_schema": "literal"
+        }
+      }
+    },
+    "/api/mcp/access": {
+      "get": {
+        "description": "`GET /api/mcp/access`: what is in force, the app's switch, and whether the environment locks it.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentAccessState"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "What is in force, the app's switch, and whether the environment locks it",
+        "tags": [
+          "mcp"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "struct"
+        }
+      },
+      "put": {
+        "description": "`PUT /api/mcp/access` `{read_only}`: the app's switch. With the environment set, it is kept but\nagents still only look until the environment changes.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentAccessChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {}
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The app's switch",
+        "tags": [
+          "mcp"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
         }
       }
     },
