@@ -8157,6 +8157,8 @@ rp_users_add_hint: "Pour jouer aussi avec un autre utilisateur, connectez-vous �
 "net_internet_support": "Le jeu par Internet passe par un petit serveur que nous payons. S'il vous est utile, un don le fait tourner. Merci !",
 "pt_elsewhere": "Vous jouez d'ailleurs ? Choisissez Internet ci-dessus.",
 "pt_elsewhere_guest": "Vous jouez d'ailleurs ? Demandez à votre ami de vous inviter via Internet, puis ouvrez son lien dans votre navigateur.",
+"pad_net_computer": "l'ordinateur",
+"rp_watch_net_how": "Toute personne ayant ce lien peut regarder le stream de n'importe où, sur téléphone, tablette ou ordinateur (jusqu'à quatre). Par Internet, elle regarde seulement : la manette ne peut pas lui être confiée.",
 };
 
 export default fr;

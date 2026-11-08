@@ -8143,6 +8143,8 @@ rp_users_add_hint: "Để chơi bằng cả người dùng khác, hãy đăng nh
 "net_internet_support": "Chơi qua Internet chạy trên một máy chủ nhỏ do chúng tôi trả tiền. Nếu nó hữu ích với bạn, một khoản ủng hộ sẽ giúp nó tiếp tục chạy. Cảm ơn bạn!",
 "pt_elsewhere": "Chơi từ nơi khác? Chọn Internet ở trên.",
 "pt_elsewhere_guest": "Chơi từ nơi khác? Nhờ bạn của bạn mời qua Internet, rồi mở liên kết của họ trong trình duyệt.",
+"pad_net_computer": "máy tính",
+"rp_watch_net_how": "Bất kỳ ai có liên kết này đều có thể xem luồng từ bất cứ đâu trên điện thoại, máy tính bảng hoặc máy tính (tối đa bốn người). Qua internet họ chỉ xem: không thể trao tay cầm cho họ.",
 };
 
 export default vi;

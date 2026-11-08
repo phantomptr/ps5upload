@@ -8150,6 +8150,8 @@ rp_users_add_hint: "Untuk bermain juga sebagai pengguna lain, masuk ke pengguna 
 "net_internet_support": "Main lewat internet berjalan di server kecil yang kami bayar. Kalau ini membantumu, donasi membuatnya tetap jalan. Terima kasih!",
 "pt_elsewhere": "Main dari tempat lain? Pilih Internet di atas.",
 "pt_elsewhere_guest": "Main dari tempat lain? Minta temanmu mengundang lewat Internet, lalu buka tautannya di browser.",
+"pad_net_computer": "komputer",
+"rp_watch_net_how": "Siapa pun yang punya tautan ini bisa menonton stream dari mana saja, di ponsel, tablet, atau komputer (hingga empat). Lewat internet mereka hanya menonton: kontroler tidak bisa diserahkan kepada mereka.",
 };
 
 export default id;

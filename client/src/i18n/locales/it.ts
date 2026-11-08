@@ -8094,6 +8094,8 @@ rp_users_add_hint: "Per giocare anche come un altro utente, accedi con quell’u
 "net_internet_support": "Il gioco via Internet passa da un piccolo server che paghiamo noi. Se ti è utile, una donazione lo tiene attivo. Grazie!",
 "pt_elsewhere": "Giocate da un altro posto? Scegli Internet qui sopra.",
 "pt_elsewhere_guest": "Giochi da un altro posto? Chiedi al tuo amico di invitarti con Internet, poi apri il suo link nel browser.",
+"pad_net_computer": "computer",
+"rp_watch_net_how": "Chiunque abbia questo link può guardare lo stream da ovunque, su telefono, tablet o computer (fino a quattro). Via internet guardano soltanto: non gli si può passare il controller.",
 };
 
 export default it;

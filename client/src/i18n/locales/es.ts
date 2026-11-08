@@ -8094,6 +8094,8 @@ rp_users_add_hint: "Para jugar también como otro usuario, inicia sesión con es
 "net_internet_support": "Jugar por Internet funciona con un pequeño servidor que pagamos. Si te resulta útil, una donación lo mantiene en marcha. ¡Gracias!",
 "pt_elsewhere": "¿Jugáis desde otro sitio? Elige Internet arriba.",
 "pt_elsewhere_guest": "¿Juegas desde otro sitio? Pide a tu amigo que te invite con Internet y abre su enlace en el navegador.",
+"pad_net_computer": "el ordenador",
+"rp_watch_net_how": "Cualquiera con este enlace puede ver la transmisión desde cualquier lugar, en su móvil, tableta u ordenador (hasta cuatro). Por internet solo miran: no se les puede pasar el mando.",
 };
 
 export default es;

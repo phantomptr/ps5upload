@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import qrcode from "qrcode-generator";
-import { Smartphone, X } from "lucide-react";
+import { Check, Copy, RefreshCw, Smartphone, X } from "lucide-react";
 
 import { Button } from "../../components";
+import { writeClipboard } from "../../lib/clipboard";
 import { getEngineUrl } from "../../state/engine";
 import { useTr } from "../../state/lang";
-import { NetworkChoice } from "./NetworkChoice";
+import { netInviteNote, NetworkChoice, saveNetwork, savedNetwork, splitByNetwork, urlHost, type NetworkKind } from "./NetworkChoice";
+import { readNetInvite, type NetInvite } from "./playTogetherState";
 
 /** The phones link of this engine's Remote Play session (pad_link.rs). */
 export interface PadLinkState {
@@ -18,7 +20,11 @@ export interface PadLinkState {
   tailscale: string | null;
   /** What the phone app connects to (it asks; this computer allows). */
   pad_ws: string | null;
-  pads: Array<{ id: number; name: string; watch?: boolean; control?: boolean }>;
+  /** Internet links may be made (Settings › Play Together); null: an engine from before them. */
+  internetInvites: boolean | null;
+  /** The internet link, once made (POST /api/ps5/rp/pad-link/internet). */
+  internet: NetInvite | null;
+  pads: Array<{ id: number; name: string; watch?: boolean; control?: boolean; via?: "internet" }>;
   pending: Array<{ id: number; name: string }>;
 }
 
@@ -46,6 +52,8 @@ const EMPTY: PadLinkState = {
   urls: [],
   tailscale: null,
   pad_ws: null,
+  internetInvites: null,
+  internet: null,
   pads: [],
   pending: [],
 };
@@ -65,16 +73,20 @@ export function readPadLink(v: unknown): PadLinkState {
           name: string;
           watch?: unknown;
           control?: unknown;
+          via?: unknown;
         };
         return {
           id: o.id,
           name: o.name,
           ...(o.watch === true ? { watch: true } : {}),
           ...(o.control === true ? { control: true } : {}),
+          ...(o.via === "internet" ? { via: "internet" as const } : {}),
         };
       });
   return {
     open: o.open === true,
+    internetInvites: typeof o.internet_invites === "boolean" ? o.internet_invites : null,
+    internet: readNetInvite(o.internet),
     url: typeof o.url === "string" ? o.url : null,
     urls: Array.isArray(o.urls)
       ? o.urls.filter((u): u is string => typeof u === "string")
@@ -132,6 +144,27 @@ export const kickPad = (id: number) =>
 /** Hand a watcher the controller, or take it back (watch party). */
 export const padControl = (id: number, on: boolean) =>
   call("/api/ps5/rp/pad-link/control", { id, on });
+
+/** The internet link (made with the link, the same one again unless `renew`: a new room and key,
+ *  the old link stops working). A refusal says why (`internet_off`, `hub_url`…). */
+export async function padInternet(
+  consoleHost: string | null,
+  renew = false,
+): Promise<{ state: PadLinkState | null; error: string | null }> {
+  try {
+    const r = await fetch(`${getEngineUrl()}/api/ps5/rp/pad-link/internet`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ console: consoleHost, new: renew }),
+    });
+    const v: unknown = await r.json().catch(() => null);
+    if (r.ok) return { state: readPadLink(v), error: null };
+    const e = (v as { error?: unknown } | null)?.error;
+    return { state: null, error: typeof e === "string" ? e : `http_${r.status}` };
+  } catch {
+    return { state: null, error: "engine" };
+  }
+}
 
 /** The watch party's link: the controller link, opened to watch (pad page, `w=1`). */
 export const watchUrl = (padUrl: string) => `${padUrl}&w=1`;
@@ -193,15 +226,59 @@ export function PhonePadsPanel({
   const [picked, setPicked] = useState<string | null>(null);
   /** Which code is shown: a phone as the controller, or a device that watches (watch party). */
   const [mode, setMode] = useState<"play" | "watch">("play");
+  // The network the link is for: the same remembered choice as Play Together's invites.
+  const [network, setNetwork] = useState<NetworkKind>(savedNetwork);
+  // Why the engine would not make the internet link (`internet_off`, `hub_url`…), or null.
+  const [netWhy, setNetWhy] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const asking = useRef(false);
+  // An engine from before internet links says nothing of them: no Internet choice there.
+  const netOffered = link.internetInvites !== null;
+  const onInternet = netOffered && network === "internet";
+  /** Asks the engine for the internet link; `renew`: a new one (the old link stops working). */
+  const askNet = async (renew: boolean): Promise<void> => {
+    if (asking.current) return;
+    asking.current = true;
+    try {
+      const r = await padInternet(consoleHost, renew);
+      setNetWhy(r.error);
+      if (r.state) onLink(r.state);
+    } finally {
+      asking.current = false;
+    }
+  };
+  const pickNetwork = (kind: NetworkKind) => {
+    setNetwork(kind);
+    saveNetwork(kind);
+    setNetWhy(null);
+  };
   useEffect(() => {
     void openPadLink(true, consoleHost).then((s) =>
       s ? onLink(s) : setFailed(true),
     );
   }, [consoleHost, onLink]);
+  // The internet link when that is the choice and the engine has none (opening the panel, the
+  // engine restarted): made once; a refusal stays shown until the host picks again.
+  const needNet = onInternet && link.open && !link.internet && !netWhy && !failed;
+  useEffect(() => {
+    if (needNet) void askNet(false);
+    // askNet reads the latest consoleHost/onLink; only the need starts it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needNet]);
   const urls = link.urls.length ? link.urls : link.url ? [link.url] : [];
+  // Tailscale, when that was the last choice and this computer still has it.
+  const lanPick = picked ?? (network === "tailscale" ? splitByNetwork(urls, link.tailscale).tailnet : null);
   const best =
-    picked && urls.includes(picked) ? picked : (link.url ?? urls[0] ?? null);
-  const shown = best && mode === "watch" ? watchUrl(best) : best;
+    lanPick && urls.includes(lanPick) ? lanPick : (link.url ?? urls[0] ?? null);
+  const base = onInternet ? (link.internet?.url ?? null) : best;
+  const shown = base && mode === "watch" ? watchUrl(base) : base;
+  const netNote = onInternet ? netInviteNote(tr, netWhy, link.internet) : null;
+  const copy = async () => {
+    if (shown && (await writeClipboard(shown))) {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    }
+  };
 
   return (
     <div
@@ -222,15 +299,15 @@ export function PhonePadsPanel({
           <X size={16} />
         </button>
       </div>
-      {failed || (link.open && !shown) ? (
-        <p className="text-sm text-[var(--color-warn)]">
+      {failed || (!onInternet && link.open && !shown) ? (
+        <p className="text-sm text-[var(--color-warn)]" data-testid="rp-pad-no-address">
           {tr(
             "rp_phone_no_address",
             undefined,
             "This computer has no address on the PS5's network to give a phone. Check that it is on the same network as the PS5.",
           )}
         </p>
-      ) : shown ? (
+      ) : shown || onInternet ? (
         <>
           <div className="flex gap-1.5" role="group" data-testid="rp-pad-mode">
             {(["play", "watch"] as const).map((m) => (
@@ -249,17 +326,25 @@ export function PhonePadsPanel({
             ))}
           </div>
           <div className="flex flex-wrap items-start gap-4">
-            <QrCode
-              text={shown}
-              label={tr(
-                "rp_phone_qr",
-                undefined,
-                "QR code for the phone's camera",
-              )}
-            />
+            {shown && (
+              <QrCode
+                text={shown}
+                label={tr(
+                  "rp_phone_qr",
+                  undefined,
+                  "QR code for the phone's camera",
+                )}
+              />
+            )}
             <div className="min-w-0 flex-1 space-y-2 text-sm">
               <p>
-                {mode === "watch"
+                {mode === "watch" && onInternet
+                  ? tr(
+                      "rp_watch_net_how",
+                      undefined,
+                      "Anyone with this link can watch the stream from anywhere, on their phone, tablet or computer (up to four). Over the internet they only watch: they can't be handed the controller.",
+                    )
+                  : mode === "watch"
                   ? tr(
                       "rp_watch_how",
                       undefined,
@@ -280,17 +365,65 @@ export function PhonePadsPanel({
                   )}
                 </p>
               )}
-              <p
-                className="break-all text-xs text-[var(--color-muted)]"
-                data-testid="rp-pad-url"
-              >
-                {shown}
-              </p>
+              {shown ? (
+                <p
+                  className="break-all text-xs text-[var(--color-muted)]"
+                  data-testid="rp-pad-url"
+                >
+                  {shown}
+                </p>
+              ) : onInternet && netWhy ? (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  leftIcon={<RefreshCw size={14} />}
+                  onClick={() => void askNet(false)}
+                  data-testid="rp-pad-net-retry"
+                >
+                  {tr("join_retry", undefined, "Try again")}
+                </Button>
+              ) : (
+                <p className="text-xs text-[var(--color-muted)]">…</p>
+              )}
+              {onInternet && shown && (
+                // Someone far away can't scan the screen: the link goes by message.
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    leftIcon={copied ? <Check size={14} /> : <Copy size={14} />}
+                    onClick={() => void copy()}
+                    data-testid="rp-pad-copy"
+                  >
+                    {copied ? tr("pt_copied", undefined, "Copied") : tr("pt_copy", undefined, "Copy link")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    leftIcon={<RefreshCw size={14} />}
+                    onClick={() => void askNet(true)}
+                    data-testid="rp-pad-new-link"
+                  >
+                    {tr("pt_new_link", undefined, "New link")}
+                  </Button>
+                </div>
+              )}
+              {netNote && (
+                <p
+                  className={`text-xs ${netNote.tone === "warn" ? "text-[var(--color-warn)]" : "text-[var(--color-muted)]"}`}
+                  data-testid={netNote.id.replace(/^pt-/, "rp-pad-")}
+                >
+                  {netNote.text}
+                </p>
+              )}
               <NetworkChoice
                 urls={urls}
                 tailscale={link.tailscale}
-                current={best}
-                onPick={setPicked}
+                current={onInternet ? null : best}
+                onPick={(u) => {
+                  setPicked(u);
+                  pickNetwork(u && link.tailscale && urlHost(u) === link.tailscale ? "tailscale" : "home");
+                }}
                 otherNetwork={tr(
                   "rp_phone_other_network",
                   undefined,
@@ -298,15 +431,28 @@ export function PhonePadsPanel({
                 )}
                 testId="rp-pad-addresses"
                 addressTestId="rp-pad-address"
+                internet={
+                  netOffered
+                    ? {
+                        on: onInternet,
+                        onPick: () => {
+                          pickNetwork("internet");
+                          if (!link.internet?.url) void askNet(false);
+                        },
+                      }
+                    : null
+                }
               />
-              <p className="text-xs text-[var(--color-muted)]" data-testid="rp-pad-android-lan">
-                {tr(
-                  "rp_phone_android_lan",
-                  undefined,
-                  "Android 17 or later and the page won't open? Allow the phone's browser Nearby devices: Settings › Apps › Chrome › Permissions.",
-                )}
-              </p>
-              {mode === "play" && (
+              {!onInternet && (
+                <p className="text-xs text-[var(--color-muted)]" data-testid="rp-pad-android-lan">
+                  {tr(
+                    "rp_phone_android_lan",
+                    undefined,
+                    "Android 17 or later and the page won't open? Allow the phone's browser Nearby devices: Settings › Apps › Chrome › Permissions.",
+                  )}
+                </p>
+              )}
+              {mode === "play" && !onInternet && (
                 <p className="text-xs text-[var(--color-muted)]">
                   {tr(
                     "rp_phone_app",
@@ -337,8 +483,14 @@ export function PhonePadsPanel({
                       : tr("rp_watch_watching", undefined, "watching")}
                   </span>
                 )}
+                {p.via === "internet" && (
+                  <span className="ms-2 text-xs text-[var(--color-muted)]" data-testid="rp-pad-via-internet">
+                    {tr("net_internet", undefined, "Internet")}
+                  </span>
+                )}
               </span>
-              {p.watch && (
+              {/* Over the internet a watcher only watches (the engine refuses it the controller). */}
+              {p.watch && p.via !== "internet" && (
                 <Button
                   size="sm"
                   variant="ghost"

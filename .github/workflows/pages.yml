@@ -10,6 +10,8 @@ name: pages
 # site/join/index.html is the Play Together guest page for internet invites
 # (https://ps5upload.phantomptr.com/join/#room=…), built by `npm run build:join` in client/ (the
 # same file the engine embeds) and committed; scripts/check-embedded-pages.mjs keeps it current.
+# site/pad/index.html is the phone link's page for its internet links (a phone as a controller or
+# to watch, https://ps5upload.phantomptr.com/pad/#room=…), from `npm run build:pad`, the same way.
 #
 # When it deploys:
 # - a change to site/ (or this file) on main;
