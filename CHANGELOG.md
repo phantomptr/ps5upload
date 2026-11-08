@@ -4,6 +4,46 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 12.0.0
+
+Tailscale, built in:
+
+- Play your PS5 from anywhere through your own Tailscale network, with no Tailscale app on the PS5 or a VPN router. Sign in once in Settings › Tailscale, then use Connection › "Put this PS5 on Tailscale".
+- On Tailscale, the PS5 only answers to Remote Play and PS5Upload, nothing else.
+- Settings and the console's Tailscale panel say in plain words when something is wrong: sign-in refused, signed out, server unreachable, or a key that has expired or is about to.
+
+Play Together:
+
+- Play together has its own page, with Start and Invite.
+- A friend can play as a profile you pick, such as a guest, so the game uses that profile's saves and trophies and nothing pops up on the TV.
+- A friend who reconnects gets the same profile back.
+- When an internet friend or phone would play as you, the Allow box says so and asks a second time.
+- The phone controller and the watch link now work over the internet too. A phone that reconnects is let back in only with the token it got when you allowed it.
+- Third-party controllers (8BitDo and other popular pads) are mapped correctly, and a friend can check their controller and set it up from the invite page.
+
+Convert:
+
+- Save to a server: an image or folder can be written straight to a NAS or server over SMB, NFS, FTP, SFTP or WebDAV.
+- Convert can now make PS4 fake packages (.pkg).
+- Not yet tried on a PS5.
+
+Payloads:
+
+- Payloads can keep themselves up to date, and stay in step with Payload Manager when you use it.
+
+Agents (MCP):
+
+- A switch in the app decides whether AI agents can only look or can change things too. When agents can only look, they can't see invite or phone-link secrets.
+
+Fixes and smaller changes:
+
+- Web UI: add files from the device you're browsing on (#730), and Go live works from an iPhone's Safari (#731).
+- Saves: saves whose file names Windows can't hold (such as RDR2) now copy and restore (#729).
+- Install: a PS5 add-on is no longer taken for the game when the game runs from an image (#724).
+- Remote Play waits for a PS5 that is still holding its last session instead of failing (#720).
+- The PS5Upload tile on the console's home screen is put back if it's missing, and an old offline copy of the console page can update itself.
+- The website lists everything the app does, has a FAQ, and covers Tailscale and playing over the internet.
+
 ## 11.6.0
 
 Play Together over the internet:
