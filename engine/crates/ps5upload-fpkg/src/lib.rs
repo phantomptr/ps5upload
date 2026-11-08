@@ -55,6 +55,7 @@ pub mod playgo;
 pub mod ps4_merge;
 pub mod ps4_param;
 pub mod ps4_pkg;
+pub mod ps4_pkg_write;
 pub mod remote_source;
 pub mod rsa;
 pub mod sample;

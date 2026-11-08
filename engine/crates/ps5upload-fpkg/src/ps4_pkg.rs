@@ -97,7 +97,7 @@ fn sha256(data: &[u8]) -> [u8; 32] {
 }
 
 /// `SHA256(SHA256(index as BE32) ‖ SHA256(content id padded to 48) ‖ passcode)`.
-fn package_key(content_id: &str, passcode: &str, index: u32) -> [u8; 32] {
+pub(crate) fn package_key(content_id: &str, passcode: &str, index: u32) -> [u8; 32] {
     let mut cid = [0u8; 48];
     let id = content_id.as_bytes();
     let n = id.len().min(48);

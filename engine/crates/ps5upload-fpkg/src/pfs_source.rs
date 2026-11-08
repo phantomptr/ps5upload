@@ -483,11 +483,28 @@ struct Dirent {
 }
 
 /// The entries of a directory's bytes: `inode, type, name length, entry size`, then the name.
-/// Stops at the first entry that does not parse, as the console does.
+/// Stops at the first entry that does not parse, as the console does. Zeros to the end of a
+/// 64 KiB block or of where an entry's header fits mean that block holds no more: a PS4
+/// package's folder moves an entry that would end in a block's last 280 bytes to the next
+/// block (maxton/LibOrbisPkg `PFSBuilder`), so a large folder goes on there.
 fn dirents(blob: &[u8]) -> Vec<Dirent> {
+    const DIR_BLOCK: usize = 0x10000;
     let mut out = Vec::new();
     let mut at = 0usize;
-    while at + 16 <= blob.len() {
+    loop {
+        let in_block = DIR_BLOCK - at % DIR_BLOCK;
+        let head_end = blob.len().min(at + 16.min(in_block));
+        if at < blob.len() && blob[at..head_end].iter().all(|b| *b == 0) {
+            let next = at + in_block;
+            if !at.is_multiple_of(DIR_BLOCK) && next < blob.len() {
+                at = next;
+                continue;
+            }
+            break;
+        }
+        if at + 16 > blob.len() {
+            break;
+        }
         let inode = le32(blob, at);
         let kind = le32(blob, at + 4) as i32;
         let name_len = le32(blob, at + 8) as i32;
@@ -542,5 +559,53 @@ impl SourceTree for PfsSource {
             self.block_size / 1024,
             self.files.len()
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(out: &mut Vec<u8>, inode: u32, name: &str) {
+        let size = (name.len() + 17).div_ceil(8) * 8;
+        let at = out.len();
+        out.resize(at + size, 0);
+        out[at..at + 4].copy_from_slice(&inode.to_le_bytes());
+        out[at + 4..at + 8].copy_from_slice(&2u32.to_le_bytes());
+        out[at + 8..at + 12].copy_from_slice(&(name.len() as u32).to_le_bytes());
+        out[at + 12..at + 16].copy_from_slice(&(size as u32).to_le_bytes());
+        out[at + 16..at + 16 + name.len()].copy_from_slice(name.as_bytes());
+    }
+
+    /// A folder whose entries go on in its next block after zeros, as a PS4 package lays out a
+    /// large one, reads whole; zeros at the start of a block still end it.
+    #[test]
+    fn a_folder_goes_on_in_its_next_block() {
+        let mut blob = Vec::new();
+        entry(&mut blob, 5, "first");
+        // The last entry ends 8 bytes before the block does: too little for a header.
+        while blob.len() < 0x10000 - 8 - 32 {
+            entry(&mut blob, 6, "x");
+        }
+        entry(&mut blob, 7, "last_in_one");
+        assert_eq!(blob.len(), 0x10000 - 8);
+        blob.resize(0x10000, 0);
+        entry(&mut blob, 8, "in_two");
+        blob.resize(0x20000, 0);
+        let names: Vec<String> = dirents(&blob).into_iter().map(|d| d.name).collect();
+        assert_eq!(names.first().map(String::as_str), Some("first"));
+        assert!(names.iter().any(|n| n == "last_in_one"));
+        assert_eq!(names.last().map(String::as_str), Some("in_two"));
+
+        let mut blob = Vec::new();
+        entry(&mut blob, 5, "only");
+        blob.resize(0x10000, 0);
+        blob.resize(0x20000, 0);
+        entry(&mut blob, 9, "never");
+        assert_eq!(
+            dirents(&blob).len(),
+            1,
+            "zeros from a block's start end the folder"
+        );
     }
 }
