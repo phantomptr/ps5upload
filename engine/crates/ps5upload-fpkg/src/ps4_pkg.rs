@@ -15,10 +15,31 @@
 //! The keys come from the content ID and the passcode, SHA-256 where a PS5 package has SHA3. Only
 //! packages with the usual all-zero passcode open. Another passcode would need the fake RSA key
 //! to unwrap the image key, and is refused in words.
+//!
+//! Three kinds share this layout, told apart by the container header (`content_type` at 0x74,
+//! `content_flags` at 0x78) and `param.sfo`'s CATEGORY, as LibOrbisPkg's `PkgBuilder` writes
+//! them (`VolTypeToContentType`, `VolTypeToContentFlags`) and `ps5upload_pkg::kind::classify`
+//! reads them:
+//!
+//! - a game: type GD (0x1A), CATEGORY `gd`;
+//! - an update: type GD with a patch flag (`SUBSEQUENT_PATCH` 0x40000000, `FIRST_PATCH`
+//!   0x00100000; `CUMULATIVE_PATCH` is 0x60000000), or type DP (0x1E), which LibOrbisPkg writes
+//!   for every `pkg_ps4_patch`; CATEGORY `gp`. Its image holds whole files: those the update
+//!   changed or added, not the rest of the game, which the console reads from the game under
+//!   it. A delta update (`DELTA_PATCH` 0x41000000: the 0x01000000 bit) holds differences
+//!   instead and is refused;
+//! - an add-on: type AC (0x1B) with an image of its own files (LibOrbisPkg's `pkg_ps4_ac_data`;
+//!   its `sce_sys` files are container entries, not in the image), or AL (0x1C,
+//!   `pkg_ps4_ac_nodata`), a licence with no image at all; CATEGORY `ac`.
+//!
+//! An add-on reads as its image alone, what a game finds at the add-on's mount point; its
+//! container entries (`param.sfo`, the icon, the licence) stay in [`Ps4Info`].
 
 use std::io::{Read, Seek, SeekFrom};
 
 use flate2::read::ZlibDecoder;
+use ps5upload_pkg::kind::{classify, Kind};
+use ps5upload_pkg::{sfo_params, SfoValue};
 use sha2::{Digest, Sha256};
 
 use crate::cnt::{self, Cnt};
@@ -48,6 +69,14 @@ const NAMES_ID: u32 = 0x200;
 const MAX_INODE_BLOCKS: u64 = 1 << 14;
 /// The root folder holds a few names; this is already generous.
 const MAX_ROOT_FOLDER: u64 = 64 << 20;
+/// `content_flags`' bit that `DELTA_PATCH` (0x41000000) adds to `SUBSEQUENT_PATCH`.
+const DELTA_FLAG: u32 = 0x0100_0000;
+/// The container entry of `param.sfo`.
+const PARAM_SFO_ID: u32 = 0x1000;
+
+/// Why a licence-only add-on converts to nothing.
+pub const LICENCE_ONLY: &str = "this PS4 add-on is a licence only: it unlocks something in the \
+     game and holds no files, so there is nothing to convert";
 
 fn le16(b: &[u8], at: usize) -> u16 {
     u16::from_le_bytes([b[at], b[at + 1]])
@@ -412,8 +441,142 @@ fn sce_sys_entries(c: &Cnt, passcode: &str) -> Vec<(String, Vec<u8>)> {
     out
 }
 
+/// What a PS4 package is: see the module docs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Ps4Kind {
+    Game,
+    Patch,
+    Addon,
+}
+
+impl Ps4Kind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Ps4Kind::Game => "game",
+            Ps4Kind::Patch => "patch",
+            Ps4Kind::Addon => "addon",
+        }
+    }
+
+    /// From a `param.sfo` CATEGORY alone, for a folder or image: `None` when it names no kind.
+    pub fn of_category(category: &str) -> Option<Self> {
+        match ps5upload_pkg::kind::classify_category(category) {
+            (Kind::Base, true, _) => Some(Ps4Kind::Game),
+            (Kind::Patch, true, _) => Some(Ps4Kind::Patch),
+            (Kind::Dlc, true, _) => Some(Ps4Kind::Addon),
+            _ => None,
+        }
+    }
+}
+
+/// A PS4 package's container header and `param.sfo`, read without its image.
+#[derive(Debug, Clone)]
+pub struct Ps4Info {
+    pub kind: Ps4Kind,
+    pub content_id: String,
+    pub content_type: u32,
+    pub content_flags: u32,
+    /// Whether the header places a PFS image in the file: an add-on that is a licence has none.
+    pub has_image: bool,
+    /// An update that holds differences from the previous version rather than files.
+    pub delta: bool,
+    pub params: Vec<(String, SfoValue)>,
+}
+
+impl Ps4Info {
+    /// A text value of its `param.sfo`, trimmed; `None` when absent or blank.
+    pub fn text(&self, key: &str) -> Option<String> {
+        sfo_text(&self.params, key)
+    }
+
+    /// The title it belongs to: `TITLE_ID`, else the content ID's.
+    pub fn title_id(&self) -> String {
+        self.text("TITLE_ID")
+            .unwrap_or_else(|| ps5upload_pkg::kind::title_id_of_content_id(&self.content_id))
+    }
+}
+
+/// A text value of `param.sfo` values, trimmed; `None` when absent or blank.
+pub fn sfo_text(params: &[(String, SfoValue)], key: &str) -> Option<String> {
+    params.iter().find_map(|(k, v)| match v {
+        SfoValue::Text(t) if k == key && !t.trim().is_empty() => Some(t.trim().to_string()),
+        _ => None,
+    })
+}
+
+/// Where the header at 0x400 puts the image: (PFS flags, offset, size, whether there is one).
+fn image_place(file: &mut PkgFile, len: u64) -> Result<(u64, u64, u64, bool)> {
+    let head = file.read_at(0x400, 0x20)?;
+    let (flags, at, size) = (be64(&head, 8), be64(&head, 0x10), be64(&head, 0x18));
+    let in_file = at.checked_add(size).is_some_and(|end| end <= len);
+    Ok((
+        flags,
+        at,
+        size,
+        be32(&head, 0) >= 1 && size >= BLOCK && in_file,
+    ))
+}
+
+fn info_of(c: &Cnt, has_image: bool) -> Ps4Info {
+    let params = c
+        .entry(PARAM_SFO_ID)
+        .and_then(|e| sfo_params(c.payload(e)).ok())
+        .unwrap_or_default();
+    let (content_type, content_flags) = (be32(&c.bytes, 0x74), be32(&c.bytes, 0x78));
+    let category = sfo_text(&params, "CATEGORY").unwrap_or_default();
+    let kind = match classify(content_type, content_flags, &category).0 {
+        Kind::Base => Ps4Kind::Game,
+        Kind::Patch => Ps4Kind::Patch,
+        Kind::Dlc => Ps4Kind::Addon,
+    };
+    Ps4Info {
+        kind,
+        content_id: c.content_id.clone(),
+        content_type,
+        content_flags,
+        has_image,
+        delta: kind == Ps4Kind::Patch && content_flags & DELTA_FLAG != 0,
+        params,
+    }
+}
+
+/// A PS4 package's kind and `param.sfo`, from its container alone (a few KiB, no keys needed).
+pub fn peek(reader: Box<dyn ReadSeek>, len: u64) -> Result<Ps4Info> {
+    let mut file = PkgFile::from_reader(reader, len);
+    let c = cnt::read(&mut file, 0)?;
+    let (_, _, _, has_image) = image_place(&mut file, len)?;
+    Ok(info_of(&c, has_image))
+}
+
+/// [`peek`] at a `.pkg` on this computer or a saved server (`remote://`, `ps5://`); `None` for
+/// anything that isn't a PS4 package.
+pub fn peek_path(path: &std::path::Path) -> Result<Option<Ps4Info>> {
+    let is_pkg = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("pkg"));
+    if !is_pkg {
+        return Ok(None);
+    }
+    let (mut reader, len): (Box<dyn ReadSeek>, u64) = if crate::remote_source::is_remote(path) {
+        crate::remote_source::open_file(path)?
+    } else {
+        let f = std::fs::File::open(path)?;
+        let len = f.metadata()?.len();
+        (Box::new(f), len)
+    };
+    let mut magic = [0u8; 4];
+    if reader.read_exact(&mut magic).is_err() || !is_ps4_magic(&magic) {
+        return Ok(None);
+    }
+    reader.seek(SeekFrom::Start(0))?;
+    peek(reader, len).map(Some)
+}
+
 /// See the module docs.
 pub struct Ps4Package {
+    info: Ps4Info,
     inner: PfsSource,
     extras: Vec<(String, Vec<u8>)>,
     files: Vec<SourceFile>,
@@ -438,12 +601,18 @@ impl Ps4Package {
         if c.content_id.len() != 36 {
             return format_err("the PS4 package has no usable content ID");
         }
-        let head = file.read_at(0x400, 0x20)?;
-        let (flags, at, size) = (be64(&head, 8), be64(&head, 0x10), be64(&head, 0x18));
-        let in_file = at.checked_add(size).is_some_and(|end| end <= len);
-        if be32(&head, 0) < 1 || size < BLOCK || !in_file {
+        let (flags, at, size, has_image) = image_place(&mut file, len)?;
+        let info = info_of(&c, has_image);
+        if !has_image {
+            return format_err(match info.kind {
+                Ps4Kind::Addon => LICENCE_ONLY,
+                _ => "this PS4 package holds no image, so it has no files to read",
+            });
+        }
+        if info.delta {
             return format_err(
-                "this PS4 package holds no game image: an update or add-on can't be opened here",
+                "this PS4 update is a delta update: it holds differences from the previous \
+                 version, not files, so it can't be read or merged here",
             );
         }
         let sb = file.read_at(at, BLOCK as usize)?;
@@ -547,10 +716,16 @@ impl Ps4Package {
         };
         let inner = PfsSource::from_reader(reader, label)?;
 
-        // The container's files go under sce_sys, unless the image already has them.
+        // The container's files go under sce_sys, unless the image already has them. An
+        // add-on is its image alone: see the module docs.
         let mut files = inner.files().to_vec();
         let mut extras = Vec::new();
-        for (path, bytes) in sce_sys_entries(&c, passcode) {
+        let entries = if info.kind == Ps4Kind::Addon {
+            Vec::new()
+        } else {
+            sce_sys_entries(&c, passcode)
+        };
+        for (path, bytes) in entries {
             if files.iter().any(|f| f.path.eq_ignore_ascii_case(&path)) {
                 continue;
             }
@@ -563,11 +738,17 @@ impl Ps4Package {
         files.sort_by(|a, b| a.path.cmp(&b.path));
         let empty_dirs = still_empty(inner.empty_dirs(), &files);
         Ok(Self {
+            info,
             inner,
             extras,
             files,
             empty_dirs,
         })
+    }
+
+    /// Its kind and `param.sfo`.
+    pub fn info(&self) -> &Ps4Info {
+        &self.info
     }
 
     fn extra(&self, path: &str) -> Option<&[u8]> {
@@ -581,7 +762,7 @@ impl Ps4Package {
 /// The folders of `empty` that no file in `files` is under: a folder empty in the image that
 /// the container's files went into (sce_sys/changeinfo with changeinfo.xml from the CNT) has
 /// files now, and an image built from this source would read back without it as empty.
-fn still_empty(empty: &[String], files: &[SourceFile]) -> Vec<String> {
+pub(crate) fn still_empty(empty: &[String], files: &[SourceFile]) -> Vec<String> {
     empty
         .iter()
         .filter(|d| {
@@ -620,12 +801,17 @@ impl SourceTree for Ps4Package {
         }
     }
     fn describe(&self) -> String {
-        format!("PS4 package: {}", self.inner.describe())
+        let what = match self.info.kind {
+            Ps4Kind::Game => "PS4 package",
+            Ps4Kind::Patch => "PS4 update package",
+            Ps4Kind::Addon => "PS4 add-on package",
+        };
+        format!("{what}: {}", self.inner.describe())
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -676,7 +862,7 @@ mod tests {
         .err()
         .expect("refused")
         .to_string();
-        assert!(e.contains("holds no game image"), "{e}");
+        assert!(e.contains("holds no image"), "{e}");
     }
 
     /// A real package from a writer that isn't ours (tests/fixtures/ps4): the container's files
@@ -741,6 +927,115 @@ mod tests {
         .expect("refused")
         .to_string();
         assert!(e.contains("all-zero passcode"), "{e}");
+    }
+
+    /// A fixture package of tests/fixtures/ps4 (see its README), unzipped.
+    pub(crate) fn fixture(name: &str) -> Vec<u8> {
+        let gz: &[u8] = match name {
+            "synthetic" => include_bytes!("../tests/fixtures/ps4/synthetic.pkg.gz"),
+            "update" => include_bytes!("../tests/fixtures/ps4/update.pkg.gz"),
+            "addon" => include_bytes!("../tests/fixtures/ps4/addon.pkg.gz"),
+            "licence" => include_bytes!("../tests/fixtures/ps4/licence.pkg.gz"),
+            _ => panic!("no fixture {name}"),
+        };
+        let mut bytes = Vec::new();
+        flate2::read::GzDecoder::new(gz)
+            .read_to_end(&mut bytes)
+            .unwrap();
+        bytes
+    }
+
+    pub(crate) fn open_fixture(name: &str) -> Result<Ps4Package> {
+        let bytes = fixture(name);
+        let len = bytes.len() as u64;
+        Ps4Package::open(
+            Box::new(std::io::Cursor::new(bytes)),
+            len,
+            crate::crypto::DEFAULT_PASSCODE,
+            name.into(),
+        )
+    }
+
+    fn peek_fixture(name: &str) -> Ps4Info {
+        let bytes = fixture(name);
+        let len = bytes.len() as u64;
+        peek(Box::new(std::io::Cursor::new(bytes)), len).unwrap()
+    }
+
+    /// `asset(seed, n)` of tests/fixtures/ps4/make_extras.py.
+    pub(crate) fn asset(seed: &str, n: usize) -> Vec<u8> {
+        (0..n)
+            .flat_map(|i| format!("{seed} {} ", i % 97).into_bytes())
+            .collect()
+    }
+
+    /// Each kind as LibOrbisPkg writes it (tests/fixtures/ps4/make_extras.py), told apart by
+    /// its header and param.sfo.
+    #[test]
+    fn each_kind_is_told_from_its_header() {
+        let game = peek_fixture("synthetic");
+        assert_eq!(game.kind, Ps4Kind::Game);
+        assert_eq!(
+            (game.content_type, game.title_id()),
+            (0x1A, "CUSA99990".into())
+        );
+        let update = peek_fixture("update");
+        assert_eq!(update.kind, Ps4Kind::Patch);
+        assert_eq!(update.content_type, 0x1E, "LibOrbisPkg writes DP");
+        assert!(!update.delta && update.has_image);
+        assert_eq!(update.text("APP_VER").as_deref(), Some("01.05"));
+        assert_eq!(update.text("CATEGORY").as_deref(), Some("gp"));
+        assert_eq!(update.content_id, game.content_id);
+        let addon = peek_fixture("addon");
+        assert_eq!((addon.kind, addon.content_type), (Ps4Kind::Addon, 0x1B));
+        assert!(addon.has_image);
+        assert_eq!(addon.title_id(), "CUSA99990");
+        let licence = peek_fixture("licence");
+        assert_eq!((licence.kind, licence.content_type), (Ps4Kind::Addon, 0x1C));
+        assert!(!licence.has_image);
+    }
+
+    /// An update reads as its own files and the container's sce_sys; the files are what
+    /// make_extras.py wrote (LibOrbisPkg's pkg_extract gives the same bytes: README).
+    #[test]
+    fn an_update_reads_back() {
+        let mut p = open_fixture("update").unwrap();
+        assert_eq!(p.info().kind, Ps4Kind::Patch);
+        let names: Vec<&str> = p.files().iter().map(|f| f.path.as_str()).collect();
+        for want in [
+            "eboot.bin",
+            "data/added.bin",
+            "data/sub/asset.bin",
+            "sce_sys/changeinfo/changeinfo.xml",
+            "sce_sys/param.sfo",
+            "sce_sys/icon0.png",
+        ] {
+            assert!(names.contains(&want), "{want} in {names:?}");
+        }
+        assert!(
+            !names.contains(&"data/empty.bin"),
+            "the game's files aren't in it"
+        );
+        assert_eq!(p.read("eboot.bin").unwrap(), b"\x7fELF patched eboot 01.05");
+        assert_eq!(
+            p.read("data/sub/asset.bin").unwrap(),
+            asset("patched", 9000)
+        );
+        assert!(p.describe().starts_with("PS4 update package"));
+    }
+
+    /// An add-on is its image alone: no sce_sys, so no param.json is made for it and it is
+    /// never taken for a game.
+    #[test]
+    fn an_addon_reads_as_its_data() {
+        let mut p = open_fixture("addon").unwrap();
+        assert_eq!(p.info().kind, Ps4Kind::Addon);
+        let names: Vec<&str> = p.files().iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(names, ["dlc/map.bin", "dlc/readme.txt"]);
+        assert_eq!(p.read("dlc/map.bin").unwrap(), asset("map", 8000));
+        assert_eq!(p.read("dlc/readme.txt").unwrap(), b"an add-on's own file");
+        let e = open_fixture("licence").err().expect("refused").to_string();
+        assert!(e.contains(LICENCE_ONLY), "{e}");
     }
 
     #[test]

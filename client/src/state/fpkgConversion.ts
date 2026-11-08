@@ -172,7 +172,14 @@ export interface ConversionState {
     /** Number the image's name when it is taken in `outputDir`, instead of refusing. */
     keepBoth?: boolean,
     /** This game's own choices (a queued game keeps what it was added with); else the settings. */
-    own?: { fullVerify?: boolean; imageLevel?: FfpfscLevel; addAmprEmu?: boolean; amprEmuBuild?: AmprEmuBuild },
+    own?: {
+      fullVerify?: boolean;
+      imageLevel?: FfpfscLevel;
+      addAmprEmu?: boolean;
+      amprEmuBuild?: AmprEmuBuild;
+      /** A PS4 update merged into the PS4 game `source`. */
+      update?: string;
+    },
   ) => Promise<void>;
   /** Unpack a game image or a debug-key package into a plain folder in `outputDir`; with
    *  `keepBoth`, a name already taken there is numbered instead of refused. */
@@ -182,7 +189,7 @@ export interface ConversionState {
     keepBoth?: boolean,
     /** This game's own choice (a queued game keeps what it was added with); else the setting.
      *  `zstd`: the folder's files in zstd packs. */
-    own?: { fullVerify?: boolean; zstd?: ZstdPacks },
+    own?: { fullVerify?: boolean; zstd?: ZstdPacks; /** A PS4 update merged into the PS4 game `source`. */ update?: string },
   ) => Promise<void>;
   /** Put the finished image in the Upload queue. */
   uploadImage: (plan: ImageUploadPlan) => void;
@@ -857,6 +864,11 @@ async function followLostUnpack(jobId: string) {
   }
 }
 
+/** A build's trailing `update` argument: there only when a PS4 update is merged in. */
+function withUpdate(update: string | undefined): [string] | [] {
+  return update ? [update] : [];
+}
+
 export const useFpkgConversion = create<ConversionState>((set, get) => ({
   pipeline: { phase: "idle" },
 
@@ -927,6 +939,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
             imageLevel,
             keepBoth,
             amprEmu,
+            ...withUpdate(own?.update),
           ),
         null,
         password,
@@ -947,6 +960,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         imageLevel,
         keepBoth,
         amprEmu,
+        ...withUpdate(own?.update),
       );
       update({ jobId: job_id });
       poll(job_id, null);
@@ -970,6 +984,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         undefined,
         keepBoth,
         own?.zstd,
+        ...withUpdate(own?.update),
       );
       update({ jobId: job_id });
       poll(job_id, null);

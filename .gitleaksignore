@@ -48,3 +48,6 @@ f01db54acdadef02d8cd956c783356c7c2298f17:engine/crates/ps5upload-engine/src/rp_g
 # Made-up invite key (00112233…eeff) in the Play Together internet tests
 33814e282aaff390b52c89541d6050fa494239ad:client/e2e/play-together-internet-ui.spec.ts:generic-api-key:9
 89000a35bf76d65d07091140da129c87bc4658f6:client/src/join/rtcTransport.test.ts:generic-api-key:28
+# The same made-up invite keys after #725 was squash-merged
+03b6ae995d2991fc510b698b2da716abaed46d0e:client/e2e/play-together-internet-ui.spec.ts:generic-api-key:9
+03b6ae995d2991fc510b698b2da716abaed46d0e:client/src/join/rtcTransport.test.ts:generic-api-key:28

@@ -459,6 +459,28 @@ describe("fpkg pipeline", () => {
     expect(useFpkgConversion.getState().pipeline).toBe(p);
   });
 
+  it("sends a PS4 update to merge with the game's folder or image build", async () => {
+    const buildFolder = vi.fn().mockResolvedValue({ job_id: "m1" });
+    const buildImage = vi.fn().mockResolvedValue({ job_id: "m2" });
+    const { fpkg } = await import("../api/fpkg");
+    (fpkg as unknown as { buildFolder: unknown }).buildFolder = buildFolder;
+    (fpkg as unknown as { buildImage: unknown }).buildImage = buildImage;
+    jobStatus.mockResolvedValue({ status: "done", dest: "/out/G", bytes_sent: 9 });
+    await useFpkgConversion.getState().buildFolder("/games/G.pkg", "/out", false, { update: "/games/U.pkg" });
+    expect(buildFolder).toHaveBeenCalledWith(
+      "/games/G.pkg", "/out", undefined, false, undefined, false, undefined, "/games/U.pkg",
+    );
+    await tick();
+    useFpkgConversion.getState().reset();
+    await useFpkgConversion
+      .getState()
+      .buildImage("/games/G.pkg", "/out", false, "ffpkg", undefined, undefined, undefined, false, { update: "/games/U.pkg" });
+    const call = buildImage.mock.calls[0] ?? [];
+    expect(call[call.length - 1]).toBe("/games/U.pkg");
+    await tick();
+    jobStatus.mockReset();
+  });
+
   it("packs a game folder into a folder in zstd packs: pack first, the packs sent with the build", async () => {
     const buildFolder = vi.fn().mockResolvedValue({ job_id: "f2" });
     const { fpkg } = await import("../api/fpkg");

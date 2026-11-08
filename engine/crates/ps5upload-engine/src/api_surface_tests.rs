@@ -920,6 +920,109 @@ async fn every_name_for_the_console_works_on_the_routes_that_lacked_them() {
     assert!(text.contains("duplicate field"), "{text}");
 }
 
+/// PS4 updates and add-ons at the API: inspect names the kind and, given an update, the merge;
+/// an update alone and an add-on as an image are refused before any job, in words.
+#[tokio::test]
+async fn ps4_updates_and_addons_are_told_and_refused_in_words() {
+    let app = app();
+    let root = std::env::temp_dir().join(format!("ps5upload-ps4-kinds-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let put = |name: &str, gz: &[u8]| {
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(gz), &mut bytes).unwrap();
+        let path = root.join(format!("{name}.pkg"));
+        std::fs::write(&path, bytes).unwrap();
+        path
+    };
+    let game = put(
+        "game",
+        include_bytes!("../../ps5upload-fpkg/tests/fixtures/ps4/synthetic.pkg.gz"),
+    );
+    let update = put(
+        "update",
+        include_bytes!("../../ps5upload-fpkg/tests/fixtures/ps4/update.pkg.gz"),
+    );
+    let addon = put(
+        "addon",
+        include_bytes!("../../ps5upload-fpkg/tests/fixtures/ps4/addon.pkg.gz"),
+    );
+    let licence = put(
+        "licence",
+        include_bytes!("../../ps5upload-fpkg/tests/fixtures/ps4/licence.pkg.gz"),
+    );
+    let out = root.join("out");
+    let inspect = |source: &std::path::Path, update: Option<&std::path::Path>| {
+        json!({ "source": source, "output_dir": out, "update": update }).to_string()
+    };
+
+    let v = json_of(post_json(&app, "/api/fpkg/inspect", &inspect(&update, None)).await).await;
+    assert_eq!(v["ps4_kind"], "patch");
+    assert_eq!(v["ps4_title_id"], "CUSA99990");
+    assert_eq!(v["content_version"], "01.05");
+    let v = json_of(post_json(&app, "/api/fpkg/inspect", &inspect(&licence, None)).await).await;
+    assert_eq!(
+        (&v["ps4_kind"], &v["ps4_addon_data"]),
+        (&json!("addon"), &json!(false))
+    );
+    let v =
+        json_of(post_json(&app, "/api/fpkg/inspect", &inspect(&game, Some(&update))).await).await;
+    assert_eq!(v["ps4_merge"]["update_version"], "01.05");
+    let r = post_json(&app, "/api/fpkg/inspect", &inspect(&update, Some(&game))).await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+
+    let refused = |path: &'static str, body: Value, want: &'static str| {
+        let app = app.clone();
+        async move {
+            let r = post_json(&app, path, &body.to_string()).await;
+            assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{body}");
+            let text = json_of(r).await["error"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            assert!(text.contains(want), "{body}: {text}");
+        }
+    };
+    refused(
+        "/api/exfat/build",
+        json!({ "source": update, "output_dir": out }),
+        "merge it into the game",
+    )
+    .await;
+    refused(
+        "/api/folder/build",
+        json!({ "source": update, "output_dir": out }),
+        "merge it into the game",
+    )
+    .await;
+    refused(
+        "/api/exfat/build",
+        json!({ "source": addon, "output_dir": out }),
+        "become a folder",
+    )
+    .await;
+    refused(
+        "/api/folder/build",
+        json!({ "source": licence, "output_dir": out }),
+        "licence only",
+    )
+    .await;
+    refused(
+        "/api/folder/build",
+        json!({ "source": game, "update": update, "entry": "data", "output_dir": out }),
+        "whole game",
+    )
+    .await;
+    refused(
+        "/api/exfat/build",
+        json!({ "source": update, "update": game, "output_dir": out }),
+        "itself an update",
+    )
+    .await;
+    assert!(!out.exists() || std::fs::read_dir(&out).unwrap().next().is_none());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A packed folder build: a game folder is a source only with `ampr_zstd`, and the request is
 /// refused before any job when its options cannot work. Nothing here starts a build.
 #[tokio::test]
