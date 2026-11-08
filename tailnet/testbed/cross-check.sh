@@ -13,7 +13,7 @@ REPO=$(cd "$HERE/../.." && pwd)
 CRATE=${1:-ps5upload-tailnet}
 NDK=${ANDROID_NDK_HOME:-$(ls -d "$HOME"/Library/Android/sdk/ndk/* 2>/dev/null | sort -V | tail -1)}
 NB="$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin"
-LOCK=${BUILD_LOCK:-/private/tmp/claude-501/build.lock}
+LOCK=${BUILD_LOCK:-${TMPDIR:-/tmp}/ps5upload-build.lock}
 fails=0
 run() { # label, command...
 	label=$1
