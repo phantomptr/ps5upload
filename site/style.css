@@ -1389,3 +1389,350 @@ code {
   -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 24px), transparent);
   mask-image: linear-gradient(to left, #000 calc(100% - 24px), transparent);
 }
+
+/* ── Everything it does (#all) ──────────────────────────────────────────── */
+/* Two columns that fill top to bottom, so a short group doesn't leave a hole beside a long one. */
+.all-grid {
+  columns: 2;
+  column-gap: 12px;
+  margin-top: 24px;
+}
+.all-group {
+  break-inside: avoid;
+  margin-bottom: 12px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.all-group summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  font-weight: 650;
+  font-size: 17px;
+}
+.all-group summary::-webkit-details-marker {
+  display: none;
+}
+.all-ico {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  font-size: 18px;
+}
+.all-name {
+  flex: 1;
+  min-width: 0;
+}
+.all-count {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.all-group summary::after {
+  content: "+";
+  color: var(--accent);
+  font-weight: 700;
+}
+.all-group[open] summary::after {
+  content: "−";
+}
+.all-group ul {
+  margin: 0;
+  padding: 0 18px 16px;
+  list-style: none;
+  display: grid;
+  gap: 7px;
+  font-size: 15px;
+}
+.all-group li {
+  position: relative;
+  padding-inline-start: 18px;
+  overflow-wrap: anywhere;
+}
+.all-group li::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 2px;
+  top: 0.62em;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.7;
+}
+.all-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 18px;
+}
+@media (max-width: 760px) {
+  .all-grid {
+    columns: 1;
+  }
+}
+
+/* ── The FAQ page (faq/, made by scripts/site-faq.mjs) ──────────────────── */
+.faq {
+  padding-top: 40px;
+}
+.faq-head h1 {
+  font-size: clamp(30px, 5vw, 44px);
+  font-weight: 700;
+}
+.faq-head .kicker a {
+  color: inherit;
+}
+.faq-note {
+  margin: 8px 0 0;
+  font-size: 14px;
+}
+.faq-search {
+  position: relative;
+  max-width: 640px;
+  margin-top: 20px;
+}
+.faq-search svg {
+  position: absolute;
+  inset-inline-start: 14px;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+}
+.faq-search input {
+  width: 100%;
+  min-height: 46px;
+  padding: 10px 14px;
+  padding-inline-start: 42px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+}
+.faq-status {
+  min-height: 1.5em;
+  margin: 8px 0 0;
+  font-size: 14px;
+}
+.faq-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 32px;
+  margin-top: 12px;
+  align-items: start;
+}
+.faq-toc {
+  position: sticky;
+  top: 76px;
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
+  font-size: 14px;
+}
+.faq-toc summary {
+  cursor: pointer;
+  font-weight: 650;
+  padding: 6px 0;
+}
+.faq-toc ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.faq-toc ul ul {
+  margin: 2px 0 10px;
+  padding-inline-start: 10px;
+  border-inline-start: 1px solid var(--line);
+}
+.faq-toc li a {
+  display: block;
+  padding: 3px 8px;
+  border-radius: 8px;
+  color: var(--muted);
+}
+.faq-toc a.faq-toc-group {
+  color: var(--text);
+  font-weight: 650;
+  margin-top: 6px;
+}
+.faq-toc li a:hover {
+  background: var(--card-2);
+  color: var(--text);
+  text-decoration: none;
+}
+.faq-group + .faq-group {
+  margin-top: 36px;
+}
+.faq-group > h2 {
+  font-size: 26px;
+  font-weight: 700;
+}
+.faq-topic {
+  margin-top: 22px;
+}
+.faq-topic > h3 {
+  font-size: 19px;
+  font-weight: 650;
+  margin-bottom: 10px;
+}
+.faq-intro {
+  color: var(--muted);
+  font-size: 15px;
+  margin-bottom: 10px;
+}
+.faq-q {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  margin-top: 8px;
+  box-shadow: var(--shadow);
+}
+.faq-q > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 16px;
+  font-weight: 600;
+}
+.faq-q > summary::-webkit-details-marker {
+  display: none;
+}
+.faq-q > summary::before {
+  content: "+";
+  flex: none;
+  width: 1em;
+  color: var(--accent);
+  font-weight: 700;
+}
+.faq-q[open] > summary::before {
+  content: "−";
+}
+.faq-q > summary > span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.faq-link {
+  flex: none;
+  color: var(--muted);
+  opacity: 0.35;
+  padding: 0 4px;
+  border-radius: 6px;
+}
+.faq-q > summary:hover .faq-link,
+.faq-q[open] .faq-link,
+.faq-link:focus-visible {
+  opacity: 1;
+}
+.faq-q:target {
+  border-color: var(--accent);
+}
+.faq-a {
+  padding-block: 0 14px;
+  padding-inline: 42px 16px;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+.faq-a p,
+.faq-intro p {
+  margin: 8px 0 0;
+}
+.faq-a ul,
+.faq-a ol,
+.faq-intro ul,
+.faq-intro ol {
+  margin: 8px 0 0;
+  padding-inline-start: 22px;
+}
+.faq-a li + li,
+.faq-intro li + li {
+  margin-top: 4px;
+}
+.faq-a h4,
+.faq-a h5,
+.faq-intro h4,
+.faq-intro h5 {
+  margin: 16px 0 0;
+  font-size: 16px;
+}
+.faq-a pre,
+.faq-intro pre {
+  margin: 10px 0 0;
+  padding: 12px 14px;
+  background: var(--card-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow-x: auto;
+  font-size: 14px;
+}
+.faq-a pre code,
+.faq-intro pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  white-space: pre;
+}
+.faq-a blockquote {
+  margin: 10px 0 0;
+  padding-inline-start: 12px;
+  border-inline-start: 3px solid var(--line-strong);
+  color: var(--muted);
+}
+.faq-table {
+  overflow-x: auto;
+  margin-top: 10px;
+}
+.faq-table table {
+  border-collapse: collapse;
+  font-size: 14px;
+  min-width: 100%;
+}
+.faq-table th,
+.faq-table td {
+  border: 1px solid var(--line);
+  padding: 6px 10px;
+  text-align: start;
+  vertical-align: top;
+}
+.faq-table th {
+  background: var(--card-2);
+}
+.faq-none {
+  padding: 24px 0;
+  color: var(--muted);
+}
+.faq-body [hidden] {
+  display: none;
+}
+@media (max-width: 900px) {
+  .faq-layout {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .faq-toc {
+    position: static;
+    max-height: none;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 6px 14px;
+  }
+  .faq-a {
+    padding-inline: 14px;
+  }
+}
