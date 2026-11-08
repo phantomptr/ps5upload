@@ -81,6 +81,9 @@ const AVA1_FATAL_REASON_PREFIXES = [
   // Download/copy failures a retry cannot change (engine download.rs / copy.rs).
   "ava1_local_io",
   "ava1_bad_manifest",
+  // AVA1 1.0.7: a symbolic link (or a file) where a folder of the job goes, on the PS5 or here.
+  "ava1_path_link",
+  "ava1_local_path",
   "ava1_copy_failed",
   "ava1_not_paired",
   "ava1_wrong_console",

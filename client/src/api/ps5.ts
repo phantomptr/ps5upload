@@ -4749,6 +4749,16 @@ export function humanizeJobErrorReason(
         "joberr.fs_delete_path_not_allowed",
         "PS5 refused access to that path. Use /data/, /user/, or a mounted /mnt/ext*, /mnt/usb* path.",
       );
+    case "ava1_path_link":
+      return trStatic(
+        "joberr.ava1_path_link",
+        "A folder inside the destination on the PS5 is a shortcut (a symbolic link) or a file, so PS5Upload won't write through it. Pick a different destination, or remove that item on the PS5, then click Retry.",
+      );
+    case "ava1_local_path":
+      return trStatic(
+        "joberr.ava1_local_path",
+        "A folder inside the download folder on this computer is a shortcut (a symbolic link) or a file, so PS5Upload won't write through it. Pick a different folder, then click Retry.",
+      );
     case "ava1_exists":
       return trStatic(
         "joberr.ava1_exists",
