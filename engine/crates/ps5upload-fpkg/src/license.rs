@@ -27,6 +27,20 @@ const SHA256_DIGEST_INFO: [u8; 19] = [
 
 /// A debug `license.dat` for an application with `content_id` (36 ASCII characters).
 pub fn license_dat(content_id: &str) -> [u8; LICENSE_DAT_LEN] {
+    license_dat_for(content_id, PS5_DRM, APPLICATION)
+}
+
+/// The DRM type a PS5 application's licence names.
+const PS5_DRM: u16 = 16;
+
+/// A debug `license.dat` naming this DRM and content type: a PS4 game's is DRM 0xF (PS4) and
+/// content type 0x1A (GD), as maxton/LibOrbisPkg's `Rif/LicenseDat.cs` writes it; otherwise
+/// the same bytes.
+pub fn license_dat_for(
+    content_id: &str,
+    drm_type: u16,
+    content_type: u16,
+) -> [u8; LICENSE_DAT_LEN] {
     let cid = content_id.as_bytes();
     let mut d = [0u8; LICENSE_DAT_LEN];
     d[0..4].copy_from_slice(b"RIF\0");
@@ -36,8 +50,8 @@ pub fn license_dat(content_id: &str) -> [u8; LICENSE_DAT_LEN] {
     ]);
     d[32..32 + cid.len()].copy_from_slice(cid);
     d[80..82].copy_from_slice(&512u16.to_be_bytes());
-    d[82..84].copy_from_slice(&16u16.to_be_bytes());
-    d[84..86].copy_from_slice(&APPLICATION.to_be_bytes());
+    d[82..84].copy_from_slice(&drm_type.to_be_bytes());
+    d[84..86].copy_from_slice(&content_type.to_be_bytes());
     d[86..88].copy_from_slice(&3u16.to_be_bytes());
     d[103] = 1;
 
@@ -63,10 +77,15 @@ pub fn license_dat(content_id: &str) -> [u8; LICENSE_DAT_LEN] {
 
 /// The matching `license.info`.
 pub fn license_info(content_id: &str) -> [u8; LICENSE_INFO_LEN] {
+    license_info_for(content_id, APPLICATION)
+}
+
+/// A `license.info` naming this content type (see [`license_dat_for`]).
+pub fn license_info_for(content_id: &str, content_type: u16) -> [u8; LICENSE_INFO_LEN] {
     let cid = content_id.as_bytes();
     let mut d = [0u8; LICENSE_INFO_LEN];
     d[..cid.len()].copy_from_slice(cid);
-    d[68..72].copy_from_slice(&u32::from(APPLICATION).to_be_bytes());
+    d[68..72].copy_from_slice(&u32::from(content_type).to_be_bytes());
     d[76..80].copy_from_slice(&1u32.to_be_bytes());
     d
 }

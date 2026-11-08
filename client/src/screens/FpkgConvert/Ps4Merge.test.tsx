@@ -25,7 +25,7 @@ const base: FpkgInspection = {
 describe("Ps4KindNote", () => {
   it("says what each PS4 kind becomes", () => {
     const note = (i: Partial<FpkgInspection>) => renderToStaticMarkup(<Ps4KindNote inspection={{ ...base, ...i }} />);
-    expect(note({ ps4_kind: "game" })).toContain("It can&#x27;t become a PS5 package");
+    expect(note({ ps4_kind: "game" })).toContain("It converts to a PS4 package");
     const patch = note({ ps4_kind: "patch", ps4_title_id: "CUSA99990", content_version: "01.05" });
     expect(patch).toContain("A PS4 update, version 01.05, for CUSA99990");
     expect(patch).toContain("choose the game it goes into");

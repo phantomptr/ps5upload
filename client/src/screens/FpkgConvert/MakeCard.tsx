@@ -25,6 +25,7 @@ export function NextGameNote() {
  * first two that suits the game on the connected console is marked: a PS5 game on firmware
  * above 11.60 installs as a package but will not play, so the image is the way; otherwise the
  * package is the ordinary choice. The folder is never marked: it is a way back, not a way in.
+ * For a PS4 game the package is a PS4 fake package, which the engine writes from the game.
  */
 export function MakeCard({
   make,
@@ -35,6 +36,7 @@ export function MakeCard({
   archive = false,
   locked = false,
   forNext = false,
+  ps4 = false,
 }: {
   make: MakeKind;
   onMake: (make: MakeKind) => void;
@@ -49,21 +51,34 @@ export function MakeCard({
   locked?: boolean;
   /** A game is being made: this card sets what the next game added becomes (#669). */
   forNext?: boolean;
+  /** The checked game is a PS4 game: the package is a PS4 one. */
+  ps4?: boolean;
 }) {
   const tr = useTr();
   const unplayableOn = checked ? ps5FakeGameUnplayableFirmware(kernel, contentId) : null;
   const recommended: "pkg" | "image" | null = !checked ? null : unplayableOn ? "image" : "pkg";
   const tiles: { id: MakeKind; icon: typeof Package; title: string; body: string }[] = [
-    {
-      id: "pkg",
-      icon: Package,
-      title: tr("fpkg.make.pkg_title", undefined, "A package (.pkg)"),
-      body: tr(
-        "fpkg.make.pkg_body",
-        undefined,
-        "Installs on the PS5 like a game from the store, streamed from here or uploaded first. PS4 games play on any firmware; PS5 games on 11.60 and below.",
-      ),
-    },
+    ps4
+      ? {
+          id: "pkg",
+          icon: Package,
+          title: tr("fpkg.make.ps4_pkg_title", undefined, "A PS4 package (.pkg)"),
+          body: tr(
+            "fpkg.make.ps4_pkg_body",
+            undefined,
+            "A PS4 fake package the PS5 installs like a game from the store, streamed from here or uploaded first. It is made with the usual fake keys and read back before it is kept.",
+          ),
+        }
+      : {
+          id: "pkg",
+          icon: Package,
+          title: tr("fpkg.make.pkg_title", undefined, "A package (.pkg)"),
+          body: tr(
+            "fpkg.make.pkg_body",
+            undefined,
+            "Installs on the PS5 like a game from the store, streamed from here or uploaded first. PS4 games play on any firmware; PS5 games on 11.60 and below.",
+          ),
+        },
     {
       id: "image",
       icon: HardDrive,

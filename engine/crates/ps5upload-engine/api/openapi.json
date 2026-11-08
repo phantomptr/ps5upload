@@ -1391,6 +1391,13 @@
           },
           "source": {
             "type": "string"
+          },
+          "update": {
+            "description": "A PS4 update to merge into the PS4 game `source` first (`ps5upload_fpkg::ps4_merge`):\nthe package is the game at the update's version.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -20212,7 +20219,7 @@
     },
     "/api/fpkg/build": {
       "post": {
-        "description": "POST /api/fpkg/build — start a conversion. Returns `{ job_id }` immediately.",
+        "description": "POST /api/fpkg/build — start a conversion. Returns `{ job_id }` immediately. A PS5 game\nbecomes a PS5 package; a PS4 game (a folder, an image or a PS4 package; with `update`, merged\nwith its update) becomes a PS4 fake package, read back and compared file by file.",
         "requestBody": {
           "content": {
             "application/json": {
