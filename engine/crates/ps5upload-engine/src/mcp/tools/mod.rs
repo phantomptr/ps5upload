@@ -27,6 +27,7 @@ pub(crate) mod route;
 mod rp;
 mod saves;
 mod settings;
+mod share;
 mod sources;
 mod together;
 mod transfer;
@@ -109,6 +110,7 @@ fn all() -> &'static [ToolDef] {
             mesh::tools(),
             rp::tools(),
             together::tools(),
+            share::tools(),
             notifications::tools(),
             api::tools(),
         ]

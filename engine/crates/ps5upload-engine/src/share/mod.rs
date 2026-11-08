@@ -229,8 +229,9 @@ fn with_share<R>(id: &str, f: impl FnOnce(&mut Entry) -> R) -> Option<R> {
 /// Records the endings of `id`'s requests (history, activity, a log line) once each, and lets
 /// the share's files and hub room go when nothing more can happen.
 fn settle(id: &str) {
-    let now = Instant::now();
-    let mut ended: Vec<(
+    /// An ending to record: the activity id (empty: none), the friend, the items' names, the
+    /// state, bytes sent, how long it took, why.
+    type Ending = (
         String,
         String,
         Vec<String>,
@@ -238,7 +239,9 @@ fn settle(id: &str) {
         u64,
         u64,
         Option<String>,
-    )> = Vec::new();
+    );
+    let now = Instant::now();
+    let mut ended: Vec<Ending> = Vec::new();
     let mut gone_staging = None;
     with_share(id, |e| {
         let items = e.items.clone();
@@ -454,7 +457,7 @@ pub(crate) async fn rtc_session(socket: crate::join_net::RtcSocket, _ip: IpAddr,
 
 /// One thing to share, as the app's page names it.
 #[derive(Debug, Clone, Deserialize)]
-pub struct ItemSpec {
+pub struct ShareItemSpec {
     pub kind: ItemKind,
     /// The console it is on (an app folder, a save, screenshots, a cheat file).
     #[serde(default, alias = "addr", alias = "host")]
@@ -480,7 +483,7 @@ pub struct ItemSpec {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct CreateBody {
+pub struct ShareCreateBody {
     /// The sender's name as the friend sees it.
     #[serde(default)]
     pub from: Option<String>,
@@ -495,7 +498,7 @@ pub struct CreateBody {
     /// One friend only (default true).
     #[serde(default)]
     pub one_use: Option<bool>,
-    pub items: Vec<ItemSpec>,
+    pub items: Vec<ShareItemSpec>,
 }
 
 /// Why an item can't be shared: the message, and the Title ID a retail refusal names.
@@ -578,7 +581,7 @@ fn inline(path: &str, bytes: Vec<u8>) -> Result<FileEntry, ItemRefused> {
 /// retail one; lists the files. Blocking (it may read the console).
 pub(crate) fn build_item(
     n: usize,
-    spec: &ItemSpec,
+    spec: &ShareItemSpec,
     title: &str,
     title_id: Option<&str>,
     staging: &Path,
@@ -798,7 +801,7 @@ fn refused_json(i: usize, r: &ItemRefused) -> Value {
 }
 
 /// Makes the share's items, or the first refusal.
-fn build_all(b: &CreateBody, staging: &Path) -> Result<Vec<Item>, (usize, ItemRefused)> {
+fn build_all(b: &ShareCreateBody, staging: &Path) -> Result<Vec<Item>, (usize, ItemRefused)> {
     let title = b.title.as_deref().unwrap_or("").trim().to_string();
     let title_id = b
         .title_id
@@ -821,7 +824,7 @@ fn lan_page(headers: &HeaderMap) -> Option<String> {
 
 /// Puts a made share in the registry and opens its room. The share's view.
 pub(crate) fn register(
-    b: &CreateBody,
+    b: &ShareCreateBody,
     items: Vec<Item>,
     staging: Option<PathBuf>,
     lan: Option<String>,
@@ -930,7 +933,7 @@ pub(crate) fn register(
 
 /// `POST /api/share`: makes a share and its link. 403 with `code: "retail"` when an app is a
 /// commercial game.
-pub async fn create(headers: HeaderMap, Json(b): Json<CreateBody>) -> Response {
+pub async fn create(headers: HeaderMap, Json(b): Json<ShareCreateBody>) -> Response {
     if b.items.is_empty() {
         return bad(StatusCode::BAD_REQUEST, "choose something to share");
     }
@@ -976,7 +979,7 @@ pub async fn create(headers: HeaderMap, Json(b): Json<CreateBody>) -> Response {
 
 /// `POST /api/share/check {title_id?, items}`: each item's verdict, nothing made. An app's
 /// identity is read as Share would (`ok: false, code: "retail"` for a commercial game).
-pub async fn check(Json(b): Json<CreateBody>) -> Response {
+pub async fn check(Json(b): Json<ShareCreateBody>) -> Response {
     let r = tokio::task::spawn_blocking(move || {
         let title_id = b
             .title_id
@@ -1034,13 +1037,13 @@ pub async fn check(Json(b): Json<CreateBody>) -> Response {
 }
 
 #[derive(Deserialize)]
-pub struct DecideBody {
+pub struct ShareDecideBody {
     pub request: u64,
     pub allow: bool,
 }
 
 /// `POST /api/share/{id}/decide {request, allow}`: the sender's Allow or Decline.
-pub async fn decide(AxPath(id): AxPath<String>, Json(b): Json<DecideBody>) -> Response {
+pub async fn decide(AxPath(id): AxPath<String>, Json(b): Json<ShareDecideBody>) -> Response {
     let token = crate::join_net::random_b64(24).unwrap_or_default();
     if token.is_empty() {
         return bad(StatusCode::INTERNAL_SERVER_ERROR, "no_random");
@@ -1202,8 +1205,29 @@ impl Rx {
             "path": s.path,
             "dest": s.dest,
             "received": s.received.iter().map(|(id, p)| {
-                let kind = s.items.iter().find(|i| &i.id == id).map(|i| i.kind.clone());
-                json!({"item": id, "kind": kind, "path": p})
+                let item = s.items.iter().find(|i| &i.id == id);
+                // An app that is one file (a package, an image): that file, for an install.
+                let file = (s.state == "done"
+                    && item.is_some_and(|i| i.kind == "app" && i.format.as_deref() != Some("folder")))
+                .then(|| {
+                    std::fs::read_dir(p).ok().and_then(|rd| {
+                        let files: Vec<PathBuf> = rd
+                            .filter_map(Result::ok)
+                            .map(|e| e.path())
+                            .filter(|f| std::fs::symlink_metadata(f).is_ok_and(|m| m.is_file()))
+                            .collect();
+                        (files.len() == 1).then(|| files[0].clone())
+                    })
+                })
+                .flatten();
+                json!({
+                    "item": id,
+                    "kind": item.map(|i| i.kind.clone()),
+                    "format": item.and_then(|i| i.format.clone()),
+                    "title_id": item.and_then(|i| i.title_id.clone()),
+                    "path": p,
+                    "file": file,
+                })
             }).collect::<Vec<_>>(),
             "started_ms": self.started_ms,
         })
@@ -1242,7 +1266,7 @@ async fn run_receive(
     loop {
         let end = match connect_any(&link).await {
             Ok(Conn::Rtc(l)) => wire::receive(l, &link.room, &name, sh.clone(), &mut cmds).await,
-            Ok(Conn::Lan(l)) => wire::receive(l, &link.room, &name, sh.clone(), &mut cmds).await,
+            Ok(Conn::Lan(l)) => wire::receive(*l, &link.room, &name, sh.clone(), &mut cmds).await,
             Err(e) => {
                 let resumable = sh.lock().unwrap_or_else(|e| e.into_inner()).token.is_some();
                 if resumable && tries < RECONNECTS {
@@ -1291,7 +1315,7 @@ async fn run_receive(
 
 enum Conn {
     Rtc(client::RtcLink),
-    Lan(client::WsLink),
+    Lan(Box<client::WsLink>),
 }
 
 async fn connect_any(link: &client::ShareLink) -> Result<Conn, String> {
@@ -1304,7 +1328,7 @@ async fn connect_any(link: &client::ShareLink) -> Result<Conn, String> {
     }
     if let Some(lan) = &link.lan {
         match client::connect_lan(lan).await {
-            Ok(l) => return Ok(Conn::Lan(l)),
+            Ok(l) => return Ok(Conn::Lan(Box::new(l))),
             Err(e) => {
                 first_err.get_or_insert(e);
             }
@@ -1384,7 +1408,7 @@ fn rx_finished(rx_id: &str) {
 }
 
 #[derive(Deserialize)]
-pub struct OpenBody {
+pub struct ShareOpenBody {
     pub link: String,
     /// This side's name as the sender sees it.
     #[serde(default)]
@@ -1393,7 +1417,7 @@ pub struct OpenBody {
 
 /// `POST /api/share/receive {link, name}`: opens a Share link. Nothing is received until
 /// `accept`; the answer has the receive's id (GET it for the offer).
-pub async fn receive_open(Json(b): Json<OpenBody>) -> Response {
+pub async fn receive_open(Json(b): Json<ShareOpenBody>) -> Response {
     let link = match client::parse_link(&b.link) {
         Ok(l) => l,
         Err(e) => return bad(StatusCode::BAD_REQUEST, e),
@@ -1449,7 +1473,7 @@ pub async fn receive_get(AxPath(id): AxPath<String>) -> Response {
 }
 
 #[derive(Deserialize)]
-pub struct AcceptBody {
+pub struct ShareAcceptBody {
     pub items: Vec<String>,
     /// The folder to put things in (default: the Collection's first folder's `Received`).
     #[serde(default)]
@@ -1457,7 +1481,10 @@ pub struct AcceptBody {
 }
 
 /// `POST /api/share/receive/{id}/accept {items, dest?}`: what to take; the sender is then asked.
-pub async fn receive_accept(AxPath(id): AxPath<String>, Json(b): Json<AcceptBody>) -> Response {
+pub async fn receive_accept(
+    AxPath(id): AxPath<String>,
+    Json(b): Json<ShareAcceptBody>,
+) -> Response {
     let base = match b.dest.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
         Some(d) => {
             let p = PathBuf::from(d);
@@ -1541,6 +1568,7 @@ pub async fn receive_cancel(AxPath(id): AxPath<String>) -> Response {
 }
 
 /// The local folder a received item is in, once the receive is done.
+#[allow(clippy::result_large_err)]
 fn received_dir(rx_id: &str, item: &str) -> Result<(PathBuf, String), Response> {
     let r = with_rx(|v| {
         v.iter().find(|r| r.id == rx_id).map(|r| {
@@ -1597,7 +1625,7 @@ pub async fn receive_data(AxPath((id, item)): AxPath<(String, String)>) -> Respo
 }
 
 #[derive(Deserialize)]
-pub struct UseSaveBody {
+pub struct ShareUseSaveBody {
     #[serde(alias = "console", alias = "host")]
     pub addr: String,
     pub folder: String,
@@ -1609,7 +1637,10 @@ pub struct UseSaveBody {
 /// `POST /api/share/receive/{id}/use-save {addr, folder, user_id?, item}`: a received save into
 /// a user's own save of the same game (as Use a shared save does: save_copy.rs). The page warns
 /// first that trophies and the account stay the user's own.
-pub async fn receive_use_save(AxPath(id): AxPath<String>, Json(b): Json<UseSaveBody>) -> Response {
+pub async fn receive_use_save(
+    AxPath(id): AxPath<String>,
+    Json(b): Json<ShareUseSaveBody>,
+) -> Response {
     let (dir, kind) = match received_dir(&id, &b.item) {
         Ok(x) => x,
         Err(r) => return r,

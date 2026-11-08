@@ -6728,12 +6728,29 @@
           "new": {
             "description": "A new key (the old link stops working).",
             "type": "boolean"
+          },
+          "share": {
+            "description": "The one link, as \"Invites work\" says: the internet invite when that is \"anywhere\" (and the\nhub address and certificate allow it), else the home network's; never refused for it.",
+            "type": "boolean"
           }
         },
         "required": [
           "addr"
         ],
         "type": "object"
+      },
+      "ItemKind": {
+        "description": "What an item is.",
+        "enum": [
+          "app",
+          "save",
+          "media",
+          "cheats",
+          "controls",
+          "stream",
+          "note"
+        ],
+        "type": "string"
       },
       "JobCreated": {
         "properties": {
@@ -11838,6 +11855,68 @@
         ],
         "type": "object"
       },
+      "Settings.request": {
+        "properties": {
+          "allow_permanent_delete": {
+            "description": "Where the engine has no trash (Docker, a headless server): Move to Trash deletes for\ngood instead. Off unless the user turns it on; every delete is still confirmed.",
+            "type": "boolean"
+          },
+          "refresh_secs": {
+            "description": "Seconds between automatic scans; `None` turns automatic refresh off.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "roots": {
+            "description": "Folders scanned, in order.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sweep_sidecars": {
+            "description": "Remove AppleDouble `._` sidecars in every folder a scan walks.",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "Settings.response": {
+        "properties": {
+          "allow_permanent_delete": {
+            "description": "Where the engine has no trash (Docker, a headless server): Move to Trash deletes for\ngood instead. Off unless the user turns it on; every delete is still confirmed.",
+            "type": "boolean"
+          },
+          "refresh_secs": {
+            "description": "Seconds between automatic scans; `None` turns automatic refresh off.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "roots": {
+            "description": "Folders scanned, in order.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sweep_sidecars": {
+            "description": "Remove AppleDouble `._` sidecars in every folder a scan walks.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "roots",
+          "refresh_secs",
+          "sweep_sidecars",
+          "allow_permanent_delete"
+        ],
+        "type": "object"
+      },
       "SettingsBody": {
         "properties": {
           "addr": {
@@ -11876,6 +11955,13 @@
           "internet_invites": {
             "type": [
               "boolean",
+              "null"
+            ]
+          },
+          "invites": {
+            "description": "\"Invites work\": \"anywhere\" or \"wifi\" (the same choice as `internet_invites`; this one wins).",
+            "type": [
+              "string",
               "null"
             ]
           },
@@ -11986,7 +12072,7 @@
             "type": "object"
           },
           {
-            "$ref": "#/components/schemas/engine.collection.store.Settings.response"
+            "$ref": "#/components/schemas/Settings.response"
           }
         ]
       },
@@ -12017,6 +12103,27 @@
         ],
         "type": "object"
       },
+      "ShareAcceptBody": {
+        "properties": {
+          "dest": {
+            "description": "The folder to put things in (default: the Collection's first folder's `Received`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "ShareBody": {
         "properties": {
           "addr": {
@@ -12043,6 +12150,180 @@
         },
         "required": [
           "addr"
+        ],
+        "type": "object"
+      },
+      "ShareCreateBody": {
+        "properties": {
+          "expires_in_s": {
+            "description": "Seconds the link works (default 24 h; 60 s to 7 days).",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "from": {
+            "description": "The sender's name as the friend sees it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ShareItemSpec"
+            },
+            "type": "array"
+          },
+          "one_use": {
+            "description": "One friend only (default true).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "title": {
+            "description": "The game or app the share is about.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "ShareDecideBody": {
+        "properties": {
+          "allow": {
+            "type": "boolean"
+          },
+          "request": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "request",
+          "allow"
+        ],
+        "type": "object"
+      },
+      "ShareItemSpec": {
+        "description": "One thing to share, as the app's page names it.",
+        "properties": {
+          "console": {
+            "description": "The console it is on (an app folder, a save, screenshots, a cheat file).",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "addr",
+              "host"
+            ]
+          },
+          "data": {
+            "description": "Data items: controls, stream settings, which cheats are on."
+          },
+          "folder": {
+            "description": "A save folder on the console.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ItemKind"
+          },
+          "name": {
+            "description": "What the friend sees (the engine names it when left out).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "A path: on the console when `console` is given, else on this computer.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "paths": {
+            "description": "Several (screenshots and clips).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "text": {
+            "description": "A note's text.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "ShareOpenBody": {
+        "properties": {
+          "link": {
+            "type": "string"
+          },
+          "name": {
+            "description": "This side's name as the sender sees it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "link"
+        ],
+        "type": "object"
+      },
+      "ShareUseSaveBody": {
+        "properties": {
+          "addr": {
+            "type": "string",
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "folder": {
+            "type": "string"
+          },
+          "item": {
+            "type": "string"
+          },
+          "user_id": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "addr",
+          "folder",
+          "item"
         ],
         "type": "object"
       },
@@ -14057,68 +14338,6 @@
         ],
         "type": "string"
       },
-      "engine.collection.store.Settings.request": {
-        "properties": {
-          "allow_permanent_delete": {
-            "description": "Where the engine has no trash (Docker, a headless server): Move to Trash deletes for\ngood instead. Off unless the user turns it on; every delete is still confirmed.",
-            "type": "boolean"
-          },
-          "refresh_secs": {
-            "description": "Seconds between automatic scans; `None` turns automatic refresh off.",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "roots": {
-            "description": "Folders scanned, in order.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "sweep_sidecars": {
-            "description": "Remove AppleDouble `._` sidecars in every folder a scan walks.",
-            "type": "boolean"
-          }
-        },
-        "type": "object"
-      },
-      "engine.collection.store.Settings.response": {
-        "properties": {
-          "allow_permanent_delete": {
-            "description": "Where the engine has no trash (Docker, a headless server): Move to Trash deletes for\ngood instead. Off unless the user turns it on; every delete is still confirmed.",
-            "type": "boolean"
-          },
-          "refresh_secs": {
-            "description": "Seconds between automatic scans; `None` turns automatic refresh off.",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "roots": {
-            "description": "Folders scanned, in order.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "sweep_sidecars": {
-            "description": "Remove AppleDouble `._` sidecars in every folder a scan walks.",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "roots",
-          "refresh_secs",
-          "sweep_sidecars",
-          "allow_permanent_delete"
-        ],
-        "type": "object"
-      },
       "engine.collection_check_api.CheckReq": {
         "properties": {
           "paths": {
@@ -14539,58 +14758,6 @@
         },
         "required": [
           "addr"
-        ],
-        "type": "object"
-      },
-      "engine.join.Settings": {
-        "description": "The host's choices (one set for every console).",
-        "properties": {
-          "block_system_buttons": {
-            "description": "Take PS and Create from guests who are playing (they keep them while picking a user).\nOn unless the host turns it off: a friend's PS could quit the game, or update the console\npast its exploit (#649).",
-            "type": "boolean"
-          },
-          "hub_url": {
-            "description": "The signalling hub (`wss://`; `ws://` only to this computer).",
-            "type": "string"
-          },
-          "internet_invites": {
-            "description": "The host may make internet invites (a room on the signalling hub, WebRTC to the guest:\ncrate::join_net). On unless the host turns it off.",
-            "type": "boolean"
-          },
-          "max_players": {
-            "description": "Guests at most (1-3).",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "stream_seat": {
-            "description": "A friend may get the stream's own controller (Player 1, signed in as the host's PS5 user)\nwhile this device shows no picture and no phone plays on it (#687). Off unless the host\nturns it on: a friend otherwise always gets their own controller and picks a user (#720).",
-            "type": "boolean"
-          },
-          "stun": {
-            "description": "STUN servers (`host:port`) the engine asks for its outside address.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "upnp": {
-            "description": "Ask the router for a port (UPnP-IGD, NAT-PMP / PCP) while an internet invite is open.",
-            "type": "boolean"
-          },
-          "video_track": {
-            "description": "Internet guests whose page offers it get the picture as an RTP video track (the browser's\nown jitter buffer, retransmission and decoder: crate::join_net::rtc), not on the data\nchannel. On unless the host turns it off; off, or a page that offers no track, keeps the\ndata channel.",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "block_system_buttons",
-          "max_players",
-          "stream_seat",
-          "internet_invites",
-          "hub_url",
-          "stun",
-          "upnp",
-          "video_track"
         ],
         "type": "object"
       },
@@ -17452,7 +17619,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/engine.collection.store.Settings.request"
+                "$ref": "#/components/schemas/Settings.request"
               }
             }
           },
@@ -22075,7 +22242,7 @@
     },
     "/api/join/invite": {
       "post": {
-        "description": "`POST /api/join/invite {addr, new?, internet?}`: `{key, code, code_display, url, urls,\nexpires_in_s, internet}`. The same invite again until it expires, unless `new` (the old link and\ncode stop working). With `internet`, also a link for friends anywhere (`internet.url`): the\nengine opens a room on the signalling hub in the settings and the guest's browser connects to\nit peer to peer (409 `internet_off` when the settings turned internet invites off, 409\n`hub_url` when the hub address is not a `wss://` one). The room stays open while the invite\nlasts or an internet guest is in.",
+        "description": "`POST /api/join/invite {addr, new?, internet?, share?}`: `{key, code, code_display, url, urls,\nexpires_in_s, share, internet}`. `share` is the one link to show (`share.url`, where it works:\n`share.works` \"anywhere\" or \"wifi\", and `share.why` for the Wi-Fi: \"setting\", \"offline\" (the hub\ncan't be reached), \"local\"; see [`share_json`]). With `share` in the request the engine makes the\ninternet link when Settings › Play Together › Invites work says Anywhere, as `internet` does,\nand quietly keeps to the home network's link otherwise. The same invite again until it expires, unless `new` (the old link and\ncode stop working). With `internet`, also a link for friends anywhere (`internet.url`): the\nengine opens a room on the signalling hub in the settings and the guest's browser connects to\nit peer to peer (409 `internet_off` when the settings turned internet invites off, 409\n`hub_url` when the hub address is not a `wss://` one). The room stays open while the invite\nlasts or an internet guest is in.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -22417,7 +22584,7 @@
     },
     "/api/join/settings": {
       "post": {
-        "description": "`POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,\ninternet_invites?, hub_url?, stun?, upnp?, video_track?}`: the host's choices (every console). Fewer players\nlets nobody go; it only stops new ones. `stream_seat` off moves a friend on the stream's\ncontroller to a pad of their own. `internet_invites` off closes the internet rooms (guests\nalready in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`\notherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none), `upnp` whether the\nrouter is asked for a port, `video_track` whether internet guests get the picture as a video\ntrack (new connections; the data channel otherwise).\n\n`guest_profiles` with `addr` (\"Guests play as\" on that console): each guest's player gets the\nprofile the host chose (`{player: 2-4, user, name, owner}`; a player left out: the TV asks).\nOnly signed-in profiles can be seated. The host's own profile (the one in front) needs `owner`\ntrue, the host's confirmation that the guest may use its saves and trophies (409\n`owner_confirm` otherwise; `owner_unknown` when the console does not say which one is in front,\nfor any profile newly chosen without `owner`); 400 `addr` without a console, 400 `player`, `user` or `duplicate`\nfor a list that is not one profile per player.",
+        "description": "`POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,\ninvites?, internet_invites?, hub_url?, stun?, upnp?, video_track?}`: the host's choices (every\nconsole). Fewer players lets nobody go; it only stops new ones. `stream_seat` off moves a friend\non the stream's controller to a pad of their own. `invites` is \"Invites work\": \"anywhere\" (the\none link, through the hub) or \"wifi\" (the home network's link only; 400 `invites` otherwise),\nthe same choice as `internet_invites` on or off, and the one setting kept across restarts.\n\"wifi\" closes the internet rooms (guests already in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`\notherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none), `upnp` whether the\nrouter is asked for a port, `video_track` whether internet guests get the picture as a video\ntrack (new connections; the data channel otherwise).\n\n`guest_profiles` with `addr` (\"Guests play as\" on that console): each guest's player gets the\nprofile the host chose (`{player: 2-4, user, name, owner}`; a player left out: the TV asks).\nOnly signed-in profiles can be seated. The host's own profile (the one in front) needs `owner`\ntrue, the host's confirmation that the guest may use its saves and trophies (409\n`owner_confirm` otherwise; `owner_unknown` when the console does not say which one is in front,\nfor any profile newly chosen without `owner`); 400 `addr` without a console, 400 `player`, `user` or `duplicate`\nfor a list that is not one profile per player.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -22434,9 +22601,7 @@
               "application/json": {
                 "schema": {
                   "properties": {
-                    "settings": {
-                      "$ref": "#/components/schemas/engine.join.Settings"
-                    }
+                    "settings": {}
                   },
                   "type": "object"
                 }
@@ -44027,6 +44192,709 @@
         }
       }
     },
+    "/api/share": {
+      "get": {
+        "description": "`GET /api/share`: the shares, the receives, and the history.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "history": {
+                      "items": {},
+                      "type": "array"
+                    },
+                    "receives": {
+                      "items": {},
+                      "type": "array"
+                    },
+                    "shares": {
+                      "items": {},
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The shares, the receives, and the history",
+        "tags": [
+          "share"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      },
+      "post": {
+        "description": "`POST /api/share`: makes a share and its link. 403 with `code: \"retail\"` when an app is a\ncommercial game.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShareCreateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Makes a share and its link",
+        "tags": [
+          "share"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/share/check": {
+      "post": {
+        "description": "`POST /api/share/check {title_id?, items}`: each item's verdict, nothing made. An app's\nidentity is read as Share would (`ok: false, code: \"retail\"` for a commercial game).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShareCreateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "items": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Each item's verdict, nothing made",
+        "tags": [
+          "share"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/share/receive": {
+      "post": {
+        "description": "`POST /api/share/receive {link, name}`: opens a Share link. Nothing is received until\n`accept`; the answer has the receive's id (GET it for the offer).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShareOpenBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many requests"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Opens a Share link",
+        "tags": [
+          "share"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/share/receive/{id}": {
+      "delete": {
+        "description": "`DELETE /api/share/receive/{id}`: stops a receive (a file half-received stays as `.part`).",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Stops a receive (a file half-received stays as `.part`)",
+        "tags": [
+          "share"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      },
+      "get": {
+        "description": "`GET /api/share/receive/{id}`.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "share"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/share/receive/{id}/accept": {
+      "post": {
+        "description": "`POST /api/share/receive/{id}/accept {items, dest?}`: what to take; the sender is then asked.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShareAcceptBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "What to take; the sender is then asked",
+        "tags": [
+          "share"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/share/receive/{id}/data/{item}": {
+      "get": {
+        "description": "`GET /api/share/receive/{id}/data/{item}`: a received data item (controls, stream settings,\nwhich cheats are on, a note) as JSON: `{kind, files: {name: content}}`.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "files": {},
+                    "kind": {
+                      "type": "string"
+                    },
+                    "path": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "A received data item (controls, stream settings, which cheats are on, a note) as JSON: `{kind, files: {name: content}}`",
+        "tags": [
+          "share"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/share/receive/{id}/use-save": {
+      "post": {
+        "description": "`POST /api/share/receive/{id}/use-save {addr, folder, user_id?, item}`: a received save into\na user's own save of the same game (as Use a shared save does: save_copy.rs). The page warns\nfirst that trophies and the account stay the user's own.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShareUseSaveBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "parts": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "A received save into a user's own save of the same game (as Use a shared save does: save_copy.rs)",
+        "tags": [
+          "share"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/share/ws": {
+      "get": {
+        "description": "`GET /api/share/ws`: a receiver on the home network (reached from the LAN; the session checks\nthe room itself, and the sender still allows).",
+        "responses": {
+          "101": {
+            "description": "Switches to a WebSocket."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many requests"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "A receiver on the home network (reached from the LAN; the session checks the room itself, and the sender still allows)",
+        "tags": [
+          "share"
+        ],
+        "x-ps5upload": {
+          "access": "lan-open",
+          "response_schema": "websocket",
+          "websocket": true
+        }
+      }
+    },
+    "/api/share/{id}": {
+      "delete": {
+        "description": "`DELETE /api/share/{id}`: cancels the share; its link stops and every transfer ends.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Cancels the share; its link stops and every transfer ends",
+        "tags": [
+          "share"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      },
+      "get": {
+        "description": "`GET /api/share/{id}`.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "share"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/share/{id}/decide": {
+      "post": {
+        "description": "`POST /api/share/{id}/decide {request, allow}`: the sender's Allow or Decline.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShareDecideBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The sender's Allow or Decline",
+        "tags": [
+          "share"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      }
+    },
     "/api/shared/{name}": {
       "get": {
         "description": "`GET /api/shared/{name}` — `{rev, value}`; `rev` 0 and `value` null when never saved. The console\nlist comes without its keys here (`GET /api/consoles/document` has them, for the app).",
@@ -46498,6 +47366,35 @@
           "response_schema": "page"
         }
       }
+    },
+    "/share": {
+      "get": {
+        "description": "`GET /share`: the page a browser on the home network opens a link with (downloads only).",
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "A page."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The page a browser on the home network opens a link with (downloads only)",
+        "tags": [
+          "share"
+        ],
+        "x-ps5upload": {
+          "access": "lan-open",
+          "response_schema": "page"
+        }
+      }
     }
   },
   "servers": [
@@ -46616,6 +47513,10 @@
     {
       "description": "ShadowMountPlus integration.",
       "name": "shadowmount"
+    },
+    {
+      "description": "An app's things sent to a friend: a link they open, each friend allowed, the files sent directly. Homebrew apps only. The sender's and the receiver's routes answer this computer and PS5UPLOAD_ALLOW_IP addresses; /share and /api/share/ws are open to the home network.",
+      "name": "share"
     },
     {
       "description": "This computer only, addressed as localhost. PS5UPLOAD_ALLOW_IP alone does not open these; PS5UPLOAD_ALLOW_AUTOMATION=1 does.",

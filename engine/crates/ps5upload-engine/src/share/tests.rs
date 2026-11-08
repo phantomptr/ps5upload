@@ -40,7 +40,7 @@ fn app_folder(title_id: &str, content_id: &str) -> PathBuf {
     d
 }
 
-fn create_body(items: Value) -> CreateBody {
+fn create_body(items: Value) -> ShareCreateBody {
     serde_json::from_value(json!({"from": "Sam", "title": "My App", "items": items})).unwrap()
 }
 
@@ -62,7 +62,7 @@ async fn a_retail_app_is_refused_by_the_engine_whatever_the_page_sent() {
         "This is a retail game (PPSA01234). PS5Upload only shares homebrew."
     );
     // The page claims a homebrew Title ID: the app's own is what counts.
-    let body: CreateBody = serde_json::from_value(json!({
+    let body: ShareCreateBody = serde_json::from_value(json!({
         "title_id": "PSUP00001",
         "items": [{"kind": "app", "path": retail}],
     }))
@@ -89,7 +89,7 @@ async fn a_retail_app_is_refused_by_the_engine_whatever_the_page_sent() {
     let (s, _) = make(json!([{"kind": "app", "path": zip}])).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
     // A retail Title ID from the page is refused before anything is read.
-    let body: CreateBody = serde_json::from_value(json!({
+    let body: ShareCreateBody = serde_json::from_value(json!({
         "title_id": "ppsa 01234",
         "items": [{"kind": "app", "path": "/nonexistent"}],
     }))
@@ -119,7 +119,7 @@ async fn a_retail_app_is_refused_by_the_engine_whatever_the_page_sent() {
     // A save of a retail game is allowed: player data.
     let save = tmp("save").join("PPSA01234 save shared.zip");
     std::fs::write(&save, b"PK zip").unwrap();
-    let body: CreateBody = serde_json::from_value(json!({
+    let body: ShareCreateBody = serde_json::from_value(json!({
         "title_id": "PPSA01234",
         "items": [{"kind": "save", "path": save}],
     }))
@@ -165,7 +165,7 @@ async fn until_request(id: &str, state: &str) -> u64 {
 async fn decide_on(id: &str, rid: u64, allow: bool) -> StatusCode {
     decide(
         axum::extract::Path(id.to_string()),
-        Json(DecideBody {
+        Json(ShareDecideBody {
             request: rid,
             allow,
         }),
@@ -573,7 +573,7 @@ async fn two_engines_share_a_homebrew_folder_and_a_save_over_webrtc() {
     assert!(!url.contains("k="), "no secret in the link");
     // The friend's engine opens it.
     let (_, r) = body(
-        receive_open(Json(OpenBody {
+        receive_open(Json(ShareOpenBody {
             link: url,
             name: Some("Alex".into()),
         }))
@@ -601,7 +601,7 @@ async fn two_engines_share_a_homebrew_folder_and_a_save_over_webrtc() {
     let (s, _) = body(
         receive_accept(
             axum::extract::Path(rid_rx.clone()),
-            Json(AcceptBody {
+            Json(ShareAcceptBody {
                 items: vec!["i1".into(), "i2".into()],
                 dest: Some(dest.to_string_lossy().into_owned()),
             }),

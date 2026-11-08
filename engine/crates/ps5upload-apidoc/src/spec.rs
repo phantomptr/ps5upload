@@ -258,6 +258,8 @@ fn access_of(route: &Route, analysis: &Analysis) -> &'static str {
         || path == "/api/pad/ws"
         || path == "/join"
         || path == "/api/join/ws"
+        || path == "/share"
+        || path == "/api/share/ws"
     {
         return "lan-open";
     }
