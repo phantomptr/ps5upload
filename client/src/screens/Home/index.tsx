@@ -646,12 +646,19 @@ function TailnetRows({ host }: { host: string }) {
               ? tr("v5_home_tailnet_home", { ip: ps5.ip }, "{ip} · home network in use")
               : ps5.via === "direct"
                 ? tr("v5_home_tailnet_direct", { ip: ps5.ip, ms: ps5.latencyMs >= 0 ? Math.round(ps5.latencyMs) : "?" }, "{ip} · in use, direct {ms} ms")
-                : tr("v5_home_tailnet_relayed", { ip: ps5.ip }, "{ip} · in use, relayed")
+                : ps5.via === "system"
+                  ? tr("v5_home_tailnet_system", { ip: ps5.ip }, "{ip} · in use, through the Tailscale app")
+                  : tr("v5_home_tailnet_relayed", { ip: ps5.ip }, "{ip} · in use, relayed")
           }
           tone={ps5.via === "lan" ? undefined : "good"}
         />
       ) : null}
-      {self !== "none" ? (
+      {self === "system" ? (
+        <MetricRow
+          label={tr("v5_home_tailnet_self", undefined, "Tailscale on this device")}
+          value={tr("v5_home_tailnet_system_app", undefined, "The Tailscale app")}
+        />
+      ) : self !== "none" ? (
         <div className="metric-row" data-testid="home-tailnet-switch">
           <span className="text-[var(--color-muted)]">
             {tr("v5_home_tailnet_self", undefined, "Tailscale on this device")}

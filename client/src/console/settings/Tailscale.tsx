@@ -12,6 +12,21 @@ export interface ConsoleTailnet {
   name?: string;
   error?: string;
   warning?: string;
+  /** Who may reach the PS5 over Tailscale (set in the app): "listed" or "all". */
+  allow_mode?: "listed" | "all";
+  /** The listed devices' Tailscale addresses, comma-separated. */
+  allow?: string;
+  peers?: { name: string; ip: string }[];
+}
+
+/** Who may reach this PS5 over Tailscale, in words (read-only here: the app sets it); null from
+ *  an older helper. */
+export function allowLine(s: ConsoleTailnet): string | null {
+  if (!s.allow_mode) return null;
+  if (s.allow_mode === "all") return t("cw_tn_allow_all");
+  const ips = (s.allow || "").split(",").map((x) => x.trim()).filter(Boolean);
+  const names = ips.map((ip) => (s.peers || []).find((p) => p.ip === ip)?.name.split(".")[0] || ip);
+  return names.length ? t("cw_tn_allow_listed", { names: names.join(", ") }) : t("cw_tn_allow_none");
 }
 
 /** Re-read while it is on: sign-in and connecting move on their own. */
@@ -82,7 +97,7 @@ export function TailscaleSection() {
     return () => window.clearInterval(id);
   }, [st?.enabled, st?.state, read]);
 
-  const run = async (op: "enable" | "disable" | "logout") => {
+  const run = async (op: "enable" | "disable" | "logout" | "renew") => {
     setBusy(true);
     setErr(null);
     setAskOut(false);
@@ -150,6 +165,25 @@ export function TailscaleSection() {
           {problem ? (
             <div className="cw-msg is-error" role="alert">
               {problem}
+            </div>
+          ) : null}
+          {on && allowLine(st) ? (
+            <p className="cw-dim cw-setting-note" data-tn-allow="">
+              {allowLine(st)}
+            </p>
+          ) : null}
+          {on && st.state === "running" ? (
+            <div className="cw-setting">
+              <button
+                type="button"
+                className="cw-focusable cw-button"
+                data-action="tailscale-renew"
+                disabled={busy}
+                onClick={() => void run("renew")}
+              >
+                <span>{t("cw_tn_renew")}</span>
+              </button>
+              <p className="cw-dim cw-setting-note">{t("cw_tn_renew_note")}</p>
             </div>
           ) : null}
           {askOut ? (

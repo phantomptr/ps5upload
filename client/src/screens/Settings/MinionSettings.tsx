@@ -18,6 +18,7 @@ import {
   setMinionOffForNew,
 } from "../../state/minionMemory";
 import { useRosterStore } from "../../state/roster";
+import { consoleOnTailnet, useTailnet } from "../../state/useTailnet";
 
 type Tr = ReturnType<typeof useTr>;
 
@@ -138,6 +139,23 @@ export interface MinionViewProps {
 }
 
 /** Settings → Minion without state (tests render it directly). */
+/** Reached through Tailscale now: the console's page is not carried there (only Remote Play and
+ *  PS5Upload's own connection are), so its link says so instead of a page that never loads. */
+function MinionTailnetNote({ host }: { host: string }) {
+  const tr = useTr();
+  const { status } = useTailnet(!!host);
+  if ((consoleOnTailnet(status, host)?.via ?? "lan") === "lan") return null;
+  return (
+    <p className="w-full text-xs text-[var(--color-muted)]" data-testid="minion-tailnet-note">
+      {tr(
+        "minion_tailnet_note",
+        undefined,
+        "This PS5 is reached through Tailscale right now, which doesn't carry this page. It opens on the PS5's home network.",
+      )}
+    </p>
+  );
+}
+
 export function MinionView({
   up,
   state,
@@ -269,6 +287,7 @@ export function MinionView({
                   >
                     {tr("minion_open_here", undefined, "Open here")}
                   </Button>
+                  <MinionTailnetNote host={host} />
                 </div>
               )}
             </div>

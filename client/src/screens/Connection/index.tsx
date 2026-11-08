@@ -38,6 +38,7 @@ import { PageHeader, Button, Spinner, ErrorCard } from "../../components";
 import { useTr } from "../../state/lang";
 import PowerControl from "./PowerControl";
 import TailnetPanel from "./TailnetPanel";
+import PathCheck from "./PathCheck";
 import { BringUpPanel } from "./BringUpPanel";
 import { useHelperReplaceGuard } from "./useHelperReplaceGuard";
 import { useConsoleAddressCommit } from "./useConsoleAddressCommit";
@@ -269,6 +270,8 @@ export default function ConnectionScreen() {
   const { commit: commitAddress, dialog: addressDialog } = useConsoleAddressCommit();
   // The console is on but has no loader: step 1 says what to load (see handleCheck).
   const [loaderMissing, setLoaderMissing] = useState(false);
+  /** Bumped by each Check: the check by path (home, then Tailscale) runs once for it. */
+  const [pathNonce, setPathNonce] = useState(0);
   const host = useConnectionStore((s) => s.host);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const payloadStatusHost = useConnectionStore((s) => s.payloadStatusHost);
@@ -530,6 +533,7 @@ export default function ConnectionScreen() {
     setTransientStep2(null);
     setTransientStep2Msg(null);
     const check = await checkConsole(target);
+    setPathNonce((n) => n + 1);
     const running = () =>
       tr("connection_payload_running", { host: target }, `Helper is running on ${target}`);
     const notLoaded = () => tr("connection_payload_not_loaded", undefined, "Helper not loaded yet");
@@ -719,6 +723,7 @@ export default function ConnectionScreen() {
               <ElfldrFirstCallout />
             </div>
           )}
+          {pathNonce > 0 && host.trim() ? <PathCheck host={host.trim()} nonce={pathNonce} /> : null}
           {/* mDNS needs the desktop or Android app: a browser has no socket for it, and the
               button showed a developer error there. */}
           {isTauriEnv() && <DiscoverPanel

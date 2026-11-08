@@ -524,7 +524,9 @@ function TailnetLine({ on }: { on: ConsoleOnTailnet | null }) {
           {" · "}
           {on.via === "direct"
             ? tr("roster_tailnet_in_use_direct", { ms: on.latencyMs >= 0 ? Math.round(on.latencyMs) : "?" }, "in use, direct {ms} ms")
-            : tr("roster_tailnet_in_use_relayed", undefined, "in use, relayed")}
+            : on.via === "system"
+              ? tr("roster_tailnet_in_use_system", undefined, "in use, through the Tailscale app")
+              : tr("roster_tailnet_in_use_relayed", undefined, "in use, relayed")}
         </span>
       ) : null}
     </div>

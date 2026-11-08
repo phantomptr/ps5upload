@@ -49,6 +49,13 @@ export interface TailnetStatus {
   error: string;
   serving: { udp_flows: number; tcp_conns: number };
   peers: TailnetPeer[];
+  /** Has a sign-in kept on the PS5 (off is then a pause). Absent from an older helper. */
+  signed_in?: boolean;
+  /** Who may reach the PS5 over Tailscale: "listed" (only `allow`) or "all". Absent from an older
+   *  helper (which lets every device of the tailnet in). */
+  allow_mode?: "listed" | "all";
+  /** The allowed devices' Tailscale addresses, comma-separated. */
+  allow?: string;
 }
 
 /** The helper predates Tailscale support (the engine answers 501 `unsupported`). */
@@ -77,13 +84,16 @@ export interface TailnetEnable {
   control_url?: string;
   hostname?: string;
   authkey?: string;
+  /** op "allow": "listed" or "all", and the list ("100.a.b.c,100.d.e.f"). */
+  allow_mode?: "listed" | "all";
+  allow?: string;
+  /** op "allow_add": one device's Tailscale address. */
+  ip?: string;
 }
 
-export function tailnetOp(
-  host: string,
-  op: "enable" | "disable" | "logout",
-  opts: TailnetEnable = {},
-): Promise<TailnetStatus> {
+export type TailnetConsoleOp = "enable" | "disable" | "logout" | "rename" | "renew" | "allow" | "allow_add";
+
+export function tailnetOp(host: string, op: TailnetConsoleOp, opts: TailnetEnable = {}): Promise<TailnetStatus> {
   return call("/api/ps5/tailnet", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -111,9 +121,18 @@ export interface AppTailnetConsole {
   host: string;
   ip: string;
   name: string;
-  /** "lan" | "direct" | "relayed" */
+  /** "lan" | "direct" | "relayed" | "system" */
   via: string;
   latency_ms: number;
+}
+
+/** The system's own Tailscale app on this device, as the engine sees it. */
+export interface SystemTailscale {
+  detected: boolean;
+  ip: string;
+  iface: string;
+  /** "" not asked yet, "system" use it, "own" sign PS5Upload in itself. */
+  choice: "" | "system" | "own";
 }
 
 export interface AppTailnetStatus {
@@ -136,16 +155,30 @@ export interface AppTailnetStatus {
   signed_in?: boolean;
   peers: TailnetPeer[];
   consoles: AppTailnetConsole[];
+  /** This device's own name + "-ps5u": the name asked for when none is set. */
+  default_hostname?: string;
+  /** Tailscale gave another name (the asked one was taken): that name, else null. */
+  renamed_to?: string | null;
+  /** How this device is on Tailscale: "builtin", "system" or "none". */
+  backend?: "builtin" | "system" | "none";
+  system?: SystemTailscale;
 }
 
 export function appTailnetStatus(): Promise<AppTailnetStatus> {
   return call("/api/tailnet") as unknown as Promise<AppTailnetStatus>;
 }
 
-export function appTailnetOp(
-  op: "enable" | "disable" | "logout",
-  opts: TailnetEnable = {},
-): Promise<AppTailnetStatus> {
+export type AppTailnetOp = "enable" | "disable" | "logout" | "rename" | "renew" | "system_choice" | "test_path";
+
+export interface AppTailnetOpts extends TailnetEnable {
+  /** op "system_choice". */
+  choice?: "system" | "own";
+  /** op "test_path": the console, and how long (0 ends it). */
+  host?: string;
+  secs?: number;
+}
+
+export function appTailnetOp(op: AppTailnetOp, opts: AppTailnetOpts = {}): Promise<AppTailnetStatus> {
   return call("/api/tailnet", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -154,9 +187,81 @@ export function appTailnetOp(
 }
 
 export interface TailnetVia {
-  /** "lan" | "direct" | "relayed" */
+  /** "lan" | "direct" | "relayed" | "system" */
   via: string;
   latency_ms: number;
+}
+
+/** One port checked on one path. */
+export interface PathCheck {
+  port: number;
+  open: boolean;
+  error: string | null;
+}
+
+/** The Connection check by path (engine GET /api/tailnet/check). */
+export interface TailnetCheck {
+  home: PathCheck[];
+  /** Only when nothing answered at home and the PS5 has a Tailscale address. */
+  tailnet: { backend: "builtin" | "system"; ip: string; online: boolean | null; checks: PathCheck[] } | null;
+  tailnet_ip: string | null;
+  /** The path that answered: "lan", "builtin", "system", or "none". */
+  used: "lan" | "builtin" | "system" | "none";
+  device: {
+    backend: "builtin" | "system" | "none";
+    enabled: boolean;
+    signed_in: boolean;
+    state: TailnetState;
+    system_detected: boolean;
+  };
+}
+
+/** The check by path; null from an engine without it (or one that is away). */
+export async function tailnetCheck(host: string): Promise<TailnetCheck | null> {
+  try {
+    const res = await fetch(`${getEngineUrl()}/api/tailnet/check?addr=${encodeURIComponent(consoleAddr(host))}`, {
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as TailnetCheck;
+    return Array.isArray(body.home) ? body : null;
+  } catch {
+    return null;
+  }
+}
+
+/** This device's Tailscale in one word, for the Connection check: the built-in node on, paused
+ *  or signed out, the system's Tailscale app, or nothing. */
+export function deviceTailscale(
+  d: TailnetCheck["device"] | null | undefined,
+): "builtin-on" | "builtin-connecting" | "builtin-paused" | "system" | "signed-out" | "none" {
+  if (!d) return "none";
+  if (d.backend === "builtin") return d.state === "running" ? "builtin-on" : "builtin-connecting";
+  if (d.backend === "system") return "system";
+  if (d.signed_in) return "builtin-paused";
+  return d.system_detected ? "system" : "signed-out";
+}
+
+/** Should the app ask "use the system's Tailscale app or sign PS5Upload in?": the app is there,
+ *  PS5Upload's own Tailscale is not set up, and the user has not answered. */
+export function shouldAskSystemChoice(st: AppTailnetStatus | null): boolean {
+  if (!st?.system?.detected) return false;
+  if (st.system.choice) return false;
+  return !st.enabled && !st.signed_in;
+}
+
+/** The comma-separated allow-list as addresses. */
+export function allowList(st: Pick<TailnetStatus, "allow"> | null | undefined): string[] {
+  return (st?.allow ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** The list with `ip` ticked on or off. */
+export function toggleAllowed(list: string[], ip: string, on: boolean): string[] {
+  const rest = list.filter((x) => x !== ip);
+  return on ? [...rest, ip] : rest;
 }
 
 // ---- problems, in words (Settings › Tailscale and the console's Tailscale panel) ----
@@ -193,7 +298,7 @@ export function tailnetProblems(
   if (st.state === "signed-out" || /signed out at control/i.test(error)) {
     out.push({
       key: "tn_err_signed_out",
-      fallback: "Signed out of the tailnet: its key expired or the device was removed. Sign out, then sign in again.",
+      fallback: "Signed out of the tailnet: its key expired or the device was removed. Use Renew to sign in again.",
       bad: true,
     });
   } else if (error && st.state !== "running") {
@@ -215,12 +320,12 @@ export function tailnetProblems(
     }
   }
   if (/expired/i.test(warning)) {
-    out.push({ key: "tn_warn_expired", fallback: "The Tailscale key has expired. Sign out, then sign in again.", bad: true });
+    out.push({ key: "tn_warn_expired", fallback: "The Tailscale key has expired. Use Renew to sign in again; the address and name stay.", bad: true });
   } else if (/expires/i.test(warning) && expiryDays(st.key_expiry ?? 0) === null) {
     // (Within a week the days are said already, from key_expiry.)
     out.push({
       key: "tn_warn_expiring",
-      fallback: "The Tailscale key expires soon. Sign out, then sign in again to renew it.",
+      fallback: "The Tailscale key expires soon. Use Renew to sign in again; the address and name stay.",
       bad: false,
     });
   }
@@ -233,6 +338,42 @@ export function tailnetProblems(
     });
   }
   return out;
+}
+
+/** Is the path a Tailscale one? */
+export function viaIsTailnet(via: string): boolean {
+  return via === "direct" || via === "relayed" || via === "system";
+}
+
+/** A notice when a console switches path: "tailnet" (now through Tailscale), "home" (back on the
+ *  home network), or null (no switch, or the first read). */
+export function pathSwitch(prev: string | null, next: string): "tailnet" | "home" | null {
+  if (prev === null) return null;
+  const was = viaIsTailnet(prev);
+  const is = viaIsTailnet(next);
+  if (was === is) return null;
+  return is ? "tailnet" : "home";
+}
+
+/** Should a large upload ask first: over a relayed Tailscale path, or on phone data, a big
+ *  upload is slow (and may cost money). */
+export const SLOW_PATH_UPLOAD_BYTES = 1024 * 1024 * 1024;
+export function slowPathWarning(
+  totalBytes: number,
+  via: string,
+  onCellular: boolean,
+): "relayed" | "cellular" | null {
+  if (totalBytes <= SLOW_PATH_UPLOAD_BYTES) return null;
+  if (onCellular) return "cellular";
+  if (via === "relayed") return "relayed";
+  return null;
+}
+
+/** Whether this device is on phone data, where the browser can tell (Android Chrome and the
+ *  Android app's WebView); false where it cannot. */
+export function onCellularData(): boolean {
+  const c = (globalThis.navigator as unknown as { connection?: { type?: string } } | undefined)?.connection;
+  return c?.type === "cellular";
 }
 
 /** How the engine reaches this console right now (the status-bar chip). */

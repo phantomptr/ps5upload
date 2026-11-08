@@ -138,32 +138,61 @@ Three ways, easiest first:
   when you're done.
 
 **Q: Can I play, or use the app, away from home?**
-Yes, with **Tailscale** built in (12.0.0): the PS5 and your devices join your own tailnet, with no
-Tailscale app needed. Never forward the engine's ports on your router instead: it has no password.
+Yes, with **Tailscale** built in (12.0.0): the PS5 and your devices join your own tailnet. Never
+forward the engine's ports on your router instead: it has no password.
 
 1. **The PS5:** at home, open **Connection** and press **Put this PS5 on Tailscale**. Sign in with
-   the link (or scan the QR code on your phone) to add the PS5 to your tailnet.
+   the link (or scan the QR code on your phone) to add the PS5 to your tailnet. It is named after
+   the PS5's own name plus `-ps5u`; change the name any time in the same panel.
 2. **Each device you play from** (phone, laptop): **Settings › Tailscale › Sign in to Tailscale**
-   adds that device the same way.
+   adds that device the same way, named after the device plus `-ps5u`. If the **Tailscale app**
+   already runs on that device, the app asks whether to use it (recommended) or to sign
+   PS5Upload in as its own device.
+3. **Test it now:** back on the PS5's panel, **Try Tailscale now** sends the app through
+   Tailscale for two minutes, from home, so you can see it work before you leave.
 
-Away from home, the app reaches the PS5 through Tailscale by itself when it doesn't answer at home.
-Only Remote Play and PS5Upload are reachable on the PS5 through it, nothing else. The connection
-chip says how it gets there: **via Tailscale (direct, 24 ms)**, or **relayed** when it goes through
-Tailscale's servers (slower). Using **Headscale**? Put its address under **Advanced › Control
-server** before you sign in. If your tailnet needs approval for new devices, approve them in its
-admin page.
+The home network always comes first: the app uses Tailscale only when the PS5 doesn't answer at
+home, and says so ("Living room PS5: now through Tailscale", then "back on your home network").
+The connection chip says how it gets there: **via Tailscale (direct, 24 ms)**, **relayed** when it
+goes through Tailscale's servers (slower), or **the Tailscale app**. The **Check** on Connection
+shows what answered on the home network and, when nothing did, over Tailscale.
 
-- **Keep the PS5 on.** In rest mode the PS5 drops off Tailscale, and it rejoins after a wake, so
-  leave it on (or wake it) before you go.
-- **Stream & install and installs from a link** need the PS5 to download from your device, which
-  it can't reach this way: use Upload & install.
-- Play runs only as well as your home connection's upload speed allows; if it keeps dropping
-  frames, take 720p.
+**Who can reach the PS5:** only Remote Play and PS5Upload are reachable on it through Tailscale,
+and only from the devices on its list: the ones signed in through PS5Upload (each adds itself the
+next time it talks to the PS5 at home) and the ones you tick in the PS5's panel. **Every device on
+my Tailscale network** is a choice you can make there; don't, if you share your tailnet with other
+people.
+
+**Pause and renew:** the switch on the PS5's panel and in Settings › Tailscale pauses Tailscale and
+keeps the sign-in (it stays paused after a restart). **Sign out** forgets it, and the device may
+get a new address when it signs in again. When a key is about to expire, **Renew** signs in again
+and keeps the address and the name. For the PS5, turn off key expiry in Tailscale's admin page
+(open the PS5 under Machines › **Disable key expiry**) so it never has to.
+
+Using **Headscale**? Put its address under **Advanced › Control server** before you sign in. If
+your tailnet needs approval for new devices, approve them in its admin page.
+
+- **Keep the PS5 on.** In rest mode the PS5 drops off Tailscale, and waking it works only on its
+  home network, so leave it on (or wake it at home) before you go. It rejoins Tailscale after a
+  wake by itself.
+- **Through Tailscale the app can't** send payloads, install packages (any kind: the PS5 would
+  have to download from your device) or open the console's own page: it says so instead of
+  waiting. Uploads, files, games and Remote Play work.
+- A large upload (over 1 GB) on a relayed path or on phone data asks first. Play runs only as well
+  as your home connection's upload speed allows; on a relayed path the app offers 720p.
 - **Friends without a Tailscale account** don't need one: send them an internet invite (see "Can a
   friend who isn't at my place play together").
-- **The web UI:** if a computer at home runs it, open `http://<its Tailscale address>:19113/` with
-  Tailscale on that device (add `100.64.0.0/10`, Tailscale's addresses, to `PS5UPLOAD_ALLOW_IP` if
-  the page refuses you). Play in the browser still needs an `https://` page.
+- **The web UI:** see the next question.
+
+**Q: I run the engine in Docker on a NAS at home. Can I use it away from home?**
+Yes, through Tailscale. Put the NAS on your tailnet (Tailscale's own app or package for your NAS,
+or the `tailscale` container next to it), then on the device you're away with, open
+`http://<the NAS's Tailscale address>:19113/`, the 100.x address the Tailscale admin page lists
+for it. The engine only answers devices it was told to trust: add `100.64.0.0/10` (Tailscale's
+addresses) to `PS5UPLOAD_ALLOW_IP` in the compose file, for example
+`PS5UPLOAD_ALLOW_IP=192.168.1.0/24,100.64.0.0/10`, and restart the container. The engine at home
+still reaches the PS5 on the home network, so uploads, installs and the console's page all work
+from there. Play in the browser still needs an `https://` page.
 
 **Q: How do I play with a friend as Player 2?**
 With **Play Together** (11.0.0). Your friend uses their own phone, tablet or computer, on your

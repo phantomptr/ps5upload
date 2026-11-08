@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Camera, Check, AlertTriangle, Globe, Images, MonitorSmartphone, Zap } from "lucide-react";
-import { tailnetVia, type TailnetVia } from "../api/tailnet";
+import { pathSwitch, tailnetVia, type TailnetVia } from "../api/tailnet";
+import { profileNameForHost } from "../state/roster";
 import { useNavigate } from "react-router";
 
 import { useConnectionStore, EMPTY_HOST_RUNTIME } from "../state/connection";
@@ -211,18 +212,36 @@ function TailnetChip() {
   useEffect(() => {
     if (!host) return;
     let live = true;
-    const read = () =>
+    let prev: string | null = null;
+    const read = () => {
+      // Foreground only: a phone in the background asks nothing.
+      if (typeof document !== "undefined" && document.hidden) return;
       void tailnetVia(host).then((v) => {
-        if (live) setVia(v);
+        if (!live) return;
+        setVia(v);
+        // "Living room PS5: now through Tailscale" / "back on your home network".
+        const sw = pathSwitch(prev, v.via);
+        prev = v.via;
+        if (sw) {
+          const name = profileNameForHost(host, useRosterStore.getState().profiles);
+          useToastStore.getState().push({
+            message:
+              sw === "tailnet"
+                ? tr("tn_switch_tailnet", { name }, "{name}: now through Tailscale")
+                : tr("tn_switch_home", { name }, "{name}: back on your home network"),
+            tone: "info",
+          });
+        }
       });
+    };
     read();
     const t = window.setInterval(read, 5000);
     return () => {
       live = false;
       window.clearInterval(t);
     };
-  }, [host]);
-  if (!host || (via.via !== "direct" && via.via !== "relayed")) return null;
+  }, [host, tr]);
+  if (!host || (via.via !== "direct" && via.via !== "relayed" && via.via !== "system")) return null;
   const label =
     via.via === "direct"
       ? tr(
@@ -230,7 +249,9 @@ function TailnetChip() {
           { ms: via.latency_ms >= 0 ? via.latency_ms.toFixed(1) : "?" },
           "via Tailscale (direct, {ms} ms)",
         )
-      : tr("tn_via_relayed", undefined, "via Tailscale (relayed)");
+      : via.via === "system"
+        ? tr("tn_via_system", undefined, "via Tailscale (the Tailscale app)")
+        : tr("tn_via_relayed", undefined, "via Tailscale (relayed)");
   return (
     <span
       className="flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[var(--color-accent-bright)]"

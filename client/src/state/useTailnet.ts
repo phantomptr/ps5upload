@@ -9,8 +9,9 @@ export const TAILNET_READ_MS = 10_000;
 export interface ConsoleOnTailnet {
   /** Its Tailscale address (100.x.y.z). */
   ip: string;
-  /** How the engine reaches it now: the home network first, Tailscale only when home does not answer. */
-  via: "lan" | "direct" | "relayed";
+  /** How the engine reaches it now: the home network first, Tailscale only when home does not
+   *  answer ("system": through the system's Tailscale app). */
+  via: "lan" | "direct" | "relayed" | "system";
   latencyMs: number;
 }
 
@@ -20,13 +21,15 @@ export function consoleOnTailnet(st: AppTailnetStatus | null, host: string): Con
   const want = consoleAddr(host);
   const c = (st.consoles ?? []).find((k) => consoleAddr(k.host) === want);
   if (!c || !c.ip) return null;
-  const via = c.via === "direct" || c.via === "relayed" ? c.via : "lan";
+  const via = c.via === "direct" || c.via === "relayed" || c.via === "system" ? c.via : "lan";
   return { ip: c.ip, via, latencyMs: typeof c.latency_ms === "number" ? c.latency_ms : -1 };
 }
 
 /** This device's own Tailscale (Settings › Tailscale): on and connected, paused, or not set up. */
-export function selfTailnet(st: AppTailnetStatus | null): "on" | "paused" | "connecting" | "none" {
+export function selfTailnet(st: AppTailnetStatus | null): "on" | "paused" | "connecting" | "system" | "none" {
   if (!st) return "none";
+  // The system's Tailscale app carries this device (PS5Upload's own is not set up).
+  if (!st.enabled && !st.signed_in && st.backend === "system") return "system";
   if (st.enabled) return st.state === "running" ? "on" : "connecting";
   // Off with a sign-in kept: paused (on again needs no sign-in).
   return st.signed_in ? "paused" : "none";
@@ -54,7 +57,10 @@ export function useTailnet(active = true): {
   useEffect(() => {
     if (!active) return;
     void read();
-    const id = window.setInterval(() => void read(), TAILNET_READ_MS);
+    // Foreground only: a phone in the background asks nothing.
+    const id = window.setInterval(() => {
+      if (typeof document === "undefined" || !document.hidden) void read();
+    }, TAILNET_READ_MS);
     return () => window.clearInterval(id);
   }, [active, read]);
   const setPaused = useCallback(async (paused: boolean) => {
