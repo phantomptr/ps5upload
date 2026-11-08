@@ -928,6 +928,7 @@ export async function browserInvoke<T>(
         keep_both: args["keepBoth"] ?? false,
         ampr_zstd: args["amprZstd"],
         update: args["update"],
+        destination: args["destination"],
       });
     }
     case "image_browse": {

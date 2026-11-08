@@ -15,6 +15,9 @@ import { useTr } from "../../state/lang";
 import { formatBytes } from "../../lib/format";
 import type { Task } from "../../state/tasks";
 import { ImageDestination } from "./ImageDestination";
+import { ServerDestination } from "./ServerDestination";
+import { displayPath, isRemotePath, parseRemotePath } from "../../lib/remotePath";
+import { useConnectionsStore } from "../../state/connections";
 import type { ImageFormat } from "../../api/fpkg";
 import { overallProgress, stageRows, type StageRow } from "./stages";
 import { lz4Active, type Lz4Choice } from "./ImageOptions";
@@ -170,10 +173,15 @@ export function idleRun(
   const folder = c.make === "folder";
   const packing = image && lz4Active(c.imageFormat, c.lz4);
   const sends = c.then !== "keep";
-  // Save to: PS5 that this image can't do (or with no console) runs nothing.
+  // Save to: PS5 that this image can't do (or with no console) runs nothing; nor does Save to:
+  // a server with no folder chosen, or for an image that can't go there.
   const ps5Blocked = image && c.saveTo === "ps5" && !savesToPs5(c);
+  const serverBlocked = (image || folder) && c.saveTo === "server" && !savesToServer(c);
   const canRun =
-    props.canConvert !== false && !ps5Blocked && (folder ? !!props.canFolder : !image || !!props.canImage);
+    props.canConvert !== false &&
+    !ps5Blocked &&
+    !serverBlocked &&
+    (folder ? !!props.canFolder : !image || !!props.canImage);
   const label = folder
     ? tr("fpkg.folder.make", undefined, "Make game folder")
     : image
@@ -469,7 +477,19 @@ export function RunCard(props: RunCardProps) {
             ? props.title
               ? tr("fpkg.installedTitle", { title: props.title }, "Installed on PS5 — {title}")
               : tr("fpkg.installedOn", { host: p.host ?? "" }, "Installed on the PS5 ({host})")
-            : p.mode === "image" && p.onConsole
+            : p.mode === "image" && isRemotePath(p.packagePath)
+              ? tr(
+                  "fpkg.image.done_server",
+                  undefined,
+                  "Game image written straight to the server and read back there.",
+                )
+              : folder && isRemotePath(p.packagePath)
+              ? tr(
+                  "fpkg.folder.done_server",
+                  undefined,
+                  "Game folder written straight to the server and read back there.",
+                )
+              : p.mode === "image" && p.onConsole
               ? tr(
                   "fpkg.image.done_ps5",
                   undefined,
@@ -525,7 +545,7 @@ export function RunCard(props: RunCardProps) {
           </div>
         )}
         <div className="break-all text-sm text-[var(--color-text)]">
-          {p.deleted ? tr("fpkg.deleted", undefined, "Package deleted") : p.packagePath}
+          {p.deleted ? tr("fpkg.deleted", undefined, "Package deleted") : <ResultPath path={p.packagePath} />}
         </div>
         {p.swap && (
           <div className="flex flex-col gap-2 rounded-[var(--radius-card)] border border-[var(--glass-edge)] p-3 text-sm">
@@ -547,7 +567,7 @@ export function RunCard(props: RunCardProps) {
           </div>
         )}
         {!p.deleted && !makesImage(p.mode) && !folder && installChoice(!installed)}
-        {!p.deleted && makesImage(p.mode) && !p.onConsole && (
+        {!p.deleted && makesImage(p.mode) && !p.onConsole && !isRemotePath(p.packagePath) && (
           <ImageUpload
             queued={!!p.uploadQueued}
             dest={props.choice.dest}
@@ -562,7 +582,7 @@ export function RunCard(props: RunCardProps) {
               {tr("fpkg.launch", undefined, "Launch on PS5")}
             </Button>
           )}
-          {!p.deleted && !p.onConsole && props.onShowFolder && (
+          {!p.deleted && !p.onConsole && !isRemotePath(p.packagePath) && props.onShowFolder && (
             <Button onClick={props.onShowFolder}>{tr("fpkg.showFolder", undefined, "Show in folder")}</Button>
           )}
           {!p.deleted && !makesImage(p.mode) && !folder && props.onViewPackage && (
@@ -582,6 +602,12 @@ export function RunCard(props: RunCardProps) {
       </div>
     </Card>
   );
+}
+
+/** Where the result is; one on a server by the server's name. */
+function ResultPath({ path }: { path: string }) {
+  const nameOf = useConnectionsStore((s) => s.nameOf);
+  return <>{isRemotePath(path) ? displayPath(path, nameOf) : path}</>;
 }
 
 /** A finished image: send it to the PS5 through the Upload queue. */
@@ -671,23 +697,40 @@ export interface OutputChoiceProps {
   onSaveTo?: (to: SaveTo) => void;
   /** Why this image can't go straight to the PS5 (a .ffpfsc, LZ4 packs), or null. */
   ps5Refusal?: string | null;
+  /** Save to: a server: the folder chosen there (a `remote://` path, "" for none). */
+  serverFolder?: string;
+  onServerFolder?: (folder: string) => void;
+  /** Why this image can't go straight to a server (a .ffpfsc, LZ4 packs), or null. */
+  serverRefusal?: string | null;
 }
 
-/** Where Convert saves an image. */
-export type SaveTo = "computer" | "ps5";
+/** Where Convert saves an image or a game folder. */
+export type SaveTo = "computer" | "ps5" | "server";
 
 /** The image goes straight to the PS5: chosen, possible for this image, and a console answers. */
 export function savesToPs5(c: Pick<OutputChoiceProps, "make" | "saveTo" | "ps5Refusal" | "canInstall">): boolean {
   return c.make === "image" && c.saveTo === "ps5" && !c.ps5Refusal && c.canInstall;
 }
 
+/** The image or game folder goes straight to a server: chosen, possible for this image, and a
+ *  folder on a server picked. */
+export function savesToServer(
+  c: Pick<OutputChoiceProps, "make" | "saveTo" | "serverRefusal" | "serverFolder">,
+): boolean {
+  if (c.saveTo !== "server" || !c.serverFolder || !parseRemotePath(c.serverFolder)) return false;
+  if (c.make === "folder") return true;
+  return c.make === "image" && !c.serverRefusal;
+}
+
 export function OutputChoice(c: OutputChoiceProps) {
   const tr = useTr();
   const image = c.make === "image";
+  const folder = c.make === "folder";
   const toPs5 = image && c.saveTo === "ps5";
+  const toServer = (image || folder) && c.saveTo === "server" && !!c.onServerFolder;
   return (
     <div className="flex flex-col gap-3" data-testid="output-choice">
-      {image && c.onSaveTo && (
+      {(image || (folder && c.onServerFolder)) && c.onSaveTo && (
         <div className="flex flex-col gap-1 text-sm">
           <label className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <span className="min-w-28 text-[var(--color-muted)]">{tr("fpkg.save_to", undefined, "Save to")}</span>
@@ -698,9 +741,16 @@ export function OutputChoice(c: OutputChoiceProps) {
               data-testid="convert-save-to"
             >
               <option value="computer">{tr("fpkg.save_to_computer", undefined, "This computer")}</option>
-              <option value="ps5" disabled={!c.canInstall}>
-                {tr("fpkg.save_to_ps5", undefined, "The PS5, straight (nothing stored here)")}
-              </option>
+              {image && (
+                <option value="ps5" disabled={!c.canInstall}>
+                  {tr("fpkg.save_to_ps5", undefined, "The PS5, straight (nothing stored here)")}
+                </option>
+              )}
+              {c.onServerFolder && (
+                <option value="server">
+                  {tr("fpkg.save_to_server", undefined, "A server, straight (nothing stored here)")}
+                </option>
+              )}
             </select>
           </label>
           {toPs5 && c.ps5Refusal && (
@@ -717,9 +767,25 @@ export function OutputChoice(c: OutputChoiceProps) {
               )}
             </span>
           )}
+          {toServer && image && c.serverRefusal && (
+            <span className="text-xs text-[var(--color-warn)]" data-testid="convert-save-to-server-refused">
+              {c.serverRefusal}
+            </span>
+          )}
+          {toServer && !(image && c.serverRefusal) && (
+            <span className="text-xs text-[var(--color-muted)]">
+              {tr(
+                "fpkg.save_to_server_note",
+                undefined,
+                "Written to the server as it is made, then read back there before it gets its name. Nothing is stored on this computer.",
+              )}
+            </span>
+          )}
         </div>
       )}
-      {toPs5 ? (
+      {toServer ? (
+        <ServerDestination folder={c.serverFolder ?? ""} onChange={(f) => c.onServerFolder?.(f)} />
+      ) : toPs5 ? (
         c.dest && <ImageDestination {...c.dest} />
       ) : (
       <>

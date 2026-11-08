@@ -2465,6 +2465,8 @@ pub async fn folder_build(
     ampr_zstd: Option<JsonValue>,
     // A PS4 update merged into the PS4 game `source` (which may then also be a folder).
     update: Option<String>,
+    // Where the folder goes: {"kind":"local"} (the default) or {"kind":"server",...}.
+    destination: Option<JsonValue>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/folder/build");
@@ -2479,6 +2481,7 @@ pub async fn folder_build(
             "keep_both": keep_both.unwrap_or(false),
             "ampr_zstd": ampr_zstd,
             "update": update,
+            "destination": destination,
         }),
     )
     .await
