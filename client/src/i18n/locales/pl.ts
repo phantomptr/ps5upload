@@ -7784,7 +7784,7 @@ helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą t
   "play_setup_pair_failed_try_pin": "Automatyczne parowanie nie zadziałało na tej konsoli. Sparuj zamiast tego z PIN-em wyświetlanym przez PS5:",
   "play_setup_pair_with_pin": "Sparuj z PIN-em wyświetlanym przez PS5",
   "saves_part_main": "główny zapis",
-  "saves_part_missing": "{part} gry {game} nie ma jeszcze u {user}: uruchom raz grę jako {user} i zapisz, potem spróbuj ponownie.",
+  "saves_part_missing": "{user} nie ma jeszcze {part} gry {game}, a zapis może zastąpić tylko slot, który {user} już ma. Uruchom grę jako {user}, zapisz w tym samym slocie, potem spróbuj ponownie.",
   "saves_share_working": "Zapisywanie zapisu {game} jako pliku…",
   "saves_shared_body_v2": "Zapisano jako {where}. Wyślij go znajomemu albo przenieś na swoje drugie PS5: tam w Danych zapisu wybierz przy {game} Kopiuj do… › Wczytaj plik zapisu.",
   "saves_backed_up": "Utworzono kopię zapasową {game}",

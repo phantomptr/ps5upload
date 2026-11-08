@@ -7502,7 +7502,7 @@ helper_mismatch_boot_copy: "你的 PS5 启动了为开机保留的旧版助手�
   "play_setup_pair_failed_try_pin": "自动配对在这台主机上没有成功。请改用 PS5 上显示的 PIN 配对：",
   "play_setup_pair_with_pin": "用 PS5 上显示的 PIN 配对",
   "saves_part_main": "主存档",
-  "saves_part_missing": "{user} 还没有 {game} 的{part}：请以 {user} 身份启动一次游戏并存档，然后重试。",
+  "saves_part_missing": "{user} 还没有 {game} 的{part}，而存档只能替换 {user} 已有的存档位。请以 {user} 身份启动游戏，在同一个存档位存档，然后重试。",
   "saves_share_working": "正在把 {game} 的存档保存为文件…",
   "saves_shared_body_v2": "已保存为 {where}。发给好友，或拿到你的另一台 PS5：在那里的存档中，对 {game} 选择 复制到… › 载入存档文件。",
   "saves_backed_up": "{game} 已备份",

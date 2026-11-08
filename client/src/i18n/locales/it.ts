@@ -7496,7 +7496,7 @@ helper_mismatch_boot_copy: "La PS5 ha avviato una copia più vecchia dell'helper
   "play_setup_pair_failed_try_pin": "L'associazione automatica non ha funzionato su questa console. Associa invece con il PIN mostrato dalla PS5:",
   "play_setup_pair_with_pin": "Associa con il PIN mostrato dalla PS5",
   "saves_part_main": "salvataggio principale",
-  "saves_part_missing": "{part} di {game} non è ancora presente per {user}: avvia il gioco una volta come {user} e salva, poi riprova.",
+  "saves_part_missing": "{user} non ha ancora {part} di {game}, e un salvataggio può sostituire solo uno slot che {user} ha già. Avvia il gioco come {user}, salva nello stesso slot, poi riprova.",
   "saves_share_working": "Salvataggio di {game} come file…",
   "saves_shared_body_v2": "Salvato come {where}. Invialo al tuo amico, o portalo sull'altra PS5: lì, in Salvataggi, scegli Copia in… › Carica un file di salvataggio su {game}.",
   "saves_backed_up": "Backup di {game} creato",

@@ -7545,7 +7545,7 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
   "play_setup_pair_failed_try_pin": "Ghép nối tự động không hoạt động trên máy này. Hãy ghép nối bằng PIN hiện trên PS5:",
   "play_setup_pair_with_pin": "Ghép nối bằng PIN hiện trên PS5",
   "saves_part_main": "bản lưu chính",
-  "saves_part_missing": "{part} của {game} chưa có trên {user}: hãy mở game một lần bằng {user} và lưu, rồi thử lại.",
+  "saves_part_missing": "{user} chưa có {part} của {game}, và bản lưu chỉ có thể thay một ô lưu mà {user} đã có. Hãy mở game bằng {user}, lưu vào cùng ô đó, rồi thử lại.",
   "saves_share_working": "Đang lưu bản lưu của {game} thành tệp…",
   "saves_shared_body_v2": "Đã lưu thành {where}. Gửi cho bạn bè, hoặc mang sang PS5 khác: ở đó, trong Dữ liệu lưu, chọn Sao chép sang… › Tải tệp bản lưu trên {game}.",
   "saves_backed_up": "Đã sao lưu {game}",

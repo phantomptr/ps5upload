@@ -1021,6 +1021,44 @@ mod tests {
     /// distinct content intact. (macOS Finder Archive Utility has a
     /// bug where it zeros one of the two on extract — out of our
     /// control, but our tool's own restore path must not.)
+    /// #729: a save holding names Windows refuses (`options\gabindings.xml`, `a:b`) is kept on
+    /// this computer under its reversible names (`host_names`), and a backup zip carries those
+    /// as they are: unpacked, every name and byte comes back, and each still stands for the
+    /// console's exact name.
+    #[test]
+    fn kept_names_survive_a_backup_zip_exactly() {
+        use crate::host_names::{escape_path, unescape_path};
+        let src = fresh_tmp("kept-src");
+        let dst = fresh_tmp("kept-dst");
+        let title = "PPSA30528";
+        let console = [
+            "options\\gabindings.xml",
+            "profile:1.dat",
+            "CON",
+            "trailing.",
+            "100%.txt",
+            "slot\\2/inner:x",
+        ];
+        for (i, name) in console.iter().enumerate() {
+            let kept = escape_path(name).unwrap();
+            touch(&src.join(title).join(&kept), &vec![i as u8; 100 + i]);
+        }
+        let zip = src.join("kept.zip");
+        zip_folder_noted(&src, title, &zip, r#"{"ps5upload":"save-backup"}"#).unwrap();
+        unzip_strict(&zip, &dst, title).unwrap();
+        for (i, name) in console.iter().enumerate() {
+            let kept = escape_path(name).unwrap();
+            assert_eq!(unescape_path(&kept).unwrap(), *name);
+            assert_eq!(
+                std::fs::read(dst.join(title).join(&kept)).unwrap(),
+                vec![i as u8; 100 + i],
+                "{name:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+    }
+
     #[test]
     fn round_trip_same_basename_different_depths() {
         let src = fresh_tmp("rt-samename-src");

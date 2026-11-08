@@ -7559,7 +7559,7 @@ helper_mismatch_boot_copy: "Votre PS5 a lancé une ancienne copie de l'assistant
   "play_setup_pair_failed_try_pin": "L'association automatique n'a pas fonctionné sur cette console. Associez plutôt avec le PIN affiché par la PS5 :",
   "play_setup_pair_with_pin": "Associer avec le PIN affiché par la PS5",
   "saves_part_main": "sauvegarde principale",
-  "saves_part_missing": "{part} de {game} n'est pas encore chez {user} : lance le jeu une fois en tant que {user} et sauvegarde, puis réessaie.",
+  "saves_part_missing": "{user} n'a pas encore {part} de {game}, et une sauvegarde ne peut remplacer qu'un emplacement que {user} possède déjà. Lance le jeu en tant que {user}, sauvegarde dans le même emplacement, puis réessaie.",
   "saves_share_working": "Enregistrement de la sauvegarde de {game} en fichier…",
   "saves_shared_body_v2": "Enregistré sous {where}. Envoie-le à ton ami ou emporte-le sur ton autre PS5 : là-bas, dans Sauvegardes, choisis Copier vers… › Charger un fichier de sauvegarde sur {game}.",
   "saves_backed_up": "{game} est copié",

@@ -7839,7 +7839,7 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
   "play_setup_pair_failed_try_pin": "Az automatikus párosítás nem működött ezen a konzolon. Párosíts inkább a PS5 által mutatott PIN-nel:",
   "play_setup_pair_with_pin": "Párosítás a PS5 által mutatott PIN-nel",
   "saves_part_main": "fő mentés",
-  "saves_part_missing": "A(z) {game} {part} része még nincs meg {user} felhasználónál: indítsd el egyszer a játékot {user} néven és ments, majd próbáld újra.",
+  "saves_part_missing": "{user} még nem rendelkezik a(z) {game} {part} részével, és egy mentés csak olyan mentési helyet írhat felül, amely {user} felhasználónak már megvan. Indítsd el a játékot {user} néven, ments ugyanarra a helyre, majd próbáld újra.",
   "saves_share_working": "A(z) {game} mentésének mentése fájlba…",
   "saves_shared_body_v2": "Mentve ide: {where}. Küldd el a barátodnak, vagy vidd át a másik PS5-ödre: ott a Mentésadatok alatt válaszd a(z) {game} játéknál: Másolás ide… › Mentésfájl betöltése.",
   "saves_backed_up": "A(z) {game} mentése elkészült",

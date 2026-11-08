@@ -7552,7 +7552,7 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
   "play_setup_pair_failed_try_pin": "Pemasangan otomatis tidak berhasil di konsol ini. Pasangkan dengan PIN yang ditampilkan PS5 saja:",
   "play_setup_pair_with_pin": "Pasangkan dengan PIN yang ditampilkan PS5",
   "saves_part_main": "save utama",
-  "saves_part_missing": "{part} dari {game} belum ada di {user}: mulai game sekali sebagai {user} dan simpan, lalu coba lagi.",
+  "saves_part_missing": "{user} belum punya {part} dari {game}, dan simpanan hanya bisa menggantikan slot yang sudah dimiliki {user}. Mulai game sebagai {user}, simpan di slot yang sama, lalu coba lagi.",
   "saves_share_working": "Menyimpan save {game} sebagai berkas…",
   "saves_shared_body_v2": "Disimpan sebagai {where}. Kirim ke temanmu, atau bawa ke PS5 lain milikmu: di sana, di Data simpan, pilih Salin ke… › Muat berkas save pada {game}.",
   "saves_backed_up": "{game} sudah dicadangkan",

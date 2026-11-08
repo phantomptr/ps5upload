@@ -7543,7 +7543,7 @@ helper_mismatch_boot_copy: "شغّل PS5 نسخة أقدم من المساعد �
   "play_setup_pair_failed_try_pin": "لم ينجح الإقران التلقائي على هذا الجهاز. أقرن بدلًا من ذلك برمز PIN الظاهر على PS5:",
   "play_setup_pair_with_pin": "الإقران برمز PIN الظاهر على PS5",
   "saves_part_main": "الحفظ الرئيسي",
-  "saves_part_missing": "{part} من {game} غير موجود لدى {user} بعد: شغّل اللعبة مرة باسم {user} واحفظ، ثم حاول مجددًا.",
+  "saves_part_missing": "{user} ليس لديه {part} من {game} بعد، ولا يمكن للحفظ أن يحلّ إلا محل خانة حفظ موجودة لدى {user}. شغّل اللعبة باسم {user} واحفظ في الخانة نفسها، ثم حاول مجددًا.",
   "saves_share_working": "جارٍ حفظ حفظ {game} كملف…",
   "saves_shared_body_v2": "حُفظ باسم {where}. أرسله إلى صديقك أو انقله إلى جهاز PS5 الآخر: هناك، في بيانات الحفظ، اختر نسخ إلى… › تحميل ملف حفظ على {game}.",
   "saves_backed_up": "تم نسخ {game} احتياطيًا",

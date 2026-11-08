@@ -7560,7 +7560,7 @@ helper_mismatch_boot_copy: "PS5가 부팅용으로 보관한 이전 헬퍼 사�
   "play_setup_pair_failed_try_pin": "이 본체에서는 자동 페어링이 되지 않았습니다. 대신 PS5에 표시된 PIN으로 페어링하세요:",
   "play_setup_pair_with_pin": "PS5에 표시된 PIN으로 페어링",
   "saves_part_main": "메인 세이브",
-  "saves_part_missing": "{game}의 {part}이(가) 아직 {user}에게 없습니다. {user}(으)로 게임을 한 번 시작해 저장한 뒤 다시 시도하세요.",
+  "saves_part_missing": "{user}에게 아직 {game}의 {part}이(가) 없습니다. 세이브는 {user}에게 이미 있는 세이브 슬롯만 대체할 수 있습니다. {user}(으)로 게임을 시작해 같은 슬롯에 저장한 뒤 다시 시도하세요.",
   "saves_share_working": "{game}의 세이브를 파일로 저장하는 중…",
   "saves_shared_body_v2": "{where}(으)로 저장했습니다. 친구에게 보내거나 다른 PS5로 가져가세요. 그곳의 저장 데이터에서 {game}의 복사 대상… › 세이브 파일 불러오기를 선택하세요.",
   "saves_backed_up": "{game}을(를) 백업했습니다",

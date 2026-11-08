@@ -7550,7 +7550,7 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
   "play_setup_pair_failed_try_pin": "Otomatik eşleştirme bu konsolda çalışmadı. Bunun yerine PS5'te gösterilen PIN ile eşleştirin:",
   "play_setup_pair_with_pin": "PS5'te gösterilen PIN ile eşleştir",
   "saves_part_main": "ana kayıt",
-  "saves_part_missing": "{game} için {part}, {user} kullanıcısında henüz yok: oyunu bir kez {user} olarak başlatıp kaydet, sonra tekrar dene.",
+  "saves_part_missing": "{user} kullanıcısında {game} için {part} henüz yok ve bir kayıt yalnızca {user} kullanıcısında zaten olan bir kayıt yuvasının yerine geçebilir. Oyunu {user} olarak başlat, aynı yuvaya kaydet, sonra tekrar dene.",
   "saves_share_working": "{game} kaydı dosya olarak kaydediliyor…",
   "saves_shared_body_v2": "{where} olarak kaydedildi. Arkadaşına gönder ya da diğer PS5'ine götür: orada Kayıt verileri'nde {game} üzerinde Kopyala… › Kayıt dosyası yükle seç.",
   "saves_backed_up": "{game} yedeklendi",
