@@ -713,8 +713,21 @@ static void initiate(tn_ctx *c, tn_dp *d, dp_peer *p)
 	path_send(c, d, p, msg, sizeof msg);
 }
 
+/* A sealed packet of the largest plaintext we send (TN_MTU, padded to 16) fits the seal buffer. */
+_Static_assert(16 + ((TN_MTU + 15) & ~15) + 16 <= PKT_BUF, "buf2 holds a sealed TN_MTU packet");
+
+size_t tn_dp_echo_reply(uint8_t *out, const tn_ip_info *ip)
+{
+	/* At most TN_MTU, whatever a peer sent: a request near PKT_BUF would seal past buf2 (16 bytes
+	 * of header, padding and a 16-byte tag on top) and could not be staged either. Bigger: no
+	 * answer (the request is dropped). */
+	return tn_ip_build_icmp_echo(out, TN_MTU, ip->dst, ip->src, 0, ip->sport, ip->dport, ip->payload, ip->plen);
+}
+
 static int wg_send(tn_ctx *c, tn_dp *d, dp_peer *p, const uint8_t *pkt, size_t n)
 {
+	if (n > TN_MTU)
+		return TN_E_TOOBIG; /* never past buf2 when sealed, or past a staging slot */
 	tn_wg_keypair *kp = tn_wg_send_keypair(&p->wg, d->now);
 	p->last_active = d->now;
 	if (!trusted(d, p) && d->now - p->last_full_ping >= DISCO_PING_INTERVAL_MS)
@@ -818,9 +831,8 @@ static void deliver(tn_ctx *c, tn_dp *d, dp_peer *p, uint8_t *pkt, size_t n)
 	if (!inbound_ok(c, d, &ip))
 		return;
 	if (ip.proto == TN_IPPROTO_ICMP && ip.icmp_type == 8) {
-		/* Echo request: answer in the core (a cheap diagnostic). */
-		size_t m = tn_ip_build_icmp_echo(d->buf, sizeof d->buf, ip.dst, ip.src, 0, ip.sport, ip.dport,
-						 ip.payload, ip.plen);
+		/* Echo request: answer in the core (a cheap diagnostic). Built in place in d->buf. */
+		size_t m = tn_dp_echo_reply(d->buf, &ip);
 		if (m)
 			wg_send(c, d, p, d->buf, m);
 		return;

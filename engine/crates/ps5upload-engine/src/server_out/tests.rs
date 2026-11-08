@@ -246,8 +246,12 @@ async fn a_name_already_there_is_never_replaced() {
     .unwrap();
     assert!(e.contains("already exists"), "{e}");
     assert_eq!(nas.mem.bytes("/out/G.exfat").unwrap(), b"mine");
-    // A partial file this engine did not write is left alone too.
+    // A partial file this engine did not write is left alone too, after the job has stamped the
+    // image's time first as a real one does (fpkg_api's to_server_job): that record is no claim on
+    // the file.
     nas.mem.add(&[("/out/H.exfat.partial", b"theirs")]);
+    let data = nas.dir.join("data");
+    image_build::server_stamp(Some(&data), &nas.dest.id, &nas.dest.path_of("H.exfat"));
     let e = tokio::task::block_in_place(|| {
         to_server(
             &nas.dest,

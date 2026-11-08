@@ -59,13 +59,19 @@ pub(crate) struct ToServer {
 }
 
 /// What is kept between tries of one image to one place on one server: the time pinned into it,
-/// and the plan (resume key) its partial file was written for. An empty key: the partial file
-/// is ours, but not one to go on from.
+/// the plan (resume key) its partial file was written for, and whether this engine made that
+/// partial file at all. An empty key: not one to go on from.
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct Record {
     time: i64,
     #[serde(default)]
     key: String,
+    /// This engine's upload made `<name>.partial` (set once `Upload::start` has created it). The
+    /// time alone is written before any byte is ([`server_stamp`]), so a record without this says
+    /// nothing about a partial file already on the server: that one is someone else's, and is
+    /// never written over. A record from before the field reads as not ours.
+    #[serde(default)]
+    owned: bool,
 }
 
 fn record_file(data: &Path, id: &str, path: &str) -> PathBuf {
@@ -117,6 +123,7 @@ pub(crate) fn server_stamp(data: Option<&Path>, id: &str, path: &str) -> i64 {
         &Record {
             time: now,
             key: String::new(),
+            owned: false,
         },
     );
     now
@@ -155,7 +162,11 @@ impl ServerImage<'_> {
         format!("{}.partial", self.path())
     }
 
+    /// The time and plan of this write, before it starts. Whether the partial file is ours stays
+    /// as it was: only an upload that made it says so ([`Self::own`]).
     fn keep(&self, time: i64, key: &str) {
+        let owned =
+            load_record(self.data.as_deref(), &self.dest.id, &self.path()).is_some_and(|r| r.owned);
         save_record(
             self.data.as_deref(),
             &self.dest.id,
@@ -163,6 +174,21 @@ impl ServerImage<'_> {
             &Record {
                 time,
                 key: key.to_string(),
+                owned,
+            },
+        );
+    }
+
+    /// Our upload has made the partial file: a later try may go on from it, or write over it.
+    fn own(&self, time: i64, key: &str) {
+        save_record(
+            self.data.as_deref(),
+            &self.dest.id,
+            &self.path(),
+            &Record {
+                time,
+                key: key.to_string(),
+                owned: true,
             },
         );
     }
@@ -229,7 +255,7 @@ pub(crate) fn stream_to_server(
     let mut skip = match dest.file_size(&*fs, &partial).map_err(|e| said(&e))? {
         None => 0,
         Some(held) => {
-            match load_record(target.data.as_deref(), &dest.id, &path) {
+            match load_record(target.data.as_deref(), &dest.id, &path).filter(|r| r.owned) {
                 None => {
                     return Err(format!(
                         "{partial} already exists on {} and this app did not write it: delete it \
@@ -272,6 +298,10 @@ pub(crate) fn stream_to_server(
         // The write, tried again (on from what landed) when the connection drops.
         loop {
             let up = Upload::start(dest, Arc::clone(&fs), &partial, size, skip, cancel.clone());
+            if up.is_ok() {
+                // The partial file there is ours from now on (made, or gone on from).
+                target.own(time, &key);
+            }
             let written = up.map_err(|e| (said(&e), Some(e))).and_then(|mut up| {
                 let n = planned
                     .write(&mut hashing, &mut up, skip, cancel, &mut |d, t| {
@@ -543,6 +573,7 @@ mod tests {
             &Record {
                 time: t1 - 100,
                 key: "k".into(),
+                owned: true,
             },
         );
         assert_eq!(server_stamp(Some(&data), "c1", "/g/G.exfat"), t1 - 100);
