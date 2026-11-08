@@ -2718,6 +2718,46 @@ async fn the_routes_that_say_host_get_the_console_as_host() {
 }
 
 #[tokio::test]
+async fn the_payload_update_tools_reach_their_routes() {
+    let server = echo_server();
+    let asked = route_of(&server, "payloads_updates", json!({})).await;
+    assert_eq!(asked["path"], "/api/payloads/updates");
+    let asked = route_of(&server, "payloads_updates_check", json!({"force": true})).await;
+    assert_eq!(asked["path"], "/api/payloads/updates/check");
+    assert_eq!(asked["body"]["force"], true);
+    let asked = route_of(
+        &server,
+        "payloads_update",
+        json!({"ids": ["kstuff-echostretch"], "sync_console": "1.2.3.4"}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/payloads/updates/apply");
+    assert_eq!(asked["body"]["sync_console"], "1.2.3.4");
+    assert_eq!(asked["body"]["ids"], json!(["kstuff-echostretch"]));
+    let asked = route_of(&server, "payloads_rollback", json!({"id": "hush"})).await;
+    assert_eq!(asked["path"], "/api/payloads/hush/rollback");
+    let asked = route_of(
+        &server,
+        "payloads_update_settings",
+        json!({"auto_update": true}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/payloads/updates/settings");
+    assert_eq!(asked["body"]["auto_update"], true);
+    let asked = route_of(
+        &server,
+        "payloads_pm_choice",
+        json!({"console": "1.2.3.4", "ids": ["hush"], "autoload_ids": []}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/payloads/pm-sync");
+    assert_eq!(asked["body"]["host"], "1.2.3.4");
+    let asked = route_of(&server, "payloads_pm_sync", json!({"console": "1.2.3.4"})).await;
+    assert_eq!(asked["path"], "/api/payloads/pm-sync/run");
+    assert_eq!(asked["body"]["host"], "1.2.3.4");
+}
+
+#[tokio::test]
 async fn each_read_tool_asks_its_route_with_the_console_as_addr() {
     let server = echo_server();
     for (tool, path, extra) in [
