@@ -348,6 +348,11 @@ fn disconnect(shared: &Shared, role: Role, conn: u64) {
             }
             r.host = None;
             r.hostless_since = Some(Instant::now());
+            // On shutdown every guest's own task closes it as going away (1001), so it comes
+            // back; closing it here as done (1000) would race that and tell it the room ended.
+            if *shared.shutdown.borrow() {
+                return;
+            }
             for (_, g) in r.guests.drain() {
                 close_guest(&g.peer, &shared.metrics);
             }
