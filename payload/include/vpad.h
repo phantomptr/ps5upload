@@ -4,7 +4,9 @@
  * makes with ioctls on /dev/hid, owned by a guest's token (128 bits, 32 hex characters, from the
  * engine). The pad is made for a signed-in user (the foreground user, else the first one in
  * /user/home): the console then asks "Who's using this controller?" on the first PS press and the
- * guest picks Quick Play (a one-time guest) or a user. A pad lives as long as the helper.
+ * guest picks Quick Play (a one-time guest) or a user. When the host chose a user for that player
+ * (bind_user), the pad is seated in that user at once instead and the console never asks. A pad
+ * lives as long as the helper.
  *
  * Seven management methods (protocol/ps5upload-ava1/MGMT_METHODS.md, app.toml 188-194). A refusal is
  * {"ok":false,"err":"<token>"[,"code":-errno]} (kept as the call's error cause, like vinput.*):
@@ -15,6 +17,17 @@
  *               live slot is a resume: nothing is made again, the pad keeps its place on the console.
  *               err vpad_busy (another token holds the slot), vpad_no_user (nobody to make it for),
  *               vpad_unsupported (no /dev/hid), vpad_failed (+code), vpad_stopping, bad_request.
+ *   vpad.open   {"slot":S,"token":T,"bind_user":U[,"bind_owner":true]}
+ *               -> the same, plus "bound":B,"bind_code":C,"owner":O
+ *               Play Together's "Guests play as": the pad is made and at once seated in user U by
+ *               the companion (vinput_relay_bind), so the console never asks who is using it. U
+ *               must be signed in; the user in front (the console's owner) only with "bind_owner"
+ *               (the host confirmed it). Never the foreground user instead: these are refused with
+ *               no pad made, for the engine to decide: vpad_bind_starting (the companion is on its
+ *               way: ask again), vpad_bind_unavailable (+"companion": its state), vpad_bind_signed_out,
+ *               vpad_bind_unknown (the console did not say who is signed in), vpad_bind_owner. A
+ *               pad made but not bound answers "bound":false with the code (the console will ask).
+ *               A resume answers "bound" as the pad was.
  *   vpad.state  {"slot":S,"token":T,"seq":N[,"buttons":B,"lx":..,"ly":..,"rx":..,"ry":..,"l2":..,"r2":..]
  *                [,"touch":[{"id":I,"x":X,"y":Y}, at most 2]][,"gyro":[x,y,z]][,"accel":[x,y,z]]}
  *               -> {"ok":true,"applied":B}
@@ -27,14 +40,17 @@
  *   vpad.hb     {"slot":S,"token":T[,"live":true]} -> {"ok":true,"neutral":B}
  *               keeps the pad (the 90 s timer). "live":true also says the guest is still there with
  *               its last state (the 400 ms timer), for an engine that sends no unchanged states.
+ *   vpad.hb     {"companion":true} -> {"ok":true,"companion":"<state>","bind":B}
+ *               Play Together is open with a profile chosen: the companion is kept up (started if it
+ *               is not) for a minute, so a bind never waits for its start. B: binds can be done now.
  *   vpad.close  {"slot":S,"token":T} -> {"ok":true}   puts the pad at rest and removes it.
  *               Closing a free slot is ok; err vpad_not_owner.
  *   vpad.output {"slot":S} -> {"ok":true,"slot":S,"motors":[l,r],"color":[r,g,b]}
  *               the rumble and light bar the console last asked of that pad. err vpad_not_open,
  *               vpad_failed (+code).
  *   vpad.status {} -> {"ok":true,"slots":[{"slot":S,"player":S,"open":B[,"owner":"<hash>","user":U,
- *                "since_ms":N,"last_state_ms":N|-1,"neutral":B,"neutral_ms":N]}..]}
- *               ages in ms; owner is a hash of the token (never the token).
+ *                "since_ms":N,"last_state_ms":N|-1,"neutral":B,"neutral_ms":N,"bound":U]}..]}
+ *               ages in ms; owner is a hash of the token (never the token); bound the user it is seated in (0: none).
  *
  * Watchdog (vpad_tick, from a thread that runs while any pad is open): a slot with no state (and no
  * "live" hb) for VPAD_NEUTRAL_MS gets one neutral state (no stuck stick or button while a guest's
@@ -117,6 +133,26 @@ void vpad_set_hid(const vpad_hid_t *h);
 
 /* Who a new pad is for: a signed-in user id, 0 when nobody. */
 typedef uint32_t (*vpad_user_fn)(void);
+
+/* Seating a guest's pad in the console user the host chose (the companion's BIND,
+ * include/vinput_wire.h): runtime.c's goes through the relay (src/vinput_relay.c), the tests' is a
+ * fake. Every call is made outside vpad's lock except forget. */
+typedef struct {
+    /* Keeps the companion up a while (and starts it): "running" (binds can be done), "starting",
+     * "no_bind", "unavailable" or "off". */
+    const char *(*hold)(void);
+    /* Whether `user` is signed in now: 1, 0, or -1 when the console did not say; *foreground 1 when
+     * it is the user in front (the console's owner, as far as Play Together is concerned). */
+    int (*signed_in)(uint32_t user, int *foreground);
+    /* Seats pad `handle`, made `age_ms` ago, in `user`: 0 when bound (the owner read back is
+     * `user`), else nonzero with *code (the Sony or the companion's answer) and *owner. */
+    int (*bind)(int handle, uint32_t user, uint32_t age_ms, int *code, uint32_t *owner);
+    /* The pad was removed: no longer watched. Called with vpad's lock held. */
+    void (*forget)(int handle);
+} vpad_binder_t;
+
+/* The binder in use (NULL: none, a vpad.open with bind_user is refused vpad_bind_unavailable). */
+void vpad_set_binder(const vpad_binder_t *b);
 /* The first user folder (8 hex digits, not 0) in `home_dir` (/user/home), 0 when none. */
 uint32_t vpad_home_user(const char *home_dir);
 
