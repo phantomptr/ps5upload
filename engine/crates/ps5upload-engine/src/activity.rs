@@ -172,6 +172,32 @@ pub(crate) fn install_ended(st: &crate::install::status::InstallStatus) {
     lock().finish(install_finished(st));
 }
 
+/// A Share transfer ended (share/mod.rs): sending to a friend (`kind` "share") or receiving
+/// (`receive`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn share_ended(
+    id: &str,
+    kind: &str,
+    label: &str,
+    ok: bool,
+    cancelled: bool,
+    error: Option<String>,
+    bytes: u64,
+    elapsed_ms: u64,
+) {
+    lock().finish(Finished {
+        seq: 0,
+        id: id.to_string(),
+        kind: kind.to_string(),
+        label: label.to_string(),
+        ok,
+        cancelled,
+        error: if ok { None } else { error },
+        bytes,
+        elapsed_ms,
+    });
+}
+
 /// The ending a terminal job snapshot describes; `None` for any other state.
 fn transfer_finished(id: &str, state: &serde_json::Value) -> Option<Finished> {
     let status = state.get("status").and_then(|v| v.as_str()).unwrap_or("");

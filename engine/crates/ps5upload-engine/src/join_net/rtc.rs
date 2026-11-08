@@ -239,7 +239,7 @@ pub(crate) static TEST_REAL_IPS: std::sync::atomic::AtomicBool =
 
 /// The addresses the sockets go on: every IPv4 interface but loopback and link-local (the tests:
 /// loopback only), the home network's first ([`by_reach`]).
-fn local_ips() -> Vec<Ipv4Addr> {
+pub(crate) fn local_ips() -> Vec<Ipv4Addr> {
     #[cfg(test)]
     if !TEST_REAL_IPS.load(Ordering::Relaxed) {
         return vec![Ipv4Addr::LOCALHOST];
@@ -1002,6 +1002,9 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
                         ip,
                         p.info.room.clone(),
                     ));
+                }
+                Kind::Share => {
+                    tokio::spawn(crate::share::rtc_session(socket, ip, p.info.room.clone()));
                 }
             }
         }

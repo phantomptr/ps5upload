@@ -1503,7 +1503,7 @@ pub(crate) fn lan_ws_target(url: &str, want: &str) -> Option<String> {
 
 /// A relay's connection refused by its address, or not reached at all.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum RelayRefusal {
+pub(crate) enum RelayRefusal {
     Address,
     Unreachable,
 }
@@ -1531,7 +1531,10 @@ fn only_lan(addrs: Vec<std::net::SocketAddr>) -> Result<Vec<std::net::SocketAddr
 }
 
 /// A TCP connection to the address `host` was checked to have.
-async fn connect_lan(host: &str, port: u16) -> Result<tokio::net::TcpStream, RelayRefusal> {
+pub(crate) async fn connect_lan(
+    host: &str,
+    port: u16,
+) -> Result<tokio::net::TcpStream, RelayRefusal> {
     let host = host.trim_start_matches('[').trim_end_matches(']');
     let addrs = match host.parse::<std::net::IpAddr>() {
         Ok(ip) => vec![std::net::SocketAddr::new(ip, port)],

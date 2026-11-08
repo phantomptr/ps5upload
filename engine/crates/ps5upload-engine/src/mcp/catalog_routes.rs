@@ -94,12 +94,25 @@ const INVITE_FIELDS: &[&str] = &["key", "k", "code", "code_display", "url", "url
 /// The passive reads whose answers hold live invites ([`INVITE_FIELDS`]).
 const INVITE_READS: &[&str] = &["/api/join", "/api/ps5/rp/pad-link"];
 
+/// What a Share link is made of: the link itself, the home network's, and the room it names
+/// (share/mod.rs: whoever has the room can ask the sender). Taken out of every read of
+/// `/api/share` (`share_status`, `api_request`), the receiving side's too; making a share
+/// (`share_create`, a POST) answers with its link, which is what the user asked for.
+const SHARE_LINK_FIELDS: &[&str] = &["url", "lan_url", "room", "link"];
+
+/// A read of `/api/share` or anything below it.
+fn is_share_read(method: &str, plain: &str) -> bool {
+    method.eq_ignore_ascii_case("GET")
+        && (plain == "/api/share" || plain.starts_with("/api/share/"))
+}
+
 /// Whether the answer to `method path` may hold something [`redact_for_agents`] takes out, so
 /// only those answers are parsed.
 pub(crate) fn may_hold_agent_secrets(method: &str, path: &str) -> bool {
     let plain = plain_path(path);
     plain.contains("tailnet")
         || (method.eq_ignore_ascii_case("GET") && INVITE_READS.contains(&plain.as_str()))
+        || is_share_read(method, &plain)
 }
 
 /// What an agent may not read in an in-process answer (`McpState::api_call`): a tailnet sign-in
@@ -130,6 +143,12 @@ pub(crate) fn redact_for_agents(method: &str, path: &str, value: &mut Value) -> 
     }
     let mut any = strip(value, SIGN_IN_FIELDS);
     let plain = plain_path(path);
+    if is_share_read(method, &plain) && strip(value, SHARE_LINK_FIELDS) {
+        if let Value::Object(map) = value {
+            map.insert("link_hidden".to_string(), json!(true));
+        }
+        any = true;
+    }
     if method.eq_ignore_ascii_case("GET") && INVITE_READS.contains(&plain.as_str()) {
         let Value::Object(map) = value else {
             return any;
@@ -723,6 +742,19 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("PATCH", "/api/settings"),
     ("GET", "/api/settings-backup"),
     ("POST", "/api/settings-backup"),
+    ("GET", "/api/share"),
+    ("POST", "/api/share"),
+    ("POST", "/api/share/check"),
+    ("POST", "/api/share/receive"),
+    ("DELETE", "/api/share/receive/{id}"),
+    ("GET", "/api/share/receive/{id}"),
+    ("POST", "/api/share/receive/{id}/accept"),
+    ("GET", "/api/share/receive/{id}/data/{item}"),
+    ("POST", "/api/share/receive/{id}/use-save"),
+    ("GET", "/api/share/ws"),
+    ("DELETE", "/api/share/{id}"),
+    ("GET", "/api/share/{id}"),
+    ("POST", "/api/share/{id}/decide"),
     ("GET", "/api/shared/{name}"),
     ("PUT", "/api/shared/{name}"),
     ("GET", "/api/shared/{name}/schema"),
@@ -764,6 +796,7 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("GET", "/pkg-host/link/{file}"),
     ("GET", "/pkg-host/{session}/{filename}"),
     ("GET", "/rp-player"),
+    ("GET", "/share"),
 ];
 
 /// The catalog as `ps5upload://catalog` serves it. Pages for people and for the console
@@ -1312,5 +1345,45 @@ mod tests {
             &mut closed
         ));
         assert!(closed.get("url").is_none());
+    }
+
+    /// A Share link lets whoever has it ask for the files: the reads (share_status, api_request)
+    /// keep what is shared and who asked, never the link or its room. Making one answers with it.
+    #[test]
+    fn share_links_leave_every_read_of_api_share() {
+        let shares = || {
+            json!({
+                "shares": [{
+                    "id": "s1",
+                    "state": "open",
+                    "url": "https://ps5upload.phantomptr.com/share/#room=ROOMROOMROOM&fp=AA&hub=h",
+                    "lan_url": "http://10.0.0.2:3000/share#room=ROOMROOMROOM",
+                    "room": "ROOMROOMROOM",
+                    "items": [{"id": "i1", "name": "My App", "size": 5}],
+                    "requests": [{"request": 1, "name": "Alex", "state": "asking"}],
+                }],
+                "receives": [{"id": "r1", "state": "done", "from": "Sam"}],
+                "history": [],
+            })
+        };
+        for path in [
+            "/api/share",
+            "/api/share/s1",
+            "/API/share/s1/",
+            "/api/share/receive/r1",
+        ] {
+            let mut v = shares();
+            assert!(may_hold_agent_secrets("GET", path), "{path}");
+            assert!(redact_for_agents("GET", path, &mut v), "{path}");
+            let text = v.to_string();
+            assert!(!text.contains("ROOMROOMROOM"), "{path}: the link is left");
+            assert_eq!(v["link_hidden"], true);
+            assert_eq!(v["shares"][0]["requests"][0]["name"], "Alex");
+            assert_eq!(v["shares"][0]["items"][0]["name"], "My App");
+        }
+        // share_create answers with the link: the user asked for it.
+        let mut made = json!({"id": "s1", "url": "https://x/share/#room=ROOMROOMROOM"});
+        assert!(!redact_for_agents("POST", "/api/share", &mut made));
+        assert!(made["url"].as_str().unwrap().contains("ROOMROOMROOM"));
     }
 }

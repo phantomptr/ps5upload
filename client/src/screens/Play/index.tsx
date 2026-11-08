@@ -1,4 +1,4 @@
-import { ListChecks, LogIn, MonitorPlay, Users } from "lucide-react";
+import { Inbox, ListChecks, LogIn, MonitorPlay, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 
@@ -14,9 +14,11 @@ import { COMPACT_QUERY, useMedia } from "./immersive";
 import { StreamPanel } from "./StreamPanel";
 import { JoinAFriend } from "./JoinAFriend";
 import { useJoinStore } from "../../state/joinSession";
+import { ReceivePanel } from "../Share/ReceivePanel";
 
-/** Play my PS5 (Remote Play), Play together (host friends on it), or Join a friend's game. */
-export type PlayMode = "mine" | "together" | "friend";
+/** Play my PS5 (Remote Play), Play together (host friends on it), Join a friend's game, or
+ *  Receive what a friend shared (a Share link). */
+export type PlayMode = "mine" | "together" | "friend" | "receive";
 
 /**
  * Play (was "Remote Play" before 10.0.0): a console's screen streamed into the app, played with a
@@ -39,7 +41,12 @@ export default function PlayScreen() {
   const launchName = params.get("name")?.trim() ?? "";
   // /play?join=<a friend's Play Together link>: Join a friend, with that link.
   const joinParam = params.get("join")?.trim() || null;
-  const [mode, setMode] = useState<PlayMode>(() => (joined || joinParam ? "friend" : "mine"));
+  // /play?receive=<a friend's Share link>: Receive, with that link.
+  const receiveParam = params.get("receive")?.trim() || null;
+  const [mode, setMode] = useState<PlayMode>(() =>
+    joined || joinParam ? "friend" : receiveParam ? "receive" : "mine",
+  );
+  const [pendingReceive] = useState<string | null>(receiveParam);
   // Play together is the same stream as Play my PS5 with its invite panel (StreamPanel stays
   // mounted between the two, so switching never touches the stream). The stream bar's button
   // and the menu switch here and back.
@@ -113,11 +120,14 @@ export default function PlayScreen() {
             // The stream bar's Play Together button has the same icon.
             { value: "together", label: tr("pt_title", undefined, "Play Together"), icon: Users },
             { value: "friend", label: tr("play_mode_friend", undefined, "Join a friend"), icon: LogIn },
+            { value: "receive", label: tr("play_mode_receive", undefined, "Receive"), icon: Inbox },
           ]}
         />
       )}
       {mode === "friend" ? (
         <JoinAFriend pending={pendingJoin} onPendingDone={() => setPendingJoin(null)} />
+      ) : mode === "receive" ? (
+        <ReceivePanel pending={pendingReceive} />
       ) : (
         <StreamPanel together={mode === "together"} onTogether={onTogether} />
       )}

@@ -110,6 +110,7 @@ mod save_copy;
 mod server_out;
 mod settings_api;
 mod settings_backup;
+mod share;
 mod shared_state;
 mod state_io;
 mod tailnet_api;
@@ -890,6 +891,11 @@ fn loopback_allows(cfg: &LoopbackGuardConfig, peer: std::net::IpAddr, path: &str
         // the invite or the resume token itself. The rest of /api/join is the host's.
         || path == "/join"
         || path == "/api/join/ws"
+        // A friend receiving a Share (share/mod.rs) on the home network: the page and its
+        // socket, which serves only what the sender allowed. The rest of /api/share is the
+        // sender's.
+        || path == "/share"
+        || path == "/api/share/ws"
         || peer.is_loopback()
         || allow_rules_contain(&cfg.allowed_ips, peer)
 }
@@ -11226,6 +11232,7 @@ async fn activity_handler(
             .collect()
     };
     active.extend(installs.jobs.running().iter().map(activity::install_active));
+    active.extend(share::activity());
     Json(activity::snapshot(q.since, active))
 }
 
@@ -12523,6 +12530,30 @@ fn build_app_and_mcp(
         .route("/api/join/playing", post(join::playing))
         .route("/api/join/settings", post(join::set_settings))
         .route("/api/join/profiles", get(join::profiles))
+        // Share: an app's things to a friend (share/mod.rs).
+        .route("/share", get(share::page))
+        .route("/api/share/ws", get(share::ws))
+        .route("/api/share", get(share::list).post(share::create))
+        .route("/api/share/check", post(share::check))
+        .route("/api/share/{id}", get(share::get_one).delete(share::cancel))
+        .route("/api/share/{id}/decide", post(share::decide))
+        .route("/api/share/receive", post(share::receive_open))
+        .route(
+            "/api/share/receive/{id}",
+            get(share::receive_get).delete(share::receive_cancel),
+        )
+        .route(
+            "/api/share/receive/{id}/accept",
+            post(share::receive_accept),
+        )
+        .route(
+            "/api/share/receive/{id}/use-save",
+            post(share::receive_use_save),
+        )
+        .route(
+            "/api/share/receive/{id}/data/{item}",
+            get(share::receive_data),
+        )
         .route(
             "/api/ps5/rp/pad-link",
             get(pad_link::get_status).post(pad_link::set_open),
