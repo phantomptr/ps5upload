@@ -308,6 +308,42 @@
         },
         "type": "object"
       },
+      "AgentAccessChange": {
+        "additionalProperties": false,
+        "properties": {
+          "read_only": {
+            "description": "`true`: agents can only look. `false`: they can change things too.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "read_only"
+        ],
+        "type": "object"
+      },
+      "AgentAccessState": {
+        "description": "What `/api/mcp/access` answers.",
+        "properties": {
+          "locked": {
+            "description": "`PS5UPLOAD_MCP_READ_ONLY` in the engine's environment holds it read-only, whatever the\nswitch says.",
+            "type": "boolean"
+          },
+          "read_only": {
+            "description": "In force now: agents can only look.",
+            "type": "boolean"
+          },
+          "setting": {
+            "description": "The app's switch (\"Agents can change things\" is its opposite).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "read_only",
+          "setting",
+          "locked"
+        ],
+        "type": "object"
+      },
       "AllowFirewallRequest": {
         "properties": {
           "confirm": {
@@ -1391,6 +1427,13 @@
           },
           "source": {
             "type": "string"
+          },
+          "update": {
+            "description": "A PS4 update to merge into the PS4 game `source` first (`ps5upload_fpkg::ps4_merge`):\nthe package is the game at the update's version.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -10177,8 +10220,18 @@
             "description": "PARAM.SFO CATEGORY (`gd`/`gp`/`ac`…).",
             "type": "string"
           },
+          "content_flags": {
+            "description": "The container header's `content_flags` (0x78); 0 when not read.",
+            "minimum": 0,
+            "type": "integer"
+          },
           "content_id": {
             "type": "string"
+          },
+          "content_type": {
+            "description": "The container header's `content_type` (0x74); 0 when not read. See [`kind::classify`].",
+            "minimum": 0,
+            "type": "integer"
           },
           "fingerprint": {
             "description": "Optional sampled artifact identity. `metadata_from_reader` leaves this\nempty because it does not know the total file size; remote callers that\ndo know it can populate the field with\n[`package_fingerprint_from_reader`].",
@@ -10203,7 +10256,9 @@
           "app_ver",
           "platform",
           "authenticity",
-          "fingerprint"
+          "fingerprint",
+          "content_type",
+          "content_flags"
         ],
         "type": "object"
       },
@@ -13008,6 +13063,10 @@
               "string",
               "null"
             ]
+          },
+          "unescape_names": {
+            "description": "The folder was downloaded with `escape_names`: each file goes to the console under the\nexact name its kept name stands for (`ps5upload_core::host_names`, #729).",
+            "type": "boolean"
           }
         },
         "required": [
@@ -13032,6 +13091,10 @@
           "dest_dir": {
             "description": "Local directory the download lands inside. The remote\nbasename is appended underneath this — so `dest_dir=/tmp/x`\nwith `src_path=/data/foo` produces `/tmp/x/foo` (file or\nfolder, mirroring the upload \"one folder per title\" rule).",
             "type": "string"
+          },
+          "escape_names": {
+            "description": "When true, a console name this computer can't hold (`a\\b`, `a:b`, `CON`) is written\nunder its reversible form (`ps5upload_core::host_names`) instead of refused; an upload\nwith `unescape_names` puts it back exactly. The saves code's downloads (#729).",
+            "type": "boolean"
           },
           "kind": {
             "description": "\"file\" or \"folder\". The caller already knows from context\n(Library/FileSystem row) so we trust the hint and skip a\nstat round-trip just to classify.",
@@ -20030,6 +20093,32 @@
     },
     "/api/files/upload": {
       "post": {
+        "parameters": [
+          {
+            "description": "Add this file to an earlier upload (its `upload_id`) instead of starting a new one.",
+            "in": "query",
+            "name": "upload_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "The file's path inside the folder being sent, with `/` between names\n(`Game/sce_sys/param.json`). The answer's `root` is then the folder's own path.",
+            "in": "query",
+            "name": "relpath",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "multipart/form-data": {
@@ -20050,6 +20139,10 @@
           "403": {
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -20279,7 +20372,7 @@
     },
     "/api/fpkg/build": {
       "post": {
-        "description": "POST /api/fpkg/build — start a conversion. Returns `{ job_id }` immediately.",
+        "description": "POST /api/fpkg/build — start a conversion. Returns `{ job_id }` immediately. A PS5 game\nbecomes a PS5 package; a PS4 game (a folder, an image or a PS4 package; with `update`, merged\nwith its update) becomes a PS4 fake package, read back and compared file by file.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -22908,6 +23001,106 @@
         }
       }
     },
+    "/api/mcp/access": {
+      "get": {
+        "description": "`GET /api/mcp/access`: what is in force, the app's switch, and whether the environment locks it.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentAccessState"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "What is in force, the app's switch, and whether the environment locks it",
+        "tags": [
+          "mcp"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "struct"
+        }
+      },
+      "put": {
+        "description": "`PUT /api/mcp/access` `{read_only}`: the app's switch. With the environment set, it is kept but\nagents still only look until the environment changes.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentAccessChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {}
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The app's switch",
+        "tags": [
+          "mcp"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      }
+    },
     "/api/mesh/activity": {
       "post": {
         "requestBody": {
@@ -25402,6 +25595,10 @@
           "403": {
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
           },
           "500": {
             "$ref": "#/components/responses/Error",

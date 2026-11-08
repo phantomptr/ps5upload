@@ -133,6 +133,42 @@ describe("OptionsCard for a folder", () => {
   });
 });
 
+describe("A PS4 game's package", () => {
+  it("is offered as a PS4 package under ②", () => {
+    const out = renderToStaticMarkup(
+      <MakeCard make="pkg" onMake={() => {}} kernel="r229358/releases/13.60" contentId="UP9000-CUSA01234_00-X" checked ps4 />,
+    );
+    expect(out).toContain("A PS4 package (.pkg)");
+    expect(out).toContain("A PS4 fake package the PS5 installs");
+    expect(out).not.toContain("A package (.pkg)");
+    expect((out.match(/role="radio"/g) ?? []).length).toBe(3);
+  });
+
+  it("has no PS5 package's compression or language under ③, and says it is read back whole", () => {
+    const out = renderToStaticMarkup(
+      <OptionsCard
+        outputDir="/out"
+        onChangeOutput={() => {}}
+        onOutputTyped={() => {}}
+        canBrowse
+        compression="balanced"
+        onCompression={() => {}}
+        estimates={undefined}
+        locked={false}
+        make="pkg"
+        language=""
+        onLanguage={() => {}}
+        ps4
+      />,
+    );
+    expect(out).toContain("options-ps4-pkg");
+    expect(out).toContain("every file is read back and compared");
+    expect(out).not.toContain("fpkg-language");
+    expect(out).not.toContain("Balanced");
+    expect(out).not.toContain("Full verification");
+  });
+});
+
 describe("OptionsCard output place", () => {
   const props = {
     outputDir: "/out",

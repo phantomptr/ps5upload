@@ -173,8 +173,9 @@ function Results({ status }: { status: BackupStatus }) {
           // A list, not one string: each line names what failed, whatever the reason says.
           detail={
             <ul className="space-y-1">
-              {failed.map((o) => (
-                <li key={o.item} className="break-words">
+              {/* One game can fail twice (two users' saves, #729): the key is the position. */}
+              {failed.map((o, i) => (
+                <li key={`${i}-${o.item}`} className="break-words">
                   {o.item}: {o.detail ? humanizePs5Error(o.detail) : ""}
                 </li>
               ))}

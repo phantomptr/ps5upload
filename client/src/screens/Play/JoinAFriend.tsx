@@ -378,11 +378,11 @@ export function JoinAFriend({ pending, onPendingDone }: { pending?: string | nul
           </ul>
         )}
       </section>
-      <p className="text-xs text-[var(--color-muted)]">
+      <p className="text-xs text-[var(--color-muted)]" data-testid="join-elsewhere">
         {tr(
-          "pt_tailscale",
+          "pt_elsewhere_guest",
           undefined,
-          "Playing from somewhere else? Both of you join the same Tailscale network, then share the link.",
+          "Playing from somewhere else? Ask your friend to invite you with Internet, then open their link in your browser.",
         )}
       </p>
       {scanning && (

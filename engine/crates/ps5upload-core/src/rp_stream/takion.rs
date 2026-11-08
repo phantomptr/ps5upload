@@ -840,6 +840,39 @@ impl Takion {
         self.closed = true;
         let _ = self.send_message(1, &super::proto::disconnect("Client Disconnecting"));
     }
+
+    /// [`close`](Self::close), then wait up to `budget` for the console to take the goodbye:
+    /// every DATA chunk of ours acknowledged (the DISCONNECT is the last, and Takion delivers in
+    /// order, so one lost chunk before it would hold it back), or the console's own DISCONNECT.
+    /// Chunks it has not acknowledged are sent again meanwhile. Returns how long that took, or
+    /// None when the console never confirmed (#720: a stop sent the DISCONNECT once and closed
+    /// the socket at once, so a lost copy was never sent again and nothing said whether it came).
+    pub fn close_and_wait(&mut self, budget: Duration) -> Option<Duration> {
+        let t0 = Instant::now();
+        self.close();
+        loop {
+            if self.send_buffer.packets.is_empty() {
+                return Some(t0.elapsed());
+            }
+            let left = budget.saturating_sub(t0.elapsed());
+            if left.is_zero() {
+                return None;
+            }
+            match self.poll(left.min(Duration::from_millis(50))) {
+                Ok(Some(Event::Data(DATA_TYPE_PROTOBUF, buf))) => {
+                    if matches!(
+                        super::proto::decode(&buf),
+                        Ok(super::proto::Message::Disconnect(_))
+                    ) {
+                        return Some(t0.elapsed());
+                    }
+                }
+                Ok(_) => {}
+                // The console's port is gone (ICMP) or the socket broke: nobody left to ask.
+                Err(_) => return None,
+            }
+        }
+    }
 }
 
 impl Drop for Takion {
@@ -1087,16 +1120,12 @@ mod tests {
         assert!(!soft_io_error(&Error::from(ErrorKind::InvalidInput)));
     }
 
-    /// Until the console acknowledges our DATA, the chunk is sent again, byte for byte.
-    #[test]
-    fn a_lost_data_chunk_reaches_the_console_on_the_resend() {
-        let console = UdpSocket::bind("127.0.0.1:0").unwrap();
-        console
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
+    /// A Takion past its handshake, talking to `console` on loopback, crypt off (so nothing
+    /// is MACed and the fake console needs no keys). Our next DATA chunk is number 100.
+    fn takion_to(console: &UdpSocket) -> Takion {
         let ours = UdpSocket::bind("127.0.0.1:0").unwrap();
         ours.connect(console.local_addr().unwrap()).unwrap();
-        let mut t = Takion {
+        Takion {
             mtu: MTU_LAN,
             sock: ours,
             tag_local: 1,
@@ -1115,7 +1144,7 @@ mod tests {
             drop_pct: 0,
             rng: 1,
             av_dropped_on_purpose: 0,
-            closed: true,
+            closed: false,
             send_buffer: SendBuffer::default(),
             data_resent: 0,
             data_given_up: 0,
@@ -1124,7 +1153,18 @@ mod tests {
             drop_out_data: None,
             data_sent: 0,
             rtt: None,
-        };
+        }
+    }
+
+    /// Until the console acknowledges our DATA, the chunk is sent again, byte for byte.
+    #[test]
+    fn a_lost_data_chunk_reaches_the_console_on_the_resend() {
+        let console = UdpSocket::bind("127.0.0.1:0").unwrap();
+        console
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut t = takion_to(&console);
+        t.closed = true;
         t.send_message(1, b"heartbeat").unwrap();
         let mut buf = [0u8; 256];
         let n = console.recv(&mut buf).unwrap();
@@ -1140,6 +1180,134 @@ mod tests {
         std::thread::sleep(Duration::from_millis(220));
         let _ = t.poll(Duration::from_millis(1));
         assert_eq!(t.data_resent, 1);
+    }
+
+    /// The console's DATA_ACK: it has every chunk of ours up to `seq`.
+    fn data_ack(seq: u32) -> Vec<u8> {
+        let mut p = vec![PACKET_CONTROL];
+        p.extend_from_slice(&1u32.to_be_bytes()); // our tag
+        p.extend_from_slice(&[0; 8]); // GMAC, key pos
+        p.extend_from_slice(&[CHUNK_DATA_ACK, 0]);
+        p.extend_from_slice(&16u16.to_be_bytes());
+        p.extend_from_slice(&seq.to_be_bytes());
+        p.extend_from_slice(&A_RWND.to_be_bytes());
+        p.extend_from_slice(&[0; 4]);
+        p
+    }
+
+    /// A DATA chunk from the console: its sequence number `seq`, a protobuf message.
+    fn console_data(seq: u32, msg: &[u8]) -> Vec<u8> {
+        let mut p = vec![PACKET_CONTROL];
+        p.extend_from_slice(&1u32.to_be_bytes());
+        p.extend_from_slice(&[0; 8]);
+        p.extend_from_slice(&[CHUNK_DATA, 1]);
+        p.extend_from_slice(&((9 + msg.len() + 4) as u16).to_be_bytes());
+        p.extend_from_slice(&seq.to_be_bytes());
+        p.extend_from_slice(&[0, 1, 0, 0, DATA_TYPE_PROTOBUF]);
+        p.extend_from_slice(msg);
+        p
+    }
+
+    /// Our DATA chunk as the console reads it: sequence number and message.
+    fn our_chunk(pkt: &[u8]) -> (u32, Vec<u8>) {
+        (be32(&pkt[17..21]), pkt[26..].to_vec())
+    }
+
+    /// #720: a stop keeps sending the DISCONNECT until the console acknowledges it, and a chunk
+    /// lost before it (Takion delivers in order) is sent again too, instead of closing at once.
+    #[test]
+    fn a_stop_waits_until_the_console_has_the_goodbye() {
+        let console = UdpSocket::bind("127.0.0.1:0").unwrap();
+        console
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut t = takion_to(&console);
+        // A heartbeat the network lost: the console holds every later chunk back until it comes.
+        t.send_message(1, b"heartbeat").unwrap();
+        let mut buf = [0u8; 256];
+        console.recv(&mut buf).unwrap();
+        let fake = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            loop {
+                let (n, from) = console.recv_from(&mut buf).unwrap();
+                seen.push(our_chunk(&buf[..n]).0);
+                // The resent heartbeat (100) and the DISCONNECT (101) are both in: ack them.
+                if seen.contains(&100) && seen.contains(&101) {
+                    console.send_to(&data_ack(101), from).unwrap();
+                    return seen;
+                }
+            }
+        });
+        let took = t.close_and_wait(Duration::from_secs(2));
+        let seen = fake.join().unwrap();
+        assert!(took.is_some(), "the console's ack ends the wait");
+        assert!(took.unwrap() < Duration::from_secs(1));
+        assert!(
+            seen.contains(&100),
+            "the lost heartbeat was sent again: {seen:?}"
+        );
+        assert!(t.data_resent >= 1);
+        assert!(t.send_buffer.packets.is_empty());
+    }
+
+    #[test]
+    fn the_goodbye_is_a_disconnect_message() {
+        let console = UdpSocket::bind("127.0.0.1:0").unwrap();
+        console
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut t = takion_to(&console);
+        let fake = std::thread::spawn(move || {
+            let mut buf = [0u8; 256];
+            let (n, from) = console.recv_from(&mut buf).unwrap();
+            let (seq, msg) = our_chunk(&buf[..n]);
+            console.send_to(&data_ack(seq), from).unwrap();
+            msg
+        });
+        assert!(t.close_and_wait(Duration::from_secs(2)).is_some());
+        let msg = fake.join().unwrap();
+        match super::super::proto::decode(&msg).unwrap() {
+            super::super::proto::Message::Disconnect(r) => assert_eq!(r, "Client Disconnecting"),
+            _ => panic!("not a DISCONNECT"),
+        }
+        // Once only: dropping it later sends nothing more.
+        assert!(t.closed);
+    }
+
+    #[test]
+    fn the_consoles_own_disconnect_also_ends_the_wait() {
+        let console = UdpSocket::bind("127.0.0.1:0").unwrap();
+        console
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut t = takion_to(&console);
+        let fake = std::thread::spawn(move || {
+            let mut buf = [0u8; 256];
+            let (_, from) = console.recv_from(&mut buf).unwrap();
+            let bye = super::super::proto::disconnect("Server shutting down");
+            console.send_to(&console_data(0, &bye), from).unwrap();
+            // Our DATA_ACK for it.
+            console.recv_from(&mut buf).unwrap();
+            buf[13]
+        });
+        let took = t.close_and_wait(Duration::from_secs(2));
+        assert_eq!(
+            fake.join().unwrap(),
+            CHUNK_DATA_ACK,
+            "the console's DISCONNECT is acknowledged"
+        );
+        assert!(took.unwrap() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_console_that_never_answers_is_given_up_on_within_the_budget() {
+        let console = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut t = takion_to(&console);
+        let t0 = Instant::now();
+        assert_eq!(t.close_and_wait(Duration::from_millis(450)), None);
+        assert!(t0.elapsed() < Duration::from_millis(900));
+        // It kept trying meanwhile (every 200 ms).
+        assert!(t.data_resent >= 1);
     }
 
     /// A v12 audio packet: the flag byte after the header says haptics (0x02) or sound.

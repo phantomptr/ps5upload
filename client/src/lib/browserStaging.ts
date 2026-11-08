@@ -35,12 +35,30 @@ type Stage = (file: File, opts?: StageOptions) => Promise<BrowserPkgUpload>;
 
 /** Sends one file to the engine as a task; rejects when it fails or is cancelled
  *  (`isStagingCancelled`). `onProgress` is for a picker that also shows it. */
-export async function stageWithTask(
+export function stageWithTask(
   file: File,
   stage: Stage,
   onProgress?: (sent: number, total: number) => void,
   outerSignal?: AbortSignal,
 ): Promise<BrowserPkgUpload> {
+  return runStagingTask(
+    trStatic("browser_staging_task", "Uploading {name} to the server").replace("{name}", file.name),
+    file.size,
+    (signal, progress) => stage(file, { signal, onProgress: progress }),
+    onProgress,
+    outerSignal,
+  );
+}
+
+/** Any staging work as one task with a percent and a Cancel: `run` gets the signal the Cancel
+ *  aborts and reports the bytes sent so far. Several files (a folder) are one task this way. */
+export async function runStagingTask<T>(
+  label: string,
+  totalBytes: number,
+  run: (signal: AbortSignal, progress: (sent: number, total: number) => void) => Promise<T>,
+  onProgress?: (sent: number, total: number) => void,
+  outerSignal?: AbortSignal,
+): Promise<T> {
   const tasks = useTaskStore.getState();
   const controller = new AbortController();
   outerSignal?.addEventListener("abort", () => controller.abort());
@@ -48,27 +66,21 @@ export async function stageWithTask(
   const taskId = tasks.registerTask({
     kind: "upload-file",
     origin: "browser.staging",
-    label: trStatic(
-      "browser_staging_task",
-      "Uploading {name} to the server",
-    ).replace("{name}", file.name),
+    label,
     consoleId: "",
     control: { owner: "browser-staging", stagingId },
     status: "running",
-    progress: { unit: "bytes", current: 0, total: file.size },
+    progress: { unit: "bytes", current: 0, total: totalBytes },
   });
   running.set(stagingId, controller);
   try {
-    const staged = await stage(file, {
-      signal: controller.signal,
-      onProgress: (sent, total) => {
-        useTaskStore
-          .getState()
-          .updateTask(taskId, {
-            progress: { unit: "bytes", current: sent, total },
-          });
-        onProgress?.(sent, total);
-      },
+    const staged = await run(controller.signal, (sent, total) => {
+      useTaskStore
+        .getState()
+        .updateTask(taskId, {
+          progress: { unit: "bytes", current: sent, total },
+        });
+      onProgress?.(sent, total);
     });
     useTaskStore.getState().finishTask(taskId, "done");
     return staged;

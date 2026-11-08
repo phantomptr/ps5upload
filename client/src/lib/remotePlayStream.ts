@@ -370,7 +370,7 @@ export function playRumble(
 export { avcCodecString, isKeyframe, supportedHevc } from "./rpCodec";
 import { avcCodecString, isKeyframe, noPictureStep, supportedHevc } from "./rpCodec";
 import { avcDescription, lengthPrefixed } from "./fmp4";
-import { MsePlayer, MseSound, mseOpusSupported } from "../pad/watchPlayer";
+import { HOST_MSE_EDGE, MsePlayer, MseSound, mseOpusSupported } from "../pad/watchPlayer";
 import {
   beginRpClientSession,
   videoConfigFacts,
@@ -611,7 +611,8 @@ export type StreamPhase =
   | "error";
 
 export interface StreamError {
-  /** Stable, from the engine: busy, in_use (another device has the console), busy_other, asleep,
+  /** Stable, from the engine: busy, held (our last session, still not let go after minutes of
+   *  waiting), in_use (another device has the console), busy_other, asleep,
    *  unreachable, keys, wake_failed, passcode_cancelled, passcode_timeout, video_refused, lost
    *  (dropped mid-stream), other — or client-side: decode, no_decoder, socket, console_ended (the
    *  console ended it; `detail` is what it said), no_session (over while the socket was away). */
@@ -1890,8 +1891,16 @@ export class RemotePlayStream {
     const input = inputEstimate({ pageRttMs: this.rttMs, consoleRttMs: this.consoleRttMs, stages });
     return (
       `${stagesLogText(stages)}; round trip to the engine ${ms(this.rttMs)}, engine to PS5 ${ms(this.consoleRttMs)}; ` +
-      `input ≈ ${ms(input)} + the game; PS5 report ${this.quality ? JSON.stringify(this.quality) : "none yet"}`
+      `input ≈ ${ms(input)} + the game; PS5 report ${this.quality ? JSON.stringify(this.quality) : "none yet"}` +
+      this.mseLogText()
     );
+  }
+
+  /** On the system's media player: how often it jumped to the live edge (each one a hitch, #720). */
+  private mseLogText(): string {
+    if (!this.mse) return "";
+    const { seeks, maxLagMs } = this.mse.videoSeeks;
+    return `; media player: ${seeks} jumps to the live edge (most behind ${maxLagMs} ms)`;
   }
 
   /** Time a round trip to the engine (answered with `{"pong": t}`). */
@@ -2765,6 +2774,7 @@ export class RemotePlayStream {
       () => this.ws?.send(JSON.stringify({ keyframe: true })),
     );
     mse.setHevc(this.hevc);
+    mse.setVideoEdge(HOST_MSE_EDGE);
     mse.onSoundFail = () => log.warn("remote-play", "media player: no sound on this device either");
     // The media player failed too, again and again: no decoder here shows this stream.
     mse.onGiveUp = () => {

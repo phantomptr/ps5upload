@@ -26,6 +26,7 @@ pub mod health;
 pub mod hearbridge;
 pub mod helper_log_level;
 pub mod host_info;
+pub mod host_names;
 pub mod hw;
 pub mod installer_client;
 pub mod local_image;

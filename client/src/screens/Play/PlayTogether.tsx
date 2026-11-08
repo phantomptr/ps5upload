@@ -290,9 +290,12 @@ export function PlayTogetherPanel({
   onState,
   onClose,
   onPhones,
+  focusOnOpen,
 }: {
   /** The console being played. */
   addr: string;
+  /** Set (Start and invite): the panel takes the keyboard focus when it shows, once. */
+  focusOnOpen?: { current: boolean };
   state: JoinHostState;
   onState: (s: JoinHostState) => void;
   onClose: () => void;
@@ -318,6 +321,12 @@ export function PlayTogetherPanel({
   const netOffered = state.settings.internetInvites !== null;
   const onInternet = netOffered && network === "internet";
   const inviting = useRef(false);
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!focusOnOpen?.current) return;
+    focusOnOpen.current = false;
+    root.current?.focus({ preventScroll: false });
+  }, [focusOnOpen]);
   /** Asks the engine for the invite; `renew` voids the old link and makes a new one; `internet`
    *  makes its internet link too. */
   const askInvite = async (renew: boolean, internet = onInternet): Promise<void> => {
@@ -430,12 +439,18 @@ export function PlayTogetherPanel({
 
   return (
     <div
-      className="space-y-4 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-raised)] p-4"
+      ref={root}
+      tabIndex={-1}
+      aria-labelledby="pt-panel-title"
+      role="region"
+      className="space-y-4 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-raised)] p-4 outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
       data-testid="pt-panel"
     >
       <div className="flex items-center gap-2">
         <Users size={16} />
-        <h3 className="flex-1 text-sm font-semibold">{tr("pt_title", undefined, "Play together")}</h3>
+        <h3 id="pt-panel-title" className="flex-1 text-sm font-semibold">
+          {tr("pt_title", undefined, "Play together")}
+        </h3>
         <button
           type="button"
           onClick={onClose}
@@ -741,11 +756,15 @@ export function PlayTogetherPanel({
 
       <p className="flex items-start gap-2 text-xs text-[var(--color-muted)]" data-testid="pt-tailscale">
         <Gamepad2 size={14} className="mt-0.5 shrink-0" />
-        {tr(
-          "pt_tailscale",
-          undefined,
-          "Playing from somewhere else? Both of you join the same Tailscale network, then share the link.",
-        )}
+        {/* Internet invites are the way for a friend somewhere else; an engine from before
+            them still has Tailscale. */}
+        {netOffered
+          ? tr("pt_elsewhere", undefined, "Playing from somewhere else? Choose Internet above.")
+          : tr(
+              "pt_tailscale",
+              undefined,
+              "Playing from somewhere else? Both of you join the same Tailscale network, then share the link.",
+            )}
       </p>
 
       <div className="flex flex-wrap gap-2">

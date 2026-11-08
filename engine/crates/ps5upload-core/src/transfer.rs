@@ -60,6 +60,9 @@ pub struct TransferConfig {
     /// the console), both relative to the folder. Only the last component may differ. Used to
     /// give a game's modules the letter case its eboot loads them by, which /data enforces.
     pub renames: Vec<(String, String)>,
+    /// Folder uploads: the folder was downloaded with its names kept (`host_names`), and
+    /// each file goes to the console under the exact name it had there (#729).
+    pub unescape_names: bool,
 }
 
 impl TransferConfig {
@@ -79,6 +82,7 @@ impl TransferConfig {
             cancel: None,
             source_fs: None,
             renames: Vec::new(),
+            unescape_names: false,
         }
     }
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy, Download, ExternalLink, Plus, Radio, Trash2, X } from "lucide-react";
 
 import { Button, Callout, Input, ProgressBar, Toggle } from "../../components";
@@ -37,10 +37,16 @@ type Tr = ReturnType<typeof useTr>;
 
 export { presetName, problemText };
 
-/** The Stream button and panel are for computers: the desktop app and the web UI (where Go
- *  live runs on the engine's computer). The phone apps have no streaming pipeline in 11.0.0. */
-export function goLiveAvailable(p: { mobile: boolean }): boolean {
-  return !p.mobile;
+/** Go live runs in the engine (with ffmpeg), so it depends on where the engine runs, not on the
+ *  screen: the desktop app, and the web UI on any device, a phone's Safari included (#731). Only
+ *  the phone apps lack it: their engine is the app's own, on the phone, with no ffmpeg. */
+export function goLiveAvailable(p: { tauri: boolean; mobile: boolean }): boolean {
+  return !inAppPhoneEngine(p);
+}
+
+/** The phone app (Tauri on Android/iOS): its engine always runs inside it, on the phone. */
+export function inAppPhoneEngine(p: { tauri: boolean; mobile: boolean }): boolean {
+  return p.tauri && p.mobile;
 }
 
 /** The OBS feed answers only on the engine's own computer, so it is offered where OBS can be
@@ -326,6 +332,7 @@ function DestinationRow({ d, disabled }: { d: LiveDestination; disabled: boolean
       <div className="flex items-center gap-2">
         <input
           type="checkbox"
+          className="h-5 w-5 shrink-0 sm:h-auto sm:w-auto"
           checked={d.enabled}
           disabled={disabled}
           onChange={(e) => void setEnabled(d.id, e.target.checked)}
@@ -347,7 +354,7 @@ function DestinationRow({ d, disabled }: { d: LiveDestination; disabled: boolean
           disabled={disabled}
           onClick={() => void remove(d.id)}
           aria-label={tr("golive_remove", { name: d.label }, `Remove ${d.label}`)}
-          className="rounded p-1 hover:bg-[var(--color-surface-3)] disabled:opacity-40"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded hover:bg-[var(--color-surface-3)] disabled:opacity-40 sm:h-7 sm:w-7"
           data-testid="golive-dest-remove"
         >
           <Trash2 size={14} />
@@ -359,9 +366,10 @@ function DestinationRow({ d, disabled }: { d: LiveDestination; disabled: boolean
         </p>
       )}
       {d.preset === "twitch" && (
-        <label className="flex items-center gap-2 ps-6 text-xs">
+        <label className="flex min-h-10 items-center gap-2 ps-6 text-xs sm:min-h-0">
           <input
             type="checkbox"
+            className="h-5 w-5 shrink-0 sm:h-auto sm:w-auto"
             checked={d.bandwidth_test}
             disabled={disabled}
             onChange={(e) => void setTest(d.id, e.target.checked)}
@@ -569,7 +577,7 @@ function GoLiveTab({ status }: { status: StreamStatus }) {
             <button
               key={p}
               type="button"
-              className="chip inline-flex min-h-8 items-center gap-1.5 px-3 text-xs"
+              className="chip inline-flex min-h-10 items-center gap-1.5 px-3 text-xs sm:min-h-8"
               onClick={() => {
                 clearError();
                 setAdding(p);
@@ -766,9 +774,16 @@ export function GoLivePanel({ onClose }: { onClose: () => void }) {
   const obs = obsFeedAvailable({ mobile: isMobile(), engineUrl: getEngineUrl() });
   const hasStream = useRemotePlayStore((s) => !!s.stream);
   const [tab, setTab] = useState<"live" | "obs">("live");
+  // On a phone the panel opens from the menu under the picture, out of sight: bring it in.
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.matchMedia?.("(max-width: 639px)").matches)
+      box.current?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+  }, []);
   return (
     <div
-      className="space-y-3 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-raised)] p-4"
+      ref={box}
+      className="min-w-0 max-w-full space-y-3 break-words rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-raised)] p-3 sm:p-4"
       data-testid="golive-panel"
     >
       <div className="flex items-center gap-2">
@@ -778,7 +793,7 @@ export function GoLivePanel({ onClose }: { onClose: () => void }) {
           type="button"
           onClick={onClose}
           aria-label={tr("golive_close", undefined, "Close")}
-          className="rounded p-1 hover:bg-[var(--color-surface-3)]"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded hover:bg-[var(--color-surface-3)] sm:h-7 sm:w-7"
         >
           <X size={16} />
         </button>
@@ -800,7 +815,7 @@ export function GoLivePanel({ onClose }: { onClose: () => void }) {
               type="button"
               aria-pressed={tab === t}
               onClick={() => setTab(t)}
-              className="chip min-h-8 px-3 text-xs"
+              className="chip min-h-10 px-3 text-xs sm:min-h-8"
               data-testid={`golive-tab-${t}`}
             >
               {t === "live" ? tr("golive_tab_live", undefined, "Go live") : "OBS"}

@@ -18,6 +18,7 @@
 //! twice. A call carries the peer and `Host` of the request that asked for it, so the routes that
 //! answer to this computer alone (`AUTOMATION.md`) judge the real caller.
 
+pub(crate) mod access;
 mod catalog_routes;
 mod dispatch;
 mod http;
@@ -62,8 +63,8 @@ struct Inner {
     events_tx: broadcast::Sender<String>,
     /// The console the API falls back to when a read names none.
     default_console: String,
-    /// `PS5UPLOAD_MCP_READ_ONLY`: anything that can change something is refused.
-    read_only: bool,
+    /// Whether agents may change things (`access.rs`): read when each call runs.
+    access: access::AgentAccess,
     ring: resources::EventRing,
     ring_started: Once,
     ops: tools::files::Ops,
@@ -78,24 +79,25 @@ impl McpState {
         events_tx: broadcast::Sender<String>,
         default_console: String,
     ) -> Self {
-        let read_only = read_only_setting(std::env::var("PS5UPLOAD_MCP_READ_ONLY").ok().as_deref());
-        if read_only {
-            crate::log_info!("mcp: read-only (PS5UPLOAD_MCP_READ_ONLY)");
-        }
-        Self::build(api, events_tx, default_console, read_only)
+        Self::build(
+            api,
+            events_tx,
+            default_console,
+            access::AgentAccess::from_environment(),
+        )
     }
 
     fn build(
         api: Router,
         events_tx: broadcast::Sender<String>,
         default_console: String,
-        read_only: bool,
+        access: access::AgentAccess,
     ) -> Self {
         Self(Arc::new(Inner {
             api,
             events_tx,
             default_console,
-            read_only,
+            access,
             ring: resources::EventRing::default(),
             ring_started: Once::new(),
             ops: tools::files::Ops::default(),
@@ -103,8 +105,14 @@ impl McpState {
         }))
     }
 
+    /// Agents may only look: anything that can change something is refused. Read at call time:
+    /// the owner can flip it in the app while the engine runs.
     pub(crate) fn read_only(&self) -> bool {
-        self.0.read_only
+        self.0.access.read_only()
+    }
+
+    pub(crate) fn access(&self) -> &access::AgentAccess {
+        &self.0.access
     }
 
     pub(crate) fn default_console(&self) -> &str {
@@ -156,6 +164,15 @@ impl McpState {
         body: Option<&Value>,
     ) -> Result<ApiReply, String> {
         let label = format!("{method} {path}");
+        // Every in-process call passes here (curated tools, resources, api_request): none may reach
+        // the switch that decides what agents may do, however the path is written. The route is
+        // also mounted outside the router this calls, so it would not be found anyway.
+        if catalog_routes::reaches_agent_access(path) {
+            return Err(format!(
+                "{label} is refused: whether agents can change things is the owner's to decide, \
+                 in the app under MCP & API › Connect an agent."
+            ));
+        }
         if catalog_routes::reaches_a_key_document(path, query, body) {
             return Err(format!(
                 "{label} is refused: that console document holds the keys that sign in to \
@@ -223,13 +240,6 @@ impl McpState {
             body,
         })
     }
-}
-
-fn read_only_setting(value: Option<&str>) -> bool {
-    value.is_some_and(|v| {
-        let v = v.trim();
-        v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes")
-    })
 }
 
 /// An answer that never ends, or that only makes sense as one.
@@ -341,17 +351,6 @@ mod unit_tests {
         assert_eq!(with_query("/api/jobs", &[]), "/api/jobs");
         assert_eq!(encode_component("a/../b?c"), "a%2F..%2Fb%3Fc");
         assert_eq!(encode_component("ゲ"), "%E3%82%B2");
-    }
-
-    #[test]
-    fn the_read_only_setting_takes_the_usual_yes() {
-        for yes in ["1", "true", "TRUE", " yes "] {
-            assert!(read_only_setting(Some(yes)), "{yes}");
-        }
-        for no in ["0", "", "false", "off"] {
-            assert!(!read_only_setting(Some(no)), "{no}");
-        }
-        assert!(!read_only_setting(None));
     }
 
     #[test]

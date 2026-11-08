@@ -426,8 +426,12 @@ const char *pkg_info_read(pkg_read_fn rd, void *ctx, uint64_t size, pkg_info_t *
         }
     }
     if (o->fih && !o->category[0]) {
-        uint32_t flags = be32(head + 0x78);
-        memcpy(o->category, (flags & 0x00100000u) || (flags & 0x40000000u) ? "gp" : "gd", 3);
+        /* param.json has no category: the header says patch, add-on (0x21, #724) or game. */
+        uint32_t type = be32(head + 0x74), flags = be32(head + 0x78);
+        const char *cat = (flags & 0x00100000u) || (flags & 0x40000000u) ? "gp"
+                          : (type == 0x21u || type == 0x1Bu || type == 0x1Cu) ? "ac"
+                                                                               : "gd";
+        memcpy(o->category, cat, 3);
     }
     title_from_content(o);
     derive_platform(o);

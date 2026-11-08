@@ -120,6 +120,8 @@ test("the host invites, allows a friend, sees their delay and removes them", asy
   await page.getByTestId("rp-start").click();
   await page.getByTestId("rp-toolbar").hover();
   await page.getByTestId("rp-together").click();
+  // The stream bar's button switches to Play › Play together.
+  await expect(page.getByRole("radio", { name: "Play together" })).toHaveAttribute("aria-checked", "true");
 
   // ① Invite: the QR code, the link and the other address.
   const panel = page.getByTestId("pt-panel");
@@ -168,6 +170,86 @@ test("the host invites, allows a friend, sees their delay and removes them", asy
   // The phones panel is one click away.
   await panel.getByTestId("pt-phones").click();
   await expect(page.getByTestId("rp-phone-pads")).toBeVisible();
+});
+
+test("Play together and Play my PS5 are one stream: switching pages never restarts or stops it", async ({ page }) => {
+  await consoleSetUp(page);
+  const posts: string[] = [];
+  await routeEngine(page, (path, req) => {
+    if (path === "/api/version") return { version: "10.8.0", caps: {} };
+    if (path === "/api/ps5/rp/session") return { host: null };
+    if (!path.startsWith("/api/join")) return {};
+    if (req.method() === "POST") posts.push(path);
+    const invite = { key: INVITE, code: "K7M2QX", code_display: "K7M-2QX", url: LINK, urls: [LINK], expires_in_s: 1800 };
+    if (path === "/api/join/invite") return invite;
+    return {
+      open: posts.includes("/api/join/open") && !posts.includes("/api/join/close"),
+      console: "192.168.1.100",
+      playing: true,
+      invite,
+      players_in: 0,
+      guests: [],
+      pending: [],
+      settings: { block_system_buttons: true, max_players: 3 },
+      max_guests: 3,
+    };
+  });
+  let streams = 0;
+  await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, (ws) => {
+    streams += 1;
+    ws.onMessage((m) => {
+      if ((JSON.parse(String(m)) as { host?: string }).host) ws.send(JSON.stringify({ stage: "first_frame" }));
+    });
+  });
+
+  await page.goto("/play", { waitUntil: "domcontentloaded" });
+  // Before a stream: Play together explains itself and has one button.
+  await page.getByRole("radio", { name: "Play together" }).click({ timeout: 30_000 });
+  await expect(page.getByTestId("pt-start")).toContainText("No app needed");
+  await expect(page.getByTestId("rp-start")).toHaveCount(0);
+  await page.getByTestId("pt-start-invite").click();
+
+  // Start and invite: the stream, then Play Together opened with its invite.
+  const panel = page.getByTestId("pt-panel");
+  await expect(panel.getByTestId("pt-url")).toHaveText(LINK, { timeout: 15_000 });
+  await expect.poll(() => posts).toContain("/api/join/open");
+  await expect(page.getByTestId("rp-stage")).toBeVisible();
+  expect(streams).toBe(1);
+
+  // To Play my PS5 and back: the same stream all along, never stopped.
+  await page.getByRole("radio", { name: "Play my PS5" }).click();
+  await expect(panel).toHaveCount(0);
+  await expect(page.getByTestId("rp-stop").first()).toBeAttached();
+  await page.getByRole("radio", { name: "Play together" }).click();
+  await expect(panel.getByTestId("pt-url")).toHaveText(LINK);
+  await page.getByRole("radio", { name: "Join a friend" }).click();
+  await page.getByRole("radio", { name: "Play together" }).click();
+  await expect(panel.getByTestId("pt-url")).toHaveText(LINK);
+  await expect(page.getByTestId("rp-stop").first()).toBeAttached();
+  expect(streams).toBe(1);
+  expect(posts).not.toContain("/api/join/close");
+
+  // Close Play Together: back to Play my PS5, still streaming.
+  await panel.getByTestId("pt-close").click();
+  await expect.poll(() => posts).toContain("/api/join/close");
+  await expect(page.getByRole("radio", { name: "Play my PS5" })).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByTestId("rp-stop").first()).toBeAttached();
+  expect(streams).toBe(1);
+});
+
+test("Play together with no console set up says so, and Start and invite waits", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("ps5upload.host", "192.168.1.100");
+    window.localStorage.setItem(
+      "ps5upload.roster.v1",
+      JSON.stringify({ active_id: "p1", profiles: [{ id: "p1", name: "Living room", host: "192.168.1.100" }] }),
+    );
+  });
+  await routeEngine(page, (path) => (path === "/api/version" ? { version: "10.8.0", caps: {} } : path === "/api/ps5/rp/session" ? { host: null } : {}));
+  await page.goto("/play", { waitUntil: "domcontentloaded" });
+  await page.getByRole("radio", { name: "Play together" }).click({ timeout: 30_000 });
+  await expect(page.getByTestId("pt-start-invite")).toBeDisabled();
+  await expect(page.getByTestId("play-open-setup")).toBeVisible();
 });
 
 test("an old helper is pointed at the update", async ({ page }) => {

@@ -116,6 +116,75 @@ pub fn hold_off(host: &str, wait: Duration) {
     }
 }
 
+/// How long to leave a console alone after its `n`th session start in a row closed with no
+/// answer (1-based). Each start is a knock on the console's one slot, so they spread out.
+pub fn closed_wait(n: u32) -> Duration {
+    const WAITS: [u64; 5] = [15, 30, 60, 90, 120];
+    Duration::from_secs(WAITS[(n.max(1) as usize - 1).min(WAITS.len() - 1)])
+}
+
+/// Session starts in a row each console closed with no answer, and when the last one was.
+fn closed_answers() -> &'static Mutex<HashMap<String, (u32, Instant)>> {
+    static M: std::sync::OnceLock<Mutex<HashMap<String, (u32, Instant)>>> =
+        std::sync::OnceLock::new();
+    M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// A run of closed answers older than this is over: the next one counts from 1 again.
+const CLOSED_RUN_GAP: Duration = Duration::from_secs(10 * 60);
+
+/// `host` closed a session start with no answer: counts it and holds off new starts for
+/// [`closed_wait`]. Returns which in a row it is and the wait.
+pub fn closed_answer(host: &str) -> InitClosed {
+    let now = Instant::now();
+    let n = closed_answers()
+        .lock()
+        .map(|mut m| {
+            let e = m.entry(host.to_string()).or_insert((0, now));
+            if now.duration_since(e.1) > CLOSED_RUN_GAP {
+                e.0 = 0;
+            }
+            e.0 += 1;
+            e.1 = now;
+            e.0
+        })
+        .unwrap_or(1);
+    let wait = closed_wait(n);
+    hold_off(host, wait);
+    InitClosed { in_a_row: n, wait }
+}
+
+/// The console gave a nonce: whatever held its slot has let go.
+pub fn slot_answered(host: &str) {
+    if let Ok(mut m) = closed_answers().lock() {
+        m.remove(host);
+    }
+}
+
+/// The console closed a session start without a word (no nonce, no "in use" code): its one
+/// Remote Play slot is still taken, by another device or by a session it has not let go of.
+/// Seen on FW 13.00 for minutes after our own stop (#720). Nothing is asked again before `wait`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InitClosed {
+    /// Which closed answer in a row this is.
+    pub in_a_row: u32,
+    pub wait: Duration,
+}
+
+impl std::fmt::Display for InitClosed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} ({} in a row; asking again in {} s)",
+            crate::rp_session::SESSION_INIT_CLOSED,
+            self.in_a_row,
+            self.wait.as_secs()
+        )
+    }
+}
+
+impl std::error::Error for InitClosed {}
+
 fn held_for(host: &str) -> Option<Duration> {
     let m = next_allowed().lock().ok()?;
     let until = *m.get(host)?;
@@ -283,6 +352,26 @@ mod tests {
         // budget 0: one look, then the answer (a real budget gives it a minute).
         let e = format!("{:#}", r.unwrap_err());
         assert!(e.contains("did not wake"), "{e}");
+    }
+
+    #[test]
+    fn closed_answers_in_a_row_wait_longer_each_time_and_a_nonce_starts_over() {
+        assert_eq!(closed_wait(1), Duration::from_secs(15));
+        assert_eq!(closed_wait(3), Duration::from_secs(60));
+        assert_eq!(closed_wait(50), Duration::from_secs(120));
+        let host = "10.255.0.9";
+        let a = closed_answer(host);
+        let b = closed_answer(host);
+        assert_eq!((a.in_a_row, b.in_a_row), (1, 2));
+        assert_eq!(b.wait, Duration::from_secs(30));
+        // Nothing knocks again before the wait is over.
+        assert!(held_for(host).unwrap() > Duration::from_secs(25));
+        // The text still says what the console did.
+        assert!(b
+            .to_string()
+            .contains(crate::rp_session::SESSION_INIT_CLOSED));
+        slot_answered(host);
+        assert_eq!(closed_answer(host).in_a_row, 1);
     }
 
     #[test]
