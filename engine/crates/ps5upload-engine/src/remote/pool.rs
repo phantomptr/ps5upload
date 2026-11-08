@@ -420,6 +420,23 @@ pub(crate) mod testing {
         async fn remove_dir(&self, p: &str) -> Result<(), RemoteError> {
             self.0.remove_dir(p).await
         }
+        async fn create_writer<'a>(
+            &'a self,
+            p: &str,
+            size: u64,
+            from: u64,
+        ) -> Result<Box<dyn crate::remote::RemoteWriter + 'a>, RemoteError> {
+            self.0.create_writer(p, size, from).await
+        }
+        fn writes_from(&self) -> bool {
+            self.0.writes_from()
+        }
+        async fn free_space(&self, p: &str) -> Result<Option<u64>, RemoteError> {
+            self.0.free_space(p).await
+        }
+        async fn remove_file(&self, p: &str) -> Result<(), RemoteError> {
+            self.0.remove_file(p).await
+        }
     }
 
     /// A Remote over a fresh temp store and `fs`.

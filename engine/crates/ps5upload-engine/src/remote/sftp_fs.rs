@@ -69,6 +69,40 @@ fn addr_of(conn: &Connection) -> String {
     super::ftp_fs::host_port(h, conn.port)
 }
 
+/// A file being written over SFTP.
+struct SftpWriter {
+    out: russh_sftp::client::fs::File,
+    host: String,
+    path: String,
+}
+
+#[async_trait::async_trait]
+impl super::RemoteWriter for SftpWriter {
+    async fn write(&mut self, data: &[u8]) -> Result<(), RemoteError> {
+        super::write_all_to(&mut self.out, data, &self.path)
+            .await
+            .map_err(|e| RemoteError::Io(format!("{}: {e}", self.host)))
+    }
+
+    async fn finish(mut self: Box<Self>) -> Result<(), RemoteError> {
+        use tokio::io::AsyncWriteExt;
+        let host = self.host.clone();
+        let path = self.path.clone();
+        timed(&host, "closing a file", async {
+            self.out
+                .shutdown()
+                .await
+                .map_err(|e| RemoteError::Io(format!("{host}: closing {path}: {e}")))
+        })
+        .await
+    }
+
+    async fn abort(mut self: Box<Self>) {
+        use tokio::io::AsyncWriteExt;
+        let _ = tokio::time::timeout(STEP, self.out.shutdown()).await;
+    }
+}
+
 fn sftp_err(host: &str, e: russh_sftp::client::error::Error) -> RemoteError {
     let msg = e.to_string();
     let lower = msg.to_ascii_lowercase();
@@ -380,27 +414,54 @@ impl RemoteFs for SftpFs {
         }
     }
 
-    async fn put_file(
-        &self,
+    /// A new or emptied file; from a byte past the start, the file opened without truncating
+    /// and written on from that byte.
+    async fn create_writer<'a>(
+        &'a self,
         path: &str,
-        src: &std::path::Path,
-        progress: &super::PutProgress,
-    ) -> Result<(), RemoteError> {
-        use tokio::io::AsyncWriteExt;
+        _size: u64,
+        from: u64,
+    ) -> Result<Box<dyn super::RemoteWriter + 'a>, RemoteError> {
+        use russh_sftp::protocol::OpenFlags;
         let full = under(&self.home, path);
         let host = self.host.as_str();
         let mut out = timed(host, "starting an upload", async {
-            self.sftp.create(full).await.map_err(|e| sftp_err(host, e))
+            if from == 0 {
+                self.sftp.create(full).await
+            } else {
+                self.sftp
+                    .open_with_flags(full, OpenFlags::WRITE | OpenFlags::CREATE)
+                    .await
+            }
+            .map_err(|e| sftp_err(host, e))
         })
         .await?;
-        let file = tokio::fs::File::open(src).await.map_err(super::local_io)?;
-        super::send_to_server(file, &mut out, progress, STEP, host, path).await?;
-        timed(host, "closing a file", async {
-            out.shutdown()
+        if from != 0 {
+            out.seek(std::io::SeekFrom::Start(from))
                 .await
-                .map_err(|e| RemoteError::Io(format!("{host}: closing {path}: {e}")))
+                .map_err(|e| RemoteError::Io(format!("{host}: {path}: {e}")))?;
+        }
+        Ok(Box::new(SftpWriter {
+            out,
+            host: self.host.clone(),
+            path: path.to_string(),
+        }))
+    }
+
+    fn writes_from(&self) -> bool {
+        true
+    }
+
+    /// statvfs@openssh.com's blocks free to an unprivileged user; `None` from a server without
+    /// that extension.
+    async fn free_space(&self, path: &str) -> Result<Option<u64>, RemoteError> {
+        let full = under(&self.home, path);
+        let host = self.host.as_str();
+        let info = timed(host, "asking for free space", async {
+            self.sftp.fs_info(full).await.map_err(|e| sftp_err(host, e))
         })
-        .await
+        .await?;
+        Ok(info.map(|s| s.blocks_avail.saturating_mul(s.fragment_size.max(1))))
     }
 
     async fn remove_file(&self, path: &str) -> Result<(), RemoteError> {

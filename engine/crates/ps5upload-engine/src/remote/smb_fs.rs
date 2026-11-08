@@ -269,6 +269,35 @@ impl RemoteFile for SmbFile {
     }
 }
 
+/// A file being written on the share.
+struct SmbWriter {
+    writer: smb2::FileWriter,
+    host: String,
+}
+
+#[async_trait::async_trait]
+impl super::RemoteWriter for SmbWriter {
+    async fn write(&mut self, data: &[u8]) -> Result<(), RemoteError> {
+        self.writer
+            .write_chunk(data)
+            .await
+            .map_err(|e| map_err(&self.host, e))
+    }
+
+    async fn finish(self: Box<Self>) -> Result<(), RemoteError> {
+        let host = self.host;
+        self.writer
+            .finish()
+            .await
+            .map(|_| ())
+            .map_err(|e| map_err(&host, e))
+    }
+
+    async fn abort(self: Box<Self>) {
+        let _ = self.writer.abort().await;
+    }
+}
+
 #[async_trait::async_trait]
 impl RemoteFs for SmbFs {
     async fn list(&self, path: &str, cursor: Option<String>) -> Result<Page, RemoteError> {
@@ -402,40 +431,47 @@ impl RemoteFs for SmbFs {
             .map_err(|e| map_err(&self.host, e))
     }
 
-    async fn put_file(
-        &self,
+    /// The crate's pipelined writer, which owns its own handle on the connection: the session
+    /// stays free for listings while a file is written. From a byte past the start, the file
+    /// is opened without truncating and written on from there.
+    async fn create_writer<'a>(
+        &'a self,
         path: &str,
-        src: &std::path::Path,
-        progress: &super::PutProgress,
-    ) -> Result<(), RemoteError> {
-        use tokio::io::AsyncReadExt;
+        _size: u64,
+        from: u64,
+    ) -> Result<Box<dyn super::RemoteWriter + 'a>, RemoteError> {
         self.finish_closes().await?;
-        let mut writer = {
+        let writer = {
             let mut s = self.session.lock().await;
             let (client, tree) = &mut *s;
-            client
-                .create_file_writer(tree, &share_path(path))
-                .await
-                .map_err(|e| map_err(&self.host, e))?
+            let opened = if from == 0 {
+                client.create_file_writer(tree, &share_path(path)).await
+            } else {
+                client
+                    .create_file_writer_at(tree, &share_path(path), from)
+                    .await
+            };
+            opened.map_err(|e| map_err(&self.host, e))?
         };
-        let mut file = tokio::fs::File::open(src).await.map_err(super::local_io)?;
-        let mut buf = vec![0u8; super::PUT_CHUNK];
-        loop {
-            if progress.cancelled() {
-                return Err(RemoteError::Io("cancelled".into()));
-            }
-            let n = file.read(&mut buf).await.map_err(super::local_io)?;
-            if n == 0 {
-                break;
-            }
-            writer
-                .write_chunk(&buf[..n])
-                .await
-                .map_err(|e| map_err(&self.host, e))?;
-            (progress.add)(n as u64);
-        }
-        writer.finish().await.map_err(|e| map_err(&self.host, e))?;
-        Ok(())
+        Ok(Box::new(SmbWriter {
+            writer,
+            host: self.host.clone(),
+        }))
+    }
+
+    fn writes_from(&self) -> bool {
+        true
+    }
+
+    /// The share's room for this user (FileFsFullSizeInformation's caller-available units).
+    async fn free_space(&self, _path: &str) -> Result<Option<u64>, RemoteError> {
+        let mut s = self.session.lock().await;
+        let (client, tree) = &mut *s;
+        let info = client
+            .fs_info(tree)
+            .await
+            .map_err(|e| map_err(&self.host, e))?;
+        Ok(Some(info.free_bytes))
     }
 
     async fn remove_file(&self, path: &str) -> Result<(), RemoteError> {

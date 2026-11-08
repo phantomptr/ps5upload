@@ -133,20 +133,48 @@ pub trait RemoteFs: Send + Sync {
         )))
     }
 
-    // ── Writing files: downloads from a console to a server (8.0.0) ──
+    // ── Writing files: downloads from a console to a server (8.0.0), Convert's output ──
 
-    /// Writes the local file `src` to `path`, creating or truncating it. `progress` hears the
-    /// bytes as they go; a set `cancel` stops the write (the partial file is left for the
-    /// caller to remove).
-    async fn put_file(
-        &self,
+    /// Opens `path` to be written front to back, `size` bytes in all. `from` 0 creates the
+    /// file, or empties one already there; a later `from` keeps the first `from` bytes of the
+    /// file already there and writes on from that byte (only where [`Self::writes_from`] says
+    /// it can). Every write of a file goes through here, [`Self::put_file`] too.
+    async fn create_writer<'a>(
+        &'a self,
         path: &str,
-        _src: &std::path::Path,
-        _progress: &PutProgress,
-    ) -> Result<(), RemoteError> {
+        _size: u64,
+        _from: u64,
+    ) -> Result<Box<dyn RemoteWriter + 'a>, RemoteError> {
         Err(RemoteError::Unsupported(format!(
             "this server cannot write {path}"
         )))
+    }
+
+    /// Whether [`Self::create_writer`] can go on from a byte past the start of a file already
+    /// there (a write that was cut off). FTP and WebDAV write a file whole.
+    fn writes_from(&self) -> bool {
+        false
+    }
+
+    /// The bytes this user can still write under the folder `path`, as the server itself
+    /// reports them; `None` when the protocol has no way to say (FTP, WebDAV). Never a guess.
+    async fn free_space(&self, _path: &str) -> Result<Option<u64>, RemoteError> {
+        Ok(None)
+    }
+
+    /// Writes the local file `src` to `path`, creating or truncating it, through
+    /// [`Self::create_writer`]. `progress` hears the bytes as they go; a set `cancel` stops the
+    /// write (the partial file is left for the caller to remove).
+    async fn put_file(
+        &self,
+        path: &str,
+        src: &std::path::Path,
+        progress: &PutProgress,
+    ) -> Result<(), RemoteError> {
+        let file = tokio::fs::File::open(src).await.map_err(local_io)?;
+        let size = file.metadata().await.map_err(local_io)?.len();
+        let writer = self.create_writer(path, size, 0).await?;
+        send_file(file, writer, progress, WRITE_STALL, path).await
     }
 
     /// Removes one file.
@@ -178,81 +206,109 @@ impl PutProgress {
 /// The bytes a write sends at a time.
 pub(crate) const PUT_CHUNK: usize = 1 << 20;
 
-/// A local file read for a write, counting what goes and stopping when cancelled.
-pub(crate) struct CountingReader<'a> {
-    pub file: std::fs::File,
-    pub progress: &'a PutProgress,
+/// How long a server may take no bytes before a write gives up on it. A plain copy parks on
+/// the socket when the server stops reading (a sleeping NAS, Wi-Fi gone with no reset).
+pub(crate) const WRITE_STALL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// A file on a server being written front to back ([`RemoteFs::create_writer`]): a few calls
+/// to [`Self::write`], then [`Self::finish`], or [`Self::abort`] to give up.
+#[allow(clippy::double_must_use)] // async_trait expands to a must_use future
+#[async_trait::async_trait]
+pub trait RemoteWriter: Send {
+    /// Sends the next bytes. A write stopped part way (its future dropped) leaves the file
+    /// where nothing more may be written to it: [`Self::abort`] is all that is left.
+    async fn write(&mut self, data: &[u8]) -> Result<(), RemoteError>;
+    /// Every byte is sent: waits until the server holds the file, then closes it.
+    async fn finish(self: Box<Self>) -> Result<(), RemoteError>;
+    /// Gives the file up and closes what it holds. What was sent stays on the server, for the
+    /// caller to remove.
+    async fn abort(self: Box<Self>);
 }
 
-impl std::io::Read for CountingReader<'_> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if self.progress.cancelled() {
-            return Err(std::io::Error::other("cancelled"));
-        }
-        let n = self.file.read(buf)?;
-        (self.progress.add)(n as u64);
-        Ok(n)
+/// [`RemoteWriter::write`], failing when the server takes nothing for `stall` and stopping at
+/// once when `cancel` is set: nothing would poll a write parked on the socket otherwise.
+pub(crate) async fn write_limited(
+    w: &mut (dyn RemoteWriter + '_),
+    data: &[u8],
+    cancel: &std::sync::atomic::AtomicBool,
+    stall: std::time::Duration,
+    path: &str,
+) -> Result<(), RemoteError> {
+    tokio::select! {
+        r = tokio::time::timeout(stall, w.write(data)) => r.map_err(|_| {
+            RemoteError::Io(format!(
+                "the server took nothing for {} s while writing {path}",
+                stall.as_secs()
+            ))
+        })?,
+        () = until_set(cancel) => Err(RemoteError::Io("cancelled".to_string())),
     }
 }
 
-/// Sends the local `file` to `out` for `path`. A server that takes no bytes for `stall` fails the
-/// write, and a cancel stops it at once. A plain copy parks on the socket when the server stops
-/// reading (a sleeping NAS, Wi-Fi gone with no reset): nothing polls the reader then, so neither
-/// would ever fire.
-pub(crate) async fn send_to_server<W>(
+/// Sends the local `file` through `w` and finishes it; on any failure or a cancel the writer is
+/// given up (the partial file stays for the caller to remove).
+pub(crate) async fn send_file(
     mut file: tokio::fs::File,
-    out: &mut W,
+    mut w: Box<dyn RemoteWriter + '_>,
     progress: &PutProgress,
     stall: std::time::Duration,
-    host: &str,
     path: &str,
-) -> Result<(), RemoteError>
-where
-    W: tokio::io::AsyncWrite + Unpin,
-{
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let cancelled = || RemoteError::Io("cancelled".to_string());
+) -> Result<(), RemoteError> {
+    use tokio::io::AsyncReadExt;
     let mut buf = vec![0u8; PUT_CHUNK];
     loop {
         if progress.cancelled() {
-            return Err(cancelled());
+            w.abort().await;
+            return Err(RemoteError::Io("cancelled".to_string()));
         }
-        let n = file.read(&mut buf).await.map_err(local_io)?;
-        if n == 0 {
-            return Ok(());
-        }
-        let mut sent = 0;
-        while sent < n {
-            let wrote = tokio::select! {
-                w = tokio::time::timeout(stall, out.write(&buf[sent..n])) => w,
-                () = until_cancelled(progress) => return Err(cancelled()),
-            };
-            let wrote = wrote
-                .map_err(|_| {
-                    RemoteError::Io(format!(
-                        "{host}: the server took nothing for {} s while writing {path}",
-                        stall.as_secs()
-                    ))
-                })?
-                .map_err(|e| RemoteError::Io(format!("{host}: writing {path}: {e}")))?;
-            if wrote == 0 {
-                return Err(RemoteError::Io(format!(
-                    "{host}: the server closed the connection while writing {path}"
-                )));
+        let n = match file.read(&mut buf).await {
+            Ok(n) => n,
+            Err(e) => {
+                w.abort().await;
+                return Err(local_io(e));
             }
-            (progress.add)(wrote as u64);
-            sent += wrote;
+        };
+        if n == 0 {
+            return w.finish().await;
         }
+        if let Err(e) = write_limited(&mut *w, &buf[..n], &progress.cancel, stall, path).await {
+            w.abort().await;
+            return Err(e);
+        }
+        (progress.add)(n as u64);
     }
 }
 
-async fn until_cancelled(progress: &PutProgress) {
-    while !progress.cancelled() {
+async fn until_set(flag: &std::sync::atomic::AtomicBool) {
+    while !flag.load(std::sync::atomic::Ordering::Relaxed) {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 }
 
-fn local_io(e: std::io::Error) -> RemoteError {
+/// A writer over a byte stream to the server (an FTP data connection, an SFTP file): `write`
+/// sends every byte, a stream that takes none failing it.
+pub(crate) async fn write_all_to<W>(out: &mut W, data: &[u8], what: &str) -> Result<(), RemoteError>
+where
+    W: tokio::io::AsyncWrite + Unpin + ?Sized,
+{
+    use tokio::io::AsyncWriteExt;
+    let mut sent = 0;
+    while sent < data.len() {
+        let n = out
+            .write(&data[sent..])
+            .await
+            .map_err(|e| RemoteError::Io(format!("writing {what}: {e}")))?;
+        if n == 0 {
+            return Err(RemoteError::Io(format!(
+                "the server closed the connection while writing {what}"
+            )));
+        }
+        sent += n;
+    }
+    Ok(())
+}
+
+pub(crate) fn local_io(e: std::io::Error) -> RemoteError {
     RemoteError::Io(format!("reading the local copy: {e}"))
 }
 
@@ -275,6 +331,11 @@ pub(crate) struct MemFs {
     down: Arc<std::sync::atomic::AtomicBool>,
     /// Removes no folder, as WebDAV (whose DELETE is recursive) never does.
     keep_dirs: Arc<std::sync::atomic::AtomicBool>,
+    /// What `free_space` answers (`None`: the protocol cannot say).
+    free: Arc<Mutex<Option<u64>>>,
+    /// A byte offset flipped in every file written from now on: a server that stores the
+    /// wrong bytes, for read-back tests.
+    corrupt_at: Arc<Mutex<Option<u64>>>,
 }
 
 #[cfg(test)]
@@ -299,6 +360,8 @@ impl MemFs {
             down_after: Arc::default(),
             down: Arc::default(),
             keep_dirs: Arc::default(),
+            free: Arc::default(),
+            corrupt_at: Arc::default(),
         }
     }
 
@@ -335,7 +398,28 @@ impl MemFs {
             down_after: Arc::clone(&self.down_after),
             down: Arc::clone(&self.down),
             keep_dirs: Arc::clone(&self.keep_dirs),
+            free: Arc::clone(&self.free),
+            corrupt_at: Arc::clone(&self.corrupt_at),
         }
+    }
+
+    /// What `free_space` answers from now on.
+    pub fn set_free(&self, free: Option<u64>) {
+        *self.free.lock().unwrap() = free;
+    }
+
+    /// Flips the byte at `at` of every file written from now on (`None`: stores what it is
+    /// sent).
+    pub fn corrupt_writes_at(&self, at: Option<u64>) {
+        *self.corrupt_at.lock().unwrap() = at;
+    }
+
+    /// Every path the server holds, files and made folders, for tests that check what was left.
+    pub fn paths(&self) -> Vec<String> {
+        let mut all: Vec<String> = self.files.lock().unwrap().keys().cloned().collect();
+        all.extend(self.dirs.lock().unwrap().iter().cloned());
+        all.sort();
+        all
     }
 
     /// Folder listings asked for since the last reset.
@@ -517,6 +601,44 @@ impl RemoteFile for MemFile {
         let end = (offset.saturating_add(len) as usize).min(self.bytes.len());
         Ok(self.bytes[start..end].to_vec())
     }
+}
+
+/// A file being written on a [`MemFs`]: every write lands at once, so a test sees the
+/// partial file grow.
+#[cfg(test)]
+struct MemWriter<'a> {
+    fs: &'a MemFs,
+    path: String,
+    at: u64,
+}
+
+#[cfg(test)]
+#[async_trait::async_trait]
+impl RemoteWriter for MemWriter<'_> {
+    async fn write(&mut self, data: &[u8]) -> Result<(), RemoteError> {
+        let (path, at) = (self.path.clone(), self.at);
+        let flip = *self.fs.corrupt_at.lock().unwrap();
+        self.fs.write(|| {
+            let mut files = self.fs.files.lock().unwrap();
+            let Some(b) = files.get_mut(&path) else {
+                return Err(RemoteError::NotFound(format!("{path} is gone")));
+            };
+            b.truncate(at as usize);
+            b.extend_from_slice(data);
+            if let Some(f) = flip.filter(|f| (at..at + data.len() as u64).contains(f)) {
+                b[f as usize] ^= 0xFF;
+            }
+            Ok(())
+        })?;
+        self.at += data.len() as u64;
+        Ok(())
+    }
+
+    async fn finish(self: Box<Self>) -> Result<(), RemoteError> {
+        self.fs.check_up()
+    }
+
+    async fn abort(self: Box<Self>) {}
 }
 
 #[cfg(test)]
@@ -713,25 +835,49 @@ impl RemoteFs for MemFs {
         })
     }
 
-    async fn put_file(
-        &self,
+    async fn create_writer<'a>(
+        &'a self,
         path: &str,
-        src: &std::path::Path,
-        progress: &PutProgress,
-    ) -> Result<(), RemoteError> {
+        _size: u64,
+        from: u64,
+    ) -> Result<Box<dyn RemoteWriter + 'a>, RemoteError> {
         let p = normal(path);
-        if progress.cancelled() {
-            return Err(RemoteError::Io("cancelled".into()));
-        }
-        let bytes = std::fs::read(src).map_err(local_io)?;
         self.write(|| {
             if !self.is_dir(&Self::parent_of(&p)) {
                 return Err(RemoteError::NotFound(format!("no folder for {p}")));
             }
-            (progress.add)(bytes.len() as u64);
-            self.files.lock().unwrap().insert(p.clone(), bytes.clone());
-            Ok(())
-        })
+            if self.is_dir(&p) {
+                return Err(RemoteError::Exists(format!("{p} is a folder")));
+            }
+            let mut files = self.files.lock().unwrap();
+            if from == 0 {
+                files.insert(p.clone(), Vec::new());
+                return Ok(());
+            }
+            match files.get_mut(&p) {
+                Some(b) if b.len() as u64 >= from => {
+                    b.truncate(from as usize);
+                    Ok(())
+                }
+                _ => Err(RemoteError::NotFound(format!(
+                    "{p} holds less than {from} bytes"
+                ))),
+            }
+        })?;
+        Ok(Box::new(MemWriter {
+            fs: self,
+            path: p,
+            at: from,
+        }))
+    }
+
+    fn writes_from(&self) -> bool {
+        true
+    }
+
+    async fn free_space(&self, _path: &str) -> Result<Option<u64>, RemoteError> {
+        self.check_up()?;
+        Ok(*self.free.lock().unwrap())
     }
 
     async fn remove_file(&self, path: &str) -> Result<(), RemoteError> {
@@ -773,53 +919,81 @@ mod tests {
         )
     }
 
+    /// A writer over a byte stream, as FTP's and SFTP's are; `ended` says how it ended.
+    struct StreamOut {
+        out: tokio::io::DuplexStream,
+        ended: Arc<Mutex<&'static str>>,
+    }
+
+    #[async_trait::async_trait]
+    impl RemoteWriter for StreamOut {
+        async fn write(&mut self, data: &[u8]) -> Result<(), RemoteError> {
+            write_all_to(&mut self.out, data, "/a").await
+        }
+        async fn finish(self: Box<Self>) -> Result<(), RemoteError> {
+            *self.ended.lock().unwrap() = "finished";
+            Ok(())
+        }
+        async fn abort(self: Box<Self>) {
+            *self.ended.lock().unwrap() = "aborted";
+        }
+    }
+
+    type Ended = Arc<Mutex<&'static str>>;
+
+    fn stream_out(cap: usize) -> (Box<StreamOut>, tokio::io::DuplexStream, Ended) {
+        let (out, server) = tokio::io::duplex(cap);
+        let ended = Arc::new(Mutex::new(""));
+        (
+            Box::new(StreamOut {
+                out,
+                ended: Arc::clone(&ended),
+            }),
+            server,
+            ended,
+        )
+    }
+
     #[tokio::test]
     async fn a_write_delivers_every_byte_and_counts_them() {
         use tokio::io::AsyncReadExt;
         let body: Vec<u8> = (0..3 * PUT_CHUNK + 17).map(|i| (i % 251) as u8).collect();
         let path = local_file(&body);
         let (progress, sent, _) = counting();
-        let (mut out, mut server) = tokio::io::duplex(64 * 1024);
+        let (w, mut server, ended) = stream_out(64 * 1024);
         let reader = tokio::spawn(async move {
             let mut got = Vec::new();
             server.read_to_end(&mut got).await.unwrap();
             got
         });
         let file = tokio::fs::File::open(&path).await.unwrap();
-        send_to_server(
-            file,
-            &mut out,
-            &progress,
-            std::time::Duration::from_secs(5),
-            "nas",
-            "/a",
-        )
-        .await
-        .unwrap();
-        drop(out);
+        send_file(file, w, &progress, std::time::Duration::from_secs(5), "/a")
+            .await
+            .unwrap();
         assert_eq!(reader.await.unwrap(), body);
         assert_eq!(sent.load(std::sync::atomic::Ordering::Relaxed), body.len());
+        assert_eq!(*ended.lock().unwrap(), "finished");
     }
 
-    /// The server stops reading and says nothing: the write ends with a reason of its own. A
-    /// plain copy parked there for good, holding the session.
+    /// The server stops reading and says nothing: the write ends with a reason of its own and
+    /// the writer is given up. A plain copy parked there for good, holding the session.
     #[tokio::test]
     async fn a_server_that_stops_reading_fails_the_write() {
         let path = local_file(&vec![1u8; 4 * PUT_CHUNK]);
         let (progress, _, _) = counting();
-        let (mut out, _server) = tokio::io::duplex(1024);
+        let (w, _server, ended) = stream_out(1024);
         let file = tokio::fs::File::open(&path).await.unwrap();
-        let e = send_to_server(
+        let e = send_file(
             file,
-            &mut out,
+            w,
             &progress,
             std::time::Duration::from_millis(50),
-            "nas",
             "/a",
         )
         .await
         .unwrap_err();
         assert!(e.to_string().contains("took nothing"), "{e}");
+        assert_eq!(*ended.lock().unwrap(), "aborted");
     }
 
     /// Cancel reaches a write that is parked on the socket: nothing polls the file then.
@@ -827,7 +1001,7 @@ mod tests {
     async fn cancel_stops_a_write_stuck_on_the_socket() {
         let path = local_file(&vec![1u8; 4 * PUT_CHUNK]);
         let (progress, _, cancel) = counting();
-        let (mut out, _server) = tokio::io::duplex(1024);
+        let (w, _server, ended) = stream_out(1024);
         let file = tokio::fs::File::open(&path).await.unwrap();
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -835,12 +1009,11 @@ mod tests {
         });
         let e = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            send_to_server(
+            send_file(
                 file,
-                &mut out,
+                w,
                 &progress,
                 std::time::Duration::from_secs(600),
-                "nas",
                 "/a",
             ),
         )
@@ -848,6 +1021,28 @@ mod tests {
         .expect("the cancel must end the write")
         .unwrap_err();
         assert_eq!(e.to_string(), "cancelled");
+        assert_eq!(*ended.lock().unwrap(), "aborted");
+    }
+
+    /// MemFs writes through the one writer path: put_file, a write from a byte past the start,
+    /// and one into a missing folder.
+    #[tokio::test]
+    async fn memfs_writes_whole_and_from_a_byte() {
+        let fs = MemFs::new(&[("/w/keep", b"x")]);
+        let path = local_file(b"0123456789");
+        let (progress, sent, _) = counting();
+        fs.put_file("/w/a", &path, &progress).await.unwrap();
+        assert_eq!(fs.bytes("/w/a").unwrap(), b"0123456789");
+        assert_eq!(sent.load(std::sync::atomic::Ordering::Relaxed), 10);
+        let mut w = fs.create_writer("/w/a", 10, 4).await.unwrap();
+        w.write(b"ABCDEF").await.unwrap();
+        w.finish().await.unwrap();
+        assert_eq!(fs.bytes("/w/a").unwrap(), b"0123ABCDEF");
+        assert!(matches!(
+            fs.create_writer("/nope/a", 1, 0).await.err(),
+            Some(RemoteError::NotFound(_))
+        ));
+        assert!(fs.create_writer("/w/a", 100, 50).await.is_err());
     }
 
     #[tokio::test]

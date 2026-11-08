@@ -1090,3 +1090,138 @@ async fn a_folder_build_with_zstd_packs_takes_a_game_folder_and_refuses_what_can
     assert!(!out.exists(), "nothing was written");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Convert straight to a saved server through the HTTP surface: an image and then a folder made
+/// from it land on the server under their names, the job's `dest` names them there, and nothing
+/// is written on this computer.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_image_and_a_folder_go_straight_to_a_server() {
+    let r = crate::remote::pool::testing::install_global(&[]);
+    // As the engine does at startup: Convert reads remote:// sources.
+    crate::convert_source::register();
+    let id = r
+        .store
+        .add(
+            crate::remote::store::conn("NAS", crate::remote::store::Protocol::Smb),
+            crate::remote::store::Secret::None,
+        )
+        .unwrap()
+        .conn
+        .id;
+    let st = state();
+    let app = app_with(st.clone(), Default::default(), "");
+    let root = std::env::temp_dir().join(format!("ps5upload-api-toserver-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let game = root.join("PPSA99995-app");
+    std::fs::create_dir_all(game.join("sce_sys")).unwrap();
+    std::fs::write(
+        game.join("sce_sys/param.json"),
+        b"{\"titleId\":\"PPSA99995\"}",
+    )
+    .unwrap();
+    std::fs::write(game.join("eboot.bin"), vec![7u8; 100_000]).unwrap();
+    std::fs::write(game.join("data.bin"), vec![9u8; 300_000]).unwrap();
+    let out = root.join("never");
+    let dir = format!("/api-toserver-{}", std::process::id());
+
+    async fn finished(st: &AppState, resp: HttpResponse<Body>) -> JobState {
+        let status = resp.status();
+        let body = json_of(resp).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        let job: Uuid = body["job_id"].as_str().unwrap().parse().unwrap();
+        for _ in 0..600 {
+            let s = st.jobs.lock().unwrap().get(&job).cloned();
+            if let Some(s @ (JobState::Done { .. } | JobState::Failed { .. })) = s {
+                return s;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("the job never ended");
+    }
+
+    // An image to the server.
+    let r1 = post_json(
+        &app,
+        "/api/exfat/build",
+        &json!({
+            "source": game,
+            "output_dir": out,
+            "format": "exfat",
+            "name": "Game",
+            "destination": { "kind": "server", "source_id": id, "dir": dir },
+        })
+        .to_string(),
+    )
+    .await;
+    let image = match finished(&st, r1).await {
+        JobState::Done {
+            dest, commit_ack, ..
+        } => {
+            assert_eq!(dest, format!("remote://{id}{dir}/Game.exfat"));
+            assert_eq!(commit_ack.unwrap()["to_server"], true);
+            dest
+        }
+        other => panic!("{}", json!(other)),
+    };
+    let fs = r.pool.fs(&r.store, &id).await.unwrap();
+    assert!(fs.stat(&format!("{dir}/Game.exfat")).await.unwrap().size > 400_000);
+    assert!(fs.stat(&format!("{dir}/Game.exfat.partial")).await.is_err());
+    // The same name again is refused, the image left as it is.
+    let r2 = post_json(
+        &app,
+        "/api/exfat/build",
+        &json!({
+            "source": game,
+            "name": "Game",
+            "destination": { "kind": "server", "source_id": id, "dir": dir },
+        })
+        .to_string(),
+    )
+    .await;
+    match finished(&st, r2).await {
+        JobState::Failed { error, .. } => assert!(error.contains("already exists"), "{error}"),
+        other => panic!("{}", json!(other)),
+    }
+    // A .ffpfsc is refused before a job.
+    let r3 = post_json(
+        &app,
+        "/api/exfat/build",
+        &json!({
+            "source": game,
+            "compress": true,
+            "destination": { "kind": "server", "source_id": id, "dir": dir },
+        })
+        .to_string(),
+    )
+    .await;
+    assert_eq!(r3.status(), StatusCode::BAD_REQUEST);
+    // The image on the server unpacked to a folder on the server.
+    let r4 = post_json(
+        &app,
+        "/api/folder/build",
+        &json!({
+            "source": image,
+            "name": "GameFolder",
+            "full_verify": true,
+            "destination": { "kind": "server", "source_id": id, "dir": dir },
+        })
+        .to_string(),
+    )
+    .await;
+    match finished(&st, r4).await {
+        JobState::Done {
+            dest, files_sent, ..
+        } => {
+            assert_eq!(dest, format!("remote://{id}{dir}/GameFolder"));
+            assert_eq!(files_sent, 3);
+        }
+        other => panic!("{}", json!(other)),
+    }
+    let eboot = fs
+        .open(&format!("{dir}/GameFolder/eboot.bin"))
+        .await
+        .unwrap();
+    assert_eq!(eboot.read_at(0, 200_000).await.unwrap(), vec![7u8; 100_000]);
+    assert!(!out.exists(), "nothing is written on this computer");
+    let _ = std::fs::remove_dir_all(&root);
+}

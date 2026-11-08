@@ -316,17 +316,121 @@ pub(crate) fn stream_to_console(
     cancel: &AtomicBool,
     stage: &mut dyn FnMut(&str, u64, u64),
 ) -> anyhow::Result<crate::image_build::Streamed> {
-    let (mut prepared, packed) =
-        prepare(source, runtime.bytes.clone(), mtime).map_err(anyhow::Error::msg)?;
-    let mut index = measure(
-        &mut prepared,
-        &packed,
+    stream_packed(
         level,
-        Path::new(&target.path),
+        runtime,
+        source,
+        mtime,
+        &target.path,
         cancel,
         stage,
+        &mut |tree, salt, stage| {
+            crate::image_build::stream_to_console(
+                format,
+                Some(mtime),
+                salt,
+                tree,
+                target,
+                mode,
+                verify_chunk,
+                cancel,
+                stage,
+            )
+        },
+        &|| {
+            ps5upload_fpkg::remote_source::open_remote(target.files.clone(), &target.path)
+                .map_err(|e| e.to_string())
+        },
+        &|| match (target.remove)(&target.path) {
+            Ok(()) => "it was removed from the PS5".to_string(),
+            Err(r) => format!("removing it from the PS5 failed too ({r:#}): delete it by hand"),
+        },
+        "the PS5",
     )
-    .map_err(anyhow::Error::msg)?;
+}
+
+/// [`build`] straight to a server (`image_build::stream_to_server`), as [`stream_to_console`]
+/// does it: the packs read back from the server's copy, which is removed if they fail.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn stream_to_server(
+    format: ImageFormat,
+    level: u8,
+    runtime: &PackRuntime,
+    source: &mut dyn SourceTree,
+    mtime: i64,
+    target: &crate::image_build::ServerImage,
+    mode: VerifyMode,
+    verify_chunk: u64,
+    cancel: &std::sync::Arc<AtomicBool>,
+    stage: &mut dyn FnMut(&str, u64, u64),
+) -> Result<crate::image_build::ToServer, String> {
+    let dest = target.dest;
+    let path = target.path();
+    stream_packed(
+        level,
+        runtime,
+        source,
+        mtime,
+        &path,
+        cancel,
+        stage,
+        &mut |tree, salt, stage| {
+            crate::image_build::stream_to_server(
+                format,
+                mtime,
+                salt,
+                tree,
+                target,
+                mode,
+                verify_chunk,
+                cancel,
+                stage,
+            )
+            .map_err(anyhow::Error::msg)
+        },
+        &|| {
+            let files = dest.files().map_err(|e| crate::server_out::said(&e))?;
+            ps5upload_fpkg::remote_source::open_remote(files, &path).map_err(|e| e.to_string())
+        },
+        &|| match dest.fs() {
+            Ok(fs) => dest.remove(&*fs, &path),
+            Err(e) => format!(
+                "removing it from {} failed too ({e}): delete {path} by hand",
+                dest.label
+            ),
+        },
+        &dest.label,
+    )
+    .map_err(|e| format!("{e:#}"))
+}
+
+/// Streams the packed game (with the salt its bytes also depend on) wherever it goes.
+type SendPacked<'a, T> =
+    dyn FnMut(&mut dyn SourceTree, &str, &mut dyn FnMut(&str, u64, u64)) -> anyhow::Result<T> + 'a;
+
+/// The packs made as [`build`] makes them, with `mtime` pinned on the index and the archive ID
+/// drawn from the packs themselves, so making them again gives the same bytes; `send` streams
+/// the packed game (with what else its bytes depend on) wherever it goes, then the packs are
+/// read back from there (`reopen`) through the emulator's checks. An image that fails them is
+/// removed (`remove` says how that went) from `place`.
+#[allow(clippy::too_many_arguments)]
+fn stream_packed<T>(
+    level: u8,
+    runtime: &PackRuntime,
+    source: &mut dyn SourceTree,
+    mtime: i64,
+    to: &str,
+    cancel: &AtomicBool,
+    stage: &mut dyn FnMut(&str, u64, u64),
+    send: &mut SendPacked<T>,
+    reopen: &dyn Fn() -> Result<Box<dyn SourceTree>, String>,
+    remove: &dyn Fn() -> String,
+    place: &str,
+) -> anyhow::Result<T> {
+    let (mut prepared, packed) =
+        prepare(source, runtime.bytes.clone(), mtime).map_err(anyhow::Error::msg)?;
+    let mut index = measure(&mut prepared, &packed, level, Path::new(to), cancel, stage)
+        .map_err(anyhow::Error::msg)?;
     pin_archive_id(&mut index).map_err(anyhow::Error::msg)?;
     let streamed = {
         let mut tree = PackedTree::new(&mut prepared, &index, 0, cancel)
@@ -336,31 +440,16 @@ pub(crate) fn stream_to_console(
             "zstd level {level} emulator {}",
             blake3::hash(&runtime.bytes).to_hex()
         );
-        crate::image_build::stream_to_console(
-            format,
-            Some(mtime),
-            &salt,
-            &mut tree,
-            target,
-            mode,
-            verify_chunk,
-            cancel,
-            stage,
-        )?
+        send(&mut tree, &salt, stage)?
     };
-    let unpacked = ps5upload_fpkg::remote_source::open_remote(target.files.clone(), &target.path)
-        .map_err(|e| e.to_string())
-        .and_then(|image| {
-            ps5_dump_forge_zstd::reader::unpack(image)
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-        });
+    let unpacked = reopen().and_then(|image| {
+        ps5_dump_forge_zstd::reader::unpack(image)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    });
     if let Err(e) = unpacked {
-        let removed = match (target.remove)(&target.path) {
-            Ok(()) => "it was removed from the PS5".to_string(),
-            Err(r) => format!("removing it from the PS5 failed too ({r:#}): delete it by hand"),
-        };
-        anyhow::bail!("reading the zstd packs back from the image on the PS5: {e}; {removed}");
+        let removed = remove();
+        anyhow::bail!("reading the zstd packs back from the image on {place}: {e}; {removed}");
     }
     Ok(streamed)
 }
@@ -372,6 +461,7 @@ pub(crate) fn stream_to_console(
 /// and every file of the game, read through the packs, against the source `reopen` opens
 /// afresh (SHA-256, of a sample or all of it as `mode` says). The caller has claimed the
 /// folder's `.partial`.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_folder(
     level: u8,
@@ -379,6 +469,30 @@ pub(crate) fn build_folder(
     source: &mut dyn SourceTree,
     reopen: &dyn Fn() -> Result<Box<dyn SourceTree>, String>,
     target: &Path,
+    mode: VerifyMode,
+    cancel: &AtomicBool,
+    stage: &mut dyn FnMut(&str, u64, u64),
+) -> Result<crate::folder_build::FolderBuilt, String> {
+    build_folder_to(
+        level,
+        runtime,
+        source,
+        reopen,
+        &crate::folder_build::FolderOut::Local(target),
+        mode,
+        cancel,
+        stage,
+    )
+}
+
+/// [`build_folder`], to a folder on this computer or on a saved server.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_folder_to(
+    level: u8,
+    runtime: &PackRuntime,
+    source: &mut dyn SourceTree,
+    reopen: &dyn Fn() -> Result<Box<dyn SourceTree>, String>,
+    out: &crate::folder_build::FolderOut,
     mode: VerifyMode,
     cancel: &AtomicBool,
     stage: &mut dyn FnMut(&str, u64, u64),
@@ -393,18 +507,31 @@ pub(crate) fn build_folder(
     // The read-back makes the same index, so it keeps this time.
     let mtime = now_secs();
     let (mut prepared, packed) = prepare(source, runtime.bytes.clone(), mtime)?;
-    let index = measure(&mut prepared, &packed, level, target, cancel, stage)?;
-    let mut tree = PackedTree::new(&mut prepared, &index, 0, cancel).map_err(|e| e.to_string())?;
-    crate::folder_build::write_checked(
-        &mut tree,
-        target,
+    let shown = out.describe();
+    let index = measure(
+        &mut prepared,
+        &packed,
+        level,
+        Path::new(&shown),
         cancel,
         stage,
-        &mut |partial, _, _, stage| {
+    )?;
+    let mut tree = PackedTree::new(&mut prepared, &index, 0, cancel).map_err(|e| e.to_string())?;
+    crate::folder_build::write_checked_to(
+        &mut tree,
+        out,
+        cancel,
+        stage,
+        &mut |written, _, _, stage| {
             stage("verify", 0, 0);
-            let written = ps5upload_fpkg::source::FolderSource::open(partial)
-                .map_err(|e| format!("the folder could not be read back: {e}"))?;
-            let mut game = ps5_dump_forge_zstd::reader::unpack(Box::new(written))
+            let written: Box<dyn SourceTree> = match written {
+                crate::folder_build::Written::Dir(partial) => Box::new(
+                    ps5upload_fpkg::source::FolderSource::open(partial)
+                        .map_err(|e| format!("the folder could not be read back: {e}"))?,
+                ),
+                crate::folder_build::Written::Tree(t) => t,
+            };
+            let mut game = ps5_dump_forge_zstd::reader::unpack(written)
                 .map_err(|e| format!("reading the zstd packs back from the folder: {e}"))?;
             let (packs, volumes) = (game.index().files.len(), game.index().volume_sizes.len());
             let mut fresh = reopen()?;
@@ -771,5 +898,54 @@ mod tests {
             got == want,
             "the console's packed image differs from the local build"
         );
+
+        // To a server: the same image, its packs read back there, and no partial file left.
+        let mem = std::sync::Arc::new(crate::remote::MemFs::new(&[]));
+        let remote =
+            crate::remote::pool::testing::remote_with_shared(std::sync::Arc::clone(&mem), None);
+        let id = remote
+            .store
+            .add(
+                crate::remote::store::conn("NAS", crate::remote::store::Protocol::Smb),
+                crate::remote::store::Secret::None,
+            )
+            .unwrap()
+            .conn
+            .id;
+        let dest = crate::server_out::ServerDest::with(
+            remote,
+            &id,
+            "/games/ps5",
+            tokio::runtime::Handle::current(),
+        )
+        .unwrap();
+        let target = crate::image_build::ServerImage {
+            dest: &dest,
+            name: "G.exfat".into(),
+            data: None,
+        };
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let r = tokio::task::block_in_place(|| {
+            let mut tree = FolderSource::open(&src).unwrap();
+            stream_to_server(
+                ImageFormat::Exfat,
+                5,
+                &runtime(),
+                &mut tree,
+                7,
+                &target,
+                VerifyMode::Full,
+                crate::image_build::DEFAULT_VERIFY_CHUNK,
+                &cancel,
+                &mut |_, _, _| {},
+            )
+        })
+        .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r.built.image_bytes, want.len() as u64);
+        assert!(
+            mem.bytes("/games/ps5/G.exfat").unwrap() == want,
+            "the server's packed image differs from the local build"
+        );
+        assert!(mem.bytes("/games/ps5/G.exfat.partial").is_none());
     }
 }

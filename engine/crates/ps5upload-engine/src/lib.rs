@@ -105,6 +105,7 @@ mod rp_stream_api;
 mod save_backup;
 mod save_backup_server;
 mod save_copy;
+mod server_out;
 mod settings_api;
 mod settings_backup;
 mod shared_state;

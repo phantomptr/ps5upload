@@ -134,8 +134,16 @@ fn language_of(v: Option<String>) -> Option<String> {
 /// where a package is easiest to find afterwards.
 /// Run a Workshop job's work off the async runtime, on a thread of its own that "use less of
 /// this computer" can lower (#632) without touching the shared blocking pool.
+/// The job's thread is inside the engine's runtime, as a blocking task's is: a source on a
+/// saved server opened there (a folder build's read-back reopens it) reaches the server.
 fn spawn_workshop_job(work: impl FnOnce() + Send + 'static) {
-    tokio::task::spawn_blocking(move || ps5upload_fpkg::workshop::on_job_thread(work));
+    let handle = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || {
+        ps5upload_fpkg::workshop::on_job_thread(move || {
+            let _runtime = handle.enter();
+            work()
+        })
+    });
 }
 
 pub(crate) fn default_output_dir() -> PathBuf {
@@ -758,6 +766,58 @@ pub(crate) enum ImageDestinationReq {
     /// A PS5: `addr` (its address) and `dir` (an absolute folder on it, made when missing). A
     /// dropped connection goes on where it stopped, and so does the same build started again.
     Console { addr: String, dir: String },
+    /// A saved server (`source_id`, a connection under Connections: SMB, NFS, FTP, SFTP or
+    /// WebDAV) and `dir`, a folder on it (made when missing). Written there as `<name>.partial`,
+    /// read back there and only then renamed, never over anything; the job's `dest` is then
+    /// `remote://<source_id>/<dir>/<name>`. On SMB, NFS and SFTP a write that was cut off goes
+    /// on from what the server holds.
+    Server { source_id: String, dir: String },
+}
+
+/// Why an image build cannot go straight to a server, in a sentence for the user; `None` when
+/// it can. The same images as straight to the console.
+pub(crate) fn server_refusal(
+    format: crate::image_build::ImageFormat,
+    compress: bool,
+    lz4_packs: bool,
+    zstd_packs: bool,
+    edited: bool,
+) -> Option<&'static str> {
+    if edited {
+        return Some(
+            "an edited copy of an image is written next to it on this computer, not straight to \
+             a server",
+        );
+    }
+    if compress {
+        return Some(
+            "a .ffpfsc can't be written straight to a server yet: save it to this computer, or \
+             choose a plain .exfat, .ffpkg or .ffpfs image",
+        );
+    }
+    if lz4_packs {
+        return Some(
+            "an image with LZ4 asset packs can't be written straight to a server yet: save it \
+             to this computer, or choose zstd packs",
+        );
+    }
+    if zstd_packs && format != crate::image_build::ImageFormat::Exfat {
+        return Some(
+            "zstd asset packs go straight to a server in an .exfat image only: choose exFAT, or \
+             save it to this computer",
+        );
+    }
+    None
+}
+
+/// A request's server destination, checked: the saved connection must exist and `dir` must be
+/// a path on it.
+fn server_dest(source_id: &str, dir: &str) -> Result<crate::server_out::ServerDest, String> {
+    if dir.trim().is_empty() {
+        return Err("choose a folder on the server".into());
+    }
+    crate::server_out::ServerDest::new(source_id.trim(), dir)
+        .map_err(|e| crate::server_out::said(&e))
 }
 
 /// Why an image build cannot go straight to the console, in a sentence for the user; `None`
@@ -801,6 +861,85 @@ pub(crate) fn console_refusal(
 enum Ended {
     Local(Result<crate::image_build::ImageBuilt, String>),
     Console(anyhow::Result<crate::image_build::Streamed>),
+    Server(Result<crate::image_build::ToServer, String>),
+}
+
+/// The job of an image build straight to the server `dest`, the image called `name` in its
+/// folder: planned with the time an unfinished earlier try pinned (so it goes on from the
+/// server's partial file), streamed, read back there and renamed
+/// (`image_build::stream_to_server`).
+#[allow(clippy::too_many_arguments)]
+fn to_server_job(
+    dest: &crate::server_out::ServerDest,
+    name: &str,
+    format: crate::image_build::ImageFormat,
+    zstd_level: Option<(u8, crate::zstd_runtime::RuntimeChoice)>,
+    runtime: &mut Option<crate::zstd_runtime::PackRuntime>,
+    tree: &mut dyn ps5upload_fpkg::source::SourceTree,
+    mode: ps5upload_fpkg::sample::VerifyMode,
+    verify_chunk: u64,
+    cancel: &Arc<std::sync::atomic::AtomicBool>,
+    stage: &mut dyn FnMut(&str, u64, u64),
+) -> Result<crate::image_build::ToServer, String> {
+    let data = crate::remote::store::data_dir();
+    let path = dest.path_of(name);
+    let stamp = crate::image_build::server_stamp(data.as_deref(), &dest.id, &path);
+    let target = crate::image_build::ServerImage {
+        dest,
+        name: name.to_string(),
+        data,
+    };
+    match zstd_level {
+        Some((level, choice)) => {
+            let r = crate::zstd_runtime::pack_runtime(choice)?;
+            crate::log_at!(
+                Info,
+                "convert",
+                "zstd packs: {} goes into {} on {}",
+                r.describe(),
+                path,
+                dest.label
+            );
+            crate::zstd_packs::stream_to_server(
+                format,
+                level,
+                runtime.insert(r),
+                tree,
+                stamp,
+                &target,
+                mode,
+                verify_chunk,
+                cancel,
+                stage,
+            )
+        }
+        // A libSceAmpr game gets a fresh ampr_emu.index (#449), as a local build does.
+        None => match crate::image_build::AmprIndexed::wrap_at(&mut *tree, stamp) {
+            Ok(Some(mut indexed)) => crate::image_build::stream_to_server(
+                format,
+                stamp,
+                "",
+                &mut indexed,
+                &target,
+                mode,
+                verify_chunk,
+                cancel,
+                stage,
+            ),
+            Ok(None) => crate::image_build::stream_to_server(
+                format,
+                stamp,
+                "",
+                tree,
+                &target,
+                mode,
+                verify_chunk,
+                cancel,
+                stage,
+            ),
+            Err(e) => Err(format!("ampr_emu.index: {e}")),
+        },
+    }
 }
 
 /// The job of an image build straight to the console at `addr`, the image at `path` there: the
@@ -1193,9 +1332,27 @@ pub(crate) async fn exfat_build_handler(
                 Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
             },
         };
-    // Straight to a console: (its address, the folder there).
+    // Straight to a console: (its address, the folder there). Straight to a server: the folder
+    // there.
+    let mut to_server: Option<crate::server_out::ServerDest> = None;
     let to_console = match req.destination.take() {
         None | Some(ImageDestinationReq::Local) => None,
+        Some(ImageDestinationReq::Server { source_id, dir }) => {
+            if let Some(why) = server_refusal(
+                format,
+                compress,
+                packs.is_some(),
+                zstd_level.is_some(),
+                edited.is_some(),
+            ) {
+                return json_err(StatusCode::BAD_REQUEST, why).into_response();
+            }
+            match server_dest(&source_id, &dir) {
+                Ok(d) => to_server = Some(d),
+                Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
+            }
+            None
+        }
         Some(ImageDestinationReq::Console { addr, dir }) => {
             if let Some(why) = console_refusal(
                 format,
@@ -1240,8 +1397,11 @@ pub(crate) async fn exfat_build_handler(
             .map_or_else(default_output_dir, Path::to_path_buf),
         _ => output_dir(req.output_dir.as_deref()),
     };
-    // On a console, a name already taken is refused when the job starts (the console is asked).
-    let named = if req.keep_both && to_console.is_none() {
+    // Straight to a console or a server, nothing is written on this computer.
+    let straight = to_console.is_some() || to_server.is_some();
+    // On a console or a server, a name already taken is refused when the job starts (it is
+    // asked there).
+    let named = if req.keep_both && !straight {
         let taken = |stem: &str| {
             let (name, _) = crate::image_build::output_names(Path::new(stem), format, compress);
             crate::folder_build::name_in_use(&out_dir.join(name))
@@ -1255,7 +1415,7 @@ pub(crate) async fn exfat_build_handler(
     // On a console: (its address, the image's path there).
     let to_console = to_console.map(|(addr, dir)| (addr, format!("{dir}/{out_name}")));
     let output = out_dir.join(&out_name);
-    if to_console.is_none()
+    if !straight
         && !remote
         && image_file
         && tokio::fs::canonicalize(&output).await.ok()
@@ -1267,14 +1427,14 @@ pub(crate) async fn exfat_build_handler(
         )
         .into_response();
     }
-    if to_console.is_none() && tokio::fs::try_exists(&output).await.unwrap_or(false) {
+    if !straight && tokio::fs::try_exists(&output).await.unwrap_or(false) {
         return json_err(
             StatusCode::CONFLICT,
             format!("{} already exists", output.display()),
         )
         .into_response();
     }
-    if to_console.is_some() {
+    if straight {
         // Nothing is written on this computer.
     } else if let Err(e) = tokio::fs::create_dir_all(&out_dir).await {
         return json_err(
@@ -1403,7 +1563,7 @@ pub(crate) async fn exfat_build_handler(
     // rather than filling the drive and failing near the end. A compressed one or LZ4 packs may
     // well fit in less, so the screen warns and it goes ahead.
     // Straight to a console, the console's own room is checked once the image's size is planned.
-    if to_console.is_none() && !compress && packs.is_none() && zstd_level.is_none() {
+    if !straight && !compress && packs.is_none() && zstd_level.is_none() {
         if let Some(why) = build::free_bytes(&out_dir)
             .and_then(|free| crate::folder_build::shortfall(free, total, &out_dir))
         {
@@ -1413,16 +1573,17 @@ pub(crate) async fn exfat_build_handler(
 
     let partial_out = PathBuf::from(format!("{}.partial", output.display()));
     // Two builds into one console path would wreck each other's job, as two into one file would.
-    let claimed = match &to_console {
-        Some((addr, path)) => PathBuf::from(format!("ps5://{addr}{path}")),
-        None => partial_out.clone(),
+    let claimed = match (&to_console, &to_server) {
+        (Some((addr, path)), _) => PathBuf::from(format!("ps5://{addr}{path}")),
+        (None, Some(d)) => PathBuf::from(d.url(&d.path_of(&out_name))),
+        (None, None) => partial_out.clone(),
     };
     let Some(writing) = Writing::claim_off_thread(claimed.clone()).await else {
         return already_building(&claimed);
     };
-    let spooling = match to_console {
-        Some(_) => None,
-        None => {
+    let spooling = match straight {
+        true => None,
+        false => {
             let spool = crate::image_build::lz4_spool(&output);
             let Some(s) = Writing::claim_off_thread(spool.clone()).await else {
                 return already_building(&spool);
@@ -1436,7 +1597,7 @@ pub(crate) async fn exfat_build_handler(
     let scaffold = Scaffold::of(&source);
     // Straight to a console the job can be cancelled, not paused: a writer held for minutes
     // would leave the console's job without data until it gives up (AVA1's stall limit).
-    let cancel = if to_console.is_some() {
+    let cancel = if straight {
         crate::register_transfer_cancel(job_id)
     } else {
         register_workshop_job(job_id)
@@ -1505,7 +1666,7 @@ pub(crate) async fn exfat_build_handler(
             job_id,
             started_at_ms,
         );
-        if to_console.is_none() {
+        if !straight {
             sweep_output_leftovers(&out_dir);
         }
         let mut tree = tree;
@@ -1543,6 +1704,22 @@ pub(crate) async fn exfat_build_handler(
         let mut runtime = None;
         // Straight to a console: its own job, failing with the transfer's reasons.
         let ended = match (source_tree, &to_console) {
+            (Ok(tree), None) if to_server.is_some() => Ended::Server(match &to_server {
+                Some(dest) => to_server_job(
+                    dest,
+                    &out_name,
+                    format,
+                    zstd_level,
+                    &mut runtime,
+                    tree,
+                    mode,
+                    verify_chunk,
+                    &cancel,
+                    &mut report,
+                ),
+                None => Err("no server".into()),
+            }),
+            (Err(e), None) if to_server.is_some() => Ended::Server(Err(e)),
             (Ok(tree), Some((addr, path))) => Ended::Console(to_console_job(
                 addr,
                 path,
@@ -1636,6 +1813,67 @@ pub(crate) async fn exfat_build_handler(
         drop(ticker);
         let outcome = match ended {
             Ended::Local(outcome) => outcome,
+            Ended::Server(written) => {
+                let url = to_server
+                    .as_ref()
+                    .map_or_else(String::new, |d| d.url(&d.path_of(&out_name)));
+                let state = match written {
+                    Ok(s) => {
+                        crate::engine_log::record(
+                            "info",
+                            format!(
+                                "image: {} -> {url} ({} files, {} bytes, {}, read back on the server){}",
+                                source.display(),
+                                s.built.files,
+                                s.built.image_bytes,
+                                s.built.detail,
+                                runtime
+                                    .as_ref()
+                                    .map(|r| format!("; emulator {}", r.describe()))
+                                    .unwrap_or_default()
+                            ),
+                        );
+                        let mut ack = serde_json::json!({
+                            "to_server": true,
+                            "resumed_from": s.resumed_from,
+                        });
+                        if let (Some(o), Some(r)) = (ack.as_object_mut(), runtime.as_ref()) {
+                            o.insert("ampr_runtime".into(), serde_json::json!(r));
+                        }
+                        JobState::Done {
+                            started_at_ms,
+                            completed_at_ms,
+                            elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                            tx_id_hex: String::new(),
+                            bytes_sent: s.built.image_bytes,
+                            dest: url,
+                            files_sent: s.built.files,
+                            skipped_files: 0,
+                            skipped_bytes: 0,
+                            commit_ack: Some(ack),
+                        }
+                    }
+                    Err(error) => {
+                        crate::engine_log::record(
+                            "warn",
+                            format!("image: to the server failed: {error}"),
+                        );
+                        JobState::Failed {
+                            started_at_ms,
+                            completed_at_ms,
+                            elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                            error,
+                            error_reason: None,
+                            error_detail: None,
+                            error_console: None,
+                            error_space: None,
+                        }
+                    }
+                };
+                set_job(&state_for_job.jobs, &state_for_job.events_tx, job_id, state);
+                fail.mark_succeeded();
+                return;
+            }
             Ended::Console(streamed) => {
                 let path = to_console.as_ref().map_or("", |(_, p)| p.as_str());
                 let state = match streamed {
@@ -1792,6 +2030,13 @@ pub(crate) struct FolderBuildReq {
     /// may then also be a folder. Not with `entry`.
     #[serde(default)]
     update: Option<String>,
+    /// Where the folder goes: `{"kind":"local"}` (the default: `output_dir` on this computer)
+    /// or `{"kind":"server","source_id":…,"dir":…}`: a folder on a saved server, every file
+    /// written under a temporary name and renamed, the files a game starts from (`eboot.bin`,
+    /// `sce_sys/param.json`) last and only once the folder reads back there. Not with `entry`;
+    /// a console is not a destination here.
+    #[serde(default)]
+    destination: Option<ImageDestinationReq>,
 }
 
 /// What a folder build reads: the whole image, one folder of it, or one file.
@@ -1867,10 +2112,38 @@ fn open_for_packing(
 /// package or game folder; `commit_ack.ampr_runtime` names the emulator that went in.
 pub(crate) async fn folder_build_handler(
     State(state): State<AppState>,
-    Json(req): Json<FolderBuildReq>,
+    Json(mut req): Json<FolderBuildReq>,
 ) -> impl IntoResponse {
     use crate::folder_build;
     let source = resolve_engine_path(&req.source);
+    // Straight to a server: the folder there.
+    let to_server = match req.destination.take() {
+        None | Some(ImageDestinationReq::Local) => None,
+        Some(ImageDestinationReq::Console { .. }) => {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                "a game folder is saved to this computer or a server, not straight to the PS5:                  upload it once it is made",
+            )
+            .into_response()
+        }
+        Some(ImageDestinationReq::Server { source_id, dir }) => {
+            if req
+                .entry
+                .as_deref()
+                .is_some_and(|e| !e.trim().trim_matches('/').is_empty())
+            {
+                return json_err(
+                    StatusCode::BAD_REQUEST,
+                    "one file or folder of an image is saved to this computer, not straight to a                      server",
+                )
+                .into_response();
+            }
+            match server_dest(&source_id, &dir) {
+                Ok(d) => Some(d),
+                Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
+            }
+        }
+    };
     let remote = ps5upload_fpkg::remote_source::is_remote(&source);
     let zstd = match &req.ampr_zstd {
         None => None,
@@ -1966,7 +2239,8 @@ pub(crate) async fn folder_build_handler(
         .into_response();
     }
     let out_dir = output_dir(req.output_dir.as_deref());
-    let name = if req.keep_both {
+    // On a server, a name already taken is refused when the job starts (it is asked there).
+    let name = if req.keep_both && to_server.is_none() {
         crate::folder_build::keep_both_stem(&name, |c| {
             crate::folder_build::name_in_use(&out_dir.join(c))
         })
@@ -1975,7 +2249,7 @@ pub(crate) async fn folder_build_handler(
         name
     };
     let target = out_dir.join(&name);
-    if tokio::fs::try_exists(&target).await.unwrap_or(false) {
+    if to_server.is_none() && tokio::fs::try_exists(&target).await.unwrap_or(false) {
         return json_err(
             StatusCode::CONFLICT,
             format!("{} already exists", target.display()),
@@ -1985,7 +2259,8 @@ pub(crate) async fn folder_build_handler(
     // A `<name>.partial` that is not one of ours is the user's: never cleared, never used. A
     // saved file's `.partial` is a file, which cannot be told from a user's: it is refused too.
     let partial = folder_build::partial_of(&target);
-    if tokio::fs::try_exists(&partial).await.unwrap_or(false)
+    if to_server.is_none()
+        && tokio::fs::try_exists(&partial).await.unwrap_or(false)
         && !folder_build::is_our_partial_dir(&partial)
     {
         return json_err(
@@ -1995,7 +2270,7 @@ pub(crate) async fn folder_build_handler(
         .into_response();
     }
     // A game folder's packs never go inside it: the read-back would list them as the game's.
-    if local_dir {
+    if local_dir && to_server.is_none() {
         if let (Ok(src), Some(out)) = (
             tokio::fs::canonicalize(&source).await,
             resolved(&out_dir).await,
@@ -2010,7 +2285,9 @@ pub(crate) async fn folder_build_handler(
             }
         }
     }
-    if let Err(e) = tokio::fs::create_dir_all(&out_dir).await {
+    if to_server.is_some() {
+        // Nothing is written on this computer.
+    } else if let Err(e) = tokio::fs::create_dir_all(&out_dir).await {
         return json_err(
             StatusCode::BAD_REQUEST,
             format!("{}: {e}", out_dir.display()),
@@ -2088,21 +2365,33 @@ pub(crate) async fn folder_build_handler(
         }
         Unpacked::File { size, .. } => *size,
     };
-    // Packs may well fit in less, as for an image: no refusal before the first write.
+    // Packs may well fit in less, as for an image: no refusal before the first write. On a
+    // server, the server's own room is asked once the job starts.
     if let Some(why) = build::free_bytes(&out_dir)
         .and_then(|free| crate::folder_build::shortfall(free, total, &out_dir))
-        .filter(|_| zstd.is_none())
+        .filter(|_| zstd.is_none() && to_server.is_none())
     {
         return json_err(StatusCode::BAD_REQUEST, why).into_response();
     }
-    let Some(writing) = Writing::claim_off_thread(partial.clone()).await else {
-        return already_building(&partial);
+    // Two builds into one server folder would wreck each other, as two into one folder here.
+    let claimed = match &to_server {
+        Some(d) => PathBuf::from(d.url(&d.path_of(&name))),
+        None => partial.clone(),
+    };
+    let Some(writing) = Writing::claim_off_thread(claimed.clone()).await else {
+        return already_building(&claimed);
     };
     let mode = ps5upload_fpkg::sample::VerifyMode::from_full(req.full_verify, false);
 
     let job_id = Uuid::new_v4();
     crate::workshop_api::note_run(job_id, "folder", &source);
-    let cancel = register_workshop_job(job_id);
+    // To a server the job can be cancelled, not paused: a write held for minutes would leave
+    // the server's connection idle until it gives up.
+    let cancel = if to_server.is_some() {
+        crate::register_transfer_cancel(job_id)
+    } else {
+        register_workshop_job(job_id)
+    };
     let bytes = Arc::new(AtomicU64::new(0));
     let started_at_ms = now_ms();
     set_job(
@@ -2163,7 +2452,7 @@ pub(crate) async fn folder_build_handler(
         );
         // A part of an image is saved wherever the user chose: that folder is theirs, and its
         // leftovers are not swept.
-        let sweep = entry.is_none();
+        let sweep = entry.is_none() && to_server.is_none();
         if sweep {
             sweep_output_leftovers(&out_dir);
         }
@@ -2206,29 +2495,40 @@ pub(crate) async fn folder_build_handler(
         };
         // zstd packs: the emulator that goes in, fetched here (off the request) and recorded.
         let mut runtime = None;
+        let on_server = to_server
+            .as_ref()
+            .map(|dest| crate::server_out::ServerFolder {
+                dest,
+                name: name.clone(),
+                cancel: cancel.clone(),
+            });
+        let out = match &on_server {
+            Some(s) => folder_build::FolderOut::Server(s),
+            None => folder_build::FolderOut::Local(&target),
+        };
+        let shown = out.describe();
         let outcome = match unpacked {
             Unpacked::Tree(mut tree) => match zstd {
                 Some((level, choice)) => crate::zstd_runtime::pack_runtime(choice).and_then(|r| {
                     crate::log_at!(
                         Info,
                         "convert",
-                        "zstd packs: {} goes into {}",
+                        "zstd packs: {} goes into {shown}",
                         r.describe(),
-                        target.display()
                     );
-                    crate::zstd_packs::build_folder(
+                    crate::zstd_packs::build_folder_to(
                         level,
                         runtime.insert(r),
                         &mut *tree,
                         &reopen,
-                        &target,
+                        &out,
                         mode,
                         &cancel,
                         &mut report,
                     )
                 }),
                 None => {
-                    folder_build::build(&mut *tree, &reopen, &target, mode, &cancel, &mut report)
+                    folder_build::build_to(&mut *tree, &reopen, &out, mode, &cancel, &mut report)
                 }
             },
             Unpacked::File {
@@ -2256,9 +2556,8 @@ pub(crate) async fn folder_build_handler(
                 crate::engine_log::record(
                     "info",
                     format!(
-                        "folder: {} -> {} ({}, read back){}",
+                        "folder: {} -> {shown} ({}, read back){}",
                         source.display(),
-                        target.display(),
                         built.detail,
                         runtime
                             .as_ref()
@@ -2276,7 +2575,7 @@ pub(crate) async fn folder_build_handler(
                         elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
                         tx_id_hex: String::new(),
                         bytes_sent: built.bytes,
-                        dest: target.display().to_string(),
+                        dest: shown.clone(),
                         files_sent: built.files,
                         skipped_files: 0,
                         skipped_bytes: 0,
@@ -3042,6 +3341,52 @@ mod extract_tests {
         let req: ExfatBuildReq =
             serde_json::from_value(serde_json::json!({"source": "/g"})).unwrap();
         assert!(req.destination.is_none());
+        let req: FolderBuildReq = serde_json::from_value(serde_json::json!({
+            "source": "/g.exfat",
+            "destination": {"kind": "server", "source_id": "nas-1", "dir": "/games"}
+        }))
+        .unwrap();
+        assert!(matches!(
+            req.destination,
+            Some(ImageDestinationReq::Server { ref source_id, ref dir })
+                if source_id == "nas-1" && dir == "/games"
+        ));
+    }
+
+    /// The same images go straight to a server as to the console, each refusal in its words.
+    #[test]
+    fn only_the_formats_that_stream_go_straight_to_a_server() {
+        use crate::image_build::ImageFormat::{Exfat, Ffpfs, Ffpkg};
+        for f in [Exfat, Ffpkg, Ffpfs] {
+            for (compress, lz4, zstd, edited) in [
+                (false, false, false, false),
+                (true, false, false, false),
+                (false, true, false, false),
+                (false, false, true, false),
+                (false, false, false, true),
+            ] {
+                assert_eq!(
+                    server_refusal(f, compress, lz4, zstd, edited).is_some(),
+                    console_refusal(f, compress, lz4, zstd, edited).is_some(),
+                    "{f:?} {compress} {lz4} {zstd} {edited}"
+                );
+                if let Some(why) = server_refusal(f, compress, lz4, zstd, edited) {
+                    assert!(why.contains("a server"), "{why}");
+                }
+            }
+        }
+    }
+
+    /// A server destination names a saved connection; one that is not there is refused before a
+    /// job starts.
+    #[tokio::test]
+    async fn an_unknown_server_or_no_folder_is_refused() {
+        crate::remote::pool::testing::install_global(&[]);
+        assert!(server_dest("no-such-connection", "/games")
+            .err()
+            .unwrap()
+            .contains("no longer exists"));
+        assert!(server_dest("x", "  ").err().unwrap().contains("folder"));
     }
 
     #[test]

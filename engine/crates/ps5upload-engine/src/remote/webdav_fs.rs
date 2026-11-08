@@ -375,6 +375,99 @@ fn is_certificate_error(message: &str) -> bool {
     m.contains("certificate") || m.contains("unknownissuer") || m.contains("unknown issuer")
 }
 
+/// Pieces queued between a WebDAV writer and its PUT.
+const PUT_QUEUE: usize = 4;
+
+/// What a writer hands its PUT: the next bytes, or the end of the body.
+enum BodyPiece {
+    Data(Vec<u8>),
+    End,
+}
+
+/// A PUT's body, read on the request's thread from what the writer sends. The writer gone
+/// without saying the body ended is an error, so a given-up write never looks complete.
+struct BodyReader {
+    rx: tokio::sync::mpsc::Receiver<BodyPiece>,
+    piece: Vec<u8>,
+    at: usize,
+    ended: bool,
+}
+
+impl std::io::Read for BodyReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        while self.at >= self.piece.len() {
+            if self.ended {
+                return Ok(0);
+            }
+            match self.rx.blocking_recv() {
+                Some(BodyPiece::Data(d)) => {
+                    self.piece = d;
+                    self.at = 0;
+                }
+                Some(BodyPiece::End) => self.ended = true,
+                None => return Err(std::io::Error::other("cancelled")),
+            }
+        }
+        let n = buf.len().min(self.piece.len() - self.at);
+        buf[..n].copy_from_slice(&self.piece[self.at..self.at + n]);
+        self.at += n;
+        Ok(n)
+    }
+}
+
+/// A file being written by one streamed PUT.
+struct WebdavWriter {
+    tx: Option<tokio::sync::mpsc::Sender<BodyPiece>>,
+    job: tokio::task::JoinHandle<Result<(), RemoteError>>,
+    path: String,
+}
+
+impl WebdavWriter {
+    /// The PUT ended before its body did: its own failure says why.
+    async fn ended_early(&mut self) -> RemoteError {
+        self.tx = None;
+        match (&mut self.job).await {
+            Ok(Err(e)) => e,
+            Ok(Ok(())) => RemoteError::Io(format!(
+                "the server answered before {} was all sent",
+                self.path
+            )),
+            Err(e) => RemoteError::Io(format!("{e}")),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl super::RemoteWriter for WebdavWriter {
+    async fn write(&mut self, data: &[u8]) -> Result<(), RemoteError> {
+        let Some(tx) = &self.tx else {
+            return Err(RemoteError::Io(format!("{} was given up", self.path)));
+        };
+        if tx.send(BodyPiece::Data(data.to_vec())).await.is_err() {
+            return Err(self.ended_early().await);
+        }
+        Ok(())
+    }
+
+    async fn finish(mut self: Box<Self>) -> Result<(), RemoteError> {
+        if let Some(tx) = self.tx.take() {
+            if tx.send(BodyPiece::End).await.is_err() {
+                return Err(self.ended_early().await);
+            }
+        }
+        match (&mut self.job).await {
+            Ok(r) => r,
+            Err(e) => Err(RemoteError::Io(format!("{e}"))),
+        }
+    }
+
+    /// The body ends in an error, so the PUT fails rather than store a short file.
+    async fn abort(mut self: Box<Self>) {
+        self.tx = None;
+        let _ = (&mut self.job).await;
+    }
+}
+
 fn auth_reason(status: u16) -> String {
     if status == 403 {
         "the server refused this user (HTTP 403)".into()
@@ -806,13 +899,20 @@ impl RemoteFs for WebdavFs {
         }
     }
 
-    /// PUT of the file's bytes, streamed. No redirect is followed (the body is read once).
-    async fn put_file(
-        &self,
+    /// One PUT of the whole file, streamed with its Content-Length from what the writer is
+    /// given. No redirect is followed (the body is read once). Always from the start: a PUT
+    /// replaces the file whole.
+    async fn create_writer<'a>(
+        &'a self,
         path: &str,
-        src: &std::path::Path,
-        progress: &super::PutProgress,
-    ) -> Result<(), RemoteError> {
+        size: u64,
+        from: u64,
+    ) -> Result<Box<dyn super::RemoteWriter + 'a>, RemoteError> {
+        if from != 0 {
+            return Err(RemoteError::Unsupported(format!(
+                "WebDAV writes {path} whole"
+            )));
+        }
         // A body is too much to send twice: this renews a Digest nonce that has aged out first.
         let _ = self
             .propfind(path.rsplit_once('/').map_or("/", |(dir, _)| dir), 0)
@@ -821,22 +921,14 @@ impl RemoteFs for WebdavFs {
         let url = self.url(&normal(path));
         let auth = self.auth.clone();
         let host = self.host.clone();
-        let src = src.to_path_buf();
-        let path = path.to_string();
-        // The progress lives on the caller's stack; the blocking thread gets its own handles.
-        let add = Arc::new(std::sync::Mutex::new(0u64));
-        let sent = Arc::clone(&add);
-        let cancel = Arc::clone(&progress.cancel);
+        let shown = path.to_string();
+        let (tx, rx) = tokio::sync::mpsc::channel::<BodyPiece>(PUT_QUEUE);
         let job = tokio::task::spawn_blocking(move || {
-            let size = std::fs::metadata(&src).map_err(super::local_io)?.len();
-            let file = std::fs::File::open(&src).map_err(super::local_io)?;
-            let local = super::PutProgress {
-                add: Box::new(move |n| *sent.lock().unwrap_or_else(|e| e.into_inner()) += n),
-                cancel,
-            };
-            let mut reader = super::CountingReader {
-                file,
-                progress: &local,
+            let mut body = BodyReader {
+                rx,
+                piece: Vec::new(),
+                at: 0,
+                ended: false,
             };
             let mut req = ureq::http::Request::builder()
                 .method("PUT")
@@ -847,37 +939,24 @@ impl RemoteFs for WebdavFs {
                 req = req.header("Authorization", a);
             }
             let req = req
-                .body(ureq::SendBody::from_reader(&mut reader))
+                .body(ureq::SendBody::from_reader(&mut body))
                 .map_err(|e| RemoteError::Io(format!("{host}: {e}")))?;
             let resp = agent.run(req).map_err(|e| map_err(&host, e))?;
             match resp.status().as_u16() {
                 200 | 201 | 204 => Ok(()),
                 s @ (401 | 403) => Err(RemoteError::Auth(auth_reason(s))),
-                409 => Err(RemoteError::NotFound(format!("no folder for {path}"))),
+                409 => Err(RemoteError::NotFound(format!("no folder for {shown}"))),
                 s => Err(RemoteError::Io(format!(
-                    "{host}: PUT {path} returned HTTP {s}"
+                    "{host}: PUT {shown} returned HTTP {s}"
                 ))),
             }
         });
-        // Pass the count on while the upload runs.
-        let mut job = job;
-        let mut reported = 0u64;
-        loop {
-            tokio::select! {
-                r = &mut job => {
-                    let total = *add.lock().unwrap_or_else(|e| e.into_inner());
-                    (progress.add)(total - reported);
-                    return r.map_err(|e| RemoteError::Io(format!("{e}")))?;
-                }
-                _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {
-                    let total = *add.lock().unwrap_or_else(|e| e.into_inner());
-                    (progress.add)(total - reported);
-                    reported = total;
-                }
-            }
-        }
+        Ok(Box::new(WebdavWriter {
+            tx: Some(tx),
+            job,
+            path: path.to_string(),
+        }))
     }
-
     async fn remove_file(&self, path: &str) -> Result<(), RemoteError> {
         match self.send("DELETE", &normal(path), Vec::new()).await? {
             200 | 202 | 204 | 404 => Ok(()),

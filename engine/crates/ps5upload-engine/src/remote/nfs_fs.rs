@@ -9,7 +9,6 @@
 //! fthdgn-gh/Alembic's client (GPL-3.0-or-later), which is written from the same RFCs.
 
 use std::collections::{BTreeSet, HashMap};
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,6 +36,7 @@ const RMDIR: u32 = 13;
 const RENAME: u32 = 14;
 const READDIR: u32 = 16;
 const READDIRPLUS: u32 = 17;
+const FSSTAT: u32 = 18;
 const FSINFO: u32 = 19;
 const COMMIT: u32 = 21;
 const TYPE_DIR: u32 = 2;
@@ -456,7 +456,15 @@ impl Inner {
                 // already, with only its reply lost, so saying it failed is all that can be said.
                 if matches!(
                     proc,
-                    GETATTR | LOOKUP | READ | WRITE | READDIR | READDIRPLUS | FSINFO | COMMIT
+                    GETATTR
+                        | LOOKUP
+                        | READ
+                        | WRITE
+                        | READDIR
+                        | READDIRPLUS
+                        | FSSTAT
+                        | FSINFO
+                        | COMMIT
                 ) {
                     s.nfs.call(proc, &args).await
                 } else {
@@ -1070,84 +1078,163 @@ impl RemoteFs for NfsFs {
         }
     }
 
-    async fn put_file(
-        &self,
+    /// CREATE (UNCHECKED, size 0) and WRITEs at their offsets, UNSTABLE, with one COMMIT at the
+    /// end. From a byte past the start the file is looked up and written on from there.
+    async fn create_writer<'a>(
+        &'a self,
         path: &str,
-        src: &Path,
-        progress: &super::PutProgress,
-    ) -> Result<(), RemoteError> {
+        _size: u64,
+        from: u64,
+    ) -> Result<Box<dyn super::RemoteWriter + 'a>, RemoteError> {
         let (dir, name) = self.inner.parent_of(path).await?;
-        let mut args = Xdr::default().dir_op(&dir, &name).u32(0); // UNCHECKED
-        args.0.extend_from_slice(&sattr(0o644, true).0);
-        let reply = self.inner.nfs_call(CREATE, args).await?;
-        let mut i = In::new(&reply);
-        let status = i.u32();
-        if status != 0 {
-            return Err(status_error(path, status));
-        }
-        let handle = if i.u32() != 0 {
-            i.opaque(64)
-        } else {
-            self.inner.lookup(&dir, &name).await?.0
-        };
-        let mut file = tokio::fs::File::open(src).await.map_err(super::local_io)?;
-        let chunk = (*self.inner.write_size.lock().await).min(super::PUT_CHUNK as u32) as usize;
-        let mut buf = vec![0u8; chunk];
-        let mut at = 0u64;
-        let mut verifier: Option<Vec<u8>> = None;
-        loop {
-            if progress.cancelled() {
-                return Err(RemoteError::Io("cancelled".to_string()));
-            }
-            let n = file.read(&mut buf).await.map_err(super::local_io)?;
-            if n == 0 {
-                break;
-            }
-            let args = Xdr::default()
-                .opaque(&handle)
-                .u64(at)
-                .u32(n as u32)
-                .u32(0) // UNSTABLE, committed at the end
-                .opaque(&buf[..n]);
-            let reply = self.inner.nfs_call(WRITE, args).await?;
+        let handle = if from == 0 {
+            let mut args = Xdr::default().dir_op(&dir, &name).u32(0); // UNCHECKED
+            args.0.extend_from_slice(&sattr(0o644, true).0);
+            let reply = self.inner.nfs_call(CREATE, args).await?;
             let mut i = In::new(&reply);
             let status = i.u32();
             if status != 0 {
                 return Err(status_error(path, status));
             }
-            wcc_data(&mut i);
-            let wrote = i.u32() as usize;
-            i.u32(); // committed
-            let verf = i.take(8).to_vec();
-            if i.bad || wrote != n {
-                return Err(RemoteError::Io(format!(
-                    "NFS: a short write to {path}: {wrote} of {n} bytes"
+            if i.u32() != 0 {
+                i.opaque(64)
+            } else {
+                self.inner.lookup(&dir, &name).await?.0
+            }
+        } else {
+            let (handle, attr) = self.inner.lookup(&dir, &name).await?;
+            let size = match attr {
+                Some(a) => a.size,
+                None => self.inner.getattr(&handle).await?.size,
+            };
+            if size < from {
+                return Err(RemoteError::NotFound(format!(
+                    "{path} holds {size} bytes, not the {from} to go on from"
                 )));
             }
-            if verifier.get_or_insert_with(|| verf.clone()) != &verf {
-                return Err(RemoteError::Io(format!(
-                    "NFS: the server restarted while writing {path}; send it again"
-                )));
-            }
-            at += n as u64;
-            (progress.add)(n as u64);
+            handle
+        };
+        let chunk = (*self.inner.write_size.lock().await).min(super::PUT_CHUNK as u32) as usize;
+        Ok(Box::new(NfsWriter {
+            inner: Arc::clone(&self.inner),
+            handle,
+            path: path.to_string(),
+            at: from,
+            chunk,
+            verifier: None,
+        }))
+    }
+
+    fn writes_from(&self) -> bool {
+        true
+    }
+
+    /// FSSTAT's `abytes`: what this user may still write on the export.
+    async fn free_space(&self, path: &str) -> Result<Option<u64>, RemoteError> {
+        if self.inner.place(path).await?.is_none() {
+            return Ok(None);
         }
-        let args = Xdr::default().opaque(&handle).u64(0).u32(0);
-        let reply = self.inner.nfs_call(COMMIT, args).await?;
+        let handle = self.inner.handle_of(path).await?;
+        let reply = self
+            .inner
+            .nfs_call(FSSTAT, Xdr::default().opaque(&handle))
+            .await?;
         let mut i = In::new(&reply);
         let status = i.u32();
         if status != 0 {
             return Err(status_error(path, status));
         }
-        wcc_data(&mut i);
-        let verf = i.take(8).to_vec();
-        if verifier.is_some_and(|v| v != verf) {
-            return Err(RemoteError::Io(format!(
-                "NFS: the server restarted while writing {path}; send it again"
-            )));
+        post_op_attr(&mut i);
+        let (_total, _free, avail) = (i.u64(), i.u64(), i.u64());
+        if i.bad {
+            return Err(RemoteError::Io("NFS: malformed FSSTAT reply".to_string()));
+        }
+        Ok(Some(avail))
+    }
+}
+
+/// A file being written on an export. Every call runs as its own task: a write given up part
+/// way (a cancel, a stall) never leaves half a call on the shared connection.
+struct NfsWriter {
+    inner: Arc<Inner>,
+    handle: Vec<u8>,
+    path: String,
+    at: u64,
+    chunk: usize,
+    /// The server's write verifier: a different one later means it restarted and may have
+    /// lost UNSTABLE writes.
+    verifier: Option<Vec<u8>>,
+}
+
+impl NfsWriter {
+    async fn call(&self, proc: u32, args: Xdr) -> Result<Vec<u8>, RemoteError> {
+        let inner = Arc::clone(&self.inner);
+        tokio::spawn(async move { inner.nfs_call(proc, args).await })
+            .await
+            .map_err(|e| RemoteError::Io(format!("NFS: {e}")))?
+    }
+
+    fn restarted(&self) -> RemoteError {
+        RemoteError::Io(format!(
+            "NFS: the server restarted while writing {}; send it again",
+            self.path
+        ))
+    }
+}
+
+#[async_trait::async_trait]
+impl super::RemoteWriter for NfsWriter {
+    async fn write(&mut self, data: &[u8]) -> Result<(), RemoteError> {
+        for piece in data.chunks(self.chunk.max(1)) {
+            let args = Xdr::default()
+                .opaque(&self.handle)
+                .u64(self.at)
+                .u32(piece.len() as u32)
+                .u32(0) // UNSTABLE, committed at the end
+                .opaque(piece);
+            let reply = self.call(WRITE, args).await?;
+            let mut i = In::new(&reply);
+            let status = i.u32();
+            if status != 0 {
+                return Err(status_error(&self.path, status));
+            }
+            wcc_data(&mut i);
+            let wrote = i.u32() as usize;
+            i.u32(); // committed
+            let verf = i.take(8).to_vec();
+            if i.bad || wrote != piece.len() {
+                return Err(RemoteError::Io(format!(
+                    "NFS: a short write to {}: {wrote} of {} bytes",
+                    self.path,
+                    piece.len()
+                )));
+            }
+            if self.verifier.get_or_insert_with(|| verf.clone()) != &verf {
+                return Err(self.restarted());
+            }
+            self.at += piece.len() as u64;
         }
         Ok(())
     }
+
+    async fn finish(self: Box<Self>) -> Result<(), RemoteError> {
+        let args = Xdr::default().opaque(&self.handle).u64(0).u32(0);
+        let reply = self.call(COMMIT, args).await?;
+        let mut i = In::new(&reply);
+        let status = i.u32();
+        if status != 0 {
+            return Err(status_error(&self.path, status));
+        }
+        wcc_data(&mut i);
+        let verf = i.take(8).to_vec();
+        if self.verifier.as_ref().is_some_and(|v| *v != verf) {
+            return Err(self.restarted());
+        }
+        Ok(())
+    }
+
+    /// Nothing is held open: NFS has no open files.
+    async fn abort(self: Box<Self>) {}
 }
 
 #[cfg(test)]
