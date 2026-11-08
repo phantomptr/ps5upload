@@ -19951,6 +19951,32 @@
     },
     "/api/files/upload": {
       "post": {
+        "parameters": [
+          {
+            "description": "Add this file to an earlier upload (its `upload_id`) instead of starting a new one.",
+            "in": "query",
+            "name": "upload_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "The file's path inside the folder being sent, with `/` between names\n(`Game/sce_sys/param.json`). The answer's `root` is then the folder's own path.",
+            "in": "query",
+            "name": "relpath",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "multipart/form-data": {
@@ -19971,6 +19997,10 @@
           "403": {
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -25237,6 +25267,10 @@
           "403": {
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
           },
           "500": {
             "$ref": "#/components/responses/Error",
