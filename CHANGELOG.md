@@ -4,6 +4,43 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+Play Together:
+
+- One invite link works everywhere. A friend on your Wi-Fi connects over your home network, a friend on Tailscale over Tailscale, anyone else directly over the internet; the app picks the best way by itself. Settings › App › Play Together: "Invites work: Anywhere" or "Only on my Wi-Fi".
+- Over the internet the picture now comes as a video stream the browser plays smoothly: on a link that loses a few packets it goes from a few frames a second to a steady 60. If a friend's connection can't carry your stream, the panel tells you to lower its quality.
+- Without internet, the invite becomes a Wi-Fi link by itself, and a friend whose page can't reach the invite service gets "Open on this Wi-Fi".
+- The panel shows how each friend is connected: home network, Tailscale or internet, and the delay.
+
+Share (new):
+
+- Each game and Collection item has Share: send a friend your saves, screenshots and clips, which cheats are on, your controls, a note, and homebrew apps (folder, image or package). Your friend opens the link, accepts, you allow, and it goes straight between you.
+- PS5Upload only shares homebrew: a retail game, its updates and add-ons can't be shared, in any format.
+
+Tailscale:
+
+- Your home network always comes first; Tailscale is only used when the PS5 doesn't answer at home.
+- Already using the Tailscale app? PS5Upload can use it instead of signing in on its own.
+- Pause Tailscale on the PS5 or on this device without signing out, from Settings, Connection, Home, or the console's own page.
+- Only devices you add can reach the PS5 over Tailscale.
+- Names are your device's name plus "-ps5u"; rename any time. Renew a key without losing the address.
+- Its address shows in the console list and on Home; Connection's check runs over Tailscale too; a notice says when a console switches to Tailscale and back. Big uploads over a slow path ask first.
+- A guided setup, and "Try Tailscale now" from home.
+- Things Tailscale can't carry (waking a resting PS5, sending payloads, some installs) now say so instead of timing out.
+- The PS5 goes to sleep and wakes up safely with Tailscale on or paused.
+
+Settings:
+
+- Settings has two tabs: App, and This PS5 with a console picker. Settings that belong to one console (keep awake, rest after uploads, wake for uploads, bring up automatically and its payloads, reconnect after rest, install fallback) are now kept for each console, starting from what you had.
+
+Fixes and smaller changes:
+
+- Mac app: the PS button reaches the PS5 during Remote Play.
+- Controller and pairing checks for AI agents; agents can read and change each console's own settings.
+- AVA1 1.0.7: safer transfers. A shortcut inside a destination folder now stops the transfer with a clear message instead of writing somewhere else.
+- Translations for everything new, in all 21 languages.
+
 ## 12.0.0
 
 Tailscale, built in:
