@@ -85,15 +85,15 @@ if-addrs = "0.15"
 # No crypto feature: str0m's own "rust-crypto" turns on dimpl's rcgen, which builds aws-lc (C) on
 # every target. join_net/crypto.rs is that provider on dimpl's RustCrypto backend instead, with the
 # certificate made by rcgen on ring (already in the tree through rustls).
-str0m = { version = "0.24.1", default-features = false }
-dimpl = { version = "0.7.6", default-features = false, features = ["rust-crypto"] }
+# 0.25 / dimpl 0.9: the RustCrypto 0.14 elliptic curves (0.13's crypto-bigint 0.5 is RUSTSEC-2026-0387).
+# The RustCrypto crates below are the versions dimpl 0.9 uses (AES-GCM and SHA-256: aes-gcm, sha2 above).
+str0m = { version = "0.25", default-features = false }
+dimpl = { version = "0.9", default-features = false, features = ["rust-crypto"] }
 rcgen = { version = "0.14", default-features = false, features = ["ring"] }
-aes = "0.8"
-aes-gcm-srtp = { package = "aes-gcm", version = "0.10", default-features = false, features = ["aes", "alloc"] }
-ctr = "0.9"
-hmac = "0.12"
-sha1 = "0.10"
-sha2-10 = { package = "sha2", version = "0.10" }
+aes = "0.9"
+ctr = "0.10"
+hmac = "0.13"
+sha1 = "0.11"
 # The router's port for those guests (join_net/nat.rs): UPnP-IGD, then NAT-PMP/PCP.
 igd-next = { version = "0.17.1", default-features = false, features = ["aio_tokio"] }
 crab_nat = { version = "0.8.1", default-features = false }

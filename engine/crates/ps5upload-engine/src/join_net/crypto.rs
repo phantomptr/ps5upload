@@ -1,7 +1,8 @@
 //! str0m's crypto on pure Rust: DTLS by dimpl's RustCrypto backend, SRTP, STUN's HMAC-SHA1 and the
-//! certificate fingerprint's SHA-256 by RustCrypto, the certificate itself by rcgen on ring.
+//! certificate fingerprints' SHA-1 and SHA-256 by RustCrypto, the certificate itself by rcgen on
+//! ring.
 //!
-//! Adapted from `str0m-rust-crypto` 0.6.0 (MIT OR Apache-2.0, Copyright (c) the str0m authors),
+//! Adapted from `str0m-rust-crypto` 0.7.0 (the one for str0m 0.25 and dimpl 0.9; MIT OR Apache-2.0, Copyright (c) the str0m authors),
 //! which cannot be used as it is: it turns on dimpl's `rcgen` feature, and with it aws-lc (a C
 //! library) on every target, the phones included. The engine already has ring (through rustls).
 //!
@@ -11,16 +12,17 @@
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
-use aes_gcm_srtp::aead::generic_array::GenericArray;
-use aes_gcm_srtp::aead::{Aead, KeyInit, Payload};
-use aes_gcm_srtp::{Aes128Gcm, Aes256Gcm, Nonce};
+use aes::cipher::Array;
+use aes_gcm::aead::consts::U12;
+use aes_gcm::aead::{Aead, KeyInit, Payload};
+use aes_gcm::{Aes128Gcm, Aes256Gcm, Nonce};
 use ctr::cipher::{KeyIvInit, StreamCipher};
 use str0m::crypto::dtls::{
     DtlsCert, DtlsImplError, DtlsInstance, DtlsOutput, DtlsProvider, DtlsVersion, ProtocolVersion,
 };
 use str0m::crypto::{
     AeadAes128Gcm, AeadAes128GcmCipher, AeadAes256Gcm, AeadAes256GcmCipher, Aes128CmSha1_80Cipher,
-    CryptoError, CryptoProvider, Sha1HmacProvider, Sha256Provider, SrtpProvider,
+    CryptoError, CryptoProvider, Sha1HmacProvider, Sha1Provider, Sha256Provider, SrtpProvider,
     SupportedAeadAes128Gcm, SupportedAeadAes256Gcm, SupportedAes128CmSha1_80,
 };
 
@@ -30,11 +32,13 @@ pub(crate) fn provider() -> Arc<CryptoProvider> {
     P.get_or_init(|| {
         static SRTP: Srtp = Srtp;
         static SHA1_HMAC: Sha1Hmac = Sha1Hmac;
+        static SHA1: Sha1 = Sha1;
         static SHA256: Sha256 = Sha256;
         static DTLS: Dtls = Dtls;
         Arc::new(CryptoProvider {
             srtp_provider: &SRTP,
             sha1_hmac_provider: &SHA1_HMAC,
+            sha1_provider: &SHA1,
             sha256_provider: &SHA256,
             dtls_provider: &DTLS,
         })
@@ -137,7 +141,7 @@ impl DtlsInstance for DtlsConn {
     fn handle_timeout(&mut self, now: Instant) -> Result<(), DtlsImplError> {
         self.0.handle_timeout(now)
     }
-    fn send_application_data(&mut self, data: &[u8]) -> Result<(), DtlsImplError> {
+    fn send_application_data(&mut self, data: &[u8]) -> Result<usize, DtlsImplError> {
         self.0.send_application_data(data)
     }
     fn is_active(&self) -> bool {
@@ -164,8 +168,8 @@ struct Sha1Hmac;
 
 impl Sha1HmacProvider for Sha1Hmac {
     fn sha1_hmac(&self, key: &[u8], payloads: &[&[u8]]) -> [u8; 20] {
-        use hmac::Mac;
-        let mut mac = <hmac::Hmac<sha1::Sha1> as Mac>::new_from_slice(key)
+        use hmac::{KeyInit, Mac};
+        let mut mac = <hmac::Hmac<sha1::Sha1> as KeyInit>::new_from_slice(key)
             .expect("HMAC takes a key of any size");
         for p in payloads {
             mac.update(p);
@@ -175,12 +179,22 @@ impl Sha1HmacProvider for Sha1Hmac {
 }
 
 #[derive(Debug)]
+struct Sha1;
+
+impl Sha1Provider for Sha1 {
+    fn sha1(&self, data: &[u8]) -> [u8; 20] {
+        use sha1::Digest;
+        sha1::Sha1::digest(data).into()
+    }
+}
+
+#[derive(Debug)]
 struct Sha256;
 
 impl Sha256Provider for Sha256 {
     fn sha256(&self, data: &[u8]) -> [u8; 32] {
-        use sha2_10::Digest;
-        sha2_10::Sha256::digest(data).into()
+        use sha2::Digest;
+        sha2::Sha256::digest(data).into()
     }
 }
 
@@ -220,23 +234,23 @@ impl Aes128CmSha1_80Cipher for CmCipher {
     }
 }
 
-fn gcm_seal<C: Aead>(
+fn gcm_seal<C: Aead<NonceSize = U12>>(
     c: &C,
-    iv: &[u8],
+    iv: &[u8; 12],
     aad: &[u8],
     input: &[u8],
     output: &mut [u8],
 ) -> Result<(), CryptoError> {
     let sealed = c
-        .encrypt(Nonce::from_slice(iv), Payload { msg: input, aad })
+        .encrypt(&Nonce::from(*iv), Payload { msg: input, aad })
         .map_err(|e| CryptoError::Other(format!("AES-GCM encrypt: {e:?}")))?;
     output[..sealed.len()].copy_from_slice(&sealed);
     Ok(())
 }
 
-fn gcm_open<C: Aead>(
+fn gcm_open<C: Aead<NonceSize = U12>>(
     c: &C,
-    iv: &[u8],
+    iv: &[u8; 12],
     aads: &[&[u8]],
     input: &[u8],
     output: &mut [u8],
@@ -249,7 +263,7 @@ fn gcm_open<C: Aead>(
         &joined
     };
     let plain = c
-        .decrypt(Nonce::from_slice(iv), Payload { msg: input, aad })
+        .decrypt(&Nonce::from(*iv), Payload { msg: input, aad })
         .map_err(|e| CryptoError::Other(format!("AES-GCM decrypt: {e:?}")))?;
     output[..plain.len()].copy_from_slice(&plain);
     Ok(plain.len())
@@ -327,13 +341,13 @@ impl SupportedAes128CmSha1_80 for Cm {
 
 impl SupportedAeadAes128Gcm for Aead128 {
     fn create_cipher(&self, key: [u8; 16], _encrypt: bool) -> Box<dyn AeadAes128GcmCipher> {
-        Box::new(Gcm128(Aes128Gcm::new(GenericArray::from_slice(&key))))
+        Box::new(Gcm128(Aes128Gcm::new(&key.into())))
     }
 }
 
 impl SupportedAeadAes256Gcm for Aead256 {
     fn create_cipher(&self, key: [u8; 32], _encrypt: bool) -> Box<dyn AeadAes256GcmCipher> {
-        Box::new(Gcm256(Aes256Gcm::new(GenericArray::from_slice(&key))))
+        Box::new(Gcm256(Aes256Gcm::new(&key.into())))
     }
 }
 
@@ -343,13 +357,14 @@ struct Srtp;
 /// One AES-ECB block of `input` then one of PKCS#7 padding (what SRTP's key derivation asks).
 fn ecb_round<C>(c: &C, input: &[u8], output: &mut [u8])
 where
-    C: aes::cipher::BlockEncrypt + aes::cipher::BlockSizeUser<BlockSize = aes::cipher::consts::U16>,
+    C: aes::cipher::BlockCipherEncrypt
+        + aes::cipher::BlockSizeUser<BlockSize = aes::cipher::consts::U16>,
 {
     assert!(input.len() == 16 && output.len() >= 32);
-    let mut b1 = *GenericArray::from_slice(&input[..16]);
+    let mut b1 = Array::try_from(&input[..16]).expect("AES block length");
     c.encrypt_block(&mut b1);
     output[..16].copy_from_slice(&b1);
-    let mut b2 = GenericArray::from([0x10u8; 16]);
+    let mut b2 = Array::from([0x10u8; 16]);
     c.encrypt_block(&mut b2);
     output[16..32].copy_from_slice(&b2);
 }
@@ -367,7 +382,7 @@ impl SrtpProvider for Srtp {
     fn srtp_aes_128_ecb_round(&self, key: &[u8], input: &[u8], output: &mut [u8]) {
         use aes::cipher::KeyInit;
         ecb_round(
-            &aes::Aes128::new(GenericArray::from_slice(key)),
+            &aes::Aes128::new(key.try_into().expect("AES-128 key length")),
             input,
             output,
         );
@@ -375,7 +390,7 @@ impl SrtpProvider for Srtp {
     fn srtp_aes_256_ecb_round(&self, key: &[u8], input: &[u8], output: &mut [u8]) {
         use aes::cipher::KeyInit;
         ecb_round(
-            &aes::Aes256::new(GenericArray::from_slice(key)),
+            &aes::Aes256::new(key.try_into().expect("AES-256 key length")),
             input,
             output,
         );
