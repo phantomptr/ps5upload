@@ -4,15 +4,14 @@
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
-      "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
       "br_where_discord",
       "cw_settings_app_name",
+      "cw_tn_err",
       "ffpkg_inspect_sce_sys",
       "helper_copy_place_pldmgr",
-      "smp_meta_json",
-      "mcp_tab_api"
+      "smp_meta_json"
     ]
   },
   "bn": {
@@ -20,18 +19,18 @@
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
-      "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
       "br_where_discord",
       "cw_settings_app_name",
+      "cw_tn_err",
       "ffpkg_inspect_sce_sys",
       "helper_copy_place_pldmgr",
+      "pc_port_rp",
       "processes_pid",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
-      "smp_meta_json",
-      "mcp_tab_api"
+      "smp_meta_json"
     ]
   },
   "de": {
@@ -39,10 +38,6 @@
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
-      "activity_kind_backport_patch",
-      "activity_kind_cheat_download",
-      "activity_kind_payload_playlist",
-      "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
       "br_where_discord",
@@ -50,17 +45,18 @@
       "cheats_unnamed_mod",
       "console_tab_name",
       "cw_settings_app_name",
+      "cw_tn_err",
       "ffpkg_inspect_sce_sys",
       "game_hub_addons",
       "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
+      "logs_cat_rp",
+      "mcp_api_nav",
+      "pc_port_rp",
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
-      "smp_meta_json",
-      "mcp_api_nav",
-      "mcp_tab_api",
-      "logs_cat_rp"
+      "smp_meta_json"
     ]
   },
   "es": {
@@ -68,22 +64,20 @@
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
-      "activity_kind_backport_patch",
-      "activity_kind_payload_playlist",
-      "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
       "br_where_discord",
       "cw_settings_app_name",
+      "cw_tn_err",
       "ffpkg_inspect_sce_sys",
       "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
+      "logs_cat_rp",
+      "pc_port_rp",
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
-      "smp_meta_json",
-      "mcp_tab_api",
-      "logs_cat_rp"
+      "smp_meta_json"
     ]
   },
   "fa": {
@@ -91,16 +85,16 @@
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
-      "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
       "br_where_discord",
       "cw_settings_app_name",
+      "cw_tn_err",
       "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
-      "remote_play",
-      "mcp_tab_api",
-      "logs_cat_rp"
+      "logs_cat_rp",
+      "pc_port_rp",
+      "remote_play"
     ]
   },
   "fr": {
@@ -108,9 +102,6 @@
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
-      "activity_kind_app_dump",
-      "activity_kind_payload_playlist",
-      "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
       "br_where_discord",
@@ -118,11 +109,12 @@
       "ffpkg_inspect_sce_sys",
       "hardware_systime_via",
       "helper_copy_place_pldmgr",
+      "pc_port_rp",
       "power_wake_signin_rpkey",
       "processes_pid",
+      "pt_way_internet",
       "queue_console_total",
-      "smp_meta_json",
-      "mcp_tab_api"
+      "smp_meta_json"
     ]
   },
   "hi": {
@@ -130,18 +122,18 @@
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
-      "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
       "br_where_discord",
       "cw_settings_app_name",
+      "cw_tn_err",
       "ffpkg_inspect_sce_sys",
       "helper_copy_place_pldmgr",
+      "pc_port_rp",
       "processes_pid",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
-      "smp_meta_json",
-      "mcp_tab_api"
+      "smp_meta_json"
     ]
   },
   "hu": {
@@ -149,24 +141,23 @@
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
-      "activity_kind_backport_patch",
-      "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
       "br_where_discord",
       "cw_settings_app_name",
+      "cw_tn_err",
       "ffpkg_inspect_sce_sys",
       "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
+      "logs_cat_rp",
+      "pc_port_rp",
       "pkglib.auth.fake",
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
-      "smp_meta_json",
-      "mcp_tab_api",
-      "logs_cat_rp"
+      "smp_meta_json"
     ]
   },
   "id": {
@@ -174,26 +165,25 @@
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
-      "activity_kind_backport_patch",
-      "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
       "br_where_discord",
       "cheats_unnamed_mod",
       "cw_settings_app_name",
+      "cw_tn_err",
       "ffpkg_inspect_sce_sys",
       "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
       "kernel_cat_shellui_crash",
+      "logs_cat_rp",
+      "mcp_api_nav",
+      "pc_port_rp",
       "processes_pid",
       "remote_play",
       "search_saved_tooltip",
       "smp_meta_json",
       "status_helper_version",
-      "task_dump",
-      "mcp_api_nav",
-      "mcp_tab_api",
-      "logs_cat_rp"
+      "task_dump"
     ]
   },
   "it": {
@@ -201,29 +191,25 @@
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
-      "activity_kind_app_dump",
-      "activity_kind_backport_patch",
-      "activity_kind_backup_snapshot",
-      "activity_kind_download",
-      "activity_others_short",
       "backup_task_snapshot",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
       "br_where_discord",
       "cw_settings_app_name",
+      "cw_tn_err",
       "ffpkg_inspect_sce_sys",
       "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
       "hw_cpu_core_clock",
+      "logs_cat_rp",
+      "pc_port_rp",
       "processes_pid",
       "remote_play",
       "rp_pip",
       "search_saved_tooltip",
       "shortcuts_sec_filesystem",
       "smp_meta_json",
-      "status_helper_version",
-      "mcp_tab_api",
-      "logs_cat_rp"
+      "status_helper_version"
     ]
   },
   "ja": {
@@ -231,7 +217,6 @@
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
-      "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
       "br_where_discord",
@@ -240,8 +225,7 @@
       "helper_copy_place_pldmgr",
       "processes_pid",
       "screenshots_png_sdr",
-      "smp_meta_json",
-      "mcp_tab_api"
+      "smp_meta_json"
     ]
   },
   "ko": {
@@ -249,18 +233,17 @@
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
-      "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
       "br_where_discord",
       "cw_settings_app_name",
+      "cw_tn_err",
       "ffpkg_inspect_sce_sys",
       "helper_copy_place_pldmgr",
       "processes_pid",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
-      "smp_meta_json",
-      "mcp_tab_api"
+      "smp_meta_json"
     ]
   },
   "pl": {
@@ -268,21 +251,20 @@
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
-      "activity_kind_backport_patch",
-      "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
       "br_where_discord",
       "cw_settings_app_name",
+      "cw_tn_err",
       "ffpkg_inspect_sce_sys",
       "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
+      "logs_cat_rp",
+      "pc_port_rp",
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
-      "smp_meta_json",
-      "mcp_tab_api",
-      "logs_cat_rp"
+      "smp_meta_json"
     ]
   },
   "pt-BR": {
@@ -290,24 +272,20 @@
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
-      "activity_kind_app_dump",
-      "activity_kind_backport_patch",
-      "activity_kind_backup_snapshot",
-      "activity_kind_payload_playlist",
-      "activity_others_short",
       "backup_task_snapshot",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
       "br_where_discord",
       "cw_settings_app_name",
+      "cw_tn_err",
       "ffpkg_inspect_sce_sys",
       "hardware_systime_via",
       "helper_copy_place_pldmgr",
+      "pc_port_rp",
       "power_wake_signin_rpkey",
       "processes_pid",
       "queue_console_total",
-      "smp_meta_json",
-      "mcp_tab_api"
+      "smp_meta_json"
     ]
   },
   "ru": {
@@ -315,19 +293,19 @@
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
-      "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
       "br_where_discord",
       "cw_settings_app_name",
+      "cw_tn_err",
       "ffpkg_inspect_sce_sys",
       "helper_copy_place_pldmgr",
+      "pc_port_rp",
       "power_wake_signin_rpkey",
       "processes_pid",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
-      "smp_meta_json",
-      "mcp_tab_api"
+      "smp_meta_json"
     ]
   },
   "th": {
@@ -335,19 +313,19 @@
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
-      "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
       "br_where_discord",
       "cw_settings_app_name",
+      "cw_tn_err",
       "ffpkg_inspect_sce_sys",
       "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
+      "logs_cat_rp",
+      "pc_port_rp",
       "processes_pid",
       "remote_play",
-      "smp_meta_json",
-      "mcp_tab_api",
-      "logs_cat_rp"
+      "smp_meta_json"
     ]
   },
   "tr": {
@@ -355,22 +333,22 @@
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
-      "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
       "br_where_discord",
       "cw_settings_app_name",
+      "cw_tn_err",
       "ffpkg_inspect_sce_sys",
       "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
+      "logs_cat_rp",
+      "pc_port_rp",
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
-      "smp_meta_json",
-      "mcp_tab_api",
-      "logs_cat_rp"
+      "smp_meta_json"
     ]
   },
   "vi": {
@@ -378,22 +356,21 @@
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
-      "activity_kind_backport_patch",
-      "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
       "br_where_discord",
       "cw_settings_app_name",
+      "cw_tn_err",
       "ffpkg_inspect_sce_sys",
       "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
+      "logs_cat_rp",
+      "pc_port_rp",
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
       "smp_meta_json",
-      "task_dump",
-      "mcp_tab_api",
-      "logs_cat_rp"
+      "task_dump"
     ]
   },
   "zh-CN": {
@@ -401,7 +378,6 @@
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
-      "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
       "br_where_discord",
@@ -410,8 +386,7 @@
       "helper_copy_place_pldmgr",
       "processes_pid",
       "screenshots_png_sdr",
-      "smp_meta_json",
-      "mcp_tab_api"
+      "smp_meta_json"
     ]
   },
   "zh-TW": {
@@ -419,7 +394,6 @@
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
-      "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
       "br_where_discord",
@@ -428,8 +402,7 @@
       "helper_copy_place_pldmgr",
       "processes_pid",
       "screenshots_png_sdr",
-      "smp_meta_json",
-      "mcp_tab_api"
+      "smp_meta_json"
     ]
   }
 }
