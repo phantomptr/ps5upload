@@ -3894,6 +3894,7 @@ gate_engine_down_body_v2: "此畫面需要應用程式的引擎，但引擎沒�
 "fpkg.image.make": "製作遊戲映像",
 "fpkg.image.make_compressed": "製作壓縮映像",
 "fpkg.image.compress_body_v2": "通常小 40–60%，製作較慢，且一律以唯讀方式掛載。它在寫入時即被壓縮，因此磁碟上只會有壓縮後的檔案。",
+"fpkg.image.resume_note": "如果製作映像檔時應用程式或引擎停止，再次製作會從停下的地方繼續，然後回讀每個位元組進行檢查。含 LZ4 或 zstd 資源包的映像檔會從頭開始。",
 "fpkg.image.level_fast_body": "製作最快，檔案稍大。",
 "fpkg.image.level_balanced_body": "檔案幾乎一樣小，製作速度快好幾倍。",
 "fpkg.image.level_smallest_body": "檔案最小：每個區塊都會再用一個更強的編碼器壓縮一次，因此耗時長好幾倍。",

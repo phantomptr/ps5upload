@@ -3943,6 +3943,7 @@ gate_engine_down_body_v2: "Màn hình này cần engine của ứng dụng, như
 "fpkg.image.make": "Tạo ảnh đĩa game",
 "fpkg.image.make_compressed": "Tạo ảnh đĩa nén",
 "fpkg.image.compress_body_v2": "Thường nhỏ hơn 40–60%, tạo lâu hơn và luôn được gắn kết ở chế độ chỉ đọc. Ảnh được nén ngay trong lúc ghi, nên trên đĩa chỉ có tệp đã nén.",
+"fpkg.image.resume_note": "Nếu ứng dụng hoặc engine dừng khi đang tạo ảnh đĩa, tạo lại sẽ tiếp tục từ chỗ đã dừng rồi đọc lại từng byte. Ảnh đĩa có gói tài nguyên LZ4 hoặc zstd sẽ làm lại từ đầu.",
 "fpkg.image.level_fast_body": "Tạo nhanh nhất, lớn hơn một chút.",
 "fpkg.image.level_balanced_body": "Nhỏ gần như tương đương, và tạo nhanh hơn nhiều lần.",
 "fpkg.image.level_smallest_body": "Tệp nhỏ nhất: một bộ mã hóa thứ hai mạnh hơn chạy trên mọi khối, nên mất thời gian gấp nhiều lần.",

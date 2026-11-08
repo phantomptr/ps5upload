@@ -3894,6 +3894,7 @@ gate_engine_down_body_v2: "Esta pantalla necesita el motor de la app, que no res
 "fpkg.image.make": "Crear imagen del juego",
 "fpkg.image.make_compressed": "Crear imagen comprimida",
 "fpkg.image.compress_body_v2": "Suele ser un 40–60 % más pequeña, tarda más en crearse y siempre se monta en solo lectura. Se comprime a medida que se escribe, así que en el disco solo queda el archivo comprimido.",
+"fpkg.image.resume_note": "Si la app o el motor se detienen mientras se crea una imagen, al crearla de nuevo continúa desde donde se quedó y después vuelve a leer cada byte. Una imagen con paquetes de recursos LZ4 o zstd empieza de cero.",
 "fpkg.image.level_fast_body": "Lo más rápido de crear, un poco más grande.",
 "fpkg.image.level_balanced_body": "Casi igual de pequeño y varias veces más rápido de crear.",
 "fpkg.image.level_smallest_body": "El archivo más pequeño: un segundo codificador más potente procesa cada bloque, así que tarda varias veces más.",

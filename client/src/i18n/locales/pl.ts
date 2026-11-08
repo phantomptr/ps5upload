@@ -4182,6 +4182,7 @@ gate_engine_down_body_v2: "Ten ekran potrzebuje silnika aplikacji, który nie od
 "fpkg.image.make": "Utwórz obraz gry",
 "fpkg.image.make_compressed": "Utwórz skompresowany obraz",
 "fpkg.image.compress_body_v2": "Zwykle o 40–60% mniejszy, wolniej powstaje i zawsze jest montowany tylko do odczytu. Jest kompresowany w trakcie zapisu, więc na dysku jest tylko skompresowany plik.",
+"fpkg.image.resume_note": "Jeśli aplikacja lub silnik zatrzyma się podczas tworzenia obrazu, ponowne tworzenie wznowi pracę od miejsca przerwania, a potem odczyta każdy bajt. Obraz z paczkami zasobów LZ4 lub zstd zaczyna od nowa.",
 "fpkg.image.level_fast_body": "Najszybciej powstaje, jest nieco większy.",
 "fpkg.image.level_balanced_body": "Prawie tak samo mały, a powstaje kilka razy szybciej.",
 "fpkg.image.level_smallest_body": "Najmniejszy plik: na każdym bloku działa drugi, mocniejszy koder, więc trwa to kilka razy dłużej.",

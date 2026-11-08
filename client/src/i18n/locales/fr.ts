@@ -3957,6 +3957,7 @@ gate_engine_down_body_v2: "Cet écran a besoin du moteur de l'application, qui n
 "fpkg.image.make": "Créer l'image du jeu",
 "fpkg.image.make_compressed": "Créer une image compressée",
 "fpkg.image.compress_body_v2": "Généralement 40–60 % plus petite, plus lente à créer et toujours montée en lecture seule. Elle est compressée pendant l'écriture : seul le fichier compressé existe sur le disque.",
+"fpkg.image.resume_note": "Si l'application ou le moteur s'arrête pendant la création d'une image, la relancer reprend là où elle s'était arrêtée, puis relit chaque octet. Une image avec des packs de ressources LZ4 ou zstd recommence du début.",
 "fpkg.image.level_fast_body": "Le plus rapide à créer, un peu plus gros.",
 "fpkg.image.level_balanced_body": "Presque aussi petit, et plusieurs fois plus rapide à créer.",
 "fpkg.image.level_smallest_body": "Le fichier le plus petit : un second encodeur, plus puissant, passe sur chaque bloc, ce qui prend plusieurs fois plus de temps.",

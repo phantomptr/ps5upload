@@ -3960,6 +3960,7 @@ gate_engine_down_body_v2: "この画面にはアプリのエンジンが必要�
 "fpkg.image.make": "ゲームイメージを作成",
 "fpkg.image.make_compressed": "圧縮イメージを作成",
 "fpkg.image.compress_body_v2": "通常 40〜60% 小さくなりますが作成に時間がかかり、常に読み取り専用でマウントされます。書き込みながら圧縮するため、ディスク上には圧縮済みのファイルだけが残ります。",
+"fpkg.image.resume_note": "イメージの作成中にアプリやエンジンが止まっても、もう一度作成すると止まったところから続け、その後すべてのバイトを読み戻して確認します。LZ4 や zstd のアセットパック入りのイメージは最初からやり直します。",
 "fpkg.image.level_fast_body": "作成が最も速く、少し大きくなります。",
 "fpkg.image.level_balanced_body": "サイズはほぼ同じで、作成は数倍速くなります。",
 "fpkg.image.level_smallest_body": "最も小さいファイル：すべてのブロックでより強力な2つ目のエンコーダーを実行するため、数倍の時間がかかります。",
