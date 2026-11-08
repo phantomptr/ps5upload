@@ -10177,8 +10177,18 @@
             "description": "PARAM.SFO CATEGORY (`gd`/`gp`/`ac`…).",
             "type": "string"
           },
+          "content_flags": {
+            "description": "The container header's `content_flags` (0x78); 0 when not read.",
+            "minimum": 0,
+            "type": "integer"
+          },
           "content_id": {
             "type": "string"
+          },
+          "content_type": {
+            "description": "The container header's `content_type` (0x74); 0 when not read. See [`kind::classify`].",
+            "minimum": 0,
+            "type": "integer"
           },
           "fingerprint": {
             "description": "Optional sampled artifact identity. `metadata_from_reader` leaves this\nempty because it does not know the total file size; remote callers that\ndo know it can populate the field with\n[`package_fingerprint_from_reader`].",
@@ -10203,7 +10213,9 @@
           "app_ver",
           "platform",
           "authenticity",
-          "fingerprint"
+          "fingerprint",
+          "content_type",
+          "content_flags"
         ],
         "type": "object"
       },
