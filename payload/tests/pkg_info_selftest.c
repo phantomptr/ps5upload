@@ -188,6 +188,16 @@ static void ps5_image(void) {
     put_be32(g_buf + 0x1000 + 0x78, 0x00100000u);
     CHECK(parse(n, &o) == NULL);
     CHECK(strcmp(pkg_info_kind(&o), "patch") == 0);
+
+    /* #724: an add-on's param.json has no category either; its content type (0x21) says it */
+    put_be32(g_buf + 0x1000 + 0x78, 0x0a020000u);
+    put_be32(g_buf + 0x1000 + 0x74, 0x21u);
+    CHECK(parse(n, &o) == NULL);
+    CHECK(strcmp(o.category, "ac") == 0);
+    CHECK(strcmp(pkg_info_kind(&o), "dlc") == 0);
+    put_be32(g_buf + 0x1000 + 0x74, 0x20u);
+    CHECK(parse(n, &o) == NULL);
+    CHECK(strcmp(pkg_info_kind(&o), "game") == 0);
 }
 
 static void damaged(void) {
