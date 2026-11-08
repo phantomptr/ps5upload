@@ -816,7 +816,8 @@ fn invites_work_is_saved_and_an_old_off_reads_as_wifi() {
 /// why it is the one.
 #[test]
 fn the_one_link_says_where_it_works() {
-    let lan = Some("http://192.168.1.10:19113/join#i=k");
+    let home = "http://192.168.1.10:19113/join#i=k";
+    let lan = Some(home);
     let net = serde_json::json!({"url": "https://x/join/#room=r", "offline": false});
     assert_eq!(
         share_json(lan, Some(&net), true),
@@ -824,7 +825,7 @@ fn the_one_link_says_where_it_works() {
     );
     let down = serde_json::json!({"url": "https://x/join/#room=r", "offline": true});
     assert_eq!(share_json(lan, Some(&down), true)["why"], "offline");
-    assert_eq!(share_json(lan, Some(&down), true)["url"], lan.unwrap());
+    assert_eq!(share_json(lan, Some(&down), true)["url"], home);
     assert_eq!(share_json(lan, None, false)["why"], "setting");
     assert_eq!(share_json(lan, None, true)["why"], "local");
     // An older engine's room json has no `offline`: its link stands.
