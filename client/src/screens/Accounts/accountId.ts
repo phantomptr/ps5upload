@@ -62,7 +62,7 @@ export function formatAccountId(id: string | null | undefined): string {
  *  bytes straight into a `uint64_t` (offact.c:63) — on the console's x86-64
  *  that IS the little-endian reading — and the base64 is taken over the
  *  bytes in memory order, so the hex digits are emitted low byte first.
- *  Verified against both consoles: 0x7a356e99a9e2205c -> "XCDiqZluNXo=".
+ *  Verified against both consoles: 0x1122334455667788 -> "iHdmVUQzIhE=".
  *
  *  Bytes only, never a number: pairing rejects anything that does not
  *  decode to exactly 8 bytes, and a rounded id would decode to 8 perfectly

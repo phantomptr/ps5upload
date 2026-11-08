@@ -5,7 +5,7 @@ import { userInfoFileName, userInfoSummary } from "./userInfoSummary";
 
 describe("accountIdToDecimal", () => {
   it("is exact for a full 64-bit id (no rounding)", () => {
-    expect(accountIdToDecimal("0x7a356e99a9e2205c")).toBe("8806066252652093532");
+    expect(accountIdToDecimal("0x1122334455667788")).toBe("1234605616436508552");
     expect(accountIdToDecimal("0xffffffffffffffff")).toBe("18446744073709551615");
     expect(accountIdToDecimal("0x1a85")).toBe("6789");
     expect(accountIdToDecimal("6789")).toBe("6789"); // decimal in, decimal out
@@ -27,7 +27,7 @@ const info: ProfileInfo = {
     { uid: 0x10000001, uid_hex: "0x10000001", username: "Bob" },
   ],
   slots: [
-    { slot: 1, name: "Alice", type: "PSN", flags: 0x1002, id: "0x7a356e99a9e2205c", activated: true, offline_activated: true },
+    { slot: 1, name: "Alice", type: "PSN", flags: 0x1002, id: "0x1122334455667788", activated: true, offline_activated: true },
     { slot: 3, name: "Old", type: "", flags: 0, id: "0x1234", activated: true, offline_activated: false },
   ],
 };
@@ -62,9 +62,9 @@ describe("userInfoSummary", () => {
 
   it("lists every user with the account ID in every form", () => {
     expect(text).toContain("1. Alice   [signed in now]");
-    expect(text).toContain("Account ID (hex):    0x7a356e99a9e2205c");
-    expect(text).toContain("Account ID (decimal): 8806066252652093532");
-    expect(text).toContain("Account ID (base64): XCDiqZluNXo=");
+    expect(text).toContain("Account ID (hex):    0x1122334455667788");
+    expect(text).toContain("Account ID (decimal): 1234605616436508552");
+    expect(text).toContain("Account ID (base64): iHdmVUQzIhE=");
     expect(text).toContain("Account state:       activated offline");
     expect(text).toContain("Online ID:           alice_ps");
     expect(text).toContain("Sign-in backup kept: yes (slot 1)");

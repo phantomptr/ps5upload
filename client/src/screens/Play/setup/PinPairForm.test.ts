@@ -13,25 +13,25 @@ describe("pairing with the PIN shown on the PS5", () => {
   });
 
   it("needs all eight digits and a readable account id", () => {
-    expect(canPairWithPin("12345678", "0x7a356e99a9e2205c")).toBe(true);
+    expect(canPairWithPin("12345678", "0x1122334455667788")).toBe(true);
     // The base64 chiaki-ng shows works too.
-    expect(canPairWithPin("12345678", "XCDiqZluNXo=")).toBe(true);
-    expect(canPairWithPin("1234567", "0x7a356e99a9e2205c")).toBe(false);
+    expect(canPairWithPin("12345678", "iHdmVUQzIhE=")).toBe(true);
+    expect(canPairWithPin("1234567", "0x1122334455667788")).toBe(false);
     expect(canPairWithPin("12345678", "")).toBe(false);
     expect(canPairWithPin("12345678", "not an id")).toBe(false);
   });
 
   it("asks the engine to register with the typed PIN and account, no helper needed", async () => {
     const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({ credential: "1", regist_key: "", rp_key: "", nickname: "PS5", mac: "", account_id_b64: "XCDiqZluNXo=", account_via: "manual_pin" }), {
+      new Response(JSON.stringify({ credential: "1", regist_key: "", rp_key: "", nickname: "PS5", mac: "", account_id_b64: "iHdmVUQzIhE=", account_via: "manual_pin" }), {
         status: 200,
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
-    await pairForWake("192.168.1.100", undefined, { pin: "12345678", accountIdB64: "XCDiqZluNXo=" });
+    await pairForWake("192.168.1.100", undefined, { pin: "12345678", accountIdB64: "iHdmVUQzIhE=" });
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toMatch(/\/api\/ps5\/power\/pair$/);
-    expect(JSON.parse(String(init.body))).toEqual({ host: "192.168.1.100", pin: "12345678", account_id: "XCDiqZluNXo=" });
+    expect(JSON.parse(String(init.body))).toEqual({ host: "192.168.1.100", pin: "12345678", account_id: "iHdmVUQzIhE=" });
   });
 
   it("automatic pairing sends no PIN, and its failure carries the engine's reason", async () => {

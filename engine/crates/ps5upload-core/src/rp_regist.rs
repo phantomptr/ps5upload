@@ -714,7 +714,7 @@ mod tests {
     #[test]
     fn the_body_is_padding_then_ciphertext() {
         let nonce = [3u8; NONCE_LEN];
-        let body = build_request_body("XCDiqZluNXo=", 12345678, &nonce).body;
+        let body = build_request_body("iHdmVUQzIhE=", 12345678, &nonce).body;
         assert!(body.len() > PADDING_BYTES);
         assert_eq!(&body[..8], b"AAAAAAAA");
         // The record must not be recognisable in the clear.
@@ -727,11 +727,11 @@ mod tests {
         // The console uses the same key and IV in both directions, so a
         // round trip here is the same operation the reply goes through.
         let nonce = [9u8; NONCE_LEN];
-        let built = build_request_body("XCDiqZluNXo=", 99887766, &nonce);
+        let built = build_request_body("iHdmVUQzIhE=", 99887766, &nonce);
         let mut plain = built.body[PADDING_BYTES..].to_vec();
         Aes128CfbDec::new(&built.seed.into(), &built.iv.into()).decrypt(&mut plain);
         let text = String::from_utf8_lossy(&plain);
-        assert!(text.contains("Np-AccountId: XCDiqZluNXo="));
+        assert!(text.contains("Np-AccountId: iHdmVUQzIhE="));
         assert!(text.contains(CLIENT_TYPE));
     }
 

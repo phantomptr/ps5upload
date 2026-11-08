@@ -138,7 +138,7 @@ static int f_ioctl(int fd, unsigned long req, void *arg) {
 static const vpad_hid_t FAKE = {f_open, f_ioctl, f_close};
 
 static int g_picks;
-static uint32_t g_pick_uid = 0x1e24b13c;
+static uint32_t g_pick_uid = 0x10000002;
 static uint32_t pick(void) {
     g_picks++;
     return g_pick_uid;
@@ -185,7 +185,7 @@ static void fresh(void) {
     vpad_set_hid(&FAKE); /* removes every pad and clears a stop */
     fake_reset();
     g_picks = 0;
-    g_pick_uid = 0x1e24b13c;
+    g_pick_uid = 0x10000002;
 }
 
 /* ---- tests ---- */
@@ -224,7 +224,7 @@ static void test_encode(void) {
 
 static void test_home_user(void) {
     char dir[] = "/tmp/vpad-home-XXXXXX", p[128];
-    const char *names[] = {"zz", "1e24b13c", "0000000a", "abc", "00000000", "1234567g"};
+    const char *names[] = {"zz", "10000002", "0000000a", "abc", "00000000", "1234567g"};
     CHECK(mkdtemp(dir) != NULL);
     for (size_t i = 0; i < sizeof names / sizeof names[0]; i++) {
         snprintf(p, sizeof p, "%s/%s", dir, names[i]);
@@ -270,7 +270,7 @@ static void test_open_resume_busy(void) {
     CHECK(f_adds == 1 && f_pads[h].live);
 
     /* no user named: the foreground (pick) */
-    CHECK(vopen("{\"slot\":3,\"token\":\"" TOK_B "\"}", 2000) > 0 && HAS("\"ok\":true") && HAS("\"user\":505721148"));
+    CHECK(vopen("{\"slot\":3,\"token\":\"" TOK_B "\"}", 2000) > 0 && HAS("\"ok\":true") && HAS("\"user\":268435458"));
     CHECK(g_picks == 1 && f_adds == 2);
     /* nobody signed in */
     g_pick_uid = 0;

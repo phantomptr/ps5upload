@@ -24,11 +24,11 @@ const T0: i64 = 1_000_000;
 #[test]
 fn a_new_pin_waits_with_a_countdown() {
     let _g = fresh();
-    rp::set_gen(0, 36876659);
+    rp::set_gen(0, 43218765);
     assert_eq!(rp::request(T0), 0);
     let v = rp::view(T0);
     assert_eq!(v.state, WAITING);
-    assert_eq!(v.pin, "36876659");
+    assert_eq!(v.pin, "43218765");
     assert_eq!(v.seconds_left, 300);
     // Confirm says 0 (nobody registered yet), as measured on the console.
     rp::set_confirm(0, 0, 0);
