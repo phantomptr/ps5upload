@@ -8135,6 +8135,15 @@ rp_users_add_hint: "Untuk bermain juga sebagai pengguna lain, masuk ke pengguna 
 "pt_set_stun_bad": "Satu host:port per baris, paling banyak {n}.",
 "pt_set_failed": "Mesin tidak menerima pengaturan ini. Coba lagi.",
 "join_net_lost": "Koneksi ke {host} terputus. Periksa koneksi internetmu, lalu minta lagi.",
+"pt_start_invite": "Mulai dan undang",
+"pt_show_invite": "Tampilkan di sini dan undang",
+"pt_switch_invite": "Hentikan stream lain, mulai dan undang",
+"pt_tab_intro": "Teman bermain sebagai Pemain 2, 3, dan 4 dari ponsel, tablet, atau komputer mereka, di browser. Tanpa aplikasi.",
+"pt_tab_console": "PS5 kamu",
+"pt_tab_where": "Di mana teman-temanmu?",
+"net_internet_support": "Main lewat internet berjalan di server kecil yang kami bayar. Kalau ini membantumu, donasi membuatnya tetap jalan. Terima kasih!",
+"pt_elsewhere": "Main dari tempat lain? Pilih Internet di atas.",
+"pt_elsewhere_guest": "Main dari tempat lain? Minta temanmu mengundang lewat Internet, lalu buka tautannya di browser.",
 };
 
 export default id;

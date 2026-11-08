@@ -8367,6 +8367,15 @@ rp_users_add_hint: "Aby grać także jako inny użytkownik, zaloguj się na nim 
 "pt_set_stun_bad": "Jeden host:port w wierszu, najwyżej {n}.",
 "pt_set_failed": "Silnik nie przyjął tego ustawienia. Spróbuj ponownie.",
 "join_net_lost": "Połączenie z {host} zostało przerwane. Sprawdź połączenie internetowe i poproś ponownie.",
+"pt_start_invite": "Uruchom i zaproś",
+"pt_show_invite": "Pokaż tutaj i zaproś",
+"pt_switch_invite": "Zatrzymaj inny stream, uruchom i zaproś",
+"pt_tab_intro": "Znajomi grają jako Gracz 2, 3 i 4 na telefonie, tablecie lub komputerze, w przeglądarce. Bez instalowania aplikacji.",
+"pt_tab_console": "Twoja PS5",
+"pt_tab_where": "Gdzie są twoi znajomi?",
+"net_internet_support": "Gra przez internet działa na małym serwerze, za który płacimy. Jeśli ci się przydaje, darowizna pomaga go utrzymać. Dziękujemy!",
+"pt_elsewhere": "Gracie z innego miejsca? Wybierz Internet powyżej.",
+"pt_elsewhere_guest": "Grasz z innego miejsca? Poproś znajomego o zaproszenie przez Internet i otwórz jego link w przeglądarce.",
 };
 
 export default pl;

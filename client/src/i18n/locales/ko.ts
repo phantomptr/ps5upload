@@ -8143,6 +8143,15 @@ rp_users_add_hint: "다른 사용자로도 플레이하려면 PS5에서 그 사�
 "pt_set_stun_bad": "한 줄에 host:port 하나, 최대 {n}개.",
 "pt_set_failed": "엔진이 이 설정을 받지 않았어요. 다시 시도하세요.",
 "join_net_lost": "{host}와의 연결이 끊겼어요. 인터넷 연결을 확인한 다음 다시 요청하세요.",
+"pt_start_invite": "시작하고 초대",
+"pt_show_invite": "여기에 표시하고 초대",
+"pt_switch_invite": "다른 스트림을 멈추고 시작·초대",
+"pt_tab_intro": "친구는 휴대폰, 태블릿, 컴퓨터의 브라우저에서 플레이어 2, 3, 4로 함께 플레이합니다. 앱이 필요 없습니다.",
+"pt_tab_console": "내 PS5",
+"pt_tab_where": "친구는 어디에 있나요?",
+"net_internet_support": "인터넷 플레이는 저희가 비용을 내는 작은 서버에서 돌아갑니다. 도움이 되셨다면 후원으로 계속 운영할 수 있어요. 감사합니다!",
+"pt_elsewhere": "다른 곳에서 플레이하나요? 위에서 인터넷을 고르세요.",
+"pt_elsewhere_guest": "다른 곳에서 플레이하나요? 친구에게 인터넷으로 초대해 달라고 한 뒤, 그 링크를 브라우저에서 여세요.",
 };
 
 export default ko;

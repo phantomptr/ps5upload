@@ -8142,6 +8142,15 @@ rp_users_add_hint: "Pour jouer aussi avec un autre utilisateur, connectez-vous �
 "pt_set_stun_bad": "Un hôte:port par ligne, {n} au maximum.",
 "pt_set_failed": "Le moteur n'a pas accepté ce réglage. Réessayez.",
 "join_net_lost": "La connexion à {host} a été coupée. Vérifiez votre connexion Internet, puis redemandez.",
+"pt_start_invite": "Lancer et inviter",
+"pt_show_invite": "Afficher ici et inviter",
+"pt_switch_invite": "Arrêter l'autre stream, lancer et inviter",
+"pt_tab_intro": "Vos amis jouent en Joueur 2, 3 et 4 depuis leur téléphone, tablette ou ordinateur, dans le navigateur. Aucune appli requise.",
+"pt_tab_console": "Votre PS5",
+"pt_tab_where": "Où sont vos amis ?",
+"net_internet_support": "Le jeu par Internet passe par un petit serveur que nous payons. S'il vous est utile, un don le fait tourner. Merci !",
+"pt_elsewhere": "Vous jouez d'ailleurs ? Choisissez Internet ci-dessus.",
+"pt_elsewhere_guest": "Vous jouez d'ailleurs ? Demandez à votre ami de vous inviter via Internet, puis ouvrez son lien dans votre navigateur.",
 };
 
 export default fr;

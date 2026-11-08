@@ -8134,6 +8134,15 @@ rp_users_add_hint: "Um auch als anderer Benutzer zu spielen, melde dich auf der 
 "pt_set_stun_bad": "Ein host:port pro Zeile, höchstens {n}.",
 "pt_set_failed": "Die Engine hat diese Einstellung nicht übernommen. Versuche es erneut.",
 "join_net_lost": "Die Verbindung zu {host} ist abgebrochen. Prüfe deine Internetverbindung und frage dann erneut.",
+"pt_start_invite": "Starten und einladen",
+"pt_show_invite": "Hier zeigen und einladen",
+"pt_switch_invite": "Anderen Stream stoppen, starten und einladen",
+"pt_tab_intro": "Freunde spielen als Spieler 2, 3 und 4 mit – vom Handy, Tablet oder Computer, im Browser. Keine App nötig.",
+"pt_tab_console": "Deine PS5",
+"pt_tab_where": "Wo sind deine Freunde?",
+"net_internet_support": "Spielen übers Internet läuft über einen kleinen Server, den wir bezahlen. Wenn es dir hilft, hält eine Spende ihn am Laufen. Danke!",
+"pt_elsewhere": "Spielt ihr von woanders? Wähle oben Internet.",
+"pt_elsewhere_guest": "Spielst du von woanders? Bitte deinen Freund, dich über Internet einzuladen, und öffne den Link im Browser.",
 };
 
 export default de;

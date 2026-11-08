@@ -8431,6 +8431,15 @@ rp_users_add_hint: "To play as another user too, sign in to that user on the PS5
 "pt_set_stun_bad": "One host:port per line, at most {n}.",
 "pt_set_failed": "The engine didn't take this setting. Try again.",
 "join_net_lost": "The connection to {host} dropped. Check your internet connection, then ask again.",
+"pt_start_invite": "Start and invite",
+"pt_show_invite": "Show it here and invite",
+"pt_switch_invite": "Stop the other stream, start and invite",
+"pt_tab_intro": "Friends play along as Player 2, 3 and 4 from their phone, tablet or computer, in the browser. No app needed.",
+"pt_tab_console": "Your PS5",
+"pt_tab_where": "Where are your friends?",
+"net_internet_support": "Internet play runs on a small server we pay for. If it helps you, a donation keeps it going. Thank you!",
+"pt_elsewhere": "Playing from somewhere else? Choose Internet above.",
+"pt_elsewhere_guest": "Playing from somewhere else? Ask your friend to invite you with Internet, then open their link in your browser.",
 };
 
 export default en;

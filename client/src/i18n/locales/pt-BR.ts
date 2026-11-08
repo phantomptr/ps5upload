@@ -8141,6 +8141,15 @@ rp_users_add_hint: "Para jogar também como outro usuário, entre com esse usuá
 "pt_set_stun_bad": "Um host:porta por linha, no máximo {n}.",
 "pt_set_failed": "O motor não aceitou essa configuração. Tente de novo.",
 "join_net_lost": "A conexão com {host} caiu. Verifique sua conexão de internet e peça de novo.",
+"pt_start_invite": "Iniciar e convidar",
+"pt_show_invite": "Mostrar aqui e convidar",
+"pt_switch_invite": "Parar a outra transmissão, iniciar e convidar",
+"pt_tab_intro": "Seus amigos jogam como Jogador 2, 3 e 4 pelo celular, tablet ou computador, no navegador. Sem precisar de app.",
+"pt_tab_console": "Seu PS5",
+"pt_tab_where": "Onde estão seus amigos?",
+"net_internet_support": "Jogar pela internet usa um pequeno servidor que nós pagamos. Se isso te ajuda, uma doação o mantém funcionando. Obrigado!",
+"pt_elsewhere": "Jogando de outro lugar? Escolha Internet acima.",
+"pt_elsewhere_guest": "Jogando de outro lugar? Peça ao seu amigo para convidar você pela Internet e abra o link dele no navegador.",
 };
 
 export default pt_BR;

@@ -8085,6 +8085,15 @@ rp_users_add_hint: "若也想以其他用户游玩，请在 PS5 上登录该用�
 "pt_set_stun_bad": "每行一个 host:port，最多 {n} 个。",
 "pt_set_failed": "引擎没有接受此设置。请重试。",
 "join_net_lost": "与 {host} 的连接已断开。请检查你的互联网连接，然后重新请求。",
+"pt_start_invite": "开始并邀请",
+"pt_show_invite": "在这里显示并邀请",
+"pt_switch_invite": "停止另一个串流，开始并邀请",
+"pt_tab_intro": "好友用手机、平板或电脑的浏览器，以玩家 2、3、4 的身份一起玩。无需安装应用。",
+"pt_tab_console": "你的 PS5",
+"pt_tab_where": "你的好友在哪里？",
+"net_internet_support": "互联网游玩运行在我们付费的一台小服务器上。如果它对你有帮助，捐助能让它继续运行。谢谢！",
+"pt_elsewhere": "在别处玩？在上方选择互联网。",
+"pt_elsewhere_guest": "在别处玩？请好友用互联网邀请你，然后在浏览器中打开他们的链接。",
 };
 
 export default zh_CN;
