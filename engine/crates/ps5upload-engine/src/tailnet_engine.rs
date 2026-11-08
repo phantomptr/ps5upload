@@ -225,7 +225,7 @@ impl TailnetEngine {
         }
     }
 
-    /// enable / disable / logout from Settings › Tailscale.
+    /// enable / disable / logout / rename from Settings › Tailscale.
     pub fn op(
         &self,
         op: &str,
@@ -270,6 +270,28 @@ impl TailnetEngine {
                     if let Some(d) = &self.dir {
                         let _ = std::fs::remove_file(d.join("tailnet-state.json"));
                     }
+                }
+            }
+            // This device's name on the tailnet, any time: kept while off, and applied now
+            // (the node starts again under it) while on. The address does not change.
+            "rename" => {
+                let name = hostname.trim();
+                if name.is_empty() || name.len() > 63 {
+                    anyhow::bail!("a device name is 1 to 63 characters");
+                }
+                let restart = {
+                    let mut s = self.settings.lock().unwrap_or_else(|p| p.into_inner());
+                    if s.hostname == name {
+                        false
+                    } else {
+                        s.hostname = name.to_string();
+                        save(&self.dir, "settings.json", &*s);
+                        s.enabled
+                    }
+                };
+                if restart {
+                    self.stop();
+                    self.start("")?;
                 }
             }
             "status" | "" => {}
@@ -422,6 +444,8 @@ impl TailnetEngine {
             "enabled": s.enabled,
             "control_url": if s.control_url.is_empty() { DEFAULT_CONTROL_URL.to_string() } else { s.control_url.clone() },
             "hostname": s.hostname,
+            // Signed in once and kept (off is then a pause), as against never signed in.
+            "signed_in": self.dir.as_ref().is_some_and(|d| d.join("tailnet-state.json").exists()),
             "state": st.as_ref().map(|s| s.state.clone()).unwrap_or_else(|| "off".into()),
             "login_url": st.as_ref().map(|s| s.login_url.clone()).unwrap_or_default(),
             "ip": st.as_ref().and_then(|s| s.ip).map(|i| i.to_string()).unwrap_or_default(),
@@ -489,5 +513,45 @@ impl Router for TailnetEngine {
             },
             _ => Via::TailnetRelayed,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn engine_in(dir: &std::path::Path) -> TailnetEngine {
+        let dir = Some(dir.to_path_buf());
+        TailnetEngine {
+            settings: Mutex::new(load(&dir, "settings.json").unwrap_or_default()),
+            known: Mutex::new(Vec::new()),
+            dir,
+            node: Mutex::new(None),
+            state: Mutex::new(HashMap::new()),
+            last_error: Mutex::new(String::new()),
+            last_warning: Mutex::new(String::new()),
+        }
+    }
+
+    #[test]
+    fn rename_while_off_keeps_it_off_and_saves_the_name() {
+        let tmp = std::env::temp_dir().join(format!("tn-rename-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmp);
+        let e = engine_in(&tmp);
+        let st = e.op("rename", "", "  Living room laptop  ", "").unwrap();
+        assert_eq!(st["hostname"], "Living room laptop");
+        assert_eq!(st["enabled"], false);
+        assert_eq!(st["signed_in"], false);
+        // Kept for the next start.
+        assert_eq!(
+            engine_in(&tmp).settings.lock().unwrap().hostname,
+            "Living room laptop"
+        );
+        assert!(e.op("rename", "", "   ", "").is_err());
+        assert!(e.op("rename", "", &"x".repeat(64), "").is_err());
+        // A sign-in kept on disk reads as signed in (off is then a pause).
+        std::fs::write(tmp.join("tailnet-state.json"), "{}").unwrap();
+        assert_eq!(e.status_json()["signed_in"], true);
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

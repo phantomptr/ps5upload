@@ -132,6 +132,8 @@ export interface AppTailnetStatus {
   error: string;
   /** Something to know while it runs (the key expires soon); absent from an older engine. */
   warning?: string;
+  /** Has a sign-in kept on this device: off is then a pause. Absent from an older engine. */
+  signed_in?: boolean;
   peers: TailnetPeer[];
   consoles: AppTailnetConsole[];
 }
