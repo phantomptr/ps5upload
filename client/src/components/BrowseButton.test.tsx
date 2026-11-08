@@ -91,6 +91,44 @@ describe("BrowseButton", () => {
     }
   });
 
+  it("web UI: offers the server and this device, each naming the machine and the cost (#730)", () => {
+    const out = renderToStaticMarkup(
+      <BrowseMenu
+        connections={[c("nas-1", "NAS", "smb")]}
+        status={{}}
+        onLocal={noop}
+        onPickServer={noop}
+        onAdd={noop}
+        onThisDevice={noop}
+        servers={false}
+      />,
+    );
+    expect(out).toContain("On the server");
+    expect(out).toContain("the computer the engine runs on");
+    expect(out).toContain("This device");
+    expect(out).toContain("the server needs free space");
+    expect(out.indexOf("On the server")).toBeLessThan(out.indexOf("This device"));
+    expect(out).not.toContain("This computer");
+    // Folders read no saved server: none listed.
+    expect(out).not.toContain("NAS");
+    expect(out).not.toContain("Add a connection");
+  });
+
+  it("web UI: a folder button gets the source menu; the desktop button stays plain (#730)", () => {
+    const web = renderToStaticMarkup(<BrowseButton mode="folder" thisDevice={noop} onPick={noop} />);
+    expect(web).toContain('aria-haspopup="menu"');
+    expect(web).toContain("Choose where to read from");
+    const desktop = renderToStaticMarkup(<BrowseButton mode="folder" onPick={noop} />);
+    expect(desktop).not.toContain("aria-haspopup");
+    // The desktop's Add files menu is unchanged: This computer and the servers.
+    const files = renderToStaticMarkup(
+      <BrowseMenu connections={[c("nas-1", "NAS", "smb")]} status={{}} onLocal={noop} onPickServer={noop} onAdd={noop} />,
+    );
+    expect(files).toContain("This computer");
+    expect(files).not.toContain("On the server");
+    expect(files).toContain("NAS");
+  });
+
   it("shows a remote path by its server's name, and a local path as is", () => {
     const nameOf = (id: string) => (id === "nas-1" ? "NAS" : undefined);
     expect(

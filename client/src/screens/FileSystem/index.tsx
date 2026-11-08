@@ -141,8 +141,14 @@ import {
   FS_DEFAULT_PATH,
 } from "../../lib/fsLastPath";
 import { useFsNavStore } from "../../state/fsNavigation";
-import { stageBrowserFile } from "../../api/pkgUpload";
-import { isStagingCancelled, noteStaged, stageWithTask } from "../../lib/browserStaging";
+import { isStagingCancelled } from "../../lib/browserStaging";
+import {
+  droppedItems,
+  picksFromDrop,
+  picksFromInput,
+  stagePicksWithTask,
+  type DevicePick,
+} from "../../lib/devicePick";
 import { dragOut, dragOutAvailable, isDragOutCopy } from "../../lib/dragOut";
 import { beginTask, trackTask } from "../../state/trackTask";
 import { useActivityHistoryStore } from "../../state/activityHistory";
@@ -1495,8 +1501,42 @@ export default function FileSystemScreen() {
     (paths) => void addPicked(paths.filter((p) => !isDragOutCopy(p))),
     canDropHere,
   );
-  // The web UI gets the browser's own file drop instead: each file goes up to the server the
-  // engine runs on, then into this folder like any picked file. A folder cannot be read that way.
+  /** Web UI, "This device…" and a drop: the picks go up to the server the engine runs on (one
+   *  task, with a Cancel), then into this folder like any picked file or folder. A cancel or a
+   *  failure removes every copy made on the server. */
+  const addFromDevice = async (picks: DevicePick[]) => {
+    const sendable = picks.filter((p) => p.kind === "file" || p.files.length > 0);
+    if (sendable.length < picks.length)
+      pushNotification(
+        "info",
+        tr("fs_device_empty_folder", undefined, "Empty folders aren't sent from a browser"),
+      );
+    if (sendable.length === 0) return;
+    setError(null);
+    let paths: string[];
+    try {
+      paths = await stagePicksWithTask(sendable);
+    } catch (e) {
+      if (!isStagingCancelled(e)) setError(humanizeCaught(e));
+      return;
+    }
+    const kind = sendable.every((p) => p.kind === "file")
+      ? "file"
+      : sendable.every((p) => p.kind === "folder")
+        ? "folder"
+        : undefined;
+    await addPicked(paths, kind);
+  };
+  const deviceFilesInput = useRef<HTMLInputElement>(null);
+  const deviceFolderInput = useRef<HTMLInputElement>(null);
+  const onDeviceInput = (ev: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(ev.currentTarget.files ?? []);
+    ev.currentTarget.value = "";
+    if (files.length > 0) void addFromDevice(picksFromInput(files));
+  };
+
+  // The web UI gets the browser's own file drop instead: files and folders go up to the server
+  // the engine runs on, then into this folder like any picked file.
   const [browserDropOver, setBrowserDropOver] = useState(false);
   const browserDrop = !isTauriEnv()
     ? {
@@ -1514,35 +1554,17 @@ export default function FileSystemScreen() {
           ev.preventDefault();
           setBrowserDropOver(false);
           if (!canDropHere) return;
-          const entries = Array.from(ev.dataTransfer.items ?? []);
-          const files = Array.from(ev.dataTransfer.files).filter(
-            (_, i) => !entries[i]?.webkitGetAsEntry?.()?.isDirectory,
-          );
-          if (files.length < ev.dataTransfer.files.length)
-            pushNotification(
-              "info",
-              tr("fs_browser_drop_folder", undefined, "Folders can't be dropped in a browser"),
-              {
-                body: tr(
-                  "fs_browser_drop_folder_body",
-                  undefined,
-                  "Drop the files inside it, or use the desktop app to copy whole folders.",
-                ),
-              },
-            );
-          if (files.length === 0) return;
+          // The items are only readable while the event lasts: take them now, read them after.
+          const items = droppedItems(ev.dataTransfer);
           void (async () => {
-            const paths: string[] = [];
+            let picks: DevicePick[];
             try {
-              for (const f of files) {
-                const staged = await stageWithTask(f, stageBrowserFile);
-                noteStaged(staged);
-                paths.push(staged.path);
-              }
+              picks = await picksFromDrop(items);
             } catch (e) {
-              if (!isStagingCancelled(e)) setError(humanizeCaught(e));
+              setError(humanizeCaught(e));
+              return;
             }
-            if (paths.length > 0) await addPicked(paths, "file");
+            await addFromDevice(picks);
           })();
         },
       }
@@ -3325,22 +3347,64 @@ export default function FileSystemScreen() {
               disabled={loading || !host?.trim() || localBusy !== null}
               onMainClick={() => void addFilesHere()}
               onPick={(p) => void addPicked([p], "file")}
+              // Web UI: the server (the default) or the device the browser runs on (#730).
+              thisDevice={!isTauriEnv() ? () => deviceFilesInput.current?.click() : undefined}
             />
-            <Button
-              variant="secondary"
-              size="sm"
-              leftIcon={<FolderUp size={12} />}
-              onClick={() => void addFolderHere()}
-              className="max-sm:min-w-10! max-sm:px-0 max-sm:[&>span]:sr-only"
-              disabled={loading || !host?.trim() || localBusy !== null}
-              title={tr(
-                "fs_add_folder_dialog_title",
-                undefined,
-                "Pick a folder to copy onto the PS5",
-              )}
-            >
-              {tr("fs_add_folder", undefined, "Add folder")}
-            </Button>
+            {isTauriEnv() ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                leftIcon={<FolderUp size={12} />}
+                onClick={() => void addFolderHere()}
+                className="max-sm:min-w-10! max-sm:px-0 max-sm:[&>span]:sr-only"
+                disabled={loading || !host?.trim() || localBusy !== null}
+                title={tr(
+                  "fs_add_folder_dialog_title",
+                  undefined,
+                  "Pick a folder to copy onto the PS5",
+                )}
+              >
+                {tr("fs_add_folder", undefined, "Add folder")}
+              </Button>
+            ) : (
+              <BrowseButton
+                mode="folder"
+                icon={<FolderUp size={12} />}
+                label={tr("fs_add_folder", undefined, "Add folder")}
+                title={tr(
+                  "fs_add_folder_dialog_title",
+                  undefined,
+                  "Pick a folder to copy onto the PS5",
+                )}
+                disabled={loading || !host?.trim() || localBusy !== null}
+                onMainClick={() => void addFolderHere()}
+                onPick={(p) => void addPicked([p], "folder")}
+                thisDevice={() => deviceFolderInput.current?.click()}
+              />
+            )}
+            {!isTauriEnv() && (
+              <>
+                <input
+                  ref={deviceFilesInput}
+                  type="file"
+                  multiple
+                  hidden
+                  onChange={onDeviceInput}
+                  data-testid="fs-device-files"
+                />
+                <input
+                  ref={(el) => {
+                    deviceFolderInput.current = el;
+                    // React has no prop for it: a folder picker, its files with their paths.
+                    el?.setAttribute("webkitdirectory", "");
+                  }}
+                  type="file"
+                  hidden
+                  onChange={onDeviceInput}
+                  data-testid="fs-device-folder"
+                />
+              </>
+            )}
             <Button
               variant="secondary"
               size="sm"
