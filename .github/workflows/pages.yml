@@ -11,6 +11,9 @@ name: pages
 # (https://ps5upload.phantomptr.com/join/#room=…), built by `npm run build:join` in client/ (the
 # same file the engine embeds) and committed; scripts/check-embedded-pages.mjs keeps it current.
 #
+# site/faq/index.html is the FAQ page, made from FAQ.md on each deploy by scripts/site-faq.mjs
+# (not committed), so a change to FAQ.md on main shows up on the site too.
+#
 # When it deploys:
 # - a change to site/ (or this file) on main;
 # - after the publish workflow finishes;
@@ -21,7 +24,15 @@ name: pages
 on:
   push:
     branches: [main]
-    paths: ["site/**", "scripts/site-releases.mjs", "scripts/site-altstore.mjs", "scripts/site-i18n.mjs", ".github/workflows/pages.yml"]
+    paths:
+      - "site/**"
+      - "FAQ.md"
+      - "scripts/site-faq.mjs"
+      - "scripts/site-faq.html"
+      - "scripts/site-releases.mjs"
+      - "scripts/site-altstore.mjs"
+      - "scripts/site-i18n.mjs"
+      - ".github/workflows/pages.yml"
   workflow_run:
     workflows: [publish]
     types: [completed]
@@ -65,6 +76,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
       - name: The iPhone source at the site's own address
         run: node scripts/site-altstore.mjs
+      - name: The FAQ page, from FAQ.md
+        run: node scripts/site-faq.mjs
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:

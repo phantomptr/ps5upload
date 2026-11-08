@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Made by scripts/site-faq.mjs from FAQ.md and this file; edit those, not site/faq/index.html. -->
+  <title data-i18n="faq.meta_title">PS5Upload FAQ — questions and answers</title>
+  <meta name="description" data-i18n-attr="content:faq.meta_description" content="Answers about PS5Upload: setup, installing games, files, saves, Play, Play Together and troubleshooting." />
+  <meta property="og:title" content="PS5Upload FAQ" />
+  <meta property="og:image" content="https://ps5upload.phantomptr.com/assets/og.jpg" />
+  <meta property="og:url" content="https://ps5upload.phantomptr.com/faq/" />
+  <meta name="color-scheme" content="light dark" />
+  <link rel="canonical" id="canonical" href="https://ps5upload.phantomptr.com/faq/" />
+  <link rel="icon" href="../assets/favicon.png" />
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" />
+  <link rel="stylesheet" href="../style.css" />
+  <!-- The language, before anything is drawn: the same as index.html's. -->
+  <script>
+    (function () {
+      var codes = ["en","zh-CN","zh-TW","hi","es","ar","bn","pl","pt-BR","ru","ja","de","fr","ko","tr","vi","id","it","th","hu","fa"];
+      var pick = function (c) {
+        if (!c) return null;
+        c = String(c).toLowerCase();
+        for (var i = 0; i < codes.length; i++) if (codes[i].toLowerCase() === c) return codes[i];
+        if (/^zh-(tw|hk|mo|hant)/.test(c)) return "zh-TW";
+        if (/^zh/.test(c)) return "zh-CN";
+        if (/^pt/.test(c)) return "pt-BR";
+        var p = c.split("-")[0];
+        return codes.indexOf(p) >= 0 ? p : null;
+      };
+      var lang = null;
+      try { lang = pick(new URLSearchParams(location.search).get("lang")) || pick(localStorage.getItem("ps5upload.site.lang")); } catch (e) {}
+      if (!lang) {
+        var nav = navigator.languages || [navigator.language];
+        for (var j = 0; j < nav.length && !lang; j++) lang = pick(nav[j]);
+      }
+      lang = lang || "en";
+      var root = document.documentElement;
+      root.lang = lang;
+      root.dir = lang === "ar" || lang === "fa" ? "rtl" : "ltr";
+      if (lang !== "en") {
+        root.classList.add("i18n-wait");
+        setTimeout(function () { root.classList.remove("i18n-wait"); }, 2500);
+      }
+      try {
+        var theme = localStorage.getItem("ps5upload.site.theme");
+        if (theme) root.dataset.theme = theme;
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body class="faq-page">
+  <a class="skip" href="#main" data-i18n="nav.skip">Skip to content</a>
+
+  <header class="top">
+    <div class="wrap top-row">
+      <a class="brand" href="../">
+        <img src="../assets/logo.png" alt="" width="34" height="34" />
+        <span>PS5Upload</span>
+      </a>
+      <nav class="nav" data-i18n-attr="aria-label:nav.sections" aria-label="Sections">
+        <a href="../#together" data-i18n="nav.together">Play Together</a>
+        <a href="../#play" data-i18n="nav.play">Play</a>
+        <a href="../#all" data-i18n="nav.all">All features</a>
+        <a href="../#guide" data-i18n="nav.guide">Guide</a>
+        <a href="./" aria-current="page" data-i18n="nav.faq">FAQ</a>
+        <a href="../#download" data-i18n="nav.download">Download</a>
+        <a href="../#thanks" data-i18n="nav.thanks">Thanks &amp; Support</a>
+      </nav>
+      <div class="top-actions">
+        <label class="lang" data-i18n-attr="title:nav.language" title="Language">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm-9-9h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3Z"/></svg>
+          <select id="lang" data-i18n-attr="aria-label:nav.language" aria-label="Language"></select>
+        </label>
+        <a class="icon-btn" href="https://github.com/phantomptr/ps5upload" data-i18n-attr="aria-label:nav.github" aria-label="PS5Upload on GitHub" title="GitHub">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.56-.29-5.25-1.28-5.25-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.7 5.39-5.27 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
+        </a>
+        <button class="icon-btn" id="theme" type="button" data-i18n-attr="aria-label:nav.theme_label;title:nav.theme_title" aria-label="Switch light or dark" title="Light or dark">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main" class="section faq">
+    <div class="wrap faq-head">
+      <p class="kicker"><a href="../" data-i18n="faq.back">PS5Upload</a></p>
+      <h1 data-i18n="faq.title">Questions and answers</h1>
+      <p class="section-lead" data-i18n="faq.lead">How to set up, install, play and fix things. The same answers as the app's Help screen.</p>
+      <p class="faq-note muted" data-i18n="faq.english">The answers are in English only.</p>
+      <div class="faq-search">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="m21 21-4.3-4.3M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z"/></svg>
+        <input id="faq-search" type="search" autocomplete="off" spellcheck="false" data-i18n-attr="placeholder:faq.search;aria-label:faq.search" placeholder="Search the answers, or an error code" aria-label="Search the answers, or an error code" />
+      </div>
+      <p class="faq-status muted" id="faq-status" role="status" aria-live="polite"></p>
+    </div>
+    <div class="wrap faq-layout">
+      <nav class="faq-toc" data-i18n-attr="aria-label:faq.topics" aria-label="Topics">
+        <details id="faq-toc" open>
+          <summary data-i18n="faq.topics">Topics</summary>
+          <ul><!--FAQ:TOC--></ul>
+        </details>
+      </nav>
+      <div class="faq-body" id="faq-body" lang="en" dir="ltr">
+        <!--FAQ:BODY-->
+        <p class="faq-none" id="faq-none" hidden></p>
+      </div>
+    </div>
+  </main>
+
+  <footer class="foot">
+    <div class="wrap foot-row">
+      <span data-i18n="foot.made">Made by <a href="https://phantomptr.com/">PhantomPtr</a>. PS5Upload is free software under the GPL-3.0.</span>
+      <span class="muted" data-i18n="foot.sony">Not affiliated with Sony Interactive Entertainment.</span>
+    </div>
+  </footer>
+
+  <script src="../faq.js" defer></script>
+</body>
+</html>

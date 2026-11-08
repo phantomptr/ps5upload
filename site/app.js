@@ -123,6 +123,10 @@ function applyTheme(theme) {
   document.querySelectorAll("img[data-theme-img]").forEach((img) => {
     img.src = `${dir}${img.dataset.themeImg}-${dark ? "dark" : "light"}.webp`;
   });
+  // A screen that looks the same in light and dark (a friend's dark join page): one picture.
+  document.querySelectorAll("img[data-lang-img]").forEach((img) => {
+    img.src = `${dir}${img.dataset.langImg}.webp`;
+  });
 }
 applyTheme(store.get("ps5upload.site.theme"));
 document.getElementById("theme").addEventListener("click", () => {
@@ -131,6 +135,21 @@ document.getElementById("theme").addEventListener("click", () => {
   store.set("ps5upload.site.theme", next);
   applyTheme(next);
 });
+
+// ── Everything it does ─────────────────────────────────────────────────────
+
+// Open on a wide screen (two columns to scan), closed on a phone (a list of groups to pick from).
+const allGroups = [...document.querySelectorAll(".all-group")];
+if (window.matchMedia("(max-width: 760px)").matches) for (const d of allGroups) d.open = false;
+document.getElementById("all-open")?.addEventListener("click", () => allGroups.forEach((d) => (d.open = true)));
+document.getElementById("all-close")?.addEventListener("click", () => allGroups.forEach((d) => (d.open = false)));
+// A link to one group (#all-saves) opens it.
+const openGroup = () => {
+  const el = location.hash && document.getElementById(location.hash.slice(1));
+  if (el?.classList.contains("all-group")) el.open = true;
+};
+window.addEventListener("hashchange", openGroup);
+openGroup();
 
 // ── Copy buttons ───────────────────────────────────────────────────────────
 

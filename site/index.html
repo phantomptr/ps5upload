@@ -89,9 +89,9 @@
       <nav class="nav" data-i18n-attr="aria-label:nav.sections" aria-label="Sections">
         <a href="#together" data-i18n="nav.together">Play Together</a>
         <a href="#play" data-i18n="nav.play">Play</a>
-        <a href="#tour" data-i18n="nav.features">Features</a>
+        <a href="#all" data-i18n="nav.all">All features</a>
         <a href="#guide" data-i18n="nav.guide">Guide</a>
-        <a href="https://github.com/phantomptr/ps5upload/blob/main/FAQ.md" data-i18n="nav.faq">FAQ</a>
+        <a href="faq/" data-i18n="nav.faq">FAQ</a>
         <a href="#download" data-i18n="nav.download">Download</a>
         <a href="#news" data-i18n="nav.news">News</a>
         <a href="#thanks" data-i18n="nav.thanks">Thanks &amp; Support</a>
@@ -122,7 +122,7 @@
             <p class="eyebrow" id="hero-version" data-i18n="hero.eyebrow">Free and open source</p>
             <a class="hero-new" href="#together">
               <span class="hero-new-tag" data-i18n="hero.new_tag">New</span>
-              <span data-i18n="hero.new_text">Play Together: friends join your game from a link</span>
+              <span data-i18n="hero.new_text2">Play Together over the internet: friends join from anywhere</span>
               <span class="hero-new-arrow" aria-hidden="true">→</span>
             </a>
           </div>
@@ -168,29 +168,26 @@
       </ul>
     </section>
 
-    <!-- Play Together (11.0) -->
+    <!-- Play Together (11.0; over the internet since 11.6) -->
     <section class="section together" id="together" aria-labelledby="together-title">
       <div class="together-glow" aria-hidden="true"></div>
       <div class="wrap together-head">
-        <p class="kicker" data-i18n="together.kicker">New in 11.0</p>
+        <p class="kicker" data-i18n="together.kicker2">New in 11.6: over the internet</p>
         <h2 id="together-title" data-i18n="together.title">Play Together: your friends, on your PS5</h2>
-        <p class="section-lead" data-i18n="together.lead">Send a link and friends join the game you're playing as Player 2, 3 and 4, each with their own controller. They need no PS5 and no app: any browser on a phone, tablet or computer will do.</p>
+        <p class="section-lead" data-i18n="together.lead2">Send a link and friends join the game you're playing as Player 2, 3 and 4, each with their own controller, from your Wi-Fi or from anywhere. They need no PS5 and no app: a browser on a phone, tablet or computer will do.</p>
       </div>
       <div class="wrap together-stage">
         <figure class="device laptop">
           <div class="screen">
             <picture>
-              <source srcset="assets/shots/together-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="together" />
-              <img src="assets/shots/together-light.webp" data-i18n-attr="alt:alt.together" alt="The Play Together panel: a QR code, the invite link and a short code, a friend asking to join with Allow, and Sam playing as Player 2." width="1600" height="1000" loading="lazy" data-theme-img="together" />
+              <source srcset="assets/shots/together-net-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="together-net" />
+              <img src="assets/shots/together-net-light.webp" data-i18n-attr="alt:alt.together_net" alt="The Play Together panel with Internet chosen: a QR code and the invite link, a friend asking to join with Allow, and Sam playing as Player 2 over the internet." width="1600" height="1000" loading="lazy" data-theme-img="together-net" />
             </picture>
           </div>
         </figure>
         <figure class="device phone together-phone">
           <div class="screen">
-            <picture>
-              <source srcset="assets/shots/m-join-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="m-join" />
-              <img src="assets/shots/m-join-light.webp" data-i18n-attr="alt:alt.m_join" alt="A Play Together invite opened in the PS5Upload app on a phone: it asks only for your name, then Join." width="390" height="844" loading="lazy" data-theme-img="m-join" />
-            </picture>
+            <img src="assets/shots/m-net-join.webp" data-i18n-attr="alt:alt.m_net_join" alt="An internet invite opened in a phone's browser, with no app: your name, then Join." width="390" height="844" loading="lazy" data-lang-img="m-net-join" />
           </div>
         </figure>
       </div>
@@ -199,12 +196,12 @@
           <li class="card">
             <span class="num">1</span>
             <h3 data-i18n="together.s1.title">Open Play Together</h3>
-            <p data-i18n="together.s1.text">While you play, press the people button on the Play bar (on a phone, <b>⋯ › Play Together</b>). Share the QR code, the link or a short code like K7M-2QX.</p>
+            <p data-i18n="together.s1.text2">While you play, press the people button on the Play bar (on a phone, <b>⋯ › Play Together</b>). Choose <b>This network</b> for friends on your Wi-Fi or <b>Internet</b> for friends anywhere, then share the QR code or the link.</p>
           </li>
           <li class="card">
             <span class="num">2</span>
             <h3 data-i18n="together.s2.title">Your friend scans or opens it</h3>
-            <p data-i18n="together.s2.text">The game opens in their browser, in their language: they type a name and you press <b>Allow</b> when it pops up over the picture. With the PS5Upload app, the invite opens straight into the game.</p>
+            <p data-i18n="together.s2.text2">The game opens in their browser, in their language, with nothing to install. They type a name, and you press <b>Allow</b> when it pops up over the picture.</p>
           </li>
           <li class="card">
             <span class="num">3</span>
@@ -235,11 +232,15 @@
         </div>
       </div>
       <div class="wrap">
+        <!-- TODO(tailscale): when the app's own Tailscale ships, it gets a card here ("Your own tailnet":
+             friends on your tailnet join with the This network link, set up from the app), a line in
+             #all under Remote Play & Play Together and Platforms, and a rewrite of the "Play away from
+             home" guide (howto.away) around it. Until then the site names no VPN product. -->
         <div class="grid together-more">
           <div class="card">
             <span class="ico" aria-hidden="true">🌍</span>
-            <h3 data-i18n="together.away.title">Friends far away too</h3>
-            <p data-i18n="together.away.text">With Tailscale on your computer, the invite offers a Tailscale link that reaches you from anywhere your friend's Tailscale does. WireGuard and other VPNs work too. Nothing to open to the internet.</p>
+            <h3 data-i18n="together.net.title">Friends anywhere, no relay</h3>
+            <p data-i18n="together.net.text">Choose Internet and the link works from anywhere, a phone on mobile data too. A small server only introduces you: the picture, sound and controls go straight between you and your friend.</p>
           </div>
           <div class="card">
             <span class="ico" aria-hidden="true">🛡️</span>
@@ -481,6 +482,212 @@
       </div>
     </section>
 
+    <!-- Everything it does: one line per feature in the app today, grouped (from README, FAQ.md,
+         CHANGELOG.md, the app's screens and the MCP tools). Released features only. -->
+    <section class="section" id="all" aria-labelledby="all-title">
+      <div class="wrap">
+        <p class="kicker" data-i18n="all.kicker">The whole list</p>
+        <h2 id="all-title" data-i18n="all.title">Everything it does</h2>
+        <p class="section-lead" data-i18n="all.lead">Every feature in the app today, grouped. Open a group to see what's in it.</p>
+        <div class="all-actions">
+          <button class="btn small" type="button" id="all-open" data-i18n="all.open">Open all</button>
+          <button class="btn small" type="button" id="all-close" data-i18n="all.close">Close all</button>
+          <a class="btn small" href="faq/" data-i18n="all.faq">Questions? Read the FAQ</a>
+        </div>
+        <div class="all-grid">
+        <details class="all-group" id="all-send" open>
+          <summary><span class="all-ico" aria-hidden="true">📤</span><span class="all-name" data-i18n="all.g.send">Send &amp; install</span><span class="all-count">16</span></summary>
+          <ul>
+            <li data-i18n="all.send.1">Send games, apps, folders, disk images and archives at the full speed of your network, every file checked</li>
+            <li data-i18n="all.send.2">Uploads pick up where they stopped after a dropped connection, a restart or rest mode</li>
+            <li data-i18n="all.send.3">One drop zone works out what you dropped: a package, a game folder, an image, an archive or a plain file</li>
+            <li data-i18n="all.send.4">Unpack .zip, .7z and .rar on the way, or send the archive as it is</li>
+            <li data-i18n="all.send.5">Multi-part and password-protected RAR archives, in the desktop apps</li>
+            <li data-i18n="all.send.6">A queue with live speed and time left: pause it, reorder it, or send something first</li>
+            <li data-i18n="all.send.7">The queue carries on by itself after rest mode or a lost connection</li>
+            <li data-i18n="all.send.8">Checks for free space before anything is sent</li>
+            <li data-i18n="all.send.9">Install PS4 packages and PS5 fake packages (games, updates, add-ons) with the app's own installer</li>
+            <li data-i18n="all.send.10">Stream &amp; install straight from your computer, or upload first and then install</li>
+            <li data-i18n="all.send.11">Install from a network share, a USB drive, the PS5's own storage or a download link</li>
+            <li data-i18n="all.send.12">If the PS5 refuses one way to install, the app offers another</li>
+            <li data-i18n="all.send.13">Asks before replacing a game or installing an update it already has</li>
+            <li data-i18n="all.send.14">Drop a package on the Play picture to install it while you play</li>
+            <li data-i18n="all.send.15">Choose which drive gets new packages and images</li>
+            <li data-i18n="all.send.16">Keeps your computer awake during transfers and installs</li>
+          </ul>
+        </details>
+        <details class="all-group" id="all-games" open>
+          <summary><span class="all-ico" aria-hidden="true">🎮</span><span class="all-name" data-i18n="all.g.games">Games &amp; library</span><span class="all-count">13</span></summary>
+          <ul>
+            <li data-i18n="all.games.1">Every game in one grid: on your computer, on network shares, installed, and on the PS5's drives</li>
+            <li data-i18n="all.games.2">One page per game with everything you can do: play, install, move, back up, convert, dump</li>
+            <li data-i18n="all.games.3">Updates and add-ons grouped with their game</li>
+            <li data-i18n="all.games.4">Start or close an installed game from its card, or play it in one press</li>
+            <li data-i18n="all.games.5">Mount disk images, and add games to the home screen or take them off it</li>
+            <li data-i18n="all.games.6">Move games between drives, and uninstall them</li>
+            <li data-i18n="all.games.7">Dump an installed game, decrypted, from its page</li>
+            <li data-i18n="all.games.8">Find duplicate copies, keep the largest and clean up junk files</li>
+            <li data-i18n="all.games.9">Tidy package folders into one layout, with a preview and undo</li>
+            <li data-i18n="all.games.10">Play time for each game, and your recent games on Home</li>
+            <li data-i18n="all.games.11">Cover art and real names, for disk images too</li>
+            <li data-i18n="all.games.12">Repair a game's icon and details on the home screen</li>
+            <li data-i18n="all.games.13">Screenshots and clips from the PS5, with HDR shots kept as HDR</li>
+          </ul>
+        </details>
+        <details class="all-group" id="all-convert" open>
+          <summary><span class="all-ico" aria-hidden="true">🛠️</span><span class="all-name" data-i18n="all.g.convert">Convert</span><span class="all-count">13</span></summary>
+          <ul>
+            <li data-i18n="all.convert.1">Build an installable package from a decrypted game folder or an image</li>
+            <li data-i18n="all.convert.2">Turn a game folder into a disk image (.exfat, .ffpkg or .ffpfs)</li>
+            <li data-i18n="all.convert.3">Make images smaller with compression</li>
+            <li data-i18n="all.convert.4">Turn an image, a package or a game back into a plain folder</li>
+            <li data-i18n="all.convert.5">Write an image straight to the PS5 as it's built, with no copy on your computer</li>
+            <li data-i18n="all.convert.6">Convert PS4 fake packages into an image or a folder</li>
+            <li data-i18n="all.convert.7">Merge a PS4 game and its update into one game at the update's version</li>
+            <li data-i18n="all.convert.8">Turn PS4 add-ons that have data into a folder</li>
+            <li data-i18n="all.convert.9">A queue converts games one after another, then sends each to the PS5</li>
+            <li data-i18n="all.convert.10">Pause a build and carry on later; a build that stopped picks up where it was</li>
+            <li data-i18n="all.convert.11">Use less of this computer: half the processor, at low priority</li>
+            <li data-i18n="all.convert.12">Look inside an image or a package, and edit an image in place</li>
+            <li data-i18n="all.convert.13">Fixes for games that need them, and backport tools for older firmware</li>
+          </ul>
+        </details>
+        <details class="all-group" id="all-files" open>
+          <summary><span class="all-ico" aria-hidden="true">📁</span><span class="all-name" data-i18n="all.g.files">Files &amp; servers</span><span class="all-count">10</span></summary>
+          <ul>
+            <li data-i18n="all.files.1">Browse the PS5's files like a folder: copy, move, rename, delete and make folders</li>
+            <li data-i18n="all.files.2">Download files and folders from the PS5, or a whole folder as a .zip</li>
+            <li data-i18n="all.files.3">Unpack archives on the console itself</li>
+            <li data-i18n="all.files.4">Search every drive, and see what takes up space</li>
+            <li data-i18n="all.files.5">Games and files from SMB, NFS, FTP, FTPS, SFTP and WebDAV servers</li>
+            <li data-i18n="all.files.6">Games on a NAS are scanned where they are and join your library</li>
+            <li data-i18n="all.files.7">Connect the PS5 itself to your network shares</li>
+            <li data-i18n="all.files.8">Mesh Drive: one folder kept the same on all your devices</li>
+            <li data-i18n="all.files.9">Send files from one PS5 to another</li>
+            <li data-i18n="all.files.10">See every drive and its free space, and eject USB drives safely</li>
+          </ul>
+        </details>
+        <details class="all-group" id="all-saves" open>
+          <summary><span class="all-ico" aria-hidden="true">💾</span><span class="all-name" data-i18n="all.g.saves">Saves</span><span class="all-count">10</span></summary>
+          <ul>
+            <li data-i18n="all.saves.1">Back up saves on a schedule or with one press</li>
+            <li data-i18n="all.saves.2">Back up to a folder, a network share or a USB drive</li>
+            <li data-i18n="all.saves.3">Restore any backup; the current save is kept until the restore has worked</li>
+            <li data-i18n="all.saves.4">Copy a save to another user on the same PS5</li>
+            <li data-i18n="all.saves.5">Copy a save straight to another PS5</li>
+            <li data-i18n="all.saves.6">Share a save as a file a friend loads under their own account</li>
+            <li data-i18n="all.saves.7">Open a save on your computer for a save editor, then write it back</li>
+            <li data-i18n="all.saves.8">Move saves over from a PS4</li>
+            <li data-i18n="all.saves.9">PS1, PS2 and Switch emulator saves too</li>
+            <li data-i18n="all.saves.10">While you play, snapshot the game's save in one press</li>
+          </ul>
+        </details>
+        <details class="all-group" id="all-play" open>
+          <summary><span class="all-ico" aria-hidden="true">▶️</span><span class="all-name" data-i18n="all.g.play">Remote Play &amp; Play Together</span><span class="all-count">20</span></summary>
+          <!-- TODO(tailscale): when the app's own Tailscale ships, add one line here ("Play over your
+               tailnet, set up from the app") as all.play.21, and one under Platforms if it also covers the
+               rest of the app away from home. Not before it is released. -->
+          <ul>
+            <li data-i18n="all.play.1">Play your PS5 on your computer, phone or tablet, or in a browser</li>
+            <li data-i18n="all.play.2">Play wakes the console from rest mode and signs your user in</li>
+            <li data-i18n="all.play.3">A setup checklist that ticks itself and fixes what it can</li>
+            <li data-i18n="all.play.4">Play with a controller, the keyboard, or touch controls on a phone</li>
+            <li data-i18n="all.play.5">DualSense rumble, haptics, adaptive triggers, motion and touchpad</li>
+            <li data-i18n="all.play.6">Remap buttons, turbo and macros, kept for each game</li>
+            <li data-i18n="all.play.7">1080p or 720p, 60 or 30 fps, your choice of bitrate, a low-latency mode and HDR</li>
+            <li data-i18n="all.play.8">Sharpen and upscale the picture to your screen, or crop it to 21:9</li>
+            <li data-i18n="all.play.9">Picture in picture, and a mini player while you use the rest of the app</li>
+            <li data-i18n="all.play.10">Your microphone to the console, for voice chat</li>
+            <li data-i18n="all.play.11">Instant replay, screenshots and clips, saved to your phone's photos</li>
+            <li data-i18n="all.play.12">Choose which PS5 user to play as, with its passcode when it has one</li>
+            <li data-i18n="all.play.13">Phones as controllers, up to four</li>
+            <li data-i18n="all.play.14">Watch party: friends watch on their phones, with sound</li>
+            <li data-i18n="all.play.15">Play Together: friends join as Player 2, 3 and 4 from a link, a QR code or a short code</li>
+            <li data-i18n="all.play.16">Internet invites: friends join from anywhere, and the picture goes straight between you</li>
+            <li data-i18n="all.play.17">Friends need no app: a phone browser will do, or the app opens the invite</li>
+            <li data-i18n="all.play.18">Nobody plays until you press Allow; remove anyone, and turn off their PS button</li>
+            <li data-i18n="all.play.19">Play on your TV and use the app only to invite friends</li>
+            <li data-i18n="all.play.20">A dropped stream or friend reconnects by itself, in the same place</li>
+          </ul>
+        </details>
+        <details class="all-group" id="all-kbm" open>
+          <summary><span class="all-ico" aria-hidden="true">⌨️</span><span class="all-name" data-i18n="all.g.kbm">Keyboard &amp; mouse</span><span class="all-count">5</span></summary>
+          <ul>
+            <li data-i18n="all.kbm.1">Give the PS5 your computer's keyboard and mouse as its own</li>
+            <li data-i18n="all.kbm.2">Three modes, kept for each game: controller, keyboard &amp; mouse, or mixed</li>
+            <li data-i18n="all.kbm.3">Click the picture to start, a key combination to get out; both can be changed</li>
+            <li data-i18n="all.kbm.4">A phone or tablet as the PS5's touchpad and keyboard</li>
+            <li data-i18n="all.kbm.5">Type into the PS5's on-screen keyboard from your device</li>
+          </ul>
+        </details>
+        <details class="all-group" id="all-live" open>
+          <summary><span class="all-ico" aria-hidden="true">🔴</span><span class="all-name" data-i18n="all.g.live">Go live</span><span class="all-count">7</span></summary>
+          <ul>
+            <li data-i18n="all.live.1">Stream your game to YouTube, Twitch, Kick or Facebook from Play</li>
+            <li data-i18n="all.live.2">Several sites at once, or any RTMP, RTMPS or SRT server</li>
+            <li data-i18n="all.live.3">Checks each site's limits and offers settings that fit</li>
+            <li data-i18n="all.live.4">Reconnects by itself if the connection drops, while you keep playing</li>
+            <li data-i18n="all.live.5">Try it on Twitch first without going public</li>
+            <li data-i18n="all.live.6">Add the stream to OBS for your own scenes and overlays</li>
+            <li data-i18n="all.live.7">Stream keys are stored encrypted and never shown again</li>
+          </ul>
+        </details>
+        <details class="all-group" id="all-console" open>
+          <summary><span class="all-ico" aria-hidden="true">🧰</span><span class="all-name" data-i18n="all.g.console">Console tools</span><span class="all-count">18</span></summary>
+          <ul>
+            <li data-i18n="all.console.1">Send payloads from a catalogue, your own lists or files, with playlists and loading at boot</li>
+            <li data-i18n="all.console.2">Keep payloads on the console in Payload Manager, the helper too, to start them with no computer</li>
+            <li data-i18n="all.console.3">Make a USB stick that loads your payloads</li>
+            <li data-i18n="all.console.4">Set up a fresh console in one go: the right payloads, in the right order</li>
+            <li data-i18n="all.console.5">Cheats: find, download and switch them on, applied when the game starts</li>
+            <li data-i18n="all.console.6">Temperatures, fan, clocks and storage at a glance</li>
+            <li data-i18n="all.console.7">Set the fan threshold or a whole fan curve</li>
+            <li data-i18n="all.console.8">Rest mode, restart and shut down, and wake over the network into your user</li>
+            <li data-i18n="all.console.9">Disc drive, beeper and front light controls</li>
+            <li data-i18n="all.console.10">Clean up leftover files</li>
+            <li data-i18n="all.console.11">Health check and speed test: what to fix between the PS5, the app and the network</li>
+            <li data-i18n="all.console.12">See what's running and which ports are open, and stop a process</li>
+            <li data-i18n="all.console.13">PS5 users: avatars, offline sign-in, account ID and backups</li>
+            <li data-i18n="all.console.14">Backup &amp; Restore: keep saves, settings, captures and homebrew before a reset</li>
+            <li data-i18n="all.console.15">Read and clear the PS5's notifications</li>
+            <li data-i18n="all.console.16">A console shell, the kernel log and an audit log, for when something is off</li>
+            <li data-i18n="all.console.17">PS5Upload Minion: a page in the PS5's own browser for games, saves, files, payloads and cheats</li>
+            <li data-i18n="all.console.18">Bug Report: the app's, the engine's and the console's logs in one zip, private details removed</li>
+          </ul>
+        </details>
+        <details class="all-group" id="all-platforms" open>
+          <summary><span class="all-ico" aria-hidden="true">💻</span><span class="all-name" data-i18n="all.g.platforms">Platforms</span><span class="all-count">10</span></summary>
+          <ul>
+            <li data-i18n="all.platforms.1">Apps for Windows, macOS and Linux, on x64 and ARM</li>
+            <li data-i18n="all.platforms.2">An Android app, and an iPhone app to sideload or add from an AltStore, SideStore or Feather source</li>
+            <li data-i18n="all.platforms.3">A Docker image serves the whole app as a web page from a NAS or server</li>
+            <li data-i18n="all.platforms.4">21 languages, matching your system</li>
+            <li data-i18n="all.platforms.5">Several consoles in one app; switch with a tap</li>
+            <li data-i18n="all.platforms.6">Computers, phones and Docker can use one PS5 at once and see what the others are doing</li>
+            <li data-i18n="all.platforms.7">Finds PS5s on your network, and follows one that changed address</li>
+            <li data-i18n="all.platforms.8">Updates itself in the background, and installs the update when you quit</li>
+            <li data-i18n="all.platforms.9">Settings backed up every day, to your computer and to each console</li>
+            <li data-i18n="all.platforms.10">Light and dark themes, plus OLED black and Peach</li>
+          </ul>
+        </details>
+        <details class="all-group" id="all-agents" open>
+          <summary><span class="all-ico" aria-hidden="true">🤖</span><span class="all-name" data-i18n="all.g.agents">AI agents &amp; scripts</span><span class="all-count">9</span></summary>
+          <ul>
+            <li data-i18n="all.agents.1">A built-in MCP server lets AI agents use PS5Upload, with more than 120 tools</li>
+            <li data-i18n="all.agents.2">One-click setup for Claude Code, Codex and OpenCode; copy and paste for other agents</li>
+            <li data-i18n="all.agents.3">Agents get new tools by themselves when the app updates</li>
+            <li data-i18n="all.agents.4">A read-only mode, and risky tools that ask first</li>
+            <li data-i18n="all.agents.5">An HTTP API for everything, described in OpenAPI</li>
+            <li data-i18n="all.agents.6">A queue per console runs uploads, installs and conversions in order, and survives restarts</li>
+            <li data-i18n="all.agents.7">Live events, so scripts can follow progress</li>
+            <li data-i18n="all.agents.8">Scripts can watch and play a Remote Play session</li>
+            <li data-i18n="all.agents.9">The running stream as a live feed for OBS or ffmpeg</li>
+          </ul>
+        </details>
+        </div>
+      </div>
+    </section>
+
     <!-- Guide -->
     <section class="section" id="guide" aria-labelledby="guide-title">
       <div class="wrap">
@@ -543,7 +750,7 @@
                 <li data-i18n="howto.together.s2">Send your friend the link, or let them scan the QR code. Press <b>Allow</b> when their name pops up.</li>
                 <li data-i18n="howto.together.s3">On the TV, they press PS and pick <b>Quick Play</b> (or their own user), then play.</li>
               </ol>
-              <p class="muted" data-i18n="howto.together.note">Not on your network? Both of you join the same Tailscale network and pick <b>Tailscale</b> above the QR code. The <a href="https://github.com/phantomptr/ps5upload/blob/main/FAQ.md">FAQ</a> has the details (in English).</p>
+              <p class="muted" data-i18n="howto.together.note2">Friend somewhere else? Choose <b>Internet</b> above the QR code and send them that link. The <a href="faq/#short-guides-phone-away-from-home-friends-tv-delay--can-a-friend-who-isn-t-at-my-place-play-together-or-use-a-phone-controller">FAQ</a> has the details (in English).</p>
             </div>
           </details>
           <details class="guide">
@@ -624,10 +831,11 @@
             <div>
               <ol>
                 <li data-i18n="howto.away.s1">PS5Upload works on your home network. Never open its ports to the internet: it has no password.</li>
-                <li data-i18n="howto.away.s2">Join your home network with a VPN such as Tailscale: on your phone or laptop, plus a computer at home set up as a subnet router, or the ps5-tailscale payload on the PS5.</li>
+                <li data-i18n="howto.away.s2b">Join your home network with a VPN: on your phone or laptop, plus a VPN server at home, on a computer or your router.</li>
                 <li data-i18n="howto.away.s3">Connect to the PS5 at its usual address and play. How smooth it is depends on your home connection's upload speed.</li>
               </ol>
               <p class="muted" data-i18n="howto.away.note">Through a VPN, Stream &amp; install and installs from a link don't work (use Upload &amp; install), and waking from rest mode may not: leave the PS5 on.</p>
+              <p class="muted" data-i18n="howto.away.friends">Only want a friend far away to play along? Send them an internet invite from <a href="#together">Play Together</a> instead: no VPN needed.</p>
             </div>
           </details>
           <details class="guide">
@@ -659,7 +867,7 @@
                 <li data-i18n="howto.help.s2">Attach it to an issue on GitHub, or ask on Discord.</li>
                 <li data-i18n="howto.help.s3">Hard to catch? Turn on <b>Detailed logs</b> in the Logs tab, make it happen again, then build the report. It turns itself off after 24 hours.</li>
               </ol>
-              <p class="muted" data-i18n="howto.help.note">The in-app <b>Help</b> screen answers most questions. Its FAQ is in English, and it is also <a href="https://github.com/phantomptr/ps5upload/blob/main/FAQ.md">on GitHub</a>.</p>
+              <p class="muted" data-i18n="howto.help.note2">The in-app <b>Help</b> screen answers most questions. Its FAQ is in English, and it is also <a href="faq/">on this site</a>, with a search.</p>
             </div>
           </details>
         </div>
@@ -681,7 +889,7 @@
         <div class="card docker">
           <div>
             <h3 data-i18n="download.docker.title">Docker (the app as a web page on your NAS or server)</h3>
-            <p class="muted" data-i18n="download.docker.text">Serves the app on your network: open port 19113 in a browser. Start from <a href="https://github.com/phantomptr/ps5upload/blob/main/engine/compose.yaml">engine/compose.yaml</a>, or change the command's two addresses and its folder to your own. Docker Desktop on a Mac or Windows PC has no host networking; follow the <a href="https://github.com/phantomptr/ps5upload/blob/main/FAQ.md">FAQ</a> there.</p>
+            <p class="muted" data-i18n="download.docker.text">Serves the app on your network: open port 19113 in a browser. Start from <a href="https://github.com/phantomptr/ps5upload/blob/main/engine/compose.yaml">engine/compose.yaml</a>, or change the command's two addresses and its folder to your own. Docker Desktop on a Mac or Windows PC has no host networking; follow the <a href="faq/#getting-started">FAQ</a> there.</p>
           </div>
           <div class="copy">
             <code id="docker-cmd">docker run -d --name ps5upload --network host -v ps5upload-data:/data -v /srv/ps5/pkgs:/pkgs:ro -e PS5_ADDR=192.168.1.50 -e PS5UPLOAD_ALLOW_IP=192.168.1.0/24 -e PS5UPLOAD_BROWSE_ROOTS=/pkgs ghcr.io/phantomptr/ps5upload-engine-webui:latest</code>
@@ -821,6 +1029,7 @@
 
   <footer class="foot">
     <div class="wrap foot-row">
+      <a href="faq/" data-i18n="nav.faq">FAQ</a>
       <span data-i18n="foot.made">Made by <a href="https://phantomptr.com/">PhantomPtr</a>. PS5Upload is free software under the GPL-3.0.</span>
       <span class="muted" data-i18n="foot.sony">Not affiliated with Sony Interactive Entertainment.</span>
     </div>

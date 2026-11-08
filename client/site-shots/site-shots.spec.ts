@@ -84,23 +84,37 @@ const READINESS = {
 };
 
 // Play Together (#641): the host's invite and two made-up friends, one playing as Player 2 and
-// one asking to join (the shapes of e2e/play-together.spec.ts and join.rs).
+// one asking to join (the shapes of e2e/play-together.spec.ts and join.rs). With `internet`, the
+// invite also has its internet link (11.6.0, playTogetherInternet.test.tsx's shapes) and the
+// friends play over the internet: a made-up room and key, never a real one.
 const INVITE = "00112233445566778899aabbccddeeff";
 const COMPUTER = HOST.replace(/\.50$/, ".20");
 const LINK = `http://${COMPUTER}:19113/join#i=${INVITE}&n=Alex`;
-const TAILNET = "100.64.0.7";
+// The shapes join/rtcTransport.ts accepts: a 22-character room and a 32-byte fingerprint.
+const NET_ROOM = "Demo0Room0Not0Real0000";
+const NET_FP = `${"AB:".repeat(31)}CD`;
+const NET_FRAGMENT = `room=${NET_ROOM}&k=${INVITE}&fp=${NET_FP}&hub=hub.example.com&n=Alex`;
+const NET_LINK = `https://ps5upload.phantomptr.com/join/#${NET_FRAGMENT}`;
 
-function joinState(path: string) {
+function joinState(path: string, internet: boolean) {
   const invite = {
     key: INVITE,
     code: "K7M2QX",
     code_display: "K7M-2QX",
     url: LINK,
-    urls: [LINK, `http://${TAILNET}:19113/join#i=${INVITE}&n=Alex`],
-    tailscale: TAILNET,
+    urls: [LINK],
+    tailscale: null,
     expires_in_s: 1800,
+    ...(internet
+      ? { internet: { url: NET_LINK, room: NET_ROOM, hub: "hub.example.com", fp: NET_FP, state: "hosted", error: null, router: null, peers: [] } }
+      : {}),
   };
-  const settings = { block_system_buttons: true, max_players: 3 };
+  const settings = {
+    block_system_buttons: true,
+    max_players: 3,
+    ...(internet ? { stream_seat: false, internet_invites: true, hub_url: "wss://hub.example.com/ws", stun: [], upnp: true } : {}),
+  };
+  const net = internet ? { via: "internet", path: "direct", ice_rtt_ms: 38 } : {};
   if (path === "/api/join/invite") return invite;
   if (path === "/api/join/decide" || path === "/api/join/kick") return { ok: true };
   if (path === "/api/join/settings") return { settings };
@@ -112,17 +126,18 @@ function joinState(path: string) {
     invite,
     players_in: 1,
     guests: [
-      { id: 4, name: "Sam", player: 2, state: "playing", connected: true, reconnect_left_s: null, rtt_ms: 24, queue: 0, skipped: 0, since_s: 640, why: null },
+      { id: 4, name: "Sam", player: 2, state: "playing", connected: true, reconnect_left_s: null, rtt_ms: internet ? 38 : 24, queue: 0, skipped: 0, since_s: 640, why: null, ...net },
     ],
     pending: [{ id: 5, name: "Mia", state: "asking" }],
     settings,
     max_guests: 3,
     ws: `ws://${COMPUTER}:19113/api/join/ws`,
+    ...(internet ? { internet: { room: NET_ROOM, peers: [] } } : {}),
   };
 }
 
 /** The made-up console, as the engine would answer for it. */
-async function fakeConsole(page: Page, opts: { paired: boolean; theme: "light" | "dark"; lang: string }) {
+async function fakeConsole(page: Page, opts: { paired: boolean; theme: "light" | "dark"; lang: string; internet?: boolean }) {
   await page.addInitScript(
     ([host, paired, theme, now, lang]) => {
       const ls = window.localStorage;
@@ -168,7 +183,7 @@ async function fakeConsole(page: Page, opts: { paired: boolean; theme: "light" |
     async (route) => {
       const path = new URL(route.request().url()).pathname;
       const json = (b: unknown) => route.fulfill({ contentType: "application/json", body: JSON.stringify(b) });
-      if (path.startsWith("/api/join")) return json(joinState(path));
+      if (path.startsWith("/api/join")) return json(joinState(path, !!opts.internet));
       switch (path) {
         case "/api/version":
           return json({ version: "11.0.4", caps: {} });
@@ -442,11 +457,14 @@ for (const lang of LANGS) {
     });
 
     // Play Together's panel is tall: a bigger window (the same picture size) shows all of it.
+    // Invited over the internet (11.6.0): the Internet choice, its link and QR code, and a friend
+    // playing from elsewhere.
     test.describe(`${lang} play together ${theme}`, () => {
       test.use({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 1.2 });
 
-      test(`play together (${theme})`, async ({ page }) => {
-        await fakeConsole(page, { paired: true, theme, lang });
+      test(`play together over the internet (${theme})`, async ({ page }) => {
+        await fakeConsole(page, { paired: true, theme, lang, internet: true });
+        await page.addInitScript(() => window.localStorage.setItem("ps5upload.pt_network", "internet"));
         await page.goto("/home", { waitUntil: "domcontentloaded" });
         const frames = await streamOf(page, { w: 1920, h: 1080 });
         await fakeStream(page, frames);
@@ -457,8 +475,9 @@ for (const lang of LANGS) {
         await page.getByTestId("rp-toolbar").hover();
         await page.getByTestId("rp-together").click();
         const panel = page.getByTestId("pt-panel");
-        await expect(panel.getByTestId("pt-code")).toHaveText("K7M-2QX", { timeout: 10_000 });
+        await expect(panel.getByTestId("pt-url")).toHaveText(NET_LINK, { timeout: 10_000 });
         await expect(panel.getByTestId("pt-player-2").getByTestId("pt-player-name")).toHaveText("Sam");
+        await expect(panel.getByTestId("pt-player-2").getByTestId("pt-player-via")).toBeVisible();
         await expect(page.getByTestId("pt-ask")).toBeVisible({ timeout: 10_000 });
         await page.mouse.move(8, 8);
         await page.waitForTimeout(800);
@@ -469,7 +488,7 @@ for (const lang of LANGS) {
           if (box) box.scrollTop += el.getBoundingClientRect().top - 84;
         });
         await page.waitForTimeout(400);
-        await shot(page, "together", theme);
+        await shot(page, "together-net", theme);
       });
     });
 
@@ -627,15 +646,27 @@ for (const lang of LANGS) {
         await shot(page, "m-play", theme);
       });
 
-      test(`a friend's invite, opened in the app (${theme})`, async ({ page }) => {
-        await fakeConsole(page, { paired: true, theme, lang });
-        await page.addInitScript(() => window.localStorage.setItem("ps5upload.join.name", "Sam"));
-        await page.goto(`/play?join=${encodeURIComponent(LINK)}`, { waitUntil: "domcontentloaded" });
-        await expect(page.getByTestId("join-invite-name")).toHaveValue("Sam", { timeout: 30_000 });
-        await page.waitForTimeout(800);
-        await shot(page, "m-join", theme);
-      });
-
+      // The website's guest page (site/join/, built by vite.join.config.ts), opened from an
+      // internet invite on a phone: the name, then Join. It is dark either way, so one picture.
+      if (theme === "light") {
+        test(`a friend's internet invite, in a phone browser`, async ({ page }) => {
+          const html = readFileSync(new URL("../../site/join/index.html", import.meta.url), "utf8");
+          await page.route("**/join/", (route) => route.fulfill({ contentType: "text/html", body: html }));
+          await page.addInitScript(
+            ([lang]) => {
+              window.localStorage.setItem("ps5upload.lang", lang);
+              window.localStorage.setItem("ps5upload.join.name", "Sam");
+            },
+            [lang] as const,
+          );
+          await page.goto(`/join/#${NET_FRAGMENT}`, { waitUntil: "domcontentloaded" });
+          await expect(page.getByTestId("join-name-step")).toBeVisible({ timeout: 30_000 });
+          await page.getByTestId("join-name").fill("Sam");
+          await page.getByTestId("join-name").blur();
+          await page.waitForTimeout(400);
+          await page.screenshot({ path: `${dir}/m-net-join.png`, animations: "disabled", caret: "hide" });
+        });
+      }
     });
   }
 }
