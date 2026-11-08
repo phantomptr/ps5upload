@@ -1,6 +1,7 @@
 # Deploying the hub on Fly.io (recommended)
 
-What you get: one small always-on machine (`shared-cpu-1x`, 256 MB) running the hub's container,
+What you get: one small machine (`shared-cpu-1x`, 256 MB) running the hub's container, stopped
+by Fly while nobody is connected and started again (about a second) by the next connection,
 HTTPS on `hub.phantomptr.com` with a certificate Fly renews, and nothing else. STUN is off
 (clients use stun.cloudflare.com and stun.l.google.com), so no UDP service and no dedicated IPv4
 are needed. Everything below runs on your computer.
@@ -74,8 +75,23 @@ fly logs                 # live
 fly logs --no-tail       # recent
 ```
 
-The hub logs only counts and error kinds, never addresses, room ids or payloads. A line
-`hub: summary rooms=... guests=...` appears every 5 minutes.
+The hub logs only counts and error kinds, never addresses, room ids or payloads, and only a few
+lines: `started`, `stopped`, and an hourly `hub: summary rooms=... errors=... refused=...` when
+something happened in that hour (an idle hub logs nothing). Bad frames and refusals are counted
+in `/metrics`, not logged one by one.
+
+## Cost
+
+Fly bills a machine by the second while it runs (`shared-cpu-1x` 256 MB: $2.19 per 30 days if it
+never stops, docs.fly.io/about/pricing). `fly.toml` lets Fly stop it when no socket is open
+(`auto_stop_machines = "stop"`, `min_machines_running = 0`), so the bill follows the hours in
+which someone has an internet invite open. A host's engine starts it again when it connects; a
+guest never waits for that, because a guest only joins a room whose host is connected. The
+shared IPv4 and the IPv6 are free; do not add a dedicated IPv4 ($2/month): the hub needs none.
+Outbound data is $0.02/GB and the hub sends a few kilobytes per guest.
+
+To keep it always on instead (no start delay for hosts, the full $2.19), set
+`auto_stop_machines = "off"` and `min_machines_running = 1`.
 
 ## Metrics
 

@@ -7,6 +7,8 @@ import {
   DC_MAX,
   framePieces,
   fingerprintMatches,
+  HUB_BACK_FOR_MS,
+  HUB_BACK_WAIT_MS,
   hubSocketUrl,
   ICE_TIMEOUT_MS,
   LAST,
@@ -175,7 +177,7 @@ class FakeHub {
   sent: Array<Record<string, unknown>> = [];
   closed = false;
   onopen: (() => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((e?: { code: number }) => void) | null = null;
   onerror: (() => void) | null = null;
   onmessage: ((e: { data: unknown }) => void) | null = null;
   constructor(readonly url: string) {
@@ -189,6 +191,13 @@ class FakeHub {
     this.closed = true;
     this.readyState = 3;
     this.onclose?.();
+  }
+  /** The hub closing the socket with a code (1001: it is shutting down). */
+  closeWith(code: number) {
+    if (this.closed) return;
+    this.closed = true;
+    this.readyState = 3;
+    this.onclose?.({ code });
   }
   open() {
     this.readyState = 1;
@@ -427,6 +436,79 @@ describe("the WebRTC transport", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(stages[stages.length - 1]).toEqual({ kind: "ended", why: "no_direct" });
     expect(hub.sent[hub.sent.length - 1]).toEqual({ t: "leave" });
+  });
+
+  it("a hub that restarts (1001) before the answer: tried again until the host's room is back", async () => {
+    const c = client();
+    c.start();
+    const first = await connect(0);
+    first.hub.closeWith(1001);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(first.pc.closed).toBe(true);
+    expect(stages[stages.length - 1]).toEqual({ kind: "connecting" });
+    // Back, but the host has not opened its room again yet: wait and try once more.
+    await vi.advanceTimersByTimeAsync(HUB_BACK_WAIT_MS);
+    expect(FakeHub.all).toHaveLength(2);
+    FakeHub.all[1].open();
+    expect(FakeHub.all[1].sent[0]).toEqual({ v: 1, t: "join", room: ROOM });
+    FakeHub.all[1].say({ t: "error", why: "no_room" });
+    await vi.advanceTimersByTimeAsync(HUB_BACK_WAIT_MS);
+    expect(FakeHub.all).toHaveLength(3);
+    const hub = FakeHub.all[2];
+    hub.open();
+    hub.say({ t: "joined", gid: "G2" });
+    await vi.advanceTimersByTimeAsync(0);
+    // The try that met no room made no peer connection: this is the second one.
+    expect(FakePC.all).toHaveLength(2);
+    const pc = FakePC.all[1];
+    const dc = pc.channel!;
+    expect(hub.signals("offer")).toHaveLength(1);
+    hub.say({ t: "signal", from: "host", data: answer() });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pc.remote?.type).toBe("answer");
+    dc.open();
+    expect(dc.texts[0]).toEqual({ hello: { name: "Ben", invite: KEY } });
+    c.stop();
+  });
+
+  it("a hub that stays away, or closes without 1001: the hub message", async () => {
+    const c = client();
+    c.start();
+    const { hub } = await connect(0);
+    hub.closeWith(1001);
+    for (let n = 1; ; n++) {
+      await vi.advanceTimersByTimeAsync(HUB_BACK_WAIT_MS);
+      const last = stages[stages.length - 1];
+      if (last.kind === "ended") break;
+      expect(n * HUB_BACK_WAIT_MS).toBeLessThanOrEqual(HUB_BACK_FOR_MS + HUB_BACK_WAIT_MS);
+      // Each try's socket goes away the same way.
+      FakeHub.all[FakeHub.all.length - 1].closeWith(1001);
+    }
+    expect(stages[stages.length - 1]).toEqual({ kind: "ended", why: "no_hub" });
+
+    FakeHub.all = [];
+    FakePC.all = [];
+    stages = [];
+    const c2 = client();
+    c2.start();
+    const two = await connect(0);
+    two.hub.closeWith(1006);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stages[stages.length - 1]).toEqual({ kind: "ended", why: "no_hub" });
+  });
+
+  it("the hub gone after the answer: ICE carries on without it", async () => {
+    const c = client();
+    c.start();
+    const { hub, pc, dc } = await connect(0);
+    hub.say({ t: "signal", from: "host", data: answer() });
+    await vi.advanceTimersByTimeAsync(0);
+    hub.closeWith(1001);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(pc.closed).toBe(false);
+    dc.open();
+    expect(dc.texts[0]).toEqual({ hello: { name: "Ben", invite: KEY } });
+    c.stop();
   });
 
   it("the hub's answers: no room, full, the engine's bye", async () => {

@@ -52,8 +52,9 @@ fn main() {
         config.stun_listen = stun_from_flags;
     }
 
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
+    // One thread: the hub runs on one shared vCPU, does no blocking work and holds its one lock
+    // only for map updates, so a second worker would only add a thread and work stealing.
+    let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap_or_else(|_| fail("cannot start the runtime"));

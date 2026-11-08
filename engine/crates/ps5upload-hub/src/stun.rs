@@ -44,36 +44,53 @@ pub fn parse_binding_request(pkt: &[u8]) -> Option<[u8; 12]> {
     Some(txid)
 }
 
-/// The Binding success response for a request from `from`.
-pub fn binding_response(txid: &[u8; 12], from: SocketAddr) -> Vec<u8> {
-    let ip = canonical_ip(from.ip());
+/// The largest response: header, attribute header, an IPv6 XOR-MAPPED-ADDRESS.
+pub const MAX_RESPONSE: usize = HEADER_LEN + 4 + 20;
+
+/// Writes the Binding success response for a request from `from` into `out` (no allocation) and
+/// returns its length: 32 bytes for IPv4, 44 for IPv6.
+pub fn write_binding_response(
+    txid: &[u8; 12],
+    from: SocketAddr,
+    out: &mut [u8; MAX_RESPONSE],
+) -> usize {
     let xport = from.port() ^ (MAGIC_COOKIE >> 16) as u16;
-    let mut value = vec![0u8, 0];
-    match ip {
+    // The attribute value: reserved byte, family, port, address.
+    let v = &mut out[HEADER_LEN + 4..];
+    v[0] = 0;
+    v[2..4].copy_from_slice(&xport.to_be_bytes());
+    let value_len = match canonical_ip(from.ip()) {
         IpAddr::V4(v4) => {
-            value[1] = 0x01;
-            value.extend_from_slice(&xport.to_be_bytes());
-            value.extend_from_slice(&(u32::from(v4) ^ MAGIC_COOKIE).to_be_bytes());
+            v[1] = 0x01;
+            v[4..8].copy_from_slice(&(u32::from(v4) ^ MAGIC_COOKIE).to_be_bytes());
+            8
         }
         IpAddr::V6(v6) => {
-            value[1] = 0x02;
-            value.extend_from_slice(&xport.to_be_bytes());
+            v[1] = 0x02;
             let mut key = [0u8; 16];
             key[..4].copy_from_slice(&MAGIC_COOKIE.to_be_bytes());
             key[4..].copy_from_slice(txid);
-            value.extend(v6.octets().iter().zip(key.iter()).map(|(a, k)| a ^ k));
+            for (dst, (a, k)) in v[4..20].iter_mut().zip(v6.octets().iter().zip(key.iter())) {
+                *dst = a ^ k;
+            }
+            20
         }
-    }
-    let attr_len = value.len() as u16;
-    let mut out = Vec::with_capacity(HEADER_LEN + 4 + value.len());
-    out.extend_from_slice(&BINDING_SUCCESS.to_be_bytes());
-    out.extend_from_slice(&(4 + attr_len).to_be_bytes());
-    out.extend_from_slice(&MAGIC_COOKIE.to_be_bytes());
-    out.extend_from_slice(txid);
-    out.extend_from_slice(&ATTR_XOR_MAPPED_ADDRESS.to_be_bytes());
-    out.extend_from_slice(&attr_len.to_be_bytes());
-    out.extend_from_slice(&value);
-    out
+    };
+    let attr_len = value_len as u16;
+    out[0..2].copy_from_slice(&BINDING_SUCCESS.to_be_bytes());
+    out[2..4].copy_from_slice(&(4 + attr_len).to_be_bytes());
+    out[4..8].copy_from_slice(&MAGIC_COOKIE.to_be_bytes());
+    out[8..20].copy_from_slice(txid);
+    out[20..22].copy_from_slice(&ATTR_XOR_MAPPED_ADDRESS.to_be_bytes());
+    out[22..24].copy_from_slice(&attr_len.to_be_bytes());
+    HEADER_LEN + 4 + value_len
+}
+
+/// The Binding success response for a request from `from`, as a new vector (tests, tools).
+pub fn binding_response(txid: &[u8; 12], from: SocketAddr) -> Vec<u8> {
+    let mut out = [0u8; MAX_RESPONSE];
+    let n = write_binding_response(txid, from, &mut out);
+    out[..n].to_vec()
 }
 
 /// Decodes the XOR-MAPPED-ADDRESS of a Binding success response (what a client does; used by the
@@ -121,6 +138,7 @@ pub fn decode_xor_mapped_address(resp: &[u8]) -> Option<SocketAddr> {
 /// Answers Binding requests on `sock` until the shutdown signal.
 pub async fn serve(sock: UdpSocket, shared: Arc<Shared>, table: Arc<Mutex<RateTable>>) {
     let mut buf = [0u8; 1500];
+    let mut resp = [0u8; MAX_RESPONSE];
     let mut shutdown = shared.shutdown.subscribe();
     loop {
         let (n, from) = tokio::select! {
@@ -149,7 +167,8 @@ pub async fn serve(sock: UdpSocket, shared: Arc<Shared>, table: Arc<Mutex<RateTa
             continue;
         }
         Metrics::inc(&shared.metrics.stun_requests);
-        let _ = sock.send_to(&binding_response(&txid, from), from).await;
+        let n = write_binding_response(&txid, from, &mut resp);
+        let _ = sock.send_to(&resp[..n], from).await;
     }
 }
 

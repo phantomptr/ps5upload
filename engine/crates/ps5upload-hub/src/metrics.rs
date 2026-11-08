@@ -35,7 +35,7 @@ pub enum ErrorKind {
     RoomFull,
     /// Over a per-minute limit.
     RateLimited,
-    /// The hub has its maximum of rooms.
+    /// The hub has its maximum of rooms (or of connections: HTTP 503 before the upgrade).
     ServerFull,
     /// This client already hosts its maximum of rooms.
     TooManyRooms,
@@ -47,10 +47,12 @@ pub enum ErrorKind {
     BadOrigin,
     /// The peer did not read its messages fast enough.
     SlowPeer,
+    /// This client already has its maximum of open connections (HTTP 429 before the upgrade).
+    TooManyConnections,
 }
 
 impl ErrorKind {
-    pub const ALL: [ErrorKind; 20] = [
+    pub const ALL: [ErrorKind; 21] = [
         ErrorKind::BadJson,
         ErrorKind::BadVersion,
         ErrorKind::UnknownType,
@@ -71,6 +73,7 @@ impl ErrorKind {
         ErrorKind::Timeout,
         ErrorKind::BadOrigin,
         ErrorKind::SlowPeer,
+        ErrorKind::TooManyConnections,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -95,6 +98,7 @@ impl ErrorKind {
             ErrorKind::Timeout => "timeout",
             ErrorKind::BadOrigin => "bad_origin",
             ErrorKind::SlowPeer => "slow_peer",
+            ErrorKind::TooManyConnections => "too_many_connections",
         }
     }
 
@@ -134,6 +138,43 @@ impl Metrics {
 
     pub fn errors(&self, kind: ErrorKind) -> u64 {
         self.errors[kind.index()].load(Ordering::Relaxed)
+    }
+
+    pub fn errors_total(&self) -> u64 {
+        self.errors.iter().map(|e| e.load(Ordering::Relaxed)).sum()
+    }
+
+    /// Requests refused by a limit (rate, size of the hub, rooms or connections per client).
+    pub fn refused_total(&self) -> u64 {
+        [
+            ErrorKind::RateLimited,
+            ErrorKind::ServerFull,
+            ErrorKind::TooManyRooms,
+            ErrorKind::TooManyConnections,
+        ]
+        .iter()
+        .map(|k| self.errors(*k))
+        .sum::<u64>()
+            + self.stun_limited.load(Ordering::Relaxed)
+    }
+
+    /// A number that grows whenever any counter does: the summary skips an interval in which it
+    /// did not.
+    pub fn activity(&self) -> u64 {
+        [
+            &self.hosts,
+            &self.reclaims,
+            &self.joins,
+            &self.signals,
+            &self.rooms_expired,
+            &self.stun_requests,
+            &self.stun_ignored,
+            &self.stun_limited,
+        ]
+        .iter()
+        .map(|c| c.load(Ordering::Relaxed))
+        .sum::<u64>()
+            + self.errors_total()
     }
 
     pub fn inc(c: &AtomicU64) {

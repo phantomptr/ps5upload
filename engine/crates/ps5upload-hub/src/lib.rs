@@ -164,14 +164,15 @@ impl Hub {
         let _ = self.shared.shutdown.send(true);
     }
 
-    /// Stops and waits for the tasks, at most `grace`.
+    /// Stops and waits for the tasks and the connections, at most `grace` in all (Fly's
+    /// `kill_timeout` must be longer).
     pub async fn stop(self, grace: Duration) {
+        let deadline = tokio::time::Instant::now() + grace;
         self.shutdown();
         let shared = self.shared.clone();
         let all = futures_util::future::join_all(self.tasks);
-        let _ = tokio::time::timeout(grace, all).await;
+        let _ = tokio::time::timeout_at(deadline, all).await;
         // Connection tasks close on the same signal; give them the rest of the grace period.
-        let deadline = tokio::time::Instant::now() + grace;
         while shared
             .connections
             .load(std::sync::atomic::Ordering::Relaxed)
