@@ -9,6 +9,7 @@ import { isMobile } from "../../lib/platform";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { getEngineUrl } from "../../state/engine";
 import { useTr } from "../../state/lang";
+import { AgentAccessSwitch } from "./AgentAccessSwitch";
 import { CopyBlock } from "./CopyBlock";
 import {
   AGENTS,
@@ -260,7 +261,8 @@ export default function ConnectTab() {
               'There is no password, and it can delete files on your console. Keep tools that change things on "ask" in your agent, and read each console command before you allow it.',
             )}
           </p>
-          <p>
+          <AgentAccessSwitch engineUrl={engineUrl} />
+          <p className="text-xs text-[var(--color-muted)]">
             {tr(
               "mcp_safety_read_only",
               undefined,

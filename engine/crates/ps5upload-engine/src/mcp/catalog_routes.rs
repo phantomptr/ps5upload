@@ -174,6 +174,17 @@ pub(crate) fn holds_console_keys(path: &str) -> bool {
     HOLD_CONSOLE_KEYS.contains(&plain_path(path).as_str())
 }
 
+/// `path` names the switch that decides whether agents can change things (`access.rs`), however it
+/// is written: percent-escapes, case, repeated or trailing slashes, `.` and `..`.
+pub(crate) fn reaches_agent_access(path: &str) -> bool {
+    let plain = plain_path(path);
+    let route = super::access::ROUTE;
+    plain == route
+        || plain
+            .strip_prefix(route)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
 /// `(method, path)`, sorted by path, then method.
 pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("GET", "/"),
@@ -874,6 +885,12 @@ mod tests {
                 ["GET", "POST", "DELETE"]
                     .iter()
                     .map(|method| (method.to_string(), "/mcp".to_string())),
+            )
+            .chain(
+                // The owner's switch for agents, mounted beside /mcp so no tool can reach it.
+                ["GET", "PUT"]
+                    .iter()
+                    .map(|method| (method.to_string(), super::super::access::ROUTE.to_string())),
             )
             .collect();
         let documented: BTreeSet<(String, String)> =
