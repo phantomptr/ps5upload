@@ -82,16 +82,21 @@ fn instructions(read_only: bool) -> String {
     );
     if read_only {
         text.push_str(
-            "\n- This server is read-only (PS5UPLOAD_MCP_READ_ONLY): anything that can change \
-             something is refused.",
+            "\n- This server is read-only: the owner set it so agents can only look (in the app \
+             under MCP & API › Connect an agent, or with PS5UPLOAD_MCP_READ_ONLY in the engine's \
+             environment). Tools that can change something are left out of the list and refused. \
+             Only the owner can change it; do not try to.",
         );
     }
     text
 }
 
-fn capabilities() -> Value {
+/// What this server offers. A modern client can hear `notifications/tools/list_changed` on a
+/// `subscriptions/listen` stream (the owner switches agents between looking and changing things);
+/// a legacy one has no stream to hear it on.
+fn capabilities(era: Era) -> Value {
     json!({
-        "tools": { "listChanged": false },
+        "tools": { "listChanged": era == Era::Modern },
         "resources": { "listChanged": false, "subscribe": false },
         "prompts": { "listChanged": false },
     })
@@ -101,7 +106,7 @@ fn capabilities() -> Value {
 fn discover(state: &McpState) -> Value {
     json!({
         "supportedVersions": SUPPORTED_VERSIONS,
-        "capabilities": capabilities(),
+        "capabilities": capabilities(Era::Modern),
         "instructions": instructions(state.read_only()),
     })
 }
@@ -115,7 +120,7 @@ fn initialize(state: &McpState, params: &Value) -> Value {
         .unwrap_or(LATEST_LEGACY_VERSION);
     json!({
         "protocolVersion": version,
-        "capabilities": capabilities(),
+        "capabilities": capabilities(Era::Legacy),
         "serverInfo": server_info(true),
         "instructions": instructions(state.read_only()),
     })
@@ -155,7 +160,7 @@ pub(crate) async fn call(
         ("ping", _) => json!({}),
         ("server/discover", Era::Modern) => discover(state),
         ("initialize", Era::Legacy) => initialize(state, params),
-        ("tools/list", _) => tools::list(),
+        ("tools/list", _) => tools::list(state.read_only()),
         ("tools/call", _) => call_tool(state, caller, params).await?,
         ("resources/list", _) => resources::list(),
         ("resources/templates/list", _) => resources::templates(),

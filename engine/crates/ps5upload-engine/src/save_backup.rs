@@ -561,7 +561,8 @@ pub(crate) fn download_save(
             download(host, &entry.path, tmp, "folder")?;
             // The copy is named after the folder, and the backup after the title: a PlayStation
             // 2 emulator's save is its `memcards` or saved states folder.
-            let got = tmp.join(entry.path.rsplit('/').next().unwrap_or_default());
+            let leaf = entry.path.rsplit('/').next().unwrap_or_default();
+            let got = tmp.join(ps5upload_core::host_names::escape_name(leaf)?);
             if got != want {
                 std::fs::rename(&got, &want).map_err(|e| format!("{}: {e}", got.display()))?;
             }
@@ -575,16 +576,44 @@ pub(crate) fn download_save(
     Ok(())
 }
 
-/// Copies `src` on `host` (a file, or a folder: `kind`) into the local folder `dest`.
-fn download(host: &str, src: &str, dest: &Path, kind: &str) -> Result<(), String> {
+/// Copies `src` on `host` (a file, or a folder: `kind`) into the local folder `dest`. A name
+/// this computer can't hold (a game may name a save file `options\x.xml`) is kept under its
+/// reversible form (`host_names`), and `upload_kept` puts it back exactly (#729).
+pub(crate) fn download(host: &str, src: &str, dest: &Path, kind: &str) -> Result<(), String> {
     let start = post(
         "/api/transfer/download",
-        json!({ "addr": host, "src_path": src, "dest_dir": dest.to_string_lossy(), "kind": kind }),
+        json!({
+            "addr": host,
+            "src_path": src,
+            "dest_dir": dest.to_string_lossy(),
+            "kind": kind,
+            "escape_names": true,
+        }),
     )?;
     let job = start
         .get("job_id")
         .and_then(Value::as_str)
         .ok_or("download did not start")?;
+    wait_job(job)
+}
+
+/// Uploads the files of the local folder `src` (one `download` made, or a backup of one) into
+/// `dest_root` on `host`, each under the console name its kept name stands for (#729).
+pub(crate) fn upload_kept(host: &str, src: &Path, dest_root: &str) -> Result<(), String> {
+    let start = post(
+        "/api/transfer/dir",
+        json!({
+            "addr": host,
+            "src_dir": src.to_string_lossy(),
+            "dest_root": dest_root,
+            "excludes": [],
+            "unescape_names": true,
+        }),
+    )?;
+    let job = start
+        .get("job_id")
+        .and_then(Value::as_str)
+        .ok_or("upload did not start")?;
     wait_job(job)
 }
 
@@ -1257,7 +1286,11 @@ fn only_the_saves_own(src: &Path, place: &crate::ps2_saves::Place) -> Result<(),
     let mut foreign: Vec<String> = rd
         .filter_map(|e| e.ok())
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|name| !place.holds(name))
+        // Asked by the console name a kept one stands for (`host_names`).
+        .filter(|name| {
+            let real = ps5upload_core::host_names::unescape_name(name);
+            !place.holds(real.as_deref().unwrap_or(name))
+        })
         .collect();
     if foreign.is_empty() {
         return Ok(());
@@ -1378,20 +1411,7 @@ pub(crate) fn put_in_place(
                 json!({ "addr": host, "path": format!("{folder}/{name}") }),
             )?;
         }
-        let start = post(
-            "/api/transfer/dir",
-            json!({
-                "addr": host,
-                "src_dir": src.to_string_lossy(),
-                "dest_root": folder,
-                "excludes": [],
-            }),
-        )?;
-        let job = start
-            .get("job_id")
-            .and_then(Value::as_str)
-            .ok_or("upload did not start")?;
-        wait_job(job)
+        upload_kept(host, src, folder)
     })();
     let drop_scratch = || {
         if let Some(dir) = &scratch {

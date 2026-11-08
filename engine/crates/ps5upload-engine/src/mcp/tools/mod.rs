@@ -122,10 +122,19 @@ pub(crate) fn find(name: &str) -> Option<&'static ToolDef> {
     all().iter().find(|tool| tool.name == name)
 }
 
-/// The answer to `tools/list`, in a fixed order.
-pub(crate) fn list() -> Value {
+impl ToolDef {
+    /// Can change something: refused, and left out of the list, when agents may only look.
+    fn changes_things(&self) -> bool {
+        matches!(self.kind, Kind::Write { .. } | Kind::Destructive { .. })
+    }
+}
+
+/// The answer to `tools/list`, in a fixed order. When agents may only look, the tools that change
+/// things are left out (`api_request` stays: it still takes GET).
+pub(crate) fn list(read_only: bool) -> Value {
     let tools: Vec<Value> = all()
         .iter()
+        .filter(|tool| !(read_only && tool.changes_things()))
         .map(|tool| {
             json!({
                 "name": tool.name,
@@ -145,11 +154,13 @@ pub(crate) async fn call(
     ctx: ToolCtx,
     arguments: Map<String, Value>,
 ) -> ToolOutput {
-    if ctx.state.read_only() && matches!(tool.kind, Kind::Write { .. } | Kind::Destructive { .. }) {
+    // Read now, not when the client listed the tools: the owner can flip it at any time, and a
+    // client may call a tool from a list it fetched before.
+    if ctx.state.read_only() && tool.changes_things() {
         return ToolOutput::error(format!(
-            "{} is refused: this engine's MCP server is read-only (PS5UPLOAD_MCP_READ_ONLY). The \
-             owner can restart the engine without that setting to allow it.",
-            tool.name
+            "{} is refused: {}",
+            tool.name,
+            super::access::refusal(ctx.state.access().locked())
         ));
     }
     if let Err(problem) = check_arguments(&tool.schema, &arguments) {

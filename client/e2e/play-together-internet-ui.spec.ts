@@ -123,6 +123,11 @@ test("Internet: the link and QR code, then a friend listed as Internet · Direct
   await expect(panel.getByTestId("pt-qr")).toBeVisible();
   await expect(panel.getByTestId("pt-addresses-internet")).toHaveAttribute("aria-pressed", "true");
   await expect(panel.getByTestId("pt-addresses-internet-hint")).toContainText("Works from anywhere");
+  // One quiet line asks for support (no amounts), only under Internet.
+  await expect(panel.getByTestId("pt-addresses-internet-support")).toContainText("a donation keeps it going");
+  await expect(panel.getByTestId("pt-addresses-internet-support")).not.toContainText(/[$€£]\s?\d/);
+  // Somewhere else: the Internet choice, no longer Tailscale.
+  await expect(panel.getByTestId("pt-tailscale")).toHaveText("Playing from somewhere else? Choose Internet above.");
   // The short code is for the same network only.
   await expect(panel.getByTestId("pt-code")).toHaveCount(0);
   // Remembered on this device.
@@ -155,5 +160,44 @@ test("Internet invites off in the settings: said, and the LAN link still works",
   await expect(panel.getByTestId("pt-url")).toHaveCount(0);
   await panel.getByTestId("pt-addresses-home").click();
   await expect(panel.getByTestId("pt-url")).toHaveText(LINK);
+  await expect(panel.getByTestId("pt-addresses-internet-support")).toHaveCount(0);
   await expect(panel.getByTestId("pt-net-off")).toHaveCount(0);
+});
+
+test("Play together page: Internet picked before the stream, Start and invite from the keyboard", async ({ page }) => {
+  await seedConsole(page);
+  const posts = await fakeEngine(page, () => "internet");
+  await page.goto("/play", { waitUntil: "domcontentloaded" });
+  await page.getByRole("radio", { name: "Play together" }).click({ timeout: 30_000 });
+  const start = page.getByTestId("pt-start");
+  await expect(start).toContainText("No app needed");
+  await start.getByTestId("pt-start-net-internet").click();
+  await expect(start.getByTestId("pt-start-net-internet-hint")).toContainText("Works from anywhere");
+  await expect(start.getByTestId("pt-start-net-internet-support")).toContainText("a donation keeps it going");
+  // Nothing opened before the button.
+  expect(posts.find((p) => p.path === "/api/join/open")).toBeUndefined();
+
+  await start.getByTestId("pt-start-invite").focus();
+  await page.keyboard.press("Enter");
+  const panel = page.getByTestId("pt-panel");
+  await expect(panel.getByTestId("pt-url")).toHaveText(NET_URL, { timeout: 15_000 });
+  await expect.poll(() => posts.map((p) => p.path)).toContain("/api/join/open");
+  // The panel shows the internet link (this fake engine has it open already), as picked here.
+  await expect(panel.getByTestId("pt-addresses-internet")).toHaveAttribute("aria-pressed", "true");
+  // The invite takes the focus, and the page stays on Play together.
+  await expect(panel).toBeFocused();
+  await expect(page.getByRole("radio", { name: "Play together" })).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByTestId("pt-start")).toHaveCount(0);
+});
+
+test("Play together page: internet invites off is said before the stream; Support opens Thanks", async ({ page }) => {
+  await seedConsole(page);
+  await fakeEngine(page, () => "lan", false);
+  await page.goto("/play", { waitUntil: "domcontentloaded" });
+  await page.getByRole("radio", { name: "Play together" }).click({ timeout: 30_000 });
+  await page.getByTestId("pt-start-net-internet").click();
+  await expect(page.getByTestId("pt-start-net-off")).toContainText("Internet invites are off");
+  await expect(page.getByTestId("pt-start-net-off").getByRole("button", { name: "Open settings" })).toBeVisible();
+  await page.getByTestId("pt-start-net-internet-donate").click();
+  await expect(page).toHaveURL(/\/thanks$/);
 });

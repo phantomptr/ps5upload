@@ -525,8 +525,14 @@ fn is_install_package_filename(name: &str) -> bool {
 ///
 /// Streamed to disk field-by-field, never buffered whole: packages run to tens
 /// of gigabytes.
-/// Removes a directory when dropped, unless it has been taken (set to `None`).
+/// Removes a directory (or a single file) when dropped, unless it has been taken (set to `None`).
 struct RemoveOnDrop(Option<PathBuf>);
+
+fn remove_dir_or_file(path: &std::path::Path) {
+    if std::fs::remove_dir_all(path).is_err() {
+        let _ = std::fs::remove_file(path);
+    }
+}
 
 impl Drop for RemoveOnDrop {
     fn drop(&mut self) {
@@ -534,35 +540,111 @@ impl Drop for RemoveOnDrop {
             // Tens of GB on a slow disk: not on an async worker, which serves every console.
             match tokio::runtime::Handle::try_current() {
                 Ok(rt) => {
-                    rt.spawn_blocking(move || std::fs::remove_dir_all(dir));
+                    rt.spawn_blocking(move || remove_dir_or_file(&dir));
                 }
-                Err(_) => {
-                    let _ = std::fs::remove_dir_all(dir);
-                }
+                Err(_) => remove_dir_or_file(&dir),
             }
         }
     }
 }
 
 async fn pkg_upload_handler(headers: HeaderMap, form: axum::extract::Multipart) -> Response<Body> {
-    stage_browser_upload(headers, form, true).await
+    stage_browser_upload(headers, form, true, FileUploadQuery::default()).await
 }
 
-async fn file_upload_handler(headers: HeaderMap, form: axum::extract::Multipart) -> Response<Body> {
-    stage_browser_upload(headers, form, false).await
+/// Where in a staged upload a file goes: how a browser sends a whole folder, one file per
+/// request, with each file's place in the folder kept (#730).
+#[derive(Debug, Default, Deserialize)]
+struct FileUploadQuery {
+    /// Add this file to an earlier upload (its `upload_id`) instead of starting a new one.
+    #[serde(default)]
+    upload_id: Option<String>,
+    /// The file's path inside the folder being sent, with `/` between names
+    /// (`Game/sce_sys/param.json`). The answer's `root` is then the folder's own path.
+    #[serde(default)]
+    relpath: Option<String>,
+}
+
+async fn file_upload_handler(
+    Query(q): Query<FileUploadQuery>,
+    headers: HeaderMap,
+    form: axum::extract::Multipart,
+) -> Response<Body> {
+    stage_browser_upload(headers, form, false, q).await
+}
+
+/// A path inside an upload, from the browser's `relpath`: its names in order, each one safe to
+/// be a path segment. `None` for one that climbs out (`..`) or names nothing.
+fn sanitize_relpath(rel: &str) -> Option<Vec<String>> {
+    let mut out = Vec::new();
+    for seg in rel.split(['/', '\\']) {
+        if seg.is_empty() || seg == "." {
+            continue;
+        }
+        let cleaned: String = seg.chars().filter(|c| !c.is_control()).collect();
+        // `..`, a name of only dots or a Windows drive (`C:`) would not stay inside the upload.
+        if cleaned.is_empty() || cleaned.chars().all(|c| c == '.') || cleaned.contains(':') {
+            return None;
+        }
+        out.push(cleaned);
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+fn bad_upload(msg: &str) -> Response<Body> {
+    json_response(StatusCode::BAD_REQUEST, serde_json::json!({ "error": msg }))
+}
+
+/// Removes what a failed upload left: its whole directory when this request started it, only
+/// the file when it was added to an earlier upload (the browser removes that one as a whole).
+async fn scrub_upload(path: &std::path::Path, whole_dir: bool) {
+    if whole_dir {
+        let _ = tokio::fs::remove_dir_all(path).await;
+    } else {
+        let _ = tokio::fs::remove_file(path).await;
+    }
 }
 
 async fn stage_browser_upload(
     headers: HeaderMap,
     mut form: axum::extract::Multipart,
     packages_only: bool,
+    q: FileUploadQuery,
 ) -> Response<Body> {
     use tokio::io::AsyncWriteExt;
 
+    let rel = match q
+        .relpath
+        .as_deref()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+    {
+        Some(r) => match sanitize_relpath(r) {
+            Some(segs) => Some(segs),
+            None => return bad_upload("invalid relpath"),
+        },
+        None => None,
+    };
     // Removes week-old uploads, tens of GB each on a slow disk: not on an async worker.
     tokio::task::spawn_blocking(cleanup_stale_pkg_uploads);
-    let id = Uuid::new_v4();
-    let dir = pkg_upload_dir().join(id.to_string());
+    let (id, dir, fresh) = match q.upload_id.as_deref().filter(|s| !s.is_empty()) {
+        Some(existing) => {
+            let Some(dir) = pkg_upload_path(existing) else {
+                return bad_upload("invalid upload id");
+            };
+            if !tokio::fs::metadata(&dir).await.is_ok_and(|m| m.is_dir()) {
+                return json_response(
+                    StatusCode::NOT_FOUND,
+                    serde_json::json!({ "error": "no such upload" }),
+                );
+            }
+            (existing.to_string(), dir, false)
+        }
+        None => {
+            let id = Uuid::new_v4();
+            (id.to_string(), pkg_upload_dir().join(id.to_string()), true)
+        }
+    };
     if let Err(e) = tokio::fs::create_dir_all(&dir).await {
         return json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -582,20 +664,25 @@ async fn stage_browser_upload(
             .ok()
             .flatten();
         if let Some(refusal) = free.and_then(|f| crate::remote::fetch::no_room(f, want)) {
-            let _ = tokio::fs::remove_dir_all(&dir).await;
+            if fresh {
+                let _ = tokio::fs::remove_dir_all(&dir).await;
+            }
             return refusal;
         }
     }
     // A browser that goes away mid-upload drops this handler at an await, past every cleanup
-    // below: the partial package (tens of GB) would sit in the temp dir for a week.
-    let mut partial = RemoveOnDrop(Some(dir.clone()));
+    // below: the partial package (tens of GB) would sit in the temp dir for a week. An upload
+    // that is added to keeps its directory; only its half-written file goes (below).
+    let mut partial = RemoveOnDrop(fresh.then(|| dir.clone()));
 
     loop {
         let field = match form.next_field().await {
             Ok(Some(f)) => f,
             Ok(None) => break,
             Err(e) => {
-                let _ = tokio::fs::remove_dir_all(&dir).await;
+                if fresh {
+                    let _ = tokio::fs::remove_dir_all(&dir).await;
+                }
                 return json_response(
                     StatusCode::BAD_REQUEST,
                     serde_json::json!({ "error": format!("malformed upload: {e}") }),
@@ -607,11 +694,33 @@ async fn stage_browser_upload(
         if packages_only && !is_install_package_filename(&filename) {
             continue;
         }
-        let dest = dir.join(&filename);
+        // A folder's file goes to its place in the folder; any other keeps the part's name.
+        let (dest, filename, root) = match &rel {
+            Some(segs) => {
+                let dest = segs.iter().fold(dir.clone(), |p, seg| p.join(seg));
+                let name = segs.last().cloned().unwrap_or(filename);
+                (dest, name, Some(dir.join(&segs[0])))
+            }
+            None => (dir.join(&filename), filename, None),
+        };
+        // What a failure removes: the whole upload when this request started it, else the file.
+        let scrub = if fresh { dir.clone() } else { dest.clone() };
+        if !fresh {
+            partial.0 = Some(dest.clone());
+        }
+        if let Some(parent) = dest.parent() {
+            if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                scrub_upload(&scrub, fresh).await;
+                return json_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    serde_json::json!({ "error": format!("could not create {}: {e}", parent.display()) }),
+                );
+            }
+        }
         let mut file = match tokio::fs::File::create(&dest).await {
             Ok(f) => f,
             Err(e) => {
-                let _ = tokio::fs::remove_dir_all(&dir).await;
+                scrub_upload(&scrub, fresh).await;
                 return json_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     serde_json::json!({ "error": format!("could not open {}: {e}", dest.display()) }),
@@ -625,7 +734,7 @@ async fn stage_browser_upload(
                 Ok(Some(bytes)) => {
                     if let Err(e) = file.write_all(&bytes).await {
                         drop(file);
-                        let _ = tokio::fs::remove_dir_all(&dir).await;
+                        scrub_upload(&scrub, fresh).await;
                         return json_response(
                             StatusCode::INTERNAL_SERVER_ERROR,
                             serde_json::json!({ "error": format!("write failed: {e}") }),
@@ -636,7 +745,7 @@ async fn stage_browser_upload(
                 Ok(None) => break,
                 Err(e) => {
                     drop(file);
-                    let _ = tokio::fs::remove_dir_all(&dir).await;
+                    scrub_upload(&scrub, fresh).await;
                     return json_response(
                         StatusCode::BAD_REQUEST,
                         serde_json::json!({ "error": format!("upload stream error: {e}") }),
@@ -646,26 +755,29 @@ async fn stage_browser_upload(
         }
         if let Err(e) = file.flush().await {
             drop(file);
-            let _ = tokio::fs::remove_dir_all(&dir).await;
+            scrub_upload(&scrub, fresh).await;
             return json_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 serde_json::json!({ "error": format!("flush failed: {e}") }),
             );
         }
         partial.0 = None;
-        return json_response(
-            StatusCode::OK,
-            serde_json::json!({
-                "upload_id": id.to_string(),
-                "path": dest.to_string_lossy(),
-                "size": written,
-                "filename": filename,
-            }),
-        );
+        let mut reply = serde_json::json!({
+            "upload_id": id,
+            "path": dest.to_string_lossy(),
+            "size": written,
+            "filename": filename,
+        });
+        if let Some(root) = root {
+            reply["root"] = serde_json::json!(root.to_string_lossy());
+        }
+        return json_response(StatusCode::OK, reply);
     }
 
-    // No .pkg field arrived — clean up the empty dir.
-    let _ = tokio::fs::remove_dir_all(&dir).await;
+    // No .pkg field arrived — clean up the empty dir (when this request made it).
+    if fresh {
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
     json_response(
         StatusCode::BAD_REQUEST,
         serde_json::json!({ "error": if packages_only { "no .pkg or .fpkg file in the upload" } else { "no file in the upload" } }),
@@ -5463,6 +5575,65 @@ mod browser_file_intake_tests {
             ureq::delete(format!("http://{address}/api/files/upload/{id}")).call().unwrap();
             assert!(!std::path::Path::new(path).exists());
         }).await;
+        server.abort();
+        result.unwrap();
+    }
+
+    #[test]
+    fn a_folder_path_from_the_browser_stays_inside_its_upload() {
+        assert_eq!(
+            sanitize_relpath("Game/sce_sys/param.json"),
+            Some(vec!["Game".into(), "sce_sys".into(), "param.json".into()])
+        );
+        assert_eq!(
+            sanitize_relpath("Game\\./.hidden"),
+            Some(vec!["Game".into(), ".hidden".into()])
+        );
+        assert_eq!(sanitize_relpath("Game/../../etc/passwd"), None);
+        assert_eq!(sanitize_relpath("C:/x"), None);
+        assert_eq!(sanitize_relpath("/"), None);
+    }
+
+    #[tokio::test]
+    async fn a_browser_can_stage_a_folder_one_file_at_a_time() {
+        let state = Arc::new(PkgInstallState::restored());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server =
+            tokio::spawn(async move { axum::serve(listener, router(state)).await.unwrap() });
+        let result = tokio::task::spawn_blocking(move || {
+            let send = |query: &str, name: &str, data: &str| -> (u16, serde_json::Value) {
+                let body = format!("--b\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\nContent-Type: application/octet-stream\r\n\r\n{data}\r\n--b--\r\n");
+                let mut response = ureq::post(format!("http://{address}/api/files/upload?{query}"))
+                    .header("content-type", "multipart/form-data; boundary=b")
+                    .config()
+                    .http_status_as_error(false)
+                    .build()
+                    .send(body.as_bytes())
+                    .unwrap();
+                let status = response.status().as_u16();
+                let v = serde_json::from_str(&response.body_mut().read_to_string().unwrap()).unwrap();
+                (status, v)
+            };
+            let (status, first) = send("relpath=Game%2Feboot.bin", "eboot.bin", "one");
+            assert_eq!(status, 200, "{first}");
+            let id = first["upload_id"].as_str().unwrap().to_string();
+            let root = std::path::PathBuf::from(first["root"].as_str().unwrap());
+            assert_eq!(root.file_name().unwrap(), "Game");
+            let (status, second) =
+                send(&format!("upload_id={id}&relpath=Game%2Fsce_sys%2Fparam.json"), "param.json", "two");
+            assert_eq!(status, 200, "{second}");
+            assert_eq!(second["upload_id"], id.as_str());
+            assert_eq!(std::fs::read(root.join("eboot.bin")).unwrap(), b"one");
+            assert_eq!(std::fs::read(root.join("sce_sys").join("param.json")).unwrap(), b"two");
+            let (status, _) = send(&format!("upload_id={id}&relpath=..%2Fescape"), "x", "x");
+            assert_eq!(status, 400);
+            let (status, _) = send(&format!("upload_id={}&relpath=a", Uuid::new_v4()), "a", "a");
+            assert_eq!(status, 404);
+            ureq::delete(format!("http://{address}/api/files/upload/{id}")).call().unwrap();
+            assert!(!root.exists());
+        })
+        .await;
         server.abort();
         result.unwrap();
     }

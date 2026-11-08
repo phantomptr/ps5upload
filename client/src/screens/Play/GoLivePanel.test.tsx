@@ -88,9 +88,14 @@ const set = (s: Partial<ReturnType<typeof useGoLiveStore.getState>>) => {
 describe("The Stream panel", () => {
   afterEach(() => set({ status: null, loadError: null, actionError: null, busy: false }));
 
-  it("is for computers only (the phone apps have no pipeline in 11.0.0)", () => {
-    expect(goLiveAvailable({ mobile: false })).toBe(true);
-    expect(goLiveAvailable({ mobile: true })).toBe(false);
+  it("follows where the engine runs, not the screen (#731)", () => {
+    // Desktop app: its engine is on the computer.
+    expect(goLiveAvailable({ tauri: true, mobile: false })).toBe(true);
+    // The phone apps: their engine is the app's own, on the phone, with no ffmpeg.
+    expect(goLiveAvailable({ tauri: true, mobile: true })).toBe(false);
+    // The web UI in a phone's Safari: the engine (and ffmpeg) is on a computer.
+    expect(goLiveAvailable({ tauri: false, mobile: true })).toBe(true);
+    expect(goLiveAvailable({ tauri: false, mobile: false })).toBe(true);
     // OBS reads the feed on the engine's computer only.
     expect(obsFeedAvailable({ mobile: false, engineUrl: "http://127.0.0.1:19113" })).toBe(true);
     expect(obsFeedAvailable({ mobile: false, engineUrl: "http://192.168.1.5:19113" })).toBe(false);

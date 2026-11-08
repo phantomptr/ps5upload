@@ -812,6 +812,9 @@ pub struct StreamReport {
     pub loss_reported: u64,
     pub bytes_received: u64,
     pub disconnect_reason: Option<String>,
+    /// After our stop: how long the console took to acknowledge our DISCONNECT, or None when
+    /// it never did (or the stream ended another way).
+    pub disconnect_acked_ms: Option<u64>,
     /// Our DATA chunks sent again because the console had not acknowledged them, and given up on.
     pub data_resent: u64,
     pub data_given_up: u64,
@@ -825,6 +828,8 @@ pub struct StreamReport {
 const SILENCE_LIMIT: Duration = Duration::from_secs(15);
 /// After ctrl closes, this long for the console's DISCONNECT (and its reason) to arrive.
 const CTRL_GONE_GRACE: Duration = Duration::from_secs(3);
+/// After our DISCONNECT, this long for the console to acknowledge it (resent meanwhile).
+const DISCONNECT_WAIT: Duration = Duration::from_secs(1);
 
 /// Open a stream and run it into `sink` (video, audio, status; pad input back)
 /// until the sink stops, `max` time passes, or the console disconnects.
@@ -863,8 +868,14 @@ pub fn run_stream(
             guard::hold_off(host, guard::IN_USE_BACKOFF);
             return Err(guard::NotReady::InUse(guard::IN_USE_BACKOFF).into());
         }
+        // Closed with no answer: the slot is still held. Asked again only after a wait that
+        // grows with each closed answer in a row (a knock may itself keep the slot taken).
+        Err(e) if format!("{e:#}").contains(crate::rp_session::SESSION_INIT_CLOSED) => {
+            return Err(guard::closed_answer(host).into());
+        }
         Err(e) => return Err(e),
     };
+    guard::slot_answered(host);
     // From here the console holds a slot for us: whatever happens next, do
     // not ask again until it has had time to let go.
     let _release = ReleaseHold {
@@ -966,7 +977,9 @@ pub fn run_stream(
     while stream_info.is_none() {
         if sink.stopped() {
             // As a stop during the stream: DISCONNECT over Takion, then ctrl closes.
-            takion.close();
+            report.disconnect_acked_ms = takion
+                .close_and_wait(DISCONNECT_WAIT)
+                .map(|d| d.as_millis() as u64);
             drop(ctrl);
             _release.clean.set(true);
             return Ok(report);
@@ -1310,8 +1323,21 @@ pub fn run_stream(
             }
         }
     };
-    // Clean stop, in chiaki's order: DISCONNECT over Takion, then close ctrl.
-    takion.close();
+    // Clean stop, in chiaki's order: DISCONNECT over Takion, then close ctrl. Ctrl stays open
+    // until the console has the DISCONNECT (or a second passes): closing both at once left the
+    // goodbye unsent again if lost and unconfirmed either way. A PS5 on FW 13.00 held its one
+    // slot for minutes after such a stop (#720); `bye_acked_ms` in the log now says whether the
+    // console had the goodbye.
+    report.disconnect_acked_ms = takion
+        .close_and_wait(DISCONNECT_WAIT)
+        .map(|d| d.as_millis() as u64);
+    crate::core_debug!(
+        "rp stream: {host}: the console {} our DISCONNECT",
+        match report.disconnect_acked_ms {
+            Some(ms) => format!("took ({ms} ms)"),
+            None => "never confirmed".to_string(),
+        }
+    );
     drop(ctrl);
     _release.clean.set(true);
     report.video = assembler.stats;
