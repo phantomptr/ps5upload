@@ -170,7 +170,10 @@ export function idleRun(
   const folder = c.make === "folder";
   const packing = image && lz4Active(c.imageFormat, c.lz4);
   const sends = c.then !== "keep";
-  const canRun = props.canConvert !== false && (folder ? !!props.canFolder : !image || !!props.canImage);
+  // Save to: PS5 that this image can't do (or with no console) runs nothing.
+  const ps5Blocked = image && c.saveTo === "ps5" && !savesToPs5(c);
+  const canRun =
+    props.canConvert !== false && !ps5Blocked && (folder ? !!props.canFolder : !image || !!props.canImage);
   const label = folder
     ? tr("fpkg.folder.make", undefined, "Make game folder")
     : image
@@ -466,7 +469,13 @@ export function RunCard(props: RunCardProps) {
             ? props.title
               ? tr("fpkg.installedTitle", { title: props.title }, "Installed on PS5 — {title}")
               : tr("fpkg.installedOn", { host: p.host ?? "" }, "Installed on the PS5 ({host})")
-            : p.mode === "image" && p.packagePath.endsWith(".ffpfsc")
+            : p.mode === "image" && p.onConsole
+              ? tr(
+                  "fpkg.image.done_ps5",
+                  undefined,
+                  "Game image written straight to the PS5 and read back there. ShadowMount+ will mount it.",
+                )
+              : p.mode === "image" && p.packagePath.endsWith(".ffpfsc")
               ? tr("fpkg.compressed", undefined, "Compressed image written and verified")
               : p.mode === "image"
                 ? tr(
@@ -538,7 +547,7 @@ export function RunCard(props: RunCardProps) {
           </div>
         )}
         {!p.deleted && !makesImage(p.mode) && !folder && installChoice(!installed)}
-        {!p.deleted && makesImage(p.mode) && (
+        {!p.deleted && makesImage(p.mode) && !p.onConsole && (
           <ImageUpload
             queued={!!p.uploadQueued}
             dest={props.choice.dest}
@@ -553,7 +562,7 @@ export function RunCard(props: RunCardProps) {
               {tr("fpkg.launch", undefined, "Launch on PS5")}
             </Button>
           )}
-          {!p.deleted && props.onShowFolder && (
+          {!p.deleted && !p.onConsole && props.onShowFolder && (
             <Button onClick={props.onShowFolder}>{tr("fpkg.showFolder", undefined, "Show in folder")}</Button>
           )}
           {!p.deleted && !makesImage(p.mode) && !folder && props.onViewPackage && (
@@ -656,13 +665,64 @@ export interface OutputChoiceProps {
   lz4?: Lz4Choice;
   /** Where an image goes on the PS5, when one can be uploaded. */
   dest?: ComponentProps<typeof ImageDestination>;
+  /** Where an image is saved: this computer, or straight to the PS5 (`dest`) with nothing
+   *  stored here. Offered when `onSaveTo` is given. */
+  saveTo?: SaveTo;
+  onSaveTo?: (to: SaveTo) => void;
+  /** Why this image can't go straight to the PS5 (a .ffpfsc, LZ4 packs), or null. */
+  ps5Refusal?: string | null;
+}
+
+/** Where Convert saves an image. */
+export type SaveTo = "computer" | "ps5";
+
+/** The image goes straight to the PS5: chosen, possible for this image, and a console answers. */
+export function savesToPs5(c: Pick<OutputChoiceProps, "make" | "saveTo" | "ps5Refusal" | "canInstall">): boolean {
+  return c.make === "image" && c.saveTo === "ps5" && !c.ps5Refusal && c.canInstall;
 }
 
 export function OutputChoice(c: OutputChoiceProps) {
   const tr = useTr();
   const image = c.make === "image";
+  const toPs5 = image && c.saveTo === "ps5";
   return (
     <div className="flex flex-col gap-3" data-testid="output-choice">
+      {image && c.onSaveTo && (
+        <div className="flex flex-col gap-1 text-sm">
+          <label className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <span className="min-w-28 text-[var(--color-muted)]">{tr("fpkg.save_to", undefined, "Save to")}</span>
+            <select
+              value={c.saveTo ?? "computer"}
+              onChange={(e) => c.onSaveTo?.(e.target.value as SaveTo)}
+              className="select w-auto!"
+              data-testid="convert-save-to"
+            >
+              <option value="computer">{tr("fpkg.save_to_computer", undefined, "This computer")}</option>
+              <option value="ps5" disabled={!c.canInstall}>
+                {tr("fpkg.save_to_ps5", undefined, "The PS5, straight (nothing stored here)")}
+              </option>
+            </select>
+          </label>
+          {toPs5 && c.ps5Refusal && (
+            <span className="text-xs text-[var(--color-warn)]" data-testid="convert-save-to-refused">
+              {c.ps5Refusal}
+            </span>
+          )}
+          {toPs5 && !c.ps5Refusal && (
+            <span className="text-xs text-[var(--color-muted)]">
+              {tr(
+                "fpkg.save_to_ps5_note",
+                undefined,
+                "Sent to the PS5 as it is written, then read back there. If the connection drops, it goes on where it stopped.",
+              )}
+            </span>
+          )}
+        </div>
+      )}
+      {toPs5 ? (
+        c.dest && <ImageDestination {...c.dest} />
+      ) : (
+      <>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
         <label className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <span className="min-w-28 text-[var(--color-muted)]">{tr("cq_after", undefined, "After converting")}</span>
@@ -707,6 +767,8 @@ export function OutputChoice(c: OutputChoiceProps) {
         )}
       </div>
       {image && c.then === "upload" && c.dest && <ImageDestination {...c.dest} />}
+      </>
+      )}
     </div>
   );
 }

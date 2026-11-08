@@ -50,7 +50,16 @@ import { isRemotePath } from "../../lib/remotePath";
 import { MakeCard } from "./MakeCard";
 import { OptionsCard } from "./OptionsCard";
 import { folderPackOptions, folderPacks, packOptions } from "./ImageOptions";
-import { OutputChoice, RunCard, idleRun, lz4Active, type Lz4Choice, type RunCardProps } from "./RunCard";
+import {
+  OutputChoice,
+  RunCard,
+  idleRun,
+  lz4Active,
+  savesToPs5,
+  type Lz4Choice,
+  type RunCardProps,
+  type SaveTo,
+} from "./RunCard";
 import { outputFor } from "../../lib/outputPlace";
 import { SwapJournals } from "./SwapJournals";
 import { nameOf, QueueCard } from "./QueueCard";
@@ -151,6 +160,8 @@ export default function WorkshopScreen() {
   const queueAutoStart = useUploadSettingsStore((s) => s.queueAutoStart);
   // ③'s one choice of what happens after converting, for Convert and the queue alike.
   const [thenChoice, setThen] = useState<ConvertThen>("keep");
+  // An image saved on this computer, or written straight to the PS5 (nothing stored here).
+  const [saveTo, setSaveTo] = useState<SaveTo>("computer");
   const [deleteAfter, setDeleteAfter] = useState(false);
   // Per game, not remembered: the wrong language carried into the next game would be a surprise.
   const [language, setLanguage] = useState("");
@@ -518,22 +529,24 @@ export default function WorkshopScreen() {
     }
     if (build.kind === "image") {
       const u = useUploadStore.getState();
+      const plan = {
+        host,
+        volume: u.destinationVolume,
+        subpath: u.destinationSubpath || DEFAULT_IMAGE_SUBPATH,
+        deleteAfter,
+      };
+      // Save to: PS5 writes it there as it is built; nothing is kept here to upload after.
+      const direct = savesToPs5(runChoice);
       void buildImage(
         src,
         out.outputDir,
         build.compress && !lz4Active(build.format, lz4Choice),
         build.format,
-        then === "upload"
-          ? {
-              host,
-              volume: u.destinationVolume,
-              subpath: u.destinationSubpath || DEFAULT_IMAGE_SUBPATH,
-              deleteAfter,
-            }
-          : undefined,
+        !direct && then === "upload" ? plan : undefined,
         packOptions(build.format, lz4Choice, lz4Profile?.text),
         password || undefined,
         out.keepBoth,
+        direct ? { toConsole: plan } : undefined,
       );
       return;
     }
@@ -848,6 +861,19 @@ export default function WorkshopScreen() {
   }
 
   const idle = pipeline.phase === "idle";
+  // Straight to the PS5 (first version): a plain .exfat, .ffpkg or .ffpfs, or .exfat with zstd packs.
+  const ps5Packs = build.kind === "image" ? packOptions(build.format, lz4Choice) : undefined;
+  const ps5Refusal =
+    build.kind === "image" &&
+    ((build.compress && !lz4Active(build.format, lz4Choice)) ||
+      (ps5Packs && !ps5Packs.zstdLevel) ||
+      (ps5Packs?.zstdLevel && build.format !== "exfat"))
+      ? tr(
+          "fpkg.save_to_ps5_unsupported",
+          undefined,
+          "Straight to the PS5 works for a plain .exfat, .ffpkg or .ffpfs image, or an .exfat with zstd packs. Save this one to this computer, or change the image above.",
+        )
+      : null;
   const runChoice: RunCardProps["choice"] = {
     make,
     onMake: setMake,
@@ -868,6 +894,9 @@ export default function WorkshopScreen() {
           onChange: (volume, subpath) => useUploadStore.getState().setDestination(volume, subpath),
         }
       : undefined,
+    saveTo,
+    onSaveTo: setSaveTo,
+    ps5Refusal,
   };
   const barRun = idleRun(
     {
@@ -1000,7 +1029,9 @@ export default function WorkshopScreen() {
                             ? tr("fpkg.run.what_folder", undefined, "a game folder")
                             : tr("fpkg.run.what_pkg", undefined, "a package (.pkg)"),
                       title: inspection.title || inspection.content_id || source.trim(),
-                      dir: outFor(src).outputDir ?? "~/Downloads/fpkgs",
+                      dir: savesToPs5(runChoice)
+                        ? tr("fpkg.run.on_ps5", undefined, "the PS5")
+                        : (outFor(src).outputDir ?? "~/Downloads/fpkgs"),
                     },
                     "Makes {what} of {title} in {dir}.",
                   )

@@ -913,6 +913,7 @@ export async function browserInvoke<T>(
         add_ampr_emu: args["addAmprEmu"] ?? true,
         ampr_zstd: args["amprZstd"],
         ampr_emu_build: args["amprEmuBuild"],
+        destination: args["destination"],
       });
     }
     case "folder_build": {

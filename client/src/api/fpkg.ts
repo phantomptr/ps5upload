@@ -11,6 +11,10 @@ import { useConvertPrefs, type AmprEmuBuild, type ZstdRuntime } from "../state/c
 /** The game image filesystems the engine writes: UFS2 (`.ffpkg`, what ShadowMount+
  *  recommends), exFAT, or PFS (`.ffpfs`, experimental in ShadowMount+ 1.7). */
 export type ImageFormat = "ffpkg" | "exfat" | "ffpfs";
+
+/** Where an image build puts the image: this computer (the output folder), or straight into a
+ *  PS5's folder over AVA1, sent as it is written and read back there. */
+export type ImageDestination = { kind: "local" } | { kind: "console"; addr: string; dir: string };
 /** How hard a .ffpfsc is compressed. */
 export type FfpfscLevel = "fast" | "balanced" | "smallest";
 
@@ -189,6 +193,8 @@ export const fpkg = {
     keepBoth = false,
     /** The AMPR emulator choice for this build (a queued game's own); the settings when absent. */
     amprEmu?: { add: boolean; build: AmprEmuBuild },
+    /** Straight to a PS5's folder, never stored on this computer; `outputDir` when absent. */
+    destination?: ImageDestination,
   ) =>
     invoke<{ job_id: string }>("exfat_build", {
       source,
@@ -206,6 +212,7 @@ export const fpkg = {
       keepBoth,
       addAmprEmu: amprEmu?.add ?? useConvertPrefs.getState().addAmprEmu,
       amprEmuBuild: amprEmu?.build ?? useConvertPrefs.getState().amprEmuBuild,
+      destination,
     }),
   /** Unpack a game image (.exfat, .ffpkg, .ffpfs, .ffpfsc) or a package made with the debug
    *  key into a plain folder in the output folder, named after the source (or `name`). One

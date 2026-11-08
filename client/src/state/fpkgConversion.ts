@@ -10,7 +10,15 @@ import { ps5FakeGameUnplayableFirmware } from "../lib/ps5Firmware";
 import { useLangStore } from "./lang";
 import { useConvertPrefs, type AmprEmuBuild } from "./convertPrefs";
 
-import { imageUploadItem, resolveImagePlan, type ImageUploadPlan } from "../lib/imageUpload";
+import {
+  DEFAULT_IMAGE_SUBPATH,
+  imageDriveNow,
+  imageUploadItem,
+  resolveImagePlan,
+  type ImageUploadPlan,
+} from "../lib/imageUpload";
+import { resolveUploadDest } from "../lib/uploadDest";
+import type { ImageDestination } from "../api/fpkg";
 import { useUploadQueueStore } from "./uploadQueue";
 
 import {
@@ -122,6 +130,8 @@ export type Pipeline =
       swap?: SwapJournal | null;
       /** An image put in the Upload queue (by the run's own plan, or Upload to PS5). */
       uploadQueued?: boolean;
+      /** An image written straight to the PS5: `packagePath` is its path there. */
+      onConsole?: boolean;
       /** A build found running after a reload, not started by this window: the queue takes its
        *  result rather than building the game again. */
       attached?: boolean;
@@ -172,7 +182,15 @@ export interface ConversionState {
     /** Number the image's name when it is taken in `outputDir`, instead of refusing. */
     keepBoth?: boolean,
     /** This game's own choices (a queued game keeps what it was added with); else the settings. */
-    own?: { fullVerify?: boolean; imageLevel?: FfpfscLevel; addAmprEmu?: boolean; amprEmuBuild?: AmprEmuBuild },
+    own?: {
+      fullVerify?: boolean;
+      imageLevel?: FfpfscLevel;
+      addAmprEmu?: boolean;
+      amprEmuBuild?: AmprEmuBuild;
+      /** Save to the PS5: the image goes straight to this console's drive and folder, never
+       *  stored on this computer (`outputDir` and `thenUpload` are not used). */
+      toConsole?: ImageUploadPlan;
+    },
   ) => Promise<void>;
   /** Unpack a game image or a debug-key package into a plain folder in `outputDir`; with
    *  `keepBoth`, a name already taken there is numbered instead of refused. */
@@ -355,6 +373,15 @@ function fail(stage: PipelineStage, message: string, packagePath: string | null)
 
 /** The Upload plan of the image being built ("send this game folder as an image"). */
 let pendingImageUpload: ImageUploadPlan | null = null;
+/** The image being built goes straight to the PS5: its result is a path there. */
+let pendingToConsole = false;
+
+/** Where an image goes on the PS5 (Save to: PS5): the drive decided now, as for an upload. */
+async function consoleDestination(plan: ImageUploadPlan): Promise<ImageDestination> {
+  const { volume } = await imageDriveNow(plan.host, plan.volume);
+  const { destRoot } = resolveUploadDest(volume, plan.subpath || DEFAULT_IMAGE_SUBPATH, "x");
+  return { kind: "console", addr: hostOf(plan.host), dir: destRoot };
+}
 /** The running Convert & install asked for its package to go once the install verified. */
 let deleteAfterInstall = false;
 
@@ -374,7 +401,9 @@ function finish(packagePath: string, packageBytes: number, convertMs: number) {
   const p = running();
   if (!p) return;
   const plan = makesImage(p.mode) ? pendingImageUpload : null;
+  const onConsole = makesImage(p.mode) && pendingToConsole;
   pendingImageUpload = null;
+  pendingToConsole = false;
   if (plan) queueImage(packagePath, packageBytes, plan);
   if (p.taskId) useTaskStore.getState().finishTask(p.taskId, "done");
   dropCopy(p);
@@ -393,6 +422,7 @@ function finish(packagePath: string, packageBytes: number, convertMs: number) {
       deleted: false,
       titleId: p.titleId,
       uploadQueued: !!plan,
+      onConsole,
       attached: p.attached,
     },
   });
@@ -893,7 +923,11 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
 
   buildImage: async (source, outputDir, thenCompress, format = "exfat", thenUpload, lz4, password, keepBoth, own) => {
     if (get().pipeline.phase === "running") return;
-    pendingImageUpload = thenUpload ?? null;
+    const toConsole = own?.toConsole;
+    // Straight to the PS5, nothing is left here to upload afterwards.
+    pendingImageUpload = toConsole ? null : (thenUpload ?? null);
+    pendingToConsole = !!toConsole;
+    thenUpload = toConsole ?? thenUpload;
     const prefs = useConvertPrefs.getState();
     const verifyChunkKib = prefs.verifyChunkKib;
     const fullVerify = own?.fullVerify ?? prefs.fullVerify;
@@ -914,7 +948,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
       void prepareThenStart(
         source,
         outputDir,
-        (local) =>
+        async (local) =>
           fpkg.buildImage(
             local,
             outputDir,
@@ -927,6 +961,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
             imageLevel,
             keepBoth,
             amprEmu,
+            ...(toConsole ? [await consoleDestination(toConsole)] : []),
           ),
         null,
         password,
@@ -947,6 +982,8 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         imageLevel,
         keepBoth,
         amprEmu,
+        // Only when it goes to the PS5: a local build's call stays as it was.
+        ...(toConsole ? [await consoleDestination(toConsole)] : []),
       );
       update({ jobId: job_id });
       poll(job_id, null);
