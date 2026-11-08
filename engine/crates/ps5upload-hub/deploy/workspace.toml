@@ -1,0 +1,23 @@
+# The one-crate workspace the Dockerfile builds the hub in (the crate directory is the Docker
+# build context, so the engine workspace is not there). Keep `version` and the shared
+# dependencies in step with engine/Cargo.toml; deploy/refresh-lock.sh rebuilds deploy/Cargo.lock
+# from the engine's lock so the image builds the exact versions the tests ran with.
+[workspace]
+members = ["ps5upload-hub"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "GPL-3.0-or-later"
+version = "11.5.2"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Small and fast: one static binary on a 256 MB machine. Unwinding stays on, so a bug in one
+# connection's task cannot take the whole hub down.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

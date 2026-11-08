@@ -2179,6 +2179,17 @@ pub(crate) mod test_live {
         pub(crate) fn merged(&self) -> ControllerState {
             self.0.sources.set(u64::MAX - 1, None)
         }
+
+        /// A picture (`kind` 1, an access unit) as the console's stream hands it to watchers and
+        /// players.
+        pub(crate) fn picture(&self, au: &[u8], key: bool) {
+            self.0.to_spectators(1, au, key);
+        }
+
+        /// Any kind of the stream's messages (0: the codec header, 1: a picture).
+        pub(crate) fn send(&self, kind: u8, data: &[u8], key: bool) {
+            self.0.to_spectators(kind, data, key);
+        }
     }
 
     impl Drop for Session {

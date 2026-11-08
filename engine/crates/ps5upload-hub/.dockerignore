@@ -1,0 +1,6 @@
+# Only what the Dockerfile copies.
+*
+!Cargo.toml
+!src
+!deploy/workspace.toml
+!deploy/Cargo.lock

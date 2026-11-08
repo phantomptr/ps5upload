@@ -13,10 +13,12 @@ import {
   backoffMs,
   encodePadFrame,
   HOST_RESTART_WINDOW_MS,
+  netFailure,
   readServerMessage,
   RESUME_WINDOW_MS,
   type ByeWhy,
   type JoinStatus,
+  type NetWhy,
   type RefuseWhy,
 } from "./joinProtocol";
 import { IDLE_PAD, type PadState } from "./remotePlayStream";
@@ -31,8 +33,9 @@ export type JoinStage =
    *  the host stopped playing, and the guest waits for them to start again. */
   | { kind: "reconnecting"; player: number; attempt: number; deadline: number; hostStopped?: boolean }
   | { kind: "refused"; why: RefuseWhy }
-  /** `gave_up`: the place was lost (60 s without the host); `lost`: never got in; `left`: Leave. */
-  | { kind: "ended"; why: ByeWhy | "gave_up" | "lost" | "left" };
+  /** `gave_up`: the place was lost (60 s without the host); `lost`: never got in; `left`: Leave;
+   *  a NetWhy: an internet invite's connection could not be made (join/rtcTransport). */
+  | { kind: "ended"; why: ByeWhy | "gave_up" | "lost" | "left" | NetWhy };
 
 type Timer = ReturnType<typeof setTimeout>;
 
@@ -182,9 +185,21 @@ export class JoinClient {
       }
       this.onText(e.data);
     };
-    ws.onclose = () => {
+    ws.onclose = (e?: CloseEvent) => {
       if (this.ws !== ws) return;
       this.ws = null;
+      // An internet invite's transport says why it could not connect (join/rtcTransport).
+      const why = netFailure(e);
+      if (why === "mismatch") {
+        // Not the host's engine: never with this link, resume or not.
+        this.forgetToken();
+        this.finish({ kind: "ended", why });
+        return;
+      }
+      if (why && this.stage.kind !== "joined" && this.stage.kind !== "reconnecting") {
+        this.finish({ kind: "ended", why });
+        return;
+      }
       this.dropped();
     };
     ws.onerror = () => {

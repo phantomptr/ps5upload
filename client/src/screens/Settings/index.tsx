@@ -100,6 +100,7 @@ import { formatDate } from "../../lib/formatDate";
 import { applyBundle, backupBeforeChange, buildBundle } from "../../lib/settingsBackup";
 import { SettingsBackups } from "./SettingsBackups";
 import { TraySettings } from "./TraySettings";
+import { PlayTogetherSettings } from "./PlayTogetherSettings";
 import { LinuxGraphicsSettings } from "./LinuxGraphicsSettings";
 import { linuxGraphicsPossible } from "../../lib/linuxGraphics";
 import { trayPossible } from "../../state/tray";
@@ -836,6 +837,10 @@ export default function SettingsScreen() {
               )}
             />
           </div>
+        </Section>
+
+        <Section title={tr("pt_button", undefined, "Play Together")} full>
+          <PlayTogetherSettings />
         </Section>
 
         <GroupHeading>
