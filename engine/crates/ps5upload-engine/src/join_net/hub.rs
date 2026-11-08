@@ -1,5 +1,5 @@
 //! The engine's side of the signalling hub (protocol v1): it hosts one room per Play Together that
-//! has an internet invite, and passes each guest's offer and candidates to [`super::rtc`] and the
+//! has an internet invite (and one for the phone link's internet link), and passes each guest's offer and candidates to [`super::rtc`] and the
 //! answers back. The hub sees the room, its secret and the SDP; never the invite key.
 //!
 //! JSON text frames over `wss://<hub>/ws`, each at most 16 KiB. Host → hub `{"v":1,"t":"host",
@@ -20,6 +20,7 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message as WsMsg;
 
 use super::rtc::Cmd;
+use super::Kind;
 
 /// The largest frame either side sends.
 pub(crate) const FRAME_MAX: usize = 16 * 1024;
@@ -48,8 +49,12 @@ pub(crate) struct Shared {
     id: Mutex<String>,
     secret: String,
     url: String,
+    kind: Kind,
     st: Mutex<St>,
 }
+
+/// Whether the room is still wanted (asked every few seconds and before each connect).
+pub(crate) type Wanted = Box<dyn Fn() -> bool + Send + Sync>;
 
 impl Shared {
     fn id(&self) -> String {
@@ -67,19 +72,20 @@ impl Shared {
     }
 }
 
-/// A room on the hub, open while this lives (Play Together holds it).
+/// A room on the hub, open while this lives (Play Together, or the phone link, holds it).
 pub(crate) struct Room {
     shared: Arc<Shared>,
     _stop: watch::Sender<()>,
 }
 
 impl Room {
-    /// Opens a room for the Play Together `party_key` on the hub at `url`.
-    pub(crate) fn start(party_key: String, url: String) -> Option<Room> {
+    /// Opens a room of `kind` on the hub at `url`, kept while `wanted` says so (and this lives).
+    pub(crate) fn start(kind: Kind, wanted: Wanted, url: String) -> Option<Room> {
         let shared = Arc::new(Shared {
             id: Mutex::new(super::random_b64(16)?),
             secret: super::random_b64(32)?,
             url,
+            kind,
             st: Mutex::new(St {
                 state: "connecting",
                 error: None,
@@ -88,7 +94,7 @@ impl Room {
             }),
         });
         let (stop, stop_rx) = watch::channel(());
-        tokio::spawn(run(shared.clone(), party_key, stop_rx));
+        tokio::spawn(run(shared.clone(), wanted, stop_rx));
         Some(Room {
             shared,
             _stop: stop,
@@ -114,7 +120,7 @@ impl Room {
             .unwrap_or_else(|e| e.into_inner())
             .map(|(a, how)| serde_json::json!({"via": how, "port": a.port()}));
         serde_json::json!({
-            "url": fp.as_ref().map(|fp| super::invite_link(&id, key, fp, &hub)),
+            "url": fp.as_ref().map(|fp| super::link_for(self.shared.kind, &id, key, fp, &hub)),
             "room": id,
             "hub": hub,
             "fp": fp,
@@ -174,21 +180,22 @@ enum End {
     Now,
 }
 
-async fn run(shared: Arc<Shared>, party_key: String, mut stop: watch::Receiver<()>) {
+async fn run(shared: Arc<Shared>, wanted: Wanted, mut stop: watch::Receiver<()>) {
     let Some(net) = super::rtc::net().await else {
         shared.set("error", Some("no network for internet guests".into()));
         return;
     };
+    let kind = shared.kind;
     let mut room = shared.id();
-    let _ = net.cmd.send(Cmd::RoomOpen(room.clone()));
+    let _ = net.cmd.send(Cmd::RoomOpen(room.clone(), kind));
     let mut backoff = BACKOFF_FIRST;
     loop {
-        if !crate::join::internet_wanted(&party_key) {
+        if !wanted() {
             break;
         }
         shared.st.lock().unwrap_or_else(|e| e.into_inner()).connects += 1;
         let end = match connect(&shared.url).await {
-            Ok(ws) => session(ws, &shared, &party_key, &net.cmd, &mut stop, &mut backoff).await,
+            Ok(ws) => session(ws, &shared, &wanted, &net.cmd, &mut stop, &mut backoff).await,
             Err(e) => {
                 crate::log_at!(Debug, "together", "join: hub unreachable: {e}");
                 shared.set("reconnecting", Some(e));
@@ -211,7 +218,7 @@ async fn run(shared: Arc<Shared>, party_key: String, mut stop: watch::Receiver<(
         if id != room {
             let _ = net.cmd.send(Cmd::RoomClose(room));
             room = id;
-            let _ = net.cmd.send(Cmd::RoomOpen(room.clone()));
+            let _ = net.cmd.send(Cmd::RoomOpen(room.clone(), kind));
         }
         tokio::select! {
             _ = tokio::time::sleep(wait) => {}
@@ -226,7 +233,7 @@ async fn run(shared: Arc<Shared>, party_key: String, mut stop: watch::Receiver<(
 async fn session(
     mut ws: Ws,
     shared: &Arc<Shared>,
-    party_key: &str,
+    wanted: &Wanted,
     cmd: &mpsc::UnboundedSender<Cmd>,
     stop: &mut watch::Receiver<()>,
     backoff: &mut Duration,
@@ -251,7 +258,7 @@ async fn session(
                 }
             }
             _ = check.tick() => {
-                if !crate::join::internet_wanted(party_key) {
+                if !wanted() {
                     let _ = ws.send(frame(serde_json::json!({"v": 1, "t": "leave"}))).await;
                     let _ = ws.close(None).await;
                     return End::Stop;

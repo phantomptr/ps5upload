@@ -12466,6 +12466,10 @@ fn build_app_and_mcp(
         .route("/api/ps5/rp/pad-link/decide", post(pad_link::decide))
         .route("/api/ps5/rp/pad-link/kick", post(pad_link::kick))
         .route("/api/ps5/rp/pad-link/control", post(pad_link::control))
+        .route(
+            "/api/ps5/rp/pad-link/internet",
+            post(pad_link::set_internet),
+        )
         .route("/api/ps5/rp/pad-relay", get(pad_link::relay))
         .route("/api/ps5/power/ddp-status", get(ps5_power_ddp_status))
         .route("/api/ps5/power/pair", post(ps5_power_pair))
@@ -13261,6 +13265,7 @@ mod loopback_guard_tests {
         for p in [
             "/api/ps5/rp/pad-link",
             "/api/ps5/rp/pad-link/decide",
+            "/api/ps5/rp/pad-link/internet",
             "/api/ps5/rp/pad-relay",
             "/api/ps5/rp/ws",
             "/api/ps5/rp/frame",

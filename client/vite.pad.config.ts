@@ -1,7 +1,9 @@
 /**
  * The phone controller page (src/pad/): `npm run build:pad` writes ONE file, script and styles
  * inlined, to engine/crates/ps5upload-engine/src/pad_page.html, which the engine embeds and serves
- * at GET /pad to a phone that scanned the computer's QR code (pad_link.rs). Commit the result.
+ * at GET /pad to a phone that scanned the computer's QR code (pad_link.rs). The same file goes to
+ * site/pad/index.html, the website's copy that the phone link's internet links open (WebRTC,
+ * src/join/rtcTransport.ts with a "pad" channel). Commit both.
  *
  * - In the phone's language, as /join is: src/join/joinLang.ts with only the keys the page's own
  *   modules use, in every locale (vite.pagePlugins.ts).
@@ -18,6 +20,9 @@ import { pageCss } from "./vite.pageCss";
 
 const RAW_BUDGET = 800 * 1024;
 const OUT = fileURLToPath(new URL("../engine/crates/ps5upload-engine/src/pad_page.html", import.meta.url));
+/** The same page on the website (https://ps5upload.phantomptr.com/pad/, .github/workflows/
+ *  pages.yml), where the phone link's internet links open (#room=…&k=…&fp=…&hub=…). */
+const SITE_OUT = fileURLToPath(new URL("../site/pad/index.html", import.meta.url));
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** Everything into index.html, written to the engine's pad_page.html. */
@@ -45,8 +50,11 @@ function singleFile(): Plugin {
       const raw = Buffer.byteLength(page);
       this.info(`pad page: ${(raw / 1024).toFixed(1)} KiB (budget ${RAW_BUDGET / 1024} KiB)`);
       if (raw > RAW_BUDGET) this.error(`pad page over budget: ${(raw / 1024).toFixed(1)} KiB`);
-      const { writeFileSync } = await import("node:fs");
+      const { mkdirSync, writeFileSync } = await import("node:fs");
+      const { dirname } = await import("node:path");
       writeFileSync(OUT, page);
+      mkdirSync(dirname(SITE_OUT), { recursive: true });
+      writeFileSync(SITE_OUT, page);
     },
   };
 }

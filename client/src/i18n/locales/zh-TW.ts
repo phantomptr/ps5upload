@@ -8166,6 +8166,10 @@ rp_users_add_hint: "若也想以其他使用者遊玩，請在 PS5 上登入該�
 "net_internet_support": "網際網路遊玩執行在我們付費的一台小伺服器上。如果它對你有幫助，捐款能讓它繼續運作。謝謝！",
 "pt_elsewhere": "在別處玩？在上方選擇網際網路。",
 "pt_elsewhere_guest": "在別處玩？請好友用網際網路邀請你，然後在瀏覽器中開啟他們的連結。",
+"pad_net_computer": "電腦",
+"rp_watch_net_how": "任何擁有此連結的人都能在任何地方用手機、平板或電腦觀看串流(最多四人)。透過網際網路只能觀看,無法把控制器交給他們。",
+"rp_watch_ask": "{name} 想觀看",
+"rp_phone_net_phone": "網際網路上的手機",
 };
 
 export default zh_TW;

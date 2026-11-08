@@ -2,6 +2,51 @@ import { useNavigate } from "react-router";
 
 import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
 import { useTr } from "../../state/lang";
+import type { NetInvite } from "./playTogetherState";
+
+type Tr = ReturnType<typeof useTr>;
+
+/** What an internet link (a Play Together invite, or the phone link's) needs the host to know, or
+ *  null: why the engine would not make one (`why`, from the call), or its link to the invite
+ *  service (the hub) as the state says. */
+export function netInviteNote(
+  tr: Tr,
+  why: string | null,
+  net: NetInvite | null,
+): { text: string; tone: "warn" | "muted"; id: string } | null {
+  if (why === "internet_off")
+    return {
+      id: "pt-net-off",
+      tone: "warn",
+      text: tr("pt_net_off", undefined, "Internet invites are off. Turn on Allow internet invites in Settings › Play Together."),
+    };
+  if (why === "hub_url")
+    return {
+      id: "pt-net-hub-url",
+      tone: "warn",
+      text: tr("pt_net_hub_url", undefined, "The invite service address in Settings › Play Together isn't a wss:// address."),
+    };
+  if (why)
+    return {
+      id: "pt-net-failed",
+      tone: "warn",
+      text: `${tr("pt_net_link_failed", undefined, "An internet link could not be made. Try again.")} (${why})`,
+    };
+  if (!net) return null;
+  if ((net.hubState === "error" || net.hubState === "reconnecting") && net.hubError)
+    return {
+      id: "pt-net-hub-down",
+      tone: "warn",
+      text: `${tr(
+        "pt_net_hub_down",
+        undefined,
+        "Couldn't reach the PS5Upload invite service, so friends can't join with this link yet. Check this computer's internet connection.",
+      )} (${net.hubError})`,
+    };
+  if (net.hubState === "connecting")
+    return { id: "pt-net-hub-connecting", tone: "muted", text: tr("pt_net_hub_connecting", undefined, "Connecting to the invite service…") };
+  return null;
+}
 
 /** Which network an invite was last made for, on this device: Play Together opens on it again. */
 export type NetworkKind = "home" | "tailscale" | "internet";
@@ -68,8 +113,8 @@ export function InternetHint({ testId }: { testId: string }) {
 /**
  * Which network a link (invite, phone controller, watch) is for: this computer's home network,
  * or its Tailscale address while the Tailscale app is connected, for someone away from home.
- * A computer on two home networks also picks which one. Play Together also offers the internet
- * (`internet`): a link through the signalling hub for friends anywhere.
+ * A computer on two home networks also picks which one. Play Together and the phone link also
+ * offer the internet (`internet`): a link through the signalling hub for anyone anywhere.
  */
 export function NetworkChoice({
   urls,

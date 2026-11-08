@@ -3,7 +3,8 @@
 // the offer, the answer and ICE candidates.
 //
 // The session (lib/joinClient) talks to a WebSocket: this module gives it one, `rtcTransport`, a
-// class shaped like WebSocket whose "socket" is the "join" data channel. Every connect (the first
+// class shaped like WebSocket whose "socket" is the "join" data channel (the phone link's page,
+// src/pad, uses it the same way with a "pad" channel for lib/padClient). Every connect (the first
 // one and each resume after a drop) makes a new one: a new hub connection, a new peer connection,
 // and the session's hello (with the resume token when it has one) once the channel opens. On the
 // channel the messages of /api/join/ws go unchanged (join.rs); binary ones in pieces
@@ -173,6 +174,10 @@ export interface RtcTransportOptions {
   iceTimeoutMs?: number;
   /** Diagnostics (the console): what the connection is doing. */
   log?: (m: string) => void;
+  /** The data channel's label: "join" (Play Together, the default) or "pad" (the phone link's
+   *  controller and watch page, engine pad_link.rs). The engine gives each room's channel only its
+   *  own kind's session. */
+  label?: "join" | "pad";
 }
 
 type HubMsg = { t?: string; gid?: string; why?: string; from?: string; data?: Record<string, unknown> };
@@ -285,7 +290,9 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
         return;
       }
       this.pc = pc;
-      const dc = pc.createDataChannel("join", { ordered: true });
+      // Reliable and ordered, for a pad too: a release lost or overtaken would leave a button held,
+      // and binary messages come in pieces that must arrive in order (join_net/chunk.rs).
+      const dc = pc.createDataChannel(o.label ?? "join", { ordered: true });
       dc.binaryType = "arraybuffer";
       this.dc = dc;
       dc.onopen = () => this.opened(dc);

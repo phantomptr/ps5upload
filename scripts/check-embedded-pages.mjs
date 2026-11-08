@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // The engine embeds two built pages, committed as files: join_page.html (Play Together guests)
-// and pad_page.html (the phone controller). The website carries a copy of the join page too,
-// site/join/index.html, where internet invites open. A source or translation edit without a
+// and pad_page.html (the phone controller). The website carries a copy of each too,
+// site/join/index.html and site/pad/index.html, where internet links open. A source or translation edit without a
 // rebuild passes every other check and never reaches a phone, so this rebuilds them and fails if a
 // file changed (or the site's copy is not the engine's page byte for byte).
 // The rebuilt files stay in the tree: after a failure, commit them.
@@ -13,7 +13,7 @@ import path from "node:path";
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const pages = [
   ["build:join", ["engine/crates/ps5upload-engine/src/join_page.html", "site/join/index.html"]],
-  ["build:pad", ["engine/crates/ps5upload-engine/src/pad_page.html"]],
+  ["build:pad", ["engine/crates/ps5upload-engine/src/pad_page.html", "site/pad/index.html"]],
 ];
 
 const stale = [];

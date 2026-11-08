@@ -8220,6 +8220,10 @@ rp_users_add_hint: "Başka bir kullanıcıyla da oynamak için PS5'te o kullanı
 "net_internet_support": "İnternet üzerinden oyun, parasını bizim ödediğimiz küçük bir sunucuda çalışır. İşine yarıyorsa bir bağış onu ayakta tutar. Teşekkürler!",
 "pt_elsewhere": "Başka bir yerden mi oynuyorsunuz? Yukarıda İnternet'i seç.",
 "pt_elsewhere_guest": "Başka bir yerden mi oynuyorsun? Arkadaşından seni İnternet ile davet etmesini iste, sonra bağlantısını tarayıcında aç.",
+"pad_net_computer": "bilgisayar",
+"rp_watch_net_how": "Bu bağlantıya sahip herkes yayını her yerden telefonunda, tabletinde veya bilgisayarında izleyebilir (en fazla dört kişi). İnternet üzerinden yalnızca izlerler: kumanda onlara verilemez.",
+"rp_watch_ask": "{name} izlemek istiyor",
+"rp_phone_net_phone": "İnternetten bir telefon",
 };
 
 export default tr;

@@ -135,14 +135,14 @@ const stateOf = (v: unknown): GuestState => (typeof v === "string" && STATES.has
 const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
 
 /** An invite's internet half (`invite.internet`), or null. */
-function readNetInvite(v: unknown): NetInvite | null {
+export function readNetInvite(v: unknown): NetInvite | null {
   if (!v || typeof v !== "object") return null;
   const o = v as Record<string, unknown>;
   return { url: str(o.url), hubState: str(o.state), hubError: str(o.error) };
 }
 
 /** The engine's internet peers (`internet.peers`, or the invite's own list). */
-function readPeers(v: unknown): NetPeer[] {
+export function readPeers(v: unknown): NetPeer[] {
   return (Array.isArray(v) ? v : [])
     .filter((p): p is Record<string, unknown> => !!p && typeof p === "object" && typeof p.gid === "string")
     .map((p) => ({ gid: p.gid as string, path: str(p.path) ?? "connecting", rttMs: num(p.rtt_ms) }));
