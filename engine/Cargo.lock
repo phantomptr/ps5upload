@@ -2795,7 +2795,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-tailnet"
-version = "11.5.2"
+version = "11.6.0"
 dependencies = [
  "cc",
 ]

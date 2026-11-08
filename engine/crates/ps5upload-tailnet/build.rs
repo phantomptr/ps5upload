@@ -6,28 +6,37 @@
 use std::path::{Path, PathBuf};
 
 fn main() {
-    let crate_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    // No canonicalize(): on Windows it returns a verbatim path (\\?\D:\...), which cl.exe behind
+    // sccache cut down to '\\crypto.c' ("C1083: Cannot open source file"). Walk up instead.
+    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let root = crate_dir
-        .join("../../..")
-        .canonicalize()
-        .expect("repo root");
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .expect("engine/crates/ps5upload-tailnet sits three levels below the repo root")
+        .to_path_buf();
     let tn = root.join("tailnet");
-    let mono = root.join("third_party/ava1/c/third_party/monocypher");
-    let bearssl = root.join("third_party/bearssl");
-    let lwip = root.join("third_party/lwip");
+    let third = root.join("third_party");
+    let mono = third
+        .join("ava1")
+        .join("c")
+        .join("third_party")
+        .join("monocypher");
+    let bearssl = third.join("bearssl");
+    let lwip = third.join("lwip");
     for (what, p) in [
-        ("tailnet core", tn.join("include/tailnet.h")),
+        ("tailnet core", under(&tn, "include/tailnet.h")),
         (
             "Monocypher (git submodule update --init third_party/ava1)",
             mono.join("monocypher.c"),
         ),
         (
             "BearSSL (git submodule update --init third_party/bearssl)",
-            bearssl.join("inc/bearssl.h"),
+            under(&bearssl, "inc/bearssl.h"),
         ),
         (
             "lwIP (git submodule update --init third_party/lwip)",
-            lwip.join("src/include/lwip/tcp.h"),
+            under(&lwip, "src/include/lwip/tcp.h"),
         ),
     ] {
         assert!(p.exists(), "missing {what}: {}", p.display());
@@ -35,6 +44,12 @@ fn main() {
 
     let target = std::env::var("TARGET").unwrap();
     let windows = target.contains("windows");
+    if windows {
+        // Where the C comes from, in the build log (the path bug above showed up only here).
+        for p in [&tn, &mono, &bearssl, &lwip] {
+            println!("cargo:warning=tailnet C source: {}", p.display());
+        }
+    }
     let msvc = target.contains("msvc");
 
     let mut b = cc::Build::new();
@@ -47,7 +62,7 @@ fn main() {
         .include(&mono)
         .include(bearssl.join("inc"))
         .include(bearssl.join("src"))
-        .include(lwip.join("src/include"))
+        .include(under(&lwip, "src/include"))
         // Entropy is injected into every TLS engine by the core (src/net.c, src/derp.c).
         .define("BR_USE_URANDOM", "0")
         .define("BR_USE_GETENTROPY", "0")
@@ -101,7 +116,7 @@ fn main() {
         "ipv4/ip4.c",
         "ipv4/ip4_addr.c",
     ] {
-        files.push(lwip.join("src/core").join(f));
+        files.push(under(&under(&lwip, "src/core"), f));
     }
     // All of BearSSL: the linker keeps only what the trimmed client profile references.
     collect_c(&bearssl.join("src"), &mut files);
@@ -132,4 +147,9 @@ fn collect_c(dir: &Path, out: &mut Vec<PathBuf>) {
             out.push(p);
         }
     }
+}
+
+/// `base` joined with a '/'-separated relative path, one component at a time (native separators).
+fn under(base: &Path, rel: &str) -> PathBuf {
+    rel.split('/').fold(base.to_path_buf(), |p, c| p.join(c))
 }
