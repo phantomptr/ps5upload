@@ -190,6 +190,8 @@ export interface ConversionState {
       /** Save to the PS5: the image goes straight to this console's drive and folder, never
        *  stored on this computer (`outputDir` and `thenUpload` are not used). */
       toConsole?: ImageUploadPlan;
+      /** A PS4 update merged into the PS4 game `source`. */
+      update?: string;
     },
   ) => Promise<void>;
   /** Unpack a game image or a debug-key package into a plain folder in `outputDir`; with
@@ -200,7 +202,7 @@ export interface ConversionState {
     keepBoth?: boolean,
     /** This game's own choice (a queued game keeps what it was added with); else the setting.
      *  `zstd`: the folder's files in zstd packs. */
-    own?: { fullVerify?: boolean; zstd?: ZstdPacks },
+    own?: { fullVerify?: boolean; zstd?: ZstdPacks; /** A PS4 update merged into the PS4 game `source`. */ update?: string },
   ) => Promise<void>;
   /** Put the finished image in the Upload queue. */
   uploadImage: (plan: ImageUploadPlan) => void;
@@ -887,6 +889,21 @@ async function followLostUnpack(jobId: string) {
   }
 }
 
+/** An image build's trailing `destination` and `update` arguments, without the empty ones at
+ *  the end, so a plain local build's call stays as it was. */
+function buildTail(
+  destination: ImageDestination | undefined,
+  update: string | undefined,
+): [destination?: ImageDestination, update?: string] {
+  if (update) return [destination, update];
+  return destination ? [destination] : [];
+}
+
+/** A build's trailing `update` argument: there only when a PS4 update is merged in. */
+function withUpdate(update: string | undefined): [string] | [] {
+  return update ? [update] : [];
+}
+
 export const useFpkgConversion = create<ConversionState>((set, get) => ({
   pipeline: { phase: "idle" },
 
@@ -961,7 +978,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
             imageLevel,
             keepBoth,
             amprEmu,
-            ...(toConsole ? [await consoleDestination(toConsole)] : []),
+            ...buildTail(toConsole ? await consoleDestination(toConsole) : undefined, own?.update),
           ),
         null,
         password,
@@ -983,7 +1000,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         keepBoth,
         amprEmu,
         // Only when it goes to the PS5: a local build's call stays as it was.
-        ...(toConsole ? [await consoleDestination(toConsole)] : []),
+        ...buildTail(toConsole ? await consoleDestination(toConsole) : undefined, own?.update),
       );
       update({ jobId: job_id });
       poll(job_id, null);
@@ -1007,6 +1024,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         undefined,
         keepBoth,
         own?.zstd,
+        ...withUpdate(own?.update),
       );
       update({ jobId: job_id });
       poll(job_id, null);

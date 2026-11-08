@@ -48,6 +48,7 @@ import { isDriveImage, LocalDrivesCard, useLocalDrives } from "../LocalImage/Loc
 import { BROWSE_IMAGE_EXTENSIONS } from "../LocalImage/imageTypes";
 import { isRemotePath } from "../../lib/remotePath";
 import { MakeCard } from "./MakeCard";
+import { mergeRole, Ps4MergePicker } from "./Ps4Merge";
 import { OptionsCard } from "./OptionsCard";
 import { folderPackOptions, folderPacks, packOptions } from "./ImageOptions";
 import {
@@ -304,6 +305,19 @@ export default function WorkshopScreen() {
   useEffect(() => {
     if (inspection?.ps4_game && make === "pkg") setMake("image");
   }, [inspection?.ps4_game, make, setMake]);
+  // A PS4 add-on's files become a folder: ShadowMount+ mounts games, not add-ons.
+  const ps4Addon = inspection?.ps4_kind === "addon";
+  useEffect(() => {
+    if (ps4Addon && make !== "folder") setMake("folder");
+  }, [ps4Addon, make, setMake]);
+  // A PS4 update and its game, merged into one image or folder: the other half of the pair is
+  // picked here, and the pair is checked by the engine before anything is made.
+  const role = mergeRole(inspection);
+  const [mergeOther, setMergeOther] = useState("");
+  const [merged, setMerged] = useState<FpkgInspection | null>(null);
+  const [mergeError, setMergeError] = useState<string | null>(null);
+  const [mergeChecking, setMergeChecking] = useState(false);
+  const mergeLatest = useRef(createLatest());
   // "pending" while the sample runs; null when it failed or there is no game.
   const [estimates, setEstimates] = useState<FpkgEstimates | "pending" | null>(null);
   // Only the newest check (and its estimate) may land: a slow check of an earlier game must not
@@ -522,9 +536,12 @@ export default function WorkshopScreen() {
   const run = () => {
     if (!source.trim()) return;
     setError(null);
-    const out = outFor(src);
+    // With an update merged in, the game is what is made and the update goes into it.
+    const game = mergeReady && mergePair ? mergePair.game : src;
+    const update = mergeReady && mergePair ? mergePair.update : undefined;
+    const out = outFor(game);
     if (build.kind === "folder") {
-      void buildFolder(src, out.outputDir, out.keepBoth, { zstd: folderPackOptions(lz4Choice) });
+      void buildFolder(game, out.outputDir, out.keepBoth, { zstd: folderPackOptions(lz4Choice), update });
       return;
     }
     if (build.kind === "image") {
@@ -538,7 +555,7 @@ export default function WorkshopScreen() {
       // Save to: PS5 writes it there as it is built; nothing is kept here to upload after.
       const direct = savesToPs5(runChoice);
       void buildImage(
-        src,
+        game,
         out.outputDir,
         build.compress && !lz4Active(build.format, lz4Choice),
         build.format,
@@ -546,7 +563,7 @@ export default function WorkshopScreen() {
         packOptions(build.format, lz4Choice, lz4Profile?.text),
         password || undefined,
         out.keepBoth,
-        direct ? { toConsole: plan } : undefined,
+        direct || update ? { ...(direct ? { toConsole: plan } : {}), ...(update ? { update } : {}) } : undefined,
       );
       return;
     }
@@ -622,9 +639,17 @@ export default function WorkshopScreen() {
   const runIsShown = pipeline.phase === "idle" || pipeline.source.trim() === src;
   const pipelineName = pipeline.phase === "idle" ? null : nameOf(pipeline.source);
   const isLocalFolder = inspection !== null && !noFiles && !isArchiveSource(src);
+  // The PS4 game and update to merge, once both are picked: the game is what is made, the update
+  // goes into it. `mergeReady` once the engine has checked that they go together.
+  const other = mergeOther.trim();
+  const mergePair =
+    role && other && src ? (role === "patch" ? { game: other, update: src } : { game: src, update: other }) : null;
+  const mergeReady = mergePair !== null && !!merged?.ps4_merge;
+  // An update alone is no game, and a game whose update was picked waits for the check.
+  const mergeBlocks = (role === "patch" || mergePair !== null) && !mergeReady;
   // An archive is not looked inside until the run unpacks it; an image run unpacks it first,
-  // as a package run does.
-  const canImage = isLocalFolder || (src !== "" && isArchiveSource(src));
+  // as a package run does. An add-on becomes a folder only.
+  const canImage = !ps4Addon && (isLocalFolder || (src !== "" && isArchiveSource(src)));
   // A game image or a package can be unpacked into a plain folder, wherever it is; a folder is
   // one already (it can become a folder in zstd packs, below), and an archive is unpacked first.
   const unpackable = src !== "" && isFolderableSource(src);
@@ -671,8 +696,54 @@ export default function WorkshopScreen() {
     : undefined;
   // A folder in zstd packs can be made of a game folder too.
   const packsFolder = folderPacks(lz4Choice);
-  const canFolder = unpackable || (isLocalFolder && packsFolder);
-  const isFolderSource = src !== "" && !unpackable && !isArchiveSource(src) && !packsFolder;
+  // A game folder with an update merged in is a new folder too.
+  const canFolder = unpackable || (isLocalFolder && (packsFolder || mergeReady));
+  const isFolderSource = src !== "" && !unpackable && !isArchiveSource(src) && !packsFolder && !mergeReady;
+
+  /** Check the picked pair: the merged game, or why the two don't go together. */
+  const checkMerge = async (pair = mergePair) => {
+    const token = mergeLatest.current.begin();
+    setMerged(null);
+    setMergeError(null);
+    if (!pair) {
+      setMergeChecking(false);
+      return;
+    }
+    setMergeChecking(true);
+    try {
+      const found = await fpkg.inspect(pair.game, outFor(pair.game).outputDir, pair.update);
+      if (mergeLatest.current.isCurrent(token)) setMerged(found);
+    } catch (e) {
+      if (mergeLatest.current.isCurrent(token)) setMergeError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (mergeLatest.current.isCurrent(token)) setMergeChecking(false);
+    }
+  };
+  // A new game under ① starts without a pair.
+  useEffect(() => {
+    mergeLatest.current.invalidate();
+    setMergeOther("");
+    setMerged(null);
+    setMergeError(null);
+    setMergeChecking(false);
+  }, [src]);
+  const browseMerge = async () => {
+    const picked = await pickPath({
+      mode: "any",
+      title:
+        role === "patch"
+          ? tr("fpkg.merge.pick_game", undefined, "Choose the PS4 game this update goes into")
+          : tr("fpkg.merge.pick_update", undefined, "Choose a PS4 update for this game"),
+      filters: [{ name: "Game image or package", extensions: ["pkg", "exfat", "ffpkg", "ffpfs", "ffpfsc"] }],
+    }).catch((e) => {
+      setError(e instanceof Error ? e.message : String(e));
+      return null;
+    });
+    if (!picked) return;
+    setMergeOther(picked);
+    const pair = role === "patch" ? { game: picked, update: src } : { game: src, update: picked };
+    void checkMerge(pair);
+  };
 
   // ④, and whether it is on screen: while it is scrolled away, a slim bar at the bottom of the
   // window offers its main button (the user asked for the main actions without scrolling).
@@ -832,7 +903,32 @@ export default function WorkshopScreen() {
       dropActive={dropActive}
       password={password}
       onPassword={setPassword}
-      tools={tools}
+      tools={
+        role && !inside ? (
+          <>
+            {tools}
+            <Ps4MergePicker
+              role={role}
+              other={mergeOther}
+              onOther={(v) => {
+                mergeLatest.current.invalidate();
+                setMergeOther(v);
+                setMerged(null);
+                setMergeError(null);
+                setMergeChecking(false);
+              }}
+              onCheck={() => void checkMerge()}
+              onBrowse={canBrowse ? () => void browseMerge() : undefined}
+              merged={merged}
+              error={mergeError}
+              checking={mergeChecking}
+              locked={locked}
+            />
+          </>
+        ) : (
+          tools
+        )
+      }
     />
   );
 
@@ -901,7 +997,7 @@ export default function WorkshopScreen() {
   const barRun = idleRun(
     {
       choice: runChoice,
-      canConvert: !noFiles && !checking && src !== "",
+      canConvert: !noFiles && !checking && src !== "" && !mergeBlocks,
       canFolder,
       canImage,
       replaces: src.startsWith("ps5://"),
@@ -1006,7 +1102,7 @@ export default function WorkshopScreen() {
             installTask={installTask}
             host={host}
             canInstall={canInstall}
-            canConvert={!noFiles && !checking && source.trim() !== ""}
+            canConvert={!noFiles && !checking && source.trim() !== "" && !mergeBlocks}
             isImage={isImage}
             deleteArmed={deleteArmed}
             // ①'s game is not the one a queue run is making: its name and size say nothing of it.

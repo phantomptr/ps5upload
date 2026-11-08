@@ -834,6 +834,98 @@ mod tests {
         r
     }
 
+    /// A PS4 fixture package of ps5upload-fpkg (tests/fixtures/ps4), written to `dir`.
+    fn ps4_fixture(dir: &Path, name: &str) -> std::path::PathBuf {
+        let gz: &[u8] = match name {
+            "synthetic" => {
+                include_bytes!("../../ps5upload-fpkg/tests/fixtures/ps4/synthetic.pkg.gz")
+            }
+            "update" => include_bytes!("../../ps5upload-fpkg/tests/fixtures/ps4/update.pkg.gz"),
+            "addon" => include_bytes!("../../ps5upload-fpkg/tests/fixtures/ps4/addon.pkg.gz"),
+            _ => panic!("no fixture {name}"),
+        };
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(gz), &mut bytes).unwrap();
+        let path = dir.join(format!("{name}.pkg"));
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    /// A PS4 game with its update merged in becomes one folder at the update's version, with
+    /// the param.json ShadowMount+ reads, and reads back against the merge opened again; an
+    /// add-on becomes a folder of its files alone.
+    #[test]
+    fn a_ps4_update_merges_into_its_game_folder_and_an_addon_unpacks() {
+        let root = scratch("ps4merge");
+        let (game, update, addon) = (
+            ps4_fixture(&root, "synthetic"),
+            ps4_fixture(&root, "update"),
+            ps4_fixture(&root, "addon"),
+        );
+        let target = root.join("merged");
+        let (mut tree, _, _) =
+            ps5upload_fpkg::module_case::open_with_update(&game, Some(&update)).unwrap();
+        let (g, u) = (game.clone(), update.clone());
+        let reopen = move || {
+            ps5upload_fpkg::module_case::open_with_update(&g, Some(&u))
+                .map(|(t, _, _)| t)
+                .map_err(|e| e.to_string())
+        };
+        let cancel = AtomicBool::new(false);
+        build(
+            &mut *tree,
+            &reopen,
+            &target,
+            VerifyMode::Full,
+            &cancel,
+            &mut |_, _, _| {},
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read(target.join("eboot.bin")).unwrap(),
+            b"\x7fELF patched eboot 01.05"
+        );
+        assert_eq!(
+            std::fs::read(target.join("data/added.bin")).unwrap(),
+            b"added by the update"
+        );
+        assert!(
+            target.join("data/empty.bin").is_file(),
+            "the game's own file"
+        );
+        let sfo = std::fs::read(target.join("sce_sys/param.sfo")).unwrap();
+        let params = ps5upload_pkg::sfo_params(&sfo).unwrap();
+        let text = |k: &str| ps5upload_fpkg::ps4_pkg::sfo_text(&params, k).unwrap();
+        assert_eq!(
+            (text("CATEGORY"), text("APP_VER")),
+            ("gd".into(), "01.05".into())
+        );
+        let json = std::fs::read_to_string(target.join("sce_sys/param.json")).unwrap();
+        assert!(json.contains("CUSA99990"), "{json}");
+
+        let target = root.join("addon");
+        let mut tree = ps5upload_fpkg::source::open(&addon).unwrap();
+        let a = addon.clone();
+        let reopen = move || ps5upload_fpkg::source::open(&a).map_err(|e| e.to_string());
+        build(
+            &mut *tree,
+            &reopen,
+            &target,
+            VerifyMode::Full,
+            &cancel,
+            &mut |_, _, _| {},
+        )
+        .unwrap();
+        let (files, _) = snapshot(&target);
+        let names: Vec<&str> = files.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(
+            names,
+            ["dlc/map.bin", "dlc/readme.txt"],
+            "no sce_sys, no param.json"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// A libSceAmpr game's stale index doesn't reach the folder, and the read-back sees the same
     /// fresh one; an LZ4-packed game's index is kept, since it also lists what is in the packs.
     #[test]

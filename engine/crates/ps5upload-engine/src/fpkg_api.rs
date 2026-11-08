@@ -40,6 +40,55 @@ pub(crate) struct InspectReq {
     /// the room left.
     #[serde(default)]
     output_dir: Option<String>,
+    /// A PS4 update to look at merged into the game `source` (see `ps5upload_fpkg::ps4_merge`):
+    /// the answer is the merged game's, or why the two don't go together.
+    #[serde(default)]
+    update: Option<String>,
+}
+
+/// Why a PS4 source can't become what was asked, or `None`: an update alone holds only the
+/// files it changed, so it goes into its game ("Merge into the game"); an add-on becomes a
+/// folder, not an image. A licence-only add-on never opens (`ps4_pkg::LICENCE_ONLY`).
+pub(crate) fn ps4_refusal(
+    source: &Path,
+    tree: &mut dyn ps5upload_fpkg::source::SourceTree,
+    image: bool,
+) -> Option<String> {
+    use ps5upload_fpkg::ps4_pkg::{self, Ps4Kind};
+    let (kind, title, version) = match ps4_pkg::peek_path(source).ok().flatten() {
+        Some(info) => (
+            Some(info.kind),
+            info.title_id(),
+            info.text("APP_VER").unwrap_or_default(),
+        ),
+        None => {
+            let path = tree
+                .files()
+                .iter()
+                .find(|f| f.path.eq_ignore_ascii_case("sce_sys/param.sfo"))
+                .map(|f| f.path.clone())?;
+            let params = ps5upload_pkg::sfo_params(&tree.read(&path).ok()?).ok()?;
+            let text = |k: &str| ps4_pkg::sfo_text(&params, k).unwrap_or_default();
+            (
+                Ps4Kind::of_category(&text("CATEGORY")),
+                text("TITLE_ID"),
+                text("APP_VER"),
+            )
+        }
+    };
+    match kind? {
+        Ps4Kind::Patch => Some(format!(
+            "{} is a PS4 update ({version}) for {title}. It holds only the files the update \
+             changed, so on its own it isn't a game: merge it into the game instead (Convert's \
+             \"Merge into the game\": the game as the source, this as its update)",
+            source.display()
+        )),
+        Ps4Kind::Addon if image => Some(format!(
+            "{} is a PS4 add-on: its files become a folder, not a game image",
+            source.display()
+        )),
+        _ => None,
+    }
 }
 
 #[derive(Deserialize)]
@@ -197,6 +246,7 @@ pub(crate) async fn fpkg_inspect_handler(
     let source = resolve_engine_path(&req.source)
         .to_string_lossy()
         .into_owned();
+    let update = update_path(req.update.as_deref());
     let result = tokio::task::spawn_blocking(move || {
         // A game folder on a NAS share the OS mounted: names the share made up would become
         // the package's file names (see smb_fs::samba_renamed_message).
@@ -210,7 +260,7 @@ pub(crate) async fn fpkg_inspect_handler(
                 return Err(ps5upload_fpkg::Error::Format(msg));
             }
         }
-        let inspection = build::inspect(Path::new(&source), &out)?;
+        let inspection = build::inspect_with_update(Path::new(&source), update.as_deref(), &out)?;
         let min_firmware =
             min_firmware_of(Path::new(&source), inspection.required_firmware.as_deref());
         Ok::<_, ps5upload_fpkg::Error>(InspectResponse {
@@ -693,6 +743,10 @@ pub(crate) struct ExfatBuildReq {
     /// packs and edited copies are refused for it.
     #[serde(default)]
     destination: Option<ImageDestinationReq>,
+    /// A PS4 update (a package, image or folder) merged into the PS4 game `source`: the image
+    /// is the game at the update's version (`ps5upload_fpkg::ps4_merge`). Not with `edits`.
+    #[serde(default)]
+    update: Option<String>,
 }
 
 /// Where an image build puts the image.
@@ -873,6 +927,14 @@ fn to_console_job(
     streamed
 }
 
+/// A request's `update`, resolved; `None` when absent or blank.
+fn update_path(update: Option<&str>) -> Option<PathBuf> {
+    update
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+        .map(resolve_engine_path)
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct AmprZstdReq {
     /// 1 to 22; 5 when absent.
@@ -1036,11 +1098,19 @@ pub(crate) async fn exfat_build_handler(
         )
         .into_response();
     }
+    let update = update_path(req.update.as_deref());
     // An edited copy (#479): the image on this computer, opened with the changes applied, is
     // written out again as the same kind of image.
     let edited = if req.edits.is_empty() && !req.rebuild_ampr_index {
         None
     } else {
+        if update.is_some() {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                "an update is merged into a game being converted, not into an edited copy",
+            )
+            .into_response();
+        }
         if remote || !image_file {
             return json_err(
                 StatusCode::BAD_REQUEST,
@@ -1219,14 +1289,25 @@ pub(crate) async fn exfat_build_handler(
     let add_ampr_emu = req.add_ampr_emu;
     let ampr_emu_build = req.ampr_emu_build.clone();
     let edited_tree = edited.map(|e| e.tree);
+    let scan_update = update.clone();
     let scanned = tokio::task::spawn_blocking(move || {
         // An edited copy keeps the image's own names: only the user's changes are made.
         if let Some(tree) = edited_tree {
             return Ok(tree);
         }
         // A UFS2 image (.ffpkg) is case-sensitive like /data: give modules the eboot's spelling.
+        // A PS4 update goes into its game here (the merge checks they go together).
         let (mut tree, renamed, signing) =
-            ps5upload_fpkg::module_case::open(&scan_source).map_err(|e| e.to_string())?;
+            ps5upload_fpkg::module_case::open_with_update(&scan_source, scan_update.as_deref())
+                .map_err(|e| e.to_string())?;
+        match &scan_update {
+            Some(_) => crate::log_at!(Info, "convert", "image build: {}", tree.describe()),
+            None => {
+                if let Some(why) = ps4_refusal(&scan_source, &mut *tree, true) {
+                    return Err(why);
+                }
+            }
+        }
         if !renamed.is_empty() {
             crate::log_at!(
                 Info,
@@ -1707,6 +1788,10 @@ pub(crate) struct FolderBuildReq {
     /// this computer, a saved server or a console). Not with `entry`.
     #[serde(default)]
     ampr_zstd: Option<AmprZstdReq>,
+    /// A PS4 update merged into the PS4 game `source`, as an image build's `update`; the game
+    /// may then also be a folder. Not with `entry`.
+    #[serde(default)]
+    update: Option<String>,
 }
 
 /// What a folder build reads: the whole image, one folder of it, or one file.
@@ -1755,9 +1840,12 @@ async fn resolved(path: &Path) -> Option<PathBuf> {
 /// the eboot's spelling, as an image or folder build reads it, then
 /// [`crate::zstd_packs::readable_for_packing`]. A packed folder build's read-back opens it the
 /// same way.
-fn open_for_packing(source: &Path) -> Result<Box<dyn ps5upload_fpkg::source::SourceTree>, String> {
+fn open_for_packing(
+    source: &Path,
+    update: Option<&Path>,
+) -> Result<Box<dyn ps5upload_fpkg::source::SourceTree>, String> {
     let (tree, renamed, signing) =
-        ps5upload_fpkg::module_case::open(source).map_err(|e| e.to_string())?;
+        ps5upload_fpkg::module_case::open_with_update(source, update).map_err(|e| e.to_string())?;
     if !renamed.is_empty() {
         crate::log_at!(
             Info,
@@ -1803,8 +1891,22 @@ pub(crate) async fn folder_build_handler(
             Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
         },
     };
+    let update = update_path(req.update.as_deref());
+    if update.is_some()
+        && req
+            .entry
+            .as_deref()
+            .is_some_and(|e| !e.trim().trim_matches('/').is_empty())
+    {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "an update is merged into a whole game, not one file or folder of it",
+        )
+        .into_response();
+    }
     let local_dir = !remote && tokio::fs::metadata(&source).await.is_ok_and(|m| m.is_dir());
-    if local_dir && zstd.is_none() {
+    // A game folder with an update merged in is a new folder.
+    if local_dir && zstd.is_none() && update.is_none() {
         return json_err(
             StatusCode::BAD_REQUEST,
             format!("{} is already a folder", source.display()),
@@ -1825,8 +1927,8 @@ pub(crate) async fn folder_build_handler(
     } else {
         crate::image_build::is_image_file(&source)
     };
-    // Packs are made of a game folder anywhere too.
-    if !named_as_image && !(zstd.is_some() && (local_dir || remote)) {
+    // Packs are made of a game folder anywhere too, and so is a game with an update merged in.
+    if !named_as_image && !((zstd.is_some() || update.is_some()) && (local_dir || remote)) {
         return json_err(
             StatusCode::BAD_REQUEST,
             format!("{} is not a game image or package", source.display()),
@@ -1901,7 +2003,7 @@ pub(crate) async fn folder_build_handler(
             if out.starts_with(&src) {
                 return json_err(
                     StatusCode::BAD_REQUEST,
-                    "the packed folder would be written inside the game folder: pick another \
+                    "the new folder would be written inside the game folder: pick another \
                      output folder",
                 )
                 .into_response();
@@ -1917,6 +2019,7 @@ pub(crate) async fn folder_build_handler(
     }
     let scan_source = source.clone();
     let scan_entry = entry.clone();
+    let scan_update = update.clone();
     let packing = zstd.is_some();
     let scanned = tokio::task::spawn_blocking(move || {
         if let Some(entry) = scan_entry {
@@ -1924,13 +2027,29 @@ pub(crate) async fn folder_build_handler(
             return open_entry(&scan_source, &entry);
         }
         if packing {
-            return open_for_packing(&scan_source).map(Unpacked::Tree);
+            let mut tree = open_for_packing(&scan_source, scan_update.as_deref())?;
+            if scan_update.is_none() {
+                if let Some(why) = ps4_refusal(&scan_source, &mut *tree, false) {
+                    return Err(why);
+                }
+            }
+            return Ok(Unpacked::Tree(tree));
         }
         // An image ignores letter case and /data does not: a Unity dump whose
         // Il2cppUserAssemblies.prx the eboot loads as Il2CppUserAssemblies.prx plays from the
         // image and crashes a second in from the folder. The folder takes the eboot's spelling.
-        let (tree, renamed, signing) =
-            ps5upload_fpkg::module_case::open(&scan_source).map_err(|e| e.to_string())?;
+        // A PS4 update goes into its game here (the merge checks they go together).
+        let (mut tree, renamed, signing) =
+            ps5upload_fpkg::module_case::open_with_update(&scan_source, scan_update.as_deref())
+                .map_err(|e| e.to_string())?;
+        match &scan_update {
+            Some(_) => crate::log_at!(Info, "convert", "folder build: {}", tree.describe()),
+            None => {
+                if let Some(why) = ps4_refusal(&scan_source, &mut *tree, false) {
+                    return Err(why);
+                }
+            }
+        }
         if !renamed.is_empty() {
             crate::log_at!(
                 Info,
@@ -2069,16 +2188,21 @@ pub(crate) async fn folder_build_handler(
         };
         let reopen_source = source.clone();
         let reopen_entry = entry.clone();
+        let reopen_update = update.clone();
         // Verification reads the source afresh by the folder's names, so with the same renames
-        // (or, for a part of the image, the same part; for packs, decoded the same way).
+        // (or, for a part of the image, the same part; for packs, decoded the same way; with an
+        // update, merged the same way).
         let reopen = move || match &reopen_entry {
             Some(e) => open_entry(&reopen_source, e).map(|u| match u {
                 Unpacked::Tree(t) | Unpacked::File { tree: t, .. } => t,
             }),
-            None if packing => open_for_packing(&reopen_source),
-            None => ps5upload_fpkg::module_case::open(&reopen_source)
-                .map(|(t, _, _)| t)
-                .map_err(|e| e.to_string()),
+            None if packing => open_for_packing(&reopen_source, reopen_update.as_deref()),
+            None => ps5upload_fpkg::module_case::open_with_update(
+                &reopen_source,
+                reopen_update.as_deref(),
+            )
+            .map(|(t, _, _)| t)
+            .map_err(|e| e.to_string()),
         };
         // zstd packs: the emulator that goes in, fetched here (off the request) and recorded.
         let mut runtime = None;

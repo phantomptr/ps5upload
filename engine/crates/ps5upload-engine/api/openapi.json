@@ -3505,6 +3505,13 @@
             "description": "A game folder on this computer (one with `sce_sys` in it).",
             "type": "string"
           },
+          "update": {
+            "description": "A PS4 update (a package, image or folder) merged into the PS4 game `source`: the image\nis the game at the update's version (`ps5upload_fpkg::ps4_merge`). Not with `edits`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "verify_chunk_kib": {
             "description": "How much of a file the read-back check reads per call, in KiB (1024 to 65536); 8192\nwhen absent, which measured fastest.",
             "minimum": 0,
@@ -4030,6 +4037,13 @@
           "source": {
             "description": "A game image (`.exfat`, `.ffpkg`/`.ufs2`, `.ffpfs`, `.ffpfsc`) or a debug-key `.pkg`,\non this computer, a saved server (`remote://`) or a console (`ps5://`).",
             "type": "string"
+          },
+          "update": {
+            "description": "A PS4 update merged into the PS4 game `source`, as an image build's `update`; the game\nmay then also be a folder. Not with `entry`.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -6094,9 +6108,45 @@
             "minimum": 0,
             "type": "integer"
           },
+          "ps4_addon_data": {
+            "description": "An add-on: whether it holds files (`false`: a licence, nothing to convert).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "ps4_game": {
-            "description": "A PS4 game: it becomes an image or a folder, not a PS5 package.",
+            "description": "A PS4 game, update or add-on: it becomes an image or a folder, not a PS5 package.",
             "type": "boolean"
+          },
+          "ps4_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Ps4Kind"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What a PS4 source is: `game`, `patch` (an update, which goes into its game: see\n[`crate::ps4_merge`]) or `addon`. Absent for a PS5 one."
+          },
+          "ps4_merge": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MergeInfo"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Inspected with an update merged in: what the merge is."
+          },
+          "ps4_title_id": {
+            "description": "The PS4 title it is or belongs to (`CUSA…`): an update's or add-on's game.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "required_firmware": {
             "type": [
@@ -6132,7 +6182,11 @@
           "ampr_packs",
           "unsigned_executables",
           "ps4_game",
-          "content_version"
+          "content_version",
+          "ps4_kind",
+          "ps4_title_id",
+          "ps4_addon_data",
+          "ps4_merge"
         ],
         "type": "object"
       },
@@ -7622,6 +7676,45 @@
         },
         "required": [
           "drive"
+        ],
+        "type": "object"
+      },
+      "MergeInfo": {
+        "description": "What a merge is: for the screen and the log.",
+        "properties": {
+          "added": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "game_version": {
+            "description": "The game's `APP_VER` and the update's.",
+            "type": "string"
+          },
+          "replaced": {
+            "description": "Files of the game the update replaces, and files it adds.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title_id": {
+            "type": "string"
+          },
+          "update_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title_id",
+          "title",
+          "game_version",
+          "update_version",
+          "replaced",
+          "added"
         ],
         "type": "object"
       },
@@ -9854,6 +9947,15 @@
           "webdav",
           "webdavs",
           "nfs"
+        ],
+        "type": "string"
+      },
+      "Ps4Kind": {
+        "description": "What a PS4 package is: see the module docs.",
+        "enum": [
+          "game",
+          "patch",
+          "addon"
         ],
         "type": "string"
       },
@@ -13966,6 +14068,13 @@
           "source": {
             "description": "A game folder, or a `.exfat` / `.ffpkg` / `.ffpfsc` mount image.",
             "type": "string"
+          },
+          "update": {
+            "description": "A PS4 update to look at merged into the game `source` (see `ps5upload_fpkg::ps4_merge`):\nthe answer is the merged game's, or why the two don't go together.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [

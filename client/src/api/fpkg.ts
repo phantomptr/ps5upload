@@ -58,10 +58,31 @@ export interface FpkgInspection {
   ampr_packs?: AmprPacksReadiness | null;
   /** How many of its executables are plain ELF files, which a build fake-signs. */
   unsigned_executables?: number;
-  /** A PS4 game: it becomes an image or a folder, not a PS5 package. */
+  /** A PS4 game, update or add-on: it becomes an image or a folder, not a PS5 package. */
   ps4_game?: boolean;
   /** The version it says it is: param.json's contentVersion, or param.sfo's APP_VER. */
   content_version?: string | null;
+  /** What a PS4 source is: a game, an update (`patch`, which goes into its game) or an add-on. */
+  ps4_kind?: Ps4Kind | null;
+  /** The PS4 title it is or belongs to (CUSA…): an update's or add-on's game. */
+  ps4_title_id?: string | null;
+  /** An add-on: whether it holds files (false: a licence, nothing to convert). */
+  ps4_addon_data?: boolean | null;
+  /** Inspected with an update merged in: what the merge is. */
+  ps4_merge?: Ps4Merge | null;
+}
+
+export type Ps4Kind = "game" | "patch" | "addon";
+
+/** A PS4 update merged into its game (the engine's `ps4_merge::MergeInfo`). */
+export interface Ps4Merge {
+  title_id: string;
+  title?: string | null;
+  game_version: string;
+  update_version: string;
+  /** Files of the game the update replaces, and files it adds. */
+  replaced: number;
+  added: number;
 }
 
 export interface AmprPacksReadiness {
@@ -138,8 +159,10 @@ export interface WorkshopRun {
 }
 
 export const fpkg = {
-  inspect: (source: string, outputDir?: string) =>
-    invoke<FpkgInspection>("fpkg_inspect", { source, outputDir }),
+  /** With `update`, the PS4 game `source` with that update merged in, or why they don't go
+   *  together. */
+  inspect: (source: string, outputDir?: string, update?: string) =>
+    invoke<FpkgInspection>("fpkg_inspect", { source, outputDir, update }),
   /** Starts a job; poll it with jobStatus from api/ps5. */
   build: (req: FpkgBuildRequest) =>
     invoke<{ job_id: string }>("fpkg_build", {
@@ -195,8 +218,11 @@ export const fpkg = {
     amprEmu?: { add: boolean; build: AmprEmuBuild },
     /** Straight to a PS5's folder, never stored on this computer; `outputDir` when absent. */
     destination?: ImageDestination,
+    /** A PS4 update merged into the PS4 game `source`: the image is the game at its version. */
+    update?: string,
   ) =>
     invoke<{ job_id: string }>("exfat_build", {
+      update,
       source,
       outputDir,
       format,
@@ -231,8 +257,11 @@ export const fpkg = {
     /** Write the game with its files in zstd packs (ampr-emu-ng goes in too); the source may
      *  then also be a game folder. */
     zstd?: ZstdPacks,
+    /** A PS4 update merged into the PS4 game `source` (which may then also be a folder). */
+    update?: string,
   ) =>
     invoke<{ job_id: string }>("folder_build", {
+      update,
       source,
       outputDir,
       name,

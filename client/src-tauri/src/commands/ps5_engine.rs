@@ -2230,12 +2230,17 @@ pub async fn game_inspect_files(token: String) -> Result<JsonValue, String> {
 /// Remote image metadata reads may exceed the standard 60-second request limit.
 /// POST /api/fpkg/inspect.
 #[tauri::command]
-pub async fn fpkg_inspect(source: String, output_dir: Option<String>) -> Result<JsonValue, String> {
+pub async fn fpkg_inspect(
+    source: String,
+    output_dir: Option<String>,
+    // A PS4 update to look at merged into the game `source`.
+    update: Option<String>,
+) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/fpkg/inspect");
     post_json_long(
         &url,
-        &serde_json::json!({ "source": source, "output_dir": output_dir }),
+        &serde_json::json!({ "source": source, "output_dir": output_dir, "update": update }),
     )
     .await
 }
@@ -2414,6 +2419,8 @@ pub async fn exfat_build(
     ampr_emu_build: Option<String>,
     // Straight to a PS5: {kind: "console", addr, dir}, passed through; the output folder when absent.
     destination: Option<JsonValue>,
+    // A PS4 update merged into the PS4 game `source`.
+    update: Option<String>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/exfat/build");
@@ -2436,6 +2443,7 @@ pub async fn exfat_build(
             "ampr_zstd": ampr_zstd,
             "ampr_emu_build": ampr_emu_build,
             "destination": destination,
+            "update": update,
         }),
     )
     .await
@@ -2443,6 +2451,7 @@ pub async fn exfat_build(
 
 /// Unpack a game image or a debug-key package into a plain folder; runs as an engine job.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn folder_build(
     source: String,
     output_dir: Option<String>,
@@ -2454,6 +2463,8 @@ pub async fn folder_build(
     keep_both: Option<bool>,
     // zstd asset packs: {level, runtime}. The source may then also be a game folder.
     ampr_zstd: Option<JsonValue>,
+    // A PS4 update merged into the PS4 game `source` (which may then also be a folder).
+    update: Option<String>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/folder/build");
@@ -2467,6 +2478,7 @@ pub async fn folder_build(
             "entry": entry,
             "keep_both": keep_both.unwrap_or(false),
             "ampr_zstd": ampr_zstd,
+            "update": update,
         }),
     )
     .await
