@@ -719,3 +719,117 @@ test.describe("a friend's phone in the app", () => {
     await expect(full).toHaveCount(0);
   });
 });
+
+/** A controller the browser has no layout for (mapping ""), `n` raw buttons: window.__pad. */
+async function fakeRawController(page: Page, id: string, n = 12, axes: number[] = [0, 0, 0, 0]) {
+  await page.addInitScript(
+    ([id, n, axes]) => {
+      const state = { buttons: new Array(n).fill(0) as number[], axes: [...axes] };
+      (window as unknown as { __pad: typeof state }).__pad = state;
+      navigator.getGamepads = () =>
+        [
+          {
+            id,
+            index: 0,
+            connected: true,
+            mapping: "",
+            timestamp: performance.now(),
+            axes: [...state.axes],
+            buttons: state.buttons.map((v) => ({ pressed: v > 0.5, touched: v > 0, value: v })),
+            vibrationActuator: null,
+          },
+        ] as unknown as (Gamepad | null)[];
+    },
+    [id, n, axes] as const,
+  );
+}
+
+/** Joined at once as Player 2; the pad frames the page sends land in `frames`. */
+async function joinedAsPlayer2(page: Page, frames: number[][]) {
+  await page.routeWebSocket(/\/api\/join\/ws/, (ws) => {
+    ws.onMessage((m) => {
+      if (typeof m !== "string") {
+        frames.push([...m]);
+        return;
+      }
+      const v = JSON.parse(m) as { hello?: Record<string, unknown>; ping?: number };
+      if (v.ping !== undefined) ws.send(JSON.stringify({ pong: v.ping }));
+      if (!v.hello) return;
+      ws.send(JSON.stringify({ stage: "joined", player: 2, token: "TOKEN-1", hevc: false }));
+      ws.send(JSON.stringify({ status: { player: 2, state: "playing", rtt_ms: 12, host: "Ann" } }));
+    });
+  });
+  await page.addInitScript(() => localStorage.setItem("ps5upload.join.guided", "1"));
+  await page.goto(`/join#i=${INVITE}&n=Ann`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("join-name").fill("Ben");
+  await page.getByTestId("join-go").click();
+  await expect(page.getByTestId("join-player")).toHaveText("You are Player 2", { timeout: 30_000 });
+}
+
+test("a friend checks a controller nobody knows: a live view, a quick mapping, Redo", async ({ page }) => {
+  await fakeRawController(page, "Mystery Pad (Vendor: 1234 Product: 5678)");
+  await serveJoinPage(page);
+  const frames: number[][] = [];
+  await joinedAsPlayer2(page, frames);
+  await expect(page.getByTestId("join-pad-unknown")).toContainText("Not on our list");
+
+  await page.getByTestId("join-pad-unknown-check").dispatchEvent("click");
+  const check = page.getByTestId("join-pad-check");
+  await expect(check).toBeVisible();
+  await expect(page.getByTestId("join-pad-check-kind")).toHaveAttribute("data-kind", "guess");
+  // Raw button 0 plays as ✕ for now (the standard order is the guess): it lights up.
+  await press(page, 0, 1);
+  await expect(page.getByTestId("join-pad-test")).toHaveAttribute("data-buttons", "1");
+  await press(page, 0, 0);
+  // While checking, the game gets nothing from this device.
+  frames.length = 0;
+  await press(page, 0, 1);
+  await page.waitForTimeout(300);
+  expect(frames.some((f) => f[5] !== 0)).toBe(false);
+  await press(page, 0, 0);
+
+  // This pad's bottom button is raw 3, right 2, left 1, top 0; the rest skipped.
+  await page.getByTestId("join-pad-learn-start").click();
+  await expect(page.getByTestId("join-pad-learn-step")).toHaveText("Press the bottom face button (✕)");
+  for (const b of [3, 2, 1, 0]) {
+    const before = (await page.getByTestId("join-pad-learn-step").textContent()) ?? "";
+    await press(page, b, 1);
+    await expect(page.getByTestId("join-pad-learn-step")).not.toHaveText(before);
+    await press(page, b, 0);
+    // Let go for a few frames, as a hand does: the next step listens after that.
+    await page.waitForTimeout(100);
+  }
+  while (await page.getByTestId("join-pad-learn").count()) await page.getByTestId("join-pad-learn-skip").click();
+  await expect(check).toContainText("Saved for this controller on this device");
+  await expect(page.getByTestId("join-pad-check-kind")).toHaveAttribute("data-kind", "saved");
+  await press(page, 3, 1);
+  await expect(page.getByTestId("join-pad-test")).toHaveAttribute("data-buttons", "1");
+  await press(page, 3, 0);
+  await expect(page.getByTestId("join-pad-learn-start")).toHaveText("Redo");
+
+  // Back in the game: raw 3 is ✕ now.
+  await page.getByTestId("join-pad-check-done").click();
+  await expect(check).toHaveCount(0);
+  frames.length = 0;
+  await press(page, 3, 1);
+  await expect.poll(() => frames.some((f) => f[5] === 1)).toBe(true);
+  await press(page, 3, 0);
+  // Kept on this device, under the controller's name.
+  expect(await page.evaluate(() => localStorage.getItem("ps5upload.rp_pad_profiles.v1"))).toContain("Mystery Pad");
+});
+
+test("a friend's 8BitDo in D-input is told how to switch it to X-input", async ({ page }) => {
+  // Chrome's reading of a Pro 2 in D-input: axes by HID usage, triggers resting at -1, hat at 9.
+  await fakeRawController(page, "8BitDo Pro 2 (Vendor: 2dc8 Product: 6006)", 15, [0, 0, 0, -1, -1, 0, 0, 0, 0, 9 / 7]);
+  await serveJoinPage(page);
+  const frames: number[][] = [];
+  await joinedAsPlayer2(page, frames);
+  await expect(page.getByTestId("pad-8bitdo-hint")).toHaveText(
+    "For the best result, switch your 8BitDo to X-input mode: set the switch on the back to X, then press Start.",
+  );
+  // Known from the table: no "not on our list", and B (raw 1, the bottom button) plays as ✕.
+  await expect(page.getByTestId("join-pad-unknown")).toHaveCount(0);
+  frames.length = 0;
+  await press(page, 1, 1);
+  await expect.poll(() => frames.some((f) => f[5] === 1)).toBe(true);
+});
