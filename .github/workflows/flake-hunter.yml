@@ -1,0 +1,207 @@
+# Nightly flake hunt: runs the timing-sensitive tests over and over on one Linux runner and keeps
+# ONE open issue, "Nightly flake report", with what failed. Gates nothing: no other workflow or
+# check waits for it, and a failing test here does not fail the run (the report is the output).
+#
+# The sets: the Play Together hub's tests, the engine's join_net and server_out tests, the tailnet
+# node self-test (ASan + UBSan, as `make test-payload` builds it) and the desktop app's agent_mcp
+# tests. Each set gets a time budget so the whole run stays near 20 minutes; a set that cannot
+# build is reported as such, not as a flake.
+#
+#   gh workflow run flake-hunter.yml -f rounds=20
+name: flake-hunter
+
+on:
+  schedule:
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+    inputs:
+      rounds:
+        description: "Rounds per set (each set also stops at its time budget)"
+        type: number
+        default: 10
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: flake-hunter
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: "0"
+  ROUNDS: ${{ inputs.rounds || 10 }}
+  OUT: ${{ github.workspace }}/../flake-report
+
+jobs:
+  hunt:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          submodules: true
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+
+      # Main's caches, read only (this workflow saves none): the engine test leg's for the hub
+      # and engine sets, the Linux desktop job's for agent_mcp.
+      - name: Restore the engine cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+          key: ${{ runner.os }}-engine-test-engine-${{ hashFiles('engine/Cargo.lock') }}-flake
+          restore-keys: |
+            ${{ runner.os }}-engine-test-engine-${{ hashFiles('engine/Cargo.lock') }}-
+            ${{ runner.os }}-engine-test-engine-
+
+      - name: Restore the desktop cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          # The same path list the desktop job saves with: a cache entry only restores into the
+          # paths it was saved from.
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            client/src-tauri/target
+          key: ${{ runner.os }}-desktop-ubuntu-24.04-${{ hashFiles('client/src-tauri/Cargo.lock') }}-flake
+          restore-keys: |
+            ${{ runner.os }}-desktop-ubuntu-24.04-${{ hashFiles('client/src-tauri/Cargo.lock') }}-
+            ${{ runner.os }}-desktop-ubuntu-24.04-
+
+      - name: Install Tauri Linux deps (agent_mcp)
+        timeout-minutes: 6
+        run: |
+          set -euo pipefail
+          sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 \
+            -o Acquire::https::Timeout=20 update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 \
+            -o Acquire::https::Timeout=20 install -y --no-install-recommends \
+            libgtk-3-dev libwebkit2gtk-4.1-dev libasound2-dev libappindicator3-dev librsvg2-dev \
+            libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
+
+      # Builds are bounded and allowed to fail: a set whose build failed is reported, not hunted.
+      - name: Build the hub and engine tests
+        id: build_engine
+        continue-on-error: true
+        timeout-minutes: 8
+        working-directory: engine
+        run: |
+          cargo test -p ps5upload-hub --no-run
+          cargo test -p ps5upload-engine --lib --no-run
+
+      # The same stubs as ci's rust desktop job: the app embeds a payload and an engine binary.
+      - name: Build the desktop app's tests
+        id: build_desktop
+        continue-on-error: true
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          mkdir -p payload engine/target/release
+          { printf '\x7fELF'; head -c 204800 /dev/zero; } > payload/ps5upload.elf
+          gzip -nf payload/ps5upload.elf
+          printf 'engine stub\n' > engine/target/release/ps5upload-engine
+          printf 'unrar helper stub\n' > engine/target/release/ps5upload-unrar
+          cd client/src-tauri && cargo test --lib --no-run
+
+      # The commands `make test-payload` runs for this self-test (Makefile, "tailnet node
+      # self-test"), with clang: GCC rejects some of the payload C clang accepts.
+      - name: Build the tailnet node self-test
+        id: build_tailnet
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          make -s -C tailnet SAN=1 CC=clang lib
+          mkdir -p payload/build/selftests
+          ava1=third_party/ava1/c
+          clang -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wall -Wextra -Werror -pthread \
+            -Ipayload/include -I"$ava1" -I"$ava1/gen" -Ipayload/gen -Itailnet/include \
+            -o payload/build/selftests/ps5upload-tailnet-node-selftest \
+            payload/tests/tailnet_node_selftest.c payload/src/tailnet_node.c payload/src/webui_codec.c \
+            "$ava1/gen/ava1_gen.c" payload/gen/ava1_app_gen.c "$ava1/ava1_wire.c" \
+            tailnet/build/asan/libtailnet.a tailnet/build/asan/liblwip.a tailnet/build/asan/libbearssl.a
+
+      # Budgets (seconds): the four sets take at most ~8 minutes together, so with the builds the
+      # run stays near 20 minutes.
+      - name: Hunt
+        env:
+          ENGINE_BUILT: ${{ steps.build_engine.outcome }}
+          DESKTOP_BUILT: ${{ steps.build_desktop.outcome }}
+          TAILNET_BUILT: ${{ steps.build_tailnet.outcome }}
+        run: |
+          set -uo pipefail
+          hunt=.github/scripts/flake-hunt.sh
+          mkdir -p "$OUT"
+          not_built() { echo "| $1 | 0 | 0 | did not build (see the build step's log) |" >> "$OUT/summary.md"; }
+          if [ "$ENGINE_BUILT" = success ]; then
+            (cd engine && "../$hunt" "$OUT" hub "$ROUNDS" 120 -- cargo test -q -p ps5upload-hub)
+            (cd engine && "../$hunt" "$OUT" "join_net + server_out" "$ROUNDS" 180 -- \
+              cargo test -q -p ps5upload-engine --lib -- join_net server_out)
+          else
+            not_built hub
+            not_built "join_net + server_out"
+          fi
+          if [ "$TAILNET_BUILT" = success ]; then
+            "$hunt" "$OUT" "tailnet node self-test" "$ROUNDS" 90 -- \
+              payload/build/selftests/ps5upload-tailnet-node-selftest
+          else
+            not_built "tailnet node self-test"
+          fi
+          if [ "$DESKTOP_BUILT" = success ]; then
+            (cd client/src-tauri && "../../$hunt" "$OUT" agent_mcp "$ROUNDS" 120 -- cargo test -q --lib agent_mcp)
+          else
+            not_built agent_mcp
+          fi
+          {
+            echo "| set | rounds | failed | note |"
+            echo "| --- | --- | --- | --- |"
+            cat "$OUT/summary.md"
+          } > "$OUT/table.md"
+          cat "$OUT/table.md" >> "$GITHUB_STEP_SUMMARY"
+          cat "$OUT/table.md"
+
+      # One issue, kept open: a comment per night that found something, a new issue only when
+      # none is open. A clean night writes nothing.
+      - name: Report to the "Nightly flake report" issue
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          title="Nightly flake report"
+          if [ ! -s "$OUT/failures.md" ] && ! grep -q 'did not build' "$OUT/table.md" 2>/dev/null; then
+            echo "nothing failed; no report"
+            exit 0
+          fi
+          body="$OUT/body.md"
+          {
+            echo "Flake hunt on \`$SHA\`, $(date -u '+%Y-%m-%d %H:%M UTC'): $RUN_URL"
+            echo
+            cat "$OUT/table.md" 2>/dev/null || echo "(the hunt did not finish; see the run)"
+            echo
+            cat "$OUT/failures.md" 2>/dev/null || true
+          } > "$body"
+          # An issue comment holds 65536 characters: keep the head, say it was cut.
+          if [ "$(wc -c < "$body")" -gt 60000 ]; then
+            head -c 60000 "$body" > "$body.cut"
+            printf '\n\n(cut; the full output is in the run)\n' >> "$body.cut"
+            mv "$body.cut" "$body"
+          fi
+          number="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" \
+            --json number,title --jq "[.[] | select(.title == \"$title\")][0].number // empty")"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body-file "$body"
+            echo "commented on #$number"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$body"
+          fi

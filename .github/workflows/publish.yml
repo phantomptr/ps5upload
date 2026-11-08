@@ -40,6 +40,11 @@ on:
       tag:
         description: "Release tag to build & publish (e.g. v2.17.0). The tag must already exist."
         required: true
+      # release-tag.yml passes its own input on. A tag push (no inputs) is always a pre-release.
+      prerelease:
+        description: "Publish as a pre-release (promote by hand after a console test). Off: the release is the latest at once."
+        type: boolean
+        default: true
 
 # Only create-release writes (its own grant below): the build jobs run npm ci, Gradle, CocoaPods
 # and downloaded tooling, which have no use for a token that can change the repository.
@@ -1242,6 +1247,8 @@ jobs:
           # GitHub once it has been checked on real hardware. The old rule
           # (prerelease only when the tag had a "-") meant a plain vX.Y.Z tag
           # went straight to "Latest" the moment CI finished, with nobody
-          # having run it on a console.
-          prerelease: true
+          # having run it on a console. Only a dispatch that says
+          # prerelease=false (release-tag.yml, when asked) publishes it as the latest.
+          prerelease: ${{ github.event.inputs.prerelease != 'false' }}
+          make_latest: ${{ github.event.inputs.prerelease == 'false' && 'true' || 'legacy' }}
           files: release/*

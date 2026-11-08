@@ -41,6 +41,13 @@ on:
       tag:
         description: "Release tag to publish (e.g. v3.3.16). Must already exist."
         required: true
+      # release-tag.yml sets this when it publishes a release as the latest at once: that release
+      # is created with GITHUB_TOKEN, which fires no `release` event, so `promote` runs here,
+      # after this run's images are pushed.
+      promote:
+        description: "Also move :latest and :<major.minor> to this version once its images are pushed"
+        type: boolean
+        default: false
   # A pre-release promoted to a release: retag its images as :latest and
   # :<major.minor> (the `promote` job). Nothing is rebuilt.
   release:
@@ -624,14 +631,20 @@ jobs:
         run: docker buildx imagetools inspect "${IMAGE}:${VERSION}"
 
   # ── Promotion: a pre-release became a release → move :latest + :<major.minor> ─
-  # Fires on `release: released` only (promoting a pre-release by hand, or an
+  # Fires on `release: released` (promoting a pre-release by hand, or an
   # edit that clears the pre-release flag), never on the pre-release that
-  # create-release publishes. Nothing is rebuilt: the multi-arch manifest the
+  # create-release publishes; and on a dispatch with promote=true, after that
+  # run's own manifests are pushed. Nothing is rebuilt: the multi-arch manifest the
   # tag run pushed as :<version> is re-tagged, for both images. Fails loudly
   # if that manifest is missing (the tag run never finished).
   promote:
-    needs: resolve
-    if: github.event_name == 'release'
+    needs: [resolve, merge, merge-webui]
+    # always(): on a `release` event merge and merge-webui are skipped (they build tag runs only).
+    if: >-
+      always() && needs.resolve.result == 'success' &&
+      (github.event_name == 'release' ||
+       (github.event_name == 'workflow_dispatch' && github.event.inputs.promote == 'true' &&
+        needs.merge.result == 'success' && needs.merge-webui.result == 'success'))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

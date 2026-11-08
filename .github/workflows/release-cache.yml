@@ -8,8 +8,10 @@ name: release-cache
 # unchanged first-party crate) compiled. The release itself builds identically with or
 # without a hit: sccache keys each object by the full compiler command line and inputs.
 #
-# When: on main when the Rust code, its lockfiles or this build change (every release commit
-# touches engine/Cargo.lock, so each release refreshes it), weekly (a new stable rustc
+# When: on main when the Rust code, its lockfiles or this build change (the batch PR that catches
+# main up after a release touches engine/Cargo.lock, so each release refreshes it; the release's
+# own bump commit lives on its tag, not main: its first-party crates, whose version changed,
+# compile fresh, their dependencies still hit), weekly (a new stable rustc
 # changes every key), by hand, and on a PR that changes this workflow or the build script
 # (its own entries then live in that PR's scope).
 #

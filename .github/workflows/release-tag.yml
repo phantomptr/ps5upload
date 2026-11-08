@@ -1,29 +1,46 @@
-# Cuts a release from GitHub instead of a local clone: creates the annotated
-# `vX.Y.Z` tag that scripts/release.sh would push, at the commit this run was
-# dispatched on, then dispatches publish.yml for it.
+# Cuts a release from GitHub, with no release PR: takes the version as an input, commits the
+# version bump on top of main's head, tags that commit vX.Y.Z and pushes ONLY the tag.
 #
-#   gh workflow run release-tag.yml --ref main
+#   gh workflow run release-tag.yml --ref main -f version=12.1.0
+#   gh workflow run release-tag.yml --ref main -f version=12.1.0 -f prerelease=false   # latest at once
 #
-# A tag pushed with GITHUB_TOKEN does not trigger `push: tags` workflows, so
-# BOTH tag-driven workflows are dispatched explicitly (workflow_dispatch is
-# exempt from that rule): publish.yml for the release assets and
-# docker-engine.yml for the GHCR images, exactly what a tag pushed from a clone
-# would have started. The tag is VERSION's; a run whose VERSION already has a
-# tag stops.
+# The bump commit (VERSION, the files scripts/update-version.js syncs, and CHANGELOG.md's
+# "## Unreleased" renamed to "## 12.1.0") is reachable from the tag only; it is never pushed to
+# main. main's ruleset lets nobody but an admin update main, and this workflow's GITHUB_TOKEN is
+# not one, so the release commit lives on the tag and main catches up in the next batch PR
+# (RELEASING.md). Pushing a tag sends the commit with it; the tag ruleset forbids deleting or
+# moving it, which keeps that commit alive.
 #
-# A tag cannot be moved and its build takes ~40 minutes, so everything that can
-# refuse it runs first: the version files, the CHANGELOG section (publish.yml
-# would only find it missing after the whole build), and `ci` for this commit.
-# The run waits for `ci`, ~20 minutes when dispatched right after the merge.
-# When it failed on a flake: `gh run rerun <id> --failed`, then dispatch again.
-# Emergencies only, skipping that wait:
+# A tag pushed with GITHUB_TOKEN does not trigger `push: tags` workflows, so BOTH tag-driven
+# workflows are dispatched explicitly (workflow_dispatch is exempt from that rule), at the tag:
+# publish.yml for the release assets and docker-engine.yml for the GHCR images. Both check out
+# the tag, so they build the bump commit and every binary, latest.json and image reports this
+# version.
 #
-#   gh workflow run release-tag.yml --ref main -f force=true
+# A tag cannot be moved and its build takes ~25 minutes, so everything that can refuse it runs
+# first: the version (X.Y.Z, newer than every release, not yet tagged), the CHANGELOG section,
+# the lockfiles resolving with --locked after the bump, and `ci` on the commit the bump goes on.
+# That commit's own run (a push to main runs every lane) is not waited for when its tree is the
+# tree a passing run already tested: the merged PR's head, up to date with main
+# (.github/scripts/release-ci-verdict.mjs). The bump itself is version strings and the
+# CHANGELOG heading: checked here by update-version.js --check, the file list below and cargo's
+# --locked resolution, not by a second full ci run.
+#
+# When ci failed on a flake: `gh run rerun <id> --failed`, then dispatch again. Emergencies only,
+# skipping that wait: add -f force=true.
 name: release-tag
 
 on:
   workflow_dispatch:
     inputs:
+      version:
+        description: "Version to release, X.Y.Z (e.g. 12.1.0). CHANGELOG.md needs its text under '## Unreleased' (or '## X.Y.Z')."
+        required: true
+        type: string
+      prerelease:
+        description: "Publish as a pre-release, promoted by hand after a console test (the release policy). Off: the release, latest.json for the stable channel and the :latest images move at once."
+        type: boolean
+        default: true
       force:
         description: "Emergency only: tag even though ci has not passed on this commit"
         type: boolean
@@ -40,24 +57,28 @@ concurrency:
 jobs:
   tag:
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
     steps:
+      - name: Dispatched on main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::dispatch this on main (gh workflow run release-tag.yml --ref main -f version=X.Y.Z)"
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           submodules: true
           fetch-depth: 0
 
-      # The same check release.sh runs: every version file agrees with VERSION, so the
-      # publish and docker builds (which build with --locked) cannot fail late or ship an
-      # engine that reports another version.
-      - name: Check every version file matches VERSION
-        run: node scripts/update-version.js --check
-
-      - name: Check the tag is new and CHANGELOG has its section
+      - name: Check the version and that its tag is new
         id: version
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
         run: |
-          version="$(tr -d '[:space:]' < VERSION)"
-          if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::VERSION '$version' is not X.Y.Z"
+          set -euo pipefail
+          version="$VERSION_INPUT"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::version '$version' is not X.Y.Z (no leading v)"
             exit 1
           fi
           tag="v$version"
@@ -65,22 +86,58 @@ jobs:
             echo "::error::$tag already exists"
             exit 1
           fi
-          # The same section publish.yml takes the release notes from, after the build.
-          notes="$(awk -v ver="$version" '
-            $0 == "## " ver { found=1; next }
-            found && $0 ~ "^## " { exit }
-            found && $0 ~ "^---$" { exit }
-            found { print }
-          ' CHANGELOG.md)"
-          if [ -z "$(printf '%s' "$notes" | tr -d '[:space:]')" ]; then
-            echo "::error::CHANGELOG.md has no '## $version' section (or it is empty). Merge the entry, then dispatch again; nothing was tagged."
+          previous="$(git ls-remote --tags --refs origin 'refs/tags/v*' | sed 's#.*refs/tags/v##' \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
+          if [ -n "$previous" ] && [ "$(printf '%s\n%s\n' "$previous" "$version" | sort -V | tail -n 1)" != "$version" ]; then
+            echo "::error::$version is not newer than the last release, $previous"
             exit 1
           fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "releasing $version (last release: ${previous:-none}) on top of $GITHUB_SHA"
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "previous=$previous"
+          } >> "$GITHUB_OUTPUT"
 
-      # A success on any run of this commit counts (a re-run keeps its run id). A failure is not
-      # final at once: ci-runner-retry may still re-run the jobs GitHub never gave a runner.
-      - name: Wait for ci to pass on this commit
+      # The same files scripts/release.sh stages. CHANGELOG.md: the batch PR wrote the entry under
+      # "## Unreleased"; this renames the heading. It also refuses when main's CHANGELOG has not
+      # caught up with the last release (its text would ship again as this release's notes).
+      - name: Bump the version files and name the CHANGELOG section
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PREVIOUS: ${{ steps.version.outputs.previous }}
+        run: |
+          set -euo pipefail
+          node scripts/update-version.js "$VERSION"
+          node scripts/update-version.js --check
+          node scripts/release/changelog-release.mjs "$VERSION" --previous "$PREVIOUS"
+          allowed=" VERSION client/package.json client/package-lock.json client/src-tauri/tauri.conf.json"
+          allowed="$allowed client/src-tauri/Cargo.toml payload/include/config.h engine/Cargo.toml"
+          allowed="$allowed engine/Cargo.lock client/src-tauri/Cargo.lock CHANGELOG.md "
+          changed="$(git status --porcelain --untracked-files=all | cut -c4-)"
+          for f in $changed; do
+            case "$allowed" in
+              *" $f "*) ;;
+              *) echo "::error::the bump changed $f, which is not a version file"; exit 1 ;;
+            esac
+          done
+          printf 'bump changes:\n%s\n' "$changed"
+          git diff --stat
+
+      # publish.yml and docker-engine.yml build with --locked: a lockfile the bump left behind would
+      # fail them twenty minutes in. Resolving takes seconds.
+      - name: The lockfiles still resolve with --locked
+        run: |
+          set -euo pipefail
+          (cd engine && cargo metadata --locked --format-version 1 >/dev/null)
+          (cd client/src-tauri && cargo metadata --locked --format-version 1 >/dev/null)
+          echo "engine and desktop lockfiles resolve with --locked"
+
+      # The bump goes on GITHUB_SHA (main's head when dispatched); ci must vouch for that commit.
+      # A pass on any run of it counts, and so does a pass on the merged PR's head when its tree is
+      # this commit's tree (release-ci-verdict.mjs). A failure is not final at once:
+      # ci-runner-retry may still re-run the jobs GitHub never gave a runner.
+      - name: Wait for ci to pass on the commit the bump goes on
         if: ${{ !inputs.force }}
         timeout-minutes: 90
         env:
@@ -90,51 +147,83 @@ jobs:
           absent=0
           failed=0
           while :; do
-            # A passing API hiccup is not a verdict: ask again (the step's limit still holds).
-            runs="$(gh run list --commit "$GITHUB_SHA" --workflow ci --limit 20 \
-              --json databaseId,status,conclusion,url)" || { sleep 30; continue; }
-            if [ "$(jq '[.[] | select(.conclusion == "success")] | length' <<< "$runs")" -gt 0 ]; then
-              echo "ci passed on $GITHUB_SHA"
-              exit 0
-            fi
-            total="$(jq 'length' <<< "$runs")"
-            active="$(jq '[.[] | select(.status != "completed")] | length' <<< "$runs")"
-            if [ "$total" = 0 ]; then
-              absent=$((absent + 1))
-              if [ "$absent" -ge 10 ]; then
-                echo "::error::no ci run for $GITHUB_SHA after 5 minutes. Run it (gh workflow run ci), then dispatch again, or dispatch with force=true in an emergency. Nothing was tagged."
-                exit 1
-              fi
-            elif [ "$active" = 0 ]; then
-              failed=$((failed + 1))
-              if [ "$failed" -ge 10 ]; then
-                jq -r '.[] | "\(.conclusion)  \(.url)"' <<< "$runs"
-                echo "::error::ci did not pass on $GITHUB_SHA (above). Fix it, or re-run a flake (gh run rerun <id> --failed), then dispatch again, or dispatch with force=true in an emergency. Nothing was tagged."
-                exit 1
-              fi
-            else
-              failed=0
-              echo "ci is still running on $GITHUB_SHA ($active of $total runs)"
-            fi
+            out="$(node .github/scripts/release-ci-verdict.mjs "$GITHUB_SHA")"
+            verdict="$(jq -r .verdict <<< "$out")"
+            reason="$(jq -r .reason <<< "$out")"
+            case "$verdict" in
+              pass)
+                echo "$reason"
+                echo "ci: $reason" >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+                ;;
+              pending)
+                absent=0
+                failed=0
+                echo "waiting: $reason"
+                ;;
+              absent)
+                absent=$((absent + 1))
+                echo "no ci run yet: $reason"
+                if [ "$absent" -ge 10 ]; then
+                  echo "::error::no ci run for $GITHUB_SHA after 5 minutes ($reason). Run it (gh workflow run ci)," \
+                    "then dispatch again, or dispatch with force=true in an emergency. Nothing was tagged."
+                  exit 1
+                fi
+                ;;
+              *)
+                failed=$((failed + 1))
+                echo "not passed: $reason"
+                if [ "$failed" -ge 10 ]; then
+                  echo "::error::ci did not pass on $GITHUB_SHA ($reason). Fix it, or re-run a flake" \
+                    "(gh run rerun <id> --failed), then dispatch again, or dispatch with force=true in an emergency." \
+                    "Nothing was tagged."
+                  exit 1
+                fi
+                ;;
+            esac
             sleep 30
           done
 
-      - name: Create and push the tag
+      - name: Commit the bump, tag it, push the tag
         id: tag
         env:
+          VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "$TAG" "$GITHUB_SHA"
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -- VERSION client/package.json client/package-lock.json client/src-tauri/tauri.conf.json \
+              client/src-tauri/Cargo.toml payload/include/config.h engine/Cargo.toml engine/Cargo.lock \
+              client/src-tauri/Cargo.lock CHANGELOG.md
+            git commit -q -m "$VERSION"
+          fi
+          commit="$(git rev-parse HEAD)"
+          git tag -a "$TAG" -m "$TAG" "$commit"
+          # Only the tag: the commit travels with it. Nothing is pushed to main.
           git push origin "refs/tags/$TAG"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Tagged $GITHUB_SHA as $TAG"
+          echo "Tagged $commit (on top of $GITHUB_SHA) as $TAG"
+          {
+            echo "### $TAG"
+            echo
+            echo "- tagged commit: \`$commit\`, on top of main's \`$GITHUB_SHA\`"
+            echo "- main keeps its version files until the next batch PR: RELEASING.md, after a release"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Dispatch publish and docker-engine
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.tag.outputs.tag }}
+          TAG: ${{ steps.version.outputs.tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
         run: |
-          gh workflow run publish.yml --ref "$TAG" -f tag="$TAG"
-          gh workflow run docker-engine.yml --ref "$TAG" -f tag="$TAG"
+          set -euo pipefail
+          gh workflow run publish.yml --ref "$TAG" -f tag="$TAG" -f prerelease="$PRERELEASE"
+          if [ "$PRERELEASE" = true ]; then
+            gh workflow run docker-engine.yml --ref "$TAG" -f tag="$TAG"
+          else
+            # A release GITHUB_TOKEN creates fires no `release` event, so the images' :latest moves
+            # in the same run that builds them.
+            gh workflow run docker-engine.yml --ref "$TAG" -f tag="$TAG" -f promote=true
+          fi
+          echo "- publish and docker-engine dispatched (pre-release: $PRERELEASE)" >> "$GITHUB_STEP_SUMMARY"
