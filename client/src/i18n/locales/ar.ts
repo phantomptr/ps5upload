@@ -5740,6 +5740,7 @@ c2c_test_deep_bad: "لم يصل الإرسال التجريبي بحجم 4 KiB: 
 "cw_files_too_large": "كبير جدًا للمعاينة.",
 "cw_settings_err_tile_add": "تعذرت إضافة PS5Upload Minion إلى الشاشة الرئيسية. حاول مرة أخرى.",
 "cw_settings_err_tile_remove": "تعذرت إزالة PS5Upload Minion من الشاشة الرئيسية. حاول مرة أخرى.",
+"cw_settings_tile_failed_reason": "تعذرت إضافة PS5Upload Minion إلى الشاشة الرئيسية ({reason}). حاول مرة أخرى.",
 "cw_hint_page": "صفحة لأعلى/لأسفل",
 "cw_hint_top": "الأعلى",
 "cw_hint_help": "مساعدة",

@@ -973,6 +973,7 @@
   "cw_settings_text_size_note": "Gilt nur für diesen Bildschirm, damit Fernseher und Computer jeweils ihre eigene Größe haben können.",
   "cw_settings_theme": "Design",
   "cw_settings_tile": "PS5Upload Minion auf dem Startbildschirm anzeigen",
+  "cw_settings_tile_failed_reason": "PS5Upload Minion konnte nicht zum Startbildschirm hinzugefügt werden ({reason}). Versuche es erneut.",
   "cw_settings_tile_hidden": "Die PS5 hat den Eintrag von PS5Upload Minion behalten, daher wurde das Symbol auf dem Startbildschirm stattdessen ausgeblendet.",
   "cw_settings_tips": "Tipps erneut zeigen",
   "cw_settings_using": "Controller und Tipps",

@@ -5740,6 +5740,7 @@ c2c_test_deep_bad: "4 KiB-এর পরীক্ষামূলক পাঠা�
 "cw_files_too_large": "প্রিভিউ করার জন্য খুব বড়।",
 "cw_settings_err_tile_add": "হোম স্ক্রিনে PS5Upload Minion যোগ করা যায়নি। আবার চেষ্টা করুন।",
 "cw_settings_err_tile_remove": "হোম স্ক্রিন থেকে PS5Upload Minion সরানো যায়নি। আবার চেষ্টা করুন।",
+"cw_settings_tile_failed_reason": "হোম স্ক্রিনে PS5Upload Minion যোগ করা যায়নি ({reason})। আবার চেষ্টা করুন।",
 "cw_hint_page": "পেজ উপরে/নিচে",
 "cw_hint_top": "একদম উপরে",
 "cw_hint_help": "সাহায্য",

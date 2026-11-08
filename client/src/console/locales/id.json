@@ -973,6 +973,7 @@
   "cw_settings_text_size_note": "Disimpan untuk layar ini saja, jadi TV dan komputer bisa punya ukurannya sendiri.",
   "cw_settings_theme": "Tema",
   "cw_settings_tile": "Tampilkan PS5Upload Minion di layar utama",
+  "cw_settings_tile_failed_reason": "PS5Upload Minion tidak dapat ditambahkan ke layar utama ({reason}). Coba lagi.",
   "cw_settings_tile_hidden": "PS5 tetap menyimpan catatan PS5Upload Minion, jadi ikonnya di layar utama disembunyikan sebagai gantinya.",
   "cw_settings_tips": "Tampilkan tips lagi",
   "cw_settings_using": "Kontroler dan tips",

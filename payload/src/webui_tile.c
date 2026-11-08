@@ -146,13 +146,55 @@ static int remove_tree(const char *path, int depth) {
 
 int webui_tile_remove_files(const char *dir) { return remove_tree(dir, 0); }
 
-webui_tile_action_t webui_tile_plan(int files_changed, int mount_live, int lnk_ours, int appmeta) {
+webui_tile_action_t webui_tile_plan(int files_changed, int mount_live, int lnk_ours, int appmeta, int listed) {
     if (files_changed) return WEBUI_TILE_REGISTER;
+    /* No install record: the home screen shows nothing, whatever is bound. Unreadable: never guess. */
+    if (listed == 0) return WEBUI_TILE_REGISTER;
     if (mount_live && lnk_ours) return WEBUI_TILE_NONE;
     /* A live mount that is not ours, or a half-removed registration: only the full register
      * (which pre-cleans the mount point and restages everything) puts it right. */
     if (!mount_live && lnk_ours && appmeta) return WEBUI_TILE_REBIND;
     return WEBUI_TILE_REGISTER;
+}
+
+int webui_tile_ensure_with(const webui_tile_ensure_ops_t *o, webui_tile_action_t *done, const char **why) {
+    const char *err = NULL;
+    webui_tile_action_t a;
+    int changed, listed, rc = 0, full = 0;
+    unsigned waited;
+    if (why) *why = "";
+    if (done) *done = WEBUI_TILE_NONE;
+    changed = o->write_files(o->ctx);
+    if (changed < 0) {
+        if (why) *why = "write_failed";
+        return -1;
+    }
+    /* A changed file re-registers anyway: app.db is read only when it can change the plan. */
+    listed = changed > 0 ? -1 : o->listed(o->ctx);
+    a = webui_tile_plan(changed > 0, o->mount_live(o->ctx), o->lnk_ours(o->ctx), o->appmeta(o->ctx), listed);
+    if (done) *done = a;
+    if (a == WEBUI_TILE_REBIND && o->rebind(o->ctx, &err) != 0) a = WEBUI_TILE_REGISTER; /* fall back */
+    if (a == WEBUI_TILE_REGISTER) {
+        err = NULL;
+        full = 1;
+        rc = o->register_full(o->ctx, &err);
+        if (rc != 0) {
+            if (why) *why = err && *err ? err : "register_failed";
+            return -1;
+        }
+    }
+    if (!full) return 0;
+    /* Sony said yes: the tile exists only once app.db lists it. */
+    for (waited = 0;; waited++) {
+        listed = o->listed(o->ctx);
+        if (listed != 0 || waited >= WEBUI_TILE_LISTED_WAIT_S) break;
+        o->sleep_s(o->ctx, 1);
+    }
+    if (listed == 0) {
+        if (why) *why = "not_listed";
+        return -1;
+    }
+    return 0;
 }
 
 int webui_tile_removed_outside(int marker, int appdb_row, int mount_live, int lnk_ours) {
@@ -359,17 +401,21 @@ static void tile_look(webui_tile_seen_t *seen, const char *step) {
         fprintf(stderr, "webui tile: app.db %s: %s not listed (%d tables)\n", step, WEBUI_TILE_TITLE_ID, p.tables);
 }
 
-static int tile_register(void) {
+/* Sony's own rc is logged by register.c ("[register] AppInstallAll PSUP00001 rc=0x..."). */
+static int tile_register_why(const char **why) {
     char tid[REGISTER_MAX_TITLE_ID], tname[REGISTER_MAX_TITLE_NAME];
     const char *err = NULL;
     int used = 0;
     if (register_title_from_path(WEBUI_TILE_DIR, 0, tid, tname, &used, &err) != 0) {
-        fprintf(stderr, "webui tile: full register failed: %s\n", err ? err : "unknown");
+        fprintf(stderr, "webui tile: full register FAILED: %s\n", err ? err : "unknown");
+        if (why) *why = err;
         return -1;
     }
-    fprintf(stderr, "webui tile: full register of %s done\n", tid);
+    fprintf(stderr, "webui tile: full register of %s returned ok\n", tid);
     return 0;
 }
+
+static int tile_register(void) { return tile_register_why(NULL); }
 
 /* The tile is on the home screen (again): remember that the helper put it there, stop the icon
  * keeper hiding it, and make its icon visible: an earlier removal may have only been able to hide
@@ -438,41 +484,88 @@ int webui_tile_respect_outside_removal(void) {
     return out;
 }
 
-int webui_tile_ensure(uint16_t port) {
-    const char *err = NULL;
-    int changed, rc = 0;
+/* ---- ensure's console steps (webui_tile_ensure_ops_t) ---- */
+
+static int en_write_files(void *ctx) {
+    int changed = webui_tile_write_files(WEBUI_TILE_DIR, *(const uint16_t *)ctx);
+    if (changed < 0) fprintf(stderr, "webui tile: cannot write %s: %s\n", WEBUI_TILE_DIR, strerror(errno));
+    return changed;
+}
+
+static int en_mount_live(void *ctx) {
+    (void)ctx;
+    return tile_mount_live();
+}
+
+static int en_lnk_ours(void *ctx) {
+    (void)ctx;
+    return tile_lnk_ours();
+}
+
+static int en_appmeta(void *ctx) {
+    (void)ctx;
+    return is_dir(TILE_APPMETA);
+}
+
+static int en_listed(void *ctx) {
+    webui_tile_seen_t seen;
+    (void)ctx;
+    tile_look(&seen, "ensure");
+    return webui_tile_install_record(&seen);
+}
+
+static int en_rebind(void *ctx, const char **err) {
+    (void)ctx;
+    /* Still registered with Sony from an earlier boot: re-mount only, no Sony call. */
+    if (register_remount_nullfs(WEBUI_TILE_TITLE_ID, WEBUI_TILE_DIR, err) == 0) {
+        fprintf(stderr, "webui tile: re-bound the nullfs (no Sony call)\n");
+        return 0;
+    }
+    fprintf(stderr, "webui tile: re-bind failed (%s); falling back to a full register\n",
+            *err ? *err : "unknown");
+    return -1;
+}
+
+static int en_register_full(void *ctx, const char **err) {
+    (void)ctx;
+    /* A changed file (register copies sce_sys into /user/app and /user/appmeta, so the copies must be
+     * refreshed; Sony answers 0x80990002 "restored": success), not listed, or never registered. */
+    return tile_register_why(err);
+}
+
+static void en_sleep_s(void *ctx, unsigned seconds) {
+    (void)ctx;
+    sleep(seconds);
+}
+
+static const char *tile_action_name(webui_tile_action_t a) {
+    return a == WEBUI_TILE_NONE ? "none (registered this boot and listed)"
+           : a == WEBUI_TILE_REBIND ? "re-bind"
+                                    : "full register";
+}
+
+int webui_tile_ensure(uint16_t port, const char **why) {
+    webui_tile_ensure_ops_t ops = {
+        &port, en_write_files, en_mount_live, en_lnk_ours, en_appmeta, en_listed, en_rebind, en_register_full,
+        en_sleep_s,
+    };
+    webui_tile_action_t a = WEBUI_TILE_NONE;
+    const char *reason = "";
+    int rc;
     pthread_mutex_lock(&g_op_mu);
     /* First: a removal had the icon keeper keep PSUP00001 hidden, and the register below changes
      * app.db, which wakes the keeper (seen on the Phat: it hid the new icon mid-register). */
     icon_keeper_note(WEBUI_TILE_TITLE_ID, 0);
-    changed = webui_tile_write_files(WEBUI_TILE_DIR, port);
-    if (changed < 0) {
-        fprintf(stderr, "webui tile: cannot write %s: %s\n", WEBUI_TILE_DIR, strerror(errno));
-        rc = -1;
+    rc = webui_tile_ensure_with(&ops, &a, &reason);
+    if (rc == 0) {
+        tile_now_registered();
+        fprintf(stderr, "webui tile: ensure ok (planned: %s)\n", tile_action_name(a));
     } else {
-        switch (webui_tile_plan(changed > 0, tile_mount_live(), tile_lnk_ours(), is_dir(TILE_APPMETA))) {
-        case WEBUI_TILE_NONE:
-            fprintf(stderr, "webui tile: already registered this boot\n");
-            break;
-        case WEBUI_TILE_REBIND:
-            /* Still registered with Sony from an earlier boot: re-mount only, no Sony call. */
-            if (register_remount_nullfs(WEBUI_TILE_TITLE_ID, WEBUI_TILE_DIR, &err) == 0) {
-                fprintf(stderr, "webui tile: re-bound the nullfs (no Sony call)\n");
-            } else {
-                fprintf(stderr, "webui tile: re-bind failed (%s); falling back to a full register\n",
-                        err ? err : "unknown");
-                rc = tile_register();
-            }
-            break;
-        default:
-            /* A changed file (register copies sce_sys into /user/app and /user/appmeta, so the copies
-             * must be refreshed; Sony answers 0x80990002 "restored": success), or never registered. */
-            rc = tile_register();
-            break;
-        }
-        if (rc == 0) tile_now_registered();
+        fprintf(stderr, "webui tile: ensure FAILED (planned: %s): %s; the tile is NOT on the home screen\n",
+                tile_action_name(a), reason);
     }
     pthread_mutex_unlock(&g_op_mu);
+    if (why) *why = reason;
     return rc;
 }
 
@@ -588,6 +681,7 @@ static int g_busy;          /* a request or the start sweep is being applied */
 static int g_sweep_pending; /* webui_tile_sweep_request not yet run */
 static int g_last_failed;   /* the last ensure/remove the worker applied returned -1 */
 static webui_tile_result_t g_last_result;
+static const char *g_last_error = ""; /* webui_tile_last_error */
 
 /* The sweep's context: the request generation it runs under (a newer one stops it). */
 typedef struct {
@@ -702,6 +796,8 @@ static void note_result(webui_tile_result_t r) {
     if (r == WEBUI_TILE_RESULT_NONE) return;
     g_last_result = r;
     g_last_failed = r == WEBUI_TILE_RESULT_FAILED;
+    /* The request path sets its own reason right after; the sweep and the watch have this one. */
+    g_last_error = g_last_failed ? "icon_still_shown" : "";
 }
 
 /* One worker at a time: it applies the newest request (repeating while new ones arrive), then a
@@ -720,14 +816,17 @@ static void *tile_worker(void *arg) {
         uint16_t port = g_req_port;
         webui_tile_result_t r;
         if (done != gen) {
+            const char *why = "";
             g_busy = 1;
             g_sweep_pending = 0; /* a request decides the tile now */
             pthread_mutex_unlock(&g_req_mu);
-            if (tile) r = webui_tile_ensure(port) == 0 ? WEBUI_TILE_RESULT_ADDED : WEBUI_TILE_RESULT_FAILED;
+            if (tile) r = webui_tile_ensure(port, &why) == 0 ? WEBUI_TILE_RESULT_ADDED : WEBUI_TILE_RESULT_FAILED;
             else r = tile_remove();
+            if (r == WEBUI_TILE_RESULT_FAILED && !tile) why = "removal_incomplete";
             pthread_mutex_lock(&g_req_mu);
             done = gen;
             note_result(r);
+            g_last_error = r == WEBUI_TILE_RESULT_FAILED ? (why && *why ? why : "failed") : "";
             watch = !tile;
             uninstalled = 0;
             continue;
@@ -772,6 +871,14 @@ static void *tile_worker(void *arg) {
     return NULL;
 }
 
+const char *webui_tile_last_error(void) {
+    const char *e;
+    pthread_mutex_lock(&g_req_mu);
+    e = g_last_failed ? g_last_error : "";
+    pthread_mutex_unlock(&g_req_mu);
+    return e;
+}
+
 void webui_tile_state(int *busy, int *failed, webui_tile_result_t *result) {
     pthread_mutex_lock(&g_req_mu);
     *busy = g_busy;
@@ -801,6 +908,7 @@ static void kick_worker(void) {
         g_busy = 0;
         g_last_failed = 1;
         g_last_result = WEBUI_TILE_RESULT_FAILED;
+        g_last_error = "no_tile_thread";
         pthread_cond_broadcast(&g_req_done);
         fprintf(stderr, "webui tile: cannot start the tile thread (%d)\n", rc);
     }

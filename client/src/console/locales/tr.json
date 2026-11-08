@@ -973,6 +973,7 @@
   "cw_settings_text_size_note": "Yalnızca bu ekran için saklanır; böylece TV ve bilgisayarın her biri kendi boyutunu kullanabilir.",
   "cw_settings_theme": "Tema",
   "cw_settings_tile": "PS5Upload Minion'u ana ekranda göster",
+  "cw_settings_tile_failed_reason": "PS5Upload Minion ana ekrana eklenemedi ({reason}). Tekrar deneyin.",
   "cw_settings_tile_hidden": "PS5, PS5Upload Minion kaydını tuttu; bu yüzden ana ekrandaki simgesi gizlendi.",
   "cw_settings_tips": "İpuçlarını yeniden göster",
   "cw_settings_using": "Kumanda ve ipuçları",

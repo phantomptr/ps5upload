@@ -8322,7 +8322,7 @@ static int handle_vpad_status(runtime_state_t *state) {
 }
 
 static int handle_minion_tile(runtime_state_t *state, const char *body, uint64_t body_len) {
-    char reply[384];
+    char reply[512];
     int n;
     if (!state || body_len > 256) return -1;
     n = webui_api_tile(body, (size_t)body_len, reply, sizeof reply);

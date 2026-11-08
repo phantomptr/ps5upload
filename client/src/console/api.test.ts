@@ -20,7 +20,7 @@ function installFetch(routeReply: () => Response): Seen[] {
   globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
     const url = String(input);
     seen.push({ url, init });
-    if (url === "/api/token") return jsonResponse(200, { token: "ab".repeat(32) });
+    if (url.startsWith("/api/token")) return jsonResponse(200, { token: "ab".repeat(32) });
     return routeReply();
   }) as typeof fetch;
   return seen;
@@ -53,7 +53,7 @@ describe("call", () => {
     const seen = installFetch(() => jsonResponse(200, {}));
     await api.call("/api/status");
     await api.call("/api/volumes");
-    expect(seen.filter((s) => s.url === "/api/token")).toHaveLength(1);
+    expect(seen.filter((s) => s.url.startsWith("/api/token"))).toHaveLength(1);
   });
 
   it("call_401_triggers_token_expired", async () => {
@@ -84,14 +84,14 @@ describe("call", () => {
     globalThis.fetch = (async (input: unknown) => {
       seen.push(String(input));
       if (down) throw new TypeError("Load failed");
-      if (String(input) === "/api/token") return jsonResponse(200, { token: "cd".repeat(32) });
+      if (String(input).startsWith("/api/token")) return jsonResponse(200, { token: "cd".repeat(32) });
       return jsonResponse(200, { up: true });
     }) as typeof fetch;
     const err = await api.call("/api/status").catch((e: unknown) => e);
     expect(api.isOffline(err)).toBe(true);
     down = false;
     await expect(api.call("/api/status")).resolves.toEqual({ up: true });
-    expect(seen.filter((u) => u === "/api/token")).toHaveLength(2);
+    expect(seen.filter((u) => u.startsWith("/api/token"))).toHaveLength(2);
   });
 });
 
@@ -100,7 +100,7 @@ describe("the deadline on every call", () => {
   function hang(deaf = false): { signals: AbortSignal[] } {
     const signals: AbortSignal[] = [];
     globalThis.fetch = ((input: unknown, init?: RequestInit) => {
-      if (String(input) === "/api/token") return Promise.resolve(jsonResponse(200, { token: "ab".repeat(32) }));
+      if (String(input).startsWith("/api/token")) return Promise.resolve(jsonResponse(200, { token: "ab".repeat(32) }));
       const s = init?.signal as AbortSignal;
       signals.push(s);
       return new Promise<Response>((_, reject) => {
@@ -148,7 +148,7 @@ describe("the deadline on every call", () => {
 
   it("a reply that stalls half way counts too", async () => {
     globalThis.fetch = (async (input: unknown) => {
-      if (String(input) === "/api/token") return jsonResponse(200, { token: "ab".repeat(32) });
+      if (String(input).startsWith("/api/token")) return jsonResponse(200, { token: "ab".repeat(32) });
       return { status: 200, ok: true, json: () => new Promise(() => {}), blob: () => new Promise(() => {}) } as unknown as Response;
     }) as typeof fetch;
     expect(await endOf(api.call("/api/volumes"), api.CALL_TIMEOUT_MS)).toMatchObject({ code: "timeout" });
@@ -189,7 +189,7 @@ describe("probeHelper (is the helper there, or is this the offline copy?)", () =
     const seen = installFetch(() => jsonResponse(200, { ok: true }));
     expect(await api.probeHelper()).toBe(true);
     await api.call("/api/status");
-    expect(seen.filter((s) => s.url === "/api/token")).toHaveLength(1);
+    expect(seen.filter((s) => s.url.startsWith("/api/token"))).toHaveLength(1);
   });
 
   it("false when nothing answers, when it is stopping, or when the answer is not the helper's", async () => {

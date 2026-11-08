@@ -843,7 +843,13 @@ int main(void) {
         else fprintf(stderr, "webui: PS5Upload Minion is off (%s enabled:false); the page is not served\n",
                      WEBUI_SETTINGS_PATH);
         startup_trace("WEBUI_STARTED");
-        if (plan.tile_add) webui_tile_request(1, WEBUI_PORT);
+        /* Every start with the tile on: the tile thread registers PSUP00001 again whenever app.db
+         * does not list it, and logs "webui tile: ensure ok/FAILED"; a failure reaches the page and
+         * the PC as tile_failed + tile_error. */
+        if (plan.tile_add) {
+            fprintf(stderr, "webui: tile on: checking that %s is on the home screen\n", WEBUI_TILE_TITLE_ID);
+            webui_tile_request(1, WEBUI_PORT);
+        }
     }
 
     /* The AVA1 server runs on its own threads; this thread has nothing left to serve. It waits for

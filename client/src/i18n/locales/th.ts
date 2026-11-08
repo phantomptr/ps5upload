@@ -5747,6 +5747,7 @@ c2c_test_deep_bad: "การส่งทดสอบ 4 KiB ไปไม่ถ�
 "cw_files_too_large": "ใหญ่เกินกว่าจะแสดงตัวอย่าง",
 "cw_settings_err_tile_add": "เพิ่ม PS5Upload Minion ลงในหน้าจอหลักไม่ได้ ลองอีกครั้ง",
 "cw_settings_err_tile_remove": "นำ PS5Upload Minion ออกจากหน้าจอหลักไม่ได้ ลองอีกครั้ง",
+"cw_settings_tile_failed_reason": "เพิ่ม PS5Upload Minion ลงในหน้าจอหลักไม่ได้ ({reason}) ลองอีกครั้ง",
 "cw_hint_page": "เลื่อนขึ้น/ลงทีละหน้า",
 "cw_hint_top": "บนสุด",
 "cw_hint_help": "ความช่วยเหลือ",

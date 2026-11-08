@@ -30,6 +30,9 @@ export interface WebSettings {
   /** What the helper last did to the tile: "added", "removed", "hidden" (the PS5 kept its record,
    *  so the icon was hidden instead), "failed" or "" (#480; older helpers send none). */
   tile_result?: string;
+  /** Why the last add/remove failed, a short code ("not_listed", "register_install_api_error", …);
+   *  "" when it did not. Helpers from 11.6.1. */
+  tile_error?: string;
   /** PS5Upload Minion as a whole (#480); older helpers send none and cannot turn it off. */
   enabled?: boolean;
   /** The page opens on Cheats instead of Home (#584); older helpers send none (Home). */
@@ -48,8 +51,11 @@ export function canTurnOff(s: WebSettings | null): boolean {
   return typeof s?.enabled === "boolean";
 }
 
-/** The note under the tile switch: says when removing the tile could only hide its icon. */
+/** The note under the tile switch: says why the tile is missing when adding it failed (also at
+ *  helper start, before anyone touched the switch), or when removing it could only hide its icon. */
 export function tileNote(s: WebSettings): string | undefined {
+  if (s.tile && !s.tile_busy && s.tile_failed && s.tile_error)
+    return t("cw_settings_tile_failed_reason", { reason: s.tile_error });
   if (s.tile || s.tile_busy || s.tile_failed || s.tile_result !== "hidden") return undefined;
   return t("cw_settings_tile_hidden");
 }

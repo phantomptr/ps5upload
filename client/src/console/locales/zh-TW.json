@@ -973,6 +973,7 @@
   "cw_settings_text_size_note": "只儲存在此螢幕上，因此電視和電腦可以各自使用自己的大小。",
   "cw_settings_theme": "佈景主題",
   "cw_settings_tile": "在主畫面顯示 PS5Upload Minion",
+  "cw_settings_tile_failed_reason": "無法將 PS5Upload Minion 加到主畫面（{reason}），請再試一次。",
   "cw_settings_tile_hidden": "PS5 保留了 PS5Upload Minion 的記錄，因此改為隱藏其主畫面圖示。",
   "cw_settings_tips": "再次顯示提示",
   "cw_settings_using": "控制器與提示",

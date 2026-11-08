@@ -5759,6 +5759,7 @@ c2c_test_deep_bad: "4 KiB のテスト送信が届きませんでした: {detail
 "cw_files_too_large": "大きすぎてプレビューできません。",
 "cw_settings_err_tile_add": "ホーム画面に PS5Upload Minion を追加できませんでした。もう一度お試しください。",
 "cw_settings_err_tile_remove": "ホーム画面から PS5Upload Minion を削除できませんでした。もう一度お試しください。",
+"cw_settings_tile_failed_reason": "ホーム画面に PS5Upload Minion を追加できませんでした（{reason}）。もう一度お試しください。",
 "cw_hint_page": "前/次のページ",
 "cw_hint_top": "先頭へ",
 "cw_hint_help": "ヘルプ",

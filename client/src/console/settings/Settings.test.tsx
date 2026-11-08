@@ -135,6 +135,19 @@ describe("settings", () => {
     expect(tileNote(at({}))).toBeUndefined();
   });
 
+  it("tile_note_says_why_the_tile_could_not_be_added", () => {
+    const at = (over: Partial<WebSettings>): WebSettings => ({ lan: false, tile: true, version: "11.6.1", ...over });
+    // Also at helper start, before anyone touched the switch: the reason the helper gave.
+    expect(tileNote(at({ tile_failed: true, tile_result: "failed", tile_error: "not_listed" }))).toBe(
+      t("cw_settings_tile_failed_reason", { reason: "not_listed" }),
+    );
+    expect(t("cw_settings_tile_failed_reason", { reason: "not_listed" })).toContain("not_listed");
+    // Still being applied, no reason (an older helper), or working: no note.
+    expect(tileNote(at({ tile_failed: true, tile_busy: true, tile_error: "not_listed" }))).toBeUndefined();
+    expect(tileNote(at({ tile_failed: true }))).toBeUndefined();
+    expect(tileNote(at({ tile_result: "added", tile_error: "" }))).toBeUndefined();
+  });
+
   it("full screen switch shows only where the browser supports it", () => {
     const onToggleFullscreen = vi.fn();
     const on = elements(SettingsView(base({ fullscreen: true, onToggleFullscreen }))).find((e) => e.props.action === "fullscreen");

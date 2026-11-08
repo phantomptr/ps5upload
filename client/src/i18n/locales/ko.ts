@@ -5757,6 +5757,7 @@ c2c_test_deep_bad: "4 KiB 테스트 전송이 도착하지 않았습니다: {det
 "cw_files_too_large": "너무 커서 미리 볼 수 없습니다.",
 "cw_settings_err_tile_add": "홈 화면에 PS5Upload Minion를 추가하지 못했습니다. 다시 시도하세요.",
 "cw_settings_err_tile_remove": "홈 화면에서 PS5Upload Minion를 제거하지 못했습니다. 다시 시도하세요.",
+"cw_settings_tile_failed_reason": "홈 화면에 PS5Upload Minion를 추가하지 못했습니다({reason}). 다시 시도하세요.",
 "cw_hint_page": "페이지 위/아래",
 "cw_hint_top": "맨 위로",
 "cw_hint_help": "도움말",

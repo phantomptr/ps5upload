@@ -973,6 +973,7 @@
   "cw_settings_text_size_note": "この画面だけに保存されるので、テレビとパソコンでそれぞれ別のサイズにできます。",
   "cw_settings_theme": "テーマ",
   "cw_settings_tile": "ホーム画面に PS5Upload Minion を表示",
+  "cw_settings_tile_failed_reason": "ホーム画面に PS5Upload Minion を追加できませんでした（{reason}）。もう一度お試しください。",
   "cw_settings_tile_hidden": "PS5 が PS5Upload Minion の記録を残したため、代わりにホーム画面のアイコンを非表示にしました。",
   "cw_settings_tips": "ヒントをもう一度表示",
   "cw_settings_using": "コントローラーとヒント",
