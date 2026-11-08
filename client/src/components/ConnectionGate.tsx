@@ -5,7 +5,7 @@ import { useConnectionStore } from "../state/connection";
 import { useHelperStopped } from "../state/helperStopped";
 import { SendHelperButton } from "./SendHelperButton";
 import { useTr } from "../state/lang";
-import { useUploadSettingsStore } from "../state/uploadSettings";
+import { useConsoleSettingForHost } from "../state/consoleSettings";
 import { isTauriEnv } from "../lib/tauriEnv";
 import { useConsoleWake } from "../lib/useConsoleWake";
 import { REST_MODE_NETWORK_SETTING_PATH } from "../lib/consolePower";
@@ -158,7 +158,7 @@ export function ConnectionGate({
 function RestModeGate({ host }: { host: string }) {
   const wake = useConsoleWake(host);
   // Desktop with "send the helper again after a wake" on: the helper comes back unasked.
-  const autoRedeploy = useUploadSettingsStore((s) => s.autoRedeployOnWake);
+  const autoRedeploy = useConsoleSettingForHost(host, "auto_redeploy_on_wake");
   return (
     <PowerNotice
       power="rest"

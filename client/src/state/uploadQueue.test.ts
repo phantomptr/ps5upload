@@ -68,6 +68,7 @@ import {
   jobCancel,
 } from "../api/ps5";
 import { useRestAfterUploadStore } from "./restAfterUpload";
+import { useRosterStore } from "./roster";
 import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
 import {
   useUploadQueueStore,
@@ -592,6 +593,27 @@ describe("rest mode after upload", () => {
     // Standby targets the mgmt addr of the drained host.
     expect(mockedStandby).toHaveBeenCalledTimes(1);
     expect(mockedStandby).toHaveBeenCalledWith("192.168.1.10");
+  });
+
+  it("each drained console by its own setting (Settings › This PS5), not the selected one", async () => {
+    const before = useRosterStore.getState();
+    useRosterStore.setState({
+      profiles: [
+        { id: "a", name: "A", host: "192.168.1.10", settings: { rest_after_upload: false } },
+        { id: "b", name: "B", host: "192.168.1.20", settings: { rest_after_upload: true } },
+      ] as unknown as ReturnType<typeof useRosterStore.getState>["profiles"],
+      active_id: "a",
+    });
+    try {
+      addItem("192.168.1.10:9113", "A1");
+      addItem("192.168.1.20:9113", "B1");
+      const p = useUploadQueueStore.getState().start();
+      await vi.advanceTimersByTimeAsync(5000);
+      await p;
+      expect(mockedStandby.mock.calls.map((c) => c[0])).toEqual(["192.168.1.20"]);
+    } finally {
+      useRosterStore.setState({ profiles: before.profiles, active_id: before.active_id });
+    }
   });
 
   it("sleeps EACH console that drains, independently", async () => {

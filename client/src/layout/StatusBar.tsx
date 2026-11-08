@@ -18,6 +18,8 @@ import {
 } from "../state/roster";
 import { ActivityStatusSlot } from "./ActivityBar";
 import { useUploadSettingsStore } from "../state/uploadSettings";
+import { useShallow } from "zustand/react/shallow";
+import { defaultConsoleSettings, profileForHost, settingsOfProfile } from "../state/consoleSettings";
 import { getEngineUrl } from "../state/engine";
 import { Spinner } from "../components/Spinner";
 import { hostOf } from "../lib/addr";
@@ -283,20 +285,23 @@ function OtherDevicesChip() {
  */
 function KeepAwakeIndicator() {
   const tr = useTr();
-  const mode = useUploadSettingsStore((s) => s.keepPs5AwakeMode);
-  const anyUp = useConnectionStore((s) => {
-    for (const h in s.runtimeByHost) {
-      if (s.runtimeByHost[h].payloadStatus === "up") return true;
-    }
-    return false;
-  });
-  if (mode !== "always" || !anyUp) return null;
+  // Each console has its own mode (Settings › This PS5): shown while one set to "Always" answers.
+  const profiles = useRosterStore((s) => s.profiles);
+  const defaultMode = useUploadSettingsStore((s) => s.keepPs5AwakeMode);
+  const upHosts = useConnectionStore(
+    useShallow((s) => Object.keys(s.runtimeByHost).filter((h) => s.runtimeByHost[h].payloadStatus === "up")),
+  );
+  const defaults = { ...defaultConsoleSettings(), keep_awake_mode: defaultMode };
+  const keeping = upHosts.some(
+    (h) => settingsOfProfile(profileForHost(h, profiles), defaults).keep_awake_mode === "always",
+  );
+  if (!keeping) return null;
   return (
     <span
       className="flex items-center gap-1 text-[var(--color-warn)]"
       title={tr(
-        "status_keep_awake_tooltip_v2",
-        "Keep-awake is set to “Always while connected” — connected consoles won't auto-enter rest mode while the app is open. Change in Settings → Console.",
+        "status_keep_awake_tooltip_v3",
+        "A connected PS5 is set to keep awake “Always while connected”: it won't go into rest mode by itself while the app is open. Change it in Settings › This PS5.",
       )}
     >
       <Zap size={11} aria-hidden />

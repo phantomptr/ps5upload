@@ -91,7 +91,6 @@ import {
   liveHelperDecision,
   loaderSettled,
   MAX_REDEPLOYS_WITHOUT_RECOVERY,
-  redeployAction,
   type RedeployAction,
 } from "../lib/autoRedeploy";
 import { bringUpStatusFor, useBringUpStore } from "../state/bringUp";
@@ -139,6 +138,14 @@ import { useNavSidebarStore, navListsFromStorage } from "../state/navSidebar";
 import { UpdateCheckButton } from "./UpdateCheckButton";
 import { useTransferStore } from "../state/transfer";
 import { useUploadSettingsStore } from "../state/uploadSettings";
+import {
+  consoleSettingFor,
+  defaultConsoleSettings,
+  ensureConsoleSettingsMigrated,
+  keepAwakeHosts,
+  keepAwakeModesInUse,
+  redeployActionForProfile,
+} from "../state/consoleSettings";
 import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
 import { isHelperStopped, noteHelperAnswering } from "../state/helperStopped";
 import { guardElfldr } from "../lib/elfldrGuard";
@@ -982,10 +989,9 @@ function useAutoRedeployDownHelpers() {
 
     const tick = () => {
       if (cancelled) return;
-      const { autoRedeployOnWake, autoBringUp } = useUploadSettingsStore.getState();
-      if (!autoRedeployOnWake && !autoBringUp) return;
       const { runtimeByHost } = useConnectionStore.getState();
       const roster = useRosterStore.getState();
+      const defaults = defaultConsoleSettings();
       for (const p of roster.profiles) {
         const h = (p.host ?? "").trim();
         if (!h) continue;
@@ -1024,11 +1030,8 @@ function useAutoRedeployDownHelpers() {
             log.info("connection", `auto-redeploy: ${h} is back up — re-armed`);
           }
         } else if (decision === "redeploy") {
-          const action = redeployAction({
-            autoBringUp,
-            autoRedeploy: autoRedeployOnWake,
-            upThisBoot: upThisBootRef.current[key] === true,
-          });
+          // This console by its own settings (Settings › This PS5), not the selected one's.
+          const action = redeployActionForProfile(p, defaults, upThisBootRef.current[key] === true);
           if (action !== "none") void tryRedeploy(h, action);
         }
       }
@@ -1134,7 +1137,14 @@ function useAgentMcpStaleNotice() {
 }
 
 function useKeepPs5Awake() {
-  const mode = useUploadSettingsStore((s) => s.keepPs5AwakeMode);
+  // Each console has its own mode (Settings › This PS5): the tick runs when any console wants it,
+  // and each tick resets only the consoles whose own mode asks for it.
+  const profiles = useRosterStore((s) => s.profiles);
+  const defaultMode = useUploadSettingsStore((s) => s.keepPs5AwakeMode);
+  const { anyOn, anyAlways } = keepAwakeModesInUse(profiles, {
+    ...defaultConsoleSettings(),
+    keep_awake_mode: defaultMode,
+  });
   const queueRunning = useUploadQueueStore((s) => s.running);
   // Plain loop instead of Object.values().some(): this selector runs on
   // EVERY transfer-store write (multiple per second during an upload),
@@ -1149,9 +1159,7 @@ function useKeepPs5Awake() {
   });
   // Installs and copies count as transfers too (they register tasks).
   const taskWork = useTaskStore((s) => anyAwakeWork(s.tasks));
-  const active =
-    mode === "always" ||
-    (mode === "transfers" && (queueRunning || transferActive || taskWork));
+  const active = anyAlways || (anyOn && (queueRunning || transferActive || taskWork));
   useEffect(() => {
     if (!active) return;
     const tickAll = () => {
@@ -1161,29 +1169,29 @@ function useKeepPs5Awake() {
       // upload on console A keeps A awake even after the user switches to tab B
       // — otherwise A could drop to rest mid-upload (the spool_apply_failed bug
       // this exists to prevent).
-      const hosts = new Set<string>();
+      const busy = new Set<string>();
       for (const [h, p] of Object.entries(
         useTransferStore.getState().phasesByHost,
       )) {
         if ((p.kind === "starting" || p.kind === "running") && h) {
-          hosts.add(hostOf(h));
+          busy.add(hostOf(h));
         }
       }
       for (const it of useUploadQueueStore.getState().items) {
-        if (it.status === "running") hosts.add(hostOf(it.addr));
+        if (it.status === "running") busy.add(hostOf(it.addr));
       }
       // Installs (stream, link, archive, upload) and console copies too, not only uploads.
-      for (const h of awakeConsoles(useTaskStore.getState().tasks)) hosts.add(hostOf(h));
-      if (useUploadSettingsStore.getState().keepPs5AwakeMode === "always") {
-        // Every console whose helper currently answers — read live at tick
-        // time (not effect deps) so consoles joining/leaving are picked up
-        // on the next tick without restarting the interval.
-        for (const [h, rt] of Object.entries(
-          useConnectionStore.getState().runtimeByHost,
-        )) {
-          if (rt.payloadStatus === "up" && h && h !== "_") hosts.add(h);
-        }
+      for (const h of awakeConsoles(useTaskStore.getState().tasks)) busy.add(hostOf(h));
+      // Every console whose helper currently answers — read live at tick time (not effect deps)
+      // so consoles joining/leaving are picked up on the next tick without restarting the
+      // interval. Only those set to "Always while connected" are ticked for it.
+      const up: string[] = [];
+      for (const [h, rt] of Object.entries(
+        useConnectionStore.getState().runtimeByHost,
+      )) {
+        if (rt.payloadStatus === "up" && h && h !== "_") up.push(h);
       }
+      const hosts = keepAwakeHosts(busy, up, (h) => consoleSettingFor(h, "keep_awake_mode"));
       const runtimes = useConnectionStore.getState().runtimeByHost;
       for (const h of keepAwakeTargets(hosts, runtimes)) {
         void powerTick(mgmtAddr(h)).catch(() => {
@@ -1704,6 +1712,9 @@ export default function AppShell() {
     // Migrate single-host users into the multi-PS5 roster on first
     // start. Idempotent — no-op when the roster is already populated.
     ensureRosterMigrated();
+    // Settings › This PS5: the app-wide values copied into each console once, before the list
+    // is shared (so a console's value set on another device wins over this copy).
+    ensureConsoleSettingsMigrated();
     // The console list is kept in the engine too: every browser of the self-hosted web UI sees the
     // same consoles, and an app's list reaches /api/consoles.
     const stopRosterShare = startRosterShare();

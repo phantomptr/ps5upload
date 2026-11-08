@@ -2,6 +2,7 @@ import { useActivityHistoryStore } from "../state/activityHistory";
 import { useNotificationsStore } from "../state/notifications";
 import { useLogsStore } from "../state/logs";
 import { useRosterStore } from "../state/roster";
+import { defaultConsoleSettings, settingsOfProfile, type ConsoleSettings } from "../state/consoleSettings";
 import { useScheduleStore } from "../state/schedules";
 import { useConnectionStore } from "../state/connection";
 import { useInstallSettingsStore } from "../state/installSettings";
@@ -108,6 +109,8 @@ export interface DiagnosticBundle {
     last_seen_kernel: string | null | undefined;
     last_seen_payload: string | null | undefined;
     notes: string | null | undefined;
+    /** This console's own settings (Settings › This PS5), defaults filled in. */
+    settings: ConsoleSettings;
   }>;
   /** User settings snapshot — the behaviour toggles. Essential for "the tool
    *  did X even though I had Y off" reports: captures the ACTUAL stored value
@@ -188,6 +191,7 @@ export function buildDiagnosticBundle(opts: {
   const conn = useConnectionStore.getState();
   const installSettings = useInstallSettingsStore.getState();
   const roster = useRosterStore.getState().profiles;
+  const consoleDefaults = defaultConsoleSettings();
   const schedules = useScheduleStore.getState().schedules;
   const playTimesByHost = usePlayTimeStore.getState().byHost;
   const activity = useActivityHistoryStore.getState().entries;
@@ -273,6 +277,7 @@ export function buildDiagnosticBundle(opts: {
       last_seen_kernel: p.last_seen_kernel,
       last_seen_payload: p.last_seen_payload,
       notes: p.notes,
+      settings: settingsOfProfile(p, consoleDefaults),
     })),
     settings: {
       auto_install_after_upload: installSettings.autoInstallAfterUpload,

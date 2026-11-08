@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 import { hostOf } from "../lib/addr";
 import { PS5_LOADER_PORT } from "./connection";
+import { bringUpPlaylistIdForHost } from "./consoleSettings";
 import { sendHelperAndWait } from "./helperSendRuntime";
 import type { Translator } from "./lang";
 import { log } from "./logs";
@@ -96,7 +97,8 @@ export const useBringUpStore = create<BringUpState>((set, get) => ({
     try {
       // ── Phase 1: pre-helper bring-up playlist (kstuff / SMP / …) ──────────
       const pl = usePayloadPlaylistsStore.getState();
-      const id = pl.autoLoader.bringUpPlaylistId;
+      // This console's own bring-up playlist (payloads depend on its firmware), else the default.
+      const id = bringUpPlaylistIdForHost(h);
       const playlist = id ? pl.playlists.find((p) => p.id === id) : undefined;
       if (playlist && playlist.steps.length > 0) {
         put({ kind: "running", host: bare, phase, detail: playlist.name });
