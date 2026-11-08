@@ -343,9 +343,10 @@ async fn the_sender_cancels_mid_transfer_and_the_receiver_stops() {
     let (sh2, room2) = (sh.clone(), room.clone());
     let t = tokio::spawn(async move { wire::receive(link, &room2, "A", sh2, &mut rx).await });
     until_rx(&sh, "offered").await;
+    let dest = tmp("d");
     tx.send(RxCmd::Accept {
         items: vec!["i1".into()],
-        dest: tmp("d"),
+        dest: dest.clone(),
     })
     .unwrap();
     let rid = until_request(&id, "asking").await;
@@ -359,6 +360,9 @@ async fn the_sender_cancels_mid_transfer_and_the_receiver_stops() {
     assert_eq!(end, wire::RxEnd::Over);
     assert_eq!(sh.lock().unwrap().state, "cancelled");
     assert!(sh.lock().unwrap().bytes_done < 64 * 1024 * 1024);
+    // The 64 MiB file and what arrived of it.
+    let _ = std::fs::remove_dir_all(&big);
+    let _ = std::fs::remove_dir_all(&dest);
 }
 
 /// A receiver that asks for what it was not given: every such request is refused, and nothing
