@@ -20,8 +20,10 @@
 mod catalogue;
 mod download;
 mod http;
+mod pm_sync;
 mod releases;
 mod repos;
+mod updates;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -32,9 +34,13 @@ use serde::Serialize;
 
 use catalogue::{CatalogueEntry, CATALOGUE};
 pub use http::{FetchKind, HttpClient, HttpResponse, UreqClient};
+pub use pm_sync::{HttpPm, PmChange, PmConsole, PmStoredRecord, PmSyncChoice, PmSyncReport};
 pub use releases::ReleaseInfo;
 pub use repos::AddRepo;
 use repos::CustomRepo;
+pub use updates::{
+    is_newer, AppliedUpdate, UpdateOutcome, UpdateRow, UpdateSettings, UpdateState, PREVIOUS_DIR,
+};
 
 /// Overrides where the library lives. The desktop app sets it for its sidecar, so the engine's
 /// routes and the app's screens share one cache.
