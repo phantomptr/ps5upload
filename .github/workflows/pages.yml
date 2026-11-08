@@ -7,6 +7,10 @@ name: pages
 # back on when the API can't be reached (offline, or GitHub's anonymous rate limit), and
 # site/altstore.json, the iPhone source of the newest promoted release.
 #
+# site/join/index.html is the Play Together guest page for internet invites
+# (https://ps5upload.phantomptr.com/join/#room=…), built by `npm run build:join` in client/ (the
+# same file the engine embeds) and committed; scripts/check-embedded-pages.mjs keeps it current.
+#
 # When it deploys:
 # - a change to site/ (or this file) on main;
 # - after the publish workflow finishes;

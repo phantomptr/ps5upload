@@ -1,0 +1,23 @@
+# /etc/caddy/Caddyfile (VPS setup, see README.md). Caddy gets and renews the Let's Encrypt
+# certificate for the name by itself once DNS points here and ports 80 and 443 are open.
+
+hub.phantomptr.com {
+	# No access log: it would hold client addresses.
+	log {
+		output discard
+	}
+
+	@metrics_remote {
+		path /metrics
+		not remote_ip 127.0.0.1 ::1
+	}
+	@hub path /ws /health /metrics
+
+	route {
+		# /metrics only from the server itself.
+		respond @metrics_remote 403
+		# WebSocket upgrades pass through reverse_proxy as they are.
+		reverse_proxy @hub 127.0.0.1:8787
+		respond 404
+	}
+}

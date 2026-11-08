@@ -70,6 +70,7 @@ mod image_build;
 mod inspect;
 mod install;
 mod join;
+mod join_net;
 mod link;
 mod link_lz4;
 mod local_fs;

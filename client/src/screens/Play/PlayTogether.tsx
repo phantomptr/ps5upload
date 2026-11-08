@@ -17,11 +17,63 @@ import {
   streamSeatFriend,
   type JoinGuest,
   type JoinHostState,
+  type NetInvite,
+  type NetPeer,
 } from "./playTogetherState";
-import { NetworkChoice } from "./NetworkChoice";
+import { NetworkChoice, saveNetwork, savedNetwork, splitByNetwork, urlHost, type NetworkKind } from "./NetworkChoice";
 import { clock } from "../../lib/clockText";
 
 type Tr = ReturnType<typeof useTr>;
+
+/** What the internet invite needs the host to know, or null: why the engine would not make one
+ *  (`why`, from the invite call), or its link to the invite service (the hub) as the state says. */
+export function netInviteNote(
+  tr: Tr,
+  why: string | null,
+  net: NetInvite | null,
+): { text: string; tone: "warn" | "muted"; id: string } | null {
+  if (why === "internet_off")
+    return {
+      id: "pt-net-off",
+      tone: "warn",
+      text: tr("pt_net_off", undefined, "Internet invites are off. Turn on Allow internet invites in Settings › Play Together."),
+    };
+  if (why === "hub_url")
+    return {
+      id: "pt-net-hub-url",
+      tone: "warn",
+      text: tr("pt_net_hub_url", undefined, "The invite service address in Settings › Play Together isn't a wss:// address."),
+    };
+  if (why)
+    return {
+      id: "pt-net-failed",
+      tone: "warn",
+      text: `${tr("pt_net_link_failed", undefined, "An internet link could not be made. Try again.")} (${why})`,
+    };
+  if (!net) return null;
+  if ((net.hubState === "error" || net.hubState === "reconnecting") && net.hubError)
+    return {
+      id: "pt-net-hub-down",
+      tone: "warn",
+      text: `${tr(
+        "pt_net_hub_down",
+        undefined,
+        "Couldn't reach the PS5Upload invite service, so friends can't join with this link yet. Check this computer's internet connection.",
+      )} (${net.hubError})`,
+    };
+  if (net.hubState === "connecting")
+    return { id: "pt-net-hub-connecting", tone: "muted", text: tr("pt_net_hub_connecting", undefined, "Connecting to the invite service…") };
+  return null;
+}
+
+/** Internet friends not in the game: those still connecting, and whether one failed that the
+ *  host has not dismissed (one notice, never a list). */
+export function netPeersView(peers: NetPeer[], dismissed: ReadonlySet<string>): { connecting: NetPeer[]; failed: NetPeer[] } {
+  return {
+    connecting: peers.filter((p) => p.path === "connecting"),
+    failed: peers.filter((p) => p.path === "failed" && !dismissed.has(p.gid)),
+  };
+}
 
 /** What a friend is doing, in words. */
 export function guestStatusText(tr: Tr, g: JoinGuest): string {
@@ -146,6 +198,20 @@ function PlayerCard({ addr, player, guest }: { addr: string; player: number; gue
             <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${CHIP[guest.status]}`} data-testid="pt-player-status">
               {guestStatusText(tr, guest)}
             </span>
+            {guest.via === "internet" && guest.status !== "left" && (
+              <span
+                className="rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-xs font-medium"
+                data-testid="pt-player-via"
+                data-path={guest.path ?? ""}
+              >
+                {tr("net_internet", undefined, "Internet")}
+                {guest.path === "direct"
+                  ? ` · ${tr("pt_path_direct", undefined, "Direct")}`
+                  : guest.path === "connecting"
+                    ? ` · ${tr("pt_net_connecting", undefined, "Connecting…")}`
+                    : ""}
+              </span>
+            )}
             {guest.rttMs != null && guest.status !== "left" && (
               <span className={`text-xs tabular-nums ${TONE[tone]}`} data-testid="pt-player-delay" data-tone={tone}>
                 {Math.round(guest.rttMs)} ms
@@ -206,18 +272,45 @@ export function PlayTogetherPanel({
   const [picked, setPicked] = useState<string | null>(null);
   // A new link the engine would not make (shown, never swallowed: #657).
   const [linkFailed, setLinkFailed] = useState(false);
+  // The network the invite is for (this device remembers the last one picked).
+  const [network, setNetwork] = useState<NetworkKind>(savedNetwork);
+  // Why the engine would not make the internet link (`internet_off`, `hub_url`…), or null.
+  const [netWhy, setNetWhy] = useState<string | null>(null);
+  // Internet friends whose failed connection the host dismissed.
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
+  // An engine from before internet invites says nothing of them: no Internet choice there.
+  const netOffered = state.settings.internetInvites !== null;
+  const onInternet = netOffered && network === "internet";
   const inviting = useRef(false);
-  /** Asks the engine for the invite; `renew` voids the old link and makes a new one. */
-  const askInvite = async (renew: boolean): Promise<void> => {
+  /** Asks the engine for the invite; `renew` voids the old link and makes a new one; `internet`
+   *  makes its internet link too. */
+  const askInvite = async (renew: boolean, internet = onInternet): Promise<void> => {
     if (inviting.current) return;
     inviting.current = true;
     try {
-      const s = await joinApi.invite(addr, renew);
-      setLinkFailed(!s);
-      if (s) onState(s);
+      if (internet) {
+        const r = await joinApi.inviteInternet(addr, renew);
+        setNetWhy(r.error ?? null);
+        setLinkFailed(false);
+        if (r.state) onState(r.state);
+        // Refused (off in the settings): the home network's link still works.
+        else if (!state.invite) {
+          const s = await joinApi.invite(addr);
+          if (s) onState(s);
+        }
+      } else {
+        const s = await joinApi.invite(addr, renew);
+        setLinkFailed(!s);
+        if (s) onState(s);
+      }
     } finally {
       inviting.current = false;
     }
+  };
+  const pickNetwork = (kind: NetworkKind) => {
+    setNetwork(kind);
+    saveNetwork(kind);
+    setNetWhy(null);
   };
 
   // Opening the panel opens Play Together with a fresh invite (the engine keeps an open one).
@@ -235,6 +328,16 @@ export function PlayTogetherPanel({
       setWhy(null);
       setFailed(false);
       onState(opened);
+      // The internet link when that was the last choice (and this engine makes them).
+      if (savedNetwork() === "internet" && opened.settings.internetInvites !== null && !opened.invite?.internet) {
+        const r = await joinApi.inviteInternet(addr);
+        if (!alive) return;
+        setNetWhy(r.error ?? null);
+        if (r.state) {
+          onState(r.state);
+          return;
+        }
+      }
       if (!opened.invite) {
         const s = await joinApi.invite(addr);
         if (alive && s) onState(s);
@@ -256,7 +359,19 @@ export function PlayTogetherPanel({
   }, [lapsed]);
   const invite = state.invite;
   const addresses = invite?.urls ?? [];
-  const link = invite ? (picked ? inviteOn(invite.url, picked) : invite.url) : null;
+  const netInvite = invite?.internet ?? null;
+  // The internet link went missing (a new invite, the engine restarted): make it again, once
+  // per invite; a refusal stays shown until the host picks again.
+  const needNet = onInternet && !!invite && !netInvite && !netWhy && helperOk && !failed;
+  useEffect(() => {
+    if (needNet) void askInvite(false, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needNet, invite?.code]);
+  // Tailscale, when that was the last choice and this computer still has it.
+  const lanPick = picked ?? (network === "tailscale" ? splitByNetwork(addresses, invite?.tailscale ?? null).tailnet : null);
+  const link = onInternet ? (netInvite?.url ?? null) : invite ? (lanPick ? inviteOn(invite.url, lanPick) : invite.url) : null;
+  const netNote = onInternet ? netInviteNote(tr, netWhy, netInvite) : null;
+  const peers = netPeersView(state.netPeers, dismissed);
   const slow = slowFriend(state);
   // The system share sheet (Messages, WhatsApp…), where the device has one: phones mostly.
   const canShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
@@ -393,7 +508,7 @@ export function PlayTogetherPanel({
                     {tr("pt_new_link_failed", undefined, "A new link could not be made. Try again.")}
                   </p>
                 )}
-                {invite?.code && (
+                {invite?.code && !onInternet && (
                   <div className="space-y-0.5">
                     <p className="flex items-baseline gap-2 text-xs text-[var(--color-muted)]">
                       {tr("pt_code_label", undefined, "Short code")}
@@ -406,17 +521,12 @@ export function PlayTogetherPanel({
                     </p>
                   </div>
                 )}
-                <NetworkChoice
-                  urls={addresses}
-                  tailscale={invite?.tailscale ?? null}
-                  current={link}
-                  onPick={setPicked}
-                  otherNetwork={tr("pt_other_network", undefined, "This computer is on more than one network: pick the one your friend is on.")}
-                  testId="pt-addresses"
-                  addressTestId="pt-address"
-                />
               </div>
-            ) : linkFailed ? (
+            ) : onInternet && netWhy ? (
+              <Button size="sm" variant="ghost" leftIcon={<RefreshCw size={14} />} onClick={() => void askInvite(false, true)} data-testid="pt-net-retry">
+                {tr("join_retry", undefined, "Try again")}
+              </Button>
+            ) : linkFailed && !onInternet ? (
               <div className="space-y-2">
                 <p className="text-xs text-[var(--color-warn)]" data-testid="pt-new-link-failed">
                   {tr("pt_new_link_failed", undefined, "A new link could not be made. Try again.")}
@@ -427,6 +537,39 @@ export function PlayTogetherPanel({
               </div>
             ) : (
               <p className="text-xs text-[var(--color-muted)]">…</p>
+            )}
+            {netNote && (
+              <p
+                className={`text-xs ${netNote.tone === "warn" ? "text-[var(--color-warn)]" : "text-[var(--color-muted)]"}`}
+                data-testid={netNote.id}
+              >
+                {netNote.text}
+              </p>
+            )}
+            {(invite || netOffered) && (
+              <NetworkChoice
+                urls={addresses}
+                tailscale={invite?.tailscale ?? null}
+                current={onInternet ? null : link}
+                onPick={(u) => {
+                  setPicked(u);
+                  pickNetwork(u && invite?.tailscale && urlHost(u) === invite.tailscale ? "tailscale" : "home");
+                }}
+                otherNetwork={tr("pt_other_network", undefined, "This computer is on more than one network: pick the one your friend is on.")}
+                testId="pt-addresses"
+                addressTestId="pt-address"
+                internet={
+                  netOffered
+                    ? {
+                        on: onInternet,
+                        onPick: () => {
+                          pickNetwork("internet");
+                          if (!netInvite?.url) void askInvite(false, true);
+                        },
+                      }
+                    : null
+                }
+              />
             )}
           </Step>
           <Step n={2} title={tr("pt_step_allow", undefined, "Allow")}>
@@ -476,6 +619,34 @@ export function PlayTogetherPanel({
             <PlayerCard key={player} addr={addr} player={player} guest={guest} />
           ))}
         </ul>
+      )}
+
+      {helperOk && !failed && peers.connecting.length > 0 && (
+        <ul className="space-y-1" data-testid="pt-net-peers">
+          {peers.connecting.map((p) => (
+            <li key={p.gid} className="flex items-center gap-2 text-xs" data-testid="pt-net-peer">
+              <span className="font-medium">{tr("pt_net_friend", undefined, "A friend on the internet")}</span>
+              <span className="text-[var(--color-muted)]">{tr("pt_net_connecting", undefined, "Connecting…")}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {helperOk && !failed && peers.failed.length > 0 && (
+        <div
+          className="flex items-start gap-2 rounded-lg bg-[var(--color-warn-soft)] px-3 py-2 text-xs text-[var(--color-warn)]"
+          data-testid="pt-net-peer-failed"
+        >
+          <span className="flex-1">{tr("pt_net_peer_failed", undefined, "Couldn't connect from their network")}</span>
+          <button
+            type="button"
+            onClick={() => setDismissed((d) => new Set([...d, ...peers.failed.map((p) => p.gid)]))}
+            aria-label={tr("rp_phone_close", undefined, "Close")}
+            className="rounded p-0.5 hover:bg-[var(--color-surface-3)]"
+            data-testid="pt-net-peer-failed-dismiss"
+          >
+            <X size={14} />
+          </button>
+        </div>
       )}
 
       {slow && (
