@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { installWindowStub } from "../../test-utils/storage";
 import { JoinAsks, PlayTogetherPanel } from "./PlayTogether";
-import { joinApi, readJoinState, readProfiles, withSeat } from "./playTogetherState";
+import { joinApi, readJoinState, readProfiles, saveSeat, withSeat } from "./playTogetherState";
 
 // "Guests play as": what the engine says (join.rs snapshot / state_json / profiles), field for field.
 const engine = {
@@ -125,5 +125,43 @@ describe("Guests play as: Settings", () => {
     expect(p?.users).toHaveLength(2);
     vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 502 })));
     expect(await joinApi.profiles("192.168.1.100")).toBeNull();
+  });
+});
+
+describe("a profile chosen while the PS5 can't say which one is the host's", () => {
+  const user = { id: 268435459, name: "Guest 1", foreground: false };
+  const answering = (first: string | null) => {
+    const bodies: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        const error = bodies.length === 1 ? first : null;
+        return new Response(JSON.stringify(error ? { error } : { settings: {} }), { status: error ? 409 : 200 });
+      }),
+    );
+    return bodies;
+  };
+
+  it("asks the same question as for the host's own profile, and saves it confirmed on a yes", async () => {
+    const bodies = answering("owner_unknown");
+    const ask = vi.fn(async () => true);
+    expect(await saveSeat("192.168.1.100", [], 2, user, false, ask)).toEqual({ error: null });
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(bodies).toEqual([
+      { addr: "192.168.1.100", guest_profiles: [{ player: 2, user: user.id, name: "Guest 1", owner: false }] },
+      { addr: "192.168.1.100", guest_profiles: [{ player: 2, user: user.id, name: "Guest 1", owner: true }] },
+    ]);
+  });
+
+  it("changes nothing on a no, and asks nothing when the PS5 answered", async () => {
+    let bodies = answering("owner_unknown");
+    expect(await saveSeat("192.168.1.100", [], 2, user, false, async () => false)).toEqual({ error: "cancelled" });
+    expect(bodies).toHaveLength(1);
+    bodies = answering(null);
+    const ask = vi.fn(async () => true);
+    expect(await saveSeat("192.168.1.100", [], 2, user, false, ask)).toEqual({ error: null });
+    expect(ask).not.toHaveBeenCalled();
+    expect(bodies).toHaveLength(1);
   });
 });

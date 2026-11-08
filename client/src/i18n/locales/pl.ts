@@ -8507,6 +8507,21 @@ rp_users_add_hint: "Aby grać także jako inny użytkownik, zaloguj się na nim 
 "rp_watch_net_how": "Każdy z tym linkiem może oglądać transmisję z dowolnego miejsca na telefonie, tablecie lub komputerze (do czterech osób). Przez internet tylko oglądają: nie można im przekazać kontrolera.",
 "rp_watch_ask": "{name} chce oglądać",
 "rp_phone_net_phone": "Telefon przez internet",
+"rp_phone_ask_net_owner": "{name} chce sterować twoją PS5 jako ty: twój profil, zapisy i trofea",
+"rp_phone_allow_as_me": "Tak, graj jako ja",
+"pt_set_owner_unknown_body": "PS5 nie podała, który profil jest twój. Jeśli to twój własny profil, znajomy grający na nim może używać twoich zapisów i trofeów.",
+"tn_err_signed_out": "Wylogowano z tailnetu: klucz wygasł lub urządzenie usunięto. Wyloguj się, a potem zaloguj ponownie.",
+"tn_err_unreachable": "Nie można połączyć się z serwerem Tailscale. Sprawdź połączenie z internetem; próby trwają.",
+"tn_err_refused": "Tailscale odrzucił logowanie.",
+"tn_err_refused_why": "Tailscale odrzucił logowanie: {why}",
+"tn_warn_expired": "Klucz Tailscale wygasł. Wyloguj się, a potem zaloguj ponownie.",
+"tn_warn_expiring": "Klucz Tailscale wkrótce wygaśnie. Wyloguj się i zaloguj ponownie, aby go odnowić.",
+"tn_slow": "Nadal brak połączenia po minucie. Jeśli logowanie się zakończyło, sprawdź, czy administrator tailnetu zatwierdził urządzenie, albo wyłącz i włącz Tailscale.",
+"cw_tile_why_not_listed": "PS5 nie pokazała go na ekranie głównym",
+"cw_tile_why_write_failed": "nie udało się zapisać jego plików na PS5",
+"cw_tile_why_removal": "usuwanie nie zostało dokończone",
+"cw_tile_why_register": "PS5 odmówiła instalacji",
+"cw_tile_why_other": "PS5 odmówiła",
 };
 
 export default pl;

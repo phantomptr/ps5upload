@@ -22,15 +22,17 @@
 //!   certificate against `fp`, and sends this socket's messages on it after a first `{"hello":
 //!   {"t", "name", "d", "w"}}` (the query below). The key only lets it ask: the computer allows
 //!   it (`decide`) before it gets the pad or the picture, as with an internet Play Together guest,
-//!   and a device it allowed comes back after a drop without asking (New link refuses the ones
-//!   still waiting). A
+//!   and one it allowed comes back after a drop without asking: on the yes the engine sends it a
+//!   reconnect token of its own (`{"rt": …}`, random), which the page keeps for that link's room
+//!   and sends back as `rt` in its hello. A device id is never enough over the internet (the phone
+//!   makes it up). New link voids every token and refuses the phones still waiting. A
 //!   watcher there gets the picture as an internet Play Together guest does (a short queue that
 //!   skips to the next keyframe), and only watches: it cannot be handed the controller. Internet
 //!   invites off (Settings › Play Together) closes the room; phones already in keep playing.
 //!
 //! `/pad` and `/api/pad/` are the only routes a LAN peer reaches besides `/pkg-host/`
 //! (`loopback_allows` in lib.rs), and the socket checks the key or the computer's yes itself.
-//! A phone also names its device (`d=`, random, kept on the phone): a device the computer allowed
+//! A phone also names its device (`d=`, random, kept on the phone): on the LAN, a device the computer allowed
 //! comes back after a dropped socket without asking again, and one it disconnected stays out until
 //! the link is closed.
 //!
@@ -164,12 +166,18 @@ struct Pad {
     control: bool,
     /// Its connection when it came over the internet (None on the LAN).
     net: Option<std::sync::Arc<crate::join_net::PeerInfo>>,
+    /// An internet phone's reconnect token (see [`NetLink::tokens`]).
+    rt: Option<String>,
 }
 
 /// The internet link: a room on the signalling hub, and the key its link carries.
 struct NetLink {
     room: crate::join_net::hub::Room,
     key: String,
+    /// Reconnect tokens this engine gave the internet phones it allowed (random, made here: never
+    /// what a phone says about itself). Only one of these lets a phone back in without asking
+    /// again; they go with the room, so a New link (or closing the link) voids them all.
+    tokens: std::collections::HashSet<String>,
 }
 
 struct Pending {
@@ -696,7 +704,11 @@ pub async fn set_internet(headers: HeaderMap, Json(r): Json<InternetReq>) -> Res
                 Box::new(|| crate::join::settings().internet_invites),
                 s.hub_url.clone(),
             )?;
-            l.net = Some(NetLink { room, key });
+            l.net = Some(NetLink {
+                room,
+                key,
+                tokens: Default::default(),
+            });
         }
         Some(())
     });
@@ -765,6 +777,10 @@ pub async fn kick(Json(r): Json<KickReq>) -> Json<serde_json::Value> {
             l.allowed.remove(d);
             l.denied.insert(d.clone());
         }
+        // Its way back in over the internet goes too.
+        if let (Some(rt), Some(n)) = (&p.rt, l.net.as_mut()) {
+            n.tokens.remove(rt);
+        }
         Some((p.id, p.watch))
     });
     let ok = gone.is_some();
@@ -832,6 +848,9 @@ pub struct PadQuery {
     /// This device's own id (random, kept on the device).
     #[serde(default)]
     d: Option<String>,
+    /// An internet phone's reconnect token, as this engine gave it when it was allowed.
+    #[serde(default)]
+    rt: Option<String>,
 }
 
 /// A phone's name as it gave it: printable, short. Empty when it gave none, and the /pad page sends
@@ -946,6 +965,26 @@ pub(crate) async fn rtc_session(
     pad_session(socket, q, ip).await
 }
 
+/// `t` when it is a reconnect token the current internet link gave (compared whole).
+fn net_token_known(t: &str) -> Option<String> {
+    with_link(|l| {
+        l.net
+            .as_ref()
+            .and_then(|n| n.tokens.iter().find(|k| same_key(k, t)).cloned())
+    })
+}
+
+/// A new reconnect token for an internet phone just allowed, kept with the current internet link.
+/// None when the link went meanwhile (the phone then has to ask again after a drop).
+fn new_net_token() -> Option<String> {
+    let t = random_key()?;
+    with_link(|l| {
+        let n = l.net.as_mut()?;
+        n.tokens.insert(t.clone());
+        Some(t)
+    })
+}
+
 fn say(v: serde_json::Value) -> Message {
     Message::Text(v.to_string().into())
 }
@@ -1047,11 +1086,14 @@ async fn pad_session<S: crate::join::GuestSocket>(
     }
     // The QR code's key lets a phone on the LAN in at once. Over the internet the link's key only
     // lets a phone ask (`rtc_session` checked it): the computer allows it, as it allows an
-    // internet Play Together guest, and a device it allowed comes back after a drop.
+    // internet Play Together guest, and one it allowed comes back after a drop with the reconnect
+    // token this engine gave it then. Never by its device id: the phone makes that up itself.
+    let mut rt = match &net {
+        Some(_) => q.rt.as_deref().and_then(net_token_known),
+        None => None,
+    };
     let keyed = match &net {
-        Some(_) => device
-            .as_ref()
-            .is_some_and(|d| with_link(|l| l.allowed.contains(d))),
+        Some(_) => rt.is_some(),
         None => is_expected(&q),
     };
     if !keyed {
@@ -1111,7 +1153,13 @@ async fn pad_session<S: crate::join::GuestSocket>(
                 return;
             }
             Some(Answer::Allow) => {
-                if let Some(d) = &device {
+                if net.is_some() {
+                    // Its way back after a drop: a token of ours, kept by the phone for this link.
+                    rt = new_net_token();
+                    if let Some(t) = &rt {
+                        send_limited(&mut socket, say(serde_json::json!({ "rt": t }))).await;
+                    }
+                } else if let Some(d) = &device {
                     with_link(|l| l.allowed.insert(d.clone()));
                 }
             }
@@ -1173,6 +1221,7 @@ async fn pad_session<S: crate::join::GuestSocket>(
             watch,
             control: false,
             net: net.clone(),
+            rt: rt.clone(),
         });
         true
     });
@@ -1704,6 +1753,7 @@ mod tests {
                     watch: false,
                     control: false,
                     net: None,
+                    rt: None,
                 },
                 Pad {
                     id: 2,
@@ -1714,6 +1764,7 @@ mod tests {
                     watch: true,
                     control: true,
                     net: None,
+                    rt: None,
                 },
             ],
             ..Default::default()
@@ -2098,6 +2149,7 @@ mod tests {
             watch,
             control,
             net: None,
+            rt: None,
         };
         assert!(!any_playing(&[]));
         assert!(

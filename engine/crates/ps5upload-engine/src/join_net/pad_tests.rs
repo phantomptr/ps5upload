@@ -94,10 +94,25 @@ async fn answer_next(allow: bool) {
     assert_eq!(r.0["ok"], true);
 }
 
-/// Asks, is allowed, and is in: the next stage after the host's yes.
+/// Asks, is allowed, and is in: the next stage after the host's yes, with the reconnect token the
+/// engine gave it first as `rt`.
 async fn allowed_in(g: &mut TestGuest, key: &str, watch: bool) -> serde_json::Value {
     assert_eq!(hello(g, key, watch).await["stage"], "asking");
     answer_next(true).await;
+    let rt = g.next_with("rt").await["rt"].clone();
+    assert!(rt.as_str().is_some_and(|t| t.len() == 32), "{rt}");
+    let mut v = g.next_with("stage").await;
+    v["rt"] = rt;
+    v
+}
+
+/// A phone coming back with the reconnect token it was given.
+async fn hello_rt(g: &mut TestGuest, key: &str, watch: bool, rt: &serde_json::Value) -> serde_json::Value {
+    let mut h = serde_json::json!({"t": key, "name": "pixel", "d": DEVICE, "rt": rt});
+    if watch {
+        h["w"] = 1.into();
+    }
+    g.text(serde_json::json!({ "hello": h }));
     g.next_with("stage").await
 }
 
@@ -174,6 +189,7 @@ async fn a_phone_anywhere_is_a_controller_with_touchpad_motion_and_rumble() {
     assert!(g.answer.contains(&format!("a=fingerprint:sha-256 {fp}")));
     let v = allowed_in(&mut g, &key, false).await;
     assert_eq!(v["stage"], "joined", "{v}");
+    let rt = v["rt"].clone();
     until_pads("an internet controller", |s| {
         s["pads"][0]["via"] == "internet" && s["pads"][0]["watch"] == false
     })
@@ -212,18 +228,29 @@ async fn a_phone_anywhere_is_a_controller_with_touchpad_motion_and_rumble() {
         }
     }
 
-    // Dropped (a tunnel, a lift): the device the host allowed comes back without asking.
+    // Dropped (a tunnel, a lift): the phone the host allowed comes back without asking, with the
+    // reconnect token the engine gave it. Its device id alone (which a phone makes up itself, so
+    // anyone with the link could copy it) only asks again.
     drop(g);
     until_pads("the drop", |s| s["pads"].as_array().unwrap().is_empty()).await;
+    let mut copycat = connect_guest_on(&hub.url, &room, "pad").await;
+    assert_eq!(hello(&mut copycat, &key, false).await["stage"], "asking");
+    answer_next(false).await;
+    assert_eq!(refused_why(&mut copycat).await, "denied");
+    let mut guess = connect_guest_on(&hub.url, &room, "pad").await;
+    let wrong = serde_json::json!("0123456789abcdef0123456789abcdef");
+    assert_eq!(hello_rt(&mut guess, &key, false, &wrong).await["stage"], "asking");
+    answer_next(false).await;
+    assert_eq!(refused_why(&mut guess).await, "denied");
     let mut g = connect_guest_on(&hub.url, &room, "pad").await;
-    assert_eq!(hello(&mut g, &key, false).await["stage"], "joined");
+    assert_eq!(hello_rt(&mut g, &key, false, &rt).await["stage"], "joined");
     let id = until_pads("back", |s| s["pads"][0]["via"] == "internet").await["pads"][0]["id"]
         .as_u64()
         .unwrap();
     g.text(serde_json::json!({"pad": {"buttons": 1}}));
     until("pressed again", || live.merged().buttons == 1).await;
 
-    // Disconnect: let go at once, told why, and the device stays out.
+    // Disconnect: let go at once, told why, and the device stays out (its token too).
     let k = crate::pad_link::kick(Json(
         serde_json::from_value(serde_json::json!({ "id": id })).unwrap(),
     ))
@@ -233,6 +260,10 @@ async fn a_phone_anywhere_is_a_controller_with_touchpad_motion_and_rumble() {
     assert_eq!(refused_why(&mut g).await, "kicked");
     let mut back = connect_guest_on(&hub.url, &room, "pad").await;
     assert_eq!(hello(&mut back, &key, false).await["why"], "kicked");
+    let mut other = connect_guest_on(&hub.url, &room, "pad").await;
+    let v = hello_as(&mut other, &key, false, "ffeeddccbbaa99887766554433221100").await;
+    assert_eq!(v["stage"], "asking", "a kicked phone's token is no way in: {v}");
+    answer_next(false).await;
 
     close_link().await;
     until("the room closed", || !hub.has_host(&room)).await;
@@ -306,20 +337,23 @@ async fn a_watcher_anywhere_gets_the_picture_never_the_controller_and_four_at_mo
     assert_eq!(live.merged().buttons, 0);
 
     // The watch party's limit holds for watchers from anywhere: four.
-    // (One device, allowed once: the others come in without asking.)
+    // (One phone, allowed once: with its token the others come in without asking.)
     let mut more = Vec::new();
+    let mut rt = serde_json::Value::Null;
     for i in 0..3 {
         let mut x = connect_guest_on(&hub.url, &room, "pad").await;
         let v = if i == 0 {
-            allowed_in(&mut x, &key, true).await
+            let v = allowed_in(&mut x, &key, true).await;
+            rt = v["rt"].clone();
+            v
         } else {
-            hello(&mut x, &key, true).await
+            hello_rt(&mut x, &key, true, &rt).await
         };
         assert_eq!(v["stage"], "joined");
         more.push(x);
     }
     let mut fifth = connect_guest_on(&hub.url, &room, "pad").await;
-    assert_eq!(hello(&mut fifth, &key, true).await["why"], "full");
+    assert_eq!(hello_rt(&mut fifth, &key, true, &rt).await["why"], "full");
 
     close_link().await;
     assert_eq!(refused_why(&mut w).await, "closed");
@@ -337,7 +371,9 @@ async fn new_link_revokes_the_old_one_and_internet_invites_off_closes_it() {
     let (room1, key1) = room_and_key(&body(net_link(false).await).await);
     until("hosted", || hub.has_host(&room1)).await;
     let mut kept = connect_guest_on(&hub.url, &room1, "pad").await;
-    assert_eq!(allowed_in(&mut kept, &key1, false).await["stage"], "joined");
+    let v = allowed_in(&mut kept, &key1, false).await;
+    assert_eq!(v["stage"], "joined");
+    let kept_rt = v["rt"].clone();
     // Another phone still waiting for the host's answer when the link is replaced.
     let mut waiting = connect_guest_on(&hub.url, &room1, "pad").await;
     let v = hello_as(
@@ -364,6 +400,11 @@ async fn new_link_revokes_the_old_one_and_internet_invites_off_closes_it() {
     assert_eq!(hello(&mut old, &key1, false).await["why"], "key");
     // A phone already in keeps playing.
     assert_eq!(kept.next_with("stage").await["stage"], "joined");
+    // But its reconnect token went with the old link: on the new one it asks again.
+    let mut again = connect_guest_on(&hub.url, &room2, "pad").await;
+    assert_eq!(hello_rt(&mut again, &key2, false, &kept_rt).await["stage"], "asking");
+    answer_next(false).await;
+    assert_eq!(refused_why(&mut again).await, "denied");
 
     // A Play Together channel in the phone link's room gets no session at all.
     let mut other = connect_guest_on(&hub.url, &room2, "join").await;

@@ -130,6 +130,8 @@ export interface AppTailnetStatus {
   home_latency_ms: number;
   key_expiry: number;
   error: string;
+  /** Something to know while it runs (the key expires soon); absent from an older engine. */
+  warning?: string;
   peers: TailnetPeer[];
   consoles: AppTailnetConsole[];
 }
@@ -153,6 +155,82 @@ export interface TailnetVia {
   /** "lan" | "direct" | "relayed" */
   via: string;
   latency_ms: number;
+}
+
+// ---- problems, in words (Settings › Tailscale and the console's Tailscale panel) ----
+
+/** One thing wrong, as a translation key, its English, and what it says (`why`: the server's own
+ *  words for a refused sign-in). `bad` is an error; otherwise a warning. */
+export interface TailnetProblem {
+  key: string;
+  fallback: string;
+  vars?: Record<string, string | number>;
+  bad: boolean;
+}
+
+/** Waiting this long to connect or for the sign-in is no longer normal: say so. */
+export const TAILNET_SLOW_MS = 60_000;
+
+/** The core's words for a network failure (tailnet/src/tailnet.c tn_strerror). */
+const UNREACHABLE = /^(connection error|timeout|TLS error|DNS lookup failed|unexpected HTTP status|protocol error)$/i;
+
+/**
+ * What to tell the user about a node, from the engine's or helper's `state`, `error` and `warning`,
+ * instead of a spinner that never ends: a refused sign-in, a node signed out (key expired or
+ * removed), a control server out of reach, a key expired or expiring, and a sign-in pending longer
+ * than {@link TAILNET_SLOW_MS} (`pendingMs`: how long it has been connecting or waiting for the
+ * sign-in). Approval needed has its own line already ("wait-approval").
+ */
+export function tailnetProblems(
+  st: { state: TailnetState; error?: string; warning?: string; key_expiry?: number },
+  pendingMs: number,
+): TailnetProblem[] {
+  const out: TailnetProblem[] = [];
+  const error = (st.error ?? "").trim();
+  const warning = (st.warning ?? "").trim();
+  if (st.state === "signed-out" || /signed out at control/i.test(error)) {
+    out.push({
+      key: "tn_err_signed_out",
+      fallback: "Signed out of the tailnet: its key expired or the device was removed. Sign out, then sign in again.",
+      bad: true,
+    });
+  } else if (error && st.state !== "running") {
+    if (UNREACHABLE.test(error)) {
+      out.push({
+        key: "tn_err_unreachable",
+        fallback: "Can't reach the Tailscale server. Check the internet connection; it keeps trying.",
+        bad: true,
+      });
+    } else if (/^(control refused registration|authentication failed)$/i.test(error)) {
+      out.push({ key: "tn_err_refused", fallback: "Tailscale refused the sign-in.", bad: true });
+    } else {
+      out.push({
+        key: "tn_err_refused_why",
+        fallback: "Tailscale refused the sign-in: {why}",
+        vars: { why: error },
+        bad: true,
+      });
+    }
+  }
+  if (/expired/i.test(warning)) {
+    out.push({ key: "tn_warn_expired", fallback: "The Tailscale key has expired. Sign out, then sign in again.", bad: true });
+  } else if (/expires/i.test(warning) && expiryDays(st.key_expiry ?? 0) === null) {
+    // (Within a week the days are said already, from key_expiry.)
+    out.push({
+      key: "tn_warn_expiring",
+      fallback: "The Tailscale key expires soon. Sign out, then sign in again to renew it.",
+      bad: false,
+    });
+  }
+  if ((st.state === "connecting" || st.state === "needs-login") && pendingMs >= TAILNET_SLOW_MS && !out.some((p) => p.bad)) {
+    out.push({
+      key: "tn_slow",
+      fallback:
+        "Still not connected after a minute. If you finished signing in, check that your tailnet admin approved the device, or turn Tailscale off and on again.",
+      bad: false,
+    });
+  }
+  return out;
 }
 
 /** How the engine reaches this console right now (the status-bar chip). */

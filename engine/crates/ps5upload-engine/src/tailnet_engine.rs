@@ -58,7 +58,11 @@ pub struct TailnetEngine {
     settings: Mutex<Settings>,
     known: Mutex<Vec<KnownConsole>>,
     state: Mutex<HashMap<String, ConsoleState>>,
+    /// The node's last error (a refused sign-in, an unreachable control server), cleared once it
+    /// runs: Settings › Tailscale says it in plain words instead of spinning on "Connecting…".
     last_error: Mutex<String>,
+    /// Something the user should know while it runs (the key expires soon, or has).
+    last_warning: Mutex<String>,
 }
 
 static ENGINE: OnceLock<Arc<TailnetEngine>> = OnceLock::new();
@@ -73,6 +77,7 @@ pub fn engine() -> &'static Arc<TailnetEngine> {
             node: Mutex::new(None),
             state: Mutex::new(HashMap::new()),
             last_error: Mutex::new(String::new()),
+            last_warning: Mutex::new(String::new()),
         };
         Arc::new(e)
     })
@@ -156,10 +161,29 @@ impl TailnetEngine {
             no_direct: std::env::var("PS5UPLOAD_TAILNET_NO_DIRECT").is_ok_and(|v| v == "1"),
             ..Default::default()
         };
+        // A fresh start says nothing of the last run's trouble.
+        self.clear_problems();
         let node = tn::Node::start(&cfg, |ev| match ev {
-            tn::Event::State(s) => crate::log_at!(Info, "tailnet", "tailnet: {s}"),
+            tn::Event::State(s) => {
+                crate::log_at!(Info, "tailnet", "tailnet: {s}");
+                if s == "running" {
+                    // In: the error that kept it out (a retry got through) is over.
+                    engine()
+                        .last_error
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .clear();
+                }
+            }
             tn::Event::Path(p) => crate::log_at!(Info, "tailnet", "tailnet: {p}"),
-            tn::Event::Warning(w) | tn::Event::Error(w) => {
+            tn::Event::Warning(w) => {
+                crate::log_at!(Warn, "tailnet", "tailnet: {w}");
+                *engine()
+                    .last_warning
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner()) = w;
+            }
+            tn::Event::Error(w) => {
                 crate::log_at!(Warn, "tailnet", "tailnet: {w}");
                 *engine()
                     .last_error
@@ -175,6 +199,17 @@ impl TailnetEngine {
         .map_err(|e| anyhow::anyhow!("{e}"))?;
         *slot = Some(Arc::new(node));
         Ok(())
+    }
+
+    fn clear_problems(&self) {
+        self.last_error
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
+        self.last_warning
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
     }
 
     fn stop(&self) {
@@ -396,6 +431,7 @@ impl TailnetEngine {
             "home_latency_ms": st.as_ref().and_then(|s| s.home_latency_ms).unwrap_or(-1.0),
             "key_expiry": st.as_ref().map(|s| s.key_expiry).unwrap_or(0),
             "error": self.last_error.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+            "warning": self.last_warning.lock().unwrap_or_else(|p| p.into_inner()).clone(),
             "peers": peers,
             "consoles": consoles,
         })

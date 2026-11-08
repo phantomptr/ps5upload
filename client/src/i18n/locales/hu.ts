@@ -8562,6 +8562,21 @@ rp_users_add_hint: "Ha másik felhasználóként is játszanál, jelentkezz be a
 "rp_watch_net_how": "Bárki, akinél ez a link van, bárhonnan nézheti a streamet telefonon, tableten vagy számítógépen (legfeljebb négyen). Interneten keresztül csak néznek: a kontrollert nem lehet átadni nekik.",
 "rp_watch_ask": "{name} nézni szeretne",
 "rp_phone_net_phone": "Egy telefon az interneten",
+"rp_phone_ask_net_owner": "{name} a nevedben akarja irányítani a PS5-öd: a profilod, mentéseid és trófeáid",
+"rp_phone_allow_as_me": "Igen, a nevemben játszhat",
+"pt_set_owner_unknown_body": "A PS5 nem mondta meg, melyik profil a tiéd. Ha ez a saját profilod, egy barát, aki ezzel játszik, használhatja a mentéseidet és trófeáidat.",
+"tn_err_signed_out": "Kijelentkezve a tailnetből: a kulcs lejárt vagy az eszközt eltávolították. Jelentkezz ki, majd be újra.",
+"tn_err_unreachable": "A Tailscale-kiszolgáló nem érhető el. Ellenőrizd az internetkapcsolatot; tovább próbálkozik.",
+"tn_err_refused": "A Tailscale elutasította a bejelentkezést.",
+"tn_err_refused_why": "A Tailscale elutasította a bejelentkezést: {why}",
+"tn_warn_expired": "A Tailscale-kulcs lejárt. Jelentkezz ki, majd be újra.",
+"tn_warn_expiring": "A Tailscale-kulcs hamarosan lejár. Jelentkezz ki és be újra a megújításhoz.",
+"tn_slow": "Egy perc után sincs kapcsolat. Ha befejezted a bejelentkezést, ellenőrizd, hogy a tailnet adminja jóváhagyta-e az eszközt, vagy kapcsold ki és be a Tailscale-t.",
+"cw_tile_why_not_listed": "a PS5 nem jelenítette meg a kezdőképernyőn",
+"cw_tile_why_write_failed": "a fájljait nem sikerült a PS5-re írni",
+"cw_tile_why_removal": "az eltávolítás nem fejeződött be",
+"cw_tile_why_register": "a PS5 elutasította a telepítést",
+"cw_tile_why_other": "a PS5 elutasította",
 };
 
 export default hu;

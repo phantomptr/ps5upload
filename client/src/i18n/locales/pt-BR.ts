@@ -8281,6 +8281,21 @@ rp_users_add_hint: "Para jogar também como outro usuário, entre com esse usuá
 "rp_watch_net_how": "Qualquer pessoa com este link pode assistir à transmissão de qualquer lugar, no celular, tablet ou computador (até quatro). Pela internet, só assistem: não dá para passar o controle a elas.",
 "rp_watch_ask": "{name} quer assistir",
 "rp_phone_net_phone": "Um celular pela internet",
+"rp_phone_ask_net_owner": "{name} quer controlar seu PS5 como você: seu perfil, seus salvamentos e troféus",
+"rp_phone_allow_as_me": "Sim, jogar como eu",
+"pt_set_owner_unknown_body": "O PS5 não informou qual perfil é o seu. Se este for o seu perfil, um amigo jogando com ele pode usar seus salvamentos e troféus.",
+"tn_err_signed_out": "Desconectado da tailnet: a chave expirou ou o dispositivo foi removido. Saia e entre novamente.",
+"tn_err_unreachable": "Não foi possível alcançar o servidor do Tailscale. Verifique a conexão com a internet; ele continua tentando.",
+"tn_err_refused": "O Tailscale recusou o login.",
+"tn_err_refused_why": "O Tailscale recusou o login: {why}",
+"tn_warn_expired": "A chave do Tailscale expirou. Saia e entre novamente.",
+"tn_warn_expiring": "A chave do Tailscale expira em breve. Saia e entre novamente para renová-la.",
+"tn_slow": "Ainda sem conexão após um minuto. Se você terminou o login, verifique se o administrador da tailnet aprovou o dispositivo, ou desligue e ligue o Tailscale de novo.",
+"cw_tile_why_not_listed": "o PS5 não a listou na tela inicial",
+"cw_tile_why_write_failed": "não foi possível gravar os arquivos no PS5",
+"cw_tile_why_removal": "a remoção não terminou",
+"cw_tile_why_register": "o PS5 recusou a instalação",
+"cw_tile_why_other": "o PS5 recusou",
 };
 
 export default pt_BR;

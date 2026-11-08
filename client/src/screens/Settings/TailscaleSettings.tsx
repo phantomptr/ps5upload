@@ -12,6 +12,7 @@ import {
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { QrCode } from "../Play/PhonePads";
 import { humanizeCaught } from "../../lib/humanizeError";
+import { TailnetProblems } from "../Connection/TailnetProblems";
 
 /**
  * Settings › Tailscale: this device's own tailnet node, built into the app (no Tailscale app,
@@ -177,6 +178,7 @@ export function TailscaleSettings() {
               {tr("tn_connecting", undefined, "Connecting to Tailscale…")}
             </p>
           )}
+          <TailnetProblems st={st} testId="app-tailnet-problems" />
           {days !== null ? (
             <p className="text-xs text-[var(--color-warn)]">
               {tr(

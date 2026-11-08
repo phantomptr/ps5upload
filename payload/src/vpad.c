@@ -147,6 +147,9 @@ typedef struct {
      * console asks), and the one it is seated in (0: not, or not yet). */
     uint32_t bind_user, bound;
     int bind_code;
+    /* Who the console says owned the pad when it was seated (the companion's answer): what a resume
+     * reports as `owner` again, never the bound user in its place. */
+    uint32_t bind_owner;
 } slot_t;
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -580,7 +583,7 @@ static int refuse_bind(char *out, size_t cap, const char *err, const char *compa
 static int resume_locked(slot_t *s, long long now_ms, char *out, size_t cap) {
     s->last_alive_ms = now_ms;
     s->have_seq = 0;
-    return opened_answer(out, cap, s, 1, s->bound);
+    return opened_answer(out, cap, s, 1, s->bind_owner);
 }
 
 int vpad_open_json(const char *body, size_t n, long long now_ms, vpad_user_fn pick_user, char *out, size_t cap) {
@@ -698,6 +701,7 @@ int vpad_open_json(const char *body, size_t n, long long now_ms, vpad_user_fn pi
         }
         s->bound = brc == 0 ? (uint32_t)bind_user : 0;
         s->bind_code = brc == 0 ? 0 : code;
+        s->bind_owner = owner;
         fprintf(stderr, "[vpad] player %d: pad %d made for user 0x%08x: %s (0x%08x, owner 0x%08x, %lld ms)\n", slot,
                 handle, (unsigned)bind_user, brc == 0 ? "bound" : "NOT bound, the console will ask", (unsigned)code,
                 (unsigned)owner, vpad_now_ms() - added_ms);

@@ -678,6 +678,10 @@ static void test_bind(void) {
     CHECK(HAS("\"ok\":true") && HAS("\"bound\":false,\"bind_code\":-2137325563,\"owner\":12289"));
     n = handle_from_answer();
     CHECK(n > 0 && f_pads[n].live && f_pads[n].user == 12288 && g_picks == 0);
+    /* a resume reports the owner the console named, not the bound user (none here) */
+    CHECK(vopen("{\"slot\":4,\"token\":\"" TOK_B "\",\"bind_user\":12288}", 0) > 0 &&
+          HAS("\"resumed\":true,\"bound\":false,\"bind_code\":-2137325563,\"owner\":12289"));
+    CHECK(fb_binds == 3 && handle_from_answer() == n);
     CHECK(vpad_open_count() == 3);
     /* close: a pad asked for a user is forgotten by the companion; one that was not is not */
     CHECK(vclose("{\"slot\":2,\"token\":\"" TOK_A "\"}", 0) > 0 && HAS("\"ok\":true"));

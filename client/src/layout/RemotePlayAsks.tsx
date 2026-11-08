@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-import { PadAsks, phoneName, usePadLink } from "../screens/Play/PhonePads";
+import { askText, PadAsks, usePadLink } from "../screens/Play/PhonePads";
 import { JoinAsks } from "../screens/Play/PlayTogether";
 import { useJoinHost } from "../screens/Play/playTogetherState";
 import { useTr } from "../state/lang";
@@ -27,8 +27,8 @@ export default function RemotePlayAsks({ host, floating }: { host: string; float
       say(`j${a.id}`, tr("pt_asks", { name }, `${name} wants to play with you`));
     }
     for (const p of pad.pending) {
-      const name = phoneName(tr, p.name);
-      say(`p${p.id}`, tr("rp_phone_ask", { name }, `${name} wants to be a controller`));
+      // An internet phone that would play is said as what it is: control of the PS5 as the host.
+      say(`p${p.id}`, askText(tr, p));
     }
   }, [join.asks, pad.pending, tr]);
   if (!floating) return null;

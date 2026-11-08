@@ -22388,7 +22388,7 @@
     },
     "/api/join/settings": {
       "post": {
-        "description": "`POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,\ninternet_invites?, hub_url?, stun?, upnp?}`: the host's choices (every console). Fewer players\nlets nobody go; it only stops new ones. `stream_seat` off moves a friend on the stream's\ncontroller to a pad of their own. `internet_invites` off closes the internet rooms (guests\nalready in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`\notherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none), `upnp` whether the\nrouter is asked for a port.\n\n`guest_profiles` with `addr` (\"Guests play as\" on that console): each guest's player gets the\nprofile the host chose (`{player: 2-4, user, name, owner}`; a player left out: the TV asks).\nOnly signed-in profiles can be seated. The host's own profile (the one in front) needs `owner`\ntrue, the host's confirmation that the guest may use its saves and trophies (409\n`owner_confirm` otherwise); 400 `addr` without a console, 400 `player`, `user` or `duplicate`\nfor a list that is not one profile per player.",
+        "description": "`POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,\ninternet_invites?, hub_url?, stun?, upnp?}`: the host's choices (every console). Fewer players\nlets nobody go; it only stops new ones. `stream_seat` off moves a friend on the stream's\ncontroller to a pad of their own. `internet_invites` off closes the internet rooms (guests\nalready in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`\notherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none), `upnp` whether the\nrouter is asked for a port.\n\n`guest_profiles` with `addr` (\"Guests play as\" on that console): each guest's player gets the\nprofile the host chose (`{player: 2-4, user, name, owner}`; a player left out: the TV asks).\nOnly signed-in profiles can be seated. The host's own profile (the one in front) needs `owner`\ntrue, the host's confirmation that the guest may use its saves and trophies (409\n`owner_confirm` otherwise; `owner_unknown` when the console does not say which one is in front,\nfor any profile newly chosen without `owner`); 400 `addr` without a console, 400 `player`, `user` or `duplicate`\nfor a list that is not one profile per player.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -24353,6 +24353,18 @@
             "description": "This device's own id (random, kept on the device).",
             "in": "query",
             "name": "d",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "An internet phone's reconnect token, as this engine gave it when it was allowed.",
+            "in": "query",
+            "name": "rt",
             "required": false,
             "schema": {
               "type": [

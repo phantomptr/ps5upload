@@ -20,6 +20,13 @@
 //! this computer (an agent's own shell tool, a script) can still call `PUT /api/mcp/access`
 //! directly. This stops agents using PS5Upload's tools to change things; it is not a lock on the
 //! computer.
+//!
+//! Looking is not looking at everything. Whatever this switch says, the in-process answers an
+//! agent reads (`McpState::api_call`, `catalog_routes::redact_for_agents`) leave out a live Play
+//! Together invite's key, code and links and the phone link's QR and internet links (`GET
+//! /api/join`, `GET /api/ps5/rp/pad-link`: a LAN phone with the QR key gets in without the host's
+//! Allow), and a tailnet's sign-in link everywhere. Only `together_invite`, which makes an invite
+//! because the user asked for one, answers with its link.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};

@@ -8274,6 +8274,21 @@ rp_users_add_hint: "Um auch als anderer Benutzer zu spielen, melde dich auf der 
 "rp_watch_net_how": "Jeder mit diesem Link kann den Stream von überall auf Handy, Tablet oder Computer ansehen (bis zu vier). Über das Internet wird nur zugeschaut: Der Controller kann nicht übergeben werden.",
 "rp_watch_ask": "{name} möchte zuschauen",
 "rp_phone_net_phone": "Ein Handy über das Internet",
+"rp_phone_ask_net_owner": "{name} möchte deine PS5 als du steuern: dein Profil, deine Spielstände und Trophäen",
+"rp_phone_allow_as_me": "Ja, als ich spielen",
+"pt_set_owner_unknown_body": "Die PS5 hat nicht gesagt, welches Profil deins ist. Wenn das dein eigenes Profil ist, kann ein Freund, der damit spielt, deine Spielstände und Trophäen nutzen.",
+"tn_err_signed_out": "Vom Tailnet abgemeldet: Der Schlüssel ist abgelaufen oder das Gerät wurde entfernt. Melde dich ab und dann wieder an.",
+"tn_err_unreachable": "Der Tailscale-Server ist nicht erreichbar. Prüfe die Internetverbindung; es wird weiter versucht.",
+"tn_err_refused": "Tailscale hat die Anmeldung abgelehnt.",
+"tn_err_refused_why": "Tailscale hat die Anmeldung abgelehnt: {why}",
+"tn_warn_expired": "Der Tailscale-Schlüssel ist abgelaufen. Melde dich ab und dann wieder an.",
+"tn_warn_expiring": "Der Tailscale-Schlüssel läuft bald ab. Melde dich ab und wieder an, um ihn zu erneuern.",
+"tn_slow": "Nach einer Minute immer noch nicht verbunden. Wenn du die Anmeldung abgeschlossen hast, prüfe, ob dein Tailnet-Admin das Gerät freigegeben hat, oder schalte Tailscale aus und wieder ein.",
+"cw_tile_why_not_listed": "die PS5 hat sie nicht auf dem Startbildschirm aufgeführt",
+"cw_tile_why_write_failed": "ihre Dateien konnten nicht auf die PS5 geschrieben werden",
+"cw_tile_why_removal": "das Entfernen wurde nicht abgeschlossen",
+"cw_tile_why_register": "die PS5 hat die Installation abgelehnt",
+"cw_tile_why_other": "die PS5 hat es abgelehnt",
 };
 
 export default de;

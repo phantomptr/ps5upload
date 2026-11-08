@@ -8219,6 +8219,21 @@ rp_users_add_hint: "Per giocare anche come un altro utente, accedi con quell’u
 "rp_watch_net_how": "Chiunque abbia questo link può guardare lo stream da ovunque, su telefono, tablet o computer (fino a quattro). Via internet guardano soltanto: non gli si può passare il controller.",
 "rp_watch_ask": "{name} vuole guardare",
 "rp_phone_net_phone": "Un telefono via Internet",
+"rp_phone_ask_net_owner": "{name} vuole controllare la tua PS5 come te: il tuo profilo, i tuoi salvataggi e trofei",
+"rp_phone_allow_as_me": "Sì, gioca come me",
+"pt_set_owner_unknown_body": "La PS5 non ha detto quale profilo è il tuo. Se questo è il tuo profilo, un amico che gioca con esso può usare i tuoi salvataggi e trofei.",
+"tn_err_signed_out": "Disconnesso dalla tailnet: la chiave è scaduta o il dispositivo è stato rimosso. Esci, poi accedi di nuovo.",
+"tn_err_unreachable": "Impossibile raggiungere il server Tailscale. Controlla la connessione a internet; continua a riprovare.",
+"tn_err_refused": "Tailscale ha rifiutato l'accesso.",
+"tn_err_refused_why": "Tailscale ha rifiutato l'accesso: {why}",
+"tn_warn_expired": "La chiave Tailscale è scaduta. Esci, poi accedi di nuovo.",
+"tn_warn_expiring": "La chiave Tailscale scade presto. Esci e accedi di nuovo per rinnovarla.",
+"tn_slow": "Ancora non connesso dopo un minuto. Se hai completato l'accesso, verifica che l'amministratore della tailnet abbia approvato il dispositivo, oppure spegni e riaccendi Tailscale.",
+"cw_tile_why_not_listed": "la PS5 non l'ha mostrata nella schermata Home",
+"cw_tile_why_write_failed": "non è stato possibile scrivere i suoi file sulla PS5",
+"cw_tile_why_removal": "la rimozione non è stata completata",
+"cw_tile_why_register": "la PS5 ha rifiutato di installarla",
+"cw_tile_why_other": "la PS5 l'ha rifiutato",
 };
 
 export default it;

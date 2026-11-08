@@ -8285,6 +8285,21 @@ rp_users_add_hint: "別のユーザーでもプレイするには、PS5 でそ�
 "rp_watch_net_how": "このリンクを持っている人は、どこからでもスマートフォン、タブレット、コンピューターでストリームを視聴できます(最大4人)。インターネット経由では視聴のみで、コントローラーを渡すことはできません。",
 "rp_watch_ask": "{name} が視聴したがっています",
 "rp_phone_net_phone": "インターネットのスマートフォン",
+"rp_phone_ask_net_owner": "{name} があなたとして PS5 を操作しようとしています：あなたのプロフィール、セーブデータ、トロフィー",
+"rp_phone_allow_as_me": "はい、自分として遊ばせる",
+"pt_set_owner_unknown_body": "PS5 からどのプロフィールがあなたのものか分かりませんでした。これがあなた自身のプロフィールなら、それで遊ぶフレンドはあなたのセーブデータとトロフィーを使えます。",
+"tn_err_signed_out": "tailnet からサインアウトされました：キーの期限が切れたか、デバイスが削除されました。サインアウトしてからもう一度サインインしてください。",
+"tn_err_unreachable": "Tailscale サーバーに接続できません。インターネット接続を確認してください。再試行を続けています。",
+"tn_err_refused": "Tailscale がサインインを拒否しました。",
+"tn_err_refused_why": "Tailscale がサインインを拒否しました：{why}",
+"tn_warn_expired": "Tailscale のキーの期限が切れました。サインアウトしてからもう一度サインインしてください。",
+"tn_warn_expiring": "Tailscale のキーがまもなく期限切れになります。更新するにはサインアウトしてから再度サインインしてください。",
+"tn_slow": "1 分たってもまだ接続できません。サインインを終えた場合は、tailnet の管理者がデバイスを承認したか確認するか、Tailscale をオフにしてからオンにしてください。",
+"cw_tile_why_not_listed": "PS5 のホーム画面に表示されませんでした",
+"cw_tile_why_write_failed": "PS5 にファイルを書き込めませんでした",
+"cw_tile_why_removal": "削除が完了しませんでした",
+"cw_tile_why_register": "PS5 がインストールを拒否しました",
+"cw_tile_why_other": "PS5 が拒否しました",
 };
 
 export default ja;

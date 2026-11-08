@@ -29,8 +29,27 @@ const root = createRoot(document.getElementById("root")!);
 if (net) {
   // An internet link plays in the browser: no "Open in the app?" question.
   const transport = rtcTransport(net, { label: "pad", log: (m) => console.info(`[pad] ${m}`) });
-  const hello: Record<string, string | number> = { t: net.key, name, d: device, ...(watch ? { w: 1 } : {}) };
-  root.render(<PadApp url={hubSocketUrl(net.hub)} computer={null} watch={watch} transport={transport} hello={hello} />);
+  // The engine's reconnect token from this link's last Allow (its room only: a New link is a new
+  // room, and the engine voids the old tokens anyway).
+  const rtKey = `ps5upload.pad.rt.${net.room}`;
+  const rt = safeGetItem(rtKey);
+  const hello: Record<string, string | number> = {
+    t: net.key,
+    name,
+    d: device,
+    ...(watch ? { w: 1 } : {}),
+    ...(rt ? { rt } : {}),
+  };
+  root.render(
+    <PadApp
+      url={hubSocketUrl(net.hub)}
+      computer={null}
+      watch={watch}
+      transport={transport}
+      hello={hello}
+      onReconnectToken={(t) => safeSetItem(rtKey, t)}
+    />,
+  );
 } else {
   // The engine may be served under a path (PS5UPLOAD_BASE_URL): the socket is beside this page.
   const prefix = location.pathname.replace(/\/pad\/?$/, "");

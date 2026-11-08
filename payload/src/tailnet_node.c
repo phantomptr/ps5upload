@@ -92,6 +92,12 @@ static void on_event(void *user, const tn_event *ev) {
     switch (ev->type) {
     case TN_EV_STATE:
         fprintf(stderr, "[tailnet] state: %s\n", ev->text);
+        if (ev->state == TN_ST_RUNNING) {
+            /* In: the error that kept it out is over (the app shows `error` while it is set). */
+            pthread_mutex_lock(&g_mu);
+            g_last_error[0] = 0;
+            pthread_mutex_unlock(&g_mu);
+        }
         break;
     case TN_EV_LOGIN_URL:
         fprintf(stderr, "[tailnet] waiting for sign-in\n"); /* the URL itself goes to the app only */

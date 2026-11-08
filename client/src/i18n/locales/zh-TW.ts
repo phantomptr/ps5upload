@@ -8219,6 +8219,21 @@ rp_users_add_hint: "若也想以其他使用者遊玩，請在 PS5 上登入該�
 "rp_watch_net_how": "任何擁有此連結的人都能在任何地方用手機、平板或電腦觀看串流(最多四人)。透過網際網路只能觀看,無法把控制器交給他們。",
 "rp_watch_ask": "{name} 想觀看",
 "rp_phone_net_phone": "網際網路上的手機",
+"rp_phone_ask_net_owner": "{name} 想以你的身分控制你的 PS5：你的個人檔案、存檔和獎盃",
+"rp_phone_allow_as_me": "是，以我的身分玩",
+"pt_set_owner_unknown_body": "PS5 沒有說明哪個個人檔案是你的。如果這是你自己的個人檔案，用它遊玩的好友可以使用你的存檔和獎盃。",
+"tn_err_signed_out": "已從 tailnet 登出：金鑰已過期或裝置已被移除。請登出後重新登入。",
+"tn_err_unreachable": "無法連線到 Tailscale 伺服器。請檢查網路連線；會繼續重試。",
+"tn_err_refused": "Tailscale 拒絕了登入。",
+"tn_err_refused_why": "Tailscale 拒絕了登入：{why}",
+"tn_warn_expired": "Tailscale 金鑰已過期。請登出後重新登入。",
+"tn_warn_expiring": "Tailscale 金鑰即將過期。請登出後重新登入以續期。",
+"tn_slow": "一分鐘後仍未連線。如果你已完成登入，請檢查 tailnet 管理員是否已核准該裝置，或關閉後重新開啟 Tailscale。",
+"cw_tile_why_not_listed": "PS5 沒有在主畫面上列出它",
+"cw_tile_why_write_failed": "無法在 PS5 上寫入它的檔案",
+"cw_tile_why_removal": "移除沒有完成",
+"cw_tile_why_register": "PS5 拒絕安裝它",
+"cw_tile_why_other": "PS5 拒絕了",
 };
 
 export default zh_TW;

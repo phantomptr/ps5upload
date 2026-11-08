@@ -253,6 +253,7 @@ clients let you allow tools one by one, so keep these on "ask".
 | `cleanup_apply`, `health_fix` | Delete what a scan found, and apply repairs |
 | `rp_stop` | End the Remote Play session someone may be playing |
 | `together_kick`, `together_close` | Send friends out of the game |
+| `together_owner_access` | Let a friend play as your own PS5 profile (your saves and trophies): Player 1 on the stream's controller, or your profile for a guest player. `together_settings` refuses both |
 | `golive_start` | Stream your session in public |
 | `golive_destination_remove` | Forget a saved stream key |
 | `api_request` | Anything the API can do |
@@ -268,9 +269,14 @@ catalog too. No tool reaches the console documents that hold keys (`state`, `con
 backup slots), through `/api/mesh/doc` or by the helper's file path; the other documents stay readable.
 Keys are taken out of every answer a tool gets: `POST /api/ps5/power/pair` still pairs and stores them,
 and a Mesh Drive's password hash reads as `has_password`. `/api/consoles` says only whether a console has
-keys. Stream keys for Go live show only their last four characters. Play Together invites and phone
-controller links do reach a tool, because handing them out is what those calls are for, and the
-host still approves who joins.
+keys. Stream keys for Go live show only their last four characters. A live Play Together invite (its key, code and
+links) and the phone controller link (its QR address lets a phone on your network in without your
+Allow) are taken out of the status reads, `together_status` and a `GET /api/join` or `GET
+/api/ps5/rp/pad-link` through `api_request`, even when agents may only look: those answers keep
+whether it is open, when it expires and who is in. `together_invite` still answers with the link,
+because handing it out is what you asked for, and you still approve who joins. A Tailscale sign-in
+link (`login_url`) never reaches a tool: whoever opens it first could put this computer or your
+PS5 on a tailnet of their own. Sign in from the app.
 
 **Logs.** Engine log lines and journal events are cleaned where they are written, and again when an
 older journal line is read: a password in a URL, a field or `name=value` named as a key, token, password

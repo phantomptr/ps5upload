@@ -51,11 +51,21 @@ export function canTurnOff(s: WebSettings | null): boolean {
   return typeof s?.enabled === "boolean";
 }
 
+/** The helper's short code for a failed add or remove of the tile (webui_tile.c, register.c), in
+ *  words: a code like "not_listed" means nothing to whoever reads the note. */
+export function tileWhy(code: string): string {
+  if (code === "not_listed") return t("cw_tile_why_not_listed");
+  if (code === "write_failed") return t("cw_tile_why_write_failed");
+  if (code === "removal_incomplete") return t("cw_tile_why_removal");
+  if (code.startsWith("register_")) return t("cw_tile_why_register");
+  return t("cw_tile_why_other");
+}
+
 /** The note under the tile switch: says why the tile is missing when adding it failed (also at
  *  helper start, before anyone touched the switch), or when removing it could only hide its icon. */
 export function tileNote(s: WebSettings): string | undefined {
   if (s.tile && !s.tile_busy && s.tile_failed && s.tile_error)
-    return t("cw_settings_tile_failed_reason", { reason: s.tile_error });
+    return t("cw_settings_tile_failed_reason", { reason: tileWhy(s.tile_error) });
   if (s.tile || s.tile_busy || s.tile_failed || s.tile_result !== "hidden") return undefined;
   return t("cw_settings_tile_hidden");
 }

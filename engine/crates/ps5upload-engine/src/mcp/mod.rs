@@ -164,6 +164,7 @@ impl McpState {
         body: Option<&Value>,
     ) -> Result<ApiReply, String> {
         let label = format!("{method} {path}");
+        let method_name = method.as_str().to_string();
         // Every in-process call passes here (curated tools, resources, api_request): none may reach
         // the switch that decides what agents may do, however the path is written. The route is
         // also mounted outside the router this calls, so it would not be found anyway.
@@ -233,6 +234,24 @@ impl McpState {
                     ))
                 }
             };
+        // What agents may not read, taken out here where every in-process call passes (curated
+        // tools, resources, api_request): a tailnet sign-in link, and the live invites in the passive
+        // reads (catalog_routes::redact_for_agents says why). The app's own HTTP calls never come
+        // this way and get the whole answer.
+        let body = if catalog_routes::may_hold_agent_secrets(&method_name, path) {
+            match serde_json::from_slice::<Value>(&body) {
+                Ok(mut json) => {
+                    if catalog_routes::redact_for_agents(&method_name, path, &mut json) {
+                        Bytes::from(json.to_string())
+                    } else {
+                        body
+                    }
+                }
+                Err(_) => body,
+            }
+        } else {
+            body
+        };
         Ok(ApiReply {
             status: parts.status,
             content_type,

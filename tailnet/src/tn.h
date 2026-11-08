@@ -332,6 +332,9 @@ uint16_t tn_ip_csum(const uint8_t *p, size_t n);
 uint16_t tn_l4_csum(uint32_t src, uint32_t dst, uint8_t proto, const uint8_t *seg, size_t n);
 int tn_ip_parse(const uint8_t *p, size_t n, tn_ip_info *o);
 size_t tn_ip_build_udp(uint8_t *out, size_t cap, tn_ep4 src, tn_ep4 dst, const uint8_t *data, size_t n);
+/* The echo reply to an inbound echo request `ip`, built in `out` (which may hold the request):
+ * its length, at most TN_MTU, or 0 when the request is too big to answer (dropped). */
+size_t tn_dp_echo_reply(uint8_t *out, const tn_ip_info *ip);
 size_t tn_ip_build_icmp_echo(uint8_t *out, size_t cap, uint32_t src, uint32_t dst, uint8_t type, uint16_t id,
 			     uint16_t seq, const uint8_t *data, size_t n);
 

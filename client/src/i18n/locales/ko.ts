@@ -8283,6 +8283,21 @@ rp_users_add_hint: "다른 사용자로도 플레이하려면 PS5에서 그 사�
 "rp_watch_net_how": "이 링크가 있는 사람은 어디서든 휴대폰, 태블릿, 컴퓨터로 스트림을 볼 수 있습니다(최대 4명). 인터넷으로는 보기만 할 수 있으며 컨트롤러를 넘겨줄 수 없습니다.",
 "rp_watch_ask": "{name}이(가) 시청하려고 합니다",
 "rp_phone_net_phone": "인터넷의 휴대폰",
+"rp_phone_ask_net_owner": "{name}이(가) 당신으로서 PS5를 조작하려고 합니다: 당신의 프로필, 저장 데이터, 트로피",
+"rp_phone_allow_as_me": "예, 나로 플레이",
+"pt_set_owner_unknown_body": "PS5가 어떤 프로필이 당신 것인지 알려주지 않았습니다. 이것이 당신의 프로필이라면, 이 프로필로 플레이하는 친구가 당신의 저장 데이터와 트로피를 사용할 수 있습니다.",
+"tn_err_signed_out": "tailnet에서 로그아웃되었습니다: 키가 만료되었거나 기기가 제거되었습니다. 로그아웃한 뒤 다시 로그인하세요.",
+"tn_err_unreachable": "Tailscale 서버에 연결할 수 없습니다. 인터넷 연결을 확인하세요. 계속 다시 시도합니다.",
+"tn_err_refused": "Tailscale이 로그인을 거부했습니다.",
+"tn_err_refused_why": "Tailscale이 로그인을 거부했습니다: {why}",
+"tn_warn_expired": "Tailscale 키가 만료되었습니다. 로그아웃한 뒤 다시 로그인하세요.",
+"tn_warn_expiring": "Tailscale 키가 곧 만료됩니다. 갱신하려면 로그아웃한 뒤 다시 로그인하세요.",
+"tn_slow": "1분이 지나도 아직 연결되지 않았습니다. 로그인을 마쳤다면 tailnet 관리자가 기기를 승인했는지 확인하거나, Tailscale을 껐다가 다시 켜세요.",
+"cw_tile_why_not_listed": "PS5 홈 화면에 표시되지 않았습니다",
+"cw_tile_why_write_failed": "PS5에 파일을 쓸 수 없었습니다",
+"cw_tile_why_removal": "제거가 끝나지 않았습니다",
+"cw_tile_why_register": "PS5가 설치를 거부했습니다",
+"cw_tile_why_other": "PS5가 거부했습니다",
 };
 
 export default ko;

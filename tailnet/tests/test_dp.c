@@ -177,11 +177,35 @@ static void test_ip(void)
 	CHECK(tn_ip_parse(pkt, 19, &ip) < 0);
 }
 
+/* An echo request from a peer is answered at most TN_MTU long: an oversize one (up to what a
+ * receive buffer holds) is dropped, never sealed past the data plane's buffers. */
+static void test_echo_oversize(void)
+{
+	static uint8_t big[TN_MTU + 256], out[TN_MTU + 256], data[TN_MTU + 256];
+	tn_ep4 src = {.ip = 0x64400001}, dst = {.ip = 0x64400002};
+	tn_ip_info ip;
+	memset(data, 0x5a, sizeof data);
+	/* the largest that fits: answered, the reply exactly TN_MTU */
+	size_t n = tn_ip_build_icmp_echo(big, sizeof big, src.ip, dst.ip, 8, 1, 2, data, TN_MTU - 28);
+	CHECK(n == TN_MTU && tn_ip_parse(big, n, &ip) == 0 && ip.icmp_type == 8);
+	size_t m = tn_dp_echo_reply(out, &ip);
+	CHECK(m == TN_MTU);
+	CHECK(tn_ip_parse(out, m, &ip) == 0 && ip.icmp_type == 0 && ip.src == dst.ip && ip.dst == src.ip);
+	/* in place, as the data plane builds it */
+	CHECK(tn_ip_parse(big, n, &ip) == 0 && tn_dp_echo_reply(big, &ip) == TN_MTU);
+	/* one byte more, and the biggest a receive buffer holds: no answer */
+	n = tn_ip_build_icmp_echo(big, sizeof big, src.ip, dst.ip, 8, 1, 2, data, TN_MTU - 27);
+	CHECK(n == TN_MTU + 1 && tn_ip_parse(big, n, &ip) == 0 && tn_dp_echo_reply(out, &ip) == 0);
+	n = tn_ip_build_icmp_echo(big, sizeof big, src.ip, dst.ip, 8, 1, 2, data, sizeof big - 28);
+	CHECK(n == sizeof big && tn_ip_parse(big, n, &ip) == 0 && tn_dp_echo_reply(big, &ip) == 0);
+}
+
 int main(void)
 {
 	test_wg();
 	test_disco();
 	test_stun();
 	test_ip();
+	test_echo_oversize();
 	return tt_done("test_dp");
 }

@@ -212,6 +212,29 @@ describe("the phone's link", () => {
     c2.stop();
   });
 
+  it("an internet phone keeps the engine's reconnect token and says it on every new socket", () => {
+    const kept: string[] = [];
+    const hello: Record<string, string | number> = { t: "k", name: "pixel", d: "00112233" };
+    client({ hello, onReconnectToken: (t) => kept.push(t) });
+    last().open();
+    expect(JSON.parse(last().sent[0])).toEqual({ hello: { t: "k", name: "pixel", d: "00112233" } });
+    last().say({ stage: "asking" });
+    const rt = "0123456789abcdef0123456789abcdef";
+    last().say({ rt });
+    last().say(JOINED);
+    expect(kept).toEqual([rt]);
+    // Not taken for a stage.
+    expect(stages[stages.length - 1].kind).toBe("joined");
+    // A drop: the next socket's hello carries the token.
+    last().close();
+    advance(2000);
+    last().open();
+    expect(JSON.parse(last().sent[0])).toEqual({ hello: { t: "k", name: "pixel", d: "00112233", rt } });
+    // Something that only looks like one is not kept.
+    last().say({ rt: "not a token" });
+    expect(kept).toEqual([rt]);
+  });
+
   it("a watcher is back to watching on a new socket", () => {
     const control: boolean[] = [];
     const c = inGame({ watch: { onFrame: () => {}, onCodec: () => {}, onControl: (on) => control.push(on) } });

@@ -76,6 +76,90 @@ pub(crate) fn redact_keys(value: &mut Value) -> bool {
     any
 }
 
+/// A tailnet's sign-in link (`login_url`, while a node waits for a sign-in): whoever opens it
+/// first signs that node into *their* tailnet. An agent that read it could put this computer, or
+/// the PS5, on a tailnet it controls and reach the console from there. So it never reaches an
+/// agent, whichever route answered with it (`/api/tailnet`, `/api/ps5/tailnet`, GET or POST); the
+/// app's own HTTP calls go around the MCP server and still get it to show the link and QR code.
+const SIGN_IN_FIELDS: &[&str] = &["login_url"];
+
+/// Fields of a live invite that let someone in: Play Together's invite key, short code and links,
+/// and the phone link's QR address (`#t=<key>`, which lets a phone on the LAN in without the
+/// host's Allow) and internet link. Taken out of the passive reads (`GET /api/join`, `GET
+/// /api/ps5/rp/pad-link`: `together_status`, `api_request`), which an agent that may only look can
+/// call too. Making an invite (`together_invite`, a POST) still answers with its link: sharing it
+/// is what the user asked the agent for.
+const INVITE_FIELDS: &[&str] = &["key", "k", "code", "code_display", "url", "urls"];
+
+/// The passive reads whose answers hold live invites ([`INVITE_FIELDS`]).
+const INVITE_READS: &[&str] = &["/api/join", "/api/ps5/rp/pad-link"];
+
+/// Whether the answer to `method path` may hold something [`redact_for_agents`] takes out, so
+/// only those answers are parsed.
+pub(crate) fn may_hold_agent_secrets(method: &str, path: &str) -> bool {
+    let plain = plain_path(path);
+    plain.contains("tailnet")
+        || (method.eq_ignore_ascii_case("GET") && INVITE_READS.contains(&plain.as_str()))
+}
+
+/// What an agent may not read in an in-process answer (`McpState::api_call`): a tailnet sign-in
+/// link anywhere ([`SIGN_IN_FIELDS`]), and in the passive invite reads the invite's key, code and
+/// links ([`INVITE_FIELDS`]; `invite.hidden` and `link_hidden` say they were there). What is left
+/// says whether it is open, when it expires, and who is in or asking. Returns whether anything
+/// went.
+pub(crate) fn redact_for_agents(method: &str, path: &str, value: &mut Value) -> bool {
+    fn strip(value: &mut Value, fields: &[&str]) -> bool {
+        let mut any = false;
+        match value {
+            Value::Object(map) => {
+                for f in fields {
+                    any |= map.remove(*f).is_some();
+                }
+                for v in map.values_mut() {
+                    any |= strip(v, fields);
+                }
+            }
+            Value::Array(items) => {
+                for v in items {
+                    any |= strip(v, fields);
+                }
+            }
+            _ => {}
+        }
+        any
+    }
+    let mut any = strip(value, SIGN_IN_FIELDS);
+    let plain = plain_path(path);
+    if method.eq_ignore_ascii_case("GET") && INVITE_READS.contains(&plain.as_str()) {
+        let Value::Object(map) = value else {
+            return any;
+        };
+        if plain == "/api/join" {
+            // Play Together: the invite and its internet link. The guests' list keeps no key.
+            if let Some(inv) = map.get_mut("invite").filter(|v| v.is_object()) {
+                if strip(inv, INVITE_FIELDS) {
+                    inv["hidden"] = json!(true);
+                    any = true;
+                }
+            }
+        } else {
+            // The phone link: its QR addresses at the top, and the internet link.
+            let mut gone = false;
+            for f in ["url", "urls"] {
+                gone |= map.remove(f).is_some();
+            }
+            if let Some(net) = map.get_mut("internet") {
+                gone |= strip(net, INVITE_FIELDS);
+            }
+            if gone {
+                map.insert("link_hidden".to_string(), json!(true));
+                any = true;
+            }
+        }
+    }
+    any
+}
+
 /// Percent-escapes undone and letters lowered, `.` and repeated or trailing slashes gone.
 fn plain_path(text: &str) -> String {
     let bytes = text.as_bytes();
@@ -1124,5 +1208,102 @@ mod tests {
         let catalog = as_json();
         assert_eq!(catalog["count"], ROUTES.len());
         assert_eq!(catalog["routes"].as_array().unwrap().len(), ROUTES.len());
+    }
+
+    /// A tailnet sign-in link never reaches an agent, from any route or method: whoever opens it
+    /// first could sign the node into a tailnet of their own.
+    #[test]
+    fn a_tailnet_sign_in_link_never_reaches_an_agent() {
+        for (method, path) in [
+            ("GET", "/api/tailnet"),
+            ("POST", "/api/tailnet"),
+            ("GET", "/api/ps5/tailnet"),
+            ("POST", "/api/PS5//tailnet/"),
+        ] {
+            assert!(may_hold_agent_secrets(method, path), "{method} {path}");
+            let mut answer = json!({
+                "ok": true, "state": "needs-login", "login_url": "https://login.example/a/1",
+                "peers": [{"name": "pc", "login_url": "https://login.example/a/2"}],
+            });
+            assert!(redact_for_agents(method, path, &mut answer));
+            assert!(
+                !answer.to_string().contains("login.example"),
+                "a sign-in link is left"
+            );
+            assert_eq!(answer["state"], "needs-login");
+        }
+        assert!(!may_hold_agent_secrets("GET", "/api/ps5/volumes"));
+    }
+
+    /// The passive reads of Play Together and the phone link keep whether an invite is open, when
+    /// it expires and who is in, never what lets someone in. Making an invite (a POST) answers with
+    /// its link: that is what the user asked for.
+    #[test]
+    fn live_invites_leave_the_passive_reads_only() {
+        let join = || {
+            json!({
+                "open": true,
+                "guests": [{"id": 1, "name": "Sam", "player": 2}],
+                "invite": {
+                    "key": "k1", "code": "ABCD12", "code_display": "ABC-D12",
+                    "url": "http://10.0.0.2:3000/join#i=k1", "urls": ["http://10.0.0.2:3000/join#i=k1"],
+                    "expires_in_s": 1700,
+                    "internet": {"url": "https://ps5upload.phantomptr.com/join/#room=r&k=k2", "room": "r", "state": "open"},
+                },
+            })
+        };
+        let mut a = join();
+        assert!(may_hold_agent_secrets("GET", "/api/join"));
+        assert!(redact_for_agents("GET", "/api/join", &mut a));
+        let text = a.to_string();
+        let gone = ["k1", "k2", "ABCD12", "ABC-D12", "#i="];
+        assert!(
+            gone.iter().all(|g| !text.contains(g)),
+            "the invite still lets someone in"
+        );
+        assert_eq!(a["invite"]["expires_in_s"], 1700);
+        assert_eq!(a["invite"]["hidden"], true);
+        assert_eq!(a["invite"]["internet"]["state"], "open");
+        assert_eq!(a["guests"][0]["name"], "Sam");
+        // together_invite and together_open (POSTs) are not touched
+        for path in ["/api/join/invite", "/api/join/open"] {
+            let mut b = join();
+            assert!(!may_hold_agent_secrets("POST", path));
+            assert!(!redact_for_agents("POST", path, &mut b));
+            assert_eq!(b, join());
+        }
+
+        let pad = || {
+            json!({
+                "open": true,
+                "url": "http://10.0.0.2:3000/pad#t=deadbeef",
+                "urls": ["http://10.0.0.2:3000/pad#t=deadbeef"],
+                "internet": {"url": "https://ps5upload.phantomptr.com/pad/#room=r&k=cafe", "state": "open"},
+                "pads": [{"id": 3, "name": "iphone"}],
+                "pending": [],
+            })
+        };
+        let mut p = pad();
+        assert!(redact_for_agents("GET", "/api/ps5/rp/pad-link", &mut p));
+        let text = p.to_string();
+        assert!(
+            !text.contains("deadbeef") && !text.contains("cafe"),
+            "the phone link still lets someone in"
+        );
+        assert_eq!(
+            (&p["open"], &p["link_hidden"]),
+            (&json!(true), &json!(true))
+        );
+        assert_eq!(p["pads"][0]["id"], 3);
+        let mut p = pad();
+        assert!(!redact_for_agents("POST", "/api/ps5/rp/pad-link", &mut p));
+        // a closed link has nothing to hide
+        let mut closed = json!({"open": false, "url": null, "urls": [], "pads": []});
+        assert!(redact_for_agents(
+            "GET",
+            "/api/ps5/rp/pad-link",
+            &mut closed
+        ));
+        assert!(closed.get("url").is_none());
     }
 }
