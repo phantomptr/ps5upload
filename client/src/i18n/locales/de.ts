@@ -7708,6 +7708,7 @@ helper_mismatch_boot_copy: "Deine PS5 hat eine ältere Kopie des Helfers gestart
 "pt_ask_seat_stream": "Wenn du {name} zulässt, bekommt er den Controller dieses Streams als Spieler 1 und spielt als dein PS5-Benutzer.",
 "pt_friend_fallback": "Freund",
 "pt_player_behind": "Verbindung kommt nicht mit",
+"pt_player_stutter": "Ihr Bild ruckelt",
 "pt_step_tv": "Am Fernseher",
 "pt_step_tv_body": "Du musst nichts tun. Dein Freund drückt PS auf seinem eigenen Controller (auf seinem Bildschirm) und wählt am Fernseher „Schnellspiel“ oder seinen Benutzer.",
 "pt_step_tv_menus": "Auf dem Startbildschirm steuerst nur du die Menüs; der Controller deines Freundes spielt in den Spielen.",

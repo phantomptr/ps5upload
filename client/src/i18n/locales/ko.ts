@@ -7717,6 +7717,7 @@ helper_mismatch_boot_copy: "PS5가 부팅용으로 보관한 이전 헬퍼 사�
 "pt_ask_seat_stream": "{name} 님을 허용하면 플레이어 1로 이 스트림의 컨트롤러를 받아 내 PS5 사용자로 플레이해요.",
 "pt_friend_fallback": "친구",
 "pt_player_behind": "연결이 따라가지 못합니다",
+"pt_player_stutter": "상대 화면이 끊깁니다",
 "pt_step_tv": "TV에서",
 "pt_step_tv_body": "할 일은 없어요. 친구가 자기 화면에서 자기 컨트롤러의 PS 버튼을 누르고 TV에서 빠른 플레이나 자기 사용자를 선택해요.",
 "pt_step_tv_menus": "홈 화면에서는 나만 메뉴를 조작할 수 있어요. 친구의 컨트롤러는 게임 안에서 플레이합니다.",

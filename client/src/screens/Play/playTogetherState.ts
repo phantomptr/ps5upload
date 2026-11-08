@@ -30,6 +30,9 @@ export interface JoinGuest {
   /** A profile was chosen for their player but couldn't be used, so the TV asks who they are:
    *  why ("signed_out", "owner", "starting", "unavailable", "failed", "old_helper", "unknown"). */
   seatNote: string | null;
+  /** How the picture looks on their side, from their page's own report: "smooth", "stutters",
+   *  "poor", or null (no report yet, or an older engine or page). */
+  quality: "smooth" | "stutters" | "poor" | null;
 }
 
 /** A PS5 profile signed in on the console (GET /api/join/profiles). */
@@ -148,6 +151,11 @@ export function readPeers(v: unknown): NetPeer[] {
     .map((p) => ({ gid: p.gid as string, path: str(p.path) ?? "connecting", rttMs: num(p.rtt_ms) }));
 }
 
+/** A guest's picture in a word, as the engine says it (anything else: unknown). */
+function readQuality(v: unknown): JoinGuest["quality"] {
+  return v === "smooth" || v === "stutters" || v === "poor" ? v : null;
+}
+
 /** The engine's answer, checked field by field (an older or odd one never breaks the page). */
 export function readJoinState(v: unknown): JoinHostState {
   const o = (v ?? {}) as Record<string, unknown>;
@@ -188,6 +196,7 @@ export function readJoinState(v: unknown): JoinHostState {
       // An older engine says nothing: the TV asks every guest.
       playsAs: str((g.plays_as as Record<string, unknown> | null | undefined)?.name),
       seatNote: str(g.seat_note),
+      quality: readQuality(g.quality),
     }))
     .sort((a, b) => a.player - b.player);
   // Friends asking to join: the engine's `pending` (`asks` kept for an older one).

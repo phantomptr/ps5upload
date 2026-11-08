@@ -7653,6 +7653,7 @@ helper_mismatch_boot_copy: "你的 PS5 啟動了為開機保留的舊版助手�
 "pt_ask_seat_stream": "如果你允許 {name}，對方會作為玩家 1 使用此串流的控制器，並以你的 PS5 使用者身分遊玩。",
 "pt_friend_fallback": "好友",
 "pt_player_behind": "連線跟不上",
+"pt_player_stutter": "對方畫面卡頓",
 "pt_step_tv": "在電視上",
 "pt_step_tv_body": "你這邊不需要操作。好友在自己的螢幕上按下自己控制器的 PS 按鈕，然後在電視上選擇「快速遊玩」或自己的使用者。",
 "pt_step_tv_menus": "在主畫面上只有你能操作選單；好友的控制器在遊戲裡使用。",

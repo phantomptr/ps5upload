@@ -7702,6 +7702,7 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
 "pt_ask_seat_stream": "Nếu bạn cho {name} vào, họ sẽ nhận tay cầm của luồng này làm Người chơi 1 và chơi bằng người dùng PS5 của bạn.",
 "pt_friend_fallback": "Bạn",
 "pt_player_behind": "Kết nối không theo kịp",
+"pt_player_stutter": "Hình bên họ bị giật",
 "pt_step_tv": "Trên TV",
 "pt_step_tv_body": "Bạn không cần làm gì. Bạn của bạn bấm PS trên tay cầm của họ (trên màn hình của họ) rồi chọn Chơi nhanh hoặc người dùng của họ trên TV.",
 "pt_step_tv_menus": "Trên màn hình chính chỉ bạn điều khiển menu; tay cầm của bạn bè chơi bên trong trò chơi.",

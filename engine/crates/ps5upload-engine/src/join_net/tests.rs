@@ -528,7 +528,7 @@ async fn a_full_channel_holds_the_session_until_it_drains_or_closes() {
     // Full past the high water: the session waits (its picture queue then fills and the stream
     // skips it to the next keyframe, as for a slow LAN guest)...
     flow.unwritten.store(0, Ordering::Relaxed);
-    flow.set_queued(super::HIGH_WATER + 1);
+    flow.set_queued(super::HIGH_WATER + 1, 0);
     let t = tokio::spawn(async move {
         let r = s.send(AxMsg::Text("x".into())).await;
         (r, s)
@@ -536,14 +536,14 @@ async fn a_full_channel_holds_the_session_until_it_drains_or_closes() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(!t.is_finished(), "held while the channel is full");
     // ...until it drains.
-    flow.set_queued(0);
+    flow.set_queued(0, 0);
     let (r, mut s) = tokio::time::timeout(Duration::from_secs(2), t)
         .await
         .unwrap()
         .unwrap();
     assert!(r.is_ok());
     // A peer that ends lets a waiting session go.
-    flow.set_queued(super::HIGH_WATER + 1);
+    flow.set_queued(super::HIGH_WATER + 1, 0);
     let t = tokio::spawn(async move { s.send(AxMsg::Text("y".into())).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
     flow.close();

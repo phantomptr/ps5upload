@@ -8005,6 +8005,7 @@ helper_mismatch_boot_copy: "Your PS5 started an older copy of the helper that it
 "pt_ask_seat_stream": "If you allow {name}, they get this stream's controller as Player 1 and play as your PS5 user.",
 "pt_friend_fallback": "Friend",
 "pt_player_behind": "Connection can't keep up",
+"pt_player_stutter": "Their picture stutters",
 "pt_step_tv": "On the TV",
 "pt_step_tv_body": "Nothing to do on your side. Your friend presses PS on their own controller (on their screen) and picks Quick Play or their user on the TV.",
 "pt_step_tv_menus": "On the home screen only you control the menus; your friend's controller plays inside games.",

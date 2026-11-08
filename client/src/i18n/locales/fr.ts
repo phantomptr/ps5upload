@@ -7716,6 +7716,7 @@ helper_mismatch_boot_copy: "Votre PS5 a lancé une ancienne copie de l'assistant
 "pt_ask_seat_stream": "Si vous acceptez {name}, il aura la manette de ce flux en Joueur 1 et jouera avec votre utilisateur PS5.",
 "pt_friend_fallback": "Ami",
 "pt_player_behind": "La connexion ne suit pas",
+"pt_player_stutter": "Leur image saccade",
 "pt_step_tv": "Sur la télé",
 "pt_step_tv_body": "Rien à faire de votre côté. Votre ami appuie sur PS sur sa propre manette (sur son écran) et choisit Jeu rapide ou son utilisateur sur la télé.",
 "pt_step_tv_menus": "Sur l'écran d'accueil, vous seul contrôlez les menus ; la manette de votre ami joue dans les jeux.",

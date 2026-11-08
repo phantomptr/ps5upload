@@ -7941,6 +7941,7 @@ helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą t
 "pt_ask_seat_stream": "Jeśli wpuścisz {name}, dostanie kontroler tego strumienia jako Gracz 1 i będzie grać jako Twój użytkownik PS5.",
 "pt_friend_fallback": "Znajomy",
 "pt_player_behind": "Połączenie nie nadąża",
+"pt_player_stutter": "Obraz u nich się zacina",
 "pt_step_tv": "Na telewizorze",
 "pt_step_tv_body": "Nie musisz nic robić. Znajomy naciska PS na swoim kontrolerze (na swoim ekranie) i wybiera na telewizorze Szybką grę albo swojego użytkownika.",
 "pt_step_tv_menus": "Na ekranie głównym tylko ty sterujesz menu; kontroler znajomego działa w grach.",

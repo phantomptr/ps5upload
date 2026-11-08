@@ -212,6 +212,27 @@ async fn an_internet_guest_joins_over_webrtc_plays_and_gets_the_picture() {
     .await;
     assert_eq!(st["internet"]["room"], room.as_str());
 
+    // The link's numbers, read on demand: the big picture went through the channel's buffer.
+    let link = &st["guests"][0]["link"];
+    assert!(link["backlog_peak_bytes"].as_u64().unwrap() >= big.len() as u64, "{link}");
+    assert_eq!(link["high_water_bytes"], crate::join_net::HIGH_WATER);
+    for k in ["queued_bytes", "buffered_bytes", "send_waits"] {
+        assert!(link[k].as_u64().is_some(), "{k}: {link}");
+    }
+    assert!(st["invite"]["internet"]["peers"][0]["link"].is_object());
+    // The page's report on its picture: the panel's word for it.
+    g.text(serde_json::json!({"stats": {"frames": 120, "stalls": 3, "stall_ms": 900}}));
+    let st = until_state(console, "the page's report", |s| {
+        s["guests"][0]["page"]["frames"] == 120
+    })
+    .await;
+    assert_eq!(st["guests"][0]["quality"], "poor");
+    // Once a stats second passed, the rate out is known.
+    until_state(console, "the rate out", |s| {
+        s["guests"][0]["link"]["sent_kbps"].as_u64().is_some()
+    })
+    .await;
+
     // They leave; Play Together closes: the room goes, and the router mapping with it.
     g.text(serde_json::json!({"leave": 1}));
     until_state(console, "left", |s| s["guests"][0]["state"] == "left").await;

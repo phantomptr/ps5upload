@@ -219,6 +219,12 @@ function PlayerCard({ addr, player, guest }: { addr: string; player: number; gue
                 {tr("pt_player_behind", undefined, "Connection can't keep up")}
               </span>
             )}
+            {/* What their own page says: the picture stands still at times on their side. */}
+            {!guest.behind && guest.status === "playing" && (guest.quality === "stutters" || guest.quality === "poor") && (
+              <span className="text-xs text-[var(--color-warn)]" data-testid="pt-player-stutter" data-quality={guest.quality}>
+                {tr("pt_player_stutter", undefined, "Their picture stutters")}
+              </span>
+            )}
           </div>
           {guest.status !== "left" && (
             <Button
