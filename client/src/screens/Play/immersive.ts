@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { invoke } from "../../lib/invokeLogged";
-import { isAndroid, isIOS, isMobile } from "../../lib/platform";
+import { isAndroid, isIOS, isMacOrLinuxDesktop, isMobile } from "../../lib/platform";
 import { isTauriEnv } from "../../lib/tauriEnv";
 
 /**
@@ -98,11 +98,11 @@ export function focusForControllers(): void {
   if (isTauriEnv() && isIOS()) void invoke("focus_webview").catch(() => {});
 }
 
-/** The iOS app: ask for the controller's PS button for the page rather than the system. The
- *  system only agrees when the user's Home button setting allows it; otherwise the menu's PS
- *  button is the way. */
+/** The iOS and Mac apps: ask for the controller's PS button for the page rather than the
+ *  system's Games overlay. On iOS the system only agrees when the user's Home button setting
+ *  allows it; otherwise the menu's PS button is the way. Elsewhere the command is a no-op. */
 export function holdControllerHome(on: boolean): void {
-  if (isTauriEnv() && isIOS()) void invoke("hold_controller_home", { on }).catch(() => {});
+  if (isTauriEnv() && (isIOS() || isMacOrLinuxDesktop())) void invoke("hold_controller_home", { on }).catch(() => {});
 }
 
 /** The iOS app: hide the status bar (the clock) while the picture fills the screen, and show it

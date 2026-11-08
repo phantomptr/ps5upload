@@ -38,6 +38,7 @@ Agents (MCP):
 Fixes and smaller changes:
 
 - Remote Play: L2 and R2 are real triggers again. A half pull reached the PS5 as a full press in the app, browsers, phones, the Windows DualSense reader and Android; now the PS5 gets how far you pull.
+- Mac app: the controller's PS button reaches the PS5 again during Remote Play. macOS was taking it for its own Games overlay while every other button worked.
 - Pairing refused (80108b03): the message now says what to check (the PS5 shows you signed in, Remote Play is on) and points to pairing with the PIN the PS5 shows.
 - Tailscale: turning it off or changing its settings just as a connection error came in could hang the helper on the PS5. Fixed.
 - Play Together over the internet: when the invite server restarts, friends are told to reconnect instead of being told the room ended, and a friend still joining tries again by itself.
