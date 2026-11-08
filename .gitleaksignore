@@ -53,3 +53,8 @@ f01db54acdadef02d8cd956c783356c7c2298f17:engine/crates/ps5upload-engine/src/rp_g
 03b6ae995d2991fc510b698b2da716abaed46d0e:client/src/join/rtcTransport.test.ts:generic-api-key:28
 # Made-up phone-link key (00112233…eeff) in the pad internet tests (#748)
 277ac37bcea06b54989805c645fc591fa3142fcb:client/src/pad/padNet.test.ts:generic-api-key:13
+# tailnet test data: PUBLIC keys only (machine/node/disco public keys are sent in the clear to
+# every peer). A Go-derived key-text vector, and a netmap captured from the throwaway local
+# Headscale test bed (tailnet/testbed), whose nodes no longer exist
+5d971c6882a161365c818554f3cf2d1502803429:tailnet/tests/vectors_go.h:generic-api-key:58
+5d971c6882a161365c818554f3cf2d1502803429:tailnet/tests/fixtures/headscale-0.29.1-map-full.json:generic-api-key:1
