@@ -1131,7 +1131,7 @@ test-payload: payload
 		$(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c \
 		tailnet/build/asan/libtailnet.a tailnet/build/asan/liblwip.a tailnet/build/asan/libbearssl.a
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-tailnet-node-selftest
-	@echo "✓ tailnet: on/off/sign-out, settings on disk (no auth key stored), status JSON; core crypto, WireGuard, disco, STUN, IP"
+	@echo "✓ tailnet: on/off/sign-out, rename, renew, the allow-list, rest/wake cycles in every state, settings on disk (no auth key stored), status JSON; core crypto, WireGuard, disco, STUN, IP"
 	@echo "Running console page tasks self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
 		-o /tmp/ps5upload-console-tasks-selftest \

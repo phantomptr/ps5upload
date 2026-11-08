@@ -809,17 +809,19 @@ static int inbound_ok(tn_ctx *c, const tn_dp *d, const tn_ip_info *ip)
 	if (!c->n_serve)
 		return 1;
 	if (ip->proto == TN_IPPROTO_ICMP)
-		return ip->icmp_type == 8 && filter_allows(d, ip->src, ip->proto, 0);
+		return ip->icmp_type == 8 && tn_peer_allowed(&c->allow, ip->src) && filter_allows(d, ip->src, ip->proto, 0);
 	int listed = 0;
 	for (uint32_t i = 0; i < c->n_serve && !listed; i++)
 		listed = c->serve[i].proto == ip->proto && c->serve[i].port == ip->dport;
 	if (!listed)
 		return 0;
+	/* A new flow also needs the app's own peer list (tn_set_peer_allow). */
 	if (ip->proto == TN_IPPROTO_TCP) /* only a SYN opens a connection */
-		return (ip->tcp_flags & 0x12) != 0x02 || filter_allows(d, ip->src, ip->proto, ip->dport);
+		return (ip->tcp_flags & 0x12) != 0x02 ||
+		       (tn_peer_allowed(&c->allow, ip->src) && filter_allows(d, ip->src, ip->proto, ip->dport));
 	if (ip->proto == TN_IPPROTO_UDP)
 		return tn_fwd_has_udp_flow(c, ip->src, ip->sport, ip->dport) ||
-		       filter_allows(d, ip->src, ip->proto, ip->dport);
+		       (tn_peer_allowed(&c->allow, ip->src) && filter_allows(d, ip->src, ip->proto, ip->dport));
 	return 0;
 }
 
@@ -1364,6 +1366,9 @@ static void *dp_loop(void *arg)
 			}
 		} else if (d->paused) {
 			d->paused = 0;
+			tn_dp_rewake(c, d);
+		} else if (tn_atomic_xchg(&c->req_rewake, 0)) {
+			tn_logf(c, 1, "wake sequence (test)");
 			tn_dp_rewake(c, d);
 		}
 		if ((uint32_t)tn_atomic_load(&c->nm_gen) != d->nm_gen) {

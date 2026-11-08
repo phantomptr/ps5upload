@@ -31,9 +31,21 @@ void tailnet_node_shutdown(void);
  *       (the console has no resolver of its own)
  *   {"op":"disable"}                                  leave the tailnet, keep the keys
  *   {"op":"logout"}                                   leave and forget the keys (sign out)
+ *   {"op":"rename","hostname":"…"}                    the device name, any time (applied now
+ *       when on: the node starts again under it; the address stays)
+ *   {"op":"renew"}                                    renew the sign-in, same node (a login URL)
+ *   {"op":"allow","allow_mode":"all|listed","allow":"100.a.b.c,100.d.e.f"}
+ *       which tailnet devices may reach the PS5: every one the tailnet allows, or only these
+ *   {"op":"allow_add","ip":"100.a.b.c"}               add one device to the list (the app adds
+ *       itself when it talks to the PS5 at home)
  * Answers the status JSON (see tailnet_node.c status_json) into out. Returns its length
  * or -1. */
 int tailnet_node_call(const char *body, size_t len, char *out, size_t cap);
+
+/* Is this tailnet IPv4 (host order) allowed by the saved list? For tests. */
+int tailnet_node_allows(unsigned int ip);
+/* Tests: what waking from rest mode runs in the core (the wall clock jumped). */
+void tailnet_node_test_rest_wake(void);
 
 /* Tests: use another state directory (before anything else). */
 void tailnet_node_set_dir(const char *dir);

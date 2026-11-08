@@ -260,6 +260,13 @@ static void rotate_node_key(tn_ctx *c)
 	tn_state_save(&c->keys, c->state_dir);
 }
 
+void tn_control_reauth(tn_ctx *c)
+{
+	rotate_node_key(c);
+	c->followup[0] = 0;
+	c->last_url[0] = 0;
+}
+
 /* POST /machine/register until authorized (spec 3.8). */
 static int do_register(tn_ctx *c)
 {

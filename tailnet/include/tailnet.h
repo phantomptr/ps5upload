@@ -242,6 +242,21 @@ void tn_pause(tn_ctx *ctx);
 void tn_resume(tn_ctx *ctx);
 /* Free everything (calls tn_stop first). */
 void tn_destroy(tn_ctx *ctx);
+/* Renew the sign-in while keeping this node: a new node key that names the old one
+ * (OldNodeKey), so control keeps the machine, its address and its name, and asks for a
+ * login again (TN_EV_LOGIN_URL). Any thread; the running session is dropped for it. */
+int tn_reauth(tn_ctx *ctx);
+
+/* Which tailnet peers may open a connection or a UDP flow to a served port, by their
+ * tailnet IPv4 (host order). n < 0: every peer the tailnet's own filter allows (the
+ * default); n >= 0: only these (0 = nobody). Up to TN_ALLOW_MAX; replies and flows already
+ * open pass. Checked alongside the serve list and the tailnet filter. Any thread. */
+#define TN_ALLOW_MAX 64
+int tn_set_peer_allow(tn_ctx *ctx, const uint32_t *ips, int n);
+
+/* Tests: run the wake sequence a wall-clock jump (rest mode) runs on the data plane,
+ * now, as if the machine had just woken. Any thread. */
+void tn_test_rewake(tn_ctx *ctx);
 
 /* Map a local port to a peer's tailnet (address, port): the reverse of `serve`, for an
  * app that reaches the console with ordinary sockets. proto 6 (TCP: a listener on

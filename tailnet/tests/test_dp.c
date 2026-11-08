@@ -200,8 +200,24 @@ static void test_echo_oversize(void)
 	CHECK(n == sizeof big && tn_ip_parse(big, n, &ip) == 0 && tn_dp_echo_reply(big, &ip) == 0);
 }
 
+/* The app's peer list (tn_set_peer_allow): everyone, nobody, or the listed tailnet IPs. */
+static void test_peer_allow(void)
+{
+	tn_peer_allow a = {.all = 1};
+	CHECK(tn_peer_allowed(&a, 0x64400001u));
+	a.all = 0;
+	CHECK(!tn_peer_allowed(&a, 0x64400001u)); /* an empty list lets nobody in */
+	a.ip[0] = 0x64400001u;
+	a.ip[1] = 0x64400009u;
+	a.n = 2;
+	CHECK(tn_peer_allowed(&a, 0x64400001u));
+	CHECK(tn_peer_allowed(&a, 0x64400009u));
+	CHECK(!tn_peer_allowed(&a, 0x64400002u));
+}
+
 int main(void)
 {
+	test_peer_allow();
 	test_wg();
 	test_disco();
 	test_stun();

@@ -162,6 +162,7 @@ int tn_create(const tn_config *cfg, tn_ctx **out)
 		c->n_serve = cfg->n_serve;
 	}
 	c->cfg.serve = c->serve;
+	c->allow.all = 1;
 	if ((r = tn_dp_create(c)) < 0 || (r = tn_fwd_create(c)) < 0)
 		goto fail;
 	if ((r = tn_state_load(&c->keys, c->state_dir, c->control_url)) < 0)
@@ -225,6 +226,11 @@ static void *loop(void *arg)
 		c->cfg.thread_cb(c->cfg.user, "control");
 	while (!tn_atomic_load(&c->req_stop)) {
 		drain(c);
+		if (tn_atomic_xchg(&c->req_reauth, 0)) {
+			tn_logf(c, 1, "renewing the sign-in (same node)");
+			tn_control_reauth(c);
+			c->backoff_ms = 0;
+		}
 		if (tn_atomic_load(&c->req_pause)) {
 			tn_set_state(c, TN_ST_PAUSED);
 			nap(c, -1);
@@ -303,6 +309,36 @@ void tn_resume(tn_ctx *c)
 	c->backoff_ms = 0;
 	wake(c);
 	tn_dp_wake(c);
+}
+
+int tn_reauth(tn_ctx *c)
+{
+	if (!c)
+		return TN_E_ARG;
+	tn_atomic_store(&c->req_reauth, 1);
+	wake(c);
+	return TN_OK;
+}
+
+void tn_test_rewake(tn_ctx *c)
+{
+	if (!c)
+		return;
+	tn_atomic_store(&c->req_rewake, 1);
+	tn_dp_wake(c);
+}
+
+int tn_set_peer_allow(tn_ctx *c, const uint32_t *ips, int n)
+{
+	if (!c || n > TN_ALLOW_MAX || (n > 0 && !ips))
+		return TN_E_ARG;
+	tn_mutex_lock(&c->dp_mu);
+	c->allow.all = n < 0;
+	c->allow.n = n < 0 ? 0 : (uint32_t)n;
+	for (int i = 0; i < n; i++)
+		c->allow.ip[i] = ips[i];
+	tn_mutex_unlock(&c->dp_mu);
+	return TN_OK;
 }
 
 void tn_destroy(tn_ctx *c)

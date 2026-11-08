@@ -25,17 +25,29 @@ static const tn_serve SERVE[] = {
     {6, 9120, 0},  /* the helper (AVA1, TCP) */
 };
 
+#define ALLOW_MAX 32
+
 typedef struct {
     int enabled;
     char control_url[256];
     char hostname[64];
     char control_addr[64];
+    /* Which tailnet devices may reach the PS5: 1 every one the tailnet allows (an explicit
+     * opt-in), 0 only `allow` (the default: the devices the app added, and the ones the user
+     * ticked). Settings saved before the list existed keep working: see g_seed. */
+    int allow_all;
+    uint32_t allow[ALLOW_MAX];
+    int n_allow;
 } tn_settings;
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static char g_dir[256] = TAILNET_NODE_DIR;
 static tn_settings g_set;
 static int g_loaded;
+/* Settings from before the allow-list (12.0.0): every device could reach the PS5. Until the
+ * node next runs with its netmap, that stays so; then the devices on the tailnet at that
+ * moment become the list (seed_locked), and from there only added or ticked devices pass. */
+static int g_seed;
 static tn_ctx *g_ctx;
 /* The node's last error and warning, under their own lock: the node's thread sets them from
  * on_event, and stopping it (tn_destroy joins that thread) happens with g_mu held, so taking
@@ -51,6 +63,51 @@ void tailnet_node_set_dir(const char *dir) {
 
 static void path_of(char *out, size_t cap, const char *name) { snprintf(out, cap, "%s/%s", g_dir, name); }
 
+/* "100.64.0.1" -> host order, 0 when not an IPv4 in 100.64.0.0/10. */
+static uint32_t parse_tailnet_ip(const char *s, size_t n) {
+    uint32_t v = 0, part = 0;
+    int dots = 0, digits = 0;
+    for (size_t i = 0; i < n; i++) {
+        char ch = s[i];
+        if (ch >= '0' && ch <= '9') {
+            part = part * 10 + (uint32_t)(ch - '0');
+            if (++digits > 3 || part > 255) return 0;
+        } else if (ch == '.') {
+            if (!digits || ++dots > 3) return 0;
+            v = v << 8 | part;
+            part = 0;
+            digits = 0;
+        } else {
+            return 0;
+        }
+    }
+    if (dots != 3 || !digits) return 0;
+    v = v << 8 | part;
+    return (v >> 22) == (100u << 2 | 1u) ? v : 0; /* 100.64.0.0/10 */
+}
+
+/* A comma-separated list of tailnet IPs into the settings; -1 on a bad entry or too many. */
+static int parse_allow(const char *list, tn_settings *s) {
+    int n = 0;
+    const char *p = list;
+    while (*p) {
+        while (*p == ' ' || *p == ',') p++;
+        if (!*p) break;
+        const char *e = p;
+        while (*e && *e != ',' && *e != ' ') e++;
+        uint32_t ip = parse_tailnet_ip(p, (size_t)(e - p));
+        int dup = 0;
+        for (int i = 0; i < n; i++) dup |= s->allow[i] == ip;
+        if (!ip || (!dup && n >= ALLOW_MAX)) return -1;
+        if (!dup) s->allow[n++] = ip;
+        p = e;
+    }
+    s->n_allow = n;
+    return 0;
+}
+
+static void push_allow_locked(void);
+
 static void load_settings(void) {
     char path[320], buf[1024];
     if (g_loaded) return;
@@ -59,7 +116,8 @@ static void load_settings(void) {
     snprintf(g_set.control_url, sizeof g_set.control_url, "%s", TAILNET_DEFAULT_CONTROL);
     path_of(path, sizeof path, "settings.json");
     FILE *f = fopen(path, "r");
-    if (!f) return;
+    g_seed = 0;
+    if (!f) return; /* never set up: the list starts empty (allow_all 0) */
     size_t n = fread(buf, 1, sizeof buf - 1, f);
     fclose(f);
     buf[n] = 0;
@@ -69,18 +127,42 @@ static void load_settings(void) {
     if (webui_json_str(buf, n, "control_url", url, sizeof url) == 1 && url[0]) snprintf(g_set.control_url, sizeof g_set.control_url, "%s", url);
     (void)webui_json_str(buf, n, "hostname", g_set.hostname, sizeof g_set.hostname);
     (void)webui_json_str(buf, n, "control_addr", g_set.control_addr, sizeof g_set.control_addr);
+    char mode[16], list[ALLOW_MAX * 16 + 8];
+    if (webui_json_str(buf, n, "allow_mode", mode, sizeof mode) == 1)
+        g_set.allow_all = !strcmp(mode, "all");
+    else
+        g_seed = 1;
+    if (webui_json_str(buf, n, "allow", list, sizeof list) == 1) {
+        tn_settings tmp = g_set;
+        if (parse_allow(list, &tmp) == 0) g_set = tmp;
+    }
+}
+
+/* "a.b.c.d,…" of the saved list. */
+static void allow_str(char *out, size_t cap) {
+    size_t len = 0;
+    char ip[16];
+    out[0] = 0;
+    for (int i = 0; i < g_set.n_allow; i++) {
+        int k = snprintf(out + len, cap - len, "%s%s", i ? "," : "", tn_ip4_str(g_set.allow[i], ip));
+        if (k < 0 || (size_t)k >= cap - len) break;
+        len += (size_t)k;
+    }
 }
 
 static int save_settings(void) {
-    char path[320], tmp[330], url[300], host[100], addr[80], buf[1024];
+    char path[320], tmp[330], url[300], host[100], addr[80], list[ALLOW_MAX * 16 + 8], buf[2048];
     mkdir(g_dir, 0700);
     path_of(path, sizeof path, "settings.json");
     snprintf(tmp, sizeof tmp, "%s.tmp", path);
     json_escape_into(g_set.control_url, url, sizeof url);
     json_escape_into(g_set.hostname, host, sizeof host);
     json_escape_into(g_set.control_addr, addr, sizeof addr);
-    int n = snprintf(buf, sizeof buf, "{\"enabled\":%s,\"control_url\":\"%s\",\"hostname\":\"%s\",\"control_addr\":\"%s\"}\n",
-                     g_set.enabled ? "true" : "false", url, host, addr);
+    allow_str(list, sizeof list);
+    int n = snprintf(buf, sizeof buf,
+                     "{\"enabled\":%s,\"control_url\":\"%s\",\"hostname\":\"%s\",\"control_addr\":\"%s\","
+                     "\"allow_mode\":\"%s\",\"allow\":\"%s\"}\n",
+                     g_set.enabled ? "true" : "false", url, host, addr, g_set.allow_all ? "all" : "listed", list);
     if (n <= 0 || (size_t)n >= sizeof buf) return -1;
     return atomic_file_write(path, tmp, buf, (size_t)n, 0600);
 }
@@ -165,10 +247,49 @@ static int start_locked(const char *authkey) {
     }
     fprintf(stderr, "[tailnet] started (%zu KiB)\n", tn_memory_footprint(c) / 1024);
     g_ctx = c;
+    push_allow_locked();
     pthread_mutex_lock(&g_msg_mu);
     g_last_error[0] = 0;
     pthread_mutex_unlock(&g_msg_mu);
     return 0;
+}
+
+/* The saved list into the running node; caller holds g_mu. */
+static void push_allow_locked(void) {
+    if (!g_ctx) return;
+    (void)tn_set_peer_allow(g_ctx, g_set.allow, g_set.allow_all || g_seed ? -1 : g_set.n_allow);
+}
+
+/* g_seed: once the node runs with a netmap, the devices on the tailnet now become the list. */
+static void seed_locked(void) {
+    static tn_peer_status ps[ALLOW_MAX];
+    tn_status st;
+    if (!g_seed || !g_ctx) return;
+    memset(&st, 0, sizeof st);
+    if (tn_get_status(g_ctx, &st, ps, ALLOW_MAX) != 0 || st.state != TN_ST_RUNNING) return;
+    g_set.n_allow = 0;
+    for (uint32_t i = 0; i < st.n_peers && i < ALLOW_MAX; i++)
+        if (ps[i].addr4) g_set.allow[g_set.n_allow++] = ps[i].addr4;
+    g_set.allow_all = 0;
+    g_seed = 0;
+    if (save_settings() != 0) fprintf(stderr, "[tailnet] settings not saved (errno %d)\n", errno);
+    fprintf(stderr, "[tailnet] allow-list started with the %d device(s) on the tailnet\n", g_set.n_allow);
+    push_allow_locked();
+}
+
+void tailnet_node_test_rest_wake(void) {
+    pthread_mutex_lock(&g_mu);
+    if (g_ctx) tn_test_rewake(g_ctx);
+    pthread_mutex_unlock(&g_mu);
+}
+
+int tailnet_node_allows(unsigned int ip) {
+    pthread_mutex_lock(&g_mu);
+    load_settings();
+    int ok = g_set.allow_all || g_seed;
+    for (int i = 0; i < g_set.n_allow && !ok; i++) ok = g_set.allow[i] == ip;
+    pthread_mutex_unlock(&g_mu);
+    return ok;
 }
 
 static void stop_locked(void) {
@@ -219,6 +340,14 @@ static int status_json(char *out, size_t cap) {
     if (put(out, cap, &len, ",\"control_url\":\"%s\"", e1) < 0) return -1;
     json_escape_into(g_set.hostname, e2, sizeof e2);
     if (put(out, cap, &len, ",\"hostname\":\"%s\"", e2) < 0) return -1;
+    {
+        char path[320], list[ALLOW_MAX * 16 + 8];
+        path_of(path, sizeof path, "tailnet-state.json");
+        if (put(out, cap, &len, ",\"signed_in\":%s", access(path, F_OK) == 0 ? "true" : "false") < 0) return -1;
+        if (put(out, cap, &len, ",\"allow_mode\":\"%s\"", g_set.allow_all || g_seed ? "all" : "listed") < 0) return -1;
+        allow_str(list, sizeof list);
+        if (put(out, cap, &len, ",\"allow\":\"%s\"", list) < 0) return -1;
+    }
     if (put(out, cap, &len, ",\"ip\":\"%s\"", st.self_addr4 ? tn_ip4_str(st.self_addr4, ip) : "") < 0) return -1;
     json_escape_into(st.self_name, e2, sizeof e2);
     if (put(out, cap, &len, ",\"name\":\"%s\"", e2) < 0) return -1;
@@ -311,10 +440,65 @@ int tailnet_node_call(const char *body, size_t len, char *out, size_t cap) {
             g_warning[0] = 0;
             pthread_mutex_unlock(&g_msg_mu);
         }
+    } else if (!strcmp(op, "rename")) {
+        /* The device name, any time: kept while off, applied now while on (the node starts
+         * again under it; control keeps its address). */
+        if (webui_json_str(body, len, "hostname", host, sizeof host) != 1 || !host[0]) {
+            pthread_mutex_unlock(&g_mu);
+            return err_json(out, cap, "bad_request");
+        }
+        if (strcmp(host, g_set.hostname)) {
+            snprintf(g_set.hostname, sizeof g_set.hostname, "%s", host);
+            if (save_settings() != 0) fprintf(stderr, "[tailnet] settings not saved (errno %d)\n", errno);
+            if (g_ctx) {
+                stop_locked();
+                r = start_locked(NULL);
+            }
+        }
+    } else if (!strcmp(op, "renew")) {
+        /* Same node, a new sign-in: a status shortly after carries the login URL. */
+        if (!g_ctx) {
+            pthread_mutex_unlock(&g_mu);
+            return err_json(out, cap, "not_running");
+        }
+        r = tn_reauth(g_ctx) == 0 ? 0 : -1;
+    } else if (!strcmp(op, "allow") || !strcmp(op, "allow_add")) {
+        char mode[16] = "", list[ALLOW_MAX * 16 + 8] = "";
+        tn_settings next = g_set;
+        if (!strcmp(op, "allow")) {
+            if (webui_json_str(body, len, "allow_mode", mode, sizeof mode) < 0 ||
+                webui_json_str(body, len, "allow", list, sizeof list) < 0 ||
+                (mode[0] && strcmp(mode, "all") && strcmp(mode, "listed")) || parse_allow(list, &next) != 0) {
+                pthread_mutex_unlock(&g_mu);
+                return err_json(out, cap, "bad_request");
+            }
+            if (mode[0]) next.allow_all = !strcmp(mode, "all");
+            g_seed = 0; /* the user chose: nothing is seeded over it */
+        } else {
+            uint32_t ip = 0;
+            if (webui_json_str(body, len, "ip", list, sizeof list) == 1) ip = parse_tailnet_ip(list, strlen(list));
+            if (!ip) {
+                pthread_mutex_unlock(&g_mu);
+                return err_json(out, cap, "bad_request");
+            }
+            int have = 0;
+            for (int i = 0; i < next.n_allow; i++) have |= next.allow[i] == ip;
+            if (!have) {
+                if (next.n_allow >= ALLOW_MAX) {
+                    pthread_mutex_unlock(&g_mu);
+                    return err_json(out, cap, "too_many");
+                }
+                next.allow[next.n_allow++] = ip;
+            }
+        }
+        g_set = next;
+        if (save_settings() != 0) fprintf(stderr, "[tailnet] settings not saved (errno %d)\n", errno);
+        push_allow_locked();
     } else if (strcmp(op, "status") != 0) {
         pthread_mutex_unlock(&g_mu);
         return err_json(out, cap, "unknown_op");
     }
+    seed_locked();
     int n = r == 0 ? status_json(out, cap) : -1;
     pthread_mutex_unlock(&g_mu);
     if (n < 0) return err_json(out, cap, r ? "start_failed" : "too_big");
