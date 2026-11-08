@@ -1226,7 +1226,10 @@ mod tests {
                 "peers": [{"name": "pc", "login_url": "https://login.example/a/2"}],
             });
             assert!(redact_for_agents(method, path, &mut answer));
-            assert!(!answer.to_string().contains("login.example"), "{answer}");
+            assert!(
+                !answer.to_string().contains("login.example"),
+                "a sign-in link is left"
+            );
             assert_eq!(answer["state"], "needs-login");
         }
         assert!(!may_hold_agent_secrets("GET", "/api/ps5/volumes"));
@@ -1253,9 +1256,11 @@ mod tests {
         assert!(may_hold_agent_secrets("GET", "/api/join"));
         assert!(redact_for_agents("GET", "/api/join", &mut a));
         let text = a.to_string();
-        for secret in ["k1", "k2", "ABCD12", "ABC-D12", "#i="] {
-            assert!(!text.contains(secret), "{secret} in {text}");
-        }
+        let gone = ["k1", "k2", "ABCD12", "ABC-D12", "#i="];
+        assert!(
+            gone.iter().all(|g| !text.contains(g)),
+            "the invite still lets someone in"
+        );
         assert_eq!(a["invite"]["expires_in_s"], 1700);
         assert_eq!(a["invite"]["hidden"], true);
         assert_eq!(a["invite"]["internet"]["state"], "open");
@@ -1283,7 +1288,7 @@ mod tests {
         let text = p.to_string();
         assert!(
             !text.contains("deadbeef") && !text.contains("cafe"),
-            "{text}"
+            "the phone link still lets someone in"
         );
         assert_eq!(
             (&p["open"], &p["link_hidden"]),
