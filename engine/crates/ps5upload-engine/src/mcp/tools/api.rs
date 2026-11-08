@@ -237,6 +237,13 @@ fn query_pairs(query: Option<&Map<String, Value>>) -> Result<Vec<(&str, String)>
 async fn request(ctx: ToolCtx, args: Args) -> ToolResult {
     let method = args.text("method").unwrap_or("GET").to_ascii_uppercase();
     let path = args.required("path")?;
+    // First: whatever else is wrong with the path, this is the answer an agent needs.
+    if catalog_routes::reaches_agent_access(path) {
+        return Err(ToolOutput::error(format!(
+            "{method} {path} is refused: whether agents can change things is the owner's to \
+             decide, in the app under MCP & API › Connect an agent."
+        )));
+    }
     if let Some(problem) = path_problem(path) {
         return Err(ToolOutput::error(problem));
     }
@@ -248,9 +255,8 @@ async fn request(ctx: ToolCtx, args: Args) -> ToolResult {
     }
     if ctx.state.read_only() && method != "GET" {
         return Err(ToolOutput::error(format!(
-            "{method} {path} is refused: this engine's MCP server is read-only \
-             (PS5UPLOAD_MCP_READ_ONLY), so only GET requests are allowed. The owner can restart \
-             the engine without that setting to allow it."
+            "{method} {path} is refused (only GET requests are allowed): {}",
+            crate::mcp::access::refusal(ctx.state.access().locked())
         )));
     }
     let Ok(http_method) = Method::from_bytes(method.as_bytes()) else {
