@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 #
+# The usual release path is release-tag.yml (no clone, no push to main): RELEASING.md. This
+# script is the local alternative; it pushes the release commit to main, which the main ruleset
+# allows only through the admin bypass.
+#
 # One-shot release helper. Cuts a `vX.Y.Z` tagged release without
 # force-pushing main and without double-triggering the CI + publish
 # workflows.
