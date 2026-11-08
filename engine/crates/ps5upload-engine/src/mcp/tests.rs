@@ -1072,6 +1072,9 @@ async fn the_routes_for_this_computer_alone_accept_a_local_caller_and_no_one_els
 
 #[tokio::test]
 async fn nothing_streaming_is_reported_not_guessed() {
+    // Other tests put a session in place while they hold this lock: "nothing streaming" is only
+    // true outside them.
+    let _live = crate::rp_stream_api::LIVE_TEST_LOCK.lock().await;
     let result = server().tool("rp_session", json!({})).await;
     assert_eq!(result["structuredContent"]["host"], Value::Null);
     assert!(text_of(&result).contains("Nothing is streaming"));

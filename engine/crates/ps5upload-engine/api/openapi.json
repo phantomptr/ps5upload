@@ -6728,6 +6728,10 @@
           "new": {
             "description": "A new key (the old link stops working).",
             "type": "boolean"
+          },
+          "share": {
+            "description": "The one link, as \"Invites work\" says: the internet invite when that is \"anywhere\" (and the\nhub address and certificate allow it), else the home network's; never refused for it.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -11838,6 +11842,68 @@
         ],
         "type": "object"
       },
+      "Settings.request": {
+        "properties": {
+          "allow_permanent_delete": {
+            "description": "Where the engine has no trash (Docker, a headless server): Move to Trash deletes for\ngood instead. Off unless the user turns it on; every delete is still confirmed.",
+            "type": "boolean"
+          },
+          "refresh_secs": {
+            "description": "Seconds between automatic scans; `None` turns automatic refresh off.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "roots": {
+            "description": "Folders scanned, in order.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sweep_sidecars": {
+            "description": "Remove AppleDouble `._` sidecars in every folder a scan walks.",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "Settings.response": {
+        "properties": {
+          "allow_permanent_delete": {
+            "description": "Where the engine has no trash (Docker, a headless server): Move to Trash deletes for\ngood instead. Off unless the user turns it on; every delete is still confirmed.",
+            "type": "boolean"
+          },
+          "refresh_secs": {
+            "description": "Seconds between automatic scans; `None` turns automatic refresh off.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "roots": {
+            "description": "Folders scanned, in order.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sweep_sidecars": {
+            "description": "Remove AppleDouble `._` sidecars in every folder a scan walks.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "roots",
+          "refresh_secs",
+          "sweep_sidecars",
+          "allow_permanent_delete"
+        ],
+        "type": "object"
+      },
       "SettingsBody": {
         "properties": {
           "addr": {
@@ -11879,6 +11945,13 @@
               "null"
             ]
           },
+          "invites": {
+            "description": "\"Invites work\": \"anywhere\" or \"wifi\" (the same choice as `internet_invites`; this one wins).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "max_players": {
             "minimum": 0,
             "type": [
@@ -11916,53 +11989,6 @@
         },
         "type": "object"
       },
-      "SettingsPatch": {
-        "properties": {
-          "add_hosts": {
-            "description": "Consoles to add to `hosts`, whatever else is on it: what a client knows of its own roster.\nSeveral clients share one engine, so none of them sends the whole list.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "dir": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "enabled": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "hosts": {
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "keep": {
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "remove_hosts": {
-            "description": "Consoles to take off `hosts`.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          }
-        },
-        "type": "object"
-      },
       "SettingsReply": {
         "allOf": [
           {
@@ -11986,7 +12012,7 @@
             "type": "object"
           },
           {
-            "$ref": "#/components/schemas/engine.collection.store.Settings.response"
+            "$ref": "#/components/schemas/Settings.response"
           }
         ]
       },
@@ -14057,68 +14083,6 @@
         ],
         "type": "string"
       },
-      "engine.collection.store.Settings.request": {
-        "properties": {
-          "allow_permanent_delete": {
-            "description": "Where the engine has no trash (Docker, a headless server): Move to Trash deletes for\ngood instead. Off unless the user turns it on; every delete is still confirmed.",
-            "type": "boolean"
-          },
-          "refresh_secs": {
-            "description": "Seconds between automatic scans; `None` turns automatic refresh off.",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "roots": {
-            "description": "Folders scanned, in order.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "sweep_sidecars": {
-            "description": "Remove AppleDouble `._` sidecars in every folder a scan walks.",
-            "type": "boolean"
-          }
-        },
-        "type": "object"
-      },
-      "engine.collection.store.Settings.response": {
-        "properties": {
-          "allow_permanent_delete": {
-            "description": "Where the engine has no trash (Docker, a headless server): Move to Trash deletes for\ngood instead. Off unless the user turns it on; every delete is still confirmed.",
-            "type": "boolean"
-          },
-          "refresh_secs": {
-            "description": "Seconds between automatic scans; `None` turns automatic refresh off.",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "roots": {
-            "description": "Folders scanned, in order.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "sweep_sidecars": {
-            "description": "Remove AppleDouble `._` sidecars in every folder a scan walks.",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "roots",
-          "refresh_secs",
-          "sweep_sidecars",
-          "allow_permanent_delete"
-        ],
-        "type": "object"
-      },
       "engine.collection_check_api.CheckReq": {
         "properties": {
           "paths": {
@@ -14401,6 +14365,27 @@
         ],
         "type": "object"
       },
+      "engine.consoles_api.SettingsPatch": {
+        "description": "`PATCH /api/consoles/settings` `{console, settings: {name: value | null}}`.",
+        "properties": {
+          "console": {
+            "type": "string",
+            "x-aliases": [
+              "addr",
+              "host"
+            ]
+          },
+          "settings": {
+            "additionalProperties": {},
+            "type": "object"
+          }
+        },
+        "required": [
+          "console",
+          "settings"
+        ],
+        "type": "object"
+      },
       "engine.disk_usage.StartReq": {
         "properties": {
           "addr": {
@@ -14539,58 +14524,6 @@
         },
         "required": [
           "addr"
-        ],
-        "type": "object"
-      },
-      "engine.join.Settings": {
-        "description": "The host's choices (one set for every console).",
-        "properties": {
-          "block_system_buttons": {
-            "description": "Take PS and Create from guests who are playing (they keep them while picking a user).\nOn unless the host turns it off: a friend's PS could quit the game, or update the console\npast its exploit (#649).",
-            "type": "boolean"
-          },
-          "hub_url": {
-            "description": "The signalling hub (`wss://`; `ws://` only to this computer).",
-            "type": "string"
-          },
-          "internet_invites": {
-            "description": "The host may make internet invites (a room on the signalling hub, WebRTC to the guest:\ncrate::join_net). On unless the host turns it off.",
-            "type": "boolean"
-          },
-          "max_players": {
-            "description": "Guests at most (1-3).",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "stream_seat": {
-            "description": "A friend may get the stream's own controller (Player 1, signed in as the host's PS5 user)\nwhile this device shows no picture and no phone plays on it (#687). Off unless the host\nturns it on: a friend otherwise always gets their own controller and picks a user (#720).",
-            "type": "boolean"
-          },
-          "stun": {
-            "description": "STUN servers (`host:port`) the engine asks for its outside address.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "upnp": {
-            "description": "Ask the router for a port (UPnP-IGD, NAT-PMP / PCP) while an internet invite is open.",
-            "type": "boolean"
-          },
-          "video_track": {
-            "description": "Internet guests whose page offers it get the picture as an RTP video track (the browser's\nown jitter buffer, retransmission and decoder: crate::join_net::rtc), not on the data\nchannel. On unless the host turns it off; off, or a page that offers no track, keeps the\ndata channel.",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "block_system_buttons",
-          "max_players",
-          "stream_seat",
-          "internet_invites",
-          "hub_url",
-          "stun",
-          "upnp",
-          "video_track"
         ],
         "type": "object"
       },
@@ -14908,6 +14841,53 @@
           "save_path",
           "user_id"
         ],
+        "type": "object"
+      },
+      "engine.save_backup.SettingsPatch": {
+        "properties": {
+          "add_hosts": {
+            "description": "Consoles to add to `hosts`, whatever else is on it: what a client knows of its own roster.\nSeveral clients share one engine, so none of them sends the whole list.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "dir": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "hosts": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "keep": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "remove_hosts": {
+            "description": "Consoles to take off `hosts`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
         "type": "object"
       },
       "engine.wake_login_api.PasscodeReq": {
@@ -17452,7 +17432,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/engine.collection.store.Settings.request"
+                "$ref": "#/components/schemas/Settings.request"
               }
             }
           },
@@ -18138,6 +18118,68 @@
         ],
         "x-ps5upload": {
           "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/consoles/settings": {
+      "patch": {
+        "description": "`PATCH /api/consoles/settings`: one console's own settings, by its id, name or address. The\napp picks the change up through the console list, as it does a renamed console.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/engine.consoles_api.SettingsPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "One console's own settings, by its id, name or address",
+        "tags": [
+          "consoles"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "addr",
+              "host"
+            ],
+            "in": "body",
+            "name": "console",
+            "required": true
+          },
           "response_schema": "json-unknown"
         }
       }
@@ -22075,7 +22117,7 @@
     },
     "/api/join/invite": {
       "post": {
-        "description": "`POST /api/join/invite {addr, new?, internet?}`: `{key, code, code_display, url, urls,\nexpires_in_s, internet}`. The same invite again until it expires, unless `new` (the old link and\ncode stop working). With `internet`, also a link for friends anywhere (`internet.url`): the\nengine opens a room on the signalling hub in the settings and the guest's browser connects to\nit peer to peer (409 `internet_off` when the settings turned internet invites off, 409\n`hub_url` when the hub address is not a `wss://` one). The room stays open while the invite\nlasts or an internet guest is in.",
+        "description": "`POST /api/join/invite {addr, new?, internet?, share?}`: `{key, code, code_display, url, urls,\nexpires_in_s, share, internet}`. `share` is the one link to show (`share.url`, where it works:\n`share.works` \"anywhere\" or \"wifi\", and `share.why` for the Wi-Fi: \"setting\", \"offline\" (the hub\ncan't be reached), \"local\"; see [`share_json`]). With `share` in the request the engine makes the\ninternet link when Settings › Play Together › Invites work says Anywhere, as `internet` does,\nand quietly keeps to the home network's link otherwise. The same invite again until it expires, unless `new` (the old link and\ncode stop working). With `internet`, also a link for friends anywhere (`internet.url`): the\nengine opens a room on the signalling hub in the settings and the guest's browser connects to\nit peer to peer (409 `internet_off` when the settings turned internet invites off, 409\n`hub_url` when the hub address is not a `wss://` one). The room stays open while the invite\nlasts or an internet guest is in.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -22417,7 +22459,7 @@
     },
     "/api/join/settings": {
       "post": {
-        "description": "`POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,\ninternet_invites?, hub_url?, stun?, upnp?, video_track?}`: the host's choices (every console). Fewer players\nlets nobody go; it only stops new ones. `stream_seat` off moves a friend on the stream's\ncontroller to a pad of their own. `internet_invites` off closes the internet rooms (guests\nalready in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`\notherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none), `upnp` whether the\nrouter is asked for a port, `video_track` whether internet guests get the picture as a video\ntrack (new connections; the data channel otherwise).\n\n`guest_profiles` with `addr` (\"Guests play as\" on that console): each guest's player gets the\nprofile the host chose (`{player: 2-4, user, name, owner}`; a player left out: the TV asks).\nOnly signed-in profiles can be seated. The host's own profile (the one in front) needs `owner`\ntrue, the host's confirmation that the guest may use its saves and trophies (409\n`owner_confirm` otherwise; `owner_unknown` when the console does not say which one is in front,\nfor any profile newly chosen without `owner`); 400 `addr` without a console, 400 `player`, `user` or `duplicate`\nfor a list that is not one profile per player.",
+        "description": "`POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,\ninvites?, internet_invites?, hub_url?, stun?, upnp?, video_track?}`: the host's choices (every\nconsole). Fewer players lets nobody go; it only stops new ones. `stream_seat` off moves a friend\non the stream's controller to a pad of their own. `invites` is \"Invites work\": \"anywhere\" (the\none link, through the hub) or \"wifi\" (the home network's link only; 400 `invites` otherwise),\nthe same choice as `internet_invites` on or off, and the one setting kept across restarts.\n\"wifi\" closes the internet rooms (guests already in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`\notherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none), `upnp` whether the\nrouter is asked for a port, `video_track` whether internet guests get the picture as a video\ntrack (new connections; the data channel otherwise).\n\n`guest_profiles` with `addr` (\"Guests play as\" on that console): each guest's player gets the\nprofile the host chose (`{player: 2-4, user, name, owner}`; a player left out: the TV asks).\nOnly signed-in profiles can be seated. The host's own profile (the one in front) needs `owner`\ntrue, the host's confirmation that the guest may use its saves and trophies (409\n`owner_confirm` otherwise; `owner_unknown` when the console does not say which one is in front,\nfor any profile newly chosen without `owner`); 400 `addr` without a console, 400 `player`, `user` or `duplicate`\nfor a list that is not one profile per player.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -22434,9 +22476,7 @@
               "application/json": {
                 "schema": {
                   "properties": {
-                    "settings": {
-                      "$ref": "#/components/schemas/engine.join.Settings"
-                    }
+                    "settings": {}
                   },
                   "type": "object"
                 }
@@ -42364,7 +42404,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SettingsPatch"
+                "$ref": "#/components/schemas/engine.save_backup.SettingsPatch"
               }
             }
           },

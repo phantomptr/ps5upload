@@ -21,7 +21,9 @@ const LIST_DESCRIPTION: &str =
      read falls back to when it names no console. When the one you need is not here, \
      consoles_discover looks for it on the network, or ask the user for its address. A console \
      paired for Remote Play lists its paired PS5 users by name as `rp_users` (`rp_user` is the one \
-     rp_start uses when it names none).";
+     rp_start uses when it names none). `settings` is a console's own settings (Settings › This \
+     PS5); one it does not list uses the app's default (settings_get); console_settings_set \
+     changes them.";
 
 pub(super) fn tools() -> Vec<ToolDef> {
     vec![
@@ -43,6 +45,32 @@ pub(super) fn tools() -> Vec<ToolDef> {
             kind: Kind::Read,
             schema: object(json!({}), &[]),
             run: |ctx, args| Box::pin(list(ctx, args)),
+        },
+        ToolDef {
+            name: "console_settings_set",
+            title: "Change one console's settings",
+            description: "Changes one console's own settings (Settings › This PS5), all or none: \
+                          wake_for_uploads, rest_after_upload, auto_bring_up, \
+                          auto_redeploy_on_wake, install_path_fallback (true or false) and \
+                          keep_awake_mode (off, transfers or always). null goes back to the \
+                          app's default. consoles_list shows what each console has. Only what \
+                          the user asked for.",
+            kind: Kind::Write { idempotent: true },
+            schema: object(
+                json!({
+                    "console": console_required(),
+                    "settings": {
+                        "type": "object",
+                        "description": "Each setting's name and new value (or null).",
+                    },
+                }),
+                &["console", "settings"],
+            ),
+            run: route!(
+                method: "PATCH",
+                path: "/api/consoles/settings",
+                done: "Changed the console's settings."
+            ),
         },
         ToolDef {
             name: "consoles_discover",
@@ -150,6 +178,8 @@ struct Known {
     /// The PS5 users paired for Remote Play, by name only, and the one a start uses by default.
     rp_users: Vec<String>,
     rp_user: Option<String>,
+    /// Its own settings (Settings › This PS5), from the saved list; empty when it has none.
+    settings: Option<Value>,
     sources: BTreeSet<&'static str>,
 }
 
@@ -175,6 +205,10 @@ pub(crate) async fn known(state: &McpState, caller: &Caller) -> Value {
                 .and_then(Value::as_str)
                 .is_some_and(|credential| !credential.is_empty());
         console.can_stream = says("has_rp_credentials");
+        console.settings = profile
+            .get("settings")
+            .filter(|v| v.as_object().is_some_and(|m| !m.is_empty()))
+            .cloned();
         for user in profile
             .get("rp_users")
             .and_then(Value::as_array)
@@ -233,6 +267,9 @@ pub(crate) async fn known(state: &McpState, caller: &Caller) -> Value {
             }
             if let Some(user) = &console.rp_user {
                 out["rp_user"] = json!(user);
+            }
+            if let Some(settings) = &console.settings {
+                out["settings"] = settings.clone();
             }
             out
         })

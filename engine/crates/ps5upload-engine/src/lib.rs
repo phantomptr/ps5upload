@@ -12203,6 +12203,10 @@ fn build_app_and_mcp(
             get(consoles_api::list).put(consoles_api::put),
         )
         .route(
+            "/api/consoles/settings",
+            axum::routing::patch(consoles_api::patch_settings),
+        )
+        .route(
             "/api/consoles/document",
             get(consoles_api::get_document).put(consoles_api::put_document),
         )

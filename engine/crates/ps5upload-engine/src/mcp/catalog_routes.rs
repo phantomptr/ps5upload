@@ -334,6 +334,7 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/console-snapshots/keep"),
     ("GET", "/api/consoles"),
     ("PUT", "/api/consoles"),
+    ("PATCH", "/api/consoles/settings"),
     ("GET", "/api/debug/crash"),
     ("GET", "/api/diag/features"),
     ("GET", "/api/diag/log-level"),

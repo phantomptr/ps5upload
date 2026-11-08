@@ -272,7 +272,16 @@ clients let you allow tools one by one, so keep these on "ask".
 | `api_request` | Anything the API can do |
 
 Some tools aren't marked destructive but still matter: `install_pkg`, `games_launch`,
-`rp_input`, `rp_start`, `together_invite`, `together_decide`, `settings_set`.
+`rp_input`, `rp_start`, `together_invite`, `together_decide`, `settings_set`,
+`console_settings_set`.
+
+**App settings and each console's own.** `settings_get` / `settings_set` are the app's settings.
+Some settings belong to one console (Settings › This PS5): `wake_for_uploads`, `keep_awake_mode`
+(off, transfers or always), `rest_after_upload`, `auto_bring_up`, `auto_redeploy_on_wake` and
+`install_path_fallback`. `consoles_list` shows each console's own as `settings`, and
+`console_settings_set` changes them for one console (null goes back to the app's default). The app
+setting of the same name is that default: changing it with `settings_set` does not change a console
+that has its own value.
 
 ### What never reaches a model
 
