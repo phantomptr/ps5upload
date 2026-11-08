@@ -4,6 +4,24 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.6.0
+
+Play Together over the internet:
+
+- Friends no longer need to be on your Wi-Fi. When you invite, choose Internet, and the link works from anywhere: a phone on mobile data, a friend's home. A small server at hub.phantomptr.com only introduces the two sides; the game's picture, sound and controls go straight between you and your friend, never through it.
+- The link carries your app's fingerprint, so a friend can only ever connect to you.
+- Most home routers work as they are. Where yours allows it, the app opens a port on it for the session (UPnP / NAT-PMP / PCP). Settings › Play Together has the server address and these options.
+- Not yet tried from outside a home network: tell us how it goes.
+
+Convert:
+
+- Save to: The PS5, straight. An image is written to the PS5 as it's built, with no copy on this computer and no upload afterwards. A dropped connection or a restart picks up where it stopped, and the image is checked on the PS5 when it's done. For .exfat, .ffpkg and .ffpfs images, and .exfat with zstd packs.
+- PS4 updates: pick a PS4 game and its update, and Convert merges them into one image or folder of the game at the update's version. It checks that the update belongs to the game and is newer.
+- PS4 add-ons (DLC) with files become a folder of their data. A licence-only add-on says there's nothing to convert.
+- A .ffpkg, .ffpfs or .ffpfsc build that stops partway (a crash, the app closed) now goes on from where it stopped, as .exfat already did. Every byte is read back afterwards, and a game that changed in between is built again from the start.
+
+None of the Convert changes have been tried on a PS5 yet.
+
 ## 11.5.2
 
 Remote Play on older Macs (#720, #683):

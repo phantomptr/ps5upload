@@ -268,6 +268,12 @@ describe("engine-backed commands the web UI depends on (#300)", () => {
     expect(JSON.parse(String(calls[0].init.body))).toMatchObject({ source: "/g", language: "de-DE" });
   });
 
+  it("sends the PS4 update a package build merges into its game", async () => {
+    const calls = captureFetch({ job_id: "j" });
+    await browserInvoke("fpkg_build", { source: "/game.pkg", update: "/update.pkg" });
+    expect(JSON.parse(String(calls[0].init.body))).toMatchObject({ source: "/game.pkg", update: "/update.pkg" });
+  });
+
   it("keeps since_seq=0 rather than dropping it as falsy", async () => {
     // Dropping it would make the engine replay the whole notification
     // backlog on every poll instead of returning only new rows.

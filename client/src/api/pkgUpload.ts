@@ -5,6 +5,8 @@ export interface BrowserPkgUpload {
   path: string;
   filename: string;
   size: number;
+  /** With `relPath`: the staged folder's own path on the engine (its first name). */
+  root?: string;
 }
 
 async function responseError(response: Response): Promise<string> {
@@ -18,6 +20,10 @@ async function responseError(response: Response): Promise<string> {
 export interface StageOptions {
   onProgress?: (sent: number, total: number) => void;
   signal?: AbortSignal;
+  /** Files only: add the file to this earlier upload instead of starting a new one. */
+  uploadId?: string;
+  /** Files only: the file's place in a folder being sent (`Game/sce_sys/param.json`). */
+  relPath?: string;
 }
 
 /**
@@ -73,13 +79,18 @@ function send(url: string, form: FormData, opts?: StageOptions): Promise<Respons
 async function stageBrowserFileAt(file: File, endpoint: string, opts?: StageOptions): Promise<BrowserPkgUpload> {
   const form = new FormData();
   form.append(endpoint === "/api/pkg/upload" ? "pkg" : "file", file, file.name);
-  const response = await send(`${getEngineUrl()}${endpoint}`, form, opts);
+  const query = new URLSearchParams();
+  if (opts?.uploadId) query.set("upload_id", opts.uploadId);
+  if (opts?.relPath) query.set("relpath", opts.relPath);
+  const qs = query.toString();
+  const response = await send(`${getEngineUrl()}${endpoint}${qs ? `?${qs}` : ""}`, form, opts);
   if (!response.ok) throw new Error(await responseError(response));
   const body = (await response.json()) as {
     upload_id?: unknown;
     path?: unknown;
     filename?: unknown;
     size?: unknown;
+    root?: unknown;
   };
   if (typeof body.upload_id !== "string" || typeof body.path !== "string") {
     throw new Error("engine returned an invalid package-upload response");
@@ -90,6 +101,7 @@ async function stageBrowserFileAt(file: File, endpoint: string, opts?: StageOpti
     filename:
       typeof body.filename === "string" ? body.filename : file.name,
     size: typeof body.size === "number" ? body.size : file.size,
+    ...(typeof body.root === "string" ? { root: body.root } : {}),
   };
 }
 

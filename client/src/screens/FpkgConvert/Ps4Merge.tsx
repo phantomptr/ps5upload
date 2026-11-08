@@ -19,19 +19,19 @@ export function Ps4KindNote({ inspection }: { inspection: FpkgInspection }) {
   let text: string;
   if (inspection.ps4_merge) {
     text = tr(
-      "fpkg.ps4_merged_note",
+      "fpkg.ps4_merged_note_v2",
       {
         title: inspection.ps4_merge.title_id,
         from: inspection.ps4_merge.game_version,
         to: inspection.ps4_merge.update_version,
       },
-      "The PS4 game {title} with its update merged in: {from} becomes {to}. It converts to a game image or a folder at that version.",
+      "The PS4 game {title} with its update merged in: {from} becomes {to}. It converts to a PS4 package, a game image or a folder at that version.",
     );
   } else if (inspection.ps4_kind === "patch") {
     text = tr(
-      "fpkg.ps4_patch_note",
+      "fpkg.ps4_patch_note_v2",
       { title, version },
-      "A PS4 update, version {version}, for {title}. It holds only the files that changed, so it isn't a game on its own: choose the game it goes into below, and the image or folder you make is the game at this version.",
+      "A PS4 update, version {version}, for {title}. It holds only the files that changed, so it isn't a game on its own: choose the game it goes into below, and what you make is the game at this version.",
     );
   } else if (inspection.ps4_kind === "addon" && inspection.ps4_addon_data === false) {
     text = tr(
@@ -47,9 +47,9 @@ export function Ps4KindNote({ inspection }: { inspection: FpkgInspection }) {
     );
   } else {
     text = tr(
-      "fpkg.ps4_game_note",
+      "fpkg.ps4_game_note_v2",
       undefined,
-      "A PS4 game. It converts to a game image or a folder, and gets the param.json ShadowMount+ needs. It can't become a PS5 package.",
+      "A PS4 game. It converts to a PS4 package, a game image or a folder; an image or folder gets the param.json ShadowMount+ needs.",
     );
   }
   return (

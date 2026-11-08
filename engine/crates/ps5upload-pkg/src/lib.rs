@@ -763,9 +763,11 @@ pub fn parse_pkg_from<R: Read + Seek>(
         // PS5 patch kind is encoded in CNT content flags even if param.json is
         // absent/encrypted. Preserve the familiar gd/gp category contract for
         // the rest of the app and never default a PS5 package to PS4GD.
+        // An add-on says so by its content type (#724).
         let is_patch = (content_flags & 0x0010_0000) != 0 || (content_flags & 0x4000_0000) != 0;
         if meta.category.is_empty() {
-            meta.category = if is_patch { "gp" } else { "gd" }.to_string();
+            meta.category =
+                kind::category_from_header(meta.content_type, content_flags).to_string();
         }
         meta.package_type = Some(if is_patch { "PS5DP" } else { "PS5GD" }.to_string());
     } else {
@@ -1357,9 +1359,9 @@ where
         if head.len() < 0x7C {
             return None;
         }
+        let content_type = u32::from_be_bytes(head[0x74..0x78].try_into().ok()?);
         let flags = u32::from_be_bytes(head[0x78..0x7C].try_into().ok()?);
-        let is_patch = (flags & 0x0010_0000) != 0 || (flags & 0x4000_0000) != 0;
-        return Some(if is_patch { "gp" } else { "gd" }.to_string());
+        return Some(kind::category_from_header(content_type, flags).to_string());
     }
     let entry_count = u32::from_be_bytes([head[0x10], head[0x11], head[0x12], head[0x13]]);
     let table_offset = u32::from_be_bytes([head[0x18], head[0x19], head[0x1A], head[0x1B]]);
@@ -1411,6 +1413,12 @@ pub struct ReaderMetadata {
     /// do know it can populate the field with
     /// [`package_fingerprint_from_reader`].
     pub fingerprint: String,
+    /// The container header's `content_type` (0x74); 0 when not read. See [`kind::classify`].
+    #[serde(default)]
+    pub content_type: u32,
+    /// The container header's `content_flags` (0x78); 0 when not read.
+    #[serde(default)]
+    pub content_flags: u32,
 }
 
 /// Title id from a content id's second dash segment, e.g.
@@ -1529,14 +1537,17 @@ where
             }
         }
     }
+    let (content_type, content_flags) = if head.len() >= 0x7C {
+        (
+            u32::from_be_bytes(head[0x74..0x78].try_into().ok()?),
+            u32::from_be_bytes(head[0x78..0x7C].try_into().ok()?),
+        )
+    } else {
+        (0, 0)
+    };
     if outer_magic == PKG_MAGIC_FIH && category.is_empty() && head.len() >= 0x7C {
-        let flags = u32::from_be_bytes(head[0x78..0x7C].try_into().ok()?);
-        category = if (flags & 0x0010_0000) != 0 || (flags & 0x4000_0000) != 0 {
-            "gp"
-        } else {
-            "gd"
-        }
-        .to_string();
+        // A PS5 add-on is `ac`, never the `gd` a full game is (#724).
+        category = kind::category_from_header(content_type, content_flags).to_string();
     }
     if title_id.is_empty() {
         title_id = title_id_from_content_id_str(&content_id);
@@ -1560,6 +1571,8 @@ where
         platform,
         authenticity,
         fingerprint: String::new(),
+        content_type,
+        content_flags,
     })
 }
 
@@ -1832,6 +1845,35 @@ mod tests {
             package_type_for_category_and_platform(&m.category, &m.platform).as_deref(),
             Some("PS5DP")
         );
+    }
+
+    /// #724: a PS5 add-on's param.json has no category; its header type says what it is.
+    #[test]
+    fn metadata_from_reader_names_an_embedded_fih_add_on_ac() {
+        let fih = |content_type: u32| {
+            let cnt_base = 0x10000usize;
+            let mut cnt = build_pkg_multi(
+                "UP0000-PPSA01234_00-DELUXEUPGRADE000",
+                &[("TITLE", "Deluxe Upgrade")],
+            );
+            cnt[0x74..0x78].copy_from_slice(&content_type.to_be_bytes());
+            cnt[0x78..0x7c].copy_from_slice(&0x0a02_0000u32.to_be_bytes());
+            let mut pkg = vec![0u8; cnt_base];
+            pkg[0..4].copy_from_slice(&PKG_MAGIC_FIH.to_be_bytes());
+            pkg[0x06..0x08].copy_from_slice(&3u16.to_le_bytes());
+            pkg[0x58..0x60].copy_from_slice(&(cnt_base as u64).to_le_bytes());
+            pkg.extend_from_slice(&cnt);
+            metadata_from_reader(move |off: u64, len: u64| {
+                let (o, l) = (off as usize, len as usize);
+                pkg.get(o..(o + l).min(pkg.len())).map(|s| s.to_vec())
+            })
+            .expect("should parse embedded CNT")
+        };
+        let m = fih(0x21);
+        assert_eq!(m.category, "ac");
+        assert_eq!((m.content_type, m.content_flags), (0x21, 0x0a02_0000));
+        assert_eq!(m.title_id, "PPSA01234");
+        assert_eq!(fih(0x20).category, "gd");
     }
 
     #[test]

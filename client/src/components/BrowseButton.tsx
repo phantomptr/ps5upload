@@ -10,6 +10,7 @@ import { pickPath, pickPaths, type PickPathOptions } from "../lib/pickPath";
 import { isMobile } from "../lib/platform";
 import { displayPath, isRemotePath } from "../lib/remotePath";
 import { useConnectionsStore, type ConnStatus } from "../state/connections";
+import { getEngineUrl } from "../state/engine";
 import { Spinner } from "./Spinner";
 import { useTr } from "../state/lang";
 import { useFitOnScreen } from "./useFitOnScreen";
@@ -47,6 +48,19 @@ export interface BrowseButtonProps {
   /** Files only: pick several at once (ticked rows in the in-app browser, the system dialog's
    *  multi-select) and hand them here instead of to `onPick`. */
   onPickMany?: (paths: string[]) => void;
+  /** Web UI: also offer the device the browser runs on. The main click and "On the server…"
+   *  keep reading the engine's computer; this runs for "This device…" (#730). */
+  thisDevice?: () => void;
+}
+
+/** The engine's computer, by the name the address bar knows it by. */
+export function engineHostName(): string {
+  try {
+    const base = typeof window === "undefined" ? "http://localhost" : window.location.href;
+    return new URL(getEngineUrl() || base, base).hostname;
+  } catch {
+    return "";
+  }
 }
 
 export function BrowseMenu(props: {
@@ -55,12 +69,18 @@ export function BrowseMenu(props: {
   onLocal: () => void;
   onPickServer: (id: string) => void;
   onAdd: () => void;
+  /** Web UI: "On the server…" and "This device…", each saying which machine it reads. */
+  onThisDevice?: () => void;
+  /** List the saved servers (and Add a connection). */
+  servers?: boolean;
 }) {
   const tr = useTr();
   const ref = useRef<HTMLDivElement>(null);
   const fit = useFitOnScreen(ref, true);
   const item =
     "flex w-full items-center gap-2 px-3 py-2 text-start text-sm hover:bg-[var(--color-surface-3)] disabled:opacity-50";
+  const servers = props.servers ?? true;
+  const host = props.onThisDevice ? engineHostName() : "";
   return (
     <div
       ref={ref}
@@ -68,14 +88,57 @@ export function BrowseMenu(props: {
       className="glass-float elev-3 absolute end-0 top-full z-40 mt-1 min-w-56 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-[var(--radius-card)] p-1.5"
       style={fit}
     >
-      <button type="button" role="menuitem" className={item} onClick={props.onLocal}>
-        <HardDrive size={14} className="text-[var(--color-muted)]" />
-        {isMobile()
-          ? tr("browse_this_device", undefined, "This device…")
-          : tr("browse_this_computer", undefined, "This computer…")}
-      </button>
-      {props.connections.length > 0 && <div className="my-1 border-t border-[var(--color-border)]" />}
-      {props.connections.map((c) => {
+      {props.onThisDevice ? (
+        <>
+          <button
+            type="button"
+            role="menuitem"
+            className={`${item} min-h-11 items-start`}
+            onClick={props.onLocal}
+            data-testid="browse-on-server"
+          >
+            <Server size={14} className="mt-0.5 shrink-0 text-[var(--color-muted)]" />
+            <span className="w-64 max-w-[70vw]">
+              <span className="block font-medium">{tr("browse_on_server", undefined, "On the server…")}</span>
+              <span className="mt-0.5 block text-xs leading-snug text-[var(--color-muted)]">
+                {tr(
+                  "browse_on_server_hint",
+                  { host },
+                  `Reads from ${host}, the computer the engine runs on. The quickest: it goes straight to the PS5.`,
+                )}
+              </span>
+            </span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className={`${item} min-h-11 items-start`}
+            onClick={props.onThisDevice}
+            data-testid="browse-this-device"
+          >
+            <HardDrive size={14} className="mt-0.5 shrink-0 text-[var(--color-muted)]" />
+            <span className="w-64 max-w-[70vw]">
+              <span className="block font-medium">{tr("browse_this_device", undefined, "This device…")}</span>
+              <span className="mt-0.5 block text-xs leading-snug text-[var(--color-muted)]">
+                {tr(
+                  "browse_this_device_hint",
+                  undefined,
+                  "Reads from the device this browser runs on. It is copied twice, to the server and then to the PS5: slower, and the server needs free space for the copy.",
+                )}
+              </span>
+            </span>
+          </button>
+        </>
+      ) : (
+        <button type="button" role="menuitem" className={item} onClick={props.onLocal}>
+          <HardDrive size={14} className="text-[var(--color-muted)]" />
+          {isMobile()
+            ? tr("browse_this_device", undefined, "This device…")
+            : tr("browse_this_computer", undefined, "This computer…")}
+        </button>
+      )}
+      {servers && props.connections.length > 0 && <div className="my-1 border-t border-[var(--color-border)]" />}
+      {servers && props.connections.map((c) => {
         const offline = props.status[c.id] === "offline";
         return (
           <button
@@ -96,11 +159,15 @@ export function BrowseMenu(props: {
           </button>
         );
       })}
-      <div className="my-1 border-t border-[var(--color-border)]" />
-      <button type="button" role="menuitem" className={item} onClick={props.onAdd}>
-        <Plus size={14} className="text-[var(--color-muted)]" />
-        {tr("browse_add_connection", undefined, "Add a connection…")}
-      </button>
+      {servers && (
+        <>
+          <div className="my-1 border-t border-[var(--color-border)]" />
+          <button type="button" role="menuitem" className={item} onClick={props.onAdd}>
+            <Plus size={14} className="text-[var(--color-muted)]" />
+            {tr("browse_add_connection", undefined, "Add a connection…")}
+          </button>
+        </>
+      )}
     </div>
   );
 }
@@ -160,25 +227,31 @@ export function BrowseButton(props: BrowseButtonProps) {
     : "border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)]";
   const base = `inline-flex min-h-9 items-center gap-1.5 border ${tone} px-4 text-sm font-medium disabled:opacity-50`;
   const label = props.label ?? tr("browse", undefined, "Browse…");
+  const split = !!props.remote || !!props.thisDevice;
   return (
     <div ref={wrap} className={`relative inline-flex ${props.className ?? ""}`}>
       <button
         type="button"
         disabled={props.disabled || props.busy}
         title={props.tooltip}
-        className={`${base} ${props.remote ? "rounded-s-full" : "rounded-full"}`}
+        className={`${base} ${split ? "rounded-s-full" : "rounded-full"}`}
         onClick={() => (props.onMainClick ? props.onMainClick() : void pick())}
       >
         {props.busy ? <Spinner size={14} tone="inherit" /> : (props.icon ?? <FolderOpen size={14} />)}
         {label}
       </button>
-      {props.remote && (
+      {split && (
         <button
           type="button"
           disabled={props.disabled}
           aria-haspopup="menu"
           aria-expanded={open}
-          aria-label={tr("browse_servers", undefined, "Browse a server")}
+          aria-label={
+            props.thisDevice
+              ? tr("browse_choose_source", undefined, "Choose where to read from")
+              : tr("browse_servers", undefined, "Browse a server")
+          }
+          data-testid="browse-source-menu"
           className={`${base} rounded-e-full px-2.5 ${
             props.primary ? "border-s-[var(--color-accent-contrast)]/30" : "border-s-0"
           }`}
@@ -202,6 +275,15 @@ export function BrowseButton(props: BrowseButtonProps) {
             setOpen(false);
             navigate("/shared-folders?add=1");
           }}
+          servers={!!props.remote}
+          onThisDevice={
+            props.thisDevice
+              ? () => {
+                  setOpen(false);
+                  props.thisDevice?.();
+                }
+              : undefined
+          }
         />
       )}
     </div>
