@@ -7,6 +7,7 @@ import {
   Download,
   ExternalLink,
   PackageOpen,
+  Share2,
   Shield,
   ShieldCheck,
   Shrink,
@@ -171,6 +172,13 @@ export function GameQuickActions({
         navigate(gamePath(game.game_id), { state: { backport: true } }),
     });
   }
+  // Share: on the game's page, with this game's copies to choose from (the engine refuses a
+  // retail game there).
+  items.push({
+    icon: <Share2 size={12} />,
+    label: tr("share_menu", undefined, "Share…"),
+    onSelect: () => navigate(gamePath(game.game_id), { state: { share: true } }),
+  });
   if (game.locations.length > 0) {
     items.push({
       icon: <ShieldCheck size={12} />,

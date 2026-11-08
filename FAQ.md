@@ -324,6 +324,29 @@ on this device** to skip the question next time. If **Open in the app** does not
 isn't on that device: press **Continue in browser** (that also forgets a remembered "app").
 A remembered "browser" lasts until you clear that page's site data in the browser.
 
+**Q: What can I share with a friend, and what can't I?**
+Open a game's page (or **Share…** on a Collection item) and press **Share**. You can send:
+
+- **The app itself, homebrew only**, in any form: a folder, a dump, a mount image (`.exfat`,
+  `.ffpkg`, `.ffpfs`) or a homebrew package.
+- **Saves of any game**, homebrew or retail: that's your progress, not the game. Your friend puts
+  it into their own save of the game; their trophies and account stay theirs.
+- **Screenshots and clips** of that game, which **cheats** you have on, your
+  **controls** (button remaps, keyboard and mouse, macros), and **a short note**. Stream settings
+  aren't kept per game, so there are none to share.
+
+PS5Upload **never shares a retail game**: not as a folder, dump, image or package, and not its
+updates or add-ons. It checks the game itself, not just the name you see, and says "This is a
+retail game (PPSA01234). PS5Upload only shares homebrew." Sharing games you bought would be
+piracy, and PS5Upload is for your own console and homebrew.
+
+You get a link and a QR code. Your friend opens it in **Play › Receive**, sees what you offer and
+picks what they want; nothing is sent until you press **Allow**. The files go straight from your
+computer to theirs, encrypted (over your Wi-Fi, Tailscale or the internet). PS5Upload's hub only
+introduces the two computers and never sees the files. A link stops working after 24 hours (you
+can pick 1 hour or 7 days) and, unless you turn it off, after the first friend you allow. You can
+cancel a share at any time.
+
 **Q: Can the app wake the PS5 without turning on the TV?**
 Yes. The TV comes on because of HDMI-CEC: a PS5 that wakes up tells the TV to turn on and switch
 to it. Turn that off on either side:

@@ -30,7 +30,9 @@ import {
   Download,
   Shield,
   CircleDot,
+  Share2,
 } from "lucide-react";
+import { SharePanel } from "../Share/SharePanel";
 
 import {
   PageHeader,
@@ -181,6 +183,10 @@ export default function GameHubScreen() {
   const location = useLocation();
   const handedBackport =
     (location.state as { backport?: boolean } | null)?.backport === true;
+  // Share (the Collection's "Share…" opens it on arrival).
+  const [sharing, setSharing] = useState(
+    () => (location.state as { share?: boolean } | null)?.share === true,
+  );
 
   // Determine the active tab from URL ?tab=
   const tabParam = searchParams.get("tab");
@@ -361,6 +367,23 @@ export default function GameHubScreen() {
   return (
     <div className="app-page">
       {launcher.dialogs}
+      {sharing && (
+        <SharePanel
+          target={{
+            titleId: game.titleId,
+            title: game.name,
+            host: connectedHost || null,
+            consolePath:
+              connectedEntry?.installed && connectedEntry.registered_from
+                ? connectedEntry.registered_from
+                : game.source !== "collection" && game.path
+                  ? game.path
+                  : null,
+            copies: gv.view?.copies ?? [],
+          }}
+          onClose={() => setSharing(false)}
+        />
+      )}
       {/* Hero: the framed cover beside a big title and the facts as chips, on
           one glass panel (the reference's greeting panel, laid sideways). */}
       <div className="mb-4">
@@ -450,6 +473,15 @@ export default function GameHubScreen() {
               >
                 <ImageIcon size={12} aria-hidden />
                 {tr("captures", undefined, "Screenshots & clips")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSharing(true)}
+                data-testid="game-share"
+                className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-3 text-xs font-medium text-[var(--color-text)] shadow-[var(--edge-highlight)] transition-colors hover:bg-[var(--color-surface)]"
+              >
+                <Share2 size={12} aria-hidden />
+                {tr("share_button", undefined, "Share")}
               </button>
             </div>
             <PlayedLine
