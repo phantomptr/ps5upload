@@ -30,6 +30,7 @@ import { usePayloadPlaylistsStore } from "../state/payloadPlaylists";
 import { log } from "../state/logs";
 import { playlistResendsOurHelper } from "../lib/playlistOps";
 import { startSaveBackupSync } from "../state/autoSaveBackup";
+import { startPayloadUpdateNotices } from "../lib/payloadUpdateNotices";
 import { useConsoleHandoff } from "./useConsoleHandoff";
 import {
   autoRunStillLoaded,
@@ -1720,6 +1721,8 @@ export default function AppShell() {
     const stopMeshShare = startMeshShare(() => useNavSidebarStore.setState(navListsFromStorage()));
     // Automatic save backups are run by the engine; it backs up the consoles in this list.
     const stopSaveBackupSync = startSaveBackupSync();
+    // A notice when the engine finds or applies payload updates (lib/payloadUpdateNotices).
+    const stopPayloadUpdateNotices = startPayloadUpdateNotices();
     // Subscribe-once: cross-store accumulator that credits running
     // titles with elapsed wall-clock between updates. Idempotent.
     installPlayTimeAccumulator();
@@ -1742,6 +1745,7 @@ export default function AppShell() {
       stopSharedPrefs();
       stopMeshShare();
       stopSaveBackupSync();
+      stopPayloadUpdateNotices();
     };
   }, []);
   // Window title follows the active console so the macOS Dock / app

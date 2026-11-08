@@ -1,4 +1,7 @@
-//! Payloads: the engine's library (`payloads_catalog`, `payloads_download`), sending one to a
+//! Payloads: the engine's library (`payloads_catalog`, `payloads_download`), its updates
+//! (`payloads_updates`, `payloads_updates_check`, `payloads_update`, `payloads_rollback`,
+//! `payloads_update_settings`), keeping a console's Payload Manager in step
+//! (`payloads_pm_choice`, `payloads_pm_sync`), sending one to a
 //! console (`payloads_send`), and the console's Payload Manager (`payloads_list`,
 //! `payloads_launch`, `payloads_store`, `payloads_delete`, `payloads_autoload`).
 
@@ -35,6 +38,147 @@ pub(super) fn tools() -> Vec<ToolDef> {
                 method: "POST",
                 path: "/api/payloads/{id}/download",
                 done: "Downloaded the payload.",
+            ),
+        },
+        ToolDef {
+            name: "payloads_updates",
+            title: "Payload updates, as last checked",
+            description: "The last update check (one row per payload: the version here, the \
+                          latest, whether an update is available, the version a rollback puts \
+                          back), what was applied, each console's last Payload Manager sync, and \
+                          the \"Keep payloads up to date\" setting. Asks no network.",
+            kind: Kind::Read,
+            schema: object(json!({}), &[]),
+            run: route!(path: "/api/payloads/updates", done: "Payload updates."),
+        },
+        ToolDef {
+            name: "payloads_updates_check",
+            title: "Check for payload updates",
+            description: "Checks every payload on the engine's computer, and every one kept in a \
+                          console's Payload Manager, for a newer release. Releases are cached for \
+                          an hour; once the host's rate limit answers, the rest come from the \
+                          cache. Nothing is downloaded.",
+            kind: Kind::Write { idempotent: true },
+            schema: object(
+                json!({
+                    "force": flag("Ask each source even when the cache is fresh."),
+                }),
+                &[],
+            ),
+            run: route!(
+                method: "POST",
+                path: "/api/payloads/updates/check",
+                done: "Checked for payload updates.",
+            ),
+        },
+        ToolDef {
+            name: "payloads_update",
+            title: "Update payloads",
+            description: "Downloads the newer release of each payload (`ids`, or all that the \
+                          last check found), with the same checks as any download, and keeps the \
+                          copy it replaces for payloads_rollback. With `sync_console`, then brings \
+                          that console's Payload Manager in step (see payloads_pm_sync).",
+            kind: Kind::Destructive { idempotent: true },
+            schema: object(
+                json!({
+                    "ids": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Payload ids, from payloads_updates. Left out, every \
+                                        update the last check found.",
+                    },
+                    "sync_console": text(
+                        "A console whose Payload Manager to sync afterwards: its address.",
+                    ),
+                }),
+                &[],
+            ),
+            run: route!(
+                method: "POST",
+                path: "/api/payloads/updates/apply",
+                done: "Updated the payloads.",
+            ),
+        },
+        ToolDef {
+            name: "payloads_rollback",
+            title: "Roll a payload back",
+            description: "Puts back the copy the last update of a payload replaced, on the \
+                          engine's computer; calling it again rolls forward. A console's Payload \
+                          Manager gets it on its next sync.",
+            kind: Kind::Write { idempotent: false },
+            schema: object(
+                json!({ "id": text("The payload's id, from payloads_updates.") }),
+                &["id"],
+            ),
+            run: route!(
+                method: "POST",
+                path: "/api/payloads/{id}/rollback",
+                done: "Rolled the payload back.",
+            ),
+        },
+        ToolDef {
+            name: "payloads_update_settings",
+            title: "Keep payloads up to date",
+            description: "Turns \"Keep payloads up to date\" on or off. On, the engine checks at \
+                          start and daily, downloads what is newer, and syncs every console's \
+                          Payload Manager the user chose payloads for. Off by default.",
+            kind: Kind::Write { idempotent: true },
+            schema: object(
+                json!({ "auto_update": flag("On or off.") }),
+                &["auto_update"],
+            ),
+            run: route!(
+                method: "PUT",
+                path: "/api/payloads/updates/settings",
+                done: "Saved the setting.",
+            ),
+        },
+        ToolDef {
+            name: "payloads_pm_choice",
+            title: "Choose what Payload Manager keeps",
+            description: "Sets which library payloads a console's Payload Manager keeps (`ids`) \
+                          and which of them it loads at boot (`autoload_ids`). Nothing changes on \
+                          the console until payloads_pm_sync. Only what the user chose.",
+            kind: Kind::Write { idempotent: true },
+            schema: object(
+                json!({
+                    "console": console_required(),
+                    "ids": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Payload ids to keep in Payload Manager.",
+                    },
+                    "autoload_ids": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Of those, the ones it loads at boot.",
+                    },
+                }),
+                &["console"],
+            ),
+            run: route!(
+                method: "PUT",
+                path: "/api/payloads/pm-sync",
+                console: "host",
+                done: "Saved the choice.",
+            ),
+        },
+        ToolDef {
+            name: "payloads_pm_sync",
+            title: "Sync Payload Manager",
+            description: "Brings a console's Payload Manager in step with the chosen payloads: \
+                          stores this computer's copy where it differs (Payload Manager writes it \
+                          through a temporary file), adds a chosen payload to the boot list once, \
+                          renames an entry whose file name changed, and keeps every other entry. \
+                          Answers what changed; `present: false` when Payload Manager isn't \
+                          running.",
+            kind: Kind::Destructive { idempotent: true },
+            schema: object(json!({ "console": console_required() }), &["console"]),
+            run: route!(
+                method: "POST",
+                path: "/api/payloads/pm-sync/run",
+                console: "host",
+                done: "Synced Payload Manager.",
             ),
         },
         ToolDef {

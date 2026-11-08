@@ -293,6 +293,47 @@
         ],
         "type": "object"
       },
+      "AddRepo": {
+        "description": "What a repo is added with.",
+        "properties": {
+          "asset_hint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "asset_name_hint"
+            ]
+          },
+          "checksum_file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "host": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "owner",
+          "name"
+        ],
+        "type": "object"
+      },
       "AddrQuery": {
         "properties": {
           "addr": {
@@ -2072,6 +2113,33 @@
         },
         "required": [
           "checks"
+        ],
+        "type": "object"
+      },
+      "ChoiceReq": {
+        "properties": {
+          "autoload_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "host": {
+            "type": "string",
+            "x-aliases": [
+              "console",
+              "addr"
+            ]
+          },
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "host"
         ],
         "type": "object"
       },
@@ -7472,6 +7540,38 @@
         },
         "type": "object"
       },
+      "LocalInventoryEntry": {
+        "description": "A file in the local cache.",
+        "properties": {
+          "mtime": {
+            "description": "File mtime, seconds since the Unix epoch.",
+            "type": "integer"
+          },
+          "path": {
+            "description": "Path of the cached `.elf`: what a send consumes.",
+            "type": "string"
+          },
+          "payload_id": {
+            "type": "string"
+          },
+          "size": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "description": "Tag of the cached binary, from the `VERSION` file beside it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "payload_id",
+          "version",
+          "path",
+          "size",
+          "mtime"
+        ],
+        "type": "object"
+      },
       "Location": {
         "description": "One place a game is: a package, an image, a folder, an archive.",
         "properties": {
@@ -10861,6 +10961,21 @@
         ],
         "type": "object"
       },
+      "RunReq": {
+        "properties": {
+          "host": {
+            "type": "string",
+            "x-aliases": [
+              "console",
+              "addr"
+            ]
+          }
+        },
+        "required": [
+          "host"
+        ],
+        "type": "object"
+      },
       "RunSummary": {
         "properties": {
           "container_root": {
@@ -13412,6 +13527,16 @@
           "drive",
           "console"
         ],
+        "type": "object"
+      },
+      "UpdateSettings": {
+        "description": "The user's update settings.",
+        "properties": {
+          "auto_update": {
+            "description": "\"Keep payloads up to date\": check at start and daily, and apply what is newer. Off\nunless the user turns it on.",
+            "type": "boolean"
+          }
+        },
         "type": "object"
       },
       "UsbEjectReq": {
@@ -24323,6 +24448,684 @@
         "x-ps5upload": {
           "access": "loopback",
           "response_schema": "literal"
+        }
+      }
+    },
+    "/api/payloads": {
+      "get": {
+        "description": "GET /api/payloads: the catalogue with the user's repos, and what is cached.",
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The catalogue with the user's repos, and what is cached",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      }
+    },
+    "/api/payloads/pm-sync": {
+      "get": {
+        "description": "GET /api/payloads/pm-sync?host= → what this console's Payload Manager keeps and loads.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "host",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "x-aliases": [
+              "console",
+              "addr"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "What this console's Payload Manager keeps and loads",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "addr"
+            ],
+            "in": "query",
+            "name": "host",
+            "required": true
+          },
+          "response_schema": "none"
+        }
+      },
+      "put": {
+        "description": "PUT /api/payloads/pm-sync `{host, ids, autoload_ids}`: the payloads Payload Manager keeps,\nand those it loads at boot. Takes effect on the next sync.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChoiceReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The payloads Payload Manager keeps, and those it loads at boot",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "addr"
+            ],
+            "in": "body",
+            "name": "host",
+            "required": true
+          },
+          "response_schema": "none"
+        }
+      }
+    },
+    "/api/payloads/pm-sync/run": {
+      "post": {
+        "description": "POST /api/payloads/pm-sync/run `{host}` → what changed. `present: false` when Payload\nManager doesn't answer; nothing else is touched then.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "What changed",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "addr"
+            ],
+            "in": "body",
+            "name": "host",
+            "required": true
+          },
+          "response_schema": "none"
+        }
+      }
+    },
+    "/api/payloads/repos": {
+      "post": {
+        "description": "POST /api/payloads/repos {host, owner, name, display_name?, asset_hint?, checksum_file?}",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddRepo"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      }
+    },
+    "/api/payloads/repos/{id}": {
+      "delete": {
+        "description": "DELETE /api/payloads/repos/{id} → {removed}",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "{removed}",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      }
+    },
+    "/api/payloads/updates": {
+      "get": {
+        "description": "GET /api/payloads/updates → `{settings, state}`: the last check, what was applied and the\nlast Payload Manager syncs. Never asks the network or a console.",
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "`{settings, state}`: the last check, what was applied and the last Payload Manager syncs",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      }
+    },
+    "/api/payloads/updates/apply": {
+      "post": {
+        "description": "POST /api/payloads/updates/apply `{ids?, console?}` → `{updated, errors, pm_sync?}`.\nEach update keeps the copy it replaces for a rollback; one failure does not stop the rest.",
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "contentEncoding": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "`{updated, errors, pm_sync?}`",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      }
+    },
+    "/api/payloads/updates/check": {
+      "post": {
+        "description": "POST /api/payloads/updates/check `{force?}` → the update state with one row per payload.",
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "contentEncoding": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The update state with one row per payload",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      }
+    },
+    "/api/payloads/updates/settings": {
+      "get": {
+        "description": "GET /api/payloads/updates/settings → `{auto_update}`.",
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "`{auto_update}`",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      },
+      "put": {
+        "description": "PUT /api/payloads/updates/settings `{auto_update}`: \"Keep payloads up to date\" checks at\nstart and daily, and applies what is newer.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "\"Keep payloads up to date\" checks at start and daily, and applies what is newer",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      }
+    },
+    "/api/payloads/{id}/download": {
+      "post": {
+        "description": "POST /api/payloads/{id}/download: fetch a release into the cache. Takes as long as the\ndownload does; `/download/cancel` stops it.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "contentEncoding": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Fetch a release into the cache",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      }
+    },
+    "/api/payloads/{id}/download/cancel": {
+      "post": {
+        "description": "POST /api/payloads/{id}/download/cancel → {cancelled}. The download's own request answers\n409 `download_cancelled`.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "{cancelled}",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      }
+    },
+    "/api/payloads/{id}/releases": {
+      "get": {
+        "description": "GET /api/payloads/{id}/releases?force=1: newest first, cached for an hour.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "force_refresh"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Newest first, cached for an hour",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      }
+    },
+    "/api/payloads/{id}/releases/latest": {
+      "get": {
+        "description": "GET /api/payloads/{id}/releases/latest?force=1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "force_refresh"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      }
+    },
+    "/api/payloads/{id}/rollback": {
+      "post": {
+        "description": "POST /api/payloads/{id}/rollback → what was put back. 404 `no_previous` when no earlier copy\nis kept.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "What was put back",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
         }
       }
     },
