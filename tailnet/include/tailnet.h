@@ -10,8 +10,15 @@
  * thread; a tn_netmap pointer passed to it is only valid during the call.
  * tn_stop(), tn_pause() and tn_resume() may be called from any thread.
  *
- * Milestone M1 implements control only: keys, /key, ts2021 (Noise IK + HTTP/2),
- * register (pre-auth key or interactive login URL) and the map long-poll.
+ * Two internal threads: the control thread (blocking I/O: /key, ts2021 + HTTP/2,
+ * register, the map long-poll, lite updates) and the data-plane thread (one poll()
+ * loop: the UDP socket for WireGuard/disco/STUN, DERP connections over TLS, timers).
+ * Event callbacks may come from either thread, but never concurrently with
+ * tn_destroy(); a callback must not call tn_stop()/tn_destroy().
+ *
+ * The node is a layer-3 endpoint: tn_send_ip() takes an IPv4 packet for a peer, and
+ * inbound packets for us arrive at tn_config.packet_cb. ICMP echo requests to our
+ * address are answered by the core.
  */
 #ifndef TAILNET_H
 #define TAILNET_H
@@ -142,7 +149,9 @@ typedef enum {
 	TN_EV_LOGIN_URL,    /* ev.text = URL the user must open */
 	TN_EV_NETMAP,       /* ev.netmap updated */
 	TN_EV_LOG,          /* ev.text = diagnostic line */
-	TN_EV_ERROR         /* ev.err + ev.text; the node retries by itself */
+	TN_EV_ERROR,        /* ev.err + ev.text; the node retries by itself */
+	TN_EV_PATH,         /* a peer's path changed (direct/relayed); ev.text describes it */
+	TN_EV_WARN          /* something the user should know, e.g. the key expires soon */
 } tn_event_type;
 
 typedef struct {
@@ -154,6 +163,11 @@ typedef struct {
 } tn_event;
 
 typedef void (*tn_event_cb)(void *user, const tn_event *ev);
+
+/* Inbound IPv4 packet addressed to us (already decrypted and checked: version,
+ * checksums, our destination, source within the sending peer's AllowedIPs).
+ * Called on the data-plane thread; may call tn_send_ip(). */
+typedef void (*tn_packet_cb)(void *user, const uint8_t *pkt, size_t len);
 
 typedef enum {
 	TN_TRANSPORT_AUTO = 0, /* http:// URL: plain; https:// URL: port 80 first, then TLS 443 */
@@ -182,9 +196,17 @@ typedef struct {
 	uint32_t json_tokens_max;/* JSON tokens per message, default 65536 (16 bytes each) */
 	/* Test hook: dump each raw MapResponse JSON to this directory (NULL = off). */
 	const char *dump_dir;
+	/* Data plane. */
+	uint16_t udp_port;       /* local UDP port for WireGuard/disco/STUN; 0 = 41641 */
+	tn_packet_cb packet_cb;  /* inbound packets; NULL = dropped (pings still answered) */
+	int no_direct;           /* debug: never use direct UDP paths (DERP only) */
 } tn_config;
 
 typedef struct tn_ctx tn_ctx;
+
+/* Largest IPv4 packet in or out (Tailscale's tunnel MTU, spec 10). */
+#define TN_MTU 1280
+
 
 /* Allocate everything; load or create keys in state_dir. */
 int tn_create(const tn_config *cfg, tn_ctx **out);
@@ -198,6 +220,43 @@ void tn_pause(tn_ctx *ctx);
 void tn_resume(tn_ctx *ctx);
 /* Free everything (calls tn_stop first). */
 void tn_destroy(tn_ctx *ctx);
+
+/* Send one IPv4 packet (len <= TN_MTU) to the peer whose AllowedIPs contain its
+ * destination. Any thread. TN_OK when sent or queued behind a handshake;
+ * TN_E_ARG no such peer / not IPv4, TN_E_TOOBIG, TN_E_STATE when not running. */
+int tn_send_ip(tn_ctx *ctx, const uint8_t *pkt, size_t len);
+
+typedef enum { TN_PATH_NONE = 0, TN_PATH_DERP, TN_PATH_DIRECT } tn_path;
+
+typedef struct {
+	char name[TN_NAME_MAX];
+	uint32_t addr4;
+	uint8_t online;         /* per control */
+	uint8_t handshake;      /* a WireGuard session is up */
+	tn_path path;
+	tn_ep4 direct;          /* when path == DIRECT */
+	int32_t derp_region;    /* the region used when relayed */
+	int32_t latency_us;     /* disco RTT on the direct path, -1 unknown */
+	int64_t last_rx_ms;     /* ms ago, -1 never */
+	uint64_t tx_bytes, rx_bytes;
+} tn_peer_status;
+
+typedef struct {
+	tn_state state;
+	uint32_t self_addr4;
+	char self_name[TN_NAME_MAX];
+	int32_t home_derp;          /* chosen by netcheck, 0 = none yet */
+	int32_t home_latency_us;    /* STUN RTT to the home region, -1 unknown */
+	uint8_t derp_connected;     /* the home DERP connection is up */
+	uint16_t udp_port;
+	uint32_t n_endpoints;
+	tn_ep4 endpoints[8];        /* what we advertise (local + STUN) */
+	int64_t key_expiry;         /* unix seconds, 0 = never */
+	uint32_t n_peers;
+} tn_status;
+
+/* Snapshot of the node; peers (may be NULL) gets up to cap entries. */
+int tn_get_status(tn_ctx *ctx, tn_status *st, tn_peer_status *peers, uint32_t cap);
 
 /* Bytes allocated by tn_create for this config (for budgeting). */
 size_t tn_memory_footprint(const tn_ctx *ctx);

@@ -164,6 +164,7 @@ typedef struct {
 	uint8_t *body;         /* caller-owned sink */
 	size_t cap, len;
 	uint32_t unacked;      /* received bytes not yet returned by WINDOW_UPDATE */
+	int32_t retry_after_s; /* Retry-After header, 0 if absent */
 } tn_h2_stream;
 
 typedef struct {
@@ -212,6 +213,206 @@ typedef struct {
 int tn_netmap_apply(tn_nmstate *s, const tn_json *j, tn_map_result *res);
 void tn_netmap_reset(tn_nmstate *s);
 
+static inline void tn_put_le32(uint8_t *p, uint32_t v)
+{
+	p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+}
+
+/* ---------- wg.c: WireGuard ---------- */
+#define TN_WG_MSG_INIT 1
+#define TN_WG_MSG_RESP 2
+#define TN_WG_MSG_COOKIE 3
+#define TN_WG_MSG_DATA 4
+#define TN_WG_INIT_LEN 148
+#define TN_WG_RESP_LEN 92
+#define TN_WG_COOKIE_LEN 64
+#define TN_WG_REKEY_AFTER_MS 120000
+#define TN_WG_REJECT_AFTER_MS 180000
+#define TN_WG_REKEY_ATTEMPT_MS 90000
+#define TN_WG_REKEY_TIMEOUT_MS 5000
+#define TN_WG_KEEPALIVE_MS 10000
+#define TN_WG_COOKIE_REFRESH_MS 120000
+#define TN_WG_INIT_RATE_MS 20
+#define TN_WG_REJECT_AFTER_MSGS (UINT64_MAX - 8192 - 1)
+#define TN_WG_REPLAY_BLOCKS 32 /* 31 * 64 = 1984-packet window */
+
+typedef struct {
+	uint8_t send_key[32], recv_key[32];
+	uint64_t send_n;
+	uint64_t replay_last;
+	uint64_t replay[TN_WG_REPLAY_BLOCKS];
+	uint32_t local_idx, remote_idx;
+	int64_t created;
+	uint8_t valid, initiator;
+} tn_wg_keypair;
+
+typedef struct {
+	uint8_t priv[32], pub[32];
+	uint8_t mac1_key[32];
+	uint8_t last_ts_sent[12];
+} tn_wg_self;
+
+typedef struct {
+	uint8_t pub[32];
+	uint8_t ss[32];            /* static-static DH, precomputed */
+	uint8_t mac1_key[32], cookie_key[32];
+	/* an initiation we sent */
+	uint8_t hs_active;
+	uint8_t hs_h[32], hs_ck[32], hs_e_priv[32];
+	uint32_t hs_local_idx;
+	int64_t hs_started, hs_sent;
+	uint8_t last_mac1[16], cookie[16], has_cookie;
+	int64_t cookie_at;
+	/* what we accepted from the peer */
+	uint8_t last_ts[12];
+	int64_t last_init_rx;
+	tn_wg_keypair cur, prev, next;
+	int64_t keepalive_due;     /* passive keepalive deadline, 0 = none */
+} tn_wg_peer;
+
+typedef struct {
+	uint8_t h[32], ck[32], e_pub[32], peer_pub[32];
+	uint32_t sender;
+} tn_wg_rx_init;
+
+void tn_wg_self_init(tn_wg_self *s, const uint8_t priv[32], const uint8_t pub[32]);
+int tn_wg_peer_init(const tn_wg_self *s, tn_wg_peer *p, const uint8_t peer_pub[32]);
+int tn_wg_check_mac1(const tn_wg_self *s, const uint8_t *msg, size_t len);
+void tn_wg_create_init(tn_wg_self *s, tn_wg_peer *p, uint8_t out[TN_WG_INIT_LEN], uint32_t local_idx,
+		       int64_t wall_ns, int64_t now_ms);
+/* Responder, step 1: check mac1 and decrypt the initiator's static key. */
+int tn_wg_init_open(const tn_wg_self *s, const uint8_t *msg, size_t len, tn_wg_rx_init *st);
+/* Step 2, once the peer is known: timestamp + rate checks. 0, -1 bad, -2 replay/flood. */
+int tn_wg_init_finish(tn_wg_peer *p, tn_wg_rx_init *st, const uint8_t *msg, int64_t now_ms);
+/* Step 3: the response; the keypair lands in p->next. */
+void tn_wg_create_resp(tn_wg_peer *p, tn_wg_rx_init *st, uint8_t out[TN_WG_RESP_LEN], uint32_t local_idx,
+		       int64_t now_ms);
+int tn_wg_consume_resp(const tn_wg_self *s, tn_wg_peer *p, const uint8_t *msg, size_t len, int64_t now_ms);
+int tn_wg_consume_cookie(tn_wg_peer *p, const uint8_t *msg, size_t len, int64_t now_ms);
+void tn_wg_confirm_next(tn_wg_peer *p);
+/* Transport: out gets 16 + pad16(n) + 16 bytes; pt may equal out + 16. */
+size_t tn_wg_seal(tn_wg_keypair *kp, uint8_t *out, const uint8_t *pt, size_t n);
+/* Decrypt in place (plaintext at msg + 16). Returns its length, -1 bad, -2 replay. */
+int tn_wg_open(tn_wg_keypair *kp, uint8_t *msg, size_t len, int64_t now_ms);
+tn_wg_keypair *tn_wg_send_keypair(tn_wg_peer *p, int64_t now_ms);
+void tn_wg_reset(tn_wg_peer *p);
+
+/* ---------- disco.c: disco + STUN ---------- */
+#define TN_DISCO_HDR 62 /* magic 6 + sender key 32 + nonce 24 */
+#define TN_DISCO_PING 1
+#define TN_DISCO_PONG 2
+#define TN_DISCO_CMM 3
+#define TN_STUN_REQ_LEN 40
+extern const uint8_t tn_disco_magic[6];
+int tn_disco_is(const uint8_t *p, size_t n);
+size_t tn_disco_seal(uint8_t *out, const uint8_t my_pub[32], const uint8_t shared[32], const uint8_t *pt,
+		     size_t n);
+int tn_disco_open(uint8_t *pt, const uint8_t *pkt, size_t n, const uint8_t shared[32]);
+void tn_disco_put_ep(uint8_t out[18], tn_ep4 ep);
+int tn_disco_get_ep(const uint8_t in[18], tn_ep4 *ep);
+uint32_t tn_crc32(const uint8_t *p, size_t n);
+size_t tn_stun_request(uint8_t out[TN_STUN_REQ_LEN], const uint8_t txid[12]);
+int tn_stun_is(const uint8_t *p, size_t n);
+int tn_stun_parse(const uint8_t *p, size_t n, uint8_t txid[12], tn_ep4 *ep);
+
+/* ---------- ip.c ---------- */
+#define TN_IPPROTO_ICMP 1
+#define TN_IPPROTO_TCP 6
+#define TN_IPPROTO_UDP 17
+typedef struct {
+	uint8_t proto, tcp_flags, icmp_type;
+	uint32_t src, dst;
+	uint16_t sport, dport;   /* ICMP echo: id, seq */
+	size_t hlen, len;
+	const uint8_t *payload;
+	size_t plen;
+} tn_ip_info;
+uint16_t tn_ip_csum(const uint8_t *p, size_t n);
+uint16_t tn_l4_csum(uint32_t src, uint32_t dst, uint8_t proto, const uint8_t *seg, size_t n);
+int tn_ip_parse(const uint8_t *p, size_t n, tn_ip_info *o);
+size_t tn_ip_build_udp(uint8_t *out, size_t cap, tn_ep4 src, tn_ep4 dst, const uint8_t *data, size_t n);
+size_t tn_ip_build_icmp_echo(uint8_t *out, size_t cap, uint32_t src, uint32_t dst, uint8_t type, uint16_t id,
+			     uint16_t seq, const uint8_t *data, size_t n);
+
+/* ---------- derp.c ---------- */
+#define TN_DERP_SERVER_KEY 0x01
+#define TN_DERP_CLIENT_INFO 0x02
+#define TN_DERP_SERVER_INFO 0x03
+#define TN_DERP_SEND 0x04
+#define TN_DERP_RECV 0x05
+#define TN_DERP_KEEPALIVE 0x06
+#define TN_DERP_NOTE_PREFERRED 0x07
+#define TN_DERP_PEER_GONE 0x08
+#define TN_DERP_PING 0x12
+#define TN_DERP_PONG 0x13
+#define TN_DERP_HEALTH 0x14
+#define TN_DERP_RESTARTING 0x15
+#define TN_DERP_PKT_MAX 2048
+enum { TN_DC_IDLE = 0, TN_DC_CONNECTING, TN_DC_TLS, TN_DC_HTTP, TN_DC_SERVERKEY, TN_DC_SERVERINFO, TN_DC_READY };
+
+typedef struct {
+	const br_x509_class *vtable;
+	br_x509_decoder_context dc;
+	int idx;
+} tn_x509_any;
+
+typedef struct {
+	uint8_t node_priv[32], node_pub[32];
+} tn_derp_keys;
+
+typedef struct tn_derpc tn_derpc;
+typedef void (*tn_derp_frame_cb)(void *u, tn_derpc *d, uint8_t type, const uint8_t *p, size_t n);
+struct tn_derpc {
+	int fd;
+	uint8_t st, home;
+	int32_t region;
+	uint32_t ip;
+	uint16_t port;
+	char host[TN_HOST_MAX];
+	int64_t t_start, last_rx, last_use, retry_at;
+	int32_t backoff_ms;
+	const tn_derp_keys *keys;
+	uint8_t server_key[32];
+	br_ssl_client_context sc;
+	br_x509_minimal_context xc;
+	tn_x509_any xa;
+	unsigned char iobuf[BR_SSL_BUFSIZE_BIDI];
+	uint8_t in[4096];
+	size_t in_len;
+	uint32_t skip;
+	uint8_t out[16384];
+	size_t out_len;
+};
+
+void tn_tls_client_setup(br_ssl_client_context *cc, br_x509_minimal_context *xc,
+			 const br_x509_trust_anchor *tas, size_t n_tas);
+int tn_derpc_open(tn_derpc *d, const tn_derp_node *node, int32_t region, const tn_derp_keys *keys,
+		  const br_x509_trust_anchor *tas, size_t n_tas, int64_t now);
+void tn_derpc_close(tn_derpc *d);
+short tn_derpc_events(const tn_derpc *d);
+int tn_derpc_io(tn_derpc *d, short revents, tn_derp_frame_cb cb, void *u, int64_t now);
+int tn_derpc_send(tn_derpc *d, const uint8_t dst[32], const uint8_t *pkt, size_t n);
+int tn_derpc_note_preferred(tn_derpc *d, int preferred);
+
+/* ---------- dp.c: the data plane thread ---------- */
+#define TN_REPORT_EPS 8
+#define TN_REPORT_LAT 32
+typedef struct {
+	uint32_t n_ep;
+	tn_ep4 ep[TN_REPORT_EPS];
+	int32_t preferred_derp;
+	uint32_t n_lat;
+	struct { int32_t region, us; } lat[TN_REPORT_LAT];
+} tn_report;
+
+typedef struct tn_dp tn_dp;
+int tn_dp_create(tn_ctx *c);
+void tn_dp_destroy(tn_ctx *c);
+int tn_dp_start(tn_ctx *c);
+void tn_dp_stop(tn_ctx *c);
+void tn_dp_wake(tn_ctx *c);
+void tn_dp_rewake(tn_ctx *c, tn_dp *d);
+
 /* ---------- the context (tailnet.c, control.c) ---------- */
 struct tn_ctx {
 	tn_config cfg;
@@ -244,8 +445,22 @@ struct tn_ctx {
 	uint8_t smallbuf[16384]; /* register / lite update bodies */
 	uint8_t litebuf[2048];
 	char reqbuf[8192];     /* request JSON */
-	char logbuf[768];
 	size_t footprint;
+	int64_t retry_after_ms;  /* from a 429/503 Retry-After, used once by the backoff */
+	int32_t expiry_bucket;   /* last key-expiry warning sent (hours left / 24), -1 none */
+
+	/* control <-> data plane. Lock order: dp_mu, then mu. */
+	pthread_mutex_t mu;      /* nms (netmap) and report */
+	atomic_uint nm_gen;      /* bumped by control after each applied netmap change */
+	tn_report report;        /* endpoints + home DERP from the data plane */
+	atomic_int report_dirty, ctl_reconnect;
+	int kick_r, kick_w;      /* data plane -> control thread */
+
+	pthread_mutex_t dp_mu;   /* recursive: all data-plane state */
+	pthread_t dp_thread;
+	int dp_started;
+	int dp_wake_r, dp_wake_w;
+	tn_dp *dp;
 };
 
 void tn_emit(tn_ctx *c, tn_event_type type, int err, const char *text);

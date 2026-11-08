@@ -312,7 +312,7 @@ int tn_tr_dial(tn_tr *tr, const char *host, int port, tn_tls *tls, int wake_fd, 
 	if (tls) {
 		uint8_t seed[32];
 		tr->tls = tls;
-		br_ssl_client_init_full(&tls->sc, &tls->xc, tls->tas, tls->n_tas);
+		tn_tls_client_setup(&tls->sc, &tls->xc, tls->tas, tls->n_tas);
 		br_ssl_engine_set_buffer(&tls->sc.eng, tls->iobuf, sizeof tls->iobuf, 1);
 		tn_random(seed, sizeof seed);
 		br_ssl_engine_inject_entropy(&tls->sc.eng, seed, sizeof seed);

@@ -5,6 +5,7 @@
 #include "crypto.h"
 
 #include <fcntl.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,7 +29,7 @@ static int ctl_port(const tn_ctx *c, int tls)
 /* GET /key?v=<capver> over TLS for https:// URLs (spec 3.1). */
 int tn_fetch_control_key(tn_ctx *c)
 {
-	char req[512], hdr[4096], body[4096], v[64];
+	char req[512], hdr[4096], body[4096], v[80];
 	tn_tr *tr = &c->tr;
 	int tls = c->url.https && c->cfg.transport != TN_TRANSPORT_PLAIN;
 	int r = tn_tr_dial(tr, c->url.host, ctl_port(c, tls), tls ? c->tls : NULL, c->wake_r,
@@ -205,6 +206,28 @@ static void hostinfo(tn_ctx *c, tn_jw *w)
 	tn_jw_kstr(w, "OS", c->os);
 	tn_jw_kstr(w, "Hostname", c->hostname);
 	tn_jw_kstr(w, "App", c->app);
+	/* Our home DERP and its latency, from the data plane's netcheck (spec 4.4): peers
+	 * learn where to reach us from this. */
+	pthread_mutex_lock(&c->mu);
+	tn_report r = c->report;
+	pthread_mutex_unlock(&c->mu);
+	if (r.preferred_derp) {
+		char k[32], v[32];
+		tn_jw_key(w, "NetInfo");
+		tn_jw_obj(w);
+		tn_jw_kint(w, "PreferredDERP", r.preferred_derp);
+		tn_jw_key(w, "DERPLatency");
+		tn_jw_obj(w);
+		for (uint32_t i = 0; i < r.n_lat; i++) {
+			snprintf(k, sizeof k, "%d-v4", (int)r.lat[i].region);
+			snprintf(v, sizeof v, "%d.%06d", (int)(r.lat[i].us / 1000000), (int)(r.lat[i].us % 1000000));
+			tn_jw_kraw(w, k, v);
+		}
+		tn_jw_end(w);
+		tn_jw_raw(w, ",");
+		tn_jw_end(w);
+		tn_jw_raw(w, ",");
+	}
 	tn_jw_end(w);
 	tn_jw_raw(w, ",");
 }
@@ -278,8 +301,12 @@ static int do_register(tn_ctx *c)
 		if (r < 0)
 			return r;
 		c->smallbuf[st.len] = 0;
-		if (st.status == 429 || st.status == 503)
-			return TN_E_HTTP; /* backoff covers Retry-After for now */
+		if (st.status == 429 || st.status == 503) {
+			if (st.retry_after_s > 0)
+				c->retry_after_ms = (int64_t)st.retry_after_s * 1000;
+			tn_logf(c, 0, "register: HTTP %d (retry after %d s)", st.status, st.retry_after_s);
+			return TN_E_HTTP;
+		}
 		if (st.status != 200 || st.overflow) {
 			tn_logf(c, 0, "register: HTTP %d: %.200s", st.status, (char *)c->smallbuf);
 			if (c->followup[0] && st.status >= 400 && st.status < 500)
@@ -347,7 +374,20 @@ static void map_request(tn_ctx *c, tn_jw *w, int stream)
 	tn_key_text(t, "discokey:", c->keys.disco_pub);
 	tn_jw_kstr(w, "DiscoKey", t);
 	hostinfo(c, w);
-	tn_jw_kraw(w, "Endpoints", "[]"); /* M3 fills these (STUN) */
+	/* Endpoints from the data plane: local interfaces and STUN (spec 5). */
+	pthread_mutex_lock(&c->mu);
+	tn_report r = c->report;
+	pthread_mutex_unlock(&c->mu);
+	tn_jw_key(w, "Endpoints");
+	tn_jw_raw(w, "[");
+	for (uint32_t i = 0; i < r.n_ep; i++) {
+		char ip[16], ep[24];
+		snprintf(ep, sizeof ep, "%s:%u", tn_ip4_str(r.ep[i].ip, ip), r.ep[i].port);
+		if (i)
+			tn_jw_raw(w, ",");
+		tn_jw_str(w, ep);
+	}
+	tn_jw_raw(w, "],");
 	tn_jw_end(w);
 }
 
@@ -364,6 +404,34 @@ static void dump_map(tn_ctx *c, const uint8_t *p, size_t n)
 	if (write(fd, p, n) < 0) { /* best effort test hook */
 	}
 	close(fd);
+}
+
+/* Warn once per day bucket when our node key expires within 7 days (Tailscale's
+ * default expiry is 180 days; Headscale's none). */
+static void expiry_check(tn_ctx *c)
+{
+	int64_t exp = c->nms.nm.self_key_expiry;
+	if (exp <= 0)
+		return;
+	int64_t left = exp - tn_wall_s();
+	if (left > 7 * 86400) {
+		c->expiry_bucket = -1;
+		return;
+	}
+	int32_t bucket = left <= 0 ? 0 : (int32_t)((left + 43200) / 86400); /* days, rounded */
+	if (bucket == c->expiry_bucket)
+		return;
+	c->expiry_bucket = bucket;
+	char msg[160];
+	if (left <= 0)
+		snprintf(msg, sizeof msg, "this device's Tailscale key has expired; sign in again");
+	else if (left < 43200)
+		snprintf(msg, sizeof msg, "this device's Tailscale key expires in %lld hours; sign in again to renew it",
+			 (long long)(left / 3600) + 1);
+	else
+		snprintf(msg, sizeof msg, "this device's Tailscale key expires in %d day%s; sign in again to renew it",
+			 (int)bucket, bucket == 1 ? "" : "s");
+	tn_emit(c, TN_EV_WARN, 0, msg);
 }
 
 /* Handle every complete [le32 len][json] message in the map stream buffer. */
@@ -388,8 +456,16 @@ static int consume_map(tn_ctx *c, tn_h2_stream *st, int64_t *last_msg)
 			return nt == -2 ? TN_E_TOOBIG : TN_E_PROTO;
 		}
 		tn_map_result res;
-		if ((r = tn_netmap_apply(&c->nms, &c->json, &res)) < 0)
+		pthread_mutex_lock(&c->mu);
+		r = tn_netmap_apply(&c->nms, &c->json, &res);
+		pthread_mutex_unlock(&c->mu);
+		if (r < 0)
 			return r;
+		if (res.changed) {
+			atomic_fetch_add(&c->nm_gen, 1);
+			tn_dp_wake(c);
+			expiry_check(c);
+		}
 		off += 4 + (size_t)n;
 		if (res.pop_url[0] && strcmp(res.pop_url, c->last_url) != 0) {
 			tn_strlcpy(c->last_url, res.pop_url, sizeof c->last_url);
@@ -415,6 +491,14 @@ static int consume_map(tn_ctx *c, tn_h2_stream *st, int64_t *last_msg)
 	return r;
 }
 
+/* Bytes already read and not yet consumed: h2_step will not block for them. */
+static int ctl_buffered(tn_ctx *c)
+{
+	if (c->tr.pre_pos < c->tr.pre_len || c->nc.pt_pos < c->nc.pt_len || c->h2.npend)
+		return 1;
+	return c->tr.tls && (br_ssl_engine_current_state(&c->tr.tls->sc.eng) & BR_SSL_RECVAPP);
+}
+
 static int map_poll(tn_ctx *c)
 {
 	tn_jw w;
@@ -423,6 +507,7 @@ static int map_poll(tn_ctx *c)
 	if (map < 0)
 		return map;
 	/* A lite update on a second stream while the poll is open (spec 3.9). */
+	atomic_store(&c->report_dirty, 0);
 	map_request(c, &w, 0);
 	int lite = post_json(c, "/machine/map", &w, c->litebuf, sizeof c->litebuf);
 	if (lite < 0)
@@ -430,6 +515,37 @@ static int map_poll(tn_ctx *c)
 	int64_t last = tn_now_ms();
 	for (;;) {
 		c->tr.deadline = last + MAP_WATCHDOG_MS;
+		/* Between frames, also listen to the data plane: new endpoints or home DERP
+		 * mean a lite update; a clock jump means a fresh session (spec 3.9, 13). */
+		if (!ctl_buffered(c)) {
+			struct pollfd pf[3] = {{.fd = c->tr.fd, .events = POLLIN},
+					       {.fd = c->wake_r, .events = POLLIN},
+					       {.fd = c->kick_r, .events = POLLIN}};
+			int64_t left = c->tr.deadline - tn_now_ms();
+			int pr = poll(pf, 3, left <= 0 ? 0 : left > 60000 ? 60000 : (int)left);
+			if (pr == 0 && left > 60000)
+				continue;
+			if (pf[1].revents)
+				return TN_E_WAKE;
+			if (pf[2].revents) {
+				char b[64];
+				while (read(c->kick_r, b, sizeof b) > 0)
+					;
+				if (atomic_exchange(&c->ctl_reconnect, 0)) {
+					tn_logf(c, 1, "control: reconnecting (wake)");
+					return TN_E_IO;
+				}
+			}
+			if (lite < 0 && atomic_exchange(&c->report_dirty, 0)) {
+				map_request(c, &w, 0);
+				lite = post_json(c, "/machine/map", &w, c->litebuf, sizeof c->litebuf);
+				if (lite < 0)
+					return lite;
+				tn_logf(c, 2, "lite map update sent (endpoints/home DERP)");
+			}
+			if (!pf[0].revents && pr >= 0)
+				continue;
+		}
 		int touched, r = tn_h2_step(&c->h2, &touched);
 		if (r == TN_E_TIMEOUT)
 			tn_logf(c, 0, "map poll: no message for %d s", MAP_WATCHDOG_MS / 1000);
@@ -445,6 +561,8 @@ static int map_poll(tn_ctx *c)
 		tn_h2_stream *st = &c->h2.st[map];
 		if (st->status && st->status != 200) {
 			tn_logf(c, 0, "map poll: HTTP %d", st->status);
+			if (st->retry_after_s > 0)
+				c->retry_after_ms = (int64_t)st->retry_after_s * 1000;
 			if (st->status == 404 || st->status == 401 || st->status == 403) {
 				c->keys.logged_in = 0; /* node deleted at control (direct.go:1219-1222) */
 				tn_state_save(&c->keys, c->state_dir);

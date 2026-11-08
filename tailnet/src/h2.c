@@ -1,4 +1,4 @@
-/* A minimal HTTP/2 client (RFC 9113) over the Noise stream (spec 3.5-3.6):
+/* A minimal HTTP/2 client (the RFC 7540 successor) over the Noise stream (spec 3.5-3.6):
  * prior knowledge, POST only, a few concurrent streams, no push or priorities. */
 #include "tn.h"
 
@@ -157,6 +157,14 @@ static int on_header(void *u, const char *name, size_t nl, const char *value, si
 	tn_h2_stream *st = u;
 	if (st && nl == 7 && !memcmp(name, ":status", 7) && vl == 3)
 		st->status = (value[0] - '0') * 100 + (value[1] - '0') * 10 + (value[2] - '0');
+	/* Retry-After in seconds (429/503); the HTTP-date form is ignored. */
+	if (st && nl == 11 && !memcmp(name, "retry-after", 11) && vl > 0 && vl < 8) {
+		int32_t s = 0;
+		for (size_t i = 0; i < vl && s >= 0; i++)
+			s = value[i] >= '0' && value[i] <= '9' ? s * 10 + (value[i] - '0') : -1;
+		if (s > 0)
+			st->retry_after_s = s;
+	}
 	return 0;
 }
 

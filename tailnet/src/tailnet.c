@@ -63,11 +63,12 @@ void tn_logf(tn_ctx *c, int level, const char *fmt, ...)
 {
 	if (level > c->cfg.verbose || !c->cfg.cb)
 		return;
+	char buf[768]; /* per call: both threads log */
 	va_list ap;
 	va_start(ap, fmt);
-	vsnprintf(c->logbuf, sizeof c->logbuf, fmt, ap);
+	vsnprintf(buf, sizeof buf, fmt, ap);
 	va_end(ap);
-	tn_emit(c, TN_EV_LOG, 0, c->logbuf);
+	tn_emit(c, TN_EV_LOG, 0, buf);
 }
 
 void tn_set_state(tn_ctx *c, tn_state st)
@@ -83,6 +84,18 @@ static void copy_opt(char *dst, size_t cap, const char *src, const char *def)
 	tn_strlcpy(dst, src && *src ? src : def, cap);
 }
 
+static int make_pipe(int *r, int *w)
+{
+	int p[2];
+	if (pipe(p) != 0)
+		return -1;
+	*r = p[0];
+	*w = p[1];
+	fcntl(p[0], F_SETFL, fcntl(p[0], F_GETFL) | O_NONBLOCK);
+	fcntl(p[1], F_SETFL, fcntl(p[1], F_GETFL) | O_NONBLOCK);
+	return 0;
+}
+
 int tn_create(const tn_config *cfg, tn_ctx **out)
 {
 	*out = NULL;
@@ -91,8 +104,15 @@ int tn_create(const tn_config *cfg, tn_ctx **out)
 	tn_ctx *c = calloc(1, sizeof *c);
 	if (!c)
 		return TN_E_NOMEM;
-	c->wake_r = c->wake_w = -1;
+	c->wake_r = c->wake_w = c->kick_r = c->kick_w = c->dp_wake_r = c->dp_wake_w = -1;
+	c->expiry_bucket = -1;
 	c->cfg = *cfg;
+	pthread_mutexattr_t ma;
+	pthread_mutexattr_init(&ma);
+	pthread_mutexattr_settype(&ma, PTHREAD_MUTEX_RECURSIVE);
+	pthread_mutex_init(&c->dp_mu, &ma);
+	pthread_mutexattr_destroy(&ma);
+	pthread_mutex_init(&c->mu, NULL);
 	copy_opt(c->state_dir, sizeof c->state_dir, cfg->state_dir, "");
 	copy_opt(c->control_url, sizeof c->control_url, cfg->control_url, "");
 	/* a trailing slash is not part of the server identity */
@@ -144,15 +164,13 @@ int tn_create(const tn_config *cfg, tn_ctx **out)
 		       c->nms.max_rules * sizeof(tn_filter_rule);
 	if ((r = tn_tls_init(c->tls, c->ca_file)) < 0)
 		goto fail;
-	int p[2];
-	if (pipe(p) != 0) {
+	if (make_pipe(&c->wake_r, &c->wake_w) < 0 || make_pipe(&c->kick_r, &c->kick_w) < 0 ||
+	    make_pipe(&c->dp_wake_r, &c->dp_wake_w) < 0) {
 		r = TN_E_IO;
 		goto fail;
 	}
-	c->wake_r = p[0];
-	c->wake_w = p[1];
-	fcntl(c->wake_r, F_SETFL, fcntl(c->wake_r, F_GETFL) | O_NONBLOCK);
-	fcntl(c->wake_w, F_SETFL, fcntl(c->wake_w, F_GETFL) | O_NONBLOCK);
+	if ((r = tn_dp_create(c)) < 0)
+		goto fail;
 	if ((r = tn_state_load(&c->keys, c->state_dir, c->control_url)) < 0)
 		goto fail;
 	c->tr.fd = -1;
@@ -224,9 +242,13 @@ static void *loop(void *arg)
 		c->backoff_ms = c->backoff_ms ? c->backoff_ms * 2 : BACKOFF_MIN_MS;
 		if (c->backoff_ms > BACKOFF_MAX_MS)
 			c->backoff_ms = BACKOFF_MAX_MS;
+		int64_t wait = c->backoff_ms;
+		if (c->retry_after_ms > wait) /* the server's Retry-After wins, capped at 1 h */
+			wait = c->retry_after_ms > 3600000 ? 3600000 : c->retry_after_ms;
+		c->retry_after_ms = 0;
 		if (c->state != TN_ST_SIGNED_OUT && c->state != TN_ST_WAIT_APPROVAL)
 			tn_set_state(c, TN_ST_BACKOFF);
-		nap(c, c->backoff_ms);
+		nap(c, wait);
 	}
 	tn_control_close(c);
 	tn_set_state(c, TN_ST_STOPPED);
@@ -238,17 +260,25 @@ int tn_start(tn_ctx *c)
 	if (c->thread_started)
 		return TN_OK;
 	atomic_store(&c->req_stop, 0);
-	if (pthread_create(&c->thread, NULL, loop, c) != 0)
+	int r = tn_dp_start(c);
+	if (r < 0)
+		return r;
+	if (pthread_create(&c->thread, NULL, loop, c) != 0) {
+		tn_stop(c);
 		return TN_E_NOMEM;
+	}
 	c->thread_started = 1;
 	return TN_OK;
 }
 
 void tn_stop(tn_ctx *c)
 {
-	if (!c || !c->thread_started)
+	if (!c)
 		return;
 	atomic_store(&c->req_stop, 1);
+	tn_dp_stop(c);
+	if (!c->thread_started)
+		return;
 	wake(c);
 	pthread_join(c->thread, NULL);
 	c->thread_started = 0;
@@ -258,15 +288,18 @@ void tn_pause(tn_ctx *c)
 {
 	atomic_store(&c->req_pause, 1);
 	wake(c);
+	tn_dp_wake(c);
 }
 
 void tn_resume(tn_ctx *c)
 {
-	/* Wake sequence for M1: a fresh control session (new TCP, Noise, map poll).
-	 * M2/M3 add: rebind UDP, drop WireGuard keypairs, reset disco trust, DERP. */
+	/* Wake sequence (spec 13): a fresh control session (new TCP, Noise, map poll);
+	 * the data plane rebinds UDP, drops WireGuard keys and disco trust, reconnects
+	 * DERP and runs netcheck (tn_dp_rewake). */
 	atomic_store(&c->req_pause, 0);
 	c->backoff_ms = 0;
 	wake(c);
+	tn_dp_wake(c);
 }
 
 void tn_destroy(tn_ctx *c)
@@ -274,10 +307,13 @@ void tn_destroy(tn_ctx *c)
 	if (!c)
 		return;
 	tn_stop(c);
-	if (c->wake_r >= 0)
-		close(c->wake_r);
-	if (c->wake_w >= 0)
-		close(c->wake_w);
+	tn_dp_destroy(c);
+	int fds[] = {c->wake_r, c->wake_w, c->kick_r, c->kick_w, c->dp_wake_r, c->dp_wake_w};
+	for (size_t i = 0; i < sizeof fds / sizeof fds[0]; i++)
+		if (fds[i] >= 0)
+			close(fds[i]);
+	pthread_mutex_destroy(&c->mu);
+	pthread_mutex_destroy(&c->dp_mu);
 	tn_wipe(&c->keys, sizeof c->keys);
 	if (c->tls)
 		tn_wipe(c->tls, sizeof *c->tls);

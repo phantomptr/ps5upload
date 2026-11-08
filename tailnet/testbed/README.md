@@ -1,10 +1,13 @@
 # tailnet test bed
 
-A local Headscale and one stock Linux `tailscaled`, in Docker on this machine. No
-Tailscale account and no Tailscale control server are involved. (Headscale fetches
-Tailscale's public DERP map, so the bed needs internet access for that one file.)
+A local Headscale, a local `derper` (DERP over TLS with a throwaway CA, plus STUN), one
+stock Linux `tailscaled`, and a Linux box (`gcc:14`) that builds and runs our tnctl, in
+Docker on this machine (network `tnbed`, 172.31.77.0/24, derper at .10). No Tailscale
+account, control server or public DERP is involved.
 
-Pinned images (in `tb.sh`): `headscale/headscale:0.29.1`, `tailscale/tailscale:v1.104.4`.
+Pinned images (in `tb.sh`): `headscale/headscale:0.29.1`, `tailscale/tailscale:v1.104.4`,
+`gcc:14`. derper is built once with Go from a tailscale clone (`TAILSCALE_SRC`, default
+`~/workspace/github.com/tailscale/tailscale`) into `.state/bin/derper`.
 
 ## Start and stop
 
@@ -12,7 +15,9 @@ Pinned images (in `tb.sh`): `headscale/headscale:0.29.1`, `tailscale/tailscale:v
 tailnet/testbed/tb.sh up      # Headscale on http://127.0.0.1:18080, peer "linux-peer" joined
 tailnet/testbed/tb.sh status  # the peer's `tailscale status`
 tailnet/testbed/tb.sh nodes   # `headscale nodes list`
-tailnet/testbed/tb.sh down    # stop and remove both containers (state is kept)
+tailnet/testbed/tb.sh down    # stop and remove the containers (state is kept)
+tailnet/testbed/tb.sh build-linux   # tnctl (ASan+UBSan) + udpecho, built in the tn box
+tailnet/testbed/tb.sh block on|off  # drop UDP between the peer and the tn box (forces DERP)
 tailnet/testbed/tb.sh reset   # down, then move .state/ aside for a clean bed
 ```
 
@@ -43,6 +48,11 @@ tailnet/testbed/tb.sh register hskey-authreq-…
 ```
 
 ## Checks
+
+- `m2-check.sh`: the M2 acceptance run, tnctl (Linux, ASan+UBSan) against the stock
+  peer: ICMP ping and UDP echo direct and over DERP with RTTs, the peer's `tailscale ping`
+  and kernel `ping` to us, direct -> DERP -> direct while UDP is blocked mid-session,
+  pause/resume, and the key-expiry warning (Headscale `nodes expire -e`).
 
 - `m1-check.sh`: the M1 acceptance run (pre-auth key, pause/resume, interactive URL,
   TLS through `tlsproxy.py` with a throwaway CA). Leaves the bed running.

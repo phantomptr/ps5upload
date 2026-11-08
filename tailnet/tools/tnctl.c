@@ -2,11 +2,19 @@
  *
  *   tnctl login --control URL --state DIR [--authkey K] [--hostname H] [--ca-file PEM]
  *               [--transport auto|plain|tls] [--once] [--timeout SEC] [--dump DIR] [-v|-vv]
+ *               [--port UDP] [--no-direct]
+ *               [--ping 100.x.y.z] [--udp-echo 100.x.y.z:PORT] [--count N] [--interval MS]
+ *               [--wait-direct SEC]
  *
  * Prints the login URL (interactive) or registers with the key, then streams a
  * netmap summary each time it changes. --once exits after the first netmap.
+ * --ping sends ICMP echo requests through the tunnel, --udp-echo UDP datagrams to an
+ * echo server; both print each RTT with the path in use and a summary, then exit.
  * SIGUSR1 pauses the node (rest mode), SIGUSR2 resumes it.
  */
+#include <arpa/inet.h>
+#include <pthread.h>
+#include <sys/socket.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,6 +28,215 @@ static volatile sig_atomic_t g_quit;
 static volatile sig_atomic_t g_got_netmap;
 static volatile sig_atomic_t g_pause, g_resume;
 static int g_once;
+
+/* probe state (written by the packet callback, read by main) */
+static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t g_target;      /* host order */
+static uint16_t g_target_port; /* 0 = ICMP */
+static uint16_t g_id = 0x7e57;
+static uint16_t g_got_seq;
+static int g_got;
+
+static double now_ms(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
+}
+
+static uint16_t be16(const uint8_t *p) { return (uint16_t)(p[0] << 8 | p[1]); }
+static uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
+static void put16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v; }
+static void put32(uint8_t *p, uint32_t v) { put16(p, (uint16_t)(v >> 16)); put16(p + 2, (uint16_t)v); }
+
+static uint16_t csum(const uint8_t *p, size_t n, uint32_t sum)
+{
+	for (; n > 1; n -= 2, p += 2)
+		sum += (uint32_t)p[0] << 8 | p[1];
+	if (n)
+		sum += (uint32_t)p[0] << 8;
+	while (sum >> 16)
+		sum = (sum & 0xffff) + (sum >> 16);
+	return (uint16_t)~sum;
+}
+
+/* Build an ICMP echo request or a UDP datagram (payload carries the sequence). */
+static size_t build_probe(uint8_t *pkt, uint32_t src, uint16_t seq)
+{
+	size_t plen = 32, l4 = g_target_port ? 8 + plen : 8 + plen, total = 20 + l4;
+	memset(pkt, 0, total);
+	pkt[0] = 0x45;
+	put16(pkt + 2, (uint16_t)total);
+	put16(pkt + 4, seq);
+	pkt[8] = 64;
+	pkt[9] = g_target_port ? 17 : 1;
+	put32(pkt + 12, src);
+	put32(pkt + 16, g_target);
+	put16(pkt + 10, csum(pkt, 20, 0));
+	uint8_t *t = pkt + 20;
+	snprintf((char *)t + 8, plen, "tnctl probe %u", seq);
+	put16(t + 8 + 28, seq);
+	if (g_target_port) {
+		put16(t, 40000);
+		put16(t + 2, g_target_port);
+		put16(t + 4, (uint16_t)l4);
+		uint32_t ps = (src >> 16) + (src & 0xffff) + (g_target >> 16) + (g_target & 0xffff) + 17 + (uint32_t)l4;
+		uint16_t c = csum(t, l4, ps);
+		put16(t + 6, c ? c : 0xffff);
+	} else {
+		t[0] = 8;
+		put16(t + 4, g_id);
+		put16(t + 6, seq);
+		put16(t + 2, csum(t, l4, 0));
+	}
+	return total;
+}
+
+static void on_packet(void *user, const uint8_t *pkt, size_t len)
+{
+	(void)user;
+	if (len < 28 || (pkt[0] >> 4) != 4)
+		return;
+	size_t hl = (size_t)(pkt[0] & 15) * 4;
+	if (be32(pkt + 12) != g_target || len < hl + 8)
+		return;
+	const uint8_t *t = pkt + hl;
+	pthread_mutex_lock(&g_mu);
+	if (!g_target_port && pkt[9] == 1 && t[0] == 0 && be16(t + 4) == g_id) {
+		g_got_seq = be16(t + 6);
+		g_got = 1;
+	} else if (g_target_port && pkt[9] == 17 && be16(t) == g_target_port && len >= hl + 8 + 30) {
+		g_got_seq = be16(t + 8 + 28);
+		g_got = 1;
+	}
+	pthread_mutex_unlock(&g_mu);
+}
+
+/* SIGUSR1/SIGUSR2 simulate rest mode and wake (tn_pause/tn_resume). */
+static void handle_signals(tn_ctx *ctx)
+{
+	if (g_pause) {
+		g_pause = 0;
+		printf("tnctl: pause\n");
+		fflush(stdout);
+		tn_pause(ctx);
+	}
+	if (g_resume) {
+		g_resume = 0;
+		printf("tnctl: resume\n");
+		fflush(stdout);
+		tn_resume(ctx);
+	}
+}
+
+static const char *path_of(tn_ctx *ctx, char *buf, size_t cap, int32_t *lat)
+{
+	tn_status st;
+	tn_peer_status ps[64];
+	char ip[16];
+	tn_get_status(ctx, &st, ps, 64);
+	*lat = -1;
+	for (uint32_t i = 0; i < st.n_peers && i < 64; i++) {
+		if (ps[i].addr4 != g_target)
+			continue;
+		*lat = ps[i].latency_us;
+		if (ps[i].path == TN_PATH_DIRECT)
+			snprintf(buf, cap, "direct %s:%u", tn_ip4_str(ps[i].direct.ip, ip), ps[i].direct.port);
+		else if (ps[i].path == TN_PATH_DERP)
+			snprintf(buf, cap, "derp(%d)", ps[i].derp_region);
+		else
+			snprintf(buf, cap, "none");
+		return buf;
+	}
+	snprintf(buf, cap, "no-peer");
+	return buf;
+}
+
+static int run_probes(tn_ctx *ctx, int count, int interval_ms, int wait_direct_s)
+{
+	tn_status st;
+	char pbuf[64], ip[16];
+	int32_t lat;
+	/* Wait until we have an address and the peer is in our netmap. */
+	double t0 = now_ms();
+	for (;;) {
+		if (g_quit)
+			return 1;
+		tn_get_status(ctx, &st, NULL, 0);
+		if (st.self_addr4 && strcmp(path_of(ctx, pbuf, sizeof pbuf, &lat), "no-peer"))
+			break;
+		if (now_ms() - t0 > 30000) {
+			printf("probe: peer %s not in the netmap after 30 s\n", tn_ip4_str(g_target, ip));
+			return 1;
+		}
+		usleep(100000);
+	}
+	const char *kind = g_target_port ? "udp-echo" : "ping";
+	double min = 1e9, max = 0, sum = 0;
+	int recv = 0, sent = 0;
+	uint8_t pkt[128];
+	size_t n;
+	/* --wait-direct: warm up (uncounted probes) until the path is direct, so the
+	 * numbers below are steady state; first contact is reported separately. */
+	if (wait_direct_s) {
+		double tw = now_ms();
+		while (strncmp(path_of(ctx, pbuf, sizeof pbuf, &lat), "direct", 6) && now_ms() - tw < wait_direct_s * 1000.0 &&
+		       !g_quit) {
+			n = build_probe(pkt, st.self_addr4, 0);
+			tn_send_ip(ctx, pkt, n);
+			handle_signals(ctx);
+			usleep(100000);
+		}
+		printf("%s: warm-up %.1f s, path %s\n", kind, (now_ms() - tw) / 1000.0, pbuf);
+	}
+	for (uint16_t seq = 1; seq <= count && !g_quit; seq++) {
+		pthread_mutex_lock(&g_mu);
+		g_got = 0;
+		pthread_mutex_unlock(&g_mu);
+		n = build_probe(pkt, st.self_addr4, seq);
+		double ts = now_ms();
+		int r = tn_send_ip(ctx, pkt, n);
+		sent++;
+		if (r < 0)
+			printf("%s: send seq=%u: %s\n", kind, seq, tn_strerror(r));
+		int ok = 0;
+		while (now_ms() - ts < 3000 && !g_quit) {
+			pthread_mutex_lock(&g_mu);
+			ok = g_got && g_got_seq == seq;
+			pthread_mutex_unlock(&g_mu);
+			if (ok)
+				break;
+			handle_signals(ctx);
+			usleep(200);
+		}
+		double rtt = now_ms() - ts;
+		path_of(ctx, pbuf, sizeof pbuf, &lat);
+		if (ok) {
+			recv++;
+			sum += rtt;
+			min = rtt < min ? rtt : min;
+			max = rtt > max ? rtt : max;
+			printf("%s %s seq=%u time=%.2f ms path=%s\n", kind, tn_ip4_str(g_target, ip), seq, rtt, pbuf);
+		} else {
+			printf("%s %s seq=%u timeout path=%s\n", kind, tn_ip4_str(g_target, ip), seq, pbuf);
+		}
+		fflush(stdout);
+		double left = interval_ms - (now_ms() - ts);
+		while (left > 0 && !g_quit) {
+			handle_signals(ctx);
+			usleep(left > 50 ? 50000 : (useconds_t)(left * 1000));
+			left = interval_ms - (now_ms() - ts);
+		}
+	}
+	path_of(ctx, pbuf, sizeof pbuf, &lat);
+	printf("%s summary: %d sent, %d received, min/avg/max %.2f/%.2f/%.2f ms, final path %s", kind, sent, recv,
+	       recv ? min : 0.0, recv ? sum / recv : 0.0, recv ? max : 0.0, pbuf);
+	if (lat >= 0)
+		printf(", disco RTT %.2f ms", lat / 1000.0);
+	printf("\n");
+	fflush(stdout);
+	return recv == sent ? 0 : 1;
+}
 
 static void on_signal(int s)
 {
@@ -95,6 +312,12 @@ static void on_event(void *user, const tn_event *ev)
 	case TN_EV_ERROR:
 		printf("error: %s (%d)\n", ev->text, ev->err);
 		break;
+	case TN_EV_PATH:
+		printf("path: %s\n", ev->text);
+		break;
+	case TN_EV_WARN:
+		printf("warning: %s\n", ev->text);
+		break;
 	}
 	fflush(stdout);
 }
@@ -103,14 +326,16 @@ static int usage(void)
 {
 	fprintf(stderr, "usage: tnctl login --control URL --state DIR [--authkey KEY] [--hostname NAME]\n"
 			"                   [--ca-file PEM] [--transport auto|plain|tls] [--once]\n"
-			"                   [--timeout SEC] [--dump DIR] [-v|-vv]\n");
+			"                   [--timeout SEC] [--dump DIR] [-v|-vv] [--port UDP] [--no-direct]\n"
+			"                   [--ping IP | --udp-echo IP:PORT] [--count N] [--interval MS]\n"
+			"                   [--wait-direct SEC]\n");
 	return 2;
 }
 
 int main(int argc, char **argv)
 {
 	tn_config cfg = {0};
-	int timeout = 0;
+	int timeout = 0, count = 5, interval = 1000, wait_direct = 0, probe = 0;
 	if (argc < 2 || strcmp(argv[1], "login") != 0)
 		return usage();
 	for (int i = 2; i < argc; i++) {
@@ -128,6 +353,10 @@ int main(int argc, char **argv)
 			cfg.verbose = 2;
 			continue;
 		}
+		if (!strcmp(a, "--no-direct")) {
+			cfg.no_direct = 1;
+			continue;
+		}
 		if (!v)
 			return usage();
 		i++;
@@ -138,6 +367,24 @@ int main(int argc, char **argv)
 		else if (!strcmp(a, "--ca-file")) cfg.ca_file = v;
 		else if (!strcmp(a, "--dump")) cfg.dump_dir = v;
 		else if (!strcmp(a, "--timeout")) timeout = atoi(v);
+		else if (!strcmp(a, "--port")) cfg.udp_port = (uint16_t)atoi(v);
+		else if (!strcmp(a, "--count")) count = atoi(v);
+		else if (!strcmp(a, "--interval")) interval = atoi(v);
+		else if (!strcmp(a, "--wait-direct")) wait_direct = atoi(v);
+		else if (!strcmp(a, "--ping") || !strcmp(a, "--udp-echo")) {
+			char host[64];
+			snprintf(host, sizeof host, "%s", v);
+			char *colon = strchr(host, ':');
+			if (colon) {
+				*colon = 0;
+				g_target_port = (uint16_t)atoi(colon + 1);
+			}
+			struct in_addr ia;
+			if (inet_pton(AF_INET, host, &ia) != 1 || (!strcmp(a, "--udp-echo") && !g_target_port))
+				return usage();
+			g_target = ntohl(ia.s_addr);
+			probe = 1;
+		}
 		else if (!strcmp(a, "--transport")) {
 			if (!strcmp(v, "plain")) cfg.transport = TN_TRANSPORT_PLAIN;
 			else if (!strcmp(v, "tls")) cfg.transport = TN_TRANSPORT_TLS;
@@ -148,6 +395,7 @@ int main(int argc, char **argv)
 	if (!cfg.control_url || !cfg.state_dir)
 		return usage();
 	cfg.cb = on_event;
+	cfg.packet_cb = on_packet;
 
 	tn_ctx *ctx;
 	int r = tn_create(&cfg, &ctx);
@@ -166,23 +414,16 @@ int main(int argc, char **argv)
 		tn_destroy(ctx);
 		return 1;
 	}
+	if (probe) {
+		r = run_probes(ctx, count, interval, wait_direct);
+		tn_destroy(ctx);
+		return r;
+	}
 	time_t start = time(NULL);
 	while (!g_quit && (!timeout || time(NULL) - start < timeout)) {
 		struct timespec ts = {0, 100 * 1000 * 1000};
 		nanosleep(&ts, NULL);
-		/* SIGUSR1/SIGUSR2 simulate rest mode and wake (tn_pause/tn_resume). */
-		if (g_pause) {
-			g_pause = 0;
-			printf("tnctl: pause\n");
-			fflush(stdout);
-			tn_pause(ctx);
-		}
-		if (g_resume) {
-			g_resume = 0;
-			printf("tnctl: resume\n");
-			fflush(stdout);
-			tn_resume(ctx);
-		}
+		handle_signals(ctx);
 	}
 	tn_destroy(ctx);
 	return g_got_netmap ? 0 : 1;

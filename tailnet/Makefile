@@ -52,7 +52,7 @@ CFLAGS_3P := -std=c11 -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE -w -O2 $(SANFLAGS) $(
 	-I$(BEARSSL_DIR)/inc -I$(BEARSSL_DIR)/src -I$(MONO_DIR)
 TN_LDFLAGS := $(SANFLAGS) -lpthread
 
-SRCS := src/crypto.c src/json.c src/util.c src/keys.c src/net.c src/noise.c src/hpack.c \
+SRCS := src/crypto.c src/json.c src/util.c src/keys.c src/net.c src/noise.c src/hpack.c src/wg.c src/disco.c src/ip.c src/derp.c src/dp.c \
 	src/h2.c src/netmap.c src/control.c src/tailnet.c
 OBJS := $(patsubst src/%.c,$(BUILD)/%.o,$(SRCS))
 MONO_OBJ := $(if $(filter 1,$(WITH_MONO)),$(BUILD)/3p/monocypher.o)
@@ -62,7 +62,7 @@ BR_OBJS := $(patsubst $(BEARSSL_DIR)/src/%.c,$(BUILD)/3p/bearssl/%.o,$(BR_SRCS))
 LIB := $(BUILD)/libtailnet.a
 BRLIB := $(BUILD)/libbearssl.a
 TNCTL := $(BUILD)/tnctl
-TESTS := test_crypto test_hpack test_noise test_netmap
+TESTS := test_crypto test_hpack test_noise test_netmap test_dp
 TEST_BINS := $(addprefix $(BUILD)/,$(TESTS))
 
 .PHONY: all lib test ps5 ps5-link size clean check-bearssl

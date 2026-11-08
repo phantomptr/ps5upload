@@ -36,7 +36,7 @@ Go (golang.org/x/crypto, golang.org/x/net) — BSD-3-Clause, The Go Authors
 Specifications
   BLAKE2s: RFC 7693 (src/crypto.c follows its Appendix C reference code).
   Salsa20/HSalsa20/XSalsa20 and NaCl box: D. J. Bernstein's specifications.
-  HPACK: RFC 7541. HTTP/2: RFC 9113. ChaCha20-Poly1305: RFC 8439. X25519: RFC 7748.
+  HPACK: RFC 7541. HTTP/2: the current HTTP/2 RFC (successor of RFC 7540). ChaCha20-Poly1305: RFC 8439. X25519: RFC 7748.
 
 JSON: src/json.c is our own bounded tokenizer (no cJSON).
 lwIP is not used yet (M4).

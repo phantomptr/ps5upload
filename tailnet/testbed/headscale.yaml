@@ -1,4 +1,5 @@
-# Headscale config for the tailnet test bed (tb.sh). Local only: no Tailscale account.
+# Headscale config for the tailnet test bed (tb.sh). Local only: no Tailscale account,
+# no public DERP servers.
 # server_url is what our node on the Mac uses (published port); the Linux peer
 # container reaches the same server as http://headscale:8080 on the bed network.
 server_url: http://127.0.0.1:18080
@@ -15,10 +16,10 @@ prefixes:
 derp:
   server:
     enabled: false
-  # Tailscale's public DERP map (fetched by Headscale; our M1 code only parses it).
-  urls:
-    - https://controlplane.tailscale.com/derpmap/default
-  paths: []
+  # Only the bed's own derper (tb.sh writes derp.yaml): no traffic leaves this Mac.
+  urls: []
+  paths:
+    - /etc/headscale/derp.yaml
   auto_update_enabled: false
   update_frequency: 24h
 disable_check_updates: true
