@@ -56,3 +56,5 @@ f01db54acdadef02d8cd956c783356c7c2298f17:engine/crates/ps5upload-engine/src/rp_g
 # key 0x10..0x2f
 5d971c6882a161365c818554f3cf2d1502803429:tailnet/tests/fixtures/headscale-0.29.1-map-full.json:generic-api-key:1
 5d971c6882a161365c818554f3cf2d1502803429:tailnet/tests/vectors_go.h:generic-api-key:58
+# Made-up invite key (00112233…eeff) in the phone-link tests (#748)
+277ac37bcea06b54989805c645fc591fa3142fcb:client/src/pad/padNet.test.ts:generic-api-key:13
