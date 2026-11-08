@@ -15,6 +15,13 @@ export function streamErrorMessage(tr: Tr, e: StreamError): string {
         { s: e.retryS ?? 30 },
         `The PS5 is still finishing the last Remote Play session. Try again in ${e.retryS ?? 30} s.`,
       );
+    case "held":
+      // Our own last session, waited out for minutes and still not let go (#720).
+      return tr(
+        "rp_err_held",
+        undefined,
+        "The PS5 still has not let go of the last Remote Play session after several minutes. Press Start to try again. If it keeps refusing, restart the PS5.",
+      );
     case "in_use":
       return tr(
         "rp_err_in_use",

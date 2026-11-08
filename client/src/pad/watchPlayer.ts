@@ -32,6 +32,14 @@ export const MSE_EDGE: Record<Latency, Edge> = {
   player: { seek: 0.15, speed: 0.06, target: 0.02 },
 };
 
+/** The app's own player on the system's media player (Settings › Video decoding, old Macs: #720).
+ *  A seek makes the media player decode again from the last keyframe, and a Remote Play stream
+ *  has one only every several seconds: each seek is a visible hitch. In the app the page is busy
+ *  (the whole UI, and the sound decoded in WebAssembly), so pictures come in bursts and the
+ *  player's 150 ms edge seeked often. It catches up by playing faster and seeks only after a real
+ *  stall. */
+export const HOST_MSE_EDGE: Edge = { seek: 0.6, speed: 0.08, target: 0.04 };
+
 /** The sound's edge (#657). A seek restarts a browser's audio output, which takes longer to
  *  start than an Opus frame lasts (iPhone Safari most of all): chasing the sound as tightly
  *  as the picture seeked it on nearly every frame and it never got to play. It catches up by
@@ -866,6 +874,15 @@ export class MseTrack {
     if (onNeedKey) this.keys = [];
   }
 
+  /** Jumps to the live edge so far, and the most the picture was behind before one, s. */
+  seeks = 0;
+  maxLagS = 0;
+
+  /** How far behind the buffered end it may fall before it catches up or jumps. */
+  setEdge(e: Latency | Edge): void {
+    this.latency = e;
+  }
+
   /** A keyframe was pushed that plays at `t` seconds. */
   markKey(t: number): void {
     this.keys?.push(t);
@@ -930,8 +947,13 @@ export class MseTrack {
     if (sb.buffered.length) {
       const end = sb.buffered.end(sb.buffered.length - 1);
       const start = sb.buffered.start(0);
-      const act = edgeAction(end - el.currentTime, end, this.latency);
-      if (act.seekTo !== null) el.currentTime = Math.max(start, act.seekTo);
+      const lag = end - el.currentTime;
+      const act = edgeAction(lag, end, this.latency);
+      if (act.seekTo !== null) {
+        this.seeks++;
+        this.maxLagS = Math.max(this.maxLagS, lag);
+        el.currentTime = Math.max(start, act.seekTo);
+      }
       if (el.playbackRate !== act.rate) el.playbackRate = act.rate;
       if (el.currentTime - start > TRIM_AFTER_S && this.trim(sb, start)) return;
     }
@@ -1144,6 +1166,16 @@ export class MsePlayer {
   /** Whether the media player stopped trying (MSE_MAX_FAILS failed opens). */
   get failed(): boolean {
     return this.gaveUp;
+  }
+
+  /** The picture's edge (see HOST_MSE_EDGE): the sound keeps its own. */
+  setVideoEdge(e: Latency | Edge): void {
+    this.video.setEdge(e);
+  }
+
+  /** Jumps to the live edge so far and the most the picture was behind before one, for the log. */
+  get videoSeeks(): { seeks: number; maxLagMs: number } {
+    return { seeks: this.video.seeks, maxLagMs: Math.round(this.video.maxLagS * 1000) };
   }
 
   get element(): HTMLElement {

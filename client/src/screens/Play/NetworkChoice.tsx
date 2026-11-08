@@ -1,3 +1,5 @@
+import { useNavigate } from "react-router";
+
 import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
 import { useTr } from "../../state/lang";
 
@@ -28,6 +30,39 @@ export function urlHost(u: string): string {
 export function splitByNetwork(urls: string[], tailscale: string | null): { lan: string[]; tailnet: string | null } {
   const tailnet = tailscale ? (urls.find((u) => urlHost(u) === tailscale) ?? null) : null;
   return { lan: urls.filter((u) => u !== tailnet), tailnet };
+}
+
+/** Under the Internet choice: what it does, and one quiet line asking for support (the hub is a
+ *  server PS5Upload pays for). No amounts; the link opens Thanks & Support. */
+export function InternetHint({ testId }: { testId: string }) {
+  const tr = useTr();
+  const navigate = useNavigate();
+  return (
+    <div className="space-y-1">
+      <p className="text-xs text-[var(--color-muted)]" data-testid={`${testId}-internet-hint`}>
+        {tr(
+          "net_internet_hint",
+          undefined,
+          "Works from anywhere: your friend's browser connects straight to this computer. Some strict networks can't connect.",
+        )}
+      </p>
+      <p className="text-[11px] text-[var(--color-muted)] opacity-80" data-testid={`${testId}-internet-support`}>
+        {tr(
+          "net_internet_support",
+          undefined,
+          "Internet play runs on a small server we pay for. If it helps you, a donation keeps it going. Thank you!",
+        )}{" "}
+        <button
+          type="button"
+          onClick={() => navigate("/thanks")}
+          className="underline underline-offset-2 hover:text-[var(--color-text)]"
+          data-testid={`${testId}-internet-donate`}
+        >
+          {tr("thanks_support_title", undefined, "Support PS5Upload")}
+        </button>
+      </p>
+    </div>
+  );
 }
 
 /**
@@ -114,15 +149,7 @@ export function NetworkChoice({
           )}
         </p>
       )}
-      {onInternet && (
-        <p className="text-xs text-[var(--color-muted)]" data-testid={`${testId}-internet-hint`}>
-          {tr(
-            "net_internet_hint",
-            undefined,
-            "Works from anywhere: your friend's browser connects straight to this computer. Some strict networks can't connect.",
-          )}
-        </p>
-      )}
+      {onInternet && <InternetHint testId={testId} />}
       {!onTailnet && !onInternet && lan.length > 1 && (
         <div className="space-y-1">
           <p className="text-xs text-[var(--color-muted)]">{otherNetwork}</p>

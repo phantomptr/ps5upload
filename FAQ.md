@@ -2735,8 +2735,8 @@ open, because the agent talks to its engine. Setup for each client is in
 
 **Q: Is it safe to connect an AI agent to my PS5?**
 It can do whatever you can, including delete files, and there is no password. By default only the
-engine's own computer can reach it. Set `PS5UPLOAD_MCP_READ_ONLY=1` for an agent that may only look,
-and keep your client asking before the tools marked destructive. The keys that sign in to your console
+engine's own computer can reach it. Turn off "Agents can change things" under MCP & API (or set
+`PS5UPLOAD_MCP_READ_ONLY=1`) for an agent that may only look, and keep your client asking before the tools marked destructive. The keys that sign in to your console
 never reach the agent. MCP.md lists those tools.
 
 **Q: What can't the API or an agent do?**
