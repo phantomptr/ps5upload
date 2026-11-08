@@ -354,6 +354,22 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/pad/ws"),
     ("POST", "/api/payload/send"),
     ("POST", "/api/payload/send-check"),
+    ("GET", "/api/payloads"),
+    ("GET", "/api/payloads/pm-sync"),
+    ("PUT", "/api/payloads/pm-sync"),
+    ("POST", "/api/payloads/pm-sync/run"),
+    ("POST", "/api/payloads/repos"),
+    ("DELETE", "/api/payloads/repos/{id}"),
+    ("GET", "/api/payloads/updates"),
+    ("POST", "/api/payloads/updates/apply"),
+    ("POST", "/api/payloads/updates/check"),
+    ("GET", "/api/payloads/updates/settings"),
+    ("PUT", "/api/payloads/updates/settings"),
+    ("POST", "/api/payloads/{id}/download"),
+    ("POST", "/api/payloads/{id}/download/cancel"),
+    ("GET", "/api/payloads/{id}/releases"),
+    ("GET", "/api/payloads/{id}/releases/latest"),
+    ("POST", "/api/payloads/{id}/rollback"),
     ("POST", "/api/pkg/console-probe"),
     ("POST", "/api/pkg/install"),
     ("GET", "/api/pkg/install/history"),
@@ -776,6 +792,14 @@ mod tests {
         routes.extend(routes_in(function(
             include_str!("../payloads_api.rs"),
             "pub fn router<",
+        )));
+        routes.extend(routes_in(function(
+            include_str!("../payloads_api.rs"),
+            "fn router_with<",
+        )));
+        routes.extend(routes_in(function(
+            include_str!("../payload_updates_api.rs"),
+            "pub(crate) fn routes_with<",
         )));
         routes.extend(routes_in(function(
             include_str!("../console_tools_api.rs"),

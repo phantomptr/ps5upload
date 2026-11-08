@@ -33,7 +33,9 @@ pub(crate) fn no_library() -> Response {
 
 fn status_of(code: &str) -> StatusCode {
     match code {
-        "unknown_payload" | "unknown_release" => StatusCode::NOT_FOUND,
+        "unknown_payload" | "unknown_release" | "no_previous" | "not_downloaded" => {
+            StatusCode::NOT_FOUND
+        }
         "repo_host_is_ip"
         | "repo_host_gitlab"
         | "repo_host_invalid"
@@ -41,7 +43,8 @@ fn status_of(code: &str) -> StatusCode {
         | "repo_name_invalid"
         | "invalid_checksum_file"
         | "asset_url_refused"
-        | "no_asset" => StatusCode::BAD_REQUEST,
+        | "no_asset"
+        | "bad_host" => StatusCode::BAD_REQUEST,
         "custom_repos_unreadable" | "download_cancelled" => StatusCode::CONFLICT,
         "io_failed" => StatusCode::INTERNAL_SERVER_ERROR,
         _ => StatusCode::BAD_GATEWAY,
@@ -81,7 +84,8 @@ impl Api {
 }
 
 pub fn router<S: Clone + Send + Sync + 'static>() -> Router<S> {
-    router_with(library())
+    // A merge, so the API description's generator follows it to the routes.
+    Router::new().merge(router_with(library()))
 }
 
 fn router_with<S: Clone + Send + Sync + 'static>(library: Option<Library>) -> Router<S> {
@@ -93,7 +97,8 @@ fn router_with<S: Clone + Send + Sync + 'static>(library: Option<Library>) -> Ro
         .route("/api/payloads/{id}/releases/latest", get(latest))
         .route("/api/payloads/{id}/download", post(download))
         .route("/api/payloads/{id}/download/cancel", post(cancel))
-        .with_state(Api(library))
+        .with_state(Api(library.clone()))
+        .merge(crate::payload_updates_api::routes(library))
 }
 
 /// GET /api/payloads: the catalogue with the user's repos, and what is cached.

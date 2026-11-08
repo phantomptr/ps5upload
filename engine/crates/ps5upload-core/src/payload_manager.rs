@@ -380,7 +380,7 @@ fn upload_path(filename: &str, check_json: &[u8]) -> String {
 /// Payload Manager's boot autoload: on/off, the seconds it waits after boot,
 /// and the ordered list. A list entry is a file name it resolves through its
 /// scan folders, or `!<ms>` for a pause.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct Autoload {
     pub enabled: bool,
     pub delay_s: i64,
