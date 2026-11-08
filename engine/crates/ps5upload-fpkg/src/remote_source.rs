@@ -97,6 +97,19 @@ pub fn open_remote(files: Arc<dyn RemoteFiles>, path: &str) -> Result<Box<dyn So
         .and_then(|e| e.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
+    open_remote_as(files, path, size, &ext)
+}
+
+/// The file at `path` (`size` bytes) on `files`, read as the kind of image or package its
+/// extension `ext` names, whatever the file itself is called: an image written as
+/// `<name>.exfat.partial` is read back before it gets its name.
+pub fn open_remote_as(
+    files: Arc<dyn RemoteFiles>,
+    path: &str,
+    size: u64,
+    ext: &str,
+) -> Result<Box<dyn SourceTree>> {
+    let ext = ext.trim_start_matches('.').to_ascii_lowercase();
     let label = format!("{ext} {path} on {}", files.label());
     let reader = || files.open(path).map_err(|e| io(path, e));
     match ext.as_str() {

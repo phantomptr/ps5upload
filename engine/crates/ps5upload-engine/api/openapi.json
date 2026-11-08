@@ -4117,6 +4117,17 @@
             ],
             "description": "Write the game with its files in zstd asset packs for ampr-emu-ng, as an image build's\n`ampr_zstd` does, as a plain folder: the packs, the files that stay loose, and the\nemulator in `fakelib/libSceAmpr.sprx`. The source may then also be a game folder (on\nthis computer, a saved server or a console). Not with `entry`."
           },
+          "destination": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageDestinationReq"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where the folder goes: `{\"kind\":\"local\"}` (the default: `output_dir` on this computer)\nor `{\"kind\":\"server\",\"source_id\":…,\"dir\":…}`: a folder on a saved server, every file\nwritten under a temporary name and renamed, the files a game starts from (`eboot.bin`,\n`sce_sys/param.json`) last and only once the folder reads back there. Not with `entry`;\na console is not a destination here."
+          },
           "entry": {
             "description": "Save only this file or folder of the image (#479, the image browser's Save), by its\npath inside the image: a folder becomes a folder named after it, a file a file. Its\nname is the entry's own unless `name` says otherwise.",
             "type": [
@@ -5886,6 +5897,37 @@
               }
             ],
             "description": "A PS5: `addr` (its address) and `dir` (an absolute folder on it, made when missing). A\ndropped connection goes on where it stopped, and so does the same build started again."
+          },
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "server"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "dir": {
+                    "type": "string"
+                  },
+                  "source_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source_id",
+                  "dir"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "A saved server (`source_id`, a connection under Connections: SMB, NFS, FTP, SFTP or\nWebDAV) and `dir`, a folder on it (made when missing). Written there as `<name>.partial`,\nread back there and only then renamed, never over anything; the job's `dest` is then\n`remote://<source_id>/<dir>/<name>`. On SMB, NFS and SFTP a write that was cut off goes\non from what the server holds."
           }
         ]
       },

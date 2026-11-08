@@ -94,6 +94,11 @@ struct ServerFiles {
     label: String,
 }
 
+/// A saved server's files as the converter reads them, through `fs`.
+pub(crate) fn server_files(fs: Arc<RemoteSourceFs>, label: String) -> Arc<dyn RemoteFiles> {
+    Arc::new(ServerFiles { fs, label })
+}
+
 impl RemoteFiles for ServerFiles {
     fn open(&self, path: &str) -> std::io::Result<Box<dyn ReadSeek>> {
         let r = self.fs.open(Path::new(path))?;

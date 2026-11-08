@@ -214,6 +214,70 @@ describe("RunCard", () => {
       expect(button(noPs5, "Make game image")?.disabled).toBe(true);
     });
 
+    it("saves an image or a game folder straight to a server folder", () => {
+      const img = { make: "image" as const, onSaveTo: noop, onServerFolder: noop };
+      expect(options(idle(img, { canImage: true }), "Save to")).toEqual([
+        "This computer",
+        "The PS5, straight (nothing stored here)",
+        "A server, straight (nothing stored here)",
+      ]);
+      // A folder goes to this computer or a server, never straight to the PS5.
+      const folder = { make: "folder" as const, onSaveTo: noop, onServerFolder: noop };
+      expect(options(idle(folder, { canFolder: true }), "Save to")).toEqual([
+        "This computer",
+        "A server, straight (nothing stored here)",
+      ]);
+      // With no folder on a server chosen yet, nothing runs.
+      const noFolder = idle({ ...img, saveTo: "server" }, { canImage: true });
+      expect(noFolder).toContain('data-testid="server-dest"');
+      expect(noFolder).not.toContain("After converting");
+      expect(button(noFolder, "Make game image")?.disabled).toBe(true);
+      const chosen = idle({ ...img, saveTo: "server", serverFolder: "remote://nas1/games" }, { canImage: true });
+      expect(chosen).toContain("read back there before it gets its name");
+      expect(button(chosen, "Make game image")?.disabled).toBe(false);
+      // An image that can't stream there says why and runs nothing.
+      const refused = idle(
+        { ...img, saveTo: "server", serverFolder: "remote://nas1/games", serverRefusal: "Not this one." },
+        { canImage: true },
+      );
+      expect(refused).toContain("Not this one.");
+      expect(button(refused, "Make game image")?.disabled).toBe(true);
+      // A folder build has no image refusal.
+      const folderTo = idle(
+        { ...folder, saveTo: "server", serverFolder: "remote://nas1/games", serverRefusal: "Not this one." },
+        { canFolder: true },
+      );
+      expect(button(folderTo, "Make game folder")?.disabled).toBe(false);
+      // The queue offers no server.
+      expect(options(idle({ make: "image", onSaveTo: noop }, { canImage: true }), "Save to")).not.toContain(
+        "A server, straight (nothing stored here)",
+      );
+    });
+
+    it("says a finished image is on a server, with nothing to upload, show or delete", () => {
+      const out = html(
+        {
+          phase: "done",
+          mode: "image",
+          source: "/g",
+          host: "10.0.0.2",
+          packagePath: "remote://nas1/games/G.exfat",
+          packageBytes: 9,
+          convertMs: 1,
+          installMs: 0,
+          stageMs: {},
+          deleted: false,
+          titleId: null,
+        },
+        { canInstall: true },
+        { onUploadImage: noop },
+      );
+      expect(out).toContain("written straight to the server");
+      expect(out).toContain("nas1 › games/G.exfat");
+      expect(button(out, "Upload to PS5")).toBeNull();
+      expect(button(out, "Show in folder")).toBeNull();
+    });
+
     it("says a finished image is on the PS5, with nothing to upload", () => {
       const out = html(
         {

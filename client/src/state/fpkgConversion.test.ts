@@ -605,6 +605,54 @@ describe("fpkg pipeline", () => {
     });
   });
 
+  it("writes an image straight to a server folder, and queues no upload nor offers a delete", async () => {
+    const buildImage = vi.fn().mockResolvedValue({ job_id: "s1" });
+    const deletePackage = vi.fn().mockResolvedValue({ ok: true });
+    const { fpkg } = await import("../api/fpkg");
+    (fpkg as unknown as { buildImage: unknown }).buildImage = buildImage;
+    (fpkg as unknown as { deletePackage: unknown }).deletePackage = deletePackage;
+    jobStatus.mockResolvedValueOnce({ status: "done", dest: "remote://nas1/games/ps5/G.exfat", bytes_sent: 9 });
+    const plan = { host: "10.0.0.2", volume: "/data", subpath: "homebrew", deleteAfter: false };
+    await useFpkgConversion
+      .getState()
+      .buildImage("/games/G", "/out", false, "exfat", plan, undefined, undefined, false, {
+        toServer: "remote://nas1/games/ps5",
+      });
+    await tick();
+    const call = buildImage.mock.calls[0] ?? [];
+    expect(call[call.length - 1]).toEqual({ kind: "server", source_id: "nas1", dir: "/games/ps5" });
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      phase: "done",
+      packagePath: "remote://nas1/games/ps5/G.exfat",
+      uploadQueued: false,
+    });
+    await useFpkgConversion.getState().deletePackage();
+    expect(deletePackage).not.toHaveBeenCalled();
+  });
+
+  it("writes a game folder straight to a server folder: the destination after the update slot", async () => {
+    const buildFolder = vi.fn().mockResolvedValue({ job_id: "s2" });
+    const { fpkg } = await import("../api/fpkg");
+    (fpkg as unknown as { buildFolder: unknown }).buildFolder = buildFolder;
+    jobStatus.mockResolvedValueOnce({ status: "done", dest: "remote://nas1/games/G", bytes_sent: 9 });
+    await useFpkgConversion
+      .getState()
+      .buildFolder("/games/G.ffpkg", "/out", false, { toServer: "remote://nas1/games" });
+    await tick();
+    expect(buildFolder).toHaveBeenCalledWith(
+      "/games/G.ffpkg",
+      "/out",
+      undefined,
+      false,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { kind: "server", source_id: "nas1", dir: "/games" },
+    );
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "done", packagePath: "remote://nas1/games/G" });
+  });
+
   it("sends a PS4 game merged with its update straight to the PS5: the destination, then the update", async () => {
     const buildImage = vi.fn().mockResolvedValue({ job_id: "i10" });
     const { fpkg } = await import("../api/fpkg");
