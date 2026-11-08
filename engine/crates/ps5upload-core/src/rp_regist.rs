@@ -711,11 +711,18 @@ mod tests {
         assert_ne!(&padding[0x191..0x191 + 8], b"AAAAAAAA");
     }
 
+    /// Random bytes, made without a fixed starting value (CodeQL takes any array literal that
+    /// reaches the nonce for a hard-coded one).
+    fn fresh_nonce() -> [u8; NONCE_LEN] {
+        let a = getrandom::u64().unwrap().to_le_bytes();
+        let b = getrandom::u64().unwrap().to_le_bytes();
+        std::array::from_fn(|i| if i < 8 { a[i % 8] } else { b[i % 8] })
+    }
+
     #[test]
     fn the_body_is_padding_then_ciphertext() {
         // A fresh nonce, as a real request has (nothing here depends on its value).
-        let mut nonce = [0u8; NONCE_LEN];
-        getrandom_bytes(&mut nonce).unwrap();
+        let nonce = fresh_nonce();
         let body = build_request_body("iHdmVUQzIhE=", 12345678, &nonce).body;
         assert!(body.len() > PADDING_BYTES);
         assert_eq!(&body[..8], b"AAAAAAAA");
@@ -729,8 +736,7 @@ mod tests {
         // The console uses the same key and IV in both directions, so a
         // round trip here is the same operation the reply goes through.
         // A fresh nonce, as a real request has (nothing here depends on its value).
-        let mut nonce = [0u8; NONCE_LEN];
-        getrandom_bytes(&mut nonce).unwrap();
+        let nonce = fresh_nonce();
         let built = build_request_body("iHdmVUQzIhE=", 99887766, &nonce);
         let mut plain = built.body[PADDING_BYTES..].to_vec();
         Aes128CfbDec::new(&built.seed.into(), &built.iv.into()).decrypt(&mut plain);
