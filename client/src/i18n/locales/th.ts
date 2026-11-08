@@ -8151,6 +8151,16 @@ rp_users_add_hint: "หากต้องการเล่นในฐานะ
 "tn_failed": "เปลี่ยน Tailscale บน PS5 เครื่องนี้ไม่ได้: {err}",
 "tn_no_peers": "ยังไม่มีอุปกรณ์อื่นใน tailnet ของคุณ",
 "tn_key_expires": "คีย์ Tailscale ของ PS5 เครื่องนี้จะหมดอายุใน {days} วัน ออกจากระบบแล้วลงชื่อเข้าใช้อีกครั้งเพื่อต่ออายุ",
+"tn_app_sub": "เข้าถึง PS5 ของคุณได้จากทุกที่ อุปกรณ์นี้เข้าร่วม tailnet ของคุณเอง ไม่ต้องใช้แอป Tailscale",
+"tn_app_enable": "ลงชื่อเข้าใช้ Tailscale",
+"tn_app_sign_in": "ลงชื่อเข้าใช้ Tailscale เพื่อเพิ่มอุปกรณ์นี้ใน tailnet ของคุณ",
+"tn_app_on_as": "อุปกรณ์นี้อยู่บน Tailscale ในชื่อ {name} ที่ {ip}",
+"tn_app_away_note": "เมื่อ PS5 บน Tailscale ไม่ตอบที่บ้าน แอปจะเชื่อมต่อผ่าน Tailscale ให้เอง",
+"tn_app_wait_approval": "กำลังรอผู้ดูแล tailnet อนุมัติอุปกรณ์นี้",
+"tn_app_key_expires": "คีย์ Tailscale ของอุปกรณ์นี้จะหมดอายุใน {days} วัน ออกจากระบบแล้วลงชื่อเข้าใช้อีกครั้งเพื่อต่ออายุ",
+"tn_app_failed": "เปลี่ยน Tailscale บนอุปกรณ์นี้ไม่ได้: {err}",
+"tn_via_direct": "ผ่าน Tailscale (โดยตรง {ms} มิลลิวินาที)",
+"tn_via_relayed": "ผ่าน Tailscale (ส่งต่อ)",
 };
 
 export default th;

@@ -8152,6 +8152,16 @@ rp_users_add_hint: "Um auch als anderer Benutzer zu spielen, melde dich auf der 
 "tn_failed": "Tailscale konnte auf dieser PS5 nicht geändert werden: {err}",
 "tn_no_peers": "Noch keine anderen Geräte in deinem Tailnet.",
 "tn_key_expires": "Der Tailscale-Schlüssel dieser PS5 läuft in {days} Tagen ab. Melde dich ab und wieder an, um ihn zu erneuern.",
+"tn_app_sub": "Erreiche deine PS5 von überall. Dieses Gerät tritt deinem Tailnet selbst bei: keine Tailscale-App nötig.",
+"tn_app_enable": "Bei Tailscale anmelden",
+"tn_app_sign_in": "Melde dich bei Tailscale an, um dieses Gerät deinem Tailnet hinzuzufügen.",
+"tn_app_on_as": "Dieses Gerät ist in Tailscale als {name} unter {ip}",
+"tn_app_away_note": "Wenn eine PS5 in Tailscale zu Hause nicht antwortet, erreicht die App sie selbst über Tailscale.",
+"tn_app_wait_approval": "Warte darauf, dass der Admin deines Tailnets dieses Gerät freigibt.",
+"tn_app_key_expires": "Der Tailscale-Schlüssel dieses Geräts läuft in {days} Tagen ab. Melde dich ab und wieder an, um ihn zu erneuern.",
+"tn_app_failed": "Tailscale konnte auf diesem Gerät nicht geändert werden: {err}",
+"tn_via_direct": "über Tailscale (direkt, {ms} ms)",
+"tn_via_relayed": "über Tailscale (weitergeleitet)",
 };
 
 export default de;

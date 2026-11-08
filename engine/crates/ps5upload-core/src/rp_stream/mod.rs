@@ -243,6 +243,10 @@ impl Drop for Ctrl {
 }
 
 fn resolve(host: &str, port: u16) -> Result<SocketAddr> {
+    // Away from home, through the engine's tailnet node (route.rs); the stream is UDP.
+    if let Some(a) = crate::route::dial(host, port, port == STREAM_PORT) {
+        return Ok(a);
+    }
     (host, port)
         .to_socket_addrs()
         .with_context(|| format!("resolving {host}"))?

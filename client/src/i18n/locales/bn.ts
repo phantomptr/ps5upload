@@ -8144,6 +8144,16 @@ rp_users_add_hint: "অন্য ব্যবহারকারী হিসে�
 "tn_failed": "এই PS5-এ Tailscale পরিবর্তন করা গেল না: {err}",
 "tn_no_peers": "আপনার tailnet-এ এখনো অন্য কোনো ডিভাইস নেই।",
 "tn_key_expires": "এই PS5-এর Tailscale কী {days} দিনে মেয়াদোত্তীর্ণ হবে। নবায়ন করতে সাইন আউট করে আবার সাইন ইন করুন।",
+"tn_app_sub": "যেকোনো জায়গা থেকে আপনার PS5-এ পৌঁছান। এই ডিভাইস নিজেই আপনার tailnet-এ যোগ দেয়: Tailscale অ্যাপ লাগবে না।",
+"tn_app_enable": "Tailscale-এ সাইন ইন করুন",
+"tn_app_sign_in": "এই ডিভাইসকে আপনার tailnet-এ যোগ করতে Tailscale-এ সাইন ইন করুন।",
+"tn_app_on_as": "এই ডিভাইস Tailscale-এ {name} নামে, ঠিকানা {ip}",
+"tn_app_away_note": "Tailscale-এ থাকা কোনো PS5 বাড়িতে সাড়া না দিলে অ্যাপ নিজেই Tailscale দিয়ে সেখানে পৌঁছায়।",
+"tn_app_wait_approval": "আপনার tailnet অ্যাডমিন এই ডিভাইস অনুমোদন করার অপেক্ষায়।",
+"tn_app_key_expires": "এই ডিভাইসের Tailscale কী {days} দিনে মেয়াদোত্তীর্ণ হবে। নবায়ন করতে সাইন আউট করে আবার সাইন ইন করুন।",
+"tn_app_failed": "এই ডিভাইসে Tailscale পরিবর্তন করা গেল না: {err}",
+"tn_via_direct": "Tailscale দিয়ে (সরাসরি, {ms} ms)",
+"tn_via_relayed": "Tailscale দিয়ে (রিলে)",
 };
 
 export default bn;

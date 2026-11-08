@@ -8426,6 +8426,16 @@ rp_users_add_hint: "برای بازی به‌عنوان کاربری دیگر ن
 "tn_failed": "تغییر Tailscale روی این PS5 ممکن نشد: {err}",
 "tn_no_peers": "هنوز دستگاه دیگری در tailnet شما نیست.",
 "tn_key_expires": "کلید Tailscale این PS5 تا {days} روز دیگر منقضی می‌شود. برای تمدید، خارج شوید و دوباره وارد شوید.",
+"tn_app_sub": "از هر جایی به PS5 خود دسترسی داشته باشید. این دستگاه خودش به tailnet شما می‌پیوندد: به برنامهٔ Tailscale نیازی نیست.",
+"tn_app_enable": "ورود به Tailscale",
+"tn_app_sign_in": "برای افزودن این دستگاه به tailnet خود، وارد Tailscale شوید.",
+"tn_app_on_as": "این دستگاه در Tailscale با نام {name} در {ip} است",
+"tn_app_away_note": "وقتی یک PS5 روی Tailscale در خانه پاسخ نمی‌دهد، برنامه خودش از طریق Tailscale به آن وصل می‌شود.",
+"tn_app_wait_approval": "در انتظار تأیید این دستگاه توسط مدیر tailnet شما.",
+"tn_app_key_expires": "کلید Tailscale این دستگاه تا {days} روز دیگر منقضی می‌شود. برای تمدید، خارج شوید و دوباره وارد شوید.",
+"tn_app_failed": "تغییر Tailscale روی این دستگاه ممکن نشد: {err}",
+"tn_via_direct": "از طریق Tailscale (مستقیم، {ms} میلی‌ثانیه)",
+"tn_via_relayed": "از طریق Tailscale (بازپخش)",
 };
 
 export default fa;

@@ -104,3 +104,66 @@ export function expiryDays(keyExpiry: number, nowS = Date.now() / 1000): number 
   if (left > 7 * 86400) return null;
   return Math.max(0, Math.round(left / 86400));
 }
+
+// ---- this device's own node (Settings › Tailscale; engine /api/tailnet) ----
+
+export interface AppTailnetConsole {
+  host: string;
+  ip: string;
+  name: string;
+  /** "lan" | "direct" | "relayed" */
+  via: string;
+  latency_ms: number;
+}
+
+export interface AppTailnetStatus {
+  ok: boolean;
+  enabled: boolean;
+  state: TailnetState;
+  login_url: string;
+  ip: string;
+  name: string;
+  control_url: string;
+  hostname: string;
+  home_derp: number;
+  derp_connected: boolean;
+  home_latency_ms: number;
+  key_expiry: number;
+  error: string;
+  peers: TailnetPeer[];
+  consoles: AppTailnetConsole[];
+}
+
+export function appTailnetStatus(): Promise<AppTailnetStatus> {
+  return call("/api/tailnet") as unknown as Promise<AppTailnetStatus>;
+}
+
+export function appTailnetOp(
+  op: "enable" | "disable" | "logout",
+  opts: TailnetEnable = {},
+): Promise<AppTailnetStatus> {
+  return call("/api/tailnet", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ op, ...opts }),
+  }) as unknown as Promise<AppTailnetStatus>;
+}
+
+export interface TailnetVia {
+  /** "lan" | "direct" | "relayed" */
+  via: string;
+  latency_ms: number;
+}
+
+/** How the engine reaches this console right now (the status-bar chip). */
+export async function tailnetVia(host: string): Promise<TailnetVia> {
+  try {
+    const res = await fetch(`${getEngineUrl()}/api/tailnet/via?addr=${encodeURIComponent(consoleAddr(host))}`, {
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return { via: "lan", latency_ms: -1 };
+    return (await res.json()) as TailnetVia;
+  } catch {
+    return { via: "lan", latency_ms: -1 };
+  }
+}

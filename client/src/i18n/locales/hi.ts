@@ -8158,6 +8158,16 @@ rp_users_add_hint: "किसी दूसरे उपयोगकर्ता 
 "tn_failed": "इस PS5 पर Tailscale नहीं बदला जा सका: {err}",
 "tn_no_peers": "आपके tailnet में अभी कोई और डिवाइस नहीं है।",
 "tn_key_expires": "इस PS5 की Tailscale कुंजी {days} दिनों में समाप्त हो जाएगी। नवीनीकरण के लिए साइन आउट करके फिर साइन इन करें।",
+"tn_app_sub": "कहीं से भी अपने PS5 तक पहुँचें। यह डिवाइस खुद आपके tailnet से जुड़ता है: Tailscale ऐप की ज़रूरत नहीं।",
+"tn_app_enable": "Tailscale में साइन इन करें",
+"tn_app_sign_in": "इस डिवाइस को अपने tailnet में जोड़ने के लिए Tailscale में साइन इन करें।",
+"tn_app_on_as": "यह डिवाइस Tailscale पर {name} के रूप में, पता {ip}",
+"tn_app_away_note": "जब Tailscale पर कोई PS5 घर पर जवाब नहीं देता, तो ऐप अपने आप Tailscale से उस तक पहुँचता है।",
+"tn_app_wait_approval": "आपके tailnet एडमिन की इस डिवाइस को मंज़ूरी का इंतज़ार है।",
+"tn_app_key_expires": "इस डिवाइस की Tailscale कुंजी {days} दिनों में समाप्त हो जाएगी। नवीनीकरण के लिए साइन आउट करके फिर साइन इन करें।",
+"tn_app_failed": "इस डिवाइस पर Tailscale नहीं बदला जा सका: {err}",
+"tn_via_direct": "Tailscale से (सीधा, {ms} ms)",
+"tn_via_relayed": "Tailscale से (रिले)",
 };
 
 export default hi;

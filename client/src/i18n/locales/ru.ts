@@ -8097,6 +8097,16 @@ rp_users_add_hint: "Чтобы играть и за другого пользо�
 "tn_failed": "Не удалось изменить Tailscale на этой PS5: {err}",
 "tn_no_peers": "В вашем tailnet пока нет других устройств.",
 "tn_key_expires": "Ключ Tailscale этой PS5 истекает через {days} дн. Выйдите и войдите снова, чтобы обновить его.",
+"tn_app_sub": "Подключайтесь к PS5 откуда угодно. Это устройство само входит в ваш tailnet: приложение Tailscale не нужно.",
+"tn_app_enable": "Войти в Tailscale",
+"tn_app_sign_in": "Войдите в Tailscale, чтобы добавить это устройство в свой tailnet.",
+"tn_app_on_as": "Это устройство в Tailscale как {name}, адрес {ip}",
+"tn_app_away_note": "Если PS5 в Tailscale не отвечает дома, приложение само подключится к ней через Tailscale.",
+"tn_app_wait_approval": "Ожидание, пока администратор вашего tailnet одобрит это устройство.",
+"tn_app_key_expires": "Ключ Tailscale этого устройства истекает через {days} дн. Выйдите и войдите снова, чтобы обновить его.",
+"tn_app_failed": "Не удалось изменить Tailscale на этом устройстве: {err}",
+"tn_via_direct": "через Tailscale (напрямую, {ms} мс)",
+"tn_via_relayed": "через Tailscale (ретрансляция)",
 };
 
 export default ru;

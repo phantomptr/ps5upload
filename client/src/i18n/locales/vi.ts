@@ -8146,6 +8146,16 @@ rp_users_add_hint: "Để chơi bằng cả người dùng khác, hãy đăng nh
 "tn_failed": "Không thể thay đổi Tailscale trên PS5 này: {err}",
 "tn_no_peers": "Chưa có thiết bị nào khác trong tailnet của bạn.",
 "tn_key_expires": "Khóa Tailscale của PS5 này hết hạn sau {days} ngày. Đăng xuất rồi đăng nhập lại để gia hạn.",
+"tn_app_sub": "Truy cập PS5 của bạn từ bất cứ đâu. Thiết bị này tự tham gia tailnet của bạn: không cần ứng dụng Tailscale.",
+"tn_app_enable": "Đăng nhập Tailscale",
+"tn_app_sign_in": "Đăng nhập Tailscale để thêm thiết bị này vào tailnet của bạn.",
+"tn_app_on_as": "Thiết bị này đang trên Tailscale với tên {name} tại {ip}",
+"tn_app_away_note": "Khi một PS5 trên Tailscale không phản hồi ở nhà, ứng dụng sẽ tự kết nối qua Tailscale.",
+"tn_app_wait_approval": "Đang chờ quản trị viên tailnet phê duyệt thiết bị này.",
+"tn_app_key_expires": "Khóa Tailscale của thiết bị này hết hạn sau {days} ngày. Đăng xuất rồi đăng nhập lại để gia hạn.",
+"tn_app_failed": "Không thể thay đổi Tailscale trên thiết bị này: {err}",
+"tn_via_direct": "qua Tailscale (trực tiếp, {ms} ms)",
+"tn_via_relayed": "qua Tailscale (chuyển tiếp)",
 };
 
 export default vi;

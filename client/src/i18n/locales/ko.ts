@@ -8161,6 +8161,16 @@ rp_users_add_hint: "다른 사용자로도 플레이하려면 PS5에서 그 사�
 "tn_failed": "이 PS5의 Tailscale을 변경하지 못했습니다: {err}",
 "tn_no_peers": "아직 tailnet에 다른 기기가 없습니다.",
 "tn_key_expires": "이 PS5의 Tailscale 키가 {days}일 후 만료됩니다. 갱신하려면 로그아웃한 뒤 다시 로그인하세요.",
+"tn_app_sub": "어디서든 PS5에 연결하세요. 이 기기가 스스로 tailnet에 참여하므로 Tailscale 앱이 필요 없습니다.",
+"tn_app_enable": "Tailscale에 로그인",
+"tn_app_sign_in": "Tailscale에 로그인해 이 기기를 tailnet에 추가하세요.",
+"tn_app_on_as": "이 기기는 Tailscale에서 {name}({ip})(으)로 연결됨",
+"tn_app_away_note": "Tailscale에 있는 PS5가 집에서 응답하지 않으면 앱이 자동으로 Tailscale을 통해 연결합니다.",
+"tn_app_wait_approval": "tailnet 관리자가 이 기기를 승인하기를 기다리는 중입니다.",
+"tn_app_key_expires": "이 기기의 Tailscale 키가 {days}일 후 만료됩니다. 갱신하려면 로그아웃한 뒤 다시 로그인하세요.",
+"tn_app_failed": "이 기기의 Tailscale을 변경하지 못했습니다: {err}",
+"tn_via_direct": "Tailscale 경유(직접, {ms}ms)",
+"tn_via_relayed": "Tailscale 경유(중계)",
 };
 
 export default ko;

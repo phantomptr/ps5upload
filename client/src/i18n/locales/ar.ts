@@ -8144,6 +8144,16 @@ rp_users_add_hint: "للعب باسم مستخدم آخر أيضًا، سجّل 
 "tn_failed": "تعذّر تغيير Tailscale على جهاز PS5 هذا: {err}",
 "tn_no_peers": "لا توجد أجهزة أخرى في شبكة tailnet بعد.",
 "tn_key_expires": "ينتهي مفتاح Tailscale لجهاز PS5 هذا خلال {days} يوم. سجّل الخروج ثم الدخول مرة أخرى لتجديده.",
+"tn_app_sub": "صِل إلى جهاز PS5 من أي مكان. ينضم هذا الجهاز إلى شبكة tailnet بنفسه: لا حاجة إلى تطبيق Tailscale.",
+"tn_app_enable": "تسجيل الدخول إلى Tailscale",
+"tn_app_sign_in": "سجّل الدخول إلى Tailscale لإضافة هذا الجهاز إلى شبكة tailnet الخاصة بك.",
+"tn_app_on_as": "هذا الجهاز على Tailscale باسم {name} على {ip}",
+"tn_app_away_note": "عندما لا يستجيب جهاز PS5 على Tailscale في المنزل، يصل إليه التطبيق عبر Tailscale تلقائيًا.",
+"tn_app_wait_approval": "في انتظار موافقة مسؤول شبكة tailnet على هذا الجهاز.",
+"tn_app_key_expires": "ينتهي مفتاح Tailscale لهذا الجهاز خلال {days} يوم. سجّل الخروج ثم الدخول مرة أخرى لتجديده.",
+"tn_app_failed": "تعذّر تغيير Tailscale على هذا الجهاز: {err}",
+"tn_via_direct": "عبر Tailscale (مباشر، {ms} مللي ثانية)",
+"tn_via_relayed": "عبر Tailscale (مُمرَّر)",
 };
 
 export default ar;

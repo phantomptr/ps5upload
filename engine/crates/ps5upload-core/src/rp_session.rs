@@ -59,6 +59,15 @@ use crate::rp_login_pin::{
 };
 use crate::rp_regist::{generate_iv, resolve, split_http};
 
+/// TCP 9295 on the console, or the engine's tailnet mapping of it when away (route.rs).
+fn session_addr(host: &str) -> Result<std::net::SocketAddr> {
+    let bare = host.split(':').next().unwrap_or(host);
+    match crate::route::dial(bare, SESSION_PORT, false) {
+        Some(a) => Ok(a),
+        None => resolve(host, SESSION_PORT),
+    }
+}
+
 /// Session init closed with no reply: the console does this while its Remote Play is in use, by
 /// another device or by a session that ended moments ago and is still being let go (12-30 s).
 /// Not the pairing message about a PIN, which this used to read as.
@@ -194,7 +203,7 @@ pub(crate) fn session_init(host: &str, regist_key: &[u8; KEY_SIZE]) -> Result<[u
         .collect();
 
     let t0 = std::time::Instant::now();
-    let addr = resolve(host, SESSION_PORT)?;
+    let addr = session_addr(host)?;
     crate::core_debug!("rp session init: {host} ({addr}) asking, Rp-Version {RP_VERSION}");
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(10)).map_err(|e| {
         crate::core_debug!(
@@ -300,7 +309,7 @@ fn ctrl_connect(
     let bitrate_b64 = next(&[0u8; 4]);
     let streaming_type_b64 = next(&2u32.to_le_bytes());
 
-    let addr = resolve(host, SESSION_PORT)?;
+    let addr = session_addr(host)?;
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(10))
         .map_err(|e| anyhow!("connecting for ctrl: {e}"))?;
     stream.set_read_timeout(Some(Duration::from_secs(15)))?;

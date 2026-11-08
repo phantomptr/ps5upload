@@ -8159,6 +8159,16 @@ rp_users_add_hint: "Para jogar também como outro usuário, entre com esse usuá
 "tn_failed": "Não foi possível alterar o Tailscale neste PS5: {err}",
 "tn_no_peers": "Ainda não há outros dispositivos na sua tailnet.",
 "tn_key_expires": "A chave do Tailscale deste PS5 expira em {days} dias. Saia e entre de novo para renová-la.",
+"tn_app_sub": "Acesse seu PS5 de qualquer lugar. Este dispositivo entra na sua tailnet sozinho: não precisa do app do Tailscale.",
+"tn_app_enable": "Entrar no Tailscale",
+"tn_app_sign_in": "Entre no Tailscale para adicionar este dispositivo à sua tailnet.",
+"tn_app_on_as": "Este dispositivo está no Tailscale como {name} em {ip}",
+"tn_app_away_note": "Quando um PS5 no Tailscale não responde em casa, o app o alcança sozinho pelo Tailscale.",
+"tn_app_wait_approval": "Aguardando o administrador da sua tailnet aprovar este dispositivo.",
+"tn_app_key_expires": "A chave do Tailscale deste dispositivo expira em {days} dias. Saia e entre de novo para renová-la.",
+"tn_app_failed": "Não foi possível alterar o Tailscale neste dispositivo: {err}",
+"tn_via_direct": "pelo Tailscale (direto, {ms} ms)",
+"tn_via_relayed": "pelo Tailscale (retransmitido)",
 };
 
 export default pt_BR;

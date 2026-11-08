@@ -8151,6 +8151,16 @@ rp_users_add_hint: "Başka bir kullanıcıyla da oynamak için PS5'te o kullanı
 "tn_failed": "Bu PS5'te Tailscale değiştirilemedi: {err}",
 "tn_no_peers": "Tailnet'inizde henüz başka cihaz yok.",
 "tn_key_expires": "Bu PS5'in Tailscale anahtarının süresi {days} gün içinde doluyor. Yenilemek için oturumu kapatıp yeniden açın.",
+"tn_app_sub": "PS5'inize her yerden ulaşın. Bu cihaz tailnet'inize kendisi katılır: Tailscale uygulaması gerekmez.",
+"tn_app_enable": "Tailscale'de oturum aç",
+"tn_app_sign_in": "Bu cihazı tailnet'inize eklemek için Tailscale'de oturum açın.",
+"tn_app_on_as": "Bu cihaz Tailscale'de {name} olarak, {ip} adresinde",
+"tn_app_away_note": "Tailscale'deki bir PS5 evde yanıt vermediğinde uygulama ona kendiliğinden Tailscale üzerinden ulaşır.",
+"tn_app_wait_approval": "Tailnet yöneticinizin bu cihazı onaylaması bekleniyor.",
+"tn_app_key_expires": "Bu cihazın Tailscale anahtarının süresi {days} gün içinde doluyor. Yenilemek için oturumu kapatıp yeniden açın.",
+"tn_app_failed": "Bu cihazda Tailscale değiştirilemedi: {err}",
+"tn_via_direct": "Tailscale üzerinden (doğrudan, {ms} ms)",
+"tn_via_relayed": "Tailscale üzerinden (aktarılıyor)",
 };
 
 export default tr;

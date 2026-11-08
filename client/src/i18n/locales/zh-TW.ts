@@ -8097,6 +8097,16 @@ rp_users_add_hint: "若也想以其他使用者遊玩，請在 PS5 上登入該�
 "tn_failed": "無法變更這台 PS5 的 Tailscale：{err}",
 "tn_no_peers": "你的 tailnet 中還沒有其他裝置。",
 "tn_key_expires": "這台 PS5 的 Tailscale 金鑰將在 {days} 天後到期。登出後重新登入即可續期。",
+"tn_app_sub": "隨時隨地連線你的 PS5。這台裝置會自己加入你的 tailnet，不需要 Tailscale 應用程式。",
+"tn_app_enable": "登入 Tailscale",
+"tn_app_sign_in": "登入 Tailscale，將這台裝置加入你的 tailnet。",
+"tn_app_on_as": "這台裝置已在 Tailscale 上，名稱 {name}，位址 {ip}",
+"tn_app_away_note": "當 Tailscale 上的 PS5 在家中沒有回應時，應用程式會自動透過 Tailscale 連線。",
+"tn_app_wait_approval": "正在等待 tailnet 管理員核准這台裝置。",
+"tn_app_key_expires": "這台裝置的 Tailscale 金鑰將在 {days} 天後到期。登出後重新登入即可續期。",
+"tn_app_failed": "無法變更這台裝置的 Tailscale：{err}",
+"tn_via_direct": "透過 Tailscale（直連，{ms} 毫秒）",
+"tn_via_relayed": "透過 Tailscale（中繼）",
 };
 
 export default zh_TW;

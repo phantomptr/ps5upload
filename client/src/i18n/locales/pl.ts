@@ -8385,6 +8385,16 @@ rp_users_add_hint: "Aby grać także jako inny użytkownik, zaloguj się na nim 
 "tn_failed": "Nie udało się zmienić Tailscale na tej PS5: {err}",
 "tn_no_peers": "W twoim tailnecie nie ma jeszcze innych urządzeń.",
 "tn_key_expires": "Klucz Tailscale tej PS5 wygasa za {days} dni. Wyloguj się i zaloguj ponownie, aby go odnowić.",
+"tn_app_sub": "Łącz się z PS5 z dowolnego miejsca. To urządzenie samo dołącza do twojego tailnetu: aplikacja Tailscale nie jest potrzebna.",
+"tn_app_enable": "Zaloguj się do Tailscale",
+"tn_app_sign_in": "Zaloguj się do Tailscale, aby dodać to urządzenie do swojego tailnetu.",
+"tn_app_on_as": "To urządzenie jest w Tailscale jako {name} pod adresem {ip}",
+"tn_app_away_note": "Gdy PS5 w Tailscale nie odpowiada w domu, aplikacja sama łączy się z nią przez Tailscale.",
+"tn_app_wait_approval": "Czekam, aż administrator tailnetu zatwierdzi to urządzenie.",
+"tn_app_key_expires": "Klucz Tailscale tego urządzenia wygasa za {days} dni. Wyloguj się i zaloguj ponownie, aby go odnowić.",
+"tn_app_failed": "Nie udało się zmienić Tailscale na tym urządzeniu: {err}",
+"tn_via_direct": "przez Tailscale (bezpośrednio, {ms} ms)",
+"tn_via_relayed": "przez Tailscale (przekazywane)",
 };
 
 export default pl;

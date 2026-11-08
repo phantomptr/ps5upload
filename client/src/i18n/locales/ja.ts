@@ -8163,6 +8163,16 @@ rp_users_add_hint: "別のユーザーでもプレイするには、PS5 でそ�
 "tn_failed": "この PS5 の Tailscale を変更できませんでした: {err}",
 "tn_no_peers": "tailnet にはまだ他のデバイスがありません。",
 "tn_key_expires": "この PS5 の Tailscale キーはあと {days} 日で期限切れになります。サインアウトしてもう一度サインインすると更新されます。",
+"tn_app_sub": "どこからでも PS5 にアクセスできます。このデバイスが自分で tailnet に参加するので、Tailscale アプリは不要です。",
+"tn_app_enable": "Tailscale にサインイン",
+"tn_app_sign_in": "Tailscale にサインインして、このデバイスを tailnet に追加してください。",
+"tn_app_on_as": "このデバイスは Tailscale 上で {name}（{ip}）として参加中",
+"tn_app_away_note": "Tailscale 上の PS5 が自宅で応答しないときは、アプリが自動で Tailscale 経由で接続します。",
+"tn_app_wait_approval": "tailnet の管理者がこのデバイスを承認するのを待っています。",
+"tn_app_key_expires": "このデバイスの Tailscale キーはあと {days} 日で期限切れになります。サインアウトしてもう一度サインインすると更新されます。",
+"tn_app_failed": "このデバイスの Tailscale を変更できませんでした: {err}",
+"tn_via_direct": "Tailscale 経由（直接、{ms} ms）",
+"tn_via_relayed": "Tailscale 経由（中継）",
 };
 
 export default ja;

@@ -3326,6 +3326,33 @@
         ],
         "type": "object"
       },
+      "EngineOpBody": {
+        "properties": {
+          "authkey": {
+            "type": "string"
+          },
+          "control_url": {
+            "type": "string"
+          },
+          "host": {
+            "description": "op `remember`: a console's LAN address and its tailnet address (what \"Put this PS5 on\nTailscale\" records by itself).",
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "ip": {
+            "type": "string"
+          },
+          "op": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "op"
+        ],
+        "type": "object"
+      },
       "Error": {
         "description": "Every failure of an /api/ route. Some routes add their own fields beside these (`reason`, `field`, `op_id`).",
         "properties": {
@@ -43326,6 +43353,285 @@
         }
       }
     },
+    "/api/tailnet": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "tailnet"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      },
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EngineOpBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "tailnet"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/tailnet/route": {
+      "get": {
+        "description": "`GET /api/tailnet/route?addr=&port=&udp=` -> `{dial, via}`: where the engine dials that\nconsole port right now (`dial` null = the console's own address). Opens the local mapping\nwhen the console is away.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          {
+            "in": "query",
+            "name": "port",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "udp",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "dial": {
+                      "type": "string"
+                    },
+                    "latency_ms": {},
+                    "via": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "> `{dial, via}`: where the engine dials that console port right now (`dial` null = the console's own address)",
+        "tags": [
+          "tailnet"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/tailnet/via": {
+      "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "latency_ms": {},
+                    "via": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "tailnet"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
     "/api/transfer/7z": {
       "post": {
         "requestBody": {
@@ -44845,6 +45151,9 @@
     {
       "description": "This computer only, addressed as localhost. PS5UPLOAD_ALLOW_IP alone does not open these; PS5UPLOAD_ALLOW_AUTOMATION=1 does.",
       "name": "strict-local"
+    },
+    {
+      "name": "tailnet"
     },
     {
       "description": "Files on the computer the engine runs on.",

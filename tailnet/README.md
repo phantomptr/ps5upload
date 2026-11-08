@@ -4,7 +4,7 @@ A small, gaming-only Tailscale node in C11, for the PS5 helper payload (no fork,
 and, through FFI, the Rust engine. The protocol facts it follows are in the research
 spec `ps5upload-docs/research/2026-11-07-tailnet-protocol-spec.md`.
 
-Status: **M3 (PS5 helper)**. Control (M1): keys, `/key` over TLS, the ts2021 Noise IK
+Status: **M4 (engine + apps)**. Control (M1): keys, `/key` over TLS, the ts2021 Noise IK
 channel, HTTP/2 with HPACK, register (pre-auth key or login URL), the map long-poll,
 lite updates with our endpoints and home DERP, Retry-After, a key-expiry warning.
 Data plane (M2): one poll() thread with the UDP socket (STUN / disco / WireGuard demux),
@@ -18,6 +18,14 @@ port list: the allow-list AND the tailnet ACL decide what gets in; UDP is relaye
 to 127.0.0.1 with back-pressure; a SYN is held until the local dial succeeds (closed
 port = RST). The PS5 helper uses it (`payload/src/tailnet_node.c`); `testbed/m3-check.sh`
 runs the same configuration against a stock tailscaled.
+Engine (M4): `tn_map()` is the reverse of `serve`: a 127.0.0.1 port (TCP listener or UDP
+socket) that reaches a peer's tailnet address. `engine/crates/ps5upload-tailnet` builds this
+core with cc-rs for every shipping target and wraps it; the engine's router
+(`ps5upload_core::route`) sends the helper, Remote Play and discovery through such mappings
+when a console's home address does not answer. Platforms: `src/os.{h,c}` (POSIX, Winsock);
+`testbed/cross-check.sh` compiles macOS, iOS, Android, Linux (glibc, musl), Windows (MinGW
+headers + link) and the PS5; `testbed/m4-check.sh` runs the real engine against our PS5-config
+node, direct and DERP-only.
 
 ```
 include/tailnet.h   the public API (one context, an event callback, start/stop/pause/resume)
@@ -34,7 +42,8 @@ testbed/            Headscale + derper (TLS, STUN) + Linux tailscaled + a tnctl 
                     Docker; m1-check.sh (control), m2-check.sh (data plane)
 ```
 
-Build: `make` (host library and `build/host/tnctl`), `make test`, `make ps5` (needs
+Build: `make` (host library and `build/host/tnctl`), `make test`, `make win` (MinGW-w64
+compile check), `make ps5` (needs
 `PS5_PAYLOAD_SDK`; the payload provides Monocypher), `make ps5-link`, `make size`.
 Dependencies are the `third_party/ava1` (Monocypher), `third_party/bearssl` and
 `third_party/lwip` submodules.

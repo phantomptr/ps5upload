@@ -110,6 +110,7 @@ mod settings_backup;
 mod shared_state;
 mod state_io;
 mod tailnet_api;
+pub(crate) mod tailnet_engine;
 mod telemetry;
 mod vinput_api;
 mod wake_login_api;
@@ -11650,6 +11651,8 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     host_guard::log_settings();
     // A console it cannot serve is a `helper_not_ava1` error, never another protocol.
     ps5upload_ava1::mgmt::install();
+    // The engine's own tailnet node (when turned on) and the away routing (tailnet_engine.rs).
+    tailnet_engine::boot();
     // Every new session says who this engine is, whatever opened it (Devices showed a phone
     // that had only checked the console's status as an app from before 8.0.0).
     ps5upload_ava1::pool::on_new_session(mesh_api::greet);
@@ -11913,6 +11916,12 @@ fn build_app_and_mcp(
             "/api/ps5/tailnet",
             get(tailnet_api::status).post(tailnet_api::op),
         )
+        .route(
+            "/api/tailnet",
+            get(tailnet_api::engine_status).post(tailnet_api::engine_op),
+        )
+        .route("/api/tailnet/route", get(tailnet_api::route))
+        .route("/api/tailnet/via", get(tailnet_api::via))
         .route(
             "/api/ps5/cleanup/scan/{id}",
             get(console_cleanup_api::scan_status),

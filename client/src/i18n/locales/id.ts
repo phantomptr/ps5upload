@@ -8153,6 +8153,16 @@ rp_users_add_hint: "Untuk bermain juga sebagai pengguna lain, masuk ke pengguna 
 "tn_failed": "Tidak dapat mengubah Tailscale di PS5 ini: {err}",
 "tn_no_peers": "Belum ada perangkat lain di tailnet Anda.",
 "tn_key_expires": "Kunci Tailscale PS5 ini kedaluwarsa dalam {days} hari. Keluar lalu masuk lagi untuk memperbaruinya.",
+"tn_app_sub": "Jangkau PS5 Anda dari mana saja. Perangkat ini bergabung ke tailnet Anda sendiri: tidak perlu aplikasi Tailscale.",
+"tn_app_enable": "Masuk ke Tailscale",
+"tn_app_sign_in": "Masuk ke Tailscale untuk menambahkan perangkat ini ke tailnet Anda.",
+"tn_app_on_as": "Perangkat ini ada di Tailscale sebagai {name} di {ip}",
+"tn_app_away_note": "Saat PS5 di Tailscale tidak menjawab di rumah, aplikasi menjangkaunya sendiri lewat Tailscale.",
+"tn_app_wait_approval": "Menunggu admin tailnet Anda menyetujui perangkat ini.",
+"tn_app_key_expires": "Kunci Tailscale perangkat ini kedaluwarsa dalam {days} hari. Keluar lalu masuk lagi untuk memperbaruinya.",
+"tn_app_failed": "Tidak dapat mengubah Tailscale di perangkat ini: {err}",
+"tn_via_direct": "lewat Tailscale (langsung, {ms} md)",
+"tn_via_relayed": "lewat Tailscale (diteruskan)",
 };
 
 export default id;

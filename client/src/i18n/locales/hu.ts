@@ -8440,6 +8440,16 @@ rp_users_add_hint: "Ha másik felhasználóként is játszanál, jelentkezz be a
 "tn_failed": "Nem sikerült módosítani a Tailscale-t ezen a PS5-ön: {err}",
 "tn_no_peers": "A tailneteden még nincs más eszköz.",
 "tn_key_expires": "A PS5 Tailscale-kulcsa {days} nap múlva lejár. Jelentkezz ki és be a megújításhoz.",
+"tn_app_sub": "Érd el a PS5-ödet bárhonnan. Ez az eszköz magától csatlakozik a tailnetedhez: nem kell hozzá Tailscale-alkalmazás.",
+"tn_app_enable": "Bejelentkezés a Tailscale-be",
+"tn_app_sign_in": "Jelentkezz be a Tailscale-be, hogy hozzáadd ezt az eszközt a tailnetedhez.",
+"tn_app_on_as": "Ez az eszköz a Tailscale-en {name} néven, {ip} címen",
+"tn_app_away_note": "Ha egy Tailscale-en lévő PS5 otthon nem válaszol, az alkalmazás magától a Tailscale-en keresztül éri el.",
+"tn_app_wait_approval": "Várakozás, hogy a tailnet adminisztrátora jóváhagyja ezt az eszközt.",
+"tn_app_key_expires": "Ennek az eszköznek a Tailscale-kulcsa {days} nap múlva lejár. Jelentkezz ki és be a megújításhoz.",
+"tn_app_failed": "Nem sikerült módosítani a Tailscale-t ezen az eszközön: {err}",
+"tn_via_direct": "Tailscale-en át (közvetlen, {ms} ms)",
+"tn_via_relayed": "Tailscale-en át (továbbítva)",
 };
 
 export default hu;

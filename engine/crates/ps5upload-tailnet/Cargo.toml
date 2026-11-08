@@ -1,0 +1,17 @@
+[package]
+name = "ps5upload-tailnet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The engine's own tailnet node: the C core in tailnet/ (control, DERP, disco, WireGuard, lwIP), linked in, with a safe wrapper. Userspace sockets only; no OS VPN, no Tailscale app."
+links = "tailnet"
+
+[lib]
+name = "ps5upload_tailnet"
+path = "src/lib.rs"
+
+[dependencies]
+
+# cc is already in the workspace lockfile (1.x).
+[build-dependencies]
+cc = "1"
