@@ -263,6 +263,20 @@ A phone controller and a watch link work from somewhere else too (12.0.0): choos
 for them the same way. Over the internet a watcher only watches and can't be handed the controller.
 We don't support forwarding the engine's port on your router: its pages use plain `http`.
 
+**Q: Which PS5 profile does a friend play as?**
+The one you choose (12.0.0). In **Settings › Play Together › Guests play as**, pick a profile for
+Player 2, 3 and 4, or **Let the TV ask** (the TV then asks the friend who they are, as before).
+Make profiles such as Guest 1 on the PS5 and sign them in there first: only profiles signed in on
+the PS5 are listed. Your own profile asks you to confirm, since a friend playing as it uses your
+saves and trophies. When you allow a friend, the request says which profile they'll play as. If
+the profile can't be used when they join (signed out, or an older helper), the TV asks them instead.
+
+**Q: A friend's controller has its buttons mixed up.**
+On the invite page, **Check your controller** lights up what they press (12.0.0), and a
+controller the app doesn't know is offered it. **Set up the buttons** has them press each face
+button as asked, and it's saved for that controller on that device. 8BitDo controllers work best in X-input mode, and the page
+says how to switch.
+
 **Q: Can a friend join over WireGuard (or another VPN) instead?**
 Yes (11.0.1). Your friend only needs to reach the computer that plays, on TCP 19113. If their VPN
 puts them on your home network, the usual link works. If they reach the computer on its own VPN
@@ -388,6 +402,17 @@ and click **Send**. The app probes
 the file, shows you whether it looks like a ps5upload payload or
 something else, and records the send in a history panel so you
 can replay it without re-picking the file.
+
+**Q: How do I keep my payloads up to date?**
+Open **Payloads › Catalog › Payload updates** (12.0.0). **Check for payload updates** compares each
+payload you downloaded with its latest release; update one, or **Update all**. Turn on **Keep
+payloads up to date** and the app checks when it starts and once a day, and downloads newer
+releases by itself. The version an update replaced is kept: **Roll back** puts it back.
+
+If you use itsPLK's Payload Manager on the PS5, tick **Keep in Payload Manager** (and **Payload
+Manager loads it at boot** if you want it at boot) on a payload, and **Sync with Payload Manager**
+copies the ones you keep into it when they change and adds the marked ones to its boot list.
+Nothing else in its list is changed. Payload Manager has to be running on the PS5 for this.
 
 **Q: The Send button says "Waiting for the helper to start…" for a long time.**
 That is the normal probe window, up to 20 seconds. If it times out, the helper likely crashed on
@@ -2210,6 +2235,21 @@ passcode open, as for PS4 games.
   itself, for example a folder inside the game.
 - **An add-on that is a licence** unlocks something the game already has and holds no files.
 - Not yet tried on a console: a merged game, and an add-on folder in use.
+
+**Q: Can Workshop make a PS4 package, or save straight to my NAS?**
+Both (12.0.0).
+
+- **A PS4 package:** pick a PS4 game, or a PS4 game merged with its update, and choose **A PS4
+  package (.pkg)** under **② What to make**. It is a fake package made with the usual fake keys:
+  the game's files stay as they are (nothing is compressed, all languages are kept), and every file
+  is read back and compared before the package is kept. Stream or upload it to install it like
+  any other PS4 package.
+- **Straight to a server:** for a game image or a folder, set **Save to** to **A server, straight**
+  and choose a server you saved under **Connections** and a folder on it (SMB, NFS, FTP, SFTP or
+  WebDAV). It is written there as it is made and read back there before it gets its name; nothing
+  is stored on this computer. On SMB, NFS and SFTP a build that was cut off picks up where it
+  stopped; FTP and WebDAV start the file over. Images work as plain `.exfat`, `.ffpkg` or `.ffpfs`,
+  or `.exfat` with zstd packs.
 
 **Q: Can I add games to Workshop's queue while one is converting?**
 Yes. While a game is being made, pick or drop more under **① Game** (also **On the PS5…**, or

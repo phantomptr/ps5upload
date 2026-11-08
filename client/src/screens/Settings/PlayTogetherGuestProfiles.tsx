@@ -121,7 +121,7 @@ export function PlayTogetherGuestProfiles({ host }: { host: string }) {
           {tr(
             "pt_set_guests_hint",
             undefined,
-            "Make profiles like Guest 1 on the PS5, and sign them in, to use them here",
+            "Create profiles such as Guest 1 on the PS5 and sign them in to use them here",
           )}
         </p>
       </div>

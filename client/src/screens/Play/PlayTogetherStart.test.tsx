@@ -32,14 +32,14 @@ const view = (p: Partial<PlayTogetherStartViewProps> = {}) =>
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Play's three pages", () => {
-  it("Play my PS5, Play together, Join a friend, in that order; Play my PS5 first", async () => {
+  it("Play my PS5, Play Together, Join a friend, in that order; Play my PS5 first", async () => {
     installWindowStub();
     const { default: PlayScreen } = await import("./index");
     const out = html(<PlayScreen />, "/play");
     const radios = [...out.matchAll(/role="radio" aria-checked="(true|false)"[^>]*>(?:<svg[\s\S]*?<\/svg>)?([^<]+)</g)].map((m) => [m[2], m[1]]);
     expect(radios).toEqual([
       ["Play my PS5", "true"],
-      ["Play together", "false"],
+      ["Play Together", "false"],
       ["Join a friend", "false"],
     ]);
     expect(out).toContain('data-testid="stream-panel" data-together="false"');

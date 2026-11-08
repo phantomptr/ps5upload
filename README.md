@@ -45,8 +45,10 @@
   drives. Replaces PS Game Library.
 - **Convert games (Workshop).** Build an installable package from a decrypted game folder or an
   image, or write a game folder as a game image (`.exfat`, `.ffpkg`, `.ffpfs`, or the smaller
-  `.ffpfsc`) that ShadowMount+ mounts. A queue makes games one after another and hands each to
-  Upload & Install to install or upload.
+  `.ffpfsc`) that ShadowMount+ mounts. A PS4 game (or a PS4 game merged with its update) can
+  also become a PS4 fake package. An image or folder can be written straight to a server (SMB,
+  NFS, FTP, SFTP or WebDAV) with nothing stored on your computer. A queue makes games one after
+  another and hands each to Upload & Install to install or upload.
 - **Browse and manage.** Files, games, disk images (mount, edit in place), screenshots and
   video clips; register, launch, stop and uninstall games; copy, move (Move to…), delete, set
   permissions.
@@ -60,6 +62,11 @@
     you use other screens, and a dropped connection rejoins by itself.
   - Play with a controller connected to this device, the keyboard (keys you can remap) or an
     on-screen controller on phones and tablets; the controller vibrates with the game.
+    Third-party controllers (8BitDo, Switch Pro, Logitech and more) are mapped for you, and
+    **Check your controller** sets up the buttons of any other.
+  - **Away from home:** Tailscale is built in. Put the PS5 on your tailnet from **Connection**
+    and sign in on each device under **Settings › Tailscale**, with no Tailscale app needed; only
+    Remote Play and PS5Upload are reachable through it.
   - Or give the PS5 your computer's keyboard and mouse as its own (any firmware), and use a
     phone as its touchpad and keyboard.
   - If the user has a PS5 passcode, the app asks for it (never saved).
@@ -74,16 +81,18 @@
     controller on the PS5, from any browser or the app. Share a QR code, a link or a short
     code, allow each friend, and they pick Quick Play on the TV. They play with a controller,
     the keyboard or the on-screen controls on a phone, and hear the game (with Mute). A short
-    drop keeps their place; when you stop Play, they're told at once. Friends away from home
-    join over Tailscale, WireGuard or another VPN, and a link opens in the PS5Upload app when
-    they have it.
+    drop keeps their place; when you stop Play, they're told at once. Friends anywhere join from
+    an **internet invite** (no Tailscale or VPN needed), and a link opens in the PS5Upload app
+    when they have it. Guests play as the PS5 profile you choose, or the TV asks them. Phone
+    controllers and watch links work over the internet too.
   - **Go live** to YouTube, Twitch, Kick, Facebook or any RTMP/SRT server, several at once,
     straight from Play (desktop apps and the web UI), or add the stream to **OBS** for your own
     scenes and overlays.
   - A script or AI agent on the engine's computer can watch and play a running session
     ([AUTOMATION.md](AUTOMATION.md)), and drive everything else too ([API and AI agents](#api-and-ai-agents)).
 - **Cheats, fan curve, hardware view,** payload sender with a catalogue and playlists, and
-  backport tools.
+  backport tools. **Payload updates** update one payload or all, roll back, or keep them up to
+  date by themselves, and keep Payload Manager's copies and boot list in step.
 - **Bug reports in one place.** Bug Report (always in the sidebar) gathers the app's, the
   engine's and the PS5 helper's logs for the time you pick into one `.zip`, with addresses,
   serials and keys removed, ready to post on GitHub or Discord. **Detailed logs** (Logs tab)

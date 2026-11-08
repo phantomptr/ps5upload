@@ -86,7 +86,7 @@ export default function TailnetPanel({ host }: { host: string }) {
       </p>
       {unsupported ? (
         <p className="text-xs text-[var(--color-warn)]">
-          {tr("tn_old_helper", undefined, "This PS5's helper is older than Tailscale support. Send the payload again.")}
+          {tr("tn_old_helper", undefined, "This PS5's helper is too old for Tailscale. Send the helper again.")}
         </p>
       ) : !st?.enabled ? (
         <div className="flex flex-col gap-2">
