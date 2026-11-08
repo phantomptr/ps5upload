@@ -15,7 +15,9 @@ pub(super) fn tools() -> Vec<ToolDef> {
             description: "Whether Play Together is open on a console, who is in, and who is \
                           waiting to be let in. Internet guests show `via: internet` with their \
                           connection's `path` (direct, or failed with the ICE state) and round \
-                          trip; `internet.peers` lists those still connecting too.",
+                          trip; `internet.peers` lists those still connecting too. The invite's \
+                          key, code and links are left out (`invite.hidden`): together_invite \
+                          gives the link when the user asks for one.",
             kind: Kind::Read,
             schema: object(json!({ "console": console_required() }), &["console"]),
             run: route!(path: "/api/join", done: "Play Together on that console."),
