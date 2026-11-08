@@ -145,7 +145,7 @@ export function JoinFlow({
         >
           {tr("join_button", undefined, "Join")}
         </button>
-        {hubDown && lanUrl && <OpenOnWifi href={lanUrl} className="border-t border-white/10 pt-4" />}
+        {hubDown && lanUrl && <OpenOnWifi href={lanUrl} />}
       </form>
     </div>
   );

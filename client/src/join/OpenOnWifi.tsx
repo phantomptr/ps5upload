@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { Wifi } from "lucide-react";
 
 import { useTr } from "../state/lang";
 import { HUB_PROBE_MS, probeHub } from "./lanHint";
@@ -23,25 +22,16 @@ export function useHubDown(hubUrl: string | null, lan: string | null): boolean {
 
 /** "Open on this Wi-Fi": the host's own page on their home network, for a friend whose browser
  *  can't reach the invite service (no internet here, or it is down) but who is on that Wi-Fi. A
- *  link the friend taps (a secure page can't fetch the LAN page, it can only go there). */
-export function OpenOnWifi({ href, className = "" }: { href: string; className?: string }) {
+ *  link the friend taps (a secure page can't fetch the LAN page, it can only go there). The
+ *  classes are ones the guest pages already use (the page's size budget). */
+export function OpenOnWifi({ href }: { href: string }) {
   const tr = useTr();
   return (
-    <div className={`space-y-2 text-center ${className}`} data-testid="open-on-wifi">
-      <p className="text-sm text-white/75">
-        {tr(
-          "join_open_lan_body",
-          undefined,
-          "Can't reach the internet? If you're on the same Wi-Fi as your friend, open the game there.",
-        )}
+    <div className="flex flex-col items-center gap-3 text-center" data-testid="open-on-wifi">
+      <p className="max-w-sm text-sm text-white/60">
+        {tr("join_open_lan_body", undefined, "Can't reach the internet? If you're on the same Wi-Fi as your friend, open the game there.")}
       </p>
-      <a
-        href={href}
-        rel="noreferrer"
-        className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black"
-        data-testid="open-on-wifi-link"
-      >
-        <Wifi size={16} aria-hidden />
+      <a href={href} rel="noreferrer" className="rounded-full bg-white px-4 py-2 text-sm font-medium text-black" data-testid="open-on-wifi-link">
         {tr("join_open_lan", undefined, "Open on this Wi-Fi")}
       </a>
     </div>

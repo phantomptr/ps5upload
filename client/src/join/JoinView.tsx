@@ -410,8 +410,8 @@ export function JoinView({
 
   if (stage.kind === "connecting" || stage.kind === "asking") {
     return (
-      <div className={inApp ? "rounded-[var(--radius-card)] bg-neutral-900 text-white" : "flex min-h-[100dvh] flex-col items-center justify-center gap-6 bg-black text-white"}>
-        {stage.kind === "connecting" && hubDown && lanUrl && <OpenOnWifi href={lanUrl} className="max-w-sm px-6" />}
+      <div className={inApp ? "rounded-[var(--radius-card)] bg-neutral-900 text-white" : "flex min-h-[100dvh] flex-col items-center justify-center gap-4 bg-black text-white"}>
+        {stage.kind === "connecting" && hubDown && lanUrl && <OpenOnWifi href={lanUrl} />}
         <Waiting
           text={
             stage.kind === "connecting"
@@ -443,7 +443,7 @@ export function JoinView({
           {endText(tr, stage, host, !!session.opts.transport)}
         </p>
         {/* The invite service can't be reached: on the host's Wi-Fi, their own page still works. */}
-        {lanUrl && stage.why === "no_hub" && <OpenOnWifi href={lanUrl} className="max-w-sm" />}
+        {lanUrl && stage.why === "no_hub" && <OpenOnWifi href={lanUrl} />}
         <div className="flex flex-wrap justify-center gap-2">
           {again && (
             <button

@@ -374,13 +374,13 @@ export function PadApp({
 
       {showLan && !ended && lanUrl && (
         <div className="absolute inset-x-0 bottom-8 z-10 flex justify-center px-6">
-          <OpenOnWifi href={lanUrl} className="max-w-sm" />
+          <OpenOnWifi href={lanUrl} />
         </div>
       )}
       {ended && (
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 px-6 text-center text-sm">
           <p className="max-w-sm text-white/85">{stageText(tr, stage, computer)}</p>
-          {showLan && lanUrl && <OpenOnWifi href={lanUrl} className="max-w-sm" />}
+          {showLan && lanUrl && <OpenOnWifi href={lanUrl} />}
           {canRetry(stage) && (
             <button
               type="button"

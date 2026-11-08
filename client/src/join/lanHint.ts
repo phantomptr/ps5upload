@@ -15,58 +15,40 @@ export const HUB_PROBE_MS = 4000;
 export function lanPage(hash: string, kind: "join" | "pad"): string | null {
   const raw = new URLSearchParams(hash.replace(/^#/, "")).get("lan");
   if (!raw) return null;
-  let u: URL;
   try {
-    u = new URL(raw);
+    const u = new URL(raw);
+    const page = u.origin + u.pathname;
+    // Anything more (a user, a query, a fragment, another scheme) is not the engine's page.
+    return /^https?:$/.test(u.protocol) && raw === page && new RegExp(`/${kind}/?$`).test(u.pathname) ? page : null;
   } catch {
     return null;
   }
-  if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-  if (u.username || u.password || u.search || u.hash) return null;
-  if (!new RegExp(`/${kind}/?$`).test(u.pathname)) return null;
-  return `${u.origin}${u.pathname}`;
 }
 
 /** Where "Open on this Wi-Fi" goes: the join page with the invite's key, or the phone link's page
  *  (no key: the phone asks the computer there), `w=1` to watch. */
 export function lanTarget(page: string, o: { key?: string; watch?: boolean }): string {
-  const parts: string[] = [];
-  if (o.key) parts.push(`i=${encodeURIComponent(o.key)}`);
-  if (o.watch) parts.push("w=1");
-  return parts.length ? `${page}#${parts.join("&")}` : page;
+  return o.key ? `${page}#i=${encodeURIComponent(o.key)}` : o.watch ? `${page}#w=1` : page;
 }
 
 /** Whether the hub answers within `ms`: a WebSocket that opens (closed again at once). False when
  *  it can't be made, closes first, or takes longer. */
 export function probeHub(url: string, ms = HUB_PROBE_MS, WS: typeof WebSocket | undefined = typeof WebSocket === "undefined" ? undefined : WebSocket): Promise<boolean> {
   return new Promise((resolve) => {
-    if (!WS) {
-      resolve(false);
-      return;
-    }
-    let ws: WebSocket;
     try {
-      ws = new WS(url);
-    } catch {
-      resolve(false);
-      return;
-    }
-    let done = false;
-    const end = (ok: boolean) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      ws.onopen = ws.onclose = ws.onerror = null;
-      try {
+      const ws = new WS!(url);
+      const end = (ok: boolean) => {
+        clearTimeout(timer);
+        ws.onopen = ws.onclose = ws.onerror = null;
         ws.close();
-      } catch {
-        // Already closed.
-      }
-      resolve(ok);
-    };
-    const timer = setTimeout(() => end(false), ms);
-    ws.onopen = () => end(true);
-    ws.onclose = () => end(false);
-    ws.onerror = () => end(false);
+        resolve(ok);
+      };
+      const timer = setTimeout(() => end(false), ms);
+      ws.onopen = () => end(true);
+      ws.onclose = ws.onerror = () => end(false);
+    } catch {
+      // No WebSocket here, or the browser would not make one.
+      resolve(false);
+    }
   });
 }
