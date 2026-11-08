@@ -45,7 +45,9 @@ export function PlayTogetherGuestProfiles({ host }: { host: string }) {
       const p = host ? await joinApi.profiles(host) : null;
       if (!alive) return;
       setUnread(!p);
-      if (p) setState(p);
+      // Another console (or none read): never keep the last console's profiles on screen, or a
+      // pick would send its user ids to this one.
+      setState(p);
     })();
     return () => {
       alive = false;

@@ -44,7 +44,23 @@ export function compareVersions(a: string, b: string): number | null {
   const preA = a.includes("-");
   const preB = b.includes("-");
   if (preA !== preB) return preA ? -1 : 1;
-  if (preA && preB && a !== b) return a < b ? -1 : 1;
+  if (preA && preB && a !== b) {
+    // Dot-separated identifiers, numbers as numbers: "beta.10" is after "beta.9".
+    const ia = a.slice(a.indexOf("-") + 1).split(".");
+    const ib = b.slice(b.indexOf("-") + 1).split(".");
+    for (let i = 0; i < Math.max(ia.length, ib.length); i++) {
+      const x = ia[i];
+      const y = ib[i];
+      if (x === y) continue;
+      if (x === undefined) return -1;
+      if (y === undefined) return 1;
+      const nx = /^\d+$/.test(x);
+      const ny = /^\d+$/.test(y);
+      if (nx && ny) return Number(x) < Number(y) ? -1 : 1;
+      if (nx !== ny) return nx ? -1 : 1;
+      return x < y ? -1 : 1;
+    }
+  }
   return 0;
 }
 

@@ -259,13 +259,22 @@ impl TailnetEngine {
         {
             return;
         }
+        let moved = known.iter().any(|k| k.host == host && k.ip != ip);
         known.retain(|k| k.host != host);
         known.push(KnownConsole {
-            host,
+            host: host.clone(),
             ip,
             name: name.to_string(),
         });
         save(&self.dir, "consoles.json", &*known);
+        drop(known);
+        if moved {
+            // A new tailnet address: the mappings made for the old one would dial nobody.
+            let mut st = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(s) = st.get_mut(&host) {
+                s.maps.clear();
+            }
+        }
     }
 
     fn known_ip(&self, host: &str) -> Option<Ipv4Addr> {
@@ -332,7 +341,9 @@ impl TailnetEngine {
         status
             .peers
             .iter()
-            .any(|p| p.ip == Some(ip))
+            // Online too: the console's node runs in its helper, so a console whose helper is down
+            // (but still home, its Remote Play answering) is not taken for away.
+            .any(|p| p.ip == Some(ip) && p.online)
             .then_some((node, ip))
     }
 

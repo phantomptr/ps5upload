@@ -712,9 +712,20 @@ pub async fn set_internet(headers: HeaderMap, Json(r): Json<InternetReq>) -> Res
     Json(status(&headers, r.console.as_deref())).into_response()
 }
 
-/// Internet invites were turned off: the internet link's room closes (phones in keep playing).
+/// Internet invites were turned off: the internet link's room closes, and the internet phones
+/// still waiting for an answer go with it (phones in keep playing).
 pub(crate) fn internet_off() {
-    with_link(|l| l.net = None);
+    let revoked = with_link(|l| {
+        l.net = None;
+        let (revoked, kept) = std::mem::take(&mut l.pending)
+            .into_iter()
+            .partition::<Vec<_>, _>(|p| p.net);
+        l.pending = kept;
+        revoked
+    });
+    for p in revoked {
+        let _ = p.answer.send(Answer::Revoked);
+    }
 }
 
 #[derive(serde::Deserialize)]

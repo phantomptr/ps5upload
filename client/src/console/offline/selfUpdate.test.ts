@@ -43,6 +43,12 @@ describe("version compare", () => {
     expect(compareVersions("11.7.0", "11.7.0-beta.1")).toBe(1);
     expect(compareVersions("11.7.0-beta.1", "11.6.9")).toBe(1);
   });
+  it("orders prerelease numbers as numbers", () => {
+    expect(compareVersions("11.7.0-beta.10", "11.7.0-beta.9")).toBe(1);
+    expect(compareVersions("11.7.0-beta.9", "11.7.0-beta.10")).toBe(-1);
+    expect(compareVersions("11.7.0-beta", "11.7.0-beta.1")).toBe(-1);
+    expect(compareVersions("11.7.0-alpha.2", "11.7.0-beta.1")).toBe(-1);
+  });
   it("is null for anything that is not a version", () => {
     expect(compareVersions("dev", "11.6.0")).toBeNull();
     expect(compareVersions("11.6.0", "")).toBeNull();

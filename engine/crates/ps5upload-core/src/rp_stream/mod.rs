@@ -947,6 +947,17 @@ pub fn run_stream(
     }
 
     let mut takion = Takion::connect(resolve(host, STREAM_PORT)?)?;
+    // Through the tailnet the address is a 127.0.0.1 mapping, which looks like one network to
+    // path_mtu; the tunnel underneath carries 1280-byte packets, so the routed size.
+    if crate::route::via(host) != crate::route::Via::Lan && takion.mtu > takion::MTU_ROUTED {
+        takion.mtu = takion::MTU_ROUTED;
+        crate::clog!(
+            Info,
+            "rp",
+            "rp_stream: packet size {} (through the tailnet)",
+            takion.mtu
+        );
+    }
     crate::core_debug!("rp stream: {host}: takion connected (ctrl took {attempt} attempt(s))");
     sink.progress(Progress::TakionConnected);
 

@@ -46,7 +46,7 @@ import { GameCard } from "./GameCard";
 import { ImageBrowser } from "../LocalImage/ImageBrowser";
 import { isDriveImage, LocalDrivesCard, useLocalDrives } from "../LocalImage/LocalDrives";
 import { BROWSE_IMAGE_EXTENSIONS } from "../LocalImage/imageTypes";
-import { displayPath, isRemotePath } from "../../lib/remotePath";
+import { displayPath, isRemotePath, parseRemotePath } from "../../lib/remotePath";
 import { useConnectionsStore } from "../../state/connections";
 import { MakeCard } from "./MakeCard";
 import { mergeRole, Ps4MergePicker } from "./Ps4Merge";
@@ -166,7 +166,12 @@ export default function WorkshopScreen() {
   // An image saved on this computer, or written straight to the PS5 (nothing stored here).
   const [saveTo, setSaveTo] = useState<SaveTo>("computer");
   // Save to: a server: the folder there (remembered, as a `remote://` path).
-  const serverFolder = useConvertPrefs((s) => s.serverDir);
+  const savedServerFolder = useConvertPrefs((s) => s.serverDir);
+  // Only a folder on a server that is still saved here (the folder is synced between devices,
+  // whose saved servers can differ): anything else is no destination, and Run waits for one.
+  const connections = useConnectionsStore((s) => s.connections);
+  const savedServerId = parseRemotePath(savedServerFolder)?.connectionId;
+  const serverFolder = savedServerId && connections.some((c) => c.id === savedServerId) ? savedServerFolder : "";
   const setServerFolder = useConvertPrefs((s) => s.setServerDir);
   const nameOfServer = useConnectionsStore((s) => s.nameOf);
   const [deleteAfter, setDeleteAfter] = useState(false);
@@ -248,6 +253,9 @@ export default function WorkshopScreen() {
       // The AMPR emulator choice as it is now: changing it later is for games added later.
       addAmprEmu: prefs.addAmprEmu,
       amprEmuBuild: prefs.amprEmuBuild,
+      // Save to: a server, as chosen now (an image or a game folder only).
+      toServer:
+        (build.kind === "image" || build.kind === "folder") && savesToServer(runChoice) ? serverFolder : undefined,
     });
   };
   /** Queue what was picked or found, then say what was left out. */

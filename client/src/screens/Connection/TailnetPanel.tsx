@@ -164,7 +164,7 @@ export default function TailnetPanel({ host }: { host: string }) {
                         <span className="truncate">{p.name.split(".")[0] || p.ip}</span>
                         <span className="text-[var(--color-muted)]">
                           {kind === "direct"
-                            ? tr("tn_path_direct", { ms: p.latency_ms.toFixed(1) }, "direct, {ms} ms")
+                            ? tr("tn_path_direct", { ms: p.latency_ms >= 0 ? p.latency_ms.toFixed(1) : "?" }, "direct, {ms} ms")
                             : kind === "relayed"
                               ? tr("tn_path_relayed", undefined, "relayed through Tailscale's servers")
                               : tr("tn_path_idle", undefined, "idle")}
