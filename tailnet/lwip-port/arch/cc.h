@@ -10,6 +10,9 @@
  * around each wire struct instead (#pragma pack). */
 #define PACK_STRUCT_USE_INCLUDES
 #endif
+#ifdef _WIN32
+#define LWIP_NO_UNISTD_H 1 /* MSVC has none (MinGW does, so its compile check could not see it) */
+#endif
 #if defined(_WIN32) && !defined(SSIZE_MAX) /* (src/os.h defines both first in our files) */
 #include <basetsd.h>
 #include <stdint.h>
