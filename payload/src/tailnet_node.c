@@ -37,6 +37,10 @@ static char g_dir[256] = TAILNET_NODE_DIR;
 static tn_settings g_set;
 static int g_loaded;
 static tn_ctx *g_ctx;
+/* The node's last error and warning, under their own lock: the node's thread sets them from
+ * on_event, and stopping it (tn_destroy joins that thread) happens with g_mu held, so taking
+ * g_mu in on_event would deadlock a stop that meets an error. Order: g_mu, then g_msg_mu. */
+static pthread_mutex_t g_msg_mu = PTHREAD_MUTEX_INITIALIZER;
 static char g_last_error[160];
 static char g_warning[200];
 
@@ -94,24 +98,24 @@ static void on_event(void *user, const tn_event *ev) {
         fprintf(stderr, "[tailnet] state: %s\n", ev->text);
         if (ev->state == TN_ST_RUNNING) {
             /* In: the error that kept it out is over (the app shows `error` while it is set). */
-            pthread_mutex_lock(&g_mu);
+            pthread_mutex_lock(&g_msg_mu);
             g_last_error[0] = 0;
-            pthread_mutex_unlock(&g_mu);
+            pthread_mutex_unlock(&g_msg_mu);
         }
         break;
     case TN_EV_LOGIN_URL:
         fprintf(stderr, "[tailnet] waiting for sign-in\n"); /* the URL itself goes to the app only */
         break;
     case TN_EV_ERROR:
-        pthread_mutex_lock(&g_mu);
+        pthread_mutex_lock(&g_msg_mu);
         snprintf(g_last_error, sizeof g_last_error, "%s", ev->text ? ev->text : "");
-        pthread_mutex_unlock(&g_mu);
+        pthread_mutex_unlock(&g_msg_mu);
         fprintf(stderr, "[tailnet] %s\n", ev->text ? ev->text : "error");
         break;
     case TN_EV_WARN:
-        pthread_mutex_lock(&g_mu);
+        pthread_mutex_lock(&g_msg_mu);
         snprintf(g_warning, sizeof g_warning, "%s", ev->text ? ev->text : "");
-        pthread_mutex_unlock(&g_mu);
+        pthread_mutex_unlock(&g_msg_mu);
         fprintf(stderr, "[tailnet] %s\n", ev->text ? ev->text : "");
         break;
     case TN_EV_PATH:
@@ -152,14 +156,18 @@ static int start_locked(const char *authkey) {
     int r = tn_create(&cfg, &c);
     if (r == 0) r = tn_start(c);
     if (r != 0) {
+        pthread_mutex_lock(&g_msg_mu);
         snprintf(g_last_error, sizeof g_last_error, "%s", tn_strerror(r));
+        pthread_mutex_unlock(&g_msg_mu);
         fprintf(stderr, "[tailnet] could not start: %s\n", tn_strerror(r));
         if (c) tn_destroy(c);
         return -1;
     }
     fprintf(stderr, "[tailnet] started (%zu KiB)\n", tn_memory_footprint(c) / 1024);
     g_ctx = c;
+    pthread_mutex_lock(&g_msg_mu);
     g_last_error[0] = 0;
+    pthread_mutex_unlock(&g_msg_mu);
     return 0;
 }
 
@@ -228,9 +236,13 @@ static int status_json(char *out, size_t cap) {
         if (n < 0 || (size_t)n >= cap - len) return -1;
         len += (size_t)n;
     }
+    char e3[sizeof e2];
+    pthread_mutex_lock(&g_msg_mu);
     json_escape_into(g_warning, e2, sizeof e2);
+    json_escape_into(g_last_error, e3, sizeof e3);
+    pthread_mutex_unlock(&g_msg_mu);
     if (put(out, cap, &len, "],\"warning\":\"%s\"", e2) < 0) return -1;
-    json_escape_into(g_last_error, e2, sizeof e2);
+    memcpy(e2, e3, sizeof e2);
     if (put(out, cap, &len, ",\"error\":\"%s\",\"peers\":[", e2) < 0) return -1;
     for (uint32_t i = 0; i < st.n_peers && i < 64; i++) {
         const tn_peer_status *p = &ps[i];
@@ -295,7 +307,9 @@ int tailnet_node_call(const char *body, size_t len, char *out, size_t cap) {
             char path[320];
             path_of(path, sizeof path, "tailnet-state.json"); /* the node and machine keys */
             if (unlink(path) != 0 && errno != ENOENT) r = -1;
+            pthread_mutex_lock(&g_msg_mu);
             g_warning[0] = 0;
+            pthread_mutex_unlock(&g_msg_mu);
         }
     } else if (strcmp(op, "status") != 0) {
         pthread_mutex_unlock(&g_mu);
