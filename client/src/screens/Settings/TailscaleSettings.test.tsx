@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 
+import { MemoryRouter } from "react-router";
 import { TailscaleSettings } from "./TailscaleSettings";
 import { appTailnetOp, appTailnetStatus, tailnetProblems, TAILNET_SLOW_MS, tailnetVia } from "../../api/tailnet";
 import { TailnetProblems } from "../Connection/TailnetProblems";
@@ -35,9 +36,16 @@ describe("Settings › Tailscale (this device's own node)", () => {
 
   it("starts with sign-in and says no Tailscale app is needed", () => {
     vi.stubGlobal("fetch", answer(200, {}));
-    const html = renderToStaticMarkup(<TailscaleSettings />);
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <TailscaleSettings />
+      </MemoryRouter>,
+    );
     expect(html).toContain("Sign in to Tailscale");
-    expect(html).toContain("no Tailscale app needed");
+    expect(html).toContain("No Tailscale app needed");
+    // It says the PS5 joins on its own screen, and leads there.
+    expect(html).toContain("Connection › Put this PS5 on Tailscale");
+    expect(html).toContain("Open Connection");
   });
 
   it("says what is wrong in words instead of spinning on Connecting", () => {

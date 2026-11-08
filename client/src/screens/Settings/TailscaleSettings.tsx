@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, ExternalLink, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Cable, ChevronDown, ChevronRight, ExternalLink, Loader2 } from "lucide-react";
+import { useLocation, useNavigate } from "react-router";
 import { Button } from "../../components";
 import { useTr } from "../../state/lang";
 import {
@@ -21,6 +22,9 @@ import { TailnetProblems } from "../Connection/TailnetProblems";
  */
 export function TailscaleSettings() {
   const tr = useTr();
+  const navigate = useNavigate();
+  const { hash } = useLocation();
+  const root = useRef<HTMLDivElement>(null);
   const [st, setSt] = useState<AppTailnetStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -61,17 +65,34 @@ export function TailscaleSettings() {
     }
   };
 
+  // The Connection screen's "Open Settings › Tailscale" lands here.
+  useEffect(() => {
+    if (hash === "#tailscale") root.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+  }, [hash]);
+
   const state = st?.state ?? "off";
   const days = st ? expiryDays(st.key_expiry) : null;
   return (
-    <div className="flex flex-col gap-2" data-testid="tailscale-settings">
+    <div ref={root} id="tailscale" className="flex flex-col gap-2 scroll-mt-4" data-testid="tailscale-settings">
       <p className="text-xs text-[var(--color-muted)]">
         {tr(
           "tn_app_sub",
           undefined,
-          "Reach your PS5 from anywhere. This device joins your tailnet by itself: no Tailscale app needed.",
+          "Adds this phone or computer to your Tailscale network, so the app can reach your PS5 when you're away from home. No Tailscale app needed. Do this on each device you play from.",
         )}
       </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-xs text-[var(--color-muted)]" data-testid="tailscale-ps5-step">
+          {tr(
+            "tn_app_ps5_step",
+            undefined,
+            "Your PS5 joins separately, once, at home: Connection › Put this PS5 on Tailscale.",
+          )}
+        </p>
+        <Button size="sm" variant="ghost" leftIcon={<Cable size={14} />} onClick={() => navigate("/connection")}>
+          {tr("tn_open_connection", undefined, "Open Connection")}
+        </Button>
+      </div>
       {!st?.enabled ? (
         <div className="flex flex-col gap-2">
           <button
@@ -117,7 +138,7 @@ export function TailscaleSettings() {
           {state === "needs-login" && st.login_url ? (
             <div className="flex flex-col gap-2">
               <p className="text-xs">
-                {tr("tn_app_sign_in", undefined, "Sign in to Tailscale to add this device to your tailnet.")}
+                {tr("tn_app_sign_in", undefined, "Sign in with your Tailscale account to add this device to your Tailscale network.")}
               </p>
               <div>
                 <Button onClick={() => void openExternalUrl(st.login_url)} data-testid="app-tailnet-login">
@@ -146,7 +167,7 @@ export function TailscaleSettings() {
               </p>
               {st.peers.length === 0 ? (
                 <p className="text-xs text-[var(--color-muted)]">
-                  {tr("tn_no_peers", undefined, "No other devices on your tailnet yet.")}
+                  {tr("tn_no_peers", undefined, "No other devices on your Tailscale network yet.")}
                 </p>
               ) : (
                 <ul className="flex flex-col gap-0.5 text-xs" data-testid="app-tailnet-peers">
@@ -170,7 +191,7 @@ export function TailscaleSettings() {
             </div>
           ) : state === "wait-approval" ? (
             <p className="text-xs">
-              {tr("tn_app_wait_approval", undefined, "Waiting for your tailnet admin to approve this device.")}
+              {tr("tn_app_wait_approval", undefined, "Waiting for this device to be approved in your Tailscale admin page.")}
             </p>
           ) : (
             <p className="flex items-center gap-1 text-xs text-[var(--color-muted)]">
