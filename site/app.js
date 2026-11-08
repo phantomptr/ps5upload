@@ -145,7 +145,8 @@ document.getElementById("all-open")?.addEventListener("click", () => allGroups.f
 document.getElementById("all-close")?.addEventListener("click", () => allGroups.forEach((d) => (d.open = false)));
 // A link to one group (#all-saves) opens it.
 const openGroup = () => {
-  const el = location.hash && document.getElementById(location.hash.slice(1));
+  // No hash: "" is not an element (`"" && …` stays "", and "".classList is undefined).
+  const el = location.hash ? document.getElementById(location.hash.slice(1)) : null;
   if (el?.classList.contains("all-group")) el.open = true;
 };
 window.addEventListener("hashchange", openGroup);
