@@ -104,7 +104,13 @@ SQLITE_CFLAGS := -Os -g0 \
                  -DSQLITE_DQS=0 \
                  -DSQLITE_UNTESTABLE=1
 
-INCLUDES := -Iinclude -Ismb -I$(BLAKE3_DIR) -I$(SQLITE_DIR) -Ithird_party/tiny_aes -I$(AVA1) -I$(AVA1)/gen -I$(MONO_DIR) -Igen
+# The tailnet core ("Put this PS5 on Tailscale", ../tailnet): its own Makefile builds it for the
+# console as three archives; Monocypher is not duplicated (it uses the copy linked here).
+TAILNET_DIR := ../tailnet
+TAILNET_BUILD := $(TAILNET_DIR)/build/ps5
+TAILNET_LIBS := $(TAILNET_BUILD)/libtailnet.a $(TAILNET_BUILD)/liblwip.a $(TAILNET_BUILD)/libbearssl.a
+
+INCLUDES := -Iinclude -Ismb -I$(BLAKE3_DIR) -I$(SQLITE_DIR) -Ithird_party/tiny_aes -I$(AVA1) -I$(AVA1)/gen -I$(MONO_DIR) -Igen -I$(TAILNET_DIR)/include
 CFLAGS := -Wall -Wextra -Werror -g $(INCLUDES)
 
 # Sony sprx linkage. The payload calls sceLncUtilLaunchApp +
@@ -243,6 +249,7 @@ SRCS := src/main.c src/runtime.c src/shell_builtin.c src/takeover.c src/takeover
         src/app_dump.c src/app_dump_core.c src/app_dump_pkg.c src/app_dump_fself.c src/app_dump_self.c src/app_dump_sha256.c $(WEBUI_TILE_ICON_C) $(EXTRACTOR_ELF_C) \
         src/pkg_info.c src/webui_pkg.c $(WEBUI_INSTALLER_C) \
         src/webui_smb.c src/smb_shares.c src/smb_client.c smb/smbd_json.c smb/smbd_path.c $(SMBD_ELF_C) \
+        src/tailnet_node.c \
         $(WEBUI_PAGE_C) $(WEBUI_STRINGS_C) $(WEBUI_OFFLINE_C) \
         third_party/tiny_aes/aes.c \
         $(BLAKE3_SRCS)
@@ -274,8 +281,12 @@ $(SQLITE_DIR)/sqlite3.c $(SQLITE_DIR)/sqlite3.h:
 # without this a change to either printed "Built" while leaving the previous
 # link in place. Adding -lSceIpmi did exactly that — the stale ELF had no
 # libSceIpmi in DT_NEEDED until the sources were touched.
-$(ELF): $(SRCS) $(HEADERS) $(SQLITE_OBJ) $(MONO_OBJ) $(BLAKE3_OBJS) $(AVA1_OBJS) $(SDK_CRT1) Makefile
-	$(CC) $(CFLAGS) -nostartfiles -o $@ $(SRCS) $(BLAKE3_OBJS) $(AVA1_OBJS) $(SQLITE_OBJ) $(MONO_OBJ) $(SDK_CRT1) $(LIBS)
+$(ELF): $(SRCS) $(HEADERS) $(SQLITE_OBJ) $(MONO_OBJ) $(BLAKE3_OBJS) $(AVA1_OBJS) $(SDK_CRT1) $(TAILNET_LIBS) Makefile
+	$(CC) $(CFLAGS) -nostartfiles -o $@ $(SRCS) $(BLAKE3_OBJS) $(AVA1_OBJS) $(SQLITE_OBJ) $(MONO_OBJ) $(SDK_CRT1) $(TAILNET_LIBS) $(LIBS)
+
+# Always asks tailnet's Makefile (it knows its sources); the archives change only when they did.
+$(TAILNET_LIBS): FORCE
+	$(MAKE) -C $(TAILNET_DIR) TARGET=ps5 lib
 
 build/blake3/%.o: $(BLAKE3_DIR)/%.c $(HEADERS) Makefile
 	@mkdir -p $(dir $@)

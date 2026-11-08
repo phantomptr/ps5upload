@@ -101,6 +101,7 @@ import { applyBundle, backupBeforeChange, buildBundle } from "../../lib/settings
 import { SettingsBackups } from "./SettingsBackups";
 import { TraySettings } from "./TraySettings";
 import { PlayTogetherSettings } from "./PlayTogetherSettings";
+import { TailscaleSettings } from "./TailscaleSettings";
 import { LinuxGraphicsSettings } from "./LinuxGraphicsSettings";
 import { linuxGraphicsPossible } from "../../lib/linuxGraphics";
 import { trayPossible } from "../../state/tray";
@@ -841,6 +842,10 @@ export default function SettingsScreen() {
 
         <Section title={tr("pt_button", undefined, "Play Together")} full>
           <PlayTogetherSettings />
+        </Section>
+
+        <Section title={tr("tn_title", undefined, "Tailscale")} full>
+          <TailscaleSettings />
         </Section>
 
         <GroupHeading>

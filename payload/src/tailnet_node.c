@@ -1,0 +1,302 @@
+/* The helper's tailnet node: settings on /data, lifecycle, and the tailnet.* call.
+ * The protocol, the data plane and the forwarder are tailnet/ (one C core shared with
+ * the engine); this file only decides when it runs and with what. See tailnet_node.h. */
+#include "tailnet_node.h"
+
+#include <errno.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include "atomic_file.h"
+#include "json_escape.h"
+#include "proc_identity.h"
+#include "tailnet.h"
+#include "webui_codec.h"
+
+/* The allow-list. The core accepts nothing else from the tailnet. */
+static const tn_serve SERVE[] = {
+    {6, 9295, 0},  /* Remote Play session (TCP) */
+    {17, 9296, 0}, /* Remote Play stream (UDP) */
+    {17, 9302, 0}, /* Remote Play discovery / wake (UDP) */
+    {6, 9120, 0},  /* the helper (AVA1, TCP) */
+};
+
+typedef struct {
+    int enabled;
+    char control_url[256];
+    char hostname[64];
+    char control_addr[64];
+} tn_settings;
+
+static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+static char g_dir[256] = TAILNET_NODE_DIR;
+static tn_settings g_set;
+static int g_loaded;
+static tn_ctx *g_ctx;
+static char g_last_error[160];
+static char g_warning[200];
+
+void tailnet_node_set_dir(const char *dir) {
+    snprintf(g_dir, sizeof g_dir, "%s", dir);
+    g_loaded = 0;
+}
+
+static void path_of(char *out, size_t cap, const char *name) { snprintf(out, cap, "%s/%s", g_dir, name); }
+
+static void load_settings(void) {
+    char path[320], buf[1024];
+    if (g_loaded) return;
+    g_loaded = 1;
+    memset(&g_set, 0, sizeof g_set);
+    snprintf(g_set.control_url, sizeof g_set.control_url, "%s", TAILNET_DEFAULT_CONTROL);
+    path_of(path, sizeof path, "settings.json");
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = 0;
+    int b = 0;
+    if (webui_json_bool(buf, n, "enabled", &b) == 1) g_set.enabled = b;
+    char url[256];
+    if (webui_json_str(buf, n, "control_url", url, sizeof url) == 1 && url[0]) snprintf(g_set.control_url, sizeof g_set.control_url, "%s", url);
+    (void)webui_json_str(buf, n, "hostname", g_set.hostname, sizeof g_set.hostname);
+    (void)webui_json_str(buf, n, "control_addr", g_set.control_addr, sizeof g_set.control_addr);
+}
+
+static int save_settings(void) {
+    char path[320], tmp[330], url[300], host[100], addr[80], buf[1024];
+    mkdir(g_dir, 0700);
+    path_of(path, sizeof path, "settings.json");
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    json_escape_into(g_set.control_url, url, sizeof url);
+    json_escape_into(g_set.hostname, host, sizeof host);
+    json_escape_into(g_set.control_addr, addr, sizeof addr);
+    int n = snprintf(buf, sizeof buf, "{\"enabled\":%s,\"control_url\":\"%s\",\"hostname\":\"%s\",\"control_addr\":\"%s\"}\n",
+                     g_set.enabled ? "true" : "false", url, host, addr);
+    if (n <= 0 || (size_t)n >= sizeof buf) return -1;
+    return atomic_file_write(path, tmp, buf, (size_t)n, 0600);
+}
+
+static void on_thread(void *user, const char *role) {
+    (void)user;
+    (void)role;
+    proc_name_set_self("ps5upload-tailnet"); /* every helper thread takes our process name */
+}
+
+static void on_event(void *user, const tn_event *ev) {
+    (void)user;
+    switch (ev->type) {
+    case TN_EV_STATE:
+        fprintf(stderr, "[tailnet] state: %s\n", ev->text);
+        break;
+    case TN_EV_LOGIN_URL:
+        fprintf(stderr, "[tailnet] waiting for sign-in\n"); /* the URL itself goes to the app only */
+        break;
+    case TN_EV_ERROR:
+        pthread_mutex_lock(&g_mu);
+        snprintf(g_last_error, sizeof g_last_error, "%s", ev->text ? ev->text : "");
+        pthread_mutex_unlock(&g_mu);
+        fprintf(stderr, "[tailnet] %s\n", ev->text ? ev->text : "error");
+        break;
+    case TN_EV_WARN:
+        pthread_mutex_lock(&g_mu);
+        snprintf(g_warning, sizeof g_warning, "%s", ev->text ? ev->text : "");
+        pthread_mutex_unlock(&g_mu);
+        fprintf(stderr, "[tailnet] %s\n", ev->text ? ev->text : "");
+        break;
+    case TN_EV_PATH:
+        fprintf(stderr, "[tailnet] %s\n", ev->text);
+        break;
+    default:
+        break;
+    }
+}
+
+/* Start with the current settings; caller holds g_mu. */
+static int start_locked(const char *authkey) {
+    if (g_ctx) return 0;
+    char dir[256];
+    snprintf(dir, sizeof dir, "%s", g_dir);
+    mkdir(dir, 0700);
+    tn_config cfg;
+    memset(&cfg, 0, sizeof cfg);
+    cfg.state_dir = dir;
+    cfg.control_url = g_set.control_url;
+    cfg.control_addr = g_set.control_addr[0] ? g_set.control_addr : NULL;
+    cfg.auth_key = authkey && *authkey ? authkey : NULL;
+    cfg.hostname = g_set.hostname[0] ? g_set.hostname : "PS5";
+    cfg.os = "ps5";
+    cfg.app = "ps5upload";
+    cfg.cb = on_event;
+    cfg.serve = SERVE;
+    cfg.n_serve = sizeof SERVE / sizeof SERVE[0];
+    cfg.thread_cb = on_thread;
+    cfg.thread_stack = 256 * 1024;
+    /* A console needs far less than the desktop defaults (6.4 MiB): a home tailnet. */
+    cfg.max_peers = 64;
+    cfg.max_regions = 64;
+    cfg.max_rules = 64;
+    cfg.map_msg_max = 1u << 20;
+    cfg.json_tokens_max = 16384;
+    tn_ctx *c = NULL;
+    int r = tn_create(&cfg, &c);
+    if (r == 0) r = tn_start(c);
+    if (r != 0) {
+        snprintf(g_last_error, sizeof g_last_error, "%s", tn_strerror(r));
+        fprintf(stderr, "[tailnet] could not start: %s\n", tn_strerror(r));
+        if (c) tn_destroy(c);
+        return -1;
+    }
+    fprintf(stderr, "[tailnet] started (%zu KiB)\n", tn_memory_footprint(c) / 1024);
+    g_ctx = c;
+    g_last_error[0] = 0;
+    return 0;
+}
+
+static void stop_locked(void) {
+    if (!g_ctx) return;
+    tn_ctx *c = g_ctx;
+    g_ctx = NULL;
+    tn_destroy(c);
+}
+
+int tailnet_node_boot(void) {
+    pthread_mutex_lock(&g_mu);
+    load_settings();
+    int r = g_set.enabled ? start_locked(NULL) : 0;
+    pthread_mutex_unlock(&g_mu);
+    return r;
+}
+
+void tailnet_node_shutdown(void) {
+    pthread_mutex_lock(&g_mu);
+    stop_locked();
+    pthread_mutex_unlock(&g_mu);
+}
+
+static int put(char *out, size_t cap, size_t *len, const char *fmt, const char *s1) {
+    int n = snprintf(out + *len, cap - *len, fmt, s1);
+    if (n < 0 || (size_t)n >= cap - *len) return -1;
+    *len += (size_t)n;
+    return 0;
+}
+
+/* {"ok":true,"enabled":…,"state":"running","login_url":…,"control_url":…,"hostname":…,
+ *  "ip":"100.x.y.z","name":…,"home_derp":900,"derp_connected":true,"home_latency_ms":1.2,
+ *  "udp_port":41641,"endpoints":["a.b.c.d:p",…],"key_expiry":unix|0,"warning":…,"error":…,
+ *  "serving":{"udp_flows":n,"tcp_conns":n},"peers":[{"name","ip","online","path","direct",
+ *  "derp_region","latency_ms","last_rx_ms"}…]} — caller holds g_mu. */
+static int status_json(char *out, size_t cap) {
+    tn_status st;
+    static tn_peer_status ps[64];
+    char e1[600], e2[300], ip[16];
+    size_t len = 0;
+    memset(&st, 0, sizeof st);
+    if (g_ctx) tn_get_status(g_ctx, &st, ps, 64);
+    if (put(out, cap, &len, "{\"ok\":true,\"enabled\":%s", g_set.enabled ? "true" : "false") < 0) return -1;
+    if (put(out, cap, &len, ",\"state\":\"%s\"", g_ctx ? tn_state_name(st.state) : "off") < 0) return -1;
+    json_escape_into(st.login_url, e1, sizeof e1);
+    if (put(out, cap, &len, ",\"login_url\":\"%s\"", e1) < 0) return -1;
+    json_escape_into(g_set.control_url, e1, sizeof e1);
+    if (put(out, cap, &len, ",\"control_url\":\"%s\"", e1) < 0) return -1;
+    json_escape_into(g_set.hostname, e2, sizeof e2);
+    if (put(out, cap, &len, ",\"hostname\":\"%s\"", e2) < 0) return -1;
+    if (put(out, cap, &len, ",\"ip\":\"%s\"", st.self_addr4 ? tn_ip4_str(st.self_addr4, ip) : "") < 0) return -1;
+    json_escape_into(st.self_name, e2, sizeof e2);
+    if (put(out, cap, &len, ",\"name\":\"%s\"", e2) < 0) return -1;
+    int n = snprintf(out + len, cap - len,
+                     ",\"home_derp\":%d,\"derp_connected\":%s,\"home_latency_ms\":%.2f,\"udp_port\":%u,\"key_expiry\":%lld"
+                     ",\"serving\":{\"udp_flows\":%u,\"tcp_conns\":%u},\"endpoints\":[",
+                     (int)st.home_derp, st.derp_connected ? "true" : "false",
+                     st.home_latency_us >= 0 ? st.home_latency_us / 1000.0 : -1.0, (unsigned)st.udp_port,
+                     (long long)st.key_expiry, st.fwd_udp_flows, st.fwd_tcp_conns);
+    if (n < 0 || (size_t)n >= cap - len) return -1;
+    len += (size_t)n;
+    for (uint32_t i = 0; i < st.n_endpoints && i < 8; i++) {
+        n = snprintf(out + len, cap - len, "%s\"%s:%u\"", i ? "," : "", tn_ip4_str(st.endpoints[i].ip, ip),
+                     (unsigned)st.endpoints[i].port);
+        if (n < 0 || (size_t)n >= cap - len) return -1;
+        len += (size_t)n;
+    }
+    json_escape_into(g_warning, e2, sizeof e2);
+    if (put(out, cap, &len, "],\"warning\":\"%s\"", e2) < 0) return -1;
+    json_escape_into(g_last_error, e2, sizeof e2);
+    if (put(out, cap, &len, ",\"error\":\"%s\",\"peers\":[", e2) < 0) return -1;
+    for (uint32_t i = 0; i < st.n_peers && i < 64; i++) {
+        const tn_peer_status *p = &ps[i];
+        char dir[24] = "";
+        if (p->path == TN_PATH_DIRECT)
+            snprintf(dir, sizeof dir, "%s:%u", tn_ip4_str(p->direct.ip, ip), (unsigned)p->direct.port);
+        json_escape_into(p->name, e2, sizeof e2);
+        n = snprintf(out + len, cap - len,
+                     "%s{\"name\":\"%s\",\"ip\":\"%s\",\"online\":%s,\"path\":\"%s\",\"direct\":\"%s\",\"derp_region\":%d,"
+                     "\"latency_ms\":%.2f,\"last_rx_ms\":%lld}",
+                     i ? "," : "", e2, tn_ip4_str(p->addr4, ip), p->online ? "true" : "false",
+                     p->path == TN_PATH_DIRECT ? "direct" : p->path == TN_PATH_DERP ? "relayed" : "idle", dir,
+                     (int)p->derp_region, p->latency_us >= 0 ? p->latency_us / 1000.0 : -1.0, (long long)p->last_rx_ms);
+        if (n < 0 || (size_t)n >= cap - len) return -1;
+        len += (size_t)n;
+    }
+    if (put(out, cap, &len, "]}%s", "") < 0) return -1;
+    return (int)len;
+}
+
+static int err_json(char *out, size_t cap, const char *err) {
+    int n = snprintf(out, cap, "{\"ok\":false,\"err\":\"%s\"}", err);
+    return n > 0 && (size_t)n < cap ? n : -1;
+}
+
+int tailnet_node_call(const char *body, size_t len, char *out, size_t cap) {
+    char op[16] = "status", url[256] = "", host[64] = "", key[256] = "", addr[64] = "";
+    if (len > 4096) return err_json(out, cap, "bad_request");
+    if (len > 0 && webui_json_str(body, len, "op", op, sizeof op) < 0) return err_json(out, cap, "bad_request");
+    pthread_mutex_lock(&g_mu);
+    load_settings();
+    int r = 0;
+    if (!strcmp(op, "enable")) {
+        if (webui_json_str(body, len, "control_url", url, sizeof url) < 0 ||
+            webui_json_str(body, len, "hostname", host, sizeof host) < 0 ||
+            webui_json_str(body, len, "authkey", key, sizeof key) < 0 ||
+            webui_json_str(body, len, "control_addr", addr, sizeof addr) < 0 ||
+            (url[0] && strncmp(url, "https://", 8) && strncmp(url, "http://", 7))) {
+            pthread_mutex_unlock(&g_mu);
+            return err_json(out, cap, "bad_request");
+        }
+        int changed = 0;
+        if (url[0] && strcmp(url, g_set.control_url)) {
+            snprintf(g_set.control_url, sizeof g_set.control_url, "%s", url);
+            changed = 1;
+        }
+        if (host[0] && strcmp(host, g_set.hostname)) {
+            snprintf(g_set.hostname, sizeof g_set.hostname, "%s", host);
+            changed = 1;
+        }
+        if (addr[0]) snprintf(g_set.control_addr, sizeof g_set.control_addr, "%s", addr);
+        g_set.enabled = 1;
+        if (save_settings() != 0) fprintf(stderr, "[tailnet] settings not saved (errno %d)\n", errno);
+        if (changed || key[0]) stop_locked(); /* new server, name or key: a fresh start */
+        r = start_locked(key);
+        memset(key, 0, sizeof key);
+    } else if (!strcmp(op, "disable") || !strcmp(op, "logout")) {
+        stop_locked();
+        g_set.enabled = 0;
+        if (save_settings() != 0) fprintf(stderr, "[tailnet] settings not saved (errno %d)\n", errno);
+        if (!strcmp(op, "logout")) {
+            char path[320];
+            path_of(path, sizeof path, "tailnet-state.json"); /* the node and machine keys */
+            if (unlink(path) != 0 && errno != ENOENT) r = -1;
+            g_warning[0] = 0;
+        }
+    } else if (strcmp(op, "status") != 0) {
+        pthread_mutex_unlock(&g_mu);
+        return err_json(out, cap, "unknown_op");
+    }
+    int n = r == 0 ? status_json(out, cap) : -1;
+    pthread_mutex_unlock(&g_mu);
+    if (n < 0) return err_json(out, cap, r ? "start_failed" : "too_big");
+    return n;
+}

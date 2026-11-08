@@ -89,6 +89,7 @@
 #include "ownership_record.h"
 #include "storage_cleanup.h"
 #include "mesh.h"
+#include "tailnet_node.h"
 #include "ava1_server.h"
 
 /* The frame numbers the management table (mgmt_table.def) carries per method. They are not on any wire now:
@@ -364,6 +365,8 @@
 /* the log levels the engine hands the helper (plog.c) */
 #define MGMT_FRAME_LOG_LEVEL 364u
 #define MGMT_FRAME_LOG_LEVEL_ACK 365u
+#define MGMT_FRAME_TAILNET 366u
+#define MGMT_FRAME_TAILNET_ACK 367u
 #define MGMT_FRAME_SDK_SCAN 214u
 #define MGMT_FRAME_SDK_SCAN_ACK 215u
 #define MGMT_FRAME_SDK_PATCH 216u
@@ -8505,6 +8508,18 @@ static int handle_log_level(runtime_state_t *state, const char *body, uint64_t b
     int n = plog_describe(out, sizeof out, now);
     if (n < 0) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
     return mgmt_reply(MGMT_FRAME_LOG_LEVEL_ACK, out, (uint64_t)n);
+}
+
+/* tailnet: "Put this PS5 on Tailscale" (tailnet_node.c). An empty body reads the status. */
+#define TAILNET_OUT_MAX (24u * 1024u)
+static int handle_tailnet(runtime_state_t *state, const char *body, uint64_t body_len) {
+    if (!state || body_len > 4096u) return mgmt_reply(MGMT_FRAME_ERROR, "bad_request", 11);
+    char *out = malloc(TAILNET_OUT_MAX);
+    if (!out) return mgmt_reply(MGMT_FRAME_ERROR, "out_of_memory", 13);
+    int n = tailnet_node_call(body ? body : "", (size_t)body_len, out, TAILNET_OUT_MAX);
+    int rc = n > 0 ? mgmt_reply(MGMT_FRAME_TAILNET_ACK, out, (uint64_t)n) : mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
+    free(out);
+    return rc;
 }
 
 /* ── The devices that use this console (mesh.c) ─────────────────────────

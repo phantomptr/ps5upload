@@ -1,5 +1,6 @@
-import { useState } from "react";
-import { Camera, Check, AlertTriangle, Images, MonitorSmartphone, Zap } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Camera, Check, AlertTriangle, Globe, Images, MonitorSmartphone, Zap } from "lucide-react";
+import { tailnetVia, type TailnetVia } from "../api/tailnet";
 import { useNavigate } from "react-router";
 
 import { useConnectionStore, EMPTY_HOST_RUNTIME } from "../state/connection";
@@ -187,6 +188,7 @@ export default function StatusBar() {
       {/* Right cluster — live activity + power/capture controls. */}
       <div className="ms-auto flex items-center gap-3">
         <ActivityStatusSlot />
+        <TailnetChip />
         <OtherDevicesChip />
         <KeepAwakeIndicator />
         {/* Saving a capture is native; the web build's Bug Report attaches files instead. */}
@@ -194,6 +196,48 @@ export default function StatusBar() {
         {isTauriEnv() && <ViewCapturesButton />}
       </div>
     </div>
+  );
+}
+
+/** "via Tailscale (direct, 3.2 ms)" / "via Tailscale (relayed)" while the engine reaches the
+ *  selected console through its tailnet node because the home address does not answer.
+ *  Nothing on the LAN. */
+function TailnetChip() {
+  const tr = useTr();
+  const host = useConnectionStore((s) => s.host);
+  const [via, setVia] = useState<TailnetVia>({ via: "lan", latency_ms: -1 });
+  useEffect(() => {
+    if (!host) return;
+    let live = true;
+    const read = () =>
+      void tailnetVia(host).then((v) => {
+        if (live) setVia(v);
+      });
+    read();
+    const t = window.setInterval(read, 5000);
+    return () => {
+      live = false;
+      window.clearInterval(t);
+    };
+  }, [host]);
+  if (!host || (via.via !== "direct" && via.via !== "relayed")) return null;
+  const label =
+    via.via === "direct"
+      ? tr(
+          "tn_via_direct",
+          { ms: via.latency_ms >= 0 ? via.latency_ms.toFixed(1) : "?" },
+          "via Tailscale (direct, {ms} ms)",
+        )
+      : tr("tn_via_relayed", undefined, "via Tailscale (relayed)");
+  return (
+    <span
+      className="flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[var(--color-accent-bright)]"
+      title={label}
+      data-testid="tailnet-chip"
+    >
+      <Globe size={12} aria-hidden />
+      <span>{label}</span>
+    </span>
   );
 }
 

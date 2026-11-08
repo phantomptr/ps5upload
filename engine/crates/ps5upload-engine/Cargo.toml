@@ -37,6 +37,7 @@ blake3.workspace = true
 mime_guess = { version = "2", optional = true }
 smb2 = "0.39"
 ps5upload-core = { path = "../ps5upload-core" }
+ps5upload-tailnet = { path = "../ps5upload-tailnet" }
 ps5upload-pkg = { path = "../ps5upload-pkg" }
 ps5upload-fpkg = { path = "../ps5upload-fpkg" }
 ps5-dump-forge-ufs2 = { path = "../ps5-dump-forge-ufs2" }

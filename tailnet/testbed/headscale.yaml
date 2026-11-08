@@ -1,0 +1,53 @@
+# Headscale config for the tailnet test bed (tb.sh). Local only: no Tailscale account,
+# no public DERP servers.
+# server_url is what our node on the Mac uses (published port); the Linux peer
+# container reaches the same server as http://headscale:8080 on the bed network.
+server_url: http://127.0.0.1:18080
+listen_addr: 0.0.0.0:8080
+metrics_listen_addr: 127.0.0.1:9090
+grpc_listen_addr: 127.0.0.1:50443
+grpc_allow_insecure: false
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+  allocation: sequential
+derp:
+  server:
+    enabled: false
+  # Only the bed's own derper (tb.sh writes derp.yaml): no traffic leaves this Mac.
+  urls: []
+  paths:
+    - /etc/headscale/derp.yaml
+  auto_update_enabled: false
+  update_frequency: 24h
+disable_check_updates: true
+node:
+  expiry: 0
+  ephemeral:
+    inactivity_timeout: 30m
+database:
+  type: sqlite
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+    write_ahead_log: true
+log:
+  level: info
+  format: text
+policy:
+  mode: database
+  path: ""  # database mode: m3-check.sh sets ACLs with `headscale policy set`
+dns:
+  magic_dns: true
+  base_domain: tnbed.internal
+  override_local_dns: false
+  nameservers:
+    global: []
+    split: {}
+  search_domains: []
+  extra_records: []
+unix_socket: /var/run/headscale/headscale.sock
+unix_socket_permission: "0770"
+logtail:
+  enabled: false

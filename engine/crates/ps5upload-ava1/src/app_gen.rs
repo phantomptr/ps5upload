@@ -146,6 +146,7 @@ pub const METHOD_VPAD_STATUS: u16 = 194;
 pub const METHOD_CONSOLE_TASKS: u16 = 195;
 pub const METHOD_CONSOLE_TASK_CANCEL: u16 = 196;
 pub const METHOD_LOG_LEVEL: u16 = 197;
+pub const METHOD_TAILNET: u16 = 198;
 pub const JOB_OP_DELETE: u8 = 1;
 pub const JOB_OP_CHMOD_R: u8 = 2;
 pub const JOB_OP_HASH: u8 = 3;

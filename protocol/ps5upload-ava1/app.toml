@@ -569,6 +569,11 @@ value = 196
 name = "METHOD_LOG_LEVEL"
 ty = "u16"
 value = 197
+# "Put this PS5 on Tailscale" (payload/src/tailnet_node.c; MGMT_METHODS.md)
+[[const]]
+name = "METHOD_TAILNET"
+ty = "u16"
+value = 198
 [[const]]
 name = "JOB_OP_DELETE"
 ty = "u8"
