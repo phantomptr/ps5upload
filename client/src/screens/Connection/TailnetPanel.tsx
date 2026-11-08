@@ -384,7 +384,16 @@ function AllowSection({
             "If you share your Tailscale network with other people, each of their devices could then reach Remote Play and PS5Upload on this PS5.",
           )}
         </p>
-      ) : (
+      ) : listed.length === 0 ? (
+        <p className="text-[var(--color-warn)]" data-testid="tailnet-allow-empty">
+          {tr(
+            "tn_allow_empty",
+            undefined,
+            "Only devices you add can reach this PS5 over Tailscale. Open PS5Upload at home on each device once, or tick devices below.",
+          )}
+        </p>
+      ) : null}
+      {all ? null : (
         <ul className="flex flex-col gap-0.5" data-testid="tailnet-allow-list">
           {peers.map((p) => (
             <li key={p.ip}>

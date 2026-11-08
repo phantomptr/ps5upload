@@ -8633,6 +8633,7 @@ rp_users_add_hint: "To play as another user too, sign in to that user on the PS5
 "tn_allow_auto": "A device that signs in to Tailscale in PS5Upload is added by itself the next time it talks to this PS5 at home.",
 "tn_allow_listed": "Only the devices ticked below (recommended)",
 "tn_allow_title": "Who can reach this PS5 over Tailscale",
+"tn_allow_empty": "Only devices you add can reach this PS5 over Tailscale. Open PS5Upload at home on each device once, or tick devices below.",
 "tn_app_paused": "Paused: this device is off Tailscale and keeps its sign-in. Switch it on to use it again.",
 "tn_app_sign_out_title": "Sign this device out of Tailscale?",
 "tn_app_sign_out_warn": "Its sign-in is forgotten: using Tailscale again needs a new sign-in, and this device may get a new address. To stop it for a while, switch it to Paused instead.",

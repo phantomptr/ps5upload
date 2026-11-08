@@ -151,18 +151,30 @@ int main(void) {
     CHECK(tailnet_node_allows(0x64650203u) && !tailnet_node_allows(0x64400006u));
     CHECK(call("{\"op\":\"disable\"}") > 0);
 
-    /* settings saved before the allow-list (12.0.0): every device still passes until the node
-     * runs with its netmap and the list is started from the devices on the tailnet */
+    /* Settings saved before the allow-list (12.0.0): listed, with nobody on it. Never started from
+     * the whole tailnet: a device gets in once its PS5Upload app adds itself at home (allow_add)
+     * or the user ticks it (allow). Kept across a restart and a run of the node. */
     {
         FILE *f = fopen(path, "w");
         CHECK(f != NULL);
         if (f) {
-            fputs("{\"enabled\":false,\"control_url\":\"http://127.0.0.1:9\",\"hostname\":\"old\",\"control_addr\":\"\"}\n", f);
+            fputs("{\"enabled\":true,\"control_url\":\"http://127.0.0.1:9\",\"hostname\":\"old\",\"control_addr\":\"\"}\n", f);
             fclose(f);
         }
         tailnet_node_set_dir(dir);
-        CHECK(call("") > 0 && str("allow_mode", v, sizeof v) == 1 && !strcmp(v, "all"));
-        CHECK(tailnet_node_allows(0x64400009u));
+        CHECK(call("") > 0 && str("allow_mode", v, sizeof v) == 1 && !strcmp(v, "listed"));
+        CHECK(str("allow", v, sizeof v) == 1 && v[0] == 0);
+        CHECK(!tailnet_node_allows(0x64400009u));
+        CHECK(tailnet_node_boot() == 0); /* the node runs: still nobody, nothing seeded */
+        usleep(200 * 1000);
+        CHECK(call("") > 0 && str("allow", v, sizeof v) == 1 && v[0] == 0 && !tailnet_node_allows(0x64400009u));
+        CHECK(call("{\"op\":\"allow_add\",\"ip\":\"100.64.0.9\"}") > 0 && boolean("ok") == 1);
+        CHECK(tailnet_node_allows(0x64400009u) && !tailnet_node_allows(0x6440000au));
+        CHECK(file_has(path, "\"allow_mode\":\"listed\"") && file_has(path, "100.64.0.9"));
+        tailnet_node_shutdown();
+        tailnet_node_set_dir(dir);
+        CHECK(call("") > 0 && str("allow", v, sizeof v) == 1 && !strcmp(v, "100.64.0.9"));
+        CHECK(call("{\"op\":\"disable\"}") > 0);
     }
 
     /* Rest mode, in every state the host can reach. The PS5 freezes the process and the core

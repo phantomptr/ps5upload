@@ -994,7 +994,7 @@
   "cw_tile_why_write_failed": "its files could not be written on the PS5",
   "cw_tn_allow_all": "Every device on your Tailscale network can reach this PS5. Change this in the PS5Upload app: Connection › Tailscale for this PS5.",
   "cw_tn_allow_listed": "Only these devices can reach this PS5 over Tailscale: {names}. Change this in the PS5Upload app.",
-  "cw_tn_allow_none": "No device is allowed to reach this PS5 over Tailscale yet. Open the PS5Upload app at home to add yours.",
+  "cw_tn_allow_none": "Only devices you add can reach this PS5 over Tailscale. Open PS5Upload at home on each device once, or tick devices in the app (Connection › Tailscale for this PS5).",
   "cw_tn_connecting": "Connecting to Tailscale…",
   "cw_tn_err": "Tailscale: {err}",
   "cw_tn_err_change": "Couldn't change Tailscale on this PS5. Try again.",
