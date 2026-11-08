@@ -2,12 +2,8 @@
 #include "tn.h"
 #include "crypto.h"
 
-#include <errno.h>
-#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
 #define STATE_FILE "tailnet-state.json"
 #define STATE_MAX 4096
@@ -58,20 +54,10 @@ int tn_state_load(tn_keys *k, const char *dir, const char *control_url)
 	int dirty = 0;
 
 	memset(k, 0, sizeof *k);
-	if (mkdir(dir, 0700) != 0 && errno != EEXIST)
-		return TN_E_STATE;
+	tn_mkdir(dir);
 	if (path_join(path, sizeof path, dir, STATE_FILE) < 0)
 		return TN_E_ARG;
-	int fd = open(path, O_RDONLY);
-	ssize_t n = 0;
-	if (fd >= 0) {
-		n = read(fd, buf, STATE_MAX);
-		close(fd);
-		if (n < 0)
-			return TN_E_STATE;
-	} else if (errno != ENOENT) {
-		return TN_E_STATE;
-	}
+	int n = tn_file_read(path, buf, STATE_MAX); /* -1: no state yet (a new node) */
 	buf[n > 0 ? n : 0] = 0;
 	if (n > 0 && tn_json_parse(&j, buf, (size_t)n) > 0 && tn_json_type(&j, 0) == TN_J_OBJ) {
 		if (get_key(&j, "machine_priv", "privkey:", k->machine_priv) == 0)
@@ -111,7 +97,7 @@ int tn_state_load(tn_keys *k, const char *dir, const char *control_url)
 
 int tn_state_save(const tn_keys *k, const char *dir)
 {
-	char path[600], tmp[620], buf[STATE_MAX], t[80];
+	char path[600], buf[STATE_MAX], t[80];
 	tn_jw w;
 	tn_jw_init(&w, buf, sizeof buf);
 	tn_jw_obj(&w);
@@ -136,33 +122,10 @@ int tn_state_save(const tn_keys *k, const char *dir)
 	tn_wipe(t, sizeof t);
 	if (w.err)
 		return TN_E_TOOBIG;
-	if (path_join(path, sizeof path, dir, STATE_FILE) < 0 ||
-	    path_join(tmp, sizeof tmp, dir, STATE_FILE ".tmp") < 0)
+	if (path_join(path, sizeof path, dir, STATE_FILE) < 0)
 		return TN_E_ARG;
-	/* Atomic replace: temp file in the same directory, fsync, rename (never across devices). */
-	int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-	if (fd < 0)
-		return TN_E_STATE;
-	size_t off = 0;
-	while (off < w.len) {
-		ssize_t r = write(fd, buf + off, w.len - off);
-		if (r < 0) {
-			if (errno == EINTR)
-				continue;
-			close(fd);
-			unlink(tmp);
-			return TN_E_STATE;
-		}
-		off += (size_t)r;
-	}
+	/* Atomic replace: temp file in the same directory, flushed, then renamed over. */
+	int r = tn_file_write_atomic(path, buf, w.len);
 	tn_wipe(buf, sizeof buf);
-	if (fsync(fd) != 0 || close(fd) != 0) {
-		unlink(tmp);
-		return TN_E_STATE;
-	}
-	if (rename(tmp, path) != 0) {
-		unlink(tmp);
-		return TN_E_STATE;
-	}
-	return TN_OK;
+	return r == 0 ? TN_OK : TN_E_STATE;
 }

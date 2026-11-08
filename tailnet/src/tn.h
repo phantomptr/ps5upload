@@ -2,10 +2,9 @@
 #ifndef TN_INTERNAL_H
 #define TN_INTERNAL_H
 
-#include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <pthread.h>
+#include "os.h"
 
 #include "bearssl.h"
 #include "tailnet.h"
@@ -382,7 +381,7 @@ struct tn_derpc {
 	uint8_t in[4096];
 	size_t in_len;
 	uint32_t skip;
-	uint8_t out[16384];
+	uint8_t out[65536];    /* a burst of a 10 Mbit/s stream while TLS catches up */
 	size_t out_len;
 };
 
@@ -431,6 +430,9 @@ int tn_fwd_pollfds(tn_ctx *c, struct pollfd *pf, int cap);
 void tn_fwd_io(tn_ctx *c, int fd, short revents, int64_t now);
 void tn_fwd_tick(tn_ctx *c, int64_t now);
 int tn_fwd_sleep_ms(tn_ctx *c);
+int tn_fwd_map(tn_ctx *c, uint8_t proto, uint32_t rip, uint16_t rport, uint16_t want, uint16_t *lport);
+void tn_fwd_unmap(tn_ctx *c, uint8_t proto, uint16_t lport);
+int tn_fwd_expects(tn_ctx *c, const tn_ip_info *ip);
 void tn_fwd_stats(tn_ctx *c, uint32_t *udp_flows, uint32_t *tcp_conns);
 
 /* ---------- the context (tailnet.c, control.c) ---------- */
@@ -441,10 +443,10 @@ struct tn_ctx {
 	tn_url url;
 	tn_keys keys;
 
-	pthread_t thread;
+	tn_thread thread;
 	int thread_started;
 	int wake_r, wake_w;
-	atomic_int req_stop, req_pause;
+	tn_atomic req_stop, req_pause;
 	tn_state state;
 
 	/* control session */
@@ -470,14 +472,14 @@ struct tn_ctx {
 	int32_t expiry_bucket;   /* last key-expiry warning sent (hours left / 24), -1 none */
 
 	/* control <-> data plane. Lock order: dp_mu, then mu. */
-	pthread_mutex_t mu;      /* nms (netmap) and report */
-	atomic_uint nm_gen;      /* bumped by control after each applied netmap change */
+	tn_mutex mu;             /* nms (netmap) and report */
+	tn_atomic nm_gen;        /* bumped by control after each applied netmap change */
 	tn_report report;        /* endpoints + home DERP from the data plane */
-	atomic_int report_dirty, ctl_reconnect;
+	tn_atomic report_dirty, ctl_reconnect;
 	int kick_r, kick_w;      /* data plane -> control thread */
 
-	pthread_mutex_t dp_mu;   /* recursive: all data-plane state */
-	pthread_t dp_thread;
+	tn_mutex dp_mu;          /* recursive: all data-plane state */
+	tn_thread dp_thread;
 	int dp_started;
 	int dp_wake_r, dp_wake_w;
 	tn_dp *dp;

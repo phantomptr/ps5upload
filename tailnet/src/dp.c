@@ -14,20 +14,9 @@
 #include "tn.h"
 #include "crypto.h"
 
-#include <arpa/inet.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <ifaddrs.h>
-#include <net/if.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <time.h>
-#include <unistd.h>
 
 #define DEFAULT_UDP_PORT 41641
 #define TICK_MS 250
@@ -137,39 +126,19 @@ struct tn_dp {
 	int64_t now;
 };
 
-static int64_t wall_ms(void)
-{
-	struct timespec ts;
-	clock_gettime(CLOCK_REALTIME, &ts);
-	return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
-}
-
-static int64_t mono_us(void)
-{
-	struct timespec ts;
-	clock_gettime(CLOCK_MONOTONIC, &ts);
-	return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
-}
-
-static int64_t wall_ns(void)
-{
-	struct timespec ts;
-	clock_gettime(CLOCK_REALTIME, &ts);
-	return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
-}
+static int64_t wall_ms(void) { return tn_wall_ns() / 1000000; }
+static int64_t mono_us(void) { return tn_mono_us(); }
+static int64_t wall_ns(void) { return tn_wall_ns(); }
 
 static void kick_control(tn_ctx *c)
 {
-	char b = 1;
-	if (write(c->kick_w, &b, 1) < 0) { /* already pending */
-	}
+	tn_wake_signal(c->kick_w);
 }
 
 void tn_dp_wake(tn_ctx *c)
 {
-	char b = 1;
-	if (c->dp_wake_w >= 0 && write(c->dp_wake_w, &b, 1) < 0) { /* already pending */
-	}
+	if (c->dp_wake_w >= 0)
+		tn_wake_signal(c->dp_wake_w);
 }
 
 static int ep_eq(tn_ep4 a, tn_ep4 b) { return a.ip == b.ip && a.port == b.port; }
@@ -185,34 +154,26 @@ static const char *ep_str(tn_ep4 e, char buf[24])
 
 static void udp_close(tn_dp *d)
 {
-	if (d->udp >= 0)
-		close(d->udp);
+	tn_sock_close(d->udp);
 	d->udp = -1;
 }
 
 static int udp_open(tn_ctx *c, tn_dp *d)
 {
 	udp_close(d);
-	int fd = socket(AF_INET, SOCK_DGRAM, 0);
+	int fd = tn_sock_open(SOCK_DGRAM);
 	if (fd < 0)
 		return TN_E_IO;
-	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
-	int sz = 1 << 20;
-	setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &sz, sizeof sz);
-	setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sz, sizeof sz);
+	tn_sock_nonblock(fd);
+	tn_sock_setint(fd, SOL_SOCKET, SO_RCVBUF, 1 << 20);
+	tn_sock_setint(fd, SOL_SOCKET, SO_SNDBUF, 1 << 20);
 	uint16_t want = d->port ? d->port : (c->cfg.udp_port ? c->cfg.udp_port : DEFAULT_UDP_PORT);
-	struct sockaddr_in sa = {.sin_family = AF_INET, .sin_port = htons(want)};
-	if (bind(fd, (struct sockaddr *)&sa, sizeof sa) != 0) {
-		/* Port taken: any port works, only the type-4 endpoint guess suffers. */
-		sa.sin_port = 0;
-		if (bind(fd, (struct sockaddr *)&sa, sizeof sa) != 0) {
-			close(fd);
-			return TN_E_IO;
-		}
+	if (tn_sock_bind(fd, 0, want) != 0 && tn_sock_bind(fd, 0, 0) != 0) {
+		/* (port taken: any port works, only the type-4 endpoint guess suffers) */
+		tn_sock_close(fd);
+		return TN_E_IO;
 	}
-	socklen_t sl = sizeof sa;
-	getsockname(fd, (struct sockaddr *)&sa, &sl);
-	d->port = ntohs(sa.sin_port);
+	d->port = tn_sock_local_port(fd);
 	d->udp = fd;
 	tn_logf(c, 1, "udp: bound port %u", d->port);
 	return TN_OK;
@@ -222,11 +183,9 @@ static void udp_send(tn_ctx *c, tn_dp *d, tn_ep4 ep, const uint8_t *p, size_t n)
 {
 	if (d->udp < 0 || !ep.ip || !ep.port)
 		return;
-	struct sockaddr_in sa = {.sin_family = AF_INET, .sin_port = htons(ep.port), .sin_addr.s_addr = htonl(ep.ip)};
-	if (sendto(d->udp, p, n, 0, (struct sockaddr *)&sa, sizeof sa) < 0) {
-		int e = errno;
-		if (e == EAGAIN || e == EWOULDBLOCK || e == EINTR || e == EHOSTUNREACH || e == ENETUNREACH ||
-		    e == ECONNREFUSED || e == EPERM || e == EACCES)
+	if (tn_sock_sendto(d->udp, p, n, ep.ip, ep.port) < 0) {
+		int e = tn_sock_raw_errno(), k = tn_sock_errno();
+		if (k != TN_ERR_OTHER)
 			return; /* one unreachable endpoint, or a full buffer: a lost datagram */
 		/* Anything else (ENETDOWN, the PS5's errno 163, EBADF): rebuild the socket
 		 * later; never busy-retry. */
@@ -380,9 +339,9 @@ static void stage_drop(tn_dp *d, int peer)
 /* Copy the netmap in (control publishes nm_gen after each change). */
 static void sync_netmap(tn_ctx *c, tn_dp *d)
 {
-	pthread_mutex_lock(&c->mu);
+	tn_mutex_lock(&c->mu);
 	const tn_netmap *nm = &c->nms.nm;
-	d->nm_gen = atomic_load(&c->nm_gen);
+	d->nm_gen = (uint32_t)tn_atomic_load(&c->nm_gen);
 	d->self_addr4 = nm->self_addr4;
 	tn_strlcpy(d->self_name, nm->self_name, sizeof d->self_name);
 	uint32_t nr = nm->n_regions < d->cap_regions ? nm->n_regions : d->cap_regions;
@@ -446,7 +405,7 @@ static void sync_netmap(tn_ctx *c, tn_dp *d)
 	while (d->n_peers && !d->peers[d->n_peers - 1].used)
 		d->n_peers--;
 	d->last_peer = -1;
-	pthread_mutex_unlock(&c->mu);
+	tn_mutex_unlock(&c->mu);
 }
 
 /* ---------------- DERP ---------------- */
@@ -472,7 +431,9 @@ static uint32_t node_ip(const tn_derp_node *n)
 	if (n->ipv4)
 		return n->ipv4;
 	/* No IPv4 in the map (some Headscale setups): one blocking lookup. */
-	struct addrinfo hints = {.ai_family = AF_INET}, *res = NULL;
+	struct addrinfo hints, *res = NULL;
+	memset(&hints, 0, sizeof hints);
+	hints.ai_family = AF_INET;
 	uint32_t ip = 0;
 	if (getaddrinfo(n->host, NULL, &hints, &res) == 0 && res) {
 		ip = ntohl(((struct sockaddr_in *)res->ai_addr)->sin_addr.s_addr);
@@ -868,6 +829,10 @@ static void deliver(tn_ctx *c, tn_dp *d, dp_peer *p, uint8_t *pkt, size_t n)
 		tn_fwd_input(c, pkt, &ip, d->now);
 		return; /* a forwarder node hands nothing to packet_cb */
 	}
+	if (tn_fwd_expects(c, &ip)) {
+		tn_fwd_input(c, pkt, &ip, d->now);
+		return; /* our own mapped TCP connections and UDP flows */
+	}
 	if (c->cfg.packet_cb)
 		c->cfg.packet_cb(c->cfg.user, pkt, ip.len);
 }
@@ -997,24 +962,15 @@ static void probe_send(tn_ctx *c, tn_dp *d, dp_probe *pr)
 
 static void local_endpoints(tn_dp *d, tn_ep4 *out, uint32_t *n, uint32_t cap)
 {
-	struct ifaddrs *ifa = NULL;
-	if (getifaddrs(&ifa) != 0)
-		return;
-	for (struct ifaddrs *i = ifa; i && *n < cap; i = i->ifa_next) {
-		if (!i->ifa_addr || i->ifa_addr->sa_family != AF_INET || !(i->ifa_flags & IFF_UP) ||
-		    (i->ifa_flags & IFF_LOOPBACK))
-			continue;
-		uint32_t ip = ntohl(((struct sockaddr_in *)i->ifa_addr)->sin_addr.s_addr);
-		if ((ip & 0xffc00000u) == 0x64400000u || (ip >> 16) == 0xa9fe)
-			continue; /* 100.64/10 (a tailnet's own) and link-local */
-		out[(*n)++] = (tn_ep4){.ip = ip, .port = d->port};
-	}
-	freeifaddrs(ifa);
+	uint32_t ips[TN_REPORT_EPS];
+	int m = tn_os_local_ipv4(ips, TN_REPORT_EPS);
+	for (int i = 0; i < m && *n < cap; i++)
+		out[(*n)++] = (tn_ep4){.ip = ips[i], .port = d->port};
 }
 
 static void publish(tn_ctx *c, tn_dp *d)
 {
-	pthread_mutex_lock(&c->mu);
+	tn_mutex_lock(&c->mu);
 	tn_report *r = &c->report;
 	int changed = r->n_ep != d->n_eps || memcmp(r->ep, d->eps, d->n_eps * sizeof *d->eps) ||
 		      r->preferred_derp != d->home;
@@ -1028,9 +984,9 @@ static void publish(tn_ctx *c, tn_dp *d)
 			r->lat[r->n_lat].us = d->probes[i].rtt_us;
 			r->n_lat++;
 		}
-	pthread_mutex_unlock(&c->mu);
+	tn_mutex_unlock(&c->mu);
 	if (changed) {
-		atomic_store(&c->report_dirty, 1);
+		tn_atomic_store(&c->report_dirty, 1);
 		kick_control(c);
 	}
 }
@@ -1061,9 +1017,9 @@ static void netcheck_finish(tn_ctx *c, tn_dp *d)
 	if (!home) {
 		/* UDP blocked: no STUN answers. Keep DERP working: the netmap's home for us,
 		 * else the first region that has a DERP node. */
-		pthread_mutex_lock(&c->mu);
+		tn_mutex_lock(&c->mu);
 		home = c->nms.nm.self_home_derp;
-		pthread_mutex_unlock(&c->mu);
+		tn_mutex_unlock(&c->mu);
 		for (uint32_t i = 0; !home && i < d->n_regions; i++)
 			if (region_node(&d->regions[i]) && !d->regions[i].avoid)
 				home = d->regions[i].id;
@@ -1140,22 +1096,22 @@ static void handle_stun(tn_ctx *c, tn_dp *d, const uint8_t *p, size_t n)
 static void on_udp(tn_ctx *c, tn_dp *d)
 {
 	for (int i = 0; i < 256 && d->udp >= 0; i++) {
-		struct sockaddr_in sa;
-		socklen_t sl = sizeof sa;
-		ssize_t n = recvfrom(d->udp, d->buf, sizeof d->buf, 0, (struct sockaddr *)&sa, &sl);
+		uint32_t sip;
+		uint16_t sport;
+		ssize_t n = tn_sock_recvfrom(d->udp, d->buf, sizeof d->buf, &sip, &sport);
 		if (n < 0) {
-			int e = errno;
-			if (e == EAGAIN || e == EWOULDBLOCK || e == EINTR || e == ECONNREFUSED)
+			int e = tn_sock_raw_errno(), k = tn_sock_errno();
+			if (k == TN_ERR_AGAIN || k == TN_ERR_INTR || k == TN_ERR_REFUSED || k == TN_ERR_RESET)
 				return;
 			tn_logf(c, 1, "udp: receive failed (errno %d); rebinding", e);
 			udp_close(d);
 			d->udp_retry_at = d->now + 1000;
 			return;
 		}
-		dp_src from = {.ep = {.ip = ntohl(sa.sin_addr.s_addr), .port = ntohs(sa.sin_port)}};
+		dp_src from = {.ep = {.ip = sip, .port = sport}};
 		if (tn_stun_is(d->buf, (size_t)n) && d->buf[1] == 0x01)
 			handle_stun(c, d, d->buf, (size_t)n);
-		else if (tn_disco_is(d->buf, (size_t)n))
+		else if (tn_disco_is(d->buf, (size_t)n) && !c->cfg.no_direct) /* DERP-only: no UDP paths at all */
 			handle_disco(c, d, d->buf, (size_t)n, &from);
 		else if (!c->cfg.no_direct)
 			handle_wg(c, d, d->buf, (size_t)n, &from, NULL);
@@ -1365,18 +1321,13 @@ void tn_dp_rewake(tn_ctx *c, tn_dp *d)
 	d->nc_running = 0;
 	d->nc_next = 0;
 	d->home = 0;
-	atomic_store(&c->ctl_reconnect, 1);
+	tn_atomic_store(&c->ctl_reconnect, 1);
 	kick_control(c);
 }
 
 /* ---------------- the loop ---------------- */
 
-static void drain(int fd)
-{
-	char b[64];
-	while (read(fd, b, sizeof b) > 0)
-		;
-}
+static void drain(int fd) { tn_wake_drain(fd); }
 
 static void *dp_loop(void *arg)
 {
@@ -1388,11 +1339,11 @@ static void *dp_loop(void *arg)
 	struct pollfd pf[DP_POLL_MAX];
 	tn_derpc *pk[DP_POLL_MAX];
 	int kind[DP_POLL_MAX]; /* 0 wake, 1 udp, 2 derp, 3 forwarder */
-	pthread_mutex_lock(&c->dp_mu);
+	tn_mutex_lock(&c->dp_mu);
 	d->now = tn_now_ms();
-	while (!atomic_load(&c->req_stop)) {
+	while (!tn_atomic_load(&c->req_stop)) {
 		d->now = tn_now_ms();
-		if (atomic_load(&c->req_pause)) {
+		if (tn_atomic_load(&c->req_pause)) {
 			if (!d->paused) {
 				tn_logf(c, 1, "data plane paused");
 				close_all(d);
@@ -1403,7 +1354,7 @@ static void *dp_loop(void *arg)
 			d->paused = 0;
 			tn_dp_rewake(c, d);
 		}
-		if (atomic_load(&c->nm_gen) != d->nm_gen) {
+		if ((uint32_t)tn_atomic_load(&c->nm_gen) != d->nm_gen) {
 			sync_netmap(c, d);
 			/* A peer gets each netmap change at the same time we do. A fresh node's first
 			 * initiation can reach a peer that has no DERP region or endpoint for us yet
@@ -1450,9 +1401,9 @@ static void *dp_loop(void *arg)
 			}
 			n += m;
 		}
-		pthread_mutex_unlock(&c->dp_mu);
-		int r = poll(pf, (nfds_t)n, d->paused ? -1 : timeout);
-		pthread_mutex_lock(&c->dp_mu);
+		tn_mutex_unlock(&c->dp_mu);
+		int r = tn_poll(pf, (unsigned)n, d->paused ? -1 : timeout);
+		tn_mutex_lock(&c->dp_mu);
 		d->now = tn_now_ms();
 		if (r <= 0)
 			continue;
@@ -1462,11 +1413,11 @@ static void *dp_loop(void *arg)
 			if (kind[i] == 0) {
 				drain(c->dp_wake_r);
 			} else if (kind[i] == 1) {
-				if (pf[i].fd == d->udp)
+				if ((int)pf[i].fd == d->udp)
 					on_udp(c, d);
 			} else if (kind[i] == 3) {
-				tn_fwd_io(c, pf[i].fd, pf[i].revents, d->now);
-			} else if (pk[i]->fd == pf[i].fd) {
+				tn_fwd_io(c, (int)pf[i].fd, pf[i].revents, d->now);
+			} else if (pk[i]->fd == (int)pf[i].fd) {
 				int e = tn_derpc_io(pk[i], pf[i].revents, on_derp_frame, c, d->now);
 				if (e < 0)
 					conn_fail(c, d, pk[i], e);
@@ -1474,7 +1425,7 @@ static void *dp_loop(void *arg)
 		}
 	}
 	close_all(d);
-	pthread_mutex_unlock(&c->dp_mu);
+	tn_mutex_unlock(&c->dp_mu);
 	return NULL;
 }
 
@@ -1531,11 +1482,7 @@ int tn_dp_start(tn_ctx *c)
 	memcpy(d->dkeys.node_pub, c->keys.node_pub, 32);
 	memcpy(d->disco_priv, c->keys.disco_priv, 32);
 	memcpy(d->disco_pub, c->keys.disco_pub, 32);
-	pthread_attr_t at;
-	pthread_attr_init(&at);
-	pthread_attr_setstacksize(&at, c->cfg.thread_stack ? c->cfg.thread_stack : 256 * 1024);
-	int r = pthread_create(&c->dp_thread, &at, dp_loop, c);
-	pthread_attr_destroy(&at);
+	int r = tn_thread_start(&c->dp_thread, dp_loop, c, c->cfg.thread_stack ? c->cfg.thread_stack : 256 * 1024);
 	if (r != 0)
 		return TN_E_NOMEM;
 	c->dp_started = 1;
@@ -1547,7 +1494,7 @@ void tn_dp_stop(tn_ctx *c)
 	if (!c->dp_started)
 		return;
 	tn_dp_wake(c);
-	pthread_join(c->dp_thread, NULL);
+	tn_thread_join(c->dp_thread);
 	c->dp_started = 0;
 }
 
@@ -1560,28 +1507,46 @@ int tn_dp_output(tn_ctx *c, const uint8_t *pkt, size_t n)
 	return p ? wg_send(c, d, p, pkt, n) : TN_E_ARG;
 }
 
+int tn_map(tn_ctx *c, uint8_t proto, uint32_t remote_ip, uint16_t remote_port, uint16_t want_port,
+	   uint16_t *local_port)
+{
+	tn_mutex_lock(&c->dp_mu);
+	int r = tn_fwd_map(c, proto, remote_ip, remote_port, want_port, local_port);
+	tn_mutex_unlock(&c->dp_mu);
+	tn_dp_wake(c); /* poll the new socket */
+	return r;
+}
+
+void tn_unmap(tn_ctx *c, uint8_t proto, uint16_t local_port)
+{
+	tn_mutex_lock(&c->dp_mu);
+	tn_fwd_unmap(c, proto, local_port);
+	tn_mutex_unlock(&c->dp_mu);
+	tn_dp_wake(c);
+}
+
 int tn_send_ip(tn_ctx *c, const uint8_t *pkt, size_t len)
 {
 	if (len > TN_MTU)
 		return TN_E_TOOBIG;
 	if (len < 20 || (pkt[0] >> 4) != 4)
 		return TN_E_ARG;
-	pthread_mutex_lock(&c->dp_mu);
+	tn_mutex_lock(&c->dp_mu);
 	tn_dp *d = c->dp;
 	int r = TN_E_STATE;
-	if (d && c->dp_started && !d->paused && !atomic_load(&c->req_stop)) {
+	if (d && c->dp_started && !d->paused && !tn_atomic_load(&c->req_stop)) {
 		d->now = tn_now_ms();
 		dp_peer *p = peer_by_ip(d, tn_be32(pkt + 16));
 		r = p ? wg_send(c, d, p, pkt, len) : TN_E_ARG;
 	}
-	pthread_mutex_unlock(&c->dp_mu);
+	tn_mutex_unlock(&c->dp_mu);
 	return r;
 }
 
 int tn_get_status(tn_ctx *c, tn_status *st, tn_peer_status *ps, uint32_t cap)
 {
 	memset(st, 0, sizeof *st);
-	pthread_mutex_lock(&c->dp_mu);
+	tn_mutex_lock(&c->dp_mu);
 	tn_dp *d = c->dp;
 	int64_t now = tn_now_ms();
 	st->state = c->state;
@@ -1622,8 +1587,8 @@ int tn_get_status(tn_ctx *c, tn_status *st, tn_peer_status *ps, uint32_t cap)
 		st->n_peers = n;
 		tn_fwd_stats(c, &st->fwd_udp_flows, &st->fwd_tcp_conns);
 	}
-	pthread_mutex_unlock(&c->dp_mu);
-	pthread_mutex_lock(&c->mu);
+	tn_mutex_unlock(&c->dp_mu);
+	tn_mutex_lock(&c->mu);
 	if (c->state == TN_ST_NEEDS_LOGIN)
 		tn_strlcpy(st->login_url, c->last_url, sizeof st->login_url);
 	st->key_expiry = c->nms.nm.self_key_expiry;
@@ -1631,6 +1596,6 @@ int tn_get_status(tn_ctx *c, tn_status *st, tn_peer_status *ps, uint32_t cap)
 		st->self_addr4 = c->nms.nm.self_addr4;
 		tn_strlcpy(st->self_name, c->nms.nm.self_name, sizeof st->self_name);
 	}
-	pthread_mutex_unlock(&c->mu);
+	tn_mutex_unlock(&c->mu);
 	return TN_OK;
 }

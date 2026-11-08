@@ -4,23 +4,10 @@
 #include "crypto.h"
 #include "isrg_roots.h"
 
-#include <arpa/inet.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
-#ifndef MSG_NOSIGNAL
-#define MSG_NOSIGNAL 0
-#endif
 
 int tn_url_parse(tn_url *u, const char *url)
 {
@@ -141,10 +128,8 @@ static int load_ca_file(tn_tls *t, const char *path)
 	if (!file)
 		return TN_E_NOMEM;
 	unsigned char *der = file + FILE_MAX;
-	int added = 0, fd = open(path, O_RDONLY);
-	ssize_t n = fd >= 0 ? read(fd, file, FILE_MAX) : -1;
-	if (fd >= 0)
-		close(fd);
+	int added = 0;
+	int n = tn_file_read(path, file, FILE_MAX);
 	if (n <= 0) {
 		free(file);
 		return TN_E_STATE;
@@ -203,9 +188,9 @@ static int wait_fd(tn_tr *tr, short ev)
 				return TN_E_TIMEOUT;
 			timeout = left > 60000 ? 60000 : (int)left;
 		}
-		int r = poll(p, tr->wake_fd >= 0 ? 2 : 1, timeout);
+		int r = tn_poll(p, tr->wake_fd >= 0 ? 2 : 1, timeout);
 		if (r < 0) {
-			if (errno == EINTR)
+			if (tn_sock_errno() == TN_ERR_INTR)
 				continue;
 			return TN_E_IO;
 		}
@@ -219,14 +204,15 @@ static int wait_fd(tn_tr *tr, short ev)
 static int sock_read(tn_tr *tr, void *buf, size_t n)
 {
 	for (;;) {
-		ssize_t r = recv(tr->fd, buf, n, 0);
+		ssize_t r = tn_sock_recv(tr->fd, buf, n);
 		if (r > 0)
 			return (int)(r > 0x7fffffff ? 0x7fffffff : r);
 		if (r == 0)
 			return TN_E_IO;
-		if (errno == EINTR)
+		int e = tn_sock_errno();
+		if (e == TN_ERR_INTR)
 			continue;
-		if (errno != EAGAIN && errno != EWOULDBLOCK)
+		if (e != TN_ERR_AGAIN)
 			return TN_E_IO; /* includes the PS5's errno 163 in rest mode */
 		int w = wait_fd(tr, POLLIN);
 		if (w < 0)
@@ -237,12 +223,13 @@ static int sock_read(tn_tr *tr, void *buf, size_t n)
 static int sock_write(tn_tr *tr, const void *buf, size_t n)
 {
 	for (;;) {
-		ssize_t r = send(tr->fd, buf, n, MSG_NOSIGNAL);
+		ssize_t r = tn_sock_send(tr->fd, buf, n);
 		if (r >= 0)
 			return (int)r;
-		if (errno == EINTR)
+		int e = tn_sock_errno();
+		if (e == TN_ERR_INTR)
 			continue;
-		if (errno != EAGAIN && errno != EWOULDBLOCK)
+		if (e != TN_ERR_AGAIN)
 			return TN_E_IO;
 		int w = wait_fd(tr, POLLOUT);
 		if (w < 0)
@@ -290,24 +277,20 @@ int tn_tr_dial(tn_tr *tr, const char *host, const char *addr, int port, tn_tls *
 			return TN_E_DNS;
 		}
 	}
-	tr->fd = socket(AF_INET, SOCK_STREAM, 0);
+	tr->fd = tn_sock_open(SOCK_STREAM);
 	if (tr->fd < 0)
 		return TN_E_IO;
-	int one = 1;
-	setsockopt(tr->fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
-#ifdef SO_NOSIGPIPE
-	setsockopt(tr->fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
-#endif
-	fcntl(tr->fd, F_SETFL, fcntl(tr->fd, F_GETFL) | O_NONBLOCK);
-	if (connect(tr->fd, (struct sockaddr *)&sa, sizeof sa) != 0) {
-		if (errno != EINPROGRESS) {
-			tn_tr_close(tr);
-			return TN_E_IO;
-		}
+	tn_sock_setint(tr->fd, IPPROTO_TCP, TCP_NODELAY, 1);
+	tn_sock_nosigpipe(tr->fd);
+	tn_sock_nonblock(tr->fd);
+	int cr = tn_sock_connect(tr->fd, ntohl(sa.sin_addr.s_addr), (uint16_t)port);
+	if (cr < 0) {
+		tn_tr_close(tr);
+		return TN_E_IO;
+	}
+	if (cr > 0) {
 		int w = wait_fd(tr, POLLOUT);
-		int soerr = 0;
-		socklen_t sl = sizeof soerr;
-		if (w < 0 || getsockopt(tr->fd, SOL_SOCKET, SO_ERROR, &soerr, &sl) != 0 || soerr) {
+		if (w < 0 || tn_sock_error(tr->fd) != 0) {
 			tn_tr_close(tr);
 			return w < 0 ? w : TN_E_IO;
 		}
@@ -393,8 +376,7 @@ int tn_tr_write(tn_tr *tr, const void *buf, size_t n)
 
 void tn_tr_close(tn_tr *tr)
 {
-	if (tr->fd >= 0)
-		close(tr->fd);
+	tn_sock_close(tr->fd);
 	tr->fd = -1;
 	tr->tls = NULL;
 	tr->pre_pos = tr->pre_len = 0;

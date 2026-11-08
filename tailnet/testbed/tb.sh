@@ -12,6 +12,7 @@
 #   tb.sh hs ARGS...      run any headscale CLI command
 #   tb.sh peer ARGS...    run any command in the peer container
 #   tb.sh tn ARGS...      run any command in the tnctl container (tailnet/ is at /src/tailnet)
+#   tb.sh tn2 ARGS...     the same in the second box (the engine's side in m4-check.sh)
 #   tb.sh build-linux     build tnctl (ASan+UBSan) and tnecho for Linux in the tn container
 #   tb.sh test-linux      the unit tests (ASan+UBSan) on Linux/glibc in the tn container
 #   tb.sh block on|off    drop/allow UDP between the peer and the tn container (forces DERP)
@@ -28,6 +29,7 @@ HS=tnbed-headscale
 PEER=tnbed-peer
 DERPER=tnbed-derper
 TN=tnbed-tn
+TN2=tnbed-tn2
 # Pinned images (multi-arch). Bump deliberately; Headscale's minimum capver rises with releases.
 HS_IMAGE=docker.io/headscale/headscale:0.29.1
 TS_IMAGE=docker.io/tailscale/tailscale:v1.104.4
@@ -146,25 +148,35 @@ EOF
 		[ -d "$STATE/peer" ] && mv "$STATE/peer" "$STATE/peer.old-$(date +%Y%m%d%H%M%S)"
 		mkdir -p "$STATE/peer"
 	fi
-	if ! running "$PEER"; then
-		docker rm -f "$PEER" >/dev/null 2>&1 || true
-		key=$(authkey)
-		docker run -d --name "$PEER" --hostname linux-peer --network "$NET" \
-			--cap-add NET_ADMIN --cap-add NET_RAW --device /dev/net/tun \
-			-v "$STATE/peer:/var/lib/tailscale" -v "$STATE/ca/ca.pem:/ca.pem:ro" \
-			-v "$STATE/bin:/tnbin:ro" \
-			-e SSL_CERT_FILE=/ca.pem \
-			-e TS_STATE_DIR=/var/lib/tailscale -e TS_USERSPACE=false \
-			-e TS_AUTHKEY="$key" -e TS_HOSTNAME=linux-peer \
-			-e TS_EXTRA_ARGS="--login-server=http://$HS:8080" \
-			"$TS_IMAGE" >/dev/null
-	fi
-	i=0
-	until docker exec "$PEER" tailscale ip -4 >/dev/null 2>&1; do
-		i=$((i + 1)); [ $i -lt 60 ] || { echo "peer did not join" >&2; docker logs "$PEER" | tail -20; exit 1; }
-		sleep 1
+	sleep 3 # Headscale answers /health before its Noise endpoint; a peer that dials too
+	        # early wedges ("forcing port 443"): give it a moment, and retry once fresh.
+	for attempt in 1 2; do
+		if ! running "$PEER"; then
+			docker rm -f "$PEER" >/dev/null 2>&1 || true
+			key=$(authkey)
+			docker run -d --name "$PEER" --hostname linux-peer --network "$NET" \
+				--cap-add NET_ADMIN --cap-add NET_RAW --device /dev/net/tun \
+				-v "$STATE/peer:/var/lib/tailscale" -v "$STATE/ca/ca.pem:/ca.pem:ro" \
+				-v "$STATE/bin:/tnbin:ro" \
+				-e SSL_CERT_FILE=/ca.pem \
+				-e TS_STATE_DIR=/var/lib/tailscale -e TS_USERSPACE=false \
+				-e TS_AUTHKEY="$key" -e TS_HOSTNAME=linux-peer \
+				-e TS_EXTRA_ARGS="--login-server=http://$HS:8080" \
+				"$TS_IMAGE" >/dev/null
+		fi
+		i=0
+		until docker exec "$PEER" tailscale ip -4 >/dev/null 2>&1 || [ $i -ge 45 ]; do i=$((i + 1)); sleep 1; done
+		docker exec "$PEER" tailscale ip -4 >/dev/null 2>&1 && break
+		echo "peer did not join (attempt $attempt); re-joining with fresh state" >&2
+		docker rm -f "$PEER" >/dev/null
+		[ -d "$STATE/peer" ] && mv "$STATE/peer" "$STATE/peer.old-$(date +%Y%m%d%H%M%S)"
+		mkdir -p "$STATE/peer"
 	done
-	echo "peer: linux-peer $(docker exec "$PEER" tailscale ip -4) ($TS_IMAGE)"
+	if docker exec "$PEER" tailscale ip -4 >/dev/null 2>&1; then
+		echo "peer: linux-peer $(docker exec "$PEER" tailscale ip -4) ($TS_IMAGE)"
+	else
+		echo "peer: linux-peer did not join (m2/m3 checks need it; m4 does not)" >&2
+	fi
 	if ! running "$TN"; then
 		docker rm -f "$TN" >/dev/null 2>&1 || true
 		docker run -d --name "$TN" --hostname tn-box --network "$NET" \
@@ -172,6 +184,12 @@ EOF
 			--entrypoint sleep "$TN_IMAGE" infinity >/dev/null
 	fi
 	echo "tn box: $TN $(docker inspect -f '{{(index .NetworkSettings.Networks "'$NET'").IPAddress}}' "$TN") ($TN_IMAGE)"
+	if ! running "$TN2"; then
+		docker rm -f "$TN2" >/dev/null 2>&1 || true
+		docker run -d --name "$TN2" --hostname tn-box2 --network "$NET" \
+			-v "$REPO:/src" -v "$STATE/ca/ca.pem:/ca.pem:ro" \
+			--entrypoint sleep "$TN_IMAGE" infinity >/dev/null
+	fi
 }
 
 build_linux() {
@@ -197,7 +215,7 @@ block() {
 }
 
 down() {
-	for c in "$TN" "$PEER" "$HS" "$DERPER"; do
+	for c in tnbed-eng "$TN2" "$TN" "$PEER" "$HS" "$DERPER"; do
 		if docker inspect "$c" >/dev/null 2>&1; then docker stop -t 2 "$c" >/dev/null; docker rm "$c" >/dev/null; echo "stopped $c"; fi
 	done
 	docker network rm "$NET" >/dev/null 2>&1 || true
@@ -216,9 +234,10 @@ status) docker exec "$PEER" tailscale status ;;
 hs) hs "$@" ;;
 peer) docker exec "$PEER" "$@" ;;
 tn) docker exec "$TN" "$@" ;;
+tn2) docker exec "$TN2" "$@" ;;
 build-linux) build_linux ;;
 test-linux) docker exec -w /src/tailnet "$TN" make -s SAN=1 BUILD=build/linux-asan run-tests ;;
 block) block "${1:-}" ;;
 reset) down; [ -d "$STATE" ] && mv "$STATE" "$STATE.old-$(date +%Y%m%d%H%M%S)"; echo "state moved aside" ;;
-*) sed -n '2,20p' "$0"; exit 2 ;;
+*) sed -n '2,21p' "$0"; exit 2 ;;
 esac

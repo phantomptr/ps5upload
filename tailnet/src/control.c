@@ -4,13 +4,9 @@
 #include "tn.h"
 #include "crypto.h"
 
-#include <fcntl.h>
-#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
 #define CONNECT_TIMEOUT_MS 10000
 #define REQUEST_TIMEOUT_MS 30000
@@ -208,9 +204,9 @@ static void hostinfo(tn_ctx *c, tn_jw *w)
 	tn_jw_kstr(w, "App", c->app);
 	/* Our home DERP and its latency, from the data plane's netcheck (spec 4.4): peers
 	 * learn where to reach us from this. */
-	pthread_mutex_lock(&c->mu);
+	tn_mutex_lock(&c->mu);
 	tn_report r = c->report;
-	pthread_mutex_unlock(&c->mu);
+	tn_mutex_unlock(&c->mu);
 	if (r.preferred_derp) {
 		char k[32], v[32];
 		tn_jw_key(w, "NetInfo");
@@ -375,9 +371,9 @@ static void map_request(tn_ctx *c, tn_jw *w, int stream)
 	tn_jw_kstr(w, "DiscoKey", t);
 	hostinfo(c, w);
 	/* Endpoints from the data plane: local interfaces and STUN (spec 5). */
-	pthread_mutex_lock(&c->mu);
+	tn_mutex_lock(&c->mu);
 	tn_report r = c->report;
-	pthread_mutex_unlock(&c->mu);
+	tn_mutex_unlock(&c->mu);
 	tn_jw_key(w, "Endpoints");
 	tn_jw_raw(w, "[");
 	for (uint32_t i = 0; i < r.n_ep; i++) {
@@ -396,14 +392,9 @@ static void dump_map(tn_ctx *c, const uint8_t *p, size_t n)
 	char path[600];
 	if (!c->dump_dir[0])
 		return;
-	mkdir(c->dump_dir, 0700);
+	tn_mkdir(c->dump_dir);
 	snprintf(path, sizeof path, "%s/map-%04u.json", c->dump_dir, c->dumped++);
-	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-	if (fd < 0)
-		return;
-	if (write(fd, p, n) < 0) { /* best effort test hook */
-	}
-	close(fd);
+	(void)tn_file_write_atomic(path, p, n); /* best effort test hook */
 }
 
 /* Warn once per day bucket when our node key expires within 7 days (Tailscale's
@@ -456,13 +447,13 @@ static int consume_map(tn_ctx *c, tn_h2_stream *st, int64_t *last_msg)
 			return nt == -2 ? TN_E_TOOBIG : TN_E_PROTO;
 		}
 		tn_map_result res;
-		pthread_mutex_lock(&c->mu);
+		tn_mutex_lock(&c->mu);
 		r = tn_netmap_apply(&c->nms, &c->json, &res);
-		pthread_mutex_unlock(&c->mu);
+		tn_mutex_unlock(&c->mu);
 		if (r < 0)
 			return r;
 		if (res.changed) {
-			atomic_fetch_add(&c->nm_gen, 1);
+			tn_atomic_inc(&c->nm_gen);
 			tn_dp_wake(c);
 			expiry_check(c);
 		}
@@ -507,7 +498,7 @@ static int map_poll(tn_ctx *c)
 	if (map < 0)
 		return map;
 	/* A lite update on a second stream while the poll is open (spec 3.9). */
-	atomic_store(&c->report_dirty, 0);
+	tn_atomic_store(&c->report_dirty, 0);
 	map_request(c, &w, 0);
 	int lite = post_json(c, "/machine/map", &w, c->litebuf, sizeof c->litebuf);
 	if (lite < 0)
@@ -522,21 +513,19 @@ static int map_poll(tn_ctx *c)
 					       {.fd = c->wake_r, .events = POLLIN},
 					       {.fd = c->kick_r, .events = POLLIN}};
 			int64_t left = c->tr.deadline - tn_now_ms();
-			int pr = poll(pf, 3, left <= 0 ? 0 : left > 60000 ? 60000 : (int)left);
+			int pr = tn_poll(pf, 3, left <= 0 ? 0 : left > 60000 ? 60000 : (int)left);
 			if (pr == 0 && left > 60000)
 				continue;
 			if (pf[1].revents)
 				return TN_E_WAKE;
 			if (pf[2].revents) {
-				char b[64];
-				while (read(c->kick_r, b, sizeof b) > 0)
-					;
-				if (atomic_exchange(&c->ctl_reconnect, 0)) {
+				tn_wake_drain(c->kick_r);
+				if (tn_atomic_xchg(&c->ctl_reconnect, 0)) {
 					tn_logf(c, 1, "control: reconnecting (wake)");
 					return TN_E_IO;
 				}
 			}
-			if (lite < 0 && atomic_exchange(&c->report_dirty, 0)) {
+			if (lite < 0 && tn_atomic_xchg(&c->report_dirty, 0)) {
 				map_request(c, &w, 0);
 				lite = post_json(c, "/machine/map", &w, c->litebuf, sizeof c->litebuf);
 				if (lite < 0)

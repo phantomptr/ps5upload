@@ -5,20 +5,9 @@
 #include "tn.h"
 #include "crypto.h"
 
-#include <arpa/inet.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <poll.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
-#ifndef MSG_NOSIGNAL
-#define MSG_NOSIGNAL 0
-#endif
 
 static const uint8_t DERP_MAGIC[8] = {0x44, 0x45, 0x52, 0x50, 0xf0, 0x9f, 0x94, 0x91};
 
@@ -104,8 +93,7 @@ static const br_x509_class any_vtable = {sizeof(tn_x509_any), any_start_chain, a
 
 void tn_derpc_close(tn_derpc *d)
 {
-	if (d->fd >= 0)
-		close(d->fd);
+	tn_sock_close(d->fd);
 	d->fd = -1;
 	d->st = TN_DC_IDLE;
 	d->in_len = d->out_len = 0;
@@ -122,17 +110,13 @@ int tn_derpc_open(tn_derpc *d, const tn_derp_node *node, int32_t region, const t
 	d->port = (uint16_t)(node->derp_port > 0 ? node->derp_port : 443);
 	tn_strlcpy(d->host, node->host, sizeof d->host);
 	d->t_start = d->last_rx = now;
-	d->fd = socket(AF_INET, SOCK_STREAM, 0);
+	d->fd = tn_sock_open(SOCK_STREAM);
 	if (d->fd < 0)
 		return TN_E_IO;
-	int one = 1;
-	setsockopt(d->fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
-#ifdef SO_NOSIGPIPE
-	setsockopt(d->fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
-#endif
-	fcntl(d->fd, F_SETFL, fcntl(d->fd, F_GETFL) | O_NONBLOCK);
-	struct sockaddr_in sa = {.sin_family = AF_INET, .sin_port = htons(d->port), .sin_addr.s_addr = htonl(d->ip)};
-	if (connect(d->fd, (struct sockaddr *)&sa, sizeof sa) != 0 && errno != EINPROGRESS) {
+	tn_sock_setint(d->fd, IPPROTO_TCP, TCP_NODELAY, 1);
+	tn_sock_nosigpipe(d->fd);
+	tn_sock_nonblock(d->fd);
+	if (tn_sock_connect(d->fd, d->ip, d->port) < 0) {
 		tn_derpc_close(d);
 		return TN_E_IO;
 	}
@@ -170,7 +154,8 @@ short tn_derpc_events(const tn_derpc *d)
 
 static int sock_err(void)
 {
-	return (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) ? 0 : TN_E_IO;
+	int e = tn_sock_errno();
+	return (e == TN_ERR_AGAIN || e == TN_ERR_INTR) ? 0 : TN_E_IO;
 }
 
 /* Move bytes between the socket, the TLS engine and our in/out buffers until
@@ -187,7 +172,7 @@ static int pump(tn_derpc *d)
 		if (s & BR_SSL_SENDREC) {
 			size_t len;
 			unsigned char *b = br_ssl_engine_sendrec_buf(e, &len);
-			ssize_t n = send(d->fd, b, len, MSG_NOSIGNAL);
+			ssize_t n = tn_sock_send(d->fd, b, len);
 			if (n > 0) {
 				br_ssl_engine_sendrec_ack(e, (size_t)n);
 				moved = 1;
@@ -218,7 +203,7 @@ static int pump(tn_derpc *d)
 		} else if (s & BR_SSL_RECVREC) {
 			size_t len;
 			unsigned char *b = br_ssl_engine_recvrec_buf(e, &len);
-			ssize_t n = recv(d->fd, b, len, 0);
+			ssize_t n = tn_sock_recv(d->fd, b, len);
 			if (n > 0) {
 				br_ssl_engine_recvrec_ack(e, (size_t)n);
 				moved = 1;
@@ -369,9 +354,7 @@ int tn_derpc_io(tn_derpc *d, short revents, tn_derp_frame_cb cb, void *u, int64_
 	if (d->st == TN_DC_CONNECTING) {
 		if (!(revents & (POLLOUT | POLLERR | POLLHUP)))
 			return TN_OK;
-		int soerr = 0;
-		socklen_t sl = sizeof soerr;
-		if (getsockopt(d->fd, SOL_SOCKET, SO_ERROR, &soerr, &sl) != 0 || soerr)
+		if (tn_sock_error(d->fd) != 0)
 			return TN_E_IO;
 		d->st = TN_DC_TLS;
 	}

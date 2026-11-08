@@ -32,6 +32,7 @@
 #define LWIP_NETIF_LINK_CALLBACK 0
 
 #define LWIP_TCP 1
+#undef TCP_MSS /* <netinet/tcp.h> has its own (a socket option number) */
 #define TCP_MSS 1240                       /* 1280 - 20 (IPv4) - 20 (TCP) */
 #define TCP_WND (32 * TCP_MSS)
 #define TCP_SND_BUF (32 * TCP_MSS)
@@ -41,7 +42,11 @@
 #define LWIP_TCP_SACK_OUT 0
 #define LWIP_WND_SCALE 0
 
-/* Memory: everything static (BSS), sized for a handful of connections. */
+/* Memory: from malloc, only while a node runs (no BSS when Tailscale is off; big
+ * static pools also made Mach-O linkers warn about their alignment). Counts below cap
+ * what is in use at once. */
+#define MEM_LIBC_MALLOC 1
+#define MEMP_MEM_MALLOC 1
 #define MEM_ALIGNMENT 8
 #define MEM_SIZE (256 * 1024)
 #define MEMP_NUM_TCP_PCB 16

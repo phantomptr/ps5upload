@@ -6,6 +6,8 @@
  *   tnecho tcp HOST PORT COUNT         connect, COUNT 64-byte round trips: connect time, RTT
  *   tnecho bulk HOST PORT MBYTES       stream MBYTES through the echo and verify: throughput
  *   tnecho connect HOST PORT           connect only: prints "connected", "refused" or "timeout"
+ *   tnecho flood HOST PORT COUNT PPS   COUNT 1200-byte datagrams at PPS (a Remote Play stream's
+ *                                      shape): echoed, lost, RTT, Mbit/s each way
  * Exit status 0 = everything answered and matched. */
 #include <arpa/inet.h>
 #include <errno.h>
@@ -140,6 +142,46 @@ int main(int argc, char **argv)
 	if (argc < 5)
 		return 2;
 	long count = atol(argv[4]);
+	if (!strcmp(argv[1], "flood") && argc >= 6) {
+		long pps = atol(argv[5]);
+		int fd = socket(AF_INET, SOCK_DGRAM, 0);
+		struct sockaddr_in sa = addr(host, port);
+		connect(fd, (struct sockaddr *)&sa, sizeof sa);
+		int sz = 4 << 20;
+		setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &sz, sizeof sz);
+		fcntl(fd, F_SETFL, O_NONBLOCK);
+		static unsigned char out[1200], in[2048];
+		static double sent_at[200000];
+		long got = 0, sent = 0;
+		double rtt_sum = 0, t0 = now_ms(), gap = 1000.0 / (double)pps;
+		if (count > 200000)
+			count = 200000;
+		while (sent < count || now_ms() - t0 < count * gap + 2000) {
+			double now = now_ms();
+			while (sent < count && now >= t0 + sent * gap) {
+				memcpy(out, &sent, sizeof sent);
+				sent_at[sent] = now;
+				send(fd, out, sizeof out, 0);
+				sent++;
+			}
+			ssize_t m;
+			while ((m = recv(fd, in, sizeof in, 0)) == (ssize_t)sizeof out) {
+				long seq;
+				memcpy(&seq, in, sizeof seq);
+				if (seq >= 0 && seq < sent) {
+					got++;
+					rtt_sum += now_ms() - sent_at[seq];
+				}
+			}
+			if (sent >= count && got >= count)
+				break;
+			wait_fd(fd, POLLIN, 1);
+		}
+		double secs = count * gap / 1000.0;
+		printf("flood %s:%d: %ld/%ld echoed (%.2f%% lost), avg rtt %.2f ms, %.1f Mbit/s each way\n", host, port, got,
+		       count, 100.0 * (double)(count - got) / (double)count, got ? rtt_sum / got : 0, got * 1200.0 * 8 / secs / 1e6);
+		return got * 100 >= count * 99 ? 0 : 1; /* tolerate up to 1%% loss, like a stream */
+	}
 	if (!strcmp(argv[1], "udp")) {
 		int fd = socket(AF_INET, SOCK_DGRAM, 0), ok = 0;
 		struct sockaddr_in sa = addr(host, port);

@@ -6,11 +6,17 @@
 
 #include "monocypher.h"
 
+#ifdef _WIN32
+#include "os.h"
+#include <bcrypt.h>
+#endif
+
 #if defined(__PROSPERO__)
 #include <sys/types.h>
 #include <sys/sysctl.h>
 #elif defined(__linux__)
-#include <sys/random.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 #include <errno.h>
 #else
 #include <stdlib.h>
@@ -395,9 +401,12 @@ int tn_random(void *buf, size_t n)
 		n -= got;
 	}
 	return 0;
+#elif defined(_WIN32)
+	return BCRYPT_SUCCESS(BCryptGenRandom(NULL, p, (ULONG)n, BCRYPT_USE_SYSTEM_PREFERRED_RNG)) ? 0 : -1;
 #elif defined(__linux__)
 	while (n > 0) {
-		ssize_t r = getrandom(p, n, 0);
+		/* the syscall: Android's libc has getrandom() only from API 28 */
+		long r = syscall(SYS_getrandom, p, n, 0);
 		if (r < 0) {
 			if (errno == EINTR)
 				continue;

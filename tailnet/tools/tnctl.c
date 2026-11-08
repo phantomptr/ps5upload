@@ -6,6 +6,8 @@
  *               [--ping 100.x.y.z] [--udp-echo 100.x.y.z:PORT] [--count N] [--interval MS]
  *               [--wait-direct SEC] [--serve tcp:PORT[:LOCAL],udp:PORT[:LOCAL],...]
  *
+ * --map tcp:LOCAL:IP:PORT,udp:LOCAL:IP:PORT maps 127.0.0.1:LOCAL to a peer's tailnet
+ * address (the engine's role): ordinary sockets reach the peer through the tunnel.
  * --serve makes this node a forwarder like the PS5 helper: only the listed tailnet
  * ports are accepted, relayed (UDP) or spliced (TCP) to 127.0.0.1:LOCAL.
  *
@@ -331,7 +333,8 @@ static int usage(void)
 			"                   [--ca-file PEM] [--transport auto|plain|tls] [--once]\n"
 			"                   [--timeout SEC] [--dump DIR] [-v|-vv] [--port UDP] [--no-direct]\n"
 			"                   [--ping IP | --udp-echo IP:PORT] [--count N] [--interval MS]\n"
-			"                   [--wait-direct SEC] [--serve tcp:PORT[:LOCAL],udp:PORT[:LOCAL]]\n");
+			"                   [--wait-direct SEC] [--serve tcp:PORT[:LOCAL],udp:PORT[:LOCAL]]\n"
+			"                   [--map tcp:LOCAL:IP:PORT,udp:LOCAL:IP:PORT]\n");
 	return 2;
 }
 
@@ -340,6 +343,8 @@ int main(int argc, char **argv)
 	tn_config cfg = {0};
 	int timeout = 0, count = 5, interval = 1000, wait_direct = 0, probe = 0;
 	static tn_serve serve[TN_SERVE_MAX];
+	struct { uint8_t proto; uint16_t lport, rport; uint32_t rip; } maps[8];
+	int n_maps = 0;
 	if (argc < 2 || strcmp(argv[1], "login") != 0)
 		return usage();
 	for (int i = 2; i < argc; i++) {
@@ -375,6 +380,24 @@ int main(int argc, char **argv)
 		else if (!strcmp(a, "--count")) count = atoi(v);
 		else if (!strcmp(a, "--interval")) interval = atoi(v);
 		else if (!strcmp(a, "--wait-direct")) wait_direct = atoi(v);
+		else if (!strcmp(a, "--map")) {
+			char spec[256];
+			snprintf(spec, sizeof spec, "%s", v);
+			for (char *tok = strtok(spec, ","); tok; tok = strtok(NULL, ",")) {
+				char proto[8] = "", ip[32] = "";
+				unsigned lport = 0, rport = 0;
+				struct in_addr ia;
+				if (n_maps >= 8 || sscanf(tok, "%7[a-z]:%u:%31[0-9.]:%u", proto, &lport, ip, &rport) != 4 ||
+				    inet_pton(AF_INET, ip, &ia) != 1 || lport > 65535 || !rport || rport > 65535 ||
+				    (strcmp(proto, "tcp") && strcmp(proto, "udp")))
+					return usage();
+				maps[n_maps].proto = !strcmp(proto, "tcp") ? 6 : 17;
+				maps[n_maps].lport = (uint16_t)lport;
+				maps[n_maps].rport = (uint16_t)rport;
+				maps[n_maps].rip = ntohl(ia.s_addr);
+				n_maps++;
+			}
+		}
 		else if (!strcmp(a, "--serve")) {
 			char spec[256];
 			snprintf(spec, sizeof spec, "%s", v);
@@ -433,6 +456,14 @@ int main(int argc, char **argv)
 		fprintf(stderr, "tnctl: %s\n", tn_strerror(r));
 		tn_destroy(ctx);
 		return 1;
+	}
+	for (int i = 0; i < n_maps; i++) {
+		uint16_t got = 0;
+		char ip[16];
+		int mr = tn_map(ctx, maps[i].proto, maps[i].rip, maps[i].rport, maps[i].lport, &got);
+		printf("map: %s 127.0.0.1:%u -> %s:%u %s\n", maps[i].proto == 6 ? "tcp" : "udp", got,
+		       tn_ip4_str(maps[i].rip, ip), maps[i].rport, mr == 0 ? "ok" : tn_strerror(mr));
+		fflush(stdout);
 	}
 	if (probe) {
 		r = run_probes(ctx, count, interval, wait_direct);

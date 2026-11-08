@@ -243,6 +243,17 @@ void tn_resume(tn_ctx *ctx);
 /* Free everything (calls tn_stop first). */
 void tn_destroy(tn_ctx *ctx);
 
+/* Map a local port to a peer's tailnet (address, port): the reverse of `serve`, for an
+ * app that reaches the console with ordinary sockets. proto 6 (TCP: a listener on
+ * 127.0.0.1, each connection dialed through the tunnel) or 17 (UDP: a socket on
+ * 127.0.0.1; replies go back to whoever sent last). want_port 0 = any free port.
+ * Mapping the same (proto, address, port) again returns the existing local port.
+ * Any thread. TN_OK and *local_port set, or TN_E_*. */
+int tn_map(tn_ctx *ctx, uint8_t proto, uint32_t remote_ip, uint16_t remote_port, uint16_t want_port,
+	   uint16_t *local_port);
+/* Close one mapping (proto 0: all of them); open connections through it are closed. */
+void tn_unmap(tn_ctx *ctx, uint8_t proto, uint16_t local_port);
+
 /* Send one IPv4 packet (len <= TN_MTU) to the peer whose AllowedIPs contain its
  * destination. Any thread. TN_OK when sent or queued behind a handshake;
  * TN_E_ARG no such peer / not IPv4, TN_E_TOOBIG, TN_E_STATE when not running. */
@@ -282,6 +293,10 @@ typedef struct {
 
 /* Snapshot of the node; peers (may be NULL) gets up to cap entries. */
 int tn_get_status(tn_ctx *ctx, tn_status *st, tn_peer_status *peers, uint32_t cap);
+
+/* sizeof of the API structs, for FFI layout checks: 0 tn_config, 1 tn_status,
+ * 2 tn_peer_status, 3 tn_event, 4 tn_serve; 0 for anything else. */
+size_t tn_abi_size(int which);
 
 /* Bytes allocated by tn_create for this config (for budgeting). */
 size_t tn_memory_footprint(const tn_ctx *ctx);

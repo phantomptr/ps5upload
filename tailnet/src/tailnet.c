@@ -2,14 +2,10 @@
 #include "tn.h"
 #include "crypto.h"
 
-#include <errno.h>
-#include <fcntl.h>
-#include <poll.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #define BACKOFF_MIN_MS 1000
 #define BACKOFF_MAX_MS 30000 /* auto.go:63 */
@@ -84,17 +80,7 @@ static void copy_opt(char *dst, size_t cap, const char *src, const char *def)
 	tn_strlcpy(dst, src && *src ? src : def, cap);
 }
 
-static int make_pipe(int *r, int *w)
-{
-	int p[2];
-	if (pipe(p) != 0)
-		return -1;
-	*r = p[0];
-	*w = p[1];
-	fcntl(p[0], F_SETFL, fcntl(p[0], F_GETFL) | O_NONBLOCK);
-	fcntl(p[1], F_SETFL, fcntl(p[1], F_GETFL) | O_NONBLOCK);
-	return 0;
-}
+static int make_pipe(int *r, int *w) { return tn_wake_pair(r, w); }
 
 int tn_create(const tn_config *cfg, tn_ctx **out)
 {
@@ -107,12 +93,9 @@ int tn_create(const tn_config *cfg, tn_ctx **out)
 	c->wake_r = c->wake_w = c->kick_r = c->kick_w = c->dp_wake_r = c->dp_wake_w = -1;
 	c->expiry_bucket = -1;
 	c->cfg = *cfg;
-	pthread_mutexattr_t ma;
-	pthread_mutexattr_init(&ma);
-	pthread_mutexattr_settype(&ma, PTHREAD_MUTEX_RECURSIVE);
-	pthread_mutex_init(&c->dp_mu, &ma);
-	pthread_mutexattr_destroy(&ma);
-	pthread_mutex_init(&c->mu, NULL);
+	tn_os_init();
+	tn_mutex_init(&c->dp_mu);
+	tn_mutex_init(&c->mu);
 	copy_opt(c->state_dir, sizeof c->state_dir, cfg->state_dir, "");
 	copy_opt(c->control_url, sizeof c->control_url, cfg->control_url, "");
 	/* a trailing slash is not part of the server identity */
@@ -193,19 +176,26 @@ fail:
 
 size_t tn_memory_footprint(const tn_ctx *c) { return c->footprint; }
 
-static void wake(tn_ctx *c)
+size_t tn_abi_size(int which)
 {
-	char b = 1;
-	if (write(c->wake_w, &b, 1) < 0) { /* full pipe: a wake is already pending */
+	switch (which) {
+	case 0: return sizeof(tn_config);
+	case 1: return sizeof(tn_status);
+	case 2: return sizeof(tn_peer_status);
+	case 3: return sizeof(tn_event);
+	case 4: return sizeof(tn_serve);
+	default: return 0;
 	}
 }
 
-static void drain(tn_ctx *c)
+static void wake(tn_ctx *c)
 {
-	char b[64];
-	while (read(c->wake_r, b, sizeof b) > 0)
-		;
+	char b = 1;
+	(void)b;
+	tn_wake_signal(c->wake_w);
 }
+
+static void drain(tn_ctx *c) { tn_wake_drain(c->wake_r); }
 
 /* Sleep up to ms (or forever if ms < 0) unless woken. Returns 1 if woken. */
 static int nap(tn_ctx *c, int64_t ms)
@@ -220,10 +210,10 @@ static int nap(tn_ctx *c, int64_t ms)
 				return 0;
 			t = left > 60000 ? 60000 : (int)left;
 		}
-		int r = poll(&p, 1, t);
+		int r = tn_poll(&p, 1, t);
 		if (r > 0)
 			return 1;
-		if (r < 0 && errno != EINTR)
+		if (r < 0 && tn_sock_errno() != TN_ERR_INTR)
 			return 0;
 	}
 }
@@ -233,15 +223,15 @@ static void *loop(void *arg)
 	tn_ctx *c = arg;
 	if (c->cfg.thread_cb)
 		c->cfg.thread_cb(c->cfg.user, "control");
-	while (!atomic_load(&c->req_stop)) {
+	while (!tn_atomic_load(&c->req_stop)) {
 		drain(c);
-		if (atomic_load(&c->req_pause)) {
+		if (tn_atomic_load(&c->req_pause)) {
 			tn_set_state(c, TN_ST_PAUSED);
 			nap(c, -1);
 			continue;
 		}
 		int r = tn_control_session(c);
-		if (atomic_load(&c->req_stop))
+		if (tn_atomic_load(&c->req_stop))
 			break;
 		if (r == TN_E_WAKE)
 			continue; /* pause or stop: handled at the top */
@@ -271,15 +261,11 @@ int tn_start(tn_ctx *c)
 {
 	if (c->thread_started)
 		return TN_OK;
-	atomic_store(&c->req_stop, 0);
+	tn_atomic_store(&c->req_stop, 0);
 	int r = tn_dp_start(c);
 	if (r < 0)
 		return r;
-	pthread_attr_t at;
-	pthread_attr_init(&at);
-	pthread_attr_setstacksize(&at, c->cfg.thread_stack ? c->cfg.thread_stack : 256 * 1024);
-	r = pthread_create(&c->thread, &at, loop, c);
-	pthread_attr_destroy(&at);
+	r = tn_thread_start(&c->thread, loop, c, c->cfg.thread_stack ? c->cfg.thread_stack : 256 * 1024);
 	if (r != 0) {
 		tn_stop(c);
 		return TN_E_NOMEM;
@@ -292,18 +278,18 @@ void tn_stop(tn_ctx *c)
 {
 	if (!c)
 		return;
-	atomic_store(&c->req_stop, 1);
+	tn_atomic_store(&c->req_stop, 1);
 	tn_dp_stop(c);
 	if (!c->thread_started)
 		return;
 	wake(c);
-	pthread_join(c->thread, NULL);
+	tn_thread_join(c->thread);
 	c->thread_started = 0;
 }
 
 void tn_pause(tn_ctx *c)
 {
-	atomic_store(&c->req_pause, 1);
+	tn_atomic_store(&c->req_pause, 1);
 	wake(c);
 	tn_dp_wake(c);
 }
@@ -313,7 +299,7 @@ void tn_resume(tn_ctx *c)
 	/* Wake sequence (spec 13): a fresh control session (new TCP, Noise, map poll);
 	 * the data plane rebinds UDP, drops WireGuard keys and disco trust, reconnects
 	 * DERP and runs netcheck (tn_dp_rewake). */
-	atomic_store(&c->req_pause, 0);
+	tn_atomic_store(&c->req_pause, 0);
 	c->backoff_ms = 0;
 	wake(c);
 	tn_dp_wake(c);
@@ -326,12 +312,11 @@ void tn_destroy(tn_ctx *c)
 	tn_stop(c);
 	tn_fwd_destroy(c);
 	tn_dp_destroy(c);
-	int fds[] = {c->wake_r, c->wake_w, c->kick_r, c->kick_w, c->dp_wake_r, c->dp_wake_w};
-	for (size_t i = 0; i < sizeof fds / sizeof fds[0]; i++)
-		if (fds[i] >= 0)
-			close(fds[i]);
-	pthread_mutex_destroy(&c->mu);
-	pthread_mutex_destroy(&c->dp_mu);
+	tn_wake_close(c->wake_r, c->wake_w);
+	tn_wake_close(c->kick_r, c->kick_w);
+	tn_wake_close(c->dp_wake_r, c->dp_wake_w);
+	tn_mutex_destroy(&c->mu);
+	tn_mutex_destroy(&c->dp_mu);
 	tn_wipe(&c->keys, sizeof c->keys);
 	if (c->tls)
 		tn_wipe(c->tls, sizeof *c->tls);

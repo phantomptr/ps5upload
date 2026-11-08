@@ -32,6 +32,15 @@ ifeq ($(TARGET),ps5)
   # lwIP's asserts abort(); on the console a bad assert must not kill the helper.
   LWIP_DEFS := -DLWIP_NOASSERT
   SIZE ?= $(firstword $(wildcard /opt/homebrew/opt/llvm/bin/llvm-size) llvm-size)
+else ifeq ($(TARGET),win)
+  # Compile check against real Windows headers (MinGW-w64); CI builds with MSVC via cc-rs.
+  CC := x86_64-w64-mingw32-gcc
+  AR := x86_64-w64-mingw32-ar
+  BUILD ?= build/win
+  OPT ?= -O2
+  WITH_MONO ?= 1
+  BR_DEFS :=
+  SIZE ?= size
 else
   CC ?= cc
   ifeq ($(SAN),1)
@@ -56,7 +65,7 @@ CFLAGS_3P := -std=c11 -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE -w -O2 $(SANFLAGS) $(
 	-I$(BEARSSL_DIR)/inc -I$(BEARSSL_DIR)/src -I$(MONO_DIR) $(LWIP_INC)
 TN_LDFLAGS := $(SANFLAGS) -lpthread
 
-SRCS := src/crypto.c src/json.c src/util.c src/keys.c src/net.c src/noise.c src/hpack.c src/wg.c src/disco.c src/ip.c src/derp.c src/dp.c src/fwd.c \
+SRCS := src/crypto.c src/json.c src/util.c src/keys.c src/net.c src/noise.c src/hpack.c src/wg.c src/disco.c src/ip.c src/derp.c src/dp.c src/fwd.c src/os.c \
 	src/h2.c src/netmap.c src/control.c src/tailnet.c
 OBJS := $(patsubst src/%.c,$(BUILD)/%.o,$(SRCS))
 MONO_OBJ := $(if $(filter 1,$(WITH_MONO)),$(BUILD)/3p/monocypher.o)
@@ -74,9 +83,9 @@ TNCTL := $(BUILD)/tnctl
 TESTS := test_crypto test_hpack test_noise test_netmap test_dp
 TEST_BINS := $(addprefix $(BUILD)/,$(TESTS))
 
-.PHONY: all lib test ps5 ps5-link size clean check-bearssl
+.PHONY: all lib test ps5 ps5-link win size clean check-bearssl
 
-ifeq ($(TARGET),ps5)
+ifneq ($(filter ps5 win,$(TARGET)),)
 all: lib
 else
 all: lib $(TNCTL)
@@ -88,7 +97,7 @@ check-bearssl:
 	@test -f $(MONO_DIR)/monocypher.h || { echo "Monocypher missing: git submodule update --init third_party/ava1"; exit 1; }
 	@test -f $(LWIP_DIR)/src/include/lwip/tcp.h || { echo "lwIP missing: git submodule update --init third_party/lwip"; exit 1; }
 
-$(BUILD)/%.o: src/%.c include/tailnet.h src/tn.h src/crypto.h src/json.h lwip-port/lwipopts.h Makefile
+$(BUILD)/%.o: src/%.c include/tailnet.h src/tn.h src/os.h src/crypto.h src/json.h lwip-port/lwipopts.h Makefile
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS_OURS) -c -o $@ $<
 
@@ -132,6 +141,9 @@ test:
 
 ps5:
 	$(MAKE) TARGET=ps5 lib
+
+win:
+	$(MAKE) TARGET=win lib
 
 ps5-link:
 	$(MAKE) TARGET=ps5 WITH_MONO=1 BUILD=build/ps5-link lib

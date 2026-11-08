@@ -1,6 +1,7 @@
-/* The forwarder: serves a fixed set of tailnet ports from this node's local ones
- * (spec 10, 16). Runs inside the data-plane poll loop, under c->dp_mu.
+/* The forwarder, both ways, inside the data-plane poll loop (under c->dp_mu).
  *
+ * Serve (the PS5 helper, spec 10, 16): a fixed list of tailnet ports served from local
+ * ones.
  *   UDP: a straight relay. Each remote (ip, port) -> our port P gets its own socket
  *        connected to 127.0.0.1:P; replies are wrapped as IPv4/UDP from our tailnet
  *        address. Idle flows close after 2 minutes.
@@ -8,7 +9,15 @@
  *        127.0.0.1:P, with back-pressure both ways (tcp_recved only after the local
  *        write, local reads only while lwIP has send buffer). A SYN is held until the
  *        local dial succeeds, so a closed local port answers the peer with a RST
- *        ("connection refused") instead of an accept followed by a reset (spec 10).
+ *        ("connection refused") instead of an accept followed by a reset.
+ *
+ * Map (the engine, the reverse): a local port on 127.0.0.1 stands for a peer's tailnet
+ * (address, port), so ordinary sockets in the app reach the console through the tunnel.
+ *   TCP: a local listener; each accepted connection is dialed through lwIP
+ *        (tcp_connect from our tailnet address) and spliced the same way.
+ *   UDP: a local socket; datagrams from the app go out from our tailnet address and a
+ *        fixed tailnet port; what the peer sends back to that port goes to the app's
+ *        last address.
  *
  * lwIP keeps global state, so one forwarder per process. */
 #include "tn.h"
@@ -21,26 +30,35 @@
 #include "lwip/tcp.h"
 #include "lwip/timeouts.h"
 
-#include <arpa/inet.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <poll.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
-#ifndef MSG_NOSIGNAL
-#define MSG_NOSIGNAL 0
-#endif
 
 #define UDP_FLOWS 32
 #define UDP_IDLE_MS 120000
-#define TCP_CONNS 16
+#define TCP_CONNS 24
 #define SYN_WAITS 8
+#define MAPS 32
 #define LOCAL_CONNECT_MS 5000
+#define DIAL_MS 15000
+#define LOOPBACK 0x7f000001u
+
+typedef struct {
+	int fd;
+	uint32_t rip;
+	uint16_t rport, port;
+	int64_t last;
+} udp_flow;
+
+typedef struct tcp_conn {
+	int used;
+	int fd;
+	struct tcp_pcb *pcb;
+	uint8_t connecting;    /* map: lwIP is still dialing the peer */
+	uint8_t remote_eof, local_eof, shut_wr, fin_sent;
+	int64_t started;
+	struct pbuf *rxq;      /* from the peer, not yet written to the local socket */
+	size_t rxq_off;        /* bytes of rxq's first pbuf already written */
+} tcp_conn;
 
 /* A SYN waiting for its local dial. */
 typedef struct {
@@ -54,21 +72,15 @@ typedef struct {
 } syn_wait;
 
 typedef struct {
-	int fd;
-	uint32_t rip;
-	uint16_t rport, port;
-	int64_t last;
-} udp_flow;
-
-typedef struct tcp_conn {
-	int used;
-	int fd;
-	struct tcp_pcb *pcb;
-	uint8_t connecting, remote_eof, local_eof, shut_wr, fin_sent;
-	int64_t started;
-	struct pbuf *rxq;      /* from the peer, not yet written to the local socket */
-	size_t rxq_off;        /* bytes of rxq's first pbuf already written */
-} tcp_conn;
+	uint8_t used, proto;
+	int fd;                 /* TCP: the listener; UDP: the local socket */
+	uint16_t lport;         /* 127.0.0.1 port */
+	uint16_t tport;         /* UDP: our tailnet source port */
+	uint32_t rip;           /* the peer's tailnet address */
+	uint16_t rport;
+	uint32_t app_ip;        /* UDP: where the app last sent from */
+	uint16_t app_port;
+} dial_map;
 
 struct tn_fwd {
 	tn_ctx *c;
@@ -79,6 +91,8 @@ struct tn_fwd {
 	udp_flow udp[UDP_FLOWS];
 	tcp_conn tcp[TCP_CONNS];
 	syn_wait syn[SYN_WAITS];
+	dial_map map[MAPS];
+	uint16_t next_tport;
 	uint8_t buf[TN_MTU];
 	uint8_t rbuf[16384];
 	uint64_t udp_in, udp_out, tcp_accepted;
@@ -106,21 +120,29 @@ static const tn_serve *rule_for(const tn_ctx *c, uint8_t proto, uint16_t port)
 
 static uint16_t local_port(const tn_serve *r) { return r->local_port ? r->local_port : r->port; }
 
-static void nonblock(int fd)
+static int again(void)
 {
-	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
-#ifdef SO_NOSIGPIPE
-	int one = 1;
-	setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
-#endif
+	int e = tn_sock_errno();
+	return e == TN_ERR_AGAIN || e == TN_ERR_INTR;
 }
 
-/* ---------------- UDP relay ---------------- */
+static int open_local(int type)
+{
+	int fd = tn_sock_open(type);
+	if (fd < 0)
+		return -1;
+	tn_sock_nonblock(fd);
+	tn_sock_nosigpipe(fd);
+	if (type == SOCK_STREAM)
+		tn_sock_setint(fd, IPPROTO_TCP, TCP_NODELAY, 1);
+	return fd;
+}
+
+/* ---------------- UDP relay (serve) ---------------- */
 
 static void udp_close(udp_flow *f)
 {
-	if (f->fd >= 0)
-		close(f->fd);
+	tn_sock_close(f->fd);
 	memset(f, 0, sizeof *f);
 	f->fd = -1;
 }
@@ -139,13 +161,11 @@ static udp_flow *udp_flow_for(tn_fwd *w, uint32_t rip, uint16_t rport, uint16_t 
 	}
 	udp_flow *f = free_f ? free_f : oldest;
 	udp_close(f);
-	int fd = socket(AF_INET, SOCK_DGRAM, 0);
+	int fd = open_local(SOCK_DGRAM);
 	if (fd < 0)
 		return NULL;
-	nonblock(fd);
-	struct sockaddr_in sa = {.sin_family = AF_INET, .sin_port = htons(lport), .sin_addr.s_addr = htonl(0x7f000001)};
-	if (connect(fd, (struct sockaddr *)&sa, sizeof sa) != 0) {
-		close(fd);
+	if (tn_sock_connect(fd, LOOPBACK, lport) != 0) {
+		tn_sock_close(fd);
 		return NULL;
 	}
 	f->fd = fd;
@@ -162,27 +182,31 @@ static void udp_from_peer(tn_fwd *w, const tn_ip_info *ip, const tn_serve *r, in
 	if (!f)
 		return;
 	f->last = now;
-	if (send(f->fd, ip->payload, ip->plen, 0) < 0 && errno != EAGAIN && errno != EWOULDBLOCK &&
-	    errno != ECONNREFUSED)
+	if (tn_sock_send(f->fd, ip->payload, ip->plen) < 0 && !again() && tn_sock_errno() != TN_ERR_REFUSED)
 		udp_close(f); /* errno 163 (rest) and friends: the next datagram makes a new one */
 	else
 		w->udp_in++;
 }
 
+static void udp_out(tn_fwd *w, uint16_t sport, uint32_t dip, uint16_t dport, size_t n)
+{
+	size_t m = tn_ip_build_udp(w->buf, sizeof w->buf, (tn_ep4){.ip = w->addr, .port = sport},
+				   (tn_ep4){.ip = dip, .port = dport}, w->buf + 28, n);
+	if (m && tn_dp_output(w->c, w->buf, m) == TN_OK)
+		w->udp_out++;
+}
+
 static void udp_from_local(tn_fwd *w, udp_flow *f, int64_t now)
 {
 	for (int i = 0; i < 64; i++) {
-		ssize_t n = recv(f->fd, w->buf + 28, sizeof w->buf - 28, 0);
+		ssize_t n = tn_sock_recv(f->fd, w->buf + 28, sizeof w->buf - 28);
 		if (n < 0) {
-			if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR && errno != ECONNREFUSED)
+			if (!again() && tn_sock_errno() != TN_ERR_REFUSED && tn_sock_errno() != TN_ERR_RESET)
 				udp_close(f);
 			return;
 		}
 		f->last = now;
-		size_t m = tn_ip_build_udp(w->buf, sizeof w->buf, (tn_ep4){.ip = w->addr, .port = f->port},
-					   (tn_ep4){.ip = f->rip, .port = f->rport}, w->buf + 28, (size_t)n);
-		if (m && tn_dp_output(w->c, w->buf, m) == TN_OK)
-			w->udp_out++;
+		udp_out(w, f->port, f->rip, f->rport, (size_t)n);
 	}
 }
 
@@ -190,8 +214,7 @@ static void udp_from_local(tn_fwd *w, udp_flow *f, int64_t now)
 
 static void conn_free(tcp_conn *k)
 {
-	if (k->fd >= 0)
-		close(k->fd);
+	tn_sock_close(k->fd);
 	if (k->rxq)
 		pbuf_free(k->rxq);
 	memset(k, 0, sizeof *k);
@@ -230,15 +253,26 @@ static int conn_close(tcp_conn *k)
 	return aborted;
 }
 
+static tcp_conn *conn_new(tn_fwd *w)
+{
+	for (int i = 0; i < TCP_CONNS; i++)
+		if (!w->tcp[i].used) {
+			memset(&w->tcp[i], 0, sizeof w->tcp[i]);
+			w->tcp[i].fd = -1;
+			return &w->tcp[i];
+		}
+	return NULL;
+}
+
 /* Write what the peer sent to the local socket; ack it to lwIP as it goes. */
 static void flush_rx(tcp_conn *k)
 {
 	while (k->rxq && !k->connecting) {
 		struct pbuf *p = k->rxq;
 		size_t left = p->len - k->rxq_off;
-		ssize_t n = left ? send(k->fd, (uint8_t *)p->payload + k->rxq_off, left, MSG_NOSIGNAL) : 0;
+		ssize_t n = left ? tn_sock_send(k->fd, (uint8_t *)p->payload + k->rxq_off, left) : 0;
 		if (n < 0) {
-			if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+			if (again())
 				return;
 			conn_abort(k);
 			return;
@@ -255,7 +289,7 @@ static void flush_rx(tcp_conn *k)
 		k->rxq_off = 0;
 	}
 	if (!k->rxq && k->remote_eof && !k->shut_wr && !k->connecting) {
-		shutdown(k->fd, SHUT_WR);
+		tn_sock_shutdown_wr(k->fd);
 		k->shut_wr = 1;
 	}
 }
@@ -296,22 +330,27 @@ static void on_err(void *arg, err_t err)
 	conn_free(k);
 }
 
+static void conn_attach(tcp_conn *k, struct tcp_pcb *pcb)
+{
+	k->pcb = pcb;
+	tcp_arg(pcb, k);
+	tcp_recv(pcb, on_recv);
+	tcp_err(pcb, on_err);
+	tcp_nagle_disable(pcb);
+}
+
 static err_t on_accept(void *arg, struct tcp_pcb *pcb, err_t err)
 {
 	tn_fwd *w = arg;
 	if (err != ERR_OK || !pcb)
 		return ERR_VAL;
-	const tn_serve *r = rule_for(w->c, TN_IPPROTO_TCP, pcb->local_port);
-	tcp_conn *k = NULL;
-	for (int i = 0; i < TCP_CONNS && !k; i++)
-		if (!w->tcp[i].used)
-			k = &w->tcp[i];
-	if (!r || !k) {
+	tcp_conn *k = conn_new(w);
+	if (!rule_for(w->c, TN_IPPROTO_TCP, pcb->local_port) || !k) {
 		tcp_abort(pcb);
 		return ERR_ABRT;
 	}
 	/* The local connection was dialed when the SYN arrived (syn_from_peer). */
-	int fd = -1, rc = 0;
+	int fd = -1;
 	uint32_t rip = ntohl(ip4_addr_get_u32(ip_2_ip4(&pcb->remote_ip)));
 	for (int i = 0; i < SYN_WAITS && fd < 0; i++) {
 		syn_wait *s = &w->syn[i];
@@ -324,16 +363,10 @@ static err_t on_accept(void *arg, struct tcp_pcb *pcb, err_t err)
 		tcp_abort(pcb);
 		return ERR_ABRT;
 	}
-	memset(k, 0, sizeof *k);
 	k->used = 1;
 	k->fd = fd;
-	k->pcb = pcb;
-	k->connecting = rc != 0;
 	k->started = tn_now_ms();
-	tcp_arg(pcb, k);
-	tcp_recv(pcb, on_recv);
-	tcp_err(pcb, on_err);
-	tcp_nagle_disable(pcb);
+	conn_attach(k, pcb);
 	w->tcp_accepted++;
 	return ERR_OK;
 }
@@ -341,13 +374,13 @@ static err_t on_accept(void *arg, struct tcp_pcb *pcb, err_t err)
 /* Local socket readable: move bytes into lwIP while it has send buffer. */
 static void tcp_from_local(tn_fwd *w, tcp_conn *k)
 {
-	while (k->used && k->pcb && !k->local_eof) {
+	while (k->used && k->pcb && !k->local_eof && !k->connecting) {
 		size_t room = tcp_sndbuf(k->pcb);
 		if (room == 0 || tcp_sndqueuelen(k->pcb) >= TCP_SND_QUEUELEN - 2)
 			break;
 		if (room > sizeof w->rbuf)
 			room = sizeof w->rbuf;
-		ssize_t n = recv(k->fd, w->rbuf, room, 0);
+		ssize_t n = tn_sock_recv(k->fd, w->rbuf, room);
 		if (n > 0) {
 			if (tcp_write(k->pcb, w->rbuf, (u16_t)n, TCP_WRITE_FLAG_COPY) != ERR_OK) {
 				conn_abort(k);
@@ -359,12 +392,12 @@ static void tcp_from_local(tn_fwd *w, tcp_conn *k)
 			k->local_eof = 1;
 			break;
 		}
-		if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+		if (again())
 			break;
 		conn_abort(k);
 		return;
 	}
-	if (!k->used)
+	if (!k->used || k->connecting)
 		return;
 	if (k->pcb)
 		tcp_output(k->pcb);
@@ -432,8 +465,7 @@ static void send_rst(tn_fwd *w, const syn_wait *s)
 
 static void syn_drop(syn_wait *s)
 {
-	if (s->fd >= 0)
-		close(s->fd);
+	tn_sock_close(s->fd);
 	memset(s, 0, sizeof *s);
 	s->fd = -1;
 }
@@ -463,12 +495,9 @@ static int syn_from_peer(tn_fwd *w, const uint8_t *pkt, const tn_ip_info *ip, co
 	}
 	if (!s || ip->len > sizeof s->syn)
 		return 1; /* too many connections opening at once: the peer retransmits */
-	int fd = socket(AF_INET, SOCK_STREAM, 0);
+	int fd = open_local(SOCK_STREAM);
 	if (fd < 0)
 		return 1;
-	nonblock(fd);
-	int one = 1;
-	setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
 	memset(s, 0, sizeof *s);
 	s->fd = fd;
 	s->rip = ip->src;
@@ -477,23 +506,103 @@ static int syn_from_peer(tn_fwd *w, const uint8_t *pkt, const tn_ip_info *ip, co
 	s->started = now;
 	s->len = (uint16_t)ip->len;
 	memcpy(s->syn, pkt, ip->len);
-	struct sockaddr_in sa = {.sin_family = AF_INET, .sin_port = htons(local_port(r)),
-				 .sin_addr.s_addr = htonl(0x7f000001)};
-	if (connect(fd, (struct sockaddr *)&sa, sizeof sa) == 0)
+	int rc = tn_sock_connect(fd, LOOPBACK, local_port(r));
+	if (rc == 0)
 		syn_dialed(w, s, 1);
-	else if (errno != EINPROGRESS)
+	else if (rc < 0)
 		syn_dialed(w, s, 0);
 	return 1;
 }
 
-/* ---------------- API (dp.c) ---------------- */
+/* ---------------- maps (the reverse direction) ---------------- */
+
+static err_t on_dialed(void *arg, struct tcp_pcb *pcb, err_t err)
+{
+	(void)pcb;
+	tcp_conn *k = arg;
+	if (!k)
+		return ERR_ABRT;
+	if (err != ERR_OK) {
+		conn_abort(k);
+		return ERR_ABRT;
+	}
+	k->connecting = 0;
+	return ERR_OK;
+}
+
+static void map_accept(tn_fwd *w, dial_map *m)
+{
+	for (int i = 0; i < 16; i++) {
+		int fd = tn_sock_accept(m->fd);
+		if (fd < 0)
+			return;
+		tn_sock_nonblock(fd);
+		tn_sock_nosigpipe(fd);
+		tn_sock_setint(fd, IPPROTO_TCP, TCP_NODELAY, 1);
+		tcp_conn *k = conn_new(w);
+		struct tcp_pcb *pcb = k && w->addr ? tcp_new() : NULL;
+		if (!pcb) {
+			tn_sock_close(fd); /* no tailnet address yet, or out of connections */
+			continue;
+		}
+		k->used = 1;
+		k->fd = fd;
+		k->connecting = 1;
+		k->started = tn_now_ms();
+		conn_attach(k, pcb);
+		ip4_addr_t a;
+		a.addr = htonl(m->rip);
+		ip_addr_t dst;
+		ip_addr_copy_from_ip4(dst, a);
+		if (tcp_connect(pcb, &dst, m->rport, on_dialed) != ERR_OK)
+			conn_abort(k);
+	}
+}
+
+static void map_udp_from_app(tn_fwd *w, dial_map *m)
+{
+	for (int i = 0; i < 64; i++) {
+		uint32_t ip;
+		uint16_t port;
+		ssize_t n = tn_sock_recvfrom(m->fd, w->buf + 28, sizeof w->buf - 28, &ip, &port);
+		if (n < 0)
+			return;
+		m->app_ip = ip;
+		m->app_port = port;
+		if (w->addr)
+			udp_out(w, m->tport, m->rip, m->rport, (size_t)n);
+	}
+}
+
+/* An inbound UDP datagram for one of our mapped tailnet ports. 1 = taken. */
+static int map_udp_from_peer(tn_fwd *w, const tn_ip_info *ip)
+{
+	for (int i = 0; i < MAPS; i++) {
+		dial_map *m = &w->map[i];
+		if (!m->used || m->proto != TN_IPPROTO_UDP || m->tport != ip->dport || m->rip != ip->src ||
+		    m->rport != ip->sport)
+			continue;
+		if (m->app_port)
+			tn_sock_sendto(m->fd, ip->payload, ip->plen, m->app_ip, m->app_port);
+		w->udp_in++;
+		return 1;
+	}
+	return 0;
+}
+
+static void map_close(dial_map *m)
+{
+	tn_sock_close(m->fd);
+	memset(m, 0, sizeof *m);
+	m->fd = -1;
+}
+
+/* ---------------- API (dp.c, tailnet.c) ---------------- */
 
 int tn_fwd_create(tn_ctx *c)
 {
-	if (!c->n_serve)
-		return TN_OK;
 	if (g_lwip_ready && g_fwd)
-		return TN_E_STATE; /* lwIP is global: one forwarder per process */
+		return c->n_serve ? TN_E_STATE : TN_OK; /* lwIP is global: one forwarder per process */
 	tn_fwd *w = calloc(1, sizeof *w);
 	if (!w)
 		return TN_E_NOMEM;
@@ -504,6 +613,9 @@ int tn_fwd_create(tn_ctx *c)
 		w->tcp[i].fd = -1;
 	for (int i = 0; i < SYN_WAITS; i++)
 		w->syn[i].fd = -1;
+	for (int i = 0; i < MAPS; i++)
+		w->map[i].fd = -1;
+	w->next_tport = (uint16_t)(40000 + tn_lwip_rand() % 20000);
 	if (!g_lwip_ready) {
 		lwip_init();
 		g_lwip_ready = 1;
@@ -557,6 +669,9 @@ void tn_fwd_destroy(tn_ctx *c)
 	if (!w)
 		return;
 	reset_all(w);
+	for (int i = 0; i < MAPS; i++)
+		if (w->map[i].used)
+			map_close(&w->map[i]);
 	for (uint32_t i = 0; i < w->n_listen; i++)
 		tcp_close(w->listen[i]);
 	netif_remove(&w->nif);
@@ -588,14 +703,20 @@ int tn_fwd_input(tn_ctx *c, const uint8_t *pkt, const tn_ip_info *ip, int64_t no
 	tn_fwd *w = c->fwd;
 	if (!w)
 		return 0;
+	if (ip->proto == TN_IPPROTO_UDP && map_udp_from_peer(w, ip))
+		return 1;
 	const tn_serve *r = rule_for(c, ip->proto, ip->dport);
-	if (!r)
-		return 0;
 	if (ip->proto == TN_IPPROTO_UDP) {
+		if (!r)
+			return 0;
 		udp_from_peer(w, ip, r, now);
 		return 1;
 	}
-	if ((ip->tcp_flags & 0x16) == 0x02 && syn_from_peer(w, pkt, ip, r, now))
+	if (ip->proto != TN_IPPROTO_TCP)
+		return 0;
+	/* TCP: served ports, and our own mapped connections (lwIP answers anything else
+	 * with a RST; it has no listener but the served ports). */
+	if (r && (ip->tcp_flags & 0x16) == 0x02 && syn_from_peer(w, pkt, ip, r, now))
 		return 1; /* held until the local dial finishes */
 	lwip_in(w, pkt, ip->len);
 	return 1;
@@ -616,6 +737,9 @@ int tn_fwd_pollfds(tn_ctx *c, struct pollfd *pf, int cap)
 	int n = 0;
 	if (!w)
 		return 0;
+	for (int i = 0; i < MAPS && n < cap; i++)
+		if (w->map[i].used)
+			pf[n++] = (struct pollfd){.fd = w->map[i].fd, .events = POLLIN};
 	for (int i = 0; i < UDP_FLOWS && n < cap; i++)
 		if (w->udp[i].fd >= 0)
 			pf[n++] = (struct pollfd){.fd = w->udp[i].fd, .events = POLLIN};
@@ -627,7 +751,7 @@ int tn_fwd_pollfds(tn_ctx *c, struct pollfd *pf, int cap)
 		if (!k->used)
 			continue;
 		short ev = 0;
-		if (k->connecting || k->rxq)
+		if (k->rxq && !k->connecting)
 			ev |= POLLOUT;
 		if (!k->connecting && !k->local_eof && k->pcb && tcp_sndbuf(k->pcb) > 0)
 			ev |= POLLIN;
@@ -641,6 +765,16 @@ void tn_fwd_io(tn_ctx *c, int fd, short revents, int64_t now)
 	tn_fwd *w = c->fwd;
 	if (!w)
 		return;
+	for (int i = 0; i < MAPS; i++) {
+		dial_map *m = &w->map[i];
+		if (!m->used || m->fd != fd)
+			continue;
+		if (m->proto == TN_IPPROTO_TCP)
+			map_accept(w, m);
+		else
+			map_udp_from_app(w, m);
+		return;
+	}
 	for (int i = 0; i < UDP_FLOWS; i++)
 		if (w->udp[i].fd == fd) {
 			udp_from_local(w, &w->udp[i], now);
@@ -650,27 +784,14 @@ void tn_fwd_io(tn_ctx *c, int fd, short revents, int64_t now)
 		syn_wait *s = &w->syn[i];
 		if (s->fd != fd || s->ready)
 			continue;
-		int soerr = 0;
-		socklen_t sl = sizeof soerr;
 		if (revents & (POLLOUT | POLLERR | POLLHUP))
-			syn_dialed(w, s, getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &sl) == 0 && !soerr);
+			syn_dialed(w, s, tn_sock_error(fd) == 0);
 		return;
 	}
 	for (int i = 0; i < TCP_CONNS; i++) {
 		tcp_conn *k = &w->tcp[i];
 		if (!k->used || k->fd != fd)
 			continue;
-		if (k->connecting) {
-			int soerr = 0;
-			socklen_t sl = sizeof soerr;
-			if (!(revents & (POLLOUT | POLLERR | POLLHUP)))
-				return;
-			if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &sl) != 0 || soerr) {
-				conn_abort(k); /* the local service refused: reset the peer */
-				return;
-			}
-			k->connecting = 0;
-		}
 		if (revents & POLLOUT)
 			flush_rx(k);
 		if (k->used && (revents & (POLLIN | POLLHUP | POLLERR)))
@@ -699,8 +820,8 @@ void tn_fwd_tick(tn_ctx *c, int64_t now)
 	}
 	for (int i = 0; i < TCP_CONNS; i++) {
 		tcp_conn *k = &w->tcp[i];
-		if (k->used && k->connecting && now - k->started > LOCAL_CONNECT_MS)
-			conn_abort(k);
+		if (k->used && k->connecting && now - k->started > DIAL_MS)
+			conn_abort(k); /* the peer never answered: the app sees its socket close */
 		else if (k->used && !k->connecting && k->pcb)
 			tcp_from_local(w, k); /* lwIP may have freed send buffer since */
 	}
@@ -720,6 +841,79 @@ void tn_fwd_stats(tn_ctx *c, uint32_t *udp_flows, uint32_t *tcp_conns)
 	*udp_flows = *tcp_conns = 0;
 	for (int i = 0; w && i < UDP_FLOWS; i++)
 		*udp_flows += w->udp[i].fd >= 0;
+	for (int i = 0; w && i < MAPS; i++)
+		*udp_flows += w->map[i].used && w->map[i].proto == TN_IPPROTO_UDP && w->map[i].app_port;
 	for (int i = 0; w && i < TCP_CONNS; i++)
 		*tcp_conns += (uint32_t)w->tcp[i].used;
+}
+
+/* dp_mu held. */
+int tn_fwd_map(tn_ctx *c, uint8_t proto, uint32_t rip, uint16_t rport, uint16_t want, uint16_t *lport)
+{
+	tn_fwd *w = c->fwd;
+	if (!w)
+		return TN_E_STATE;
+	if (proto != TN_IPPROTO_TCP && proto != TN_IPPROTO_UDP)
+		return TN_E_ARG;
+	for (int i = 0; i < MAPS; i++) {
+		dial_map *m = &w->map[i];
+		if (m->used && m->proto == proto && m->rip == rip && m->rport == rport && (!want || m->lport == want)) {
+			*lport = m->lport; /* already mapped */
+			return TN_OK;
+		}
+	}
+	dial_map *m = NULL;
+	for (int i = 0; i < MAPS && !m; i++)
+		if (!w->map[i].used)
+			m = &w->map[i];
+	if (!m)
+		return TN_E_TOOBIG;
+	int fd = tn_sock_open(proto == TN_IPPROTO_TCP ? SOCK_STREAM : SOCK_DGRAM);
+	if (fd < 0)
+		return TN_E_IO;
+	if (tn_sock_bind(fd, LOOPBACK, want) != 0 || (proto == TN_IPPROTO_TCP && tn_sock_listen(fd) != 0)) {
+		tn_sock_close(fd);
+		return TN_E_IO;
+	}
+	tn_sock_nonblock(fd);
+	memset(m, 0, sizeof *m);
+	m->used = 1;
+	m->proto = proto;
+	m->fd = fd;
+	m->lport = tn_sock_local_port(fd);
+	m->rip = rip;
+	m->rport = rport;
+	if (proto == TN_IPPROTO_UDP) {
+		m->tport = w->next_tport++;
+		if (w->next_tport < 40000)
+			w->next_tport = 40000;
+	}
+	*lport = m->lport;
+	return TN_OK;
+}
+
+void tn_fwd_unmap(tn_ctx *c, uint8_t proto, uint16_t lport)
+{
+	tn_fwd *w = c->fwd;
+	for (int i = 0; w && i < MAPS; i++)
+		if (w->map[i].used && (!proto || (w->map[i].proto == proto && w->map[i].lport == lport)))
+			map_close(&w->map[i]);
+}
+
+/* Is this an inbound packet a client node expects (a reply on one of its mapped
+ * connections or flows)? Used when the node serves nothing. */
+int tn_fwd_expects(tn_ctx *c, const tn_ip_info *ip)
+{
+	tn_fwd *w = c->fwd;
+	if (!w)
+		return 0;
+	if (ip->proto == TN_IPPROTO_TCP)
+		return 1; /* lwIP: our connections, or a RST for anything else */
+	for (int i = 0; ip->proto == TN_IPPROTO_UDP && i < MAPS; i++) {
+		dial_map *m = &w->map[i];
+		if (m->used && m->proto == TN_IPPROTO_UDP && m->tport == ip->dport && m->rip == ip->src &&
+		    m->rport == ip->sport)
+			return 1;
+	}
+	return 0;
 }
