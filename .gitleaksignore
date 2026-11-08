@@ -51,3 +51,8 @@ f01db54acdadef02d8cd956c783356c7c2298f17:engine/crates/ps5upload-engine/src/rp_g
 # The same made-up invite keys after #725 was squash-merged
 03b6ae995d2991fc510b698b2da716abaed46d0e:client/e2e/play-together-internet-ui.spec.ts:generic-api-key:9
 03b6ae995d2991fc510b698b2da716abaed46d0e:client/src/join/rtcTransport.test.ts:generic-api-key:28
+# Native Tailscale (#747) test vectors: public node/machine/disco keys from a
+# throwaway local Headscale testbed, and the machine key of fixed test private
+# key 0x10..0x2f
+5d971c6882a161365c818554f3cf2d1502803429:tailnet/tests/fixtures/headscale-0.29.1-map-full.json:generic-api-key:1
+5d971c6882a161365c818554f3cf2d1502803429:tailnet/tests/vectors_go.h:generic-api-key:58
