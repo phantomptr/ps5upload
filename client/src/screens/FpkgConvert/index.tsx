@@ -307,12 +307,10 @@ export default function WorkshopScreen() {
   }, []);
   const [source, setSource] = useState(pipeline.phase === "idle" ? "" : pipeline.source);
   const [inspection, setInspection] = useState<FpkgInspection | null>(null);
-  // A PS4 game can't become a PS5 package: the build this screen offers next is an image.
-  useEffect(() => {
-    if (inspection?.ps4_game && make === "pkg") setMake("image");
-  }, [inspection?.ps4_game, make, setMake]);
   // A PS4 add-on's files become a folder: ShadowMount+ mounts games, not add-ons.
   const ps4Addon = inspection?.ps4_kind === "addon";
+  // A PS4 game's package is a PS4 one (the engine writes it; a PS5 package needs param.json).
+  const ps4 = !!inspection?.ps4_game && !ps4Addon;
   useEffect(() => {
     if (ps4Addon && make !== "folder") setMake("folder");
   }, [ps4Addon, make, setMake]);
@@ -590,11 +588,13 @@ export default function WorkshopScreen() {
     const install = then !== "keep";
     void start(
       {
-        source: source.trim(),
+        // A PS4 game with its update merged in: the game is the source of the PS4 package.
+        source: update ? game : source.trim(),
         outputDir: out.outputDir,
         compression,
         language: language || undefined,
         keepBoth: out.keepBoth,
+        update,
       },
       {
         install,
@@ -1080,6 +1080,7 @@ export default function WorkshopScreen() {
             checked={!locked && inspection !== null}
             archive={!locked && isArchiveSource(src)}
             forNext={locked}
+            ps4={!locked && ps4}
           />
 
           <OptionsCard
@@ -1105,6 +1106,7 @@ export default function WorkshopScreen() {
             estimates={locked ? null : estimates}
             locked={false}
             forNext={locked}
+            ps4={!locked && ps4}
             plannedSize={locked ? undefined : inspection?.planned_size}
             outputFree={locked ? undefined : inspection?.output_free}
             compressedFrom={
@@ -1155,7 +1157,9 @@ export default function WorkshopScreen() {
                           ? tr("fpkg.run.what_image", { ext: buildExtension(build) }, "a {ext} game image")
                           : build.kind === "folder"
                             ? tr("fpkg.run.what_folder", undefined, "a game folder")
-                            : tr("fpkg.run.what_pkg", undefined, "a package (.pkg)"),
+                            : ps4
+                              ? tr("fpkg.run.what_ps4_pkg", undefined, "a PS4 package (.pkg)")
+                              : tr("fpkg.run.what_pkg", undefined, "a package (.pkg)"),
                       title: inspection.title || inspection.content_id || source.trim(),
                       dir: savesToPs5(runChoice)
                         ? tr("fpkg.run.on_ps5", undefined, "the PS5")

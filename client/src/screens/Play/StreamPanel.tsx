@@ -37,7 +37,7 @@ import { chosenRpUser, rpUsersOf } from "../../lib/rpUsers";
 import { rpUserLabel } from "./setup/PairedUsers";
 import { deviceName, meshFor, othersRemotePlaying, remotePlayPads, useMeshStore } from "../../state/mesh";
 import { isTauriEnv } from "../../lib/tauriEnv";
-import { isLinuxDesktop, isMobile } from "../../lib/platform";
+import { isIOS, isLinuxDesktop, isMobile } from "../../lib/platform";
 import {
   streamRefusal,
   stopEngineSession,
@@ -81,7 +81,7 @@ import { JoinAsks, PlayTogetherPanel } from "./PlayTogether";
 import { friendsIn, useJoinHost } from "./playTogetherState";
 import { okToStartPlay } from "./JoinAFriend";
 import { useConfirm } from "../../components/ConfirmDialog";
-import { GoLiveBarIcon, GoLiveChip, GoLivePanel, goLiveAvailable, useGoLivePolling } from "./GoLivePanel";
+import { GoLiveBarIcon, GoLiveChip, GoLivePanel, goLiveAvailable, inAppPhoneEngine, useGoLivePolling } from "./GoLivePanel";
 import { GamePanel } from "./game/GamePanel";
 import { LaunchStatus } from "./game/LaunchStatus";
 import { DropChoice, DropZone, useStreamDropZone } from "./game/DropToInstall";
@@ -526,7 +526,7 @@ export function StreamPanel() {
   const pictureHere = useRemotePlayStore((s) => s.pictureHere);
   const setPictureHere = useRemotePlayStore((s) => s.setPictureHere);
   const playing = sessionPlaying && pictureHere;
-  const goLive = goLiveAvailable({ mobile: isMobile() });
+  const goLive = goLiveAvailable({ tauri: isTauriEnv(), mobile: isMobile() });
   useGoLivePolling(running && goLive, goLiveOpen);
   // Play a title on the stream (from a game's page, or the Game panel): stream, helper, launch.
   const launcher = useGameLaunch();
@@ -1114,6 +1114,16 @@ export function StreamPanel() {
       setSettingsOpen(false);
       setGameOpen(true);
     },
+    // A phone has no room for Stream on the bar: it is in this menu (#731).
+    onGoLive: goLive
+      ? () => {
+          setMenuOpen(false);
+          if (full) exitFull();
+          setGoLiveOpen(true);
+        }
+      : undefined,
+    // The iPhone/iPad app: the hint names Safari, so it is for iOS only.
+    goLiveHint: inAppPhoneEngine({ tauri: isTauriEnv(), mobile: isMobile() }) && isIOS(),
   };
 
   const stageView = (

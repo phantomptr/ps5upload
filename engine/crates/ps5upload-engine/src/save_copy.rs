@@ -183,10 +183,15 @@ fn close_save(c: &dyn Console, changed: bool) -> Result<(), String> {
     Err(format!("the save could not be closed ({last})"))
 }
 
+/// How `read_image` says the save image would not open (its first words).
+const IMAGE_OPEN_FAILED: &str = "the save image would not open";
+
 /// Copies the files of the save image `image`, opened decrypted, into the new local folder
 /// `dest`; closed again after.
 fn read_image(c: &dyn Console, image: &str, dest: &Path) -> Result<(), String> {
-    let mount = c.open_image(image)?;
+    let mount = c
+        .open_image(image)
+        .map_err(|e| format!("{IMAGE_OPEN_FAILED} ({e})"))?;
     let copied = c.copy_out(&mount, dest);
     // Read only: closing it changes nothing on the console.
     let closed = close_save(c, false);
@@ -673,10 +678,24 @@ pub fn match_parts(
 /// The error for parts a user's save doesn't have yet.
 fn missing_error(title_id: &str, who: &str, missing: Vec<String>) -> Failed {
     let labels: Vec<String> = missing.iter().map(|m| part_label(m)).collect();
+    // A game makes each save slot the first time it saves there (RDR2 has several, #729), and
+    // the console only knows the slots a user has: one can't be added from here.
+    let (what, how) = match labels.as_slice() {
+        [one] if one == "main save" => ("main save".to_string(), "once"),
+        [one] => (format!("save slot {one}"), "in that slot"),
+        many => (
+            format!("save slots {}", many.join(", ")),
+            "in each of those slots",
+        ),
+    };
+    let mut cap = who.chars();
+    let who_cap: String = cap
+        .next()
+        .map(|c| c.to_uppercase().chain(cap).collect())
+        .unwrap_or_default();
     Failed {
         msg: format!(
-            "{title_id}'s {} isn't on {who} yet: start the game once as {who} and save, then try again.",
-            labels.join(", ")
+            "{who_cap} doesn't have {title_id}'s {what} yet, and a save can only replace one {who} already has. Start the game as {who} and save {how}, then try again."
         ),
         missing,
     }
@@ -969,7 +988,13 @@ pub fn restore_to_user(
         let shared = (|| {
             c.put_raw(&title_id, &src, &to.path, to_user)?;
             share(c, &to.path).map(|(_, z)| z).map_err(|e| {
-                format!("the backup could not be opened on this PS5 (was it made on another console?): {e}")
+                // Only a save that would not open hints at another PS5: one that opened and
+                // could not be copied (#729) was made here.
+                if e.starts_with(IMAGE_OPEN_FAILED) {
+                    format!("the backup could not be opened on this PS5 (was it made on another console?): {e}")
+                } else {
+                    format!("the backup could not be read: {e}")
+                }
             })
         })();
         // Their own save back, whatever happened.
@@ -1127,16 +1152,11 @@ impl Console for Live<'_> {
         let dl = make_temp_dir("share")?;
         let dl_s = dl.to_string_lossy().into_owned();
         let r = (|| {
-            let start = local::post(
-                "/api/transfer/download",
-                json!({ "addr": self.host, "src_path": mount, "dest_dir": dl_s, "kind": "folder" }),
+            // Names this computer can't hold are kept reversibly, and `fill` puts them back (#729).
+            local::download(self.host, mount, &dl, "folder")?;
+            let leaf = ps5upload_core::host_names::escape_name(
+                mount.rsplit('/').next().unwrap_or("save_mount"),
             )?;
-            let job = start
-                .get("job_id")
-                .and_then(Value::as_str)
-                .ok_or("download did not start")?;
-            local::wait_job(job)?;
-            let leaf = mount.rsplit('/').next().unwrap_or("save_mount");
             std::fs::rename(dl.join(leaf), dest).map_err(|e| format!("copy: {e}"))
         })();
         let _ = cleanup_temp_dir(&dl_s);
@@ -1158,15 +1178,7 @@ impl Console for Live<'_> {
                 json!({ "addr": host, "path": format!("{mount}/{name}") }),
             )?;
         }
-        let start = local::post(
-            "/api/transfer/dir",
-            json!({ "addr": host, "src_dir": src.to_string_lossy(), "dest_root": mount, "excludes": [] }),
-        )?;
-        let job = start
-            .get("job_id")
-            .and_then(Value::as_str)
-            .ok_or("upload did not start")?;
-        local::wait_job(job)
+        local::upload_kept(host, src, mount)
     }
     fn close_once(&self) -> Result<Closed, String> {
         local::close_save(self.host).map(|was_open| Closed { was_open })
@@ -1765,6 +1777,8 @@ mod tests {
         /// Replacing this image fails.
         fail_replace: Option<String>,
         fail_read: bool,
+        /// Opening an image fails (the console would not mount it).
+        fail_open: bool,
         /// The image open now.
         mounted: RefCell<Option<String>>,
         /// What the next closes say before one works: "reset" (the connection dropped before
@@ -1799,6 +1813,7 @@ mod tests {
                 images: BTreeMap::from([(folder(A), v(a)), (folder(B), v(b))]),
                 fail_replace: None,
                 fail_read: false,
+                fail_open: false,
                 mounted: RefCell::default(),
                 close_errors: RefCell::default(),
                 close_stuck: false,
@@ -1877,6 +1892,9 @@ mod tests {
                 self.mounted.borrow().is_none(),
                 "{image} opened over another"
             );
+            if self.fail_open {
+                return Err("mount failed".into());
+            }
             *self.mounted.borrow_mut() = Some(image.to_string());
             Ok("/mnt/save".into())
         }
@@ -1885,7 +1903,7 @@ mod tests {
             let image = self.mounted.borrow().clone().unwrap();
             self.log(format!("read {image}"));
             if self.fail_read {
-                return Err("mount failed".into());
+                return Err("the console sent a download this computer will not write".into());
             }
             std::fs::create_dir_all(dest.join(SYS_DIR)).unwrap();
             std::fs::write(dest.join(SYS_DIR).join("param.sfo"), b"owner").unwrap();
@@ -2073,7 +2091,9 @@ mod tests {
         let e = copy_to_user(&c, &body(A, B)).unwrap_err();
         assert_eq!(e.missing, vec![STAR.to_string()]);
         assert!(
-            e.msg.contains("STARBOARD isn't on the other user yet"),
+            e.msg
+                .starts_with("The other user doesn't have PPSA01650's save slot STARBOARD yet")
+                && e.msg.contains("save in that slot"),
             "{}",
             e.msg
         );
@@ -2496,17 +2516,20 @@ mod tests {
         let tmp = make_temp_dir("restoretest").unwrap();
         let zip = backup_zip(&tmp, &[MAIN, STAR]);
         let file = zip.file_name().unwrap().to_string_lossy().into_owned();
-        let c = Fake {
-            fail_read: true,
-            ..Fake::both(&[MAIN, STAR])
-        };
-        let e = restore_to_user(&c, T, &file, &zip, B).unwrap_err().msg;
-        assert!(
-            e.contains("another console") && e.contains("put back"),
-            "{e}"
-        );
-        assert!(c.calls().last().unwrap().starts_with("put_back"));
-        assert!(!c.calls().iter().any(|x| x.starts_with("replace")));
+        // A save that won't open may be another PS5's; one that opened and could not be
+        // copied (#729) is not, and the message doesn't guess so.
+        for (fail_open, guess) in [(true, true), (false, false)] {
+            let c = Fake {
+                fail_open,
+                fail_read: !fail_open,
+                ..Fake::both(&[MAIN, STAR])
+            };
+            let e = restore_to_user(&c, T, &file, &zip, B).unwrap_err().msg;
+            assert_eq!(e.contains("another console"), guess, "{e}");
+            assert!(e.contains("put back"), "{e}");
+            assert!(c.calls().last().unwrap().starts_with("put_back"));
+            assert!(!c.calls().iter().any(|x| x.starts_with("replace")));
+        }
         let c = Fake {
             fail_replace: Some(STAR.into()),
             ..Fake::both(&[MAIN, STAR])

@@ -278,7 +278,7 @@ export function SaveBackupsList({
                 e.message = tr(
                   "saves_part_missing",
                   { game: game ?? save.title_id, part: e.missing.map((m) => partLabel(m, main)).join(", "), user: targetName(t, tr) },
-                  "{game}'s {part} isn't on {user} yet: start the game once as {user} and save, then try again.",
+                  "{user} doesn't have {game}'s {part} yet, and a save can only replace a save slot {user} already has. Start the game as {user}, save in the same slot, then try again.",
                 );
               }
               throw e;

@@ -10,8 +10,10 @@ export function wasOffered(s: RemotePlayStream): boolean {
   return offered.has(s);
 }
 
-/** How long a switch keeps trying while the PS5 still holds its last session, ms. */
-const SWITCH_FOR_MS = 90_000;
+/** How long a switch keeps trying while the PS5 still holds its last session, ms. A PS5 on
+ *  FW 13.00 held it for minutes after a stop (#720); the engine spreads its tries out and ends
+ *  the wait itself ("held") after about 5 minutes, so this is only the backstop. */
+export const SWITCH_FOR_MS = 7 * 60_000;
 
 /** What is under way: `quality`, a switch to 720p; `restart`, Play again with other settings;
  *  `wait`, a plain Start waiting for the PS5 to free its last session. */

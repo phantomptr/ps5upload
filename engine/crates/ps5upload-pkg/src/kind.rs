@@ -41,6 +41,19 @@ const PATCH_CONTENT_TYPES: [u32; 1] = [0x1E];
 /// 0x40000000 a later patch, 0x00100000 the first patch.
 const PATCH_FLAG_MASK: u32 = 0x4010_0000;
 
+/// The PARAM-style category a PS5 package's header says, for when its param.json (which has no
+/// category) is all there is: `gp` for a patch, `ac` for additional content, else `gd`. A PS5
+/// add-on read as `gd` was refused as a full game whose title runs from an image (#724).
+pub fn category_from_header(content_type: u32, content_flags: u32) -> &'static str {
+    if content_flags & PATCH_FLAG_MASK != 0 {
+        "gp"
+    } else if DLC_CONTENT_TYPES.contains(&content_type) {
+        "ac"
+    } else {
+        "gd"
+    }
+}
+
 /// What a PARAM category says, when it says one of the three.
 fn kind_of_category(category: &str) -> Option<Kind> {
     match category.trim().to_ascii_lowercase().as_str() {
@@ -253,6 +266,16 @@ mod tests {
         assert!(why.contains("CATEGORY=gp says patch"), "{why}");
         let (_, sure, why) = classify(0x99, 0, "");
         assert!(!sure && why.contains("unrecognized"));
+    }
+
+    #[test]
+    fn a_ps5_header_names_its_category() {
+        // #724: a PS5 add-on (0x21) whose param.json has no category was called `gd`.
+        assert_eq!(category_from_header(0x21, 0x0a02_0000), "ac");
+        assert_eq!(category_from_header(0x20, 0), "gd");
+        assert_eq!(category_from_header(0x26, 0x0602_0000), "gd");
+        assert_eq!(category_from_header(0x20, 0x4000_0000), "gp");
+        assert_eq!(category_from_header(0x20, 0x0010_0000), "gp");
     }
 
     #[test]

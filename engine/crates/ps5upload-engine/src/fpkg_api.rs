@@ -123,6 +123,10 @@ pub(crate) struct BuildReq {
     /// the user's own and may hold anything.
     #[serde(default)]
     keep_both: bool,
+    /// A PS4 update to merge into the PS4 game `source` first (`ps5upload_fpkg::ps4_merge`):
+    /// the package is the game at the update's version.
+    #[serde(default)]
+    update: Option<String>,
 }
 
 /// The language a build asked for, trimmed; none when blank.
@@ -351,7 +355,9 @@ pub(crate) async fn fpkg_estimate_handler(
     }
 }
 
-/// POST /api/fpkg/build — start a conversion. Returns `{ job_id }` immediately.
+/// POST /api/fpkg/build — start a conversion. Returns `{ job_id }` immediately. A PS5 game
+/// becomes a PS5 package; a PS4 game (a folder, an image or a PS4 package; with `update`, merged
+/// with its update) becomes a PS4 fake package, read back and compared file by file.
 pub(crate) async fn fpkg_build_handler(
     State(state): State<AppState>,
     Json(req): Json<BuildReq>,
@@ -364,10 +370,20 @@ pub(crate) async fn fpkg_build_handler(
 
     // Look first: a source that cannot convert should fail now, with the reason, rather
     // than as a job the user has to poll to see fail.
+    let update = req
+        .update
+        .as_deref()
+        .filter(|u| !u.trim().is_empty())
+        .map(resolve_engine_path);
     let inspection = {
         let out = out.clone();
         let source_path = source_path.clone();
-        match tokio::task::spawn_blocking(move || build::inspect(&source_path, &out)).await {
+        let update = update.clone();
+        match tokio::task::spawn_blocking(move || {
+            build::inspect_with_update(&source_path, update.as_deref(), &out)
+        })
+        .await
+        {
             Ok(Ok(inspection)) => inspection,
             Ok(Err(error)) => {
                 return json_err(StatusCode::BAD_REQUEST, error.to_string()).into_response()
@@ -382,18 +398,10 @@ pub(crate) async fn fpkg_build_handler(
         }
     };
 
-    // Without param.json there is no PS5 title to package (#596): the build would stop at the
-    // content id, or, given one, write a package the console cannot launch.
-    if inspection.ps4_game {
-        return json_err(
-            StatusCode::BAD_REQUEST,
-            format!(
-                "{} is a PS4 game, which can't become a PS5 package. Make a game image or a \
-                 folder of it instead.",
-                source_path.display()
-            ),
-        )
-        .into_response();
+    // A PS4 game (or one with its update merged in) becomes a PS4 package; without param.json
+    // there is no PS5 title to package (#596).
+    if inspection.ps4_game || inspection.ps4_kind.is_some() || update.is_some() {
+        return ps4_package_build(state, req, out, source_path, update, inspection).await;
     }
     if inspection
         .checks
@@ -607,6 +615,312 @@ pub(crate) async fn fpkg_build_handler(
                         completed_at_ms,
                         elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
                         error: error.to_string(),
+                        error_reason: None,
+                        error_detail: None,
+                        error_console: None,
+                        error_space: None,
+                    },
+                );
+            }
+        }
+        fail.mark_succeeded();
+    });
+
+    (
+        StatusCode::ACCEPTED,
+        Json(JobCreated {
+            job_id: job_id.to_string(),
+        }),
+    )
+        .into_response()
+}
+
+/// A PS4 game, or a PS4 game with its update merged in, as a PS4 fake package
+/// (`ps5upload_fpkg::ps4_pkg_write`), then read back with our PS4 reader and compared file by
+/// file. Its files go in as they are: no case fixes and no signing, which are a PS5 package's.
+async fn ps4_package_build(
+    state: AppState,
+    req: BuildReq,
+    out: PathBuf,
+    source_path: PathBuf,
+    update: Option<PathBuf>,
+    inspection: build::Inspection,
+) -> axum::response::Response {
+    use ps5upload_fpkg::ps4_pkg::Ps4Kind;
+    use ps5upload_fpkg::ps4_pkg_write as ps4w;
+    use ps5upload_fpkg::source::SourceTree;
+
+    let refuse = |why: String| json_err(StatusCode::BAD_REQUEST, why).into_response();
+    if update.is_none() {
+        match inspection.ps4_kind {
+            Some(Ps4Kind::Patch) => {
+                return refuse(format!(
+                    "{} is a PS4 update, and only a game becomes a PS4 package: choose its game \
+                     as the source and this as the update to merge in, and the package is the \
+                     game at the update's version",
+                    source_path.display()
+                ))
+            }
+            Some(Ps4Kind::Addon) => {
+                return refuse(format!(
+                    "{} is a PS4 add-on, and only a PS4 game becomes a PS4 package here",
+                    source_path.display()
+                ))
+            }
+            _ => {}
+        }
+    }
+    let opened = {
+        let (source_path, update) = (source_path.clone(), update.clone());
+        tokio::task::spawn_blocking(move || -> Result<Box<dyn SourceTree>, String> {
+            let mut tree: Box<dyn SourceTree> = match &update {
+                Some(u) => Box::new(
+                    ps5upload_fpkg::ps4_merge::open(&source_path, u).map_err(|e| e.to_string())?,
+                ),
+                None => ps5upload_fpkg::source::open(&source_path).map_err(|e| e.to_string())?,
+            };
+            match ps4w::refusal(tree.as_mut()) {
+                Some(why) => Err(format!("{}: {why}", source_path.display())),
+                None => Ok(tree),
+            }
+        })
+        .await
+    };
+    let tree = match opened {
+        Ok(Ok(tree)) => tree,
+        Ok(Err(why)) => return refuse(why),
+        Err(join) => {
+            return json_err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("the source could not be opened: {join}"),
+            )
+            .into_response()
+        }
+    };
+
+    // `<content id>.pkg` unless named; a name already taken is a new name or a refusal, never
+    // an overwrite (the source itself may be that file).
+    let stem = req
+        .name
+        .clone()
+        .filter(|n| !n.trim().is_empty())
+        .or_else(|| inspection.content_id.clone())
+        .or_else(|| {
+            source_path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "ps4-game".to_string());
+    let stem = if req.keep_both {
+        crate::folder_build::keep_both_stem(&stem, |c| {
+            crate::folder_build::name_in_use(&out.join(format!("{c}.pkg")))
+        })
+        .unwrap_or(stem)
+    } else {
+        stem
+    };
+    let final_path = out.join(format!("{stem}.pkg"));
+    if final_path.exists() {
+        return json_err(
+            StatusCode::CONFLICT,
+            format!(
+                "output already exists: {}; choose another output folder or name",
+                final_path.display()
+            ),
+        )
+        .into_response();
+    }
+    let partial_path = out.join(format!("{stem}.pkg.partial"));
+    let partial = match Writing::claim_off_thread(partial_path.clone()).await {
+        Some(w) => w,
+        None => return already_building(&partial_path),
+    };
+
+    let job_id = Uuid::new_v4();
+    crate::workshop_api::note_run(job_id, "package", &source_path);
+    let scaffold = Scaffold::of(&source_path);
+    let cancel = register_workshop_job(job_id);
+    let bytes = Arc::new(AtomicU64::new(0));
+    let total = Arc::new(AtomicU64::new(inspection.bytes));
+    let stage = Arc::new(AtomicU64::new(u64::from(build::Stage::Write.index())));
+    let started_at_ms = now_ms();
+    set_job(
+        &state.jobs,
+        &state.events_tx,
+        job_id,
+        JobState::Running {
+            stage: None,
+            started_at_ms,
+            bytes_sent: 0,
+            total_bytes: inspection.bytes,
+            files: Default::default(),
+            skipped_files: 0,
+            skipped_bytes: 0,
+            files_processing: 0,
+            files_finalized: 0,
+            files_finalizing_total: 0,
+            bytes_finalized: 0,
+        },
+    );
+    let jobs = state.jobs.clone();
+    let events_tx = state.events_tx.clone();
+    let (tick_bytes, tick_total, tick_stage) = (bytes.clone(), total.clone(), stage.clone());
+    let ticker = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let mut g = jobs.lock().unwrap_or_else(|e| e.into_inner());
+            match g.get_mut(&job_id) {
+                Some(JobState::Running {
+                    bytes_sent,
+                    total_bytes,
+                    stage,
+                    ..
+                }) => {
+                    *bytes_sent = tick_bytes.load(Ordering::Relaxed);
+                    *total_bytes = tick_total.load(Ordering::Relaxed);
+                    let at = tick_stage.load(Ordering::Relaxed);
+                    *stage = STAGES.get(at as usize).map(|s| JobStage {
+                        id: s.id().to_string(),
+                        index: s.index(),
+                        count: build::STAGE_COUNT,
+                        done: *bytes_sent,
+                        total: *total_bytes,
+                    });
+                    let state = crate::event_bus::tick_wanted(&events_tx)
+                        .then(|| g.get(&job_id).map(|st| serde_json::json!(st)))
+                        .flatten();
+                    drop(g);
+                    if let Some(state) = state {
+                        let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": crate::with_live_notes(job_id, state) });
+                        let _ = events_tx.send(msg.to_string());
+                    }
+                }
+                _ => break,
+            }
+        }
+    });
+
+    let state_for_job = state.clone();
+    let ticker = JobTicker(ticker.abort_handle());
+    let mut tree = tree;
+    spawn_workshop_job(move || {
+        let _scaffold = scaffold;
+        let mut fail = JobFailOnDropGuard::new(
+            state_for_job.jobs.clone(),
+            state_for_job.events_tx.clone(),
+            job_id,
+            started_at_ms,
+        );
+        sweep_output_leftovers(&out);
+        let outcome = (|| -> Result<ps4w::Written, String> {
+            std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+            let mut file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&partial_path)
+                .map_err(|e| format!("{}: {e}", partial_path.display()))?;
+            // Writing, then hashing the image for the container's digests: one stage.
+            let image_bytes = std::cell::Cell::new(0u64);
+            let written = ps4w::write(
+                tree.as_mut(),
+                &mut file,
+                &ps4w::Options::default(),
+                &mut |step, done, of| {
+                    let (done, of) = match step {
+                        ps4w::Step::Write => {
+                            image_bytes.set(of);
+                            (done, of.saturating_mul(2))
+                        }
+                        ps4w::Step::Hash => (image_bytes.get() + done, image_bytes.get() + of),
+                    };
+                    bytes.store(done, Ordering::Relaxed);
+                    total.store(of, Ordering::Relaxed);
+                },
+                &cancel,
+            )
+            .map_err(|e| e.to_string())?;
+            drop(file);
+            stage.store(u64::from(build::Stage::Verify.index()), Ordering::Relaxed);
+            bytes.store(0, Ordering::Relaxed);
+            ps4w::read_back(
+                &partial_path,
+                &written,
+                &mut |done, of| {
+                    bytes.store(done, Ordering::Relaxed);
+                    total.store(of, Ordering::Relaxed);
+                },
+                &cancel,
+            )
+            .map_err(|e| e.to_string())?;
+            if final_path.exists() {
+                return Err(format!(
+                    "output already exists: {}; choose another output folder or name",
+                    final_path.display()
+                ));
+            }
+            std::fs::rename(&partial_path, &final_path)
+                .map_err(|e| format!("{}: {e}", final_path.display()))?;
+            Ok(written)
+        })();
+        drop(partial);
+        if outcome.is_err() {
+            sweep_output_leftovers(&out);
+        }
+        let completed_at_ms = now_ms();
+        drop(ticker);
+        match outcome {
+            Ok(written) => {
+                built_packages()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(final_path.clone());
+                crate::engine_log::record(
+                    "info",
+                    format!(
+                        "fpkg: built PS4 package {} ({} bytes, {} files read back the same; \
+                         licence {}, keystone {})",
+                        final_path.display(),
+                        written.size,
+                        written.files.len(),
+                        if written.made_licence { "made" } else { "kept" },
+                        if written.made_keystone {
+                            "made"
+                        } else {
+                            "kept"
+                        },
+                    ),
+                );
+                set_job(
+                    &state_for_job.jobs,
+                    &state_for_job.events_tx,
+                    job_id,
+                    JobState::Done {
+                        started_at_ms,
+                        completed_at_ms,
+                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                        tx_id_hex: written.content_id.clone(),
+                        bytes_sent: written.size,
+                        dest: final_path.display().to_string(),
+                        files_sent: written.files.len() as u64,
+                        skipped_files: 0,
+                        skipped_bytes: 0,
+                        commit_ack: None,
+                    },
+                );
+            }
+            Err(error) => {
+                crate::engine_log::record("warn", format!("fpkg: PS4 package failed: {error}"));
+                set_job(
+                    &state_for_job.jobs,
+                    &state_for_job.events_tx,
+                    job_id,
+                    JobState::Failed {
+                        started_at_ms,
+                        completed_at_ms,
+                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                        error,
                         error_reason: None,
                         error_detail: None,
                         error_console: None,

@@ -2262,6 +2262,8 @@ pub async fn fpkg_build(
     full_verify: Option<bool>,
     // A name already taken in the output folder is numbered instead of refused.
     keep_both: Option<bool>,
+    // A PS4 update merged into the PS4 game `source` first: a PS4 package of the merged game.
+    update: Option<String>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/fpkg/build");
@@ -2277,6 +2279,7 @@ pub async fn fpkg_build(
             "language": language,
             "full_verify": full_verify.unwrap_or(false),
             "keep_both": keep_both.unwrap_or(false),
+            "update": update,
         }),
     )
     .await

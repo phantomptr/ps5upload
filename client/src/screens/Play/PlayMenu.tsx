@@ -20,6 +20,7 @@ import { MicTile } from "./MicControl";
 import { useTr } from "../../state/lang";
 import { useRemotePlayStore } from "../../state/remotePlay";
 import { CaptureRow } from "./CaptureControls";
+import { GoLiveBarIcon } from "./GoLivePanel";
 
 /** Volume, on the picture's bar and in the player menu (Settings has it too). Keys and presses
  *  on it never reach the pad. */
@@ -114,6 +115,8 @@ export function PlayMenu({
   onGame,
   onPsButton,
   onTogether,
+  onGoLive,
+  goLiveHint,
 }: {
   inFull: boolean;
   pipKind: unknown;
@@ -127,6 +130,10 @@ export function PlayMenu({
   onPsButton?: () => void;
   /** Play Together (#641): friends as Player 2–4. */
   onTogether?: () => void;
+  /** Stream (Go live): where the engine can, the web UI on a phone included (#731). */
+  onGoLive?: () => void;
+  /** The phone app, where Go live can't run: say where it does. */
+  goLiveHint?: boolean;
 }) {
   const tr = useTr();
   const prefs = useRemotePlayStore((s) => s.prefs);
@@ -228,6 +235,14 @@ export function PlayMenu({
             testId="rp-menu-together"
           />
         )}
+        {onGoLive && !inFull && (
+          <Tile
+            label={tr("golive_title", undefined, "Stream")}
+            icon={<GoLiveBarIcon />}
+            onClick={onGoLive}
+            testId="rp-menu-golive"
+          />
+        )}
         <Tile
           label={tr("rp_settings", undefined, "Settings")}
           icon={<Settings2 size={18} />}
@@ -244,6 +259,15 @@ export function PlayMenu({
           />
         )}
       </div>
+      {!inFull && goLiveHint && !onGoLive && (
+        <p className="px-1 text-[11px] leading-snug text-white/60" data-testid="rp-menu-golive-hint">
+          {tr(
+            "golive_phone_app_hint",
+            undefined,
+            "Go live runs on a computer: open the web UI from Safari with the engine on a computer",
+          )}
+        </p>
+      )}
       {!inFull && pictureHere && <CaptureRow onDone={onClose} />}
       {inFull && pictureHere && (
         // Picture size where it shows: in full screen.

@@ -1023,6 +1023,103 @@ async fn ps4_updates_and_addons_are_told_and_refused_in_words() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A PS4 game at `/api/fpkg/build` becomes a PS4 package, read back before it is kept; with
+/// `update`, merged with its update. An update alone and an add-on are refused in words, and an
+/// output that exists is never overwritten.
+#[tokio::test]
+async fn a_ps4_game_becomes_a_ps4_package() {
+    let app = app();
+    let root = std::env::temp_dir().join(format!("ps5upload-ps4-pkg-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let put = |name: &str, gz: &[u8]| {
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(gz), &mut bytes).unwrap();
+        let path = root.join(format!("{name}.pkg"));
+        std::fs::write(&path, bytes).unwrap();
+        path
+    };
+    let game = put(
+        "game",
+        include_bytes!("../../ps5upload-fpkg/tests/fixtures/ps4/synthetic.pkg.gz"),
+    );
+    let update = put(
+        "update",
+        include_bytes!("../../ps5upload-fpkg/tests/fixtures/ps4/update.pkg.gz"),
+    );
+    let addon = put(
+        "addon",
+        include_bytes!("../../ps5upload-fpkg/tests/fixtures/ps4/addon.pkg.gz"),
+    );
+    let out = root.join("out");
+    let build = |body: Value| {
+        let app = app.clone();
+        async move {
+            let r = post_json(&app, "/api/fpkg/build", &body.to_string()).await;
+            let status = r.status();
+            (status, json_of(r).await)
+        }
+    };
+    let finished = |id: String| {
+        let app = app.clone();
+        async move {
+            for _ in 0..1000 {
+                let v = json_of(get(&app, &format!("/api/jobs/{id}")).await).await;
+                if v["status"] != "running" {
+                    return v;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            panic!("job {id} never finished");
+        }
+    };
+
+    let (status, v) = build(json!({ "source": game, "output_dir": out })).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{v}");
+    let done = finished(v["job_id"].as_str().unwrap().to_string()).await;
+    assert_eq!(done["status"], "done", "{done}");
+    assert_eq!(done["tx_id_hex"], "UP0000-CUSA99990_00-TESTGAME00000000");
+    let made = std::path::PathBuf::from(done["dest"].as_str().unwrap());
+    assert_eq!(
+        made,
+        out.join("UP0000-CUSA99990_00-TESTGAME00000000.pkg"),
+        "named by its content ID"
+    );
+    let mut p = ps5upload_fpkg::source::open(&made).unwrap();
+    assert_eq!(
+        p.read("data/empty.bin").unwrap(),
+        b"",
+        "a PS4 package of the game"
+    );
+
+    // Again: the name is taken, so it is refused rather than overwritten.
+    let (status, v) = build(json!({ "source": game, "output_dir": out })).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{v}");
+    assert!(
+        v["error"].as_str().unwrap().contains("already exists"),
+        "{v}"
+    );
+
+    // Merged with its update: the game at 01.05.
+    let (status, v) = build(json!({
+        "source": game, "update": update, "output_dir": out, "name": "merged"
+    }))
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{v}");
+    let done = finished(v["job_id"].as_str().unwrap().to_string()).await;
+    assert_eq!(done["status"], "done", "{done}");
+    let mut p = ps5upload_fpkg::source::open(&out.join("merged.pkg")).unwrap();
+    assert_eq!(p.read("eboot.bin").unwrap(), b"\x7fELF patched eboot 01.05");
+
+    for (source, want) in [(&update, "PS4 update"), (&addon, "PS4 add-on")] {
+        let (status, v) = build(json!({ "source": source, "output_dir": out })).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{v}");
+        let text = v["error"].as_str().unwrap_or_default();
+        assert!(text.contains(want), "{text}");
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A packed folder build: a game folder is a source only with `ampr_zstd`, and the request is
 /// refused before any job when its options cannot work. Nothing here starts a build.
 #[tokio::test]

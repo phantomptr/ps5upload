@@ -481,6 +481,25 @@ describe("fpkg pipeline", () => {
     jobStatus.mockReset();
   });
 
+  it("sends a PS4 update to merge with the game's package build, which offers install like any package", async () => {
+    build.mockResolvedValueOnce({ job_id: "p1" });
+    jobStatus.mockResolvedValue({
+      status: "done",
+      dest: "/out/UP0000-CUSA99990_00-TESTGAME00000000.pkg",
+      bytes_sent: 9,
+      tx_id_hex: "UP0000-CUSA99990_00-TESTGAME00000000",
+    });
+    await useFpkgConversion
+      .getState()
+      .start({ source: "/games/G.pkg", outputDir: "/out", update: "/games/U.pkg" }, { install: false, host: null });
+    expect(build).toHaveBeenCalledWith(expect.objectContaining({ source: "/games/G.pkg", update: "/games/U.pkg" }));
+    await tick();
+    const p = useFpkgConversion.getState().pipeline;
+    expect(p).toMatchObject({ phase: "done", mode: "convert", packagePath: "/out/UP0000-CUSA99990_00-TESTGAME00000000.pkg" });
+    useFpkgConversion.getState().reset();
+    jobStatus.mockReset();
+  });
+
   it("packs a game folder into a folder in zstd packs: pack first, the packs sent with the build", async () => {
     const buildFolder = vi.fn().mockResolvedValue({ job_id: "f2" });
     const { fpkg } = await import("../api/fpkg");

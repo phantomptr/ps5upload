@@ -858,6 +858,7 @@ export async function browserInvoke<T>(
         language: args["language"],
         full_verify: args["fullVerify"] ?? false,
         keep_both: args["keepBoth"] ?? false,
+        update: args["update"],
       }, true);
     }
     case "ps5_elfldr_health": {
