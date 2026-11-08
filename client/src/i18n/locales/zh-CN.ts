@@ -6879,6 +6879,7 @@ library_compressed_hint: "压缩镜像需要 ShadowMount+ 才能游玩。如需�
 "rp_start": "开始",
 "rp_stop": "停止",
 "rp_err_busy": "PS5 仍在结束上一次远程游玩会话。请在 {s} 秒后重试。",
+"rp_err_held": "几分钟后 PS5 仍未释放上一次远程游玩会话。按“开始”重试。如果仍被拒绝，请重启 PS5。",
 "rp_stats_line": "{fps} fps · {mbps} Mbit/s · {ms} ms · {codec} · 丢包 {loss}%",
 "fs_mesh_home_note": "此文件夹是 Mesh Drive，会在其中每台设备上保持一致。它的同步文件在这里是隐藏的：请勿移动或重命名此文件夹，否则该驱动器会被视为离线。",
 "cw_files_mesh_home": "此文件夹是 Mesh Drive。它的同步文件已隐藏：请勿移动或重命名此文件夹。",

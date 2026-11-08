@@ -54,6 +54,22 @@ describe("a restart with other settings", () => {
     expect(useRpQualityStore.getState().switching).toBeNull();
   }, 10_000);
 
+  it("a PS5 holding its last session is waited out again and again, then said (#720)", async () => {
+    let tries = 0;
+    const start = vi.fn(async () => {
+      tries++;
+      // The engine: busy while it spreads its tries out, then held.
+      const code = tries < 3 ? "busy" : "held";
+      useRemotePlayStore.setState({ stream: null, phase: "ended", error: { code, retryS: code === "busy" ? 0 : undefined, detail: "" } });
+    });
+    useRemotePlayStore.setState({ stream: null, target, phase: "ended", error: { code: "busy", retryS: 0, detail: "" }, start });
+    await useRpQualityStore.getState().startWhenFree(target);
+    expect(start).toHaveBeenCalledTimes(3);
+    // Held is shown (with Start), not waited out for ever.
+    expect(useRemotePlayStore.getState().error?.code).toBe("held");
+    expect(useRpQualityStore.getState().switching).toBeNull();
+  }, 15_000);
+
   it("another device using the console is not waited out by a plain Start", async () => {
     const start = vi.fn(async () => {
       useRemotePlayStore.setState({ stream: null, phase: "ended", error: { code: "in_use", retryS: 30, detail: "" } });
