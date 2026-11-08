@@ -4,10 +4,10 @@ import { accountIdToChiakiNumeric, accountIdToHex, accountIdToPairingB64 } from 
 // Ground truth. The console stores the id as 8 bytes, low byte first; the
 // base64 is over those bytes and pxplay's number is the same uint64 in
 // decimal. ps5-account-tools prints all three from one uint64_t.
-//   0x7ed3586971779f76 = "dp93cWlY034=" = 9138745278763343734  (issue report)
-//   0x7a356e99a9e2205c = "XCDiqZluNXo=" = 8806066252652093532  (both test consoles)
-const REPORTED = { hex: "0x7ed3586971779f76", b64: "dp93cWlY034=", dec: "9138745278763343734" };
-const CONSOLES = { hex: "0x7a356e99a9e2205c", b64: "XCDiqZluNXo=", dec: "8806066252652093532" };
+//   0x7e1d2c3b4a596877 = "d2hZSjssHX4=" = 9087468256265594999  (made up)
+//   0x1122334455667788 = "iHdmVUQzIhE=" = 1234605616436508552  (made up)
+const REPORTED = { hex: "0x7e1d2c3b4a596877", b64: "d2hZSjssHX4=", dec: "9087468256265594999" };
+const CONSOLES = { hex: "0x1122334455667788", b64: "iHdmVUQzIhE=", dec: "1234605616436508552" };
 
 describe("accountIdToChiakiNumeric", () => {
   it("returns empty string for empty or unreadable input", () => {
@@ -32,8 +32,8 @@ describe("accountIdToChiakiNumeric", () => {
 
   it("reads a typed hex id, with or without 0x", () => {
     expect(accountIdToChiakiNumeric(REPORTED.hex)).toBe(REPORTED.dec);
-    expect(accountIdToChiakiNumeric("7ed3586971779f76")).toBe(REPORTED.dec);
-    expect(accountIdToChiakiNumeric("7ED3586971779F76")).toBe(REPORTED.dec);
+    expect(accountIdToChiakiNumeric("7e1d2c3b4a596877")).toBe(REPORTED.dec);
+    expect(accountIdToChiakiNumeric("7E1D2C3B4A596877")).toBe(REPORTED.dec);
   });
 
   it("passes a pxplay number through", () => {
@@ -53,7 +53,7 @@ describe("accountIdToChiakiNumeric", () => {
 
 describe("accountIdToPairingB64", () => {
   it("turns every form the user might paste into the console's base64", () => {
-    for (const v of [REPORTED.hex, "7ed3586971779f76", REPORTED.dec, REPORTED.b64]) {
+    for (const v of [REPORTED.hex, "7e1d2c3b4a596877", REPORTED.dec, REPORTED.b64]) {
       expect(accountIdToPairingB64(v)).toBe(REPORTED.b64);
     }
     expect(accountIdToPairingB64(CONSOLES.hex)).toBe(CONSOLES.b64);
@@ -68,7 +68,7 @@ describe("accountIdToPairingB64", () => {
 
 describe("accountIdToHex", () => {
   it("spells the base64 the payload reports as the console's hex", () => {
-    expect(accountIdToHex("dp93cWlY034=")).toBe("0x7ed3586971779f76");
+    expect(accountIdToHex("d2hZSjssHX4=")).toBe("0x7e1d2c3b4a596877");
     expect(accountIdToHex("AAAAAAAAAAA=")).toBe("");
     expect(accountIdToHex("")).toBe("");
   });

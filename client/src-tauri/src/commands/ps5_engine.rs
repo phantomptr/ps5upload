@@ -2897,10 +2897,10 @@ mod profile_activate_req_tests {
     #[test]
     fn accepts_a_hex_string_id_and_passes_it_through() {
         let req: ProfileActivateReq = serde_json::from_value(serde_json::json!({
-            "addr": null, "slot": 1, "id": "0x7a356e99a9e2205c"
+            "addr": null, "slot": 1, "id": "0x1122334455667788"
         }))
         .expect("string id must deserialize");
-        assert_eq!(req.id, Some(serde_json::json!("0x7a356e99a9e2205c")));
+        assert_eq!(req.id, Some(serde_json::json!("0x1122334455667788")));
     }
 
     #[test]

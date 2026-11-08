@@ -71,7 +71,7 @@ test("a PS4's saves are copied here, then put on the PS5 user with the same acco
           uid_hex: "0x10000000",
           username: "Alice",
           users: [{ uid: 268435456, uid_hex: "0x10000000", username: "Alice" }],
-          slots: [{ slot: 1, name: "Alice", type: "", flags: 0, id: "0x7a356e99a9e2205c", activated: true, offline_activated: false }],
+          slots: [{ slot: 1, name: "Alice", type: "", flags: 0, id: "0x1122334455667788", activated: true, offline_activated: false }],
         });
       if (path === "/api/ps5/saves/list")
         return json({
@@ -107,13 +107,13 @@ test("a PS4's saves are copied here, then put on the PS5 user with the same acco
 
   // Onto the PS5: the account check first.
   const step3 = page.getByTestId("ps4-move-ps5");
-  await expect(step3).toContainText("0x7a356e99a9e2205c");
+  await expect(step3).toContainText("0x1122334455667788");
   const put = page.getByTestId("ps4-move-put");
   await expect(put).toBeDisabled();
   await page.getByTestId("ps4-move-ps4-account").fill("0x1111");
   await expect(page.getByTestId("ps4-move-mismatch")).toBeVisible();
   await expect(put).toBeDisabled();
-  await page.getByTestId("ps4-move-ps4-account").fill("7A356E99A9E2205C");
+  await page.getByTestId("ps4-move-ps4-account").fill("1122334455667788");
   await expect(step3).toContainText("The IDs match.");
   // Only the game already on this user is put; the other says how to make it ready.
   const targets = page.getByTestId("ps4-move-targets");

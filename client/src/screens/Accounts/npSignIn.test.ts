@@ -76,10 +76,10 @@ describe("the sign-in backup", () => {
     const pro = info({
       uid: 0,
       username: "",
-      users: [{ uid: 505721148, uid_hex: "0x1E24B13C", username: "PhantomPtr" }],
+      users: [{ uid: 268435458, uid_hex: "0x10000002", username: "PhantomPtr" }],
       slots: [slot({ name: "PhantomPtr", flags: 6 })],
     });
-    expect(npBackupTarget(pro)).toEqual({ uid: 505721148, slot: 1, username: "PhantomPtr" });
+    expect(npBackupTarget(pro)).toEqual({ uid: 268435458, slot: 1, username: "PhantomPtr" });
     expect(
       npBackupTarget({
         ...pro,

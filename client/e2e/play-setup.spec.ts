@@ -298,7 +298,7 @@ test("the PIN shown on the PS5 pairs without the helper", async ({ page }) => {
   await page.getByTestId("play-setup-pin-pair").click();
   await page.getByTestId("pin-pair-pin").fill("87654321");
   // chiaki-ng's base64 spelling of the account id works as typed.
-  await page.getByTestId("pin-pair-account").fill("XCDiqZluNXo=");
+  await page.getByTestId("pin-pair-account").fill("iHdmVUQzIhE=");
   await page.getByTestId("pin-pair-go").click();
   await expect(step).toHaveAttribute("data-state", "ok", { timeout: 15_000 });
 });

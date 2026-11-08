@@ -2,9 +2,9 @@
  * PSN account id conversions for Remote Play clients.
  *
  * One id, three spellings, all of the same 8 registry bytes:
- *   hex     0x7ed3586971779f76     what the console, offact and Profile show
- *   base64  dp93cWlY034=           what Chiaki wants and the payload reports
- *   decimal 9138745278763343734    what pxplay wants
+ *   hex     0x7e1d2c3b4a596877     what the console, offact and Profile show
+ *   base64  d2hZSjssHX4=           what Chiaki wants and the payload reports
+ *   decimal 9087468256265594999    what pxplay wants
  *
  * The console reads the bytes straight into a uint64_t on a little-endian
  * CPU, so the base64 is over the bytes LOW byte first; the hex and decimal
