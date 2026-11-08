@@ -234,7 +234,7 @@ export default function SavesScreen() {
     return tr(
       "saves_part_missing",
       { game, part, user },
-      "{game}'s {part} isn't on {user} yet: start the game once as {user} and save, then try again.",
+      "{user} doesn't have {game}'s {part} yet, and a save can only replace a save slot {user} already has. Start the game as {user}, save in the same slot, then try again.",
     );
   };
   // A file for a friend or another PS5: every part of this save in one .zip.
