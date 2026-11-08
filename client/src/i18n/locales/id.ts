@@ -3950,6 +3950,7 @@ gate_engine_down_body_v2: "Layar ini membutuhkan engine aplikasi, yang tidak men
 "fpkg.image.make": "Buat image game",
 "fpkg.image.make_compressed": "Buat image terkompresi",
 "fpkg.image.compress_body_v2": "Biasanya 40–60% lebih kecil, lebih lama dibuat, dan selalu di-mount hanya-baca. Dikompres saat ditulis, jadi hanya berkas terkompresi yang ada di disk.",
+"fpkg.image.resume_note": "Jika aplikasi atau engine berhenti saat image sedang dibuat, membuatnya lagi akan melanjutkan dari titik berhenti lalu membaca ulang setiap byte. Image dengan paket aset LZ4 atau zstd dimulai dari awal.",
 "fpkg.image.level_fast_body": "Paling cepat dibuat, sedikit lebih besar.",
 "fpkg.image.level_balanced_body": "Hampir sama kecilnya, dan beberapa kali lebih cepat dibuat.",
 "fpkg.image.level_smallest_body": "File terkecil: encoder kedua yang lebih kuat dijalankan pada setiap blok, jadi butuh waktu beberapa kali lebih lama.",

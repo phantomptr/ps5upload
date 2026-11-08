@@ -3958,6 +3958,7 @@ gate_engine_down_body_v2: "이 화면에는 앱의 엔진이 필요한데 엔진
 "fpkg.image.make": "게임 이미지 만들기",
 "fpkg.image.make_compressed": "압축 이미지 만들기",
 "fpkg.image.compress_body_v2": "보통 40–60% 더 작지만 만드는 데 더 오래 걸리고 항상 읽기 전용으로 마운트됩니다. 쓰는 동안 압축되므로 디스크에는 압축된 파일만 남습니다.",
+"fpkg.image.resume_note": "이미지를 만드는 중에 앱이나 엔진이 멈추면, 다시 만들 때 멈춘 지점부터 이어서 진행한 뒤 모든 바이트를 다시 읽어 확인합니다. LZ4 또는 zstd 에셋 팩이 들어간 이미지는 처음부터 다시 시작합니다.",
 "fpkg.image.level_fast_body": "가장 빨리 만들어지며, 조금 더 큽니다.",
 "fpkg.image.level_balanced_body": "거의 비슷하게 작으면서 몇 배 더 빨리 만들어집니다.",
 "fpkg.image.level_smallest_body": "가장 작은 파일: 모든 블록에 더 강력한 두 번째 인코더를 실행하므로 몇 배의 시간이 걸립니다.",

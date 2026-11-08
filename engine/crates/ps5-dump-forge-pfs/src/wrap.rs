@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::{self, BufWriter, Seek, SeekFrom, Write};
+use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
@@ -174,6 +174,76 @@ pub fn wrap<T>(
     wrap_with(inner_name, raw_size, out, opts, cancel, &encode, fill)
 }
 
+/// Where a `.ffpfsc` build goes on from, and how it says where the next one can.
+///
+/// What makes going on possible: a block's stored form is a function of its 64 KiB and the
+/// options alone (each worker's encoder is reset per block, and the writer puts the results back
+/// in order), so the container a crashed build left is, block for block, what a new one would
+/// write, as long as the inner image is the same bytes. The offset table is the one thing kept
+/// only in memory until the end; at each checkpoint the entries so far go into its place in the
+/// file, so a new build reads them back from there.
+pub struct Resume<'a> {
+    /// Inner-image blocks already stored in the output (0: from the start, an empty output).
+    pub blocks: u64,
+    /// Container bytes between checkpoints.
+    pub every: u64,
+    /// Told `(blocks, bytes)` once the first `blocks` blocks are durable in the output, which
+    /// holds `bytes` for certain. An error stops the build.
+    pub saved: &'a (dyn Fn(u64, u64) -> io::Result<()> + Sync),
+}
+
+/// [`wrap`] going on from `resume.blocks` blocks a crashed build stored in `out`, and saving
+/// checkpoints as it writes. `fill` writes the whole inner image as ever: the blocks already
+/// stored are cut and dropped, so it may write zeros in place of their bytes.
+pub fn wrap_resumable<T>(
+    inner_name: &str,
+    raw_size: u64,
+    out: &mut File,
+    opts: &WrapOptions,
+    cancel: &AtomicBool,
+    resume: &Resume<'_>,
+    fill: impl FnOnce(&mut Stream<'_>) -> Result<T>,
+) -> Result<(T, WrapReport)> {
+    let encode = |e: &mut BlockEncoder, raw: &[u8]| e.encode(raw);
+    wrap_inner(
+        inner_name,
+        raw_size,
+        out,
+        opts,
+        cancel,
+        &encode,
+        Some(resume),
+        fill,
+    )
+}
+
+/// The table entries a crashed build saved for its first `n` blocks, checked for sense: they
+/// start at `data_at`, and every block takes between 1 byte and a whole block.
+fn saved_offsets(out: &mut File, base: u64, data_at: u64, n: u64, blocks: u64) -> Result<Vec<u64>> {
+    if n > blocks {
+        return Err(err(format!(
+            "the checkpoint says {n} blocks of an image of {blocks}"
+        )));
+    }
+    let mut raw = vec![0u8; ((n + 1) * 8) as usize];
+    out.seek(SeekFrom::Start(base + PFSC_TABLE_AT))?;
+    out.read_exact(&mut raw)?;
+    let offsets: Vec<u64> = raw
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|c| u64::from_le_bytes(*c))
+        .collect();
+    let sound = offsets.first() == Some(&data_at)
+        && offsets
+            .windows(2)
+            .all(|w| w[1] > w[0] && w[1] - w[0] <= BLOCK);
+    if !sound {
+        return Err(err("the block table saved for going on is damaged"));
+    }
+    Ok(offsets)
+}
+
 /// How a worker encodes one block with its own encoder (a seam for the tests).
 type Encode = dyn Fn(&mut BlockEncoder, &[u8]) -> io::Result<Stored> + Sync;
 
@@ -203,6 +273,20 @@ fn wrap_with<T>(
     encode: &Encode,
     fill: impl FnOnce(&mut Stream<'_>) -> Result<T>,
 ) -> Result<(T, WrapReport)> {
+    wrap_inner(inner_name, raw_size, out, opts, cancel, encode, None, fill)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn wrap_inner<T>(
+    inner_name: &str,
+    raw_size: u64,
+    out: &mut File,
+    opts: &WrapOptions,
+    cancel: &AtomicBool,
+    encode: &Encode,
+    resume: Option<&Resume<'_>>,
+    fill: impl FnOnce(&mut Stream<'_>) -> Result<T>,
+) -> Result<(T, WrapReport)> {
     let block_opts = opts.block();
     block_opts.check().map_err(err)?;
     if raw_size == 0 {
@@ -213,12 +297,24 @@ fn wrap_with<T>(
     let data_at = data_at(raw_size)?;
     let max = container_size_max(raw_size)? - FILE_BLOCK * BLOCK;
     image::single(inner_name, raw_size, max, time)?;
-    if out.seek(SeekFrom::End(0))? != 0 {
-        return Err(err("the .ffpfsc output is not empty"));
-    }
-    check_cancel(cancel)?;
     let base = FILE_BLOCK * BLOCK;
-    out.seek(SeekFrom::Start(base + data_at))?;
+    let skip = resume.map_or(0, |r| r.blocks);
+    let offsets = if skip == 0 {
+        if out.seek(SeekFrom::End(0))? != 0 {
+            return Err(err("the .ffpfsc output is not empty"));
+        }
+        vec![data_at]
+    } else {
+        saved_offsets(out, base, data_at, skip, raw_size.div_ceil(BLOCK))?
+    };
+    check_cancel(cancel)?;
+    // From the start: the first block's place. Going on: past the last block stored, anything
+    // a crash left after it cut off.
+    let end = base + offsets.last().copied().unwrap_or(data_at);
+    if skip > 0 {
+        out.set_len(end)?;
+    }
+    out.seek(SeekFrom::Start(end))?;
     let threads = opts.worker_threads();
     let depth = threads * DEPTH_PER_WORKER;
     // Every zero block is stored as this.
@@ -253,7 +349,7 @@ fn wrap_with<T>(
         let sink = BufWriter::with_capacity(8 << 20, &mut *out);
         let writer = s.spawn(move || {
             lane.enter();
-            let r = write_blocks(results, free, sink, data_at, zero, cancel);
+            let r = write_blocks(results, free, sink, offsets, base, resume, zero, cancel);
             if r.is_err() {
                 failed.store(true, Ordering::Relaxed);
             }
@@ -265,6 +361,7 @@ fn wrap_with<T>(
             block: None,
             fill: 0,
             seq: 0,
+            skip,
             raw_size,
             pos: 0,
             cancel,
@@ -380,19 +477,25 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
 }
 
 /// Puts the workers' results back in order and writes them, returning each buffer to the pool
-/// once its block is out. Stops at the first failure.
+/// once its block is out, and with `resume` makes a checkpoint every so often. `offsets`: the
+/// blocks before the first to come, and where it goes. Stops at the first failure.
+#[allow(clippy::too_many_arguments)]
 fn write_blocks(
     results: Receiver<Done>,
     free: Sender<Vec<u8>>,
     mut out: BufWriter<&mut File>,
-    data_at: u64,
+    mut offsets: Vec<u64>,
+    base: u64,
+    resume: Option<&Resume<'_>>,
     zero: &[u8],
     cancel: &AtomicBool,
 ) -> std::result::Result<Written, Failure> {
-    let mut offsets = vec![data_at];
     let mut report = WrapReport::default();
     let mut waiting: BTreeMap<u64, (Vec<u8>, Stored)> = BTreeMap::new();
-    let mut next = 0u64;
+    let mut next = offsets.len() as u64 - 1;
+    // Table entries already in the file (a crashed build's), and bytes since the last checkpoint.
+    let mut in_table = if next > 0 { offsets.len() } else { 0 };
+    let mut since = 0u64;
     for (seq, buf, result) in results {
         waiting.insert(seq, (buf, result?));
         while let Some((buf, stored)) = waiting.remove(&next) {
@@ -427,9 +530,15 @@ fn write_blocks(
             report.write += t.elapsed();
             let end = offsets.last().copied().unwrap_or(0) + bytes.len() as u64;
             offsets.push(end);
+            since += bytes.len() as u64;
             // The stream may be gone already (an error elsewhere): nothing to hand it then.
             let _ = free.send(buf);
             next += 1;
+            if let Some(r) = resume.filter(|r| since >= r.every) {
+                since = 0;
+                checkpoint(&mut out, &offsets, &mut in_table, base, r, next)
+                    .map_err(Failure::Io)?;
+            }
         }
     }
     if !waiting.is_empty() {
@@ -442,6 +551,30 @@ fn write_blocks(
     report.write += t.elapsed();
     Ok(Written { offsets, report })
 }
+/// Makes the blocks so far durable, puts their table entries in place in the file, and says so.
+fn checkpoint(
+    out: &mut BufWriter<&mut File>,
+    offsets: &[u64],
+    in_table: &mut usize,
+    base: u64,
+    resume: &Resume<'_>,
+    blocks: u64,
+) -> io::Result<()> {
+    out.flush()?;
+    let file: &mut File = out.get_mut();
+    let end = file.stream_position()?;
+    let entries: Vec<u8> = offsets[*in_table..]
+        .iter()
+        .flat_map(|o| o.to_le_bytes())
+        .collect();
+    file.seek(SeekFrom::Start(base + PFSC_TABLE_AT + 8 * *in_table as u64))?;
+    file.write_all(&entries)?;
+    file.seek(SeekFrom::Start(end))?;
+    file.sync_data()?;
+    *in_table = offsets.len();
+    (resume.saved)(blocks, end)
+}
+
 fn pfsc_header(blocks: u64, data_at: u64) -> [u8; PFSC_HEADER_LEN] {
     let mut h = [0u8; PFSC_HEADER_LEN];
     h[0x00..0x04].copy_from_slice(&PFSC_MAGIC.to_le_bytes());
@@ -502,6 +635,8 @@ pub struct Stream<'a> {
     fill: usize,
     /// The next block's place.
     seq: u64,
+    /// Blocks before this one are stored already (going on from a crash): cut, then dropped.
+    skip: u64,
     raw_size: u64,
     /// Inner-image bytes taken.
     pos: u64,
@@ -570,6 +705,12 @@ impl Stream<'_> {
         if self.failed.load(Ordering::Relaxed) {
             return Err(worker_failed());
         }
+        if self.seq < self.skip {
+            // Stored already: the buffer is kept for the next block.
+            self.fill = 0;
+            self.seq += 1;
+            return Ok(());
+        }
         let Some(mut block) = self.block.take() else {
             return Ok(());
         };
@@ -590,7 +731,8 @@ impl Stream<'_> {
                 self.pos, self.raw_size
             )));
         }
-        if self.block.is_some() {
+        // A kept buffer with nothing cut into it is no block.
+        if self.block.is_some() && self.fill > 0 {
             self.submit()?;
         }
         self.work = None;
@@ -871,5 +1013,93 @@ mod tests {
         assert_eq!(report.blocks, 3);
         assert_eq!(report.compressed_blocks, 3);
         assert_eq!(out.metadata().unwrap().len(), report.image_size);
+    }
+
+    /// A block's stored form follows from its bytes alone: any number of workers, and a build
+    /// that goes on from a crash's checkpoint, make the same file.
+    #[test]
+    fn the_container_is_the_same_bytes_however_it_is_made() {
+        let d = temp("same");
+        let n = 40 * BLOCK + 123;
+        // Compressible, random and zero stretches, so every stored form turns up.
+        let mut x = 0x9E37_79B9u32;
+        let raw: Vec<u8> = (0..n)
+            .map(|i| match (i / BLOCK) % 3 {
+                0 => (i % 13) as u8,
+                1 => {
+                    x ^= x << 13;
+                    x ^= x >> 17;
+                    x ^= x << 5;
+                    x as u8
+                }
+                _ => 0,
+            })
+            .collect();
+        let make = |threads: usize, path: &std::path::Path, resume: Option<&Resume<'_>>| {
+            let mut out = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(path)?;
+            let cancel = AtomicBool::new(false);
+            let fill = |s: &mut Stream<'_>| {
+                for c in raw.chunks(10_007) {
+                    s.write_all(c)?;
+                }
+                Ok(())
+            };
+            let o = opts(threads);
+            match resume {
+                Some(r) => wrap_resumable("x.exfat", n, &mut out, &o, &cancel, r, fill),
+                None => wrap("x.exfat", n, &mut out, &o, &cancel, fill),
+            }
+            .map(|((), r)| r)
+        };
+        let report = make(1, &d.join("one"), None).unwrap();
+        assert!(report.zero_blocks > 0 && report.compressed_blocks > report.zero_blocks);
+        assert!(
+            report.blocks > report.compressed_blocks,
+            "some blocks stored raw"
+        );
+        make(8, &d.join("many"), None).unwrap();
+        let want = std::fs::read(d.join("one")).unwrap();
+        assert!(std::fs::read(d.join("many")).unwrap() == want);
+
+        // Stopped after a checkpoint, as a crash would; then going on from it.
+        let last = Mutex::new((0u64, 0u64));
+        let stop = |blocks: u64, bytes: u64| {
+            *last.lock().unwrap() = (blocks, bytes);
+            if blocks >= 15 {
+                return Err(io::Error::other("stopped"));
+            }
+            Ok(())
+        };
+        let path = d.join("resumed");
+        let crash = Resume {
+            blocks: 0,
+            every: 4 * BLOCK,
+            saved: &stop,
+        };
+        assert!(make(4, &path, Some(&crash)).is_err());
+        let (blocks, bytes) = *last.lock().unwrap();
+        assert!(blocks >= 15 && blocks < n / BLOCK, "{blocks}");
+        assert!(std::fs::metadata(&path).unwrap().len() >= bytes);
+        let go_on = Resume {
+            blocks,
+            every: 4 * BLOCK,
+            saved: &|_, _| Ok(()),
+        };
+        make(4, &path, Some(&go_on)).unwrap();
+        assert!(std::fs::read(&path).unwrap() == want, "the same file");
+
+        // A checkpoint the file's table cannot back is refused, not gone on from.
+        let damaged = Resume {
+            blocks: n / BLOCK + 5,
+            every: 4 * BLOCK,
+            saved: &|_, _| Ok(()),
+        };
+        assert!(make(4, &path, Some(&damaged)).is_err());
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
