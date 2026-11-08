@@ -713,7 +713,9 @@ mod tests {
 
     #[test]
     fn the_body_is_padding_then_ciphertext() {
-        let nonce = [3u8; NONCE_LEN];
+        // A fresh nonce, as a real request has (nothing here depends on its value).
+        let mut nonce = [0u8; NONCE_LEN];
+        getrandom_bytes(&mut nonce).unwrap();
         let body = build_request_body("iHdmVUQzIhE=", 12345678, &nonce).body;
         assert!(body.len() > PADDING_BYTES);
         assert_eq!(&body[..8], b"AAAAAAAA");
@@ -726,7 +728,9 @@ mod tests {
     fn a_record_decrypts_back_to_itself() {
         // The console uses the same key and IV in both directions, so a
         // round trip here is the same operation the reply goes through.
-        let nonce = [9u8; NONCE_LEN];
+        // A fresh nonce, as a real request has (nothing here depends on its value).
+        let mut nonce = [0u8; NONCE_LEN];
+        getrandom_bytes(&mut nonce).unwrap();
         let built = build_request_body("iHdmVUQzIhE=", 99887766, &nonce);
         let mut plain = built.body[PADDING_BYTES..].to_vec();
         Aes128CfbDec::new(&built.seed.into(), &built.iv.into()).decrypt(&mut plain);

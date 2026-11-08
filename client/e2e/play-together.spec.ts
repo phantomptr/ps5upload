@@ -791,6 +791,9 @@ test("a friend checks a controller nobody knows: a live view, a quick mapping, R
   // This pad's bottom button is raw 3, right 2, left 1, top 0; the rest skipped.
   await page.getByTestId("join-pad-learn-start").click();
   await expect(page.getByTestId("join-pad-learn-step")).toHaveText("Press the bottom face button (✕)");
+  // The check's first reading is where everything rests: let it take one with nothing pressed
+  // (a press before it would be taken for rest, and never seen; a slow runner showed that).
+  await page.waitForTimeout(150);
   for (const b of [3, 2, 1, 0]) {
     const before = (await page.getByTestId("join-pad-learn-step").textContent()) ?? "";
     await press(page, b, 1);
