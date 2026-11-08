@@ -390,7 +390,10 @@ impl Driver {
                     continue;
                 }
                 self.stun_tx.insert(tx, i);
-                let _ = sock.try_send_to(&stun::request(tx), *a);
+                // Awaited, not `try_send_to`: the sockets are new when the first room opens, and a
+                // socket the runtime has not yet seen writable refuses a try (WouldBlock), which
+                // lost the request, and with it the STUN candidate, whenever the machine was busy.
+                let _ = tokio::time::timeout(STUN_WAIT, sock.send_to(&stun::request(tx), *a)).await;
             }
         }
     }
