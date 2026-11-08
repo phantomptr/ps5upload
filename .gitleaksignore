@@ -58,3 +58,8 @@ f01db54acdadef02d8cd956c783356c7c2298f17:engine/crates/ps5upload-engine/src/rp_g
 # Headscale test bed (tailnet/testbed), whose nodes no longer exist
 5d971c6882a161365c818554f3cf2d1502803429:tailnet/tests/vectors_go.h:generic-api-key:58
 5d971c6882a161365c818554f3cf2d1502803429:tailnet/tests/fixtures/headscale-0.29.1-map-full.json:generic-api-key:1
+# The same made-up key and tailnet public-key test data, as the 12.0.0 squash merge (#752) brought
+# them to main under its own commit
+3350d0dde8aa9a41d0f32a0f74c3e1eefb4dd260:client/src/pad/padNet.test.ts:generic-api-key:13
+3350d0dde8aa9a41d0f32a0f74c3e1eefb4dd260:tailnet/tests/vectors_go.h:generic-api-key:58
+3350d0dde8aa9a41d0f32a0f74c3e1eefb4dd260:tailnet/tests/fixtures/headscale-0.29.1-map-full.json:generic-api-key:1
