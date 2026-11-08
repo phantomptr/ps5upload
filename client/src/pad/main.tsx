@@ -7,6 +7,8 @@
 // peer to peer over WebRTC, introduced by the signalling hub (join/rtcTransport with a "pad"
 // channel), and says in its first message what the LAN socket's address carries; nothing goes to
 // this page's own origin.
+// First: stand-ins for what an older WebKit lacks (lib/polyfills), before any other module runs.
+import "../lib/polyfills";
 import { createRoot } from "react-dom/client";
 import "../index.css";
 import { PadApp } from "./PadApp";

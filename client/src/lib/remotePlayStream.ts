@@ -480,7 +480,9 @@ export function pictureUnseen(s: {
 
 /** True when this device can play a stream at all. */
 export function canStream(): boolean {
-  return typeof VideoDecoder !== "undefined" && typeof WebSocket !== "undefined";
+  // WebCodecs, or the system's media player (an older WebKit has MSE but no WebCodecs: macOS 11
+  // and 12 without Safari 16.4, #766).
+  return typeof WebSocket !== "undefined" && (typeof VideoDecoder !== "undefined" || mseAvailable());
 }
 
 /** Why a stream can't play here: browsers only give VideoDecoder to a secure page, so on a plain
@@ -2612,6 +2614,8 @@ export class RemotePlayStream {
     if (this.mse) return;
     // Settings › Video decoding › System media player: straight to MSE, WebCodecs never tried.
     if (this.o.decoding === "mse" && this.startMse("chosen in Settings › Video decoding", true)) return;
+    // No WebCodecs on this system at all (an older WebKit, #766): the media player from the start.
+    if (typeof VideoDecoder === "undefined" && this.startMse("this system has no WebCodecs", true)) return;
     // A new decoder: its wait for a picture starts with its first frame.
     this.waitingSince = 0;
     // Linux: the GL display WebKitGTK needs first, and the crash marker until the first picture.

@@ -3,6 +3,8 @@
 // vite.join.config.ts into join_page.html and site/join/index.html). The invite key is in the
 // address's #fragment, so it never reaches a server log; the page gives it to the socket in its
 // hello.
+// First: stand-ins for what an older WebKit lacks (lib/polyfills), before any other module runs.
+import "../lib/polyfills";
 import { createRoot } from "react-dom/client";
 import "../index.css";
 import { JoinFlow } from "./JoinFlow";
