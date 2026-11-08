@@ -1808,7 +1808,9 @@ export default function AppShell() {
       <div className="h-top-bar flex shrink-0 items-center gap-2.5 pb-2 pt-[calc(var(--safe-top)_+_0.5rem)] md:hidden">
         <NavigationControls />
         <AppLogo size={28} />
-        <span className="text-base font-semibold tracking-[-0.02em]">PS5Upload</span>
+        {/* One word that never breaks (on a 320 px phone it wrapped its last letter onto a
+            second line). */}
+        <span className="shrink-0 whitespace-nowrap text-base font-semibold tracking-[-0.02em]">PS5Upload</span>
         {/* The bell on a phone too: its panel is a full-width sheet there. */}
         <div className="ms-auto">
           <NotificationInbox align="right" placement="below" variant="orb" />
