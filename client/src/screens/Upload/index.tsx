@@ -126,6 +126,7 @@ import { SlowTransferHint } from "./SlowTransferHint";
 import { ElfSourceHint } from "./ElfSourceHint";
 import { humanizePs5Error, humanizeCaught } from "../../lib/humanizeError";
 import { formatBytes } from "../../lib/format";
+import { useSlowPathGuard } from "./slowPath";
 import { FoldSection } from "../../components/FoldSection";
 import { resumeSummary } from "../../lib/resumeSummary";
 import { progressFigures, resumedShown } from "../../lib/resumedProgress";
@@ -201,6 +202,8 @@ export default function UploadScreen({
   embedded = false,
 }: { embedded?: boolean } = {}) {
   const tr = useTr();
+  // A large upload over a relayed Tailscale path or on phone data asks first.
+  const { guard: guardSlowPath, dialog: slowPathDialog } = useSlowPathGuard();
   const {
     source,
     detecting,
@@ -658,6 +661,13 @@ export default function UploadScreen({
       }));
       return;
     }
+    if (
+      !(await guardSlowPath(
+        host,
+        source.meta?.total_size ?? source.pkgInfo?.totalBytes ?? source.zipInfo?.total_uncompressed ?? null,
+      ))
+    )
+      return;
     if (source.kind === "pkg") {
       sendNow("overwrite");
       return;
@@ -866,6 +876,7 @@ export default function UploadScreen({
 
   return (
     <div className={embedded ? undefined : "app-page"}>
+      {slowPathDialog}
       {pending && (
         <ExistingDestinationDialog
           entryCount={pending.entryCount}

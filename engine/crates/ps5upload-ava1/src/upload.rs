@@ -468,6 +468,11 @@ pub(crate) fn refusal(status: u16, message: String) -> UploadFailure {
     // be fixed by trying again, so it is told apart by the console's words.
     let reason = if status == gen::ERR_IO && message.contains("File too large") {
         "ava1_file_too_large".into()
+    } else if status == gen::ERR_PATH
+        && (message.contains("is a symbolic link") || message.contains("is not a folder"))
+    {
+        // AVA1 1.0.7: a link (or a file) where a folder of the job goes, inside the destination.
+        "ava1_path_link".into()
     } else {
         refusal_reason(status)
     };
@@ -1690,6 +1695,14 @@ mod failure_reason_tests {
     fn refusals_keep_their_machine_reason() {
         assert_eq!(refusal_reason(gen::ERR_NO_SPACE), "ava1_no_space");
         assert_eq!(refusal_reason(gen::ERR_PATH), "ava1_not_allowed");
+        assert_eq!(
+            refusal(gen::ERR_PATH, "Game/sce_sys is a symbolic link".into()).reason,
+            "ava1_path_link"
+        );
+        assert_eq!(
+            refusal(gen::ERR_PATH, "outside the allowed roots".into()).reason,
+            "ava1_not_allowed"
+        );
         assert_eq!(refusal_reason(gen::ERR_EXISTS), "ava1_exists");
         assert_eq!(refusal_reason(gen::ERR_CROSS_DEVICE), "ava1_cross_device");
         assert_eq!(refusal_reason(gen::ERR_STALLED), "ava1_stalled");

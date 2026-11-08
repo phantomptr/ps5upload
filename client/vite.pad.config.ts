@@ -18,7 +18,9 @@ import tailwindcss from "@tailwindcss/vite";
 import { oneLangPerSelector, pageModuleSwap, pageStrings } from "./vite.pagePlugins";
 import { pageCss } from "./vite.pageCss";
 
-const RAW_BUDGET = 800 * 1024;
+// 619 KiB in 12.1.0, once the page stopped importing the host's whole Remote Play store for rpInput
+// (state/rpInput.ts): kept close, so that does not creep back in.
+const RAW_BUDGET = 660 * 1024;
 const OUT = fileURLToPath(new URL("../engine/crates/ps5upload-engine/src/pad_page.html", import.meta.url));
 /** The same page on the website (https://ps5upload.phantomptr.com/pad/, .github/workflows/
  *  pages.yml), where the phone link's internet links open (#room=…&k=…&fp=…&hub=…). */

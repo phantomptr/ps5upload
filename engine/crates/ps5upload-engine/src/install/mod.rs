@@ -978,6 +978,28 @@ pub async fn install_handler(
                 .into_response();
         }
     }
+    // Away on Tailscale: an install talks to the installer daemon (port 9040) and the PS5
+    // fetches the package from this device, neither of which Tailscale carries (the console
+    // serves only Remote Play and the helper there, and never dials out over it). Say so now
+    // instead of a timeout.
+    {
+        let ip = ip.clone();
+        let away =
+            tokio::task::spawn_blocking(move || ps5upload_core::route::via(&ip).is_tailnet())
+                .await
+                .unwrap_or(false);
+        if away {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "ok": false,
+                    "reason": "tailnet_home_only",
+                    "error": ps5upload_core::route::home_only("Installing a package"),
+                })),
+            )
+                .into_response();
+        }
+    }
     let job = match state.jobs.begin(&req.ps5_addr) {
         Ok(j) => j,
         Err(active) => {

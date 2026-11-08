@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PS5Upload Share</title>
+<style>
+:root{--bg:#0f1115;--fg:#e8eaf0;--mut:#9aa3b2;--card:#181b22;--line:#2a2f3a;--acc:#3b82f6;--bad:#ef4444}
+@media (prefers-color-scheme: light){:root{--bg:#f6f7f9;--fg:#14171f;--mut:#5b6474;--card:#fff;--line:#dde1e8}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:560px;margin:0 auto;padding:24px 16px}h1{font-size:22px;margin:0 0 4px}p{color:var(--mut);margin:6px 0 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:10px 0}
+label{display:flex;gap:10px;align-items:flex-start;padding:6px 0}label small{color:var(--mut);display:block}
+button{font:inherit;border:0;border-radius:10px;padding:10px 16px;background:var(--acc);color:#fff;cursor:pointer;margin:8px 8px 0 0}
+button.sec{background:transparent;color:var(--fg);border:1px solid var(--line)}button:disabled{opacity:.5}
+.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin-top:8px}.bar i{display:block;height:100%;background:var(--acc);width:0}
+.bad{color:var(--bad)}
+</style>
+</head>
+<body>
+<main>
+<h1>Something shared with you</h1>
+<p id="lead">Connecting…</p>
+<div id="items"></div>
+<div id="act"></div>
+<div class="bar" id="bar" hidden><i></i></div>
+<p id="note">In a browser you can only download the files. To install an app or use a save, open this link in the PS5Upload app (Play › Receive).</p>
+</main>
+<script>
+(function(){
+  var q=new URLSearchParams(location.hash.slice(1)),room=q.get("room")||"";
+  var $=function(id){return document.getElementById(id)};
+  function say(t,bad){$("lead").textContent=t;$("lead").className=bad?"bad":""}
+  function size(n){var u=["B","KB","MB","GB"],i=0;while(n>=1024&&i<3){n/=1024;i++}return n.toFixed(i?1:0)+" "+u[i]}
+  if(!room){say("This link is missing its share. Ask for a new link.",true);return}
+  var base=location.pathname.replace(/\/share\/?$/,"");
+  var ws=new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.host+base+"/api/share/ws");
+  ws.binaryType="arraybuffer";
+  var files=[],cur=-1,parts=[],total=0,got=0,offer=null;
+  var why={expired:"This link has expired.",used:"This link was already used.",cancelled:"The sender cancelled this share.",busy:"The sender is busy; try again in a minute.",no_share:"This share isn't open any more."};
+  ws.onopen=function(){ws.send(JSON.stringify({hello:{v:1,room:room,name:"A friend (browser)"}}))};
+  ws.onclose=function(){if(cur<files.length||!files.length)if(!$("lead").className&&$("lead").textContent.indexOf("Done")<0)say("The connection closed.",true)};
+  function next(){cur++;if(cur>=files.length){ws.send(JSON.stringify({done:{}}));say("Done. Your browser saved "+files.length+" file(s).");$("bar").hidden=true;return}
+    parts=[];var f=files[cur];ws.send(JSON.stringify({get:{n:cur+1,item:f.item,path:f.path,offset:0}}))}
+  ws.onmessage=function(e){
+    if(typeof e.data!=="string"){var b=e.data;parts.push(b.slice(12));got+=b.byteLength-12;$("bar").firstChild.style.width=(total?100*got/total:0)+"%";return}
+    var m=JSON.parse(e.data);
+    if(m.refused){say(why[m.refused.why]||"The share can't be opened.",true);return}
+    if(m.offer){offer=m.offer;say((offer.from||"A friend")+" shared"+(offer.title?" from "+offer.title:"")+". Choose what to take.");
+      offer.items.forEach(function(it){var l=document.createElement("label");var c=document.createElement("input");c.type="checkbox";c.value=it.id;c.checked=true;
+        var s=document.createElement("span");s.textContent=it.name;var sm=document.createElement("small");sm.textContent=size(it.size);s.appendChild(sm);l.appendChild(c);l.appendChild(s);var d=document.createElement("div");d.className="card";d.appendChild(l);$("items").appendChild(d)});
+      var a=document.createElement("button");a.textContent="Accept";a.onclick=function(){var ids=[].slice.call(document.querySelectorAll("input:checked")).map(function(c){return c.value});if(!ids.length)return;a.disabled=true;ws.send(JSON.stringify({accept:{items:ids}}));say("Waiting for "+(offer.from||"the sender")+" to allow it…")};
+      var n=document.createElement("button");n.className="sec";n.textContent="No thanks";n.onclick=function(){ws.send(JSON.stringify({cancel:{}}));ws.close();say("You said no thanks.")};
+      $("act").appendChild(a);$("act").appendChild(n);return}
+    if(m.declined){say("The sender declined.",true);return}
+    if(m.cancelled){say("The sender cancelled this share.",true);return}
+    if(m.allowed){files=m.allowed.files||[];files.forEach(function(f){total+=f.size});$("act").innerHTML="";$("bar").hidden=false;say("Downloading…");next();return}
+    if(m.eof){var f=files[cur],blob=new Blob(parts),u=URL.createObjectURL(blob),a=document.createElement("a");a.href=u;a.download=f.path.split("/").join("_");document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(u)},5000);next();return}
+    if(m.error){say("A file couldn't be sent.",true)}
+  };
+})();
+</script>
+</body>
+</html>

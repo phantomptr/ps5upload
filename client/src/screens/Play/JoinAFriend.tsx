@@ -380,9 +380,9 @@ export function JoinAFriend({ pending, onPendingDone }: { pending?: string | nul
       </section>
       <p className="text-xs text-[var(--color-muted)]" data-testid="join-elsewhere">
         {tr(
-          "pt_elsewhere_guest",
+          "pt_elsewhere_guest_one_link",
           undefined,
-          "Playing from somewhere else? Ask your friend to invite you with Internet, then open their link in your browser.",
+          "Playing from somewhere else? Ask your friend for their invite link, then open it in your browser.",
         )}
       </p>
       {scanning && (

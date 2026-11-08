@@ -198,13 +198,14 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "ava1"
-version = "1.0.6"
+version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e0a5f35087af001218eec0f179fd9be77d6d9621396b0aa79572d3065805c9d"
+checksum = "4031cd928f78df518d77247495ec9616259e3464eecf26a82fa532a48911c34b"
 dependencies = [
  "blake2 0.11.0",
  "blake3",
  "getrandom 0.4.3",
+ "libc",
  "ring",
  "snow",
  "thiserror",
@@ -215,7 +216,7 @@ dependencies = [
 
 [[package]]
 name = "ava1-chaos"
-version = "1.0.6"
+version = "1.0.7"
 dependencies = [
  "tokio",
 ]

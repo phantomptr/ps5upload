@@ -132,7 +132,7 @@ async fn silent_for(g: &mut TestGuest, ms: u64) -> bool {
     loop {
         match tokio::time::timeout_at(until, g.rx.recv()).await {
             Err(_) => return true,
-            Ok(Some(GIn::Text(_) | GIn::Binary(_))) => return false,
+            Ok(Some(GIn::Text(_) | GIn::Binary(_) | GIn::Media(..))) => return false,
             Ok(Some(GIn::Ping)) => {}
             Ok(None) => return true,
         }
@@ -157,11 +157,20 @@ async fn a_phone_anywhere_is_a_controller_with_touchpad_motion_and_rumble() {
     let (room, key) = room_and_key(&s);
     let fp = crate::join_net::fingerprint().unwrap();
     let hub_host = crate::join_net::hub_host(&hub.url).unwrap();
+    let url = s["internet"]["url"].as_str().unwrap();
+    let (link, lan) = url.split_once("&lan=").unwrap_or((url, ""));
     assert_eq!(
-        s["internet"]["url"],
+        link,
         format!("https://ps5upload.phantomptr.com/pad/#room={room}&k={key}&fp={fp}&hub={hub_host}")
     );
     let lan_url = s["url"].as_str().unwrap_or_default().to_string();
+    // "Open on this Wi-Fi": the home network's controller page, without the LAN link's key (a
+    // phone there asks, as over the internet).
+    if !lan_url.is_empty() {
+        let page = lan_url.split('#').next().unwrap();
+        assert_eq!(lan, crate::join_net::pct(page), "{url}");
+        assert!(!url.contains(&lan_url[lan_url.find("#t=").unwrap() + 3..]));
+    }
     assert!(
         !lan_url.contains(&key),
         "the internet link has a key of its own"
@@ -426,9 +435,11 @@ async fn new_link_revokes_the_old_one_and_internet_invites_off_closes_it() {
             max_players: None,
             stream_seat: None,
             internet_invites: Some(false),
+            invites: None,
             hub_url: None,
             stun: None,
             upnp: None,
+            video_track: None,
         }),
     )
     .await;

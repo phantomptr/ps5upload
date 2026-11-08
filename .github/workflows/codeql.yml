@@ -4,12 +4,38 @@
 # dependency and secret scan that does gate PRs is the `security scan` job in engine-ci.yml.
 #
 # The payload's C is not analysed here: it builds only with the PS5 Payload SDK.
+#
+# Off the critical path: neither `PR gate` (engine-ci.yml) nor release-tag.yml waits for this
+# workflow, and it must not be made a required check (a PR that touches none of the paths below
+# never gets one, and a merge-queue entry never runs it). It runs on every push to main, weekly,
+# and on a pull request only when it changes code in one of the four languages analysed here; a
+# PR of docs, templates or the website has nothing for it to read. Results still upload to the
+# Security tab, and open alerts still stop scripts/release.sh.
 name: codeql
 
 on:
   push:
     branches: [main]
   pull_request:
+    # actions, javascript-typescript, python, rust: their sources and the manifests that pull in
+    # dependencies, plus this workflow and its config.
+    paths:
+      - ".github/workflows/**"
+      - ".github/actions/**"
+      - ".github/codeql/**"
+      - "**/*.rs"
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "**/*.js"
+      - "**/*.mjs"
+      - "**/*.cjs"
+      - "**/*.jsx"
+      - "**/*.ts"
+      - "**/*.tsx"
+      - "**/*.html"
+      - "**/package.json"
+      - "**/package-lock.json"
+      - "**/*.py"
   schedule:
     # Weekly, so new CodeQL queries also run over code nobody touched.
     - cron: "17 4 * * 1"

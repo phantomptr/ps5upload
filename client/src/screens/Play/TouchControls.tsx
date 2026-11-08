@@ -4,7 +4,8 @@ import { Menu } from "lucide-react";
 import { IDLE_PAD, PadButton, touchAt, type PadState, type RemotePlayStream } from "../../lib/remotePlayStream";
 import { gamepadsOf } from "../../lib/nativePad";
 import { useTr } from "../../state/lang";
-import { rpInput, type RpPrefs } from "../../state/remotePlay";
+import type { RpPrefs } from "../../state/remotePlay";
+import { rpInput } from "../../state/rpInput";
 import { controllerScale, deckIsShort, thumbOffset, touchOpacity } from "./touchLook";
 
 /** True when the on-screen controller should show: set on, or (auto) a touch screen with no

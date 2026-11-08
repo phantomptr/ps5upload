@@ -610,6 +610,20 @@ impl Sink for ZipSink {
 fn terminal(e: SendError) -> anyhow::Error {
     match e {
         SendError::Cancelled => anyhow!("transfer_cancelled"),
+        // This computer's receiver refused where it would write (AVA1 1.0.7: a symbolic link or
+        // a file where a folder of the download goes): this computer's doing, not the PS5's. A
+        // path the PS5 refused to send (a protected folder) stays ava1_not_allowed.
+        SendError::Refused { status, message }
+            if status == gen::ERR_PATH
+                && (message.contains("is a symbolic link")
+                    || message.contains("is not a folder")) =>
+        {
+            UploadFailure {
+                reason: "ava1_local_path".into(),
+                detail: format!("this computer will not save it there: {message}"),
+            }
+            .into()
+        }
         SendError::Refused { status, message } => refusal(status, message).into(),
         SendError::Source(e) if e.kind() == io::ErrorKind::InvalidData => UploadFailure {
             reason: "ava1_bad_manifest".into(),
@@ -2015,6 +2029,13 @@ mod tests {
                 message: "no".into()
             }),
             "ava1_not_allowed"
+        );
+        assert_eq!(
+            reason(SendError::Refused {
+                status: gen::ERR_PATH,
+                message: "Saves/slot1 is a symbolic link".into()
+            }),
+            "ava1_local_path"
         );
     }
 

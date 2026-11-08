@@ -253,6 +253,35 @@ for (const build of ["desktop", "browser"] as const) {
       expect(mockedWake).not.toHaveBeenCalled();
     });
 
+    it("reads the waiting console's own setting: off for it, though the default is on", async () => {
+      useRosterStore.setState({
+        profiles: [
+          { id: "p1", name: "PS5", host: HOST, wake_credential: "1234", settings: { wake_for_uploads: false } },
+          { id: "p2", name: "Other", host: "192.168.1.99", settings: { wake_for_uploads: true } },
+        ] as unknown as ReturnType<typeof useRosterStore.getState>["profiles"],
+        active_id: "p2",
+      });
+      useUploadSettingsStore.setState({ wakeForUploads: true });
+      setPower("rest");
+      addItem("A");
+      await startAndSettle();
+      expect(row().waitingForWake).toBe(true);
+      expect(mockedWake).not.toHaveBeenCalled();
+    });
+
+    it("reads the waiting console's own setting: on for it, though the default is off", async () => {
+      useRosterStore.setState({
+        profiles: [
+          { id: "p1", name: "PS5", host: HOST, wake_credential: "1234", settings: { wake_for_uploads: true } },
+        ] as unknown as ReturnType<typeof useRosterStore.getState>["profiles"],
+      });
+      useUploadSettingsStore.setState({ wakeForUploads: false });
+      setPower("rest");
+      addItem("A");
+      await startAndSettle();
+      expect(mockedWake).toHaveBeenCalledWith(HOST, "1234");
+    });
+
     it("Start all with two uploads for a sleeping console ends instead of looping", async () => {
       setPower("rest");
       addItem("A");

@@ -521,6 +521,9 @@ fn status(headers: &HeaderMap, console: Option<&str>) -> serde_json::Value {
         crate::pkg_install::bridged_container_without_pkg_host_ip(),
     );
     let internet_invites = crate::join::settings().internet_invites;
+    // The home network's page, the internet link's hint for a phone that cannot reach the hub
+    // ("Open on this Wi-Fi"). It carries no key: the phone asks there, and the computer allows it.
+    let lan_page = bases.first().map(|b| format!("{b}{prefix}/pad"));
     with_link(|l| {
         serde_json::json!({
             "open": l.key.is_some(),
@@ -528,7 +531,7 @@ fn status(headers: &HeaderMap, console: Option<&str>) -> serde_json::Value {
             "internet_invites": internet_invites,
             // The internet link once asked for: `url` (the link), `room`, `hub`, `fp`, `state`
             // (the hub connection), `error`, `router`, `peers` (as Play Together's invite has).
-            "internet": l.net.as_ref().map(|n| n.room.json(&n.key)),
+            "internet": l.net.as_ref().map(|n| n.room.json(&n.key, lan_page.as_deref())),
             "url": match (bases.first(), &l.key) {
                 (Some(b), Some(k)) => serde_json::Value::String(format!("{b}{prefix}/pad#t={k}")),
                 _ => serde_json::Value::Null,
@@ -550,6 +553,8 @@ fn status(headers: &HeaderMap, console: Option<&str>) -> serde_json::Value {
                 "id": p.id, "name": p.name, "since_ms": p.since_ms, "watch": p.watch, "control": p.control,
                 "via": if p.net.is_some() { "internet" } else { "lan" },
                 "rtt_ms": p.net.as_ref().and_then(|n| n.rtt_ms()),
+                // An internet phone's way: "lan", "tailscale", "internet" (ICE's selected pair).
+                "path": p.net.as_ref().and_then(|n| n.net_path()),
             })).collect::<Vec<_>>(),
             "pending": l.pending.iter().map(|p| serde_json::json!({
                 "id": p.id, "name": p.name, "via": if p.net { "internet" } else { "lan" }, "watch": p.watch,
@@ -1178,6 +1183,7 @@ async fn pad_session<S: crate::join::GuestSocket>(
                         &host,
                         NET_WATCH_QUEUE,
                         std::sync::Arc::new(AtomicU64::new(0)),
+                        true,
                     )
                 })
                 .map(|f| (Some(f.other), Some(f.video)))
@@ -1497,7 +1503,7 @@ pub(crate) fn lan_ws_target(url: &str, want: &str) -> Option<String> {
 
 /// A relay's connection refused by its address, or not reached at all.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum RelayRefusal {
+pub(crate) enum RelayRefusal {
     Address,
     Unreachable,
 }
@@ -1525,7 +1531,10 @@ fn only_lan(addrs: Vec<std::net::SocketAddr>) -> Result<Vec<std::net::SocketAddr
 }
 
 /// A TCP connection to the address `host` was checked to have.
-async fn connect_lan(host: &str, port: u16) -> Result<tokio::net::TcpStream, RelayRefusal> {
+pub(crate) async fn connect_lan(
+    host: &str,
+    port: u16,
+) -> Result<tokio::net::TcpStream, RelayRefusal> {
     let host = host.trim_start_matches('[').trim_end_matches(']');
     let addrs = match host.parse::<std::net::IpAddr>() {
         Ok(ip) => vec![std::net::SocketAddr::new(ip, port)],

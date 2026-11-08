@@ -35,7 +35,7 @@ const BACKOFF_MAX: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 30 
 
 pub(crate) trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}
-type Ws = tokio_tungstenite::WebSocketStream<Box<dyn Io>>;
+pub(crate) type Ws = tokio_tungstenite::WebSocketStream<Box<dyn Io>>;
 
 #[derive(Debug)]
 struct St {
@@ -51,7 +51,14 @@ pub(crate) struct Shared {
     url: String,
     kind: Kind,
     st: Mutex<St>,
+    /// When the room was asked for (how long the hub has had to answer).
+    started: std::time::Instant,
 }
+
+/// The hub not hosting the room this long after it was asked for (or a failed connect): the
+/// invite is made for the home network instead ([`Room::offline`]). A hub that answers does so in
+/// well under a second; a computer without internet fails its lookup at once or times out.
+pub(crate) const OFFLINE_AFTER: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 6 });
 
 /// Whether the room is still wanted (asked every few seconds and before each connect).
 pub(crate) type Wanted = Box<dyn Fn() -> bool + Send + Sync>;
@@ -92,6 +99,7 @@ impl Room {
                 hosted_once: false,
                 connects: 0,
             }),
+            started: std::time::Instant::now(),
         });
         let (stop, stop_rx) = watch::channel(());
         tokio::spawn(run(shared.clone(), wanted, stop_rx));
@@ -109,8 +117,19 @@ impl Room {
         &self.shared.url
     }
 
-    /// The invite's internet half, as the host's page shows it (`key`: the invite's).
-    pub(crate) fn json(&self, key: &str) -> serde_json::Value {
+    /// The hub can't be reached: not hosting the room now, and a connect failed or it has had
+    /// [`OFFLINE_AFTER`] to. The host's page then shares the home network's link (works on the
+    /// Wi-Fi only) until the hub hosts the room again.
+    pub(crate) fn offline(&self) -> bool {
+        let st = self.shared.st.lock().unwrap_or_else(|e| e.into_inner());
+        st.state != "hosted"
+            && (st.error.is_some() || self.shared.started.elapsed() >= OFFLINE_AFTER)
+    }
+
+    /// The invite's internet half, as the host's page shows it (`key`: the invite's; `lan`: the
+    /// home network's page the link names as its hint, see [`super::link_for`]).
+    pub(crate) fn json(&self, key: &str, lan: Option<&str>) -> serde_json::Value {
+        let offline = self.offline();
         let id = self.id();
         let hub = super::hub_host(&self.shared.url).unwrap_or_default();
         let fp = super::fingerprint();
@@ -120,19 +139,21 @@ impl Room {
             .unwrap_or_else(|e| e.into_inner())
             .map(|(a, how)| serde_json::json!({"via": how, "port": a.port()}));
         serde_json::json!({
-            "url": fp.as_ref().map(|fp| super::link_for(self.shared.kind, &id, key, fp, &hub)),
+            "url": fp.as_ref().map(|fp| super::link_for(self.shared.kind, &id, key, fp, &hub, lan)),
             "room": id,
             "hub": hub,
             "fp": fp,
             "state": st.state,
             "error": st.error,
+            // The hub can't be reached (Room::offline): share the home network's link instead.
+            "offline": offline,
             "router": router,
             "peers": super::peers_json(&id),
         })
     }
 }
 
-async fn connect(url: &str) -> Result<Ws, String> {
+pub(crate) async fn connect(url: &str) -> Result<Ws, String> {
     let uri: axum::http::Uri = url.parse().map_err(|_| "bad hub address".to_string())?;
     let host = uri.host().ok_or("bad hub address")?.to_string();
     let tls = uri.scheme_str() == Some("wss");

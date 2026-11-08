@@ -26,6 +26,7 @@ import { withConsolePrefix } from "../../state/roster";
 import { audit } from "../../state/auditLog";
 import { powerStateFromDdp, wakeUi, type PowerState } from "../../lib/wakeState";
 import WakeSetup from "./WakeSetup";
+import { consoleOnTailnet, useTailnet } from "../../state/useTailnet";
 import { busyText } from "../../lib/helperGuard";
 import { meshFor, othersBusy, useMeshStore } from "../../state/mesh";
 import { trStatic } from "../../lib/trStatic";
@@ -71,6 +72,10 @@ export default function PowerControl({ host }: { host: string }) {
   // THIS console's stored wake credentials (by address), not the selected profile's: the
   // card can show a console that is not the active tab.
   const wakeCtl = useConsoleWake(host);
+  // A PS5 on Tailscale: a resting one is off Tailscale, so a wake works only at home. Said
+  // plainly next to Wake instead of a wake that silently does nothing from away.
+  const { status: tailnet } = useTailnet();
+  const onTailnet = !!consoleOnTailnet(tailnet, host);
   const { profile, credential, hasSessionKeys } = wakeCtl;
   const rt = useHostRuntime(host);
   const [ddp, setDdp] = useState<DdpStatus | null>(null);
@@ -238,6 +243,15 @@ export default function PowerControl({ host }: { host: string }) {
           </span>
         ) : null}
       </div>
+      {power !== "awake" && onTailnet ? (
+        <p className="mb-2 text-xs text-[var(--color-muted)]" data-testid="power-wake-tailnet-note">
+          {tr(
+            "power_wake_tailnet_note",
+            undefined,
+            "Away from home? A PS5 in rest mode is off Tailscale, so it can only be woken from its home network.",
+          )}
+        </p>
+      ) : null}
       <div className="flex flex-wrap items-center gap-2">
         {/* Only when it can actually work: the console is asleep and a wake
             credential is stored. Every other state hides it rather than

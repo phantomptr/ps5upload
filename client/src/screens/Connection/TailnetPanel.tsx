@@ -1,34 +1,56 @@
 import { useCallback, useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, ExternalLink, Globe, Loader2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Circle, ExternalLink, Globe, Loader2, Settings2 } from "lucide-react";
+import { useNavigate } from "react-router";
 import { Button } from "../../components";
+import { useConfirm } from "../../components/ConfirmDialog";
 import { useTr } from "../../state/lang";
 import {
+  allowList,
+  appTailnetOp,
+  appTailnetStatus,
   expiryDays,
-  peerPathKind,
   tailnetOp,
   tailnetStatus,
+  tailnetVia,
+  toggleAllowed,
   TailnetUnsupportedError,
+  type AppTailnetStatus,
+  type TailnetConsoleOp,
+  type TailnetEnable,
   type TailnetStatus,
 } from "../../api/tailnet";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { QrCode } from "../Play/PhonePads";
 import { humanizeCaught } from "../../lib/humanizeError";
 import { TailnetProblems } from "./TailnetProblems";
+import { KeyExpiryHint, NameField, OnPausedSwitch, RenewButton } from "./TailnetBits";
+
+/** "Test it now" sends the PS5 through Tailscale from home for this long. */
+const TEST_SECS = 120;
 
 /**
  * "Put this PS5 on Tailscale": the console joins the user's tailnet through the helper and
- * serves only Remote Play and PS5Upload to it. Sign-in is Tailscale's own page (a link and a
- * QR code for the phone); the advanced fields are for a Headscale server.
+ * serves only Remote Play and PS5Upload to it, and only to the devices on its list. Sign-in is
+ * Tailscale's own page (a link and a QR code for the phone); the advanced fields are for a
+ * Headscale server. A guided setup: this PS5 (1), each device you play from (2), then "Test it
+ * now" (3), which sends this PS5 through Tailscale from home so you can see it work.
  */
 export default function TailnetPanel({ host }: { host: string }) {
   const tr = useTr();
+  const navigate = useNavigate();
+  const { confirm, dialog } = useConfirm();
   const [st, setSt] = useState<TailnetStatus | null>(null);
+  /** This device's own Tailscale (Settings › Tailscale): step 2. null until read. */
+  const [me, setMe] = useState<AppTailnetStatus | null>(null);
   const [unsupported, setUnsupported] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [advanced, setAdvanced] = useState(false);
   const [controlUrl, setControlUrl] = useState("");
   const [deviceName, setDeviceName] = useState("");
+  /** "Test it now": until when, and what it found. */
+  const [testUntil, setTestUntil] = useState(0);
+  const [testVia, setTestVia] = useState("");
 
   const refresh = useCallback(async () => {
     try {
@@ -37,28 +59,41 @@ export default function TailnetPanel({ host }: { host: string }) {
     } catch (e) {
       if (e instanceof TailnetUnsupportedError) setUnsupported(true);
     }
+    try {
+      setMe(await appTailnetStatus());
+    } catch {
+      /* an engine without Tailscale: step 2 is just not shown as done */
+    }
   }, [host]);
 
   useEffect(() => {
     void refresh();
     // While it is on, follow sign-in and paths; off, one read is enough.
     const t = window.setInterval(() => {
-      if (st?.enabled) void refresh();
+      if ((st?.enabled || testUntil) && !document.hidden) void refresh();
     }, 3000);
     return () => window.clearInterval(t);
-  }, [refresh, st?.enabled]);
+  }, [refresh, st?.enabled, testUntil]);
 
-  const run = async (op: "enable" | "disable" | "logout") => {
+  // While a test runs: how the engine reaches the PS5 now, and the end of the test.
+  useEffect(() => {
+    if (!testUntil) return;
+    const t = window.setInterval(() => {
+      if (Date.now() >= testUntil) {
+        setTestUntil(0);
+        setTestVia("");
+        return;
+      }
+      void tailnetVia(host).then((v) => setTestVia(v.via));
+    }, 2000);
+    return () => window.clearInterval(t);
+  }, [testUntil, host]);
+
+  const run = async (op: TailnetConsoleOp, opts: TailnetEnable = {}) => {
     setBusy(true);
     setErr("");
     try {
-      setSt(
-        await tailnetOp(
-          host,
-          op,
-          op === "enable" ? { control_url: controlUrl.trim(), hostname: deviceName.trim() } : {},
-        ),
-      );
+      setSt(await tailnetOp(host, op, opts));
     } catch (e) {
       if (e instanceof TailnetUnsupportedError) setUnsupported(true);
       else setErr(tr("tn_failed", { err: humanizeCaught(e) }, "Could not change Tailscale on this PS5: {err}"));
@@ -67,28 +102,88 @@ export default function TailnetPanel({ host }: { host: string }) {
     }
   };
 
+  const signOut = async () => {
+    const ok = await confirm({
+      title: tr("tn_sign_out_title", undefined, "Sign this PS5 out of Tailscale?"),
+      message: tr(
+        "tn_sign_out_warn_ps5",
+        undefined,
+        "Its sign-in is forgotten: putting it back on Tailscale needs a new sign-in, and it may get a new address. To stop it for a while, switch it to Paused instead.",
+      ),
+      confirmLabel: tr("tn_sign_out", undefined, "Sign out"),
+      destructive: true,
+    });
+    if (ok) await run("logout");
+  };
+
+  const testNow = async (on: boolean) => {
+    setBusy(true);
+    setErr("");
+    try {
+      setMe(await appTailnetOp("test_path", { host, secs: on ? TEST_SECS : 0 }));
+      setTestUntil(on ? Date.now() + TEST_SECS * 1000 : 0);
+      setTestVia("");
+    } catch (e) {
+      setErr(tr("tn_test_failed", { err: humanizeCaught(e) }, "Could not try Tailscale now: {err}"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const state = st?.state ?? "off";
+  const psOn = !!st?.enabled && state === "running" && !!st.ip;
+  const selfOn = !!me && (me.backend === "builtin" ? me.state === "running" : me.backend === "system");
+  const setUp = !!st && (st.enabled || !!st.signed_in);
+  const days = st ? expiryDays(st.key_expiry) : null;
+  const listed = allowList(st);
   return (
     <section
       className="flex flex-col gap-2 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] p-3"
       data-testid="tailnet-panel"
     >
+      {dialog}
       <div className="flex items-center gap-2 text-sm font-semibold">
         <Globe size={16} />
-        {tr("tn_title", undefined, "Tailscale")}
+        <span className="flex-1">{tr("tn_title_ps5", undefined, "Tailscale for this PS5")}</span>
+        {setUp && !unsupported ? (
+          <OnPausedSwitch
+            on={!!st?.enabled}
+            connecting={!!st?.enabled && state !== "running"}
+            busy={busy}
+            onChange={(on) => void run(on ? "enable" : "disable")}
+            testId="tailnet-switch"
+          />
+        ) : null}
       </div>
       <p className="text-xs text-[var(--color-muted)]">
-        {tr(
-          "tn_sub",
-          undefined,
-          "Play on this PS5 from anywhere through your own tailnet. Only Remote Play and PS5Upload are reachable.",
-        )}
+        {tr("tn_sub_setup", undefined, "Play this PS5 when you're away from home. Set it up once, at home:")}
+      </p>
+      <ol className="flex flex-col gap-1 text-xs" data-testid="tailnet-steps">
+        <Step done={psOn} n={1} text={tr("tn_step_ps5", undefined, "Here, at home: put this PS5 on your Tailscale network.")} />
+        <Step
+          done={selfOn}
+          n={2}
+          text={tr(
+            "tn_step_devices",
+            undefined,
+            "On each phone or computer you'll play from: Settings › Tailscale › Sign in to Tailscale.",
+          )}
+        />
+        <Step
+          done={testVia !== "" && testVia !== "lan"}
+          n={3}
+          text={tr("tn_step_test", undefined, "Test it now: reach this PS5 through Tailscale from home, to see it work.")}
+        />
+      </ol>
+      <p className="text-xs text-[var(--color-muted)]">
+        {tr("tn_only_rp", undefined, "Only Remote Play and PS5Upload can reach the PS5 this way.")}{" "}
+        {tr("tn_no_wake", undefined, "A PS5 in rest mode is off Tailscale, so it can only be woken at home.")}
       </p>
       {unsupported ? (
         <p className="text-xs text-[var(--color-warn)]">
           {tr("tn_old_helper", undefined, "This PS5's helper is too old for Tailscale. Send the helper again.")}
         </p>
-      ) : !st?.enabled ? (
+      ) : !setUp ? (
         <div className="flex flex-col gap-2">
           {state === "signed-out" && (
             <p className="text-xs">{tr("tn_signed_out", undefined, "Signed out. Turn it on again to sign in.")}</p>
@@ -108,7 +203,8 @@ export default function TailnetPanel({ host }: { host: string }) {
                 <input
                   className="rounded border border-[var(--glass-edge)] bg-transparent px-2 py-1"
                   value={deviceName}
-                  placeholder={st?.hostname || "PS5"}
+                  maxLength={63}
+                  placeholder={st?.hostname || tr("tn_default_name_ps5", undefined, "This PS5's own name + -ps5u")}
                   onChange={(e) => setDeviceName(e.target.value)}
                 />
               </label>
@@ -125,7 +221,11 @@ export default function TailnetPanel({ host }: { host: string }) {
             </div>
           )}
           <div>
-            <Button onClick={() => void run("enable")} disabled={busy} data-testid="tailnet-enable">
+            <Button
+              onClick={() => void run("enable", { control_url: controlUrl.trim(), hostname: deviceName.trim() })}
+              disabled={busy}
+              data-testid="tailnet-enable"
+            >
               {busy ? <Loader2 size={14} className="animate-spin" /> : null}
               {tr("tn_enable", undefined, "Put this PS5 on Tailscale")}
             </Button>
@@ -133,10 +233,14 @@ export default function TailnetPanel({ host }: { host: string }) {
         </div>
       ) : (
         <div className="flex flex-col gap-2">
-          {state === "needs-login" && st.login_url ? (
+          {!st?.enabled ? (
+            <p className="text-xs text-[var(--color-muted)]" data-testid="tailnet-paused">
+              {tr("tn_paused_ps5", undefined, "Paused: this PS5 is off Tailscale and keeps its sign-in. Switch it on to use it again.")}
+            </p>
+          ) : state === "needs-login" && st.login_url ? (
             <div className="flex flex-col gap-2">
               <p className="text-xs">
-                {tr("tn_sign_in", undefined, "Sign in to Tailscale to add this PS5 to your tailnet.")}
+                {tr("tn_sign_in", undefined, "Sign in with your Tailscale account to add this PS5 to your Tailscale network.")}
               </p>
               <div>
                 <Button onClick={() => void openExternalUrl(st.login_url)} data-testid="tailnet-login">
@@ -152,33 +256,45 @@ export default function TailnetPanel({ host }: { host: string }) {
               <p className="text-xs" data-testid="tailnet-on-as">
                 {tr("tn_on_as", { name: st.name.replace(/\.$/, ""), ip: st.ip }, "On Tailscale as {name} at {ip}")}
               </p>
-              {st.peers.length === 0 ? (
-                <p className="text-xs text-[var(--color-muted)]">
-                  {tr("tn_no_peers", undefined, "No other devices on your tailnet yet.")}
+              {selfOn ? (
+                <p className="text-xs text-[var(--color-good)]" data-testid="tailnet-self-on">
+                  {tr("tn_this_device_on", undefined, "This device is on Tailscale too, so it can reach this PS5 from anywhere.")}
                 </p>
               ) : (
-                <ul className="flex flex-col gap-0.5 text-xs" data-testid="tailnet-peers">
-                  {st.peers.map((p) => {
-                    const kind = peerPathKind(p);
-                    return (
-                      <li key={p.ip} className="flex justify-between gap-2">
-                        <span className="truncate">{p.name.split(".")[0] || p.ip}</span>
-                        <span className="text-[var(--color-muted)]">
-                          {kind === "direct"
-                            ? tr("tn_path_direct", { ms: p.latency_ms >= 0 ? p.latency_ms.toFixed(1) : "?" }, "direct, {ms} ms")
-                            : kind === "relayed"
-                              ? tr("tn_path_relayed", undefined, "relayed through Tailscale's servers")
-                              : tr("tn_path_idle", undefined, "idle")}
-                        </span>
-                      </li>
-                    );
-                  })}
-                </ul>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-xs" data-testid="tailnet-self-off">
+                    {tr("tn_this_device_off", undefined, "Next: add the devices you'll play from. This one isn't on Tailscale yet.")}
+                  </p>
+                  <Button size="sm" variant="secondary" leftIcon={<Settings2 size={14} />} onClick={() => navigate("/settings#tailscale")}>
+                    {tr("tn_open_settings", undefined, "Open Settings › Tailscale")}
+                  </Button>
+                </div>
               )}
+              {selfOn ? (
+                <div className="flex flex-wrap items-center gap-2" data-testid="tailnet-test">
+                  {testUntil ? (
+                    <>
+                      <span className="text-xs">
+                        {testVia && testVia !== "lan"
+                          ? tr("tn_test_working", undefined, "Working: the app reaches this PS5 through Tailscale now.")
+                          : tr("tn_test_trying", undefined, "Switching to Tailscale…")}
+                      </span>
+                      <Button size="sm" variant="secondary" disabled={busy} onClick={() => void testNow(false)}>
+                        {tr("tn_test_stop", undefined, "Back to the home network")}
+                      </Button>
+                    </>
+                  ) : (
+                    <Button size="sm" variant="secondary" disabled={busy} onClick={() => void testNow(true)} data-testid="tailnet-try-now">
+                      {tr("tn_try_now", undefined, "Try Tailscale now")}
+                    </Button>
+                  )}
+                </div>
+              ) : null}
+              <AllowSection st={st} busy={busy} listed={listed} onSave={(mode, list) => void run("allow", { allow_mode: mode, allow: list.join(",") })} />
             </div>
           ) : state === "wait-approval" ? (
             <p className="text-xs">
-              {tr("tn_wait_approval", undefined, "Waiting for your tailnet admin to approve this PS5.")}
+              {tr("tn_wait_approval", undefined, "Waiting for this PS5 to be approved in your Tailscale admin page.")}
             </p>
           ) : (
             <p className="flex items-center gap-1 text-xs text-[var(--color-muted)]">
@@ -187,20 +303,22 @@ export default function TailnetPanel({ host }: { host: string }) {
             </p>
           )}
           <TailnetProblems st={st} testId="tailnet-problems" />
-          {expiryDays(st.key_expiry) !== null ? (
+          {days !== null ? (
             <p className="text-xs text-[var(--color-warn)]" data-testid="tailnet-expiry">
-              {tr(
-                "tn_key_expires",
-                { days: expiryDays(st.key_expiry) ?? 0 },
-                "This PS5's Tailscale key expires in {days} days. Sign out and in again to renew it.",
-              )}
+              {tr("tn_key_expires", { days }, "This PS5's Tailscale key expires in {days} days. Renew it to keep this PS5 on Tailscale.")}
             </p>
           ) : null}
-          <div className="flex gap-2">
-            <Button variant="secondary" onClick={() => void run("disable")} disabled={busy}>
-              {tr("tn_turn_off", undefined, "Turn off")}
-            </Button>
-            <Button variant="secondary" onClick={() => void run("logout")} disabled={busy} data-testid="tailnet-logout">
+          {st?.enabled && (days !== null || state === "running" || state === "signed-out") ? <KeyExpiryHint /> : null}
+          <NameField
+            current={st?.hostname ?? ""}
+            placeholder={tr("tn_default_name_ps5", undefined, "This PS5's own name + -ps5u")}
+            busy={busy}
+            onSave={(name) => void run("rename", { hostname: name })}
+            testId="tailnet-name"
+          />
+          <div className="flex flex-wrap gap-2">
+            {st?.enabled ? <RenewButton busy={busy} onRenew={() => void run("renew")} testId="tailnet-renew" /> : null}
+            <Button size="sm" variant="ghost" onClick={() => void signOut()} disabled={busy} data-testid="tailnet-logout">
               {tr("tn_sign_out", undefined, "Sign out")}
             </Button>
           </div>
@@ -208,5 +326,109 @@ export default function TailnetPanel({ host }: { host: string }) {
       )}
       {err ? <p className="text-xs text-[var(--color-bad)]">{err}</p> : null}
     </section>
+  );
+}
+
+function Step({ done, n, text }: { done: boolean; n: number; text: string }) {
+  return (
+    <li className="flex items-start gap-1.5">
+      {done ? (
+        <CheckCircle2 size={14} className="mt-px shrink-0 text-[var(--color-good)]" />
+      ) : (
+        <Circle size={14} className="mt-px shrink-0 text-[var(--color-muted)]" />
+      )}
+      <span>
+        <span className="font-semibold">{n}.</span> {text}
+      </span>
+    </li>
+  );
+}
+
+/** Who may reach this PS5 over Tailscale: the devices ticked here (the default: the ones added
+ *  from PS5Upload), or every device on the Tailscale network (an opt-in, with a warning for a
+ *  shared tailnet). Nothing from an older helper, which has no list. */
+function AllowSection({
+  st,
+  busy,
+  listed,
+  onSave,
+}: {
+  st: TailnetStatus;
+  busy: boolean;
+  listed: string[];
+  onSave: (mode: "listed" | "all", list: string[]) => void;
+}) {
+  const tr = useTr();
+  if (!st.allow_mode) return null;
+  const all = st.allow_mode === "all";
+  const peers = st.peers.filter((p) => p.ip);
+  // Listed devices that are not in the PS5's peer list now still show, by address.
+  const extra = listed.filter((ip) => !peers.some((p) => p.ip === ip));
+  return (
+    <div className="mt-1 flex flex-col gap-1 border-t border-[var(--glass-edge)] pt-2 text-xs" data-testid="tailnet-allow">
+      <span className="font-semibold">{tr("tn_allow_title", undefined, "Who can reach this PS5 over Tailscale")}</span>
+      <label className="flex items-center gap-1.5">
+        <input type="radio" checked={!all} disabled={busy} onChange={() => onSave("listed", listed)} />
+        {tr("tn_allow_listed", undefined, "Only the devices ticked below (recommended)")}
+      </label>
+      <label className="flex items-center gap-1.5">
+        <input type="radio" checked={all} disabled={busy} onChange={() => onSave("all", listed)} />
+        {tr("tn_allow_all", undefined, "Every device on my Tailscale network")}
+      </label>
+      {all ? (
+        <p className="flex items-start gap-1 text-[var(--color-warn)]" data-testid="tailnet-allow-all-warn">
+          <AlertTriangle size={12} className="mt-px shrink-0" />
+          {tr(
+            "tn_allow_all_warn",
+            undefined,
+            "If you share your Tailscale network with other people, each of their devices could then reach Remote Play and PS5Upload on this PS5.",
+          )}
+        </p>
+      ) : listed.length === 0 ? (
+        <p className="text-[var(--color-warn)]" data-testid="tailnet-allow-empty">
+          {tr(
+            "tn_allow_empty",
+            undefined,
+            "Only devices you add can reach this PS5 over Tailscale. Open PS5Upload at home on each device once, or tick devices below.",
+          )}
+        </p>
+      ) : null}
+      {all ? null : (
+        <ul className="flex flex-col gap-0.5" data-testid="tailnet-allow-list">
+          {peers.map((p) => (
+            <li key={p.ip}>
+              <label className="flex items-center gap-1.5">
+                <input
+                  type="checkbox"
+                  checked={listed.includes(p.ip)}
+                  disabled={busy}
+                  onChange={(e) => onSave("listed", toggleAllowed(listed, p.ip, e.target.checked))}
+                />
+                <span className="truncate">{p.name.split(".")[0] || p.ip}</span>
+                <span className="text-[var(--color-muted)]">{p.ip}</span>
+              </label>
+            </li>
+          ))}
+          {extra.map((ip) => (
+            <li key={ip}>
+              <label className="flex items-center gap-1.5">
+                <input type="checkbox" checked disabled={busy} onChange={() => onSave("listed", toggleAllowed(listed, ip, false))} />
+                <span className="text-[var(--color-muted)]">{ip}</span>
+              </label>
+            </li>
+          ))}
+          {peers.length === 0 && extra.length === 0 ? (
+            <li className="text-[var(--color-muted)]">{tr("tn_no_peers", undefined, "No other devices on your Tailscale network yet.")}</li>
+          ) : null}
+        </ul>
+      )}
+      <p className="text-[var(--color-muted)]">
+        {tr(
+          "tn_allow_auto",
+          undefined,
+          "A device that signs in to Tailscale in PS5Upload is added by itself the next time it talks to this PS5 at home.",
+        )}
+      </p>
+    </div>
   );
 }

@@ -1,8 +1,14 @@
 name: ci
 
-# Runs on every push to main and every PR. No user-controlled inputs
+# Runs on every push to main, every PR and every merge-queue entry. No user-controlled inputs
 # interpolate into shell commands anywhere in this file — all `run:`
 # blocks use static strings only.
+#
+# Lanes: a PR (and a merge-queue entry) runs only the jobs its change can affect. The `changes`
+# job below lists the changed paths and .github/scripts/ci-changes.mjs maps them to lanes (a path
+# it has no rule for runs everything, and so does any change to a workflow, a lockfile, VERSION
+# or a submodule). Pushes to main and manual runs always run every lane. `PR gate` stays the one
+# check to require: .github/scripts/pr-gate.mjs passes a skipped job only when its lane was off.
 
 on:
   push:
@@ -14,6 +20,9 @@ on:
     # already validating end-to-end.
     tags-ignore: ['**']
   pull_request:
+  # GitHub's merge queue (off until the main ruleset turns it on; RELEASING.md says how). The
+  # queue waits for `PR gate` on the commit it is about to put on main.
+  merge_group:
   workflow_dispatch:
 
 # One concurrency group per ref: if you push twice in a row (e.g.
@@ -38,6 +47,63 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  # ─────────────────────────────────────────────────────────────────────
+  # Which lanes this change needs (see the note at the top). Sparse and shallow: it only needs
+  # the change list, which git reads from the commits' trees.
+  # ─────────────────────────────────────────────────────────────────────
+  changes:
+    name: changes (which jobs this change needs)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      engine: ${{ steps.lanes.outputs.engine }}
+      hub: ${{ steps.lanes.outputs.hub }}
+      hub_only: ${{ steps.lanes.outputs.hub_only }}
+      ctest: ${{ steps.lanes.outputs.ctest }}
+      payload: ${{ steps.lanes.outputs.payload }}
+      client: ${{ steps.lanes.outputs.client }}
+      desktop: ${{ steps.lanes.outputs.desktop }}
+      android: ${{ steps.lanes.outputs.android }}
+      scripts: ${{ steps.lanes.outputs.scripts }}
+      all: ${{ steps.lanes.outputs.all }}
+    steps:
+      # A PR run checks out the PR's merge commit: its first parent is the base it merges into,
+      # so HEAD^1..HEAD is exactly what the PR changes there.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 2
+          sparse-checkout: .github/scripts
+
+      - name: List the changed paths and pick the lanes
+        id: lanes
+        env:
+          EVENT: ${{ github.event_name }}
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+          classify() { node .github/scripts/ci-changes.mjs "$@" >> "$GITHUB_OUTPUT"; }
+          case "$EVENT" in
+            pull_request)
+              # --no-renames: a move lists both the old path and the new one.
+              files="$(git diff --no-renames --name-only HEAD^1 HEAD)" || files=""
+              ;;
+            merge_group)
+              # Everything ahead of main in this queue entry (earlier entries included).
+              files=""
+              if git fetch --no-tags --quiet --depth=1 origin "$QUEUE_BASE"; then
+                files="$(git diff --no-renames --name-only "$QUEUE_BASE" HEAD)" || files=""
+              fi
+              ;;
+            *)
+              echo "$EVENT: every lane"
+              classify --all
+              exit 0
+              ;;
+          esac
+          # An empty list (a diff that failed) runs every lane: ci-changes.mjs treats it so.
+          printf '%s\n' "$files" | sed 's/^/changed: /'
+          printf '%s\n' "$files" | classify
+
   # ─────────────────────────────────────────────────────────────────────
   # Version sync gate. VERSION (repo root) is the canonical source of
   # truth; downstream files (payload config.h, Tauri conf, Cargo.toml,
@@ -70,6 +136,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   rust-engine:
     name: rust (engine workspace)
+    needs: changes
+    if: needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -159,6 +227,8 @@ jobs:
   # in `libs` without anyone listing it.
   rust-engine-tests:
     name: rust tests (${{ matrix.part }})
+    needs: changes
+    if: needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     strategy:
@@ -317,6 +387,8 @@ jobs:
   # files. Restores the engine test leg's cache and saves none of its own.
   rust-golive:
     name: rust tests (go live, ffmpeg)
+    needs: changes
+    if: needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -365,12 +437,72 @@ jobs:
           RUST_BACKTRACE: 1
         run: cargo test -p ps5upload-engine --lib -- --ignored --test-threads 1 rp_golive live_feed ffmpeg_makes_a_picture_of_a_keyframe ffmpeg_says_why_garbage_makes_no_picture ffmpeg_makes_a_frame_for_a_session_with_no_page
 
+  # The Play Together hub when it is the only Rust that changed: it depends on no workspace crate
+  # and none on it, so its own format, lint and tests are the whole check. When the engine lane
+  # runs, `rust tests (libs)` tests the hub with everything else and this job is skipped.
+  rust-hub:
+    name: rust hub (format, clippy, tests)
+    needs: changes
+    if: needs.changes.outputs.hub_only == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          submodules: true
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      # The libs test leg's cache, read only: it already holds the hub's dependencies.
+      - name: Restore cargo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+          key: ${{ runner.os }}-engine-test-libs-${{ hashFiles('engine/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-engine-test-libs-${{ hashFiles('engine/Cargo.lock') }}-
+            ${{ runner.os }}-engine-test-libs-
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2
+        with:
+          tool: cargo-nextest
+
+      - name: cargo fmt
+        working-directory: engine
+        run: cargo fmt -p ps5upload-hub -- --check
+
+      - name: cargo clippy
+        working-directory: engine
+        run: cargo clippy --locked -p ps5upload-hub --all-targets -- -D warnings
+
+      - name: cargo nextest
+        working-directory: engine
+        timeout-minutes: 10
+        env:
+          RUST_BACKTRACE: 1
+        run: cargo nextest run --profile ci -p ps5upload-hub
+
+      - name: cargo test --doc
+        working-directory: engine
+        timeout-minutes: 5
+        run: cargo test --doc -p ps5upload-hub
+
   # The C interop suite. The C server and the data layer are process-wide singletons, so the
   # suite runs one test at a time: a test that holds the server cannot starve the others. That
   # rule holds inside one machine, so the test files are dealt across four machines, each still
   # running its share one at a time.
   rust-ctest:
     name: rust (payload C over AVA1 ${{ matrix.shard }}/4)
+    needs: changes
+    if: needs.changes.outputs.ctest == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     strategy:
@@ -431,6 +563,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   ava1:
     name: ava1 (app schema, no FTX2)
+    needs: changes
+    if: needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -460,6 +594,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   ava1-ctest-sanitize:
     name: ps5upload-ctest (ASan + UBSan)
+    needs: changes
+    if: needs.changes.outputs.ctest == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     # Four shards, test files dealt exactly like rust-ctest (by measured time): the serial
@@ -528,6 +664,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   rust-engine-targets:
     name: rust engine target (${{ matrix.targets }})
+    needs: changes
+    if: needs.changes.outputs.engine == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -636,6 +774,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   rust-desktop:
     name: rust desktop (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -794,6 +934,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   client-frontend:
     name: client (ts + vite)
+    needs: changes
+    if: needs.changes.outputs.client == 'true'
     runs-on: ubuntu-24.04
     # Typecheck, lint, ~4900 unit tests, the build and ~200 browser tests: 15 min ran out in 11.0.1.
     timeout-minutes: 25
@@ -908,13 +1050,16 @@ jobs:
   # Repo scripts and hygiene. Runs the same parser/audit layer exposed by
   # `make lint-scripts` / `npm run scripts:check`.
   # ─────────────────────────────────────────────────────────────────────
+  # Ubuntu on every change (it also runs the .github/scripts tests); macOS and Windows only when
+  # a script or something scripts read changed.
   repo-scripts:
     name: repo scripts
+    needs: changes
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15, windows-2022]
+        os: ${{ fromJSON(needs.changes.outputs.scripts == 'true' && '["ubuntu-24.04","macos-15","windows-2022"]' || '["ubuntu-24.04"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -945,8 +1090,8 @@ jobs:
   coverage:
     name: coverage reports
     # A report, not a gate (pr-gate does not need it): ~35 min of instrumented tests is not worth
-    # holding a runner on every PR. Pushes to main and manual runs still produce it.
-    if: github.event_name != 'pull_request'
+    # holding a runner on every PR or queue entry. Pushes to main and manual runs still produce it.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     # `continue-on-error` below does NOT cover the timeout: a job that hits
     # `timeout-minutes` is reported as *cancelled*, which cancels the whole
@@ -1032,6 +1177,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   payload:
     name: payload (ELF)
+    needs: changes
+    if: needs.changes.outputs.payload == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -1163,7 +1310,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   payload-selftests:
     name: payload host self-tests (make test-payload)
-    needs: payload
+    needs: [changes, payload]
+    if: needs.changes.outputs.payload == 'true'
     runs-on: macos-15
     timeout-minutes: 20
     steps:
@@ -1198,6 +1346,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   android:
     name: android (apk build)
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -1374,15 +1524,21 @@ jobs:
   # SKIP this job, and GitHub counts a skipped required check as passing —
   # letting a broken PR merge. With always() + the result check below, the
   # gate runs regardless and fails when any dependency didn't succeed.
+  #
+  # Lanes: a job may be skipped only when the `changes` job said its lane was off.
+  # .github/scripts/pr-gate.mjs holds each job's lane and fails on a job it does not know, so a
+  # job added here without a lane fails the gate instead of passing it unchecked.
   # ─────────────────────────────────────────────────────────────────────
   pr-gate:
     name: PR gate
     if: always()
     needs:
+      - changes
       - version-sync
       - rust-engine
       - rust-engine-tests
       - rust-golive
+      - rust-hub
       - rust-ctest
       - ava1
       - ava1-ctest-sanitize
@@ -1397,14 +1553,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Require every gating job to have succeeded
-        run: |
-          results="${{ join(needs.*.result, ' ') }}"
-          echo "dependency results: $results"
-          for r in $results; do
-            if [ "$r" != "success" ]; then
-              echo "::error::a required CI job did not succeed (saw '$r') — PR is not mergeable"
-              exit 1
-            fi
-          done
-          echo "✓ all required CI jobs succeeded"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Every job this change needed succeeded; the others were skipped on purpose
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: node .github/scripts/pr-gate.mjs

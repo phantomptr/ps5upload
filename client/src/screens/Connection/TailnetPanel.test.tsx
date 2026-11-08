@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 
+import { MemoryRouter } from "react-router";
 import TailnetPanel from "./TailnetPanel";
 import { expiryDays, tailnetOp, tailnetStatus, TailnetUnsupportedError } from "../../api/tailnet";
 
@@ -54,8 +55,15 @@ describe("Tailscale on a console", () => {
 
   it("starts with the button that puts the PS5 on Tailscale", () => {
     vi.stubGlobal("fetch", answer(200, {}));
-    const html = renderToStaticMarkup(<TailnetPanel host="192.0.2.9" />);
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <TailnetPanel host="192.0.2.9" />
+      </MemoryRouter>,
+    );
     expect(html).toContain("Put this PS5 on Tailscale");
-    expect(html).toContain("Only Remote Play and PS5Upload are reachable");
+    expect(html).toContain("Only Remote Play and PS5Upload can reach the PS5 this way");
+    // Both steps are spelled out, so the PS5's sign-in and each device's are not confused.
+    expect(html).toContain("Here, at home: put this PS5 on your Tailscale network.");
+    expect(html).toContain("Settings › Tailscale › Sign in to Tailscale");
   });
 });

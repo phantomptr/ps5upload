@@ -26,6 +26,7 @@ import { menuKeyTarget } from "../lib/menuKeys";
 import { formatDate } from "../lib/formatDate";
 import { useFitOnScreen } from "../components/useFitOnScreen";
 import { useBackDismiss } from "../lib/systemBack";
+import { consoleOnTailnet, useTailnet, type ConsoleOnTailnet } from "../state/useTailnet";
 
 /**
  * Sidebar dropdown for switching between known PS5s.
@@ -52,6 +53,8 @@ export default function RosterPicker() {
   const setActive = useRosterStore((s) => s.setActive);
   const active = useActiveProfile();
   const [open, setOpen] = useState(false);
+  // Each console's Tailscale address, shown under its home address once it is on Tailscale.
+  const { status: tailnet } = useTailnet();
   const [manageOpen, setManageOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -153,6 +156,7 @@ export default function RosterPicker() {
                 {active.host}
                 {fwLabel && ` · FW ${fwLabel}`}
               </div>
+              <TailnetLine on={consoleOnTailnet(tailnet, active.host)} />
             </>
           ) : (
             <span className="text-[var(--color-muted)]">
@@ -207,6 +211,7 @@ export default function RosterPicker() {
                       <div className="truncate text-xs text-[var(--color-muted)]">
                         {p.host}
                       </div>
+                      <TailnetLine on={consoleOnTailnet(tailnet, p.host)} />
                     </div>
                   </button>
                 </li>
@@ -236,6 +241,7 @@ export default function RosterPicker() {
 }
 
 function RosterManageModal({ onClose }: { onClose: () => void }) {
+  const { status: tailnetStatus } = useTailnet();
   const tr = useTr();
   const profiles = useRosterStore((s) => s.profiles);
   const add = useRosterStore((s) => s.add);
@@ -370,6 +376,7 @@ function RosterManageModal({ onClose }: { onClose: () => void }) {
                     <div className="min-w-0 flex-1">
                       <div className="font-medium">{p.name}</div>
                       <div className="text-[var(--color-muted)]">{p.host}</div>
+                      <TailnetLine on={consoleOnTailnet(tailnetStatus, p.host)} />
                       {p.last_seen_at && (
                         <div className="mt-0.5 text-xs text-[var(--color-muted)]">
                           {tr(
@@ -500,5 +507,28 @@ function RosterManageModal({ onClose }: { onClose: () => void }) {
         </div>
       </Modal>
     </>
+  );
+}
+
+/** "Tailscale 100.x.y.z", and "· in use" while the home network does not answer and Tailscale
+ *  carries this console. Nothing for a console that is not on Tailscale. */
+function TailnetLine({ on }: { on: ConsoleOnTailnet | null }) {
+  const tr = useTr();
+  if (!on) return null;
+  const inUse = on.via !== "lan";
+  return (
+    <div className="truncate text-xs text-[var(--color-muted)]" data-testid="roster-tailnet">
+      {tr("roster_tailnet", { ip: on.ip }, "Tailscale {ip}")}
+      {inUse ? (
+        <span className="text-[var(--color-accent-bright)]">
+          {" · "}
+          {on.via === "direct"
+            ? tr("roster_tailnet_in_use_direct", { ms: on.latencyMs >= 0 ? Math.round(on.latencyMs) : "?" }, "in use, direct {ms} ms")
+            : on.via === "system"
+              ? tr("roster_tailnet_in_use_system", undefined, "in use, through the Tailscale app")
+              : tr("roster_tailnet_in_use_relayed", undefined, "in use, relayed")}
+        </span>
+      ) : null}
+    </div>
   );
 }

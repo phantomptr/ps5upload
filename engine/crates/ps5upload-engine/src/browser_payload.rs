@@ -112,6 +112,14 @@ fn loader_settled(host: &str, wait: Duration) -> bool {
     }
 }
 
+/// A console reached through Tailscale now: a loader port is not on its tailnet allow-list, so a
+/// send would only time out. Blocking (the router may probe home once).
+fn away_refusal(host: &str) -> Option<String> {
+    ps5upload_core::route::via(host)
+        .is_tailnet()
+        .then(|| ps5upload_core::route::home_only("Sending a payload"))
+}
+
 fn refused(code: &str) -> Response {
     (StatusCode::CONFLICT, Json(json!({ "error": code }))).into_response()
 }
@@ -130,6 +138,14 @@ async fn check(installs: PkgInstallStateHandle, body: CheckBody) -> Response {
     }
     if let Some(code) = refusal(&installs, &host, body.helper) {
         return refused(code);
+    }
+    let away_host = host.clone();
+    if let Ok(Some(message)) = tokio::task::spawn_blocking(move || away_refusal(&away_host)).await {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "tailnet_away", "message": message })),
+        )
+            .into_response();
     }
     let h = host.clone();
     match tokio::task::spawn_blocking(move || loader_settled(&h, LOADER_WAIT)).await {
@@ -225,6 +241,9 @@ async fn send(
         return refused;
     }
     let result = tokio::task::spawn_blocking(move || {
+        if let Some(m) = away_refusal(&host) {
+            return Err(m);
+        }
         with_loader_lock(&host, port, || {
             send_payload_image(&host, port, "upload", &bytes, &mut stamp_helper)
         })
@@ -294,6 +313,9 @@ async fn send_json(installs: PkgInstallStateHandle, body: &[u8]) -> Response {
         return refused;
     }
     let result = tokio::task::spawn_blocking(move || {
+        if let Some(m) = away_refusal(&host) {
+            return Err(m);
+        }
         with_loader_lock(&host, port, || {
             send_payload_file(&host, &path, port, &mut stamp_helper)
         })

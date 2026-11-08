@@ -81,8 +81,20 @@ pub(crate) struct DoctorFacts {
 /// time and how many opened. A connection opens in the console's network stack, not in the
 /// helper, so this is the network's round trip even while the helper is busy with a transfer.
 pub(crate) fn reply_time(host: &str, tries: usize) -> (Option<u64>, usize) {
-    let Some(target) = resolve(host, ps5upload_ava1::gen::DEFAULT_PORT) else {
-        return (None, 0);
+    // Through Tailscale when the console is away (the same path the transfers take). A local
+    // mapping of the engine's own node opens at once whatever the network does, so it is no
+    // measurement: none then.
+    let target = match ps5upload_core::route::dial(
+        &ps5upload_core::events::console_host(host),
+        ps5upload_ava1::gen::DEFAULT_PORT,
+        false,
+    ) {
+        Some(a) if a.ip().is_loopback() => return (None, 0),
+        Some(a) => a,
+        None => match resolve(host, ps5upload_ava1::gen::DEFAULT_PORT) {
+            Some(a) => a,
+            None => return (None, 0),
+        },
     };
     let mut samples = Vec::new();
     for _ in 0..tries {

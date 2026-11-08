@@ -14,6 +14,10 @@
 //!   entry with its address, or gets a new one. Keys are write-only: leaving them out keeps what is
 //!   stored, an empty string clears them. With `base_rev`, a stale list answers 409 with the
 //!   current one.
+//! * `PATCH /api/consoles/settings` `{console, settings: {name: value | null}}`: one console's own
+//!   settings (Settings › This PS5): wake_for_uploads, keep_awake_mode (off | transfers | always),
+//!   rest_after_upload, auto_bring_up, auto_redeploy_on_wake, install_path_fallback. null goes
+//!   back to the app's default. `GET /api/consoles` lists each console's `settings`.
 //! * `GET|PUT /api/consoles/document`: the same document in the app's own form, Wake keys included:
 //!   the app and the web UI need them to start a stream from the page. Not for scripts.
 //! * `/api/shared/consoles` keeps working for a page that was already open during an update, without
@@ -417,6 +421,8 @@ fn console_view(p: &Value, keys: &KeyStore) -> Value {
         "name": str_of(p, "name"),
         "host": str_of(p, "host"),
         "notes": p.get("notes").cloned().unwrap_or(Value::Null),
+        // This console's own settings (Settings › This PS5); a missing one uses the app's default.
+        "settings": p.get("settings").cloned().filter(Value::is_object).unwrap_or_else(|| json!({})),
         "has_rp_credentials": has(REGIST_KEY) && has(RP_KEY),
         "has_wake_credential": creds.and_then(wake_of).is_some(),
         "rp_users": creds.map(users_view).unwrap_or_else(|| json!([])),
@@ -613,6 +619,121 @@ fn save_list(req: PutConsoles) -> Result<Value, Box<Response>> {
     value["profiles"] = Value::Array(list);
     shared_state::write(DOC, doc.rev, value).map_err(failed)?;
     Ok(view(&shared_state::read(DOC), &keys))
+}
+
+/// The settings one console keeps for itself (the app's `ConsoleSettings`, Settings › This PS5),
+/// and what each may be. A setting left out of a console uses the app's default.
+const CONSOLE_SETTINGS: &[(&str, &[&str])] = &[
+    ("wake_for_uploads", &[]),
+    ("keep_awake_mode", &["off", "transfers", "always"]),
+    ("rest_after_upload", &[]),
+    ("auto_bring_up", &[]),
+    ("auto_redeploy_on_wake", &[]),
+    ("install_path_fallback", &[]),
+];
+
+/// `PATCH /api/consoles/settings` `{console, settings: {name: value | null}}`.
+#[derive(Deserialize)]
+pub struct SettingsPatch {
+    #[serde(alias = "addr", alias = "host")]
+    console: String,
+    settings: Map<String, Value>,
+}
+
+/// Checks `changes` against [`CONSOLE_SETTINGS`] (all or none) and applies them to `current`:
+/// a value sets it, null goes back to the app's default.
+fn apply_console_settings(
+    current: &mut Map<String, Value>,
+    changes: &Map<String, Value>,
+) -> Result<(), String> {
+    for (k, v) in changes {
+        let Some((_, allowed)) = CONSOLE_SETTINGS.iter().find(|(name, _)| name == k) else {
+            let names: Vec<&str> = CONSOLE_SETTINGS.iter().map(|(n, _)| *n).collect();
+            return Err(format!(
+                "{k} is not a console setting (they are: {})",
+                names.join(", ")
+            ));
+        };
+        let ok = match v {
+            Value::Null => true,
+            Value::Bool(_) => allowed.is_empty(),
+            Value::String(t) => allowed.contains(&t.as_str()),
+            _ => false,
+        };
+        if !ok {
+            return Err(if allowed.is_empty() {
+                format!("{k} is true, false or null")
+            } else {
+                format!("{k} is one of {} or null", allowed.join(", "))
+            });
+        }
+    }
+    for (k, v) in changes {
+        if v.is_null() {
+            current.remove(k);
+        } else {
+            current.insert(k.clone(), v.clone());
+        }
+    }
+    Ok(())
+}
+
+/// `PATCH /api/consoles/settings`: one console's own settings, by its id, name or address. The
+/// app picks the change up through the console list, as it does a renamed console.
+pub async fn patch_settings(Json(req): Json<SettingsPatch>) -> Response {
+    let done = tokio::task::spawn_blocking(move || -> Result<Value, Box<Response>> {
+        migrate();
+        let _g = ROSTER.lock().unwrap_or_else(|e| e.into_inner());
+        let doc = shared_state::read(DOC);
+        let mut list = profiles_of(doc.value.as_ref());
+        let want = req.console.trim();
+        let at = list.iter().position(|p| {
+            str_of(p, "id") == want
+                || str_of(p, "name").eq_ignore_ascii_case(want)
+                || (!key_of(want).is_empty() && key_of(str_of(p, "host")) == key_of(want))
+        });
+        let Some(at) = at else {
+            return Err(Box::new(json_error(
+                StatusCode::NOT_FOUND,
+                "no_console",
+                format!("no console {want} on the list"),
+            )));
+        };
+        let mut current = list[at]
+            .get("settings")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        apply_console_settings(&mut current, &req.settings)
+            .map_err(|m| Box::new(json_error(StatusCode::BAD_REQUEST, "bad_setting", m)))?;
+        if let Some(p) = list[at].as_object_mut() {
+            p.insert("settings".into(), Value::Object(current));
+        }
+        let mut value = doc
+            .value
+            .clone()
+            .filter(Value::is_object)
+            .unwrap_or_else(|| json!({}));
+        value["profiles"] = Value::Array(list);
+        shared_state::write(DOC, doc.rev, value).map_err(|m| {
+            Box::new(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "save_failed",
+                m,
+            ))
+        })?;
+        Ok(view(&shared_state::read(DOC), &lock_keys()))
+    })
+    .await;
+    match done {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(r)) => *r,
+        Err(e) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "save_failed",
+            e.to_string(),
+        ),
+    }
 }
 
 // ── For the rest of the engine ──────────────────────────────────────────────────────────────────
@@ -942,6 +1063,56 @@ mod tests {
 
     fn p(id: &str, host: &str) -> Value {
         json!({"id": id, "name": id, "host": host})
+    }
+
+    #[test]
+    fn console_settings_are_checked_all_or_none_and_null_restores_the_default() {
+        let mut cur = Map::new();
+        cur.insert("rest_after_upload".into(), json!(true));
+        let ok: Map<String, Value> = serde_json::from_value(json!({
+            "wake_for_uploads": false,
+            "keep_awake_mode": "always",
+            "rest_after_upload": null,
+        }))
+        .unwrap();
+        apply_console_settings(&mut cur, &ok).unwrap();
+        assert_eq!(
+            Value::Object(cur.clone()),
+            json!({"wake_for_uploads": false, "keep_awake_mode": "always"})
+        );
+        // A wrong one changes nothing, and is named.
+        for bad in [
+            json!({"wake_for_uploads": true, "keep_awake_mode": "sometimes"}),
+            json!({"auto_bring_up": "yes"}),
+            json!({"theme": "dark"}),
+            json!({"install_path_fallback": 1}),
+        ] {
+            let bad: Map<String, Value> = serde_json::from_value(bad).unwrap();
+            let before = cur.clone();
+            assert!(apply_console_settings(&mut cur, &bad).is_err());
+            assert_eq!(cur, before);
+        }
+        let err = apply_console_settings(
+            &mut cur,
+            &serde_json::from_value(json!({"theme": "x"})).unwrap(),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("theme") && err.contains("keep_awake_mode"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn the_view_lists_each_console_settings_and_never_a_key() {
+        let keys = KeyStore::in_memory();
+        let v = console_view(
+            &json!({"id": "a", "name": "A", "host": "192.0.2.9", "settings": {"rest_after_upload": true}}),
+            &keys,
+        );
+        assert_eq!(v["settings"], json!({"rest_after_upload": true}));
+        let v = console_view(&p("b", "192.0.2.10"), &keys);
+        assert_eq!(v["settings"], json!({}));
     }
 
     #[test]

@@ -139,3 +139,13 @@ size_t tn_ip_build_icmp_echo(uint8_t *out, size_t cap, uint32_t src, uint32_t ds
 	tn_put_be16(ic + 2, tn_ip_csum(ic, 8 + n));
 	return total;
 }
+
+int tn_peer_allowed(const tn_peer_allow *a, uint32_t ip)
+{
+	if (a->all)
+		return 1;
+	for (uint32_t i = 0; i < a->n && i < TN_ALLOW_MAX; i++)
+		if (a->ip[i] == ip)
+			return 1;
+	return 0;
+}

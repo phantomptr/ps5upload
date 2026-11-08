@@ -1394,49 +1394,54 @@ pub async fn post_use_shared(Query(q): Query<UseSharedQuery>, body: axum::body::
         return local::json_error(status, why);
     }
     let response = blocking(
-        move || {
-            let folder = folder_asked(q.folder.as_deref(), q.image.as_deref())?;
-            let compat = q
-                .image
-                .as_deref()
-                .and_then(|i| i.rsplit('/').next())
-                .map(String::from);
-            let user_id = user_of_folder(&folder, q.user_id)?;
-            let host = q.addr.trim().to_string();
-            // A backup this app made, picked here (after a reset its user is gone, and Load a
-            // save file is where a person with a backup .zip goes): put back as Restore does,
-            // into this user's save even when it was another user's. The console it was made on
-            // is still checked, and the save there now is kept first.
-            if local::noted_backup(&incoming) {
-                let title_id = title_of_folder(folder.trim_end_matches('/'))?;
-                let beside = crate::remote::store::data_dir()
-                    .map(|d| d.join("save-backups").join("before-restore"));
-                local::restore_zip_any_user(
-                    &host,
-                    &title_id,
-                    &incoming,
-                    folder.trim_end_matches('/'),
-                    user_id,
-                    beside,
-                )?;
-                crate::log_info!("save backup: a backup loaded as a save file into {folder}");
-                return Ok(vec![RESTORED_WHOLE.to_string()]);
-            }
-            import_as(
-                &Live::new(&host),
-                &folder,
-                user_id,
-                "this user",
-                ZipIn::File(&incoming),
-                None,
-                compat.as_deref(),
-            )
-        },
+        move || use_shared_file(&q, &incoming),
         |parts| Json(json!({ "ok": true, "parts": parts })).into_response(),
     )
     .await;
     let _ = tokio::task::spawn_blocking(move || cleanup_temp_dir(&tmp_s)).await;
     response
+}
+
+/// A shared save on this computer's disk (`incoming`) into the user's save `q` names: what
+/// `POST /api/save-backup/use-shared` does with its body, and Share's received saves
+/// (share/mod.rs). Blocking.
+pub fn use_shared_file(q: &UseSharedQuery, incoming: &Path) -> Result<Vec<String>, Failed> {
+    let folder = folder_asked(q.folder.as_deref(), q.image.as_deref())?;
+    let compat = q
+        .image
+        .as_deref()
+        .and_then(|i| i.rsplit('/').next())
+        .map(String::from);
+    let user_id = user_of_folder(&folder, q.user_id)?;
+    let host = q.addr.trim().to_string();
+    // A backup this app made, picked here (after a reset its user is gone, and Load a
+    // save file is where a person with a backup .zip goes): put back as Restore does,
+    // into this user's save even when it was another user's. The console it was made on
+    // is still checked, and the save there now is kept first.
+    if local::noted_backup(incoming) {
+        let title_id = title_of_folder(folder.trim_end_matches('/'))?;
+        let beside =
+            crate::remote::store::data_dir().map(|d| d.join("save-backups").join("before-restore"));
+        local::restore_zip_any_user(
+            &host,
+            &title_id,
+            incoming,
+            folder.trim_end_matches('/'),
+            user_id,
+            beside,
+        )?;
+        crate::log_info!("save backup: a backup loaded as a save file into {folder}");
+        return Ok(vec![RESTORED_WHOLE.to_string()]);
+    }
+    import_as(
+        &Live::new(&host),
+        &folder,
+        user_id,
+        "this user",
+        ZipIn::File(incoming),
+        None,
+        compat.as_deref(),
+    )
 }
 
 /// `POST /api/save-backup/copy` `{addr, title_id, from_user, to_user}`: one user's PS5 save into

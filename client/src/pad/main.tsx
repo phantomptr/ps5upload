@@ -7,6 +7,8 @@
 // peer to peer over WebRTC, introduced by the signalling hub (join/rtcTransport with a "pad"
 // channel), and says in its first message what the LAN socket's address carries; nothing goes to
 // this page's own origin.
+// First: stand-ins for what an older WebKit lacks (lib/polyfills), before any other module runs.
+import "../lib/polyfills";
 import { createRoot } from "react-dom/client";
 import "../index.css";
 import { PadApp } from "./PadApp";
@@ -15,6 +17,7 @@ import { padDeviceId } from "../lib/padClient";
 import { padAppLink } from "../lib/padLink";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { hubSocketUrl, parseInternetFragment, rtcTransport } from "../join/rtcTransport";
+import { lanPage, lanTarget } from "../join/lanHint";
 import { deviceWord } from "./deviceName";
 
 const hash = new URLSearchParams(location.hash.slice(1));
@@ -40,6 +43,9 @@ if (net) {
     ...(watch ? { w: 1 } : {}),
     ...(rt ? { rt } : {}),
   };
+  // The computer's own controller page on its Wi-Fi (a link from a newer computer names it), for
+  // when the hub can't be reached: no key there, so the phone asks the computer, as here.
+  const lan = lanPage(location.hash, "pad");
   root.render(
     <PadApp
       url={hubSocketUrl(net.hub)}
@@ -48,6 +54,7 @@ if (net) {
       transport={transport}
       hello={hello}
       onReconnectToken={(t) => safeSetItem(rtKey, t)}
+      lanUrl={lan ? lanTarget(lan, { watch }) : null}
     />,
   );
 } else {

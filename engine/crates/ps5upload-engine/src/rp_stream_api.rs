@@ -283,6 +283,9 @@ struct Live {
     /// This session's id (NEXT_SESSION), shown by `GET /api/ps5/rp/session`.
     session: u64,
     hevc: bool,
+    /// The bitrate the console was asked for (kbit/s; it cannot change mid-session): an internet
+    /// guest's video track compares its bandwidth estimate with it (join_net).
+    bitrate_kbps: std::sync::atomic::AtomicU32,
     keep_alive: Duration,
     /// Every pad state the page sent, in order: a quick tap is a press and a
     /// release, and keeping only the latest would lose the press.
@@ -352,6 +355,9 @@ struct Spectator {
     /// Skips in a row (each soon after the last), and when the last was.
     lag_skips: u32,
     last_skip: Option<Instant>,
+    /// Its keyframe gap once it keeps falling behind ([`LAGGING_KEY_GAP`], an internet guest's
+    /// [`INTERNET_LAGGING_KEY_GAP`]).
+    lagging_gap: Duration,
 }
 
 impl Spectator {
@@ -366,6 +372,7 @@ impl Spectator {
             key_asked: None,
             lag_skips: 0,
             last_skip: None,
+            lagging_gap: LAGGING_KEY_GAP,
         }
     }
 
@@ -387,6 +394,8 @@ pub(crate) struct PlayerFeed {
     pub video: mpsc::Receiver<Message>,
     pub other: mpsc::Receiver<Message>,
     pub hevc: bool,
+    /// The stream's bitrate, kbit/s.
+    pub kbps: u32,
 }
 
 /// Frames queued for a watcher before it is skipped to the next keyframe (about 2 s at 60 fps).
@@ -394,12 +403,16 @@ const SPECTATOR_QUEUE: usize = 120;
 /// The least time between keyframes asked for on behalf of watchers and players (the console has
 /// one stream: each keyframe costs everyone's picture some quality, so one guest who can't keep
 /// up must not set the rate).
-const GUEST_KEY_GAP: Duration = Duration::from_secs(2);
+pub(crate) const GUEST_KEY_GAP: Duration = Duration::from_secs(2);
 /// …and for one who keeps falling behind: this many skips, each within [`LAG_FORGIVEN`] of the
 /// last, and it gets a keyframe this rarely.
-const LAG_SKIPS: u32 = 3;
-const LAGGING_KEY_GAP: Duration = Duration::from_secs(5);
-const LAG_FORGIVEN: Duration = Duration::from_secs(10);
+pub(crate) const LAG_SKIPS: u32 = 3;
+pub(crate) const LAGGING_KEY_GAP: Duration = Duration::from_secs(5);
+/// …but an internet guest's: its link (one SCTP association, link_sim.rs) falls behind in bursts
+/// after a loss, and each skip waits for a keyframe; held to one per 5 s it froze for seconds
+/// (measured: 30 ms, 0.5% loss, 2.6 fps). The every-guest gap still holds.
+pub(crate) const INTERNET_LAGGING_KEY_GAP: Duration = GUEST_KEY_GAP;
+pub(crate) const LAG_FORGIVEN: Duration = Duration::from_secs(10);
 
 /// How often a page's or phone's socket hears a WebSocket ping. The browser answers it itself,
 /// without the page's timers, which a hidden tab has hardly any of.
@@ -659,12 +672,14 @@ pub(crate) fn add_spectator(id: u64) -> Option<mpsc::Receiver<Message>> {
 /// A player joins (join.rs, Play Together) the session on `host`: like a watcher, but pictures
 /// go through a queue of `video_queue` frames (a watcher's holds about 2 s), so a player is
 /// never far behind: a full queue skips to the next keyframe (counted in `skipped`) instead of
-/// adding delay. None when no session runs for `host`.
+/// adding delay. None when no session runs for `host`. `internet`: over a WebRTC data channel
+/// (keyframes come sooner after it keeps falling behind, [`INTERNET_LAGGING_KEY_GAP`]).
 pub(crate) fn add_player(
     id: u64,
     host: &str,
     video_queue: usize,
     skipped: Arc<AtomicU64>,
+    internet: bool,
 ) -> Option<PlayerFeed> {
     let l = live()
         .filter(|l| crate::vinput_api::host_key(&l.host) == crate::vinput_api::host_key(host))?;
@@ -673,6 +688,11 @@ pub(crate) fn add_player(
     let sp = Spectator {
         video: Some(vtx.clone()),
         skipped: Some(skipped),
+        lagging_gap: if internet {
+            INTERNET_LAGGING_KEY_GAP
+        } else {
+            LAGGING_KEY_GAP
+        },
         ..Spectator::watcher(id, tx)
     };
     l.add_spectator(sp, Some(&vtx));
@@ -680,6 +700,7 @@ pub(crate) fn add_player(
         video,
         other,
         hevc: l.hevc,
+        kbps: l.bitrate_kbps.load(Ordering::Relaxed),
     })
 }
 
@@ -759,7 +780,7 @@ fn bin(kind: u8, payload: &[u8]) -> Message {
 }
 
 /// True when an Annex-B access unit starts a picture a decoder can begin at.
-fn is_keyframe(au: &[u8], hevc: bool) -> bool {
+pub(crate) fn is_keyframe(au: &[u8], hevc: bool) -> bool {
     let mut i = 0;
     while i + 3 < au.len() {
         if au[i] == 0 && au[i + 1] == 0 && au[i + 2] == 1 {
@@ -882,7 +903,7 @@ impl Live {
     /// falling behind only one per [`LAGGING_KEY_GAP`]; it still gets any keyframe that comes.
     fn lag_ask(&self, sp: &mut Spectator, now: Instant) {
         let own_gap = if sp.lag_skips >= LAG_SKIPS {
-            LAGGING_KEY_GAP
+            sp.lagging_gap
         } else {
             GUEST_KEY_GAP
         };
@@ -945,6 +966,7 @@ impl Live {
             host,
             session: NEXT_SESSION.fetch_add(1, Ordering::Relaxed),
             hevc,
+            bitrate_kbps: std::sync::atomic::AtomicU32::new(StreamConfig::default().bitrate_kbps),
             keep_alive,
             pad: Default::default(),
             sources: Default::default(),
@@ -1898,6 +1920,7 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
             .unwrap_or(DEFAULT_KEEP_ALIVE)
             .min(MAX_KEEP_ALIVE),
     ));
+    live.bitrate_kbps.store(cfg.bitrate_kbps, Ordering::Relaxed);
     let _ = live.regist_hex.set(
         creds
             .regist_key

@@ -471,6 +471,8 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
               enabled: there.enabled,
               playlistId: there.playlistId ? (idMap.get(there.playlistId) ?? null) : null,
               bringUpPlaylistId: there.bringUpPlaylistId ? (idMap.get(there.bringUpPlaylistId) ?? null) : null,
+              // Each console's choice is this device's (its consoles, its playlist ids).
+              ...(here.bringUpByConsole ? { bringUpByConsole: here.bringUpByConsole } : {}),
             }
           : here,
       });

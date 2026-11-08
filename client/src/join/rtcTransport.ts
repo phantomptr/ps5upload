@@ -13,7 +13,7 @@
 // A connection that cannot be made closes with a CloseEvent whose reason is `net:<why>`
 // (`netFailure`), which the session shows as the reason the guest is not in the game.
 
-import { NET_CLOSE, netFailure, type NetWhy } from "../lib/joinProtocol";
+import { NET_CLOSE, netFailure, type NetWhy, type TrackMedia } from "../lib/joinProtocol";
 
 /** What an internet invite link's fragment carries:
  *  `#room=<id>&k=<invite key>&fp=<SHA-256, upper-case hex with colons>&hub=<host[:port]>`. */
@@ -183,6 +183,18 @@ export interface RtcTransportOptions {
    *  controller and watch page, engine pad_link.rs). The engine gives each room's channel only its
    *  own kind's session. */
   label?: "join" | "pad";
+  /** Offer to take the picture as a video track (Play Together): the engine answers it when it
+   *  can and its host allows it, and says so in `joined` (`track`); otherwise the pictures stay
+   *  on the channel. */
+  video?: boolean;
+}
+
+/** The video codecs the track may use, H.264 first (H.265 only where this browser has it: the
+ *  engine takes it only for an H.265 session), with their retransmission entries. */
+export function trackCodecs(caps: RTCRtpCapabilities | null | undefined): RTCRtpCodec[] {
+  const c = caps?.codecs ?? [];
+  const of = (m: string) => c.filter((x) => x.mimeType.toLowerCase() === m);
+  return [...of("video/h264"), ...of("video/h265"), ...of("video/rtx")];
 }
 
 type HubMsg = { t?: string; gid?: string; why?: string; from?: string; data?: Record<string, unknown> };
@@ -220,6 +232,8 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
     private early: RTCIceCandidateInit[] = [];
     /** Set while waiting for a restarting hub: until when it is worth trying again. */
     private hubBackUntil = 0;
+    /** The video track, once the answer brought it (the session reads it when joined). */
+    media: TrackMedia | null = null;
 
     constructor(_url?: string) {
       // Asynchronous like a WebSocket's own events: the session sets its handlers first.
@@ -316,6 +330,18 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
         if (this.dc !== dc) return;
         this.dropped();
       };
+      if (o.video && pc.addTransceiver) {
+        try {
+          const t = pc.addTransceiver("video", { direction: "recvonly" });
+          const codecs = trackCodecs(globalThis.RTCRtpReceiver?.getCapabilities?.("video"));
+          if (codecs.length && t.setCodecPreferences) t.setCodecPreferences(codecs);
+        } catch {
+          // No track here: the pictures come on the channel.
+        }
+        pc.ontrack = (e: RTCTrackEvent) => {
+          if (this.pc === pc) this.media = { stream: e.streams[0] ?? new MediaStream([e.track]), receiver: e.receiver };
+        };
+      }
       pc.onicecandidate = (e: RTCPeerConnectionIceEvent) => {
         const c = e.candidate;
         // The end of gathering (null or empty) needs nothing: the engine takes what came.
@@ -485,6 +511,7 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
       const dc = this.dc;
       this.pc = null;
       this.dc = null;
+      this.media = null;
       try {
         dc?.close();
       } catch {

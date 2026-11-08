@@ -15,7 +15,19 @@ pub(super) fn tools() -> Vec<ToolDef> {
             description: "Whether Play Together is open on a console, who is in, and who is \
                           waiting to be let in. Internet guests show `via: internet` with their \
                           connection's `path` (direct, or failed with the ICE state) and round \
-                          trip; `internet.peers` lists those still connecting too. The invite's \
+                          trip; `internet.peers` lists those still connecting too. Each guest's \
+                          `link` says how they are connected: `link.path` (`lan`: the home \
+                          network, `tailscale`, `internet`: direct through both routers) and \
+                          `link.rtt_ms`; for internet guests also (round trip, `sent_kbps`, bytes queued and \
+                          buffered on the data channel, the backlog's peaks, `send_waits`; \
+                          `video`: `track` when the picture goes as an RTP video track, else \
+                          `channel`; `track`: frames_sent, rtp_packets, nacks, plis, firs, loss, \
+                          rtcp_rtt_ms, bwe_kbps against stream_kbps, and `slow` when the \
+                          estimate stays under the stream's bitrate: lower the stream's quality), \
+                          `skipped` pictures and `key_asks`, and `page`: what the guest's own \
+                          page last said about its picture (frames drawn, dropped, late, \
+                          decode_ms, stalls, stall_ms) with `quality` in a word (smooth, \
+                          stutters, poor) — use it to tell why a friend's picture stutters. The invite's \
                           key, code and links are left out (`invite.hidden`): together_invite \
                           gives the link when the user asks for one.",
             kind: Kind::Read,
@@ -34,24 +46,31 @@ pub(super) fn tools() -> Vec<ToolDef> {
         ToolDef {
             name: "together_invite",
             title: "Invite a friend",
-            description: "The invite link and code for friends to join. The same invite comes \
-                          back until it expires. With `new`, a new one, and the old link and code \
-                          stop working. With `internet`, also a link for friends outside the home \
-                          network (`internet.url`), through the signalling hub in the settings. \
-                          Whoever has a link can ask to join: share it only as the user says.",
+            description: "The invite link and code for friends to join. `share.url` is the one \
+                          link to give: as Settings › Play Together › Invites work says, the \
+                          internet link (`share.works: anywhere`; it works on the same Wi-Fi \
+                          too, and the connection then stays on it), or the home network's link \
+                          (`share.works: wifi`, with `share.why`: `setting` when invites work \
+                          only on the Wi-Fi, `offline` when the invite service can't be reached). \
+                          The same invite comes back until it expires. With `new`, a new one, \
+                          and the old link and code stop working. `internet: false` keeps to the \
+                          home network's link; `internet: true` insists on the internet one (an \
+                          error when invites work only on the Wi-Fi). Whoever has a link can ask \
+                          to join: share it only as the user says.",
             kind: Kind::Write { idempotent: false },
             schema: object(
                 json!({
                     "console": console_required(),
                     "new": flag("Make a new invite; the old link and code stop working."),
                     "internet": flag(
-                        "Also an internet invite: friends anywhere join peer to peer, with the \
-                         hub only introducing them.",
+                        "Left out: as Invites work says. True: the internet link (friends \
+                         anywhere join peer to peer, the hub only introducing them). False: the \
+                         home network's link only.",
                     ),
                 }),
                 &["console"],
             ),
-            run: route!(method: "POST", path: "/api/join/invite", done: "The invite."),
+            run: |ctx, args| Box::pin(invite(ctx, args)),
         },
         ToolDef {
             name: "together_decide",
@@ -98,8 +117,8 @@ pub(super) fn tools() -> Vec<ToolDef> {
             name: "together_settings",
             title: "Play Together settings",
             description: "How many guests may join (1 to 3), whether PS and Create are taken \
-                          from guests who are playing, and internet invites: on or off, the \
-                          signalling hub, the STUN servers, asking the router for a port (UPnP). \
+                          from guests who are playing, and where invites work (`invites`: \
+                          anywhere, or only on the Wi-Fi), the signalling hub, the STUN servers, asking the router for a port (UPnP). \
                           One set for every console. With `addr` (the console), `guest_profiles` \
                           says which signed-in profile each guest's player plays as on that \
                           console (together_profiles lists them): the guest is seated in it and \
@@ -122,7 +141,16 @@ pub(super) fn tools() -> Vec<ToolDef> {
                         "Not here: a guest on the stream's own controller plays as the host's PS5 \
                          profile, so it is together_owner_access, which asks the user first.",
                     ),
-                    "internet_invites": flag("Allow internet invites (on by default)."),
+                    "invites": {
+                        "type": "string",
+                        "enum": ["anywhere", "wifi"],
+                        "description": "Invites work: `anywhere` (the default: one link that \
+                                        works on the Wi-Fi and over the internet) or `wifi` \
+                                        (the home network's link only). Kept across restarts.",
+                    },
+                    "internet_invites": flag(
+                        "The older name of `invites`: true is anywhere, false only on the Wi-Fi.",
+                    ),
                     "hub_url": text("The signalling hub, a wss:// address."),
                     "stun": {
                         "type": "array",
@@ -293,6 +321,26 @@ async fn settings(ctx: ToolCtx, args: Args) -> ToolResult {
     Ok(ToolOutput::ok("Changed.", answer))
 }
 
+/// The invite as the host's app asks for it: `internet` left out is `share` (the one link, as
+/// Invites work says); given, it is passed on as it is.
+fn invite_body(args: &Args) -> Value {
+    let mut body = serde_json::Map::new();
+    for (name, value) in args.entries() {
+        if !value.is_null() {
+            body.insert(name.clone(), value.clone());
+        }
+    }
+    if !body.contains_key("internet") {
+        body.insert("share".into(), Value::Bool(true));
+    }
+    Value::Object(body)
+}
+
+async fn invite(ctx: ToolCtx, args: Args) -> ToolResult {
+    let answer = ctx.post("/api/join/invite", &invite_body(&args)).await?;
+    Ok(ToolOutput::ok("The invite.", answer))
+}
+
 /// The route takes `{destinations: [{key_id}]}`; an agent has a list of ids.
 async fn golive_start(ctx: ToolCtx, args: Args) -> ToolResult {
     let ids: Vec<Value> = args
@@ -323,6 +371,31 @@ mod tests {
             Value::Object(m) => Args(m),
             _ => Args::default(),
         }
+    }
+
+    /// together_invite without `internet` asks for the one link (as Invites work says); with it,
+    /// the agent's choice goes as it is.
+    #[test]
+    fn an_invite_follows_invites_work_unless_told() {
+        let b = invite_body(&args(json!({"console": "1.2.3.4"})));
+        assert_eq!(b, json!({"console": "1.2.3.4", "share": true}));
+        let b = invite_body(&args(
+            json!({"console": "1.2.3.4", "internet": false, "new": true}),
+        ));
+        assert_eq!(
+            b,
+            json!({"console": "1.2.3.4", "internet": false, "new": true})
+        );
+        let tools = tools();
+        let s = &tools
+            .iter()
+            .find(|t| t.name == "together_settings")
+            .unwrap()
+            .schema;
+        assert_eq!(
+            s["properties"]["invites"]["enum"],
+            json!(["anywhere", "wifi"])
+        );
     }
 
     /// The host's own profile goes through together_owner_access alone, which is marked

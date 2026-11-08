@@ -11,6 +11,7 @@ import { inputEstimate, STAGES, stageValues } from "../../lib/rpLatency";
 import { useTr } from "../../state/lang";
 import { useRemotePlayStore } from "../../state/remotePlay";
 import { useRpQualityStore, wasOffered } from "../../state/rpQuality";
+import { tailnetVia } from "../../api/tailnet";
 
 /** What the delay that can be measured comes to, ms: the round trip to the engine (null until
  *  it answers) and the time a frame takes from arriving to being drawn. The console's own leg
@@ -125,6 +126,24 @@ export function QualityNotice() {
 
   const watch = useRef(new BusyNetworkWatch());
   useEffect(() => watch.current.reset(), [stream]);
+  // Through Tailscale's relay servers: 720p is the better picture there, so it is offered once at
+  // the start instead of after frames are lost.
+  const host = useRemotePlayStore((s) => s.target?.host ?? "");
+  const [relayed, setRelayed] = useState(false);
+  useEffect(() => {
+    setRelayed(false);
+    if (!stream || !host || phase !== "playing") return;
+    let live = true;
+    void tailnetVia(host).then((v) => {
+      if (!live || v.via !== "relayed") return;
+      setRelayed(true);
+      const can = canStepDown({ enabled, res, pictureHeight: stream.canvas.height, offered: wasOffered(stream) });
+      if (can) offer(stream);
+    });
+    return () => {
+      live = false;
+    };
+  }, [stream, phase === "playing"]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!stream || !stats || phase !== "playing") return;
     const can = canStepDown({ enabled, res, pictureHeight: stream.canvas.height, offered: wasOffered(stream) });
@@ -184,7 +203,11 @@ export function QualityNotice() {
       data-testid="rp-quality-offer"
     >
       <Wifi size={15} className="shrink-0 text-white/70" aria-hidden />
-      <span className="min-w-0 truncate">{tr("rp_busy_net", undefined, "The network is dropping frames.")}</span>
+      <span className="min-w-0 truncate">
+        {relayed
+          ? tr("rp_relayed_720", undefined, "Tailscale is relaying this stream: 720p plays smoother.")
+          : tr("rp_busy_net", undefined, "The network is dropping frames.")}
+      </span>
       <button
         type="button"
         onClick={(e) => {

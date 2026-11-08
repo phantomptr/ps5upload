@@ -28,8 +28,28 @@ More than 120 tools, all of them thin layers over [the engine's API](API.md):
 | Hardware | `hw_*`, `power_*`, `notifications_*`, `health_*`, `disk_usage_*`, `cleanup_*`, `shell_run` | Temperatures, rest and wake, health checks and repairs, what fills the drive |
 | Payloads | `payloads_*` | Catalogue, download, updates and rollback, send, store, autoload, Payload Manager sync |
 | Remote Play | `rp_*` | Start and stop a session, see the picture, press buttons, type, answer a passcode; see what the controller sends and how pairing went |
-| Friends and viewers | `together_*`, `golive_*` | Open Play Together and invite; go live |
+| Friends and viewers | `together_*`, `golive_*`, `share_*` | Open Play Together and invite; go live; share an app's things with a friend |
 | Everything else | `settings_*`, `devices_list`, `drive_*`, `api_catalog`, `api_describe`, `api_request` | Settings, Mesh Drive, and any route of the API |
+
+**Play Together has one invite.** `together_invite` gives one link (`share.url`) that works on your
+Wi-Fi and over the internet; a friend on your Wi-Fi stays on it. Without internet, or when the invite
+service is down, it gives your Wi-Fi's link (`share.works: "wifi"`, `share.why: "offline"`). What
+changed for agents:
+
+- `together_invite` follows "Invites work" unless you pass `internet`. `internet: true` still asks
+  for the internet link, and `internet: false` for your Wi-Fi's.
+- `together_settings` takes `invites`: `anywhere` (the default) or `wifi`. The setting is kept
+  across restarts. `internet_invites` still works and means the same: on is anywhere, off is Wi-Fi
+  only.
+- `together_status` gives each friend `link.path` (`lan`, `tailscale` or `internet`) and
+  `link.rtt_ms`.
+
+**Share sends an app's things to a friend.** `share_create` makes a link (homebrew apps only: a
+retail game, its updates and add-ons are refused by the engine in any format; saves of any game,
+screenshots and clips, cheats, controls, stream settings and a note can go too). The friend opens it
+and asks; `share_decide` allows or declines each request, and only then do files go, directly from
+this computer to theirs. `share_status` shows the shares, requests, receives and history without
+the links; `share_cancel` stops one.
 
 `api_catalog` finds a route, `api_describe` gives its fields and answers, and `api_request` calls it,
 so what the other tools don't cover is still reachable. The only exceptions hold console keys, and
@@ -256,10 +276,21 @@ clients let you allow tools one by one, so keep these on "ask".
 | `together_owner_access` | Let a friend play as your own PS5 profile (your saves and trophies): Player 1 on the stream's controller, or your profile for a guest player. `together_settings` refuses both |
 | `golive_start` | Stream your session in public |
 | `golive_destination_remove` | Forget a saved stream key |
+| `share_create`, `share_decide` | Make a Share link, and send the files to a friend who asked |
+| `share_cancel` | Stop a share and its transfers |
 | `api_request` | Anything the API can do |
 
 Some tools aren't marked destructive but still matter: `install_pkg`, `games_launch`,
-`rp_input`, `rp_start`, `together_invite`, `together_decide`, `settings_set`.
+`rp_input`, `rp_start`, `together_invite`, `together_decide`, `settings_set`,
+`console_settings_set`.
+
+**App settings and each console's own.** `settings_get` / `settings_set` are the app's settings.
+Some settings belong to one console (Settings › This PS5): `wake_for_uploads`, `keep_awake_mode`
+(off, transfers or always), `rest_after_upload`, `auto_bring_up`, `auto_redeploy_on_wake` and
+`install_path_fallback`. `consoles_list` shows each console's own as `settings`, and
+`console_settings_set` changes them for one console (null goes back to the app's default). The app
+setting of the same name is that default: changing it with `settings_set` does not change a console
+that has its own value.
 
 ### What never reaches a model
 
@@ -276,7 +307,9 @@ Allow) are taken out of the status reads, `together_status` and a `GET /api/join
 whether it is open, when it expires and who is in. `together_invite` still answers with the link,
 because handing it out is what you asked for, and you still approve who joins. A Tailscale sign-in
 link (`login_url`) never reaches a tool: whoever opens it first could put this computer or your
-PS5 on a tailnet of their own. Sign in from the app.
+PS5 on a tailnet of their own. Sign in from the app. A Share link (its `url`, `lan_url` and `room`:
+whoever has the room can ask you for the files) is taken out of every read of `/api/share`
+(`share_status`, `api_request`), which says `link_hidden`; `share_create` still answers with it.
 
 **Logs.** Engine log lines and journal events are cleaned where they are written, and again when an
 older journal line is read: a password in a URL, a field or `name=value` named as a key, token, password

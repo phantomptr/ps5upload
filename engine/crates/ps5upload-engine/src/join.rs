@@ -13,7 +13,8 @@
 //!   nearby" join from the mesh presence; every new guest asks the host); answers
 //!   `{"stage": "asking"}` (waiting for the host), `{"stage": "waiting", "why": "host_stopped"}`
 //!   (a guest coming back while the host restarts Play), then `{"stage": "joined", "player": n,
-//!   "token": t, "hevc": bool}` or `{"stage": "refused", "why": "key" | "expired" | "full" |
+//!   "token": t, "hevc": bool, "track": bool}` (`track`: an internet guest's pictures come on the
+//!   RTP video track its page offered, not on the channel; join_net/rtc.rs) or `{"stage": "refused", "why": "key" | "expired" | "full" |
 //!   "denied" | "no_answer" (the host did not answer in time) | "closed" | "not_playing" |
 //!   "old_helper" | "unreachable" | "slow_down" (5 wrong codes in a minute) | "seat_taken" (a
 //!   resume to the stream's controller, which the host needs back, with no pad free)}`.
@@ -91,7 +92,7 @@ const OPEN_WAIT: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 5 });
 /// How often a guest hears its status (and the engine pings it).
 const STATUS_EVERY: Duration = Duration::from_secs(1);
 /// Pictures queued for a player before it skips to the next keyframe (the host page's queue).
-const PLAYER_QUEUE: usize = 6;
+pub(crate) const PLAYER_QUEUE: usize = 6;
 /// A guest may press PS this long after their pad is made (to answer "Who's using this
 /// controller?"), unless the host says they are in sooner.
 const PICKING_GRACE: Duration = Duration::from_secs(60);
@@ -240,6 +241,12 @@ pub(crate) struct Settings {
     /// Ask the router for a port (UPnP-IGD, NAT-PMP / PCP) while an internet invite is open.
     #[serde(default = "yes")]
     pub upnp: bool,
+    /// Internet guests whose page offers it get the picture as an RTP video track (the browser's
+    /// own jitter buffer, retransmission and decoder: crate::join_net::rtc), not on the data
+    /// channel. On unless the host turns it off; off, or a page that offers no track, keeps the
+    /// data channel.
+    #[serde(default = "yes")]
+    pub video_track: bool,
 }
 
 fn yes() -> bool {
@@ -267,11 +274,24 @@ impl Default for Settings {
             hub_url: default_hub(),
             stun: default_stun(),
             upnp: true,
+            video_track: true,
         }
     }
 }
 
 static SETTINGS: Mutex<Option<Settings>> = Mutex::new(None);
+
+/// Other modules' tests (share/tests.rs): the hub under test, and the internet invites switch.
+#[cfg(test)]
+pub(crate) fn set_test_hub(hub_url: &str, internet: bool) {
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings {
+        hub_url: hub_url.to_string(),
+        internet_invites: internet,
+        stun: Vec::new(),
+        upnp: false,
+        ..Settings::default()
+    });
+}
 
 pub(crate) fn settings() -> Settings {
     SETTINGS
@@ -279,6 +299,95 @@ pub(crate) fn settings() -> Settings {
         .unwrap_or_else(|e| e.into_inner())
         .clone()
         .unwrap_or_default()
+}
+
+// ── "Invites work" (kept across restarts) ───────────────────────────────────────────────────────
+
+/// Where the engine keeps "Invites work" (in its data folder). The other Play Together choices
+/// last one engine run, as before.
+const INVITES_FILE: &str = "play_together.json";
+
+/// "Invites work" as the API says it: "anywhere" (the one link: the internet invite, which also
+/// works on the Wi-Fi) or "wifi" (the home network's link only): `internet_invites` on or off.
+pub(crate) fn invites_word(anywhere: bool) -> &'static str {
+    if anywhere {
+        "anywhere"
+    } else {
+        "wifi"
+    }
+}
+
+/// The settings as the API shows them: every field, and `invites` (the same choice as
+/// `internet_invites`, in the words of Settings › App › Play Together).
+pub(crate) fn settings_view(s: &Settings) -> serde_json::Value {
+    let mut v = serde_json::to_value(s).unwrap_or_default();
+    v["invites"] = invites_word(s.internet_invites).into();
+    v
+}
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct StoredInvites {
+    /// "anywhere" or "wifi".
+    #[serde(default)]
+    invites: Option<String>,
+    /// The older name of the same choice (internet invites on or off), read too.
+    #[serde(default, skip_serializing)]
+    internet_invites: Option<bool>,
+}
+
+/// The saved choice (true: anywhere), None when the file says none.
+fn read_invites(path: &std::path::Path) -> Option<bool> {
+    let s: StoredInvites = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    match s.invites.as_deref() {
+        Some("anywhere") => Some(true),
+        Some("wifi") => Some(false),
+        _ => s.internet_invites,
+    }
+}
+
+fn write_invites(path: &std::path::Path, anywhere: bool) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| crate::state_io::describe("the Play Together setting", dir, &e))?;
+    }
+    let body = serde_json::to_vec_pretty(&StoredInvites {
+        invites: Some(invites_word(anywhere).to_string()),
+        internet_invites: None,
+    })
+    .map_err(|e| e.to_string())?;
+    // Written aside and renamed over: a crash mid-write never leaves half a file.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, body)
+        .and_then(|()| std::fs::rename(&tmp, path))
+        .map_err(|e| crate::state_io::describe("the Play Together setting", path, &e))
+}
+
+fn invites_path() -> Option<std::path::PathBuf> {
+    ps5upload_ava1::pool::data_dir().map(|d| d.join(INVITES_FILE))
+}
+
+/// "Invites work" as it was last set; called once as the engine starts. Nothing saved (every
+/// engine before 12.1 kept Allow internet invites for one run only, on at each start): anywhere.
+pub(crate) fn load_invites() {
+    let Some(anywhere) = invites_path().and_then(|p| read_invites(&p)) else {
+        return;
+    };
+    let mut g = SETTINGS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut s = g.clone().unwrap_or_default();
+    s.internet_invites = anywhere;
+    *g = Some(s);
+}
+
+/// Saves "Invites work" (never from the tests: they would write the user's own data folder).
+fn save_invites(anywhere: bool) {
+    if cfg!(test) {
+        return;
+    }
+    if let Some(p) = invites_path() {
+        if let Err(e) = write_invites(&p, anywhere) {
+            crate::log_at!(Warn, "together", "join: {e}");
+        }
+    }
 }
 
 /// "Guests play as": the console profile a guest on Player `player` gets, chosen by the host for
@@ -433,9 +542,151 @@ pub(crate) struct Stats {
     pad_frames: AtomicU64,
     /// Pictures were skipped in the last few seconds: this guest's connection can't keep up.
     behind: AtomicBool,
+    /// The guest's keyframe asks that reached the console (at most one a [`KEY_ASK_GAP`]).
+    key_asks: AtomicU64,
+    /// What the guest's page said last about its picture (`{"stats": …}`, every 2 s at most).
+    page: Mutex<Option<PageReport>>,
+}
+
+/// A guest page's report on its picture: totals since its picture started, kept as numbers only.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct PageReport {
+    /// Pictures drawn, dropped (waiting for a keyframe, or behind), arriving over 50 ms after
+    /// the one before.
+    frames: u64,
+    dropped: u64,
+    late: u64,
+    /// Average decode time over the last report, ms.
+    decode_ms: f64,
+    /// Over 100 ms without a new picture: how often, in all, the longest (ms).
+    stalls: u64,
+    stall_ms: u64,
+    worst_stall_ms: u64,
+    /// Times the picture waited for a keyframe.
+    key_waits: u64,
+    /// "webcodecs" or "mse" (the picture on the data channel), "track" (the video track: the
+    /// numbers are the browser's own, `getStats` inbound-rtp).
+    decoder: Option<&'static str>,
+    /// The video track's: the browser's jitter buffer delay (average, ms), and the NACKs and PLIs
+    /// it sent.
+    jitter_ms: Option<f64>,
+    nacks: Option<u64>,
+    plis: Option<u64>,
+    /// Stalled time since the report before (ms), and when this one came.
+    stall_ms_recent: u64,
+    at: Option<Instant>,
+}
+
+/// Reports closer together than this are ignored (the page sends one every 2 s).
+const PAGE_REPORT_GAP: Duration = Duration::from_millis(1500);
+
+impl PageReport {
+    /// The page's `{"stats": …}`, its numbers taken (anything else ignored); None when it has none.
+    fn from_page(v: &serde_json::Value) -> Option<PageReport> {
+        let o = v.as_object()?;
+        let n = |k: &str| {
+            o.get(k)
+                .and_then(|x| x.as_f64())
+                .filter(|x| x.is_finite() && *x >= 0.0)
+                .map(|x| x.min(1e12))
+        };
+        Some(PageReport {
+            frames: n("frames")? as u64,
+            dropped: n("dropped").unwrap_or(0.0) as u64,
+            late: n("late").unwrap_or(0.0) as u64,
+            decode_ms: (n("decode_ms").unwrap_or(0.0).min(10_000.0) * 10.0).round() / 10.0,
+            stalls: n("stalls").unwrap_or(0.0) as u64,
+            stall_ms: n("stall_ms").unwrap_or(0.0) as u64,
+            worst_stall_ms: n("worst_stall_ms").unwrap_or(0.0) as u64,
+            key_waits: n("key_waits").unwrap_or(0.0) as u64,
+            decoder: match o.get("decoder").and_then(|d| d.as_str()) {
+                Some("webcodecs") => Some("webcodecs"),
+                Some("mse") => Some("mse"),
+                Some("track") => Some("track"),
+                _ => None,
+            },
+            jitter_ms: n("jitter_ms").map(|x| (x.min(60_000.0) * 10.0).round() / 10.0),
+            nacks: n("nacks").map(|x| x as u64),
+            plis: n("plis").map(|x| x as u64),
+            ..PageReport::default()
+        })
+    }
+
+    /// How the picture looks to the guest now: "smooth", "stutters" or "poor", from the time it
+    /// stood still since the report before (a page that stopped reporting says nothing).
+    fn quality(&self, now: Instant) -> Option<&'static str> {
+        let at = self.at?;
+        if now.saturating_duration_since(at) > Duration::from_secs(10) {
+            return None;
+        }
+        Some(match self.stall_ms_recent {
+            0..=150 => "smooth",
+            151..=600 => "stutters",
+            _ => "poor",
+        })
+    }
+
+    fn json(&self, now: Instant) -> serde_json::Value {
+        serde_json::json!({
+            "frames": self.frames,
+            "dropped": self.dropped,
+            "late": self.late,
+            "decode_ms": self.decode_ms,
+            "stalls": self.stalls,
+            "stall_ms": self.stall_ms,
+            "worst_stall_ms": self.worst_stall_ms,
+            "key_waits": self.key_waits,
+            "decoder": self.decoder,
+            "jitter_ms": self.jitter_ms,
+            "nacks": self.nacks,
+            "plis": self.plis,
+            "stall_ms_recent": self.stall_ms_recent,
+            "age_s": self.at.map(|t| now.saturating_duration_since(t).as_secs()),
+            "quality": self.quality(now),
+        })
+    }
 }
 
 impl Stats {
+    /// A page report: kept unless the last came under [`PAGE_REPORT_GAP`] ago. A report whose
+    /// totals went down is a new picture (a reconnect): its stalled time counts from zero.
+    fn page_report(&self, v: &serde_json::Value, now: Instant) {
+        let Some(mut r) = PageReport::from_page(v) else {
+            return;
+        };
+        let mut g = self.page.lock().unwrap_or_else(|e| e.into_inner());
+        let before = g.as_ref();
+        if before
+            .and_then(|b| b.at)
+            .is_some_and(|t| now.saturating_duration_since(t) < PAGE_REPORT_GAP)
+        {
+            return;
+        }
+        r.stall_ms_recent = match before {
+            Some(b) if r.stall_ms >= b.stall_ms && r.frames >= b.frames => r.stall_ms - b.stall_ms,
+            _ => r.stall_ms,
+        };
+        r.at = Some(now);
+        *g = Some(r);
+    }
+
+    fn page_json(&self, now: Instant) -> serde_json::Value {
+        self.page
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|r| r.json(now))
+            .unwrap_or(serde_json::Value::Null)
+    }
+
+    fn quality(&self, now: Instant) -> Option<&'static str> {
+        self.page
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .and_then(|r| r.quality(now))
+    }
+
     fn rtt(&self, ms: u32) {
         self.rtt_ms.store(ms.max(1), Ordering::Relaxed);
         self.rtt_max.fetch_max(ms, Ordering::Relaxed);
@@ -498,6 +749,24 @@ enum SeatMove {
 }
 
 impl Guest {
+    /// Their connection, as the host's panel and together_status show it: `path` ("lan",
+    /// "tailscale", "internet") and `rtt_ms`. An internet guest's is its peer connection's (the
+    /// pair ICE selected, with its numbers); a LAN guest's socket says only where it comes from
+    /// (never the address itself).
+    fn link_json(&self) -> serde_json::Value {
+        match &self.net {
+            Some(n) => n.link_json(),
+            None => serde_json::json!({
+                "path": self.ip.map(|ip| match crate::join_net::rtc::reach_rank(ip) {
+                    1 => "tailscale",
+                    0 => "lan",
+                    _ => "internet",
+                }),
+                "rtt_ms": self.stats.rtt_now(),
+            }),
+        }
+    }
+
     /// Their pad was made (or made again) as `r` says: seated in the profile the host chose, so
     /// they play at once (PS and Create blocked from the first frame when the host blocks them,
     /// no picking window); or the console asks them who they are, as without a choice (with the
@@ -736,7 +1005,13 @@ impl Party {
     /// The internet half of the invite `inv` (None without a room or an invite).
     fn internet_json(&self, inv: Option<&InviteInfo>) -> Option<serde_json::Value> {
         let inv = inv?;
-        self.internet.as_ref().map(|r| r.json(&inv.key))
+        let room = self.internet.as_ref()?;
+        // The home network's page, the link's hint for a guest who cannot reach the hub.
+        let lan = bases(&self.console, &self.reach)
+            .into_iter()
+            .next()
+            .map(|b| format!("{b}{}/join", crate::host_guard::base_path()));
+        Some(room.json(&inv.key, lan.as_deref()))
     }
 
     fn key_ok(&self, key: &str, now: Instant) -> bool {
@@ -1139,6 +1414,13 @@ impl Party {
                     "via": if g.net.is_some() { "internet" } else { "lan" },
                     "path": g.net.as_ref().map(|n| n.path()),
                     "ice_rtt_ms": g.net.as_ref().and_then(|n| n.rtt_ms()),
+                    // An internet guest's connection now (round trip, rate, what waits to go).
+                    "link": g.link_json(),
+                    "key_asks": g.stats.key_asks.load(Ordering::Relaxed),
+                    // What the guest's page says about its picture, and in a word ("smooth",
+                    // "stutters", "poor"; null before its first report or from an older page).
+                    "page": g.stats.page_json(now),
+                    "quality": g.stats.quality(now),
                 })
             })
             .collect();
@@ -1151,7 +1433,7 @@ impl Party {
             "players_in": self.guests_in(),
             "guests": guests,
             "pending": self.pending.iter().map(|a| serde_json::json!({"id": a.id, "name": a.name, "state": "asking"})).collect::<Vec<_>>(),
-            "settings": self.settings,
+            "settings": settings_view(&self.settings),
             "max_guests": MAX_GUESTS,
             // "Guests play as" on this console, and the helper's companion that binds them.
             "guest_profiles": seat_profiles(&self.console),
@@ -1204,6 +1486,10 @@ impl Party {
                     "queue": s.queue.load(Ordering::Relaxed),
                     "skipped_pictures": s.skipped.load(Ordering::Relaxed),
                     "pad_frames": s.pad_frames.load(Ordering::Relaxed),
+                    "key_asks": s.key_asks.load(Ordering::Relaxed),
+                    "via": if g.net.is_some() { "internet" } else { "lan" },
+                    "link": g.link_json(),
+                    "page": s.page_json(now),
                     "slot_open": g.slot_open,
                     "stream_seat": g.on_seat(),
                     "seat_move": format!("{:?}", g.seat_move),
@@ -1741,6 +2027,18 @@ pub(crate) trait GuestSocket: Send + 'static {
     /// An internet guest's connection, for the host's panel (None on the LAN).
     fn net(&self) -> Option<Arc<crate::join_net::PeerInfo>> {
         None
+    }
+    /// The session's pictures (`hevc`, at `stream_kbps`) go on an internet guest's RTP video
+    /// track, which their page offered ([`Self::send_video`]); false: on this socket with the rest.
+    fn video_track(&mut self, _hevc: bool, _stream_kbps: u32) -> bool {
+        false
+    }
+    /// A picture or the codec header for the video track.
+    fn send_video(
+        &mut self,
+        m: Message,
+    ) -> impl std::future::Future<Output = Result<(), ()>> + Send {
+        self.send(m)
     }
 }
 
@@ -2531,6 +2829,7 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
     let key = host_key(&console);
     let (tx, mut rx) = mpsc::channel::<Out>(64);
     let net = socket.net();
+    let internet = net.is_some();
     let Some((fx, player, token, stats)) = with_party(&key, |p| {
         let fx = p.attach(id, gen, tx);
         let g = p.guest_mut(id)?;
@@ -2544,17 +2843,27 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
     };
     apply(&console, fx);
     let spect = SPECTATOR_BASE | gen;
-    let feed =
-        crate::rp_stream_api::add_player(spect, &console, PLAYER_QUEUE, stats.skipped.clone());
+    let feed = crate::rp_stream_api::add_player(
+        spect,
+        &console,
+        PLAYER_QUEUE,
+        stats.skipped.clone(),
+        internet,
+    );
     let hevc = feed.as_ref().map(|f| f.hevc).unwrap_or(false);
+    // An internet guest whose page offered a video track gets the pictures there (join_net::rtc).
+    let track = match &feed {
+        Some(f) => socket.video_track(f.hevc, f.kbps),
+        None => false,
+    };
     crate::log_at!(
         Debug,
         "together",
         "join: Player {player} on {console} connected (socket {gen}): picture {}, hevc {hevc}",
-        if feed.is_some() {
-            "on"
-        } else {
-            "none (no session)"
+        match (&feed, track) {
+            (None, _) => "none (no session)",
+            (Some(_), true) => "on the video track",
+            (Some(_), false) => "on",
         }
     );
     let (mut video, mut other) = match feed {
@@ -2564,6 +2873,8 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
     let ended = socket
         .send(say(serde_json::json!({
             "stage": "joined", "player": player, "token": token, "hevc": hevc,
+            // The pictures come on the video track (an internet page that offered one), not here.
+            "track": track,
         })))
         .await
         .is_err();
@@ -2613,6 +2924,8 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
                         #[serde(default)] ping: Option<serde_json::Value>,
                         #[serde(default)] leave: Option<serde_json::Value>,
                         #[serde(default)] keyframe: bool,
+                        /// The page's picture report (every 2 s at most), for the host's panel.
+                        #[serde(default)] stats: Option<serde_json::Value>,
                     }
                     if let Ok(m) = serde_json::from_str::<In>(t.as_str()) {
                         if m.leave.is_some() {
@@ -2621,8 +2934,12 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
                         }
                         // The guest's picture waits for a keyframe (#648): ask the console, at
                         // most once a KEY_ASK_GAP so a guest can't flood the host's stream.
+                        if let Some(s) = &m.stats {
+                            stats.page_report(s, Instant::now());
+                        }
                         if m.keyframe {
                             if key_ask.take(Instant::now()) {
+                                stats.key_asks.fetch_add(1, Ordering::Relaxed);
                                 crate::log_at!(Debug, "together",
                                     "join: Player {player} on {console} asks for a keyframe ({} pictures skipped so far)",
                                     stats.skipped.load(Ordering::Relaxed)
@@ -2672,7 +2989,8 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
                     if let Some(r) = video.as_ref() {
                         stats.queue.store(r.len(), Ordering::Relaxed);
                     }
-                    if socket.send(m).await.is_err() { break }
+                    let sent = if track { socket.send_video(m).await } else { socket.send(m).await };
+                    if sent.is_err() { break }
                 }
                 None => video = None,
             },
@@ -2801,11 +3119,44 @@ fn invite_json(
         // This computer's Tailscale address (one of `urls`), for the page to label.
         "tailscale": crate::pad_link::tailscale_ip().map(|ip| ip.to_string()),
         "expires_in_s": inv.until.saturating_duration_since(now).as_secs(),
+        // The one link to share (QR code and Copy): `share.url`, and where it works (`works`).
+        "share": share_json(urls.first().map(String::as_str), internet.as_ref(), settings().internet_invites),
         // The internet invite, when the host made one: `url` (the link to share), `room`, `hub`,
-        // `fp` (this engine's DTLS fingerprint), `state` on the hub, `router` (the port the router
-        // mapped), `peers` (each internet guest's connection).
+        // `fp` (this engine's DTLS fingerprint), `state` on the hub, `offline` (the hub can't be
+        // reached), `router` (the port the router mapped), `peers` (each internet guest's
+        // connection).
         "internet": internet,
     })
+}
+
+/// The one link the host shares ("one invite"): the internet link, which works anywhere (on the
+/// same Wi-Fi too: ICE keeps that connection on the home network, and the link names the home
+/// network's page for a guest who cannot reach the hub), or the home network's own link when
+/// there is no internet link: `works` "anywhere" or "wifi", and `why` it is the Wi-Fi's: "setting"
+/// (Invites work: Only on my Wi-Fi), "offline" (the hub can't be reached: no internet here, or the
+/// hub is down), "local" (none was asked for).
+pub(crate) fn share_json(
+    lan: Option<&str>,
+    internet: Option<&serde_json::Value>,
+    anywhere: bool,
+) -> serde_json::Value {
+    let net_url = internet
+        .filter(|n| n["offline"] != true)
+        .and_then(|n| n["url"].as_str());
+    match net_url {
+        Some(u) => serde_json::json!({"url": u, "works": "anywhere", "why": null}),
+        None => serde_json::json!({
+            "url": lan,
+            "works": "wifi",
+            "why": if !anywhere {
+                "setting"
+            } else if internet.is_some() {
+                "offline"
+            } else {
+                "local"
+            },
+        }),
+    }
 }
 
 fn state_json(console: &str) -> serde_json::Value {
@@ -2860,7 +3211,7 @@ fn state_json(console: &str) -> serde_json::Value {
             "players_in": 0,
             "guests": [],
             "pending": [],
-            "settings": settings(),
+            "settings": settings_view(&settings()),
             "max_guests": MAX_GUESTS,
             "guest_profiles": seat_profiles(console),
         }),
@@ -2975,10 +3326,18 @@ pub struct InviteBody {
     /// Also an internet invite: a room on the signalling hub (`invite.internet.url`).
     #[serde(default)]
     internet: bool,
+    /// The one link, as "Invites work" says: the internet invite when that is "anywhere" (and the
+    /// hub address and certificate allow it), else the home network's; never refused for it.
+    #[serde(default)]
+    share: bool,
 }
 
-/// `POST /api/join/invite {addr, new?, internet?}`: `{key, code, code_display, url, urls,
-/// expires_in_s, internet}`. The same invite again until it expires, unless `new` (the old link and
+/// `POST /api/join/invite {addr, new?, internet?, share?}`: `{key, code, code_display, url, urls,
+/// expires_in_s, share, internet}`. `share` is the one link to show (`share.url`, where it works:
+/// `share.works` "anywhere" or "wifi", and `share.why` for the Wi-Fi: "setting", "offline" (the hub
+/// can't be reached), "local"; see [`share_json`]). With `share` in the request the engine makes the
+/// internet link when Settings › Play Together › Invites work says Anywhere, as `internet` does,
+/// and quietly keeps to the home network's link otherwise. The same invite again until it expires, unless `new` (the old link and
 /// code stop working). With `internet`, also a link for friends anywhere (`internet.url`): the
 /// engine opens a room on the signalling hub in the settings and the guest's browser connects to
 /// it peer to peer (409 `internet_off` when the settings turned internet invites off, 409
@@ -2993,6 +3352,13 @@ pub async fn invite(
         return r;
     }
     let s = settings();
+    // The one link: the internet one when invites work anywhere and it can be made; otherwise the
+    // home network's, never a refusal (`share` says which, and why).
+    let internet = b.internet
+        || (b.share
+            && s.internet_invites
+            && crate::join_net::hub_url_ok(&s.hub_url)
+            && crate::join_net::fingerprint().is_some());
     if b.internet {
         if !s.internet_invites {
             return bad(StatusCode::CONFLICT, "internet_off");
@@ -3009,7 +3375,7 @@ pub async fn invite(
     let key = host_key(&b.addr);
     match with_party(&key, |p| {
         let inv = p.invite(b.new, now);
-        if b.internet && inv.is_some() && p.internet.as_ref().is_none_or(|r| r.url() != s.hub_url) {
+        if internet && inv.is_some() && p.internet.as_ref().is_none_or(|r| r.url() != s.hub_url) {
             let k = key.clone();
             p.internet = crate::join_net::hub::Room::start(
                 crate::join_net::Kind::Join,
@@ -3168,12 +3534,17 @@ pub struct SettingsBody {
     stream_seat: Option<bool>,
     #[serde(default)]
     internet_invites: Option<bool>,
+    /// "Invites work": "anywhere" or "wifi" (the same choice as `internet_invites`; this one wins).
+    #[serde(default)]
+    invites: Option<String>,
     #[serde(default)]
     hub_url: Option<String>,
     #[serde(default)]
     stun: Option<Vec<String>>,
     #[serde(default)]
     upnp: Option<bool>,
+    #[serde(default)]
+    video_track: Option<bool>,
 }
 
 /// A STUN server as the settings take it: `host:port`, a name or an address, nothing else.
@@ -3191,12 +3562,15 @@ fn stun_server_ok(s: &str) -> bool {
 }
 
 /// `POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,
-/// internet_invites?, hub_url?, stun?, upnp?}`: the host's choices (every console). Fewer players
-/// lets nobody go; it only stops new ones. `stream_seat` off moves a friend on the stream's
-/// controller to a pad of their own. `internet_invites` off closes the internet rooms (guests
-/// already in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`
+/// invites?, internet_invites?, hub_url?, stun?, upnp?, video_track?}`: the host's choices (every
+/// console). Fewer players lets nobody go; it only stops new ones. `stream_seat` off moves a friend
+/// on the stream's controller to a pad of their own. `invites` is "Invites work": "anywhere" (the
+/// one link, through the hub) or "wifi" (the home network's link only; 400 `invites` otherwise),
+/// the same choice as `internet_invites` on or off, and the one setting kept across restarts.
+/// "wifi" closes the internet rooms (guests already in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`
 /// otherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none), `upnp` whether the
-/// router is asked for a port.
+/// router is asked for a port, `video_track` whether internet guests get the picture as a video
+/// track (new connections; the data channel otherwise).
 ///
 /// `guest_profiles` with `addr` ("Guests play as" on that console): each guest's player gets the
 /// profile the host chose (`{player: 2-4, user, name, owner}`; a player left out: the TV asks).
@@ -3244,8 +3618,15 @@ pub async fn set_settings(
     if let Some(v) = b.stream_seat {
         s.stream_seat = v;
     }
+    let was_anywhere = s.internet_invites;
     if let Some(v) = b.internet_invites {
         s.internet_invites = v;
+    }
+    match b.invites.as_deref() {
+        None => {}
+        Some("anywhere") => s.internet_invites = true,
+        Some("wifi") => s.internet_invites = false,
+        Some(_) => return bad(StatusCode::BAD_REQUEST, "invites"),
     }
     if let Some(v) = b.hub_url {
         let v = v.trim().to_string();
@@ -3268,6 +3649,9 @@ pub async fn set_settings(
     if let Some(v) = b.upnp {
         s.upnp = v;
     }
+    if let Some(v) = b.video_track {
+        s.video_track = v;
+    }
     // Everything checked: the profiles take effect with the rest (each pad made from now on).
     if let Some((addr, v)) = &seats {
         set_seat_profiles(addr, v.clone());
@@ -3279,6 +3663,9 @@ pub async fn set_settings(
         );
     }
     *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(s.clone());
+    if (b.internet_invites.is_some() || b.invites.is_some()) && s.internet_invites != was_anywhere {
+        save_invites(s.internet_invites);
+    }
     let fx = with_parties(|m| {
         m.values_mut()
             .map(|p| {
@@ -3302,7 +3689,7 @@ pub async fn set_settings(
         // The phone link's internet link too (phones already in keep playing).
         crate::pad_link::internet_off();
     }
-    let mut out = serde_json::json!({ "settings": s });
+    let mut out = serde_json::json!({ "settings": settings_view(&s) });
     if let Some(addr) = b.addr.as_deref().filter(|a| !a.trim().is_empty()) {
         out["guest_profiles"] = serde_json::json!(seat_profiles(addr));
     }
@@ -4335,6 +4722,59 @@ pub(crate) mod link {
 mod tests {
     use super::link::{unseated, Cmd, Event, LinkState, OpenResult, Port, SlotIo, HOLD};
     use super::*;
+
+    #[test]
+    fn a_guest_page_report_keeps_numbers_only_and_says_how_the_picture_looks() {
+        let t0 = Instant::now();
+        let s = Stats::default();
+        assert_eq!(s.page_json(t0), serde_json::Value::Null);
+        assert_eq!(s.quality(t0), None);
+        // Without a frame count it is not a report; odd values are dropped or clamped.
+        s.page_report(&serde_json::json!({"stalls": 3}), t0);
+        assert_eq!(s.page_json(t0), serde_json::Value::Null);
+        s.page_report(
+            &serde_json::json!({
+                "frames": 600, "dropped": -4, "late": "x", "decode_ms": 3.456, "stalls": 0,
+                "stall_ms": 0, "decoder": "<script>", "name": "Ann"
+            }),
+            t0,
+        );
+        let v = s.page_json(t0);
+        assert_eq!(v["frames"], 600);
+        assert_eq!(v["dropped"], 0);
+        assert_eq!(v["late"], 0);
+        assert_eq!(v["decode_ms"], 3.5);
+        assert_eq!(v["decoder"], serde_json::Value::Null);
+        assert!(v.get("name").is_none());
+        assert_eq!(s.quality(t0), Some("smooth"));
+        // Another inside the gap is ignored.
+        s.page_report(
+            &serde_json::json!({"frames": 700, "stall_ms": 5000}),
+            t0 + Duration::from_millis(500),
+        );
+        assert_eq!(s.page_json(t0)["frames"], 600);
+        // Stalled 400 ms since the last: it stutters; 2 s more: poor; none: smooth again.
+        let t1 = t0 + Duration::from_secs(2);
+        s.page_report(
+            &serde_json::json!({"frames": 700, "stalls": 2, "stall_ms": 400, "decoder": "webcodecs"}),
+            t1,
+        );
+        assert_eq!(s.quality(t1), Some("stutters"));
+        assert_eq!(s.page_json(t1)["decoder"], "webcodecs");
+        let t2 = t1 + Duration::from_secs(2);
+        s.page_report(&serde_json::json!({"frames": 720, "stall_ms": 2400}), t2);
+        assert_eq!(s.quality(t2), Some("poor"));
+        assert_eq!(s.page_json(t2)["stall_ms_recent"], 2000);
+        let t3 = t2 + Duration::from_secs(2);
+        s.page_report(&serde_json::json!({"frames": 840, "stall_ms": 2400}), t3);
+        assert_eq!(s.quality(t3), Some("smooth"));
+        // A new picture (a reconnect) starts its totals over: counted from zero, not negative.
+        let t4 = t3 + Duration::from_secs(2);
+        s.page_report(&serde_json::json!({"frames": 10, "stall_ms": 120}), t4);
+        assert_eq!(s.page_json(t4)["stall_ms_recent"], 120);
+        // A page that stopped reporting says nothing.
+        assert_eq!(s.quality(t4 + Duration::from_secs(11)), None);
+    }
 
     #[test]
     fn guest_keyframe_asks_are_spaced() {
@@ -6995,9 +7435,11 @@ mod tests {
                     max_players: None,
                     stream_seat: None,
                     internet_invites: None,
+                    invites: None,
                     hub_url: None,
                     stun: None,
                     upnp: None,
+                    video_track: None,
                 }),
             )
             .await

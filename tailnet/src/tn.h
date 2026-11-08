@@ -438,6 +438,15 @@ void tn_fwd_unmap(tn_ctx *c, uint8_t proto, uint16_t lport);
 int tn_fwd_expects(tn_ctx *c, const tn_ip_info *ip);
 void tn_fwd_stats(tn_ctx *c, uint32_t *udp_flows, uint32_t *tcp_conns);
 
+/* Which peers may open flows to served ports (tn_set_peer_allow). */
+typedef struct {
+	int all;                 /* 1: no list (the tailnet's filter decides alone) */
+	uint32_t n;
+	uint32_t ip[TN_ALLOW_MAX];
+} tn_peer_allow;
+/* ip.c: is `ip` allowed by `a`? */
+int tn_peer_allowed(const tn_peer_allow *a, uint32_t ip);
+
 /* ---------- the context (tailnet.c, control.c) ---------- */
 struct tn_ctx {
 	tn_config cfg;
@@ -449,7 +458,7 @@ struct tn_ctx {
 	tn_thread thread;
 	int thread_started;
 	int wake_r, wake_w;
-	tn_atomic req_stop, req_pause;
+	tn_atomic req_stop, req_pause, req_reauth, req_rewake;
 	tn_state state;
 
 	/* control session */
@@ -488,6 +497,7 @@ struct tn_ctx {
 	tn_dp *dp;
 	tn_serve serve[TN_SERVE_MAX]; /* copied from the config */
 	uint32_t n_serve;
+	tn_peer_allow allow;     /* tn_set_peer_allow; under dp_mu */
 	tn_fwd *fwd;
 };
 
@@ -502,6 +512,9 @@ void tn_set_state(tn_ctx *c, tn_state st);
 /* control.c */
 int tn_fetch_control_key(tn_ctx *c);
 int tn_control_session(tn_ctx *c);
+/* Start a renewal: rotate the node key (keeping the old one as OldNodeKey) and forget a
+ * pending login URL; the next session registers again. Control thread only. */
+void tn_control_reauth(tn_ctx *c);
 void tn_control_close(tn_ctx *c);
 
 #endif

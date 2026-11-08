@@ -2,7 +2,7 @@
 // session over a WebRTC data channel, the hub room's life, the settings.
 
 use super::*;
-use crate::join_net::tests::{connect_guest, FakeHub, GIn, GOut};
+use crate::join_net::tests::{connect_guest, connect_guest_with, FakeHub, GIn, GOut};
 
 async fn internet_invite(console: &str) -> serde_json::Value {
     let (ci, h) = local();
@@ -14,6 +14,7 @@ async fn internet_invite(console: &str) -> serde_json::Value {
                 addr: console.into(),
                 new: false,
                 internet: true,
+                share: false,
             }),
         )
         .await,
@@ -93,9 +94,11 @@ fn settings_body() -> SettingsBody {
         max_players: None,
         stream_seat: None,
         internet_invites: None,
+        invites: None,
         hub_url: None,
         stun: None,
         upnp: None,
+        video_track: None,
     }
 }
 
@@ -133,12 +136,23 @@ async fn an_internet_guest_joins_over_webrtc_plays_and_gets_the_picture() {
     let room = net["room"].as_str().unwrap().to_string();
     let fp = crate::join_net::fingerprint().unwrap();
     let hub_host = crate::join_net::hub_host(&hub.url).unwrap();
+    let url = net["url"].as_str().unwrap();
+    let (link, lan) = url.split_once("&lan=").unwrap_or((url, ""));
     assert_eq!(
-        net["url"].as_str().unwrap(),
+        link,
         format!(
             "https://ps5upload.phantomptr.com/join/#room={room}&k={key}&fp={fp}&hub={hub_host}"
         )
     );
+    // The hint for a guest who can't reach the hub: the home network's page (no key of its own;
+    // the page adds the link's). None when this computer has no address a guest could use.
+    if let Some(home) = inv["url"].as_str() {
+        let page = home.split('#').next().unwrap();
+        assert_eq!(lan, crate::join_net::pct(page), "{url}");
+    }
+    // The one link to share: the internet one.
+    assert_eq!(inv["share"]["works"], "anywhere", "{inv}");
+    assert_eq!(inv["share"]["url"], url);
     assert_eq!(
         inv["key"],
         key.as_str(),
@@ -173,6 +187,8 @@ async fn an_internet_guest_joins_over_webrtc_plays_and_gets_the_picture() {
     let j = g.next_with("stage").await;
     assert_eq!(j["stage"], "joined", "{j}");
     assert_eq!(j["player"], 2);
+    // A page that offered no video track (an older one): the pictures on the channel, as before.
+    assert_eq!(j["track"], false, "{j}");
 
     // A keyframe bigger than a data-channel message comes whole (in pieces on the wire).
     let big: Vec<u8> = (0..50_000u32).map(|i| (i % 251) as u8).collect();
@@ -211,6 +227,37 @@ async fn an_internet_guest_joins_over_webrtc_plays_and_gets_the_picture() {
     })
     .await;
     assert_eq!(st["internet"]["room"], room.as_str());
+
+    // How they are connected, from ICE's selected pair: this test's loopback is the home network.
+    let st = until_state(console, "the selected pair", |s| {
+        s["guests"][0]["link"]["path"].is_string()
+    })
+    .await;
+    assert_eq!(st["guests"][0]["link"]["path"], "lan");
+    assert!(st["guests"][0]["link"]["rtt_ms"].as_u64().is_some());
+
+    // The link's numbers, read on demand: the big picture went through the channel's buffer.
+    let link = &st["guests"][0]["link"];
+    assert_eq!(link["video"], "channel", "{link}");
+    assert!(link["track"].is_null(), "{link}");
+    assert!(link["backlog_peak_bytes"].as_u64().unwrap() >= big.len() as u64, "{link}");
+    assert_eq!(link["high_water_bytes"], crate::join_net::HIGH_WATER);
+    for k in ["queued_bytes", "buffered_bytes", "send_waits"] {
+        assert!(link[k].as_u64().is_some(), "{k}: {link}");
+    }
+    assert!(st["invite"]["internet"]["peers"][0]["link"].is_object());
+    // The page's report on its picture: the panel's word for it.
+    g.text(serde_json::json!({"stats": {"frames": 120, "stalls": 3, "stall_ms": 900}}));
+    let st = until_state(console, "the page's report", |s| {
+        s["guests"][0]["page"]["frames"] == 120
+    })
+    .await;
+    assert_eq!(st["guests"][0]["quality"], "poor");
+    // Once a stats second passed, the rate out is known.
+    until_state(console, "the rate out", |s| {
+        s["guests"][0]["link"]["sent_kbps"].as_u64().is_some()
+    })
+    .await;
 
     // They leave; Play Together closes: the room goes, and the router mapping with it.
     g.text(serde_json::json!({"leave": 1}));
@@ -292,6 +339,7 @@ async fn the_hub_room_is_renamed_if_taken_reclaimed_after_a_drop_and_closed_when
             h,
             Json(SettingsBody {
                 internet_invites: Some(false),
+                invites: None,
                 ..settings_body()
             }),
         )
@@ -310,6 +358,7 @@ async fn the_hub_room_is_renamed_if_taken_reclaimed_after_a_drop_and_closed_when
             addr: console.into(),
             new: false,
             internet: true,
+            share: false,
         }),
     )
     .await;
@@ -443,4 +492,343 @@ async fn e2e_internet_guest_fixture() {
     close_party(console).await;
     set_live(console, 0);
     *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
+/// An H.264 stream as the console's would be: the codec header (SPS, PPS), a keyframe without
+/// them, a picture after it. No two zero bytes in a row inside a unit (no start code there).
+fn h264() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let mut header = vec![0, 0, 0, 1, 0x67, 0x64, 0x00, 0x2a, 0xac, 0x2b, 0x40, 0x3c, 0x01];
+    header.extend_from_slice(&[0, 0, 0, 1, 0x68, 0xee, 0x3c, 0xb0]);
+    let mut key = vec![0, 0, 0, 1, 0x65, 0x88];
+    key.extend((0..30_000u32).map(|i| (i % 200 + 17) as u8));
+    let mut p = vec![0, 0, 0, 1, 0x41, 0x9a];
+    p.extend((0..900u32).map(|i| (i % 100 + 9) as u8));
+    (header, key, p)
+}
+
+/// The next picture off the guest's video track (10 s), skipping the channel's messages but
+/// failing on a picture there.
+async fn next_track_picture(g: &mut crate::join_net::tests::TestGuest) -> (Vec<u8>, bool) {
+    let until = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        match tokio::time::timeout_at(until, g.rx.recv()).await {
+            Ok(Some(GIn::Media(au, contiguous))) => return (au, contiguous),
+            Ok(Some(GIn::Binary(b))) if b.first() == Some(&1) => {
+                panic!("a picture on the channel with the track on")
+            }
+            Ok(Some(_)) => {}
+            other => panic!("no picture on the track: {other:?}"),
+        }
+    }
+}
+
+/// The picture as an RTP video track (#762's design): a page that offers one gets the pictures
+/// there (the codec header in front of each keyframe), the sound stays on the channel, the
+/// browser's PLI asks the console for a keyframe, and the host's panel reads the track's numbers.
+/// The host's setting off answers that same page with the channel (as an engine without the track
+/// would), and the page shows the channel's pictures.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_page_that_offers_a_video_track_gets_the_pictures_on_it_unless_the_host_turned_it_off() {
+    let _turn = PARTY_TESTS.lock().await;
+    let _live_turn = crate::rp_stream_api::LIVE_TEST_LOCK.lock().await;
+    let hub = FakeHub::start().await;
+    let console = "10.77.0.43";
+    let f = Arc::new(FakeHelper::default());
+    set_helper(console, f.clone());
+    set_live(console, 1);
+    let live = crate::rp_stream_api::test_live::Session::start(console);
+    let (header, key, p) = h264();
+    for track_on in [true, false] {
+        *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings {
+            hub_url: hub.url.clone(),
+            stun: Vec::new(),
+            upnp: false,
+            video_track: track_on,
+            ..Settings::default()
+        });
+        let s = open_party(console).await;
+        let invite = s["invite"]["key"].as_str().unwrap().to_string();
+        let room = internet_invite(console).await["internet"]["room"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        until("hosted", || hub.has_host(&room)).await;
+        let mut g = connect_guest_with(&hub.url, &room, "join", true).await;
+        assert!(g.answer.contains("m=video"), "the video section is answered");
+        g.text(serde_json::json!({"hello": {"invite": invite, "name": "Far"}}));
+        assert_eq!(g.next_with("stage").await["stage"], "asking");
+        allow_next(console, true).await;
+        let j = g.next_with("stage").await;
+        assert_eq!((&j["stage"], &j["track"]), (&"joined".into(), &track_on.into()), "{j}");
+
+        live.send(0, &header, false);
+        live.picture(&key, true);
+        live.picture(&p, false);
+        if !track_on {
+            live.send(4, &[0, 1, 0xfc, 0xff], false);
+            // Off: everything on the channel, the page's own player shows it.
+            let mut kinds = Vec::new();
+            let until = tokio::time::Instant::now() + Duration::from_secs(10);
+            while kinds.len() < 4 {
+                match tokio::time::timeout_at(until, g.rx.recv()).await {
+                    Ok(Some(GIn::Binary(b))) => kinds.push(b[0]),
+                    Ok(Some(GIn::Media(..))) => panic!("a picture on the track with it off"),
+                    Ok(Some(_)) => {}
+                    other => panic!("the channel's messages: {other:?} after {kinds:?}"),
+                }
+            }
+            // Sound may come first (it goes before the pictures).
+            kinds.sort();
+            assert_eq!(kinds, vec![0, 1, 1, 4]);
+            let st = until_state(console, "the channel's numbers", |s| {
+                s["guests"][0]["link"]["video"] == "channel"
+            })
+            .await;
+            assert!(st["guests"][0]["link"]["track"].is_null());
+        } else {
+            // The keyframe with the codec header in front (it came without), then the picture.
+            let (au, contiguous) = next_track_picture(&mut g).await;
+            assert!(contiguous);
+            let types: Vec<u8> = au
+                .windows(4)
+                .filter(|w| w[..3] == [0, 0, 1])
+                .map(|w| w[3] & 0x1f)
+                .collect();
+            assert_eq!(types, vec![7, 8, 5], "SPS, PPS, IDR");
+            assert!(au.ends_with(&key[key.len() - 64..]));
+            let (au, _) = next_track_picture(&mut g).await;
+            assert!(au.ends_with(&p[4..]), "the picture after it, whole");
+            // The sound stays on the channel.
+            live.send(4, &[0, 1, 0xfc, 0xff], false);
+            let until = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                match tokio::time::timeout_at(until, g.rx.recv()).await {
+                    Ok(Some(GIn::Binary(b))) if b.first() == Some(&4) => break,
+                    Ok(Some(GIn::Binary(b))) if b.first() == Some(&1) => panic!("a picture on the channel"),
+                    Ok(Some(_)) => {}
+                    other => panic!("no sound on the channel: {other:?}"),
+                }
+            }
+            // The browser's PLI: the session's keyframe ask (its gates), counted on both sides.
+            let _ = g.tx.send(GOut::Pli);
+            let st = until_state(console, "the PLI and the track's numbers", |s| {
+                let gst = &s["guests"][0];
+                gst["key_asks"].as_u64() >= Some(1) && gst["link"]["track"]["plis"].as_u64() >= Some(1)
+            })
+            .await;
+            let link = &st["guests"][0]["link"];
+            assert_eq!(link["video"], "track", "{link}");
+            let t = &link["track"];
+            assert_eq!(t["frames_sent"], 2, "{t}");
+            let rate = ps5upload_core::rp_stream::StreamConfig::default().bitrate_kbps;
+            assert_eq!(t["stream_kbps"], rate, "the session's bitrate: {t}");
+            assert_eq!(t["slow"], false, "{t}");
+            for k in ["rtp_packets", "nacks", "firs"] {
+                assert!(t[k].as_u64().is_some(), "{k}: {t}");
+            }
+            // The estimate arrives with the transport-cc feedback.
+            until_state(console, "the bandwidth estimate", |s| {
+                s["guests"][0]["link"]["track"]["bwe_kbps"].as_u64().is_some()
+            })
+            .await;
+        }
+        g.text(serde_json::json!({"leave": 1}));
+        until_state(console, "left", |s| s["guests"][0]["state"] == "left").await;
+        close_party(console).await;
+        until("the room closed", || !hub.has_host(&room)).await;
+    }
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    set_live(console, 0);
+}
+
+async fn share_invite(console: &str) -> serde_json::Value {
+    let (ci, h) = local();
+    body(
+        invite(
+            ci,
+            h,
+            Json(InviteBody {
+                addr: console.into(),
+                new: false,
+                internet: false,
+                share: true,
+            }),
+        )
+        .await,
+    )
+    .await
+}
+
+async fn set_invites(word: &str) -> Response {
+    let (ci, h) = local();
+    set_settings(
+        ci,
+        h,
+        Json(SettingsBody {
+            invites: Some(word.into()),
+            ..settings_body()
+        }),
+    )
+    .await
+}
+
+async fn set_settings_hub(url: &str) -> Response {
+    let (ci, h) = local();
+    set_settings(
+        ci,
+        h,
+        Json(SettingsBody {
+            hub_url: Some(url.into()),
+            ..settings_body()
+        }),
+    )
+    .await
+}
+
+/// One invite: the host asks for the one link. With the hub there it is the internet link; with
+/// no hub to reach (no internet here, or the hub is down) the home network's link instead, said
+/// to work on the Wi-Fi only, until the hub hosts the room again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_one_link_is_the_home_networks_while_the_hub_cant_be_reached() {
+    let _turn = PARTY_TESTS.lock().await;
+    // A hub address nothing answers on (a port just closed): every connect fails at once.
+    let dead = {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        l.local_addr().unwrap()
+    };
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings {
+        hub_url: format!("ws://{dead}/ws"),
+        stun: Vec::new(),
+        upnp: false,
+        ..Settings::default()
+    });
+    let console = "10.77.0.45";
+    set_helper(console, Arc::new(FakeHelper::default()));
+    set_live(console, 1);
+    open_party(console).await;
+    let inv = share_invite(console).await;
+    assert!(inv["internet"]["room"].is_string(), "a room was asked for: {inv}");
+    let s = until_state(console, "the Wi-Fi's link", |s| {
+        s["invite"]["share"]["works"] == "wifi"
+    })
+    .await;
+    let inv = &s["invite"];
+    assert_eq!(inv["share"]["why"], "offline", "{inv}");
+    assert_eq!(inv["share"]["url"], inv["url"], "the home network's own link");
+    assert_eq!(inv["internet"]["offline"], true);
+
+    // The hub is back (here: the settings name one that answers): the internet link again.
+    let hub = FakeHub::start().await;
+    assert_eq!(set_settings_hub(&hub.url).await.status(), StatusCode::OK);
+    let inv = share_invite(console).await;
+    let room = inv["internet"]["room"].as_str().unwrap().to_string();
+    until("hosted", || hub.has_host(&room)).await;
+    let s = until_state(console, "the internet link", |s| {
+        s["invite"]["share"]["works"] == "anywhere"
+    })
+    .await;
+    assert_eq!(s["invite"]["share"]["url"], s["invite"]["internet"]["url"]);
+    assert!(s["invite"]["share"]["why"].is_null());
+    close_party(console).await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    set_live(console, 0);
+}
+
+/// Invites work: Only on my Wi-Fi. The one link is the home network's (no room on the hub, no
+/// refusal), `invites` and `internet_invites` say the same, and a word it doesn't know is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn invites_work_only_on_the_wifi_keeps_to_the_home_networks_link() {
+    let _turn = PARTY_TESTS.lock().await;
+    let hub = FakeHub::start().await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings {
+        hub_url: hub.url.clone(),
+        stun: Vec::new(),
+        upnp: false,
+        ..Settings::default()
+    });
+    let console = "10.77.0.46";
+    set_helper(console, Arc::new(FakeHelper::default()));
+    set_live(console, 1);
+    let s = open_party(console).await;
+    assert_eq!(s["settings"]["invites"], "anywhere");
+    // Before anything is asked: the home network's link, none asked for.
+    assert_eq!(s["invite"]["share"]["works"], "wifi");
+    assert_eq!(s["invite"]["share"]["why"], "local");
+
+    let r = body(set_invites("wifi").await).await;
+    assert_eq!(
+        (&r["settings"]["invites"], &r["settings"]["internet_invites"]),
+        (&serde_json::json!("wifi"), &serde_json::json!(false))
+    );
+    let inv = share_invite(console).await;
+    assert!(inv["internet"].is_null(), "{inv}");
+    assert_eq!(inv["share"]["works"], "wifi");
+    assert_eq!(inv["share"]["why"], "setting");
+    assert_eq!(inv["share"]["url"], inv["url"]);
+    assert!(hub.hosts().is_empty(), "nothing on the hub");
+    assert_eq!(
+        set_invites("everywhere").await.status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    // Anywhere again (by the older name): the one link is the internet one.
+    let (ci, h) = local();
+    let r = body(
+        set_settings(
+            ci,
+            h,
+            Json(SettingsBody {
+                internet_invites: Some(true),
+                ..settings_body()
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(r["settings"]["invites"], "anywhere");
+    let inv = share_invite(console).await;
+    assert_eq!(inv["share"]["works"], "anywhere", "{inv}");
+    close_party(console).await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    set_live(console, 0);
+}
+
+/// "Invites work" is kept in the data folder; a file with the older name of the choice
+/// (`internet_invites` false) reads as Only on my Wi-Fi, a missing or broken one as nothing saved.
+#[test]
+fn invites_work_is_saved_and_an_old_off_reads_as_wifi() {
+    let dir = std::env::temp_dir().join(format!("ps5u-invites-{}", std::process::id()));
+    let p = dir.join(INVITES_FILE);
+    assert_eq!(read_invites(&p), None);
+    write_invites(&p, false).unwrap();
+    assert_eq!(read_invites(&p), Some(false));
+    assert!(std::fs::read_to_string(&p).unwrap().contains("\"wifi\""));
+    write_invites(&p, true).unwrap();
+    assert_eq!(read_invites(&p), Some(true));
+    std::fs::write(&p, r#"{"internet_invites": false}"#).unwrap();
+    assert_eq!(read_invites(&p), Some(false));
+    std::fs::write(&p, "not json").unwrap();
+    assert_eq!(read_invites(&p), None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The one link's words: the internet link unless the hub can't be reached; the Wi-Fi's link says
+/// why it is the one.
+#[test]
+fn the_one_link_says_where_it_works() {
+    let home = "http://192.168.1.10:19113/join#i=k";
+    let lan = Some(home);
+    let net = serde_json::json!({"url": "https://x/join/#room=r", "offline": false});
+    assert_eq!(
+        share_json(lan, Some(&net), true),
+        serde_json::json!({"url": "https://x/join/#room=r", "works": "anywhere", "why": null})
+    );
+    let down = serde_json::json!({"url": "https://x/join/#room=r", "offline": true});
+    assert_eq!(share_json(lan, Some(&down), true)["why"], "offline");
+    assert_eq!(share_json(lan, Some(&down), true)["url"], home);
+    assert_eq!(share_json(lan, None, false)["why"], "setting");
+    assert_eq!(share_json(lan, None, true)["why"], "local");
+    // An older engine's room json has no `offline`: its link stands.
+    let old = serde_json::json!({"url": "https://x/join/#room=r"});
+    assert_eq!(share_json(lan, Some(&old), true)["works"], "anywhere");
 }

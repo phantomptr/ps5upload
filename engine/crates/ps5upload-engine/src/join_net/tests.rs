@@ -12,6 +12,7 @@ use axum::extract::State;
 use futures_util::{SinkExt, StreamExt};
 use str0m::change::{SdpAnswer, SdpPendingOffer};
 use str0m::channel::ChannelId;
+use str0m::media::{Direction, KeyframeRequestKind, MediaKind, Mid};
 use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, Event, Input, Output, Rtc};
 use tokio::sync::mpsc;
@@ -226,11 +227,16 @@ pub(crate) enum GIn {
     Binary(Vec<u8>),
     /// The engine's ping (answered already).
     Ping,
+    /// A picture off the video track (an access unit, Annex B), and whether nothing was lost
+    /// before it.
+    Media(Vec<u8>, bool),
 }
 
 pub(crate) enum GOut {
     Text(String),
     Binary(Vec<u8>),
+    /// The browser's keyframe request on the video track (a PLI).
+    Pli,
 }
 
 pub(crate) struct TestGuest {
@@ -268,6 +274,17 @@ pub(crate) async fn connect_guest(hub_url: &str, room: &str) -> TestGuest {
 
 /// [`connect_guest`] with a data channel labelled `label` ("pad": a phone, pad_link.rs).
 pub(crate) async fn connect_guest_on(hub_url: &str, room: &str, label: &str) -> TestGuest {
+    connect_guest_with(hub_url, room, label, false).await
+}
+
+/// [`connect_guest_on`], the offer also with a receive-only video section when `video` (a page
+/// that takes the picture as a video track, join/rtcTransport.ts).
+pub(crate) async fn connect_guest_with(
+    hub_url: &str,
+    room: &str,
+    label: &str,
+    video: bool,
+) -> TestGuest {
     let (mut hub, _) = tokio_tungstenite::connect_async(hub_url).await.unwrap();
     hub.send(TMsg::Text(
         serde_json::json!({"v": 1, "t": "join", "room": room})
@@ -283,10 +300,12 @@ pub(crate) async fn connect_guest_on(hub_url: &str, room: &str, label: &str) -> 
     let local = sock.local_addr().unwrap();
     let mut rtc = Rtc::builder()
         .set_crypto_provider(super::crypto::provider())
+        .set_reordering_size_video(4000)
         .build(Instant::now());
     rtc.add_local_candidate(Candidate::host(local, "udp").unwrap());
     let mut api = rtc.sdp_api();
     let cid = api.add_channel(label.into());
+    let mid = video.then(|| api.add_media(MediaKind::Video, Direction::RecvOnly, None, None, None));
     let (offer, pending): (_, SdpPendingOffer) = api.apply().unwrap();
     let signal = |data: serde_json::Value| {
         TMsg::Text(
@@ -329,7 +348,7 @@ pub(crate) async fn connect_guest_on(hub_url: &str, room: &str, label: &str) -> 
         }
     });
     tokio::spawn(drive(
-        rtc, cid, sock, local, in_tx, out_rx, cand_rx, open_tx,
+        rtc, cid, mid, sock, local, in_tx, out_rx, cand_rx, open_tx,
     ));
     tokio::time::timeout(Duration::from_secs(10), open_rx)
         .await
@@ -364,6 +383,7 @@ async fn next_hub(
 async fn drive(
     mut rtc: Rtc,
     cid: ChannelId,
+    mid: Option<Mid>,
     sock: tokio::net::UdpSocket,
     local: SocketAddr,
     in_tx: mpsc::UnboundedSender<GIn>,
@@ -419,6 +439,9 @@ async fn drive(
                         }
                     }
                     Event::ChannelClose(id) if id == cid => return,
+                    Event::MediaData(d) => {
+                        let _ = in_tx.send(GIn::Media(d.data.to_vec(), d.contiguous));
+                    }
                     _ => {}
                 },
                 Err(_) => return,
@@ -442,6 +465,11 @@ async fn drive(
             m = out_rx.recv() => match m {
                 Some(GOut::Text(t)) => pending.push((false, t.into_bytes())),
                 Some(GOut::Binary(b)) => pending.extend(chunk::split(&b).into_iter().map(|p| (true, p))),
+                Some(GOut::Pli) => {
+                    if let Some(mut w) = mid.and_then(|m| rtc.writer(m)) {
+                        let _ = w.request_keyframe(None, KeyframeRequestKind::Pli);
+                    }
+                }
                 None => return,
             },
             c = cand_rx.recv() => {
@@ -485,13 +513,31 @@ fn links_and_hub_addresses() {
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     assert_eq!(
-        super::link_for(super::Kind::Join, "R", "K", "AA:BB", "hub.example"),
+        super::link_for(super::Kind::Join, "R", "K", "AA:BB", "hub.example", None),
         "https://ps5upload.phantomptr.com/join/#room=R&k=K&fp=AA:BB&hub=hub.example"
     );
     // The phone link's: the website's controller page, its own channel label.
     assert_eq!(
-        super::link_for(super::Kind::Pad, "R", "K", "AA:BB", "hub.example"),
+        super::link_for(super::Kind::Pad, "R", "K", "AA:BB", "hub.example", None),
         "https://ps5upload.phantomptr.com/pad/#room=R&k=K&fp=AA:BB&hub=hub.example"
+    );
+    // The home network's page as a hint (percent-encoded: it is a fragment value).
+    assert_eq!(
+        super::link_for(
+            super::Kind::Join,
+            "R",
+            "K",
+            "AA:BB",
+            "hub.example",
+            Some("http://192.168.1.10:19113/join")
+        ),
+        "https://ps5upload.phantomptr.com/join/#room=R&k=K&fp=AA:BB&hub=hub.example\
+         &lan=http%3A%2F%2F192.168.1.10%3A19113%2Fjoin"
+    );
+    // Only an http(s) page is a hint.
+    assert!(
+        !super::link_for(super::Kind::Pad, "R", "K", "F", "h", Some("javascript:x"))
+            .contains("lan=")
     );
     assert_eq!(
         (super::Kind::Join.label(), super::Kind::Pad.label()),
@@ -528,7 +574,7 @@ async fn a_full_channel_holds_the_session_until_it_drains_or_closes() {
     // Full past the high water: the session waits (its picture queue then fills and the stream
     // skips it to the next keyframe, as for a slow LAN guest)...
     flow.unwritten.store(0, Ordering::Relaxed);
-    flow.set_queued(super::HIGH_WATER + 1);
+    flow.set_queued(super::HIGH_WATER + 1, 0);
     let t = tokio::spawn(async move {
         let r = s.send(AxMsg::Text("x".into())).await;
         (r, s)
@@ -536,14 +582,14 @@ async fn a_full_channel_holds_the_session_until_it_drains_or_closes() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(!t.is_finished(), "held while the channel is full");
     // ...until it drains.
-    flow.set_queued(0);
+    flow.set_queued(0, 0);
     let (r, mut s) = tokio::time::timeout(Duration::from_secs(2), t)
         .await
         .unwrap()
         .unwrap();
     assert!(r.is_ok());
     // A peer that ends lets a waiting session go.
-    flow.set_queued(super::HIGH_WATER + 1);
+    flow.set_queued(super::HIGH_WATER + 1, 0);
     let t = tokio::spawn(async move { s.send(AxMsg::Text("y".into())).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
     flow.close();

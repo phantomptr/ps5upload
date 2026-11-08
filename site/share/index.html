@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="referrer" content="no-referrer" />
+    <link rel="icon" href="data:," />
+    <title>PS5Upload · Share</title>
+    <!--
+      The page a friend's Share link opens (https://ps5upload.phantomptr.com/share/#room=…). The
+      link's details are after the #, so they never reach this website's server. Files go between
+      the two PS5Upload apps directly; this page only hands the link to the app, or to the sender's
+      own page on the same Wi-Fi. No scripts or fonts from anywhere else.
+    -->
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f5f5f7;
+        --card: #ffffff;
+        --text: #1d1d1f;
+        --muted: #6e6e73;
+        --accent: #0071e3;
+        --edge: rgba(0, 0, 0, 0.08);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #000000;
+          --card: #1c1c1e;
+          --text: #f5f5f7;
+          --muted: #a1a1a6;
+          --accent: #2997ff;
+          --edge: rgba(255, 255, 255, 0.12);
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 16px;
+        background: var(--bg);
+        color: var(--text);
+        font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      }
+      main {
+        width: 100%;
+        max-width: 28rem;
+        background: var(--card);
+        border: 1px solid var(--edge);
+        border-radius: 20px;
+        padding: 28px 24px;
+      }
+      h1 { font-size: 1.5rem; margin: 0 0 8px; letter-spacing: -0.02em; }
+      p { margin: 0 0 16px; color: var(--muted); }
+      .actions { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; }
+      a.button {
+        display: block;
+        text-align: center;
+        padding: 12px 16px;
+        border-radius: 999px;
+        text-decoration: none;
+        font-weight: 600;
+        border: 1px solid var(--edge);
+        color: var(--text);
+      }
+      a.button.primary { background: var(--accent); border-color: transparent; color: #fff; }
+      .note { font-size: 0.85rem; margin-top: 20px; margin-bottom: 0; }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1 data-s="title">A friend shared something with you</h1>
+      <p data-s="lead">Open this link in PS5Upload to see what's shared and accept it. Nothing is sent until you accept and your friend allows it.</p>
+      <p id="bad" hidden data-s="bad">This link is incomplete. Ask your friend to send it again.</p>
+      <div class="actions" id="actions">
+        <a class="button primary" id="open-app" href="#" data-s="open">Open in PS5Upload</a>
+        <a class="button" id="open-lan" href="#" hidden data-s="lan">Open on this Wi-Fi</a>
+        <a class="button" href="../#download" data-s="get">Get PS5Upload</a>
+      </div>
+      <p class="note" data-s="note">Files go straight between your PS5Upload and your friend's. This website never sees them.</p>
+    </main>
+    <script>
+      (function () {
+        // The page's own words, in the website's 21 languages.
+        var S = {
+          en: {
+            title: "A friend shared something with you",
+            lead: "Open this link in PS5Upload to see what's shared and accept it. Nothing is sent until you accept and your friend allows it.",
+            bad: "This link is incomplete. Ask your friend to send it again.",
+            open: "Open in PS5Upload",
+            lan: "Open on this Wi-Fi",
+            get: "Get PS5Upload",
+            note: "Files go straight between your PS5Upload and your friend's. This website never sees them."
+          },
+          "ar": {"title": "شارك صديق شيئًا معك", "lead": "افتح هذا الرابط في PS5Upload لترى ما شُورك وتقبله. لا يُرسل شيء حتى تقبل ويسمح صديقك بذلك.", "bad": "هذا الرابط غير مكتمل. اطلب من صديقك إرساله مرة أخرى.", "open": "افتح في PS5Upload", "lan": "افتح على شبكة Wi-Fi هذه", "get": "احصل على PS5Upload", "note": "تنتقل الملفات مباشرةً بين PS5Upload لديك ولدى صديقك. هذا الموقع لا يراها أبدًا."},
+          "bn": {"title": "একজন বন্ধু আপনার সাথে কিছু শেয়ার করেছেন", "lead": "কী শেয়ার করা হয়েছে দেখতে ও গ্রহণ করতে এই লিংকটি PS5Upload-এ খুলুন। আপনি গ্রহণ না করা এবং আপনার বন্ধু অনুমতি না দেওয়া পর্যন্ত কিছুই পাঠানো হয় না।", "bad": "এই লিংকটি অসম্পূর্ণ। আপনার বন্ধুকে আবার পাঠাতে বলুন।", "open": "PS5Upload-এ খুলুন", "lan": "এই Wi-Fi-তে খুলুন", "get": "PS5Upload নিন", "note": "ফাইল সরাসরি আপনার আর আপনার বন্ধুর PS5Upload-এর মধ্যে যায়। এই ওয়েবসাইট কখনো সেগুলো দেখে না।"},
+          "de": {"title": "Ein Freund hat etwas mit dir geteilt", "lead": "Öffne diesen Link in PS5Upload, um zu sehen, was geteilt wurde, und es anzunehmen. Nichts wird gesendet, bevor du annimmst und dein Freund es zulässt.", "bad": "Dieser Link ist unvollständig. Bitte deinen Freund, ihn noch einmal zu senden.", "open": "In PS5Upload öffnen", "lan": "In diesem WLAN öffnen", "get": "PS5Upload holen", "note": "Dateien gehen direkt zwischen deinem PS5Upload und dem deines Freundes. Diese Website sieht sie nie."},
+          "es": {"title": "Un amigo compartió algo contigo", "lead": "Abre este enlace en PS5Upload para ver lo que se compartió y aceptarlo. No se envía nada hasta que aceptes y tu amigo lo permita.", "bad": "Este enlace está incompleto. Pide a tu amigo que te lo envíe de nuevo.", "open": "Abrir en PS5Upload", "lan": "Abrir en este Wi-Fi", "get": "Descargar PS5Upload", "note": "Los archivos van directos entre tu PS5Upload y el de tu amigo. Este sitio web nunca los ve."},
+          "fa": {"title": "دوستی چیزی با شما به اشتراک گذاشته است", "lead": "این پیوند را در PS5Upload باز کنید تا ببینید چه چیزی به اشتراک گذاشته شده و آن را بپذیرید. تا شما نپذیرید و دوستتان اجازه ندهد، چیزی فرستاده نمی‌شود.", "bad": "این پیوند ناقص است. از دوستتان بخواهید دوباره بفرستد.", "open": "باز کردن در PS5Upload", "lan": "باز کردن روی همین Wi-Fi", "get": "دریافت PS5Upload", "note": "فایل‌ها مستقیم بین PS5Upload شما و دوستتان جابه‌جا می‌شوند. این وب‌سایت هرگز آن‌ها را نمی‌بیند."},
+          "fr": {"title": "Un ami a partagé quelque chose avec vous", "lead": "Ouvrez ce lien dans PS5Upload pour voir ce qui est partagé et l'accepter. Rien n'est envoyé tant que vous n'acceptez pas et que votre ami ne l'autorise pas.", "bad": "Ce lien est incomplet. Demandez à votre ami de vous le renvoyer.", "open": "Ouvrir dans PS5Upload", "lan": "Ouvrir sur ce Wi-Fi", "get": "Obtenir PS5Upload", "note": "Les fichiers vont directement de votre PS5Upload à celui de votre ami. Ce site ne les voit jamais."},
+          "hi": {"title": "एक दोस्त ने आपके साथ कुछ शेयर किया है", "lead": "क्या शेयर हुआ है यह देखने और स्वीकार करने के लिए यह लिंक PS5Upload में खोलें। जब तक आप स्वीकार न करें और आपका दोस्त अनुमति न दे, कुछ नहीं भेजा जाता।", "bad": "यह लिंक अधूरा है। अपने दोस्त से इसे फिर से भेजने को कहें।", "open": "PS5Upload में खोलें", "lan": "इसी Wi-Fi पर खोलें", "get": "PS5Upload पाएँ", "note": "फ़ाइलें सीधे आपके और आपके दोस्त के PS5Upload के बीच जाती हैं। यह वेबसाइट उन्हें कभी नहीं देखती।"},
+          "hu": {"title": "Egy barátod megosztott veled valamit", "lead": "Nyisd meg ezt a linket a PS5Uploadban, hogy lásd, mit osztottak meg, és elfogadd. Semmi sem megy át, amíg el nem fogadod, és a barátod nem engedélyezi.", "bad": "Ez a link hiányos. Kérd meg a barátodat, hogy küldje el újra.", "open": "Megnyitás a PS5Uploadban", "lan": "Megnyitás ezen a Wi-Fin", "get": "PS5Upload letöltése", "note": "A fájlok közvetlenül a te PS5Uploadod és a barátodé között mennek. Ez a weboldal sosem látja őket."},
+          "id": {"title": "Temanmu membagikan sesuatu denganmu", "lead": "Buka tautan ini di PS5Upload untuk melihat apa yang dibagikan dan menerimanya. Tidak ada yang dikirim sampai kamu menerima dan temanmu mengizinkan.", "bad": "Tautan ini tidak lengkap. Minta temanmu mengirimnya lagi.", "open": "Buka di PS5Upload", "lan": "Buka di Wi-Fi ini", "get": "Dapatkan PS5Upload", "note": "File langsung dikirim antara PS5Upload milikmu dan milik temanmu. Situs web ini tidak pernah melihatnya."},
+          "it": {"title": "Un amico ha condiviso qualcosa con te", "lead": "Apri questo link in PS5Upload per vedere cosa è stato condiviso e accettarlo. Non viene inviato nulla finché non accetti e il tuo amico lo consente.", "bad": "Questo link è incompleto. Chiedi al tuo amico di inviarlo di nuovo.", "open": "Apri in PS5Upload", "lan": "Apri su questo Wi-Fi", "get": "Scarica PS5Upload", "note": "I file vanno direttamente tra il tuo PS5Upload e quello del tuo amico. Questo sito non li vede mai."},
+          "ja": {"title": "友だちがあなたに共有しました", "lead": "このリンクを PS5Upload で開くと、共有されたものを確認して受け取れます。あなたが受け取り、友だちが許可するまで、何も送られません。", "bad": "このリンクは不完全です。友だちにもう一度送ってもらってください。", "open": "PS5Upload で開く", "lan": "この Wi-Fi で開く", "get": "PS5Upload を入手", "note": "ファイルはあなたの PS5Upload と友だちの PS5Upload の間で直接やり取りされます。このウェブサイトがファイルを見ることはありません。"},
+          "ko": {"title": "친구가 무언가를 공유했습니다", "lead": "이 링크를 PS5Upload에서 열면 공유된 것을 보고 받을 수 있습니다. 내가 수락하고 친구가 허용하기 전에는 아무것도 전송되지 않습니다.", "bad": "이 링크가 완전하지 않습니다. 친구에게 다시 보내 달라고 하세요.", "open": "PS5Upload에서 열기", "lan": "이 Wi-Fi에서 열기", "get": "PS5Upload 받기", "note": "파일은 내 PS5Upload와 친구의 PS5Upload 사이에서 바로 오갑니다. 이 웹사이트는 파일을 볼 수 없습니다."},
+          "pl": {"title": "Znajomy coś ci udostępnił", "lead": "Otwórz ten link w PS5Upload, aby zobaczyć, co zostało udostępnione, i to przyjąć. Nic nie zostanie wysłane, dopóki nie zaakceptujesz, a znajomy nie zezwoli.", "bad": "Ten link jest niepełny. Poproś znajomego, aby wysłał go ponownie.", "open": "Otwórz w PS5Upload", "lan": "Otwórz w tej sieci Wi-Fi", "get": "Pobierz PS5Upload", "note": "Pliki idą bezpośrednio między twoim PS5Upload a PS5Upload znajomego. Ta strona nigdy ich nie widzi."},
+          "pt-BR": {"title": "Um amigo compartilhou algo com você", "lead": "Abra este link no PS5Upload para ver o que foi compartilhado e aceitar. Nada é enviado até você aceitar e seu amigo permitir.", "bad": "Este link está incompleto. Peça ao seu amigo para enviar de novo.", "open": "Abrir no PS5Upload", "lan": "Abrir neste Wi-Fi", "get": "Baixar o PS5Upload", "note": "Os arquivos vão direto entre o seu PS5Upload e o do seu amigo. Este site nunca os vê."},
+          "ru": {"title": "Друг чем-то поделился с вами", "lead": "Откройте эту ссылку в PS5Upload, чтобы увидеть, чем поделились, и принять это. Ничего не отправляется, пока вы не примете и друг не разрешит.", "bad": "Ссылка неполная. Попросите друга отправить её ещё раз.", "open": "Открыть в PS5Upload", "lan": "Открыть в этой сети Wi-Fi", "get": "Скачать PS5Upload", "note": "Файлы идут напрямую между вашим PS5Upload и PS5Upload друга. Этот сайт их никогда не видит."},
+          "th": {"title": "เพื่อนแชร์บางอย่างให้คุณ", "lead": "เปิดลิงก์นี้ใน PS5Upload เพื่อดูสิ่งที่แชร์และยอมรับ จะไม่มีอะไรถูกส่งจนกว่าคุณจะยอมรับและเพื่อนอนุญาต", "bad": "ลิงก์นี้ไม่สมบูรณ์ ขอให้เพื่อนส่งมาอีกครั้ง", "open": "เปิดใน PS5Upload", "lan": "เปิดบน Wi-Fi นี้", "get": "ดาวน์โหลด PS5Upload", "note": "ไฟล์ส่งตรงระหว่าง PS5Upload ของคุณกับของเพื่อน เว็บไซต์นี้ไม่เคยเห็นไฟล์เหล่านั้น"},
+          "tr": {"title": "Bir arkadaşın seninle bir şey paylaştı", "lead": "Neyin paylaşıldığını görmek ve kabul etmek için bu bağlantıyı PS5Upload'da aç. Sen kabul edip arkadaşın izin verene kadar hiçbir şey gönderilmez.", "bad": "Bu bağlantı eksik. Arkadaşından yeniden göndermesini iste.", "open": "PS5Upload'da aç", "lan": "Bu Wi-Fi'da aç", "get": "PS5Upload'u edin", "note": "Dosyalar senin PS5Upload'un ile arkadaşınınki arasında doğrudan gider. Bu web sitesi onları asla görmez."},
+          "vi": {"title": "Một người bạn đã chia sẻ thứ gì đó với bạn", "lead": "Mở liên kết này trong PS5Upload để xem những gì được chia sẻ và chấp nhận. Không có gì được gửi cho đến khi bạn chấp nhận và bạn của bạn cho phép.", "bad": "Liên kết này không đầy đủ. Hãy nhờ bạn của bạn gửi lại.", "open": "Mở trong PS5Upload", "lan": "Mở trên Wi-Fi này", "get": "Tải PS5Upload", "note": "Tệp đi thẳng giữa PS5Upload của bạn và của bạn bè. Trang web này không bao giờ thấy chúng."},
+          "zh-CN": {"title": "朋友和你分享了内容", "lead": "在 PS5Upload 中打开此链接，查看分享的内容并接受。在你接受且朋友允许之前，不会发送任何内容。", "bad": "此链接不完整。请让朋友重新发送。", "open": "在 PS5Upload 中打开", "lan": "在此 Wi-Fi 上打开", "get": "获取 PS5Upload", "note": "文件直接在你的 PS5Upload 和朋友的 PS5Upload 之间传送。本网站不会接触这些文件。"},
+          "zh-TW": {"title": "朋友和你分享了內容", "lead": "在 PS5Upload 中開啟此連結，查看分享的內容並接受。在你接受且朋友允許之前，不會傳送任何內容。", "bad": "此連結不完整。請朋友重新傳送。", "open": "在 PS5Upload 中開啟", "lan": "在此 Wi-Fi 上開啟", "get": "取得 PS5Upload", "note": "檔案直接在你的 PS5Upload 和朋友的 PS5Upload 之間傳送。本網站不會接觸這些檔案。"}
+        };
+        var langs = (navigator.languages || [navigator.language || "en"]).map(function (l) { return String(l); });
+        var words = S.en;
+        for (var i = 0; i < langs.length; i++) {
+          var l = langs[i];
+          var hit = S[l] || S[l.split("-")[0]] || (l.toLowerCase().indexOf("zh") === 0 && (/tw|hk|hant/i.test(l) ? S["zh-TW"] : S["zh-CN"]));
+          if (hit) { words = hit; document.documentElement.lang = l; if (/^(ar|fa)\b/i.test(l)) document.documentElement.dir = "rtl"; break; }
+        }
+        document.querySelectorAll("[data-s]").forEach(function (el) {
+          var s = words[el.getAttribute("data-s")];
+          if (s) el.textContent = s;
+        });
+
+        var frag = location.hash.replace(/^#/, "");
+        var q = new URLSearchParams(frag);
+        var room = q.get("room") || "";
+        if (!/^[A-Za-z0-9_-]{8,64}$/.test(room) || !q.get("fp")) {
+          document.getElementById("bad").hidden = false;
+          document.getElementById("open-app").hidden = true;
+          return;
+        }
+        // The app checks the link again before it does anything with it.
+        document.getElementById("open-app").href = "ps5upload://receive?link=" + encodeURIComponent(location.href);
+
+        // The sender's own page on the same Wi-Fi: only a plain http page on a private address.
+        var lan = q.get("lan") || "";
+        try {
+          var u = new URL(lan);
+          var h = u.hostname;
+          var priv = /^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || /^169\.254\./.test(h) || /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(h);
+          if (u.protocol === "http:" && priv && /\/share\/?$/.test(u.pathname)) {
+            q.delete("lan");
+            var b = document.getElementById("open-lan");
+            b.href = u.origin + u.pathname + "#" + q.toString();
+            b.hidden = false;
+          }
+        } catch (e) {
+          /* no Wi-Fi page in this link */
+        }
+      })();
+    </script>
+  </body>
+</html>

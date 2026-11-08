@@ -59,6 +59,8 @@ describe("isAutoRecoverable", () => {
     "ava1_no_identity",
     "ava1_no_space",
     "ava1_not_allowed",
+    "ava1_path_link",
+    "ava1_local_path",
   ])("does NOT recover AVA1 refusal %s (retrying cannot change it)", (r) => {
     expect(isAutoRecoverable(r, "")).toBe(false);
   });

@@ -14,6 +14,9 @@ export function payloadSendRefusalText(e: unknown): string {
       return translate(lang, "payload_refused_install", undefined);
     case "helper_busy":
       return translate(lang, "payload_refused_helper", undefined);
+    // Reached through Tailscale now: a loader port is not carried there.
+    case "tailnet_away":
+      return translate(lang, "payload_refused_tailnet", undefined);
     default:
       return translate(lang, "payload_refused_loader", undefined);
   }

@@ -552,7 +552,9 @@ impl Default for Timing {
 type Probe = Arc<dyn Fn(String) -> BoxFuture<'static, bool> + Send + Sync>;
 
 async fn helper_answers(addr: String) -> bool {
-    let target = ps5upload_ava1::pool::ava1_addr(&addr);
+    // The same path the items will take: home first, Tailscale when the console is away there
+    // (`ps5upload_core::route`). The bare home address read an away console as gone for good.
+    let target = ps5upload_core::route::dial_str(&ps5upload_ava1::pool::ava1_addr(&addr), 9120);
     matches!(
         tokio::time::timeout(PROBE_TIMEOUT, tokio::net::TcpStream::connect(target)).await,
         Ok(Ok(_))

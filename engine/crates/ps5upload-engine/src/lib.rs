@@ -110,10 +110,12 @@ mod save_copy;
 mod server_out;
 mod settings_api;
 mod settings_backup;
+mod share;
 mod shared_state;
 mod state_io;
 mod tailnet_api;
 pub(crate) mod tailnet_engine;
+pub(crate) mod tailnet_system;
 mod telemetry;
 mod vinput_api;
 mod wake_login_api;
@@ -889,6 +891,11 @@ fn loopback_allows(cfg: &LoopbackGuardConfig, peer: std::net::IpAddr, path: &str
         // the invite or the resume token itself. The rest of /api/join is the host's.
         || path == "/join"
         || path == "/api/join/ws"
+        // A friend receiving a Share (share/mod.rs) on the home network: the page and its
+        // socket, which serves only what the sender allowed. The rest of /api/share is the
+        // sender's.
+        || path == "/share"
+        || path == "/api/share/ws"
         || peer.is_loopback()
         || allow_rules_contain(&cfg.allowed_ips, peer)
 }
@@ -4728,10 +4735,16 @@ async fn ps5_power_wake(Json(req): Json<PowerWakeReq>) -> impl IntoResponse {
             "from the saved console"
         }
     );
+    // A PS5 on Tailscale whose home address is silent may be asleep at home (wake works) or
+    // away from this device's network (it cannot: a resting PS5 is off Tailscale, and a wake is
+    // a home-network broadcast). The wake goes out either way; the note says the second plainly.
+    let away_note = tailnet_engine::engine()
+        .home_silent(&host)
+        .then_some(tailnet_engine::WAKE_AWAY_NOTE);
     match tokio::task::spawn_blocking(move || ps5upload_core::ddp::wake(&host, &cred)).await {
         Ok(Ok(())) => (
             StatusCode::OK,
-            Json(serde_json::json!({ "ok": true, "sent": true })),
+            Json(serde_json::json!({ "ok": true, "sent": true, "tailnet_note": away_note })),
         )
             .into_response(),
         Ok(Err(e)) => json_err(StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
@@ -11085,18 +11098,35 @@ async fn ps5_port_check(Query(q): Query<PortCheckQuery>) -> impl IntoResponse {
         );
     }
     let timeout = Duration::from_millis(q.timeout_ms.unwrap_or(1500).clamp(100, 10_000));
+    // Home first, always; a port the console serves to Tailscale goes there only when the
+    // console is away (`ps5upload_core::route`). `via` says which path answered.
     let res = tokio::task::spawn_blocking(move || {
-        ps5upload_core::payload_lifecycle::probe_port(&ip, q.port, timeout)
+        let host = ps5upload_core::events::console_host(&ip);
+        match ps5upload_core::route::dial(&host, q.port, false) {
+            Some(a) => {
+                let (via, _) = tailnet_engine::via_json(&ps5upload_core::route::via(&host));
+                let r = ps5upload_core::payload_lifecycle::probe_port(
+                    &a.ip().to_string(),
+                    a.port(),
+                    timeout,
+                );
+                (r, via)
+            }
+            None => (
+                ps5upload_core::payload_lifecycle::probe_port(&ip, q.port, timeout),
+                "lan",
+            ),
+        }
     })
     .await;
     match res {
-        Ok(Ok(())) => (
+        Ok((Ok(()), via)) => (
             StatusCode::OK,
-            Json(serde_json::json!({ "open": true, "error": null })),
+            Json(serde_json::json!({ "open": true, "error": null, "via": via })),
         ),
-        Ok(Err(e)) => (
+        Ok((Err(e), via)) => (
             StatusCode::OK,
-            Json(serde_json::json!({ "open": false, "error": e })),
+            Json(serde_json::json!({ "open": false, "error": e, "via": via })),
         ),
         Err(e) => (
             StatusCode::OK,
@@ -11202,6 +11232,7 @@ async fn activity_handler(
             .collect()
     };
     active.extend(installs.jobs.running().iter().map(activity::install_active));
+    active.extend(share::activity());
     Json(activity::snapshot(q.since, active))
 }
 
@@ -11773,6 +11804,8 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     };
     // "Use less of this computer" as it was last set (#632).
     workshop_api::load();
+    // Play Together's "Invites work" as it was last set.
+    join::load_invites();
 
     // The Collection's automatic refresh (a no-op until a folder is added).
     collection_api::spawn_auto_refresh();
@@ -11967,6 +12000,7 @@ fn build_app_and_mcp(
             get(tailnet_api::engine_status).post(tailnet_api::engine_op),
         )
         .route("/api/tailnet/route", get(tailnet_api::route))
+        .route("/api/tailnet/check", get(tailnet_api::check))
         .route("/api/tailnet/via", get(tailnet_api::via))
         .route(
             "/api/ps5/cleanup/scan/{id}",
@@ -12174,6 +12208,10 @@ fn build_app_and_mcp(
         .route(
             "/api/consoles",
             get(consoles_api::list).put(consoles_api::put),
+        )
+        .route(
+            "/api/consoles/settings",
+            axum::routing::patch(consoles_api::patch_settings),
         )
         .route(
             "/api/consoles/document",
@@ -12492,6 +12530,30 @@ fn build_app_and_mcp(
         .route("/api/join/playing", post(join::playing))
         .route("/api/join/settings", post(join::set_settings))
         .route("/api/join/profiles", get(join::profiles))
+        // Share: an app's things to a friend (share/mod.rs).
+        .route("/share", get(share::page))
+        .route("/api/share/ws", get(share::ws))
+        .route("/api/share", get(share::list).post(share::create))
+        .route("/api/share/check", post(share::check))
+        .route("/api/share/{id}", get(share::get_one).delete(share::cancel))
+        .route("/api/share/{id}/decide", post(share::decide))
+        .route("/api/share/receive", post(share::receive_open))
+        .route(
+            "/api/share/receive/{id}",
+            get(share::receive_get).delete(share::receive_cancel),
+        )
+        .route(
+            "/api/share/receive/{id}/accept",
+            post(share::receive_accept),
+        )
+        .route(
+            "/api/share/receive/{id}/use-save",
+            post(share::receive_use_save),
+        )
+        .route(
+            "/api/share/receive/{id}/data/{item}",
+            get(share::receive_data),
+        )
         .route(
             "/api/ps5/rp/pad-link",
             get(pad_link::get_status).post(pad_link::set_open),

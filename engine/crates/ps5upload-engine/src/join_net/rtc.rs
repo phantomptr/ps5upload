@@ -9,12 +9,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use axum::body::Bytes;
 use axum::extract::ws::Message;
+use str0m::bwe::{Bitrate, BweKind};
 use str0m::change::SdpOffer;
 use str0m::channel::ChannelId;
 use str0m::config::DtlsCert;
+use str0m::format::Codec;
+use str0m::media::{Direction, Frequency, KeyframeRequestKind, MediaKind, MediaTime, Mid, Pt};
 use str0m::net::{Protocol, Receive};
-use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
+use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc, RtcConfig};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 
@@ -34,9 +38,124 @@ const CLOSE_DRAIN: Duration = Duration::from_secs(2);
 /// How long STUN servers have to answer.
 const STUN_WAIT: Duration = Duration::from_secs(2);
 /// What the data channel's SCTP may hold (str0m's default is 128 KiB, below [`super::HIGH_WATER`]).
-const SCTP_BUFFER: usize = 1024 * 1024;
+pub(crate) const SCTP_BUFFER: usize = 1024 * 1024;
 /// Messages queued from the channel to the session before the peer is dropped as a flood.
 const TO_SESSION: usize = 256;
+/// The video track's send buffer, in packets: what str0m keeps to answer NACKs (and to probe
+/// with). About 2 s at 15 Mbit/s (1,200-byte packets), as a browser's jitter buffer waits for a
+/// resend at most that long.
+pub(crate) const SEND_BUFFER_VIDEO: usize = 3000;
+/// The bandwidth estimate starts here (the Play screen's default bitrate) until the session says
+/// its own: started lower, the pacer would hold the pictures back while it climbs.
+const BWE_START_KBPS: u64 = 15_000;
+/// The estimate looks this far above the stream's bitrate (to tell whether the link carries it).
+const BWE_HEADROOM: f64 = 1.25;
+
+/// An internet guest's peer connection with the video track on offer: H.264 (H.265 when the offer
+/// has it) with str0m's NACK, RTX, PLI/FIR and transport-cc defaults, a send buffer for the
+/// resends, and the bandwidth estimate. Shared with the link harness (link_sim.rs).
+pub(crate) fn with_track(b: RtcConfig) -> RtcConfig {
+    b.clear_codecs()
+        .enable_h264(true)
+        .enable_h265(true)
+        .set_send_buffer_video(SEND_BUFFER_VIDEO)
+        .enable_bwe(Some(Bitrate::kbps(BWE_START_KBPS)))
+}
+
+/// The payload types a video section may be sent with, best first per codec: H.264 with
+/// packetization mode 1 (FU-A, what a 1080p picture needs) with its profile-level-id, and H.265.
+#[derive(Default, Debug, Clone)]
+pub(crate) struct TrackPts {
+    pub h264: Vec<(Pt, u32)>,
+    pub h265: Option<Pt>,
+}
+
+impl TrackPts {
+    pub(crate) fn of(rtc: &mut Rtc, mid: Mid) -> TrackPts {
+        let mut t = TrackPts::default();
+        if let Some(w) = rtc.writer(mid) {
+            for p in w.payload_params() {
+                let spec = p.spec();
+                match spec.codec {
+                    Codec::H264 if spec.format.packetization_mode == Some(1) => t
+                        .h264
+                        .push((p.pt(), spec.format.profile_level_id.unwrap_or(0x42e01f))),
+                    Codec::H265 if t.h265.is_none() => t.h265 = Some(p.pt()),
+                    _ => {}
+                }
+            }
+        }
+        t
+    }
+
+    /// The H.264 payload type for a stream whose SPS has `profile_idc` (the first one otherwise:
+    /// a browser decodes any profile it has, the SDP only names one).
+    pub(crate) fn h264_for(&self, profile_idc: Option<u8>) -> Option<Pt> {
+        profile_idc
+            .and_then(|p| self.h264.iter().find(|(_, plid)| (plid >> 16) as u8 == p))
+            .or(self.h264.first())
+            .map(|(pt, _)| *pt)
+    }
+}
+
+/// NAL units of an Annex B access unit: (type, the unit from its header on).
+fn nals(au: &[u8], hevc: bool) -> impl Iterator<Item = (u8, &[u8])> {
+    let mut starts = Vec::new();
+    let mut i = 0;
+    while i + 3 <= au.len() {
+        if au[i] == 0 && au[i + 1] == 0 && au[i + 2] == 1 {
+            starts.push(i + 3);
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+    let n = starts.len();
+    (0..n).filter_map(move |k| {
+        let from = starts[k];
+        let mut to = if k + 1 < n {
+            starts[k + 1] - 3
+        } else {
+            au.len()
+        };
+        // A four-byte start code's leading zero belongs to the next one.
+        if k + 1 < n && to > from && au[to - 1] == 0 {
+            to -= 1;
+        }
+        let nal = au.get(from..to).filter(|n| !n.is_empty())?;
+        let t = if hevc {
+            (nal[0] >> 1) & 0x3f
+        } else {
+            nal[0] & 0x1f
+        };
+        Some((t, nal))
+    })
+}
+
+/// The SPS's profile_idc in an H.264 codec header (Annex B parameter sets).
+pub(crate) fn h264_profile(header: &[u8]) -> Option<u8> {
+    nals(header, false)
+        .find(|(t, _)| *t == 7)
+        .and_then(|(_, n)| n.get(1).copied())
+}
+
+/// Whether an access unit carries its own parameter sets (SPS, or HEVC's VPS/SPS).
+fn has_params(au: &[u8], hevc: bool) -> bool {
+    nals(au, hevc).any(|(t, _)| if hevc { (32..=33).contains(&t) } else { t == 7 })
+}
+
+/// The video track of one peer: where it goes and what the session sent it.
+struct Video {
+    mid: Mid,
+    pts: TrackPts,
+    /// The payload type pictures are written with, once the session chose the track.
+    pt: Option<Pt>,
+    hevc: bool,
+    /// The codec header (kind 0): put in front of each keyframe that lacks it, as a decoder that
+    /// joins at that keyframe needs (a browser asks for a keyframe until it has the SPS).
+    header: Option<Vec<u8>>,
+    t0: Instant,
+}
 
 /// What the driver is asked.
 pub(crate) enum Cmd {
@@ -64,6 +183,11 @@ pub(crate) enum Cmd {
     },
     /// A guest session's message (its length as [`Flow`] counted it).
     Up(u64, Message, usize),
+    /// The session's pictures (H.265 or not) go on the peer's video track, at this stream bitrate
+    /// (kbit/s).
+    Track(u64, bool, u32),
+    /// One of the session's video messages for the track: `[0][codec header]` or `[1][AU]`.
+    Video(u64, Bytes),
     /// A guest session ended.
     Gone(u64),
     /// The router mapping, made or lost.
@@ -114,8 +238,8 @@ pub(crate) static TEST_REAL_IPS: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// The addresses the sockets go on: every IPv4 interface but loopback and link-local (the tests:
-/// loopback only).
-fn local_ips() -> Vec<Ipv4Addr> {
+/// loopback only), the home network's first ([`by_reach`]).
+pub(crate) fn local_ips() -> Vec<Ipv4Addr> {
     #[cfg(test)]
     if !TEST_REAL_IPS.load(Ordering::Relaxed) {
         return vec![Ipv4Addr::LOCALHOST];
@@ -128,9 +252,66 @@ fn local_ips() -> Vec<Ipv4Addr> {
             _ => None,
         })
         .collect();
-    v.sort();
+    v.sort_by_key(|ip| (reach_rank(IpAddr::V4(*ip)), *ip));
     v.dedup();
     v
+}
+
+/// Which network an address is on, best first for a guest: 0 the home network (RFC 1918,
+/// link-local, IPv6 ULA and link-local; loopback too), 1 Tailscale (100.64.0.0/10, fd7a:115c:a1e0::/48), 2
+/// anything else (a public address).
+///
+/// ICE ranks this engine's host candidates by the order they are added (str0m gives each its local
+/// preference from a counter: is::default_local_preference), so the sockets are kept in this order
+/// and their candidates added in it ([`add_host_candidates`]): a guest on the same Wi-Fi as a
+/// computer that also runs Tailscale pairs with the home network's address, not the tailnet's
+/// (sorted by address, 100.x came before 192.168.x).
+pub(crate) fn reach_rank(ip: IpAddr) -> u8 {
+    match ip {
+        IpAddr::V4(a) => {
+            let o = a.octets();
+            if a.is_private() || a.is_link_local() || a.is_loopback() {
+                0
+            } else if o[0] == 100 && (64..128).contains(&o[1]) {
+                1
+            } else {
+                2
+            }
+        }
+        IpAddr::V6(a) => {
+            let s = a.segments();
+            if s[0] == 0xfd7a && s[1] == 0x115c && s[2] == 0xa1e0 {
+                1
+            } else if (s[0] & 0xfe00) == 0xfc00 || (s[0] & 0xffc0) == 0xfe80 || a.is_loopback() {
+                0
+            } else {
+                2
+            }
+        }
+    }
+}
+
+/// The way a connection goes, from its selected candidate pair (this engine's socket, the guest's
+/// address as packets come from it): `"tailscale"` when either end is on the tailnet, `"lan"` when
+/// the guest's address is on the home network, else `"internet"` (straight through both routers).
+pub(crate) fn path_of(local: SocketAddr, remote: SocketAddr) -> &'static str {
+    match (reach_rank(local.ip()), reach_rank(remote.ip())) {
+        (1, _) | (_, 1) => "tailscale",
+        (_, 0) => "lan",
+        _ => "internet",
+    }
+}
+
+/// This engine's host candidates on `rtc`, the home network's first (their ICE priority follows
+/// the order: [`reach_rank`]).
+pub(crate) fn add_host_candidates(rtc: &mut Rtc, addrs: impl IntoIterator<Item = SocketAddr>) {
+    let mut v: Vec<SocketAddr> = addrs.into_iter().collect();
+    v.sort_by_key(|a| reach_rank(a.ip()));
+    for a in v {
+        if let Ok(c) = Candidate::host(a, "udp") {
+            rtc.add_local_candidate(c);
+        }
+    }
 }
 
 async fn start() -> Option<Arc<Net>> {
@@ -226,6 +407,10 @@ struct Peer {
     closing_at: Option<Instant>,
     /// Where its packets last came from (the guest's address, for the connect limit).
     last_src: Option<SocketAddr>,
+    /// The video track may be used (a Play Together room, the host's setting on).
+    track_ok: bool,
+    /// The video track, when the offer had one the engine can send on.
+    video: Option<Video>,
 }
 
 static NEXT_PEER: AtomicU64 = AtomicU64::new(1);
@@ -477,6 +662,16 @@ impl Driver {
                     flush(p);
                 }
             }
+            Cmd::Track(id, hevc, kbps) => {
+                if let Some(p) = self.peers.iter_mut().find(|p| p.id == id) {
+                    track_on(p, hevc, kbps);
+                }
+            }
+            Cmd::Video(id, b) => {
+                if let Some(p) = self.peers.iter_mut().find(|p| p.id == id) {
+                    to_track(p, &b, Instant::now());
+                }
+            }
             Cmd::Gone(id) => {
                 if let Some(p) = self.peers.iter_mut().find(|p| p.id == id) {
                     p.to_session = None;
@@ -536,17 +731,19 @@ impl Driver {
             return;
         };
         let now = Instant::now();
-        let mut rtc = Rtc::builder()
+        let mut b = Rtc::builder()
             .set_crypto_provider(super::crypto::provider())
             .set_dtls_cert(cert.clone())
             .set_stats_interval(Some(Duration::from_secs(1)))
-            .set_sctp_max_buffered_amount(SCTP_BUFFER)
-            .build(now);
-        for (_, a) in &self.socks {
-            if let Ok(c) = Candidate::host(*a, "udp") {
-                rtc.add_local_candidate(c);
-            }
+            .set_sctp_max_buffered_amount(SCTP_BUFFER);
+        // The picture as a video track for a Play Together page that offers one (a pad page's
+        // watcher keeps its data channel: pad_link.rs has no track).
+        let track = kind == Kind::Join && crate::join::settings().video_track;
+        if track {
+            b = with_track(b);
         }
+        let mut rtc = b.build(now);
+        add_host_candidates(&mut rtc, self.socks.iter().map(|(_, a)| *a));
         for c in &self.extra {
             rtc.add_local_candidate(c.clone());
         }
@@ -560,6 +757,8 @@ impl Driver {
         };
         let info = PeerInfo::new(&room, &gid);
         info.with(|s| s.ice = "checking");
+        let flow = Arc::new(Flow::default());
+        let _ = info.flow.set(flow.clone());
         let _ = signal.send((
             gid.clone(),
             serde_json::json!({"type": "answer", "sdp": answer.to_sdp_string()}),
@@ -574,7 +773,7 @@ impl Driver {
             signal,
             cid: None,
             to_session: None,
-            flow: Arc::new(Flow::default()),
+            flow,
             out: VecDeque::new(),
             out_bytes: 0,
             reasm: Reassembler::new(crate::join::GUEST_MSG_MAX),
@@ -582,6 +781,8 @@ impl Driver {
             disconnected_at: None,
             closing_at: None,
             last_src: None,
+            track_ok: track,
+            video: None,
         });
     }
 
@@ -699,7 +900,7 @@ fn flush(p: &mut Peer) {
         }
         buffered = ch.buffered_amount();
     }
-    p.flow.set_queued(p.out_bytes + buffered);
+    p.flow.set_queued(p.out_bytes, buffered);
 }
 
 /// Drives one peer until it has nothing more to do now: its packets out, its events handled.
@@ -802,6 +1003,9 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
                         p.info.room.clone(),
                     ));
                 }
+                Kind::Share => {
+                    tokio::spawn(crate::share::rtc_session(socket, ip, p.info.room.clone()));
+                }
             }
         }
         Event::ChannelData(d) => {
@@ -855,7 +1059,60 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
             }
         }
         Event::ChannelBufferedAmountLow(_) => flush(p),
+        // The offer's video section: the track, if the engine may send on it with a codec it has.
+        Event::MediaAdded(m) => {
+            if !p.track_ok
+                || p.video.is_some()
+                || m.kind != MediaKind::Video
+                || !matches!(m.direction, Direction::SendOnly | Direction::SendRecv)
+            {
+                return;
+            }
+            let pts = TrackPts::of(&mut p.rtc, m.mid);
+            if pts.h264.is_empty() && pts.h265.is_none() {
+                return;
+            }
+            p.info
+                .track_offered(!pts.h264.is_empty(), pts.h265.is_some());
+            p.video = Some(Video {
+                mid: m.mid,
+                pts,
+                pt: None,
+                hevc: false,
+                header: None,
+                t0: Instant::now(),
+            });
+        }
+        // The guest's browser asks for a keyframe (its decoder lost the picture): the session's
+        // own keyframe ask, with its gates (join.rs KeyAsk, then rp_stream_api's guest gaps).
+        Event::KeyframeRequest(r) => {
+            p.info.track_with(|t| match r.kind {
+                KeyframeRequestKind::Pli => t.plis += 1,
+                KeyframeRequestKind::Fir => t.firs += 1,
+            });
+            if let Some(tx) = &p.to_session {
+                let _ = tx.try_send(Message::Text(r#"{"keyframe":true}"#.into()));
+            }
+        }
+        Event::MediaEgressStats(s) => {
+            p.info.track_with(|t| {
+                t.packets = s.packets;
+                t.nacks = s.nacks;
+                t.loss = s.loss.or(t.loss);
+                t.rtcp_rtt_ms = s.rtt.map(|d| d.as_millis() as u32).or(t.rtcp_rtt_ms);
+            });
+        }
+        Event::EgressBitrateEstimate(BweKind::Twcc { estimate, .. }) => {
+            let kbps = (estimate.as_f64() / 1000.0).round().min(u32::MAX as f64) as u32;
+            p.info.track_with(|t| t.estimate(kbps, Instant::now()));
+        }
         Event::PeerStats(s) => {
+            // The pair ICE sends on now (this engine's socket, the guest's address): the way the
+            // connection goes, for the host's panel.
+            if let Some(c) = s.selected_candidate_pair.as_ref() {
+                let pair = (c.local.addr, c.remote.addr);
+                p.info.with(|st| st.pair = Some(pair));
+            }
             if let Some(rtt) = s
                 .selected_candidate_pair
                 .as_ref()
@@ -865,9 +1122,72 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
                 p.info
                     .with(|st| st.rtt_ms = Some((rtt.as_millis() as u32).max(1)));
             }
+            p.info.sent(s.peer_bytes_tx, s.timestamp);
             flush(p);
+            p.flow.second();
         }
         _ => {}
+    }
+}
+
+/// The session chose the track: the payload type for its codec, and the estimate aimed at its
+/// bitrate.
+fn track_on(p: &mut Peer, hevc: bool, kbps: u32) {
+    let Some(v) = p.video.as_mut() else { return };
+    v.hevc = hevc;
+    let h264 = v.header.as_deref().and_then(h264_profile);
+    v.pt = if hevc {
+        v.pts.h265
+    } else {
+        v.pts.h264_for(h264)
+    };
+    if kbps > 0 {
+        let k = kbps as f64;
+        p.rtc.bwe().reset(Bitrate::kbps(kbps as u64));
+        p.rtc
+            .bwe()
+            .set_bitrate(Bitrate::kbps(0), Bitrate::kbps((k * BWE_HEADROOM) as u64));
+    }
+}
+
+/// One of the session's video messages onto the track: the codec header is kept, a picture is
+/// written (str0m packetizes it, sends it at once and keeps it for resends).
+fn to_track(p: &mut Peer, b: &[u8], now: Instant) {
+    let Some(v) = p.video.as_mut() else { return };
+    let (Some(&kind), Some(body)) = (b.first(), b.get(1..)) else {
+        return;
+    };
+    match kind {
+        0 => {
+            if !v.hevc {
+                v.pt = v.pts.h264_for(h264_profile(body)).or(v.pt);
+            }
+            v.header = Some(body.to_vec());
+        }
+        1 => {
+            let Some(pt) = v.pt else { return };
+            let data = track_au(body, v.hevc, v.header.as_deref());
+            let us = now.saturating_duration_since(v.t0).as_micros() as u64;
+            let t = MediaTime::new(us * 90 / 1000, Frequency::NINETY_KHZ);
+            let mid = v.mid;
+            if let Some(w) = p.rtc.writer(mid) {
+                if w.write(pt, now, t, data).is_ok() {
+                    p.info.track_with(|t| t.frames += 1);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// An access unit as the track sends it: a keyframe without its parameter sets gets the codec
+/// header in front.
+pub(crate) fn track_au(au: &[u8], hevc: bool, header: Option<&[u8]>) -> Vec<u8> {
+    match header {
+        Some(h) if crate::rp_stream_api::is_keyframe(au, hevc) && !has_params(au, hevc) => {
+            [h, au].concat()
+        }
+        _ => au.to_vec(),
     }
 }
 
@@ -930,3 +1250,67 @@ fn nat_search() -> Option<nat::Search> {
 
 #[cfg(test)]
 pub(crate) static TEST_NAT: Mutex<Option<nat::Search>> = Mutex::new(None);
+
+#[cfg(test)]
+mod track_tests {
+    use super::*;
+
+    const HEADER: &[u8] = &[0, 0, 0, 1, 0x67, 0x64, 0, 0x2a, 0xac, 0, 0, 1, 0x68, 0xee];
+
+    #[test]
+    fn a_keyframe_gets_the_codec_header_in_front_unless_it_has_its_own() {
+        assert_eq!(h264_profile(HEADER), Some(0x64));
+        let idr = [0, 0, 1, 0x65, 0x88, 0x11];
+        assert_eq!(track_au(&idr, false, Some(HEADER)), [HEADER, &idr].concat());
+        // Its own SPS, a picture that is not a keyframe, or no header yet: as it came.
+        let with_sps = [HEADER, &idr].concat();
+        assert_eq!(track_au(&with_sps, false, Some(HEADER)), with_sps);
+        let p = [0, 0, 0, 1, 0x41, 0x9a];
+        assert_eq!(track_au(&p, false, Some(HEADER)), p);
+        assert_eq!(track_au(&idr, false, None), idr);
+        // H.265: an IDR (type 19) without a VPS gets the header too.
+        let hevc_idr = [0, 0, 1, 19 << 1, 1, 0x22];
+        let hevc_hdr = [0, 0, 1, 32 << 1, 1, 0x0c];
+        assert_eq!(
+            track_au(&hevc_idr, true, Some(&hevc_hdr)),
+            [&hevc_hdr[..], &hevc_idr].concat()
+        );
+    }
+
+    #[test]
+    fn the_payload_type_follows_the_streams_profile() {
+        let t = TrackPts {
+            h264: vec![(Pt::from(108), 0x42e01f), (Pt::from(114), 0x64001f)],
+            h265: None,
+        };
+        assert_eq!(t.h264_for(Some(0x64)), Some(Pt::from(114)));
+        assert_eq!(
+            t.h264_for(Some(0x4d)),
+            Some(Pt::from(108)),
+            "else the first"
+        );
+        assert_eq!(t.h264_for(None), Some(Pt::from(108)));
+        assert_eq!(TrackPts::default().h264_for(Some(0x64)), None);
+    }
+
+    #[test]
+    fn the_host_is_told_only_when_the_estimate_stays_under_the_streams_rate() {
+        let t0 = Instant::now();
+        let mut t = super::super::TrackSt {
+            on: true,
+            stream_kbps: Some(15_000),
+            ..Default::default()
+        };
+        t.estimate(14_000, t0); // a few percent under: it carries it
+        assert!(!t.slow(t0 + Duration::from_secs(9)));
+        t.estimate(9_000, t0);
+        assert!(!t.slow(t0 + Duration::from_secs(4)));
+        t.estimate(8_500, t0 + Duration::from_secs(3));
+        assert!(t.slow(t0 + super::super::SLOW_FOR));
+        t.estimate(16_000, t0 + Duration::from_secs(6));
+        assert!(!t.slow(t0 + Duration::from_secs(20)));
+        t.on = false;
+        t.estimate(1_000, t0);
+        assert!(!t.slow(t0 + Duration::from_secs(20)), "not on the track");
+    }
+}

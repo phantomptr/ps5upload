@@ -19,6 +19,7 @@ import {
   type ByeWhy,
   type JoinStatus,
   type NetWhy,
+  type TrackMedia,
   type RefuseWhy,
 } from "./joinProtocol";
 import { IDLE_PAD, type PadState } from "./remotePlayStream";
@@ -58,9 +59,14 @@ export interface JoinClientOptions {
   /** Round trip measured by this page's own pings, in ms. */
   onRtt?: (ms: number) => void;
   onFrame?: (data: ArrayBuffer) => void;
-  onCodec?: (hevc: boolean) => void;
+  /** The session's codec, and its video track when the pictures come on one (an internet socket
+   *  that has it, and the engine said `track`); null: they come on the socket. */
+  onCodec?: (hevc: boolean, track: TrackMedia | null) => void;
   onRumble?: (strong: number, weak: number) => void;
   onLight?: (rgb: [number, number, number]) => void;
+  /** The picture's numbers (drawn, dropped, stalls…), sent to the host every STATS_EVERY_PINGS
+   *  pings as `{"stats": …}` so the host's panel can say how the picture looks here. */
+  readStats?: () => Record<string, unknown> | null;
   /** Where the resume token is kept (sessionStorage by default; null: nowhere). */
   storage?: JoinStorage | null;
   /** Tests: a fake socket and clock. */
@@ -88,6 +94,8 @@ export const KEEPALIVE_MS = 100;
 export const SILENCE_MS = 3500;
 /** Waiting for the host past the window this much longer, the engine's own answer not come: give up. */
 export const HOST_WAIT_SLACK_MS = 5000;
+/** The picture's report goes with every this-many pings (one a second): every 2 s. */
+export const STATS_EVERY_PINGS = 2;
 
 export class JoinClient {
   private ws: WebSocket | null = null;
@@ -239,7 +247,7 @@ export class JoinClient {
         } catch {
           // Private mode: a reload asks again.
         }
-        this.o.onCodec?.(m.hevc);
+        this.o.onCodec?.(m.hevc, (m.track && (this.ws as { media?: TrackMedia | null } | null)?.media) || null);
         this.setStage({ kind: "joined", player: m.player, hevc: m.hevc });
         this.sendPad(true);
         return;
@@ -376,7 +384,12 @@ export class JoinClient {
       return;
     }
     ws.send(JSON.stringify({ ping: this.now() }));
+    if (this.stage.kind === "joined" && this.o.readStats && ++this.pings % STATS_EVERY_PINGS === 0) {
+      const stats = this.o.readStats();
+      if (stats) ws.send(JSON.stringify({ stats }));
+    }
   }
+  private pings = 0;
 
   /** Let go of everything (the page is hidden or lost the focus), or take the pad back. */
   setNeutral(on: boolean): void {

@@ -28,13 +28,17 @@ import { pairingAllow } from "../../api/ava1";
 import { parsePS5Firmware } from "../../lib/ps5Firmware";
 import { compareVersions } from "../../lib/semver";
 import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
-import { AlertTriangle, CheckCircle2, CircleDashed, Moon, XCircle, Send, ArrowRight, Radar, Sparkles, Cable, ExternalLink } from "lucide-react";
+import { AlertTriangle, CheckCircle2, CircleDashed, Moon, XCircle, Send, ArrowRight, Radar, Sparkles, Cable, ExternalLink, Settings2 } from "lucide-react";
+import { useRosterStore } from "../../state/roster";
+import { profileForHost } from "../../state/consoleSettings";
+import { ps5SettingsLink } from "../Settings/settingsTabs";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { cleanConsoleAddress, hostOf as bareHostOf } from "../../lib/addr";
 import { PageHeader, Button, Spinner, ErrorCard } from "../../components";
 import { useTr } from "../../state/lang";
 import PowerControl from "./PowerControl";
 import TailnetPanel from "./TailnetPanel";
+import PathCheck from "./PathCheck";
 import { BringUpPanel } from "./BringUpPanel";
 import { useHelperReplaceGuard } from "./useHelperReplaceGuard";
 import { useConsoleAddressCommit } from "./useConsoleAddressCommit";
@@ -266,6 +270,8 @@ export default function ConnectionScreen() {
   const { commit: commitAddress, dialog: addressDialog } = useConsoleAddressCommit();
   // The console is on but has no loader: step 1 says what to load (see handleCheck).
   const [loaderMissing, setLoaderMissing] = useState(false);
+  /** Bumped by each Check: the check by path (home, then Tailscale) runs once for it. */
+  const [pathNonce, setPathNonce] = useState(0);
   const host = useConnectionStore((s) => s.host);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const payloadStatusHost = useConnectionStore((s) => s.payloadStatusHost);
@@ -527,6 +533,7 @@ export default function ConnectionScreen() {
     setTransientStep2(null);
     setTransientStep2Msg(null);
     const check = await checkConsole(target);
+    setPathNonce((n) => n + 1);
     const running = () =>
       tr("connection_payload_running", { host: target }, `Helper is running on ${target}`);
     const notLoaded = () => tr("connection_payload_not_loaded", undefined, "Helper not loaded yet");
@@ -716,6 +723,7 @@ export default function ConnectionScreen() {
               <ElfldrFirstCallout />
             </div>
           )}
+          {pathNonce > 0 && host.trim() ? <PathCheck host={host.trim()} nonce={pathNonce} /> : null}
           {/* mDNS needs the desktop or Android app: a browser has no socket for it, and the
               button showed a developer error there. */}
           {isTauriEnv() && <DiscoverPanel
@@ -848,6 +856,8 @@ export default function ConnectionScreen() {
         {host.trim() && <PowerControl host={host.trim()} />}
         {/* "Put this PS5 on Tailscale": Remote Play and PS5Upload from anywhere. */}
         {host.trim() && <TailnetPanel host={host.trim()} />}
+        {/* This console's own settings (Settings › This PS5). */}
+        {host.trim() && <Ps5SettingsPointer host={host.trim()} />}
         {/* Points at Payloads, which the browser build does not have. */}
         {step2 === "ok" && isTauriEnv() && <CompanionSuggestion />}
       </div>
@@ -1362,6 +1372,37 @@ export function SendPayloadPointer() {
         onClick={() => navigate("/payloads?tab=send")}
       >
         {tr("connection_send_payload_open", undefined, "Open Send payload")}
+      </Button>
+    </div>
+  );
+}
+
+/** "Settings for this PS5": its own settings (bring-up, rest mode, wake for uploads...) are in
+ *  Settings › This PS5, opened on this console. */
+export function Ps5SettingsPointer({ host }: { host: string }) {
+  const tr = useTr();
+  const navigate = useNavigate();
+  const consoleId = useRosterStore((s) => profileForHost(host, s.profiles)?.id ?? null);
+  return (
+    <div
+      className="flex flex-wrap items-center gap-2 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] p-3 text-xs"
+      data-testid="connection-ps5-settings"
+    >
+      <Settings2 size={14} className="shrink-0 text-[var(--color-accent)]" aria-hidden />
+      <span className="min-w-[14rem] flex-1 text-[var(--color-muted)]">
+        {tr(
+          "connection_ps5_settings_hint",
+          undefined,
+          "Bring-up, rest mode, waking for uploads and Minion are set for each PS5 in Settings › This PS5.",
+        )}
+      </span>
+      <Button
+        variant="secondary"
+        size="sm"
+        rightIcon={<ArrowRight size={11} className="rtl:rotate-180" />}
+        onClick={() => navigate(ps5SettingsLink(consoleId))}
+      >
+        {tr("connection_ps5_settings_open", undefined, "Settings for this PS5")}
       </Button>
     </div>
   );

@@ -20,13 +20,21 @@ vi.mock("../../state/lang", async (orig) => ({
       typeof vars === "string" ? vars : (fallback ?? key),
 }));
 
-const { default: SettingsScreen } = await import("./index");
+// The screens read the stores' live state, so the console set below shows in the This PS5 tab.
+vi.mock("zustand", async (orig) => {
+  const { liveZustand } = await import("../../test-utils/liveZustand");
+  return liveZustand(await orig<typeof import("zustand")>());
+});
 
-function render(p: { tauri: boolean; mobile: boolean }): string {
+const { default: SettingsScreen } = await import("./index");
+const { useRosterStore } = await import("../../state/roster");
+useRosterStore.setState({ profiles: [{ id: "p1", name: "Living room", host: "192.168.1.50" }], active_id: "p1" });
+
+function render(p: { tauri: boolean; mobile: boolean }, path = "/settings"): string {
   platform.tauri = p.tauri;
   platform.mobile = p.mobile;
   return renderToStaticMarkup(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[path]}>
       <SettingsScreen />
     </MemoryRouter>,
   );
@@ -73,9 +81,13 @@ describe("Settings screen per platform", () => {
     expect(html).toContain("Keep computer awake");
     expect(html).toContain("Settings file");
     expect(html).toContain("Show system notifications");
-    expect(html).toContain("Reconnect automatically after rest mode");
     expect(html).toContain("Check for updates automatically");
     expect(html).not.toContain("pull the new Docker image");
+    // Reconnecting is one console's setting now (This PS5).
+    expect(html).not.toContain("Reconnect automatically after rest mode");
+    expect(render({ tauri: true, mobile: false }, "/settings?tab=ps5")).toContain(
+      "Reconnect automatically after rest mode",
+    );
   });
 
   it("Android has no engine URL", () => {
@@ -97,6 +109,11 @@ describe("Settings screen per platform", () => {
     ]) {
       expect(html).not.toContain(gone);
     }
+    // This PS5 in the browser: no reconnect loop and no bring-up (they send from this machine).
+    const ps5 = render({ tauri: false, mobile: false }, "/settings?tab=ps5");
+    expect(ps5).toContain("Keep the PS5 awake");
+    expect(ps5).not.toContain("Reconnect automatically after rest mode");
+    expect(ps5).not.toContain("Bring up automatically");
     expect(html).toContain("pull the new Docker image");
     // The page can keep the screen on, which keeps the tab driving the queue awake.
     expect(html).toContain("Keep screen on");
@@ -117,8 +134,8 @@ describe("Settings screen per platform", () => {
     }
   });
 
-  it("groups the console's rest-mode settings together", () => {
-    const html = render({ tauri: true, mobile: false });
+  it("groups the console's rest-mode settings together (This PS5)", () => {
+    const html = render({ tauri: true, mobile: false }, "/settings?tab=ps5");
     const at = (s: string) => html.indexOf(s);
     const console = at(">Console<");
     const uploads = at(">Uploads<");

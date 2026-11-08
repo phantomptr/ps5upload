@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { consoleOnTailnet, selfTailnet, useTailnet } from "../../state/useTailnet";
 import PowerControl from "../Connection/PowerControl";
 import { Link } from "react-router";
 import {
@@ -397,6 +398,7 @@ export default function HomeScreen() {
                         : "warn"
                   }
                 />
+                {host ? <TailnetRows host={host} /> : null}
               </div>
 
               <div className="relative mt-4 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-4">
@@ -620,6 +622,68 @@ function MetricRow({
         {value}
       </span>
     </div>
+  );
+}
+
+/**
+ * Console status › Tailscale: the PS5's Tailscale address and which way it is reached (the home
+ * network first; Tailscale only when home does not answer), and a switch that pauses this
+ * device's own Tailscale and keeps its sign-in. Nothing when neither is set up.
+ */
+function TailnetRows({ host }: { host: string }) {
+  const tr = useTr();
+  const { status, setPaused, busy } = useTailnet();
+  const ps5 = consoleOnTailnet(status, host);
+  const self = selfTailnet(status);
+  if (!ps5 && self === "none") return null;
+  return (
+    <>
+      {ps5 ? (
+        <MetricRow
+          label={tr("v5_home_tailnet", undefined, "Tailscale")}
+          value={
+            ps5.via === "lan"
+              ? tr("v5_home_tailnet_home", { ip: ps5.ip }, "{ip} · home network in use")
+              : ps5.via === "direct"
+                ? tr("v5_home_tailnet_direct", { ip: ps5.ip, ms: ps5.latencyMs >= 0 ? Math.round(ps5.latencyMs) : "?" }, "{ip} · in use, direct {ms} ms")
+                : ps5.via === "system"
+                  ? tr("v5_home_tailnet_system", { ip: ps5.ip }, "{ip} · in use, through the Tailscale app")
+                  : tr("v5_home_tailnet_relayed", { ip: ps5.ip }, "{ip} · in use, relayed")
+          }
+          tone={ps5.via === "lan" ? undefined : "good"}
+        />
+      ) : null}
+      {self === "system" ? (
+        <MetricRow
+          label={tr("v5_home_tailnet_self", undefined, "Tailscale on this device")}
+          value={tr("v5_home_tailnet_system_app", undefined, "The Tailscale app")}
+        />
+      ) : self !== "none" ? (
+        <div className="metric-row" data-testid="home-tailnet-switch">
+          <span className="text-[var(--color-muted)]">
+            {tr("v5_home_tailnet_self", undefined, "Tailscale on this device")}
+          </span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={self !== "paused"}
+            disabled={busy}
+            onClick={() => void setPaused(self !== "paused").catch(() => {})}
+            className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${
+              self === "paused"
+                ? "border-[var(--glass-edge)] text-[var(--color-muted)]"
+                : "border-transparent bg-[var(--color-accent-soft)] text-[var(--color-accent-bright)]"
+            }`}
+          >
+            {self === "paused"
+              ? tr("v5_home_tailnet_paused", undefined, "Paused")
+              : self === "on"
+                ? tr("v5_home_tailnet_on", undefined, "On")
+                : tr("v5_home_tailnet_connecting", undefined, "Connecting…")}
+          </button>
+        </div>
+      ) : null}
+    </>
   );
 }
 

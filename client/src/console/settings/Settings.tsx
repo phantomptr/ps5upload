@@ -18,6 +18,7 @@ import {
 } from "../theme";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { forgetPhoneUrl } from "../ui/PhoneHandoff";
+import { TailscaleSection } from "./Tailscale";
 
 /** /api/settings (payload/src/webui_api.c send_settings). */
 export interface WebSettings {
@@ -111,6 +112,8 @@ export function settingsErrorText(err: unknown): string | null {
 }
 
 export interface SettingsViewProps {
+  /** Tests: leave out the Tailscale section (it reads the helper itself). */
+  noTailscale?: boolean;
   /** null until the first answer. */
   settings: WebSettings | null;
   loadFailed: boolean;
@@ -213,7 +216,7 @@ function ActionRow({ setting, label, note, onClick }: { setting: string; label: 
 /**
  * Settings without state: everything comes in through props (tests render it directly).
  * Order: Theme · Language · Full screen · Controls · Show tips again · Allow other devices ·
- * Show PS5Upload Minion on the home screen · Turn off PS5Upload Minion · About (each row carries
+ * Show PS5Upload Minion on the home screen · Turn off PS5Upload Minion · Tailscale · About (each row carries
  * data-setting).
  */
 export function SettingsView(p: SettingsViewProps) {
@@ -387,6 +390,8 @@ export function SettingsView(p: SettingsViewProps) {
           <p className="cw-dim">{t("cw_home_loading")}</p>
         )}
       </section>
+
+      {p.turnedOff || p.noTailscale ? null : <TailscaleSection />}
 
       <section className="cw-home-section" data-setting="about">
         <h2 className="cw-h2">{t("cw_settings_about")}</h2>

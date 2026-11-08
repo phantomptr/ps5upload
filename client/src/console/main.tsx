@@ -1,3 +1,5 @@
+// First: stand-ins for what an older WebKit lacks (lib/polyfills), before any other module runs.
+import "../lib/polyfills";
 import { StrictMode, useEffect, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import "virtual:pc-tokens.css";

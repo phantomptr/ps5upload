@@ -32,10 +32,43 @@ pub enum Op {
     Disable,
     /// Leave and forget the keys: the next enable signs in again.
     Logout,
+    /// The device name, any time (applied now while on; the address stays).
+    Rename { hostname: String },
+    /// Renew the sign-in keeping the node (its address and name): a login URL follows.
+    Renew,
+    /// Which tailnet devices may reach the PS5: `mode` "all" or "listed" (empty keeps it), and
+    /// the list as "100.a.b.c,100.d.e.f".
+    Allow { mode: String, list: String },
+    /// Add one device (its tailnet IPv4) to the list.
+    AllowAdd { ip: String },
+}
+
+/// The fields of an op request beyond its name.
+#[derive(Clone, Debug, Default)]
+pub struct OpFields<'a> {
+    pub control_url: &'a str,
+    pub hostname: &'a str,
+    pub authkey: &'a str,
+    pub allow_mode: &'a str,
+    pub allow: &'a str,
+    pub ip: &'a str,
 }
 
 impl Op {
     pub fn parse(op: &str, control_url: &str, hostname: &str, authkey: &str) -> Result<Op> {
+        Self::parse_fields(
+            op,
+            &OpFields {
+                control_url,
+                hostname,
+                authkey,
+                ..Default::default()
+            },
+        )
+    }
+
+    pub fn parse_fields(op: &str, f: &OpFields) -> Result<Op> {
+        let (control_url, hostname, authkey) = (f.control_url, f.hostname, f.authkey);
         Ok(match op {
             "" | "status" => Op::Status,
             "enable" => Op::Enable {
@@ -45,6 +78,39 @@ impl Op {
             },
             "disable" => Op::Disable,
             "logout" => Op::Logout,
+            "rename" => {
+                let h = hostname.trim();
+                if h.is_empty() || h.len() > 63 {
+                    bail!("a device name is 1 to 63 characters");
+                }
+                Op::Rename {
+                    hostname: h.to_string(),
+                }
+            }
+            "renew" => Op::Renew,
+            "allow" => {
+                let mode = f.allow_mode.trim();
+                if !mode.is_empty() && mode != "all" && mode != "listed" {
+                    bail!("allow_mode must be \"all\" or \"listed\"");
+                }
+                for ip in f.allow.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                    if tailnet_ip(&json!({ "ip": ip })).is_none() {
+                        bail!("{ip:?} is not a Tailscale address (100.64.0.0/10)");
+                    }
+                }
+                Op::Allow {
+                    mode: mode.to_string(),
+                    list: f.allow.trim().to_string(),
+                }
+            }
+            "allow_add" => {
+                if tailnet_ip(&json!({ "ip": f.ip.trim() })).is_none() {
+                    bail!("ip must be a Tailscale address (100.64.0.0/10)");
+                }
+                Op::AllowAdd {
+                    ip: f.ip.trim().to_string(),
+                }
+            }
             other => bail!("unknown op {other:?}"),
         })
     }
@@ -90,6 +156,18 @@ pub fn request_body(op: &Op) -> Value {
         Op::Status => json!({ "op": "status" }),
         Op::Disable => json!({ "op": "disable" }),
         Op::Logout => json!({ "op": "logout" }),
+        Op::Rename { hostname } => json!({ "op": "rename", "hostname": hostname }),
+        Op::Renew => json!({ "op": "renew" }),
+        Op::Allow { mode, list } => {
+            let mut b = Map::new();
+            b.insert("op".into(), json!("allow"));
+            if !mode.is_empty() {
+                b.insert("allow_mode".into(), json!(mode));
+            }
+            b.insert("allow".into(), json!(list));
+            Value::Object(b)
+        }
+        Op::AllowAdd { ip } => json!({ "op": "allow_add", "ip": ip }),
         Op::Enable {
             control_url,
             hostname,
@@ -153,6 +231,40 @@ mod tests {
         assert!(Op::parse("reboot", "", "", "").is_err());
         assert!(!Op::Status.mutates());
         assert!(Op::Disable.mutates());
+        assert_eq!(
+            Op::parse("rename", "", " den-ps5u ", "").unwrap(),
+            Op::Rename {
+                hostname: "den-ps5u".into()
+            }
+        );
+        assert!(Op::parse("rename", "", " ", "").is_err());
+        assert_eq!(Op::parse("renew", "", "", "").unwrap(), Op::Renew);
+        let f = OpFields {
+            allow_mode: "listed",
+            allow: "100.64.0.5, 100.101.2.3",
+            ..Default::default()
+        };
+        let op = Op::parse_fields("allow", &f).unwrap();
+        assert_eq!(request_body(&op)["allow_mode"], "listed");
+        let bad = OpFields {
+            allow: "192.168.1.2",
+            ..Default::default()
+        };
+        assert!(Op::parse_fields("allow", &bad).is_err());
+        let mode = OpFields {
+            allow_mode: "some",
+            ..Default::default()
+        };
+        assert!(Op::parse_fields("allow", &mode).is_err());
+        let add = OpFields {
+            ip: "100.64.0.7",
+            ..Default::default()
+        };
+        assert_eq!(
+            request_body(&Op::parse_fields("allow_add", &add).unwrap())["ip"],
+            "100.64.0.7"
+        );
+        assert!(Op::parse_fields("allow_add", &OpFields::default()).is_err());
     }
 
     #[test]

@@ -71,7 +71,7 @@ Every operation in the document carries `x-ps5upload.access`:
 | `loopback` | Most routes. This computer and the `PS5UPLOAD_ALLOW_IP` addresses. |
 | `strict-local` | Also tagged `strict-local`. Remote Play start, stop, frame, input, passcode, keyboard, microphone, the live feed, virtual keyboard and mouse. This computer alone, unless `PS5UPLOAD_ALLOW_AUTOMATION=1`. |
 | `host-checked` | Play Together's and Go live's host routes. This computer, addressed by a loopback name or one in `PS5UPLOAD_ALLOW_HOST`, and the `PS5UPLOAD_ALLOW_IP` addresses. |
-| `lan-open` | `/pkg-host/*` (package bytes for the console), `/pad`, `/api/pad/ws`, `/join`, `/api/join/ws` (a phone or a friend, which check their own key or invite). |
+| `lan-open` | `/pkg-host/*` (package bytes for the console), `/pad`, `/api/pad/ws`, `/join`, `/api/join/ws`, `/share`, `/api/share/ws` (a phone or a friend, which check their own key or invite; a Share serves only what the sender allowed). |
 | `mcp` | `/mcp`. Like `loopback`, and a browser may reach it only from this computer. |
 
 Two routes are left out of the document and refused by the MCP tools, because they hand out the
@@ -301,6 +301,7 @@ places to start.
 | `health` | `/api/ps5/health/*`, `/api/ps5/cleanup/*`, `/api/net/*` | Checks, clean-up, network diagnosis. |
 | `remote-play` | `/api/ps5/rp/*`, `/api/ps5/vinput/*`, `/api/ps5/remoteplay/*` | Sessions, picture, input. See [AUTOMATION.md](AUTOMATION.md). |
 | `play-together`, `go-live` | `/api/join/*`; `/api/stream/*` | Friends joining; streaming to other sites. |
+| `share` | `/api/share/*` | An app's things sent to a friend, and things received. See [Share](#share). |
 | `workshop` | `/api/fpkg/*`, `/api/exfat/*`, `/api/folder/*`, `/api/fakelibs/*`, `/api/ampr/*`, `/api/backport/*` | Package conversion, images, backporting. |
 | `collection`, `this-computer` | `/api/collection/*`; `/api/local/*` | Game folders and files on this computer. |
 | `mesh` | `/api/mesh/*`, `/api/drive/*` | Devices sharing a console, and Mesh Drive. |
@@ -335,6 +336,60 @@ cd engine && cargo run -p ps5upload-apidoc
 Words the source can't give (a summary for a handler with no doc comment) go in
 `engine/crates/ps5upload-engine/api/overrides.json`.
 
+## Share
+
+Share sends an app's things to a friend: the app itself (homebrew only), its saves, screenshots and
+clips, cheats and which are on, controls, stream settings, and a note. The sender makes a link; the
+friend opens it and asks for some of the items; the sender allows or declines; only then do files go,
+directly between the two computers (a WebRTC data channel, DTLS-encrypted; the signalling hub only
+introduces them, and on the same network the friend may use the sender's `/api/share/ws`).
+
+**Retail games are refused by the engine**, whatever the request says: an app whose Title ID starts
+with a Sony product prefix (`PPSA`, `CUSA`, `PLAS`, `ECAS`, … in any case, with spaces or dashes),
+whose Content ID names one or carries a store publisher code (`UP0001-`, `EP…`, `JP…`, `HP…`, `KP…`,
+`IP…`) in front of a Title ID of the retail shape, or that can't be identified at all. Updates and
+add-ons carry their game's Title ID and are refused with it. The answer is 403:
+
+```json
+{"error": "This is a retail game (PPSA01234). PS5Upload only shares homebrew.", "code": "retail", "title_id": "PPSA01234", "item": 0}
+```
+
+The sender's side:
+
+```sh
+# Make a share: an app folder on the console, a save, a note. One friend, 24 hours.
+curl -s localhost:19113/api/share -H 'content-type: application/json' -d '{
+  "from": "Sam", "title": "My App", "title_id": "PSUP00001",
+  "items": [
+    {"kind": "app", "console": "192.168.1.20", "path": "/data/homebrew/PSUP00001"},
+    {"kind": "save", "console": "192.168.1.20", "folder": "/user/home/10000000/savedata_prospero/PSUP00001"},
+    {"kind": "note", "text": "Have fun"}
+  ]}'
+# {"id": "…", "state": "open", "url": "https://ps5upload.phantomptr.com/share/#room=…&fp=…&hub=…&lan=…", "works": "anywhere", …}
+
+curl -s localhost:19113/api/share                      # shares, receives, history
+curl -s localhost:19113/api/share/<id>/decide -d '{"request": 1, "allow": true}' -H 'content-type: application/json'
+curl -s -X DELETE localhost:19113/api/share/<id>       # stop it
+```
+
+`POST /api/share/check` takes the same body and answers each item's verdict without making
+anything. A share's `requests` say who asked (`name`), for what (`wants_names`), and how far it got
+(`state`: asking, allowed, sending, done, declined, cancelled, left; `bytes_done`, `bytes_total`).
+`expires_in_s` is 60 s to 7 days (default a day); `one_use` (default true) takes one Allow, after
+which the link takes nobody new. The friend can only ask for the files listed when the share was
+made, by item and path; a path with `..`, an absolute path, or a symbolic link is refused.
+
+The receiver's side: `POST /api/share/receive {link, name}` → `{id}`; `GET /api/share/receive/{id}`
+shows the offer (`state: offered`, `from`, `items`); `POST /api/share/receive/{id}/accept {items,
+dest?}` asks the sender (the default folder is `Received` in the Collection's first folder);
+`DELETE /api/share/receive/{id}` stops. When `state` is `done`, `received` says where each item is;
+`POST /api/share/receive/{id}/use-save {addr, folder, user_id?, item}` puts a received save into a
+user's own save of the same game (the save stays that user's: trophies and the account are not
+carried over), and `GET /api/share/receive/{id}/data/{item}` reads the small data items.
+
+Transfers show in `GET /api/activity` (kinds `share` and `receive`), and each change is an event
+named `share` on `GET /api/events`. Read through MCP, `/api/share` leaves the links out.
+
 ## What the API can't do
 
 The API covers what the engine does. Some things in the app aren't the engine's, so no route reaches
@@ -347,6 +402,7 @@ them:
 | **The notification inbox** | Likewise per device. | `GET /api/ps5/notif/list` is the helper's log; `GET /api/event-journal` is the engine's. |
 | **A phone as a controller** | `/pad` and `/api/pad/ws`, for a person holding the phone that scanned the code. | `POST /api/ps5/rp/input` drives the session from a script. `/api/ps5/rp/pad-link` opens and closes the link. |
 | **A guest joining Play Together** | `/join` and `/api/join/ws`, for a person who has the invite. | `/api/join/*` is the host's side: open, invite, let in, let go. |
+| **A friend receiving a Share in a browser** | `/share` and `/api/share/ws`, for a person with the link on the same network. | `/api/share/receive` receives one engine to another. |
 | **Your file picker, drag and drop, keep-awake, game mode, screenshots of the app, controller haptics, the app's updater** | The device itself. | Name paths directly. `GET /api/engine/update` says if there's a new release. |
 
 Other limits worth knowing:

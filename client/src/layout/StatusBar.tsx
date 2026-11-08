@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Camera, Check, AlertTriangle, Globe, Images, MonitorSmartphone, Zap } from "lucide-react";
-import { tailnetVia, type TailnetVia } from "../api/tailnet";
+import { pathSwitch, tailnetVia, type TailnetVia } from "../api/tailnet";
+import { profileNameForHost } from "../state/roster";
 import { useNavigate } from "react-router";
 
 import { useConnectionStore, EMPTY_HOST_RUNTIME } from "../state/connection";
@@ -18,6 +19,8 @@ import {
 } from "../state/roster";
 import { ActivityStatusSlot } from "./ActivityBar";
 import { useUploadSettingsStore } from "../state/uploadSettings";
+import { useShallow } from "zustand/react/shallow";
+import { defaultConsoleSettings, profileForHost, settingsOfProfile } from "../state/consoleSettings";
 import { getEngineUrl } from "../state/engine";
 import { Spinner } from "../components/Spinner";
 import { hostOf } from "../lib/addr";
@@ -209,18 +212,36 @@ function TailnetChip() {
   useEffect(() => {
     if (!host) return;
     let live = true;
-    const read = () =>
+    let prev: string | null = null;
+    const read = () => {
+      // Foreground only: a phone in the background asks nothing.
+      if (typeof document !== "undefined" && document.hidden) return;
       void tailnetVia(host).then((v) => {
-        if (live) setVia(v);
+        if (!live) return;
+        setVia(v);
+        // "Living room PS5: now through Tailscale" / "back on your home network".
+        const sw = pathSwitch(prev, v.via);
+        prev = v.via;
+        if (sw) {
+          const name = profileNameForHost(host, useRosterStore.getState().profiles);
+          useToastStore.getState().push({
+            message:
+              sw === "tailnet"
+                ? tr("tn_switch_tailnet", { name }, "{name}: now through Tailscale")
+                : tr("tn_switch_home", { name }, "{name}: back on your home network"),
+            tone: "info",
+          });
+        }
       });
+    };
     read();
     const t = window.setInterval(read, 5000);
     return () => {
       live = false;
       window.clearInterval(t);
     };
-  }, [host]);
-  if (!host || (via.via !== "direct" && via.via !== "relayed")) return null;
+  }, [host, tr]);
+  if (!host || (via.via !== "direct" && via.via !== "relayed" && via.via !== "system")) return null;
   const label =
     via.via === "direct"
       ? tr(
@@ -228,7 +249,9 @@ function TailnetChip() {
           { ms: via.latency_ms >= 0 ? via.latency_ms.toFixed(1) : "?" },
           "via Tailscale (direct, {ms} ms)",
         )
-      : tr("tn_via_relayed", undefined, "via Tailscale (relayed)");
+      : via.via === "system"
+        ? tr("tn_via_system", undefined, "via Tailscale (the Tailscale app)")
+        : tr("tn_via_relayed", undefined, "via Tailscale (relayed)");
   return (
     <span
       className="flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[var(--color-accent-bright)]"
@@ -283,20 +306,23 @@ function OtherDevicesChip() {
  */
 function KeepAwakeIndicator() {
   const tr = useTr();
-  const mode = useUploadSettingsStore((s) => s.keepPs5AwakeMode);
-  const anyUp = useConnectionStore((s) => {
-    for (const h in s.runtimeByHost) {
-      if (s.runtimeByHost[h].payloadStatus === "up") return true;
-    }
-    return false;
-  });
-  if (mode !== "always" || !anyUp) return null;
+  // Each console has its own mode (Settings › This PS5): shown while one set to "Always" answers.
+  const profiles = useRosterStore((s) => s.profiles);
+  const defaultMode = useUploadSettingsStore((s) => s.keepPs5AwakeMode);
+  const upHosts = useConnectionStore(
+    useShallow((s) => Object.keys(s.runtimeByHost).filter((h) => s.runtimeByHost[h].payloadStatus === "up")),
+  );
+  const defaults = { ...defaultConsoleSettings(), keep_awake_mode: defaultMode };
+  const keeping = upHosts.some(
+    (h) => settingsOfProfile(profileForHost(h, profiles), defaults).keep_awake_mode === "always",
+  );
+  if (!keeping) return null;
   return (
     <span
       className="flex items-center gap-1 text-[var(--color-warn)]"
       title={tr(
-        "status_keep_awake_tooltip_v2",
-        "Keep-awake is set to “Always while connected” — connected consoles won't auto-enter rest mode while the app is open. Change in Settings → Console.",
+        "status_keep_awake_tooltip_v3",
+        "A connected PS5 is set to keep awake “Always while connected”: it won't go into rest mode by itself while the app is open. Change it in Settings › This PS5.",
       )}
     >
       <Zap size={11} aria-hidden />

@@ -45,9 +45,13 @@ pub(crate) mod rtc;
 pub(crate) mod stun;
 
 #[cfg(test)]
+mod ice_path;
+#[cfg(test)]
+mod link_sim;
+#[cfg(test)]
 pub(crate) mod tests;
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -58,6 +62,8 @@ use tokio::sync::{mpsc, Notify};
 pub(crate) const PAGE: &str = "https://ps5upload.phantomptr.com/join/";
 /// The phone page that reads an internet phone link (a controller, or `&w=1` to watch).
 pub(crate) const PAD_PAGE: &str = "https://ps5upload.phantomptr.com/pad/";
+/// The page that reads a Share link in a browser (share/mod.rs): file downloads only.
+pub(crate) const SHARE_PAGE: &str = "https://ps5upload.phantomptr.com/share/";
 
 /// What a room's peers come for, and so which session their channel gets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,6 +72,8 @@ pub(crate) enum Kind {
     Join,
     /// The phone link (pad_link.rs): a controller or a watcher.
     Pad,
+    /// A Share link (share/mod.rs): a friend receiving what was shared, over a "share" channel.
+    Share,
 }
 
 impl Kind {
@@ -74,6 +82,7 @@ impl Kind {
         match self {
             Kind::Join => "join",
             Kind::Pad => "pad",
+            Kind::Share => "share",
         }
     }
 
@@ -82,6 +91,7 @@ impl Kind {
         match self {
             Kind::Join => PAGE,
             Kind::Pad => PAD_PAGE,
+            Kind::Share => SHARE_PAGE,
         }
     }
 }
@@ -102,6 +112,8 @@ pub(crate) struct PeerInfo {
     pub room: String,
     started: Instant,
     st: Mutex<PeerSt>,
+    /// Its channel's back-pressure (set once the driver made it): the link numbers read it.
+    flow: std::sync::OnceLock<Arc<Flow>>,
 }
 
 #[derive(Default)]
@@ -111,7 +123,70 @@ struct PeerSt {
     failed: bool,
     ended: Option<Instant>,
     rtt_ms: Option<u32>,
+    /// The selected candidate pair (this engine's socket, the guest's address), from the stats.
+    pair: Option<(std::net::SocketAddr, std::net::SocketAddr)>,
     why: Option<&'static str>,
+    /// What went out to the guest over the last stats second (every byte on the wire), kbit/s.
+    sent_kbps: Option<u32>,
+    /// `peer_bytes_tx` and its time at the last stats event.
+    sent_at: Option<(u64, Instant)>,
+    /// The video track (rtc.rs), when the guest's offer had one the engine can send on.
+    track: Option<TrackSt>,
+}
+
+/// An internet guest's video track: what the offer allows, whether the session uses it, and its
+/// numbers (each set by the driver as str0m reports them; nothing per frame is kept).
+#[derive(Default, Clone)]
+pub(crate) struct TrackSt {
+    /// The answer has an H.264 (packetization mode 1) or an H.265 payload type to send with.
+    pub h264: bool,
+    pub h265: bool,
+    /// The session sends its pictures on the track (else on the data channel).
+    pub on: bool,
+    /// Access units written to the track.
+    pub frames: u64,
+    /// From str0m's egress stats: RTP packets sent (retransmissions included), NACKs, PLIs and
+    /// FIRs received, the loss the guest reported, the RTCP round trip.
+    pub packets: u64,
+    pub nacks: u64,
+    pub plis: u64,
+    pub firs: u64,
+    pub loss: Option<f32>,
+    pub rtcp_rtt_ms: Option<u32>,
+    /// The send-side bandwidth estimate (TWCC), kbit/s, and since when it stays under the
+    /// stream's bitrate.
+    pub bwe_kbps: Option<u32>,
+    pub under_since: Option<Instant>,
+    /// The stream's bitrate (kbit/s): the console cannot change it mid-session.
+    pub stream_kbps: Option<u32>,
+}
+
+/// The estimate under the stream's bitrate this long: the host is told to lower the quality.
+pub(crate) const SLOW_FOR: Duration = Duration::from_secs(5);
+/// …by this much (an estimate a few percent under the rate still carries it).
+const SLOW_UNDER: f64 = 0.9;
+
+impl TrackSt {
+    /// A new estimate.
+    pub(crate) fn estimate(&mut self, kbps: u32, now: Instant) {
+        self.bwe_kbps = Some(kbps);
+        let under = self
+            .stream_kbps
+            .is_some_and(|s| (kbps as f64) < s as f64 * SLOW_UNDER);
+        if !under {
+            self.under_since = None;
+        } else if self.under_since.is_none() {
+            self.under_since = Some(now);
+        }
+    }
+
+    /// The estimate stayed under the stream's bitrate for [`SLOW_FOR`].
+    pub(crate) fn slow(&self, now: Instant) -> bool {
+        self.on
+            && self
+                .under_since
+                .is_some_and(|t| now.saturating_duration_since(t) >= SLOW_FOR)
+    }
 }
 
 impl PeerInfo {
@@ -124,6 +199,7 @@ impl PeerInfo {
                 ice: "new",
                 ..PeerSt::default()
             }),
+            flow: std::sync::OnceLock::new(),
         });
         let mut g = PEERS.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
@@ -158,8 +234,105 @@ impl PeerInfo {
         self.with(|s| s.rtt_ms)
     }
 
+    /// Which way the connection goes now: `"lan"` (the home network), `"tailscale"` or
+    /// `"internet"` (straight through both routers), from the pair ICE selected; None before it
+    /// connected.
+    pub(crate) fn net_path(&self) -> Option<&'static str> {
+        self.with(|s| s.pair)
+            .map(|(local, remote)| rtc::path_of(local, remote))
+    }
+
+    /// The driver's view of the video track (rtc.rs).
+    pub(crate) fn track_with<R>(&self, f: impl FnOnce(&mut TrackSt) -> R) -> Option<R> {
+        self.with(|s| s.track.as_mut().map(f))
+    }
+
+    /// The offer had a video section the engine can send on (with these codecs).
+    pub(crate) fn track_offered(&self, h264: bool, h265: bool) {
+        self.with(|s| {
+            s.track = Some(TrackSt {
+                h264,
+                h265,
+                ..TrackSt::default()
+            })
+        });
+    }
+
+    /// The session's choice: its pictures (`hevc` or not) on the track, when it can carry them.
+    /// True when they go there.
+    pub(crate) fn use_track(&self, hevc: bool, stream_kbps: u32) -> bool {
+        self.track_with(|t| {
+            t.on = if hevc { t.h265 } else { t.h264 };
+            t.stream_kbps = Some(stream_kbps);
+            t.on
+        })
+        .unwrap_or(false)
+    }
+
+    /// The driver's stats event (once a second): the bytes sent so far, for the rate.
+    fn sent(&self, total: u64, now: Instant) {
+        self.with(|s| {
+            if let Some((was, at)) = s.sent_at {
+                let dt = now.saturating_duration_since(at).as_secs_f64();
+                if dt > 0.2 {
+                    let kbps = total.saturating_sub(was) as f64 * 8.0 / 1000.0 / dt;
+                    s.sent_kbps = Some(kbps.round().min(u32::MAX as f64) as u32);
+                }
+            }
+            s.sent_at = Some((total, now));
+        });
+    }
+
+    /// The connection's numbers, read on demand (the host's panel, together_status, a bug report):
+    /// round trip, what went out over the last second, and what waits to go.
+    pub(crate) fn link_json(&self) -> serde_json::Value {
+        let f = self.flow.get();
+        let now = Instant::now();
+        let (rtt_ms, sent_kbps, track) = self.with(|s| (s.rtt_ms, s.sent_kbps, s.track.clone()));
+        let on = track.as_ref().is_some_and(|t| t.on);
+        let path = self.net_path();
+        serde_json::json!({
+            // How the guest is connected: "lan" (the home network), "tailscale", "internet"
+            // (direct through both routers); null while ICE has no pair yet.
+            "path": path,
+            // Where the picture goes: "track" (RTP) or "channel" (the data channel).
+            "video": if on { "track" } else { "channel" },
+            // The track's numbers (null on the channel): `frames_sent` (access units written),
+            // `rtp_packets` (retransmissions included), `nacks` (each answered with a resend from
+            // the send buffer), `plis` / `firs` (keyframe asks from the guest's browser), `loss` (its
+            // receiver reports, 0-1), `rtcp_rtt_ms`, `bwe_kbps` (the bandwidth estimate),
+            // `stream_kbps`, and `slow`: the estimate stayed under the stream's rate (lower the
+            // stream's quality: the console cannot change it mid-session).
+            "track": track.filter(|t| t.on).map(|t| serde_json::json!({
+                "frames_sent": t.frames,
+                "rtp_packets": t.packets,
+                "nacks": t.nacks,
+                "plis": t.plis,
+                "firs": t.firs,
+                "loss": t.loss.map(|l| (l as f64 * 1000.0).round() / 1000.0),
+                "rtcp_rtt_ms": t.rtcp_rtt_ms,
+                "bwe_kbps": t.bwe_kbps,
+                "stream_kbps": t.stream_kbps,
+                "slow": t.slow(now),
+            })),
+            "rtt_ms": rtt_ms,
+            "sent_kbps": sent_kbps,
+            // The driver's queue (messages the channel did not take yet) and the data channel's
+            // own buffer (SCTP: sent but not acknowledged, or not sent yet).
+            "queued_bytes": f.map(|f| f.driver.load(Ordering::Relaxed)),
+            "buffered_bytes": f.map(|f| f.channel.load(Ordering::Relaxed)),
+            // The most that waited (both together) over the last stats second, and ever.
+            "backlog_peak_1s_bytes": f.map(|f| f.peak_1s.load(Ordering::Relaxed)),
+            "backlog_peak_bytes": f.map(|f| f.peak.load(Ordering::Relaxed)),
+            // Times the session's send waited for the channel (its pictures then skip ahead).
+            "send_waits": f.map(|f| f.waits.load(Ordering::Relaxed)),
+            "high_water_bytes": HIGH_WATER,
+        })
+    }
+
     pub(crate) fn json(&self, now: Instant) -> serde_json::Value {
         let path = self.path();
+        let link = self.link_json();
         self.with(|s| {
             serde_json::json!({
                 "gid": self.gid,
@@ -168,6 +341,7 @@ impl PeerInfo {
                 "rtt_ms": s.rtt_ms,
                 "since_s": now.duration_since(self.started).as_secs(),
                 "why": s.why,
+                "link": link,
             })
         })
     }
@@ -198,6 +372,14 @@ pub(crate) struct Flow {
     queued: AtomicUsize,
     closed: AtomicBool,
     notify: Notify,
+    // What the link numbers show (PeerInfo::link_json): the two parts of `queued`, its peak over
+    // the last stats second and ever, and how often a send had to wait.
+    driver: AtomicUsize,
+    channel: AtomicUsize,
+    peak_1s: AtomicUsize,
+    peak_now: AtomicUsize,
+    peak: AtomicUsize,
+    waits: AtomicU64,
 }
 
 impl Flow {
@@ -208,11 +390,25 @@ impl Flow {
         self.closed.store(true, Ordering::Relaxed);
         self.notify.notify_waiters();
     }
-    fn set_queued(&self, n: usize) {
+    /// The driver's queue and the channel's buffer now.
+    fn set_queued(&self, driver: usize, channel: usize) {
+        let n = driver + channel;
+        self.driver.store(driver, Ordering::Relaxed);
+        self.channel.store(channel, Ordering::Relaxed);
+        self.peak_now.fetch_max(n, Ordering::Relaxed);
+        self.peak.fetch_max(n, Ordering::Relaxed);
         self.queued.store(n, Ordering::Relaxed);
         if self.pending() <= HIGH_WATER {
             self.notify.notify_waiters();
         }
+    }
+    /// A stats second ended: its peak is the one shown, the next starts from now.
+    fn second(&self) {
+        let now = self.queued.load(Ordering::Relaxed);
+        self.peak_1s.store(
+            self.peak_now.swap(now, Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
     }
 }
 
@@ -236,6 +432,9 @@ fn msg_len(m: &Message) -> usize {
 impl crate::join::GuestSocket for RtcSocket {
     async fn send(&mut self, m: Message) -> Result<(), ()> {
         // Wait while the channel is full: the session then stops taking pictures.
+        if self.flow.pending() > HIGH_WATER {
+            self.flow.waits.fetch_add(1, Ordering::Relaxed);
+        }
         loop {
             if self.flow.closed.load(Ordering::Relaxed) {
                 return Err(());
@@ -262,6 +461,26 @@ impl crate::join::GuestSocket for RtcSocket {
 
     fn net(&self) -> Option<Arc<PeerInfo>> {
         Some(self.info.clone())
+    }
+
+    fn video_track(&mut self, hevc: bool, stream_kbps: u32) -> bool {
+        let on = self.info.use_track(hevc, stream_kbps);
+        if on {
+            let _ = self.up.send(rtc::Cmd::Track(self.id, hevc, stream_kbps));
+        }
+        on
+    }
+
+    async fn send_video(&mut self, m: Message) -> Result<(), ()> {
+        // No back-pressure: str0m sends a picture at once and keeps its packets for resends, so
+        // there is no backlog to skip (a lost packet costs a resend, not the picture).
+        if self.flow.closed.load(Ordering::Relaxed) {
+            return Err(());
+        }
+        match m {
+            Message::Binary(b) => self.up.send(rtc::Cmd::Video(self.id, b)).map_err(|_| ()),
+            _ => Ok(()),
+        }
     }
 }
 
@@ -307,8 +526,36 @@ pub(crate) fn hub_url_ok(url: &str) -> bool {
 }
 
 /// A room's link (an internet invite, or the phone link's), on the website's page for its kind.
-pub(crate) fn link_for(kind: Kind, room: &str, key: &str, fp: &str, hub: &str) -> String {
-    format!("{}#room={room}&k={key}&fp={fp}&hub={hub}", kind.page())
+/// `lan`: this engine's own page for the kind on the home network (`http://192.168.1.10:19113/join`),
+/// the hint the page offers as "Open on this Wi-Fi" when it cannot reach the hub. It is no
+/// secret: the page there asks the host, as the link's key does.
+pub(crate) fn link_for(
+    kind: Kind,
+    room: &str,
+    key: &str,
+    fp: &str,
+    hub: &str,
+    lan: Option<&str>,
+) -> String {
+    let mut s = format!("{}#room={room}&k={key}&fp={fp}&hub={hub}", kind.page());
+    if let Some(l) = lan.filter(|l| l.starts_with("http://") || l.starts_with("https://")) {
+        s.push_str("&lan=");
+        s.push_str(&pct(l));
+    }
+    s
+}
+
+/// `s` with everything but RFC 3986's unreserved characters percent-encoded (a fragment value).
+pub(crate) fn pct(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 /// `n` random bytes as base64url without padding (16 → 22 characters, 32 → 43).

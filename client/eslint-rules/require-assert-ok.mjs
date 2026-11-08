@@ -50,6 +50,8 @@ const STATUS_ENDPOINTS = new Set([
   "netInterfacesGet",
   // Each folder's own `ok` is what the Mesh Drive form shows next to that folder.
   "checkFolders",
+  // Share's check: each item's `ok` is the engine's verdict on it (a retail app), shown beside it.
+  "shareCheck",
 ]);
 
 /** Only the API modules — this is a rule about where guards belong. */

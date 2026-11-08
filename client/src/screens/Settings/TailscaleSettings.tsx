@@ -1,26 +1,37 @@
-import { useCallback, useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, ExternalLink, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Cable, ChevronDown, ChevronRight, ExternalLink, Loader2 } from "lucide-react";
+import { useLocation, useNavigate } from "react-router";
 import { Button } from "../../components";
+import { useConfirm } from "../../components/ConfirmDialog";
 import { useTr } from "../../state/lang";
 import {
   appTailnetOp,
   appTailnetStatus,
   expiryDays,
   peerPathKind,
+  shouldAskSystemChoice,
+  type AppTailnetOp,
+  type AppTailnetOpts,
   type AppTailnetStatus,
 } from "../../api/tailnet";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { QrCode } from "../Play/PhonePads";
 import { humanizeCaught } from "../../lib/humanizeError";
 import { TailnetProblems } from "../Connection/TailnetProblems";
+import { NameField, OnPausedSwitch, RenewButton } from "../Connection/TailnetBits";
 
 /**
- * Settings › Tailscale: this device's own tailnet node, built into the app (no Tailscale app,
- * no VPN). Signed in, the app reaches a console that is on Tailscale ("Put this PS5 on
- * Tailscale" on the Connection screen) when its home address does not answer.
+ * Settings › Tailscale: this device on Tailscale. Either PS5Upload's own node, built into the app
+ * (no Tailscale app, no VPN), or, when the official Tailscale app already runs here, that app.
+ * Either way the app reaches a console that is on Tailscale ("Put this PS5 on Tailscale" on the
+ * Connection screen) only when its home address does not answer.
  */
 export function TailscaleSettings() {
   const tr = useTr();
+  const navigate = useNavigate();
+  const { hash } = useLocation();
+  const { confirm, dialog } = useConfirm();
+  const root = useRef<HTMLDivElement>(null);
   const [st, setSt] = useState<AppTailnetStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -39,21 +50,16 @@ export function TailscaleSettings() {
   useEffect(() => {
     void refresh();
     const t = window.setInterval(() => {
-      if (st?.enabled) void refresh();
+      if (st?.enabled && !document.hidden) void refresh();
     }, 3000);
     return () => window.clearInterval(t);
   }, [refresh, st?.enabled]);
 
-  const run = async (op: "enable" | "disable" | "logout") => {
+  const run = async (op: AppTailnetOp, opts: AppTailnetOpts = {}) => {
     setBusy(true);
     setErr("");
     try {
-      setSt(
-        await appTailnetOp(
-          op,
-          op === "enable" ? { control_url: controlUrl.trim(), hostname: deviceName.trim() } : {},
-        ),
-      );
+      setSt(await appTailnetOp(op, opts));
     } catch (e) {
       setErr(tr("tn_app_failed", { err: humanizeCaught(e) }, "Could not change Tailscale on this device: {err}"));
     } finally {
@@ -61,18 +67,95 @@ export function TailscaleSettings() {
     }
   };
 
+  const signOut = async () => {
+    const ok = await confirm({
+      title: tr("tn_app_sign_out_title", undefined, "Sign this device out of Tailscale?"),
+      message: tr(
+        "tn_app_sign_out_warn",
+        undefined,
+        "Its sign-in is forgotten: using Tailscale again needs a new sign-in, and this device may get a new address. To stop it for a while, switch it to Paused instead.",
+      ),
+      confirmLabel: tr("tn_sign_out", undefined, "Sign out"),
+      destructive: true,
+    });
+    if (ok) await run("logout");
+  };
+
+  // The Connection screen's "Open Settings › Tailscale" lands here.
+  useEffect(() => {
+    if (hash === "#tailscale") root.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+  }, [hash]);
+
   const state = st?.state ?? "off";
   const days = st ? expiryDays(st.key_expiry) : null;
+  const setUp = !!st && (st.enabled || !!st.signed_in);
+  const usingSystem = !!st && !setUp && st.backend === "system";
+  const defaultName = st?.default_hostname ?? "";
   return (
-    <div className="flex flex-col gap-2" data-testid="tailscale-settings">
+    <div ref={root} id="tailscale" className="flex flex-col gap-2 scroll-mt-4" data-testid="tailscale-settings">
+      {dialog}
       <p className="text-xs text-[var(--color-muted)]">
         {tr(
           "tn_app_sub",
           undefined,
-          "Reach your PS5 from anywhere. This device joins your tailnet by itself: no Tailscale app needed.",
+          "Adds this phone or computer to your Tailscale network, so the app can reach your PS5 when you're away from home. No Tailscale app needed. Do this on each device you play from.",
         )}
       </p>
-      {!st?.enabled ? (
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-xs text-[var(--color-muted)]" data-testid="tailscale-ps5-step">
+          {tr(
+            "tn_app_ps5_step",
+            undefined,
+            "Your PS5 joins separately, once, at home: Connection › Put this PS5 on Tailscale.",
+          )}
+        </p>
+        <Button size="sm" variant="ghost" leftIcon={<Cable size={14} />} onClick={() => navigate("/connection")}>
+          {tr("tn_open_connection", undefined, "Open Connection")}
+        </Button>
+      </div>
+      {shouldAskSystemChoice(st) ? (
+        <div
+          className="flex flex-col gap-2 rounded-[var(--radius-card)] border border-[var(--glass-edge)] p-2"
+          data-testid="tailscale-system-ask"
+        >
+          <p className="text-xs">
+            {tr(
+              "tn_system_ask",
+              undefined,
+              "Tailscale is already on this device. Use it (recommended) or sign PS5Upload in as its own device?",
+            )}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" disabled={busy} onClick={() => void run("system_choice", { choice: "system" })} data-testid="tailscale-use-system">
+              {tr("tn_system_use", undefined, "Use it (recommended)")}
+            </Button>
+            <Button size="sm" variant="secondary" disabled={busy} onClick={() => void run("system_choice", { choice: "own" })}>
+              {tr("tn_system_own", undefined, "Sign PS5Upload in as its own device")}
+            </Button>
+          </div>
+        </div>
+      ) : usingSystem ? (
+        <div className="flex flex-col gap-1" data-testid="tailscale-system-in-use">
+          <p className="text-xs">
+            {st?.system?.ip
+              ? tr("tn_system_in_use_ip", { ip: st.system.ip }, "Using the Tailscale app on this device ({ip}).")
+              : tr("tn_system_in_use", undefined, "Using the Tailscale app on this device.")}
+          </p>
+          <p className="text-xs text-[var(--color-muted)]">
+            {tr(
+              "tn_system_in_use_note",
+              undefined,
+              "When a PS5 on Tailscale does not answer at home, the app reaches it through the Tailscale app. Keep the Tailscale app connected.",
+            )}
+          </p>
+          <div>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => void run("system_choice", { choice: "own" })}>
+              {tr("tn_system_switch_own", undefined, "Sign PS5Upload in as its own device instead")}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+      {usingSystem || shouldAskSystemChoice(st) ? null : !setUp ? (
         <div className="flex flex-col gap-2">
           <button
             type="button"
@@ -89,7 +172,8 @@ export function TailscaleSettings() {
                 <input
                   className="rounded border border-[var(--glass-edge)] bg-transparent px-2 py-1"
                   value={deviceName}
-                  placeholder={st?.hostname || ""}
+                  maxLength={63}
+                  placeholder={st?.hostname || defaultName}
                   onChange={(e) => setDeviceName(e.target.value)}
                 />
               </label>
@@ -106,7 +190,11 @@ export function TailscaleSettings() {
             </div>
           )}
           <div>
-            <Button onClick={() => void run("enable")} disabled={busy} data-testid="app-tailnet-enable">
+            <Button
+              onClick={() => void run("enable", { control_url: controlUrl.trim(), hostname: deviceName.trim() })}
+              disabled={busy}
+              data-testid="app-tailnet-enable"
+            >
               {busy ? <Loader2 size={14} className="animate-spin" /> : null}
               {tr("tn_app_enable", undefined, "Sign in to Tailscale")}
             </Button>
@@ -114,10 +202,24 @@ export function TailscaleSettings() {
         </div>
       ) : (
         <div className="flex flex-col gap-2">
-          {state === "needs-login" && st.login_url ? (
+          <div className="flex items-center gap-2 text-xs">
+            <span className="flex-1">{tr("v5_home_tailnet_self", undefined, "Tailscale on this device")}</span>
+            <OnPausedSwitch
+              on={!!st?.enabled}
+              connecting={!!st?.enabled && state !== "running"}
+              busy={busy}
+              onChange={(on) => void run(on ? "enable" : "disable")}
+              testId="app-tailnet-switch"
+            />
+          </div>
+          {!st?.enabled ? (
+            <p className="text-xs text-[var(--color-muted)]" data-testid="app-tailnet-paused">
+              {tr("tn_app_paused", undefined, "Paused: this device is off Tailscale and keeps its sign-in. Switch it on to use it again.")}
+            </p>
+          ) : state === "needs-login" && st.login_url ? (
             <div className="flex flex-col gap-2">
               <p className="text-xs">
-                {tr("tn_app_sign_in", undefined, "Sign in to Tailscale to add this device to your tailnet.")}
+                {tr("tn_app_sign_in", undefined, "Sign in with your Tailscale account to add this device to your Tailscale network.")}
               </p>
               <div>
                 <Button onClick={() => void openExternalUrl(st.login_url)} data-testid="app-tailnet-login">
@@ -137,6 +239,15 @@ export function TailscaleSettings() {
                   "This device is on Tailscale as {name} at {ip}",
                 )}
               </p>
+              {st.renamed_to ? (
+                <p className="text-xs text-[var(--color-muted)]" data-testid="app-tailnet-renamed">
+                  {tr(
+                    "tn_renamed_by_tailscale",
+                    { name: st.renamed_to },
+                    "Another device already had that name, so Tailscale named this one {name}.",
+                  )}
+                </p>
+              ) : null}
               <p className="text-xs text-[var(--color-muted)]">
                 {tr(
                   "tn_app_away_note",
@@ -146,7 +257,7 @@ export function TailscaleSettings() {
               </p>
               {st.peers.length === 0 ? (
                 <p className="text-xs text-[var(--color-muted)]">
-                  {tr("tn_no_peers", undefined, "No other devices on your tailnet yet.")}
+                  {tr("tn_no_peers", undefined, "No other devices on your Tailscale network yet.")}
                 </p>
               ) : (
                 <ul className="flex flex-col gap-0.5 text-xs" data-testid="app-tailnet-peers">
@@ -170,7 +281,7 @@ export function TailscaleSettings() {
             </div>
           ) : state === "wait-approval" ? (
             <p className="text-xs">
-              {tr("tn_app_wait_approval", undefined, "Waiting for your tailnet admin to approve this device.")}
+              {tr("tn_app_wait_approval", undefined, "Waiting for this device to be approved in your Tailscale admin page.")}
             </p>
           ) : (
             <p className="flex items-center gap-1 text-xs text-[var(--color-muted)]">
@@ -184,15 +295,20 @@ export function TailscaleSettings() {
               {tr(
                 "tn_app_key_expires",
                 { days },
-                "This device's Tailscale key expires in {days} days. Sign out and in again to renew it.",
+                "This device's Tailscale key expires in {days} days. Renew it to stay on Tailscale.",
               )}
             </p>
           ) : null}
-          <div className="flex gap-2">
-            <Button variant="secondary" onClick={() => void run("disable")} disabled={busy}>
-              {tr("tn_turn_off", undefined, "Turn off")}
-            </Button>
-            <Button variant="secondary" onClick={() => void run("logout")} disabled={busy} data-testid="app-tailnet-logout">
+          <NameField
+            current={st?.hostname ?? ""}
+            placeholder={defaultName}
+            busy={busy}
+            onSave={(name) => void run("rename", { hostname: name })}
+            testId="app-tailnet-name"
+          />
+          <div className="flex flex-wrap gap-2">
+            {st?.enabled ? <RenewButton busy={busy} onRenew={() => void run("renew")} testId="app-tailnet-renew" /> : null}
+            <Button size="sm" variant="ghost" onClick={() => void signOut()} disabled={busy} data-testid="app-tailnet-logout">
               {tr("tn_sign_out", undefined, "Sign out")}
             </Button>
           </div>

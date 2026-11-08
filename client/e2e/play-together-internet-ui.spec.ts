@@ -1,33 +1,51 @@
 import { expect, test, type Page } from "@playwright/test";
 import { routeEngine, seedConsole } from "./fixtures/engine";
 
-// Play Together's internet invites, the host's side (the app): Internet beside "This network" on
-// the invite card, the internet link and its QR code, the refusals, and an internet friend in the
-// guest list. The engine is faked as in play-together.spec.ts (join.rs and join_net's answers,
-// field for field); play-together-internet.spec.ts runs the real hub and WebRTC.
+// Play Together's one invite, the host's side (the app): one link and QR code that work anywhere
+// (the internet link, which stays on the Wi-Fi for a friend on it), the Wi-Fi's own link while
+// there is no internet, Only on my Wi-Fi in the settings, and how each friend is connected. The
+// engine is faked as in play-together.spec.ts (join.rs and join_net's answers, field for field);
+// play-together-internet.spec.ts runs the real hub and WebRTC.
 
 const KEY = "00112233445566778899aabbccddeeff";
 const LINK = `http://192.168.1.9:19113/join#i=${KEY}&n=Ann`;
-const NET_URL = `https://ps5upload.phantomptr.com/join/#room=r00m&k=${KEY}&fp=AB:CD:EF&hub=hub.phantomptr.com`;
+const NET_URL = `https://ps5upload.phantomptr.com/join/#room=r00m&k=${KEY}&fp=AB:CD:EF&hub=hub.phantomptr.com&lan=http%3A%2F%2F192.168.1.9%3A19113%2Fjoin`;
 
-type Phase = "lan" | "internet" | "connecting" | "playing";
+type Phase = "offline" | "internet" | "connecting" | "playing";
 
 /** The engine's answers while `phase()` says where the invite is; `posts` gathers what was sent. */
-async function fakeEngine(page: Page, phase: () => Phase, internetInvites = true) {
+async function fakeEngine(page: Page, phase: () => Phase, invites: "anywhere" | "wifi" = "anywhere") {
   const posts: Array<{ path: string; body: Record<string, unknown> }> = [];
   await routeEngine(page, (path, req) => {
-    if (path === "/api/version") return { version: "11.6.0", caps: {} };
+    if (path === "/api/version") return { version: "12.1.0", caps: {} };
     if (path === "/api/ps5/rp/session") return { host: null };
     if (!path.startsWith("/api/join")) return {};
     if (req.method() === "POST") posts.push({ path, body: req.postDataJSON() as Record<string, unknown> });
     const p = phase();
-    const net = p !== "lan";
+    const anywhere = invites === "anywhere";
+    // The room is asked for once the panel asks for the one link (`share`).
+    const asked = posts.some((x) => x.path === "/api/join/invite" && x.body.share);
+    const net = anywhere && asked;
+    const offline = p === "offline";
     const peers =
       p === "connecting"
         ? [{ gid: "g1", path: "connecting", ice: "checking", rtt_ms: null, since_s: 2, why: null }]
         : p === "playing"
           ? [{ gid: "g1", path: "direct", ice: "connected", rtt_ms: 35, since_s: 9, why: null }]
           : [];
+    const internet = net
+      ? {
+          url: NET_URL,
+          room: "r00m",
+          hub: "hub.phantomptr.com",
+          fp: "AB:CD:EF",
+          state: offline ? "reconnecting" : "hosted",
+          error: offline ? "connect: no route to host" : null,
+          offline,
+          router: null,
+          peers,
+        }
+      : null;
     const invite = {
       key: KEY,
       code: "K7M2QX",
@@ -35,9 +53,11 @@ async function fakeEngine(page: Page, phase: () => Phase, internetInvites = true
       url: LINK,
       urls: [LINK],
       expires_in_s: 1800,
-      internet: net
-        ? { url: NET_URL, room: "r00m", hub: "hub.phantomptr.com", fp: "AB:CD:EF", state: "hosted", error: null, router: null, peers }
-        : null,
+      share:
+        net && !offline
+          ? { url: NET_URL, works: "anywhere", why: null }
+          : { url: LINK, works: "wifi", why: !anywhere ? "setting" : net ? "offline" : "local" },
+      internet,
     };
     const whole = {
       open: true,
@@ -45,13 +65,19 @@ async function fakeEngine(page: Page, phase: () => Phase, internetInvites = true
       playing: true,
       host_away_s: null,
       invite,
-      players_in: p === "playing" ? 1 : 0,
+      players_in: p === "playing" ? 2 : 0,
       guests:
         p === "playing"
           ? [
               {
                 id: 4, name: "Ben", player: 2, state: "playing", connected: true, reconnect_left_s: null, rtt_ms: 35,
                 queue: 0, skipped: 0, since_s: 5, why: null, stream_seat: false, via: "internet", path: "direct", ice_rtt_ms: 33,
+                link: { path: "internet", rtt_ms: 33 },
+              },
+              {
+                id: 5, name: "Cat", player: 3, state: "playing", connected: true, reconnect_left_s: null, rtt_ms: 6,
+                queue: 0, skipped: 0, since_s: 5, why: null, stream_seat: false, via: "internet", path: "direct", ice_rtt_ms: 4,
+                link: { path: "lan", rtt_ms: 4 },
               },
             ]
           : [],
@@ -60,7 +86,8 @@ async function fakeEngine(page: Page, phase: () => Phase, internetInvites = true
         block_system_buttons: true,
         max_players: 3,
         stream_seat: false,
-        internet_invites: internetInvites,
+        internet_invites: anywhere,
+        invites,
         hub_url: "wss://hub.phantomptr.com/ws",
         stun: ["stun.cloudflare.com:3478", "stun.l.google.com:19302"],
         upnp: true,
@@ -73,18 +100,6 @@ async function fakeEngine(page: Page, phase: () => Phase, internetInvites = true
     if (path === "/api/join/settings") return { settings: whole.settings };
     return whole;
   });
-  // Off in the settings: the engine refuses an internet invite (409 internet_off).
-  if (!internetInvites) {
-    await page.route(
-      (url) => url.pathname === "/api/join/invite",
-      async (route) => {
-        const body = route.request().postDataJSON() as Record<string, unknown>;
-        posts.push({ path: "/api/join/invite", body });
-        if (body.internet) await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "internet_off" }) });
-        else await route.fallback();
-      },
-    );
-  }
   await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, (ws) => {
     ws.onMessage((m) => {
       if ((JSON.parse(String(m)) as { host?: string }).host) ws.send(JSON.stringify({ stage: "first_frame" }));
@@ -102,78 +117,72 @@ async function openPlayTogether(page: Page) {
   return page.getByTestId("pt-panel");
 }
 
-test("Internet: the link and QR code, then a friend listed as Internet · Direct", async ({ page }) => {
+test("one link: the internet one with its QR code, then each friend with how they're connected", async ({ page }) => {
   await seedConsole(page);
-  let phase: Phase = "lan";
+  let phase: Phase = "internet";
   const posts = await fakeEngine(page, () => phase);
   const panel = await openPlayTogether(page);
 
-  // This network first: the LAN link, Internet offered beside it.
-  await expect(panel.getByTestId("pt-url")).toHaveText(LINK);
-  await expect(panel.getByTestId("pt-addresses-home")).toHaveAttribute("aria-pressed", "true");
-
-  // Internet: the engine is asked for an internet invite, and its link replaces the LAN one.
-  phase = "internet";
-  await panel.getByTestId("pt-addresses-internet").click();
-  await expect.poll(() => posts.find((p) => p.path === "/api/join/invite" && p.body.internet)?.body).toEqual({
-    addr: "192.168.1.100",
-    internet: true,
-  });
+  // The one link, asked for as Invites work says: no Local or Internet to choose.
+  await expect.poll(() => posts.find((p) => p.path === "/api/join/invite")?.body).toEqual({ addr: "192.168.1.100", share: true });
   await expect(panel.getByTestId("pt-url")).toHaveText(NET_URL);
   await expect(panel.getByTestId("pt-qr")).toBeVisible();
-  await expect(panel.getByTestId("pt-addresses-internet")).toHaveAttribute("aria-pressed", "true");
-  await expect(panel.getByTestId("pt-addresses-internet-hint")).toContainText("Works from anywhere");
-  // One quiet line asks for support (no amounts), only under Internet.
+  await expect(panel.getByTestId("pt-works-anywhere")).toContainText("on your Wi-Fi and over the internet");
+  await expect(panel.getByTestId("pt-addresses-home")).toHaveCount(0);
+  await expect(panel.getByTestId("pt-addresses-internet")).toHaveCount(0);
+  // One quiet line asks for support (no amounts).
   await expect(panel.getByTestId("pt-addresses-internet-support")).toContainText("a donation keeps it going");
   await expect(panel.getByTestId("pt-addresses-internet-support")).not.toContainText(/[$€£]\s?\d/);
-  // Somewhere else: the Internet choice, no longer Tailscale.
-  await expect(panel.getByTestId("pt-tailscale")).toHaveText("Playing from somewhere else? Choose Internet above.");
-  // The short code is for the same network only.
-  await expect(panel.getByTestId("pt-code")).toHaveCount(0);
-  // Remembered on this device.
-  expect(await page.evaluate(() => window.localStorage.getItem("ps5upload.pt_network"))).toBe("internet");
+  // The short code still works for a friend on the same network.
+  await expect(panel.getByTestId("pt-code")).toBeVisible();
 
   // A friend's browser connecting.
   phase = "connecting";
   await expect(panel.getByTestId("pt-net-peer")).toContainText("Connecting…", { timeout: 10_000 });
 
-  // In the game: Internet · Direct, with the delay.
+  // In the game: one over the internet, one whose connection stayed on the Wi-Fi.
   phase = "playing";
-  const card = panel.getByTestId("pt-player-2");
-  await expect(card.getByTestId("pt-player-name")).toHaveText("Ben", { timeout: 10_000 });
-  await expect(card.getByTestId("pt-player-via")).toHaveText("Internet · Direct");
-  await expect(card.getByTestId("pt-player-delay")).toHaveText("35 ms");
+  const ben = panel.getByTestId("pt-player-2");
+  await expect(ben.getByTestId("pt-player-name")).toHaveText("Ben", { timeout: 10_000 });
+  await expect(ben.getByTestId("pt-player-via")).toHaveText("Internet direct");
+  await expect(ben.getByTestId("pt-player-delay")).toHaveText("35 ms");
+  await expect(panel.getByTestId("pt-player-3").getByTestId("pt-player-via")).toHaveText("Home network");
   await expect(panel.getByTestId("pt-net-peer")).toHaveCount(0);
-
-  // Back to this network: the LAN link again.
-  await panel.getByTestId("pt-addresses-home").click();
-  await expect(panel.getByTestId("pt-url")).toHaveText(LINK);
 });
 
-test("Internet invites off in the settings: said, and the LAN link still works", async ({ page }) => {
+test("no internet here: the Wi-Fi's link, said to work on the Wi-Fi only, then the one link again", async ({ page }) => {
   await seedConsole(page);
-  await fakeEngine(page, () => "lan", false);
+  let phase: Phase = "offline";
+  await fakeEngine(page, () => phase);
+  const panel = await openPlayTogether(page);
+  await expect(panel.getByTestId("pt-url")).toHaveText(LINK, { timeout: 15_000 });
+  await expect(panel.getByTestId("pt-wifi-only")).toHaveText("Works on your Wi-Fi only (no internet right now).");
+  // The hub comes back: the engine says so on its next answer.
+  phase = "internet";
+  await expect(panel.getByTestId("pt-url")).toHaveText(NET_URL, { timeout: 10_000 });
+  await expect(panel.getByTestId("pt-wifi-only")).toHaveCount(0);
+});
+
+test("Only on my Wi-Fi in the settings: the LAN link and the way to change it", async ({ page }) => {
+  await seedConsole(page);
+  const posts = await fakeEngine(page, () => "internet", "wifi");
   const panel = await openPlayTogether(page);
   await expect(panel.getByTestId("pt-url")).toHaveText(LINK);
-  await panel.getByTestId("pt-addresses-internet").click();
-  await expect(panel.getByTestId("pt-net-off")).toContainText("Settings › Play Together");
-  await expect(panel.getByTestId("pt-url")).toHaveCount(0);
-  await panel.getByTestId("pt-addresses-home").click();
-  await expect(panel.getByTestId("pt-url")).toHaveText(LINK);
+  await expect(panel.getByTestId("pt-wifi-only")).toContainText("Settings › App › Play Together");
   await expect(panel.getByTestId("pt-addresses-internet-support")).toHaveCount(0);
-  await expect(panel.getByTestId("pt-net-off")).toHaveCount(0);
+  expect(posts.some((p) => p.path === "/api/join/invite" && (p.body.share || p.body.internet))).toBe(false);
 });
 
-test("Play together page: Internet picked before the stream, Start and invite from the keyboard", async ({ page }) => {
+test("Play together page: one link, nothing to choose; Start and invite from the keyboard", async ({ page }) => {
   await seedConsole(page);
   const posts = await fakeEngine(page, () => "internet");
   await page.goto("/play", { waitUntil: "domcontentloaded" });
   await page.getByRole("radio", { name: "Play Together" }).click({ timeout: 30_000 });
   const start = page.getByTestId("pt-start");
   await expect(start).toContainText("No app needed");
-  await start.getByTestId("pt-start-net-internet").click();
   await expect(start.getByTestId("pt-start-net-internet-hint")).toContainText("Works from anywhere");
   await expect(start.getByTestId("pt-start-net-internet-support")).toContainText("a donation keeps it going");
+  await expect(start.getByTestId("pt-start-net-home")).toHaveCount(0);
   // Nothing opened before the button.
   expect(posts.find((p) => p.path === "/api/join/open")).toBeUndefined();
 
@@ -182,22 +191,26 @@ test("Play together page: Internet picked before the stream, Start and invite fr
   const panel = page.getByTestId("pt-panel");
   await expect(panel.getByTestId("pt-url")).toHaveText(NET_URL, { timeout: 15_000 });
   await expect.poll(() => posts.map((p) => p.path)).toContain("/api/join/open");
-  // The panel shows the internet link (this fake engine has it open already), as picked here.
-  await expect(panel.getByTestId("pt-addresses-internet")).toHaveAttribute("aria-pressed", "true");
   // The invite takes the focus, and the page stays on Play together.
   await expect(panel).toBeFocused();
   await expect(page.getByRole("radio", { name: "Play Together" })).toHaveAttribute("aria-checked", "true");
   await expect(page.getByTestId("pt-start")).toHaveCount(0);
 });
 
-test("Play together page: internet invites off is said before the stream; Support opens Thanks", async ({ page }) => {
+test("Play together page: Only on my Wi-Fi is said before the stream; Support opens Thanks", async ({ page }) => {
   await seedConsole(page);
-  await fakeEngine(page, () => "lan", false);
+  await fakeEngine(page, () => "internet", "wifi");
   await page.goto("/play", { waitUntil: "domcontentloaded" });
   await page.getByRole("radio", { name: "Play Together" }).click({ timeout: 30_000 });
-  await page.getByTestId("pt-start-net-internet").click();
-  await expect(page.getByTestId("pt-start-net-off")).toContainText("Internet invites are off");
+  await expect(page.getByTestId("pt-start-net-off")).toContainText("Invites work only on your Wi-Fi");
   await expect(page.getByTestId("pt-start-net-off").getByRole("button", { name: "Open settings" })).toBeVisible();
+});
+
+test("Play together page: Support opens Thanks", async ({ page }) => {
+  await seedConsole(page);
+  await fakeEngine(page, () => "internet");
+  await page.goto("/play", { waitUntil: "domcontentloaded" });
+  await page.getByRole("radio", { name: "Play Together" }).click({ timeout: 30_000 });
   await page.getByTestId("pt-start-net-internet-donate").click();
   await expect(page).toHaveURL(/\/thanks$/);
 });

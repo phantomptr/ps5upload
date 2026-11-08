@@ -32,7 +32,7 @@ import {
   type ReconcileMode,
 } from "../api/ps5";
 import { fileResumeTxId } from "../lib/fileResumeTx";
-import { restAfterUploadEnabled } from "./restAfterUpload";
+import { consoleSettingFor } from "./consoleSettings";
 import {
   moveItemDownWithinGroup,
   moveItemToWithinGroup,
@@ -2141,7 +2141,8 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       }),
     }));
     scheduleSave();
-    wakeForUpload(item.addr, useUploadSettingsStore.getState().wakeForUploads);
+    // The waiting console's own choice (Settings › This PS5), not the one on screen.
+    wakeForUpload(item.addr, consoleSettingFor(item.addr, "wake_for_uploads"));
     log.info(
       "queue",
       `${hostOf(item.addr)} is in rest mode — ${item.sourcePath || item.id} waits for the PS5 to wake` +
@@ -3351,7 +3352,8 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
           // cancelled/failed — that wasn't a successful upload session).
           // Fire-and-forget + guarded: a standby rejection (unsupported FW)
           // must never surface as an unhandledrejection from the drain loop.
-          if (restAfterUploadEnabled() && !nextPendingForHost(get().items, h)) {
+          // `h`'s own setting: the console that finished, whichever one is on screen.
+          if (consoleSettingFor(h, "rest_after_upload") && !nextPendingForHost(get().items, h)) {
             // Only real upload sessions count. An install finishes on the
             // console after our call returns, and an Install Package upload
             // has its install queued right after it: sleeping then would cut
