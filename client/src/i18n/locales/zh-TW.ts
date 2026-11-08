@@ -6877,6 +6877,7 @@ library_compressed_hint: "壓縮映像需要 ShadowMount+ 才能遊玩。如需�
 "rp_start": "開始",
 "rp_stop": "停止",
 "rp_err_busy": "PS5 仍在結束上一次遙控遊玩工作階段。請在 {s} 秒後重試。",
+"rp_err_held": "幾分鐘後 PS5 仍未釋放上一次遙控遊玩工作階段。按「開始」重試。若仍被拒絕，請重新啟動 PS5。",
 "rp_stats_line": "{fps} fps · {mbps} Mbit/s · {ms} ms · {codec} · 遺失 {loss}%",
 "fs_mesh_home_note": "此資料夾是 Mesh Drive，會在其中每台裝置上保持一致。它的同步檔案在這裡是隱藏的：請勿移動或重新命名此資料夾，否則該磁碟會被視為離線。",
 "cw_files_mesh_home": "此資料夾是 Mesh Drive。它的同步檔案已隱藏：請勿移動或重新命名此資料夾。",

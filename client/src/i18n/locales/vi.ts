@@ -6926,6 +6926,7 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "rp_start": "Bắt đầu",
 "rp_stop": "Dừng",
 "rp_err_busy": "PS5 vẫn đang kết thúc phiên Remote Play trước. Thử lại sau {s} giây.",
+"rp_err_held": "Sau vài phút, PS5 vẫn chưa nhả phiên Remote Play trước. Nhấn Bắt đầu để thử lại. Nếu vẫn bị từ chối, hãy khởi động lại PS5.",
 "rp_stats_line": "{fps} fps · {mbps} Mbit/s · {ms} ms · {codec} · mất {loss}%",
 "fs_mesh_home_note": "Thư mục này là một Mesh Drive, được giữ giống nhau trên mọi thiết bị trong đó. Tệp đồng bộ của nó bị ẩn ở đây: hãy để thư mục ở nguyên chỗ và đừng đổi tên, nếu không ổ sẽ coi nó là ngoại tuyến.",
 "cw_files_mesh_home": "Thư mục này là một Mesh Drive. Tệp đồng bộ của nó bị ẩn: đừng di chuyển hoặc đổi tên thư mục.",

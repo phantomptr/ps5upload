@@ -6940,6 +6940,7 @@ library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour
 "rp_start": "Démarrer",
 "rp_stop": "Arrêter",
 "rp_err_busy": "La PS5 termine encore la dernière session de Lecture à distance. Réessayez dans {s} s.",
+"rp_err_held": "La PS5 n'a toujours pas libéré la dernière session de Remote Play après plusieurs minutes. Appuie sur Démarrer pour réessayer. Si elle refuse encore, redémarre la PS5.",
 "rp_stats_line": "{fps} i/s · {mbps} Mbit/s · {ms} ms · {codec} · perte {loss} %",
 "fs_mesh_home_note": "Ce dossier est un Mesh Drive, maintenu identique sur chaque appareil qui en fait partie. Son fichier de synchronisation est masqué ici : laissez le dossier à sa place et ne le renommez pas, sinon le disque le considère comme hors ligne.",
 "cw_files_mesh_home": "Ce dossier est un Mesh Drive. Son fichier de synchronisation est masqué : ne déplacez pas et ne renommez pas le dossier.",

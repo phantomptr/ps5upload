@@ -1570,37 +1570,104 @@ impl StreamSink for Sink {
     }
 }
 
-/// When this engine's last session with each console ended.
-static SESSION_ENDED: std::sync::LazyLock<
-    Mutex<std::collections::HashMap<String, std::time::Instant>>,
-> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+/// When this engine's last session with each console ended, in Unix ms. Kept on disk
+/// ([`SLOT_FILE`]): the app restarting between a stop and the next Start (#720) must not turn
+/// our own session the console still holds into "another device".
+static SESSION_ENDED: std::sync::LazyLock<Mutex<std::collections::HashMap<String, u64>>> =
+    std::sync::LazyLock::new(|| Mutex::new(load_session_ended()));
 
-/// How long a console holds Remote Play after a session ends (12-30 s seen), with a margin.
-const SLOT_HOLD: Duration = Duration::from_secs(40);
+/// In the engine's data folder: `{host: ended_unix_ms}`.
+const SLOT_FILE: &str = "rp-last-session.json";
 
-/// Session init closed with no reply: "busy" with the wait left when our own session with this
-/// console ended moments ago (the player waits it out and starts again by itself), otherwise "in
-/// use" by another device. None for any other error.
+/// How long after our own session a closed start is still put down to it. A console was seen
+/// holding its slot 12-30 s after a stop on FW 13.60 and for 3-10 minutes on FW 13.00 (#720).
+const OURS_FOR: Duration = Duration::from_secs(20 * 60);
+
+/// Closed starts in a row (each waited out, see `guard::closed_wait`) before the player stops
+/// waiting by itself and says the PS5 has not let go: about 5 minutes of asking.
+const HELD_AFTER: u32 = 5;
+
+fn slot_file() -> Option<std::path::PathBuf> {
+    crate::remote::store::data_dir().map(|d| d.join(SLOT_FILE))
+}
+
+fn load_session_ended() -> std::collections::HashMap<String, u64> {
+    // Tests never read or write the user's data folder.
+    if cfg!(test) {
+        return Default::default();
+    }
+    slot_file().map(|p| read_slot_file(&p)).unwrap_or_default()
+}
+
+fn read_slot_file(p: &std::path::Path) -> std::collections::HashMap<String, u64> {
+    std::fs::read(p)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+/// Our session with `host` ended now: remembered here and on disk.
+fn note_session_ended(host: &str) {
+    let Ok(mut g) = SESSION_ENDED.lock() else {
+        return;
+    };
+    let now = unix_ms();
+    g.insert(host.to_string(), now);
+    // Old entries go; a handful of consoles at most.
+    g.retain(|_, t| now.saturating_sub(*t) < OURS_FOR.as_millis() as u64 * 3);
+    if cfg!(test) {
+        return;
+    }
+    if let (Some(p), Ok(body)) = (slot_file(), serde_json::to_vec(&*g)) {
+        let _ = std::fs::write(p, body);
+    }
+}
+
+/// Session init closed with no reply. When our own session with this console ended within
+/// [`OURS_FOR`], it is that session still being let go: "busy" with the wait, and the player
+/// waits it out and starts again by itself, with a countdown — up to [`HELD_AFTER`] closed
+/// answers in a row, then "held" (the PS5 has not let go; restart it). Otherwise "in use" by
+/// another device. None for any other error.
 fn slot_held_status(host: &str, e: &anyhow::Error) -> Option<serde_json::Value> {
+    use ps5upload_core::rp_stream::guard::InitClosed;
     let text = format!("{e:#}");
     if !text.contains(ps5upload_core::rp_session::SESSION_INIT_CLOSED) {
         return None;
     }
+    let closed = e
+        .downcast_ref::<InitClosed>()
+        .copied()
+        .unwrap_or(InitClosed {
+            in_a_row: 1,
+            wait: ps5upload_core::rp_stream::guard::closed_wait(1),
+        });
     let since = SESSION_ENDED
         .lock()
         .ok()
-        .and_then(|g| g.get(host).map(|t| t.elapsed()));
-    Some(slot_held_value(since, &text))
+        .and_then(|g| g.get(host).copied())
+        .map(|t| Duration::from_millis(unix_ms().saturating_sub(t)));
+    Some(slot_held_value(since, closed, &text))
 }
 
-fn slot_held_value(since_ours: Option<Duration>, text: &str) -> serde_json::Value {
-    match since_ours {
-        Some(d) if d < SLOT_HOLD => {
-            let left = (SLOT_HOLD - d).as_secs().max(3);
-            serde_json::json!({"stage": "error", "code": "busy", "retry_s": left, "error": text})
-        }
-        _ => serde_json::json!({"stage": "error", "code": "in_use", "retry_s": 10, "error": text}),
-    }
+fn slot_held_value(
+    since_ours: Option<Duration>,
+    closed: ps5upload_core::rp_stream::guard::InitClosed,
+    text: &str,
+) -> serde_json::Value {
+    let retry_s = closed.wait.as_secs().max(1);
+    let (code, retry) = match since_ours {
+        Some(d) if d < OURS_FOR && closed.in_a_row > HELD_AFTER => ("held", None),
+        Some(d) if d < OURS_FOR => ("busy", Some(retry_s)),
+        _ => ("in_use", Some(retry_s)),
+    };
+    serde_json::json!({
+        "stage": "error",
+        "code": code,
+        "retry_s": retry,
+        // How long since our own last session with this console ended, when there was one.
+        "since_ours_s": since_ours.map(|d| d.as_secs()),
+        "error": text,
+    })
 }
 
 /// An error as the player shows it: a stable `code` to pick the plain-English
@@ -1848,6 +1915,9 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
                 "io_soft_errors": rep.io_soft_errors,
                 "ws_dropped": l.dropped.load(Ordering::Relaxed),
                 "reason": rep.disconnect_reason,
+                // Our stop: how long the console took to acknowledge our DISCONNECT (null:
+                // it never did, or the stream ended another way). #720.
+                "bye_acked_ms": rep.disconnect_acked_ms,
             }),
             Err(e) => slot_held_status(&l.host, &e).unwrap_or_else(|| error_status(&e)),
         };
@@ -1856,9 +1926,7 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
         // that got as far as the console's slot: an end, or one lost mid-stream (an unreachable
         // or refused start never held it).
         if end["stage"] == "ended" || end["code"] == "lost" {
-            if let Ok(mut g) = SESSION_ENDED.lock() {
-                g.insert(l.host.clone(), std::time::Instant::now());
-            }
+            note_session_ended(&l.host);
         }
         // The end and why, with the console's words for a refusal (80108b26 and the like).
         if end["stage"] == "error" {
@@ -2203,21 +2271,93 @@ pub(crate) mod test_live {
 mod slot_held_tests {
     use super::*;
 
+    use ps5upload_core::rp_stream::guard::{closed_wait, InitClosed};
+
+    fn closed(n: u32) -> InitClosed {
+        InitClosed {
+            in_a_row: n,
+            wait: closed_wait(n),
+        }
+    }
+
     #[test]
-    fn a_closed_start_right_after_our_session_waits_it_out() {
-        let v = slot_held_value(Some(Duration::from_secs(10)), "x");
+    fn a_closed_start_after_our_session_waits_it_out() {
+        let v = slot_held_value(Some(Duration::from_secs(10)), closed(1), "x");
         assert_eq!(
             (v["code"].as_str(), v["retry_s"].as_u64()),
-            (Some("busy"), Some(30))
+            (Some("busy"), Some(15))
         );
-        let v = slot_held_value(Some(Duration::from_secs(39)), "x");
-        assert_eq!(v["retry_s"], 3);
-        let v = slot_held_value(Some(Duration::from_secs(90)), "x");
+        // #720: 157 s after the stop is still our session, and the waits grow.
+        let v = slot_held_value(Some(Duration::from_secs(157)), closed(3), "x");
+        assert_eq!(
+            (v["code"].as_str(), v["retry_s"].as_u64()),
+            (Some("busy"), Some(60))
+        );
+        assert_eq!(v["since_ours_s"], 157);
+        // Waited out five times: the PS5 has not let go, and the player says so.
+        let v = slot_held_value(Some(Duration::from_secs(400)), closed(HELD_AFTER + 1), "x");
+        assert_eq!(v["code"], "held");
+        assert!(v["retry_s"].is_null());
+        // Long after ours, or never ours: another device.
+        let v = slot_held_value(Some(OURS_FOR + Duration::from_secs(1)), closed(1), "x");
         assert_eq!(v["code"], "in_use");
-        assert_eq!(slot_held_value(None, "x")["code"], "in_use");
+        assert_eq!(slot_held_value(None, closed(1), "x")["code"], "in_use");
         let e = anyhow::anyhow!("{}", ps5upload_core::rp_session::SESSION_INIT_CLOSED);
         assert!(slot_held_status("10.9.9.9", &e).is_some());
         assert!(slot_held_status("10.9.9.9", &anyhow::anyhow!("other")).is_none());
+    }
+
+    /// #720 end to end on the engine's side: a session ends (our stop), the app restarts, Start
+    /// is closed by the PS5 again and again. Each answer is "busy" with a growing wait (the
+    /// player counts down and tries again by itself), never "another device", until five of
+    /// them; then "held".
+    #[test]
+    fn stop_then_start_while_the_ps5_holds_its_slot() {
+        let host = "10.250.7.20";
+        note_session_ended(host);
+        // The restart: what is on disk comes back (the file itself is tested below).
+        let codes: Vec<(String, Option<u64>)> = (0..HELD_AFTER + 1)
+            .map(|_| {
+                let e = anyhow::Error::new(ps5upload_core::rp_stream::guard::closed_answer(host));
+                let v = slot_held_status(host, &e).unwrap();
+                (
+                    v["code"].as_str().unwrap().to_string(),
+                    v["retry_s"].as_u64(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            codes,
+            vec![
+                ("busy".into(), Some(15)),
+                ("busy".into(), Some(30)),
+                ("busy".into(), Some(60)),
+                ("busy".into(), Some(90)),
+                ("busy".into(), Some(120)),
+                ("held".into(), None),
+            ]
+        );
+        // Another console, never streamed from here: someone else's session.
+        let other = "10.250.7.21";
+        let e = anyhow::Error::new(ps5upload_core::rp_stream::guard::closed_answer(other));
+        assert_eq!(slot_held_status(other, &e).unwrap()["code"], "in_use");
+    }
+
+    #[test]
+    fn the_last_session_survives_a_restart_on_disk() {
+        let dir = std::env::temp_dir().join(format!("ps5u-rp-slot-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join(SLOT_FILE);
+        let mut m = std::collections::HashMap::new();
+        m.insert("10.0.0.2".to_string(), 1_794_098_553_137u64);
+        std::fs::write(&p, serde_json::to_vec(&m).unwrap()).unwrap();
+        assert_eq!(read_slot_file(&p), m);
+        // Missing or broken: nothing, not an error.
+        std::fs::write(&p, b"{not json").unwrap();
+        assert!(read_slot_file(&p).is_empty());
+        std::fs::remove_file(&p).unwrap();
+        assert!(read_slot_file(&p).is_empty());
+        std::fs::remove_dir(&dir).unwrap();
     }
 }
 
