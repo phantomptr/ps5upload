@@ -250,6 +250,8 @@ async fn connection(socket: WebSocket, shared: Arc<Shared>, ip: IpKey) {
     );
     // A peer that never says anything still has to be checked before the first ping is due.
     let mut shutdown = shared.shutdown.subscribe();
+    // The close this side sent (0: none, the peer went or the socket broke), for the log.
+    let mut closed: (u16, &str) = (0, "gone");
 
     loop {
         tokio::select! {
@@ -270,6 +272,7 @@ async fn connection(socket: WebSocket, shared: Arc<Shared>, ip: IpKey) {
                     }
                     Ok(Action::ReplyThenClose(lines)) => {
                         let _ = send_all(&mut sink, lines).await;
+                        closed = (CLOSE_DONE, "bye");
                         let _ = sink.send(close_msg(CLOSE_DONE, "bye")).await;
                         break;
                     }
@@ -283,6 +286,7 @@ async fn connection(socket: WebSocket, shared: Arc<Shared>, ip: IpKey) {
                         }
                         shared.log("protocol_error", &[("kind", Field::S(kind.as_str()))]);
                         let _ = sink.send(Message::Text(error_text(kind).into())).await;
+                        closed = (CLOSE_PROTOCOL, kind.as_str());
                         let _ = sink.send(close_msg(CLOSE_PROTOCOL, kind.as_str())).await;
                         break;
                     }
@@ -295,6 +299,7 @@ async fn connection(socket: WebSocket, shared: Arc<Shared>, ip: IpKey) {
                     }
                 }
                 Some(Out::Close(code, reason)) => {
+                    closed = (code, reason);
                     let _ = sink.send(close_msg(code, reason)).await;
                     break;
                 }
@@ -304,7 +309,8 @@ async fn connection(socket: WebSocket, shared: Arc<Shared>, ip: IpKey) {
             _ = ping.tick() => {
                 if last_seen.elapsed() >= cfg.peer_timeout {
                     shared.metrics.error(ErrorKind::Timeout);
-                    let _ = sink.send(close_msg(CLOSE_GOING_AWAY, "timeout")).await;
+                    closed = (CLOSE_GOING_AWAY, "timeout");
+                        let _ = sink.send(close_msg(CLOSE_GOING_AWAY, "timeout")).await;
                     break;
                 }
                 if sink.send(Message::Ping(Default::default())).await.is_err() {
@@ -312,12 +318,23 @@ async fn connection(socket: WebSocket, shared: Arc<Shared>, ip: IpKey) {
                 }
             }
             _ = stopped(&mut shutdown) => {
-                let _ = sink.send(close_msg(CLOSE_GOING_AWAY, "shutdown")).await;
+                closed = (CLOSE_GOING_AWAY, "shutdown");
+                        let _ = sink.send(close_msg(CLOSE_GOING_AWAY, "shutdown")).await;
                 break;
             }
         }
     }
     let _ = sink.close().await;
+    // Which close each socket got: a guest told 1000 (room closed) during a shutdown that
+    // should have said 1001 (going away) shows up here.
+    shared.log(
+        "closed",
+        &[
+            ("conn", Field::N(conn)),
+            ("code", Field::N(u64::from(closed.0))),
+            ("reason", Field::S(closed.1)),
+        ],
+    );
     disconnect(&shared, role, conn);
     shared.connections.fetch_sub(1, Ordering::Relaxed);
 }

@@ -709,7 +709,20 @@ async fn shutdown_closes_sockets() {
     t.hub.stop(Duration::from_secs(3)).await;
     assert_eq!(recv_close(&mut h).await, Some(1001));
     assert_eq!(recv_close(&mut g).await, Some(1001));
-    assert!(logs.lock().unwrap().iter().any(|l| l == "hub: stopped"));
+    let logs = logs.lock().unwrap();
+    assert!(logs.iter().any(|l| l == "hub: stopped"));
+    // Each socket's close is logged with the code it got.
+    let closes: Vec<_> = logs
+        .iter()
+        .filter(|l| l.starts_with("hub: closed "))
+        .collect();
+    assert_eq!(closes.len(), 2, "{closes:?}");
+    assert!(
+        closes
+            .iter()
+            .all(|l| l.contains(" code=1001 reason=shutdown")),
+        "{closes:?}"
+    );
 }
 
 #[tokio::test]
