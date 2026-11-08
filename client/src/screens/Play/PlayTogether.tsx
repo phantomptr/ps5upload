@@ -219,8 +219,19 @@ function PlayerCard({ addr, player, guest }: { addr: string; player: number; gue
                 {tr("pt_player_behind", undefined, "Connection can't keep up")}
               </span>
             )}
+            {/* Their video track's estimate stays under the stream's bitrate: only a lower quality
+                helps (the PS5 can't change it mid-stream). */}
+            {guest.carries && guest.status === "playing" && (
+              <span className="text-xs text-[var(--color-warn)]" data-testid="pt-player-carries">
+                {tr(
+                  "pt_player_carries",
+                  { got: (guest.carries.kbps / 1000).toFixed(1), need: (guest.carries.streamKbps / 1000).toFixed(1) },
+                  `Their connection carries ${(guest.carries.kbps / 1000).toFixed(1)} of ${(guest.carries.streamKbps / 1000).toFixed(1)} Mbit/s: lower the stream's quality`,
+                )}
+              </span>
+            )}
             {/* What their own page says: the picture stands still at times on their side. */}
-            {!guest.behind && guest.status === "playing" && (guest.quality === "stutters" || guest.quality === "poor") && (
+            {!guest.behind && !guest.carries && guest.status === "playing" && (guest.quality === "stutters" || guest.quality === "poor") && (
               <span className="text-xs text-[var(--color-warn)]" data-testid="pt-player-stutter" data-quality={guest.quality}>
                 {tr("pt_player_stutter", undefined, "Their picture stutters")}
               </span>

@@ -120,6 +120,63 @@ struct PeerSt {
     sent_kbps: Option<u32>,
     /// `peer_bytes_tx` and its time at the last stats event.
     sent_at: Option<(u64, Instant)>,
+    /// The video track (rtc.rs), when the guest's offer had one the engine can send on.
+    track: Option<TrackSt>,
+}
+
+/// An internet guest's video track: what the offer allows, whether the session uses it, and its
+/// numbers (each set by the driver as str0m reports them; nothing per frame is kept).
+#[derive(Default, Clone)]
+pub(crate) struct TrackSt {
+    /// The answer has an H.264 (packetization mode 1) or an H.265 payload type to send with.
+    pub h264: bool,
+    pub h265: bool,
+    /// The session sends its pictures on the track (else on the data channel).
+    pub on: bool,
+    /// Access units written to the track.
+    pub frames: u64,
+    /// From str0m's egress stats: RTP packets sent (retransmissions included), NACKs, PLIs and
+    /// FIRs received, the loss the guest reported, the RTCP round trip.
+    pub packets: u64,
+    pub nacks: u64,
+    pub plis: u64,
+    pub firs: u64,
+    pub loss: Option<f32>,
+    pub rtcp_rtt_ms: Option<u32>,
+    /// The send-side bandwidth estimate (TWCC), kbit/s, and since when it stays under the
+    /// stream's bitrate.
+    pub bwe_kbps: Option<u32>,
+    pub under_since: Option<Instant>,
+    /// The stream's bitrate (kbit/s): the console cannot change it mid-session.
+    pub stream_kbps: Option<u32>,
+}
+
+/// The estimate under the stream's bitrate this long: the host is told to lower the quality.
+pub(crate) const SLOW_FOR: Duration = Duration::from_secs(5);
+/// …by this much (an estimate a few percent under the rate still carries it).
+const SLOW_UNDER: f64 = 0.9;
+
+impl TrackSt {
+    /// A new estimate.
+    pub(crate) fn estimate(&mut self, kbps: u32, now: Instant) {
+        self.bwe_kbps = Some(kbps);
+        let under = self
+            .stream_kbps
+            .is_some_and(|s| (kbps as f64) < s as f64 * SLOW_UNDER);
+        if !under {
+            self.under_since = None;
+        } else if self.under_since.is_none() {
+            self.under_since = Some(now);
+        }
+    }
+
+    /// The estimate stayed under the stream's bitrate for [`SLOW_FOR`].
+    pub(crate) fn slow(&self, now: Instant) -> bool {
+        self.on
+            && self
+                .under_since
+                .is_some_and(|t| now.saturating_duration_since(t) >= SLOW_FOR)
+    }
 }
 
 impl PeerInfo {
@@ -167,6 +224,33 @@ impl PeerInfo {
         self.with(|s| s.rtt_ms)
     }
 
+    /// The driver's view of the video track (rtc.rs).
+    pub(crate) fn track_with<R>(&self, f: impl FnOnce(&mut TrackSt) -> R) -> Option<R> {
+        self.with(|s| s.track.as_mut().map(f))
+    }
+
+    /// The offer had a video section the engine can send on (with these codecs).
+    pub(crate) fn track_offered(&self, h264: bool, h265: bool) {
+        self.with(|s| {
+            s.track = Some(TrackSt {
+                h264,
+                h265,
+                ..TrackSt::default()
+            })
+        });
+    }
+
+    /// The session's choice: its pictures (`hevc` or not) on the track, when it can carry them.
+    /// True when they go there.
+    pub(crate) fn use_track(&self, hevc: bool, stream_kbps: u32) -> bool {
+        self.track_with(|t| {
+            t.on = if hevc { t.h265 } else { t.h264 };
+            t.stream_kbps = Some(stream_kbps);
+            t.on
+        })
+        .unwrap_or(false)
+    }
+
     /// The driver's stats event (once a second): the bytes sent so far, for the rate.
     fn sent(&self, total: u64, now: Instant) {
         self.with(|s| {
@@ -185,8 +269,30 @@ impl PeerInfo {
     /// round trip, what went out over the last second, and what waits to go.
     pub(crate) fn link_json(&self) -> serde_json::Value {
         let f = self.flow.get();
-        let (rtt_ms, sent_kbps) = self.with(|s| (s.rtt_ms, s.sent_kbps));
+        let now = Instant::now();
+        let (rtt_ms, sent_kbps, track) = self.with(|s| (s.rtt_ms, s.sent_kbps, s.track.clone()));
+        let on = track.as_ref().is_some_and(|t| t.on);
         serde_json::json!({
+            // Where the picture goes: "track" (RTP) or "channel" (the data channel).
+            "video": if on { "track" } else { "channel" },
+            // The track's numbers (null on the channel): `frames_sent` (access units written),
+            // `rtp_packets` (retransmissions included), `nacks` (each answered with a resend from
+            // the send buffer), `plis` / `firs` (keyframe asks from the guest's browser), `loss` (its
+            // receiver reports, 0-1), `rtcp_rtt_ms`, `bwe_kbps` (the bandwidth estimate),
+            // `stream_kbps`, and `slow`: the estimate stayed under the stream's rate (lower the
+            // stream's quality: the console cannot change it mid-session).
+            "track": track.filter(|t| t.on).map(|t| serde_json::json!({
+                "frames_sent": t.frames,
+                "rtp_packets": t.packets,
+                "nacks": t.nacks,
+                "plis": t.plis,
+                "firs": t.firs,
+                "loss": t.loss.map(|l| (l as f64 * 1000.0).round() / 1000.0),
+                "rtcp_rtt_ms": t.rtcp_rtt_ms,
+                "bwe_kbps": t.bwe_kbps,
+                "stream_kbps": t.stream_kbps,
+                "slow": t.slow(now),
+            })),
             "rtt_ms": rtt_ms,
             "sent_kbps": sent_kbps,
             // The driver's queue (messages the channel did not take yet) and the data channel's
@@ -333,6 +439,26 @@ impl crate::join::GuestSocket for RtcSocket {
 
     fn net(&self) -> Option<Arc<PeerInfo>> {
         Some(self.info.clone())
+    }
+
+    fn video_track(&mut self, hevc: bool, stream_kbps: u32) -> bool {
+        let on = self.info.use_track(hevc, stream_kbps);
+        if on {
+            let _ = self.up.send(rtc::Cmd::Track(self.id, hevc, stream_kbps));
+        }
+        on
+    }
+
+    async fn send_video(&mut self, m: Message) -> Result<(), ()> {
+        // No back-pressure: str0m sends a picture at once and keeps its packets for resends, so
+        // there is no backlog to skip (a lost packet costs a resend, not the picture).
+        if self.flow.closed.load(Ordering::Relaxed) {
+            return Err(());
+        }
+        match m {
+            Message::Binary(b) => self.up.send(rtc::Cmd::Video(self.id, b)).map_err(|_| ()),
+            _ => Ok(()),
+        }
     }
 }
 

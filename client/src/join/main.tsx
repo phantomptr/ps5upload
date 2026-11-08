@@ -15,7 +15,7 @@ const host = hash.get("n")?.trim() || null;
 const net = parseInternetFragment(location.hash);
 const root = createRoot(document.getElementById("root")!);
 if (net) {
-  const transport = rtcTransport(net, { log: (m) => console.info(`[join] ${m}`) });
+  const transport = rtcTransport(net, { video: true, log: (m) => console.info(`[join] ${m}`) });
   root.render(<JoinFlow url={hubSocketUrl(net.hub)} invite={net.key} host={host} transport={transport} />);
 } else {
   const invite = hash.get("i") || null;

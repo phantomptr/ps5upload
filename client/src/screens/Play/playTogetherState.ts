@@ -33,6 +33,10 @@ export interface JoinGuest {
   /** How the picture looks on their side, from their page's own report: "smooth", "stutters",
    *  "poor", or null (no report yet, or an older engine or page). */
   quality: "smooth" | "stutters" | "poor" | null;
+  /** An internet guest's picture on its video track whose bandwidth estimate stays under the
+   *  stream's bitrate (kbit/s both): the host should lower the stream's quality, since the console
+   *  can't change it mid-stream. Null otherwise (the data channel, an older engine). */
+  carries: { kbps: number; streamKbps: number } | null;
 }
 
 /** A PS5 profile signed in on the console (GET /api/join/profiles). */
@@ -88,6 +92,9 @@ export interface NetSettings {
   hubUrl: string;
   stun: string[];
   upnp: boolean;
+  /** Internet friends' picture as a video track (the data channel when off, or for a page or
+   *  engine without it). */
+  videoTrack: boolean;
 }
 
 export interface JoinHostState {
@@ -122,7 +129,7 @@ export const EMPTY_JOIN: JoinHostState = {
   invite: null,
   guests: [],
   asks: [],
-  settings: { blockSystemButtons: true, maxPlayers: 3, streamSeat: false, internetInvites: null, hubUrl: "", stun: [], upnp: true },
+  settings: { blockSystemButtons: true, maxPlayers: 3, streamSeat: false, internetInvites: null, hubUrl: "", stun: [], upnp: true, videoTrack: true },
   netPeers: [],
   seatNext: false,
   nextProfile: null,
@@ -154,6 +161,15 @@ export function readPeers(v: unknown): NetPeer[] {
 /** A guest's picture in a word, as the engine says it (anything else: unknown). */
 function readQuality(v: unknown): JoinGuest["quality"] {
   return v === "smooth" || v === "stutters" || v === "poor" ? v : null;
+}
+
+/** What an internet guest's video track carries when it can't carry the stream (`link.track`
+ *  with `slow`), or null. */
+export function readCarries(link: unknown): JoinGuest["carries"] {
+  const t = (link as { track?: Record<string, unknown> | null } | null | undefined)?.track;
+  const kbps = num(t?.bwe_kbps);
+  const streamKbps = num(t?.stream_kbps);
+  return t?.slow === true && kbps != null && streamKbps != null ? { kbps, streamKbps } : null;
 }
 
 /** The engine's answer, checked field by field (an older or odd one never breaks the page). */
@@ -197,6 +213,7 @@ export function readJoinState(v: unknown): JoinHostState {
       playsAs: str((g.plays_as as Record<string, unknown> | null | undefined)?.name),
       seatNote: str(g.seat_note),
       quality: readQuality(g.quality),
+      carries: readCarries(g.link),
     }))
     .sort((a, b) => a.player - b.player);
   // Friends asking to join: the engine's `pending` (`asks` kept for an older one).
@@ -217,6 +234,7 @@ export function readJoinState(v: unknown): JoinHostState {
       hubUrl: typeof s.hub_url === "string" ? s.hub_url : "",
       stun: Array.isArray(s.stun) ? s.stun.filter((x): x is string => typeof x === "string") : [],
       upnp: s.upnp !== false,
+      videoTrack: s.video_track !== false,
     },
     netPeers: readPeers((o.internet as Record<string, unknown> | null | undefined)?.peers ?? (inv?.internet as Record<string, unknown> | null | undefined)?.peers),
     seatNext: o.seat_next === true,
@@ -433,6 +451,7 @@ export interface NetSettingsBody {
   hub_url?: string;
   stun?: string[];
   upnp?: boolean;
+  video_track?: boolean;
 }
 
 /** A hub address the engine takes: `wss://`, or `ws://` only to this computer (join_net::hub_url_ok). */

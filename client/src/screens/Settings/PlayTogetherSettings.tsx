@@ -129,6 +129,21 @@ export function PlayTogetherSettings() {
           )}
         />
       </div>
+      <div data-testid="pt-set-video-track">
+        <Toggle
+          checked={net.videoTrack}
+          onChange={(on) => {
+            setNet({ ...net, videoTrack: on });
+            void save({ video_track: on });
+          }}
+          label={tr("pt_set_video_track", undefined, "Video track for internet friends")}
+          hint={tr(
+            "pt_set_video_track_hint",
+            undefined,
+            "Sends the picture the way video calls do, so a lost packet costs a resend instead of a frozen picture. Off: the picture goes with the controls and the sound, as before.",
+          )}
+        />
+      </div>
       <details className="text-sm" data-testid="pt-set-advanced">
         <summary className="cursor-pointer select-none text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]">
           {tr("pt_set_advanced", undefined, "Advanced")}

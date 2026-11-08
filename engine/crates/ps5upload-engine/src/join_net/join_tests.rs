@@ -2,7 +2,7 @@
 // session over a WebRTC data channel, the hub room's life, the settings.
 
 use super::*;
-use crate::join_net::tests::{connect_guest, FakeHub, GIn, GOut};
+use crate::join_net::tests::{connect_guest, connect_guest_with, FakeHub, GIn, GOut};
 
 async fn internet_invite(console: &str) -> serde_json::Value {
     let (ci, h) = local();
@@ -96,6 +96,7 @@ fn settings_body() -> SettingsBody {
         hub_url: None,
         stun: None,
         upnp: None,
+        video_track: None,
     }
 }
 
@@ -173,6 +174,8 @@ async fn an_internet_guest_joins_over_webrtc_plays_and_gets_the_picture() {
     let j = g.next_with("stage").await;
     assert_eq!(j["stage"], "joined", "{j}");
     assert_eq!(j["player"], 2);
+    // A page that offered no video track (an older one): the pictures on the channel, as before.
+    assert_eq!(j["track"], false, "{j}");
 
     // A keyframe bigger than a data-channel message comes whole (in pieces on the wire).
     let big: Vec<u8> = (0..50_000u32).map(|i| (i % 251) as u8).collect();
@@ -214,6 +217,8 @@ async fn an_internet_guest_joins_over_webrtc_plays_and_gets_the_picture() {
 
     // The link's numbers, read on demand: the big picture went through the channel's buffer.
     let link = &st["guests"][0]["link"];
+    assert_eq!(link["video"], "channel", "{link}");
+    assert!(link["track"].is_null(), "{link}");
     assert!(link["backlog_peak_bytes"].as_u64().unwrap() >= big.len() as u64, "{link}");
     assert_eq!(link["high_water_bytes"], crate::join_net::HIGH_WATER);
     for k in ["queued_bytes", "buffered_bytes", "send_waits"] {
@@ -464,4 +469,151 @@ async fn e2e_internet_guest_fixture() {
     close_party(console).await;
     set_live(console, 0);
     *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
+/// An H.264 stream as the console's would be: the codec header (SPS, PPS), a keyframe without
+/// them, a picture after it. No two zero bytes in a row inside a unit (no start code there).
+fn h264() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let mut header = vec![0, 0, 0, 1, 0x67, 0x64, 0x00, 0x2a, 0xac, 0x2b, 0x40, 0x3c, 0x01];
+    header.extend_from_slice(&[0, 0, 0, 1, 0x68, 0xee, 0x3c, 0xb0]);
+    let mut key = vec![0, 0, 0, 1, 0x65, 0x88];
+    key.extend((0..30_000u32).map(|i| (i % 200 + 17) as u8));
+    let mut p = vec![0, 0, 0, 1, 0x41, 0x9a];
+    p.extend((0..900u32).map(|i| (i % 100 + 9) as u8));
+    (header, key, p)
+}
+
+/// The next picture off the guest's video track (10 s), skipping the channel's messages but
+/// failing on a picture there.
+async fn next_track_picture(g: &mut crate::join_net::tests::TestGuest) -> (Vec<u8>, bool) {
+    let until = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        match tokio::time::timeout_at(until, g.rx.recv()).await {
+            Ok(Some(GIn::Media(au, contiguous))) => return (au, contiguous),
+            Ok(Some(GIn::Binary(b))) if b.first() == Some(&1) => {
+                panic!("a picture on the channel with the track on")
+            }
+            Ok(Some(_)) => {}
+            other => panic!("no picture on the track: {other:?}"),
+        }
+    }
+}
+
+/// The picture as an RTP video track (#762's design): a page that offers one gets the pictures
+/// there (the codec header in front of each keyframe), the sound stays on the channel, the
+/// browser's PLI asks the console for a keyframe, and the host's panel reads the track's numbers.
+/// The host's setting off answers that same page with the channel (as an engine without the track
+/// would), and the page shows the channel's pictures.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_page_that_offers_a_video_track_gets_the_pictures_on_it_unless_the_host_turned_it_off() {
+    let _turn = PARTY_TESTS.lock().await;
+    let _live_turn = crate::rp_stream_api::LIVE_TEST_LOCK.lock().await;
+    let hub = FakeHub::start().await;
+    let console = "10.77.0.43";
+    let f = Arc::new(FakeHelper::default());
+    set_helper(console, f.clone());
+    set_live(console, 1);
+    let live = crate::rp_stream_api::test_live::Session::start(console);
+    let (header, key, p) = h264();
+    for track_on in [true, false] {
+        *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings {
+            hub_url: hub.url.clone(),
+            stun: Vec::new(),
+            upnp: false,
+            video_track: track_on,
+            ..Settings::default()
+        });
+        let s = open_party(console).await;
+        let invite = s["invite"]["key"].as_str().unwrap().to_string();
+        let room = internet_invite(console).await["internet"]["room"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        until("hosted", || hub.has_host(&room)).await;
+        let mut g = connect_guest_with(&hub.url, &room, "join", true).await;
+        assert!(g.answer.contains("m=video"), "the video section is answered");
+        g.text(serde_json::json!({"hello": {"invite": invite, "name": "Far"}}));
+        assert_eq!(g.next_with("stage").await["stage"], "asking");
+        allow_next(console, true).await;
+        let j = g.next_with("stage").await;
+        assert_eq!((&j["stage"], &j["track"]), (&"joined".into(), &track_on.into()), "{j}");
+
+        live.send(0, &header, false);
+        live.picture(&key, true);
+        live.picture(&p, false);
+        if !track_on {
+            live.send(4, &[0, 1, 0xfc, 0xff], false);
+            // Off: everything on the channel, the page's own player shows it.
+            let mut kinds = Vec::new();
+            let until = tokio::time::Instant::now() + Duration::from_secs(10);
+            while kinds.len() < 4 {
+                match tokio::time::timeout_at(until, g.rx.recv()).await {
+                    Ok(Some(GIn::Binary(b))) => kinds.push(b[0]),
+                    Ok(Some(GIn::Media(..))) => panic!("a picture on the track with it off"),
+                    Ok(Some(_)) => {}
+                    other => panic!("the channel's messages: {other:?} after {kinds:?}"),
+                }
+            }
+            // Sound may come first (it goes before the pictures).
+            kinds.sort();
+            assert_eq!(kinds, vec![0, 1, 1, 4]);
+            let st = until_state(console, "the channel's numbers", |s| {
+                s["guests"][0]["link"]["video"] == "channel"
+            })
+            .await;
+            assert!(st["guests"][0]["link"]["track"].is_null());
+        } else {
+            // The keyframe with the codec header in front (it came without), then the picture.
+            let (au, contiguous) = next_track_picture(&mut g).await;
+            assert!(contiguous);
+            let types: Vec<u8> = au
+                .windows(4)
+                .filter(|w| w[..3] == [0, 0, 1])
+                .map(|w| w[3] & 0x1f)
+                .collect();
+            assert_eq!(types, vec![7, 8, 5], "SPS, PPS, IDR");
+            assert!(au.ends_with(&key[key.len() - 64..]));
+            let (au, _) = next_track_picture(&mut g).await;
+            assert!(au.ends_with(&p[4..]), "the picture after it, whole");
+            // The sound stays on the channel.
+            live.send(4, &[0, 1, 0xfc, 0xff], false);
+            let until = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                match tokio::time::timeout_at(until, g.rx.recv()).await {
+                    Ok(Some(GIn::Binary(b))) if b.first() == Some(&4) => break,
+                    Ok(Some(GIn::Binary(b))) if b.first() == Some(&1) => panic!("a picture on the channel"),
+                    Ok(Some(_)) => {}
+                    other => panic!("no sound on the channel: {other:?}"),
+                }
+            }
+            // The browser's PLI: the session's keyframe ask (its gates), counted on both sides.
+            let _ = g.tx.send(GOut::Pli);
+            let st = until_state(console, "the PLI and the track's numbers", |s| {
+                let gst = &s["guests"][0];
+                gst["key_asks"].as_u64() >= Some(1) && gst["link"]["track"]["plis"].as_u64() >= Some(1)
+            })
+            .await;
+            let link = &st["guests"][0]["link"];
+            assert_eq!(link["video"], "track", "{link}");
+            let t = &link["track"];
+            assert_eq!(t["frames_sent"], 2, "{t}");
+            let rate = ps5upload_core::rp_stream::StreamConfig::default().bitrate_kbps;
+            assert_eq!(t["stream_kbps"], rate, "the session's bitrate: {t}");
+            assert_eq!(t["slow"], false, "{t}");
+            for k in ["rtp_packets", "nacks", "firs"] {
+                assert!(t[k].as_u64().is_some(), "{k}: {t}");
+            }
+            // The estimate arrives with the transport-cc feedback.
+            until_state(console, "the bandwidth estimate", |s| {
+                s["guests"][0]["link"]["track"]["bwe_kbps"].as_u64().is_some()
+            })
+            .await;
+        }
+        g.text(serde_json::json!({"leave": 1}));
+        until_state(console, "left", |s| s["guests"][0]["state"] == "left").await;
+        close_party(console).await;
+        until("the room closed", || !hub.has_host(&room)).await;
+    }
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    set_live(console, 0);
 }
