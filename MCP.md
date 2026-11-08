@@ -26,7 +26,7 @@ More than 120 tools, all of them thin layers over [the engine's API](API.md):
 | Installs | `install_*` | Install a package by the best route, check first, wait for it |
 | Games | `games_*`, `processes_*`, `saves_*`, `cheats_*` | Installed titles, launch and stop, back up saves, cheats |
 | Hardware | `hw_*`, `power_*`, `notifications_*`, `health_*`, `disk_usage_*`, `cleanup_*`, `shell_run` | Temperatures, rest and wake, health checks and repairs, what fills the drive |
-| Payloads | `payloads_*` | Catalogue, download, send, store, autoload |
+| Payloads | `payloads_*` | Catalogue, download, updates and rollback, send, store, autoload, Payload Manager sync |
 | Remote Play | `rp_*` | Start and stop a session, see the picture, press buttons, type, answer a passcode |
 | Friends and viewers | `together_*`, `golive_*` | Open Play Together and invite; go live |
 | Everything else | `settings_*`, `devices_list`, `drive_*`, `api_catalog`, `api_describe`, `api_request` | Settings, Mesh Drive, and any route of the API |
@@ -249,7 +249,7 @@ clients let you allow tools one by one, so keep these on "ask".
 | `power_control` | Rest, reboot or shut down |
 | `shell_run` | Run any command on the console, and read any file there, sign-in keys included |
 | `payloads_send` | Run a program on the console, with the same reach as a shell |
-| `payloads_store`, `payloads_delete`, `payloads_autoload` | Change what the console keeps and runs at boot |
+| `payloads_store`, `payloads_delete`, `payloads_autoload`, `payloads_pm_sync`, `payloads_update` (with `sync_console`) | Change what the console keeps and runs at boot |
 | `cleanup_apply`, `health_fix` | Delete what a scan found, and apply repairs |
 | `rp_stop` | End the Remote Play session someone may be playing |
 | `together_kick`, `together_close` | Send friends out of the game |

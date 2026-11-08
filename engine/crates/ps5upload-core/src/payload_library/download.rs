@@ -133,7 +133,7 @@ fn sha256_for(sums: &str, file: &str) -> Option<String> {
 }
 
 /// SHA-256 of a file on disk: what is actually there, not what passed through the socket.
-fn sha256_of_file(path: &Path) -> std::io::Result<String> {
+pub(super) fn sha256_of_file(path: &Path) -> std::io::Result<String> {
     let mut f = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 64 * 1024];
