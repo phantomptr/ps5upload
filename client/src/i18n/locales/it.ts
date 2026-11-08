@@ -7861,6 +7861,7 @@ helper_mismatch_boot_copy: "La PS5 ha avviato una copia più vecchia dell'helper
   "golive_close": "Chiudi",
   "golive_tab_live": "Vai in diretta",
   "golive_old_engine": "Questo motore non può andare in diretta: aggiorna PS5Upload sul computer su cui gira.",
+  "golive_phone_app_hint": "La diretta funziona su un computer: apri l'interfaccia web da Safari, con il motore su un computer",
   "golive_no_engine": "Impossibile raggiungere il motore.",
   "golive_loading": "Caricamento…",
   "rp_bitrate": "Bitrate video",

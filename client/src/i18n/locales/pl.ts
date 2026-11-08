@@ -8149,6 +8149,7 @@ helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą t
   "golive_close": "Zamknij",
   "golive_tab_live": "Na żywo",
   "golive_old_engine": "Ten silnik nie obsługuje transmisji na żywo: zaktualizuj PS5Upload na komputerze, na którym działa.",
+  "golive_phone_app_hint": "Transmisja na żywo działa na komputerze: otwórz interfejs WWW w Safari, z silnikiem na komputerze",
   "golive_no_engine": "Brak połączenia z silnikiem.",
   "golive_loading": "Wczytywanie…",
   "rp_bitrate": "Przepływność (bitrate)",

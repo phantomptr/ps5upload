@@ -7910,6 +7910,7 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
   "golive_close": "Đóng",
   "golive_tab_live": "Lên sóng",
   "golive_old_engine": "Engine này không thể phát trực tiếp: hãy cập nhật PS5Upload trên máy tính đang chạy nó.",
+  "golive_phone_app_hint": "Phát trực tiếp chạy trên máy tính: mở giao diện web từ Safari, với engine chạy trên máy tính",
   "golive_no_engine": "Không kết nối được engine.",
   "golive_loading": "Đang tải…",
   "rp_bitrate": "Tốc độ bit",

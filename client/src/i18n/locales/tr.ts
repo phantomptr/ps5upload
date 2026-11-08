@@ -7915,6 +7915,7 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
   "golive_close": "Kapat",
   "golive_tab_live": "Canlı yayın",
   "golive_old_engine": "Bu motor canlı yayın yapamaz: çalıştığı bilgisayarda PS5Upload'ı güncelle.",
+  "golive_phone_app_hint": "Canlı yayın bir bilgisayarda çalışır: motor bir bilgisayardayken web arayüzünü Safari'den açın",
   "golive_no_engine": "Motora ulaşılamıyor.",
   "golive_loading": "Yükleniyor…",
   "rp_bitrate": "Bit hızı",

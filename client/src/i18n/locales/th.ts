@@ -7915,6 +7915,7 @@ helper_mismatch_boot_copy: "PS5 เปิดสำเนาตัวช่วย
   "golive_close": "ปิด",
   "golive_tab_live": "ไลฟ์สด",
   "golive_old_engine": "เอนจินนี้ไลฟ์ไม่ได้: อัปเดต PS5Upload บนคอมพิวเตอร์ที่รันเอนจินอยู่",
+  "golive_phone_app_hint": "การไลฟ์ทำงานบนคอมพิวเตอร์: เปิดเว็บ UI จาก Safari โดยให้เอนจินทำงานบนคอมพิวเตอร์",
   "golive_no_engine": "เชื่อมต่อเอนจินไม่ได้",
   "golive_loading": "กำลังโหลด…",
   "rp_bitrate": "บิตเรต",

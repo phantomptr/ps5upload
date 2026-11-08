@@ -7917,6 +7917,7 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
   "golive_close": "Tutup",
   "golive_tab_live": "Siaran langsung",
   "golive_old_engine": "Engine ini tidak bisa siaran langsung: perbarui PS5Upload di komputer tempat engine berjalan.",
+  "golive_phone_app_hint": "Siaran langsung berjalan di komputer: buka UI web dari Safari dengan engine di komputer",
   "golive_no_engine": "Tidak bisa menjangkau engine.",
   "golive_loading": "Memuat…",
   "rp_bitrate": "Laju bit",

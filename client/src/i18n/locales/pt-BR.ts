@@ -7923,6 +7923,7 @@ helper_mismatch_boot_copy: "Seu PS5 iniciou uma cópia antiga do auxiliar que gu
   "golive_close": "Fechar",
   "golive_tab_live": "Ao vivo",
   "golive_old_engine": "Este motor não consegue transmitir ao vivo: atualize o PS5Upload no computador onde ele roda.",
+  "golive_phone_app_hint": "A transmissão ao vivo roda em um computador: abra a interface web no Safari com o motor em um computador",
   "golive_no_engine": "Não foi possível alcançar o motor.",
   "golive_loading": "Carregando…",
   "rp_bitrate": "Taxa de bits",

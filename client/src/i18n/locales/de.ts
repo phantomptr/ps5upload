@@ -7916,6 +7916,7 @@ helper_mismatch_boot_copy: "Deine PS5 hat eine ältere Kopie des Helfers gestart
   "golive_close": "Schließen",
   "golive_tab_live": "Live gehen",
   "golive_old_engine": "Diese Engine kann nicht live gehen: Aktualisiere PS5Upload auf dem Computer, auf dem sie läuft.",
+  "golive_phone_app_hint": "Live gehen läuft auf einem Computer: Öffne die Web-Oberfläche in Safari, mit der Engine auf einem Computer",
   "golive_no_engine": "Die Engine ist nicht erreichbar.",
   "golive_loading": "Wird geladen…",
   "rp_bitrate": "Datenrate (Bitrate)",

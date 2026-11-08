@@ -7861,6 +7861,7 @@ helper_mismatch_boot_copy: "Tu PS5 inició una copia antigua del ayudante que gu
   "golive_close": "Cerrar",
   "golive_tab_live": "En directo",
   "golive_old_engine": "Este motor no puede emitir en directo: actualiza PS5Upload en el ordenador donde se ejecuta.",
+  "golive_phone_app_hint": "Emitir en directo funciona en un ordenador: abre la interfaz web desde Safari con el motor en un ordenador",
   "golive_no_engine": "No se puede conectar con el motor.",
   "golive_loading": "Cargando…",
   "rp_bitrate": "Tasa de bits",

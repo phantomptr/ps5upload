@@ -7925,6 +7925,7 @@ helper_mismatch_boot_copy: "PS5가 부팅용으로 보관한 이전 헬퍼 사�
   "golive_close": "닫기",
   "golive_tab_live": "라이브 시작",
   "golive_old_engine": "이 엔진은 라이브 방송을 할 수 없습니다: 엔진이 실행 중인 컴퓨터에서 PS5Upload를 업데이트하세요.",
+  "golive_phone_app_hint": "라이브 방송은 컴퓨터에서 실행됩니다: 엔진을 컴퓨터에서 실행하고 Safari에서 웹 UI를 여세요",
   "golive_no_engine": "엔진에 연결할 수 없습니다.",
   "golive_loading": "불러오는 중…",
   "rp_bitrate": "비트레이트",

@@ -7924,6 +7924,7 @@ helper_mismatch_boot_copy: "Votre PS5 a lancé une ancienne copie de l'assistant
   "golive_close": "Fermer",
   "golive_tab_live": "En direct",
   "golive_old_engine": "Ce moteur ne peut pas passer en direct : mets à jour PS5Upload sur l'ordinateur où il tourne.",
+  "golive_phone_app_hint": "Le direct tourne sur un ordinateur : ouvre l'interface web dans Safari, avec le moteur sur un ordinateur",
   "golive_no_engine": "Impossible de joindre le moteur.",
   "golive_loading": "Chargement…",
   "rp_bitrate": "Débit",

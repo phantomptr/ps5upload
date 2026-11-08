@@ -8213,6 +8213,7 @@ helper_mismatch_boot_copy: "Your PS5 started an older copy of the helper that it
   "golive_close": "Close",
   "golive_tab_live": "Go live",
   "golive_old_engine": "This engine can't go live: update PS5Upload on the computer it runs on.",
+  "golive_phone_app_hint": "Go live runs on a computer: open the web UI from Safari with the engine on a computer",
   "golive_no_engine": "Can't reach the engine.",
   "golive_loading": "Loading…",
   "rp_bitrate": "Bitrate",

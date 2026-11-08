@@ -7867,6 +7867,7 @@ helper_mismatch_boot_copy: "你的 PS5 启动了为开机保留的旧版助手�
   "golive_close": "关闭",
   "golive_tab_live": "开始直播",
   "golive_old_engine": "这个引擎无法直播：请在运行它的电脑上更新 PS5Upload。",
+  "golive_phone_app_hint": "直播在电脑上运行：在电脑上运行引擎，然后用 Safari 打开网页界面",
   "golive_no_engine": "无法连接引擎。",
   "golive_loading": "正在加载…",
   "rp_bitrate": "码率",

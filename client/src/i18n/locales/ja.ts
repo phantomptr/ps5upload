@@ -7927,6 +7927,7 @@ helper_mismatch_boot_copy: "PS5 が起動用に保持している古いヘルパ
   "golive_close": "閉じる",
   "golive_tab_live": "ライブ配信",
   "golive_old_engine": "このエンジンはライブ配信に対応していません。エンジンを実行している PC の PS5Upload を更新してください。",
+  "golive_phone_app_hint": "ライブ配信はコンピューターで動きます: エンジンをコンピューターで動かし、Safari から Web UI を開いてください",
   "golive_no_engine": "エンジンに接続できません。",
   "golive_loading": "読み込み中…",
   "rp_bitrate": "ビットレート",

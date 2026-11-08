@@ -8204,6 +8204,7 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
   "golive_close": "Bezárás",
   "golive_tab_live": "Élő adás",
   "golive_old_engine": "Ez a motor nem tud élő adást indítani: frissítsd a PS5Uploadot azon a számítógépen, amelyen fut.",
+  "golive_phone_app_hint": "Az élő adás számítógépen fut: nyisd meg a webes felületet Safariból, a motorral egy számítógépen",
   "golive_no_engine": "A motor nem érhető el.",
   "golive_loading": "Betöltés…",
   "rp_bitrate": "Bitráta",

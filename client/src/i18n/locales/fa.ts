@@ -8190,6 +8190,7 @@ helper_mismatch_boot_copy: "PS5 نسخه‌ی قدیمی‌تری از کمک‌
   "golive_close": "بستن",
   "golive_tab_live": "پخش زنده",
   "golive_old_engine": "این موتور نمی‌تواند پخش زنده کند: PS5Upload را روی رایانه‌ای که موتور روی آن اجرا می‌شود به‌روز کنید.",
+  "golive_phone_app_hint": "پخش زنده روی رایانه اجرا می‌شود: رابط وب را از Safari باز کنید، با موتوری که روی یک رایانه اجرا می‌شود",
   "golive_no_engine": "موتور در دسترس نیست.",
   "golive_loading": "در حال بارگذاری…",
   "rp_bitrate": "بیت‌ریت",

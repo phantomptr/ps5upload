@@ -7908,6 +7908,7 @@ helper_mismatch_boot_copy: "আপনার PS5 বুটের জন্য র
   "golive_close": "বন্ধ করুন",
   "golive_tab_live": "লাইভে যান",
   "golive_old_engine": "এই ইঞ্জিন লাইভে যেতে পারে না: যে কম্পিউটারে এটি চলে সেখানে PS5Upload আপডেট করুন।",
+  "golive_phone_app_hint": "লাইভ সম্প্রচার কম্পিউটারে চলে: কম্পিউটারে ইঞ্জিন চালিয়ে Safari থেকে ওয়েব UI খুলুন",
   "golive_no_engine": "ইঞ্জিনে পৌঁছানো যাচ্ছে না।",
   "golive_loading": "লোড হচ্ছে…",
   "rp_bitrate": "বিটরেট",

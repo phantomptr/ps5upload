@@ -7922,6 +7922,7 @@ helper_mismatch_boot_copy: "आपके PS5 ने बूट के लिए �
   "golive_close": "बंद करें",
   "golive_tab_live": "लाइव जाएँ",
   "golive_old_engine": "यह इंजन लाइव नहीं जा सकता: जिस कंप्यूटर पर यह चलता है, वहाँ PS5Upload अपडेट करें।",
+  "golive_phone_app_hint": "लाइव जाना कंप्यूटर पर चलता है: कंप्यूटर पर इंजन चलाकर Safari से वेब UI खोलें",
   "golive_no_engine": "इंजन तक नहीं पहुँच पा रहे।",
   "golive_loading": "लोड हो रहा है…",
   "rp_bitrate": "बिटरेट",

@@ -7908,6 +7908,7 @@ helper_mismatch_boot_copy: "شغّل PS5 نسخة أقدم من المساعد �
   "golive_close": "إغلاق",
   "golive_tab_live": "بث مباشر",
   "golive_old_engine": "هذا المحرك لا يدعم البث المباشر: حدّث PS5Upload على الكمبيوتر الذي يعمل عليه.",
+  "golive_phone_app_hint": "يعمل البث المباشر على كمبيوتر: افتح واجهة الويب من Safari مع تشغيل المحرّك على كمبيوتر",
   "golive_no_engine": "تعذّر الوصول إلى المحرك.",
   "golive_loading": "جارٍ التحميل…",
   "rp_bitrate": "معدل البت",
