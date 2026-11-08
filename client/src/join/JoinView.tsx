@@ -5,10 +5,14 @@ import type { JoinStage } from "../lib/joinClient";
 import { delayTone, playerColor } from "../lib/joinProtocol";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { gamepadsOf } from "../lib/nativePad";
+import { isWeak8BitDo, padPlatform, type PadKind } from "../lib/padMappings";
+import { padKind } from "../lib/padProfiles";
+import { EightBitDoHint } from "../screens/Play/PadHint";
 import { TouchControls } from "../screens/Play/TouchControls";
 import { useTr } from "../state/lang";
 import { devicePad, useJoinSession, type JoinSession } from "./session";
 import { useAutoHide } from "./autoHide";
+import { PadCheck } from "./PadCheck";
 import { clock } from "../lib/clockText";
 
 type Tr = ReturnType<typeof useTr>;
@@ -131,15 +135,32 @@ function useNow(on: boolean): number {
   return now;
 }
 
+interface PadReady {
+  ready: boolean;
+  pressed: boolean;
+  /** The first controller: its id, how it plays, and whether it is an 8BitDo in a weak mode. */
+  id: string | null;
+  kind: PadKind | null;
+  weak8BitDo: boolean;
+}
+
 /** A controller connected to this device, and whether a button is held (the test press). */
-function usePadReady(): { ready: boolean; pressed: boolean } {
-  const [state, setState] = useState({ ready: false, pressed: false });
+function usePadReady(): PadReady {
+  const [state, setState] = useState<PadReady>({ ready: false, pressed: false, id: null, kind: null, weak8BitDo: false });
   useEffect(() => {
     const read = () => {
-      const ready = gamepadsOf(typeof navigator === "undefined" ? undefined : navigator).some((g) => !!g?.connected);
+      const first = gamepadsOf(typeof navigator === "undefined" ? undefined : navigator).find((g): g is Gamepad => !!g?.connected);
+      const ready = !!first;
       const p = ready ? devicePad() : null;
       const pressed = !!p && (p.buttons !== 0 || p.l2 > 30 || p.r2 > 30);
-      setState((s) => (s.ready === ready && s.pressed === pressed ? s : { ready, pressed }));
+      const id = first?.id ?? null;
+      const kind = first ? padKind(first) : null;
+      const weak8BitDo = !!first && isWeak8BitDo(first);
+      setState((s) =>
+        s.ready === ready && s.pressed === pressed && s.id === id && s.kind === kind && s.weak8BitDo === weak8BitDo
+          ? s
+          : { ready, pressed, id, kind, weak8BitDo },
+      );
     };
     read();
     const t = window.setInterval(read, 120);
@@ -231,6 +252,7 @@ export function JoinView({
   const [guided, setGuided] = useState(() => safeGetItem(GUIDED_KEY) === "1");
   const [portrait, setPortrait] = useState(() => typeof window !== "undefined" && window.innerHeight > window.innerWidth);
   const pad = usePadReady();
+  const [checking, setChecking] = useState(false);
   const reconnecting = stage.kind === "reconnecting";
   const now = useNow(reconnecting);
   const live = stage.kind === "joined" || reconnecting;
@@ -555,6 +577,16 @@ export function JoinView({
       )}
       <button
         type="button"
+        onClick={() => setChecking(true)}
+        aria-label={tr("join_check_title", undefined, "Check your controller")}
+        title={tr("join_check_title", undefined, "Check your controller")}
+        className="flex items-center gap-1 rounded-full bg-white/15 px-2.5 py-1 hover:bg-white/25"
+        data-testid="join-check-open"
+      >
+        <Gamepad2 size={13} />
+      </button>
+      <button
+        type="button"
         onClick={leave}
         className="flex items-center gap-1 rounded-full bg-[var(--color-danger,#dc2626)] px-3 py-1 font-medium"
         data-testid="join-leave"
@@ -688,6 +720,8 @@ export function JoinView({
           </p>
         )}
 
+        {checking && <PadCheck onClose={() => setChecking(false)} />}
+
         {showTouch && <TouchControls stream={session} layout="overlay" onMenu={() => (chrome.shown ? chrome.hide() : poke())} />}
 
         {!showTouch && !reconnecting && (
@@ -697,7 +731,25 @@ export function JoinView({
           >
             <Gamepad2 size={14} style={{ color: pad.pressed ? `rgb(${light[0]},${light[1]},${light[2]})` : undefined }} />
             {pad.ready
-              ? tr("join_pad_ready", undefined, "Your controller is ready")
+              ? (
+                <span className="flex flex-col items-start gap-1">
+                  <span>{tr("join_pad_ready", undefined, "Your controller is ready")}</span>
+                  {pad.weak8BitDo && pad.id && <EightBitDoHint id={pad.id} className="text-amber-200/90" />}
+                  {pad.kind === "guess" && padPlatform() && (
+                    <span className="flex flex-wrap items-center gap-2 text-white/75" data-testid="join-pad-unknown">
+                      {tr("join_check_unknown_short", undefined, "Not on our list: buttons may be mixed up.")}
+                      <button
+                        type="button"
+                        onClick={() => setChecking(true)}
+                        className="rounded-full bg-white px-2.5 py-0.5 font-medium text-black"
+                        data-testid="join-pad-unknown-check"
+                      >
+                        {tr("join_check_title", undefined, "Check your controller")}
+                      </button>
+                    </span>
+                  )}
+                </span>
+              )
               : coarse && inApp && !full
                 ? tr("join_full_to_play", undefined, "Tap full screen to play with the on-screen controller.")
                 : (
