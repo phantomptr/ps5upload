@@ -3,7 +3,11 @@
  * The /dev/hid requests (ADD, INSERT, DELETE and OUTPUT, the description and state block layouts,
  * the output fields) are from ProsperoSunshine (https://github.com/Darkatek7/ProsperoSunshine,
  * Darkatek7), src/platform/ps5/pad.c, GPL-3.0-only, itself derived from ps5-mcp's RemoteEye. They
- * are written anew here, around slots, owners and a watchdog of our own. This file is GPL-3.0-only
+ * are written anew here, around slots, owners and a watchdog of our own. Seating a pad in a chosen
+ * user right after its add (bind_user: the add's handle is the bus's device id, bound within
+ * milliseconds so the console never asks) follows the same project's PR #33
+ * (src/platform/ps5/profile_seat.c, measured on 10.20); the bind itself runs in the vinput
+ * companion (src/vinput_companion.c). This file is GPL-3.0-only
  * (ps5upload is GPL-3.0-or-later, which takes it in as GPL-3.0); see LICENSES/README.md. */
 #include "vpad.h"
 
@@ -139,11 +143,16 @@ typedef struct {
     long long last_alive_ms; /* the last open, state or hb: the removal timer */
     long long neutral_ms;
     int neutral; /* at rest since neutral_ms (made so, or rested by the watchdog) */
+    /* Play Together's "Guests play as": the user the pad was asked to be seated in (0: none, the
+     * console asks), and the one it is seated in (0: not, or not yet). */
+    uint32_t bind_user, bound;
+    int bind_code;
 } slot_t;
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static slot_t g_slots[VPAD_SLOTS];
 static const vpad_hid_t *g_hid = &HID;
+static const vpad_binder_t *g_binder;
 static int g_stopped;
 static int g_wd_running;
 static int g_no_watchdog;
@@ -185,6 +194,8 @@ static void remove_locked(slot_t *s, const char *why) {
     d.handle = (uint32_t)s->handle;
     rc = g_hid->ioctl_hid(s->fd, VPAD_IOCTL_DELETE, &d);
     g_hid->close_hid(s->fd);
+    /* Its handle may be the next pad's: the companion must not keep it in the old user. */
+    if (s->bind_user && g_binder && g_binder->forget) g_binder->forget(s->handle);
     fprintf(stderr, "[vpad] player %d: pad %d removed (%s)%s\n", player_of(s), s->handle, why,
             rc ? " (the console refused the removal)" : "");
     memset(s, 0, sizeof *s);
@@ -257,6 +268,12 @@ void vpad_set_hid(const vpad_hid_t *h) {
     remove_all_locked("device layer replaced");
     g_hid = h ? h : &HID;
     g_stopped = 0;
+    pthread_mutex_unlock(&g_lock);
+}
+
+void vpad_set_binder(const vpad_binder_t *b) {
+    pthread_mutex_lock(&g_lock);
+    g_binder = b;
     pthread_mutex_unlock(&g_lock);
 }
 
@@ -540,9 +557,22 @@ static int refuse_code(char *out, size_t cap, const char *err, int code) {
 
 /* ── The methods ──────────────────────────────────────────────────────────────────────────────── */
 
-static int opened_answer(char *out, size_t cap, const slot_t *s, int resumed) {
+static int opened_answer(char *out, size_t cap, const slot_t *s, int resumed, uint32_t owner) {
+    if (s->bind_user)
+        return answer(cap, snprintf(out, cap,
+                                    "{\"ok\":true,\"slot\":%d,\"handle\":%d,\"user\":%u,\"resumed\":%s,\"bound\":%s,"
+                                    "\"bind_code\":%d,\"owner\":%u}",
+                                    player_of(s), s->handle, (unsigned)s->user, resumed ? "true" : "false",
+                                    s->bound ? "true" : "false", s->bind_code, (unsigned)owner));
     return answer(cap, snprintf(out, cap, "{\"ok\":true,\"slot\":%d,\"handle\":%d,\"user\":%u,\"resumed\":%s}",
                                 player_of(s), s->handle, (unsigned)s->user, resumed ? "true" : "false"));
+}
+
+/* A bind refused before any pad is made, with the companion's state when that is why. */
+static int refuse_bind(char *out, size_t cap, const char *err, const char *companion) {
+    if (companion)
+        return answer(cap, snprintf(out, cap, "{\"ok\":false,\"err\":\"%s\",\"companion\":\"%s\"}", err, companion));
+    return refuse(out, cap, err);
 }
 
 /* The same owner opening a live slot again: nothing is made again, and its next state counts
@@ -550,18 +580,21 @@ static int opened_answer(char *out, size_t cap, const slot_t *s, int resumed) {
 static int resume_locked(slot_t *s, long long now_ms, char *out, size_t cap) {
     s->last_alive_ms = now_ms;
     s->have_seq = 0;
-    return opened_answer(out, cap, s, 1);
+    return opened_answer(out, cap, s, 1, s->bound);
 }
 
 int vpad_open_json(const char *body, size_t n, long long now_ms, vpad_user_fn pick_user, char *out, size_t cap) {
     char tok[VPAD_TOKEN_HEX + 1];
     uint8_t desc[VPAD_BLOCK];
     add_req_t r;
-    uint64_t user = 0;
-    int slot, fd, handle = -1, rc;
+    uint64_t user = 0, bind_user = 0;
+    int slot, fd, handle = -1, rc, bind_owner = 0;
+    long long added_ms = 0;
     slot_t *s;
     if (!body || n > VPAD_REQ_MAX || slot_of(body, n, &slot) < 0 || token_of(body, n, tok) < 0 ||
-        opt_uint(body, n, "user", 0xFFFFFFFFu, &user) < 0)
+        opt_uint(body, n, "user", 0xFFFFFFFFu, &user) < 0 || opt_uint(body, n, "bind_user", 0xFFFFFFFEu, &bind_user) < 0 ||
+        webui_json_bool(body, n, "bind_owner", &bind_owner) < 0 ||
+        (webui_json_u64(body, n, "bind_user", &(uint64_t){0}) == 1 && !bind_user))
         return refuse(out, cap, "bad_request");
     s = &g_slots[slot - VPAD_FIRST_SLOT];
     pthread_mutex_lock(&g_lock);
@@ -577,6 +610,25 @@ int vpad_open_json(const char *body, size_t n, long long now_ms, vpad_user_fn pi
 
     /* Who the pad is for, outside the lock: the foreground user is a Sony call behind the Sony API
      * lock, which a launch can hold for seconds, and the other players' input must not wait. */
+    if (bind_user) {
+        /* The host chose who this player is: that user or no pad at all, never the foreground user
+         * in its place. Checked before the pad is made: a refusal leaves nothing behind. */
+        const vpad_binder_t *b;
+        const char *st;
+        int fg = 0, in;
+        pthread_mutex_lock(&g_lock);
+        b = g_binder;
+        pthread_mutex_unlock(&g_lock);
+        if (!b || !b->hold || !b->signed_in || !b->bind) return refuse_bind(out, cap, "vpad_bind_unavailable", "off");
+        st = b->hold();
+        if (strcmp(st, "starting") == 0) return refuse_bind(out, cap, "vpad_bind_starting", st);
+        if (strcmp(st, "running") != 0) return refuse_bind(out, cap, "vpad_bind_unavailable", st);
+        in = b->signed_in((uint32_t)bind_user, &fg);
+        if (in < 0) return refuse(out, cap, "vpad_bind_unknown");
+        if (in == 0) return refuse(out, cap, "vpad_bind_signed_out");
+        if (fg && !bind_owner) return refuse(out, cap, "vpad_bind_owner");
+        user = bind_user;
+    }
     if (!user) user = pick_user ? pick_user() : vpad_home_user("/user/home");
     if (!user) return refuse(out, cap, "vpad_no_user");
 
@@ -607,6 +659,7 @@ int vpad_open_json(const char *body, size_t n, long long now_ms, vpad_user_fn pi
     r.desc = (uint64_t)(uintptr_t)desc;
     r.handle_out = (uint64_t)(uintptr_t)&handle;
     rc = g_hid->ioctl_hid(fd, VPAD_IOCTL_ADD, &r);
+    added_ms = vpad_now_ms();
     if (rc != 0 || handle < 0) {
         g_hid->close_hid(fd);
         fprintf(stderr, "[vpad] player %d: the console did not add a pad for user 0x%08x (%d)\n", slot,
@@ -625,9 +678,36 @@ int vpad_open_json(const char *body, size_t n, long long now_ms, vpad_user_fn pi
     s->last_state_ms = -1;
     s->neutral = 1; /* made at rest */
     if (rest_locked(s) != 0) fprintf(stderr, "[vpad] player %d: first state not taken\n", slot);
+    s->bind_user = (uint32_t)bind_user;
+    if (bind_user) {
+        /* Seated first, before anything else: the console decides about a new pad ~10 ms after
+         * it is added. The slot is published (its input flows meanwhile); the lock is not held
+         * across the companion's answer. */
+        const vpad_binder_t *b = g_binder;
+        int code = 0, brc;
+        uint32_t owner = 0;
+        long long t0;
+        pthread_mutex_unlock(&g_lock);
+        t0 = vpad_now_ms();
+        brc = b && b->bind ? b->bind(handle, (uint32_t)bind_user, (uint32_t)(t0 - added_ms), &code, &owner) : -1;
+        pthread_mutex_lock(&g_lock);
+        /* Still this pad (a close, or a stop, may have come meanwhile)? */
+        if (!s->open || s->handle != handle || !token_eq(s->token, tok)) {
+            rc = refuse(out, cap, g_stopped ? "vpad_stopping" : "vpad_not_open");
+            goto done;
+        }
+        s->bound = brc == 0 ? (uint32_t)bind_user : 0;
+        s->bind_code = brc == 0 ? 0 : code;
+        fprintf(stderr, "[vpad] player %d: pad %d made for user 0x%08x: %s (0x%08x, owner 0x%08x, %lld ms)\n", slot,
+                handle, (unsigned)bind_user, brc == 0 ? "bound" : "NOT bound, the console will ask", (unsigned)code,
+                (unsigned)owner, vpad_now_ms() - added_ms);
+        watchdog_ensure_locked();
+        rc = opened_answer(out, cap, s, 0, owner);
+        goto done;
+    }
     fprintf(stderr, "[vpad] player %d: pad %d made for user 0x%08x\n", slot, handle, (unsigned)user);
     watchdog_ensure_locked();
-    rc = opened_answer(out, cap, s, 0);
+    rc = opened_answer(out, cap, s, 0, 0);
 done:
     pthread_mutex_unlock(&g_lock);
     return rc;
@@ -709,8 +789,20 @@ int vpad_states_json(const char *body, size_t n, long long now_ms, char *out, si
 
 int vpad_hb_json(const char *body, size_t n, long long now_ms, char *out, size_t cap) {
     char tok[VPAD_TOKEN_HEX + 1];
-    int slot, live = 0, rc;
+    int slot, live = 0, rc, companion = 0;
     slot_t *s;
+    if (body && n <= VPAD_REQ_MAX && webui_json_bool(body, n, "companion", &companion) == 1 && companion &&
+        webui_json_u64(body, n, "slot", &(uint64_t){0}) == 0) {
+        /* Play Together keeps the companion up (outside the lock: it may start it). */
+        const vpad_binder_t *b;
+        const char *st;
+        pthread_mutex_lock(&g_lock);
+        b = g_binder;
+        pthread_mutex_unlock(&g_lock);
+        st = b && b->hold ? b->hold() : "off";
+        return answer(cap, snprintf(out, cap, "{\"ok\":true,\"companion\":\"%s\",\"bind\":%s}", st,
+                                    strcmp(st, "running") == 0 ? "true" : "false"));
+    }
     if (!body || n > VPAD_REQ_MAX || slot_of(body, n, &slot) < 0 || token_of(body, n, tok) < 0 ||
         webui_json_bool(body, n, "live", &live) < 0)
         return refuse(out, cap, "bad_request");
@@ -791,10 +883,10 @@ int vpad_status_json(long long now_ms, char *out, size_t cap) {
         if (s->open)
             w = snprintf(out + len, cap - len,
                          "%s{\"slot\":%d,\"player\":%d,\"open\":true,\"owner\":\"%08x\",\"user\":%u,\"since_ms\":%lld,"
-                         "\"last_state_ms\":%lld,\"neutral\":%s,\"neutral_ms\":%lld}",
+                         "\"last_state_ms\":%lld,\"neutral\":%s,\"neutral_ms\":%lld,\"bound\":%u}",
                          i ? "," : "", player_of(s), player_of(s), (unsigned)token_hash(s->token), (unsigned)s->user,
                          now_ms - s->opened_ms, s->last_state_ms < 0 ? -1LL : now_ms - s->last_state_ms,
-                         s->neutral ? "true" : "false", s->neutral ? now_ms - s->neutral_ms : 0LL);
+                         s->neutral ? "true" : "false", s->neutral ? now_ms - s->neutral_ms : 0LL, (unsigned)s->bound);
         else
             w = snprintf(out + len, cap - len, "%s{\"slot\":%d,\"player\":%d,\"open\":false}", i ? "," : "",
                          player_of(s), player_of(s));

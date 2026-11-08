@@ -475,7 +475,7 @@ static void test_close_output_status(void) {
     CHECK(vpad_status_json(1500, g_out, sizeof g_out) > 0);
     CHECK(HAS("{\"ok\":true,\"slots\":[{\"slot\":2,\"player\":2,\"open\":false},{\"slot\":3,\"player\":3,\"open\":false},"
               "{\"slot\":4,\"player\":4,\"open\":true,\"owner\":\""));
-    CHECK(HAS("\"user\":9,\"since_ms\":500,\"last_state_ms\":300,\"neutral\":false,\"neutral_ms\":0}]}"));
+    CHECK(HAS("\"user\":9,\"since_ms\":500,\"last_state_ms\":300,\"neutral\":false,\"neutral_ms\":0,\"bound\":0}]}"));
     CHECK(!HAS(TOK_A) && !HAS("0123456789")); /* the token never shows */
     {
         char tiny[16];
@@ -567,6 +567,140 @@ static void test_threads(void) {
     vpad_stop();
 }
 
+/* ---- Play Together's "Guests play as": a fake companion (the binder) ---- */
+
+static const char *fb_hold = "running";
+static uint32_t fb_signed[4] = {0x2000, 0x3000, 0x1e24b13c, 0};
+static int fb_unknown, fb_bind_rc, fb_code, fb_binds, fb_holds, fb_stop_in_bind;
+static uint32_t fb_fg = 0x1e24b13c, fb_owner_shift;
+static int fb_last_handle = -1, fb_forgot[8], fb_nforgot;
+static uint32_t fb_last_user, fb_last_age;
+
+static const char *fb_hold_fn(void) {
+    fb_holds++;
+    return fb_hold;
+}
+static int fb_signed_in(uint32_t user, int *fg) {
+    if (fb_unknown) return -1;
+    *fg = user == fb_fg;
+    for (int i = 0; fb_signed[i]; i++)
+        if (fb_signed[i] == user) return 1;
+    return 0;
+}
+static int fb_bind(int handle, uint32_t user, uint32_t age_ms, int *code, uint32_t *owner) {
+    fb_binds++;
+    fb_last_handle = handle;
+    fb_last_user = user;
+    fb_last_age = age_ms;
+    /* the pad is there and published while the companion answers */
+    pthread_mutex_lock(&f_mtx);
+    CHECK(handle > 0 && handle < MAXH && f_pads[handle].live && f_pads[handle].inserts >= 1);
+    pthread_mutex_unlock(&f_mtx);
+    if (fb_stop_in_bind) vpad_stop();
+    *code = fb_code;
+    *owner = fb_bind_rc == 0 ? user : user + fb_owner_shift;
+    return fb_bind_rc;
+}
+static void fb_forget(int handle) {
+    if (fb_nforgot < 8) fb_forgot[fb_nforgot++] = handle;
+}
+static const vpad_binder_t FB = {fb_hold_fn, fb_signed_in, fb_bind, fb_forget};
+
+static void fb_reset(void) {
+    fb_hold = "running";
+    fb_unknown = fb_bind_rc = fb_code = fb_binds = fb_holds = fb_stop_in_bind = fb_nforgot = 0;
+    fb_fg = 0x1e24b13c;
+    fb_owner_shift = 0;
+    fb_last_handle = -1;
+}
+
+/* A pad asked for a user: made for that user and seated by the companion at once, never the
+ * foreground user in its place; refused with nothing made when the companion is not up, the user is
+ * not signed in (or the console does not say), or it is the user in front without the host's
+ * confirmation; a failed bind keeps the pad (the console asks); resume, status, close and the
+ * companion heartbeat. */
+static void test_bind(void) {
+    int h, n;
+    fresh();
+    fb_reset();
+    vpad_set_binder(NULL);
+    /* no binder (a helper without the companion) */
+    CHECK(vopen("{\"slot\":2,\"token\":\"" TOK_A "\",\"bind_user\":8192}", 0) > 0 &&
+          HAS("\"err\":\"vpad_bind_unavailable\",\"companion\":\"off\""));
+    CHECK(vhb("{\"companion\":true}", 0) > 0 && HAS("\"companion\":\"off\",\"bind\":false"));
+    vpad_set_binder(&FB);
+    /* malformed: 0 and "nobody" are no user */
+    CHECK(vopen("{\"slot\":2,\"token\":\"" TOK_A "\",\"bind_user\":0}", 0) > 0 && HAS("bad_request"));
+    CHECK(vopen("{\"slot\":2,\"token\":\"" TOK_A "\",\"bind_user\":4294967295}", 0) > 0 && HAS("bad_request"));
+    CHECK(vopen("{\"slot\":2,\"token\":\"" TOK_A "\",\"bind_user\":8192,\"bind_owner\":1}", 0) > 0 &&
+          HAS("bad_request"));
+    /* the companion on its way, or without the bus: nothing made, no foreground pick */
+    fb_hold = "starting";
+    CHECK(vopen("{\"slot\":2,\"token\":\"" TOK_A "\",\"bind_user\":8192}", 0) > 0 &&
+          HAS("\"err\":\"vpad_bind_starting\""));
+    fb_hold = "no_bind";
+    CHECK(vopen("{\"slot\":2,\"token\":\"" TOK_A "\",\"bind_user\":8192}", 0) > 0 &&
+          HAS("\"err\":\"vpad_bind_unavailable\",\"companion\":\"no_bind\""));
+    fb_hold = "running";
+    /* not signed in, or the console does not say */
+    CHECK(vopen("{\"slot\":2,\"token\":\"" TOK_A "\",\"bind_user\":16384}", 0) > 0 &&
+          HAS("\"err\":\"vpad_bind_signed_out\""));
+    fb_unknown = 1;
+    CHECK(vopen("{\"slot\":2,\"token\":\"" TOK_A "\",\"bind_user\":8192}", 0) > 0 &&
+          HAS("\"err\":\"vpad_bind_unknown\""));
+    fb_unknown = 0;
+    /* the user in front (the owner) only with the host's confirmation */
+    CHECK(vopen("{\"slot\":2,\"token\":\"" TOK_A "\",\"bind_user\":505721148}", 0) > 0 &&
+          HAS("\"err\":\"vpad_bind_owner\""));
+    CHECK(vopen("{\"slot\":2,\"token\":\"" TOK_A "\",\"bind_user\":505721148,\"bind_owner\":false}", 0) > 0 &&
+          HAS("\"err\":\"vpad_bind_owner\""));
+    CHECK(f_adds == 0 && g_picks == 0 && fb_binds == 0 && vpad_open_count() == 0);
+
+    /* seated: made for that user, bound right after the add, never the foreground pick */
+    CHECK(vopen("{\"slot\":2,\"token\":\"" TOK_A "\",\"bind_user\":8192,\"user\":7}", 1000) > 0);
+    CHECK(HAS("\"ok\":true,\"slot\":2,") && HAS("\"user\":8192") && HAS("\"bound\":true,\"bind_code\":0,\"owner\":8192"));
+    h = handle_from_answer();
+    CHECK(h > 0 && f_pads[h].user == 8192 && fb_last_handle == h && fb_last_user == 8192 && fb_last_age < 1000);
+    CHECK(g_picks == 0 && fb_binds == 1);
+    CHECK(vpad_status_json(1000, g_out, sizeof g_out) > 0 && HAS("\"bound\":8192"));
+    /* a resume says it is still seated, and seats nothing again */
+    CHECK(vopen("{\"slot\":2,\"token\":\"" TOK_A "\",\"bind_user\":8192}", 2000) > 0 &&
+          HAS("\"resumed\":true,\"bound\":true"));
+    CHECK(fb_binds == 1 && f_adds == 1);
+    /* the owner, confirmed by the host */
+    CHECK(vopen("{\"slot\":3,\"token\":\"" TOK_B "\",\"bind_user\":505721148,\"bind_owner\":true}", 0) > 0 &&
+          HAS("\"bound\":true"));
+    /* a bind that fails: the pad stays, unbound (the console will ask), with the code */
+    fb_bind_rc = -1;
+    fb_code = (int)0x809b0005u;
+    fb_owner_shift = 1;
+    CHECK(vopen("{\"slot\":4,\"token\":\"" TOK_B "\",\"bind_user\":12288}", 0) > 0);
+    CHECK(HAS("\"ok\":true") && HAS("\"bound\":false,\"bind_code\":-2137325563,\"owner\":12289"));
+    n = handle_from_answer();
+    CHECK(n > 0 && f_pads[n].live && f_pads[n].user == 12288 && g_picks == 0);
+    CHECK(vpad_open_count() == 3);
+    /* close: a pad asked for a user is forgotten by the companion; one that was not is not */
+    CHECK(vclose("{\"slot\":2,\"token\":\"" TOK_A "\"}", 0) > 0 && HAS("\"ok\":true"));
+    CHECK(fb_nforgot == 1 && fb_forgot[0] == h);
+    CHECK(vclose("{\"slot\":4,\"token\":\"" TOK_B "\"}", 0) > 0 && fb_nforgot == 2 && fb_forgot[1] == n);
+    fb_bind_rc = 0;
+    fb_owner_shift = 0;
+    CHECK(vopen("{\"slot\":2,\"token\":\"" TOK_A "\"}", 0) > 0 && HAS("\"ok\":true") && !HAS("\"bound\""));
+    CHECK(vclose("{\"slot\":2,\"token\":\"" TOK_A "\"}", 0) > 0 && fb_nforgot == 2);
+    /* the companion heartbeat (no slot): its state, and whether binds can be done */
+    CHECK(vhb("{\"companion\":true}", 0) > 0 && HAS("\"ok\":true,\"companion\":\"running\",\"bind\":true"));
+    fb_hold = "starting";
+    CHECK(vhb("{\"companion\":true}", 0) > 0 && HAS("\"companion\":\"starting\",\"bind\":false"));
+    fb_hold = "running";
+    CHECK(vhb("{\"companion\":true,\"slot\":2}", 0) > 0 && HAS("bad_request")); /* a slot's hb needs a token */
+    /* the helper stopping while the companion answers: no pad answered as made */
+    fb_stop_in_bind = 1;
+    CHECK(vopen("{\"slot\":4,\"token\":\"" TOK_B "\",\"bind_user\":12288}", 0) > 0 && HAS("\"err\":\"vpad_stopping\""));
+    CHECK(vpad_open_count() == 0);
+    vpad_set_binder(NULL);
+    fresh();
+}
+
 int main(void) {
     vpad_test_no_watchdog(1);
     test_encode();
@@ -579,6 +713,7 @@ int main(void) {
     test_stop();
     test_watchdog_thread();
     test_threads();
+    test_bind();
     if (failures) {
         fprintf(stderr, "vpad selftest: %d failure(s)\n", failures);
         return 1;

@@ -25,6 +25,18 @@ fn rel(p: &Path) -> String {
     }
 }
 
+/// Whether `t` calls the function `name` itself: `name(` not preceded by an identifier
+/// character or a member access, so `vinput_relay_bind(` and `b->bind(` are not a socket `bind(`.
+fn calls(t: &str, name: &str) -> bool {
+    let pat = format!("{name}(");
+    t.match_indices(&pat).any(|(i, _)| {
+        !t[..i]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '>')
+    })
+}
+
 /// Every C/H source of the payload and of the AVA1 library it builds in (except the vendored third
 /// party code).
 fn sources() -> Vec<(PathBuf, String)> {
@@ -70,14 +82,14 @@ fn c_payload_binds_only_9120() {
     }
     // runtime.c opens no socket of its own: no listener, no accept loop.
     let rt = std::fs::read_to_string(payload().join("src/runtime.c")).unwrap();
-    for banned in ["bind(", "listen(", "accept("] {
-        assert!(!rt.contains(banned), "runtime.c still calls {banned}");
+    for banned in ["bind", "listen", "accept"] {
+        assert!(!calls(&rt, banned), "runtime.c still calls {banned}(");
     }
     // The helper's only listener is the AVA1 server; the installer daemon and the SMB daemon
     // (separate processes) have their own.
     let mut binders: Vec<String> = files
         .iter()
-        .filter(|(_, t)| t.contains("bind(") || t.contains("listen("))
+        .filter(|(_, t)| calls(t, "bind") || calls(t, "listen"))
         .map(|(p, _)| rel(p))
         .collect();
     binders.retain(|p| {
@@ -85,6 +97,8 @@ fn c_payload_binds_only_9120() {
             && !p.starts_with("tests/")
             && !p.starts_with("installer/")
             && !p.starts_with("smb/")
+            // Standalone probes (payload/tools/), never part of the helper.
+            && !p.starts_with("tools/")
     });
     // The keyboard & mouse companion (payload/vinput/, a process of its own) listens on the
     // console's loopback only; its loop lives in src/ so the host tests can run it.

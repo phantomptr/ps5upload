@@ -21,9 +21,27 @@
  *   HB      -                            -> rc
  *   CLOSE   -                            -> rc  (everything let go, the devices removed)
  *
+ * Play Together's guest pads (src/vpad.c makes them in the helper; the companion seats them in a
+ * console user with libSceMbus, which must not be called in the helper: payload/vinput/README.md):
+ *
+ *   HELLO's answer also carries u8 mbus (1: sceMbusInit worked at the start, binds can be done).
+ *   HOLD    u8 on                        -> rc, u8 mbus
+ *           (Play Together is open: on keeps the companion from its idle exit)
+ *   BIND    u32 device, u32 user, u32 age_ms
+ *                                        -> rc, i32 sce rc, u32 owner, u8 tries, u32 us
+ *           device: the handle the helper's /dev/hid add just returned, age_ms how long ago (more
+ *           than VWIRE_BIND_MAX_AGE_MS: refused, a bind is only for a pad just made, before the
+ *           console asks "Who's using this controller?"). sceMbusBindDeviceWithUserId, tried every
+ *           millisecond while it answers VWIRE_MBUS_NO_DEVICE (VWIRE_BIND_TRIES at most), then
+ *           the owner read back (sceMbusGetDeviceInfo_). rc OK only when the owner is `user`; the
+ *           pad is then watched: an owner the console changes (someone answered the question
+ *           after all) is put back, VWIRE_KEEP_FIXES times at most.
+ *   FORGET  u32 device                   -> rc  (the pad was removed: no longer watched)
+ *
  * The companion lets go of everything and removes its devices after VWIRE_HB_TIMEOUT_MS with no
  * frame from the helper; it exits when the helper's connection closes, when nobody presented the
- * token within VWIRE_AUTH_WAIT_MS of the start, and after VWIRE_IDLE_EXIT_MS with no device open. */
+ * token within VWIRE_AUTH_WAIT_MS of the start, and after VWIRE_IDLE_EXIT_MS with no device open,
+ * no HOLD on and no pad watched. */
 #ifndef PS5UPLOAD_VINPUT_WIRE_H
 #define PS5UPLOAD_VINPUT_WIRE_H
 
@@ -59,7 +77,17 @@ enum {
     VWIRE_REPORT = 4,
     VWIRE_HB = 5,
     VWIRE_CLOSE = 6,
+    VWIRE_HOLD = 7,
+    VWIRE_BIND = 8,
+    VWIRE_FORGET = 9,
 };
+
+/* BIND (ProsperoSunshine PR #33, src/platform/ps5/profile_seat.c, measured on FW 10.20). */
+#define VWIRE_BIND_MAX_AGE_MS 1000u
+#define VWIRE_BIND_TRIES 30
+#define VWIRE_MBUS_NO_DEVICE 0x809b0005u
+#define VWIRE_KEEP_FIXES 5
+#define VWIRE_WATCH_MAX 8
 
 #define VWIRE_RC_OK 0
 #define VWIRE_RC_UNSUPPORTED (-1) /* = VINPUT_E_UNSUPPORTED */

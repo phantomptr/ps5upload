@@ -103,7 +103,14 @@ describe("engine messages", () => {
       readServerMessage('{"status":{"player":3,"state":"picking_user","rtt_ms":42,"host":"Ann","block_system":true}}'),
     ).toEqual({
       kind: "status",
-      status: { player: 3, state: "picking_user", rttMs: 42, host: "Ann", blockSystem: true, streamSeat: false },
+      status: { player: 3, state: "picking_user", rttMs: 42, host: "Ann", blockSystem: true, streamSeat: false, playsAs: null, seatNote: null },
+    });
+    // Seated in the profile the host chose ("Guests play as"), or told the TV asks instead.
+    expect(readServerMessage('{"status":{"player":2,"state":"playing","plays_as":"Guest 1"}}')).toMatchObject({
+      status: { player: 2, playsAs: "Guest 1", seatNote: null },
+    });
+    expect(readServerMessage('{"status":{"player":3,"state":"picking_user","seat_note":"signed_out","plays_as":null}}')).toMatchObject({
+      status: { playsAs: null, seatNote: "signed_out" },
     });
     // On the host's stream's own controller (#687): playing as the host's PS5 user.
     expect(readServerMessage('{"status":{"player":1,"state":"playing","stream_seat":true}}')).toMatchObject({

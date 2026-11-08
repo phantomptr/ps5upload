@@ -12457,6 +12457,7 @@ fn build_app_and_mcp(
         .route("/api/join/kick", post(join::kick))
         .route("/api/join/playing", post(join::playing))
         .route("/api/join/settings", post(join::set_settings))
+        .route("/api/join/profiles", get(join::profiles))
         .route(
             "/api/ps5/rp/pad-link",
             get(pad_link::get_status).post(pad_link::set_open),

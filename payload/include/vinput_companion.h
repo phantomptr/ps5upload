@@ -5,8 +5,22 @@
 #ifndef PS5UPLOAD_VINPUT_COMPANION_H
 #define PS5UPLOAD_VINPUT_COMPANION_H
 
+#include <stdint.h>
+
 #include "vinput.h"
 #include "vinput_wire.h"
+
+/* libSceMbus, for BIND (on the console src/vinput_mbus.c, in the host tests a fake). */
+typedef struct {
+    /* Once, after dev_init and before the port listens: sceMbusInit. 0 when binds can be done. */
+    int (*init)(void);
+    /* sceMbusBindDeviceWithUserId: the Sony rc. */
+    int (*bind)(uint64_t device, int32_t user);
+    /* sceMbusGetDeviceInfo_'s owner: 0 with *owner (0: none), or the Sony rc. */
+    int (*owner)(uint64_t device, uint32_t *owner);
+    /* Between bind tries (NULL: usleep). */
+    void (*sleep_us)(unsigned us);
+} vcomp_mbus_t;
 
 typedef struct {
     int port;               /* 0: VWIRE_PORT */
@@ -14,6 +28,8 @@ typedef struct {
     const char *pid_path;   /* NULL: VWIRE_PID_PATH; "" writes none */
     long long hb_timeout_ms, idle_exit_ms, auth_wait_ms; /* 0: the VWIRE_* defaults */
     const vinput_backend_t *dev;
+    /* NULL: BIND answers VWIRE_RC_UNSUPPORTED. */
+    const vcomp_mbus_t *mbus;
     /* Before the port listens (after it is bound, so a second instance never gets here). NULL: none. */
     void (*dev_init)(void);
     /* About once a second; 1 when the devices were made again (a new foreground user): whatever
