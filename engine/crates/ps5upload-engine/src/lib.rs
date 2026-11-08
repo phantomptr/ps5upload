@@ -98,6 +98,7 @@ mod queue_api;
 mod remote;
 mod remote_download;
 mod remote_pkg;
+mod rp_diag;
 mod rp_golive;
 mod rp_keyboard;
 mod rp_live_ts;
@@ -4780,6 +4781,8 @@ async fn ps5_power_pair(Json(req): Json<PowerPairReq>) -> impl IntoResponse {
         return missing_console_addr();
     };
     let manual = req.pin.filter(|p| !p.trim().is_empty());
+    let with = if manual.is_some() { "pin" } else { "helper" };
+    let tried_host = host.clone();
     crate::log_info!(
         "power_pair: addr={addr} host={host} with={}",
         if manual.is_some() {
@@ -4808,6 +4811,12 @@ async fn ps5_power_pair(Json(req): Json<PowerPairReq>) -> impl IntoResponse {
     .await
     .map_err(anyhow::Error::from)
     .and_then(|r| r);
+    // Kept for GET /api/ps5/rp/pair/attempts and the log, scrubbed of anything like a PIN or key.
+    rp_diag::pair_attempt(
+        &tried_host,
+        with,
+        r.as_ref().err().map(|e| format!("{e:#}")).as_deref(),
+    );
     match r {
         Ok(p) => (StatusCode::OK, Json(p)).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
@@ -8630,6 +8639,7 @@ async fn remoteplay_readiness_handler(
     Query(q): Query<AddrQuery>,
 ) -> impl IntoResponse {
     let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
+    let seen_addr = addr.clone();
     let r = tokio::task::spawn_blocking(move || {
         ps5upload_core::remoteplay::remoteplay_readiness(&addr)
     })
@@ -8637,7 +8647,11 @@ async fn remoteplay_readiness_handler(
     .map_err(anyhow::Error::from)
     .and_then(|r| r);
     match r {
-        Ok(result) => (StatusCode::OK, Json(result)).into_response(),
+        Ok(result) => {
+            // What the next pairing try's record says about the console (rp_diag.rs).
+            rp_diag::readiness_seen(&seen_addr, &result);
+            (StatusCode::OK, Json(result)).into_response()
+        }
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
@@ -12400,6 +12414,11 @@ fn build_app_and_mcp(
         // Remote Play stream spike (rp_stream_api).
         .route("/api/ps5/rp/ws", get(rp_stream_api::ws))
         .route("/api/ps5/rp/session", get(rp_stream_api::current))
+        .route("/api/ps5/rp/controller", get(rp_stream_api::controller))
+        .route(
+            "/api/ps5/rp/pair/attempts",
+            get(rp_diag::pair_attempts_handler),
+        )
         // Remote Play with no app page (rp_control.rs), this computer only.
         .route("/api/ps5/rp/start", post(rp_stream_api::control::start))
         .route("/api/ps5/rp/stop", post(rp_stream_api::control::stop))

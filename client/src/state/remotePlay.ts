@@ -23,7 +23,8 @@ import {
 } from "../lib/remotePlayStream";
 import type { MotionReading } from "../lib/motion";
 import { gamepadsOf } from "../lib/nativePad";
-import { profileFor } from "../lib/padProfiles";
+import { padKind, profileFor } from "../lib/padProfiles";
+import { describePads, padActive, padFromMessage, type PadInput } from "../lib/padFrom";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { setGameMode } from "../lib/gameMode";
 import { setScreenWakeReason } from "../lib/androidScreenWake";
@@ -339,7 +340,22 @@ function readPad(): PadState {
   };
   // The running game's turbo, mouse aim and macros (Game panel › Controls).
   const now = typeof performance !== "undefined" ? performance.now() : Date.now();
-  return applyControls(merged, controls, rpInput.held, rpControls, now);
+  const out = applyControls(merged, controls, rpInput.held, rpControls, now);
+  // Which inputs fed the pad this session, for the engine's controller check (lib/padFrom.ts).
+  if (padActive(read)) padInputs.add("controller");
+  if (padActive(keys)) padInputs.add("keys");
+  if (padActive(rpInput.touchPad) || rpInput.touch) padInputs.add("touch");
+  if (pt?.click || pt?.touch) padInputs.add("touchpad");
+  if (out !== merged) padInputs.add("controls");
+  return out;
+}
+
+/** The inputs that fed the pad since the stream started (lib/padFrom.ts). */
+const padInputs = new Set<PadInput>();
+
+/** What feeds the pad, read by the stream only when the pad changed. */
+function readPadFrom(): { key: string; value: unknown } {
+  return padFromMessage(padInputs, describePads(rpGamepads(), padKind));
 }
 
 export const useRemotePlayStore = create<RpState>((set, get) => ({
@@ -494,8 +510,10 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
         set({ passcode: ask ? { ...ask, seq: (get().passcode?.seq ?? 0) + 1 } : null });
       },
       readPad,
+      padFrom: readPadFrom,
       gamepads: rpGamepads,
     });
+    padInputs.clear();
     stream.setVolume(prefs.muted ? 0 : prefs.volume);
     set({ stream, target: t, phase: "connecting", error: null, stats: null, light: null, keyboard: null, passcode: null, sessionQuality: quality, pictureHere: pictureHere !== false });
     await stream.start();

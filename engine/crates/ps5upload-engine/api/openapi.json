@@ -36249,6 +36249,36 @@
         }
       }
     },
+    "/api/ps5/rp/controller": {
+      "get": {
+        "description": "`GET /api/ps5/rp/controller` — what Remote Play sends the console's controller: for the running\nsession (or the last one, `running: false`), each controller's last state (`page`: this\ndevice's, which says what feeds it in `from`; `phone N`; `guest`; `automation`) with its\nbuttons by name, L2/R2 0-255 and sticks, the trigger peaks since the session started, and\n`triggers_analog` (false: only 0 or 255 ever came). `sent` is every controller merged, as the\nconsole gets it. No keys, nothing typed.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "remote-play"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      }
+    },
     "/api/ps5/rp/frame": {
       "get": {
         "description": "`GET /api/ps5/rp/frame`.",
@@ -37483,6 +37513,44 @@
           "access": "loopback",
           "response_schema": "websocket",
           "websocket": true
+        }
+      }
+    },
+    "/api/ps5/rp/pair/attempts": {
+      "get": {
+        "description": "`GET /api/ps5/rp/pair/attempts` — the last pairing tries (at most 5, newest last): when, which\nconsole, with the helper or the PS5's PIN, whether it paired, the console's refusal code and\nreason, and what the console last said about its user and Remote Play switch. Never a PIN or\na key.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "attempts": {
+                      "items": {},
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "remote-play"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
         }
       }
     },

@@ -27,7 +27,7 @@ More than 120 tools, all of them thin layers over [the engine's API](API.md):
 | Games | `games_*`, `processes_*`, `saves_*`, `cheats_*` | Installed titles, launch and stop, back up saves, cheats |
 | Hardware | `hw_*`, `power_*`, `notifications_*`, `health_*`, `disk_usage_*`, `cleanup_*`, `shell_run` | Temperatures, rest and wake, health checks and repairs, what fills the drive |
 | Payloads | `payloads_*` | Catalogue, download, updates and rollback, send, store, autoload, Payload Manager sync |
-| Remote Play | `rp_*` | Start and stop a session, see the picture, press buttons, type, answer a passcode |
+| Remote Play | `rp_*` | Start and stop a session, see the picture, press buttons, type, answer a passcode; see what the controller sends and how pairing went |
 | Friends and viewers | `together_*`, `golive_*` | Open Play Together and invite; go live |
 | Everything else | `settings_*`, `devices_list`, `drive_*`, `api_catalog`, `api_describe`, `api_request` | Settings, Mesh Drive, and any route of the API |
 
@@ -316,6 +316,14 @@ until it's back on.
 where its keys live. A console can be paired as several PS5 users (one pairing each): `consoles_list`
 shows their names as `rp_users`, and `rp_start` takes `user` to pick one. Left out, it uses the user
 chosen in the app. `rp_session` says which user a stream signed in.
+
+**Checking the controller and pairing.** `rp_controller` shows what the PS5's controller was last
+sent in the running (or last) session, per controller: buttons, L2/R2 from 0 to 255, sticks, the
+trigger peaks, and `triggers_analog` (false when only 0 or 255 ever came). For the app's own
+controller it also says which controllers it reads and how. Ask the player to half-press L2 and look
+for about 128. `rp_pair_attempts` lists the last 5 pairing tries with the PS5's refusal code and what
+the console last said about its signed-in user and Remote Play switch. Both only read what the engine
+already holds in memory; neither shows a PIN or a key.
 
 **Going live.** `golive_start` needs ffmpeg and a running session. Add destinations and their stream
 keys in the app.
