@@ -2448,6 +2448,7 @@ pub async fn exfat_build(
 
 /// Unpack a game image or a debug-key package into a plain folder; runs as an engine job.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn folder_build(
     source: String,
     output_dir: Option<String>,
