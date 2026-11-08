@@ -3443,6 +3443,17 @@
             "description": "Write the image straight into a `.ffpfsc` container (no uncompressed copy on disk).",
             "type": "boolean"
           },
+          "destination": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageDestinationReq"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where the image goes: `{\"kind\":\"local\"}` (the default: `output_dir` on this computer) or\n`{\"kind\":\"console\",\"addr\":…,\"dir\":…}`: straight into that PS5's folder `dir` over AVA1,\nsent as it is written, so the image is never stored on this computer. The job's `dest` is\nthen the image's path on the PS5, and the read-back runs there. For `.exfat`, `.ffpkg`\nand `.ffpfs` images, and `.exfat` with `ampr_zstd` packs; a `.ffpfsc` (`compress`), LZ4\npacks and edited copies are refused for it."
+          },
           "edits": {
             "description": "Write an edited COPY of the image `source` (#479): its files with these changes, as an\nimage of the same kind (format and compression are the source's; `format`/`compress`\nare ignored), named `<name>-edited` and put next to it unless `name`/`output_dir` say\notherwise. The source image is only read.",
             "items": {
@@ -5718,6 +5729,54 @@
           "region"
         ],
         "type": "object"
+      },
+      "ImageDestinationReq": {
+        "description": "Where an image build puts the image.",
+        "oneOf": [
+          {
+            "description": "This computer: `output_dir`.",
+            "properties": {
+              "kind": {
+                "const": "local"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "console"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "addr": {
+                    "type": "string"
+                  },
+                  "dir": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "addr",
+                  "dir"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "A PS5: `addr` (its address) and `dir` (an absolute folder on it, made when missing). A\ndropped connection goes on where it stopped, and so does the same build started again."
+          }
+        ]
       },
       "ImageEditReq": {
         "description": "One change for an edited copy of an image: `{\"op\":\"delete\",\"path\":…}` removes a file or\nfolder; `{\"op\":\"put\",\"path\":…,\"from\":…}` puts a file (or a folder's contents) from this\ncomputer at `path`, replacing what is there.",

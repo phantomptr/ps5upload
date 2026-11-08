@@ -554,6 +554,55 @@ describe("fpkg pipeline", () => {
     });
   });
 
+  it("writes an image straight to the PS5 when it is saved there, and queues no upload", async () => {
+    const buildImage = vi.fn().mockResolvedValue({ job_id: "i9" });
+    const { fpkg } = await import("../api/fpkg");
+    (fpkg as unknown as { buildImage: unknown }).buildImage = buildImage;
+    jobStatus.mockResolvedValueOnce({ status: "done", dest: "/data/homebrew/G.exfat", bytes_sent: 9 });
+    const plan = { host: "10.0.0.2", volume: "/data", subpath: "homebrew", deleteAfter: false };
+    await useFpkgConversion
+      .getState()
+      .buildImage("/games/G", "/out", false, "exfat", undefined, undefined, undefined, false, { toConsole: plan });
+    await tick();
+    expect(buildImage).toHaveBeenCalledWith(
+      "/games/G",
+      "/out",
+      "exfat",
+      false,
+      undefined,
+      8192,
+      false,
+      undefined,
+      "balanced",
+      false,
+      { add: true, build: "ampr_emu" },
+      { kind: "console", addr: "10.0.0.2", dir: "/data/homebrew" },
+    );
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      phase: "done",
+      packagePath: "/data/homebrew/G.exfat",
+      onConsole: true,
+      uploadQueued: false,
+    });
+  });
+
+  it("sends a PS4 game merged with its update straight to the PS5: the destination, then the update", async () => {
+    const buildImage = vi.fn().mockResolvedValue({ job_id: "i10" });
+    const { fpkg } = await import("../api/fpkg");
+    (fpkg as unknown as { buildImage: unknown }).buildImage = buildImage;
+    jobStatus.mockResolvedValueOnce({ status: "done", dest: "/data/homebrew/G.ffpkg", bytes_sent: 9 });
+    const plan = { host: "10.0.0.2", volume: "/data", subpath: "homebrew", deleteAfter: false };
+    await useFpkgConversion
+      .getState()
+      .buildImage("/games/G.pkg", "/out", false, "ffpkg", undefined, undefined, undefined, false, {
+        toConsole: plan,
+        update: "/games/U.pkg",
+      });
+    await tick();
+    const call = buildImage.mock.calls[0] ?? [];
+    expect(call.slice(-2)).toEqual([{ kind: "console", addr: "10.0.0.2", dir: "/data/homebrew" }, "/games/U.pkg"]);
+  });
+
   it("packs LZ4 assets first when asked, and follows the engine's pack stage", async () => {
     const buildImage = vi.fn().mockResolvedValue({ job_id: "i3" });
     const { fpkg } = await import("../api/fpkg");

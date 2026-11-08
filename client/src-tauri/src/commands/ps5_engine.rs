@@ -2417,6 +2417,8 @@ pub async fn exfat_build(
     ampr_zstd: Option<JsonValue>,
     // Which emulator add_ampr_emu adds: ampr_emu, the default, or ampr-emu-ng.
     ampr_emu_build: Option<String>,
+    // Straight to a PS5: {kind: "console", addr, dir}, passed through; the output folder when absent.
+    destination: Option<JsonValue>,
     // A PS4 update merged into the PS4 game `source`.
     update: Option<String>,
 ) -> Result<JsonValue, String> {
@@ -2440,6 +2442,7 @@ pub async fn exfat_build(
             "add_ampr_emu": add_ampr_emu.unwrap_or(true),
             "ampr_zstd": ampr_zstd,
             "ampr_emu_build": ampr_emu_build,
+            "destination": destination,
             "update": update,
         }),
     )

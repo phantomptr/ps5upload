@@ -193,6 +193,52 @@ describe("RunCard", () => {
       expect(button(out, "Add this game to the queue")?.disabled).toBe(false);
     });
 
+    it("saves an image to this computer or straight to the PS5", () => {
+      const img = { make: "image" as const, onSaveTo: noop };
+      expect(options(idle(img, { canImage: true }), "Save to")).toEqual([
+        "This computer",
+        "The PS5, straight (nothing stored here)",
+      ]);
+      // A package has no such choice.
+      expect(idle({ onSaveTo: noop })).not.toContain("Save to");
+      const toPs5 = idle({ ...img, saveTo: "ps5" }, { canImage: true });
+      expect(toPs5).not.toContain("After converting");
+      expect(toPs5).toContain("goes on where it stopped");
+      expect(button(toPs5, "Make game image")?.disabled).toBe(false);
+      // An image that can't stream there says why and runs nothing.
+      const refused = idle({ ...img, saveTo: "ps5", ps5Refusal: "Save this one to this computer." }, { canImage: true });
+      expect(refused).toContain("Save this one to this computer.");
+      expect(button(refused, "Make game image")?.disabled).toBe(true);
+      // Nor with no console to send to.
+      const noPs5 = idle({ ...img, saveTo: "ps5", canInstall: false }, { canImage: true });
+      expect(button(noPs5, "Make game image")?.disabled).toBe(true);
+    });
+
+    it("says a finished image is on the PS5, with nothing to upload", () => {
+      const out = html(
+        {
+          phase: "done",
+          mode: "image",
+          source: "/g",
+          host: "10.0.0.2",
+          packagePath: "/data/homebrew/G.exfat",
+          packageBytes: 9,
+          convertMs: 1,
+          installMs: 0,
+          stageMs: {},
+          deleted: false,
+          titleId: null,
+          onConsole: true,
+        },
+        { canInstall: true },
+        { onUploadImage: noop },
+      );
+      expect(out).toContain("written straight to the PS5");
+      expect(out).toContain("/data/homebrew/G.exfat");
+      expect(button(out, "Upload to PS5")).toBeNull();
+      expect(button(out, "Show in folder")).toBeNull();
+    });
+
     it("names the action after the choice", () => {
       expect(button(idle({}), "Convert only")).not.toBeNull();
       expect(button(idle({ then: "stream" }), "Convert & install")).not.toBeNull();

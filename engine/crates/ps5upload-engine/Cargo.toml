@@ -108,6 +108,8 @@ trash = "5.2"
 ps5upload-core = { path = "../ps5upload-core", features = ["mdns"] }
 
 [dev-dependencies]
+# Drops the loopback receiver's connections mid-stream: a convert-to-console resume test.
+ava1-chaos.workspace = true
 # Requests through the real router in the tests (`ServiceExt::oneshot`). Already in the tree through axum.
 tower = { version = "0.5", default-features = false, features = ["util"] }
 # Writes the tiny archives the no-helper tests plan against (the decode side is ps5upload-core's).
