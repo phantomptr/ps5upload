@@ -1736,3 +1736,33 @@ code {
     padding-inline: 14px;
   }
 }
+
+/* ── Tailscale (12.0) ───────────────────────────────────────────────────── */
+.tailscale {
+  position: relative;
+  border-top: 1px solid var(--line);
+}
+.tailscale .together-more {
+  margin-top: 56px;
+}
+.together-tab {
+  margin-top: 56px;
+}
+/* The status bar's "via Tailscale" chip, close up: as tall as the bar's own line. */
+.ts-chip {
+  margin: 14px 0 0;
+}
+.ts-chip img {
+  display: block;
+  width: auto;
+  height: 39px;
+  max-width: 100%;
+  object-fit: contain;
+  object-position: left center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+}
+[dir="rtl"] .ts-chip img {
+  object-position: right center;
+}
