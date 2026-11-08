@@ -221,6 +221,8 @@ payload/ps5upload.elf.gz
 payload/smb/ps5upload-smb.elf
 payload/smb/build/
 payload/vinput/ps5u-vinput.elf
+# A standalone hardware probe (payload/tools/mbus-probe/README.md), sent by hand.
+payload/tools/mbus-probe/ps5u-mbusprobe.elf
 
 # ─── Personal scratch + notes ───────────────────────────────────────────
 # Anything in /scratch or /notes-local that a dev wants to keep
