@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const renderToStaticMarkup = (el: ReactElement) => ssr(<MemoryRouter>{el}</MemoryRouter>);
 
 import { installWindowStub } from "../../test-utils/storage";
-import { PadAsks, padInternet, PhonePadsPanel, readPadLink, watchUrl } from "./PhonePads";
+import { allowTap, askText, PadAsks, padInternet, PhonePadsPanel, playsAsHost, readPadLink, watchUrl } from "./PhonePads";
 
 // The phone link over the internet (pad_link.rs status, POST /api/ps5/rp/pad-link/internet),
 // field for field as the engine says it.
@@ -148,7 +148,7 @@ describe("the panel's network choice", () => {
     expect(out).toContain('data-testid="rp-pad-pending"');
     expect(out.match(/data-testid="rp-pad-pending-allow"/g)).toHaveLength(2);
     expect(out).toContain("Pixel wants to watch · Internet");
-    expect(out).toContain("Android phone wants to be a controller · Internet");
+    expect(out).toContain("Android phone wants to control your PS5 as you: your profile, saves and trophies");
     expect(out.match(/data-testid="rp-pad-net-peer"/g)).toHaveLength(1);
     expect(out).toContain('data-testid="rp-pad-net-failed"');
     expect(out).toContain("Couldn&#x27;t connect from their network");
@@ -165,6 +165,27 @@ describe("the panel's network choice", () => {
     expect(out).toContain('data-testid="rp-pad-ask"');
     expect(out).toContain("Pixel wants to watch · Internet");
     expect(out).toContain('data-testid="rp-pad-allow"');
+  });
+
+  it("an internet phone that would play says it plays as the host, and Allow takes two taps", () => {
+    installWindowStub();
+    const tr = ((_k: string, _v: unknown, fallback: string) => fallback) as Parameters<typeof askText>[0];
+    const net = { id: 8, name: "Pixel", via: "internet" as const };
+    const watcher = { id: 7, name: "Pixel", via: "internet" as const, watch: true };
+    const lan = { id: 9, name: "Pixel" };
+    expect(playsAsHost(net)).toBe(true);
+    expect(askText(tr, net)).toBe("Pixel wants to control your PS5 as you: your profile, saves and trophies");
+    expect(allowTap(net, false)).toBe("arm");
+    expect(allowTap(net, true)).toBe("allow");
+    // A watcher from afar and a phone on the LAN are allowed in one tap, as before.
+    expect(playsAsHost(watcher) || playsAsHost(lan)).toBe(false);
+    expect(allowTap(watcher, false)).toBe("allow");
+    expect(allowTap(lan, false)).toBe("allow");
+    expect(askText(tr, lan)).toBe("Pixel wants to be a controller");
+    const out = renderToStaticMarkup(<PadAsks pending={[net]} />);
+    expect(out).toContain("wants to control your PS5 as you");
+    expect(out).toContain('data-testid="rp-pad-allow"');
+    expect(out).not.toContain("data-armed");
   });
 
   it("phones from the internet are marked, and a watcher there is never handed the controller", () => {

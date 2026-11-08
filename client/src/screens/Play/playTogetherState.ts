@@ -503,6 +503,23 @@ export const joinApi = {
   },
 };
 
+/** Sets one guest player's profile (`withSeat`). When the PS5 can't say which profile is the host's
+ *  own (`owner_unknown`), the chosen one may be: `ask` puts the same question as for the host's own,
+ *  and a yes saves it as confirmed (`owner`). A no changes nothing (`cancelled`). */
+export async function saveSeat(
+  addr: string,
+  seats: SeatProfile[],
+  player: number,
+  user: ConsoleProfile | null,
+  owner: boolean,
+  ask: () => Promise<boolean>,
+): Promise<{ error: string | null }> {
+  const r = await joinApi.seats(addr, withSeat(seats, player, user, owner));
+  if (r.error !== "owner_unknown" || !user || owner) return r;
+  if (!(await ask())) return { error: "cancelled" };
+  return joinApi.seats(addr, withSeat(seats, player, user, true));
+}
+
 /** The engine's Play Together state for a console: every second while it is open (the delays
  *  and asks are live), every 4 s otherwise. */
 export function useJoinHost(on: boolean, addr: string | null): [JoinHostState, (s: JoinHostState) => void] {

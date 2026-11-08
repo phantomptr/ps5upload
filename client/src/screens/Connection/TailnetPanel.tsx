@@ -13,6 +13,7 @@ import {
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { QrCode } from "../Play/PhonePads";
 import { humanizeCaught } from "../../lib/humanizeError";
+import { TailnetProblems } from "./TailnetProblems";
 
 /**
  * "Put this PS5 on Tailscale": the console joins the user's tailnet through the helper and
@@ -185,6 +186,7 @@ export default function TailnetPanel({ host }: { host: string }) {
               {tr("tn_connecting", undefined, "Connecting to Tailscale…")}
             </p>
           )}
+          <TailnetProblems st={st} testId="tailnet-problems" />
           {expiryDays(st.key_expiry) !== null ? (
             <p className="text-xs text-[var(--color-warn)]" data-testid="tailnet-expiry">
               {tr(

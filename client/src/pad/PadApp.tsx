@@ -143,6 +143,7 @@ export function PadApp({
   watch = false,
   transport,
   hello,
+  onReconnectToken,
 }: {
   url: string;
   /** The computer's name for the page's words; null (an internet link): "the computer". */
@@ -154,6 +155,8 @@ export function PadApp({
    *  LAN WebSocket, and the hello it opens with (padClient). */
   transport?: typeof WebSocket;
   hello?: Record<string, string | number>;
+  /** An internet link: the engine's reconnect token, to keep for this link. */
+  onReconnectToken?: (rt: string) => void;
 }) {
   const tr = useTr();
   const computer = computerName ?? tr("pad_net_computer", undefined, "the computer");
@@ -205,6 +208,7 @@ export function PadApp({
       url,
       WebSocketImpl: transport,
       hello,
+      onReconnectToken,
       onStage: setStage,
       touchPad: () => rpInput.touchPad,
       onLight: setLight,

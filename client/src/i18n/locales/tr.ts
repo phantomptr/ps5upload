@@ -8273,6 +8273,21 @@ rp_users_add_hint: "Başka bir kullanıcıyla da oynamak için PS5'te o kullanı
 "rp_watch_net_how": "Bu bağlantıya sahip herkes yayını her yerden telefonunda, tabletinde veya bilgisayarında izleyebilir (en fazla dört kişi). İnternet üzerinden yalnızca izlerler: kumanda onlara verilemez.",
 "rp_watch_ask": "{name} izlemek istiyor",
 "rp_phone_net_phone": "İnternetten bir telefon",
+"rp_phone_ask_net_owner": "{name}, PS5'ini senin adına kontrol etmek istiyor: profilin, kayıtların ve kupaların",
+"rp_phone_allow_as_me": "Evet, benim adıma oynasın",
+"pt_set_owner_unknown_body": "PS5 hangi profilin senin olduğunu söylemedi. Bu senin profilinse, onunla oynayan bir arkadaş kayıtlarını ve kupalarını kullanabilir.",
+"tn_err_signed_out": "Tailnet oturumu kapandı: anahtarın süresi doldu ya da cihaz kaldırıldı. Çıkış yap, sonra yeniden giriş yap.",
+"tn_err_unreachable": "Tailscale sunucusuna ulaşılamıyor. İnternet bağlantısını kontrol et; denemeye devam ediyor.",
+"tn_err_refused": "Tailscale girişi reddetti.",
+"tn_err_refused_why": "Tailscale girişi reddetti: {why}",
+"tn_warn_expired": "Tailscale anahtarının süresi doldu. Çıkış yap, sonra yeniden giriş yap.",
+"tn_warn_expiring": "Tailscale anahtarının süresi yakında doluyor. Yenilemek için çıkış yapıp yeniden giriş yap.",
+"tn_slow": "Bir dakika sonra hâlâ bağlanmadı. Girişi bitirdiysen tailnet yöneticinin cihazı onayladığını kontrol et ya da Tailscale'i kapatıp yeniden aç.",
+"cw_tile_why_not_listed": "PS5 onu ana ekranda listelemedi",
+"cw_tile_why_write_failed": "dosyaları PS5'e yazılamadı",
+"cw_tile_why_removal": "kaldırma işlemi tamamlanmadı",
+"cw_tile_why_register": "PS5 yüklemeyi reddetti",
+"cw_tile_why_other": "PS5 reddetti",
 };
 
 export default tr;

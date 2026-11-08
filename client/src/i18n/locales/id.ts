@@ -8275,6 +8275,21 @@ rp_users_add_hint: "Untuk bermain juga sebagai pengguna lain, masuk ke pengguna 
 "rp_watch_net_how": "Siapa pun yang punya tautan ini bisa menonton stream dari mana saja, di ponsel, tablet, atau komputer (hingga empat). Lewat internet mereka hanya menonton: kontroler tidak bisa diserahkan kepada mereka.",
 "rp_watch_ask": "{name} ingin menonton",
 "rp_phone_net_phone": "Ponsel lewat internet",
+"rp_phone_ask_net_owner": "{name} ingin mengontrol PS5 kamu sebagai kamu: profil, simpanan, dan trofi kamu",
+"rp_phone_allow_as_me": "Ya, main sebagai saya",
+"pt_set_owner_unknown_body": "PS5 tidak menyebutkan profil mana yang milikmu. Jika ini profilmu sendiri, teman yang bermain dengannya bisa memakai simpanan dan trofimu.",
+"tn_err_signed_out": "Keluar dari tailnet: kuncinya kedaluwarsa atau perangkat dihapus. Keluar, lalu masuk lagi.",
+"tn_err_unreachable": "Server Tailscale tidak dapat dijangkau. Periksa koneksi internet; terus dicoba.",
+"tn_err_refused": "Tailscale menolak proses masuk.",
+"tn_err_refused_why": "Tailscale menolak proses masuk: {why}",
+"tn_warn_expired": "Kunci Tailscale sudah kedaluwarsa. Keluar, lalu masuk lagi.",
+"tn_warn_expiring": "Kunci Tailscale segera kedaluwarsa. Keluar lalu masuk lagi untuk memperbaruinya.",
+"tn_slow": "Masih belum terhubung setelah satu menit. Jika kamu sudah selesai masuk, pastikan admin tailnet menyetujui perangkat, atau matikan lalu nyalakan lagi Tailscale.",
+"cw_tile_why_not_listed": "PS5 tidak menampilkannya di layar beranda",
+"cw_tile_why_write_failed": "berkasnya tidak bisa ditulis ke PS5",
+"cw_tile_why_removal": "penghapusannya tidak selesai",
+"cw_tile_why_register": "PS5 menolak memasangnya",
+"cw_tile_why_other": "PS5 menolaknya",
 };
 
 export default id;

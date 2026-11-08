@@ -53,6 +53,9 @@ export interface PadClientOptions {
   /** An internet link (the website's copy of this page): the first message on each new socket,
    *  `{"hello": …}`, carrying what the LAN socket's address has (`t`, `name`, `d`, `w`). */
   hello?: Record<string, string | number>;
+  /** The engine allowed this internet phone and gave it a reconnect token (`rt`, added to `hello`
+   *  for every later socket): the page keeps it for this link's room. */
+  onReconnectToken?: (rt: string) => void;
   /** The socket class: the LAN WebSocket (default), or an internet link's WebRTC transport
    *  (join/rtcTransport, a "pad" channel), whose failures close as `net:<why>`. Tests: a fake. */
   WebSocketImpl?: typeof WebSocket;
@@ -196,6 +199,20 @@ export class PadClient {
     if (typeof data !== "string") {
       if (data instanceof ArrayBuffer) this.o.watch?.onFrame(data);
       return;
+    }
+    if (this.o.hello && data.startsWith('{"rt":')) {
+      // Allowed over the internet: the engine's own token for coming back after a drop without
+      // asking again. Every later socket's hello carries it; the page keeps it for this link.
+      try {
+        const v = JSON.parse(data) as { rt?: unknown };
+        if (typeof v.rt === "string" && /^[0-9a-f]{32}$/.test(v.rt)) {
+          this.o.hello.rt = v.rt;
+          this.o.onReconnectToken?.(v.rt);
+          return;
+        }
+      } catch {
+        // Not JSON: not for us.
+      }
     }
     if (data.includes('"kbm_caps"')) {
       try {

@@ -8219,6 +8219,21 @@ rp_users_add_hint: "Para jugar también como otro usuario, inicia sesión con es
 "rp_watch_net_how": "Cualquiera con este enlace puede ver la transmisión desde cualquier lugar, en su móvil, tableta u ordenador (hasta cuatro). Por internet solo miran: no se les puede pasar el mando.",
 "rp_watch_ask": "{name} quiere mirar",
 "rp_phone_net_phone": "Un teléfono por internet",
+"rp_phone_ask_net_owner": "{name} quiere controlar tu PS5 como tú: tu perfil, tus partidas guardadas y trofeos",
+"rp_phone_allow_as_me": "Sí, jugar como yo",
+"pt_set_owner_unknown_body": "La PS5 no indicó cuál es tu perfil. Si este es tu propio perfil, un amigo que juegue con él podrá usar tus partidas guardadas y trofeos.",
+"tn_err_signed_out": "Sesión cerrada en la tailnet: su clave caducó o se quitó el dispositivo. Cierra sesión y vuelve a iniciarla.",
+"tn_err_unreachable": "No se puede contactar con el servidor de Tailscale. Comprueba la conexión a internet; se sigue intentando.",
+"tn_err_refused": "Tailscale rechazó el inicio de sesión.",
+"tn_err_refused_why": "Tailscale rechazó el inicio de sesión: {why}",
+"tn_warn_expired": "La clave de Tailscale caducó. Cierra sesión y vuelve a iniciarla.",
+"tn_warn_expiring": "La clave de Tailscale caduca pronto. Cierra sesión y vuelve a iniciarla para renovarla.",
+"tn_slow": "Sigue sin conectar tras un minuto. Si ya iniciaste sesión, comprueba que el administrador de tu tailnet aprobó el dispositivo, o apaga y vuelve a encender Tailscale.",
+"cw_tile_why_not_listed": "la PS5 no la mostró en la pantalla de inicio",
+"cw_tile_why_write_failed": "no se pudieron escribir sus archivos en la PS5",
+"cw_tile_why_removal": "no se terminó de quitar",
+"cw_tile_why_register": "la PS5 rechazó instalarla",
+"cw_tile_why_other": "la PS5 lo rechazó",
 };
 
 export default es;

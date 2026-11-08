@@ -5,7 +5,8 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 
 import { TailscaleSettings } from "./TailscaleSettings";
-import { appTailnetOp, appTailnetStatus, tailnetVia } from "../../api/tailnet";
+import { appTailnetOp, appTailnetStatus, tailnetProblems, TAILNET_SLOW_MS, tailnetVia } from "../../api/tailnet";
+import { TailnetProblems } from "../Connection/TailnetProblems";
 
 function answer(status: number, body: unknown) {
   return vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify(body), { status }));
@@ -37,5 +38,37 @@ describe("Settings › Tailscale (this device's own node)", () => {
     const html = renderToStaticMarkup(<TailscaleSettings />);
     expect(html).toContain("Sign in to Tailscale");
     expect(html).toContain("no Tailscale app needed");
+  });
+
+  it("says what is wrong in words instead of spinning on Connecting", () => {
+    const keys = (st: Parameters<typeof tailnetProblems>[0], ms = 0) => tailnetProblems(st, ms).map((p) => p.key);
+    // a refused sign-in: the server's own words, or plain ones
+    expect(tailnetProblems({ state: "backoff", error: "invalid key: unable to validate API key" }, 0)).toEqual([
+      { key: "tn_err_refused_why", fallback: "Tailscale refused the sign-in: {why}", vars: { why: "invalid key: unable to validate API key" }, bad: true },
+    ]);
+    expect(keys({ state: "backoff", error: "control refused registration" })).toEqual(["tn_err_refused"]);
+    // out of reach, signed out
+    expect(keys({ state: "backoff", error: "connection error" })).toEqual(["tn_err_unreachable"]);
+    expect(keys({ state: "connecting", error: "DNS lookup failed" })).toEqual(["tn_err_unreachable"]);
+    expect(keys({ state: "signed-out", error: "signed out at control" })).toEqual(["tn_err_signed_out"]);
+    // the key: expired, or expiring beyond what key_expiry says in days
+    expect(keys({ state: "running", warning: "this device's Tailscale key has expired; sign in again" })).toEqual(["tn_warn_expired"]);
+    expect(keys({ state: "running", warning: "this device's Tailscale key expires in 5 hours" })).toEqual(["tn_warn_expiring"]);
+    const soon = Date.now() / 1000 + 3 * 86400;
+    expect(keys({ state: "running", warning: "expires in 3 days", key_expiry: soon })).toEqual([]);
+    // an old error once running says nothing
+    expect(keys({ state: "running", error: "connection error" })).toEqual([]);
+    // a sign-in that stays pending
+    expect(keys({ state: "needs-login" }, TAILNET_SLOW_MS - 1)).toEqual([]);
+    expect(keys({ state: "needs-login" }, TAILNET_SLOW_MS)).toEqual(["tn_slow"]);
+    expect(keys({ state: "connecting" }, TAILNET_SLOW_MS * 2)).toEqual(["tn_slow"]);
+    expect(keys({ state: "connecting", error: "timeout" }, TAILNET_SLOW_MS)).toEqual(["tn_err_unreachable"]);
+  });
+
+  it("shows the problem on the page, and nothing when all is well", () => {
+    const html = renderToStaticMarkup(<TailnetProblems st={{ state: "backoff", error: "control refused registration" }} testId="p" />);
+    expect(html).toContain('data-testid="p"');
+    expect(html).toContain("Tailscale refused the sign-in.");
+    expect(renderToStaticMarkup(<TailnetProblems st={{ state: "running" }} testId="p" />)).toBe("");
   });
 });

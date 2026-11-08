@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import de from "../locales/de.json";
 import { _setStringsLoaderForTests, chooseLanguage, getLanguage, storedLanguage, stringsReady, t } from "../strings";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
-import { canTurnOff, lanToggleStep, SettingsView, startSection, TurnedOff, tileNote, waitTileApplied, type SettingsViewProps, type WebSettings } from "./Settings";
+import { canTurnOff, lanToggleStep, SettingsView, startSection, TurnedOff, tileNote, tileWhy, waitTileApplied, type SettingsViewProps, type WebSettings } from "./Settings";
 
 function elements(node: ReactNode): ReactElement<Record<string, unknown>>[] {
   const out: ReactElement<Record<string, unknown>>[] = [];
@@ -135,11 +135,27 @@ describe("settings", () => {
     expect(tileNote(at({}))).toBeUndefined();
   });
 
+  it("tile_errors_are_words_not_codes", () => {
+    // The helper's codes, in the page's language (never the raw code).
+    for (const [code, key] of [
+      ["not_listed", "cw_tile_why_not_listed"],
+      ["write_failed", "cw_tile_why_write_failed"],
+      ["removal_incomplete", "cw_tile_why_removal"],
+      ["register_install_api_error", "cw_tile_why_register"],
+      ["register_drm_patch_oom", "cw_tile_why_register"],
+      ["failed", "cw_tile_why_other"],
+      ["something_new", "cw_tile_why_other"],
+    ] as const) {
+      expect(tileWhy(code)).toBe(t(key));
+      expect(tileWhy(code)).not.toContain("_");
+    }
+  });
+
   it("tile_note_says_why_the_tile_could_not_be_added", () => {
     const at = (over: Partial<WebSettings>): WebSettings => ({ lan: false, tile: true, version: "11.6.1", ...over });
     // Also at helper start, before anyone touched the switch: the reason the helper gave.
     expect(tileNote(at({ tile_failed: true, tile_result: "failed", tile_error: "not_listed" }))).toBe(
-      t("cw_settings_tile_failed_reason", { reason: "not_listed" }),
+      t("cw_settings_tile_failed_reason", { reason: t("cw_tile_why_not_listed") }),
     );
     expect(t("cw_settings_tile_failed_reason", { reason: "not_listed" })).toContain("not_listed");
     // Still being applied, no reason (an older helper), or working: no note.

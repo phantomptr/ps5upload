@@ -5,7 +5,7 @@ import { useConfirm } from "../../components/ConfirmDialog";
 import { useTr } from "../../state/lang";
 import {
   joinApi,
-  withSeat,
+  saveSeat,
   type ConsoleProfile,
   type ProfilesState,
 } from "../Play/playTogetherState";
@@ -73,7 +73,23 @@ export function PlayTogetherGuestProfiles({ host }: { host: string }) {
       if (!owner) return;
     }
     setBusy(true);
-    const r = await joinApi.seats(host, withSeat(state.seats, player, user, owner));
+    // When the PS5 doesn't say which profile is the host's, this one may be: the same question.
+    const r = await saveSeat(host, state.seats, player, user, owner, () =>
+      confirm({
+        title: tr("pt_set_owner_title", { name: user?.name ?? "" }, `Let a friend play as ${user?.name ?? ""}?`),
+        message: tr(
+          "pt_set_owner_unknown_body",
+          undefined,
+          "The PS5 didn't say which profile is yours. If this is your own profile, a friend playing as it can use your saves and trophies.",
+        ),
+        confirmLabel: tr("pt_set_owner_yes", undefined, "Let them"),
+        destructive: true,
+      }),
+    );
+    if (r.error === "cancelled") {
+      setBusy(false);
+      return;
+    }
     setWhy(r.error);
     await load();
     setBusy(false);

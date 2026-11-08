@@ -8225,6 +8225,21 @@ rp_users_add_hint: "若也想以其他用户游玩，请在 PS5 上登录该用�
 "rp_watch_net_how": "任何拿到此链接的人都可以在任何地方用手机、平板或电脑观看直播(最多四人)。通过互联网只能观看,无法把手柄交给他们。",
 "rp_watch_ask": "{name} 想观看",
 "rp_phone_net_phone": "互联网上的手机",
+"rp_phone_ask_net_owner": "{name} 想以你的身份控制你的 PS5：你的个人资料、存档和奖杯",
+"rp_phone_allow_as_me": "是，以我的身份玩",
+"pt_set_owner_unknown_body": "PS5 没有说明哪个个人资料是你的。如果这是你自己的个人资料，用它游玩的好友可以使用你的存档和奖杯。",
+"tn_err_signed_out": "已从 tailnet 退出：密钥已过期或设备已被移除。请退出后重新登录。",
+"tn_err_unreachable": "无法连接 Tailscale 服务器。请检查网络连接；会继续重试。",
+"tn_err_refused": "Tailscale 拒绝了登录。",
+"tn_err_refused_why": "Tailscale 拒绝了登录：{why}",
+"tn_warn_expired": "Tailscale 密钥已过期。请退出后重新登录。",
+"tn_warn_expiring": "Tailscale 密钥即将过期。请退出后重新登录以续期。",
+"tn_slow": "一分钟后仍未连接。如果你已完成登录，请检查 tailnet 管理员是否已批准该设备，或关闭后重新打开 Tailscale。",
+"cw_tile_why_not_listed": "PS5 没有在主屏幕上列出它",
+"cw_tile_why_write_failed": "无法在 PS5 上写入它的文件",
+"cw_tile_why_removal": "移除没有完成",
+"cw_tile_why_register": "PS5 拒绝安装它",
+"cw_tile_why_other": "PS5 拒绝了",
 };
 
 export default zh_CN;

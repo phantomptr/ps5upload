@@ -8282,6 +8282,21 @@ rp_users_add_hint: "Pour jouer aussi avec un autre utilisateur, connectez-vous �
 "rp_watch_net_how": "Toute personne ayant ce lien peut regarder le stream de n'importe où, sur téléphone, tablette ou ordinateur (jusqu'à quatre). Par Internet, elle regarde seulement : la manette ne peut pas lui être confiée.",
 "rp_watch_ask": "{name} veut regarder",
 "rp_phone_net_phone": "Un téléphone sur Internet",
+"rp_phone_ask_net_owner": "{name} veut contrôler ta PS5 en ton nom : ton profil, tes sauvegardes et tes trophées",
+"rp_phone_allow_as_me": "Oui, jouer en mon nom",
+"pt_set_owner_unknown_body": "La PS5 n'a pas indiqué quel profil est le tien. Si c'est ton propre profil, un ami qui joue avec pourra utiliser tes sauvegardes et tes trophées.",
+"tn_err_signed_out": "Déconnecté du tailnet : sa clé a expiré ou l'appareil a été retiré. Déconnecte-toi, puis reconnecte-toi.",
+"tn_err_unreachable": "Impossible de joindre le serveur Tailscale. Vérifie la connexion internet ; il réessaie.",
+"tn_err_refused": "Tailscale a refusé la connexion.",
+"tn_err_refused_why": "Tailscale a refusé la connexion : {why}",
+"tn_warn_expired": "La clé Tailscale a expiré. Déconnecte-toi, puis reconnecte-toi.",
+"tn_warn_expiring": "La clé Tailscale expire bientôt. Déconnecte-toi, puis reconnecte-toi pour la renouveler.",
+"tn_slow": "Toujours pas connecté après une minute. Si tu as fini de te connecter, vérifie que l'admin de ton tailnet a approuvé l'appareil, ou désactive puis réactive Tailscale.",
+"cw_tile_why_not_listed": "la PS5 ne l'a pas affichée sur l'écran d'accueil",
+"cw_tile_why_write_failed": "ses fichiers n'ont pas pu être écrits sur la PS5",
+"cw_tile_why_removal": "la suppression ne s'est pas terminée",
+"cw_tile_why_register": "la PS5 a refusé de l'installer",
+"cw_tile_why_other": "la PS5 l'a refusé",
 };
 
 export default fr;

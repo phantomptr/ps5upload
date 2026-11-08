@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import qrcode from "qrcode-generator";
 import { Check, Copy, RefreshCw, Smartphone, X } from "lucide-react";
 
@@ -480,9 +480,13 @@ export function PhonePadsPanel({
           {link.pending.map((p) => (
             <li key={p.id} className="flex flex-wrap items-center gap-2 text-sm">
               <span className="min-w-0 flex-1 truncate">{askText(tr, p)}</span>
-              <Button size="sm" variant="primary" onClick={() => void decidePad(p.id, true)} data-testid="rp-pad-pending-allow">
-                {tr("rp_phone_allow", undefined, "Allow")}
-              </Button>
+              <AllowPad p={p}>
+                {(label, onClick, armed) => (
+                  <Button size="sm" variant={armed ? "danger" : "primary"} onClick={onClick} data-testid="rp-pad-pending-allow" data-armed={armed || undefined}>
+                    {label}
+                  </Button>
+                )}
+              </AllowPad>
               <Button size="sm" variant="ghost" onClick={() => void decidePad(p.id, false)}>
                 {tr("rp_phone_deny", undefined, "No")}
               </Button>
@@ -575,9 +579,54 @@ export function PhonePadsPanel({
   );
 }
 
-/** What a phone asking wants, in words: to play or to watch, and "· Internet" from afar. */
+/** A phone asking to be a controller over the internet. Every phone plays on the stream's own
+ *  controller (Player 1), signed in as this console's own profile: one Allow hands someone the host's
+ *  profile, saves and trophies. A LAN QR phone is the host's own and asks nothing of the kind. */
+export function playsAsHost(p: PadLinkState["pending"][number]): boolean {
+  return p.via === "internet" && !p.watch;
+}
+
+/** What a tap on Allow does: arm it first for a phone that would play as the host, else allow. */
+export function allowTap(p: PadLinkState["pending"][number], armed: boolean): "arm" | "allow" {
+  return playsAsHost(p) && !armed ? "arm" : "allow";
+}
+
+/** Allow, made deliberate for a phone that would play as the host ([`playsAsHost`]): the first tap
+ *  only arms it ("Yes, play as me"), the second allows. Any other phone: one tap, as before. */
+export function AllowPad({
+  p,
+  children,
+}: {
+  p: PadLinkState["pending"][number];
+  children: (label: string, onClick: () => void, armed: boolean) => ReactNode;
+}) {
+  const tr = useTr();
+  const [armedId, setArmedId] = useState<number | null>(null);
+  const armed = armedId === p.id;
+  const onClick = () => {
+    if (allowTap(p, armed) === "arm") {
+      setArmedId(p.id);
+      return;
+    }
+    void decidePad(p.id, true);
+  };
+  const label = armed
+    ? tr("rp_phone_allow_as_me", undefined, "Yes, play as me")
+    : tr("rp_phone_allow", undefined, "Allow");
+  return <>{children(label, onClick, armed)}</>;
+}
+
+/** What a phone asking wants, in words: to play or to watch, and "· Internet" from afar. A phone
+ *  over the internet that would play is told as what it is: control of the PS5 as the host. */
 export function askText(tr: ReturnType<typeof useTr>, p: PadLinkState["pending"][number]): string {
   const name = phoneName(tr, p.name);
+  if (playsAsHost(p)) {
+    return tr(
+      "rp_phone_ask_net_owner",
+      { name },
+      `${name} wants to control your PS5 as you: your profile, saves and trophies`,
+    );
+  }
   const what = p.watch
     ? tr("rp_watch_ask", { name }, `${name} wants to watch`)
     : tr("rp_phone_ask", { name }, `${name} wants to be a controller`);
@@ -600,14 +649,19 @@ export function PadAsks({ pending }: { pending: PadLinkState["pending"] }) {
     >
       <Smartphone size={14} />
       <span>{askText(tr, p)}</span>
-      <button
-        type="button"
-        className="rounded-full bg-white px-3 py-1 text-xs font-medium text-black"
-        onClick={() => void decidePad(p.id, true)}
-        data-testid="rp-pad-allow"
-      >
-        {tr("rp_phone_allow", undefined, "Allow")}
-      </button>
+      <AllowPad p={p}>
+        {(label, onClick, armed) => (
+          <button
+            type="button"
+            className={`rounded-full px-3 py-1 text-xs font-medium ${armed ? "bg-[var(--color-bad)] text-white" : "bg-white text-black"}`}
+            onClick={onClick}
+            data-testid="rp-pad-allow"
+            data-armed={armed || undefined}
+          >
+            {label}
+          </button>
+        )}
+      </AllowPad>
       <button
         type="button"
         className="rounded-full bg-white/15 px-3 py-1 text-xs"

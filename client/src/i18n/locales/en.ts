@@ -8571,6 +8571,21 @@ rp_users_add_hint: "To play as another user too, sign in to that user on the PS5
 "rp_watch_net_how": "Anyone with this link can watch the stream from anywhere, on their phone, tablet or computer (up to four). Over the internet they only watch: they can't be handed the controller.",
 "rp_watch_ask": "{name} wants to watch",
 "rp_phone_net_phone": "A phone on the internet",
+"rp_phone_ask_net_owner": "{name} wants to control your PS5 as you: your profile, saves and trophies",
+"rp_phone_allow_as_me": "Yes, play as me",
+"pt_set_owner_unknown_body": "The PS5 didn't say which profile is yours. If this is your own profile, a friend playing as it can use your saves and trophies.",
+"tn_err_signed_out": "Signed out of the tailnet: its key expired or the device was removed. Sign out, then sign in again.",
+"tn_err_unreachable": "Can't reach the Tailscale server. Check the internet connection; it keeps trying.",
+"tn_err_refused": "Tailscale refused the sign-in.",
+"tn_err_refused_why": "Tailscale refused the sign-in: {why}",
+"tn_warn_expired": "The Tailscale key has expired. Sign out, then sign in again.",
+"tn_warn_expiring": "The Tailscale key expires soon. Sign out, then sign in again to renew it.",
+"tn_slow": "Still not connected after a minute. If you finished signing in, check that your tailnet admin approved the device, or turn Tailscale off and on again.",
+"cw_tile_why_not_listed": "the PS5 did not list it on the home screen",
+"cw_tile_why_write_failed": "its files could not be written on the PS5",
+"cw_tile_why_removal": "removing it did not finish",
+"cw_tile_why_register": "the PS5 refused to install it",
+"cw_tile_why_other": "the PS5 refused it",
 };
 
 export default en;

@@ -8268,6 +8268,21 @@ rp_users_add_hint: "Để chơi bằng cả người dùng khác, hãy đăng nh
 "rp_watch_net_how": "Bất kỳ ai có liên kết này đều có thể xem luồng từ bất cứ đâu trên điện thoại, máy tính bảng hoặc máy tính (tối đa bốn người). Qua internet họ chỉ xem: không thể trao tay cầm cho họ.",
 "rp_watch_ask": "{name} muốn xem",
 "rp_phone_net_phone": "Một điện thoại qua internet",
+"rp_phone_ask_net_owner": "{name} muốn điều khiển PS5 của bạn với tư cách là bạn: hồ sơ, dữ liệu lưu và cúp của bạn",
+"rp_phone_allow_as_me": "Có, chơi với tư cách tôi",
+"pt_set_owner_unknown_body": "PS5 không cho biết hồ sơ nào là của bạn. Nếu đây là hồ sơ của bạn, người bạn chơi bằng nó có thể dùng dữ liệu lưu và cúp của bạn.",
+"tn_err_signed_out": "Đã đăng xuất khỏi tailnet: khóa đã hết hạn hoặc thiết bị đã bị gỡ. Hãy đăng xuất rồi đăng nhập lại.",
+"tn_err_unreachable": "Không kết nối được máy chủ Tailscale. Hãy kiểm tra kết nối internet; vẫn đang thử lại.",
+"tn_err_refused": "Tailscale đã từ chối đăng nhập.",
+"tn_err_refused_why": "Tailscale đã từ chối đăng nhập: {why}",
+"tn_warn_expired": "Khóa Tailscale đã hết hạn. Hãy đăng xuất rồi đăng nhập lại.",
+"tn_warn_expiring": "Khóa Tailscale sắp hết hạn. Hãy đăng xuất rồi đăng nhập lại để gia hạn.",
+"tn_slow": "Sau một phút vẫn chưa kết nối. Nếu bạn đã đăng nhập xong, hãy kiểm tra quản trị viên tailnet đã duyệt thiết bị chưa, hoặc tắt rồi bật lại Tailscale.",
+"cw_tile_why_not_listed": "PS5 không hiển thị nó trên màn hình chính",
+"cw_tile_why_write_failed": "không ghi được tệp của nó lên PS5",
+"cw_tile_why_removal": "việc gỡ bỏ chưa hoàn tất",
+"cw_tile_why_register": "PS5 từ chối cài đặt nó",
+"cw_tile_why_other": "PS5 đã từ chối",
 };
 
 export default vi;
