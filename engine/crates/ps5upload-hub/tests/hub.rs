@@ -111,6 +111,40 @@ async fn recv_close(ws: &mut Ws) -> Option<u16> {
     }
 }
 
+/// Reads a WebSocket's bytes straight off its TCP socket to the end, never writing, and returns the
+/// close frame's code among them. A peer read through the client library is not silent: it answers
+/// every ping it reads, and a pong that reaches a socket the hub has already closed draws a reset,
+/// after which Linux drops whatever was still unread, the close frame included.
+async fn raw_close_code(mut ws: Ws) -> Option<u16> {
+    let MaybeTlsStream::Plain(tcp) = ws.get_mut() else {
+        unreachable!("ws:// is plain TCP")
+    };
+    let mut b = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let end = tokio::time::Instant::now() + WAIT;
+    loop {
+        match tokio::time::timeout_at(end, tcp.read(&mut chunk))
+            .await
+            .expect("closes in time")
+        {
+            Ok(0) | Err(_) => break,
+            Ok(n) => b.extend_from_slice(&chunk[..n]),
+        }
+    }
+    // The hub's frames: unmasked, short (7-bit lengths). Pings until the close.
+    let mut i = 0;
+    while i + 2 <= b.len() {
+        let (op, len) = (b[i] & 0x0f, usize::from(b[i + 1] & 0x7f));
+        assert!(b[i + 1] & 0x80 == 0 && len < 126, "a short unmasked frame");
+        let p = b.get(i + 2..i + 2 + len)?;
+        if op == 0x8 {
+            return (len >= 2).then(|| u16::from_be_bytes([p[0], p[1]]));
+        }
+        i += 2 + len;
+    }
+    None
+}
+
 /// Nothing arrives within `d` (other than pings).
 async fn quiet(ws: &mut Ws, d: Duration) {
     let end = tokio::time::Instant::now() + d;
@@ -453,16 +487,14 @@ async fn keepalive_drops_silent_peers() {
     let mut h = host(&t, &r, &secret(40)).await;
     // A guest that reads (and so answers pings) stays.
     let (mut g, gid) = join(&t, &mut h, &r).await;
-    // A silent one does not read, so never pongs.
+    // A silent one never pongs: its socket is read underneath the client library, which would.
     let (silent, sgid) = join(&t, &mut h, &r).await;
-    let watch = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(800)).await;
-        silent
-    });
-    // Keep the host and the reading guest busy reading.
+    let mut watch = tokio::spawn(raw_close_code(silent));
+    // Keep the host and the reading guest busy reading until the hub says the silent one left
+    // (a deadline, not a fixed wait: a loaded machine takes longer than the timeout).
     let mut left = None;
-    let end = tokio::time::Instant::now() + Duration::from_millis(900);
-    while tokio::time::Instant::now() < end {
+    let end = tokio::time::Instant::now() + WAIT;
+    while left.is_none() && tokio::time::Instant::now() < end {
         tokio::select! {
             m = h.next() => {
                 if let Some(Ok(Message::Text(s))) = m {
@@ -474,8 +506,15 @@ async fn keepalive_drops_silent_peers() {
         }
     }
     assert_eq!(left, Some(json!({"t":"left","gid":sgid})));
-    let mut silent = watch.await.unwrap();
-    assert_eq!(recv_close(&mut silent).await, Some(1001));
+    // Still reading the others while the silent one's close is collected.
+    let code = loop {
+        tokio::select! {
+            c = &mut watch => break c.unwrap(),
+            _ = h.next() => {}
+            _ = g.next() => {}
+        }
+    };
+    assert_eq!(code, Some(1001));
     // The reading guest is still in.
     send(&mut g, json!({"t":"signal","to":"host","data":{}})).await;
     assert_eq!(
