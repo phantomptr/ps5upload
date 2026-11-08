@@ -22,7 +22,7 @@ import {
   type PadState,
 } from "../lib/remotePlayStream";
 import { makeWatchPlayer, type MsePlayer, type WatchPlayer, type WatchProblem } from "../pad/watchPlayer";
-import { rpInput } from "../state/remotePlay";
+import { rpInput } from "../state/rpInput";
 import { setScreenWakeReason } from "../lib/androidScreenWake";
 import { setPadForwardReason } from "../lib/androidPadBridge";
 import type { JoinTransport } from "./rtcTransport";

@@ -21,7 +21,6 @@ import {
   type StreamStats,
   type PasscodeAsk,
 } from "../lib/remotePlayStream";
-import type { MotionReading } from "../lib/motion";
 import { gamepadsOf } from "../lib/nativePad";
 import { padKind, profileFor } from "../lib/padProfiles";
 import { describePads, padActive, padFromMessage, type PadInput } from "../lib/padFrom";
@@ -256,32 +255,10 @@ interface RpState {
  *  Picture-in-Picture; video: the browser's video picture in picture (picture only). */
 export type PipKind = "popup" | "document" | "video";
 
-/** Who holds the game's input back now (Settings, the passcode box, the keyboard box). */
-const inputPauses = new Set<string>();
-
-/** While any `owner` has it on, the console gets an idle pad. Each lets go only of its own: the
- *  keyboard box closing must not hand the pad back under open Settings. */
-export function pauseRpInput(owner: "settings" | "passcode" | "keyboard", on: boolean): void {
-  if (on) inputPauses.add(owner);
-  else inputPauses.delete(owner);
-}
-
-/** Keys held on the picture and a finger on the touchpad: read by the stream every frame. */
-export const rpInput = {
-  held: new Set<string>(),
-  touch: null as [number, number] | null,
-  /** The on-screen controller. */
-  touchPad: IDLE_PAD as PadState,
-  /** A controller is being mapped: its presses are answers, not play. */
-  mapping: false,
-  /** Remote Play's settings or a box are open over the stream: keys, controllers and touch are
-   *  theirs, and the console gets an idle pad until they close ([`pauseRpInput`]). */
-  get paused(): boolean {
-    return inputPauses.size > 0;
-  },
-  /** The phone's latest motion reading, while motion controls are on. */
-  motion: null as MotionReading | null,
-};
+// rpInput and pauseRpInput live in ./rpInput (kept small: the friend's and the phone's pages
+// read rpInput, and importing this store would carry all of Remote Play into them).
+export { pauseRpInput, rpInput } from "./rpInput";
+import { rpInput } from "./rpInput";
 
 /** Controllers as every window showing the stream sees them. A hidden page's list can be a
  *  stale snapshot (buttons stuck down), so only visible ones count. Read once each: the same

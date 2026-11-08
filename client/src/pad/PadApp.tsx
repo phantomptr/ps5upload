@@ -9,7 +9,7 @@ import { KbmSender } from "../lib/kbmInput";
 import { useTr } from "../state/lang";
 import { setScreenWakeReason } from "../lib/androidScreenWake";
 import { setPadForwardReason } from "../lib/androidPadBridge";
-import { rpInput } from "../state/remotePlay";
+import { rpInput } from "../state/rpInput";
 import { makeWatchPlayer, type MsePlayer, type WatchPlayer, type WatchProblem } from "./watchPlayer";
 import { OpenOnWifi, useHubDown } from "../join/OpenOnWifi";
 

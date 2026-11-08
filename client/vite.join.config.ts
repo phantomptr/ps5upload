@@ -23,7 +23,9 @@ import tailwindcss from "@tailwindcss/vite";
 import { oneLangPerSelector, pageModuleSwap, pageStrings } from "./vite.pagePlugins";
 import { pageCss } from "./vite.pageCss";
 
-const RAW_BUDGET = 906 * 1024;
+// 768 KiB in 12.1.0, once the page stopped importing the host's whole Remote Play store for rpInput
+// (state/rpInput.ts): kept close, so that does not creep back in.
+const RAW_BUDGET = 800 * 1024;
 const OUT = fileURLToPath(new URL("../engine/crates/ps5upload-engine/src/join_page.html", import.meta.url));
 /** The same page on the website (https://ps5upload.phantomptr.com/join/, .github/workflows/
  *  pages.yml), where internet invites open (#room=…&k=…&fp=…&hub=…, join/rtcTransport.ts). */
