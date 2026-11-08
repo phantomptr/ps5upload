@@ -13,6 +13,7 @@ import { gamepadsOf } from "../lib/nativePad";
 import { profileFor } from "../lib/padProfiles";
 import {
   DEFAULT_KEYMAP,
+  IDLE_PAD,
   mergePads,
   padFromGamepads,
   padFromKeys,
@@ -88,9 +89,18 @@ function isControl(t: HTMLElement | null): boolean {
   return role === "button" || role === "link" || role === "menuitem" || role === "tab" || role === "switch";
 }
 
-/** The pad this device is: connected controllers (standard mapping), the keyboard and the
+let padChecking = false;
+
+/** While the guest checks their controller, the game gets an idle pad. */
+export function setPadChecking(on: boolean): void {
+  padChecking = on;
+}
+
+/** The pad this device is: connected controllers (each through its profile), the keyboard and the
  *  on-screen one, merged. */
 export function devicePad(): PadState {
+  // Checking the controller (PadCheck): its presses are not the game's.
+  if (padChecking) return { ...IDLE_PAD };
   const pads = padFromGamepads(gamepadsOf(typeof navigator === "undefined" ? undefined : navigator), profileFor);
   const touch = rpInput.touchPad;
   const merged = mergePads(mergePads(pads, padFromKeys(guestHeld, GUEST_KEYMAP)), touch);

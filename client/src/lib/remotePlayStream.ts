@@ -195,8 +195,9 @@ export function padFromKeys(held: Iterable<string>, keymap: Record<string, KeyAc
   return p;
 }
 
-/** Gamepad API "standard" mapping, button index → pad bit (6/7 are the analog triggers). */
-const STANDARD_BUTTONS = [
+/** Gamepad API "standard" mapping, button index → pad bit (6/7 are the analog triggers; 17 is
+ *  the touchpad click Chrome adds for PlayStation pads). */
+export const STANDARD_BUTTON_BITS: readonly number[] = [
   PadButton.CROSS, PadButton.CIRCLE, PadButton.SQUARE, PadButton.TRIANGLE, PadButton.L1, PadButton.R1, 0, 0,
   PadButton.SHARE, PadButton.OPTIONS, PadButton.L3, PadButton.R3, PadButton.UP, PadButton.DOWN, PadButton.LEFT,
   PadButton.RIGHT, PadButton.PS, PadButton.TOUCHPAD,
@@ -227,10 +228,25 @@ export function hatPosition(v: number): number | null {
   return Math.round((v + 1) * 3.5) % 8;
 }
 
-/** A stick axis: the controller's axis index, inverted when it reads the other way round. */
+/** A stick axis: the controller's axis index, inverted when it reads the other way round. `hat`:
+ *  the axis is a hat (a Joy-Con held sideways has its d-pad as the stick), read as its x or y. */
 export interface PadAxis {
   a: number;
   inv?: boolean;
+  hat?: "x" | "y";
+}
+
+const HAT_X = [0, 1, 1, 1, 0, -1, -1, -1];
+const HAT_Y = [-1, -1, 0, 1, 1, 1, 0, -1];
+
+/** A stick axis's reading on `g`, -1..1. */
+export function axisValue(g: Gamepad, ax: PadAxis): number {
+  const v = g.axes[ax.a] ?? 0;
+  if (ax.hat) {
+    const at = hatPosition(v);
+    return at === null ? 0 : (ax.hat === "x" ? HAT_X : HAT_Y)[at];
+  }
+  return ax.inv ? -v : v;
 }
 
 /** How a controller's buttons and axes become the console's pad. Several sources may drive one
@@ -247,7 +263,7 @@ export interface PadProfile {
 
 /** The browser's "standard" layout (W3C Gamepad standard mapping). */
 export const STANDARD_PROFILE: PadProfile = {
-  buttons: STANDARD_BUTTONS.flatMap((bit, i): Array<[number, PadSource]> => (bit ? [[bit, { b: i }]] : [])),
+  buttons: STANDARD_BUTTON_BITS.flatMap((bit, i): Array<[number, PadSource]> => (bit ? [[bit, { b: i }]] : [])),
   l2: { b: 6 },
   r2: { b: 7 },
   lx: { a: 0 },
@@ -310,7 +326,7 @@ export function padFromGamepads(
   const axis = (v: number) => (Math.abs(v) < 0.08 ? 0 : clampAxis(v * 32767));
   // Several pads: the stick pushed furthest wins, so a resting pad does not cancel another.
   const pick = (cur: number, v: number) => (Math.abs(v) > Math.abs(cur) ? v : cur);
-  const stick = (g: Gamepad, ax: PadAxis | null) => (ax ? axis((g.axes[ax.a] ?? 0) * (ax.inv ? -1 : 1)) : 0);
+  const stick = (g: Gamepad, ax: PadAxis | null) => (ax ? axis(axisValue(g, ax)) : 0);
   for (const g of pads) {
     if (!g || !g.connected) continue;
     const prof = profileOf(g);

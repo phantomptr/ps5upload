@@ -6,6 +6,7 @@
 // mapped by pressing its buttons in turn ("press ✕"), saved per controller. Extra buttons (back
 // paddles) can be given any PS5 button the same way.
 
+import { knownProfile, type PadKind } from "./padMappings";
 import { safeGetItem, safeSetItem } from "./safeStorage";
 import {
   guessProfile,
@@ -59,10 +60,25 @@ export function saveProfile(id: string, prof: PadProfile | null): Record<string,
 
 let cache: Record<string, PadProfile> | null = null;
 
-/** The profile `g` plays with: its saved one, else the browser's standard layout or the guess. */
+/** The profile `g` plays with: its saved one, else the browser's standard layout, the known
+ *  controllers' table (padMappings.ts) or the guess. */
 export function profileFor(g: Gamepad): PadProfile {
   cache ??= loadProfiles();
-  return cache[g.id] ?? migratedProfile(cache, g.id) ?? guessProfile(g);
+  return cache[g.id] ?? migratedProfile(cache, g.id) ?? knownProfile(g) ?? guessProfile(g);
+}
+
+/** How `g` plays now (see PadKind). */
+export function padKind(g: Gamepad): PadKind {
+  cache ??= loadProfiles();
+  if (cache[g.id]) return "saved";
+  if (g.mapping === "standard") return "standard";
+  return knownProfile(g) ? "known" : "guess";
+}
+
+/** What `g` would play with without a saved mapping: the base a check fills its skipped steps
+ *  from. */
+export function defaultProfileFor(g: Gamepad): PadProfile {
+  return knownProfile(g) ?? guessProfile(g);
 }
 
 /** A forwarded controller is named `<name> (app)` since #668. A mapping saved under the name the
@@ -189,20 +205,100 @@ export function addExtra(prof: PadProfile, bit: number, src: PadSource): PadProf
 /** Steps skipped in a mapping keep what the standard layout had, unless that button or axis
  *  was given to another control (✕ mapped to button 5 must not also press R1, button 5's
  *  standard meaning). */
-export function withStandardGaps(prof: PadProfile): PadProfile {
+export function withStandardGaps(prof: PadProfile, base: PadProfile = STANDARD_PROFILE): PadProfile {
   const have = new Set(prof.buttons.map(([bit]) => bit));
   const key = (s: PadSource) => ("b" in s ? `b${s.b}` : "h" in s ? `h${s.h}.${s.at}` : `a${s.a}${s.d}`);
   const used = new Set([...prof.buttons.map(([, s]) => key(s)), ...[prof.l2, prof.r2].filter((s): s is PadSource => !!s).map(key)]);
   return {
     buttons: [
       ...prof.buttons,
-      ...STANDARD_PROFILE.buttons.filter(([bit, src]) => !have.has(bit) && !used.has(key(src))),
+      ...base.buttons.filter(([bit, src]) => !have.has(bit) && !used.has(key(src))),
     ],
-    l2: prof.l2 ?? STANDARD_PROFILE.l2,
-    r2: prof.r2 ?? STANDARD_PROFILE.r2,
-    lx: prof.lx ?? STANDARD_PROFILE.lx,
-    ly: prof.ly ?? STANDARD_PROFILE.ly,
-    rx: prof.rx ?? STANDARD_PROFILE.rx,
-    ry: prof.ry ?? STANDARD_PROFILE.ry,
+    l2: prof.l2 ?? base.l2,
+    r2: prof.r2 ?? base.r2,
+    lx: prof.lx ?? base.lx,
+    ly: prof.ly ?? base.ly,
+    rx: prof.rx ?? base.rx,
+    ry: prof.ry ?? base.ry,
   };
+}
+
+/** The quick check a friend runs on the Play Together page: the face buttons by position, the
+ *  d-pad, the shoulders and triggers, then the sticks. The rest keep what the controller had. */
+export const CHECK_STEPS: MapStep[] = MAP_STEPS.filter(
+  (s) =>
+    s.kind !== "button" ||
+    !(
+      [PadButton.L3, PadButton.R3, PadButton.OPTIONS, PadButton.SHARE, PadButton.PS, PadButton.TOUCHPAD] as number[]
+    ).includes(s.bit),
+);
+
+/** Everything back where it rests (within a little), after a press. */
+export function atRest(rest: PadSnapshot, now: PadSnapshot): boolean {
+  return (
+    now.buttons.every((v, i) => Math.abs(v - (rest.buttons[i] ?? 0)) < 0.3) &&
+    now.axes.every((v, i) => Math.abs(v - (rest.axes[i] ?? 0)) < 0.3)
+  );
+}
+
+/**
+ * Mapping a controller one step at a time, fed the controller every frame: the first reading is
+ * where everything rests; then each step waits for everything to be let go, and takes the next
+ * press (or stick push). Shared by Play's controller setup and the Play Together check.
+ */
+export class PadLearner {
+  step = 0;
+  private prof = blankProfile();
+  private rest: PadSnapshot | null = null;
+  private waiting = true;
+
+  constructor(readonly steps: readonly MapStep[] = MAP_STEPS) {}
+
+  get done(): boolean {
+    return this.step >= this.steps.length;
+  }
+
+  get current(): MapStep | null {
+    return this.steps[this.step] ?? null;
+  }
+
+  /** One reading of the controller. True when it answered a step. */
+  feed(now: PadSnapshot): boolean {
+    if (this.done) return false;
+    if (!this.rest) {
+      // Where everything rests, taken as the check opens (triggers on axes rest at -1).
+      this.rest = now;
+      this.waiting = false;
+      return false;
+    }
+    if (this.waiting) {
+      if (atRest(this.rest, now)) this.waiting = false;
+      return false;
+    }
+    const s = this.steps[this.step];
+    const got = s.kind === "axis" ? detectAxis(this.rest, now) : detectPress(this.rest, now);
+    if (!got) return false;
+    this.prof = applyStep(this.prof, s, got);
+    this.go(this.step + 1);
+    return true;
+  }
+
+  /** Skip this step (it keeps what the controller had). */
+  skip(): void {
+    this.go(this.step + 1);
+  }
+
+  back(): void {
+    if (this.step > 0) this.go(this.step - 1);
+  }
+
+  private go(to: number): void {
+    this.waiting = true;
+    this.step = Math.min(to, this.steps.length);
+  }
+
+  /** What was learned, the skipped steps filled from `base`. */
+  profile(base: PadProfile = STANDARD_PROFILE): PadProfile {
+    return withStandardGaps(this.prof, base);
+  }
 }
