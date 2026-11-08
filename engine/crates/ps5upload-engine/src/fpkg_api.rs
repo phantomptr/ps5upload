@@ -938,6 +938,24 @@ mod path_tests {
     use super::*;
 
     #[test]
+    fn only_our_own_leftovers_at_a_plain_absolute_path_are_cleared() {
+        let root = std::env::temp_dir();
+        let ok = root.join("out").join("Game.exfat.partial");
+        assert_eq!(clearable_leftover(&ok), Some(ok.clone()));
+        assert!(clearable_leftover(&root.join("Game.lz4spool")).is_some());
+        // Not ours, not absolute, or climbing out: never touched.
+        assert!(clearable_leftover(&root.join("Game.exfat")).is_none());
+        assert!(clearable_leftover(Path::new("out/Game.exfat.partial")).is_none());
+        assert!(clearable_leftover(&root.join("..").join("Game.exfat.partial")).is_none());
+        // A `.` inside a path is dropped by `components()` itself, so it names the same file.
+        let dotted = root.join(".").join("Game.exfat.partial");
+        assert_eq!(
+            clearable_leftover(&dotted),
+            Some(root.join("Game.exfat.partial"))
+        );
+    }
+
+    #[test]
     fn a_build_takes_the_language_it_was_asked_for() {
         let req: BuildReq =
             serde_json::from_str(r#"{"source":"/g","language":" fr-FR "}"#).unwrap();
@@ -2697,6 +2715,24 @@ fn is_own_leftover(path: &std::path::Path) -> bool {
         .is_some_and(|n| n.ends_with(".partial") || n.ends_with(".lz4spool"))
 }
 
+/// `path` as a leftover `claim` may look at and clear: absolute, with no `..` (or other
+/// non-normal part) after its root, and named like one of our own leftovers. `None` for
+/// anything else, which `claim` then never touches on disk.
+fn clearable_leftover(path: &std::path::Path) -> Option<PathBuf> {
+    use std::path::Component;
+    if !path.is_absolute() || !is_own_leftover(path) {
+        return None;
+    }
+    let mut clean = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => clean.push(part),
+            Component::CurDir | Component::ParentDir => return None,
+        }
+    }
+    Some(clean)
+}
+
 impl Writing {
     /// Claims `path` for one build. `None` when another running build already writes it: two
     /// builds of one output would wreck each other's file. A leftover at `path` from a build
@@ -2707,15 +2743,15 @@ impl Writing {
         if active.contains(&path) {
             return None;
         }
-        // A leftover with a checkpoint is what the build goes on from (`image_build`).
-        let checkpointed = crate::image_build::checkpoint_path(&path).is_file();
-        // Only ever our own leftovers: a `.partial` output or an `.lz4spool`, whatever path a
-        // caller hands in.
-        if is_own_leftover(&path) {
-            if path.is_dir() {
-                let _ = std::fs::remove_dir_all(&path);
-            } else if path.is_file() && !checkpointed {
-                let _ = std::fs::remove_file(&path);
+        // Only ever our own leftovers (a `.partial` output or an `.lz4spool`) at an absolute
+        // path with no `..`, whatever path a caller hands in; anything else is never touched.
+        if let Some(leftover) = clearable_leftover(&path) {
+            // A leftover with a checkpoint is what the build goes on from (`image_build`).
+            let checkpointed = crate::image_build::checkpoint_path(&leftover).is_file();
+            if leftover.is_dir() {
+                let _ = std::fs::remove_dir_all(&leftover);
+            } else if leftover.is_file() && !checkpointed {
+                let _ = std::fs::remove_file(&leftover);
             }
         }
         active.insert(path.clone());
