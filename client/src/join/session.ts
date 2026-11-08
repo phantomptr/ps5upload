@@ -140,6 +140,8 @@ export class JoinSession {
       onStatus: (status) => this.set({ status, host: status.host ?? this.snap.host }),
       onRtt: (rttMs) => this.set({ rttMs }),
       onFrame: (d) => this.picture().onMessage(d),
+      // How the picture looks here, for the host's panel (none before the first picture).
+      readStats: () => (this.player && this.player.stats.frames > 0 ? this.player.stats.snapshot() : null),
       onCodec: (h) => this.picture().setHevc(h),
       onRumble: (strong, weak) => {
         const pads = gamepadsOf(typeof navigator === "undefined" ? undefined : navigator);

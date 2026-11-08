@@ -7653,6 +7653,7 @@ helper_mismatch_boot_copy: "Tu PS5 inició una copia antigua del ayudante que gu
 "pt_ask_seat_stream": "Si dejas entrar a {name}, tendrá el mando de este stream como Jugador 1 y jugará con tu usuario de PS5.",
 "pt_friend_fallback": "Amigo",
 "pt_player_behind": "La conexión no da abasto",
+"pt_player_stutter": "Su imagen se entrecorta",
 "pt_step_tv": "En la tele",
 "pt_step_tv_body": "No tienes que hacer nada. Tu amigo pulsa PS en su propio mando (en su pantalla) y elige Juego rápido o su usuario en la tele.",
 "pt_step_tv_menus": "En la pantalla de inicio solo tú controlas los menús; el mando de tu amigo juega dentro de los juegos.",

@@ -7707,6 +7707,7 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
 "pt_ask_seat_stream": "{name} adlı kişiye izin verirsen, bu yayının kumandasını 1. Oyuncu olarak alır ve senin PS5 kullanıcınla oynar.",
 "pt_friend_fallback": "Arkadaş",
 "pt_player_behind": "Bağlantı yetişemiyor",
+"pt_player_stutter": "Görüntüsü takılıyor",
 "pt_step_tv": "Televizyonda",
 "pt_step_tv_body": "Senin yapacağın bir şey yok. Arkadaşın kendi kumandasındaki (kendi ekranında) PS tuşuna basar ve televizyonda Hızlı Oyna'yı ya da kendi kullanıcısını seçer.",
 "pt_step_tv_menus": "Ana ekranda menüleri yalnızca sen kontrol edersin; arkadaşının kumandası oyunların içinde çalışır.",

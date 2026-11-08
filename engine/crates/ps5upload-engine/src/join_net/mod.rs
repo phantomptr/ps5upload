@@ -45,9 +45,11 @@ pub(crate) mod rtc;
 pub(crate) mod stun;
 
 #[cfg(test)]
+mod link_sim;
+#[cfg(test)]
 pub(crate) mod tests;
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -102,6 +104,8 @@ pub(crate) struct PeerInfo {
     pub room: String,
     started: Instant,
     st: Mutex<PeerSt>,
+    /// Its channel's back-pressure (set once the driver made it): the link numbers read it.
+    flow: std::sync::OnceLock<Arc<Flow>>,
 }
 
 #[derive(Default)]
@@ -112,6 +116,10 @@ struct PeerSt {
     ended: Option<Instant>,
     rtt_ms: Option<u32>,
     why: Option<&'static str>,
+    /// What went out to the guest over the last stats second (every byte on the wire), kbit/s.
+    sent_kbps: Option<u32>,
+    /// `peer_bytes_tx` and its time at the last stats event.
+    sent_at: Option<(u64, Instant)>,
 }
 
 impl PeerInfo {
@@ -124,6 +132,7 @@ impl PeerInfo {
                 ice: "new",
                 ..PeerSt::default()
             }),
+            flow: std::sync::OnceLock::new(),
         });
         let mut g = PEERS.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
@@ -158,8 +167,44 @@ impl PeerInfo {
         self.with(|s| s.rtt_ms)
     }
 
+    /// The driver's stats event (once a second): the bytes sent so far, for the rate.
+    fn sent(&self, total: u64, now: Instant) {
+        self.with(|s| {
+            if let Some((was, at)) = s.sent_at {
+                let dt = now.saturating_duration_since(at).as_secs_f64();
+                if dt > 0.2 {
+                    let kbps = total.saturating_sub(was) as f64 * 8.0 / 1000.0 / dt;
+                    s.sent_kbps = Some(kbps.round().min(u32::MAX as f64) as u32);
+                }
+            }
+            s.sent_at = Some((total, now));
+        });
+    }
+
+    /// The connection's numbers, read on demand (the host's panel, together_status, a bug report):
+    /// round trip, what went out over the last second, and what waits to go.
+    pub(crate) fn link_json(&self) -> serde_json::Value {
+        let f = self.flow.get();
+        let (rtt_ms, sent_kbps) = self.with(|s| (s.rtt_ms, s.sent_kbps));
+        serde_json::json!({
+            "rtt_ms": rtt_ms,
+            "sent_kbps": sent_kbps,
+            // The driver's queue (messages the channel did not take yet) and the data channel's
+            // own buffer (SCTP: sent but not acknowledged, or not sent yet).
+            "queued_bytes": f.map(|f| f.driver.load(Ordering::Relaxed)),
+            "buffered_bytes": f.map(|f| f.channel.load(Ordering::Relaxed)),
+            // The most that waited (both together) over the last stats second, and ever.
+            "backlog_peak_1s_bytes": f.map(|f| f.peak_1s.load(Ordering::Relaxed)),
+            "backlog_peak_bytes": f.map(|f| f.peak.load(Ordering::Relaxed)),
+            // Times the session's send waited for the channel (its pictures then skip ahead).
+            "send_waits": f.map(|f| f.waits.load(Ordering::Relaxed)),
+            "high_water_bytes": HIGH_WATER,
+        })
+    }
+
     pub(crate) fn json(&self, now: Instant) -> serde_json::Value {
         let path = self.path();
+        let link = self.link_json();
         self.with(|s| {
             serde_json::json!({
                 "gid": self.gid,
@@ -168,6 +213,7 @@ impl PeerInfo {
                 "rtt_ms": s.rtt_ms,
                 "since_s": now.duration_since(self.started).as_secs(),
                 "why": s.why,
+                "link": link,
             })
         })
     }
@@ -198,6 +244,14 @@ pub(crate) struct Flow {
     queued: AtomicUsize,
     closed: AtomicBool,
     notify: Notify,
+    // What the link numbers show (PeerInfo::link_json): the two parts of `queued`, its peak over
+    // the last stats second and ever, and how often a send had to wait.
+    driver: AtomicUsize,
+    channel: AtomicUsize,
+    peak_1s: AtomicUsize,
+    peak_now: AtomicUsize,
+    peak: AtomicUsize,
+    waits: AtomicU64,
 }
 
 impl Flow {
@@ -208,11 +262,25 @@ impl Flow {
         self.closed.store(true, Ordering::Relaxed);
         self.notify.notify_waiters();
     }
-    fn set_queued(&self, n: usize) {
+    /// The driver's queue and the channel's buffer now.
+    fn set_queued(&self, driver: usize, channel: usize) {
+        let n = driver + channel;
+        self.driver.store(driver, Ordering::Relaxed);
+        self.channel.store(channel, Ordering::Relaxed);
+        self.peak_now.fetch_max(n, Ordering::Relaxed);
+        self.peak.fetch_max(n, Ordering::Relaxed);
         self.queued.store(n, Ordering::Relaxed);
         if self.pending() <= HIGH_WATER {
             self.notify.notify_waiters();
         }
+    }
+    /// A stats second ended: its peak is the one shown, the next starts from now.
+    fn second(&self) {
+        let now = self.queued.load(Ordering::Relaxed);
+        self.peak_1s.store(
+            self.peak_now.swap(now, Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
     }
 }
 
@@ -236,6 +304,9 @@ fn msg_len(m: &Message) -> usize {
 impl crate::join::GuestSocket for RtcSocket {
     async fn send(&mut self, m: Message) -> Result<(), ()> {
         // Wait while the channel is full: the session then stops taking pictures.
+        if self.flow.pending() > HIGH_WATER {
+            self.flow.waits.fetch_add(1, Ordering::Relaxed);
+        }
         loop {
             if self.flow.closed.load(Ordering::Relaxed) {
                 return Err(());

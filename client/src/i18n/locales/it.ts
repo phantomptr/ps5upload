@@ -7653,6 +7653,7 @@ helper_mismatch_boot_copy: "La PS5 ha avviato una copia più vecchia dell'helper
 "pt_ask_seat_stream": "Se fai entrare {name}, avrà il controller di questo stream come Giocatore 1 e giocherà con il tuo utente PS5.",
 "pt_friend_fallback": "Amico",
 "pt_player_behind": "La connessione non regge",
+"pt_player_stutter": "La sua immagine scatta",
 "pt_step_tv": "Sulla TV",
 "pt_step_tv_body": "Non devi fare nulla. Il tuo amico preme PS sul suo controller (sul suo schermo) e sceglie Gioco rapido o il suo utente sulla TV.",
 "pt_step_tv_menus": "Nella schermata iniziale solo tu controlli i menu; il controller del tuo amico gioca dentro i giochi.",

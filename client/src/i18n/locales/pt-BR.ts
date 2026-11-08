@@ -7715,6 +7715,7 @@ helper_mismatch_boot_copy: "Seu PS5 iniciou uma cópia antiga do auxiliar que gu
 "pt_ask_seat_stream": "Se você deixar {name} entrar, ele recebe o controle desta transmissão como Jogador 1 e joga com o seu usuário do PS5.",
 "pt_friend_fallback": "Amigo",
 "pt_player_behind": "A conexão não está acompanhando",
+"pt_player_stutter": "A imagem dele está travando",
 "pt_step_tv": "Na TV",
 "pt_step_tv_body": "Você não precisa fazer nada. Seu amigo aperta PS no próprio controle (na tela dele) e escolhe Jogo rápido ou o usuário dele na TV.",
 "pt_step_tv_menus": "Na tela inicial só você controla os menus; o controle do seu amigo joga dentro dos jogos.",

@@ -1224,8 +1224,11 @@ pub fn run_stream(
                 lost.min(u16::MAX as u64) as u16,
             )?;
         }
-        if sink.wants_keyframe()
-            && last_idr.is_none_or(|t: Instant| t.elapsed() > Duration::from_millis(500))
+        // The gate first: asked inside it, the ask waits for it. Taken first (the sink forgets an
+        // ask it has given), an ask within 500 ms of the last IDR was lost, and a Play Together
+        // guest that had just skipped to a keyframe waited seconds for its next ask.
+        if last_idr.is_none_or(|t: Instant| t.elapsed() > Duration::from_millis(500))
+            && sink.wants_keyframe()
         {
             last_idr = Some(Instant::now());
             takion.send_message(2, &proto::bare(proto::kind::IDRREQUEST))?;

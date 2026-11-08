@@ -7996,6 +7996,7 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
 "pt_ask_seat_stream": "Ha beengeded {name} játékost, ő kapja ennek a streamnek a kontrollerét 1. játékosként, és a PS5-felhasználódként játszik.",
 "pt_friend_fallback": "Barát",
 "pt_player_behind": "A kapcsolat nem bírja",
+"pt_player_stutter": "Náluk akadozik a kép",
 "pt_step_tv": "A tévén",
 "pt_step_tv_body": "Neked nincs teendőd. A barátod megnyomja a PS gombot a saját kontrollerén (a saját képernyőjén), és a tévén a Gyors játékot vagy a saját felhasználóját választja.",
 "pt_step_tv_menus": "A kezdőképernyőn csak te kezeled a menüket; a barátod kontrollere a játékokban működik.",

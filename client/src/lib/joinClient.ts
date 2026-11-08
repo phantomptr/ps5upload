@@ -61,6 +61,9 @@ export interface JoinClientOptions {
   onCodec?: (hevc: boolean) => void;
   onRumble?: (strong: number, weak: number) => void;
   onLight?: (rgb: [number, number, number]) => void;
+  /** The picture's numbers (drawn, dropped, stalls…), sent to the host every STATS_EVERY_PINGS
+   *  pings as `{"stats": …}` so the host's panel can say how the picture looks here. */
+  readStats?: () => Record<string, unknown> | null;
   /** Where the resume token is kept (sessionStorage by default; null: nowhere). */
   storage?: JoinStorage | null;
   /** Tests: a fake socket and clock. */
@@ -88,6 +91,8 @@ export const KEEPALIVE_MS = 100;
 export const SILENCE_MS = 3500;
 /** Waiting for the host past the window this much longer, the engine's own answer not come: give up. */
 export const HOST_WAIT_SLACK_MS = 5000;
+/** The picture's report goes with every this-many pings (one a second): every 2 s. */
+export const STATS_EVERY_PINGS = 2;
 
 export class JoinClient {
   private ws: WebSocket | null = null;
@@ -376,7 +381,12 @@ export class JoinClient {
       return;
     }
     ws.send(JSON.stringify({ ping: this.now() }));
+    if (this.stage.kind === "joined" && this.o.readStats && ++this.pings % STATS_EVERY_PINGS === 0) {
+      const stats = this.o.readStats();
+      if (stats) ws.send(JSON.stringify({ stats }));
+    }
   }
+  private pings = 0;
 
   /** Let go of everything (the page is hidden or lost the focus), or take the pad back. */
   setNeutral(on: boolean): void {

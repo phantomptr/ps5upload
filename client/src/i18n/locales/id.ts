@@ -7709,6 +7709,7 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
 "pt_ask_seat_stream": "Jika Anda mengizinkan {name}, dia mendapat kontroler stream ini sebagai Pemain 1 dan bermain sebagai pengguna PS5 Anda.",
 "pt_friend_fallback": "Teman",
 "pt_player_behind": "Koneksi tidak sanggup",
+"pt_player_stutter": "Gambar di sisi mereka tersendat",
 "pt_step_tv": "Di TV",
 "pt_step_tv_body": "Tidak ada yang perlu Anda lakukan. Teman Anda menekan PS di kontrolernya sendiri (di layarnya) dan memilih Main Cepat atau penggunanya di TV.",
 "pt_step_tv_menus": "Di layar beranda hanya Anda yang mengendalikan menu; kontroler teman Anda berfungsi di dalam game.",

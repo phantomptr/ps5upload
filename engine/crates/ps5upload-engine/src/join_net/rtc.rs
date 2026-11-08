@@ -34,7 +34,7 @@ const CLOSE_DRAIN: Duration = Duration::from_secs(2);
 /// How long STUN servers have to answer.
 const STUN_WAIT: Duration = Duration::from_secs(2);
 /// What the data channel's SCTP may hold (str0m's default is 128 KiB, below [`super::HIGH_WATER`]).
-const SCTP_BUFFER: usize = 1024 * 1024;
+pub(crate) const SCTP_BUFFER: usize = 1024 * 1024;
 /// Messages queued from the channel to the session before the peer is dropped as a flood.
 const TO_SESSION: usize = 256;
 
@@ -560,6 +560,8 @@ impl Driver {
         };
         let info = PeerInfo::new(&room, &gid);
         info.with(|s| s.ice = "checking");
+        let flow = Arc::new(Flow::default());
+        let _ = info.flow.set(flow.clone());
         let _ = signal.send((
             gid.clone(),
             serde_json::json!({"type": "answer", "sdp": answer.to_sdp_string()}),
@@ -574,7 +576,7 @@ impl Driver {
             signal,
             cid: None,
             to_session: None,
-            flow: Arc::new(Flow::default()),
+            flow,
             out: VecDeque::new(),
             out_bytes: 0,
             reasm: Reassembler::new(crate::join::GUEST_MSG_MAX),
@@ -699,7 +701,7 @@ fn flush(p: &mut Peer) {
         }
         buffered = ch.buffered_amount();
     }
-    p.flow.set_queued(p.out_bytes + buffered);
+    p.flow.set_queued(p.out_bytes, buffered);
 }
 
 /// Drives one peer until it has nothing more to do now: its packets out, its events handled.
@@ -865,7 +867,9 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
                 p.info
                     .with(|st| st.rtt_ms = Some((rtt.as_millis() as u32).max(1)));
             }
+            p.info.sent(s.peer_bytes_tx, s.timestamp);
             flush(p);
+            p.flow.second();
         }
         _ => {}
     }

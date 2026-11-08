@@ -209,6 +209,93 @@ async function decodesOpus(rate: number, channels: number): Promise<boolean> {
   }
 }
 
+/** A picture this long after the one before arrived late (ms). */
+export const LATE_MS = 50;
+/** No new picture for longer than this is a stall (ms). */
+export const STALL_MS = 100;
+
+/** What a player's picture did, cheaply: counters, and the time of the last picture. Read on
+ *  demand (`snapshot`, every 2 s for a Play Together guest's report to the host). The counters
+ *  carry the report's own names (the guest page has a size budget). */
+export class PictureStats {
+  /** Pictures drawn, dropped (waiting for a keyframe, or behind), arriving over LATE_MS after
+   *  the one before; stalls over STALL_MS (how many, in all, the longest, ms); keyframe waits. */
+  readonly n = { frames: 0, dropped: 0, late: 0, stalls: 0, stall_ms: 0, worst_stall_ms: 0, key_waits: 0 };
+  /** The last arrival, the last picture drawn, whether a keyframe is awaited. */
+  private a = 0;
+  private d = 0;
+  private w = false;
+  /** Decode start times, in order (WebCodecs outputs in order), and the decode time summed. */
+  private q: number[] = [];
+  private sum = 0;
+  private cnt = 0;
+
+  constructor(
+    private readonly decoder: "webcodecs" | "mse",
+    private readonly now: () => number = () => performance.now(),
+  ) {}
+
+  get frames(): number {
+    return this.n.frames;
+  }
+
+  /** A picture arrived whole. */
+  arrived(): void {
+    const t = this.now();
+    if (this.a && t - this.a > LATE_MS) this.n.late++;
+    this.a = t;
+  }
+
+  /** A picture was not used (waiting for a keyframe, or behind). */
+  drop(): void {
+    this.n.dropped++;
+    if (!this.w) this.n.key_waits++;
+    this.w = true;
+  }
+
+  /** A picture went to the decoder. */
+  decoding(): void {
+    this.w = false;
+    if (this.q.push(this.now()) > 64) this.q.shift();
+  }
+
+  /** A picture was drawn (WebCodecs' output, with `decoded`; or MSE took it). */
+  drawn(decoded = false): void {
+    const t = this.now();
+    const s = decoded ? this.q.shift() : undefined;
+    if (s !== undefined) {
+      this.sum += t - s;
+      this.cnt++;
+    }
+    const gap = this.d ? t - this.d : 0;
+    if (gap > STALL_MS) this.stall(gap);
+    this.d = t;
+    this.n.frames++;
+  }
+
+  private stall(gap: number): void {
+    this.n.stalls++;
+    this.n.stall_ms += gap;
+    this.n.worst_stall_ms = Math.max(this.n.worst_stall_ms, gap);
+  }
+
+  /** The totals so far (a stall still going counts up to now); the decode time is the average
+   *  since the last snapshot. */
+  snapshot(): Record<string, number | string> {
+    const on = this.d ? this.now() - this.d : 0;
+    const v: Record<string, number | string> = { ...this.n, decoder: this.decoder };
+    if (on > STALL_MS) {
+      v.stalls = this.n.stalls + 1;
+      v.stall_ms = this.n.stall_ms + on;
+      v.worst_stall_ms = Math.max(this.n.worst_stall_ms, on);
+    }
+    for (const k of ["stall_ms", "worst_stall_ms"]) v[k] = Math.round(v[k] as number);
+    v.decode_ms = this.cnt ? Math.round((this.sum / this.cnt) * 10) / 10 : 0;
+    this.sum = this.cnt = 0;
+    return v;
+  }
+}
+
 /** The events a browser lets start sound (a touch's pointerdown is not one). */
 const GESTURES = ["pointerup", "touchend", "click", "keydown"] as const;
 
@@ -224,6 +311,8 @@ export class WatchPlayer {
   private opening = false;
   private sawKey = false;
   private keyAsk: KeyAsker;
+  /** What the picture did (a Play Together guest reports it to the host). */
+  readonly stats = new PictureStats("webcodecs");
   /** A problem is on show until the next picture. */
   private problemShown = false;
   private ts = 0;
@@ -384,6 +473,7 @@ export class WatchPlayer {
             c.height = frame.displayHeight;
           }
           this.ctx?.drawImage(frame, 0, 0, c.width, c.height);
+          this.stats.drawn(true);
           frame.close();
           if (this.problemShown) {
             this.problemShown = false;
@@ -424,10 +514,15 @@ export class WatchPlayer {
     }
     if (!v || v.state !== "configured") return;
     const key = isKeyframe(au, this.hevc);
-    if (!this.sawKey && !key) return this.keyAsk.waiting();
+    this.stats.arrived();
+    if (!this.sawKey && !key) {
+      this.stats.drop();
+      return this.keyAsk.waiting();
+    }
     // Behind: a watcher wants now, not the backlog. Wait for the next keyframe.
     if (!key && v.decodeQueueSize > BACKLOG_LIMIT[this.latency]) {
       this.sawKey = false;
+      this.stats.drop();
       return this.keyAsk.waiting();
     }
     this.sawKey = true;
@@ -439,6 +534,7 @@ export class WatchPlayer {
       data.set(au, this.header.length);
     }
     this.ts += 16_667;
+    this.stats.decoding();
     v.decode(new EncodedVideoChunk({ type: key ? "key" : "delta", timestamp: this.ts, data }));
   }
 
@@ -1082,6 +1178,8 @@ export class MsePlayer {
   private header: Uint8Array | null = null;
   private sawKey = false;
   private keyAsk: KeyAsker;
+  /** What the picture did (a Play Together guest reports it to the host). */
+  readonly stats = new PictureStats("mse");
   private problemShown = false;
   private vTime = 0;
   private vLast = 0;
@@ -1270,13 +1368,19 @@ export class MsePlayer {
       this.video.dropped = false;
       this.sawKey = false;
     }
-    if (!this.sawKey && !key) return this.keyAsk.waiting();
+    this.stats.arrived();
+    if (!this.sawKey && !key) {
+      this.stats.drop();
+      return this.keyAsk.waiting();
+    }
     // Behind: skip to the next keyframe rather than play the backlog.
     if (!key && this.video.backlog > BACKLOG_LIMIT[this.latency]) {
       this.sawKey = false;
+      this.stats.drop();
       return this.keyAsk.waiting();
     }
     this.sawKey = true;
+    this.stats.drawn();
     // Times from arrival, so a 30 or 60 fps stream both play at their pace.
     const now = performance.now();
     const dur = this.vLast ? Math.min(9000, Math.max(750, Math.round((now - this.vLast) * 90))) : 1500;

@@ -188,6 +188,30 @@ describe("join client", () => {
     expect(rtts).toEqual([35]);
   });
 
+  it("reports the picture every 2 s once joined, and nothing while it has none", () => {
+    let stats: Record<string, unknown> | null = null;
+    const c = client({ readStats: () => stats });
+    c.start();
+    last().open();
+    advance(4000);
+    expect(last().texts.some((t) => "stats" in t)).toBe(false);
+    last().say({ stage: "joined", player: 2, token: "TOK", hevc: false });
+    // The engine is heard every second (its pongs), as on a live link.
+    const seconds = (n: number) => {
+      for (let i = 0; i < n; i++) {
+        advance(1000);
+        last().say({ pong: now });
+      }
+    };
+    seconds(4);
+    expect(last().texts.some((t) => "stats" in t)).toBe(false);
+    stats = { frames: 120, stalls: 1, stall_ms: 140 };
+    seconds(4);
+    const sent = last().texts.filter((t) => "stats" in t);
+    expect(sent).toHaveLength(2);
+    expect(sent[0].stats).toEqual({ frames: 120, stalls: 1, stall_ms: 140 });
+  });
+
   it("reconnects with backoff and resumes with the token, without asking", () => {
     const c = client();
     joinNow(c, 2);

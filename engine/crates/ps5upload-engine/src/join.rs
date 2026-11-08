@@ -91,7 +91,7 @@ const OPEN_WAIT: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 5 });
 /// How often a guest hears its status (and the engine pings it).
 const STATUS_EVERY: Duration = Duration::from_secs(1);
 /// Pictures queued for a player before it skips to the next keyframe (the host page's queue).
-const PLAYER_QUEUE: usize = 6;
+pub(crate) const PLAYER_QUEUE: usize = 6;
 /// A guest may press PS this long after their pad is made (to answer "Who's using this
 /// controller?"), unless the host says they are in sooner.
 const PICKING_GRACE: Duration = Duration::from_secs(60);
@@ -433,9 +433,138 @@ pub(crate) struct Stats {
     pad_frames: AtomicU64,
     /// Pictures were skipped in the last few seconds: this guest's connection can't keep up.
     behind: AtomicBool,
+    /// The guest's keyframe asks that reached the console (at most one a [`KEY_ASK_GAP`]).
+    key_asks: AtomicU64,
+    /// What the guest's page said last about its picture (`{"stats": …}`, every 2 s at most).
+    page: Mutex<Option<PageReport>>,
+}
+
+/// A guest page's report on its picture: totals since its picture started, kept as numbers only.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct PageReport {
+    /// Pictures drawn, dropped (waiting for a keyframe, or behind), arriving over 50 ms after
+    /// the one before.
+    frames: u64,
+    dropped: u64,
+    late: u64,
+    /// Average decode time over the last report, ms.
+    decode_ms: f64,
+    /// Over 100 ms without a new picture: how often, in all, the longest (ms).
+    stalls: u64,
+    stall_ms: u64,
+    worst_stall_ms: u64,
+    /// Times the picture waited for a keyframe.
+    key_waits: u64,
+    /// "webcodecs" or "mse".
+    decoder: Option<&'static str>,
+    /// Stalled time since the report before (ms), and when this one came.
+    stall_ms_recent: u64,
+    at: Option<Instant>,
+}
+
+/// Reports closer together than this are ignored (the page sends one every 2 s).
+const PAGE_REPORT_GAP: Duration = Duration::from_millis(1500);
+
+impl PageReport {
+    /// The page's `{"stats": …}`, its numbers taken (anything else ignored); None when it has none.
+    fn from_page(v: &serde_json::Value) -> Option<PageReport> {
+        let o = v.as_object()?;
+        let n = |k: &str| {
+            o.get(k)
+                .and_then(|x| x.as_f64())
+                .filter(|x| x.is_finite() && *x >= 0.0)
+                .map(|x| x.min(1e12))
+        };
+        Some(PageReport {
+            frames: n("frames")? as u64,
+            dropped: n("dropped").unwrap_or(0.0) as u64,
+            late: n("late").unwrap_or(0.0) as u64,
+            decode_ms: (n("decode_ms").unwrap_or(0.0).min(10_000.0) * 10.0).round() / 10.0,
+            stalls: n("stalls").unwrap_or(0.0) as u64,
+            stall_ms: n("stall_ms").unwrap_or(0.0) as u64,
+            worst_stall_ms: n("worst_stall_ms").unwrap_or(0.0) as u64,
+            key_waits: n("key_waits").unwrap_or(0.0) as u64,
+            decoder: match o.get("decoder").and_then(|d| d.as_str()) {
+                Some("webcodecs") => Some("webcodecs"),
+                Some("mse") => Some("mse"),
+                _ => None,
+            },
+            ..PageReport::default()
+        })
+    }
+
+    /// How the picture looks to the guest now: "smooth", "stutters" or "poor", from the time it
+    /// stood still since the report before (a page that stopped reporting says nothing).
+    fn quality(&self, now: Instant) -> Option<&'static str> {
+        let at = self.at?;
+        if now.saturating_duration_since(at) > Duration::from_secs(10) {
+            return None;
+        }
+        Some(match self.stall_ms_recent {
+            0..=150 => "smooth",
+            151..=600 => "stutters",
+            _ => "poor",
+        })
+    }
+
+    fn json(&self, now: Instant) -> serde_json::Value {
+        serde_json::json!({
+            "frames": self.frames,
+            "dropped": self.dropped,
+            "late": self.late,
+            "decode_ms": self.decode_ms,
+            "stalls": self.stalls,
+            "stall_ms": self.stall_ms,
+            "worst_stall_ms": self.worst_stall_ms,
+            "key_waits": self.key_waits,
+            "decoder": self.decoder,
+            "stall_ms_recent": self.stall_ms_recent,
+            "age_s": self.at.map(|t| now.saturating_duration_since(t).as_secs()),
+            "quality": self.quality(now),
+        })
+    }
 }
 
 impl Stats {
+    /// A page report: kept unless the last came under [`PAGE_REPORT_GAP`] ago. A report whose
+    /// totals went down is a new picture (a reconnect): its stalled time counts from zero.
+    fn page_report(&self, v: &serde_json::Value, now: Instant) {
+        let Some(mut r) = PageReport::from_page(v) else {
+            return;
+        };
+        let mut g = self.page.lock().unwrap_or_else(|e| e.into_inner());
+        let before = g.as_ref();
+        if before
+            .and_then(|b| b.at)
+            .is_some_and(|t| now.saturating_duration_since(t) < PAGE_REPORT_GAP)
+        {
+            return;
+        }
+        r.stall_ms_recent = match before {
+            Some(b) if r.stall_ms >= b.stall_ms && r.frames >= b.frames => r.stall_ms - b.stall_ms,
+            _ => r.stall_ms,
+        };
+        r.at = Some(now);
+        *g = Some(r);
+    }
+
+    fn page_json(&self, now: Instant) -> serde_json::Value {
+        self.page
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|r| r.json(now))
+            .unwrap_or(serde_json::Value::Null)
+    }
+
+    fn quality(&self, now: Instant) -> Option<&'static str> {
+        self.page
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .and_then(|r| r.quality(now))
+    }
+
     fn rtt(&self, ms: u32) {
         self.rtt_ms.store(ms.max(1), Ordering::Relaxed);
         self.rtt_max.fetch_max(ms, Ordering::Relaxed);
@@ -1139,6 +1268,13 @@ impl Party {
                     "via": if g.net.is_some() { "internet" } else { "lan" },
                     "path": g.net.as_ref().map(|n| n.path()),
                     "ice_rtt_ms": g.net.as_ref().and_then(|n| n.rtt_ms()),
+                    // An internet guest's connection now (round trip, rate, what waits to go).
+                    "link": g.net.as_ref().map(|n| n.link_json()),
+                    "key_asks": g.stats.key_asks.load(Ordering::Relaxed),
+                    // What the guest's page says about its picture, and in a word ("smooth",
+                    // "stutters", "poor"; null before its first report or from an older page).
+                    "page": g.stats.page_json(now),
+                    "quality": g.stats.quality(now),
                 })
             })
             .collect();
@@ -1204,6 +1340,10 @@ impl Party {
                     "queue": s.queue.load(Ordering::Relaxed),
                     "skipped_pictures": s.skipped.load(Ordering::Relaxed),
                     "pad_frames": s.pad_frames.load(Ordering::Relaxed),
+                    "key_asks": s.key_asks.load(Ordering::Relaxed),
+                    "via": if g.net.is_some() { "internet" } else { "lan" },
+                    "link": g.net.as_ref().map(|n| n.link_json()),
+                    "page": s.page_json(now),
                     "slot_open": g.slot_open,
                     "stream_seat": g.on_seat(),
                     "seat_move": format!("{:?}", g.seat_move),
@@ -2531,6 +2671,7 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
     let key = host_key(&console);
     let (tx, mut rx) = mpsc::channel::<Out>(64);
     let net = socket.net();
+    let internet = net.is_some();
     let Some((fx, player, token, stats)) = with_party(&key, |p| {
         let fx = p.attach(id, gen, tx);
         let g = p.guest_mut(id)?;
@@ -2544,8 +2685,13 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
     };
     apply(&console, fx);
     let spect = SPECTATOR_BASE | gen;
-    let feed =
-        crate::rp_stream_api::add_player(spect, &console, PLAYER_QUEUE, stats.skipped.clone());
+    let feed = crate::rp_stream_api::add_player(
+        spect,
+        &console,
+        PLAYER_QUEUE,
+        stats.skipped.clone(),
+        internet,
+    );
     let hevc = feed.as_ref().map(|f| f.hevc).unwrap_or(false);
     crate::log_at!(
         Debug,
@@ -2613,6 +2759,8 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
                         #[serde(default)] ping: Option<serde_json::Value>,
                         #[serde(default)] leave: Option<serde_json::Value>,
                         #[serde(default)] keyframe: bool,
+                        /// The page's picture report (every 2 s at most), for the host's panel.
+                        #[serde(default)] stats: Option<serde_json::Value>,
                     }
                     if let Ok(m) = serde_json::from_str::<In>(t.as_str()) {
                         if m.leave.is_some() {
@@ -2621,8 +2769,12 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
                         }
                         // The guest's picture waits for a keyframe (#648): ask the console, at
                         // most once a KEY_ASK_GAP so a guest can't flood the host's stream.
+                        if let Some(s) = &m.stats {
+                            stats.page_report(s, Instant::now());
+                        }
                         if m.keyframe {
                             if key_ask.take(Instant::now()) {
+                                stats.key_asks.fetch_add(1, Ordering::Relaxed);
                                 crate::log_at!(Debug, "together",
                                     "join: Player {player} on {console} asks for a keyframe ({} pictures skipped so far)",
                                     stats.skipped.load(Ordering::Relaxed)
@@ -4335,6 +4487,59 @@ pub(crate) mod link {
 mod tests {
     use super::link::{unseated, Cmd, Event, LinkState, OpenResult, Port, SlotIo, HOLD};
     use super::*;
+
+    #[test]
+    fn a_guest_page_report_keeps_numbers_only_and_says_how_the_picture_looks() {
+        let t0 = Instant::now();
+        let s = Stats::default();
+        assert_eq!(s.page_json(t0), serde_json::Value::Null);
+        assert_eq!(s.quality(t0), None);
+        // Without a frame count it is not a report; odd values are dropped or clamped.
+        s.page_report(&serde_json::json!({"stalls": 3}), t0);
+        assert_eq!(s.page_json(t0), serde_json::Value::Null);
+        s.page_report(
+            &serde_json::json!({
+                "frames": 600, "dropped": -4, "late": "x", "decode_ms": 3.456, "stalls": 0,
+                "stall_ms": 0, "decoder": "<script>", "name": "Ann"
+            }),
+            t0,
+        );
+        let v = s.page_json(t0);
+        assert_eq!(v["frames"], 600);
+        assert_eq!(v["dropped"], 0);
+        assert_eq!(v["late"], 0);
+        assert_eq!(v["decode_ms"], 3.5);
+        assert_eq!(v["decoder"], serde_json::Value::Null);
+        assert!(v.get("name").is_none());
+        assert_eq!(s.quality(t0), Some("smooth"));
+        // Another inside the gap is ignored.
+        s.page_report(
+            &serde_json::json!({"frames": 700, "stall_ms": 5000}),
+            t0 + Duration::from_millis(500),
+        );
+        assert_eq!(s.page_json(t0)["frames"], 600);
+        // Stalled 400 ms since the last: it stutters; 2 s more: poor; none: smooth again.
+        let t1 = t0 + Duration::from_secs(2);
+        s.page_report(
+            &serde_json::json!({"frames": 700, "stalls": 2, "stall_ms": 400, "decoder": "webcodecs"}),
+            t1,
+        );
+        assert_eq!(s.quality(t1), Some("stutters"));
+        assert_eq!(s.page_json(t1)["decoder"], "webcodecs");
+        let t2 = t1 + Duration::from_secs(2);
+        s.page_report(&serde_json::json!({"frames": 720, "stall_ms": 2400}), t2);
+        assert_eq!(s.quality(t2), Some("poor"));
+        assert_eq!(s.page_json(t2)["stall_ms_recent"], 2000);
+        let t3 = t2 + Duration::from_secs(2);
+        s.page_report(&serde_json::json!({"frames": 840, "stall_ms": 2400}), t3);
+        assert_eq!(s.quality(t3), Some("smooth"));
+        // A new picture (a reconnect) starts its totals over: counted from zero, not negative.
+        let t4 = t3 + Duration::from_secs(2);
+        s.page_report(&serde_json::json!({"frames": 10, "stall_ms": 120}), t4);
+        assert_eq!(s.page_json(t4)["stall_ms_recent"], 120);
+        // A page that stopped reporting says nothing.
+        assert_eq!(s.quality(t4 + Duration::from_secs(11)), None);
+    }
 
     #[test]
     fn guest_keyframe_asks_are_spaced() {

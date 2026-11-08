@@ -15,7 +15,13 @@ pub(super) fn tools() -> Vec<ToolDef> {
             description: "Whether Play Together is open on a console, who is in, and who is \
                           waiting to be let in. Internet guests show `via: internet` with their \
                           connection's `path` (direct, or failed with the ICE state) and round \
-                          trip; `internet.peers` lists those still connecting too. The invite's \
+                          trip; `internet.peers` lists those still connecting too. Each guest's \
+                          `link` (internet only: round trip, `sent_kbps`, bytes queued and \
+                          buffered on the data channel, the backlog's peaks, `send_waits`), \
+                          `skipped` pictures and `key_asks`, and `page`: what the guest's own \
+                          page last said about its picture (frames drawn, dropped, late, \
+                          decode_ms, stalls, stall_ms) with `quality` in a word (smooth, \
+                          stutters, poor) — use it to tell why a friend's picture stutters. The invite's \
                           key, code and links are left out (`invite.hidden`): together_invite \
                           gives the link when the user asks for one.",
             kind: Kind::Read,
