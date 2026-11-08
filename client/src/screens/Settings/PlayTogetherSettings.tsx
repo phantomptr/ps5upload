@@ -11,11 +11,13 @@ import {
   type NetSettings,
   type NetSettingsBody,
 } from "../Play/playTogetherState";
+import { PlayTogetherGuestProfiles } from "./PlayTogetherGuestProfiles";
 
 /**
- * Settings › Play Together: internet invites (a link through the signalling hub, the friend's
- * browser connecting straight to this computer over WebRTC). The engine keeps one set for every
- * console, so any console's address reads and writes it.
+ * Settings › Play Together: which PS5 profile each guest plays as on the connected console
+ * (PlayTogetherGuestProfiles), and internet invites (a link through the signalling hub, the
+ * friend's browser connecting straight to this computer over WebRTC). The engine keeps one set of
+ * the internet settings for every console, so any console's address reads and writes it.
  */
 export function PlayTogetherSettings() {
   const tr = useTr();
@@ -92,6 +94,7 @@ export function PlayTogetherSettings() {
 
   return (
     <div className="space-y-3" data-testid="pt-settings">
+      <PlayTogetherGuestProfiles host={host} />
       <div data-testid="pt-set-internet">
         <Toggle
           checked={net.internetInvites}

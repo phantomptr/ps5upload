@@ -440,6 +440,8 @@ export function JoinView({
   const showTouch = live && !reconnecting && !pad.ready && coarse && (!inApp || full);
   const showGuide = showsGuide({ player, guided, movedOff, reconnecting });
   const onSeat = player === STREAM_SEAT;
+  // Seated in the profile the host chose: nothing to pick on the TV.
+  const playsAs = status?.playsAs ?? null;
   const leftS = reconnecting ? (stage.deadline - now) / 1000 : 0;
   const toggleFull = async () => {
     const next = !full;
@@ -479,6 +481,16 @@ export function JoinView({
       {onSeat && (
         <span className="rounded-full bg-black/60 px-2.5 py-1 text-white/85" data-testid="join-seat-stream">
           {tr("join_seat_stream", { host }, `You're playing as ${host}'s PS5 user. No need to pick one.`)}
+        </span>
+      )}
+      {playsAs && !onSeat && (
+        <span className="rounded-full bg-black/60 px-2.5 py-1 text-white/85" data-testid="join-plays-as">
+          {tr("join_plays_as", { profile: playsAs }, `You're playing as ${playsAs}. No need to pick one.`)}
+        </span>
+      )}
+      {picking && !onSeat && status?.seatNote && (
+        <span className="rounded-full bg-black/60 px-2.5 py-1 text-white/85" data-testid="join-seat-note">
+          {tr("join_seat_tv_asks", { host }, `${host} chose a profile for you, but it couldn't be used. The TV will ask who you are.`)}
         </span>
       )}
       {picking && !onSeat && (
@@ -717,7 +729,7 @@ export function JoinView({
           </p>
         )}
 
-        {showGuide && (
+        {showGuide && !playsAs && (
           <div
             className="absolute bottom-14 left-1/2 z-30 w-[min(22rem,calc(100%-2rem))] -translate-x-1/2 rounded-2xl border border-white/10 bg-neutral-900/90 p-4 text-sm shadow-2xl backdrop-blur-md"
             data-testid="join-guide"
