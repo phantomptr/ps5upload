@@ -8134,6 +8134,15 @@ rp_users_add_hint: "Để chơi bằng cả người dùng khác, hãy đăng nh
 "pt_set_stun_bad": "Mỗi dòng một host:port, tối đa {n}.",
 "pt_set_failed": "Engine không nhận cài đặt này. Hãy thử lại.",
 "join_net_lost": "Kết nối tới {host} đã bị ngắt. Hãy kiểm tra kết nối internet, rồi xin vào lại.",
+"pt_start_invite": "Bắt đầu và mời",
+"pt_show_invite": "Hiện ở đây và mời",
+"pt_switch_invite": "Dừng luồng kia, bắt đầu và mời",
+"pt_tab_intro": "Bạn bè chơi cùng với vai Người chơi 2, 3 và 4 từ điện thoại, máy tính bảng hoặc máy tính, ngay trong trình duyệt. Không cần ứng dụng.",
+"pt_tab_console": "PS5 của bạn",
+"pt_tab_where": "Bạn bè của bạn ở đâu?",
+"net_internet_support": "Chơi qua Internet chạy trên một máy chủ nhỏ do chúng tôi trả tiền. Nếu nó hữu ích với bạn, một khoản ủng hộ sẽ giúp nó tiếp tục chạy. Cảm ơn bạn!",
+"pt_elsewhere": "Chơi từ nơi khác? Chọn Internet ở trên.",
+"pt_elsewhere_guest": "Chơi từ nơi khác? Nhờ bạn của bạn mời qua Internet, rồi mở liên kết của họ trong trình duyệt.",
 };
 
 export default vi;

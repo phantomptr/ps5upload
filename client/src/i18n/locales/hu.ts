@@ -8428,6 +8428,15 @@ rp_users_add_hint: "Ha másik felhasználóként is játszanál, jelentkezz be a
 "pt_set_stun_bad": "Soronként egy host:port, legfeljebb {n}.",
 "pt_set_failed": "A motor nem fogadta el ezt a beállítást. Próbáld újra.",
 "join_net_lost": "Megszakadt a kapcsolat ezzel: {host}. Ellenőrizd az internetkapcsolatod, aztán kérd újra.",
+"pt_start_invite": "Indítás és meghívás",
+"pt_show_invite": "Megjelenítés itt és meghívás",
+"pt_switch_invite": "A másik stream leállítása, indítás és meghívás",
+"pt_tab_intro": "A barátaid 2., 3. és 4. játékosként játszanak a telefonjukról, tabletjükről vagy gépükről, böngészőben. Nem kell alkalmazás.",
+"pt_tab_console": "A PS5-öd",
+"pt_tab_where": "Hol vannak a barátaid?",
+"net_internet_support": "Az internetes játék egy kis szerveren fut, amit mi fizetünk. Ha hasznos neked, egy adomány életben tartja. Köszönjük!",
+"pt_elsewhere": "Máshonnan játszotok? Válaszd fent az Internetet.",
+"pt_elsewhere_guest": "Máshonnan játszol? Kérd meg a barátodat, hogy Interneten hívjon meg, majd nyisd meg a linkjét a böngészőben.",
 };
 
 export default hu;

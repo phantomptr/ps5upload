@@ -8085,6 +8085,15 @@ rp_users_add_hint: "若也想以其他使用者遊玩，請在 PS5 上登入該�
 "pt_set_stun_bad": "每行一個 host:port，最多 {n} 個。",
 "pt_set_failed": "引擎沒有接受此設定。請再試一次。",
 "join_net_lost": "與 {host} 的連線已中斷。請檢查你的網際網路連線，然後重新要求。",
+"pt_start_invite": "開始並邀請",
+"pt_show_invite": "在這裡顯示並邀請",
+"pt_switch_invite": "停止另一個串流，開始並邀請",
+"pt_tab_intro": "好友用手機、平板或電腦的瀏覽器，以玩家 2、3、4 的身分一起玩。不需安裝 App。",
+"pt_tab_console": "你的 PS5",
+"pt_tab_where": "你的好友在哪裡？",
+"net_internet_support": "網際網路遊玩執行在我們付費的一台小伺服器上。如果它對你有幫助，捐款能讓它繼續運作。謝謝！",
+"pt_elsewhere": "在別處玩？在上方選擇網際網路。",
+"pt_elsewhere_guest": "在別處玩？請好友用網際網路邀請你，然後在瀏覽器中開啟他們的連結。",
 };
 
 export default zh_TW;

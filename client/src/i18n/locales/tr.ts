@@ -8139,6 +8139,15 @@ rp_users_add_hint: "Başka bir kullanıcıyla da oynamak için PS5'te o kullanı
 "pt_set_stun_bad": "Her satıra bir host:port, en fazla {n}.",
 "pt_set_failed": "Motor bu ayarı kabul etmedi. Tekrar dene.",
 "join_net_lost": "{host} ile bağlantı koptu. İnternet bağlantını kontrol et, sonra yeniden iste.",
+"pt_start_invite": "Başlat ve davet et",
+"pt_show_invite": "Burada göster ve davet et",
+"pt_switch_invite": "Diğer yayını durdur, başlat ve davet et",
+"pt_tab_intro": "Arkadaşların telefon, tablet veya bilgisayarından, tarayıcıda Oyuncu 2, 3 ve 4 olarak katılır. Uygulama gerekmez.",
+"pt_tab_console": "PS5'in",
+"pt_tab_where": "Arkadaşların nerede?",
+"net_internet_support": "İnternet üzerinden oyun, parasını bizim ödediğimiz küçük bir sunucuda çalışır. İşine yarıyorsa bir bağış onu ayakta tutar. Teşekkürler!",
+"pt_elsewhere": "Başka bir yerden mi oynuyorsunuz? Yukarıda İnternet'i seç.",
+"pt_elsewhere_guest": "Başka bir yerden mi oynuyorsun? Arkadaşından seni İnternet ile davet etmesini iste, sonra bağlantısını tarayıcında aç.",
 };
 
 export default tr;
