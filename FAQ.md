@@ -161,7 +161,8 @@ haven't tested Play over Tailscale ourselves.
 
 **Q: How do I play with a friend as Player 2?**
 With **Play Together** (11.0.0). Your friend uses their own phone, tablet or computer, on your
-network, and plays your PS5 as Player 2, 3 or 4 while you play as Player 1.
+network or anywhere else with an internet invite (11.6.0), and plays your PS5 as Player 2, 3 or 4
+while you play as Player 1.
 
 1. **Invite.** Start Play, then press the people button on the picture's bar (on a phone:
    **⋯ › Play Together**). Your friend scans the QR code with their phone's camera, or you send
@@ -236,20 +237,25 @@ is you on the TV. If there's only one user on the console, add one first.
   as always (they pick **Quick Play** on the TV), but this setup hasn't been tried with every game.
 
 **Q: Can a friend who isn't at my place play together, or use a phone controller?**
-Yes, with Tailscale (11.0.1). Your friend connects to your computer, not to the PS5, so only your
-computer and your friend's device need it; no payload on the PS5.
+Play Together, yes: with an **internet invite** (11.6.0). Your friend needs nothing installed;
+the link opens in any browser, a phone on mobile data included.
 
-1. Install [Tailscale](https://tailscale.com/download) on the computer that plays, and sign in.
-2. Your friend installs Tailscale on their phone, tablet or computer. Either sign them in to your
-   tailnet, or keep your tailnets apart and share just this computer with them: in Tailscale's
-   admin console, open the computer's **⋯ › Share…** and send them the invite.
-3. In Play Together (or the phone controller and watch panel), press **Tailscale** above the QR
-   code: the link and the code switch to your computer's Tailscale address. Send that link.
+1. In Play Together, choose **Internet** above the QR code (instead of **This network**).
+2. Send your friend that link, or let them scan the QR code.
+3. As at home: they type a name, you press **Allow**, and they pick **Quick Play** on the TV.
 
-The **This network | Tailscale** choice shows only while Tailscale is connected on your computer.
-The rest works as at home: they ask, you allow. Everything goes through Tailscale's encrypted
-connection; how smooth it is depends on both connections' upload speed (take 720p if it stutters).
-We don't support forwarding the engine's port on your router: its pages use plain `http`.
+A small server (hub.phantomptr.com) only introduces the two of you. The game's picture, sound and
+controls go straight between your computer and your friend's browser, never through it, and the
+link carries your app's fingerprint, so it can only ever reach you. Most home routers work as they
+are; where yours allows it, the app opens a port on it for the session (UPnP / NAT-PMP / PCP).
+Some strict networks (some offices, schools and mobile carriers) can't connect directly: the panel
+then says **Couldn't connect from their network**. How smooth it is depends on both connections'
+upload speed (take 720p if it stutters). **Settings › Play Together** has the server address and
+these options, and **Allow internet invites** turns them off.
+
+A phone controller or a watch link from somewhere else still needs your friend on the same
+network as your computer, for example through a VPN (next question). We don't support forwarding
+the engine's port on your router: its pages use plain `http`.
 
 **Q: Can a friend join over WireGuard (or another VPN) instead?**
 Yes (11.0.1). Your friend only needs to reach the computer that plays, on TCP 19113. If their VPN
