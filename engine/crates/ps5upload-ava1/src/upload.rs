@@ -656,9 +656,13 @@ fn source_for(cfg: &TransferConfig, root: &Path) -> Arc<dyn Source> {
     }
 }
 
-/// [`source_for`] a folder upload, with the config's renames applied.
+/// [`source_for`] a folder upload, with the config's renames applied, and its kept names read
+/// back as the console's (`unescape_names`).
 fn dir_source_for(cfg: &TransferConfig, root: &Path) -> Arc<dyn Source> {
-    let source = source_for(cfg, root);
+    let mut source = source_for(cfg, root);
+    if cfg.unescape_names {
+        source = Arc::new(crate::source::KeptNamesSource::new(source));
+    }
     if cfg.renames.is_empty() {
         return source;
     }

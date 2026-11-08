@@ -1939,6 +1939,10 @@ struct TransferDirReq {
     /// sets it when it hands a job to this handler.
     #[serde(default)]
     skip_existing: Option<String>,
+    /// The folder was downloaded with `escape_names`: each file goes to the console under the
+    /// exact name its kept name stands for (`ps5upload_core::host_names`, #729).
+    #[serde(default)]
+    unescape_names: bool,
 }
 
 /// Upload a `.zip`'s contents, decompressing on the host so files land
@@ -7361,6 +7365,7 @@ async fn transfer_dir_handler(
         cfg.cancel = Some(cancel);
         cfg.excludes = req.excludes;
         cfg.renames = renames;
+        cfg.unescape_names = req.unescape_names;
         cfg.progress_bytes = Some(Arc::clone(&progress));
         cfg.progress_files = Some(Arc::clone(&progress_files));
         cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));
@@ -10315,12 +10320,18 @@ struct TransferDownloadReq {
     /// Read-only — the payload ignores this flag for destructive ops.
     #[serde(default)]
     unsafe_read: bool,
+    /// When true, a console name this computer can't hold (`a\b`, `a:b`, `CON`) is written
+    /// under its reversible form (`ps5upload_core::host_names`) instead of refused; an upload
+    /// with `unescape_names` puts it back exactly. The saves code's downloads (#729).
+    #[serde(default)]
+    escape_names: bool,
 }
 
 /// Where an AVA1 download lands (Task 25).
 enum Ava1DownloadTarget {
-    /// A tree under this directory: `dest_dir/<basename>`.
-    Folder(std::path::PathBuf),
+    /// A tree under this directory: `dest_dir/<basename>`; `true` keeps names this computer
+    /// can't hold under their reversible form (`TransferDownloadReq::escape_names`).
+    Folder(std::path::PathBuf, bool),
     /// One `.zip` at this path, Stored (resumable) or Deflated (cannot resume).
     Zip(std::path::PathBuf, ps5upload_ava1::download::ZipCompression),
     /// A folder on a saved server (`remote://id/dir`), through this engine (download_relay.rs).
@@ -10355,7 +10366,7 @@ fn start_ava1_download(
         .unwrap_or("")
         .to_string();
     let dest_display = match &target {
-        Ava1DownloadTarget::Folder(dir) => dir.join(&basename).to_string_lossy().to_string(),
+        Ava1DownloadTarget::Folder(dir, _) => dir.join(&basename).to_string_lossy().to_string(),
         Ava1DownloadTarget::Zip(zip, _) => zip.to_string_lossy().to_string(),
         Ava1DownloadTarget::Server(dir) => format!("{}/{basename}", dir.trim_end_matches('/')),
     };
@@ -10428,7 +10439,7 @@ fn start_ava1_download(
             &progress_files,
             ready,
             || match &target {
-                Ava1DownloadTarget::Folder(dir) => ps5upload_ava1::download::to_local(
+                Ava1DownloadTarget::Folder(dir, false) => ps5upload_ava1::download::to_local(
                     &addr,
                     &src,
                     kind,
@@ -10438,6 +10449,18 @@ fn start_ava1_download(
                     &counters,
                     Some(cancel),
                 ),
+                Ava1DownloadTarget::Folder(dir, true) => {
+                    ps5upload_ava1::download::to_local_escaped(
+                        &addr,
+                        &src,
+                        kind,
+                        dir,
+                        unsafe_read,
+                        id,
+                        &counters,
+                        Some(cancel),
+                    )
+                }
                 Ava1DownloadTarget::Zip(zip, compression) => ps5upload_ava1::download::to_zip_with(
                     &addr,
                     &src,
@@ -10594,7 +10617,9 @@ async fn transfer_download_handler(
         return json_err(StatusCode::BAD_REQUEST, "src_path cannot be empty or '/'")
             .into_response();
     };
-    if basename == "." || basename == ".." || basename.contains('/') || basename.contains('\\') {
+    // With `escape_names` the name lands under its reversible form (checked by the download).
+    let bad_char = basename.contains('/') || (basename.contains('\\') && !req.escape_names);
+    if basename == "." || basename == ".." || bad_char {
         return json_err(
             StatusCode::BAD_REQUEST,
             format!(
@@ -10603,7 +10628,9 @@ async fn transfer_download_handler(
         )
         .into_response();
     }
-    if let Some(why) = ps5upload_core::transfer::host_unsafe_component(basename) {
+    if let Some(why) =
+        ps5upload_core::transfer::host_unsafe_component(basename).filter(|_| !req.escape_names)
+    {
         return json_err(
             StatusCode::BAD_REQUEST,
             format!("{basename:?} cannot be saved on this computer: {why}."),
@@ -10641,7 +10668,7 @@ async fn transfer_download_handler(
         req.src_path.clone(),
         kind,
         req_unsafe,
-        Ava1DownloadTarget::Folder(dest_dir),
+        Ava1DownloadTarget::Folder(dest_dir, req.escape_names),
     )
 }
 
@@ -10877,6 +10904,7 @@ async fn transfer_dir_reconcile_handler(
         excludes: req.excludes,
         bandwidth_cap_mbps: req.bandwidth_cap_mbps,
         skip_existing: Some(skip.to_string()),
+        unescape_names: false,
     };
     transfer_dir_handler(State(state), Json(dir_req))
         .await
@@ -13724,6 +13752,7 @@ mod helpers_tests {
             excludes: vec![],
             bandwidth_cap_mbps: None,
             skip_existing: None,
+            unescape_names: false,
         };
 
         let resp = transfer_dir_handler(State(state), Json(req))
@@ -13790,6 +13819,7 @@ mod helpers_tests {
             excludes: vec![],
             bandwidth_cap_mbps: None,
             skip_existing: None,
+            unescape_names: false,
         };
         let _ = transfer_dir_handler(State(state), Json(req))
             .await
@@ -13833,6 +13863,7 @@ mod helpers_tests {
             excludes: vec![],
             bandwidth_cap_mbps: None,
             skip_existing: Some("sometimes".to_string()),
+            unescape_names: false,
         };
         let resp = transfer_dir_handler(State(state), Json(req))
             .await

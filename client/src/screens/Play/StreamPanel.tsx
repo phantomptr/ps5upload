@@ -37,7 +37,7 @@ import { chosenRpUser, rpUsersOf } from "../../lib/rpUsers";
 import { rpUserLabel } from "./setup/PairedUsers";
 import { deviceName, meshFor, othersRemotePlaying, remotePlayPads, useMeshStore } from "../../state/mesh";
 import { isTauriEnv } from "../../lib/tauriEnv";
-import { isLinuxDesktop, isMobile } from "../../lib/platform";
+import { isIOS, isLinuxDesktop, isMobile } from "../../lib/platform";
 import {
   streamRefusal,
   stopEngineSession,
@@ -78,10 +78,11 @@ import { rpBrowserAdvice } from "./browserAdvice";
 import { motionAvailable, startMotion } from "../../lib/motion";
 import { PadAsks, PhonePadsPanel, usePadLink } from "./PhonePads";
 import { JoinAsks, PlayTogetherPanel } from "./PlayTogether";
+import { PlayTogetherStart, togetherStartKind } from "./PlayTogetherStart";
 import { friendsIn, useJoinHost } from "./playTogetherState";
 import { okToStartPlay } from "./JoinAFriend";
 import { useConfirm } from "../../components/ConfirmDialog";
-import { GoLiveBarIcon, GoLiveChip, GoLivePanel, goLiveAvailable, useGoLivePolling } from "./GoLivePanel";
+import { GoLiveBarIcon, GoLiveChip, GoLivePanel, goLiveAvailable, inAppPhoneEngine, useGoLivePolling } from "./GoLivePanel";
 import { GamePanel } from "./game/GamePanel";
 import { LaunchStatus } from "./game/LaunchStatus";
 import { DropChoice, DropZone, useStreamDropZone } from "./game/DropToInstall";
@@ -390,7 +391,17 @@ function FitMenu({
  * leaving it keeps the stream running and coming back shows it again. Uses the Wake & sign in
  * keys stored for the console (never shown); a console without them is pointed at that setup.
  */
-export function StreamPanel() {
+export function StreamPanel({
+  together = false,
+  onTogether,
+}: {
+  /** Play › Play together is on show: before a stream, its Start and invite; during one, the
+   *  Play Together panel with the picture. */
+  together?: boolean;
+  /** Play Together is a page of Play (index.tsx): the stream bar's button and the menu switch
+   *  to it (true) or back (false). Without it, the panel opens here on its own. */
+  onTogether?: (open: boolean) => void;
+} = {}) {
   const tr = useTr();
   const navigate = useNavigate();
   const profiles = useRosterStore((s) => s.profiles);
@@ -421,7 +432,19 @@ export function StreamPanel() {
   const [gameOpen, setGameOpen] = useState(false);
   const [phonesOpen, setPhonesOpen] = useState(false);
   /** Play Together (#641): friends as Player 2–4. */
-  const [togetherOpen, setTogetherOpen] = useState(false);
+  const [togetherOpenHere, setTogetherOpenHere] = useState(false);
+  const togetherOpen = onTogether ? together : togetherOpenHere;
+  const setTogetherOpen = useCallback(
+    (open: boolean) => (onTogether ? onTogether(open) : setTogetherOpenHere(open)),
+    [onTogether],
+  );
+  // Read by start (a callback) without making it new on every switch of the page.
+  const togetherRef = useRef(togetherOpen);
+  useEffect(() => {
+    togetherRef.current = togetherOpen;
+  }, [togetherOpen]);
+  /** Start and invite: the Play Together panel takes the focus when it shows. */
+  const inviteFocus = useRef(false);
   const { confirm, dialog: confirmDialog } = useConfirm();
   /** The Stream panel (Go live, OBS; #635). */
   const [goLiveOpen, setGoLiveOpen] = useState(false);
@@ -526,7 +549,7 @@ export function StreamPanel() {
   const pictureHere = useRemotePlayStore((s) => s.pictureHere);
   const setPictureHere = useRemotePlayStore((s) => s.setPictureHere);
   const playing = sessionPlaying && pictureHere;
-  const goLive = goLiveAvailable({ mobile: isMobile() });
+  const goLive = goLiveAvailable({ tauri: isTauriEnv(), mobile: isMobile() });
   useGoLivePolling(running && goLive, goLiveOpen);
   // Play a title on the stream (from a game's page, or the Game panel): stream, helper, launch.
   const launcher = useGameLaunch();
@@ -833,10 +856,15 @@ export function StreamPanel() {
       // One thing at a time: a friend's game this app joined is left first (asked).
       if (!(await okToStartPlay(tr, confirm))) return;
       const go = async () => {
+        // Started from Play together: the invite comes first (its panel takes the focus), so the
+        // page stays where it is.
+        const forTogether = togetherRef.current;
+        inviteFocus.current = forTogether;
         await startStream(
           { host: p.host, name: p.name, registKey: p.wake_regist_key!, rpKey: p.wake_rp_key! },
           { attach },
         );
+        if (forTogether) return;
         stage.current?.focus();
         if (compact) stage.current?.scrollIntoView?.({ block: "start", behavior: "smooth" });
       };
@@ -1114,6 +1142,16 @@ export function StreamPanel() {
       setSettingsOpen(false);
       setGameOpen(true);
     },
+    // A phone has no room for Stream on the bar: it is in this menu (#731).
+    onGoLive: goLive
+      ? () => {
+          setMenuOpen(false);
+          if (full) exitFull();
+          setGoLiveOpen(true);
+        }
+      : undefined,
+    // The iPhone/iPad app: the hint names Safari, so it is for iOS only.
+    goLiveHint: inAppPhoneEngine({ tauri: isTauriEnv(), mobile: isMobile() }) && isIOS(),
   };
 
   const stageView = (
@@ -1412,7 +1450,7 @@ export function StreamPanel() {
                   onClick={() => {
                     if (full) exitFull();
                     setPhonesOpen(false);
-                    setTogetherOpen((v) => !v);
+                    setTogetherOpen(!togetherOpen);
                   }}
                   testId="rp-together"
                 >
@@ -1601,9 +1639,52 @@ export function StreamPanel() {
         </div>
   );
 
+  const togetherStart = togetherStartKind({
+    otherStream: !!otherStream,
+    streaming,
+    elsewhere,
+    host: profile?.host ?? null,
+  });
+
   return (
     <div className="space-y-3">
-      {!running && (
+      {!running && togetherOpen && (
+        <PlayTogetherStart
+          host={profile?.host ?? null}
+          consoleName={profile?.name ?? null}
+          canStart={paired && !startHeld}
+          starting={startHeld}
+          startLabel={
+            togetherStart === "switch"
+              ? tr("pt_switch_invite", undefined, "Stop the other stream, start and invite")
+              : togetherStart === "attach"
+                ? tr("pt_show_invite", undefined, "Show it here and invite")
+                : tr("pt_start_invite", undefined, "Start and invite")
+          }
+          // Play my PS5's Start (or its Show it here / switch), the same code path.
+          onStart={() =>
+            void (togetherStart === "switch"
+              ? switchHere()
+              : togetherStart === "attach"
+                ? start(true, elsewhere ?? undefined)
+                : start())
+          }
+          playAs={
+            profile && rpUsers.length > 1 ? (
+              <Select
+                label={tr("rp_play_as", undefined, "Play as")}
+                block={false}
+                className="w-40"
+                value={rpUser ?? ""}
+                onChange={(e) => chooseRpUser(profile.id, e.target.value)}
+                options={rpUsers.map((u, i) => ({ value: u.wake_regist_key, label: rpUserLabel(u, i, tr) }))}
+                data-testid="pt-play-as"
+              />
+            ) : null
+          }
+        />
+      )}
+      {!running && !togetherOpen && (
         // Start first (10.0.1); the console is the one selected in the app (no picker of its own).
         <div className="flex flex-wrap items-end gap-2">
           <Button
@@ -1798,7 +1879,8 @@ export function StreamPanel() {
         </Callout>
       )}
 
-      {profile && !paired && !running && (
+      {/* Play together says so with no console at all too: Start and invite is greyed out. */}
+      {(profile || togetherOpen) && !paired && !running && (
         <Callout
           tone="info"
           title={tr("play_not_ready", undefined, "Set up Play for this console first")}
@@ -1848,6 +1930,7 @@ export function StreamPanel() {
           addr={target.host}
           state={joinHost}
           onState={setJoinHost}
+          focusOnOpen={inviteFocus}
           onClose={() => setTogetherOpen(false)}
           onPhones={() => {
             setTogetherOpen(false);
@@ -1870,7 +1953,12 @@ export function StreamPanel() {
 
       {!full && settingsDrawer}
 
-      {full ? createPortal(stageView, document.body) : stageView}
+      {/* Play together before its stream: no empty picture ("Press Start…") under Start and
+          invite. Kept mounted (hidden) so the stage is the same element once it plays; it shows
+          while a start is held (the blocker check draws on it). */}
+      <div hidden={togetherOpen && !running && !startHeld}>
+        {full ? createPortal(stageView, document.body) : stageView}
+      </div>
 
       {/* Touch-sized player, on the page: the bar is under the picture, never on it, so every
           action fits at 360 px and nothing covers the game. More opens the rest. */}
@@ -1942,7 +2030,7 @@ export function StreamPanel() {
       )}
 
 
-      {compact && !running && (
+      {compact && !running && !togetherOpen && (
         <p className="text-xs text-[var(--color-muted)]">
           {tr(
             "rp_touch_hint",
@@ -1951,7 +2039,7 @@ export function StreamPanel() {
           )}
         </p>
       )}
-      {!compact && (
+      {!compact && !(togetherOpen && !running) && (
         <p className="text-xs text-[var(--color-muted)]">
           {tr(
             "rp_keys_body3",

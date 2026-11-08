@@ -2258,12 +2258,37 @@ fn read_host_header(path: &str) -> Option<ps5upload_pkg::ReaderMetadata> {
     })
 }
 
-/// The package is a full game, known from its category (gd, gde, ...). An unknown category is
-/// not a game for a refusal: an add-on whose category the caller didn't send was refused as one
-/// whenever its base game ran from an image (#721).
+/// The package is a full game, known from its category: a PARAM one (`gd`, `gde`, ...) or the
+/// BGFT package type the client sends in its place (`PS5GD`). Anything else, unknown or not
+/// sent, is not a game for a refusal: an add-on whose category the caller didn't send was
+/// refused as one whenever its base game ran from an image (#721).
 fn certainly_a_game(category: &str) -> bool {
     let c = category.trim().to_ascii_lowercase();
-    !c.is_empty() && !(c.ends_with("gp") || c.ends_with("dp") || c.ends_with("ac"))
+    let c = c
+        .strip_prefix("ps4")
+        .or_else(|| c.strip_prefix("ps5"))
+        .unwrap_or(&c);
+    matches!(
+        ps5upload_pkg::kind::classify_category(c),
+        (ps5upload_pkg::kind::Kind::Base, true, _)
+    )
+}
+
+/// Whether the image-or-folder refusal applies: the category says a full game, and the
+/// package's own header, when it could be read, does not say otherwise. A PS5 add-on's
+/// param.json has no category, so only its header says add-on, and a client that sent the
+/// package type it derived (`PS5GD`) had the add-on refused as the game (#724).
+fn image_refusal_applies(category: &str, header: Option<&ps5upload_pkg::ReaderMetadata>) -> bool {
+    if !certainly_a_game(category) {
+        return false;
+    }
+    match header {
+        Some(h) => {
+            ps5upload_pkg::kind::classify(h.content_type, h.content_flags, &h.category).0
+                == ps5upload_pkg::kind::Kind::Base
+        }
+        None => true,
+    }
 }
 
 #[cfg(test)]
@@ -2272,12 +2297,166 @@ mod certainly_a_game_tests {
     fn only_a_known_game_category_is_a_game() {
         assert!(super::certainly_a_game("gd"));
         assert!(super::certainly_a_game("GDE"));
+        assert!(super::certainly_a_game("PS5GD"));
+        assert!(super::certainly_a_game("PS4GD"));
         assert!(!super::certainly_a_game("ac"));
+        assert!(!super::certainly_a_game("PS5AC"));
         assert!(!super::certainly_a_game("gp"));
+        assert!(!super::certainly_a_game("PS5DP"));
         assert!(!super::certainly_a_game("dp"));
-        // Not sent: an add-on is never refused as a game (#721).
+        // Not sent or not known: an add-on is never refused as a game (#721, #724).
         assert!(!super::certainly_a_game(""));
         assert!(!super::certainly_a_game("  "));
+        assert!(!super::certainly_a_game("la"));
+        assert!(!super::certainly_a_game("PS5LA"));
+        assert!(!super::certainly_a_game("zz"));
+    }
+
+    /// A PS5 package as a FIH envelope around a CNT with no param category, as Sony's are.
+    fn ps5_pkg(content_type: u32, content_flags: u32) -> Vec<u8> {
+        let base = 0x1000usize;
+        let mut pkg = vec![0u8; base + 0x100];
+        pkg[0..4].copy_from_slice(&ps5upload_pkg::PKG_MAGIC_FIH.to_be_bytes());
+        pkg[6..8].copy_from_slice(&3u16.to_le_bytes());
+        pkg[0x58..0x60].copy_from_slice(&(base as u64).to_le_bytes());
+        let cnt = &mut pkg[base..];
+        cnt[0..4].copy_from_slice(&ps5upload_pkg::PKG_MAGIC.to_be_bytes());
+        let cid = b"UP0000-PPSA01234_00-DELUXEUPGRADE000";
+        cnt[0x40..0x40 + cid.len()].copy_from_slice(cid);
+        cnt[0x74..0x78].copy_from_slice(&content_type.to_be_bytes());
+        cnt[0x78..0x7C].copy_from_slice(&content_flags.to_be_bytes());
+        pkg
+    }
+
+    fn header_of(bytes: Vec<u8>) -> ps5upload_pkg::ReaderMetadata {
+        ps5upload_pkg::metadata_from_reader(move |off, len| {
+            let (o, l) = (off as usize, len as usize);
+            bytes.get(o..(o + l).min(bytes.len())).map(<[u8]>::to_vec)
+        })
+        .expect("a PS5 package header")
+    }
+
+    const ADD_ON: (u32, u32) = (0x21, 0x0a02_0000);
+    const GAME: (u32, u32) = (0x20, 0x0a02_0000);
+
+    /// #724, on every route the title's image is registered: what each route's caller sends as
+    /// the category, with the package's own header. An add-on, or a package whose category is
+    /// not known, is never refused as the game; a full game still is.
+    #[test]
+    fn only_a_full_game_is_refused_for_an_image_on_every_route() {
+        use super::image_refusal_applies as refused;
+        let add_on = header_of(ps5_pkg(ADD_ON.0, ADD_ON.1));
+        let game = header_of(ps5_pkg(GAME.0, GAME.1));
+        assert_eq!(add_on.category, "ac");
+        assert_eq!(game.category, "gd");
+
+        // Stream from this computer (host_file): the client sends the probe's package type,
+        // which for a PS5 add-on is PS5GD. Upload then install / staged (console_path), a saved
+        // server (remote) and a link (url) send the same field, or nothing.
+        for sent in ["PS5GD", "gd"] {
+            assert!(!refused(sent, Some(&add_on)), "add-on sent as {sent}");
+            assert!(refused(sent, Some(&game)), "game sent as {sent}");
+        }
+        // The header read fills a missing category itself: an add-on's is ac.
+        assert!(!refused(&add_on.category, Some(&add_on)));
+        assert!(refused(&game.category, Some(&game)));
+        // Category ac: never refused, whatever the header.
+        for sent in ["ac", "PS5AC"] {
+            assert!(!refused(sent, Some(&add_on)));
+            assert!(!refused(sent, Some(&game)));
+            assert!(!refused(sent, None));
+        }
+        // No category or an unknown one: never refused.
+        for sent in ["", "  ", "la", "PS5LA", "zz"] {
+            assert!(!refused(sent, Some(&game)), "{sent:?}");
+            assert!(!refused(sent, None), "{sent:?}");
+        }
+        // The header unreadable: a category that says game is all there is, so it stands.
+        assert!(refused("PS5GD", None));
+        assert!(refused("gd", None));
+        // A patch's header is not the game either.
+        let patch = header_of(ps5_pkg(0x20, 0x4000_0000));
+        assert!(!refused("PS5GD", Some(&patch)));
+    }
+
+    /// The stream route reads the header from the file on this computer.
+    #[tokio::test]
+    async fn the_stream_route_reads_the_add_on_header_from_the_file_here() {
+        let dir = std::env::temp_dir().join(format!("ps5u-724-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut verdicts = Vec::new();
+        for (name, (t, f)) in [("addon.pkg", ADD_ON), ("game.pkg", GAME)] {
+            let path = dir.join(name);
+            std::fs::write(&path, ps5_pkg(t, f)).unwrap();
+            let source = super::Source::HostFile(path.to_string_lossy().into_owned());
+            let h = super::read_source_header(&source, "192.0.2.1:9113", false).await;
+            assert!(h.is_some(), "{name} header read");
+            verdicts.push(super::image_refusal_applies("PS5GD", h.as_ref()));
+            let _ = std::fs::remove_file(&path);
+        }
+        let _ = std::fs::remove_dir(&dir);
+        assert_eq!(
+            verdicts,
+            [false, true],
+            "the add-on installs, the game is refused"
+        );
+    }
+}
+
+/// The package's header, read from wherever the install takes it. Asked for only when a
+/// refusal is about to be given, so it costs a few ranged reads on that path alone.
+async fn read_source_header(
+    source: &Source,
+    mgmt: &str,
+    insecure_tls: bool,
+) -> Option<ps5upload_pkg::ReaderMetadata> {
+    match source {
+        Source::HostFile(path) => {
+            let p = path.clone();
+            tokio::task::spawn_blocking(move || read_host_header(&p))
+                .await
+                .ok()
+                .flatten()
+        }
+        Source::ConsolePath(path) => {
+            let (m, p) = (mgmt.to_string(), path.clone());
+            tokio::task::spawn_blocking(move || {
+                ps5upload_pkg::metadata_from_reader(|off, len| {
+                    ps5upload_core::fs_ops::fs_read(&m, &p, off, len).ok()
+                })
+            })
+            .await
+            .ok()
+            .flatten()
+        }
+        Source::Remote { connection, path } => {
+            let remote = format!("remote://{connection}/{path}");
+            crate::pkg_install::open_remote_package(&remote)
+                .await
+                .ok()
+                .map(|(_, _, h, _, _)| h)
+        }
+        Source::Url(url) => {
+            let u = url.clone();
+            tokio::task::spawn_blocking(move || {
+                let probe =
+                    crate::remote_pkg::RemoteSource::probe_with_options(&u, insecure_tls).ok()?;
+                let remote = crate::remote_pkg::RemoteSource::new_with_options(
+                    u,
+                    probe.total_size,
+                    insecure_tls,
+                );
+                ps5upload_pkg::metadata_from_reader(|off, len| {
+                    if len == 0 {
+                        return Some(Vec::new());
+                    }
+                    remote.read_range(off, off + len - 1).ok()
+                })
+            })
+            .await
+            .ok()
+            .flatten()
+        }
     }
 }
 
@@ -2303,10 +2482,18 @@ async fn refusal_before_delivery(
         .await
         .unwrap_or(false);
         if mounted {
-            return Some((
-                FailReason::ImageMounted,
-                format!("{title_id} is registered on the PS5 from a game image or folder; move that off the scan folder first"),
-            ));
+            let header = read_source_header(&req.source, mgmt, req.options.insecure_tls).await;
+            if image_refusal_applies(category, header.as_ref()) {
+                return Some((
+                    FailReason::ImageMounted,
+                    format!("{title_id} is registered on the PS5 from a game image or folder; move that off the scan folder first"),
+                ));
+            }
+            crate::log_at!(
+                Info,
+                "install",
+                "{title_id} runs from an image or folder, but this package's header says it is not the full game (category {category:?}); installing"
+            );
         }
     }
     if let Some(kind) = base_check_applies(category, title_id) {

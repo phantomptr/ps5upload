@@ -144,6 +144,9 @@ export interface FpkgBuildRequest {
   /** When the package's name is taken in the output folder, name it `<name> (2).pkg` instead
    *  of refusing (Workshop's "Save each next to its source"). */
   keepBoth?: boolean;
+  /** A PS4 update merged into the PS4 game `source` first: the PS4 package is the game at the
+   *  update's version. */
+  update?: string;
 }
 
 /** `stored` = no compression: the fallback for a console that refuses a compressed package. */
@@ -175,6 +178,7 @@ export const fpkg = {
       language: req.language,
       fullVerify: req.fullVerify ?? false,
       keepBoth: req.keepBoth ?? false,
+      update: req.update,
     }),
   /** Unpack a .zip / .7z / .rar into an unpack folder in `outputDir`, as a job; the job's
    *  `dest` is the game found inside. A RAR's password goes with it, never stored. */

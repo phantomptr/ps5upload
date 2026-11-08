@@ -1,5 +1,10 @@
-import { renderToStaticMarkup } from "react-dom/server";
+import type { ReactElement } from "react";
+import { renderToStaticMarkup as ssr } from "react-dom/server";
+import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+// The Internet hint's Support link navigates: render inside a router.
+const renderToStaticMarkup = (el: ReactElement) => ssr(<MemoryRouter>{el}</MemoryRouter>);
 
 import { installWindowStub } from "../../test-utils/storage";
 import { NetworkChoice, savedNetwork, saveNetwork } from "./NetworkChoice";
@@ -184,9 +189,16 @@ describe("the network choice", () => {
     expect(off).toContain('data-testid="pt-addresses-internet"');
     expect(off).toMatch(/aria-pressed="true"[^>]*data-testid="pt-addresses-home"/);
     expect(off).not.toContain("Works from anywhere");
+    // The support line is for Internet only.
+    expect(off).not.toContain("pt-addresses-internet-support");
     const on = renderToStaticMarkup(<NetworkChoice {...props} internet={{ on: true, onPick: () => {} }} />);
     expect(on).toMatch(/aria-pressed="true"[^>]*data-testid="pt-addresses-internet"/);
     expect(on).toContain("Works from anywhere: your friend&#x27;s browser connects straight to this computer.");
+    expect(on).toContain('data-testid="pt-addresses-internet-support"');
+    expect(on).toContain("a donation keeps it going");
+    expect(on).toMatch(/data-testid="pt-addresses-internet-donate">Support PS5Upload</);
+    // Never an amount.
+    expect(on).not.toMatch(/[$€£]\s?\d/);
     // No internet offered and one address: nothing to choose.
     expect(renderToStaticMarkup(<NetworkChoice {...props} />)).toBe("");
   });

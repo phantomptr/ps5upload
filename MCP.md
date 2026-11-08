@@ -213,14 +213,24 @@ API: it answers this computer and any address in `PS5UPLOAD_ALLOW_IP`, and a web
 
 ### Read-only mode
 
+In the app, turn off **Agents can change things** under MCP & API › Connect an agent. It applies at
+once, no restart: the tools that change something leave the tool list and refuse, and `api_request`
+allows only `GET`. Reads go on working: an agent can still look at your files, read your save data's
+contents and see the picture of a session. It applies to MCP only; the HTTP API itself doesn't change.
+A client that listens (`subscriptions/listen` with `toolsListChanged`) hears
+`notifications/tools/list_changed` when it flips.
+
+An agent can't turn it back on: `settings_set` and `api_request` refuse the switch
+(`/api/mcp/access`), however it is spelt. That stops agents using PS5Upload's tools; a program that
+can run commands on this computer, an agent's own shell included, could still reach the engine
+directly, since the API has no password.
+
+To hold it on whatever the app says, set this in the engine's environment and restart it. The app
+then shows the switch off and locked:
+
 ```sh
 PS5UPLOAD_MCP_READ_ONLY=1
 ```
-
-Set this in the engine's environment and restart it. Every tool that changes something then refuses,
-and `api_request` allows only `GET`. Reads go on working: an agent can still look at your files, read
-your save data's contents and see the picture of a session. It applies to MCP only; the HTTP API
-itself doesn't change.
 
 ### Tools that can lose something or interrupt you
 

@@ -192,6 +192,52 @@ impl Source for RenamedSource {
     }
 }
 
+/// A folder downloaded with `escape_names` (`download::to_local_with_in`), read under the
+/// console's own names: each kept name (`host_names::escape_name`) is listed as the name it
+/// stands for and read from the file that holds it. A name that is not one this app keeps is
+/// refused, so two files never stand for one console name (#729).
+pub struct KeptNamesSource {
+    inner: Arc<dyn Source>,
+}
+
+impl KeptNamesSource {
+    pub fn new(inner: Arc<dyn Source>) -> Self {
+        Self { inner }
+    }
+
+    /// The file a console path is kept in.
+    fn kept(rel: &str) -> io::Result<String> {
+        if rel.is_empty() {
+            return Ok(String::new());
+        }
+        ps5upload_core::host_names::escape_path(rel)
+            .map_err(|why| io::Error::new(io::ErrorKind::InvalidInput, why))
+    }
+}
+
+impl Source for KeptNamesSource {
+    fn open(&self, rel: &str) -> io::Result<Box<dyn ReadAt>> {
+        self.inner.open(&Self::kept(rel)?)
+    }
+
+    fn list(&self, rel: &str) -> io::Result<Vec<(String, SourceMeta)>> {
+        let mut out = self.inner.list(&Self::kept(rel)?)?;
+        for (name, _) in &mut out {
+            *name = ps5upload_core::host_names::unescape_name(name)
+                .map_err(|why| io::Error::new(io::ErrorKind::InvalidData, why))?;
+        }
+        Ok(out)
+    }
+
+    fn stat(&self, rel: &str) -> io::Result<SourceMeta> {
+        self.inner.stat(&Self::kept(rel)?)
+    }
+
+    fn close(&self) {
+        self.inner.close()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
