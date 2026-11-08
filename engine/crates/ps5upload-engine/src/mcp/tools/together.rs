@@ -87,7 +87,7 @@ pub(super) fn tools() -> Vec<ToolDef> {
             description: "The profiles signed in on a console (the one in front is the host's \
                           own), which profile each guest's player (2 to 4) plays as, and whether \
                           the helper can seat guests in them. together_settings changes the \
-                          choice.",
+                          choice (together_owner_access for the host's own profile).",
             kind: Kind::Read,
             schema: object(json!({ "console": console_required() }), &["console"]),
             run: route!(path: "/api/join/profiles", done: "The console's profiles."),
@@ -96,15 +96,14 @@ pub(super) fn tools() -> Vec<ToolDef> {
             name: "together_settings",
             title: "Play Together settings",
             description: "How many guests may join (1 to 3), whether PS and Create are taken \
-                          from guests who are playing, and whether a guest may play on the \
-                          stream's own controller as the host's PS5 user; and internet invites: \
-                          on or off, the signalling hub, the STUN servers, asking the router for \
-                          a port (UPnP). One set for every console. With `addr` (the console), \
-                          `guest_profiles` says which signed-in profile each guest's player \
-                          plays as on that console (together_profiles lists them): the guest is \
-                          seated in it and the TV never asks. The host's own profile lets a \
-                          friend use their saves and trophies: only with the user's explicit \
-                          yes, as `owner: true`.",
+                          from guests who are playing, and internet invites: on or off, the \
+                          signalling hub, the STUN servers, asking the router for a port (UPnP). \
+                          One set for every console. With `addr` (the console), `guest_profiles` \
+                          says which signed-in profile each guest's player plays as on that \
+                          console (together_profiles lists them): the guest is seated in it and \
+                          the TV never asks. Anything that lets a friend play as the host's own \
+                          PS5 profile (its saves and trophies) is together_owner_access, which \
+                          asks the user first: this tool refuses `owner: true` and `stream_seat`.",
             kind: Kind::Write { idempotent: true },
             schema: object(
                 json!({
@@ -112,39 +111,14 @@ pub(super) fn tools() -> Vec<ToolDef> {
                         "type": "string",
                         "description": "The console `guest_profiles` are for (its address). Required with them.",
                     },
-                    "guest_profiles": {
-                        "type": "array",
-                        "description": "The profile each guest's player plays as, replacing the \
-                                        last choice. A player left out: the TV asks the guest \
-                                        who they are. Empty: the TV asks every guest.",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "player": { "type": "integer", "minimum": 2, "maximum": 4 },
-                                "user": {
-                                    "type": "integer",
-                                    "description": "The profile's id, from together_profiles.",
-                                },
-                                "name": { "type": "string" },
-                                "owner": {
-                                    "type": "boolean",
-                                    "description": "The user confirmed a friend may play as \
-                                                    their own profile (its saves and \
-                                                    trophies).",
-                                },
-                            },
-                            "required": ["player", "user"],
-                        },
-                    },
+                    "guest_profiles": guest_profiles_schema(false),
                     "max_players": whole("Guests at most, 1 to 3."),
                     "block_system_buttons": flag(
                         "Take PS and Create from guests who are playing.",
                     ),
                     "stream_seat": flag(
-                        "Let a guest play as the host on Player 1 (the stream's own controller, \
-                         signed in as the host's PS5 user) while the host's device shows no \
-                         picture and no phone plays. Off: every guest gets their own controller \
-                         and picks a user on the TV.",
+                        "Not here: a guest on the stream's own controller plays as the host's PS5 \
+                         profile, so it is together_owner_access, which asks the user first.",
                     ),
                     "internet_invites": flag("Allow internet invites (on by default)."),
                     "hub_url": text("The signalling hub, a wss:// address."),
@@ -156,6 +130,34 @@ pub(super) fn tools() -> Vec<ToolDef> {
                     "upnp": flag(
                         "Ask the router for a port (UPnP, NAT-PMP) while an internet invite is \
                          open.",
+                    ),
+                }),
+                &[],
+            ),
+            run: |ctx, args| Box::pin(settings(ctx, args)),
+        },
+        ToolDef {
+            name: "together_owner_access",
+            title: "Let a friend play as the host",
+            description: "Lets a friend play as the host's own PS5 profile, with its saves, \
+                          trophies and purchases: only with the user's explicit yes, asked for \
+                          this change. `stream_seat` on lets a guest take Player 1, the stream's \
+                          own controller signed in as the host's PS5 user, while the host's device \
+                          shows no picture and no phone plays (off: every guest gets their own \
+                          controller and picks a user on the TV). `guest_profiles` with `addr` \
+                          sets each guest player's profile as together_settings does, and may \
+                          name the host's own profile (the one in front) as `owner: true`.",
+            kind: Kind::Destructive { idempotent: true },
+            schema: object(
+                json!({
+                    "addr": {
+                        "type": "string",
+                        "description": "The console `guest_profiles` are for (its address). Required with them.",
+                    },
+                    "guest_profiles": guest_profiles_schema(true),
+                    "stream_seat": flag(
+                        "Let a guest play as the host on Player 1 (the stream's own controller, \
+                         signed in as the host's PS5 user).",
                     ),
                 }),
                 &[],
@@ -228,6 +230,67 @@ pub(super) fn tools() -> Vec<ToolDef> {
     ]
 }
 
+/// `guest_profiles` as a tool takes it. `owner` only in together_owner_access.
+fn guest_profiles_schema(owner: bool) -> Value {
+    let mut item = json!({
+        "type": "object",
+        "properties": {
+            "player": { "type": "integer", "minimum": 2, "maximum": 4 },
+            "user": {
+                "type": "integer",
+                "description": "The profile's id, from together_profiles.",
+            },
+            "name": { "type": "string" },
+        },
+        "required": ["player", "user"],
+    });
+    if owner {
+        item["properties"]["owner"] = json!({
+            "type": "boolean",
+            "description": "The user confirmed a friend may play as their own profile (its \
+                            saves and trophies).",
+        });
+    }
+    json!({
+        "type": "array",
+        "description": "The profile each guest's player plays as, replacing the last choice. A \
+                        player left out: the TV asks the guest who they are. Empty: the TV asks \
+                        every guest.",
+        "items": item,
+    })
+}
+
+/// What together_settings leaves to together_owner_access: a friend playing as the host's own
+/// profile, on a helper pad (`owner: true`) or on the stream's controller (`stream_seat`). That
+/// tool is marked destructive, so a client asks the user before it runs; this one is not.
+fn owner_access_asked(args: &Args) -> Option<&'static str> {
+    if args.value("stream_seat").is_some() {
+        return Some("stream_seat");
+    }
+    let owner = args
+        .value("guest_profiles")
+        .and_then(Value::as_array)
+        .is_some_and(|v| v.iter().any(|p| p.get("owner") == Some(&Value::Bool(true))));
+    owner.then_some("owner: true")
+}
+
+async fn settings(ctx: ToolCtx, args: Args) -> ToolResult {
+    if let Some(what) = owner_access_asked(&args) {
+        return Err(ToolOutput::error(format!(
+            "together_settings does not take `{what}`: it lets a friend play as the host's own PS5 \
+             profile (its saves and trophies). Ask the user, then use together_owner_access."
+        )));
+    }
+    let mut body = serde_json::Map::new();
+    for (name, value) in args.entries() {
+        if !value.is_null() {
+            body.insert(name.clone(), value.clone());
+        }
+    }
+    let answer = ctx.post("/api/join/settings", &Value::Object(body)).await?;
+    Ok(ToolOutput::ok("Changed.", answer))
+}
+
 /// The route takes `{destinations: [{key_id}]}`; an agent has a list of ids.
 async fn golive_start(ctx: ToolCtx, args: Args) -> ToolResult {
     let ids: Vec<Value> = args
@@ -247,4 +310,62 @@ async fn golive_start(ctx: ToolCtx, args: Args) -> ToolResult {
     }
     let answer = ctx.post("/api/stream/start", &body).await?;
     Ok(ToolOutput::ok("Live.", answer))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(v: Value) -> Args {
+        match v {
+            Value::Object(m) => Args(m),
+            _ => Args::default(),
+        }
+    }
+
+    /// The host's own profile goes through together_owner_access alone, which is marked
+    /// destructive so a client asks the user; together_settings refuses it and names that tool.
+    #[test]
+    fn the_host_s_own_profile_is_a_tool_of_its_own() {
+        let tools = tools();
+        let tool = |name: &str| tools.iter().find(|t| t.name == name).unwrap();
+        let owner = tool("together_owner_access");
+        assert_eq!(owner.kind.annotations()["destructiveHint"], true);
+        assert!(
+            owner.schema["properties"]["guest_profiles"]["items"]["properties"]
+                .get("owner")
+                .is_some()
+        );
+        let plain = tool("together_settings");
+        assert_eq!(plain.kind.annotations()["destructiveHint"], false);
+        assert!(
+            plain.schema["properties"]["guest_profiles"]["items"]["properties"]
+                .get("owner")
+                .is_none()
+        );
+
+        assert_eq!(
+            owner_access_asked(&args(json!({"stream_seat": true}))),
+            Some("stream_seat")
+        );
+        assert_eq!(
+            owner_access_asked(&args(json!({"stream_seat": false}))),
+            Some("stream_seat")
+        );
+        assert_eq!(
+            owner_access_asked(&args(json!({
+                "addr": "1.2.3.4",
+                "guest_profiles": [{"player": 2, "user": 1, "owner": true}],
+            }))),
+            Some("owner: true")
+        );
+        assert_eq!(
+            owner_access_asked(&args(json!({
+                "addr": "1.2.3.4",
+                "guest_profiles": [{"player": 2, "user": 1, "owner": false}],
+                "max_players": 2,
+            }))),
+            None
+        );
+    }
 }

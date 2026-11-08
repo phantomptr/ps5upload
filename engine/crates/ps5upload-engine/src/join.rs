@@ -323,11 +323,21 @@ fn seat_profile(console: &str, player: u8) -> Option<SeatProfile> {
 
 /// The [`vpad::Bind`] a new pad for `player` asks for: only a profile the host chose, and the
 /// owner flag only as the host confirmed it.
+#[cfg(test)]
 fn seat_bind(console: &str, player: u8) -> Option<vpad::Bind> {
-    seat_profile(console, player).map(|p| vpad::Bind {
+    seat_profile(console, player).as_ref().map(seat_bind_of)
+}
+
+/// Another profile (or none, or one where there was none): the pad must be seated again.
+fn seat_changed(had: Option<&SeatProfile>, want: Option<&SeatProfile>) -> bool {
+    had.map(seat_bind_of) != want.map(seat_bind_of)
+}
+
+fn seat_bind_of(p: &SeatProfile) -> vpad::Bind {
+    vpad::Bind {
         user: p.user,
         owner: p.owner,
-    })
+    }
 }
 
 fn set_seat_profiles(console: &str, v: Vec<SeatProfile>) {
@@ -343,6 +353,36 @@ fn set_seat_profiles(console: &str, v: Vec<SeatProfile>) {
 /// The choices as the host's request gives them: Player 2-4 each at most once, a profile at most
 /// once, a real user id (not 0, not the console's "nobody"), names trimmed. The error names what is
 /// wrong.
+/// The host's own profile (the one in front) is chosen only with `owner`, their confirmation. When
+/// the console does not say who is in front (it did not answer, or named nobody), any profile newly
+/// chosen without that confirmation may be the host's own: refused as `owner_unknown`, which the app
+/// asks about the same way. A choice kept as it was (`before`) keeps the confirmation it had.
+fn owner_check(
+    v: &[SeatProfile],
+    users: Option<&[vpad::ConsoleUser]>,
+    before: &[SeatProfile],
+) -> Result<(), &'static str> {
+    let front = users.and_then(|u| u.iter().find(|u| u.foreground).map(|u| u.id));
+    match front {
+        Some(front) => {
+            if v.iter().any(|p| !p.owner && p.user == front) {
+                return Err("owner_confirm");
+            }
+        }
+        None => {
+            let kept = |p: &SeatProfile| {
+                before
+                    .iter()
+                    .any(|b| b.player == p.player && b.user == p.user)
+            };
+            if v.iter().any(|p| !p.owner && !kept(p)) {
+                return Err("owner_unknown");
+            }
+        }
+    }
+    Ok(())
+}
+
 fn clean_seat_profiles(v: Vec<SeatProfile>) -> Result<Vec<SeatProfile>, &'static str> {
     let mut out: Vec<SeatProfile> = Vec::new();
     for p in v {
@@ -428,6 +468,9 @@ pub(crate) struct Guest {
     /// Seated in the profile the host chose ("Guests play as"): its id and name. The console
     /// does not ask, and PS and Create are blocked from the start.
     plays_as: Option<(u32, String)>,
+    /// The host's choice their pad was last opened with (the link asks the helper for it on every
+    /// reopen): a resume compares it with the choice now and seats the pad again when it changed.
+    seat: Option<SeatProfile>,
     /// A profile was chosen for their player but not given to their pad (the console asks):
     /// why (`link::unseated`).
     seat_note: Option<&'static str>,
@@ -459,12 +502,19 @@ impl Guest {
     /// they play at once (PS and Create blocked from the first frame when the host blocks them,
     /// no picking window); or the console asks them who they are, as without a choice (with the
     /// reason when a choice could not be used).
-    fn pad_made(&mut self, r: &link::OpenResult, console: &str, now: Instant) {
+    /// `seat` is the choice the pad was opened with (None: a reopen, which asks for the same one).
+    fn pad_made(&mut self, r: &link::OpenResult, seat: Option<Option<SeatProfile>>, now: Instant) {
+        if let Some(seat) = seat {
+            self.seat = seat;
+        }
         match r {
             link::OpenResult::Seated(user) => {
-                let name = seat_profile(console, self.player)
+                // The name of the choice it was seated in: the choice now may be another one.
+                let name = self
+                    .seat
+                    .as_ref()
                     .filter(|p| p.user == *user)
-                    .map(|p| p.name)
+                    .map(|p| p.name.clone())
                     .unwrap_or_default();
                 self.plays_as = Some((*user, name));
                 self.seat_note = None;
@@ -479,6 +529,19 @@ impl Guest {
                 self.playing = false;
                 self.picking_since = now;
             }
+        }
+    }
+
+    /// The pad keeps its profile (the same user), whose name may have changed since: the name
+    /// shown is the choice's now.
+    fn seat_renamed(&mut self, want: Option<SeatProfile>) {
+        if let (Some((user, name)), Some(w)) = (self.plays_as.as_mut(), want.as_ref()) {
+            if *user == w.user {
+                name.clone_from(&w.name);
+            }
+        }
+        if want.is_some() {
+            self.seat = want;
         }
     }
 
@@ -754,6 +817,7 @@ impl Party {
             playing: false,
             picking_since: now,
             plays_as: None,
+            seat: None,
             seat_note: None,
             seat_input_at: None,
             seat_move: SeatMove::No,
@@ -862,13 +926,12 @@ impl Party {
     /// The pad of `slot` was made anew (the helper restarted): seated in the host's choice again
     /// (`seat`), or the console asks the guest who they are again.
     fn reopened(&mut self, slot: u8, seat: &link::OpenResult, now: Instant) {
-        let console = self.console.clone();
         if let Some(g) = self
             .guests
             .iter_mut()
             .find(|g| g.active() && g.player == slot)
         {
-            g.pad_made(seat, &console, now);
+            g.pad_made(seat, None, now);
         }
     }
 
@@ -1288,7 +1351,8 @@ async fn move_off_seat(console: String, id: u64) -> bool {
             SeatStep::NoPad => break,
             SeatStep::Try(n, t) => (n, t),
         };
-        let r = open_slot(&console, player, &token).await;
+        let seat = seat_profile(&console, player);
+        let r = open_slot(&console, player, &token, seat.as_ref()).await;
         if r == link::OpenResult::Busy {
             tried.push(player);
             continue;
@@ -1302,7 +1366,7 @@ async fn move_off_seat(console: String, id: u64) -> bool {
                 .filter(|g| g.active() && g.seat_move == SeatMove::Running)
                 .map(|g| {
                     g.slot_open = true;
-                    g.pad_made(&r, &console, now);
+                    g.pad_made(&r, Some(seat.clone()), now);
                     g.seat_move = SeatMove::No;
                 })
         })
@@ -1972,7 +2036,7 @@ async fn resume<S: GuestSocket>(socket: &mut S, token: &str) -> Option<Admit> {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
-    let Some((player, token, open)) = with_party(&key, |p| {
+    let Some((player, token, open, kept, had)) = with_party(&key, |p| {
         p.guests
             .iter()
             .find(|g| g.id == id && g.active())
@@ -1982,21 +2046,40 @@ async fn resume<S: GuestSocket>(socket: &mut S, token: &str) -> Option<Admit> {
                     g.player,
                     g.pad_token.clone(),
                     g.slot_open || g.seat_move != SeatMove::No,
+                    g.slot_open && g.seat_move == SeatMove::No,
+                    g.seat.clone(),
                 )
             })
     })
     .flatten() else {
         return Some(Admit::Refused("expired"));
     };
-    if !open && player != STREAM_SEAT {
+    // The host may have chosen another profile for their player while they were away: their pad
+    // is seated in the choice now (the link makes it again in that profile), not the old one.
+    let want = seat_profile(&console, player);
+    let rebind = kept && player != STREAM_SEAT && seat_changed(had.as_ref(), want.as_ref());
+    if kept && !rebind {
+        // The same profile: only its name may be new (it is the one shown).
+        with_party(&key, |p| {
+            if let Some(g) = p.guest_mut(id).filter(|g| g.active()) {
+                g.seat_renamed(want.clone());
+            }
+        });
+    }
+    if (!open || rebind) && player != STREAM_SEAT {
         // The pad was removed while the host was away: make it again (the console asks who
-        // they are again).
+        // they are again, unless the host chose a profile). Or seat it in the host's new choice.
         crate::log_at!(
             Debug,
             "together",
-            "join: guest {id} resumes on {console}: making Player {player}'s pad again"
+            "join: guest {id} resumes on {console}: {} Player {player}'s pad",
+            if rebind {
+                "seating again"
+            } else {
+                "making again"
+            }
         );
-        match open_slot(&console, player, &token).await {
+        match open_slot(&console, player, &token, want.as_ref()).await {
             r if r.is_ok() => {
                 let now = Instant::now();
                 // Still in? A kick or a loss while the pad was made means nobody will close
@@ -2004,7 +2087,7 @@ async fn resume<S: GuestSocket>(socket: &mut S, token: &str) -> Option<Admit> {
                 let ok = with_party(&key, |p| {
                     p.guest_mut(id).filter(|g| g.active()).map(|g| {
                         g.slot_open = true;
-                        g.pad_made(&r, &console, now);
+                        g.pad_made(&r, Some(want.clone()), now);
                     })
                 })
                 .flatten()
@@ -2029,9 +2112,14 @@ async fn resume<S: GuestSocket>(socket: &mut S, token: &str) -> Option<Admit> {
 /// (if any: [`seat_bind`]). Only the host's choice is ever asked for, and the owner's profile only
 /// as the host confirmed it; a seat the helper cannot give leaves the pad to the console's
 /// question ([`link::OpenResult::Unseated`]).
-async fn open_slot(console: &str, slot: u8, token: &str) -> link::OpenResult {
+async fn open_slot(
+    console: &str,
+    slot: u8,
+    token: &str,
+    seat: Option<&SeatProfile>,
+) -> link::OpenResult {
     let (tx, rx) = oneshot::channel();
-    let bind = seat_bind(console, slot);
+    let bind = seat.map(seat_bind_of);
     link::send(
         console,
         link::Cmd::Open {
@@ -2235,16 +2323,16 @@ async fn ask<S: GuestSocket>(
             );
             return Some(Admit::New(console, gid));
         }
-        let r = open_slot(&console, player, &pad_token).await;
+        let seat = seat_profile(&console, player);
+        let r = open_slot(&console, player, &pad_token, seat.as_ref()).await;
         let now = Instant::now();
         if r.is_ok() {
-            let c = console.clone();
             let ok = with_party(&key, |p| {
                 // Still in: a kick while the pad was made leaves nobody to close it.
                 p.guest_mut(gid).filter(|g| g.active()).map(|g| {
                     g.slot_open = true;
                     // Seated in the host's choice: playing from the first frame.
-                    g.pad_made(&r, &c, now);
+                    g.pad_made(&r, Some(seat.clone()), now);
                     g.joined_at = now;
                 })
             })
@@ -3114,7 +3202,8 @@ fn stun_server_ok(s: &str) -> bool {
 /// profile the host chose (`{player: 2-4, user, name, owner}`; a player left out: the TV asks).
 /// Only signed-in profiles can be seated. The host's own profile (the one in front) needs `owner`
 /// true, the host's confirmation that the guest may use its saves and trophies (409
-/// `owner_confirm` otherwise); 400 `addr` without a console, 400 `player`, `user` or `duplicate`
+/// `owner_confirm` otherwise; `owner_unknown` when the console does not say which one is in front,
+/// for any profile newly chosen without `owner`); 400 `addr` without a console, 400 `player`, `user` or `duplicate`
 /// for a list that is not one profile per player.
 pub async fn set_settings(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
@@ -3134,16 +3223,14 @@ pub async fn set_settings(
             Err(why) => return bad(StatusCode::BAD_REQUEST, why),
         };
         // The host's own profile only with their confirmation. The helper checks again as each pad
-        // is made (the one in front may change); a console that does not answer now is left to it.
+        // is made (the one in front may change).
         let c = addr.clone();
-        if let Ok(Ok(users)) =
-            tokio::task::spawn_blocking(move || link::port_for(&c).users(&c)).await
-        {
-            if v.iter()
-                .any(|p| !p.owner && users.iter().any(|u| u.foreground && u.id == p.user))
-            {
-                return bad(StatusCode::CONFLICT, "owner_confirm");
-            }
+        let users = tokio::task::spawn_blocking(move || link::port_for(&c).users(&c))
+            .await
+            .ok()
+            .and_then(Result::ok);
+        if let Err(why) = owner_check(&v, users.as_deref(), &seat_profiles(&addr)) {
+            return bad(StatusCode::CONFLICT, why);
         }
         seats = Some((addr, v));
     }
@@ -3675,6 +3762,21 @@ pub(crate) mod link {
                     reply,
                 } => {
                     if let Some(s) = self.slots.get_mut(&slot) {
+                        if s.token == token && s.want != bind {
+                            // The same guest, another profile (the host changed it while they
+                            // were away): the helper keeps a pad in the profile it was made for,
+                            // so the pad goes and is made again in the new one.
+                            if let Some(old) = self.slots.remove(&slot) {
+                                for w in old.waiters {
+                                    let _ = w.send(OpenResult::Failed("replaced".into()));
+                                }
+                                self.closing.push((slot, old.token));
+                            }
+                            let mut s = Slot::new(token, bind, now);
+                            s.waiters.push(reply);
+                            self.slots.insert(slot, s);
+                            return;
+                        }
                         if s.token == token {
                             if s.opened {
                                 let _ = reply.send(s.result());
@@ -5552,9 +5654,11 @@ mod tests {
                 .unwrap(),
             OpenResult::Seated(0x1000)
         );
-        // no choice: nothing asked
+        // the same owner with the same choice gets what its pad has: nothing asked again
         assert_eq!(
-            open_slot_t(&mut st, 2, "a", t).try_recv().unwrap(),
+            open_bound_t(&mut st, 2, "a", bind(0x2000, false), t)
+                .try_recv()
+                .unwrap(),
             OpenResult::Seated(0x2000),
             "the same owner again gets what its pad has"
         );
@@ -5568,6 +5672,91 @@ mod tests {
                 bind(0x1000, true),
             ]
         );
+    }
+
+    /// A guest coming back after the host chose another profile for their player: the same owner
+    /// asks with the new choice, and its pad goes and is made again in that profile (the helper
+    /// keeps a pad in the profile it was made for).
+    #[test]
+    fn a_resume_with_another_choice_seats_the_pad_again() {
+        let f = seat_helper(&[0x2000, 0x3000, 0x1000], 0x1000);
+        let (mut st, _ev) = link_with(&f);
+        let t = Instant::now();
+        assert_eq!(
+            open_bound_t(&mut st, 2, "a", bind(0x2000, false), t)
+                .try_recv()
+                .unwrap(),
+            OpenResult::Seated(0x2000)
+        );
+        let mut rx = open_bound_t(&mut st, 2, "a", bind(0x3000, false), t);
+        st.tick(t);
+        assert_eq!(rx.try_recv().unwrap(), OpenResult::Seated(0x3000));
+        let log = f.log();
+        assert_eq!(log, vec!["open2", "close2", "open2"], "{log:?}");
+        // the choice taken away: made again without one (the TV asks)
+        let mut rx = open_bound_t(&mut st, 2, "a", None, t);
+        st.tick(t);
+        assert_eq!(rx.try_recv().unwrap(), OpenResult::Ok);
+        assert_eq!(
+            f.binds.lock().unwrap().clone(),
+            vec![bind(0x2000, false), bind(0x3000, false), None]
+        );
+    }
+
+    #[test]
+    fn the_owner_check_asks_when_the_console_does_not_say_who_is_in_front() {
+        let seat = |player: u8, user: u32, owner: bool| SeatProfile {
+            player,
+            user,
+            name: String::new(),
+            owner,
+        };
+        let users = |front: Option<u32>| {
+            [0x1000u32, 0x2000]
+                .iter()
+                .map(|&id| vpad::ConsoleUser {
+                    id,
+                    name: String::new(),
+                    foreground: Some(id) == front,
+                })
+                .collect::<Vec<_>>()
+        };
+        let known = users(Some(0x1000));
+        // the one in front needs the host's yes; another profile does not
+        assert_eq!(
+            owner_check(&[seat(2, 0x1000, false)], Some(&known), &[]),
+            Err("owner_confirm")
+        );
+        assert_eq!(
+            owner_check(&[seat(2, 0x1000, true)], Some(&known), &[]),
+            Ok(())
+        );
+        assert_eq!(
+            owner_check(&[seat(2, 0x2000, false)], Some(&known), &[]),
+            Ok(())
+        );
+        // the console did not answer, or named nobody in front: any new choice may be the
+        // host's own, so it needs the same yes
+        for users in [None, Some(users(None))] {
+            assert_eq!(
+                owner_check(&[seat(2, 0x2000, false)], users.as_deref(), &[]),
+                Err("owner_unknown")
+            );
+            assert_eq!(
+                owner_check(&[seat(2, 0x2000, true)], users.as_deref(), &[]),
+                Ok(())
+            );
+            // a choice kept as it was keeps the answer it had
+            assert_eq!(
+                owner_check(
+                    &[seat(2, 0x2000, false), seat(3, 0x1000, true)],
+                    users.as_deref(),
+                    &[seat(2, 0x2000, false)]
+                ),
+                Ok(())
+            );
+            assert_eq!(owner_check(&[], users.as_deref(), &[]), Ok(()));
+        }
     }
 
     #[test]
@@ -5703,10 +5892,9 @@ mod tests {
         let mut p = party();
         let t = Instant::now();
         let id = admit(&mut p, "Sam", t);
-        let c = p.console.clone();
         p.guest_mut(id)
             .unwrap()
-            .pad_made(&OpenResult::Seated(0x2000), &c, t);
+            .pad_made(&OpenResult::Seated(0x2000), Some(None), t);
         // PS and Create taken from the first frame: no picking window
         assert_eq!(p.strip_mask(id), Some((2, vpad::button::SYSTEM)));
         assert_eq!(p.guest_status(id).unwrap()["status"]["block_system"], true);
@@ -6078,7 +6266,7 @@ mod tests {
         let f = Arc::new(FakeHelper::default());
         *f.open_delay.lock().unwrap() = OPEN_WAIT + Duration::from_millis(700);
         set_helper(console, f.clone());
-        let r = open_slot(console, 2, "0123456789abcdef0123456789abcdef").await;
+        let r = open_slot(console, 2, "0123456789abcdef0123456789abcdef", None).await;
         assert_eq!(r, OpenResult::Failed("timeout".into()));
         until("the late pad to be removed", || {
             f.log().contains(&"close2".to_string())
@@ -6964,6 +7152,110 @@ mod tests {
         .await;
         set_seat_profiles(console, Vec::new());
         *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        set_live(console, 0);
+    }
+
+    /// A guest who drops and comes back with their token after the host chose another profile for
+    /// their player: their pad is seated in the new one (made again), and its name is the one
+    /// shown, never blank. With the same choice, the pad they had is kept as it was.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_resume_takes_the_profile_the_host_chose_meanwhile() {
+        let _turn = PARTY_TESTS.lock().await;
+        let console = "10.77.0.42";
+        let f = seat_helper(&[0x2000, 0x3000, 0x1000], 0x1000);
+        set_helper(console, f.clone());
+        let url = serve().await;
+        set_live(console, 1);
+        set_seat_profiles(
+            console,
+            vec![SeatProfile {
+                player: 2,
+                user: 0x2000,
+                name: "Guest 1".into(),
+                owner: false,
+            }],
+        );
+        let (ci, h) = local();
+        let s = body(
+            open(
+                ci,
+                h,
+                Json(AddrBody {
+                    addr: console.into(),
+                }),
+            )
+            .await,
+        )
+        .await;
+        let key = s["invite"]["key"].as_str().unwrap().to_string();
+        let mut sam = guest(
+            &url,
+            serde_json::json!({"hello": {"invite": key, "name": "Sam"}}),
+        )
+        .await;
+        assert_eq!(next(&mut sam).await["stage"], "asking");
+        allow_next(console, true).await;
+        let j = next(&mut sam).await;
+        assert_eq!(j["player"], 2);
+        let token = j["token"].as_str().unwrap().to_string();
+        let plays_as = || async {
+            let s = host_state(console).await;
+            s["guests"][0]["plays_as"]["name"].clone()
+        };
+        assert_eq!(plays_as().await, "Guest 1");
+
+        // Same choice: back on the pad they had, nothing made again.
+        drop(sam);
+        until("Sam away", || {
+            with_party(&host_key(console), |p| {
+                p.guests.iter().any(|g| g.conn.is_none())
+            })
+            .unwrap_or(false)
+        })
+        .await;
+        let mut sam = guest(&url, serde_json::json!({"hello": {"resume": token}})).await;
+        assert_eq!(next(&mut sam).await["player"], 2);
+        assert_eq!(f.binds.lock().unwrap().clone(), vec![bind(0x2000, false)]);
+
+        // The host chooses Guest 2 for Player 2 while Sam is away.
+        drop(sam);
+        until("Sam away again", || {
+            with_party(&host_key(console), |p| {
+                p.guests.iter().any(|g| g.conn.is_none())
+            })
+            .unwrap_or(false)
+        })
+        .await;
+        set_seat_profiles(
+            console,
+            vec![SeatProfile {
+                player: 2,
+                user: 0x3000,
+                name: "Guest 2".into(),
+                owner: false,
+            }],
+        );
+        let mut sam = guest(&url, serde_json::json!({"hello": {"resume": token}})).await;
+        assert_eq!(next(&mut sam).await["player"], 2);
+        assert_eq!(
+            f.binds.lock().unwrap().last().cloned(),
+            Some(bind(0x3000, false)),
+            "seated in the new choice"
+        );
+        assert!(f.log().contains(&"close2".to_string()), "{:?}", f.log());
+        assert_eq!(plays_as().await, "Guest 2");
+
+        drop(sam);
+        let (ci, h) = local();
+        close(
+            ci,
+            h,
+            Json(AddrBody {
+                addr: console.into(),
+            }),
+        )
+        .await;
+        set_seat_profiles(console, Vec::new());
         set_live(console, 0);
     }
 
