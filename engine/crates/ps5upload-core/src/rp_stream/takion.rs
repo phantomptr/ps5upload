@@ -982,10 +982,7 @@ mod path_mtu_tests {
         // Tailscale.
         assert_eq!(path_mtu(ip("100.101.1.2"), ip("100.90.3.4")), MTU_ROUTED);
         // Another subnet behind a router.
-        assert_eq!(
-            path_mtu(ip("192.168.2.5"), ip("192.168.1.100")),
-            MTU_ROUTED
-        );
+        assert_eq!(path_mtu(ip("192.168.2.5"), ip("192.168.1.100")), MTU_ROUTED);
         assert_eq!(path_mtu(ip("fe80::1"), ip("fe80::2")), MTU_LAN);
     }
 }
