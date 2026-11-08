@@ -975,17 +975,14 @@ mod path_mtu_tests {
     #[test]
     fn full_size_only_on_one_local_network() {
         let ip = |s: &str| s.parse::<std::net::IpAddr>().unwrap();
-        assert_eq!(path_mtu(ip("192.168.86.20"), ip("192.168.86.100")), MTU_LAN);
+        assert_eq!(path_mtu(ip("192.168.1.20"), ip("192.168.1.100")), MTU_LAN);
         assert_eq!(path_mtu(ip("127.0.0.1"), ip("127.0.0.1")), MTU_LAN);
         // WireGuard on a phone: a tunnel address reaching the home LAN.
-        assert_eq!(path_mtu(ip("10.8.0.2"), ip("192.168.86.100")), MTU_ROUTED);
+        assert_eq!(path_mtu(ip("10.8.0.2"), ip("192.168.1.100")), MTU_ROUTED);
         // Tailscale.
         assert_eq!(path_mtu(ip("100.101.1.2"), ip("100.90.3.4")), MTU_ROUTED);
         // Another subnet behind a router.
-        assert_eq!(
-            path_mtu(ip("192.168.1.5"), ip("192.168.86.100")),
-            MTU_ROUTED
-        );
+        assert_eq!(path_mtu(ip("192.168.2.5"), ip("192.168.1.100")), MTU_ROUTED);
         assert_eq!(path_mtu(ip("fe80::1"), ip("fe80::2")), MTU_LAN);
     }
 }

@@ -1721,23 +1721,24 @@ void webui_api_settings_init(const webui_settings_t *s, int saved) {
 /* tile_busy / tile_failed: the tile switch is applied on the tile thread after this reply (Sony calls
  * take seconds), so the page re-reads /api/settings until tile_busy is false and then says so when
  * the last ensure/remove failed (webui_tile_state). tile_result: what the helper last did to the
- * tile ("added", "removed", "hidden", "failed" or ""; webui_tile_result_name). */
+ * tile ("added", "removed", "hidden", "failed" or ""; webui_tile_result_name). tile_error: why it
+ * failed, a short code ("not_listed", "register_install_api_error", ...; webui_tile_last_error). */
 /* `addr`: with LAN access on, the console's address a phone opens ("Continue on your phone"; the
  * page builds http://<addr>:<port>/ from it); "" when off or there is none. Dotted IPv4 only.
  * `enabled`: PS5Upload Minion as a whole (false only in the reply that turns it off: the page
  * stops right after). `start_cheats`: the page opens on Cheats instead of Home (#584). */
 static void send_settings(int fd, const webui_settings_t *s) {
-    char json[320], addr[INET_ADDRSTRLEN];
+    char json[448], addr[INET_ADDRSTRLEN];
     int busy, failed, k;
     webui_tile_result_t result;
     webui_tile_state(&busy, &failed, &result);
     if (!s->lan || !webui_lan_addr(addr)) addr[0] = '\0';
     k = snprintf(json, sizeof json,
                  "{\"lan\":%s,\"tile\":%s,\"enabled\":%s,\"start_cheats\":%s,\"tile_busy\":%s,\"tile_failed\":%s,"
-                 "\"tile_result\":\"%s\",\"version\":\"%s\",\"addr\":\"%s\"}",
+                 "\"tile_result\":\"%s\",\"tile_error\":\"%s\",\"version\":\"%s\",\"addr\":\"%s\"}",
                  s->lan ? "true" : "false", s->tile ? "true" : "false", s->enabled ? "true" : "false",
                  s->start_cheats ? "true" : "false", busy ? "true" : "false", failed ? "true" : "false",
-                 webui_tile_result_name(result), PS5UPLOAD2_VERSION, addr);
+                 webui_tile_result_name(result), webui_tile_last_error(), PS5UPLOAD2_VERSION, addr);
     if (k < 0 || (size_t)k >= sizeof json) {
         send_error(fd, 500, "bad_settings_reply", 18);
         return;
@@ -1959,10 +1960,10 @@ int webui_api_tile(const char *body, size_t len, char *out, size_t cap) {
     webui_tile_state(&busy, &failed, &result);
     n = snprintf(out, cap,
         "{\"tile\":%s,\"enabled\":%s,\"lan\":%s,\"saved\":%s,\"tile_busy\":%s,\"tile_failed\":%s,"
-        "\"tile_result\":\"%s\",\"port\":%d,\"version\":\"%s\"",
+        "\"tile_result\":\"%s\",\"tile_error\":\"%s\",\"port\":%d,\"version\":\"%s\"",
         s.tile ? "true" : "false", s.enabled ? "true" : "false", s.lan ? "true" : "false",
         g_saved ? "true" : "false", busy ? "true" : "false", failed ? "true" : "false",
-        webui_tile_result_name(result), (int)WEBUI_PORT, PS5UPLOAD2_VERSION);
+        webui_tile_result_name(result), webui_tile_last_error(), (int)WEBUI_PORT, PS5UPLOAD2_VERSION);
     if (n > 0 && (size_t)n < cap && removed >= 0) n += snprintf(out + n, cap - (size_t)n, ",\"removed\":%d", removed);
     if (n > 0 && (size_t)n < cap) n += snprintf(out + n, cap - (size_t)n, "}");
     pthread_mutex_unlock(&g_set_mu);
@@ -3096,22 +3097,44 @@ _Static_assert(sizeof(STRINGS_HEADERS) <= 300, "STRINGS_HEADERS must fit webui_s
 /* The offline copy's files (webui_offline.h): checked on every visit. */
 #define OFFLINE_HEADERS "Cache-Control: no-cache\r\n"
 
-/* GET /, GET /api/token, GET /strings/<lang>.json, GET /sw.js and GET /cache.appcache: the server
+/* An older page's token read refused at most once per window (webui_offline_nudge). */
+static pthread_mutex_t g_nudge_mu = PTHREAD_MUTEX_INITIALIZER;
+static webui_nudge_t g_nudge;
+
+static int nudge_old_page(const char *query) {
+    int refuse;
+    pthread_mutex_lock(&g_nudge_mu);
+    refuse = webui_offline_nudge(query, (uint64_t)mono_ms(), &g_nudge);
+    pthread_mutex_unlock(&g_nudge_mu);
+    if (refuse)
+        fprintf(stderr, "webui: an older stored copy of the page asked for the token; answering \"stopping\" "
+                        "once so it reloads from the helper\n");
+    return refuse;
+}
+
+/* GET /, GET /api/token, GET /strings/<lang>.json, GET /sw.js, GET /minion.appcache and the retired
+ * GET /cache.appcache (410): the server
  * checked Host/Origin but no token (is_api is 0 for all of them). None reaches a helper method, so they stay outside the in-flight RPC
  * gate. The token goes out as JSON with no CORS headers: another site's page cannot read the reply,
  * and loaded through a <script> tag it executes nothing. Never serve it as JavaScript. A strings
- * path names one of the embedded languages exactly (webui_strings_find) or answers 404. */
+ * path names one of the embedded languages exactly (webui_strings_find) or answers 404. The token
+ * reply carries the helper's version, so a page can tell it is older and reload itself; an older
+ * stored page that does not mark its token read is nudged into reloading (webui_offline.h). */
 static int serve_static(const webui_req_t *r, int fd) {
     int page = strcmp(r->path, "/") == 0;
     int strings = strncmp(r->path, STRINGS_PREFIX, sizeof STRINGS_PREFIX - 1) == 0;
     webui_offline_file_t off;
     int offline = webui_offline_find(r->path, &off);
-    if (!page && !strings && !offline && strcmp(r->path, "/api/token") != 0) return 0;
+    int retired = webui_offline_retired(r->path);
+    if (!page && !strings && !offline && !retired && strcmp(r->path, "/api/token") != 0) return 0;
     if (strcmp(r->method, "GET") != 0) {
         webui_send_json(fd, 405, "{\"error\":\"method_not_allowed\"}");
         return 1;
     }
-    if (offline) {
+    if (retired) {
+        /* 410: the browser deletes the appcache stored under this manifest ("obsolete"). */
+        webui_send_ex(fd, 410, "text/plain; charset=utf-8", (const unsigned char *)"", 0, WEBUI_OFFLINE_GONE_HEADERS);
+    } else if (offline) {
         webui_send_ex(fd, 200, off.ctype, off.data, off.len, OFFLINE_HEADERS);
     } else if (strings) {
         const webui_strings_entry_t *e = webui_strings_find(webui_strings_table, webui_strings_count, r->path);
@@ -3120,14 +3143,18 @@ static int serve_static(const webui_req_t *r, int fd) {
     } else if (page) {
         webui_send_ex(fd, 200, "text/html; charset=utf-8", webui_page_gz, webui_page_gz_len, PAGE_HEADERS);
     } else {
-        char tok[65], json[96];
+        char tok[65], json[160];
         int n;
         webui_token_copy(tok);
-        if (!tok[0]) {
+        if (!tok[0] || nudge_old_page(r->query)) {
             webui_send_json(fd, 503, "{\"error\":\"stopping\"}");
             return 1;
         }
-        n = snprintf(json, sizeof json, "{\"token\":\"%s\"}", tok);
+        n = webui_offline_token_json(json, sizeof json, tok, PS5UPLOAD2_VERSION);
+        if (n < 0) {
+            webui_send_json(fd, 500, "{\"error\":\"internal\"}");
+            return 1;
+        }
         send_json(fd, 200, json, (size_t)n);
     }
     return 1;

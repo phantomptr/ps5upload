@@ -138,30 +138,37 @@ Three ways, easiest first:
   when you're done.
 
 **Q: Can I play, or use the app, away from home?**
-Not over the internet by itself. PS5Upload talks to the PS5 on your home network, and the engine
-has no password, so never forward its ports on your router. Away from home, join your home network
-with a VPN; Tailscale is the easy one.
+Yes, with **Tailscale** built in (12.0.0): the PS5 and your devices join your own tailnet, with no
+Tailscale app needed. Never forward the engine's ports on your router instead: it has no password.
 
-- **The phone or laptop app:** install Tailscale on that device, and on a computer at home that
-  stays on, set Tailscale up as a *subnet router* for your home network (and approve the route in
-  Tailscale's admin page). The app then reaches the PS5 at its usual home address. Or run the
-  [ps5-tailscale](https://github.com/holdmysocks/ps5-tailscale) payload, so the PS5 joins your
-  Tailscale network itself, and connect to its Tailscale address.
-- **The web UI:** if a computer at home runs it, open `http://<its Tailscale address>:19113/`
-  with Tailscale on (add `100.64.0.0/10`, Tailscale's addresses, to `PS5UPLOAD_ALLOW_IP` if the
-  page refuses you). The engine is at home, so waking the console and Stream & install work as
-  usual; Play in the browser still needs an `https://` page.
+1. **The PS5:** at home, open **Connection** and press **Put this PS5 on Tailscale**. Sign in with
+   the link (or scan the QR code on your phone) to add the PS5 to your tailnet.
+2. **Each device you play from** (phone, laptop): **Settings › Tailscale › Sign in to Tailscale**
+   adds that device the same way.
 
-Through a VPN from the app, these don't work: **Stream & install and installs from a link** (the
-PS5 downloads from your device, which it can't reach; use Upload & install), and **waking the PS5
-from rest mode** may not (it drops off Tailscale in rest mode with ps5-tailscale, and we haven't
-tested it through a subnet router), so leave it on or wake it before you go. Play runs only as
-well as your home connection's upload speed allows; if it keeps dropping frames, take 720p. We
-haven't tested Play over Tailscale ourselves.
+Away from home, the app reaches the PS5 through Tailscale by itself when it doesn't answer at home.
+Only Remote Play and PS5Upload are reachable on the PS5 through it, nothing else. The connection
+chip says how it gets there: **via Tailscale (direct, 24 ms)**, or **relayed** when it goes through
+Tailscale's servers (slower). Using **Headscale**? Put its address under **Advanced › Control
+server** before you sign in. If your tailnet needs approval for new devices, approve them in its
+admin page.
+
+- **Keep the PS5 on.** In rest mode the PS5 drops off Tailscale, and it rejoins after a wake, so
+  leave it on (or wake it) before you go.
+- **Stream & install and installs from a link** need the PS5 to download from your device, which
+  it can't reach this way: use Upload & install.
+- Play runs only as well as your home connection's upload speed allows; if it keeps dropping
+  frames, take 720p.
+- **Friends without a Tailscale account** don't need one: send them an internet invite (see "Can a
+  friend who isn't at my place play together").
+- **The web UI:** if a computer at home runs it, open `http://<its Tailscale address>:19113/` with
+  Tailscale on that device (add `100.64.0.0/10`, Tailscale's addresses, to `PS5UPLOAD_ALLOW_IP` if
+  the page refuses you). Play in the browser still needs an `https://` page.
 
 **Q: How do I play with a friend as Player 2?**
 With **Play Together** (11.0.0). Your friend uses their own phone, tablet or computer, on your
-network, and plays your PS5 as Player 2, 3 or 4 while you play as Player 1.
+network or anywhere else with an internet invite (11.6.0), and plays your PS5 as Player 2, 3 or 4
+while you play as Player 1.
 
 1. **Invite.** Start Play, then press the people button on the picture's bar (on a phone:
    **⋯ › Play Together**). Your friend scans the QR code with their phone's camera, or you send
@@ -236,19 +243,24 @@ is you on the TV. If there's only one user on the console, add one first.
   as always (they pick **Quick Play** on the TV), but this setup hasn't been tried with every game.
 
 **Q: Can a friend who isn't at my place play together, or use a phone controller?**
-Yes, with Tailscale (11.0.1). Your friend connects to your computer, not to the PS5, so only your
-computer and your friend's device need it; no payload on the PS5.
+Play Together, yes: with an **internet invite** (11.6.0). Your friend needs nothing installed;
+the link opens in any browser, a phone on mobile data included.
 
-1. Install [Tailscale](https://tailscale.com/download) on the computer that plays, and sign in.
-2. Your friend installs Tailscale on their phone, tablet or computer. Either sign them in to your
-   tailnet, or keep your tailnets apart and share just this computer with them: in Tailscale's
-   admin console, open the computer's **⋯ › Share…** and send them the invite.
-3. In Play Together (or the phone controller and watch panel), press **Tailscale** above the QR
-   code: the link and the code switch to your computer's Tailscale address. Send that link.
+1. In Play Together, choose **Internet** above the QR code (instead of **This network**).
+2. Send your friend that link, or let them scan the QR code.
+3. As at home: they type a name, you press **Allow**, and they pick **Quick Play** on the TV.
 
-The **This network | Tailscale** choice shows only while Tailscale is connected on your computer.
-The rest works as at home: they ask, you allow. Everything goes through Tailscale's encrypted
-connection; how smooth it is depends on both connections' upload speed (take 720p if it stutters).
+A small server (hub.phantomptr.com) only introduces the two of you. The game's picture, sound and
+controls go straight between your computer and your friend's browser, never through it, and the
+link carries your app's fingerprint, so it can only ever reach you. Most home routers work as they
+are; where yours allows it, the app opens a port on it for the session (UPnP / NAT-PMP / PCP).
+Some strict networks (some offices, schools and mobile carriers) can't connect directly: the panel
+then says **Couldn't connect from their network**. How smooth it is depends on both connections'
+upload speed (take 720p if it stutters). **Settings › Play Together** has the server address and
+these options, and **Allow internet invites** turns them off.
+
+A phone controller and a watch link work from somewhere else too (12.0.0): choose **Internet**
+for them the same way. Over the internet a watcher only watches and can't be handed the controller.
 We don't support forwarding the engine's port on your router: its pages use plain `http`.
 
 **Q: Can a friend join over WireGuard (or another VPN) instead?**

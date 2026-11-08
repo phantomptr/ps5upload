@@ -973,6 +973,7 @@
   "cw_settings_text_size_note": "บันทึกไว้สำหรับหน้าจอนี้เท่านั้น ทีวีและคอมพิวเตอร์จึงตั้งขนาดของตัวเองได้",
   "cw_settings_theme": "ธีม",
   "cw_settings_tile": "แสดง PS5Upload Minion บนหน้าจอหลัก",
+  "cw_settings_tile_failed_reason": "เพิ่ม PS5Upload Minion ลงในหน้าจอหลักไม่ได้ ({reason}) ลองอีกครั้ง",
   "cw_settings_tile_hidden": "PS5 เก็บบันทึกของ PS5Upload Minion ไว้ จึงซ่อนไอคอนบนหน้าจอหลักแทน",
   "cw_settings_tips": "แสดงเคล็ดลับอีกครั้ง",
   "cw_settings_using": "จอยและเคล็ดลับ",

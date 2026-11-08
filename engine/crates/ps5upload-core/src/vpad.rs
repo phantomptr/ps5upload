@@ -223,8 +223,75 @@ pub struct Opened {
     /// pad (the console asks "Who's using this controller?").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resumed: Option<bool>,
+    /// Asked with [`Bind`]: the pad was seated in that user (the console will not ask who is
+    /// using it). False: made but not seated (the console will ask). None: not asked, or an older
+    /// helper that ignored the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bound: Option<bool>,
+    /// Why a seat failed: the Sony code (0x809b0005 reads -2137325563) or the companion's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind_code: Option<i64>,
+    /// The companion's state when a seat was refused for it (`vpad_bind_unavailable`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub companion: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub err: Option<String>,
+}
+
+/// A `vpad.open` that seats the pad in a console user the host chose (Play Together's "Guests
+/// play as"). The helper makes the pad for that user and binds it at once through the vinput
+/// companion, so the console never asks "Who's using this controller?"; it never makes it for the
+/// foreground user instead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Bind {
+    pub user: u32,
+    /// The host confirmed this profile although it is their own (the user in front): without it
+    /// the helper refuses that user (`vpad_bind_owner`).
+    pub owner: bool,
+}
+
+/// Refusals of a [`Bind`] open, with nothing made: the engine opens without it (the console asks).
+pub mod bind_err {
+    /// The companion is starting: ask again shortly.
+    pub const STARTING: &str = "vpad_bind_starting";
+    /// No companion to bind with (`companion` says its state: off, unavailable, no_bind).
+    pub const UNAVAILABLE: &str = "vpad_bind_unavailable";
+    /// That user is not signed in.
+    pub const SIGNED_OUT: &str = "vpad_bind_signed_out";
+    /// The console did not say who is signed in.
+    pub const UNKNOWN: &str = "vpad_bind_unknown";
+    /// That user is the one in front and the host did not confirm it.
+    pub const OWNER: &str = "vpad_bind_owner";
+
+    /// One of these: the helper refused the seat, not the pad.
+    pub fn is_bind(err: &str) -> bool {
+        err.starts_with("vpad_bind_")
+    }
+}
+
+/// The answer to `vpad.hb {"companion": true}`: the vinput companion kept up for Play Together.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Companion {
+    #[serde(default)]
+    pub ok: bool,
+    /// running, starting, no_bind, unavailable, off.
+    #[serde(default)]
+    pub companion: String,
+    /// Binds can be done now.
+    #[serde(default)]
+    pub bind: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub err: Option<String>,
+}
+
+/// One user signed in on the console (`user.list`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConsoleUser {
+    pub id: u32,
+    pub name: String,
+    /// The user in front (whoever the TV shows): the console's owner, as far as Play Together is
+    /// concerned.
+    pub foreground: bool,
 }
 
 /// One slot `vpad.states` could not apply.
@@ -300,6 +367,14 @@ impl Refusal for Opened {
         }
     }
 }
+impl Refusal for Companion {
+    fn refused(err: String) -> Self {
+        Companion {
+            err: Some(err),
+            ..Default::default()
+        }
+    }
+}
 impl Refusal for Ack {
     fn refused(err: String) -> Self {
         Ack {
@@ -370,11 +445,76 @@ fn call(addr: &str, method: Method, body: &serde_json::Value) -> Result<Vec<u8>>
 /// Opens (or keeps) Player `slot`'s pad for `token`; `user` the console user it starts with (the
 /// helper picks the foreground user when None). `None` from a helper without the method.
 pub fn open(addr: &str, slot: u8, token: &str, user: Option<u32>) -> Result<Option<Opened>> {
+    open_with(addr, slot, token, user, None)
+}
+
+/// [`open`], seating the pad in `bind`'s user when given ([`Bind`]).
+pub fn open_with(
+    addr: &str,
+    slot: u8,
+    token: &str,
+    user: Option<u32>,
+    bind: Option<Bind>,
+) -> Result<Option<Opened>> {
     let mut body = serde_json::json!({"slot": slot, "token": token});
     if let Some(u) = user {
         body["user"] = u.into();
     }
+    if let Some(b) = bind {
+        body["bind_user"] = b.user.into();
+        if b.owner {
+            body["bind_owner"] = true.into();
+        }
+    }
     supported(answer(call(addr, m::VPAD_OPEN, &body)))
+}
+
+/// Keeps the vinput companion up for Play Together's binds (a minute per call): its state. An
+/// older helper (no such heartbeat) answers a refusal (`bad_request`), one without Play Together
+/// `None`.
+pub fn companion(addr: &str) -> Result<Option<Companion>> {
+    supported(answer(call(
+        addr,
+        m::VPAD_HB,
+        &serde_json::json!({"companion": true}),
+    )))
+}
+
+/// The users signed in on the console (`user.list`), the one in front marked. Ids are read as the
+/// helper writes them: unsigned, or negative from an older helper (the same 32 bits).
+pub fn users(addr: &str) -> Result<Vec<ConsoleUser>> {
+    #[derive(Deserialize)]
+    struct Raw {
+        id: i64,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        foreground: bool,
+    }
+    #[derive(Deserialize)]
+    struct List {
+        #[serde(default)]
+        err_list: i64,
+        #[serde(default)]
+        users: Vec<Raw>,
+    }
+    let b = call(addr, m::USER_LIST, &serde_json::json!({}))?;
+    let l: List = serde_json::from_slice(&b)?;
+    if l.err_list != 0 {
+        anyhow::bail!(
+            "the console did not list its users (0x{:08x})",
+            l.err_list as u32
+        );
+    }
+    Ok(l.users
+        .into_iter()
+        .filter(|u| u.id != 0 && u.id != -1 && u.id != 0xFFFF_FFFF)
+        .map(|u| ConsoleUser {
+            id: u.id as u32,
+            name: u.name,
+            foreground: u.foreground,
+        })
+        .collect())
 }
 
 /// One slot's state.
@@ -498,6 +638,113 @@ mod tests {
             seen[0].1,
             serde_json::json!({"slot":3,"token":"ab","user":0x1000_0001u32})
         );
+    }
+
+    #[test]
+    fn a_seated_open_names_the_user_and_the_owner_only_when_confirmed() {
+        let f = fake(|_, _| {
+            Ok(Some(
+                br#"{"ok":true,"slot":2,"handle":7,"user":8192,"resumed":false,"bound":false,"bind_code":-2137325563,"owner":0}"#
+                    .to_vec(),
+            ))
+        });
+        let _g = scoped_transport(f.clone());
+        let o = open_with(
+            "c",
+            2,
+            "t",
+            None,
+            Some(Bind {
+                user: 0x2000,
+                owner: false,
+            }),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!((o.bound, o.bind_code), (Some(false), Some(-2137325563)));
+        open_with(
+            "c",
+            3,
+            "t",
+            None,
+            Some(Bind {
+                user: 0x9000_0001,
+                owner: true,
+            }),
+        )
+        .unwrap();
+        let seen = f.seen.lock().unwrap();
+        assert_eq!(
+            seen[0].1,
+            serde_json::json!({"slot":2,"token":"t","bind_user":0x2000})
+        );
+        assert_eq!(
+            seen[1].1,
+            serde_json::json!({"slot":3,"token":"t","bind_user":0x9000_0001u32,"bind_owner":true})
+        );
+        // a seat refused with nothing made is an answer
+        let _g = scoped_transport(fake(|_, _| {
+            Err(refusal(
+                7,
+                r#"{"ok":false,"err":"vpad_bind_unavailable","companion":"no_bind"}"#,
+            ))
+        }));
+        let o = open_with(
+            "c",
+            2,
+            "t",
+            None,
+            Some(Bind {
+                user: 1,
+                owner: false,
+            }),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(o.err.as_deref(), Some(bind_err::UNAVAILABLE));
+        assert_eq!(o.companion.as_deref(), Some("no_bind"));
+        assert!(bind_err::is_bind(bind_err::OWNER) && !bind_err::is_bind(ERR_BUSY));
+    }
+
+    #[test]
+    fn the_companion_heartbeat_and_the_users() {
+        let f = fake(|m, b| {
+            if m.id == m::VPAD_HB.id {
+                assert_eq!(b, &serde_json::json!({"companion": true}));
+                return Ok(Some(
+                    br#"{"ok":true,"companion":"running","bind":true}"#.to_vec(),
+                ));
+            }
+            assert_eq!(m.id, m::USER_LIST.id);
+            // an older helper prints an id above 0x7fffffff as a negative int
+            Ok(Some(
+                br#"{"foreground":-1,"err_fg":0,"err_list":0,"users":[{"id":268435458,"name":"Ann","foreground":true,"err_name":0},{"id":-1879048191,"name":"Guest 1","foreground":false,"err_name":0},{"id":-1,"name":"","foreground":false}]}"#
+                    .to_vec(),
+            ))
+        });
+        let _g = scoped_transport(f);
+        let c = companion("c").unwrap().unwrap();
+        assert!(c.ok && c.bind && c.companion == "running");
+        let u = users("c").unwrap();
+        assert_eq!(
+            u,
+            vec![
+                ConsoleUser {
+                    id: 268435458,
+                    name: "Ann".into(),
+                    foreground: true
+                },
+                ConsoleUser {
+                    id: 0x9000_0001,
+                    name: "Guest 1".into(),
+                    foreground: false
+                },
+            ]
+        );
+        let _g = scoped_transport(fake(|_, _| {
+            Ok(Some(br#"{"err_list":-2137784319,"users":[]}"#.to_vec()))
+        }));
+        assert!(users("c").is_err(), "a list the console did not give");
     }
 
     #[test]

@@ -230,7 +230,7 @@ describe("multi-part archives land in ONE folder", () => {
 // real PS5, but pinned here so a future change to the `.partN` peel can't
 // silently reintroduce the split.
 describe("multi-part sets share one destination", () => {
-  const dir = "C:\\Users\\Majid\\Downloads\\Black Myth Wukong";
+  const dir = "C:\\Users\\me\\Downloads\\Black Myth Wukong";
   const parts = [
     `${dir}\\[DLPSGAME.COM]- 01.021 PPSA23226.part01.zip`,
     `${dir}\\[DLPSGAME.COM]- 01.021 PPSA23226.part02.zip`,

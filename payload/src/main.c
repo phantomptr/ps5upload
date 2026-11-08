@@ -24,6 +24,7 @@
 #include "hw_info.h"
 #include "sigpipe_guard.h"
 #include "wake_watchdog.h"
+#include "tailnet_node.h"
 #include "icon_keeper.h"
 #include "fakelib_overlay.h"
 #include "vinput.h"
@@ -843,8 +844,19 @@ int main(void) {
         else fprintf(stderr, "webui: PS5Upload Minion is off (%s enabled:false); the page is not served\n",
                      WEBUI_SETTINGS_PATH);
         startup_trace("WEBUI_STARTED");
-        if (plan.tile_add) webui_tile_request(1, WEBUI_PORT);
+        /* Every start with the tile on: the tile thread registers PSUP00001 again whenever app.db
+         * does not list it, and logs "webui tile: ensure ok/FAILED"; a failure reaches the page and
+         * the PC as tile_failed + tile_error. */
+        if (plan.tile_add) {
+            fprintf(stderr, "webui: tile on: checking that %s is on the home screen\n", WEBUI_TILE_TITLE_ID);
+            webui_tile_request(1, WEBUI_PORT);
+        }
     }
+
+    /* "Put this PS5 on Tailscale": join the tailnet if the user turned it on (tailnet_node.h).
+     * After AVA1 is up, since the tailnet serves its port. Failure is logged, never fatal. */
+    if (tailnet_node_boot() != 0) fprintf(stderr, "[tailnet] not started\n");
+    startup_trace("TAILNET_STARTED");
 
     /* The AVA1 server runs on its own threads; this thread has nothing left to serve. It waits for
      * node.shutdown or the takeover flag (runtime_request_shutdown), then tears down. */
@@ -856,6 +868,8 @@ int main(void) {
      * Healthy shutdown exits via the return below long before this fires. Armed FIRST: everything
      * after it (a file write, a thread join) can hang too. */
     runtime_arm_shutdown_watchdog(&state, rc == 0 ? 0 : 1);
+    /* Leave the tailnet first: the next instance wants the same UDP port (41641). */
+    tailnet_node_shutdown();
 
     /* Persist tracked play time before we go. The watcher only saves every
      * 60s, so a payload swap in between would otherwise drop the current

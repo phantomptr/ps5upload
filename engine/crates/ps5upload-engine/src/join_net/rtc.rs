@@ -3,7 +3,7 @@
 //! which packet is whose). One task drives them all; the guest sessions talk to it through
 //! [`Cmd`].
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -19,7 +19,7 @@ use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 
 use super::chunk::{self, Piece, Reassembler};
-use super::{nat, stun, Flow, PeerInfo, RtcSocket};
+use super::{nat, stun, Flow, Kind, PeerInfo, RtcSocket};
 
 /// Peers being set up or connected at once, every room together.
 const MAX_PEERS: usize = 32;
@@ -40,8 +40,9 @@ const TO_SESSION: usize = 256;
 
 /// What the driver is asked.
 pub(crate) enum Cmd {
-    /// A room is open: gather the outside addresses, keep the router mapping.
-    RoomOpen(String),
+    /// A room is open: gather the outside addresses, keep the router mapping. Its kind says which
+    /// session its peers' channels get.
+    RoomOpen(String, Kind),
     RoomClose(String),
     /// A guest's offer (signal `data.type == "offer"`); `signal` takes what goes back to them.
     Offer {
@@ -195,7 +196,7 @@ async fn start() -> Option<Arc<Net>> {
         socks: socks.into_iter().zip(local).collect(),
         extra: Vec::new(),
         peers: Vec::new(),
-        rooms: HashSet::new(),
+        rooms: HashMap::new(),
         stun_tx: HashMap::new(),
         cmd: cmd.clone(),
         nat_want: None,
@@ -206,6 +207,8 @@ async fn start() -> Option<Arc<Net>> {
 
 struct Peer {
     id: u64,
+    /// Its room's kind: the channel label it may open and the session that gets it.
+    kind: Kind,
     info: Arc<PeerInfo>,
     rtc: Rtc,
     /// The offer's data section, for trickled candidates.
@@ -232,7 +235,7 @@ struct Driver {
     /// Outside candidates (STUN's, the router's), added to every new peer.
     extra: Vec<Candidate>,
     peers: Vec<Peer>,
-    rooms: HashSet<String>,
+    rooms: HashMap<String, Kind>,
     /// STUN requests in flight: transaction id → socket index.
     stun_tx: HashMap<[u8; 12], usize>,
     cmd: mpsc::UnboundedSender<Cmd>,
@@ -420,8 +423,8 @@ impl Driver {
 
     async fn on_cmd(&mut self, c: Cmd) {
         match c {
-            Cmd::RoomOpen(r) => {
-                self.rooms.insert(r);
+            Cmd::RoomOpen(r, kind) => {
+                self.rooms.insert(r, kind);
                 self.want_mapping(true);
                 self.gather().await;
             }
@@ -502,9 +505,9 @@ impl Driver {
         let bye = |why: &str| {
             let _ = signal.send((gid.clone(), serde_json::json!({"type": "bye", "why": why})));
         };
-        if !self.rooms.contains(&room) {
+        let Some(&kind) = self.rooms.get(&room) else {
             return;
-        }
+        };
         // A new offer from the same guest replaces one that did not connect.
         for p in self.peers.iter_mut().filter(|p| {
             p.info.room == room && p.info.gid == gid && p.cid.is_none() && p.closing_at.is_none()
@@ -564,6 +567,7 @@ impl Driver {
         crate::log_at!(Debug, "together", "join: internet guest {gid}: answered");
         self.peers.push(Peer {
             id: NEXT_PEER.fetch_add(1, Ordering::Relaxed),
+            kind,
             info,
             rtc,
             mid: first_mid(&sdp),
@@ -748,7 +752,7 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
             );
         }
         Event::ChannelOpen(cid, label) => {
-            if label != "join" || p.cid.is_some() || p.closing_at.is_some() {
+            if label != p.kind.label() || p.cid.is_some() || p.closing_at.is_some() {
                 return;
             }
             p.cid = Some(cid);
@@ -787,7 +791,18 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
                 "join: internet guest {}: data channel open",
                 p.info.gid
             );
-            tokio::spawn(crate::join::guest_session(socket, ip));
+            match p.kind {
+                Kind::Join => {
+                    tokio::spawn(crate::join::guest_session(socket, ip));
+                }
+                Kind::Pad => {
+                    tokio::spawn(crate::pad_link::rtc_session(
+                        socket,
+                        ip,
+                        p.info.room.clone(),
+                    ));
+                }
+            }
         }
         Event::ChannelData(d) => {
             if Some(d.id) != p.cid {

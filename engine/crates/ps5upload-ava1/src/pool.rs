@@ -19,6 +19,12 @@ use ps5upload_core::ddp::Power;
 
 /// `host:9120` — the AVA1 default port. The lab can override an address on
 /// its own Pool; a process environment variable cannot redirect engine jobs.
+/// The address to dial for the console's AVA1 port: its own, or the engine's tailnet mapping
+/// of it when the console is away (`ps5upload_core::route`). The pinned key is checked either way.
+fn routed(addr: &str) -> String {
+    ps5upload_core::route::dial_str(addr, crate::gen::DEFAULT_PORT)
+}
+
 pub fn ava1_addr(console: &str) -> String {
     format!("{}:{}", host_of(console), crate::gen::DEFAULT_PORT)
 }
@@ -657,7 +663,7 @@ impl Pool {
             return ConsoleMatch::Unknown;
         };
         match connect_expecting(
-            &self.addr_for(new),
+            &routed(&self.addr_for(new)),
             Some(want),
             me,
             self.peers.clone(),
@@ -684,7 +690,7 @@ impl Pool {
         let pin = self.pinned(&host_of(console));
         self.attempts.fetch_add(1, Ordering::Relaxed);
         let s = connect_expecting(
-            &self.addr_for(console),
+            &routed(&self.addr_for(console)),
             pin,
             me,
             self.peers.clone(),

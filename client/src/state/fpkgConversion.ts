@@ -39,7 +39,7 @@ import { pkgLibraryStore, type PkgLibraryStore } from "./pkgLibrary";
 import { useTaskStore } from "./tasks";
 import { remoteApi } from "../api/remote";
 import { fetchRemote } from "../lib/materialize";
-import { isRemotePath } from "../lib/remotePath";
+import { isRemotePath, parseRemotePath } from "../lib/remotePath";
 import { finishSwap, runSwap, type SwapJournal } from "../lib/dumpSwap";
 import { consoleSwapDeps } from "../lib/dumpSwapConsole";
 import { readWithRetries } from "../lib/pollRead";
@@ -190,6 +190,9 @@ export interface ConversionState {
       /** Save to the PS5: the image goes straight to this console's drive and folder, never
        *  stored on this computer (`outputDir` and `thenUpload` are not used). */
       toConsole?: ImageUploadPlan;
+      /** Save to a server: the image goes straight to this folder on a saved server (a
+       *  `remote://<connection>/<folder>` path), never stored on this computer. */
+      toServer?: string;
       /** A PS4 update merged into the PS4 game `source`. */
       update?: string;
     },
@@ -202,7 +205,14 @@ export interface ConversionState {
     keepBoth?: boolean,
     /** This game's own choice (a queued game keeps what it was added with); else the setting.
      *  `zstd`: the folder's files in zstd packs. */
-    own?: { fullVerify?: boolean; zstd?: ZstdPacks; /** A PS4 update merged into the PS4 game `source`. */ update?: string },
+    own?: {
+      fullVerify?: boolean;
+      zstd?: ZstdPacks;
+      /** A PS4 update merged into the PS4 game `source`. */
+      update?: string;
+      /** Save to a server: the folder goes straight to this `remote://` folder. */
+      toServer?: string;
+    },
   ) => Promise<void>;
   /** Put the finished image in the Upload queue. */
   uploadImage: (plan: ImageUploadPlan) => void;
@@ -383,6 +393,11 @@ async function consoleDestination(plan: ImageUploadPlan): Promise<ImageDestinati
   const { volume } = await imageDriveNow(plan.host, plan.volume);
   const { destRoot } = resolveUploadDest(volume, plan.subpath || DEFAULT_IMAGE_SUBPATH, "x");
   return { kind: "console", addr: hostOf(plan.host), dir: destRoot };
+}
+/** Where a build goes on a saved server: `remote://<id>/<folder>` as the engine takes it. */
+export function serverDestination(folder: string): ImageDestination | undefined {
+  const parsed = parseRemotePath(folder);
+  return parsed ? { kind: "server", source_id: parsed.connectionId, dir: parsed.path } : undefined;
 }
 /** The running Convert & install asked for its package to go once the install verified. */
 let deleteAfterInstall = false;
@@ -899,8 +914,13 @@ function buildTail(
   return destination ? [destination] : [];
 }
 
-/** A build's trailing `update` argument: there only when a PS4 update is merged in. */
-function withUpdate(update: string | undefined): [string] | [] {
+/** A folder build's trailing `update` and `destination` arguments, without the empty ones at
+ *  the end, so a plain local build's call stays as it was. */
+function folderTail(
+  update: string | undefined,
+  destination: ImageDestination | undefined,
+): [update?: string, destination?: ImageDestination] {
+  if (destination) return [update, destination];
   return update ? [update] : [];
 }
 
@@ -941,8 +961,9 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
   buildImage: async (source, outputDir, thenCompress, format = "exfat", thenUpload, lz4, password, keepBoth, own) => {
     if (get().pipeline.phase === "running") return;
     const toConsole = own?.toConsole;
-    // Straight to the PS5, nothing is left here to upload afterwards.
-    pendingImageUpload = toConsole ? null : (thenUpload ?? null);
+    const toServer = own?.toServer ? serverDestination(own.toServer) : undefined;
+    // Straight to the PS5 or a server, nothing is left here to upload afterwards.
+    pendingImageUpload = toConsole || toServer ? null : (thenUpload ?? null);
     pendingToConsole = !!toConsole;
     thenUpload = toConsole ?? thenUpload;
     const prefs = useConvertPrefs.getState();
@@ -978,7 +999,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
             imageLevel,
             keepBoth,
             amprEmu,
-            ...buildTail(toConsole ? await consoleDestination(toConsole) : undefined, own?.update),
+            ...buildTail(toConsole ? await consoleDestination(toConsole) : toServer, own?.update),
           ),
         null,
         password,
@@ -1000,7 +1021,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         keepBoth,
         amprEmu,
         // Only when it goes to the PS5: a local build's call stays as it was.
-        ...buildTail(toConsole ? await consoleDestination(toConsole) : undefined, own?.update),
+        ...buildTail(toConsole ? await consoleDestination(toConsole) : toServer, own?.update),
       );
       update({ jobId: job_id });
       poll(job_id, null);
@@ -1024,7 +1045,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         undefined,
         keepBoth,
         own?.zstd,
-        ...withUpdate(own?.update),
+        ...folderTail(own?.update, own?.toServer ? serverDestination(own.toServer) : undefined),
       );
       update({ jobId: job_id });
       poll(job_id, null);
@@ -1097,13 +1118,15 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
   uploadImage: (plan) => {
     const p = get().pipeline;
     if (p.phase !== "done" || p.deleted || !makesImage(p.mode) || p.uploadQueued) return;
+    // On a server: nothing on this computer to upload.
+    if (isRemotePath(p.packagePath)) return;
     queueImage(p.packagePath, p.packageBytes, plan);
     set({ pipeline: { ...p, uploadQueued: true } });
   },
 
   deletePackage: async () => {
     const p = get().pipeline;
-    if (p.phase !== "done" || p.deleted) return;
+    if (p.phase !== "done" || p.deleted || isRemotePath(p.packagePath)) return;
     await fpkg.deletePackage(p.packagePath);
     set({ pipeline: { ...p, deleted: true } });
   },

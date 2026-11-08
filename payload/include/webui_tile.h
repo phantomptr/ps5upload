@@ -46,11 +46,40 @@ int webui_tile_remove_files(const char *dir);
  *   mount_live     the nullfs at /system_ex/app/PSUP00001 is mounted
  *   lnk_ours       the tracker (/user/app/PSUP00001/ps5upload.lnk, or mount.lnk) names WEBUI_TILE_DIR
  *   appmeta        /user/appmeta/PSUP00001 exists
+ *   listed         app.db's install record for it (webui_tile_install_record): 1 / 0 / -1 unreadable
  * NONE: registered this boot, nothing to do. REBIND: registered before, but the bind did not
  * survive a reboot: re-mount only, no Sony call (a full register on FW 13.x runs AppInstallAll,
- * and install records could pile up one per boot). REGISTER: the full register_title_from_path. */
+ * and install records could pile up one per boot). REGISTER: the full register_title_from_path.
+ * A bind and a tracker are not a tile: the home screen draws app.db, so `listed` 0 always means
+ * REGISTER (before this, a helper restarted in the same boot found the bind and its tracker,
+ * logged "already registered" and reported "added" while the console listed no PSUP00001). */
 typedef enum { WEBUI_TILE_NONE = 0, WEBUI_TILE_REBIND = 1, WEBUI_TILE_REGISTER = 2 } webui_tile_action_t;
-webui_tile_action_t webui_tile_plan(int files_changed, int mount_live, int lnk_ours, int appmeta);
+webui_tile_action_t webui_tile_plan(int files_changed, int mount_live, int lnk_ours, int appmeta, int listed);
+
+/* The steps of an ensure, so its order and its checks are host-tested with fakes (webui_tile_ensure
+ * passes the console's). */
+typedef struct {
+    void *ctx;
+    int (*write_files)(void *ctx);                    /* webui_tile_write_files: >0 changed, 0 same, -1 */
+    int (*mount_live)(void *ctx);
+    int (*lnk_ours)(void *ctx);
+    int (*appmeta)(void *ctx);
+    int (*listed)(void *ctx);                         /* app.db install record: 1 / 0 / -1 unreadable */
+    int (*remount)(void *ctx, const char **err);       /* register_remount_nullfs: 0 / -1 */
+    int (*register_full)(void *ctx, const char **err); /* register_title_from_path: 0 / -1 */
+    void (*sleep_s)(void *ctx, unsigned seconds);
+} webui_tile_ensure_ops_t;
+
+/* After a full register, how long app.db is given to list the tile (Sony's installer writes it a
+ * moment after it returns: two records 2.2 s apart on FW 13.60 through AppInstallAll). */
+#define WEBUI_TILE_LISTED_WAIT_S 10
+
+/* write_files, webui_tile_plan, then nothing / remount (a full register when that fails) / a full
+ * register; after a full register, app.db must list the tile within WEBUI_TILE_LISTED_WAIT_S
+ * (unreadable counts as fine: never guess). 0, or -1 with *why set to a short reason code:
+ * "write_failed", the register's own err (e.g. "register_install_api_error"), or "not_listed"
+ * (Sony said yes, but the console never listed it). `*done` (optional) gets the action taken. */
+int webui_tile_ensure_with(const webui_tile_ensure_ops_t *ops, webui_tile_action_t *done, const char **why);
 
 /* At helper start, with the tile setting on: 1 when the tile was registered by this helper
  * (`marker`), app.db can be read and has no install record for it (`appdb_row` 1 / 0 / -1
@@ -190,8 +219,9 @@ void webui_tile_sweep_request(void);
  * this boot (or when a file changed: register copies sce_sys, so the copies must be refreshed).
  * After a reboot, when the title is still ours (webui_tile_plan REBIND), only the nullfs is
  * re-mounted; a failed re-mount falls back to the full register. Logs which path ran.
- * Synchronous (Sony calls): call it from webui_tile_request's thread. 0, or -1 (logged). */
-int webui_tile_ensure(uint16_t port);
+ * Synchronous (Sony calls): call it from webui_tile_request's thread. 0, or -1 (logged) with *why
+ * (optional) set as webui_tile_ensure_with does. */
+int webui_tile_ensure(uint16_t port, const char **why);
 
 /* unregister_title(PSUP00001), then checks app.db, which is what the home screen draws: while a row
  * is left it asks Sony once more; a leftover whose staged files were already gone (the greyed-out
@@ -221,6 +251,10 @@ unsigned webui_tile_request(int tile, uint16_t port); /* the request's generatio
  * *result what the helper last did (webui_tile_result_name; the settle watch can update it later,
  * after *busy went back to 0). `result` may be NULL. */
 void webui_tile_state(int *busy, int *failed, webui_tile_result_t *result);
+
+/* Why the last ensure/remove the worker applied failed: a short reason code (static storage; see
+ * webui_tile_ensure_with), "" when it did not fail. For the page and the PC ("tile_error"). */
+const char *webui_tile_last_error(void);
 #endif
 
 #endif

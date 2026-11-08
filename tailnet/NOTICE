@@ -1,0 +1,48 @@
+tailnet — third-party code, ports and credits
+============================================
+
+tailnet is part of ps5upload (GPL-3.0-or-later, see ../LICENSE). It builds on:
+
+Monocypher 4.0.2 — CC0-1.0 or BSD-2-Clause
+  https://monocypher.org, Loup Vaillant and contributors.
+  Not vendored here: the copy shipped with AVA1 (../third_party/ava1/c/third_party/monocypher,
+  LICENCE.md) is shared with the PS5 payload. X25519, ChaCha20-Poly1305, Poly1305.
+
+BearSSL — MIT
+  https://www.bearssl.org, Thomas Pornin. Git submodule ../third_party/bearssl (LICENSE.txt).
+  TLS 1.2 client and X.509 validation for /key, the TLS fallback to control, and DERP.
+  src/isrg_roots.h was generated with BearSSL's "brssl ta".
+
+Tailscale — BSD-3-Clause, Copyright (c) Tailscale Inc & contributors
+  https://github.com/tailscale/tailscale. No Go code is linked. Ported or derived from it:
+    - src/noise.c: the ts2021 Noise IK client and record layer (control/controlbase).
+    - src/control.c: /key, the /ts2021 upgrade, register/followup and map-poll flow
+      (control/controlhttp, control/ts2021, control/controlclient direct.go/auto.go).
+    - src/netmap.c: MapResponse fields and delta semantics (tailcfg, controlclient/map.go).
+    - src/keys.c: key clamping and text encodings (types/key).
+    - src/isrg_roots.h: the ISRG roots Tailscale bakes in (net/bakedroots).
+    - include/tailnet.h: protocol constants (capability version, message types).
+    - testbed/vectors/main.go links tailscale.com to derive test vectors.
+  Ported functions say so in a comment.
+
+WireGuard (wireguard-go) — MIT, Copyright (C) 2017-2023 WireGuard LLC
+  The HKDF/KDF construction in src/crypto.c follows device/noise-helpers.go; its KDF
+  test vectors are used in tests/test_crypto.c.
+
+Go (golang.org/x/crypto, golang.org/x/net) — BSD-3-Clause, The Go Authors
+  src/hpack_tables.h was generated from golang.org/x/net/http2/hpack (the tables are
+  RFC 7541 Appendix A and B). Test vectors in tests/ come from x/crypto and x/net tests.
+
+Specifications
+  BLAKE2s: RFC 7693 (src/crypto.c follows its Appendix C reference code).
+  Salsa20/HSalsa20/XSalsa20 and NaCl box: D. J. Bernstein's specifications.
+  HPACK: RFC 7541. HTTP/2: the current HTTP/2 RFC (successor of RFC 7540). ChaCha20-Poly1305: RFC 8439. X25519: RFC 7748.
+
+JSON: src/json.c is our own bounded tokenizer (no cJSON).
+lwIP 2.2.1 (third_party/lwip, git submodule) — BSD-3-Clause, Swedish Institute of
+  Computer Science and contributors. Compiled unmodified (IPv4 + TCP, NO_SYS); our
+  options are in lwip-port/.
+
+wireguard-go (MIT, WireGuard LLC): src/wg.c follows device/noise-protocol.go, cookie.go
+  and replay/replay.go. tailscale (BSD-3-Clause): src/derp.c, src/disco.c, src/dp.c
+  follow derp/, disco/, net/stun/ and wgengine/magicsock/ (wire formats and timers).

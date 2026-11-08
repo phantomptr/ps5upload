@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // The website's translations (site/i18n/<code>.json) against its English (site/index.html's
-// data-i18n and data-i18n-attr, and app.js's t("key", "English") calls).
+// data-i18n and data-i18n-attr, and app.js's t("key", "English") calls; the same in the FAQ
+// page's shell, scripts/site-faq.html, and its site/faq.js).
 //
 //   node scripts/site-i18n.mjs          check: every language has every key, no stale keys, the
 //                                        same tags and {placeholders} as the English, and no
@@ -12,8 +13,10 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const site = new URL("../site/", import.meta.url).pathname;
-const html = readFileSync(`${site}index.html`, "utf8");
+const faqShell = new URL("./site-faq.html", import.meta.url).pathname;
+const html = readFileSync(`${site}index.html`, "utf8") + readFileSync(faqShell, "utf8");
 const js = readFileSync(`${site}app.js`, "utf8");
+const scripts = js + readFileSync(`${site}faq.js`, "utf8");
 const tidy = (s) => s.replace(/\s+/g, " ").trim();
 
 const en = {};
@@ -34,7 +37,7 @@ for (const m of html.matchAll(/<\w+\b[^>]*\sdata-i18n-attr="([^"]+)"[^>]*>/g)) {
     add(key, tidy(text), "index.html");
   }
 }
-for (const m of js.matchAll(/\bt\(\s*"([\w.]+)",\s*"((?:[^"\\]|\\.)*)"/g)) add(m[1], JSON.parse(`"${m[2]}"`), "app.js");
+for (const m of scripts.matchAll(/\bt\(\s*"([\w.]+)",\s*"((?:[^"\\]|\\.)*)"/g)) add(m[1], JSON.parse(`"${m[2]}"`), "app.js or faq.js");
 
 const LANGS = [...js.matchAll(/^\s*\["([\w-]+)", "[^"]+"\],$/gm)].map((m) => m[1]);
 if (LANGS.length !== 21) throw new Error(`expected 21 languages in app.js, found ${LANGS.length}`);

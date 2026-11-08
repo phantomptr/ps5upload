@@ -93,7 +93,7 @@ describe("needsManualPartUploads", () => {
 
 describe("siblingPartPaths", () => {
   it("keeps a Windows path a Windows path", () => {
-    const dir = "C:\\Users\\Majid\\Downloads\\Black Myth Wukong";
+    const dir = "C:\\Users\\me\\Downloads\\Black Myth Wukong";
     expect(siblingPartPaths(`${dir}\\${SET[0]}`, SET)).toEqual([
       `${dir}\\${SET[0]}`,
       `${dir}\\${SET[1]}`,

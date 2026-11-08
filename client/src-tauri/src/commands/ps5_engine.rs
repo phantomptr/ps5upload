@@ -2468,6 +2468,8 @@ pub async fn folder_build(
     ampr_zstd: Option<JsonValue>,
     // A PS4 update merged into the PS4 game `source` (which may then also be a folder).
     update: Option<String>,
+    // Where the folder goes: {"kind":"local"} (the default) or {"kind":"server",...}.
+    destination: Option<JsonValue>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/folder/build");
@@ -2482,6 +2484,7 @@ pub async fn folder_build(
             "keep_both": keep_both.unwrap_or(false),
             "ampr_zstd": ampr_zstd,
             "update": update,
+            "destination": destination,
         }),
     )
     .await
@@ -2897,10 +2900,10 @@ mod profile_activate_req_tests {
     #[test]
     fn accepts_a_hex_string_id_and_passes_it_through() {
         let req: ProfileActivateReq = serde_json::from_value(serde_json::json!({
-            "addr": null, "slot": 1, "id": "0x7a356e99a9e2205c"
+            "addr": null, "slot": 1, "id": "0x1122334455667788"
         }))
         .expect("string id must deserialize");
-        assert_eq!(req.id, Some(serde_json::json!("0x7a356e99a9e2205c")));
+        assert_eq!(req.id, Some(serde_json::json!("0x1122334455667788")));
     }
 
     #[test]

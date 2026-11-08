@@ -6,7 +6,7 @@
 // screen that was off) for as long as the computer lets this phone in; let go (neutral) while
 // the page is hidden or loses the focus.
 
-import { backoffMs } from "./joinProtocol";
+import { backoffMs, netFailure } from "./joinProtocol";
 import type { MotionReading } from "./motion";
 import { gamepadsOf } from "./nativePad";
 import { profileFor } from "./padProfiles";
@@ -50,7 +50,11 @@ export interface PadClientOptions {
     onCodec: (hevc: boolean) => void;
     onControl: (on: boolean) => void;
   };
-  /** Tests: a fake socket and clock. */
+  /** An internet link (the website's copy of this page): the first message on each new socket,
+   *  `{"hello": …}`, carrying what the LAN socket's address has (`t`, `name`, `d`, `w`). */
+  hello?: Record<string, string | number>;
+  /** The socket class: the LAN WebSocket (default), or an internet link's WebRTC transport
+   *  (join/rtcTransport, a "pad" channel), whose failures close as `net:<why>`. Tests: a fake. */
   WebSocketImpl?: typeof WebSocket;
   now?: () => number;
   raf?: (cb: () => void) => number;
@@ -169,14 +173,21 @@ export class PadClient {
       this.lastHeard = this.now();
       this.onMessage(e.data);
     };
-    ws.onclose = () => {
+    ws.onclose = (e) => {
       if (this.ws !== ws) return;
       this.ws = null;
+      // An internet link that could not connect at all says why (`refused` "net:<why>").
+      const why = netFailure(e);
+      if (why && !this.wasIn) {
+        this.finish({ kind: "refused", why: `net:${why}` });
+        return;
+      }
       this.dropped();
     };
     ws.onopen = () => {
       if (this.ws !== ws) return;
       this.lastHeard = this.now();
+      if (this.o.hello) ws.send(JSON.stringify({ hello: this.o.hello }));
       this.send(true);
     };
   }

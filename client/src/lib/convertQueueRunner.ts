@@ -41,7 +41,7 @@ async function build(item: ConvertItem) {
   const left = conv.pipeline;
   if (left.phase === "done" && left.attached && left.source === item.source) {
     useFpkgConversion.setState({ pipeline: { ...left, attached: false } });
-    const send = item.build?.kind === "image" && item.then !== "keep" && !!item.host;
+    const send = item.build?.kind === "image" && !item.toServer && item.then !== "keep" && !!item.host;
     if (send) {
       const dest = imageDestFor(item.imageDest, item.host!);
       conv.uploadImage({ host: item.host!, volume: dest.volume, subpath: dest.subpath, deleteAfter: !!item.deleteAfterInstall });
@@ -53,13 +53,15 @@ async function build(item: ConvertItem) {
     await conv.buildFolder(item.source, outputOf(item), item.keepBoth, {
       fullVerify: item.fullVerify,
       zstd: item.build.zstd,
+      ...(item.toServer ? { toServer: item.toServer } : {}),
     });
     await whenIdle();
     return outcome(true);
   }
   if (item.build?.kind === "image") {
-    // A game image, in the format picked; sent on to the Upload queue when asked.
-    const send = item.then !== "keep" && !!item.host;
+    // A game image, in the format picked; sent on to the Upload queue when asked. Saved to a
+    // server, it is written there as it is built: nothing here to upload after.
+    const send = !item.toServer && item.then !== "keep" && !!item.host;
     // A game changed to an image while it waited was added with no destination: the one set now.
     const dest = send ? imageDestFor(item.imageDest, item.host!) : null;
     await conv.buildImage(
@@ -83,6 +85,7 @@ async function build(item: ConvertItem) {
         imageLevel: item.imageLevel,
         addAmprEmu: item.addAmprEmu,
         amprEmuBuild: item.amprEmuBuild,
+        ...(item.toServer ? { toServer: item.toServer } : {}),
       },
     );
     await whenIdle();

@@ -22,6 +22,7 @@ const KEY_IMAGE_FORMAT = "ps5upload.convert.image_format";
 const KEY_IMAGE_COMPRESS = "ps5upload.convert.image_compress";
 const KEY_IMAGE_LEVEL = "ps5upload.convert.image_level";
 const KEY_ZSTD_RUNTIME = "ps5upload.convert.zstd_runtime";
+const KEY_SERVER_DIR = "ps5upload.convert.server_dir";
 const IMAGE_LEVELS: readonly FfpfscLevel[] = ["fast", "balanced", "smallest"];
 const IMAGE_FORMATS: readonly ImageFormat[] = ["ffpkg", "exfat", "ffpfs"];
 const LEVELS: readonly FpkgCompression[] = ["stored", "fast", "balanced", "smallest"];
@@ -76,6 +77,15 @@ interface ConvertPrefs {
    *  digest GitHub publishes for it) or the tested one. */
   zstdRuntime: ZstdRuntime;
   setZstdRuntime: (runtime: ZstdRuntime) => void;
+  /** Save to: a server: the folder chosen there, as a `remote://<connection>/<folder>` path;
+   *  "" when none is chosen yet. */
+  serverDir: string;
+  setServerDir: (dir: string) => void;
+}
+
+/** A remembered server folder: only a `remote://` path counts. */
+export function parseServerDir(v: string | null): string {
+  return v && v.startsWith("remote://") ? v : "";
 }
 
 export type ZstdRuntime = "latest" | "pinned";
@@ -180,11 +190,17 @@ export const useConvertPrefs = create<ConvertPrefs>((set) => ({
     safeSetItem(KEY_ZSTD_RUNTIME, v);
     set({ zstdRuntime: v });
   },
+  serverDir: parseServerDir(safeGetItem(KEY_SERVER_DIR)),
+  setServerDir: (dir) => {
+    const v = parseServerDir(dir);
+    safeSetItem(KEY_SERVER_DIR, v);
+    set({ serverDir: v });
+  },
 }));
 
 // A change synced from another device shows at once (lib/liveSettings).
 registerSettingReload(
-  [KEY_DIR, KEY_PLACE, KEY_VERIFY_CHUNK, KEY_FULL_VERIFY, KEY_ADD_AMPR_EMU, KEY_AMPR_EMU_BUILD, KEY_MAKE, KEY_IMAGE_FORMAT, KEY_IMAGE_COMPRESS, KEY_IMAGE_LEVEL, KEY_ZSTD_RUNTIME, "ps5upload.convert.compression"],
+  [KEY_DIR, KEY_PLACE, KEY_VERIFY_CHUNK, KEY_FULL_VERIFY, KEY_ADD_AMPR_EMU, KEY_AMPR_EMU_BUILD, KEY_MAKE, KEY_IMAGE_FORMAT, KEY_IMAGE_COMPRESS, KEY_IMAGE_LEVEL, KEY_ZSTD_RUNTIME, KEY_SERVER_DIR, "ps5upload.convert.compression"],
   () =>
     useConvertPrefs.setState({
       outputDir: safeGetItem(KEY_DIR) ?? "",
@@ -199,5 +215,6 @@ registerSettingReload(
       imageCompress: safeGetItem(KEY_IMAGE_COMPRESS) === "1",
       imageLevel: parseImageLevel(safeGetItem(KEY_IMAGE_LEVEL)),
       zstdRuntime: parseZstdRuntime(safeGetItem(KEY_ZSTD_RUNTIME)),
+      serverDir: parseServerDir(safeGetItem(KEY_SERVER_DIR)),
     }),
 );

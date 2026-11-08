@@ -350,7 +350,7 @@ mod status_tests {
     fn a_live_pin_is_waiting_with_its_countdown() {
         // Shape of the payload's answer three seconds after a request (Phat, FW 13.60).
         let s = parse(
-            r#"{"state":"waiting","pin":"36876659","account_id":"XCDiqZluNXo=",
+            r#"{"state":"waiting","pin":"43218765","account_id":"iHdmVUQzIhE=",
                 "seconds_left":297,"err":"","probes":1,"confirm_rc":0,
                 "confirm_status":0,"confirm_err":0}"#,
         );
@@ -400,7 +400,7 @@ mod status_tests {
     #[test]
     fn an_older_payload_without_the_diagnostics_still_parses() {
         let s = parse(
-            r#"{"state":"idle","pin":"","account_id":"XCDiqZluNXo=","seconds_left":0,"err":""}"#,
+            r#"{"state":"idle","pin":"","account_id":"iHdmVUQzIhE=","seconds_left":0,"err":""}"#,
         );
         assert_eq!(s.phase(), PairingPhase::Idle);
         assert_eq!((s.probes, s.confirm_rc, s.confirm_status), (0, 0, 0));

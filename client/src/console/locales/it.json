@@ -973,6 +973,7 @@
   "cw_settings_text_size_note": "Salvata solo per questo schermo, così TV e computer possono avere ciascuno la propria dimensione.",
   "cw_settings_theme": "Tema",
   "cw_settings_tile": "Mostra PS5Upload Minion nella schermata Home",
+  "cw_settings_tile_failed_reason": "Impossibile aggiungere PS5Upload Minion alla schermata Home ({reason}). Riprova.",
   "cw_settings_tile_hidden": "La PS5 ha mantenuto il record di PS5Upload Minion, quindi la sua icona nella schermata Home è stata nascosta.",
   "cw_settings_tips": "Mostra di nuovo i suggerimenti",
   "cw_settings_using": "Controller e suggerimenti",

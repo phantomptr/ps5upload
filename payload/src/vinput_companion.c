@@ -26,6 +26,14 @@ typedef struct {
      * asked again every tick, and on the next OPEN, until it is back. */
     int m_lost, k_lost;
     uint8_t buttons, mods, keys[VINPUT_KEYS];
+    /* Play Together: libSceMbus is up (cfg->mbus's init worked), HOLD is on, and the pads seated
+     * in a user (BIND), watched so they keep that user. */
+    int mbus_ok, held;
+    struct {
+        uint32_t device, user;
+        int fixes;
+    } watch[VWIRE_WATCH_MAX];
+    int nwatch;
 } vcomp_t;
 
 /* There for input: open and not lost. */
@@ -205,9 +213,106 @@ static int bind_loopback(int port) {
     return fd;
 }
 
+/* ── Play Together: seating a guest's pad in a user (BIND) ──────────────────────────────────────
+ * What and why: include/vinput_wire.h (BIND), from ProsperoSunshine PR #33 (profile_seat.c, and
+ * platform_ps5.cpp's keep_owner for the watch). */
+
+static void mbus_nap(const vcomp_t *c, unsigned us) {
+    if (c->cfg->mbus->sleep_us)
+        c->cfg->mbus->sleep_us(us);
+    else
+        usleep(us);
+}
+
+static int watch_find(const vcomp_t *c, uint32_t device) {
+    for (int i = 0; i < c->nwatch; i++)
+        if (c->watch[i].device == device) return i;
+    return -1;
+}
+
+static void watch_drop(vcomp_t *c, int i) {
+    c->watch[i] = c->watch[--c->nwatch];
+}
+
+/* BIND: u32 device, u32 user, u32 age_ms. Answers rc, i32 sce, u32 owner, u8 tries, u32 us. */
+static int handle_bind(vcomp_t *c, int fd, const vwire_frame_t *f) {
+    uint8_t x[13];
+    uint32_t device, user, age, owner = 0;
+    int rc = VWIRE_RC_FAILED, sce = (int)VWIRE_MBUS_NO_DEVICE, tries = 0;
+    memset(x, 0, sizeof x);
+    if (f->len < 12) return reply(fd, f, VWIRE_RC_BAD_REQUEST, x, sizeof x);
+    device = vwire_get32(f->payload);
+    user = vwire_get32(f->payload + 4);
+    age = vwire_get32(f->payload + 8);
+    /* Only a pad the helper just made: a handle is a small positive number, a user is never 0 or
+     * the console's "nobody", and an old pad is the console's to ask about (and perhaps the TV's own
+     * controller's: never moved from here). Each pad is seated once. */
+    if (!device || device > 0x7FFFFFFFu || !user || user == 0xFFFFFFFFu || age > VWIRE_BIND_MAX_AGE_MS ||
+        watch_find(c, device) >= 0) {
+        vc_log(c, "bind refused", (int)device, (int)age);
+        return reply(fd, f, VWIRE_RC_BAD_REQUEST, x, sizeof x);
+    }
+    if (!c->cfg->mbus || !c->mbus_ok) return reply(fd, f, VWIRE_RC_UNSUPPORTED, x, sizeof x);
+    {
+        struct timespec a, b;
+        clock_gettime(CLOCK_MONOTONIC, &a);
+        /* Right after the add the bus may not know the pad yet: tried again every millisecond. */
+        while (tries < VWIRE_BIND_TRIES && (uint32_t)sce == VWIRE_MBUS_NO_DEVICE) {
+            if (tries) mbus_nap(c, 1000);
+            sce = c->cfg->mbus->bind(device, (int32_t)user);
+            tries++;
+        }
+        if (sce == 0) {
+            int irc = c->cfg->mbus->owner(device, &owner);
+            if (irc != 0) owner = 0;
+            if (irc == 0 && owner == user) rc = VWIRE_RC_OK;
+        }
+        clock_gettime(CLOCK_MONOTONIC, &b);
+        vwire_put32(x + 9, (uint32_t)((b.tv_sec - a.tv_sec) * 1000000 + (b.tv_nsec - a.tv_nsec) / 1000));
+    }
+    if (rc == VWIRE_RC_OK && c->nwatch < VWIRE_WATCH_MAX) {
+        c->watch[c->nwatch].device = device;
+        c->watch[c->nwatch].user = user;
+        c->watch[c->nwatch].fixes = 0;
+        c->nwatch++;
+    }
+    if (c->cfg->log)
+        c->cfg->log("bind device %u user 0x%08x: sce 0x%08x after %d tries, owner 0x%08x, age %u ms -> %d",
+                    (unsigned)device, (unsigned)user, (unsigned)sce, tries, (unsigned)owner, (unsigned)age, rc);
+    vwire_put32(x, (uint32_t)sce);
+    vwire_put32(x + 4, owner);
+    x[8] = (uint8_t)tries;
+    return reply(fd, f, rc, x, sizeof x);
+}
+
+/* About once a second: a watched pad whose owner the console changed (someone answered "Who's
+ * using this controller?" after all: a bind a moment late leaves the question up) is seated back,
+ * VWIRE_KEEP_FIXES times at most. One the bus no longer knows (removed) is forgotten. */
+static void keep_owners(vcomp_t *c) {
+    for (int i = 0; i < c->nwatch;) {
+        uint32_t owner = 0;
+        int irc = c->cfg->mbus->owner(c->watch[i].device, &owner);
+        if (irc != 0) {
+            if (c->cfg->log)
+                c->cfg->log("watched device %u gone (0x%08x)", (unsigned)c->watch[i].device, (unsigned)irc);
+            watch_drop(c, i);
+            continue;
+        }
+        if (owner && owner != c->watch[i].user && c->watch[i].fixes < VWIRE_KEEP_FIXES) {
+            int sce = c->cfg->mbus->bind(c->watch[i].device, (int32_t)c->watch[i].user);
+            c->watch[i].fixes++;
+            if (c->cfg->log)
+                c->cfg->log("device %u went to 0x%08x: seated back in 0x%08x (0x%08x, fix %d)",
+                            (unsigned)c->watch[i].device, (unsigned)owner, (unsigned)c->watch[i].user, (unsigned)sce,
+                            c->watch[i].fixes);
+        }
+        i++;
+    }
+}
+
 /* One request from the authenticated helper. -1 when the connection should go. */
 static int handle(vcomp_t *c, int fd, const vwire_frame_t *f) {
-    uint8_t x[8];
+    uint8_t x[9];
     int mouse = 0, keyboard = 0;
     switch (f->type) {
     case VWIRE_HELLO: /* again: answered like the first */
@@ -216,7 +321,23 @@ static int handle(vcomp_t *c, int fd, const vwire_frame_t *f) {
         vwire_put32(x + 2, (uint32_t)getpid());
         x[6] = (uint8_t)!!mouse;
         x[7] = (uint8_t)!!keyboard;
-        return reply(fd, f, VWIRE_RC_OK, x, 8);
+        x[8] = (uint8_t)!!c->mbus_ok;
+        return reply(fd, f, VWIRE_RC_OK, x, 9);
+    case VWIRE_HOLD:
+        if (f->len < 1) return reply(fd, f, VWIRE_RC_BAD_REQUEST, NULL, 0);
+        if (c->held != !!f->payload[0]) vc_log(c, "hold", !!f->payload[0], c->nwatch);
+        c->held = !!f->payload[0];
+        x[0] = (uint8_t)!!c->mbus_ok;
+        return reply(fd, f, VWIRE_RC_OK, x, 1);
+    case VWIRE_BIND:
+        return handle_bind(c, fd, f);
+    case VWIRE_FORGET: {
+        int i;
+        if (f->len < 4) return reply(fd, f, VWIRE_RC_BAD_REQUEST, NULL, 0);
+        i = watch_find(c, vwire_get32(f->payload));
+        if (i >= 0) watch_drop(c, i);
+        return reply(fd, f, VWIRE_RC_OK, NULL, 0);
+    }
     case VWIRE_CAPS:
         c->cfg->dev->caps(&mouse, &keyboard);
         x[0] = (uint8_t)!!mouse;
@@ -274,6 +395,13 @@ int vcomp_run(const vcomp_cfg_t *cfg) {
      * hangs; not left behind when listen fails. */
     write_pid(pid_path);
     if (cfg->dev_init) cfg->dev_init();
+    /* Once, in the single thread, before anything is answered (sceMbusInit froze the helper when
+     * it ran there: payload/vinput/README.md). */
+    if (cfg->mbus && cfg->mbus->bind && cfg->mbus->owner) {
+        int r = cfg->mbus->init ? cfg->mbus->init() : 0;
+        c.mbus_ok = r == 0;
+        vc_log(&c, "mbus", c.mbus_ok, r);
+    }
     if (listen(lfd, 4) != 0) {
         close(lfd);
         unlink_pid(pid_path);
@@ -370,12 +498,12 @@ int vcomp_run(const vcomp_cfg_t *cfg) {
             cfd = -1;
         }
         if (authed && (c.m_open || c.k_open) && now - last_rx > hb_ms) release_all(&c, "heartbeat timeout");
-        if (c.m_open || c.k_open) idle_since = now;
+        if (c.m_open || c.k_open || c.held || c.nwatch) idle_since = now;
         if (!ever_authed && now - start > auth_ms) {
             vc_log(&c, "nobody came", 0, 0);
             break;
         }
-        if (!c.m_open && !c.k_open && now - idle_since > idle_ms) {
+        if (now - idle_since > idle_ms) {
             vc_log(&c, "idle", 0, 0);
             break;
         }
@@ -387,6 +515,7 @@ int vcomp_run(const vcomp_cfg_t *cfg) {
             }
             if (c.m_lost) remake(&c, &c.m_open, &c.m_lost, cfg->dev->mouse_open, "mouse not made again");
             if (c.k_lost) remake(&c, &c.k_open, &c.k_lost, cfg->dev->keyboard_open, "keyboard not made again");
+            if (c.nwatch) keep_owners(&c);
         }
     }
 out:

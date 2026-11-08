@@ -973,6 +973,7 @@
   "cw_settings_text_size_note": "Salvo só para esta tela, assim a TV e um computador podem ter cada um o seu tamanho.",
   "cw_settings_theme": "Tema",
   "cw_settings_tile": "Mostrar o PS5Upload Minion na tela inicial",
+  "cw_settings_tile_failed_reason": "Não foi possível adicionar o PS5Upload Minion à tela inicial ({reason}). Tente de novo.",
   "cw_settings_tile_hidden": "O PS5 manteve o registro do PS5Upload Minion, então o ícone dele na tela inicial foi ocultado.",
   "cw_settings_tips": "Mostrar as dicas de novo",
   "cw_settings_using": "Controle e dicas",

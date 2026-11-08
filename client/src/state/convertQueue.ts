@@ -84,6 +84,9 @@ export interface ConvertItem {
    *  set when the game was added (absent on older items: the current settings at run time). */
   addAmprEmu?: boolean;
   amprEmuBuild?: AmprEmuBuild;
+  /** Save to a server: the image or folder goes straight to this `remote://<connection>/<folder>`
+   *  path, as chosen when the game was added (never kept on this computer). */
+  toServer?: string;
   status: ConvertStatus;
   packagePath?: string;
   error?: string;

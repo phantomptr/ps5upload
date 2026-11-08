@@ -4,12 +4,13 @@ import { Gamepad2 } from "lucide-react";
 import { Button, Select } from "../../components";
 import {
   addExtra,
-  applyStep,
   blankProfile,
-  detectAxis,
+  defaultProfileFor,
   detectPress,
   loadProfiles,
   MAP_STEPS,
+  PadLearner,
+  padKind,
   profileFor,
   saveProfile,
   snapshot,
@@ -17,6 +18,8 @@ import {
   type MapStep,
   type PadSnapshot,
 } from "../../lib/padProfiles";
+import { isWeak8BitDo, padName } from "../../lib/padMappings";
+import { EightBitDoHint } from "./PadHint";
 import { gamepadsOf } from "../../lib/nativePad";
 import { setPadForwardReason } from "../../lib/androidPadBridge";
 import { PadButton, type PadProfile } from "../../lib/remotePlayStream";
@@ -31,7 +34,10 @@ const padAt = (index: number) => gamepadsOf(navigator).find((g) => g?.index === 
 interface PadInfo {
   index: number;
   id: string;
+  /** Laid out the standard way by the browser, or from the known controllers' table. */
   standard: boolean;
+  /** An 8BitDo in a mode the browser does not lay out the standard way. */
+  weak8BitDo: boolean;
 }
 
 /** The controllers the browser sees. It shows one only after a button press on it (privacy). */
@@ -41,7 +47,10 @@ function useConnectedPads(): PadInfo[] {
       ? []
       : gamepadsOf(navigator)
           .filter((g): g is Gamepad => !!g?.connected)
-          .map((g) => ({ index: g.index, id: g.id, standard: g.mapping === "standard" }));
+          .map((g) => {
+            const kind = padKind(g);
+            return { index: g.index, id: g.id, standard: kind === "standard" || kind === "known", weak8BitDo: isWeak8BitDo(g) };
+          });
   const [pads, setPads] = useState(read);
   // Android: the app forwards controllers only while something on the page reads them.
   useEffect(() => {
@@ -62,11 +71,6 @@ function useConnectedPads(): PadInfo[] {
   return pads;
 }
 
-/** A controller's name without the browser's vendor/product numbers. */
-export function padName(id: string): string {
-  const n = id.replace(/\s*\((?:STANDARD GAMEPAD\s*)?Vendor:.*\)\s*$/i, "").replace(/^[0-9a-f]{4}-[0-9a-f]{4}-/i, "");
-  return n.trim() || id;
-}
 
 function stepText(tr: Tr, s: MapStep): string {
   if (s.kind === "axis") {
@@ -97,10 +101,6 @@ const EXTRA_TARGETS: Array<[number, string]> = [
   [PadButton.TOUCHPAD, "Touchpad"],
   [PadButton.PS, "PS"],
 ];
-
-const atRest = (rest: PadSnapshot, now: PadSnapshot) =>
-  now.buttons.every((v, i) => Math.abs(v - (rest.buttons[i] ?? 0)) < 0.3) &&
-  now.axes.every((v, i) => Math.abs(v - (rest.axes[i] ?? 0)) < 0.3);
 
 /** Every frame while `on`: the controller at `index`, as a snapshot (null when it is gone). */
 function usePadFrames(on: boolean, index: number, cb: (s: PadSnapshot | null) => void) {
@@ -167,6 +167,9 @@ export function ControllerSetup() {
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium">{padName(p.id)}</div>
                   <div className="text-xs text-[var(--color-muted)]">
+                    {p.weak8BitDo && !mapped && (
+                      <EightBitDoHint id={p.id} className="block" />
+                    )}
                     {mapped
                       ? tr("rp_pad_mapped", undefined, "Plays with your mapping")
                       : p.standard
@@ -232,41 +235,28 @@ export function ControllerSetup() {
   );
 }
 
-/** Press each button in turn; a step can be skipped (it keeps the usual layout). */
+/** Press each button in turn; a step can be skipped (it keeps what the controller had). */
 function MapWizard({ pad, onCancel, onDone }: { pad: PadInfo; onCancel: () => void; onDone: (p: PadProfile) => void }) {
   const tr = useTr();
+  const learner = useRef(new PadLearner(MAP_STEPS));
   const [step, setStep] = useState(0);
-  const prof = useRef<PadProfile>(blankProfile());
-  const rest = useRef<PadSnapshot | null>(null);
-  /** After an answer: wait until everything is let go before the next step listens. */
-  const waiting = useRef(true);
   const [gone, setGone] = useState(false);
 
+  const sync = () => {
+    const l = learner.current;
+    if (!l.done) return setStep(l.step);
+    const g = padAt(pad.index);
+    onDone(l.profile(g ? defaultProfileFor(g) : undefined));
+  };
   const advance = (to: number) => {
-    waiting.current = true;
-    if (to >= MAP_STEPS.length) onDone(withStandardGaps(prof.current));
-    else setStep(to);
+    if (to < step) learner.current.back();
+    else learner.current.skip();
+    sync();
   };
 
   usePadFrames(true, pad.index, (now) => {
     setGone(!now);
-    if (!now) return;
-    if (!rest.current) {
-      // Where everything rests, taken as the wizard opens (triggers on axes rest at -1).
-      rest.current = now;
-      waiting.current = false;
-      return;
-    }
-    if (waiting.current) {
-      if (atRest(rest.current, now)) waiting.current = false;
-      return;
-    }
-    const s = MAP_STEPS[step];
-    const got = s.kind === "axis" ? detectAxis(rest.current!, now) : detectPress(rest.current!, now);
-    if (got) {
-      prof.current = applyStep(prof.current, s, got);
-      advance(step + 1);
-    }
+    if (now && learner.current.feed(now)) sync();
   });
 
   return (

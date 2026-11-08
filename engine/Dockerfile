@@ -60,6 +60,8 @@ RUN apk add --no-cache musl-dev g++ make
 WORKDIR /build
 COPY engine engine
 COPY third_party third_party
+# The engine's own tailnet node: the C core (ps5upload-tailnet's build.rs compiles it).
+COPY tailnet tailnet
 # The engine serves these guides as MCP resources (src/mcp/resources.rs).
 COPY AUTOMATION.md API.md MCP.md ./
 # The PS5 helper ELFs the engine embeds (build.rs looks for them at

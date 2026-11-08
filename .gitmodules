@@ -1,3 +1,9 @@
 [submodule "third_party/ava1"]
 	path = third_party/ava1
 	url = https://github.com/phantomptr/ava1.git
+[submodule "third_party/bearssl"]
+	path = third_party/bearssl
+	url = https://www.bearssl.org/git/BearSSL
+[submodule "third_party/lwip"]
+	path = third_party/lwip
+	url = https://github.com/lwip-tcpip/lwip.git

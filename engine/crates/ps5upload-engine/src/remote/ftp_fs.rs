@@ -480,6 +480,36 @@ pub struct FtpFs {
     session: Mutex<Ftp>,
 }
 
+/// A file being written over STOR, holding the session it was started on. A failed or given-up
+/// write drops the data connection, which the session remembers: its next command reads the
+/// reply first.
+struct FtpWriter<'a> {
+    _session: tokio::sync::MutexGuard<'a, Ftp>,
+    stream: suppaftp::tokio::TransferStream<suppaftp::tokio::AsyncRustlsStream>,
+    host: String,
+    path: String,
+}
+
+#[async_trait::async_trait]
+impl super::RemoteWriter for FtpWriter<'_> {
+    async fn write(&mut self, data: &[u8]) -> Result<(), RemoteError> {
+        super::write_all_to(&mut self.stream, data, &self.path)
+            .await
+            .map_err(|e| RemoteError::Io(format!("{}: {e}", self.host)))
+    }
+
+    async fn finish(self: Box<Self>) -> Result<(), RemoteError> {
+        let (host, path) = (self.host, self.path);
+        // The server answers once the file is on its disk, which a slow NAS takes a while over.
+        tokio::time::timeout(PUT_COMMIT, self.stream.finish())
+            .await
+            .map_err(|_| RemoteError::Io(format!("{host}: no answer after writing {path}")))?
+            .map_err(|e| map_err(&host, e))
+    }
+
+    async fn abort(self: Box<Self>) {}
+}
+
 /// `path` ("/games/x") under `home` ("/ftp/t") on the server.
 pub(crate) fn under(home: &str, path: &str) -> String {
     let home = home.trim_end_matches('/');
@@ -932,14 +962,20 @@ impl RemoteFs for FtpFs {
     /// STOR in binary mode on the shared session: no limit on the whole file (a game file takes
     /// minutes), only on a server that stops taking bytes. A failed or cancelled write drops the
     /// data connection, which the session remembers: its next command reads the reply first.
-    async fn put_file(
-        &self,
+    /// The writer holds the session for the whole file: FTP has one transfer per session.
+    /// Always from the start (STOR): REST before STOR is not one every server keeps to.
+    async fn create_writer<'a>(
+        &'a self,
         path: &str,
-        src: &std::path::Path,
-        progress: &super::PutProgress,
-    ) -> Result<(), RemoteError> {
+        _size: u64,
+        from: u64,
+    ) -> Result<Box<dyn super::RemoteWriter + 'a>, RemoteError> {
+        if from != 0 {
+            return Err(RemoteError::Unsupported(format!(
+                "FTP writes {path} from the start"
+            )));
+        }
         let full = under(&self.home, path);
-        let file = tokio::fs::File::open(src).await.map_err(super::local_io)?;
         let mut s = self.session.lock().await;
         let host = self.host.as_str();
         timed(host, "starting an upload", async {
@@ -948,19 +984,18 @@ impl RemoteFs for FtpFs {
                 .map_err(|e| map_err(host, e))
         })
         .await?;
-        let mut stream = timed(host, "starting an upload", async {
+        let stream = timed(host, "starting an upload", async {
             s.put_with_stream(full.as_str())
                 .await
                 .map_err(|e| map_err(host, e))
         })
         .await?;
-        super::send_to_server(file, &mut stream, progress, STEP, host, path).await?;
-        // The server answers once the file is on its disk, which a slow NAS takes a while over.
-        tokio::time::timeout(PUT_COMMIT, stream.finish())
-            .await
-            .map_err(|_| RemoteError::Io(format!("{host}: no answer after writing {path}")))?
-            .map_err(|e| map_err(host, e))?;
-        Ok(())
+        Ok(Box::new(FtpWriter {
+            _session: s,
+            stream,
+            host: self.host.clone(),
+            path: path.to_string(),
+        }))
     }
 
     async fn remove_file(&self, path: &str) -> Result<(), RemoteError> {

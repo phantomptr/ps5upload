@@ -82,16 +82,60 @@ pub(super) fn tools() -> Vec<ToolDef> {
             run: route!(method: "POST", path: "/api/join/kick", done: "They are out."),
         },
         ToolDef {
+            name: "together_profiles",
+            title: "Play Together profiles",
+            description: "The profiles signed in on a console (the one in front is the host's \
+                          own), which profile each guest's player (2 to 4) plays as, and whether \
+                          the helper can seat guests in them. together_settings changes the \
+                          choice.",
+            kind: Kind::Read,
+            schema: object(json!({ "console": console_required() }), &["console"]),
+            run: route!(path: "/api/join/profiles", done: "The console's profiles."),
+        },
+        ToolDef {
             name: "together_settings",
             title: "Play Together settings",
             description: "How many guests may join (1 to 3), whether PS and Create are taken \
                           from guests who are playing, and whether a guest may play on the \
                           stream's own controller as the host's PS5 user; and internet invites: \
                           on or off, the signalling hub, the STUN servers, asking the router for \
-                          a port (UPnP). One set for every console.",
+                          a port (UPnP). One set for every console. With `addr` (the console), \
+                          `guest_profiles` says which signed-in profile each guest's player \
+                          plays as on that console (together_profiles lists them): the guest is \
+                          seated in it and the TV never asks. The host's own profile lets a \
+                          friend use their saves and trophies: only with the user's explicit \
+                          yes, as `owner: true`.",
             kind: Kind::Write { idempotent: true },
             schema: object(
                 json!({
+                    "addr": {
+                        "type": "string",
+                        "description": "The console `guest_profiles` are for (its address). Required with them.",
+                    },
+                    "guest_profiles": {
+                        "type": "array",
+                        "description": "The profile each guest's player plays as, replacing the \
+                                        last choice. A player left out: the TV asks the guest \
+                                        who they are. Empty: the TV asks every guest.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "player": { "type": "integer", "minimum": 2, "maximum": 4 },
+                                "user": {
+                                    "type": "integer",
+                                    "description": "The profile's id, from together_profiles.",
+                                },
+                                "name": { "type": "string" },
+                                "owner": {
+                                    "type": "boolean",
+                                    "description": "The user confirmed a friend may play as \
+                                                    their own profile (its saves and \
+                                                    trophies).",
+                                },
+                            },
+                            "required": ["player", "user"],
+                        },
+                    },
                     "max_players": whole("Guests at most, 1 to 3."),
                     "block_system_buttons": flag(
                         "Take PS and Create from guests who are playing.",

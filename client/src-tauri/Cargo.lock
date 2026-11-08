@@ -4871,6 +4871,7 @@ dependencies = [
  "ps5upload-core",
  "ps5upload-fpkg",
  "ps5upload-pkg",
+ "ps5upload-tailnet",
  "rcgen",
  "russh",
  "russh-sftp",
@@ -4930,6 +4931,13 @@ dependencies = [
  "serde_json",
  "sha1 0.11.0",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "ps5upload-tailnet"
+version = "11.6.0"
+dependencies = [
+ "cc",
 ]
 
 [[package]]

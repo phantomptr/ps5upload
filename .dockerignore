@@ -78,3 +78,7 @@ Dockerfile*
 .env.*
 *.pem
 *.key
+
+# tailnet's own build outputs and the test bed's state (keys, logs, a derper binary)
+tailnet/build/
+tailnet/testbed/.state/

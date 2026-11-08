@@ -148,7 +148,11 @@ pub(crate) fn name_problem(name: &str) -> Option<&'static str> {
 /// file may also be a folder, and on a case-insensitive drive (`fold_case`) no two may differ
 /// only by case. The error names the file.
 fn check_paths(tree: &dyn SourceTree, fold_case: bool) -> Result<(), String> {
-    let windows = cfg!(windows);
+    check_paths_for(tree, fold_case, cfg!(windows))
+}
+
+/// [`check_paths`] for a drive that holds Windows names only when `windows` (a share).
+fn check_paths_for(tree: &dyn SourceTree, fold_case: bool, windows: bool) -> Result<(), String> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut dirs: HashSet<String> = HashSet::new();
     let key = |p: &str| {
@@ -416,10 +420,23 @@ fn verify(
 /// against a source `reopen` opens afresh, then renamed. `stage(id, done, total)` reports
 /// `write` and `verify`. The caller has claimed the `.partial` (`fpkg_api::Writing`); on any
 /// failure it is removed here.
+#[cfg(test)]
 pub(crate) fn build(
     tree: &mut dyn SourceTree,
     reopen: &dyn Fn() -> Result<Box<dyn SourceTree>, String>,
     target: &Path,
+    mode: VerifyMode,
+    cancel: &AtomicBool,
+    stage: &mut dyn FnMut(&str, u64, u64),
+) -> Result<FolderBuilt, String> {
+    build_to(tree, reopen, &FolderOut::Local(target), mode, cancel, stage)
+}
+
+/// [`build`], to a folder on this computer or on a saved server.
+pub(crate) fn build_to(
+    tree: &mut dyn SourceTree,
+    reopen: &dyn Fn() -> Result<Box<dyn SourceTree>, String>,
+    out: &FolderOut,
     mode: VerifyMode,
     cancel: &AtomicBool,
     stage: &mut dyn FnMut(&str, u64, u64),
@@ -438,17 +455,9 @@ pub(crate) fn build(
         None => tree,
     };
     if let Some(mut indexed) = crate::image_build::AmprIndexed::wrap_at(&mut *tree, mtime)? {
-        return build_tree(
-            &mut indexed,
-            reopen,
-            Some(mtime),
-            target,
-            mode,
-            cancel,
-            stage,
-        );
+        return build_tree(&mut indexed, reopen, Some(mtime), out, mode, cancel, stage);
     }
-    build_tree(tree, reopen, None, target, mode, cancel, stage)
+    build_tree(tree, reopen, None, out, mode, cancel, stage)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -456,17 +465,17 @@ fn build_tree(
     tree: &mut dyn SourceTree,
     reopen: &dyn Fn() -> Result<Box<dyn SourceTree>, String>,
     index_mtime: Option<i64>,
-    target: &Path,
+    out: &FolderOut,
     mode: VerifyMode,
     cancel: &AtomicBool,
     stage: &mut dyn FnMut(&str, u64, u64),
 ) -> Result<FolderBuilt, String> {
-    write_checked(
+    write_checked_to(
         tree,
-        target,
+        out,
         cancel,
         stage,
-        &mut |partial, listed, empty_dirs, stage| {
+        &mut |written, listed, empty_dirs, stage| {
             let mut fresh = reopen()?;
             let mut ps4 = ps5upload_fpkg::ps4_param::Ps4Params::wrap(&mut *fresh)
                 .map_err(|e| e.to_string())?;
@@ -482,18 +491,42 @@ fn build_tree(
                 Some(i) => i,
                 None => plain,
             };
-            let summary = verify(
-                partial,
-                listed,
-                empty_dirs,
-                source,
-                mode,
-                cancel,
-                &mut |d, t| stage("verify", d, t),
-            )?;
-            Ok(describe(&summary))
+            match written {
+                Written::Dir(partial) => {
+                    let summary = verify(
+                        partial,
+                        listed,
+                        empty_dirs,
+                        source,
+                        mode,
+                        cancel,
+                        &mut |d, t| stage("verify", d, t),
+                    )?;
+                    Ok(describe(&summary))
+                }
+                Written::Tree(mut got) => {
+                    same_empty_dirs(&*got, empty_dirs)?;
+                    verify_trees(&mut *got, source, mode, cancel, &mut |d, t| {
+                        stage("verify", d, t)
+                    })
+                }
+            }
         },
     )
+}
+
+/// The empty folders read back are the ones written.
+fn same_empty_dirs(got: &dyn SourceTree, want: &[String]) -> Result<(), String> {
+    let norm = |v: &[String]| {
+        let mut v: Vec<String> = v.iter().map(|d| d.trim_matches('/').to_string()).collect();
+        v.sort();
+        v
+    };
+    let (got, want) = (norm(got.empty_dirs()), norm(want));
+    match want.iter().find(|d| got.binary_search(d).is_err()) {
+        Some(d) => Err(format!("the empty folder {d} is missing")),
+        None => Ok(()),
+    }
 }
 
 /// How a read-back went, for the job's detail.
@@ -504,21 +537,66 @@ fn describe(summary: &VerifySummary) -> String {
     }
 }
 
-/// The read-back of a folder [`write_checked`] wrote: given the `.partial` folder, the files
+/// The folder a build wrote, as its check gets it: the `.partial` folder on this computer, or
+/// the folder on a server read back as a tree.
+pub(crate) enum Written<'a> {
+    Dir(&'a Path),
+    Tree(Box<dyn SourceTree>),
+}
+
+/// The read-back of a folder [`write_checked_to`] wrote: given the folder written, the files
 /// written (path, size), the empty folders and the stage reporter, the check's description or
 /// why it failed.
 pub(crate) type Check<'a> = dyn FnMut(
-        &Path,
+        Written<'_>,
         &[(String, u64)],
         &[String],
         &mut dyn FnMut(&str, u64, u64),
     ) -> Result<String, String>
     + 'a;
 
-/// Writes `tree` as the folder `target`: its paths checked, written into `<target>.partial/`,
-/// `check`ed there, then renamed. `stage` reports `write` (and whatever `check` reports). The
-/// caller has claimed the `.partial`; on any failure it is removed here.
-pub(crate) fn write_checked(
+/// Writes `tree` as a folder: its paths checked, written into `<target>.partial/` on this
+/// computer (or, on a server, as [`crate::server_out::write_folder`] writes it), `check`ed there,
+/// then renamed. `stage` reports `write` (and whatever `check` reports). The caller has claimed
+/// the `.partial`; on any failure it is removed here.
+pub(crate) fn write_checked_to(
+    tree: &mut dyn SourceTree,
+    out: &FolderOut,
+    cancel: &AtomicBool,
+    stage: &mut dyn FnMut(&str, u64, u64),
+    check: &mut Check,
+) -> Result<FolderBuilt, String> {
+    match out {
+        FolderOut::Local(target) => write_checked_here(tree, target, cancel, stage, check),
+        FolderOut::Server(to) => crate::server_out::write_folder(tree, to, cancel, stage, check),
+    }
+}
+
+/// Where a folder build writes.
+pub(crate) enum FolderOut<'a> {
+    /// A folder on this computer, written as `<target>.partial/` and renamed.
+    Local(&'a Path),
+    /// A folder on a saved server.
+    Server(&'a crate::server_out::ServerFolder<'a>),
+}
+
+impl FolderOut<'_> {
+    /// For logs.
+    pub(crate) fn describe(&self) -> String {
+        match self {
+            Self::Local(p) => p.display().to_string(),
+            Self::Server(to) => to.dest.url(&to.dest.path_of(&to.name)),
+        }
+    }
+}
+
+/// [`check_paths_for`] for the server folder builds.
+pub(crate) fn check_server_paths(tree: &dyn SourceTree, windows: bool) -> Result<(), String> {
+    // A share folds case; other servers may: two names one case apart are refused everywhere.
+    check_paths_for(tree, true, windows)
+}
+
+fn write_checked_here(
     tree: &mut dyn SourceTree,
     target: &Path,
     cancel: &AtomicBool,
@@ -569,7 +647,7 @@ pub(crate) fn write_checked(
             return Err("cancelled".into());
         }
 
-        let checked = check(&partial, &listed, &empty_dirs, stage)?;
+        let checked = check(Written::Dir(&partial), &listed, &empty_dirs, stage)?;
         std::fs::remove_file(partial.join(MARKER)).map_err(|e| e.to_string())?;
         if target.exists() {
             return Err(format!(

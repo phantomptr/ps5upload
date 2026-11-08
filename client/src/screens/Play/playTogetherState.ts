@@ -25,6 +25,38 @@ export interface JoinGuest {
   via: "lan" | "internet";
   /** An internet guest's connection: "direct", "connecting", "failed", "closed" (null on the LAN). */
   path: string | null;
+  /** Seated in the PS5 profile the host chose for their player ("Guests play as"): its name. */
+  playsAs: string | null;
+  /** A profile was chosen for their player but couldn't be used, so the TV asks who they are:
+   *  why ("signed_out", "owner", "starting", "unavailable", "failed", "old_helper", "unknown"). */
+  seatNote: string | null;
+}
+
+/** A PS5 profile signed in on the console (GET /api/join/profiles). */
+export interface ConsoleProfile {
+  id: number;
+  name: string;
+  /** The one in front on the TV: the host's own. */
+  foreground: boolean;
+}
+
+/** "Guests play as": the profile one guest's player gets on this console. */
+export interface SeatProfile {
+  /** 2-4. */
+  player: number;
+  user: number;
+  name: string;
+  /** The host confirmed it although it is their own profile (saves and trophies). */
+  owner: boolean;
+}
+
+/** What Settings › Play Together shows for "Guests play as". */
+export interface ProfilesState {
+  users: ConsoleProfile[];
+  seats: SeatProfile[];
+  /** The helper's companion that seats guests: "running", "starting", "no_bind", "unavailable",
+   *  "off", "old_helper", "unreachable"; null when not asked yet (Play Together closed). */
+  companion: string | null;
 }
 
 /** An internet guest's connection the engine knows of, in the game or not (yet). */
@@ -74,6 +106,8 @@ export interface JoinHostState {
   netPeers: NetPeer[];
   /** The next friend allowed in gets this stream's controller (Player 1, as the host's PS5 user). */
   seatNext: boolean;
+  /** The next friend allowed in plays as this profile (the host's choice for their player). */
+  nextProfile: { player: number; name: string } | null;
   helperOk: boolean;
   reason: string | null;
   /** The guest socket friends connect to (`ws`, else made from the invite's address). */
@@ -88,6 +122,7 @@ export const EMPTY_JOIN: JoinHostState = {
   settings: { blockSystemButtons: true, maxPlayers: 3, streamSeat: false, internetInvites: null, hubUrl: "", stun: [], upnp: true },
   netPeers: [],
   seatNext: false,
+  nextProfile: null,
   helperOk: true,
   reason: null,
   ws: null,
@@ -100,14 +135,14 @@ const stateOf = (v: unknown): GuestState => (typeof v === "string" && STATES.has
 const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
 
 /** An invite's internet half (`invite.internet`), or null. */
-function readNetInvite(v: unknown): NetInvite | null {
+export function readNetInvite(v: unknown): NetInvite | null {
   if (!v || typeof v !== "object") return null;
   const o = v as Record<string, unknown>;
   return { url: str(o.url), hubState: str(o.state), hubError: str(o.error) };
 }
 
 /** The engine's internet peers (`internet.peers`, or the invite's own list). */
-function readPeers(v: unknown): NetPeer[] {
+export function readPeers(v: unknown): NetPeer[] {
   return (Array.isArray(v) ? v : [])
     .filter((p): p is Record<string, unknown> => !!p && typeof p === "object" && typeof p.gid === "string")
     .map((p) => ({ gid: p.gid as string, path: str(p.path) ?? "connecting", rttMs: num(p.rtt_ms) }));
@@ -150,6 +185,9 @@ export function readJoinState(v: unknown): JoinHostState {
       // An older engine says nothing: the home network.
       via: g.via === "internet" ? ("internet" as const) : ("lan" as const),
       path: str(g.path),
+      // An older engine says nothing: the TV asks every guest.
+      playsAs: str((g.plays_as as Record<string, unknown> | null | undefined)?.name),
+      seatNote: str(g.seat_note),
     }))
     .sort((a, b) => a.player - b.player);
   // Friends asking to join: the engine's `pending` (`asks` kept for an older one).
@@ -173,10 +211,57 @@ export function readJoinState(v: unknown): JoinHostState {
     },
     netPeers: readPeers((o.internet as Record<string, unknown> | null | undefined)?.peers ?? (inv?.internet as Record<string, unknown> | null | undefined)?.peers),
     seatNext: o.seat_next === true,
+    nextProfile: readNextProfile(o.next_profile),
     helperOk: o.helper_ok !== false,
     reason: typeof o.reason === "string" && o.reason ? o.reason : null,
     ws: typeof o.ws === "string" && /^wss?:\/\//.test(o.ws) ? o.ws : invite ? socketOf(invite.url) : null,
   };
+}
+
+/** The profile the next friend plays as (`next_profile`), or null. */
+function readNextProfile(v: unknown): { player: number; name: string } | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  const name = str(o.name);
+  const player = num(o.player);
+  return name && player ? { player, name } : null;
+}
+
+/** The ids the engine writes (unsigned 32-bit); anything else is no profile. */
+const userId = (v: unknown): number | null => {
+  const n = num(v);
+  return n != null && Number.isInteger(n) && n > 0 && n < 0xffffffff ? n : null;
+};
+
+/** GET /api/join/profiles, checked field by field. */
+export function readProfiles(v: unknown): ProfilesState {
+  const o = (v ?? {}) as Record<string, unknown>;
+  const users = (Array.isArray(o.users) ? o.users : [])
+    .filter((u): u is Record<string, unknown> => !!u && typeof u === "object" && userId(u.id) != null)
+    .map((u) => ({ id: userId(u.id)!, name: typeof u.name === "string" ? u.name : "", foreground: u.foreground === true }));
+  const seats = (Array.isArray(o.seats) ? o.seats : [])
+    .filter((s): s is Record<string, unknown> => !!s && typeof s === "object" && userId(s.user) != null)
+    .map((s) => ({
+      player: num(s.player) ?? 0,
+      user: userId(s.user)!,
+      name: typeof s.name === "string" ? s.name : "",
+      owner: s.owner === true,
+    }))
+    .filter((s) => s.player >= 2 && s.player <= 4);
+  return { users, seats, companion: str(o.companion) };
+}
+
+/** The seats with `player` set to `user` (null: the TV asks), as POST /api/join/settings takes
+ *  them. A profile is on one player at most: choosing it for another moves it. */
+export function withSeat(
+  seats: SeatProfile[],
+  player: number,
+  user: ConsoleProfile | null,
+  owner: boolean,
+): SeatProfile[] {
+  const rest = seats.filter((s) => s.player !== player && (!user || s.user !== user.id));
+  const next = user ? [...rest, { player, user: user.id, name: user.name, owner }] : rest;
+  return next.sort((a, b) => a.player - b.player);
 }
 
 /** The guest socket of an invite link's computer. */
@@ -396,6 +481,26 @@ export const joinApi = {
     change("/api/join/settings", addr, s),
   /** Internet invite settings; a refusal says which (`hub_url`, `stun`). */
   netSettings: (addr: string, s: NetSettingsBody) => changeOrWhy("/api/join/settings", addr, s),
+  /** "Guests play as": the PS5's signed-in profiles and the host's choices for this console;
+   *  null when the engine or the console didn't answer (or an engine from before it). */
+  profiles: async (addr: string): Promise<ProfilesState | null> => {
+    try {
+      const r = await request(`/api/join/profiles?addr=${encodeURIComponent(addr)}`);
+      return r.ok ? readProfiles(r.json) : null;
+    } catch {
+      return null;
+    }
+  },
+  /** Sets every guest player's profile on this console; a refusal says why (`owner_confirm`: the
+   *  host's own profile without `owner`, `duplicate`, `player`, `user`). */
+  seats: async (addr: string, seats: SeatProfile[]): Promise<{ error: string | null }> => {
+    try {
+      const r = await request("/api/join/settings", { addr, guest_profiles: seats });
+      return { error: r.ok ? null : errorOf(r.json) };
+    } catch {
+      return { error: "engine" };
+    }
+  },
 };
 
 /** The engine's Play Together state for a console: every second while it is open (the delays

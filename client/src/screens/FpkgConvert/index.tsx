@@ -46,7 +46,8 @@ import { GameCard } from "./GameCard";
 import { ImageBrowser } from "../LocalImage/ImageBrowser";
 import { isDriveImage, LocalDrivesCard, useLocalDrives } from "../LocalImage/LocalDrives";
 import { BROWSE_IMAGE_EXTENSIONS } from "../LocalImage/imageTypes";
-import { isRemotePath } from "../../lib/remotePath";
+import { displayPath, isRemotePath, parseRemotePath } from "../../lib/remotePath";
+import { useConnectionsStore } from "../../state/connections";
 import { MakeCard } from "./MakeCard";
 import { mergeRole, Ps4MergePicker } from "./Ps4Merge";
 import { OptionsCard } from "./OptionsCard";
@@ -57,6 +58,7 @@ import {
   idleRun,
   lz4Active,
   savesToPs5,
+  savesToServer,
   type Lz4Choice,
   type RunCardProps,
   type SaveTo,
@@ -163,6 +165,15 @@ export default function WorkshopScreen() {
   const [thenChoice, setThen] = useState<ConvertThen>("keep");
   // An image saved on this computer, or written straight to the PS5 (nothing stored here).
   const [saveTo, setSaveTo] = useState<SaveTo>("computer");
+  // Save to: a server: the folder there (remembered, as a `remote://` path).
+  const savedServerFolder = useConvertPrefs((s) => s.serverDir);
+  // Only a folder on a server that is still saved here (the folder is synced between devices,
+  // whose saved servers can differ): anything else is no destination, and Run waits for one.
+  const connections = useConnectionsStore((s) => s.connections);
+  const savedServerId = parseRemotePath(savedServerFolder)?.connectionId;
+  const serverFolder = savedServerId && connections.some((c) => c.id === savedServerId) ? savedServerFolder : "";
+  const setServerFolder = useConvertPrefs((s) => s.setServerDir);
+  const nameOfServer = useConnectionsStore((s) => s.nameOf);
   const [deleteAfter, setDeleteAfter] = useState(false);
   // Per game, not remembered: the wrong language carried into the next game would be a surprise.
   const [language, setLanguage] = useState("");
@@ -242,6 +253,9 @@ export default function WorkshopScreen() {
       // The AMPR emulator choice as it is now: changing it later is for games added later.
       addAmprEmu: prefs.addAmprEmu,
       amprEmuBuild: prefs.amprEmuBuild,
+      // Save to: a server, as chosen now (an image or a game folder only).
+      toServer:
+        (build.kind === "image" || build.kind === "folder") && savesToServer(runChoice) ? serverFolder : undefined,
     });
   };
   /** Queue what was picked or found, then say what was left out. */
@@ -539,7 +553,13 @@ export default function WorkshopScreen() {
     const update = mergeReady && mergePair ? mergePair.update : undefined;
     const out = outFor(game);
     if (build.kind === "folder") {
-      void buildFolder(game, out.outputDir, out.keepBoth, { zstd: folderPackOptions(lz4Choice), update });
+      // Save to: a server writes it there; nothing is kept here.
+      const toServer = savesToServer(runChoice) ? serverFolder : undefined;
+      void buildFolder(game, out.outputDir, out.keepBoth, {
+        zstd: folderPackOptions(lz4Choice),
+        update,
+        ...(toServer ? { toServer } : {}),
+      });
       return;
     }
     if (build.kind === "image") {
@@ -552,16 +572,24 @@ export default function WorkshopScreen() {
       };
       // Save to: PS5 writes it there as it is built; nothing is kept here to upload after.
       const direct = savesToPs5(runChoice);
+      // Save to: a server writes it there as it is built, the same way.
+      const toServer = !direct && savesToServer(runChoice) ? serverFolder : undefined;
       void buildImage(
         game,
         out.outputDir,
         build.compress && !lz4Active(build.format, lz4Choice),
         build.format,
-        !direct && then === "upload" ? plan : undefined,
+        !direct && !toServer && then === "upload" ? plan : undefined,
         packOptions(build.format, lz4Choice, lz4Profile?.text),
         password || undefined,
         out.keepBoth,
-        direct || update ? { ...(direct ? { toConsole: plan } : {}), ...(update ? { update } : {}) } : undefined,
+        direct || toServer || update
+          ? {
+              ...(direct ? { toConsole: plan } : {}),
+              ...(toServer ? { toServer } : {}),
+              ...(update ? { update } : {}),
+            }
+          : undefined,
       );
       return;
     }
@@ -970,6 +998,14 @@ export default function WorkshopScreen() {
           "Straight to the PS5 works for a plain .exfat, .ffpkg or .ffpfs image, or an .exfat with zstd packs. Save this one to this computer, or change the image above.",
         )
       : null;
+  // Straight to a server: the same images as straight to the PS5.
+  const serverRefusal = ps5Refusal
+    ? tr(
+        "fpkg.save_to_server_unsupported",
+        undefined,
+        "Straight to a server works for a plain .exfat, .ffpkg or .ffpfs image, or an .exfat with zstd packs. Save this one to this computer, or change the image above.",
+      )
+    : null;
   const runChoice: RunCardProps["choice"] = {
     make,
     onMake: setMake,
@@ -990,9 +1026,13 @@ export default function WorkshopScreen() {
           onChange: (volume, subpath) => useUploadStore.getState().setDestination(volume, subpath),
         }
       : undefined,
-    saveTo,
+    // A folder can't go straight to the PS5: shown as this computer.
+    saveTo: make === "folder" && saveTo === "ps5" ? "computer" : saveTo,
     onSaveTo: setSaveTo,
     ps5Refusal,
+    serverFolder,
+    onServerFolder: setServerFolder,
+    serverRefusal,
   };
   const barRun = idleRun(
     {
@@ -1131,7 +1171,9 @@ export default function WorkshopScreen() {
                       title: inspection.title || inspection.content_id || source.trim(),
                       dir: savesToPs5(runChoice)
                         ? tr("fpkg.run.on_ps5", undefined, "the PS5")
-                        : (outFor(src).outputDir ?? "~/Downloads/fpkgs"),
+                        : savesToServer(runChoice)
+                          ? displayPath(serverFolder, nameOfServer)
+                          : (outFor(src).outputDir ?? "~/Downloads/fpkgs"),
                     },
                     "Makes {what} of {title} in {dir}.",
                   )

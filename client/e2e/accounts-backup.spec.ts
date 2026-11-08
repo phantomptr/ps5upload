@@ -22,7 +22,7 @@ test("Accounts backs up the user information as a text file", async ({ page }) =
           { uid: 268435457, uid_hex: "0x10000001", username: "Bob" },
         ],
         slots: [
-          { slot: 1, name: "Alice", type: "", flags: 4098, id: "0x7a356e99a9e2205c", activated: true, offline_activated: true },
+          { slot: 1, name: "Alice", type: "", flags: 4098, id: "0x1122334455667788", activated: true, offline_activated: true },
         ],
       };
     if (path === "/api/profile/avatar/current") body = { data_url: null };
@@ -48,9 +48,9 @@ test("Accounts backs up the user information as a text file", async ({ page }) =
   expect(file.suggestedFilename()).toMatch(/^ps5upload-users-.+-\d{4}-\d{2}-\d{2}\.txt$/);
   const text = await readFile((await file.path())!, "utf8");
   expect(text).toContain("1. Alice   [signed in now]");
-  expect(text).toContain("Account ID (hex):    0x7a356e99a9e2205c");
-  expect(text).toContain("Account ID (decimal): 8806066252652093532");
-  expect(text).toContain("Account ID (base64): XCDiqZluNXo=");
+  expect(text).toContain("Account ID (hex):    0x1122334455667788");
+  expect(text).toContain("Account ID (decimal): 1234605616436508552");
+  expect(text).toContain("Account ID (base64): iHdmVUQzIhE=");
   expect(text).toContain("Online ID:           alice_ps");
   expect(text).toContain("2. Bob");
   expect(text).toContain("RESTORING");

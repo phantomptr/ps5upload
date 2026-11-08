@@ -3437,6 +3437,33 @@
         ],
         "type": "object"
       },
+      "EngineOpBody": {
+        "properties": {
+          "authkey": {
+            "type": "string"
+          },
+          "control_url": {
+            "type": "string"
+          },
+          "host": {
+            "description": "op `remember`: a console's LAN address and its tailnet address (what \"Put this PS5 on\nTailscale\" records by itself).",
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "ip": {
+            "type": "string"
+          },
+          "op": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "op"
+        ],
+        "type": "object"
+      },
       "Error": {
         "description": "Every failure of an /api/ route. Some routes add their own fields beside these (`reason`, `field`, `op_id`).",
         "properties": {
@@ -4116,6 +4143,17 @@
               }
             ],
             "description": "Write the game with its files in zstd asset packs for ampr-emu-ng, as an image build's\n`ampr_zstd` does, as a plain folder: the packs, the files that stay loose, and the\nemulator in `fakelib/libSceAmpr.sprx`. The source may then also be a game folder (on\nthis computer, a saved server or a console). Not with `entry`."
+          },
+          "destination": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageDestinationReq"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where the folder goes: `{\"kind\":\"local\"}` (the default: `output_dir` on this computer)\nor `{\"kind\":\"server\",\"source_id\":…,\"dir\":…}`: a folder on a saved server, every file\nwritten under a temporary name and renamed, the files a game starts from (`eboot.bin`,\n`sce_sys/param.json`) last and only once the folder reads back there. Not with `entry`;\na console is not a destination here."
           },
           "entry": {
             "description": "Save only this file or folder of the image (#479, the image browser's Save), by its\npath inside the image: a folder becomes a folder named after it, a file a file. Its\nname is the entry's own unless `name` says otherwise.",
@@ -5886,6 +5924,37 @@
               }
             ],
             "description": "A PS5: `addr` (its address) and `dir` (an absolute folder on it, made when missing). A\ndropped connection goes on where it stopped, and so does the same build started again."
+          },
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "server"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "dir": {
+                    "type": "string"
+                  },
+                  "source_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source_id",
+                  "dir"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "A saved server (`source_id`, a connection under Connections: SMB, NFS, FTP, SFTP or\nWebDAV) and `dir`, a folder on it (made when missing). Written there as `<name>.partial`,\nread back there and only then renamed, never over anything; the job's `dest` is then\n`remote://<source_id>/<dir>/<name>`. On SMB, NFS and SFTP a write that was cut off goes\non from what the server holds."
           }
         ]
       },
@@ -6613,6 +6682,25 @@
           "fingerprint",
           "content_id"
         ],
+        "type": "object"
+      },
+      "InternetReq": {
+        "properties": {
+          "console": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "addr",
+              "host"
+            ]
+          },
+          "new": {
+            "description": "A new room and key: the old internet link stops working.",
+            "type": "boolean"
+          }
+        },
         "type": "object"
       },
       "InviteBody": {
@@ -8442,6 +8530,36 @@
           "title",
           "size_bytes",
           "category"
+        ],
+        "type": "object"
+      },
+      "OpBody": {
+        "properties": {
+          "addr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "authkey": {
+            "type": "string"
+          },
+          "control_url": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "op": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "op"
         ],
         "type": "object"
       },
@@ -11528,6 +11646,64 @@
         ],
         "type": "object"
       },
+      "SeatProfile.request": {
+        "description": "\"Guests play as\": the console profile a guest on Player `player` gets, chosen by the host for\none console (user ids are that console's). The helper seats the guest's pad in it as it is made\n(`vpad.open` with `bind_user`), so the console never asks \"Who's using this controller?\" and the\nguest cannot pick another profile. No entry for a player: the console asks (as before).",
+        "properties": {
+          "name": {
+            "description": "The profile's name as the console showed it when the host chose it.",
+            "type": "string"
+          },
+          "owner": {
+            "description": "The host confirmed this profile although it is their own (the one in front): the guest can\nuse its saves and trophies. Without it the helper refuses that profile.",
+            "type": "boolean"
+          },
+          "player": {
+            "description": "2-4.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "user": {
+            "description": "The console's user id (`user.list`).",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "player",
+          "user"
+        ],
+        "type": "object"
+      },
+      "SeatProfile.response": {
+        "description": "\"Guests play as\": the console profile a guest on Player `player` gets, chosen by the host for\none console (user ids are that console's). The helper seats the guest's pad in it as it is made\n(`vpad.open` with `bind_user`), so the console never asks \"Who's using this controller?\" and the\nguest cannot pick another profile. No entry for a player: the console asks (as before).",
+        "properties": {
+          "name": {
+            "description": "The profile's name as the console showed it when the host chose it.",
+            "type": "string"
+          },
+          "owner": {
+            "description": "The host confirmed this profile although it is their own (the one in front): the guest can\nuse its saves and trophies. Without it the helper refuses that profile.",
+            "type": "boolean"
+          },
+          "player": {
+            "description": "2-4.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "user": {
+            "description": "The console's user id (`user.list`).",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "player",
+          "user",
+          "name",
+          "owner"
+        ],
+        "type": "object"
+      },
       "SessionInfo": {
         "description": "The running session as a stream for a site sees it (Go live checks it against each site's\nlimits, rp_golive.rs).",
         "properties": {
@@ -11646,9 +11822,30 @@
       },
       "SettingsBody": {
         "properties": {
+          "addr": {
+            "description": "The console `guest_profiles` are for (user ids are that console's).",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
           "block_system_buttons": {
             "type": [
               "boolean",
+              "null"
+            ]
+          },
+          "guest_profiles": {
+            "description": "\"Guests play as\": the profile for each guest's player on `addr` (`{player: 2-4, user,\nname, owner}`), replacing the last; empty: the TV asks every guest.",
+            "items": {
+              "$ref": "#/components/schemas/SeatProfile.request"
+            },
+            "type": [
+              "array",
               "null"
             ]
           },
@@ -22079,6 +22276,79 @@
         }
       }
     },
+    "/api/join/profiles": {
+      "get": {
+        "description": "`GET /api/join/profiles?addr=`: the profiles signed in on that console (`users`: `{id, name,\nforeground}`, `foreground` the one in front: the host's own), what the host chose for each\nguest's player (`seats`: `{player, user, name, owner}`), and the helper's companion that seats\nguests in them (`companion`: running, starting, no_bind, unavailable, off; null when not asked\nyet). Only signed-in profiles can be chosen (502 `unreachable` when the console does not\nanswer).",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "companion": {},
+                    "seats": {
+                      "items": {
+                        "$ref": "#/components/schemas/SeatProfile.response"
+                      },
+                      "type": "array"
+                    },
+                    "users": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "play-together"
+        ],
+        "x-ps5upload": {
+          "access": "host-checked",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
     "/api/join/relay": {
       "get": {
         "description": "`GET /api/join/relay?url=ws://<host engine>:<port>/api/join/ws` (this computer only): an app\njoining a friend's Play Together talks to its own engine (an app page may not open a plain\n`ws://` to another machine), which passes the socket through unchanged. Only another engine's\n`/api/join/ws` on a private address.",
@@ -22118,7 +22388,7 @@
     },
     "/api/join/settings": {
       "post": {
-        "description": "`POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,\ninternet_invites?, hub_url?, stun?, upnp?}`: the host's choices (every console). Fewer players\nlets nobody go; it only stops new ones. `stream_seat` off moves a friend on the stream's\ncontroller to a pad of their own. `internet_invites` off closes the internet rooms (guests\nalready in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`\notherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none), `upnp` whether the\nrouter is asked for a port.",
+        "description": "`POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,\ninternet_invites?, hub_url?, stun?, upnp?}`: the host's choices (every console). Fewer players\nlets nobody go; it only stops new ones. `stream_seat` off moves a friend on the stream's\ncontroller to a pad of their own. `internet_invites` off closes the internet rooms (guests\nalready in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`\notherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none), `upnp` whether the\nrouter is asked for a port.\n\n`guest_profiles` with `addr` (\"Guests play as\" on that console): each guest's player gets the\nprofile the host chose (`{player: 2-4, user, name, owner}`; a player left out: the TV asks).\nOnly signed-in profiles can be seated. The host's own profile (the one in front) needs `owner`\ntrue, the host's confirmation that the guest may use its saves and trophies (409\n`owner_confirm` otherwise); 400 `addr` without a console, 400 `player`, `user` or `duplicate`\nfor a list that is not one profile per player.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -22153,6 +22423,10 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
           "default": {
             "$ref": "#/components/responses/Error",
             "description": "Any other failure, in the same shape."
@@ -22164,6 +22438,15 @@
         ],
         "x-ps5upload": {
           "access": "host-checked",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": false
+          },
           "response_schema": "literal"
         }
       }
@@ -36908,7 +37191,7 @@
     },
     "/api/ps5/rp/pad-link/control": {
       "post": {
-        "description": "`POST /api/ps5/rp/pad-link/control {id, on}`: hand a watcher the controller, or take it back.",
+        "description": "`POST /api/ps5/rp/pad-link/control {id, on}`: hand a watcher the controller, or take it back.\nNot one watching over the internet (`ok: false`): those only watch.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -36997,6 +37280,64 @@
         "x-ps5upload": {
           "access": "loopback",
           "response_schema": "literal"
+        }
+      }
+    },
+    "/api/ps5/rp/pad-link/internet": {
+      "post": {
+        "description": "`POST /api/ps5/rp/pad-link/internet {new?, console?}`: the link for a phone anywhere\n(`internet.url` in the answer, the status as `GET` has it; the link opens too). A room on the\nsignalling hub in Play Together's settings, with a key of its own; the same one again unless\n`new`, which closes the old room (its link stops working; internet phones still waiting to be\nallowed are told so, phones already in keep playing). An internet phone asks like the phone\napp does: the computer allows it (`pending`, `decide`) before it gets the pad or the picture.\n409 `internet_off` when the settings turned internet invites off, 409 `hub_url` when the hub\naddress is not a `wss://` one.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InternetReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The link for a phone anywhere (`internet.url` in the answer, the status as `GET` has it; the link opens too)",
+        "tags": [
+          "remote-play"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "addr",
+              "host"
+            ],
+            "in": "body",
+            "name": "console",
+            "required": false
+          },
+          "response_schema": "json-unknown"
         }
       }
     },
@@ -39167,6 +39508,194 @@
             "in": "query",
             "name": "addr",
             "required": false
+          },
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/ps5/tailnet": {
+      "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Not implemented"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "console-tools"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "json-unknown"
+        }
+      },
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Not implemented"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "console-tools"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": true
           },
           "response_schema": "json-unknown"
         }
@@ -44108,6 +44637,285 @@
         }
       }
     },
+    "/api/tailnet": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "tailnet"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      },
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EngineOpBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "tailnet"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/tailnet/route": {
+      "get": {
+        "description": "`GET /api/tailnet/route?addr=&port=&udp=` -> `{dial, via}`: where the engine dials that\nconsole port right now (`dial` null = the console's own address). Opens the local mapping\nwhen the console is away.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          {
+            "in": "query",
+            "name": "port",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "udp",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "dial": {
+                      "type": "string"
+                    },
+                    "latency_ms": {},
+                    "via": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "> `{dial, via}`: where the engine dials that console port right now (`dial` null = the console's own address)",
+        "tags": [
+          "tailnet"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/tailnet/via": {
+      "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "latency_ms": {},
+                    "via": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "tailnet"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
     "/api/transfer/7z": {
       "post": {
         "requestBody": {
@@ -45627,6 +46435,9 @@
     {
       "description": "This computer only, addressed as localhost. PS5UPLOAD_ALLOW_IP alone does not open these; PS5UPLOAD_ALLOW_AUTOMATION=1 does.",
       "name": "strict-local"
+    },
+    {
+      "name": "tailnet"
     },
     {
       "description": "Files on the computer the engine runs on.",

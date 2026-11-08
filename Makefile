@@ -1040,9 +1040,9 @@ test-payload: payload
 	@echo "Running webui offline copy lookup self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-webui-offline-selftest \
-		$(PAYLOAD_DIR)/tests/webui_offline_selftest.c $(PAYLOAD_DIR)/src/webui_offline.c
+		$(PAYLOAD_DIR)/tests/webui_offline_selftest.c $(PAYLOAD_DIR)/src/webui_offline.c $(PAYLOAD_DIR)/src/webui_http.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-webui-offline-selftest
-	@echo "✓ GET /sw.js and /cache.appcache answer with their own types; nothing else matches"
+	@echo "✓ GET /sw.js and /minion.appcache answer with their own types; the old /cache.appcache is 410 Gone; an old stored page is nudged to reload once"
 	@echo "Running webui auth self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-webui-auth-selftest \
@@ -1120,6 +1120,18 @@ test-payload: payload
 		$(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-mesh-selftest
 	@echo "✓ devices connect, are listed, renamed, blocked and pruned; locks lapse; shared documents keep their revision"
+	@echo "Running the tailnet core's unit tests (host build, ASan + UBSan)..."
+	@$(MAKE) -s -C tailnet test
+	@$(MAKE) -s -C tailnet SAN=1 lib
+	@echo "Running the tailnet node self-test (host build, ASan + UBSan)..."
+	@cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wall -Wextra -Werror -pthread \
+		-I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen -Itailnet/include \
+		-o $(SELFTEST_DIR)/ps5upload-tailnet-node-selftest \
+		$(PAYLOAD_DIR)/tests/tailnet_node_selftest.c $(PAYLOAD_DIR)/src/tailnet_node.c $(PAYLOAD_DIR)/src/webui_codec.c \
+		$(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c \
+		tailnet/build/asan/libtailnet.a tailnet/build/asan/liblwip.a tailnet/build/asan/libbearssl.a
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-tailnet-node-selftest
+	@echo "✓ tailnet: on/off/sign-out, settings on disk (no auth key stored), status JSON; core crypto, WireGuard, disco, STUN, IP"
 	@echo "Running console page tasks self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
 		-o /tmp/ps5upload-console-tasks-selftest \

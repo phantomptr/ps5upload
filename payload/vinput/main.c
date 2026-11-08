@@ -1,6 +1,7 @@
-/* ps5u-vinput: the console's virtual keyboard and mouse, driven for the helper (payload/vinput/
- * README.md; protocol include/vinput_wire.h). The helper embeds this ELF and sends it to the
- * console's own loader (:9021) when a keyboard & mouse session opens; it is never sent on its own.
+/* ps5u-vinput: the console's virtual keyboard and mouse, driven for the helper, and Play Together's
+ * guest pads seated in a console user (BIND) (payload/vinput/README.md; protocol
+ * include/vinput_wire.h). The helper embeds this ELF and sends it to the console's own loader
+ * (:9021) when a keyboard & mouse session or Play Together needs it; it is never sent on its own.
  * Single-threaded; listens on 127.0.0.1:VWIRE_PORT only. Its log: VWIRE_LOG_PATH. */
 #include <fcntl.h>
 #include <signal.h>
@@ -14,6 +15,7 @@
 
 #include "vinput_companion.h"
 #include "vinput_dev.h"
+#include "vinput_mbus.h"
 #include "vinput_wire.h"
 
 static void vlog(const char *fmt, ...) {
@@ -70,6 +72,8 @@ int main(void) {
     cfg.dev = vinput_dev_backend();
     cfg.dev_init = dev_init;
     cfg.dev_tick = vinput_dev_tick;
+    /* Play Together's BIND: resolved now, sceMbusInit called by vcomp_run after dev_init. */
+    cfg.mbus = vinput_mbus_backend(vlog);
     cfg.log = vlog;
     cfg.stop = &g_stop;
     code = vcomp_run(&cfg);

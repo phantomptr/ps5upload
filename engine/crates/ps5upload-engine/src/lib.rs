@@ -106,10 +106,13 @@ mod rp_stream_api;
 mod save_backup;
 mod save_backup_server;
 mod save_copy;
+mod server_out;
 mod settings_api;
 mod settings_backup;
 mod shared_state;
 mod state_io;
+mod tailnet_api;
+pub(crate) mod tailnet_engine;
 mod telemetry;
 mod vinput_api;
 mod wake_login_api;
@@ -11678,6 +11681,8 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     host_guard::log_settings();
     // A console it cannot serve is a `helper_not_ava1` error, never another protocol.
     ps5upload_ava1::mgmt::install();
+    // The engine's own tailnet node (when turned on) and the away routing (tailnet_engine.rs).
+    tailnet_engine::boot();
     // Every new session says who this engine is, whatever opened it (Devices showed a phone
     // that had only checked the console's status as an app from before 8.0.0).
     ps5upload_ava1::pool::on_new_session(mesh_api::greet);
@@ -11939,6 +11944,16 @@ fn build_app_and_mcp(
         .route("/api/ps5/disk-usage/{id}", get(disk_usage::status))
         .route("/api/ps5/disk-usage/{id}/cancel", post(disk_usage::cancel))
         .route("/api/ps5/cleanup/scan", post(console_cleanup_api::scan))
+        .route(
+            "/api/ps5/tailnet",
+            get(tailnet_api::status).post(tailnet_api::op),
+        )
+        .route(
+            "/api/tailnet",
+            get(tailnet_api::engine_status).post(tailnet_api::engine_op),
+        )
+        .route("/api/tailnet/route", get(tailnet_api::route))
+        .route("/api/tailnet/via", get(tailnet_api::via))
         .route(
             "/api/ps5/cleanup/scan/{id}",
             get(console_cleanup_api::scan_status),
@@ -12457,6 +12472,7 @@ fn build_app_and_mcp(
         .route("/api/join/kick", post(join::kick))
         .route("/api/join/playing", post(join::playing))
         .route("/api/join/settings", post(join::set_settings))
+        .route("/api/join/profiles", get(join::profiles))
         .route(
             "/api/ps5/rp/pad-link",
             get(pad_link::get_status).post(pad_link::set_open),
@@ -12464,6 +12480,10 @@ fn build_app_and_mcp(
         .route("/api/ps5/rp/pad-link/decide", post(pad_link::decide))
         .route("/api/ps5/rp/pad-link/kick", post(pad_link::kick))
         .route("/api/ps5/rp/pad-link/control", post(pad_link::control))
+        .route(
+            "/api/ps5/rp/pad-link/internet",
+            post(pad_link::set_internet),
+        )
         .route("/api/ps5/rp/pad-relay", get(pad_link::relay))
         .route("/api/ps5/power/ddp-status", get(ps5_power_ddp_status))
         .route("/api/ps5/power/pair", post(ps5_power_pair))
@@ -13259,6 +13279,7 @@ mod loopback_guard_tests {
         for p in [
             "/api/ps5/rp/pad-link",
             "/api/ps5/rp/pad-link/decide",
+            "/api/ps5/rp/pad-link/internet",
             "/api/ps5/rp/pad-relay",
             "/api/ps5/rp/ws",
             "/api/ps5/rp/frame",

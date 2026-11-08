@@ -25,11 +25,13 @@ use ps5upload_fpkg::sample::{self, VerifyMode, VerifySummary, SLICE};
 use ps5upload_fpkg::source::{SourceFile, SourceTree};
 
 mod to_console;
+mod to_server;
 #[cfg(test)]
 pub(crate) use to_console::tests as to_console_tests;
 pub(crate) use to_console::{
     console_stamp, forget_console_stamp, stream_to_console, ConsoleTarget, Streamed,
 };
+pub(crate) use to_server::{server_stamp, stream_to_server, ServerImage, ToServer};
 
 /// The filesystems a game image can have.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,6 +295,15 @@ impl<'a> HashingTree<'a> {
 
     /// Every file's slice hashes: the ones seen whole while writing, the rest read now.
     fn hashes(mut self, cancel: &AtomicBool) -> Result<HashMap<String, Vec<blake3::Hash>>, String> {
+        self.hashes_now(cancel)
+    }
+
+    /// [`Self::hashes`], keeping the tree: what it reads from now on is no longer hashed (an
+    /// image written again over a dropped connection reuses these).
+    fn hashes_now(
+        &mut self,
+        cancel: &AtomicBool,
+    ) -> Result<HashMap<String, Vec<blake3::Hash>>, String> {
         self.feed = None;
         let mut done = match self.hasher.take().map(|h| h.join()) {
             Some(Ok(done)) => done,
@@ -308,7 +319,7 @@ impl<'a> HashingTree<'a> {
         for (path, size) in missing {
             let mut slices = Vec::new();
             hash_slices(
-                self.inner,
+                &mut *self.inner,
                 &path,
                 size,
                 0,

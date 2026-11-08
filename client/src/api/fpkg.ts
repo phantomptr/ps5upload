@@ -14,7 +14,11 @@ export type ImageFormat = "ffpkg" | "exfat" | "ffpfs";
 
 /** Where an image build puts the image: this computer (the output folder), or straight into a
  *  PS5's folder over AVA1, sent as it is written and read back there. */
-export type ImageDestination = { kind: "local" } | { kind: "console"; addr: string; dir: string };
+export type ImageDestination =
+  | { kind: "local" }
+  | { kind: "console"; addr: string; dir: string }
+  /** A saved server (`source_id`, a Connections id) and an absolute folder on it. */
+  | { kind: "server"; source_id: string; dir: string };
 /** How hard a .ffpfsc is compressed. */
 export type FfpfscLevel = "fast" | "balanced" | "smallest";
 
@@ -263,9 +267,13 @@ export const fpkg = {
     zstd?: ZstdPacks,
     /** A PS4 update merged into the PS4 game `source` (which may then also be a folder). */
     update?: string,
+    /** Straight to a folder on a saved server, never stored on this computer; `outputDir`
+     *  when absent. */
+    destination?: ImageDestination,
   ) =>
     invoke<{ job_id: string }>("folder_build", {
       update,
+      destination,
       source,
       outputDir,
       name,

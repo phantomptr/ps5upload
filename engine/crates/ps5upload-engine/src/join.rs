@@ -281,6 +281,89 @@ pub(crate) fn settings() -> Settings {
         .unwrap_or_default()
 }
 
+/// "Guests play as": the console profile a guest on Player `player` gets, chosen by the host for
+/// one console (user ids are that console's). The helper seats the guest's pad in it as it is made
+/// (`vpad.open` with `bind_user`), so the console never asks "Who's using this controller?" and the
+/// guest cannot pick another profile. No entry for a player: the console asks (as before).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct SeatProfile {
+    /// 2-4.
+    pub player: u8,
+    /// The console's user id (`user.list`).
+    pub user: u32,
+    /// The profile's name as the console showed it when the host chose it.
+    #[serde(default)]
+    pub name: String,
+    /// The host confirmed this profile although it is their own (the one in front): the guest can
+    /// use its saves and trophies. Without it the helper refuses that profile.
+    #[serde(default)]
+    pub owner: bool,
+}
+
+/// Each console's choices, by [`host_key`]. Kept apart from [`Settings`] (one set for every
+/// console, and in bug reports): these name the host's profiles.
+static SEAT_PROFILES: Mutex<Option<HashMap<String, Vec<SeatProfile>>>> = Mutex::new(None);
+
+/// The host's choices for `console`.
+pub(crate) fn seat_profiles(console: &str) -> Vec<SeatProfile> {
+    SEAT_PROFILES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|m| m.get(&host_key(console)).cloned())
+        .unwrap_or_default()
+}
+
+/// The profile chosen for `player` on `console`.
+fn seat_profile(console: &str, player: u8) -> Option<SeatProfile> {
+    seat_profiles(console)
+        .into_iter()
+        .find(|p| p.player == player)
+}
+
+/// The [`vpad::Bind`] a new pad for `player` asks for: only a profile the host chose, and the
+/// owner flag only as the host confirmed it.
+fn seat_bind(console: &str, player: u8) -> Option<vpad::Bind> {
+    seat_profile(console, player).map(|p| vpad::Bind {
+        user: p.user,
+        owner: p.owner,
+    })
+}
+
+fn set_seat_profiles(console: &str, v: Vec<SeatProfile>) {
+    let mut g = SEAT_PROFILES.lock().unwrap_or_else(|e| e.into_inner());
+    let m = g.get_or_insert_with(HashMap::new);
+    if v.is_empty() {
+        m.remove(&host_key(console));
+    } else {
+        m.insert(host_key(console), v);
+    }
+}
+
+/// The choices as the host's request gives them: Player 2-4 each at most once, a profile at most
+/// once, a real user id (not 0, not the console's "nobody"), names trimmed. The error names what is
+/// wrong.
+fn clean_seat_profiles(v: Vec<SeatProfile>) -> Result<Vec<SeatProfile>, &'static str> {
+    let mut out: Vec<SeatProfile> = Vec::new();
+    for p in v {
+        if !(vpad::FIRST_SLOT..=vpad::LAST_SLOT).contains(&p.player) {
+            return Err("player");
+        }
+        if p.user == 0 || p.user == u32::MAX {
+            return Err("user");
+        }
+        if out.iter().any(|o| o.player == p.player || o.user == p.user) {
+            return Err("duplicate");
+        }
+        out.push(SeatProfile {
+            name: clean_name(Some(&p.name)),
+            ..p
+        });
+    }
+    out.sort_by_key(|p| p.player);
+    Ok(out)
+}
+
 /// What goes to a guest's socket.
 #[derive(Debug)]
 pub(crate) enum Out {
@@ -342,6 +425,12 @@ pub(crate) struct Guest {
     playing: bool,
     /// Since when the console has asked "Who's using this controller?" (the pad was made).
     picking_since: Instant,
+    /// Seated in the profile the host chose ("Guests play as"): its id and name. The console
+    /// does not ask, and PS and Create are blocked from the start.
+    plays_as: Option<(u32, String)>,
+    /// A profile was chosen for their player but not given to their pad (the console asks):
+    /// why (`link::unseated`).
+    seat_note: Option<&'static str>,
     /// On [`STREAM_SEAT`]: when their last state arrived, while one is held on the controller.
     seat_input_at: Option<Instant>,
     /// Leaving the stream's controller for a helper pad (the host's side needs it back).
@@ -366,6 +455,33 @@ enum SeatMove {
 }
 
 impl Guest {
+    /// Their pad was made (or made again) as `r` says: seated in the profile the host chose, so
+    /// they play at once (PS and Create blocked from the first frame when the host blocks them,
+    /// no picking window); or the console asks them who they are, as without a choice (with the
+    /// reason when a choice could not be used).
+    fn pad_made(&mut self, r: &link::OpenResult, console: &str, now: Instant) {
+        match r {
+            link::OpenResult::Seated(user) => {
+                let name = seat_profile(console, self.player)
+                    .filter(|p| p.user == *user)
+                    .map(|p| p.name)
+                    .unwrap_or_default();
+                self.plays_as = Some((*user, name));
+                self.seat_note = None;
+                self.playing = true;
+            }
+            other => {
+                self.plays_as = None;
+                self.seat_note = match other {
+                    link::OpenResult::Unseated(note) => Some(note),
+                    _ => None,
+                };
+                self.playing = false;
+                self.picking_since = now;
+            }
+        }
+    }
+
     /// On the stream's controller, and keeping it.
     fn on_seat(&self) -> bool {
         self.active() && self.player == STREAM_SEAT && self.seat_move == SeatMove::No
@@ -491,6 +607,10 @@ pub(crate) struct Party {
     pub(crate) reach: Reach,
     /// The internet invite's room on the hub (closed when this goes).
     internet: Option<crate::join_net::hub::Room>,
+    /// The helper's companion for "Guests play as" (`vpad::Companion`): its state when last kept up
+    /// (None: no profile chosen, or not asked yet), and when.
+    companion: Option<String>,
+    companion_at: Option<Instant>,
 }
 
 /// How guests reach this engine.
@@ -522,6 +642,8 @@ impl Party {
             settings,
             reach: Reach::default(),
             internet: None,
+            companion: None,
+            companion_at: None,
         }
     }
 
@@ -631,6 +753,8 @@ impl Party {
             left: None,
             playing: false,
             picking_since: now,
+            plays_as: None,
+            seat_note: None,
             seat_input_at: None,
             seat_move: SeatMove::No,
             slot_open: false,
@@ -735,16 +859,16 @@ impl Party {
         fx
     }
 
-    /// The pad of `slot` was made anew (the helper restarted): the console asks the guest who
-    /// they are again.
-    fn reopened(&mut self, slot: u8, now: Instant) {
+    /// The pad of `slot` was made anew (the helper restarted): seated in the host's choice again
+    /// (`seat`), or the console asks the guest who they are again.
+    fn reopened(&mut self, slot: u8, seat: &link::OpenResult, now: Instant) {
+        let console = self.console.clone();
         if let Some(g) = self
             .guests
             .iter_mut()
             .find(|g| g.active() && g.player == slot)
         {
-            g.playing = false;
-            g.picking_since = now;
+            g.pad_made(seat, &console, now);
         }
     }
 
@@ -943,6 +1067,10 @@ impl Party {
                     "why": g.left.map(|(_, w)| w),
                     // On the stream's own controller: plays as the host's PS5 user.
                     "stream_seat": g.on_seat(),
+                    // Seated in the profile the host chose ({id, name}), or null (the TV asks).
+                    "plays_as": g.plays_as.as_ref().map(|(id, name)| serde_json::json!({"id": id, "name": name})),
+                    // A chosen profile not given to their pad: why (the TV asks them instead).
+                    "seat_note": g.seat_note,
                     // "lan", or "internet" with the connection's path ("direct", "failed", …)
                     // and ICE's own round trip.
                     "via": if g.net.is_some() { "internet" } else { "lan" },
@@ -962,6 +1090,9 @@ impl Party {
             "pending": self.pending.iter().map(|a| serde_json::json!({"id": a.id, "name": a.name, "state": "asking"})).collect::<Vec<_>>(),
             "settings": self.settings,
             "max_guests": MAX_GUESTS,
+            // "Guests play as" on this console, and the helper's companion that binds them.
+            "guest_profiles": seat_profiles(&self.console),
+            "companion": self.companion,
             // Internet guests' connections, those not in yet (connecting, failed) too.
             "internet": self.internet.as_ref().map(|r| serde_json::json!({
                 "room": r.id(),
@@ -981,6 +1112,10 @@ impl Party {
             "block_system": self.settings.block_system_buttons && g.playing,
             // On the stream's own controller: they play as the host's PS5 user, nothing to pick.
             "stream_seat": g.on_seat(),
+            // The profile the host gave them (they play as it, nothing to pick), or null.
+            "plays_as": g.plays_as.as_ref().map(|(_, name)| name),
+            // The host chose a profile for them that could not be used: the TV asks who they are.
+            "seat_note": g.seat_note,
             "queue": g.stats.queue.load(Ordering::Relaxed),
             "skipped": g.stats.skipped.load(Ordering::Relaxed),
         }}))
@@ -1009,6 +1144,9 @@ impl Party {
                     "slot_open": g.slot_open,
                     "stream_seat": g.on_seat(),
                     "seat_move": format!("{:?}", g.seat_move),
+                    // Seated in a chosen profile (never its name or id), or why not.
+                    "seated": g.plays_as.is_some(),
+                    "seat_note": g.seat_note,
                 })
             })
             .collect();
@@ -1022,6 +1160,9 @@ impl Party {
             "guests": guests,
             "settings": self.settings,
             "reach_web_host": self.reach.web_base.is_some(),
+            // How many players have a profile chosen (never which), and the companion's state.
+            "seat_profiles": seat_profiles(&self.console).len(),
+            "companion": self.companion,
         })
     }
 }
@@ -1152,7 +1293,7 @@ async fn move_off_seat(console: String, id: u64) -> bool {
             tried.push(player);
             continue;
         }
-        if r != link::OpenResult::Ok {
+        if !r.is_ok() {
             break;
         }
         let now = Instant::now();
@@ -1161,8 +1302,7 @@ async fn move_off_seat(console: String, id: u64) -> bool {
                 .filter(|g| g.active() && g.seat_move == SeatMove::Running)
                 .map(|g| {
                     g.slot_open = true;
-                    g.playing = false;
-                    g.picking_since = now;
+                    g.pad_made(&r, &console, now);
                     g.seat_move = SeatMove::No;
                 })
         })
@@ -1281,9 +1421,15 @@ fn on_link_event(console: &str, ev: link::Event) {
                 )]
             })
             .unwrap_or_default(),
-        link::Event::Reopened { slot } => {
-            p.reopened(slot, now);
-            Vec::new()
+        link::Event::Reopened { slot, seat } => {
+            p.reopened(slot, &seat, now);
+            if let link::OpenResult::Unseated(note) = seat {
+                vec![Effect::Log(format!(
+                    "join: Player {slot}'s pad was made again without the chosen profile ({note}): the console asks who they are"
+                ))]
+            } else {
+                Vec::new()
+            }
         }
         link::Event::Lost { slot } => {
             let id = p
@@ -1334,6 +1480,58 @@ fn spawn_watch(key: String) {
             if !keep {
                 return;
             }
+            keep_companion(&key, &console, now);
+        }
+    });
+}
+
+/// How often an open Play Together with a profile chosen keeps the helper's companion up (each
+/// ask lasts the helper a minute).
+const COMPANION_EVERY: Duration = Duration::from_secs(20);
+
+/// While Play Together is open on `console` and the host chose a profile for a guest's player,
+/// the helper's companion is kept up, so a guest's pad is seated the moment it is made instead of
+/// after the companion's cold start (~0.7 s, too late: the console asks within milliseconds).
+/// Started when Play Together opens (or a profile is chosen), then every [`COMPANION_EVERY`].
+fn keep_companion(key: &str, console: &str, now: Instant) {
+    if seat_profiles(console).is_empty() {
+        return;
+    }
+    let due = with_party(key, |p| {
+        let due = p
+            .companion_at
+            .is_none_or(|t| now.duration_since(t) >= COMPANION_EVERY);
+        if due {
+            p.companion_at = Some(now);
+        }
+        due
+    })
+    .unwrap_or(false);
+    if !due {
+        return;
+    }
+    let (k, c) = (key.to_string(), console.to_string());
+    tokio::spawn(async move {
+        let c2 = c.clone();
+        let r = tokio::task::spawn_blocking(move || link::port_for(&c2).companion(&c2)).await;
+        let state = match r {
+            Ok(Ok(Some(a))) if a.ok => a.companion,
+            // A helper without the heartbeat (older) or without Play Together.
+            Ok(Ok(_)) => "old_helper".to_string(),
+            _ => "unreachable".to_string(),
+        };
+        let changed = with_party(&k, |p| {
+            let changed = p.companion.as_deref() != Some(state.as_str());
+            p.companion = Some(state.clone());
+            changed
+        })
+        .unwrap_or(false);
+        if changed {
+            crate::log_at!(
+                Info,
+                "together",
+                "join: the helper's pad-binding companion on {c}: {state}"
+            );
         }
     });
 }
@@ -1799,15 +1997,14 @@ async fn resume<S: GuestSocket>(socket: &mut S, token: &str) -> Option<Admit> {
             "join: guest {id} resumes on {console}: making Player {player}'s pad again"
         );
         match open_slot(&console, player, &token).await {
-            link::OpenResult::Ok => {
+            r if r.is_ok() => {
                 let now = Instant::now();
                 // Still in? A kick or a loss while the pad was made means nobody will close
                 // it later, so it goes now.
                 let ok = with_party(&key, |p| {
                     p.guest_mut(id).filter(|g| g.active()).map(|g| {
                         g.slot_open = true;
-                        g.playing = false;
-                        g.picking_since = now;
+                        g.pad_made(&r, &console, now);
                     })
                 })
                 .flatten()
@@ -1828,13 +2025,19 @@ async fn resume<S: GuestSocket>(socket: &mut S, token: &str) -> Option<Admit> {
     Some(Admit::Resume(console, id))
 }
 
+/// Makes Player `slot`'s pad for `token`, seated in the profile the host chose for that player
+/// (if any: [`seat_bind`]). Only the host's choice is ever asked for, and the owner's profile only
+/// as the host confirmed it; a seat the helper cannot give leaves the pad to the console's
+/// question ([`link::OpenResult::Unseated`]).
 async fn open_slot(console: &str, slot: u8, token: &str) -> link::OpenResult {
     let (tx, rx) = oneshot::channel();
+    let bind = seat_bind(console, slot);
     link::send(
         console,
         link::Cmd::Open {
             slot,
             token: token.to_string(),
+            bind,
             reply: tx,
         },
     );
@@ -1849,7 +2052,20 @@ async fn open_slot(console: &str, slot: u8, token: &str) -> link::OpenResult {
         "join: helper pad for Player {slot} on {console}: {r:?} in {} ms",
         t0.elapsed().as_millis()
     );
-    if !matches!(r, link::OpenResult::Ok | link::OpenResult::Busy) {
+    match &r {
+        link::OpenResult::Seated(_) => crate::log_at!(
+            Info,
+            "together",
+            "join: Player {slot} on {console} plays as the profile the host chose"
+        ),
+        link::OpenResult::Unseated(note) => crate::log_at!(
+            Info,
+            "together",
+            "join: Player {slot} on {console} could not get the profile the host chose ({note}): the TV asks who they are"
+        ),
+        _ => {}
+    }
+    if !r.is_ok() && r != link::OpenResult::Busy {
         // Not ours to play: a pad the link still makes (a slow helper) or has goes again, so it
         // is not kept alive by heartbeats with nobody on it. Only while `token` owns the slot (a
         // busy slot is another owner's).
@@ -2021,12 +2237,14 @@ async fn ask<S: GuestSocket>(
         }
         let r = open_slot(&console, player, &pad_token).await;
         let now = Instant::now();
-        if r == link::OpenResult::Ok {
+        if r.is_ok() {
+            let c = console.clone();
             let ok = with_party(&key, |p| {
                 // Still in: a kick while the pad was made leaves nobody to close it.
                 p.guest_mut(gid).filter(|g| g.active()).map(|g| {
                     g.slot_open = true;
-                    g.picking_since = now;
+                    // Seated in the host's choice: playing from the first frame.
+                    g.pad_made(&r, &c, now);
                     g.joined_at = now;
                 })
             })
@@ -2521,9 +2739,20 @@ fn state_json(console: &str) -> serde_json::Value {
             v["invite"] = invite_json(&c, &reach, inv, net, now);
             // The next friend allowed in gets the stream's controller (Player 1, as the host's
             // PS5 user): the Allow prompt says so.
-            v["seat_next"] = (v["settings"]["stream_seat"] == true
-                && crate::rp_stream_api::stream_seat_free(&c))
-            .into();
+            let seat_next =
+                v["settings"]["stream_seat"] == true && crate::rp_stream_api::stream_seat_free(&c);
+            v["seat_next"] = seat_next.into();
+            // Otherwise they get the next free pad, and the profile the host chose for it (if
+            // any): the Allow prompt names it.
+            v["next_profile"] = if seat_next {
+                serde_json::Value::Null
+            } else {
+                with_party(&key, |p| p.free_player(&[]))
+                    .flatten()
+                    .and_then(|n| seat_profile(&c, n))
+                    .map(|p| serde_json::json!({"player": p.player, "id": p.user, "name": p.name}))
+                    .unwrap_or(serde_json::Value::Null)
+            };
             // the LAN socket guests connect to (nearby apps get it from the mesh presence): an
             // address when there is one, which an app's relay can use as it is
             let prefix = crate::host_guard::base_path();
@@ -2545,6 +2774,7 @@ fn state_json(console: &str) -> serde_json::Value {
             "pending": [],
             "settings": settings(),
             "max_guests": MAX_GUESTS,
+            "guest_profiles": seat_profiles(console),
         }),
     }
 }
@@ -2692,7 +2922,12 @@ pub async fn invite(
     match with_party(&key, |p| {
         let inv = p.invite(b.new, now);
         if b.internet && inv.is_some() && p.internet.as_ref().is_none_or(|r| r.url() != s.hub_url) {
-            p.internet = crate::join_net::hub::Room::start(key.clone(), s.hub_url.clone());
+            let k = key.clone();
+            p.internet = crate::join_net::hub::Room::start(
+                crate::join_net::Kind::Join,
+                Box::new(move || internet_wanted(&k)),
+                s.hub_url.clone(),
+            );
         }
         let net = p.internet_json(inv.as_ref());
         (inv, net, p.console.clone(), p.reach.clone())
@@ -2799,8 +3034,44 @@ pub async fn playing(
     Json(serde_json::json!({ "ok": ok })).into_response()
 }
 
+/// `GET /api/join/profiles?addr=`: the profiles signed in on that console (`users`: `{id, name,
+/// foreground}`, `foreground` the one in front: the host's own), what the host chose for each
+/// guest's player (`seats`: `{player, user, name, owner}`), and the helper's companion that seats
+/// guests in them (`companion`: running, starting, no_bind, unavailable, off; null when not asked
+/// yet). Only signed-in profiles can be chosen (502 `unreachable` when the console does not
+/// answer).
+pub async fn profiles(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    Query(q): Query<AddrQuery>,
+) -> Response {
+    if let Some(r) = guard(&peer, &headers) {
+        return r;
+    }
+    let c = q.addr.clone();
+    let users = match tokio::task::spawn_blocking(move || link::port_for(&c).users(&c)).await {
+        Ok(Ok(u)) => u,
+        Ok(Err(e)) => return bad(StatusCode::BAD_GATEWAY, &format!("unreachable: {e:#}")),
+        Err(e) => return bad(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    let companion = with_party(&host_key(&q.addr), |p| p.companion.clone()).flatten();
+    Json(serde_json::json!({
+        "users": users,
+        "seats": seat_profiles(&q.addr),
+        "companion": companion,
+    }))
+    .into_response()
+}
+
 #[derive(serde::Deserialize)]
 pub struct SettingsBody {
+    /// The console `guest_profiles` are for (user ids are that console's).
+    #[serde(default, alias = "console", alias = "host")]
+    addr: Option<String>,
+    /// "Guests play as": the profile for each guest's player on `addr` (`{player: 2-4, user,
+    /// name, owner}`), replacing the last; empty: the TV asks every guest.
+    #[serde(default)]
+    guest_profiles: Option<Vec<SeatProfile>>,
     #[serde(default)]
     block_system_buttons: Option<bool>,
     #[serde(default)]
@@ -2838,6 +3109,13 @@ fn stun_server_ok(s: &str) -> bool {
 /// already in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`
 /// otherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none), `upnp` whether the
 /// router is asked for a port.
+///
+/// `guest_profiles` with `addr` ("Guests play as" on that console): each guest's player gets the
+/// profile the host chose (`{player: 2-4, user, name, owner}`; a player left out: the TV asks).
+/// Only signed-in profiles can be seated. The host's own profile (the one in front) needs `owner`
+/// true, the host's confirmation that the guest may use its saves and trophies (409
+/// `owner_confirm` otherwise); 400 `addr` without a console, 400 `player`, `user` or `duplicate`
+/// for a list that is not one profile per player.
 pub async fn set_settings(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
@@ -2845,6 +3123,29 @@ pub async fn set_settings(
 ) -> Response {
     if let Some(r) = guard(&peer, &headers) {
         return r;
+    }
+    let mut seats = None;
+    if let Some(v) = b.guest_profiles {
+        let Some(addr) = b.addr.clone().filter(|a| !a.trim().is_empty()) else {
+            return bad(StatusCode::BAD_REQUEST, "addr");
+        };
+        let v = match clean_seat_profiles(v) {
+            Ok(v) => v,
+            Err(why) => return bad(StatusCode::BAD_REQUEST, why),
+        };
+        // The host's own profile only with their confirmation. The helper checks again as each pad
+        // is made (the one in front may change); a console that does not answer now is left to it.
+        let c = addr.clone();
+        if let Ok(Ok(users)) =
+            tokio::task::spawn_blocking(move || link::port_for(&c).users(&c)).await
+        {
+            if v.iter()
+                .any(|p| !p.owner && users.iter().any(|u| u.foreground && u.id == p.user))
+            {
+                return bad(StatusCode::CONFLICT, "owner_confirm");
+            }
+        }
+        seats = Some((addr, v));
     }
     let mut s = settings();
     if let Some(v) = b.block_system_buttons {
@@ -2880,6 +3181,16 @@ pub async fn set_settings(
     if let Some(v) = b.upnp {
         s.upnp = v;
     }
+    // Everything checked: the profiles take effect with the rest (each pad made from now on).
+    if let Some((addr, v)) = &seats {
+        set_seat_profiles(addr, v.clone());
+        crate::log_at!(
+            Info,
+            "together",
+            "join: guests on {addr} play as {} chosen profile(s)",
+            v.len()
+        );
+    }
     *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(s.clone());
     let fx = with_parties(|m| {
         m.values_mut()
@@ -2900,7 +3211,15 @@ pub async fn set_settings(
     for (console, fx) in fx {
         apply(&console, fx);
     }
-    Json(serde_json::json!({ "settings": s })).into_response()
+    if !s.internet_invites {
+        // The phone link's internet link too (phones already in keep playing).
+        crate::pad_link::internet_off();
+    }
+    let mut out = serde_json::json!({ "settings": s });
+    if let Some(addr) = b.addr.as_deref().filter(|a| !a.trim().is_empty()) {
+        out["guest_profiles"] = serde_json::json!(seat_profiles(addr));
+    }
+    Json(out).into_response()
 }
 
 /// The routes (lib.rs registers the same ones): the host API (this computer only) and the
@@ -2920,6 +3239,7 @@ pub(crate) fn router<S: Clone + Send + Sync + 'static>() -> axum::Router<S> {
         .route("/api/join/kick", post(kick))
         .route("/api/join/playing", post(playing))
         .route("/api/join/settings", post(set_settings))
+        .route("/api/join/profiles", get(profiles))
 }
 
 // ── The helper link ──────────────────────────────────────────────────────────────────────────────
@@ -2933,7 +3253,9 @@ pub(crate) mod link {
     use std::time::{Duration, Instant};
 
     use anyhow::Result;
-    use ps5upload_core::vpad::{self, Ack, Opened, Output, PadState, StateItem};
+    use ps5upload_core::vpad::{
+        self, bind_err, Ack, Bind, Companion, ConsoleUser, Opened, Output, PadState, StateItem,
+    };
     use tokio::sync::oneshot;
 
     use crate::vinput_api::host_key;
@@ -2971,19 +3293,46 @@ pub(crate) mod link {
 
     /// The helper (a test seam).
     pub(crate) trait Port: Send + Sync + 'static {
-        fn open(&self, host: &str, slot: u8, token: &str) -> Result<Option<Opened>>;
+        /// `bind`: seat the pad in the user the host chose ([`vpad::Bind`]).
+        fn open(
+            &self,
+            host: &str,
+            slot: u8,
+            token: &str,
+            bind: Option<Bind>,
+        ) -> Result<Option<Opened>>;
         fn states(&self, host: &str, items: &[StateItem]) -> Result<Option<Ack>>;
         fn hb(&self, host: &str, slot: u8, token: &str, live: bool) -> Result<Option<Ack>>;
         fn close(&self, host: &str, slot: u8, token: &str) -> Result<Option<Ack>>;
         fn output(&self, host: &str, slot: u8) -> Result<Option<Output>>;
         fn status(&self, host: &str) -> Result<Option<serde_json::Value>>;
+        /// Keeps the helper's vinput companion up for binds (`vpad.hb {"companion": true}`).
+        fn companion(&self, _host: &str) -> Result<Option<Companion>> {
+            Ok(None)
+        }
+        /// The users signed in on the console.
+        fn users(&self, _host: &str) -> Result<Vec<ConsoleUser>> {
+            Ok(Vec::new())
+        }
     }
 
     struct HelperPort;
 
     impl Port for HelperPort {
-        fn open(&self, host: &str, slot: u8, token: &str) -> Result<Option<Opened>> {
-            vpad::open(host, slot, token, None)
+        fn open(
+            &self,
+            host: &str,
+            slot: u8,
+            token: &str,
+            bind: Option<Bind>,
+        ) -> Result<Option<Opened>> {
+            vpad::open_with(host, slot, token, None, bind)
+        }
+        fn companion(&self, host: &str) -> Result<Option<Companion>> {
+            vpad::companion(host)
+        }
+        fn users(&self, host: &str) -> Result<Vec<ConsoleUser>> {
+            vpad::users(host)
         }
         fn states(&self, host: &str, items: &[StateItem]) -> Result<Option<Ack>> {
             vpad::states(host, items)
@@ -3020,7 +3369,14 @@ pub(crate) mod link {
 
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub(crate) enum OpenResult {
+        /// The pad is there (no profile was chosen for the player: the console asks who it is).
         Ok,
+        /// The pad is there, seated in the profile the host chose (this user id): the console
+        /// does not ask.
+        Seated(u32),
+        /// The pad is there, but the profile the host chose could not be given to it: the console
+        /// asks who it is, as without a choice. Why: [`Unseated`] notes.
+        Unseated(&'static str),
         /// Another owner holds the slot.
         Busy,
         /// The helper has no Play Together.
@@ -3029,10 +3385,18 @@ pub(crate) mod link {
     }
 
     impl OpenResult {
+        /// The pad is there.
+        pub(crate) fn is_ok(&self) -> bool {
+            matches!(
+                self,
+                OpenResult::Ok | OpenResult::Seated(_) | OpenResult::Unseated(_)
+            )
+        }
+
         /// The guest's refusal for it.
         pub(crate) fn why(&self) -> &'static str {
             match self {
-                OpenResult::Ok => "ok",
+                OpenResult::Ok | OpenResult::Seated(_) | OpenResult::Unseated(_) => "ok",
                 OpenResult::Busy => "full",
                 OpenResult::OldHelper => "old_helper",
                 OpenResult::Failed(_) => "unreachable",
@@ -3040,11 +3404,47 @@ pub(crate) mod link {
         }
     }
 
+    /// Why a chosen profile was not given to the pad ([`OpenResult::Unseated`]).
+    pub(crate) mod unseated {
+        /// The helper's companion was still starting after [`super::BIND_WAIT`].
+        pub const STARTING: &str = "starting";
+        /// The helper cannot bind (no companion, or its libSceMbus did not start).
+        pub const UNAVAILABLE: &str = "unavailable";
+        /// The profile is not signed in on the console.
+        pub const SIGNED_OUT: &str = "signed_out";
+        /// The console did not say who is signed in.
+        pub const UNKNOWN: &str = "unknown";
+        /// The profile is the one in front (the host's own) and the host did not confirm it.
+        pub const OWNER: &str = "owner";
+        /// The console did not take the bind.
+        pub const FAILED: &str = "failed";
+        /// The helper is too old to bind.
+        pub const OLD_HELPER: &str = "old_helper";
+    }
+
+    /// The note for a seat the helper refused ([`bind_err`]).
+    fn unseated_note(err: &str) -> &'static str {
+        match err {
+            bind_err::STARTING => unseated::STARTING,
+            bind_err::SIGNED_OUT => unseated::SIGNED_OUT,
+            bind_err::UNKNOWN => unseated::UNKNOWN,
+            bind_err::OWNER => unseated::OWNER,
+            _ => unseated::UNAVAILABLE,
+        }
+    }
+
+    /// A seat the helper says is starting is asked again this often, for [`BIND_WAIT`] at most
+    /// (then the pad is made without it: the console asks).
+    const BIND_RETRY: Duration = Duration::from_millis(250);
+    pub(crate) const BIND_WAIT: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 3 });
+
     pub(crate) enum Cmd {
-        /// Make (or keep) Player `slot`'s pad for `token`.
+        /// Make (or keep) Player `slot`'s pad for `token`, seated in `bind`'s user when the host
+        /// chose one.
         Open {
             slot: u8,
             token: String,
+            bind: Option<Bind>,
             reply: oneshot::Sender<OpenResult>,
         },
         /// The guest's latest state.
@@ -3062,8 +3462,10 @@ pub(crate) mod link {
     pub(crate) enum Event {
         /// The game changed Player `slot`'s rumble or light bar.
         Output { slot: u8, out: Output },
-        /// The pad was made anew (the helper restarted).
-        Reopened { slot: u8 },
+        /// The pad was made anew (the helper restarted): `seat` says whether it is seated in the
+        /// host's chosen profile again ([`OpenResult::Seated`]) or the console asks the guest who
+        /// they are ([`OpenResult::Ok`], [`OpenResult::Unseated`]).
+        Reopened { slot: u8, seat: OpenResult },
         /// The helper no longer has the slot for us and cannot make it again.
         Lost { slot: u8 },
     }
@@ -3162,6 +3564,19 @@ pub(crate) mod link {
         token: String,
         opened: bool,
         handle: Option<i64>,
+        /// The profile the host chose for this player: every open (a reopen too) asks for it.
+        want: Option<Bind>,
+        /// This open asks for `want` (false after the helper refused it: made without, the
+        /// console asks).
+        try_bind: bool,
+        /// Why `want` was not given to the pad, while it is not.
+        note: Option<&'static str>,
+        /// The pad is seated in `want`'s user.
+        seated: bool,
+        /// A seat the helper said is starting is asked again until this.
+        bind_until: Option<Instant>,
+        /// The next open no sooner than this.
+        open_at: Instant,
         waiters: Vec<oneshot::Sender<OpenResult>>,
         seq: u32,
         io: SlotIo,
@@ -3178,11 +3593,17 @@ pub(crate) mod link {
     }
 
     impl Slot {
-        fn new(token: String, now: Instant) -> Self {
+        fn new(token: String, want: Option<Bind>, now: Instant) -> Self {
             Slot {
                 token,
                 opened: false,
                 handle: None,
+                want,
+                try_bind: want.is_some(),
+                note: None,
+                seated: false,
+                bind_until: None,
+                open_at: now,
                 waiters: Vec::new(),
                 seq: 0,
                 io: SlotIo::default(),
@@ -3194,6 +3615,21 @@ pub(crate) mod link {
                 out_due: now,
                 out_fast_until: now,
             }
+        }
+
+        /// What an open of this pad answers.
+        fn result(&self) -> OpenResult {
+            match (self.want, self.seated, self.note) {
+                (Some(b), true, _) => OpenResult::Seated(b.user),
+                (Some(_), false, note) => OpenResult::Unseated(note.unwrap_or(unseated::FAILED)),
+                (None, ..) => OpenResult::Ok,
+            }
+        }
+
+        /// The next open asks for the chosen profile again (a reopen: the helper restarted).
+        fn bind_again(&mut self) {
+            self.try_bind = self.want.is_some();
+            self.bind_until = None;
         }
     }
 
@@ -3232,11 +3668,16 @@ pub(crate) mod link {
 
         pub(crate) fn on_cmd(&mut self, c: Cmd, now: Instant) {
             match c {
-                Cmd::Open { slot, token, reply } => {
+                Cmd::Open {
+                    slot,
+                    token,
+                    bind,
+                    reply,
+                } => {
                     if let Some(s) = self.slots.get_mut(&slot) {
                         if s.token == token {
                             if s.opened {
-                                let _ = reply.send(OpenResult::Ok);
+                                let _ = reply.send(s.result());
                             } else {
                                 s.waiters.push(reply);
                             }
@@ -3247,7 +3688,7 @@ pub(crate) mod link {
                             self.closing.push((slot, old.token));
                         }
                     }
-                    let mut s = Slot::new(token, now);
+                    let mut s = Slot::new(token, bind, now);
                     s.waiters.push(reply);
                     self.slots.insert(slot, s);
                 }
@@ -3295,6 +3736,7 @@ pub(crate) mod link {
             self.retry_at = Some(now + self.backoff);
             for s in self.slots.values_mut() {
                 s.opened = false;
+                s.bind_again();
             }
         }
 
@@ -3311,21 +3753,34 @@ pub(crate) mod link {
                 let _ = self.port.close(&self.host, slot, &token);
             }
             // Opens.
-            let to_open: Vec<(u8, String)> = self
+            let to_open: Vec<(u8, String, Option<Bind>)> = self
                 .slots
                 .iter()
-                .filter(|(_, s)| !s.opened)
-                .map(|(k, s)| (*k, s.token.clone()))
+                .filter(|(_, s)| !s.opened && s.open_at <= now)
+                .map(|(k, s)| (*k, s.token.clone(), s.want.filter(|_| s.try_bind)))
                 .collect();
-            for (slot, token) in to_open {
+            for (slot, token, bind) in to_open {
                 self.calls += 1;
-                let r = self.port.open(&self.host, slot, &token);
+                let r = self.port.open(&self.host, slot, &token, bind);
                 let Some(s) = self.slots.get_mut(&slot) else {
                     continue;
                 };
                 let first = !s.waiters.is_empty() || s.handle.is_none();
                 match r {
                     Ok(Some(o)) if o.ok => {
+                        // The seat: asked for and taken, asked for and not (the console asks),
+                        // or not asked this time (refused before: the note says why).
+                        if bind.is_some() {
+                            s.seated = o.bound == Some(true);
+                            s.note = match o.bound {
+                                Some(true) => None,
+                                Some(false) => Some(unseated::FAILED),
+                                None => Some(unseated::OLD_HELPER),
+                            };
+                        } else {
+                            s.seated = false;
+                        }
+                        s.bind_until = None;
                         // a new pad where we had one: the helper restarted (or dropped it)
                         let had = s.handle.is_some();
                         let reopened = had
@@ -3347,9 +3802,10 @@ pub(crate) mod link {
                             s.io.force = true;
                         }
                         let waited = !s.waiters.is_empty();
+                        let res = s.result();
                         let mut told = false;
                         for w in s.waiters.drain(..) {
-                            told |= w.send(OpenResult::Ok).is_ok();
+                            told |= w.send(res.clone()).is_ok();
                         }
                         self.ok();
                         if waited && !told {
@@ -3359,8 +3815,27 @@ pub(crate) mod link {
                             continue;
                         }
                         if reopened {
-                            (self.events)(Event::Reopened { slot });
+                            (self.events)(Event::Reopened { slot, seat: res });
                         }
+                    }
+                    Ok(Some(o))
+                        if bind.is_some() && o.err.as_deref().is_some_and(bind_err::is_bind) =>
+                    {
+                        // The seat was refused with nothing made. Starting: asked again for a
+                        // while. Otherwise (or too long): the pad is made without it (the console
+                        // asks), at once.
+                        let err = o.err.unwrap_or_default();
+                        if err == bind_err::STARTING
+                            && now < *s.bind_until.get_or_insert(now + BIND_WAIT)
+                        {
+                            s.open_at = now + BIND_RETRY;
+                        } else {
+                            s.try_bind = false;
+                            s.seated = false;
+                            s.note = Some(unseated_note(&err));
+                            s.open_at = now;
+                        }
+                        self.ok();
                     }
                     Ok(Some(o)) => {
                         let busy = o.err.as_deref() == Some(vpad::ERR_BUSY);
@@ -3485,6 +3960,7 @@ pub(crate) mod link {
                         self.ok();
                         if let Some(s) = self.slots.get_mut(&slot) {
                             s.opened = false;
+                            s.bind_again();
                             s.last_call = now;
                         }
                     }
@@ -3551,6 +4027,7 @@ pub(crate) mod link {
                     // not open there (the helper restarted) or not ours: open it again (the
                     // state goes once it is)
                     s.opened = false;
+                    s.bind_again();
                 }
             }
         }
@@ -3623,7 +4100,7 @@ pub(crate) mod link {
                 }
                 for s in self.slots.values() {
                     if !s.opened {
-                        min(now);
+                        min(s.open_at.max(now));
                         continue;
                     }
                     min(s.last_call + vpad::HEARTBEAT);
@@ -3754,7 +4231,7 @@ pub(crate) mod link {
 
 #[cfg(test)]
 mod tests {
-    use super::link::{Cmd, Event, LinkState, OpenResult, Port, SlotIo, HOLD};
+    use super::link::{unseated, Cmd, Event, LinkState, OpenResult, Port, SlotIo, HOLD};
     use super::*;
 
     #[test]
@@ -3767,7 +4244,9 @@ mod tests {
         assert!(k.take(t0 + KEY_ASK_GAP));
         assert!(!k.take(t0 + KEY_ASK_GAP + Duration::from_millis(10)));
     }
-    use ps5upload_core::vpad::{Ack, Opened, Output, SlotFailure, StateItem};
+    use ps5upload_core::vpad::{
+        bind_err, Ack, Bind, ConsoleUser, Opened, Output, SlotFailure, StateItem,
+    };
     use std::sync::atomic::{AtomicBool, AtomicI64};
 
     // ── pad frames ──
@@ -4211,7 +4690,7 @@ mod tests {
         assert_eq!(p.strip_mask(id), Some((2, 0)));
         p.settings.block_system_buttons = true;
         // a new pad (helper restart) asks who they are again
-        p.reopened(2, t + PICKING_GRACE);
+        p.reopened(2, &OpenResult::Ok, t + PICKING_GRACE);
         assert_eq!(p.strip_mask(id), Some((2, 0)));
         p.leave(id, "left", t);
         assert_eq!(p.strip_mask(id), None);
@@ -4599,6 +5078,14 @@ mod tests {
         out: Mutex<Output>,
         /// the next heartbeat says the watchdog let the pad go
         rested: AtomicBool,
+        /// "Guests play as", as the helper checks it: who is signed in, who is in front, how many
+        /// seated opens answer "starting" first, whether the console refuses the bind
+        signed_in: Mutex<Vec<u32>>,
+        foreground: Mutex<u32>,
+        bind_starting: std::sync::atomic::AtomicUsize,
+        bind_fails: AtomicBool,
+        /// every open's seat request, in order
+        binds: Mutex<Vec<Option<Bind>>>,
     }
 
     impl FakeHelper {
@@ -4617,15 +5104,42 @@ mod tests {
     }
 
     impl Port for FakeHelper {
-        fn open(&self, _h: &str, slot: u8, _t: &str) -> anyhow::Result<Option<Opened>> {
+        fn open(
+            &self,
+            _h: &str,
+            slot: u8,
+            _t: &str,
+            bind: Option<Bind>,
+        ) -> anyhow::Result<Option<Opened>> {
             self.up()?;
             let delay = *self.open_delay.lock().unwrap();
             if !delay.is_zero() {
                 std::thread::sleep(delay);
             }
             self.log.lock().unwrap().push(format!("open{slot}"));
+            self.binds.lock().unwrap().push(bind);
             if self.old.load(Ordering::Relaxed) {
                 return Ok(None);
+            }
+            // The helper's checks before a seated pad is made (vpad.c): refused, nothing made.
+            if let Some(b) = bind {
+                let refuse = |e: &str| {
+                    Ok(Some(Opened {
+                        err: Some(e.into()),
+                        ..Default::default()
+                    }))
+                };
+                let starting = self.bind_starting.load(Ordering::Relaxed);
+                if starting > 0 {
+                    self.bind_starting.store(starting - 1, Ordering::Relaxed);
+                    return refuse(bind_err::STARTING);
+                }
+                if !self.signed_in.lock().unwrap().contains(&b.user) {
+                    return refuse(bind_err::SIGNED_OUT);
+                }
+                if b.user == *self.foreground.lock().unwrap() && !b.owner {
+                    return refuse(bind_err::OWNER);
+                }
             }
             if self.busy.lock().unwrap().contains(&slot) {
                 return Ok(Some(Opened {
@@ -4651,7 +5165,33 @@ mod tests {
                 slot,
                 handle: self.handle.load(Ordering::Relaxed),
                 resumed: Some(!fresh),
+                bound: bind.map(|_| !self.bind_fails.load(Ordering::Relaxed)),
                 ..Default::default()
+            }))
+        }
+        fn users(&self, _h: &str) -> anyhow::Result<Vec<ConsoleUser>> {
+            self.up()?;
+            let fg = *self.foreground.lock().unwrap();
+            Ok(self
+                .signed_in
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|&id| ConsoleUser {
+                    id,
+                    name: format!("user{id}"),
+                    foreground: id == fg,
+                })
+                .collect())
+        }
+        fn companion(&self, _h: &str) -> anyhow::Result<Option<vpad::Companion>> {
+            self.up()?;
+            self.log.lock().unwrap().push("companion".into());
+            Ok(Some(vpad::Companion {
+                ok: true,
+                companion: "running".into(),
+                bind: true,
+                err: None,
             }))
         }
         fn states(&self, _h: &str, items: &[StateItem]) -> anyhow::Result<Option<Ack>> {
@@ -4750,11 +5290,23 @@ mod tests {
         token: &str,
         t: Instant,
     ) -> oneshot::Receiver<OpenResult> {
+        open_bound_t(st, slot, token, None, t)
+    }
+
+    /// An open seated in `bind`'s user (the host's choice for that player).
+    fn open_bound_t(
+        st: &mut LinkState,
+        slot: u8,
+        token: &str,
+        bind: Option<Bind>,
+        t: Instant,
+    ) -> oneshot::Receiver<OpenResult> {
         let (tx, rx) = oneshot::channel();
         st.on_cmd(
             Cmd::Open {
                 slot,
                 token: token.into(),
+                bind,
                 reply: tx,
             },
             t,
@@ -4956,6 +5508,255 @@ mod tests {
         assert_eq!((last.state.buttons, last.seq), (0x40, 1));
     }
 
+    // ── "Guests play as" (the host's chosen profile per player) ──
+
+    fn seat_helper(signed_in: &[u32], foreground: u32) -> Arc<FakeHelper> {
+        let f = Arc::new(FakeHelper::default());
+        *f.signed_in.lock().unwrap() = signed_in.to_vec();
+        *f.foreground.lock().unwrap() = foreground;
+        f
+    }
+
+    fn bind(user: u32, owner: bool) -> Option<Bind> {
+        Some(Bind { user, owner })
+    }
+
+    #[test]
+    fn a_chosen_profile_seats_the_pad_and_the_owners_only_when_the_host_confirmed_it() {
+        let f = seat_helper(&[0x2000, 0x1000], 0x1000);
+        let (mut st, _ev) = link_with(&f);
+        let t = Instant::now();
+        // a profile chosen for Player 2: seated, no question on the TV
+        assert_eq!(
+            open_bound_t(&mut st, 2, "a", bind(0x2000, false), t)
+                .try_recv()
+                .unwrap(),
+            OpenResult::Seated(0x2000)
+        );
+        // the user in front (the host's own) without the host's confirmation: the helper refuses
+        // it, and the pad is made without any profile (the console asks), never as the owner
+        let mut rx = open_bound_t(&mut st, 3, "b", bind(0x1000, false), t);
+        assert!(
+            rx.try_recv().is_err(),
+            "not answered before the pad is made"
+        );
+        st.tick(t);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            OpenResult::Unseated(unseated::OWNER)
+        );
+        // confirmed by the host: seated
+        assert_eq!(
+            open_bound_t(&mut st, 4, "c", bind(0x1000, true), t)
+                .try_recv()
+                .unwrap(),
+            OpenResult::Seated(0x1000)
+        );
+        // no choice: nothing asked
+        assert_eq!(
+            open_slot_t(&mut st, 2, "a", t).try_recv().unwrap(),
+            OpenResult::Seated(0x2000),
+            "the same owner again gets what its pad has"
+        );
+        let asked = f.binds.lock().unwrap().clone();
+        assert_eq!(
+            asked,
+            vec![
+                bind(0x2000, false),
+                bind(0x1000, false),
+                None, // the refused seat: the pad made without one
+                bind(0x1000, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_seat_that_cannot_be_given_leaves_the_pad_to_the_tv() {
+        let t = Instant::now();
+        // not signed in
+        let f = seat_helper(&[0x2000], 0x1000);
+        let (mut st, _ev) = link_with(&f);
+        let mut rx = open_bound_t(&mut st, 2, "a", bind(0x3000, false), t);
+        st.tick(t);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            OpenResult::Unseated(unseated::SIGNED_OUT)
+        );
+        // the console refuses the bind: the pad stays, the TV asks
+        let f = seat_helper(&[0x2000], 0x1000);
+        f.bind_fails.store(true, Ordering::Relaxed);
+        let (mut st, _ev) = link_with(&f);
+        assert_eq!(
+            open_bound_t(&mut st, 2, "a", bind(0x2000, false), t)
+                .try_recv()
+                .unwrap(),
+            OpenResult::Unseated(unseated::FAILED)
+        );
+        // an older helper ignores the request: made, not seated
+        let f = Arc::new(OldBindHelper(seat_helper(&[0x2000], 0x1000)));
+        let ev: Events = Arc::default();
+        let e2 = ev.clone();
+        let mut st = LinkState::new("c", f, Arc::new(move |e| e2.lock().unwrap().push(e)));
+        assert_eq!(
+            open_bound_t(&mut st, 2, "a", bind(0x2000, false), t)
+                .try_recv()
+                .unwrap(),
+            OpenResult::Unseated(unseated::OLD_HELPER)
+        );
+    }
+
+    /// A helper from before "Guests play as": `bind_user` is not read, `bound` never answered.
+    struct OldBindHelper(Arc<FakeHelper>);
+    impl Port for OldBindHelper {
+        fn open(
+            &self,
+            h: &str,
+            slot: u8,
+            t: &str,
+            _bind: Option<Bind>,
+        ) -> anyhow::Result<Option<Opened>> {
+            self.0.open(h, slot, t, None)
+        }
+        fn states(&self, h: &str, items: &[StateItem]) -> anyhow::Result<Option<Ack>> {
+            Port::states(&*self.0, h, items)
+        }
+        fn hb(&self, h: &str, slot: u8, t: &str, live: bool) -> anyhow::Result<Option<Ack>> {
+            self.0.hb(h, slot, t, live)
+        }
+        fn close(&self, h: &str, slot: u8, t: &str) -> anyhow::Result<Option<Ack>> {
+            self.0.close(h, slot, t)
+        }
+        fn output(&self, h: &str, slot: u8) -> anyhow::Result<Option<Output>> {
+            self.0.output(h, slot)
+        }
+        fn status(&self, h: &str) -> anyhow::Result<Option<serde_json::Value>> {
+            self.0.status(h)
+        }
+    }
+
+    #[test]
+    fn a_starting_companion_is_asked_again_for_a_while_then_the_tv_asks() {
+        let t = Instant::now();
+        let f = seat_helper(&[0x2000], 0x1000);
+        f.bind_starting.store(2, Ordering::Relaxed);
+        let (mut st, _ev) = link_with(&f);
+        let mut rx = open_bound_t(&mut st, 2, "a", bind(0x2000, false), t);
+        // not asked again before its time
+        st.tick(t + Duration::from_millis(100));
+        assert_eq!(f.binds.lock().unwrap().len(), 1);
+        assert!(st.wait(t) > Duration::ZERO, "no busy loop while it starts");
+        st.tick(t + Duration::from_millis(250));
+        st.tick(t + Duration::from_millis(500));
+        assert_eq!(rx.try_recv().unwrap(), OpenResult::Seated(0x2000));
+        // one that never comes up: after BIND_WAIT, the pad is made without it
+        let f = seat_helper(&[0x2000], 0x1000);
+        f.bind_starting.store(1000, Ordering::Relaxed);
+        let (mut st, _ev) = link_with(&f);
+        let mut rx = open_bound_t(&mut st, 2, "a", bind(0x2000, false), t);
+        let mut now = t;
+        while now < t + link::BIND_WAIT + Duration::from_millis(600) {
+            now += Duration::from_millis(250);
+            st.tick(now);
+        }
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            OpenResult::Unseated(unseated::STARTING)
+        );
+        assert_eq!(f.binds.lock().unwrap().last().unwrap(), &None);
+    }
+
+    #[test]
+    fn a_restarted_helper_seats_the_pad_again() {
+        let f = seat_helper(&[0x2000], 0x1000);
+        let (mut st, ev) = link_with(&f);
+        let t = Instant::now();
+        open_bound_t(&mut st, 2, "a", bind(0x2000, false), t);
+        // the helper restarted: it does not know slot 2
+        *f.not_open.lock().unwrap() = Some(2);
+        st.on_cmd(
+            Cmd::State {
+                slot: 2,
+                state: st_(0x40),
+            },
+            t,
+        );
+        st.tick(t);
+        *f.not_open.lock().unwrap() = None;
+        f.restarted.store(true, Ordering::Relaxed);
+        st.tick(t + Duration::from_secs(5));
+        let e = ev.lock().unwrap();
+        assert!(
+            e.contains(&Event::Reopened {
+                slot: 2,
+                seat: OpenResult::Seated(0x2000)
+            }),
+            "{e:?}"
+        );
+        assert_eq!(
+            f.binds.lock().unwrap().last().unwrap(),
+            &bind(0x2000, false)
+        );
+    }
+
+    #[test]
+    fn a_seated_guest_is_playing_at_once_and_one_not_seated_picks_a_user() {
+        let mut p = party();
+        let t = Instant::now();
+        let id = admit(&mut p, "Sam", t);
+        let c = p.console.clone();
+        p.guest_mut(id)
+            .unwrap()
+            .pad_made(&OpenResult::Seated(0x2000), &c, t);
+        // PS and Create taken from the first frame: no picking window
+        assert_eq!(p.strip_mask(id), Some((2, vpad::button::SYSTEM)));
+        assert_eq!(p.guest_status(id).unwrap()["status"]["block_system"], true);
+        // a reopen not seated again: the TV asks, PS goes through while they pick
+        p.reopened(2, &OpenResult::Unseated(unseated::FAILED), t);
+        assert_eq!(p.strip_mask(id), Some((2, 0)));
+        let s = p.guest_status(id).unwrap();
+        assert_eq!(s["status"]["seat_note"], "failed");
+        assert!(s["status"]["plays_as"].is_null());
+        // seated again on the next reopen
+        p.reopened(2, &OpenResult::Seated(0x2000), t);
+        assert_eq!(p.strip_mask(id), Some((2, vpad::button::SYSTEM)));
+        // no choice at all: as before
+        p.reopened(2, &OpenResult::Ok, t);
+        assert_eq!(p.strip_mask(id), Some((2, 0)));
+        assert!(p.guest_status(id).unwrap()["status"]["seat_note"].is_null());
+    }
+
+    #[test]
+    fn the_hosts_choices_are_one_profile_per_player() {
+        let sp = |player, user| SeatProfile {
+            player,
+            user,
+            name: " Guest\u{7}1 ".into(),
+            owner: false,
+        };
+        assert_eq!(clean_seat_profiles(vec![sp(1, 5)]), Err("player"));
+        assert_eq!(clean_seat_profiles(vec![sp(5, 5)]), Err("player"));
+        assert_eq!(clean_seat_profiles(vec![sp(2, 0)]), Err("user"));
+        assert_eq!(clean_seat_profiles(vec![sp(2, u32::MAX)]), Err("user"));
+        assert_eq!(
+            clean_seat_profiles(vec![sp(2, 5), sp(2, 6)]),
+            Err("duplicate")
+        );
+        assert_eq!(
+            clean_seat_profiles(vec![sp(2, 5), sp(3, 5)]),
+            Err("duplicate")
+        );
+        let v = clean_seat_profiles(vec![sp(4, 7), sp(2, 0x9000_0001)]).unwrap();
+        assert_eq!((v[0].player, v[1].player), (2, 4));
+        assert_eq!(v[0].name, "Guest1");
+        // only the host's choice is ever asked for, as they set it
+        let console = "10.77.0.31";
+        set_seat_profiles(console, v);
+        assert_eq!(seat_bind(console, 2), bind(0x9000_0001, false));
+        assert_eq!(seat_bind(console, 3), None);
+        set_seat_profiles(console, Vec::new());
+        assert_eq!(seat_bind(console, 2), None);
+    }
+
     #[test]
     fn an_unreachable_helper_is_tried_again_with_backoff_and_the_pads_reopened() {
         let f = Arc::new(FakeHelper::default());
@@ -5069,6 +5870,7 @@ mod tests {
         tx.send(Cmd::Open {
             slot: 2,
             token: "a".into(),
+            bind: None,
             reply,
         })
         .unwrap();
@@ -5232,6 +6034,7 @@ mod tests {
             Cmd::Open {
                 slot: 2,
                 token: "a".into(),
+                bind: None,
                 reply: tx,
             },
             t,
@@ -5975,8 +6778,202 @@ mod tests {
             .remove(&key);
     }
 
+    /// "Guests play as" end to end: the host's own profile needs their confirmation, a guest on a
+    /// player with a chosen profile is seated in it with PS and Create taken from the first frame
+    /// (no 60 s picking window, no "They're in"), the companion is kept up while Play Together is
+    /// open, and a profile that cannot be used leaves the guest to the TV's question, said to the
+    /// host and to them.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_guest_plays_as_the_profile_the_host_chose() {
+        let _turn = PARTY_TESTS.lock().await;
+        *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings {
+            block_system_buttons: true,
+            ..Settings::default()
+        });
+        let console = "10.77.0.41";
+        let f = seat_helper(&[0x2000, 0x1000], 0x1000);
+        set_helper(console, f.clone());
+        let url = serve().await;
+        set_live(console, 1);
+        async fn choose(console: &str, v: serde_json::Value) -> Response {
+            let (ci, h) = local();
+            set_settings(
+                ci,
+                h,
+                Json(SettingsBody {
+                    addr: Some(console.into()),
+                    guest_profiles: Some(serde_json::from_value(v).unwrap()),
+                    block_system_buttons: None,
+                    max_players: None,
+                    stream_seat: None,
+                    internet_invites: None,
+                    hub_url: None,
+                    stun: None,
+                    upnp: None,
+                }),
+            )
+            .await
+        }
+        // The host's own profile (in front) without their confirmation: refused.
+        let r = choose(
+            console,
+            serde_json::json!([{"player": 2, "user": 0x1000, "name": "Me"}]),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::CONFLICT);
+        assert_eq!(body(r).await["error"], "owner_confirm");
+        assert!(seat_profiles(console).is_empty());
+        // Player 2 as "Guest 1", Player 3 as a profile that is not signed in.
+        let r = body(
+            choose(
+                console,
+                serde_json::json!([
+                    {"player": 2, "user": 0x2000, "name": "Guest 1"},
+                    {"player": 3, "user": 0x3000, "name": "Away"},
+                ]),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(r["guest_profiles"][0]["name"], "Guest 1");
+        // The settings page lists the signed-in profiles, the one in front marked.
+        let (ci, h) = local();
+        let p = body(
+            profiles(
+                ci,
+                h,
+                Query(AddrQuery {
+                    addr: console.into(),
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(p["users"].as_array().unwrap().len(), 2);
+        assert_eq!(p["users"][1]["foreground"], true);
+        assert_eq!(p["seats"][1]["player"], 3);
+
+        let (ci, h) = local();
+        let s = body(
+            open(
+                ci,
+                h,
+                Json(AddrBody {
+                    addr: console.into(),
+                }),
+            )
+            .await,
+        )
+        .await;
+        let key = s["invite"]["key"].as_str().unwrap().to_string();
+        assert_eq!(
+            s["next_profile"]["name"], "Guest 1",
+            "the Allow prompt names it"
+        );
+        // The companion is kept up while Play Together is open with a profile chosen.
+        until("the companion asked", || {
+            f.log().contains(&"companion".to_string())
+        })
+        .await;
+
+        // Sam is Player 2, seated in Guest 1: PS is taken from the very first frame.
+        let mut sam = guest(
+            &url,
+            serde_json::json!({"hello": {"invite": key, "name": "Sam"}}),
+        )
+        .await;
+        assert_eq!(next(&mut sam).await["stage"], "asking");
+        allow_next(console, true).await;
+        let j = next(&mut sam).await;
+        assert_eq!((&j["stage"], &j["player"]), (&"joined".into(), &2.into()));
+        assert_eq!(f.binds.lock().unwrap()[0], bind(0x2000, false));
+        use vpad::{app_button as app, button as pad};
+        sam.send(TMsg::Binary(
+            frame(1, app::PS | app::CROSS, &[], None).into(),
+        ))
+        .await
+        .unwrap();
+        until("PS stripped at once", || {
+            f.states()
+                .iter()
+                .any(|s| s.slot == 2 && s.state.buttons & pad::CROSS != 0)
+        })
+        .await;
+        assert!(!f.states().iter().any(|s| s.state.buttons & pad::PS != 0));
+        let s = host_state(console).await;
+        let g = &s["guests"][0];
+        assert_eq!(
+            (&g["state"], &g["plays_as"]["name"]),
+            (&"playing".into(), &"Guest 1".into())
+        );
+
+        // Ann is Player 3, whose profile is not signed in: her pad is made without it (never as
+        // the foreground user), the TV asks her, and both sides are told.
+        let mut ann = guest(
+            &url,
+            serde_json::json!({"hello": {"invite": key, "name": "Ann"}}),
+        )
+        .await;
+        assert_eq!(next(&mut ann).await["stage"], "asking");
+        allow_next(console, true).await;
+        assert_eq!(next(&mut ann).await["player"], 3);
+        let binds = f.binds.lock().unwrap().clone();
+        assert_eq!(&binds[1..], &[bind(0x3000, false), None]);
+        let s = host_state(console).await;
+        let g = s["guests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["player"] == 3)
+            .unwrap()
+            .clone();
+        assert_eq!(
+            (&g["state"], &g["seat_note"]),
+            (&"picking_user".into(), &"signed_out".into())
+        );
+        assert!(g["plays_as"].is_null());
+        let st = with_party(&host_key(console), |p| {
+            p.guest_status(g["id"].as_u64().unwrap())
+        })
+        .flatten()
+        .unwrap();
+        assert_eq!(st["status"]["seat_note"], "signed_out");
+        assert_eq!(
+            st["status"]["block_system"], false,
+            "PS answers the TV's question"
+        );
+        ann.send(TMsg::Binary(frame(1, app::PS, &[], None).into()))
+            .await
+            .unwrap();
+        until("PS reaches the TV", || {
+            f.states()
+                .iter()
+                .any(|s| s.slot == 3 && s.state.buttons & pad::PS != 0)
+        })
+        .await;
+
+        drop((sam, ann));
+        let (ci, h) = local();
+        close(
+            ci,
+            h,
+            Json(AddrBody {
+                addr: console.into(),
+            }),
+        )
+        .await;
+        set_seat_profiles(console, Vec::new());
+        *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        set_live(console, 0);
+    }
+
     // Internet invites (join_net): the same session over a WebRTC data channel.
     mod internet {
         include!("join_net/join_tests.rs");
+    }
+
+    // The phone link over the internet (pad_link.rs on join_net): here for the settings and turns.
+    mod pad_internet {
+        include!("join_net/pad_tests.rs");
     }
 }

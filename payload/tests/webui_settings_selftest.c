@@ -252,30 +252,154 @@ static void tile_files_written_only_when_different(void) {
     rmdir(p);
 }
 
-/* ensure's decision: every combination of (files changed, mount live, mount.lnk ours, appmeta). */
+/* ensure's decision: every combination of (files changed, mount live, mount.lnk ours, appmeta,
+ * app.db listing it 1 / 0 / -1 unreadable). */
 static void tile_plan_decides_rebind_or_register(void) {
-    int c, m, l, a;
+    int c, m, l, a, k;
     for (c = 0; c < 2; c++)
         for (m = 0; m < 2; m++)
             for (l = 0; l < 2; l++)
-                for (a = 0; a < 2; a++) {
-                    webui_tile_action_t want;
-                    if (c) want = WEBUI_TILE_REGISTER;           /* the copies must be refreshed */
-                    else if (m && l) want = WEBUI_TILE_NONE;     /* registered this boot */
-                    else if (!m && l && a) want = WEBUI_TILE_REBIND; /* after a reboot: re-mount only */
-                    else want = WEBUI_TILE_REGISTER;             /* never ours, half-removed, or someone else's bind */
-                    if (webui_tile_plan(c, m, l, a) != want) {
-                        fprintf(stderr, "FAIL plan(changed=%d mount=%d lnk=%d appmeta=%d) = %d, want %d\n", c, m, l, a,
-                                (int)webui_tile_plan(c, m, l, a), (int)want);
-                        failures++;
+                for (a = 0; a < 2; a++)
+                    for (k = -1; k <= 1; k++) {
+                        webui_tile_action_t want;
+                        if (c) want = WEBUI_TILE_REGISTER;           /* the copies must be refreshed */
+                        else if (k == 0) want = WEBUI_TILE_REGISTER; /* app.db lists no tile: nothing shows */
+                        else if (m && l) want = WEBUI_TILE_NONE;     /* registered this boot */
+                        else if (!m && l && a) want = WEBUI_TILE_REBIND; /* after a reboot: re-mount only */
+                        else want = WEBUI_TILE_REGISTER;             /* never ours, half-removed, or someone else's bind */
+                        if (webui_tile_plan(c, m, l, a, k) != want) {
+                            fprintf(stderr, "FAIL plan(changed=%d mount=%d lnk=%d appmeta=%d listed=%d) = %d, want %d\n",
+                                    c, m, l, a, k, (int)webui_tile_plan(c, m, l, a, k), (int)want);
+                            failures++;
+                        }
                     }
-                }
     /* The cases the review named, spelled out. */
-    CHECK(webui_tile_plan(0, 0, 1, 1) == WEBUI_TILE_REBIND);
-    CHECK(webui_tile_plan(0, 0, 1, 0) == WEBUI_TILE_REGISTER);
-    CHECK(webui_tile_plan(0, 0, 0, 1) == WEBUI_TILE_REGISTER);
-    CHECK(webui_tile_plan(0, 1, 1, 1) == WEBUI_TILE_NONE);
-    CHECK(webui_tile_plan(1, 1, 1, 1) == WEBUI_TILE_REGISTER);
+    CHECK(webui_tile_plan(0, 0, 1, 1, 1) == WEBUI_TILE_REBIND);
+    CHECK(webui_tile_plan(0, 0, 1, 0, 1) == WEBUI_TILE_REGISTER);
+    CHECK(webui_tile_plan(0, 0, 0, 1, 1) == WEBUI_TILE_REGISTER);
+    CHECK(webui_tile_plan(0, 1, 1, 1, 1) == WEBUI_TILE_NONE);
+    CHECK(webui_tile_plan(1, 1, 1, 1, 1) == WEBUI_TILE_REGISTER);
+    /* The missing tile (2026-11-07): a helper restarted in the same boot found the bind and its
+     * tracker and did nothing, whatever app.db said. */
+    CHECK(webui_tile_plan(0, 1, 1, 1, 0) == WEBUI_TILE_REGISTER);
+    /* After a reboot with no install record: a re-bind alone would draw nothing. */
+    CHECK(webui_tile_plan(0, 0, 1, 1, 0) == WEBUI_TILE_REGISTER);
+    /* app.db unreadable: the bind decides, as before (never guess). */
+    CHECK(webui_tile_plan(0, 1, 1, 1, -1) == WEBUI_TILE_NONE);
+    CHECK(webui_tile_plan(0, 0, 1, 1, -1) == WEBUI_TILE_REBIND);
+}
+
+/* A console for webui_tile_ensure_with: what each step answers, and the steps taken, in order. */
+typedef struct {
+    int changed, mount, lnk, appmeta;
+    int listed[16]; /* app.db's answer to each look, in turn (unset ones: 0, not listed) */
+    int looks, rebind_rc, register_rc;
+    const char *register_err;
+    unsigned slept;
+    char log[256];
+} fake_ensure_t;
+
+static void ens_log(fake_ensure_t *f, const char *step) {
+    size_t n = strlen(f->log);
+    snprintf(f->log + n, sizeof f->log - n, "%s%s", n ? "," : "", step);
+}
+static int ens_write(void *c) {
+    fake_ensure_t *f = c;
+    ens_log(f, "write");
+    return f->changed;
+}
+static int ens_mount(void *c) { return ((fake_ensure_t *)c)->mount; }
+static int ens_lnk(void *c) { return ((fake_ensure_t *)c)->lnk; }
+static int ens_appmeta(void *c) { return ((fake_ensure_t *)c)->appmeta; }
+static int ens_listed(void *c) {
+    fake_ensure_t *f = c;
+    int i = f->looks < 15 ? f->looks : 15;
+    f->looks++;
+    ens_log(f, "look");
+    return f->listed[i];
+}
+static int ens_rebind(void *c, const char **err) {
+    fake_ensure_t *f = c;
+    ens_log(f, "rebind");
+    if (f->rebind_rc) *err = "register_remount_failed";
+    return f->rebind_rc;
+}
+static int ens_register(void *c, const char **err) {
+    fake_ensure_t *f = c;
+    ens_log(f, "register");
+    if (f->register_rc) *err = f->register_err;
+    return f->register_rc;
+}
+static void ens_sleep(void *c, unsigned s) { ((fake_ensure_t *)c)->slept += s; }
+
+static int run_ensure(fake_ensure_t *f, webui_tile_action_t *done, const char **why) {
+    webui_tile_ensure_ops_t o = { f, ens_write, ens_mount, ens_lnk, ens_appmeta, ens_listed, ens_rebind, ens_register,
+                                  ens_sleep };
+    return webui_tile_ensure_with(&o, done, why);
+}
+
+/* Helper start with the tile on registers PSUP00001 whenever app.db does not list it, checks that the
+ * console lists it afterwards, and says why when it does not. */
+static void tile_ensure_registers_what_is_not_listed(void) {
+    webui_tile_action_t done;
+    const char *why;
+    { /* bound and listed this boot: nothing to do, no Sony call */
+        fake_ensure_t f = { .mount = 1, .lnk = 1, .appmeta = 1, .listed = { 1 } };
+        CHECK(run_ensure(&f, &done, &why) == 0);
+        CHECK(strcmp(f.log, "write,look") == 0);
+        CHECK(done == WEBUI_TILE_NONE && strcmp(why, "") == 0);
+    }
+    { /* bound and tracked, but app.db lists no tile: a full register, then listed */
+        fake_ensure_t f = { .mount = 1, .lnk = 1, .appmeta = 1, .listed = { 0, 0, 1 } };
+        CHECK(run_ensure(&f, &done, &why) == 0);
+        CHECK(strcmp(f.log, "write,look,register,look,look") == 0);
+        CHECK(done == WEBUI_TILE_REGISTER && f.slept == 1);
+    }
+    { /* after a reboot, listed: re-bind only */
+        fake_ensure_t f = { .lnk = 1, .appmeta = 1, .listed = { 1 } };
+        CHECK(run_ensure(&f, &done, &why) == 0);
+        CHECK(strcmp(f.log, "write,look,rebind") == 0);
+        CHECK(done == WEBUI_TILE_REBIND);
+    }
+    { /* the re-bind failed: a full register instead, then checked */
+        fake_ensure_t f = { .lnk = 1, .appmeta = 1, .listed = { 1, 1 }, .rebind_rc = -1 };
+        CHECK(run_ensure(&f, &done, &why) == 0);
+        CHECK(strcmp(f.log, "write,look,rebind,register,look") == 0);
+    }
+    { /* a changed file: register without reading app.db first */
+        fake_ensure_t f = { .changed = 1, .mount = 1, .lnk = 1, .listed = { 1 } };
+        CHECK(run_ensure(&f, &done, &why) == 0);
+        CHECK(strcmp(f.log, "write,register,look") == 0);
+    }
+    { /* Sony refused: the register's own reason, no app.db wait */
+        fake_ensure_t f = { .listed = { 0 }, .register_rc = -1, .register_err = "register_install_api_error" };
+        CHECK(run_ensure(&f, &done, &why) == -1);
+        CHECK(strcmp(why, "register_install_api_error") == 0);
+        CHECK(strcmp(f.log, "write,look,register") == 0);
+    }
+    { /* Sony refused without a reason: still a reason */
+        fake_ensure_t f = { .listed = { 0 }, .register_rc = -1 };
+        CHECK(run_ensure(&f, &done, &why) == -1);
+        CHECK(strcmp(why, "register_failed") == 0);
+    }
+    { /* Sony said yes but the console never listed it: not_listed after the wait, never "added" */
+        fake_ensure_t f = { .listed = { 0 } };
+        CHECK(run_ensure(&f, &done, &why) == -1);
+        CHECK(strcmp(why, "not_listed") == 0);
+        CHECK(f.slept == WEBUI_TILE_LISTED_WAIT_S);
+        CHECK(f.looks == 1 + WEBUI_TILE_LISTED_WAIT_S + 1);
+    }
+    { /* app.db unreadable after the register: fine (never guess), no wait */
+        fake_ensure_t f = { .listed = { 0, -1 } };
+        CHECK(run_ensure(&f, &done, &why) == 0);
+        CHECK(f.slept == 0);
+    }
+    { /* the folder could not be written: nothing else runs */
+        fake_ensure_t f = { .changed = -1 };
+        CHECK(run_ensure(&f, &done, &why) == -1);
+        CHECK(strcmp(why, "write_failed") == 0);
+        CHECK(strcmp(f.log, "write") == 0);
+    }
 }
 
 /* #480: helper start leaves a tile the user deleted on the PS5 deleted, and never mistakes a
@@ -686,6 +810,7 @@ int main(void) {
     param_json_exact();
     tile_files_written_only_when_different();
     tile_plan_decides_rebind_or_register();
+    tile_ensure_registers_what_is_not_listed();
     tile_outside_removal_is_respected();
     tile_removal_verdict_follows_appdb();
     tile_remove_runs_in_order();

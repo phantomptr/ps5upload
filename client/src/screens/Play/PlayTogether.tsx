@@ -17,54 +17,15 @@ import {
   streamSeatFriend,
   type JoinGuest,
   type JoinHostState,
-  type NetInvite,
   type NetPeer,
 } from "./playTogetherState";
-import { NetworkChoice, saveNetwork, savedNetwork, splitByNetwork, urlHost, type NetworkKind } from "./NetworkChoice";
+import { netInviteNote, NetworkChoice, saveNetwork, savedNetwork, splitByNetwork, urlHost, type NetworkKind } from "./NetworkChoice";
 import { clock } from "../../lib/clockText";
 
 type Tr = ReturnType<typeof useTr>;
 
-/** What the internet invite needs the host to know, or null: why the engine would not make one
- *  (`why`, from the invite call), or its link to the invite service (the hub) as the state says. */
-export function netInviteNote(
-  tr: Tr,
-  why: string | null,
-  net: NetInvite | null,
-): { text: string; tone: "warn" | "muted"; id: string } | null {
-  if (why === "internet_off")
-    return {
-      id: "pt-net-off",
-      tone: "warn",
-      text: tr("pt_net_off", undefined, "Internet invites are off. Turn on Allow internet invites in Settings › Play Together."),
-    };
-  if (why === "hub_url")
-    return {
-      id: "pt-net-hub-url",
-      tone: "warn",
-      text: tr("pt_net_hub_url", undefined, "The invite service address in Settings › Play Together isn't a wss:// address."),
-    };
-  if (why)
-    return {
-      id: "pt-net-failed",
-      tone: "warn",
-      text: `${tr("pt_net_link_failed", undefined, "An internet link could not be made. Try again.")} (${why})`,
-    };
-  if (!net) return null;
-  if ((net.hubState === "error" || net.hubState === "reconnecting") && net.hubError)
-    return {
-      id: "pt-net-hub-down",
-      tone: "warn",
-      text: `${tr(
-        "pt_net_hub_down",
-        undefined,
-        "Couldn't reach the PS5Upload invite service, so friends can't join with this link yet. Check this computer's internet connection.",
-      )} (${net.hubError})`,
-    };
-  if (net.hubState === "connecting")
-    return { id: "pt-net-hub-connecting", tone: "muted", text: tr("pt_net_hub_connecting", undefined, "Connecting to the invite service…") };
-  return null;
-}
+// Shared with the phone link's panel (PhonePads): it lives beside the network choice.
+export { netInviteNote };
 
 /** Internet friends not in the game: those still connecting, and whether one failed that the
  *  host has not dismissed (one notice, never a list). */
@@ -163,6 +124,32 @@ function SeatNextNote({ name, className = "text-xs text-[var(--color-muted)]" }:
   );
 }
 
+/** Under an ask, when allowing it seats the friend in the PS5 profile chosen for their player
+ *  (Settings › Play Together › Guests play as). */
+function ProfileNextNote({
+  name,
+  profile,
+  className = "text-xs text-[var(--color-muted)]",
+}: {
+  name: string;
+  profile: string;
+  className?: string;
+}) {
+  const tr = useTr();
+  return (
+    <p className={className} data-testid="pt-ask-profile">
+      {tr("pt_ask_plays_as", { name, profile }, `If you allow ${name}, they play as ${profile}.`)}
+    </p>
+  );
+}
+
+/** Why the profile chosen for a friend's player wasn't used (the TV asks them instead). */
+function seatNoteText(tr: Tr, note: string): string {
+  return note === "signed_out"
+    ? tr("pt_seat_note_signed_out", undefined, "Their chosen profile isn't signed in on the PS5, so the TV asks who they are.")
+    : tr("pt_seat_note", undefined, "Their chosen profile couldn't be used, so the TV asks who they are.");
+}
+
 function PlayerCard({ addr, player, guest }: { addr: string; player: number; guest: JoinGuest | null }) {
   const tr = useTr();
   const tone = delayTone(guest?.rttMs);
@@ -192,6 +179,16 @@ function PlayerCard({ addr, player, guest }: { addr: string; player: number; gue
                 { name: friendName(tr, guest.name) },
                 `${friendName(tr, guest.name)} is using this stream's controller and plays as your PS5 user`,
               )}
+            </p>
+          )}
+          {guest.playsAs && guest.status !== "left" && (
+            <p className="truncate text-xs text-[var(--color-muted)]" data-testid="pt-player-plays-as">
+              {tr("pt_plays_as", { profile: guest.playsAs }, `Plays as ${guest.playsAs}`)}
+            </p>
+          )}
+          {guest.seatNote && guest.status !== "left" && (
+            <p className="text-xs text-[var(--color-warn)]" data-testid="pt-player-seat-note" data-note={guest.seatNote}>
+              {seatNoteText(tr, guest.seatNote)}
             </p>
           )}
           <div className="flex flex-wrap items-center gap-1.5">
@@ -607,6 +604,9 @@ export function PlayTogetherPanel({
               </ul>
             )}
             {state.asks.length > 0 && state.seatNext && <SeatNextNote name={friendName(tr, state.asks[0].name)} />}
+            {state.asks.length > 0 && !state.seatNext && state.nextProfile && (
+              <ProfileNextNote name={friendName(tr, state.asks[0].name)} profile={state.nextProfile.name} />
+            )}
           </Step>
           <Step n={3} title={tr("pt_step_tv", undefined, "On the TV")}>
             <TvHint />
@@ -755,11 +755,14 @@ export function JoinAsks({
   addr,
   asks,
   seatNext = false,
+  nextProfile = null,
 }: {
   addr: string | null;
   asks: JoinHostState["asks"];
   /** Allowing the first one gives them this stream's controller (Player 1, as the host's user). */
   seatNext?: boolean;
+  /** Allowing the first one seats them in this PS5 profile (the host's choice for their player). */
+  nextProfile?: string | null;
 }) {
   const tr = useTr();
   if (!asks.length || !addr) return null;
@@ -767,7 +770,7 @@ export function JoinAsks({
   return (
     <div
       className={`pointer-events-auto absolute left-1/2 top-28 z-40 flex max-w-[min(32rem,calc(100%-2rem))] -translate-x-1/2 flex-wrap items-center gap-2 bg-black/85 px-4 py-2 text-sm text-white shadow-lg ${
-        seatNext ? "rounded-2xl" : "rounded-full"
+        seatNext || nextProfile ? "rounded-2xl" : "rounded-full"
       }`}
       data-testid="pt-ask"
       onClick={(e) => e.stopPropagation()}
@@ -777,6 +780,9 @@ export function JoinAsks({
       <Users size={14} />
       <span>{tr("pt_asks", { name: friendName(tr, a.name) }, `${friendName(tr, a.name)} wants to play with you`)}</span>
       {seatNext && <SeatNextNote name={friendName(tr, a.name)} className="order-last w-full text-xs text-white/75" />}
+      {!seatNext && nextProfile && (
+        <ProfileNextNote name={friendName(tr, a.name)} profile={nextProfile} className="order-last w-full text-xs text-white/75" />
+      )}
       <button
         type="button"
         className="rounded-full bg-white px-3 py-1 text-xs font-medium text-black"

@@ -711,10 +711,19 @@ mod tests {
         assert_ne!(&padding[0x191..0x191 + 8], b"AAAAAAAA");
     }
 
+    /// Random bytes, made without a fixed starting value (CodeQL takes any array literal that
+    /// reaches the nonce for a hard-coded one).
+    fn fresh_nonce() -> [u8; NONCE_LEN] {
+        let a = getrandom::u64().unwrap().to_le_bytes();
+        let b = getrandom::u64().unwrap().to_le_bytes();
+        std::array::from_fn(|i| if i < 8 { a[i % 8] } else { b[i % 8] })
+    }
+
     #[test]
     fn the_body_is_padding_then_ciphertext() {
-        let nonce = [3u8; NONCE_LEN];
-        let body = build_request_body("XCDiqZluNXo=", 12345678, &nonce).body;
+        // A fresh nonce, as a real request has (nothing here depends on its value).
+        let nonce = fresh_nonce();
+        let body = build_request_body("iHdmVUQzIhE=", 12345678, &nonce).body;
         assert!(body.len() > PADDING_BYTES);
         assert_eq!(&body[..8], b"AAAAAAAA");
         // The record must not be recognisable in the clear.
@@ -726,12 +735,13 @@ mod tests {
     fn a_record_decrypts_back_to_itself() {
         // The console uses the same key and IV in both directions, so a
         // round trip here is the same operation the reply goes through.
-        let nonce = [9u8; NONCE_LEN];
-        let built = build_request_body("XCDiqZluNXo=", 99887766, &nonce);
+        // A fresh nonce, as a real request has (nothing here depends on its value).
+        let nonce = fresh_nonce();
+        let built = build_request_body("iHdmVUQzIhE=", 99887766, &nonce);
         let mut plain = built.body[PADDING_BYTES..].to_vec();
         Aes128CfbDec::new(&built.seed.into(), &built.iv.into()).decrypt(&mut plain);
         let text = String::from_utf8_lossy(&plain);
-        assert!(text.contains("Np-AccountId: XCDiqZluNXo="));
+        assert!(text.contains("Np-AccountId: iHdmVUQzIhE="));
         assert!(text.contains(CLIENT_TYPE));
     }
 

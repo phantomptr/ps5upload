@@ -79,6 +79,10 @@ export interface JoinStatus {
   blockSystem: boolean;
   /** On the host's stream's own controller (Player 1): playing as the host's PS5 user. */
   streamSeat: boolean;
+  /** Seated in the PS5 profile the host chose for them: its name (no user to pick). */
+  playsAs: string | null;
+  /** The host chose a profile for them that couldn't be used: the TV asks who they are. */
+  seatNote: string | null;
 }
 
 export type ServerMessage =
@@ -152,6 +156,8 @@ export function readServerMessage(text: string): ServerMessage | null {
         host: typeof s.host === "string" && s.host ? s.host : null,
         blockSystem: s.block_system === true,
         streamSeat: s.stream_seat === true,
+        playsAs: typeof s.plays_as === "string" && s.plays_as ? s.plays_as : null,
+        seatNote: typeof s.seat_note === "string" && s.seat_note ? s.seat_note : null,
       },
     };
   }
