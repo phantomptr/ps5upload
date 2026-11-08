@@ -11,6 +11,7 @@ import { setScreenWakeReason } from "../lib/androidScreenWake";
 import { setPadForwardReason } from "../lib/androidPadBridge";
 import { rpInput } from "../state/remotePlay";
 import { makeWatchPlayer, type MsePlayer, type WatchPlayer, type WatchProblem } from "./watchPlayer";
+import { OpenOnWifi, useHubDown } from "../join/OpenOnWifi";
 
 type Tr = ReturnType<typeof useTr>;
 
@@ -144,7 +145,11 @@ export function PadApp({
   transport,
   hello,
   onReconnectToken,
+  lanUrl = null,
 }: {
+  /** An internet link's page on the computer's Wi-Fi ("Open on this Wi-Fi", join/lanHint),
+   *  offered when the invite service can't be reached; null: none. */
+  lanUrl?: string | null;
   url: string;
   /** The computer's name for the page's words; null (an internet link): "the computer". */
   computer: string | null;
@@ -159,6 +164,7 @@ export function PadApp({
   onReconnectToken?: (rt: string) => void;
 }) {
   const tr = useTr();
+  const hubDown = useHubDown(transport ? url : null, lanUrl);
   const computer = computerName ?? tr("pad_net_computer", undefined, "the computer");
   const [stage, setStage] = useState<PadLinkStage>({ kind: "connecting" });
   const [attempt, setAttempt] = useState(0);
@@ -252,6 +258,10 @@ export function PadApp({
   const ended = stage.kind === "refused" || stage.kind === "lost";
   // Through a short drop the controller stays where the thumbs are.
   const live = stage.kind === "joined" || stage.kind === "reconnecting";
+  // The invite service can't be reached (this page's check, or the connection said so): on the
+  // computer's Wi-Fi, its own page still works.
+  const showLan =
+    !!lanUrl && !live && (hubDown || (stage.kind === "refused" && stage.why === "net:no_hub"));
   return (
     <div
       className="fixed inset-0 select-none overflow-hidden bg-black text-white [-webkit-touch-callout:none]"
@@ -362,9 +372,15 @@ export function PadApp({
         </div>
       )}
 
+      {showLan && !ended && lanUrl && (
+        <div className="absolute inset-x-0 bottom-8 z-10 flex justify-center px-6">
+          <OpenOnWifi href={lanUrl} />
+        </div>
+      )}
       {ended && (
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 px-6 text-center text-sm">
           <p className="max-w-sm text-white/85">{stageText(tr, stage, computer)}</p>
+          {showLan && lanUrl && <OpenOnWifi href={lanUrl} />}
           {canRetry(stage) && (
             <button
               type="button"

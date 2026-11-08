@@ -45,6 +45,8 @@ pub(crate) mod rtc;
 pub(crate) mod stun;
 
 #[cfg(test)]
+mod ice_path;
+#[cfg(test)]
 mod link_sim;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -115,6 +117,8 @@ struct PeerSt {
     failed: bool,
     ended: Option<Instant>,
     rtt_ms: Option<u32>,
+    /// The selected candidate pair (this engine's socket, the guest's address), from the stats.
+    pair: Option<(std::net::SocketAddr, std::net::SocketAddr)>,
     why: Option<&'static str>,
     /// What went out to the guest over the last stats second (every byte on the wire), kbit/s.
     sent_kbps: Option<u32>,
@@ -224,6 +228,14 @@ impl PeerInfo {
         self.with(|s| s.rtt_ms)
     }
 
+    /// Which way the connection goes now: `"lan"` (the home network), `"tailscale"` or
+    /// `"internet"` (straight through both routers), from the pair ICE selected; None before it
+    /// connected.
+    pub(crate) fn net_path(&self) -> Option<&'static str> {
+        self.with(|s| s.pair)
+            .map(|(local, remote)| rtc::path_of(local, remote))
+    }
+
     /// The driver's view of the video track (rtc.rs).
     pub(crate) fn track_with<R>(&self, f: impl FnOnce(&mut TrackSt) -> R) -> Option<R> {
         self.with(|s| s.track.as_mut().map(f))
@@ -272,7 +284,11 @@ impl PeerInfo {
         let now = Instant::now();
         let (rtt_ms, sent_kbps, track) = self.with(|s| (s.rtt_ms, s.sent_kbps, s.track.clone()));
         let on = track.as_ref().is_some_and(|t| t.on);
+        let path = self.net_path();
         serde_json::json!({
+            // How the guest is connected: "lan" (the home network), "tailscale", "internet"
+            // (direct through both routers); null while ICE has no pair yet.
+            "path": path,
             // Where the picture goes: "track" (RTP) or "channel" (the data channel).
             "video": if on { "track" } else { "channel" },
             // The track's numbers (null on the channel): `frames_sent` (access units written),
@@ -504,8 +520,36 @@ pub(crate) fn hub_url_ok(url: &str) -> bool {
 }
 
 /// A room's link (an internet invite, or the phone link's), on the website's page for its kind.
-pub(crate) fn link_for(kind: Kind, room: &str, key: &str, fp: &str, hub: &str) -> String {
-    format!("{}#room={room}&k={key}&fp={fp}&hub={hub}", kind.page())
+/// `lan`: this engine's own page for the kind on the home network (`http://192.168.1.10:19113/join`),
+/// the hint the page offers as "Open on this Wi-Fi" when it cannot reach the hub. It is no
+/// secret: the page there asks the host, as the link's key does.
+pub(crate) fn link_for(
+    kind: Kind,
+    room: &str,
+    key: &str,
+    fp: &str,
+    hub: &str,
+    lan: Option<&str>,
+) -> String {
+    let mut s = format!("{}#room={room}&k={key}&fp={fp}&hub={hub}", kind.page());
+    if let Some(l) = lan.filter(|l| l.starts_with("http://") || l.starts_with("https://")) {
+        s.push_str("&lan=");
+        s.push_str(&pct(l));
+    }
+    s
+}
+
+/// `s` with everything but RFC 3986's unreserved characters percent-encoded (a fragment value).
+pub(crate) fn pct(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 /// `n` random bytes as base64url without padding (16 → 22 characters, 32 → 43).

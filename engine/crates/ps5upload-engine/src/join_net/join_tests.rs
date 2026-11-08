@@ -14,6 +14,7 @@ async fn internet_invite(console: &str) -> serde_json::Value {
                 addr: console.into(),
                 new: false,
                 internet: true,
+                share: false,
             }),
         )
         .await,
@@ -93,6 +94,7 @@ fn settings_body() -> SettingsBody {
         max_players: None,
         stream_seat: None,
         internet_invites: None,
+        invites: None,
         hub_url: None,
         stun: None,
         upnp: None,
@@ -134,12 +136,23 @@ async fn an_internet_guest_joins_over_webrtc_plays_and_gets_the_picture() {
     let room = net["room"].as_str().unwrap().to_string();
     let fp = crate::join_net::fingerprint().unwrap();
     let hub_host = crate::join_net::hub_host(&hub.url).unwrap();
+    let url = net["url"].as_str().unwrap();
+    let (link, lan) = url.split_once("&lan=").unwrap_or((url, ""));
     assert_eq!(
-        net["url"].as_str().unwrap(),
+        link,
         format!(
             "https://ps5upload.phantomptr.com/join/#room={room}&k={key}&fp={fp}&hub={hub_host}"
         )
     );
+    // The hint for a guest who can't reach the hub: the home network's page (no key of its own;
+    // the page adds the link's). None when this computer has no address a guest could use.
+    if let Some(home) = inv["url"].as_str() {
+        let page = home.split('#').next().unwrap();
+        assert_eq!(lan, crate::join_net::pct(page), "{url}");
+    }
+    // The one link to share: the internet one.
+    assert_eq!(inv["share"]["works"], "anywhere", "{inv}");
+    assert_eq!(inv["share"]["url"], url);
     assert_eq!(
         inv["key"],
         key.as_str(),
@@ -214,6 +227,14 @@ async fn an_internet_guest_joins_over_webrtc_plays_and_gets_the_picture() {
     })
     .await;
     assert_eq!(st["internet"]["room"], room.as_str());
+
+    // How they are connected, from ICE's selected pair: this test's loopback is the home network.
+    let st = until_state(console, "the selected pair", |s| {
+        s["guests"][0]["link"]["path"].is_string()
+    })
+    .await;
+    assert_eq!(st["guests"][0]["link"]["path"], "lan");
+    assert!(st["guests"][0]["link"]["rtt_ms"].as_u64().is_some());
 
     // The link's numbers, read on demand: the big picture went through the channel's buffer.
     let link = &st["guests"][0]["link"];
@@ -318,6 +339,7 @@ async fn the_hub_room_is_renamed_if_taken_reclaimed_after_a_drop_and_closed_when
             h,
             Json(SettingsBody {
                 internet_invites: Some(false),
+                invites: None,
                 ..settings_body()
             }),
         )
@@ -336,6 +358,7 @@ async fn the_hub_room_is_renamed_if_taken_reclaimed_after_a_drop_and_closed_when
             addr: console.into(),
             new: false,
             internet: true,
+            share: false,
         }),
     )
     .await;
@@ -616,4 +639,196 @@ async fn a_page_that_offers_a_video_track_gets_the_pictures_on_it_unless_the_hos
     }
     *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
     set_live(console, 0);
+}
+
+async fn share_invite(console: &str) -> serde_json::Value {
+    let (ci, h) = local();
+    body(
+        invite(
+            ci,
+            h,
+            Json(InviteBody {
+                addr: console.into(),
+                new: false,
+                internet: false,
+                share: true,
+            }),
+        )
+        .await,
+    )
+    .await
+}
+
+async fn set_invites(word: &str) -> Response {
+    let (ci, h) = local();
+    set_settings(
+        ci,
+        h,
+        Json(SettingsBody {
+            invites: Some(word.into()),
+            ..settings_body()
+        }),
+    )
+    .await
+}
+
+async fn set_settings_hub(url: &str) -> Response {
+    let (ci, h) = local();
+    set_settings(
+        ci,
+        h,
+        Json(SettingsBody {
+            hub_url: Some(url.into()),
+            ..settings_body()
+        }),
+    )
+    .await
+}
+
+/// One invite: the host asks for the one link. With the hub there it is the internet link; with
+/// no hub to reach (no internet here, or the hub is down) the home network's link instead, said
+/// to work on the Wi-Fi only, until the hub hosts the room again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_one_link_is_the_home_networks_while_the_hub_cant_be_reached() {
+    let _turn = PARTY_TESTS.lock().await;
+    // A hub address nothing answers on (a port just closed): every connect fails at once.
+    let dead = {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        l.local_addr().unwrap()
+    };
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings {
+        hub_url: format!("ws://{dead}/ws"),
+        stun: Vec::new(),
+        upnp: false,
+        ..Settings::default()
+    });
+    let console = "10.77.0.45";
+    set_helper(console, Arc::new(FakeHelper::default()));
+    set_live(console, 1);
+    open_party(console).await;
+    let inv = share_invite(console).await;
+    assert!(inv["internet"]["room"].is_string(), "a room was asked for: {inv}");
+    let s = until_state(console, "the Wi-Fi's link", |s| {
+        s["invite"]["share"]["works"] == "wifi"
+    })
+    .await;
+    let inv = &s["invite"];
+    assert_eq!(inv["share"]["why"], "offline", "{inv}");
+    assert_eq!(inv["share"]["url"], inv["url"], "the home network's own link");
+    assert_eq!(inv["internet"]["offline"], true);
+
+    // The hub is back (here: the settings name one that answers): the internet link again.
+    let hub = FakeHub::start().await;
+    assert_eq!(set_settings_hub(&hub.url).await.status(), StatusCode::OK);
+    let inv = share_invite(console).await;
+    let room = inv["internet"]["room"].as_str().unwrap().to_string();
+    until("hosted", || hub.has_host(&room)).await;
+    let s = until_state(console, "the internet link", |s| {
+        s["invite"]["share"]["works"] == "anywhere"
+    })
+    .await;
+    assert_eq!(s["invite"]["share"]["url"], s["invite"]["internet"]["url"]);
+    assert!(s["invite"]["share"]["why"].is_null());
+    close_party(console).await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    set_live(console, 0);
+}
+
+/// Invites work: Only on my Wi-Fi. The one link is the home network's (no room on the hub, no
+/// refusal), `invites` and `internet_invites` say the same, and a word it doesn't know is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn invites_work_only_on_the_wifi_keeps_to_the_home_networks_link() {
+    let _turn = PARTY_TESTS.lock().await;
+    let hub = FakeHub::start().await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings {
+        hub_url: hub.url.clone(),
+        stun: Vec::new(),
+        upnp: false,
+        ..Settings::default()
+    });
+    let console = "10.77.0.46";
+    set_helper(console, Arc::new(FakeHelper::default()));
+    set_live(console, 1);
+    let s = open_party(console).await;
+    assert_eq!(s["settings"]["invites"], "anywhere");
+    // Before anything is asked: the home network's link, none asked for.
+    assert_eq!(s["invite"]["share"]["works"], "wifi");
+    assert_eq!(s["invite"]["share"]["why"], "local");
+
+    let r = body(set_invites("wifi").await).await;
+    assert_eq!(
+        (&r["settings"]["invites"], &r["settings"]["internet_invites"]),
+        (&serde_json::json!("wifi"), &serde_json::json!(false))
+    );
+    let inv = share_invite(console).await;
+    assert!(inv["internet"].is_null(), "{inv}");
+    assert_eq!(inv["share"]["works"], "wifi");
+    assert_eq!(inv["share"]["why"], "setting");
+    assert_eq!(inv["share"]["url"], inv["url"]);
+    assert!(hub.hosts().is_empty(), "nothing on the hub");
+    assert_eq!(
+        set_invites("everywhere").await.status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    // Anywhere again (by the older name): the one link is the internet one.
+    let (ci, h) = local();
+    let r = body(
+        set_settings(
+            ci,
+            h,
+            Json(SettingsBody {
+                internet_invites: Some(true),
+                ..settings_body()
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(r["settings"]["invites"], "anywhere");
+    let inv = share_invite(console).await;
+    assert_eq!(inv["share"]["works"], "anywhere", "{inv}");
+    close_party(console).await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    set_live(console, 0);
+}
+
+/// "Invites work" is kept in the data folder; a file with the older name of the choice
+/// (`internet_invites` false) reads as Only on my Wi-Fi, a missing or broken one as nothing saved.
+#[test]
+fn invites_work_is_saved_and_an_old_off_reads_as_wifi() {
+    let dir = std::env::temp_dir().join(format!("ps5u-invites-{}", std::process::id()));
+    let p = dir.join(INVITES_FILE);
+    assert_eq!(read_invites(&p), None);
+    write_invites(&p, false).unwrap();
+    assert_eq!(read_invites(&p), Some(false));
+    assert!(std::fs::read_to_string(&p).unwrap().contains("\"wifi\""));
+    write_invites(&p, true).unwrap();
+    assert_eq!(read_invites(&p), Some(true));
+    std::fs::write(&p, r#"{"internet_invites": false}"#).unwrap();
+    assert_eq!(read_invites(&p), Some(false));
+    std::fs::write(&p, "not json").unwrap();
+    assert_eq!(read_invites(&p), None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The one link's words: the internet link unless the hub can't be reached; the Wi-Fi's link says
+/// why it is the one.
+#[test]
+fn the_one_link_says_where_it_works() {
+    let home = "http://192.168.1.10:19113/join#i=k";
+    let lan = Some(home);
+    let net = serde_json::json!({"url": "https://x/join/#room=r", "offline": false});
+    assert_eq!(
+        share_json(lan, Some(&net), true),
+        serde_json::json!({"url": "https://x/join/#room=r", "works": "anywhere", "why": null})
+    );
+    let down = serde_json::json!({"url": "https://x/join/#room=r", "offline": true});
+    assert_eq!(share_json(lan, Some(&down), true)["why"], "offline");
+    assert_eq!(share_json(lan, Some(&down), true)["url"], home);
+    assert_eq!(share_json(lan, None, false)["why"], "setting");
+    assert_eq!(share_json(lan, None, true)["why"], "local");
+    // An older engine's room json has no `offline`: its link stands.
+    let old = serde_json::json!({"url": "https://x/join/#room=r"});
+    assert_eq!(share_json(lan, Some(&old), true)["works"], "anywhere");
 }

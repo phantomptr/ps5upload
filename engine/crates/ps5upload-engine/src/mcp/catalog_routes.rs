@@ -1251,6 +1251,7 @@ mod tests {
                     "key": "k1", "code": "ABCD12", "code_display": "ABC-D12",
                     "url": "http://10.0.0.2:3000/join#i=k1", "urls": ["http://10.0.0.2:3000/join#i=k1"],
                     "expires_in_s": 1700,
+                    "share": {"url": "https://ps5upload.phantomptr.com/join/#room=r&k=k2", "works": "anywhere"},
                     "internet": {"url": "https://ps5upload.phantomptr.com/join/#room=r&k=k2", "room": "r", "state": "open"},
                 },
             })
@@ -1267,6 +1268,8 @@ mod tests {
         assert_eq!(a["invite"]["expires_in_s"], 1700);
         assert_eq!(a["invite"]["hidden"], true);
         assert_eq!(a["invite"]["internet"]["state"], "open");
+        // The one link goes too; where it works stays.
+        assert_eq!(a["invite"]["share"]["works"], "anywhere");
         assert_eq!(a["guests"][0]["name"], "Sam");
         // together_invite and together_open (POSTs) are not touched
         for path in ["/api/join/invite", "/api/join/open"] {

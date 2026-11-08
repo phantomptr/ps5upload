@@ -289,6 +289,95 @@ pub(crate) fn settings() -> Settings {
         .unwrap_or_default()
 }
 
+// ── "Invites work" (kept across restarts) ───────────────────────────────────────────────────────
+
+/// Where the engine keeps "Invites work" (in its data folder). The other Play Together choices
+/// last one engine run, as before.
+const INVITES_FILE: &str = "play_together.json";
+
+/// "Invites work" as the API says it: "anywhere" (the one link: the internet invite, which also
+/// works on the Wi-Fi) or "wifi" (the home network's link only): `internet_invites` on or off.
+pub(crate) fn invites_word(anywhere: bool) -> &'static str {
+    if anywhere {
+        "anywhere"
+    } else {
+        "wifi"
+    }
+}
+
+/// The settings as the API shows them: every field, and `invites` (the same choice as
+/// `internet_invites`, in the words of Settings › App › Play Together).
+pub(crate) fn settings_view(s: &Settings) -> serde_json::Value {
+    let mut v = serde_json::to_value(s).unwrap_or_default();
+    v["invites"] = invites_word(s.internet_invites).into();
+    v
+}
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct StoredInvites {
+    /// "anywhere" or "wifi".
+    #[serde(default)]
+    invites: Option<String>,
+    /// The older name of the same choice (internet invites on or off), read too.
+    #[serde(default, skip_serializing)]
+    internet_invites: Option<bool>,
+}
+
+/// The saved choice (true: anywhere), None when the file says none.
+fn read_invites(path: &std::path::Path) -> Option<bool> {
+    let s: StoredInvites = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    match s.invites.as_deref() {
+        Some("anywhere") => Some(true),
+        Some("wifi") => Some(false),
+        _ => s.internet_invites,
+    }
+}
+
+fn write_invites(path: &std::path::Path, anywhere: bool) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| crate::state_io::describe("the Play Together setting", dir, &e))?;
+    }
+    let body = serde_json::to_vec_pretty(&StoredInvites {
+        invites: Some(invites_word(anywhere).to_string()),
+        internet_invites: None,
+    })
+    .map_err(|e| e.to_string())?;
+    // Written aside and renamed over: a crash mid-write never leaves half a file.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, body)
+        .and_then(|()| std::fs::rename(&tmp, path))
+        .map_err(|e| crate::state_io::describe("the Play Together setting", path, &e))
+}
+
+fn invites_path() -> Option<std::path::PathBuf> {
+    ps5upload_ava1::pool::data_dir().map(|d| d.join(INVITES_FILE))
+}
+
+/// "Invites work" as it was last set; called once as the engine starts. Nothing saved (every
+/// engine before 12.1 kept Allow internet invites for one run only, on at each start): anywhere.
+pub(crate) fn load_invites() {
+    let Some(anywhere) = invites_path().and_then(|p| read_invites(&p)) else {
+        return;
+    };
+    let mut g = SETTINGS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut s = g.clone().unwrap_or_default();
+    s.internet_invites = anywhere;
+    *g = Some(s);
+}
+
+/// Saves "Invites work" (never from the tests: they would write the user's own data folder).
+fn save_invites(anywhere: bool) {
+    if cfg!(test) {
+        return;
+    }
+    if let Some(p) = invites_path() {
+        if let Err(e) = write_invites(&p, anywhere) {
+            crate::log_at!(Warn, "together", "join: {e}");
+        }
+    }
+}
+
 /// "Guests play as": the console profile a guest on Player `player` gets, chosen by the host for
 /// one console (user ids are that console's). The helper seats the guest's pad in it as it is made
 /// (`vpad.open` with `bind_user`), so the console never asks "Who's using this controller?" and the
@@ -648,6 +737,24 @@ enum SeatMove {
 }
 
 impl Guest {
+    /// Their connection, as the host's panel and together_status show it: `path` ("lan",
+    /// "tailscale", "internet") and `rtt_ms`. An internet guest's is its peer connection's (the
+    /// pair ICE selected, with its numbers); a LAN guest's socket says only where it comes from
+    /// (never the address itself).
+    fn link_json(&self) -> serde_json::Value {
+        match &self.net {
+            Some(n) => n.link_json(),
+            None => serde_json::json!({
+                "path": self.ip.map(|ip| match crate::join_net::rtc::reach_rank(ip) {
+                    1 => "tailscale",
+                    0 => "lan",
+                    _ => "internet",
+                }),
+                "rtt_ms": self.stats.rtt_now(),
+            }),
+        }
+    }
+
     /// Their pad was made (or made again) as `r` says: seated in the profile the host chose, so
     /// they play at once (PS and Create blocked from the first frame when the host blocks them,
     /// no picking window); or the console asks them who they are, as without a choice (with the
@@ -886,7 +993,13 @@ impl Party {
     /// The internet half of the invite `inv` (None without a room or an invite).
     fn internet_json(&self, inv: Option<&InviteInfo>) -> Option<serde_json::Value> {
         let inv = inv?;
-        self.internet.as_ref().map(|r| r.json(&inv.key))
+        let room = self.internet.as_ref()?;
+        // The home network's page, the link's hint for a guest who cannot reach the hub.
+        let lan = bases(&self.console, &self.reach)
+            .into_iter()
+            .next()
+            .map(|b| format!("{b}{}/join", crate::host_guard::base_path()));
+        Some(room.json(&inv.key, lan.as_deref()))
     }
 
     fn key_ok(&self, key: &str, now: Instant) -> bool {
@@ -1290,7 +1403,7 @@ impl Party {
                     "path": g.net.as_ref().map(|n| n.path()),
                     "ice_rtt_ms": g.net.as_ref().and_then(|n| n.rtt_ms()),
                     // An internet guest's connection now (round trip, rate, what waits to go).
-                    "link": g.net.as_ref().map(|n| n.link_json()),
+                    "link": g.link_json(),
                     "key_asks": g.stats.key_asks.load(Ordering::Relaxed),
                     // What the guest's page says about its picture, and in a word ("smooth",
                     // "stutters", "poor"; null before its first report or from an older page).
@@ -1308,7 +1421,7 @@ impl Party {
             "players_in": self.guests_in(),
             "guests": guests,
             "pending": self.pending.iter().map(|a| serde_json::json!({"id": a.id, "name": a.name, "state": "asking"})).collect::<Vec<_>>(),
-            "settings": self.settings,
+            "settings": settings_view(&self.settings),
             "max_guests": MAX_GUESTS,
             // "Guests play as" on this console, and the helper's companion that binds them.
             "guest_profiles": seat_profiles(&self.console),
@@ -1363,7 +1476,7 @@ impl Party {
                     "pad_frames": s.pad_frames.load(Ordering::Relaxed),
                     "key_asks": s.key_asks.load(Ordering::Relaxed),
                     "via": if g.net.is_some() { "internet" } else { "lan" },
-                    "link": g.net.as_ref().map(|n| n.link_json()),
+                    "link": g.link_json(),
                     "page": s.page_json(now),
                     "slot_open": g.slot_open,
                     "stream_seat": g.on_seat(),
@@ -2994,11 +3107,44 @@ fn invite_json(
         // This computer's Tailscale address (one of `urls`), for the page to label.
         "tailscale": crate::pad_link::tailscale_ip().map(|ip| ip.to_string()),
         "expires_in_s": inv.until.saturating_duration_since(now).as_secs(),
+        // The one link to share (QR code and Copy): `share.url`, and where it works (`works`).
+        "share": share_json(urls.first().map(String::as_str), internet.as_ref(), settings().internet_invites),
         // The internet invite, when the host made one: `url` (the link to share), `room`, `hub`,
-        // `fp` (this engine's DTLS fingerprint), `state` on the hub, `router` (the port the router
-        // mapped), `peers` (each internet guest's connection).
+        // `fp` (this engine's DTLS fingerprint), `state` on the hub, `offline` (the hub can't be
+        // reached), `router` (the port the router mapped), `peers` (each internet guest's
+        // connection).
         "internet": internet,
     })
+}
+
+/// The one link the host shares ("one invite"): the internet link, which works anywhere (on the
+/// same Wi-Fi too: ICE keeps that connection on the home network, and the link names the home
+/// network's page for a guest who cannot reach the hub), or the home network's own link when
+/// there is no internet link: `works` "anywhere" or "wifi", and `why` it is the Wi-Fi's: "setting"
+/// (Invites work: Only on my Wi-Fi), "offline" (the hub can't be reached: no internet here, or the
+/// hub is down), "local" (none was asked for).
+pub(crate) fn share_json(
+    lan: Option<&str>,
+    internet: Option<&serde_json::Value>,
+    anywhere: bool,
+) -> serde_json::Value {
+    let net_url = internet
+        .filter(|n| n["offline"] != true)
+        .and_then(|n| n["url"].as_str());
+    match net_url {
+        Some(u) => serde_json::json!({"url": u, "works": "anywhere", "why": null}),
+        None => serde_json::json!({
+            "url": lan,
+            "works": "wifi",
+            "why": if !anywhere {
+                "setting"
+            } else if internet.is_some() {
+                "offline"
+            } else {
+                "local"
+            },
+        }),
+    }
 }
 
 fn state_json(console: &str) -> serde_json::Value {
@@ -3053,7 +3199,7 @@ fn state_json(console: &str) -> serde_json::Value {
             "players_in": 0,
             "guests": [],
             "pending": [],
-            "settings": settings(),
+            "settings": settings_view(&settings()),
             "max_guests": MAX_GUESTS,
             "guest_profiles": seat_profiles(console),
         }),
@@ -3168,10 +3314,18 @@ pub struct InviteBody {
     /// Also an internet invite: a room on the signalling hub (`invite.internet.url`).
     #[serde(default)]
     internet: bool,
+    /// The one link, as "Invites work" says: the internet invite when that is "anywhere" (and the
+    /// hub address and certificate allow it), else the home network's; never refused for it.
+    #[serde(default)]
+    share: bool,
 }
 
-/// `POST /api/join/invite {addr, new?, internet?}`: `{key, code, code_display, url, urls,
-/// expires_in_s, internet}`. The same invite again until it expires, unless `new` (the old link and
+/// `POST /api/join/invite {addr, new?, internet?, share?}`: `{key, code, code_display, url, urls,
+/// expires_in_s, share, internet}`. `share` is the one link to show (`share.url`, where it works:
+/// `share.works` "anywhere" or "wifi", and `share.why` for the Wi-Fi: "setting", "offline" (the hub
+/// can't be reached), "local"; see [`share_json`]). With `share` in the request the engine makes the
+/// internet link when Settings › Play Together › Invites work says Anywhere, as `internet` does,
+/// and quietly keeps to the home network's link otherwise. The same invite again until it expires, unless `new` (the old link and
 /// code stop working). With `internet`, also a link for friends anywhere (`internet.url`): the
 /// engine opens a room on the signalling hub in the settings and the guest's browser connects to
 /// it peer to peer (409 `internet_off` when the settings turned internet invites off, 409
@@ -3186,6 +3340,13 @@ pub async fn invite(
         return r;
     }
     let s = settings();
+    // The one link: the internet one when invites work anywhere and it can be made; otherwise the
+    // home network's, never a refusal (`share` says which, and why).
+    let internet = b.internet
+        || (b.share
+            && s.internet_invites
+            && crate::join_net::hub_url_ok(&s.hub_url)
+            && crate::join_net::fingerprint().is_some());
     if b.internet {
         if !s.internet_invites {
             return bad(StatusCode::CONFLICT, "internet_off");
@@ -3202,7 +3363,7 @@ pub async fn invite(
     let key = host_key(&b.addr);
     match with_party(&key, |p| {
         let inv = p.invite(b.new, now);
-        if b.internet && inv.is_some() && p.internet.as_ref().is_none_or(|r| r.url() != s.hub_url) {
+        if internet && inv.is_some() && p.internet.as_ref().is_none_or(|r| r.url() != s.hub_url) {
             let k = key.clone();
             p.internet = crate::join_net::hub::Room::start(
                 crate::join_net::Kind::Join,
@@ -3361,6 +3522,9 @@ pub struct SettingsBody {
     stream_seat: Option<bool>,
     #[serde(default)]
     internet_invites: Option<bool>,
+    /// "Invites work": "anywhere" or "wifi" (the same choice as `internet_invites`; this one wins).
+    #[serde(default)]
+    invites: Option<String>,
     #[serde(default)]
     hub_url: Option<String>,
     #[serde(default)]
@@ -3386,10 +3550,12 @@ fn stun_server_ok(s: &str) -> bool {
 }
 
 /// `POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,
-/// internet_invites?, hub_url?, stun?, upnp?, video_track?}`: the host's choices (every console). Fewer players
-/// lets nobody go; it only stops new ones. `stream_seat` off moves a friend on the stream's
-/// controller to a pad of their own. `internet_invites` off closes the internet rooms (guests
-/// already in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`
+/// invites?, internet_invites?, hub_url?, stun?, upnp?, video_track?}`: the host's choices (every
+/// console). Fewer players lets nobody go; it only stops new ones. `stream_seat` off moves a friend
+/// on the stream's controller to a pad of their own. `invites` is "Invites work": "anywhere" (the
+/// one link, through the hub) or "wifi" (the home network's link only; 400 `invites` otherwise),
+/// the same choice as `internet_invites` on or off, and the one setting kept across restarts.
+/// "wifi" closes the internet rooms (guests already in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`
 /// otherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none), `upnp` whether the
 /// router is asked for a port, `video_track` whether internet guests get the picture as a video
 /// track (new connections; the data channel otherwise).
@@ -3440,8 +3606,15 @@ pub async fn set_settings(
     if let Some(v) = b.stream_seat {
         s.stream_seat = v;
     }
+    let was_anywhere = s.internet_invites;
     if let Some(v) = b.internet_invites {
         s.internet_invites = v;
+    }
+    match b.invites.as_deref() {
+        None => {}
+        Some("anywhere") => s.internet_invites = true,
+        Some("wifi") => s.internet_invites = false,
+        Some(_) => return bad(StatusCode::BAD_REQUEST, "invites"),
     }
     if let Some(v) = b.hub_url {
         let v = v.trim().to_string();
@@ -3478,6 +3651,9 @@ pub async fn set_settings(
         );
     }
     *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(s.clone());
+    if (b.internet_invites.is_some() || b.invites.is_some()) && s.internet_invites != was_anywhere {
+        save_invites(s.internet_invites);
+    }
     let fx = with_parties(|m| {
         m.values_mut()
             .map(|p| {
@@ -3501,7 +3677,7 @@ pub async fn set_settings(
         // The phone link's internet link too (phones already in keep playing).
         crate::pad_link::internet_off();
     }
-    let mut out = serde_json::json!({ "settings": s });
+    let mut out = serde_json::json!({ "settings": settings_view(&s) });
     if let Some(addr) = b.addr.as_deref().filter(|a| !a.trim().is_empty()) {
         out["guest_profiles"] = serde_json::json!(seat_profiles(addr));
     }
@@ -7247,6 +7423,7 @@ mod tests {
                     max_players: None,
                     stream_seat: None,
                     internet_invites: None,
+                    invites: None,
                     hub_url: None,
                     stun: None,
                     upnp: None,

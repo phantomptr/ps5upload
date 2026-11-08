@@ -24,7 +24,7 @@ const view = (p: Partial<PlayTogetherStartViewProps> = {}) =>
       startLabel="Start and invite"
       onStart={() => {}}
       playAs={null}
-      internetInvites
+      invites="anywhere"
       {...p}
     />,
   );
@@ -56,18 +56,18 @@ describe("Play's three pages", () => {
 });
 
 describe("Start and invite", () => {
-  it("says what it is, the console, the network, and one button", () => {
+  it("says what it is, the console, and one button: no network to choose", () => {
     installWindowStub();
     const out = view();
     expect(out).toContain("No app needed");
     expect(out).toMatch(/data-testid="pt-start-console">.*Living room/);
-    expect(out).toMatch(/aria-pressed="true"[^>]*data-testid="pt-start-net-home"/);
-    expect(out).toContain('data-testid="pt-start-net-internet"');
     expect(out).toMatch(/<button[^>]*data-testid="pt-start-invite"[^>]*>[\s\S]*Start and invite<\/span><\/button>/);
     expect(out).not.toMatch(/<button[^>]* disabled=""[^>]*data-testid="pt-start-invite"/);
-    // This network: no internet hint, no support line.
-    expect(out).not.toContain("pt-start-net-internet-hint");
-    expect(out).not.toContain("pt-start-net-internet-support");
+    // One link that works anywhere: its hint and the support line, no Local or Internet choice.
+    expect(out).toContain('data-testid="pt-start-net-internet-hint"');
+    expect(out).toContain('data-testid="pt-start-net-internet-support"');
+    expect(out).not.toContain("pt-start-net-home");
+    expect(out).not.toContain('data-testid="pt-start-net-internet"');
   });
 
   it("a console not set up: the button is greyed out", () => {
@@ -75,24 +75,26 @@ describe("Start and invite", () => {
     expect(view({ canStart: false, consoleName: null })).toMatch(/<button[^>]* disabled=""[^>]*data-testid="pt-start-invite"/);
   });
 
-  it("Internet remembered: its hint and the support line; off in the settings is said, with the way there", () => {
+  it("an old saved Internet choice changes nothing", () => {
     installWindowStub({ "ps5upload.pt_network": "internet" });
-    const on = view();
-    expect(on).toMatch(/aria-pressed="true"[^>]*data-testid="pt-start-net-internet"/);
-    expect(on).toContain('data-testid="pt-start-net-internet-hint"');
-    expect(on).toContain('data-testid="pt-start-net-internet-support"');
-    expect(on).not.toContain("pt-start-net-off");
-    const off = view({ internetInvites: false });
-    expect(off).toContain('data-testid="pt-start-net-off"');
-    expect(off).toContain("Internet invites are off");
-    expect(off).toContain("Open settings");
+    expect(view()).not.toContain("pt-start-net-home");
   });
 
-  it("an engine with no internet invites offers only this network", () => {
-    installWindowStub({ "ps5upload.pt_network": "internet" });
-    const out = view({ internetInvites: null });
-    expect(out).not.toContain("pt-start-net-internet");
-    expect(out).toMatch(/aria-pressed="true"[^>]*data-testid="pt-start-net-home"/);
+  it("only on the Wi-Fi in the settings: said, with the way there", () => {
+    installWindowStub();
+    const off = view({ invites: "wifi" });
+    expect(off).toContain('data-testid="pt-start-net-off"');
+    expect(off).toContain("Invites work only on your Wi-Fi");
+    expect(off).toContain("Open settings");
+    expect(off).not.toContain("pt-start-net-internet-hint");
+  });
+
+  it("an engine with no internet invites, or not read yet: nothing about networks", () => {
+    installWindowStub();
+    for (const invites of [null, undefined]) {
+      const out = view({ invites });
+      expect(out).not.toContain("pt-start-net");
+    }
   });
 
   it("starts, switches from another console, or shows the stream started elsewhere", () => {

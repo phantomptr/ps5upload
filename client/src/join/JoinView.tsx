@@ -13,6 +13,7 @@ import { useTr } from "../state/lang";
 import { devicePad, useJoinSession, type JoinSession } from "./session";
 import { useAutoHide } from "./autoHide";
 import { PadCheck } from "./PadCheck";
+import { OpenOnWifi } from "./OpenOnWifi";
 import { clock } from "../lib/clockText";
 
 type Tr = ReturnType<typeof useTr>;
@@ -233,9 +234,16 @@ export function JoinView({
   onLeave,
   onAgain,
   onFullscreen,
+  lanUrl = null,
+  hubDown = false,
 }: {
   session: JoinSession;
   inApp?: boolean;
+  /** An internet invite's page on the host's Wi-Fi ("Open on this Wi-Fi", join/lanHint), offered
+   *  when the invite service can't be reached; null: none. */
+  lanUrl?: string | null;
+  /** The invite service did not answer this page's check (OpenOnWifi useHubDown). */
+  hubDown?: boolean;
   /** After Leave or Cancel. */
   onLeave: () => void;
   /** Ask to join again (a new ask, no saved place). */
@@ -402,7 +410,8 @@ export function JoinView({
 
   if (stage.kind === "connecting" || stage.kind === "asking") {
     return (
-      <div className={inApp ? "rounded-[var(--radius-card)] bg-neutral-900 text-white" : "flex min-h-[100dvh] items-center justify-center bg-black text-white"}>
+      <div className={inApp ? "rounded-[var(--radius-card)] bg-neutral-900 text-white" : "flex min-h-[100dvh] flex-col items-center justify-center gap-4 bg-black text-white"}>
+        {stage.kind === "connecting" && hubDown && lanUrl && <OpenOnWifi href={lanUrl} />}
         <Waiting
           text={
             stage.kind === "connecting"
@@ -433,6 +442,8 @@ export function JoinView({
         <p className="max-w-sm text-base" data-testid="join-ended-text">
           {endText(tr, stage, host, !!session.opts.transport)}
         </p>
+        {/* The invite service can't be reached: on the host's Wi-Fi, their own page still works. */}
+        {lanUrl && stage.why === "no_hub" && <OpenOnWifi href={lanUrl} />}
         <div className="flex flex-wrap justify-center gap-2">
           {again && (
             <button

@@ -11,9 +11,10 @@
  *   /pad, vite.pagePlugins.ts).
  * - The built CSS goes through what the app's does (oneLangPerSelector): older Android WebViews
  *   and Safari 14.0 are friends' phones too.
- * - Budget: the build fails over 904 KiB raw (900 until the picture as a video track,
+ * - Budget: the build fails over 906 KiB raw (900 until the picture as a video track,
  *   join/trackPlayer.ts, took 2.4 KiB; nothing it replaces can go: the data channel's picture
- *   stays as its fallback).
+ *   stays as its fallback. 904 until "Open on this Wi-Fi", join/lanHint.ts and OpenOnWifi.tsx,
+ *   took 1.7 KiB: the page was at 903.3 before it).
  */
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
@@ -22,7 +23,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { oneLangPerSelector, pageModuleSwap, pageStrings } from "./vite.pagePlugins";
 import { pageCss } from "./vite.pageCss";
 
-const RAW_BUDGET = 904 * 1024;
+const RAW_BUDGET = 906 * 1024;
 const OUT = fileURLToPath(new URL("../engine/crates/ps5upload-engine/src/join_page.html", import.meta.url));
 /** The same page on the website (https://ps5upload.phantomptr.com/join/, .github/workflows/
  *  pages.yml), where internet invites open (#room=…&k=…&fp=…&hub=…, join/rtcTransport.ts). */

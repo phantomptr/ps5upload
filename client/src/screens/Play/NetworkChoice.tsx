@@ -18,7 +18,11 @@ export function netInviteNote(
     return {
       id: "pt-net-off",
       tone: "warn",
-      text: tr("pt_net_off", undefined, "Internet invites are off. Turn on Allow internet invites in Settings › Play Together."),
+      text: tr(
+        "pt_wifi_only_setting",
+        undefined,
+        "Invites work only on your Wi-Fi. For friends somewhere else, set Invites work to Anywhere in Settings › App › Play Together.",
+      ),
     };
   if (why === "hub_url")
     return {

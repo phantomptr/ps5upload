@@ -213,6 +213,13 @@ test("a friend anywhere joins through the hub, is allowed, plays as Player 2 and
       return g ? `${g.via} ${g.path}` : "";
     })
     .toBe("internet direct");
+  // One invite: the browser and the engine share this computer's network, and ICE keeps the
+  // connection on it, though Chrome hides its own address behind an mDNS name the engine
+  // ignores (the engine learns it from Chrome's checks: a peer-reflexive candidate).
+  await expect
+    .poll(async () => ((await state()).guests?.[0] as { link?: { path?: string } } | undefined)?.link?.path, { timeout: 10_000 })
+    .toBe("lan");
+  expect(link).toContain("&lan=");
 
   // The picture: the session's stream reaches the guest over the data channel (the keyframe in
   // pieces) and draws.
@@ -232,4 +239,25 @@ test("a friend anywhere joins through the hub, is allowed, plays as Player 2 and
   await expect(page.getByTestId("join-name-step")).toBeVisible();
   await expect.poll(async () => (await state()).guests?.[0]?.state, { timeout: 10_000 }).toBe("left");
   await api("/api/join/close", { addr: consoleAddr });
+});
+
+test("the invite service can't be reached: the page offers the host's own page on the Wi-Fi", async ({ page }) => {
+  test.setTimeout(60_000);
+  // An internet link whose hub nothing answers (a port just closed), naming the engine's page as
+  // the Wi-Fi's (as a newer engine's link does).
+  const dead = await freePort();
+  const key = "0f".repeat(16);
+  const fp = Array.from({ length: 32 }, () => "AB").join(":");
+  const lan = `${engine}/join`;
+  const link = `${siteOrigin}/join/#room=${"r".repeat(22)}&k=${key}&fp=${fp}&hub=127.0.0.1:${dead}&lan=${encodeURIComponent(lan)}`;
+  await page.goto(link, { waitUntil: "domcontentloaded" });
+  // Before the friend types anything: a few seconds, then the way in on the Wi-Fi.
+  const open = page.getByTestId("open-on-wifi-link");
+  await expect(open).toBeVisible({ timeout: 10_000 });
+  await expect(open).toHaveAttribute("href", `${lan}#i=${key}`);
+  // A tap goes there: the engine's own guest page, with the same invite key.
+  await open.click();
+  await expect(page).toHaveURL(`${lan}#i=${key}`);
+  // (A LAN link in a browser first offers the app.)
+  await expect(page.getByTestId("open-in-gate").or(page.getByTestId("join-name-step"))).toBeVisible();
 });

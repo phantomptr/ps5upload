@@ -31,6 +31,19 @@ More than 120 tools, all of them thin layers over [the engine's API](API.md):
 | Friends and viewers | `together_*`, `golive_*` | Open Play Together and invite; go live |
 | Everything else | `settings_*`, `devices_list`, `drive_*`, `api_catalog`, `api_describe`, `api_request` | Settings, Mesh Drive, and any route of the API |
 
+**Play Together has one invite.** `together_invite` gives one link (`share.url`) that works on your
+Wi-Fi and over the internet; a friend on your Wi-Fi stays on it. Without internet, or when the invite
+service is down, it gives your Wi-Fi's link (`share.works: "wifi"`, `share.why: "offline"`). What
+changed for agents:
+
+- `together_invite` follows "Invites work" unless you pass `internet`. `internet: true` still asks
+  for the internet link, and `internet: false` for your Wi-Fi's.
+- `together_settings` takes `invites`: `anywhere` (the default) or `wifi`. The setting is kept
+  across restarts. `internet_invites` still works and means the same: on is anywhere, off is Wi-Fi
+  only.
+- `together_status` gives each friend `link.path` (`lan`, `tailscale` or `internet`) and
+  `link.rtt_ms`.
+
 `api_catalog` finds a route, `api_describe` gives its fields and answers, and `api_request` calls it,
 so what the other tools don't cover is still reachable. The only exceptions hold console keys, and
 `api_request` refuses them: see [What never reaches a model](#what-never-reaches-a-model).
