@@ -93,6 +93,20 @@ describe("Settings → Minion", () => {
     expect(minionStatus(state(), tr)).toBe("The home-screen tile is shown.");
     expect(minionStatus(state({ tile: false }), tr)).toBe("The home-screen tile is hidden.");
   });
+  it("says why the tile could not be added, also when the helper tried at its start", () => {
+    const fill = (key: string, vars?: Record<string, unknown>, fallback?: string) =>
+      (fallback ?? key).replace(/\{(\w+)\}/g, (_, k: string) => String(vars?.[k] ?? ""));
+    expect(
+      minionStatus(
+        state({ tile_failed: true, tile_result: "failed", tile_error: "not_listed" }),
+        fill as unknown as typeof tr,
+      ),
+    ).toBe("Could not add PS5Upload Minion to the home screen (not_listed). Try again.");
+    // An older helper sends no reason: the plain message.
+    expect(minionStatus(state({ tile_failed: true, tile_result: "failed" }), tr)).toBe(
+      "The home screen update failed. Try again.",
+    );
+  });
   it("a current helper offers network access and Remove; an older one neither", () => {
     const html = renderToStaticMarkup(
       <MinionView

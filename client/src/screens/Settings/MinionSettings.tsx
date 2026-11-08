@@ -92,6 +92,13 @@ export function minionStatus(
       "Minion is off: its home-screen tile is removed and the page on the console is stopped.",
     );
   }
+  // Also after a failed add at helper start, before anyone pressed a button: says why.
+  if (state.tile_failed && state.tile && state.tile_error)
+    return tr(
+      "cw_settings_tile_failed_reason",
+      { reason: state.tile_error },
+      "Could not add PS5Upload Minion to the home screen ({reason}). Try again.",
+    );
   if (state.tile_failed)
     return tr(
       state.tile ? "cw_settings_err_tile_add" : "cw_settings_err_tile_remove",

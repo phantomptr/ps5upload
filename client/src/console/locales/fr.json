@@ -973,6 +973,7 @@
   "cw_settings_text_size_note": "Enregistrée pour cet écran seulement : la TV et un ordinateur peuvent chacun avoir leur propre taille.",
   "cw_settings_theme": "Thème",
   "cw_settings_tile": "Afficher PS5Upload Minion sur l'écran d'accueil",
+  "cw_settings_tile_failed_reason": "Impossible d'ajouter PS5Upload Minion à l'écran d'accueil ({reason}). Réessayez.",
   "cw_settings_tile_hidden": "La PS5 a conservé l'entrée de PS5Upload Minion : son icône a donc été masquée sur l'écran d'accueil.",
   "cw_settings_tips": "Revoir les astuces",
   "cw_settings_using": "Manette et astuces",

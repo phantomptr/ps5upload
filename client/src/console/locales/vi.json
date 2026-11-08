@@ -973,6 +973,7 @@
   "cw_settings_text_size_note": "Chỉ lưu cho màn hình này, nên TV và máy tính có thể dùng cỡ chữ riêng.",
   "cw_settings_theme": "Giao diện",
   "cw_settings_tile": "Hiện PS5Upload Minion trên màn hình chính",
+  "cw_settings_tile_failed_reason": "Không thể thêm PS5Upload Minion vào màn hình chính ({reason}). Hãy thử lại.",
   "cw_settings_tile_hidden": "PS5 vẫn giữ bản ghi của PS5Upload Minion, nên biểu tượng trên màn hình chính đã được ẩn thay vào đó.",
   "cw_settings_tips": "Hiện lại các mẹo",
   "cw_settings_using": "Tay cầm và mẹo",

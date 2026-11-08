@@ -8,11 +8,14 @@
  *     the strings (/strings/…); what arrives is stored, and it is answered
  *     from the store only when the network fails. Nothing else is touched:
  *     /api/* never reaches the store, POSTs are never intercepted.
- *   - the appcache (<html manifest="/cache.appcache">), the fallback the PS5
- *     browser honours for Payload Manager: the page is its only cached entry
- *     (NETWORK: * lets everything else through). An appcache serves its copy
- *     first and updates behind it, so on "updateready" the page offers a
- *     one-press reload (UpdateBanner, update.ts), never reloading by itself.
+ *   - the appcache (<html manifest="/minion.appcache">; pages up to 11.6.x
+ *     used /cache.appcache, which the helper now answers 410 so the browser
+ *     drops that copy), the fallback the PS5 browser honours for Payload
+ *     Manager: the page is its only cached entry (NETWORK: * lets everything
+ *     else through). An appcache serves its copy first and updates behind it,
+ *     so on "updateready" the page offers a one-press reload (UpdateBanner,
+ *     update.ts); a page older than the helper replaces itself without a
+ *     press (selfUpdate.ts).
  *
  * vite.console.config.ts writes both files next to the page with the page's
  * hash in them (a new build = a new cache), and payload/Makefile embeds them in

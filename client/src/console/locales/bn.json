@@ -973,6 +973,7 @@
   "cw_settings_text_size_note": "শুধু এই স্ক্রিনের জন্য রাখা হয়, তাই টিভি আর কম্পিউটারে আলাদা আকার রাখা যায়।",
   "cw_settings_theme": "থিম",
   "cw_settings_tile": "হোম স্ক্রিনে PS5Upload Minion দেখান",
+  "cw_settings_tile_failed_reason": "হোম স্ক্রিনে PS5Upload Minion যোগ করা যায়নি ({reason})। আবার চেষ্টা করুন।",
   "cw_settings_tile_hidden": "PS5 PS5Upload Minion-এর রেকর্ড রেখে দিয়েছে, তাই এর বদলে হোম স্ক্রিনের আইকনটি লুকানো হয়েছে।",
   "cw_settings_tips": "টিপস আবার দেখান",
   "cw_settings_using": "কন্ট্রোলার ও টিপস",

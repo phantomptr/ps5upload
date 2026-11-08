@@ -112,6 +112,8 @@ export type MinionTileState =
       tile_failed: boolean;
       /** "added" | "removed" | "hidden" | "failed" | "" (#480); absent from older helpers. */
       tile_result?: string;
+      /** Why the last add/remove failed (a short code, "" when it did not); helpers from 11.6.1. */
+      tile_error?: string;
       /** PS5Upload Minion as a whole: off = no tile, no page on the console (#480). Absent from
        *  helpers that predate the on/off switch. */
       enabled?: boolean;
@@ -160,6 +162,7 @@ export async function minionSet(
     tile_busy: b.tile_busy,
     tile_failed: b.tile_failed,
     ...(typeof b.tile_result === "string" ? { tile_result: b.tile_result } : {}),
+    ...(typeof b.tile_error === "string" && b.tile_error ? { tile_error: b.tile_error } : {}),
     ...(typeof b.enabled === "boolean" ? { enabled: b.enabled } : {}),
     ...(typeof b.lan === "boolean" ? { lan: b.lan } : {}),
     ...(typeof b.saved === "boolean" ? { saved: b.saved } : {}),

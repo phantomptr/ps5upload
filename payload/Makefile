@@ -182,7 +182,7 @@ WEBUI_PAGE_C := build/webui_page.c
 WEBUI_STRINGS_C := build/webui_strings.c
 # And its offline copy (client/src/console/offline/offlineCopy.ts): dist-console/sw.js and
 # dist-console/cache.appcache, embedded by xxd as webui_sw_js[] and webui_cache_appcache[]
-# (include/webui_offline.h), served at GET /sw.js and GET /cache.appcache.
+# (include/webui_offline.h), served at GET /sw.js and GET /minion.appcache.
 WEBUI_OFFLINE_C := build/webui_offline.c
 # The installer daemon the console page's package install brings up (webui_pkg.c), embedded by xxd
 # as webui_installer_elf[] + webui_installer_elf_len plus its INST_VERSION (include/webui_installer.h).

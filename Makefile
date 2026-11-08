@@ -1040,9 +1040,9 @@ test-payload: payload
 	@echo "Running webui offline copy lookup self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-webui-offline-selftest \
-		$(PAYLOAD_DIR)/tests/webui_offline_selftest.c $(PAYLOAD_DIR)/src/webui_offline.c
+		$(PAYLOAD_DIR)/tests/webui_offline_selftest.c $(PAYLOAD_DIR)/src/webui_offline.c $(PAYLOAD_DIR)/src/webui_http.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-webui-offline-selftest
-	@echo "✓ GET /sw.js and /cache.appcache answer with their own types; nothing else matches"
+	@echo "✓ GET /sw.js and /minion.appcache answer with their own types; the old /cache.appcache is 410 Gone; an old stored page is nudged to reload once"
 	@echo "Running webui auth self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-webui-auth-selftest \

@@ -46,6 +46,19 @@ describe("paired console controls", () => {
     reply({ supported: true, tile: false, tile_busy: false, tile_failed: false });
     expect(await minionSet("h", {})).not.toHaveProperty("tile_result");
   });
+  it("passes why adding the tile failed through, and drops an empty reason", async () => {
+    reply({
+      supported: true,
+      tile: true,
+      tile_busy: false,
+      tile_failed: true,
+      tile_result: "failed",
+      tile_error: "not_listed",
+    });
+    expect(await minionSet("h", {})).toMatchObject({ tile_failed: true, tile_error: "not_listed" });
+    reply({ supported: true, tile: true, tile_busy: false, tile_failed: false, tile_error: "" });
+    expect(await minionSet("h", {})).not.toHaveProperty("tile_error");
+  });
   it("turns Minion off and on and reports whether the helper can", async () => {
     const fetcher = reply({
       supported: true,

@@ -5754,6 +5754,7 @@ c2c_test_deep_bad: "4 KiB का परीक्षण नहीं पहुँ
 "cw_files_too_large": "पूर्वावलोकन के लिए बहुत बड़ा है।",
 "cw_settings_err_tile_add": "होम स्क्रीन पर PS5Upload Minion नहीं जोड़ा जा सका। फिर कोशिश करें।",
 "cw_settings_err_tile_remove": "होम स्क्रीन से PS5Upload Minion नहीं हटाया जा सका। फिर कोशिश करें।",
+"cw_settings_tile_failed_reason": "होम स्क्रीन पर PS5Upload Minion नहीं जोड़ा जा सका ({reason})। फिर कोशिश करें।",
 "cw_hint_page": "पेज ऊपर/नीचे",
 "cw_hint_top": "सबसे ऊपर",
 "cw_hint_help": "सहायता",

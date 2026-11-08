@@ -8,6 +8,8 @@
  * onTokenExpired listeners hear about it (the ReloadBanner).
  */
 
+import { PAGE_VERSION } from "./offline/update.ts";
+
 export const TOKEN_HEADER = "X-PS5U-Token";
 
 /** A failed call. status 0 = the request never got an answer. */
@@ -45,12 +47,28 @@ let tokenPromise: Promise<string> | null = null;
 /** A token read that has not answered by then counts as "nothing answered" (the offline screen). */
 export const TOKEN_TIMEOUT_MS = 4000;
 
-async function fetchToken(): Promise<string> {
+/**
+ * GET /api/token's URL. `?page=` tells the helper this page reloads itself when it is older
+ * (offline/selfUpdate.ts): a read without it is an older stored page, which the helper nudges into
+ * reloading once (payload/include/webui_offline.h).
+ */
+export function tokenUrl(page: string = PAGE_VERSION): string {
+  return `/api/token?page=${encodeURIComponent(page || "dev")}`;
+}
+
+let lastVersion: string | null = null;
+
+/** The helper's version from its last token reply (helpers from 11.6.1 send it), else null. */
+export function helperVersionFromToken(): string | null {
+  return lastVersion;
+}
+
+async function readToken(): Promise<{ token: string; version: string | null }> {
   let res: Response;
   const stop = typeof AbortController === "function" ? new AbortController() : null;
   const timer = setTimeout(() => stop?.abort(), TOKEN_TIMEOUT_MS);
   try {
-    res = await fetch("/api/token", { method: "GET", credentials: "same-origin", cache: "no-store", signal: stop?.signal });
+    res = await fetch(tokenUrl(), { method: "GET", credentials: "same-origin", cache: "no-store", signal: stop?.signal });
   } catch {
     throw new ApiError(0, "offline");
   } finally {
@@ -60,10 +78,28 @@ async function fetchToken(): Promise<string> {
   // Anything but JSON (another server on the port, a captive page) is not the helper.
   const body = (await res.json().catch(() => {
     throw new ApiError(0, "offline");
-  })) as { token?: unknown } | null;
+  })) as { token?: unknown; version?: unknown } | null;
   if (!body || typeof body !== "object") throw new ApiError(0, "offline");
   if (typeof body.token !== "string" || !body.token) throw new ApiError(res.status, "token_unavailable");
-  return body.token;
+  const version = typeof body.version === "string" && body.version ? body.version : null;
+  if (version) lastVersion = version;
+  return { token: body.token, version };
+}
+
+async function fetchToken(): Promise<string> {
+  return (await readToken()).token;
+}
+
+/**
+ * The helper's version, read now (a fresh token read; the token this page holds is kept). Null when
+ * the helper did not answer or is too old to say.
+ */
+export async function readHelperVersion(): Promise<string | null> {
+  try {
+    return (await readToken()).version;
+  } catch {
+    return null;
+  }
 }
 
 function token(): Promise<string> {

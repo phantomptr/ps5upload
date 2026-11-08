@@ -18,7 +18,7 @@
  *   (__CW_STRINGS_V__), so the helper's immutable caching never mixes builds.
  * - Offline copy: sw.js and cache.appcache next to the page (offlineCopy.ts), with the page's
  *   hash in them; payload/Makefile embeds both (build/webui_offline.c), served at /sw.js and
- *   /cache.appcache.
+ *   /minion.appcache (the old /cache.appcache answers 410: payload/include/webui_offline.h).
  * - Right-to-left: console.css is written with logical properties. At this target the margins,
  *   paddings and borders stay as written (Safari 12.1 has them); `inset-inline-*` (Safari 14.1) is
  *   rewritten by the minifier into left/right pairs picked by `:lang(…)`, which strings.ts keeps in

@@ -194,6 +194,7 @@ static const char *status_text(int status) {
     case 408: return "Request Timeout";
     case 413: return "Payload Too Large";
     case 409: return "Conflict";
+    case 410: return "Gone";
     case 414: return "URI Too Long";
     case 416: return "Range Not Satisfiable";
     case 429: return "Too Many Requests";

@@ -973,6 +973,7 @@
   "cw_settings_text_size_note": "Kept for this screen only, so the TV and a computer can each have their own size.",
   "cw_settings_theme": "Theme",
   "cw_settings_tile": "Show PS5Upload Minion on the home screen",
+  "cw_settings_tile_failed_reason": "Could not add PS5Upload Minion to the home screen ({reason}). Try again.",
   "cw_settings_tile_hidden": "The PS5 kept its record of PS5Upload Minion, so its home-screen icon is hidden instead.",
   "cw_settings_tips": "Show tips again",
   "cw_settings_using": "Controller and tips",

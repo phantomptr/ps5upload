@@ -5693,6 +5693,7 @@ c2c_test_deep_bad: "Тестовая отправка 4 КиБ не дошла: 
 "cw_files_too_large": "Слишком большой для просмотра.",
 "cw_settings_err_tile_add": "Не удалось добавить PS5Upload Minion на главный экран. Повторите попытку.",
 "cw_settings_err_tile_remove": "Не удалось убрать PS5Upload Minion с главного экрана. Повторите попытку.",
+"cw_settings_tile_failed_reason": "Не удалось добавить PS5Upload Minion на главный экран ({reason}). Повторите попытку.",
 "cw_hint_page": "Страница вверх/вниз",
 "cw_hint_top": "В начало",
 "cw_hint_help": "Справка",
