@@ -34,6 +34,7 @@ import { cleanConsoleAddress, hostOf as bareHostOf } from "../../lib/addr";
 import { PageHeader, Button, Spinner, ErrorCard } from "../../components";
 import { useTr } from "../../state/lang";
 import PowerControl from "./PowerControl";
+import TailnetPanel from "./TailnetPanel";
 import { BringUpPanel } from "./BringUpPanel";
 import { useHelperReplaceGuard } from "./useHelperReplaceGuard";
 import { useConsoleAddressCommit } from "./useConsoleAddressCommit";
@@ -845,6 +846,8 @@ export default function ConnectionScreen() {
         {/* Power control whenever an address is set, as on Home: Wake is the
             action needed exactly when the console does not answer. */}
         {host.trim() && <PowerControl host={host.trim()} />}
+        {/* "Put this PS5 on Tailscale": Remote Play and PS5Upload from anywhere. */}
+        {host.trim() && <TailnetPanel host={host.trim()} />}
         {/* Points at Payloads, which the browser build does not have. */}
         {step2 === "ok" && isTauriEnv() && <CompanionSuggestion />}
       </div>

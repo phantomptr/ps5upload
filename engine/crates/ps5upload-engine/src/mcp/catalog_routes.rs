@@ -539,6 +539,8 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/ps5/smp/status"),
     ("GET", "/api/ps5/status"),
     ("GET", "/api/ps5/syslog/tail"),
+    ("GET", "/api/ps5/tailnet"),
+    ("POST", "/api/ps5/tailnet"),
     ("GET", "/api/ps5/time/get"),
     ("POST", "/api/ps5/time/sync"),
     ("GET", "/api/ps5/title-sdk-pair"),

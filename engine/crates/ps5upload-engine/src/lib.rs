@@ -109,6 +109,7 @@ mod settings_api;
 mod settings_backup;
 mod shared_state;
 mod state_io;
+mod tailnet_api;
 mod telemetry;
 mod vinput_api;
 mod wake_login_api;
@@ -11908,6 +11909,10 @@ fn build_app_and_mcp(
         .route("/api/ps5/disk-usage/{id}", get(disk_usage::status))
         .route("/api/ps5/disk-usage/{id}/cancel", post(disk_usage::cancel))
         .route("/api/ps5/cleanup/scan", post(console_cleanup_api::scan))
+        .route(
+            "/api/ps5/tailnet",
+            get(tailnet_api::status).post(tailnet_api::op),
+        )
         .route(
             "/api/ps5/cleanup/scan/{id}",
             get(console_cleanup_api::scan_status),
