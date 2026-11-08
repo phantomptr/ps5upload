@@ -23,7 +23,21 @@ describe("humanizePs5Error", () => {
     expect(m).toBe(en.err_pair_pending);
     expect(m).toContain("Enable Remote Play");
     expect(m).toContain("Pair again");
-    expect(m).toContain("Accounts › Users");
+    // A PS5 that says "You're not signed in" refuses: the user has to show as signed in, and
+    // pairing with the PIN is the way left when it still refuses.
+    expect(m).toContain("Users and Accounts");
+    expect(m).toContain(en.play_setup_pair_with_pin);
+  });
+
+  it("names the PIN pairing button the way each language's setup screen shows it", async () => {
+    const mods = import.meta.glob<{ default: Record<string, string> }>("../i18n/locales/*.ts", { eager: true });
+    const seen = Object.entries(mods).filter(([f]) => !f.endsWith("/types.ts"));
+    expect(seen.length).toBe(21);
+    for (const [file, mod] of seen) {
+      const t = mod.default;
+      expect(t.err_pair_pending, file).toContain(t.play_setup_pair_with_pin);
+      expect(t.err_pair_pending, file).toContain("80108b03");
+    }
   });
 
   it("returns empty input unchanged", () => {

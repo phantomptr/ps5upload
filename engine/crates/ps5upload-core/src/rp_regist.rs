@@ -394,11 +394,12 @@ fn reason_text(code: &str) -> &'static str {
         // screen, where trying and unpairing change nothing: the step that is
         // left is on the console.
         "80108b03" => {
-            "Remote Play isn't ready on the PS5. Open Settings › System › Remote Play on the \
-             console and turn on Enable Remote Play. If it's greyed out, this PS5 user's account \
-             usually isn't activated: activate it in Accounts › Users. If it still won't turn on \
-             or stay on, run the offline sign-in in Play › Set up and restart the PS5. Then press \
-             Pair again"
+            "Remote Play isn't ready on the PS5. On the console, the user you play as must show as \
+             signed in (Settings › Users and Accounts) and Enable Remote Play must be on \
+             (Settings › System › Remote Play). If either is off or greyed out, run the offline \
+             sign-in in Play › Set up, restart the PS5 and press Pair again. Still refused? Pair \
+             with the PIN the PS5 shows in Settings › System › Remote Play › Link Device \
+             (Play › Set up › Pair with the PIN shown on the PS5)"
         }
         "80108b02" => "the console rejected the PSN account",
         "80108b10" => "Remote Play is already in use",
@@ -805,7 +806,8 @@ mod tests {
         let t = reason_text("80108b03");
         assert!(t.contains("Enable Remote Play"), "{t}");
         assert!(t.contains("Pair again"), "{t}");
-        assert!(t.contains("Accounts › Users"), "{t}");
+        assert!(t.contains("Users and Accounts"), "{t}");
+        assert!(t.contains("Pair with the PIN shown on the PS5"), "{t}");
         assert_eq!(reason_text("80108B03"), reason_text("80108b03"));
     }
 
@@ -997,9 +999,12 @@ pub fn pair_with_console(mgmt_addr: &str, host: &str) -> Result<PairResult> {
         if pin.is_empty() {
             bail!("the console did not return a pairing PIN");
         }
-        let pin_num: u32 = pin
-            .parse()
-            .map_err(|_| anyhow!("the console produced a PIN we cannot read: {pin:?}"))?;
+        let pin_num: u32 = pin.parse().map_err(|_| {
+            anyhow!(
+                "the console produced a PIN we cannot read ({} characters)",
+                pin.len()
+            )
+        })?;
 
         register(host, &account_id, pin_num)
     });
