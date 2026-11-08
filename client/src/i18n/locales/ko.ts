@@ -7994,6 +7994,11 @@ mcp_try_install: "이 패키지를 내 PS5에 설치하고 끝나면 알려 줘.
 mcp_safety_title: "에이전트는 사용자가 할 수 있는 모든 일을 할 수 있습니다",
 mcp_safety_body: "비밀번호가 없으며 콘솔의 파일을 삭제할 수도 있습니다. 무언가를 바꾸는 도구는 에이전트에서 \"ask\"로 두고, 콘솔 명령은 허용하기 전에 하나씩 읽어 보세요.",
 mcp_safety_read_only: "보기만 허용하려면 엔진 환경에 이 값을 설정하고 엔진을 다시 시작하세요:",
+mcp_access_label: "에이전트가 변경할 수 있음",
+mcp_access_hint: "끄면: 에이전트는 보기만 할 수 있습니다. 파일 목록, 상태 확인, 전송 확인 등이며 아무것도 바뀌지 않습니다.",
+mcp_access_locked: "꺼짐, 엔진 환경에서 설정됨.",
+mcp_access_failed: "변경하지 못했습니다: {error}",
+mcp_access_limit: "에이전트가 PS5Upload 도구를 쓰지 못하게 할 뿐입니다. 이 컴퓨터에서 명령을 실행할 수 있는 프로그램은 여전히 엔진에 접근할 수 있습니다.",
 mcp_other_clients_title: "다른 에이전트와 앱",
 mcp_gemini_label: "Gemini CLI: 터미널에서 실행",
 mcp_cursor_label: "Cursor: ~/.cursor/mcp.json에 넣기",
@@ -8158,6 +8163,15 @@ rp_users_add_hint: "다른 사용자로도 플레이하려면 PS5에서 그 사�
 "pt_set_stun_bad": "한 줄에 host:port 하나, 최대 {n}개.",
 "pt_set_failed": "엔진이 이 설정을 받지 않았어요. 다시 시도하세요.",
 "join_net_lost": "{host}와의 연결이 끊겼어요. 인터넷 연결을 확인한 다음 다시 요청하세요.",
+"pt_start_invite": "시작하고 초대",
+"pt_show_invite": "여기에 표시하고 초대",
+"pt_switch_invite": "다른 스트림을 멈추고 시작·초대",
+"pt_tab_intro": "친구는 휴대폰, 태블릿, 컴퓨터의 브라우저에서 플레이어 2, 3, 4로 함께 플레이합니다. 앱이 필요 없습니다.",
+"pt_tab_console": "내 PS5",
+"pt_tab_where": "친구는 어디에 있나요?",
+"net_internet_support": "인터넷 플레이는 저희가 비용을 내는 작은 서버에서 돌아갑니다. 도움이 되셨다면 후원으로 계속 운영할 수 있어요. 감사합니다!",
+"pt_elsewhere": "다른 곳에서 플레이하나요? 위에서 인터넷을 고르세요.",
+"pt_elsewhere_guest": "다른 곳에서 플레이하나요? 친구에게 인터넷으로 초대해 달라고 한 뒤, 그 링크를 브라우저에서 여세요.",
 };
 
 export default ko;

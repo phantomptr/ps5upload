@@ -7930,6 +7930,11 @@ mcp_try_install: "把這個安裝包裝到我的 PS5 上，裝好了告訴我。
 mcp_safety_title: "你能做的，代理程式都能做",
 mcp_safety_body: "沒有密碼，它還能刪除主機上的檔案。請讓會變更內容的工具在代理程式裡保持 \"ask\"，並在允許前讀過每條主機指令。",
 mcp_safety_read_only: "如果只想讓它查看，請在引擎的環境中設定以下內容並重新啟動引擎：",
+mcp_access_label: "允許代理變更內容",
+mcp_access_hint: "關閉：代理只能查看，例如列出檔案、讀取狀態和追蹤傳輸。不會變更任何內容。",
+mcp_access_locked: "已關閉，由引擎的環境設定。",
+mcp_access_failed: "無法變更：{error}",
+mcp_access_limit: "這會阻止代理使用 PS5Upload 的工具；能在這台電腦上執行指令的程式仍可能連到引擎。",
 mcp_other_clients_title: "其他代理程式和應用程式",
 mcp_gemini_label: "Gemini CLI：在終端機執行此指令",
 mcp_cursor_label: "Cursor：寫入 ~/.cursor/mcp.json",
@@ -8094,6 +8099,15 @@ rp_users_add_hint: "若也想以其他使用者遊玩，請在 PS5 上登入該�
 "pt_set_stun_bad": "每行一個 host:port，最多 {n} 個。",
 "pt_set_failed": "引擎沒有接受此設定。請再試一次。",
 "join_net_lost": "與 {host} 的連線已中斷。請檢查你的網際網路連線，然後重新要求。",
+"pt_start_invite": "開始並邀請",
+"pt_show_invite": "在這裡顯示並邀請",
+"pt_switch_invite": "停止另一個串流，開始並邀請",
+"pt_tab_intro": "好友用手機、平板或電腦的瀏覽器，以玩家 2、3、4 的身分一起玩。不需安裝 App。",
+"pt_tab_console": "你的 PS5",
+"pt_tab_where": "你的好友在哪裡？",
+"net_internet_support": "網際網路遊玩執行在我們付費的一台小伺服器上。如果它對你有幫助，捐款能讓它繼續運作。謝謝！",
+"pt_elsewhere": "在別處玩？在上方選擇網際網路。",
+"pt_elsewhere_guest": "在別處玩？請好友用網際網路邀請你，然後在瀏覽器中開啟他們的連結。",
 };
 
 export default zh_TW;

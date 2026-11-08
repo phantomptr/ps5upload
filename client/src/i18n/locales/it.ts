@@ -7930,6 +7930,11 @@ mcp_try_install: "Installa questo pacchetto sulla mia PS5 e dimmi quando ha fini
 mcp_safety_title: "Un agente può fare tutto ciò che puoi fare tu",
 mcp_safety_body: "Non c'è una password e può eliminare file dalla console. Lascia su \"ask\" gli strumenti che modificano qualcosa e leggi ogni comando per la console prima di consentirlo.",
 mcp_safety_read_only: "Per farlo solo guardare, imposta questo nell'ambiente del motore e riavvia il motore:",
+mcp_access_label: "Gli agenti possono modificare",
+mcp_access_hint: "Disattivato: gli agenti possono solo guardare, ad esempio elencare i file, leggere lo stato e seguire i trasferimenti. Non cambia nulla.",
+mcp_access_locked: "Disattivato, impostato dall'ambiente del motore.",
+mcp_access_failed: "Impossibile modificarlo: {error}",
+mcp_access_limit: "Questo impedisce agli agenti di usare gli strumenti di PS5Upload; un programma che può eseguire comandi su questo computer potrebbe comunque raggiungere il motore.",
 mcp_other_clients_title: "Altri agenti e app",
 mcp_gemini_label: "Gemini CLI: esegui questo in un terminale",
 mcp_cursor_label: "Cursor: metti questo in ~/.cursor/mcp.json",
@@ -8094,6 +8099,15 @@ rp_users_add_hint: "Per giocare anche come un altro utente, accedi con quell’u
 "pt_set_stun_bad": "Un host:porta per riga, al massimo {n}.",
 "pt_set_failed": "Il motore non ha accettato questa impostazione. Riprova.",
 "join_net_lost": "La connessione con {host} si è interrotta. Controlla la connessione Internet, poi chiedi di nuovo.",
+"pt_start_invite": "Avvia e invita",
+"pt_show_invite": "Mostra qui e invita",
+"pt_switch_invite": "Ferma l'altro stream, avvia e invita",
+"pt_tab_intro": "Gli amici giocano come Giocatore 2, 3 e 4 dal telefono, tablet o computer, nel browser. Nessuna app necessaria.",
+"pt_tab_console": "La tua PS5",
+"pt_tab_where": "Dove sono i tuoi amici?",
+"net_internet_support": "Il gioco via Internet passa da un piccolo server che paghiamo noi. Se ti è utile, una donazione lo tiene attivo. Grazie!",
+"pt_elsewhere": "Giocate da un altro posto? Scegli Internet qui sopra.",
+"pt_elsewhere_guest": "Giochi da un altro posto? Chiedi al tuo amico di invitarti con Internet, poi apri il suo link nel browser.",
 };
 
 export default it;

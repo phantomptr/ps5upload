@@ -19,7 +19,7 @@ use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
 use tokio::sync::{broadcast, watch};
@@ -31,7 +31,7 @@ use super::jsonrpc::{
     MODERN_VERSION, PARSE_ERROR, SUPPORTED_VERSIONS,
 };
 use super::resources::{URI_EVENTS, URI_JOBS};
-use super::{Caller, McpState};
+use super::{access, Caller, McpState};
 
 /// The same cap the rest of the API has.
 const MAX_REQUEST_BYTES: usize = 64 * 1024 * 1024;
@@ -45,11 +45,15 @@ const HEADER_METHOD: &str = "mcp-method";
 const HEADER_NAME: &str = "mcp-name";
 const HEADER_SESSION: &str = "mcp-session-id";
 
-/// The MCP routes.
+/// The MCP routes, and the owner's switch for what agents may do. That switch is mounted here,
+/// after the engine took the clone of its API that tools call, so no tool can reach it (`access.rs`
+/// says what that does and does not stop). It is not behind [`origin_guard`]: the app's web UI may
+/// be opened by another name than localhost, as the rest of the API may.
 pub(crate) fn router(state: McpState) -> Router {
     Router::new()
         .route("/mcp", post(post_mcp).get(get_mcp).delete(delete_mcp))
         .route_layer(middleware::from_fn(origin_guard))
+        .route("/api/mcp/access", get(access::get).put(access::put))
         .with_state(state)
 }
 
@@ -281,13 +285,28 @@ fn listen(state: &McpState, id: &Value, params: &Value) -> Response {
         .into_iter()
         .filter(|uri| asked.is_some_and(|list| list.iter().any(|u| u.as_str() == Some(*uri))))
         .collect();
+    // The tool list changes when the owner switches agents between looking and changing things.
+    let tools_list = params
+        .get("notifications")
+        .and_then(|n| n.get("toolsListChanged"))
+        .and_then(Value::as_bool)
+        == Some(true);
+    let mut honoured = json!({ "resourceSubscriptions": uris });
+    if tools_list {
+        honoured["toolsListChanged"] = json!(true);
+    }
     let acknowledged = json!({
         "jsonrpc": "2.0",
         "method": "notifications/subscriptions/acknowledged",
         "params": {
             "_meta": { META_SUBSCRIPTION_ID: id },
-            "notifications": { "resourceSubscriptions": uris },
+            "notifications": honoured,
         },
+    });
+    let access = tools_list.then(|| {
+        let mut changes = state.access().subscribe();
+        changes.mark_unchanged();
+        changes
     });
     let stream_state = Listen {
         id: id.clone(),
@@ -295,6 +314,7 @@ fn listen(state: &McpState, id: &Value, params: &Value) -> Response {
         // No subscription this server can honour: the stream only stays open.
         events: (!uris.is_empty()).then(|| state.subscribe_events()),
         uris,
+        access,
         shutdown: state.subscribe_shutdown(),
         changed: false,
         last_update: None,
@@ -321,6 +341,8 @@ struct Listen {
     frames: VecDeque<Value>,
     uris: Vec<&'static str>,
     events: Option<broadcast::Receiver<String>>,
+    /// Whether agents may only look, when the client asked to hear the tool list change.
+    access: Option<watch::Receiver<bool>>,
     shutdown: watch::Receiver<bool>,
     /// Something changed since the last update went out.
     changed: bool,
@@ -351,6 +373,17 @@ impl Listen {
                 changed = self.shutdown.changed() => {
                     if changed.is_err() {
                         self.end();
+                    }
+                }
+                changed = next_access_change(&mut self.access) => {
+                    if changed {
+                        self.frames.push_back(json!({
+                            "jsonrpc": "2.0",
+                            "method": "notifications/tools/list_changed",
+                            "params": { "_meta": { META_SUBSCRIPTION_ID: self.id } },
+                        }));
+                    } else {
+                        self.access = None;
                     }
                 }
                 changed = next_event(&mut self.events) => {
@@ -393,6 +426,19 @@ impl Listen {
             }),
         ));
     }
+}
+
+/// Waits for the owner to switch what agents may do: `true`, it changed; `false`, nothing can
+/// change it any more. With nothing asked for, this waits forever.
+async fn next_access_change(access: &mut Option<watch::Receiver<bool>>) -> bool {
+    let Some(access) = access else {
+        return std::future::pending().await;
+    };
+    let changed = access.changed().await.is_ok();
+    if changed {
+        access.mark_unchanged();
+    }
+    changed
 }
 
 /// Waits for something on the event bus: `true`, something changed (falling behind the bus counts);

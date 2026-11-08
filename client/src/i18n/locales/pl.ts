@@ -8218,6 +8218,11 @@ mcp_try_install: "Zainstaluj ten pakiet na mojej PS5 i daj znać, gdy skończysz
 mcp_safety_title: "Agent może zrobić wszystko, co Ty",
 mcp_safety_body: "Nie ma hasła, a agent może usuwać pliki z konsoli. Narzędzia, które coś zmieniają, zostaw na \"ask\" i czytaj każde polecenie dla konsoli, zanim na nie pozwolisz.",
 mcp_safety_read_only: "Aby mógł tylko patrzeć, ustaw to w środowisku silnika i uruchom silnik ponownie:",
+mcp_access_label: "Agenci mogą wprowadzać zmiany",
+mcp_access_hint: "Wyłączone: agenci mogą tylko patrzeć, np. wyświetlać pliki, odczytywać stan i śledzić transfery. Nic się nie zmienia.",
+mcp_access_locked: "Wyłączone, ustawione przez środowisko silnika.",
+mcp_access_failed: "Nie udało się zmienić: {error}",
+mcp_access_limit: "To powstrzymuje agentów przed użyciem narzędzi PS5Upload; program, który może uruchamiać polecenia na tym komputerze, nadal może dotrzeć do silnika.",
 mcp_other_clients_title: "Inni agenci i aplikacje",
 mcp_gemini_label: "Gemini CLI: uruchom to w terminalu",
 mcp_cursor_label: "Cursor: wpisz to do ~/.cursor/mcp.json",
@@ -8382,6 +8387,15 @@ rp_users_add_hint: "Aby grać także jako inny użytkownik, zaloguj się na nim 
 "pt_set_stun_bad": "Jeden host:port w wierszu, najwyżej {n}.",
 "pt_set_failed": "Silnik nie przyjął tego ustawienia. Spróbuj ponownie.",
 "join_net_lost": "Połączenie z {host} zostało przerwane. Sprawdź połączenie internetowe i poproś ponownie.",
+"pt_start_invite": "Uruchom i zaproś",
+"pt_show_invite": "Pokaż tutaj i zaproś",
+"pt_switch_invite": "Zatrzymaj inny stream, uruchom i zaproś",
+"pt_tab_intro": "Znajomi grają jako Gracz 2, 3 i 4 na telefonie, tablecie lub komputerze, w przeglądarce. Bez instalowania aplikacji.",
+"pt_tab_console": "Twoja PS5",
+"pt_tab_where": "Gdzie są twoi znajomi?",
+"net_internet_support": "Gra przez internet działa na małym serwerze, za który płacimy. Jeśli ci się przydaje, darowizna pomaga go utrzymać. Dziękujemy!",
+"pt_elsewhere": "Gracie z innego miejsca? Wybierz Internet powyżej.",
+"pt_elsewhere_guest": "Grasz z innego miejsca? Poproś znajomego o zaproszenie przez Internet i otwórz jego link w przeglądarce.",
 };
 
 export default pl;

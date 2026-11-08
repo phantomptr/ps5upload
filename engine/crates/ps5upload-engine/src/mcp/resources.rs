@@ -384,7 +384,7 @@ mod tests {
     /// MCP.md lists the tools a client should ask about first. A new one must be added there.
     #[test]
     fn the_guide_names_every_destructive_tool() {
-        let listed = tools::list();
+        let listed = tools::list(false);
         for tool in listed["tools"].as_array().unwrap() {
             if tool["annotations"]["destructiveHint"] == true {
                 let name = tool["name"].as_str().unwrap();

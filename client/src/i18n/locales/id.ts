@@ -7986,6 +7986,11 @@ mcp_try_install: "Pasang paket ini di PS5 saya dan beri tahu saya kalau sudah se
 mcp_safety_title: "Agen bisa melakukan apa pun yang kamu bisa",
 mcp_safety_body: "Tidak ada kata sandi, dan agen bisa menghapus file di konsol kamu. Biarkan alat yang mengubah sesuatu tetap di \"ask\", dan baca setiap perintah konsol sebelum mengizinkannya.",
 mcp_safety_read_only: "Agar agen hanya bisa melihat, atur ini di lingkungan mesin lalu mulai ulang mesin:",
+mcp_access_label: "Agen boleh mengubah sesuatu",
+mcp_access_hint: "Mati: agen hanya bisa melihat, misalnya mendaftar file, membaca status, dan mengikuti transfer. Tidak ada yang berubah.",
+mcp_access_locked: "Mati, diatur oleh lingkungan mesin.",
+mcp_access_failed: "Tidak bisa diubah: {error}",
+mcp_access_limit: "Ini mencegah agen memakai alat PS5Upload; program yang bisa menjalankan perintah di komputer ini tetap bisa menjangkau mesin.",
 mcp_other_clients_title: "Agen dan aplikasi lain",
 mcp_gemini_label: "Gemini CLI: jalankan ini di terminal",
 mcp_cursor_label: "Cursor: masukkan ini ke ~/.cursor/mcp.json",
@@ -8150,6 +8155,15 @@ rp_users_add_hint: "Untuk bermain juga sebagai pengguna lain, masuk ke pengguna 
 "pt_set_stun_bad": "Satu host:port per baris, paling banyak {n}.",
 "pt_set_failed": "Mesin tidak menerima pengaturan ini. Coba lagi.",
 "join_net_lost": "Koneksi ke {host} terputus. Periksa koneksi internetmu, lalu minta lagi.",
+"pt_start_invite": "Mulai dan undang",
+"pt_show_invite": "Tampilkan di sini dan undang",
+"pt_switch_invite": "Hentikan stream lain, mulai dan undang",
+"pt_tab_intro": "Teman bermain sebagai Pemain 2, 3, dan 4 dari ponsel, tablet, atau komputer mereka, di browser. Tanpa aplikasi.",
+"pt_tab_console": "PS5 kamu",
+"pt_tab_where": "Di mana teman-temanmu?",
+"net_internet_support": "Main lewat internet berjalan di server kecil yang kami bayar. Kalau ini membantumu, donasi membuatnya tetap jalan. Terima kasih!",
+"pt_elsewhere": "Main dari tempat lain? Pilih Internet di atas.",
+"pt_elsewhere_guest": "Main dari tempat lain? Minta temanmu mengundang lewat Internet, lalu buka tautannya di browser.",
 };
 
 export default id;

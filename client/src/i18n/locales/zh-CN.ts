@@ -7936,6 +7936,11 @@ mcp_try_install: "把这个安装包装到我的 PS5 上，装好了告诉我。
 mcp_safety_title: "你能做的，智能体都能做",
 mcp_safety_body: "没有密码，它还能删除主机上的文件。请让会改动内容的工具在智能体里保持 \"ask\"，并在允许前读一遍每条主机命令。",
 mcp_safety_read_only: "如果只想让它查看，请在引擎的环境中设置以下内容并重启引擎：",
+mcp_access_label: "允许代理更改内容",
+mcp_access_hint: "关闭：代理只能查看，例如列出文件、读取状态和跟踪传输。不会更改任何内容。",
+mcp_access_locked: "已关闭，由引擎的环境设置。",
+mcp_access_failed: "无法更改：{error}",
+mcp_access_limit: "这会阻止代理使用 PS5Upload 的工具；能在这台电脑上运行命令的程序仍可能访问引擎。",
 mcp_other_clients_title: "其他智能体和应用",
 mcp_gemini_label: "Gemini CLI：在终端运行此命令",
 mcp_cursor_label: "Cursor：写入 ~/.cursor/mcp.json",
@@ -8100,6 +8105,15 @@ rp_users_add_hint: "若也想以其他用户游玩，请在 PS5 上登录该用�
 "pt_set_stun_bad": "每行一个 host:port，最多 {n} 个。",
 "pt_set_failed": "引擎没有接受此设置。请重试。",
 "join_net_lost": "与 {host} 的连接已断开。请检查你的互联网连接，然后重新请求。",
+"pt_start_invite": "开始并邀请",
+"pt_show_invite": "在这里显示并邀请",
+"pt_switch_invite": "停止另一个串流，开始并邀请",
+"pt_tab_intro": "好友用手机、平板或电脑的浏览器，以玩家 2、3、4 的身份一起玩。无需安装应用。",
+"pt_tab_console": "你的 PS5",
+"pt_tab_where": "你的好友在哪里？",
+"net_internet_support": "互联网游玩运行在我们付费的一台小服务器上。如果它对你有帮助，捐助能让它继续运行。谢谢！",
+"pt_elsewhere": "在别处玩？在上方选择互联网。",
+"pt_elsewhere_guest": "在别处玩？请好友用互联网邀请你，然后在浏览器中打开他们的链接。",
 };
 
 export default zh_CN;

@@ -72,6 +72,61 @@ export function mcpUrl(engineUrl: string): string {
   return `${engineUrl.replace(/\/+$/, "")}/mcp`;
 }
 
+/** Whether agents may change things through the MCP server (engine mcp/access.rs). `read_only` is
+ *  what is in force; `setting` is this switch; `locked` means PS5UPLOAD_MCP_READ_ONLY in the
+ *  engine's environment holds it read-only whatever the switch says. */
+export interface AgentAccess {
+  read_only: boolean;
+  setting: boolean;
+  locked: boolean;
+}
+
+function agentAccessUrl(engineUrl: string): string {
+  return `${engineUrl.replace(/\/+$/, "")}/api/mcp/access`;
+}
+
+function parseAgentAccess(doc: unknown): AgentAccess {
+  const d = (doc ?? {}) as Record<string, unknown>;
+  if (typeof d.read_only !== "boolean") {
+    throw new Error("The engine did not say whether agents can change things.");
+  }
+  return {
+    read_only: d.read_only,
+    setting: d.setting === true,
+    locked: d.locked === true,
+  };
+}
+
+async function accessReply(res: Response): Promise<AgentAccess> {
+  const doc: unknown = await res.json().catch(() => null);
+  if (!res.ok) {
+    const error = (doc as { error?: unknown } | null)?.error;
+    throw new Error(typeof error === "string" ? error : `HTTP ${res.status}`);
+  }
+  return parseAgentAccess(doc);
+}
+
+export async function readAgentAccess(
+  engineUrl: string,
+  signal?: AbortSignal,
+): Promise<AgentAccess> {
+  return accessReply(await fetch(agentAccessUrl(engineUrl), { signal }));
+}
+
+/** `readOnly`: agents may only look. Applies at once, no restart. */
+export async function writeAgentAccess(
+  engineUrl: string,
+  readOnly: boolean,
+): Promise<AgentAccess> {
+  return accessReply(
+    await fetch(agentAccessUrl(engineUrl), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ read_only: readOnly }),
+    }),
+  );
+}
+
 /** Quoted so a shell takes it whole. A URL here has no quote of its own to escape. */
 function q(url: string): string {
   return /^[\w:/.\-[\]]+$/.test(url) ? url : `"${url}"`;

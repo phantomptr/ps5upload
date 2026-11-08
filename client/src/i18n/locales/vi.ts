@@ -7979,6 +7979,11 @@ mcp_try_install: "Cài gói này lên PS5 của tôi và báo cho tôi khi xong.
 mcp_safety_title: "Agent có thể làm mọi thứ bạn làm được",
 mcp_safety_body: "Không có mật khẩu và agent có thể xóa tệp trên máy console. Hãy để các công cụ có thay đổi ở chế độ \"ask\", và đọc từng lệnh console trước khi cho phép.",
 mcp_safety_read_only: "Để agent chỉ được xem, hãy đặt mục này trong môi trường của engine rồi khởi động lại engine:",
+mcp_access_label: "Agent được thay đổi",
+mcp_access_hint: "Tắt: agent chỉ được xem, như liệt kê tệp, đọc trạng thái và theo dõi truyền tải. Không có gì thay đổi.",
+mcp_access_locked: "Tắt, do môi trường của engine đặt.",
+mcp_access_failed: "Không thay đổi được: {error}",
+mcp_access_limit: "Điều này ngăn agent dùng công cụ của PS5Upload; một chương trình chạy được lệnh trên máy tính này vẫn có thể truy cập engine.",
 mcp_other_clients_title: "Agent và ứng dụng khác",
 mcp_gemini_label: "Gemini CLI: chạy lệnh này trong terminal",
 mcp_cursor_label: "Cursor: đặt nội dung này vào ~/.cursor/mcp.json",
@@ -8143,6 +8148,15 @@ rp_users_add_hint: "Để chơi bằng cả người dùng khác, hãy đăng nh
 "pt_set_stun_bad": "Mỗi dòng một host:port, tối đa {n}.",
 "pt_set_failed": "Engine không nhận cài đặt này. Hãy thử lại.",
 "join_net_lost": "Kết nối tới {host} đã bị ngắt. Hãy kiểm tra kết nối internet, rồi xin vào lại.",
+"pt_start_invite": "Bắt đầu và mời",
+"pt_show_invite": "Hiện ở đây và mời",
+"pt_switch_invite": "Dừng luồng kia, bắt đầu và mời",
+"pt_tab_intro": "Bạn bè chơi cùng với vai Người chơi 2, 3 và 4 từ điện thoại, máy tính bảng hoặc máy tính, ngay trong trình duyệt. Không cần ứng dụng.",
+"pt_tab_console": "PS5 của bạn",
+"pt_tab_where": "Bạn bè của bạn ở đâu?",
+"net_internet_support": "Chơi qua Internet chạy trên một máy chủ nhỏ do chúng tôi trả tiền. Nếu nó hữu ích với bạn, một khoản ủng hộ sẽ giúp nó tiếp tục chạy. Cảm ơn bạn!",
+"pt_elsewhere": "Chơi từ nơi khác? Chọn Internet ở trên.",
+"pt_elsewhere_guest": "Chơi từ nơi khác? Nhờ bạn của bạn mời qua Internet, rồi mở liên kết của họ trong trình duyệt.",
 };
 
 export default vi;

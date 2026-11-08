@@ -7993,6 +7993,11 @@ mcp_try_install: "Installe ce paquet sur ma PS5 et préviens-moi quand c'est fin
 mcp_safety_title: "Un agent peut faire tout ce que tu peux faire",
 mcp_safety_body: "Il n'y a pas de mot de passe et il peut supprimer des fichiers sur ta console. Laisse sur \"ask\" les outils qui modifient quelque chose, et lis chaque commande console avant de l'autoriser.",
 mcp_safety_read_only: "Pour qu'il puisse seulement regarder, définis ceci dans l'environnement du moteur et redémarre-le :",
+mcp_access_label: "Les agents peuvent modifier des choses",
+mcp_access_hint: "Désactivé : les agents peuvent seulement regarder, par exemple lister les fichiers, lire l'état et suivre les transferts. Rien ne change.",
+mcp_access_locked: "Désactivé, imposé par l'environnement du moteur.",
+mcp_access_failed: "Impossible de le modifier : {error}",
+mcp_access_limit: "Cela empêche les agents d'utiliser les outils de PS5Upload ; un programme capable d'exécuter des commandes sur cet ordinateur pourrait quand même joindre le moteur.",
 mcp_other_clients_title: "Autres agents et applications",
 mcp_gemini_label: "Gemini CLI : exécute ceci dans un terminal",
 mcp_cursor_label: "Cursor : mets ceci dans ~/.cursor/mcp.json",
@@ -8157,6 +8162,15 @@ rp_users_add_hint: "Pour jouer aussi avec un autre utilisateur, connectez-vous �
 "pt_set_stun_bad": "Un hôte:port par ligne, {n} au maximum.",
 "pt_set_failed": "Le moteur n'a pas accepté ce réglage. Réessayez.",
 "join_net_lost": "La connexion à {host} a été coupée. Vérifiez votre connexion Internet, puis redemandez.",
+"pt_start_invite": "Lancer et inviter",
+"pt_show_invite": "Afficher ici et inviter",
+"pt_switch_invite": "Arrêter l'autre stream, lancer et inviter",
+"pt_tab_intro": "Vos amis jouent en Joueur 2, 3 et 4 depuis leur téléphone, tablette ou ordinateur, dans le navigateur. Aucune appli requise.",
+"pt_tab_console": "Votre PS5",
+"pt_tab_where": "Où sont vos amis ?",
+"net_internet_support": "Le jeu par Internet passe par un petit serveur que nous payons. S'il vous est utile, un don le fait tourner. Merci !",
+"pt_elsewhere": "Vous jouez d'ailleurs ? Choisissez Internet ci-dessus.",
+"pt_elsewhere_guest": "Vous jouez d'ailleurs ? Demandez à votre ami de vous inviter via Internet, puis ouvrez son lien dans votre navigateur.",
 };
 
 export default fr;
