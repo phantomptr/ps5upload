@@ -4727,7 +4727,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-pfs"
-version = "11.5.2"
+version = "11.6.0"
 dependencies = [
  "flate2",
  "ps5upload-fpkg",
@@ -4735,7 +4735,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-ufs2"
-version = "11.5.2"
+version = "11.6.0"
 dependencies = [
  "ps5upload-fpkg",
  "unicode-normalization",
@@ -4743,7 +4743,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-zstd"
-version = "11.5.2"
+version = "11.6.0"
 dependencies = [
  "crc32fast",
  "getrandom 0.4.3",
@@ -4754,7 +4754,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-ava1"
-version = "11.5.2"
+version = "11.6.0"
 dependencies = [
  "anyhow",
  "ava1",
@@ -4773,7 +4773,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-core"
-version = "11.5.2"
+version = "11.6.0"
 dependencies = [
  "aes 0.9.2",
  "aes-gcm 0.11.0",
@@ -4799,7 +4799,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-desktop"
-version = "11.5.2"
+version = "11.6.0"
 dependencies = [
  "anyhow",
  "ava1",
@@ -4840,7 +4840,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-engine"
-version = "11.5.2"
+version = "11.6.0"
 dependencies = [
  "aes 0.9.2",
  "aes-gcm 0.11.0",
@@ -4899,7 +4899,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-fpkg"
-version = "11.5.2"
+version = "11.6.0"
 dependencies = [
  "aes 0.9.2",
  "crc32fast",
@@ -4922,7 +4922,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-pkg"
-version = "11.5.2"
+version = "11.6.0"
 dependencies = [
  "aes 0.9.2",
  "blake3",
