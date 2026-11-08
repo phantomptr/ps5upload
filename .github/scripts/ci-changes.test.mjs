@@ -12,17 +12,22 @@ const ALL = Object.keys(LANES).sort();
 
 test("docs only: no lane runs (version-sync, security scan and repo scripts on Ubuntu still do)", () => {
   assert.deepEqual(
-    on(["README.md", "CHANGELOG.md", ".github/ISSUE_TEMPLATE/bug.yml", "site/index.html", "site/i18n/de.json"]),
+    on(["README.md", "CONTRIBUTING.md", ".github/ISSUE_TEMPLATE/bug.yml", "site/index.html", "site/i18n/de.json"]),
     [],
   );
+});
+
+test("CHANGELOG.md and FAQ.md: the client job, whose tests read them", () => {
+  assert.deepEqual(on(["CHANGELOG.md"]), ["client"]);
+  assert.deepEqual(on(["FAQ.md"]), ["client"]);
 });
 
 test("client only: client, android, and the payload that embeds the console page", () => {
   assert.deepEqual(on(["client/src/screens/Home.tsx", "client/src/i18n/en.ts"]), ["android", "client", "payload"]);
 });
 
-test("desktop shell only", () => {
-  assert.deepEqual(on(["client/src-tauri/src/commands/agent_mcp.rs"]), ["android", "desktop"]);
+test("desktop shell only: desktop, android, and the client tests that read it", () => {
+  assert.deepEqual(on(["client/src-tauri/src/commands/agent_mcp.rs"]), ["android", "client", "desktop"]);
 });
 
 test("engine only: the engine and everything that links it or reads its sources", () => {
@@ -92,7 +97,6 @@ test("an empty or unreadable change list runs everything", () => {
 test("markdown the engine or the app embeds is not docs-only", () => {
   assert.ok(on(["API.md"]).includes("engine"));
   assert.ok(on(["AUTOMATION.md"]).includes("engine"));
-  assert.ok(on(["FAQ.md"]).includes("client"));
 });
 
 test("the site's guest and pad pages are checked against the client build", () => {

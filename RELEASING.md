@@ -126,7 +126,7 @@ On a PR or queue entry, the `changes` job maps the changed paths to lanes
 | hub | rust hub, only when the engine lane is off | `engine/crates/ps5upload-hub/**` |
 | ctest | payload C over AVA1, sanitized ctest | `payload/**`, core, ava1, ctest crates |
 | payload | payload ELF, host self-tests | `payload/**`, `tailnet/**`, `client/**` (console page) |
-| client | client (ts + vite) | `client/**`, engine sources, `FAQ.md`, `site/join`, `site/pad` |
+| client | client (ts + vite) | `client/**` (src-tauri too), engine sources, `CHANGELOG.md`, `FAQ.md`, `site/join`, `site/pad` |
 | desktop, android | rust desktop, android | `client/src-tauri/**`, engine, `tailnet/**` (android also `client/**`) |
 | scripts | repo scripts on macOS and Windows | `scripts/**`, any `.js/.mjs/.sh/.py/.ps1` |
 
@@ -137,6 +137,9 @@ These run every lane: workflows, `.github/scripts`, lockfiles, `package.json`, `
 `VERSION`, submodules, `protocol/**`, and any path without a rule.
 
 A docs-only change (`*.md`, `site/**`, issue templates) runs only the jobs that always run.
+The exceptions are Markdown that the app or engine reads. `CHANGELOG.md` and `FAQ.md` also run
+the client job, because its tests read them. `API.md`, `AUTOMATION.md` and `MCP.md` are built
+into the engine.
 
 Pushes to `main` and manual runs always run every lane. `PR gate` fails if a job whose lane
 was on did not succeed, if a job was skipped while its lane was on, or if it finds a job it

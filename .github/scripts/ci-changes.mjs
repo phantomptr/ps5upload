@@ -86,12 +86,16 @@ export const RULES = [
   // The tailnet core: the helper links it (payload), and so does the engine (ps5upload-tailnet).
   { pattern: "tailnet/**", lanes: ["payload", "engine", "desktop", "android"] },
 
-  // The desktop shell; Android builds the same crate.
-  { pattern: "client/src-tauri/**", lanes: ["desktop", "android"] },
+  // The desktop shell; Android builds the same crate, and the client's tests read its CSP
+  // (tauri.conf.json) and its commands (browserInvokeCoverage, bgWork).
+  { pattern: "client/src-tauri/**", lanes: ["desktop", "android", "client"] },
   // The front end. Android bundles it; the payload embeds the console page built from it.
   { pattern: "client/**", lanes: ["client", "android", "payload"] },
-  // Bundled into the app (What's new, FAQ) and checked by the client's tests.
-  { pattern: "FAQ.md", lanes: ["client", "desktop", "android"] },
+  // Bundled into the app (What's new, FAQ) and read by the client's tests: FAQ.md's grammar
+  // (MarkdownView.test.tsx), and the What's new screen in the browser tests
+  // (e2e/bundled-docs.spec.ts looks for a version heading among the newest 20 sections).
+  { pattern: "FAQ.md", lanes: ["client"] },
+  { pattern: "CHANGELOG.md", lanes: ["client"] },
   // The site's guest and pad pages are the engine's, byte for byte (check-embedded-pages.mjs).
   { pattern: "site/join/**", lanes: ["client"] },
   { pattern: "site/pad/**", lanes: ["client"] },
@@ -105,9 +109,7 @@ export const RULES = [
   { pattern: "bench/**", lanes: ["scripts"] },
   { pattern: "tests/**", lanes: ["scripts"] },
 
-  // Words only. The app bundles CHANGELOG.md, but nothing tests its text (the e2e test reads a
-  // fixed old section); pushes to main still build with it.
-  { pattern: "CHANGELOG.md", lanes: [] },
+  // Words only.
   { pattern: "*.md", lanes: [] },
   { pattern: "**/README.md", lanes: [] },
 ];
