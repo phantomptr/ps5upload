@@ -57,6 +57,15 @@ static int g_kill_pid; /* a silent companion to end: the relay thread does it, w
 static long long g_retry_at, g_last_reply, g_last_hb, g_running_since, g_unavail_at, g_asked_at = -100000;
 static int g_thread_on, g_shutdown;
 static pthread_t g_thread;
+/* Play Together: the companion's sceMbusInit worked (binds can be done), it is held up until
+ * g_hold_until, and what HOLD it was last told. */
+static int g_mbus, g_hold_sent;
+static long long g_hold_until;
+
+/* The companion is wanted: a device open, a recent ask, or Play Together's hold. Lock held. */
+static int wanted_locked(long long now) {
+    return g_want_m || g_want_k || now - g_asked_at < 5000 || now < g_hold_until;
+}
 
 static long long now_ms(void) {
     struct timespec ts;
@@ -183,7 +192,7 @@ static void wake_thread_locked(void);
 /* The companion is gone (or silent: killed). Lock held. */
 static void lost_locked(int kill_it, const char *why) {
     long long now = now_ms();
-    int wanted = g_want_m || g_want_k || now - g_asked_at < 5000;
+    int wanted = wanted_locked(now);
     fprintf(stderr, "[vinput] companion pid %d %s\n", g_pid, why);
     if (kill_it && g_pid > 0 && C.kill) g_kill_pid = g_pid;
     if (g_fd >= 0) close(g_fd);
@@ -191,6 +200,7 @@ static void lost_locked(int kill_it, const char *why) {
     g_pid = 0;
     g_rhave = 0;
     g_m_open = g_k_open = 0;
+    g_mbus = g_hold_sent = 0; /* a new companion is told again */
     if (g_kill_pid) wake_thread_locked();
     if (!wanted && !kill_it) {
         g_st = ST_IDLE; /* it went idle: started again when a session opens */
@@ -208,12 +218,14 @@ static void lost_locked(int kill_it, const char *why) {
     wake_thread_locked();
 }
 
-/* A request to the running companion. Lock held. The rc, or IO_ERR (then it is gone). */
-static int call_locked(uint8_t type, const uint8_t *payload, size_t len, uint8_t *out, size_t *out_len) {
+/* A request to the running companion, answered within timeout_ms. Lock held. The rc, or IO_ERR
+ * (then it is gone). */
+static int call_within_locked(uint8_t type, const uint8_t *payload, size_t len, uint8_t *out, size_t *out_len,
+                              int timeout_ms) {
     int rc;
     if (g_st != ST_RUNNING || g_fd < 0) return IO_ERR;
     g_seq++;
-    rc = exchange(g_fd, g_rbuf, &g_rhave, type, g_seq, payload, len, CFG(call_timeout_ms, 200), out, out_len);
+    rc = exchange(g_fd, g_rbuf, &g_rhave, type, g_seq, payload, len, timeout_ms, out, out_len);
     if (rc == -3) {
         if (now_ms() - g_last_reply >= CFG(silent_ms, 1000)) lost_locked(1, "is silent: killed");
         return IO_ERR;
@@ -224,6 +236,21 @@ static int call_locked(uint8_t type, const uint8_t *payload, size_t len, uint8_t
     }
     g_last_reply = now_ms();
     return rc;
+}
+
+static int call_locked(uint8_t type, const uint8_t *payload, size_t len, uint8_t *out, size_t *out_len) {
+    return call_within_locked(type, payload, len, out, out_len, CFG(call_timeout_ms, 200));
+}
+
+/* Tells the companion whether Play Together holds it, when that changed. Lock held. */
+static void hold_sync_locked(long long now) {
+    uint8_t on = now < g_hold_until, out[8];
+    size_t n = 0;
+    if (g_st != ST_RUNNING || on == g_hold_sent) return;
+    if (call_locked(VWIRE_HOLD, &on, 1, out, &n) == VWIRE_RC_OK) {
+        g_hold_sent = on;
+        if (n >= 1) g_mbus = out[0];
+    }
 }
 
 /* OPEN with what is wanted now. Lock held. */
@@ -275,7 +302,7 @@ static int read_pid(const char *path) {
 }
 
 typedef struct {
-    int fd, pid, mouse, keyboard;
+    int fd, pid, mouse, keyboard, mbus;
     uint8_t rbuf[4 * VWIRE_MAX_FRAME];
     size_t rhave;
 } started_t;
@@ -318,6 +345,7 @@ static int start_companion(started_t *s) {
             s->pid = (int)vwire_get32(out + 2);
             s->mouse = out[6];
             s->keyboard = out[7];
+            s->mbus = n >= 9 && out[8];
             memset(hello, 0, sizeof hello);
             return 0;
         }
@@ -357,7 +385,7 @@ static void *relay_main(void *arg) {
             continue;
         }
         now = now_ms();
-        wanted = g_want_m || g_want_k || now - g_asked_at < 5000;
+        wanted = wanted_locked(now);
         if (g_st == ST_STARTING || (g_st == ST_STOPPED && wanted && now >= g_retry_at)) {
             started_t s;
             int rc;
@@ -375,14 +403,19 @@ static void *relay_main(void *arg) {
                 g_pid = s.pid;
                 g_cm = s.mouse;
                 g_ck = s.keyboard;
+                g_mbus = s.mbus;
+                g_hold_sent = 0;
                 memcpy(g_rbuf, s.rbuf, s.rhave);
                 g_rhave = s.rhave;
                 g_st = ST_RUNNING;
                 g_reason = NULL;
                 g_last_reply = g_last_hb = g_running_since = now;
-                fprintf(stderr, "[vinput] companion pid %d up (mouse %d, keyboard %d)\n", g_pid, g_cm, g_ck);
+                fprintf(stderr, "[vinput] companion pid %d up (mouse %d, keyboard %d, pad binding %d)\n", g_pid, g_cm,
+                        g_ck, g_mbus);
+                /* Play Together's hold first: a bind waits for it. */
+                hold_sync_locked(now);
                 /* A restart: the devices the session had are made again, nothing held. */
-                if (g_want_m || g_want_k) (void)open_locked(g_want_m, g_want_k);
+                if (g_st == ST_RUNNING && (g_want_m || g_want_k)) (void)open_locked(g_want_m, g_want_k);
                 g_buttons = g_mods = 0;
                 memset(g_keys, 0, sizeof g_keys);
             } else if (rc == START_INIT_FAILED) {
@@ -413,7 +446,8 @@ static void *relay_main(void *arg) {
             continue;
         }
         if (g_st == ST_RUNNING) {
-            if (now - g_last_hb >= CFG(hb_ms, 300)) {
+            hold_sync_locked(now);
+            if (g_st == ST_RUNNING && now - g_last_hb >= CFG(hb_ms, 300)) {
                 g_last_hb = now;
                 (void)call_locked(VWIRE_HB, NULL, 0, NULL, NULL);
             }
@@ -627,6 +661,64 @@ const vinput_backend_t *vinput_relay_backend(void) {
     return &RELAY;
 }
 
+/* ── Play Together: guest pads seated in a user ─────────────────────────────────────────────── */
+
+const char *vinput_relay_hold(int lease_ms) {
+    const char *st;
+    long long now;
+    pthread_mutex_lock(&g_mu);
+    now = now_ms();
+    if (now + lease_ms > g_hold_until) g_hold_until = now + lease_ms;
+    if (g_st == ST_UNAVAILABLE && !g_init_failed && unavailable_over_locked(now)) {
+        g_fails = 0;
+        g_reason = NULL;
+        g_st = ST_IDLE;
+    }
+    if (g_st == ST_IDLE) g_st = ST_STARTING;
+    if (g_st != ST_UNAVAILABLE) wake_thread_locked();
+    st = g_st == ST_RUNNING ? (g_mbus ? "running" : "no_bind") : g_st == ST_UNAVAILABLE ? "unavailable" : "starting";
+    pthread_mutex_unlock(&g_mu);
+    return st;
+}
+
+int vinput_relay_bind(uint32_t device, uint32_t user, uint32_t age_ms, vrelay_bind_t *out) {
+    uint8_t p[12], x[VWIRE_MAX_PAYLOAD];
+    size_t n = 0;
+    int rc;
+    memset(out, 0, sizeof *out);
+    vwire_put32(p, device);
+    vwire_put32(p + 4, user);
+    vwire_put32(p + 8, age_ms);
+    pthread_mutex_lock(&g_mu);
+    if (g_st != ST_RUNNING) {
+        pthread_mutex_unlock(&g_mu);
+        return VRELAY_BIND_NOT_RUNNING;
+    }
+    if (!g_mbus) {
+        pthread_mutex_unlock(&g_mu);
+        return VWIRE_RC_UNSUPPORTED;
+    }
+    /* 30 tries a millisecond apart and the owner read back: well under this. */
+    rc = call_within_locked(VWIRE_BIND, p, sizeof p, x, &n, 500);
+    pthread_mutex_unlock(&g_mu);
+    if (rc == IO_ERR) return VRELAY_BIND_LOST;
+    if (n >= 13) {
+        out->sce = (int)vwire_get32(x);
+        out->owner = vwire_get32(x + 4);
+        out->tries = x[8];
+        out->us = vwire_get32(x + 9);
+    }
+    return rc;
+}
+
+void vinput_relay_forget(uint32_t device) {
+    uint8_t p[4];
+    vwire_put32(p, device);
+    pthread_mutex_lock(&g_mu);
+    if (g_st == ST_RUNNING) (void)call_locked(VWIRE_FORGET, p, sizeof p, NULL, NULL);
+    pthread_mutex_unlock(&g_mu);
+}
+
 int vinput_relay_pid(void) {
     int pid;
     pthread_mutex_lock(&g_mu);
@@ -660,6 +752,8 @@ void vinput_relay_reset(void) {
     memset(g_keys, 0, sizeof g_keys);
     g_fails = 0;
     g_init_failed = g_init_pid = 0;
+    g_mbus = g_hold_sent = 0;
+    g_hold_until = 0;
     g_retry_at = g_last_reply = g_last_hb = g_running_since = g_unavail_at = g_asked_at = 0;
     g_asked_at = -100000;
     g_thread_on = 0;

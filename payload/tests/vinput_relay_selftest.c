@@ -107,6 +107,83 @@ static int d_ksend(uint8_t mods, const uint8_t keys[VINPUT_KEYS]) {
 }
 static const vinput_backend_t DEV = {"fake", d_caps, d_mopen, d_mclose, d_msend, d_kopen, d_kclose, d_ksend, NULL};
 
+/* ---- a fake libSceMbus (BIND), shared with the companion thread ---- */
+
+#define FM_DEVICES 16
+static int fm_init_rc;       /* sceMbusInit's answer */
+static int fm_unknown_for;   /* binds answering "no such device" before the bus knows a device */
+static int fm_bind_rc;       /* the answer once it knows it */
+static int fm_owner_shift;   /* the owner read back is the bound user + this (a bind that did not stick) */
+static int fm_binds, fm_inits;
+static uint32_t fm_owner[FM_DEVICES]; /* by device id */
+static int fm_gone[FM_DEVICES];       /* the bus no longer knows it (removed) */
+static int fm_tries[FM_DEVICES];
+
+static int fm_init(void) {
+    pthread_mutex_lock(&f_mu);
+    fm_inits++;
+    pthread_mutex_unlock(&f_mu);
+    return fm_init_rc;
+}
+static int fm_bind(uint64_t device, int32_t user) {
+    int rc;
+    pthread_mutex_lock(&f_mu);
+    fm_binds++;
+    if (device >= FM_DEVICES || fm_gone[device]) {
+        rc = (int)VWIRE_MBUS_NO_DEVICE;
+    } else if (fm_tries[device]++ < fm_unknown_for) {
+        rc = (int)VWIRE_MBUS_NO_DEVICE;
+    } else {
+        rc = fm_bind_rc;
+        if (rc == 0) fm_owner[device] = (uint32_t)user + (uint32_t)fm_owner_shift;
+    }
+    pthread_mutex_unlock(&f_mu);
+    return rc;
+}
+static int fm_get_owner(uint64_t device, uint32_t *owner) {
+    int rc = 0;
+    pthread_mutex_lock(&f_mu);
+    if (device >= FM_DEVICES || fm_gone[device])
+        rc = (int)0x809b0005;
+    else
+        *owner = fm_owner[device];
+    pthread_mutex_unlock(&f_mu);
+    return rc;
+}
+static void fm_set_owner(int device, uint32_t owner) {
+    pthread_mutex_lock(&f_mu);
+    fm_owner[device] = owner;
+    pthread_mutex_unlock(&f_mu);
+}
+static uint32_t fm_owner_of(int device) {
+    uint32_t o;
+    pthread_mutex_lock(&f_mu);
+    o = fm_owner[device];
+    pthread_mutex_unlock(&f_mu);
+    return o;
+}
+static int fm_bind_count(void) {
+    int n;
+    pthread_mutex_lock(&f_mu);
+    n = fm_binds;
+    pthread_mutex_unlock(&f_mu);
+    return n;
+}
+static void fm_reset(void) {
+    pthread_mutex_lock(&f_mu);
+    fm_init_rc = fm_unknown_for = fm_bind_rc = fm_owner_shift = fm_binds = fm_inits = 0;
+    memset(fm_owner, 0, sizeof fm_owner);
+    memset(fm_gone, 0, sizeof fm_gone);
+    memset(fm_tries, 0, sizeof fm_tries);
+    pthread_mutex_unlock(&f_mu);
+}
+static void fm_nap(unsigned us) {
+    (void)us; /* the tries are counted, not slept */
+}
+static const vcomp_mbus_t FMBUS = {fm_init, fm_bind, fm_get_owner, fm_nap};
+/* Companions comp_start makes have the fake bus. */
+static int g_with_mbus;
+
 /* ---- companions on threads ---- */
 
 typedef struct {
@@ -157,6 +234,7 @@ static comp_t *comp_start(long long hb_ms, long long idle_ms) {
     c->cfg.idle_exit_ms = idle_ms;
     c->cfg.auth_wait_ms = 3000;
     c->cfg.dev = &DEV;
+    c->cfg.mbus = g_with_mbus ? &FMBUS : NULL;
     c->cfg.stop = &c->stop;
     c->cfg.hang = &c->hang;
     pthread_create(&c->th, NULL, comp_main, c);
@@ -411,6 +489,159 @@ static void test_companion_remake(void) {
     comp_end(c);
 }
 
+/* BIND on the companion: a pad just made is seated (tried again while the bus does not know it
+ * yet), checked by its owner, watched and put back; old, repeated or odd requests are refused; HOLD
+ * and a watched pad keep it from its idle exit; no Mbus says so. */
+static int bind_req(int fd, uint32_t device, uint32_t user, uint32_t age, int *sce, uint32_t *owner, int *tries) {
+    uint8_t p[12], out[VWIRE_MAX_PAYLOAD];
+    int rc;
+    vwire_put32(p, device);
+    vwire_put32(p + 4, user);
+    vwire_put32(p + 8, age);
+    memset(out, 0, sizeof out);
+    rc = req(fd, VWIRE_BIND, p, sizeof p, out);
+    if (sce) *sce = (int)vwire_get32(out);
+    if (owner) *owner = vwire_get32(out + 4);
+    if (tries) *tries = out[8];
+    return rc;
+}
+
+static int forget_req(int fd, uint32_t device) {
+    uint8_t p[4];
+    vwire_put32(p, device);
+    return req(fd, VWIRE_FORGET, p, sizeof p, NULL);
+}
+
+static void test_companion_bind(void) {
+    uint8_t tok[VWIRE_TOKEN_LEN], hello[2 + VWIRE_TOKEN_LEN], out[VWIRE_MAX_PAYLOAD];
+    comp_t *c;
+    int fd, sce, tries, ok;
+    uint32_t owner;
+    for (int i = 0; i < VWIRE_TOKEN_LEN; i++) tok[i] = (uint8_t)(0x50 + i);
+    vwire_put16(hello, VWIRE_VERSION);
+    memcpy(hello + 2, tok, VWIRE_TOKEN_LEN);
+
+    fm_reset();
+    fm_unknown_for = 3;
+    g_with_mbus = 1;
+    write_token(tok);
+    c = comp_start(100000, 300); /* idle exit after 300 ms with nothing held */
+    fd = dial();
+    CHECK(req(fd, VWIRE_HELLO, hello, sizeof hello, out) == VWIRE_RC_OK && out[8] == 1);
+    pthread_mutex_lock(&f_mu);
+    CHECK(fm_inits == 1);
+    pthread_mutex_unlock(&f_mu);
+    /* seated after the bus learns of it (three "no such device" first), owner read back */
+    CHECK(bind_req(fd, 7, 0x1000, 3, &sce, &owner, &tries) == VWIRE_RC_OK);
+    CHECK(sce == 0 && owner == 0x1000 && tries == 4);
+    /* never twice, never an old pad, never user 0 / "nobody", never handle 0 or a negative one */
+    CHECK(bind_req(fd, 7, 0x1000, 3, NULL, NULL, NULL) == VWIRE_RC_BAD_REQUEST);
+    CHECK(bind_req(fd, 6, 0x1000, VWIRE_BIND_MAX_AGE_MS + 1, NULL, NULL, NULL) == VWIRE_RC_BAD_REQUEST);
+    CHECK(bind_req(fd, 6, 0, 3, NULL, NULL, NULL) == VWIRE_RC_BAD_REQUEST);
+    CHECK(bind_req(fd, 6, 0xFFFFFFFFu, 3, NULL, NULL, NULL) == VWIRE_RC_BAD_REQUEST);
+    CHECK(bind_req(fd, 0, 0x1000, 3, NULL, NULL, NULL) == VWIRE_RC_BAD_REQUEST);
+    CHECK(bind_req(fd, 0x80000001u, 0x1000, 3, NULL, NULL, NULL) == VWIRE_RC_BAD_REQUEST);
+    CHECK(req(fd, VWIRE_BIND, "\x01\x00", 2, NULL) == VWIRE_RC_BAD_REQUEST);
+    /* a bus that never learns of it: 30 tries, then failed */
+    pthread_mutex_lock(&f_mu);
+    fm_unknown_for = 1000;
+    pthread_mutex_unlock(&f_mu);
+    CHECK(bind_req(fd, 8, 0x1000, 3, &sce, &owner, &tries) == VWIRE_RC_FAILED);
+    CHECK((uint32_t)sce == VWIRE_MBUS_NO_DEVICE && tries == VWIRE_BIND_TRIES && owner == 0);
+    /* the bind answers 0 but the owner read back is someone else: failed, not watched */
+    pthread_mutex_lock(&f_mu);
+    fm_unknown_for = 0;
+    fm_owner_shift = 1;
+    pthread_mutex_unlock(&f_mu);
+    CHECK(bind_req(fd, 9, 0x1000, 3, &sce, &owner, NULL) == VWIRE_RC_FAILED && sce == 0 && owner == 0x1001);
+    pthread_mutex_lock(&f_mu);
+    fm_owner_shift = 0;
+    fm_bind_rc = (int)0x80020001;
+    pthread_mutex_unlock(&f_mu);
+    CHECK(bind_req(fd, 10, 0x1000, 3, &sce, NULL, NULL) == VWIRE_RC_FAILED && (uint32_t)sce == 0x80020001u);
+    pthread_mutex_lock(&f_mu);
+    fm_bind_rc = 0;
+    pthread_mutex_unlock(&f_mu);
+
+    /* someone answered the console's question for the watched pad: seated back within a tick */
+    fm_set_owner(7, 0x2000);
+    ok = 0;
+    for (int i = 0; i < 30 && !ok; i++) {
+        nap(100);
+        ok = fm_owner_of(7) == 0x1000;
+    }
+    CHECK(ok);
+    /* ... at most VWIRE_KEEP_FIXES times */
+    for (int k = 1; k < VWIRE_KEEP_FIXES; k++) {
+        fm_set_owner(7, 0x2000);
+        ok = 0;
+        for (int i = 0; i < 30 && !ok; i++) {
+            nap(100);
+            ok = fm_owner_of(7) == 0x1000;
+        }
+        CHECK(ok);
+    }
+    fm_set_owner(7, 0x2000);
+    nap(1300);
+    CHECK(fm_owner_of(7) == 0x2000);
+
+    /* the watched pad keeps it from its idle exit; forgotten, and nothing held, it goes */
+    nap(500);
+    CHECK(!DONE(c));
+    CHECK(forget_req(fd, 7) == VWIRE_RC_OK);
+    CHECK(forget_req(fd, 7) == VWIRE_RC_OK); /* again: fine */
+    /* HOLD keeps it */
+    CHECK(req(fd, VWIRE_HOLD, "\x01", 1, out) == VWIRE_RC_OK && out[0] == 1);
+    nap(700);
+    CHECK(!DONE(c));
+    CHECK(req(fd, VWIRE_HOLD, "\x00", 1, out) == VWIRE_RC_OK);
+    for (int i = 0; i < 100 && !DONE(c); i++) nap(10);
+    CHECK(DONE(c));
+    close(fd);
+    comp_end(c);
+
+    /* a watched pad the bus no longer knows (removed without FORGET) is dropped: then it idles out */
+    fm_reset();
+    write_token(tok);
+    c = comp_start(100000, 300);
+    fd = dial();
+    CHECK(req(fd, VWIRE_HELLO, hello, sizeof hello, out) == VWIRE_RC_OK);
+    CHECK(bind_req(fd, 3, 0x1000, 0, NULL, NULL, NULL) == VWIRE_RC_OK);
+    nap(600);
+    CHECK(!DONE(c));
+    pthread_mutex_lock(&f_mu);
+    fm_gone[3] = 1;
+    pthread_mutex_unlock(&f_mu);
+    for (int i = 0; i < 300 && !DONE(c); i++) nap(10);
+    CHECK(DONE(c));
+    close(fd);
+    comp_end(c);
+
+    /* sceMbusInit failing: HELLO says so and BIND answers unsupported, the bus untouched */
+    fm_reset();
+    fm_init_rc = (int)0x80020003;
+    write_token(tok);
+    c = comp_start(100000, 100000);
+    fd = dial();
+    CHECK(req(fd, VWIRE_HELLO, hello, sizeof hello, out) == VWIRE_RC_OK && out[8] == 0);
+    CHECK(bind_req(fd, 4, 0x1000, 0, NULL, NULL, NULL) == VWIRE_RC_UNSUPPORTED && fm_bind_count() == 0);
+    close(fd);
+    for (int i = 0; i < 100 && !DONE(c); i++) nap(10);
+    comp_end(c);
+
+    /* no bus at all (a companion without libSceMbus) */
+    g_with_mbus = 0;
+    fm_reset();
+    write_token(tok);
+    c = comp_start(100000, 100000);
+    fd = dial();
+    CHECK(req(fd, VWIRE_HELLO, hello, sizeof hello, out) == VWIRE_RC_OK && out[8] == 0);
+    CHECK(bind_req(fd, 4, 0x1000, 0, NULL, NULL, NULL) == VWIRE_RC_UNSUPPORTED);
+    close(fd);
+    for (int i = 0; i < 100 && !DONE(c); i++) nap(10);
+    comp_end(c);
+}
+
 /* ---- the relay ---- */
 
 static int fake_launch(void *ctx) {
@@ -628,6 +859,61 @@ static int caps_needs_loader(void) {
 }
 static int second_launch(void) { return launches() == 2; }
 
+/* Play Together through the relay: a hold starts the companion with no keyboard or mouse session,
+ * a bind reaches the fake bus and answers with the owner, a forget lets the same handle be bound
+ * again, nothing is bound while the companion is not up, and one without the bus says no_bind. */
+static int hold_running(void) {
+    return strcmp(vinput_relay_hold(5000), "running") == 0;
+}
+
+static void test_relay_bind(void) {
+    vrelay_bind_t b;
+    int ok;
+    fm_reset();
+    g_with_mbus = 1;
+    relay_setup(0);
+    CHECK(vinput_relay_bind(5, 0x1000, 0, &b) == VRELAY_BIND_NOT_RUNNING);
+    CHECK(strcmp(vinput_relay_hold(5000), "starting") == 0);
+    ok = 0;
+    for (int i = 0; i < 100 && !ok; i++) {
+        nap(20);
+        ok = hold_running();
+    }
+    CHECK(ok);
+    CHECK(launches() == 1);
+    CHECK(vinput_relay_bind(5, 0x1000, 2, &b) == VWIRE_RC_OK);
+    CHECK(b.sce == 0 && b.owner == 0x1000 && b.tries == 1);
+    CHECK(vinput_relay_bind(5, 0x1000, 2, &b) == VWIRE_RC_BAD_REQUEST); /* already seated */
+    vinput_relay_forget(5);
+    CHECK(vinput_relay_bind(5, 0x2000, 2, &b) == VWIRE_RC_OK && b.owner == 0x2000);
+    /* held: the relay keeps it with no device open, heartbeats and all */
+    nap(800);
+    CHECK(hold_running() && launches() == 1 && kills() == 0);
+
+    /* a companion without the bus */
+    g_with_mbus = 0;
+    relay_setup(0);
+    (void)vinput_relay_hold(5000);
+    ok = 0;
+    for (int i = 0; i < 100 && !ok; i++) {
+        nap(20);
+        ok = strcmp(vinput_relay_hold(5000), "no_bind") == 0;
+    }
+    CHECK(ok);
+    CHECK(vinput_relay_bind(5, 0x1000, 2, &b) == VWIRE_RC_UNSUPPORTED);
+    /* no loader: unavailable, and a bind is refused at once */
+    relay_setup(1);
+    (void)vinput_relay_hold(5000);
+    ok = 0;
+    for (int i = 0; i < 100 && !ok; i++) {
+        nap(20);
+        ok = strcmp(vinput_relay_hold(5000), "unavailable") == 0;
+    }
+    CHECK(ok);
+    CHECK(vinput_relay_bind(5, 0x1000, 2, &b) == VRELAY_BIND_NOT_RUNNING);
+    relay_setup(0);
+}
+
 static void test_relay_no_loader(void) {
     relay_setup(1);
     session("{\"op\":\"open\",\"id\":7,\"mouse\":true,\"keyboard\":true}");
@@ -752,7 +1038,9 @@ int main(void) {
     test_wire();
     test_companion();
     test_companion_remake();
+    test_companion_bind();
     test_relay();
+    test_relay_bind();
     test_relay_no_loader();
     test_relay_init_failure_not_retried();
 

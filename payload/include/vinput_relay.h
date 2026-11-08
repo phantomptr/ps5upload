@@ -15,6 +15,8 @@
 #ifndef PS5UPLOAD_VINPUT_RELAY_H
 #define PS5UPLOAD_VINPUT_RELAY_H
 
+#include <stdint.h>
+
 #include "vinput.h"
 
 /* launch's answers besides 0 (sent) and -1 (failed). */
@@ -50,5 +52,33 @@ const vinput_backend_t *vinput_relay_backend(void);
 void vinput_relay_reset(void);
 /* The companion's pid while connected (0 otherwise). */
 int vinput_relay_pid(void);
+
+/* ── Play Together: guest pads seated in a console user (the companion's BIND) ────────────────
+ * The helper makes the pad (src/vpad.c); the companion binds it, since sceMbusInit must not run
+ * in the helper (payload/vinput/README.md). */
+
+/* Keeps the companion up for lease_ms more, starting it when it is not running (never again on its
+ * own after a companion that did not get through Init: only a fresh keyboard & mouse open does).
+ * "running" (binds can be done), "no_bind" (running, but its sceMbusInit failed), "starting", or
+ * "unavailable". */
+const char *vinput_relay_hold(int lease_ms);
+
+typedef struct {
+    int sce;        /* the bind's Sony rc (or the companion's) */
+    uint32_t owner; /* the owner read back, 0 unknown */
+    int tries;
+    uint32_t us; /* the bind and the read back, in the companion */
+} vrelay_bind_t;
+
+/* vinput_relay_bind's answers besides VWIRE_RC_* from the companion (VWIRE_RC_OK: bound, the
+ * owner read back is `user`). */
+#define VRELAY_BIND_NOT_RUNNING (-20) /* no companion up (vinput_relay_hold starts one) */
+#define VRELAY_BIND_LOST (-21)        /* the companion went while asked */
+
+/* Seats the pad the helper just made (`device`: the /dev/hid add's handle, `age_ms` ago) in
+ * `user`. Waits at most about 500 ms. */
+int vinput_relay_bind(uint32_t device, uint32_t user, uint32_t age_ms, vrelay_bind_t *out);
+/* The pad is gone: the companion stops watching it. */
+void vinput_relay_forget(uint32_t device);
 
 #endif

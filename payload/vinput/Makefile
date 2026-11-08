@@ -18,8 +18,9 @@ ELF := ps5u-vinput.elf
 CFLAGS := -Wall -Wextra -Werror -g -Os -I../include
 LIBS := -lkernel_sys -lSceUserService -lSceSystemService -lSceSysmodule
 
-SRCS := main.c ../src/vinput_companion.c ../src/vinput_wire.c ../src/vinput_dev.c
-HEADERS := ../include/vinput.h ../include/vinput_wire.h ../include/vinput_companion.h ../include/vinput_dev.h
+SRCS := main.c ../src/vinput_companion.c ../src/vinput_wire.c ../src/vinput_dev.c ../src/vinput_mbus.c
+HEADERS := ../include/vinput.h ../include/vinput_wire.h ../include/vinput_companion.h ../include/vinput_dev.h \
+           ../include/vinput_mbus.h
 
 all: $(ELF)
 

@@ -11,9 +11,9 @@ the helper has no inflater, and linking zlib into the helper crashed it before.
 | Process / thread name | `ps5u-vinput`. It must not start with `ps5upload`, because the helper's own-instance sweep kills that prefix. |
 | Socket | `127.0.0.1:9184` only (`VWIRE_PORT`). A second instance cannot bind, so it exits. |
 | Files | `/data/ps5upload/vinput.token` (0600; the helper writes it, the companion reads and deletes it), `vinput.pid`, `vinput.handles` (its open devices), `vinput.log` |
-| Protocol | `include/vinput_wire.h`: binary frames, little-endian; HELLO (token) / CAPS / OPEN / REPORT (the 16-byte report of `include/vinput.h`) / HB / CLOSE, each answered with the same seq and an rc |
+| Protocol | `include/vinput_wire.h`: binary frames, little-endian; HELLO (token) / CAPS / OPEN / REPORT (the 16-byte report of `include/vinput.h`) / HB / CLOSE, and Play Together's HOLD / BIND / FORGET, each answered with the same seq and an rc |
 | Threads | One (`src/vinput_companion.c` is a poll loop) |
-| Sources | `main.c`, `../src/vinput_companion.c` (loop, host-tested), `../src/vinput_dev.c` (the Sony calls), `../src/vinput_wire.c` |
+| Sources | `main.c`, `../src/vinput_companion.c` (loop, host-tested), `../src/vinput_dev.c` (the Sony calls), `../src/vinput_mbus.c` (libSceMbus for BIND), `../src/vinput_wire.c` |
 
 ## Lifetime
 
@@ -22,7 +22,21 @@ the helper has no inflater, and linking zlib into the helper crashed it before.
 - **Devices:** made per OPEN for the foreground user, and made again when that user changes.
 - **2 s with no frame from the helper:** everything let go, the devices removed.
 - **The helper's connection closes** (it stopped, was replaced, or died): devices removed, the companion exits.
-- **Exits after:** 30 s with no device open, or 10 s with nobody presenting the token.
+- **Exits after:** 30 s with no device open, no HOLD and no pad watched, or 10 s with nobody presenting the token.
+
+## Play Together: guest pads seated in a user (BIND)
+
+The helper makes a guest's virtual DualSense itself (`src/vpad.c`, ioctls on `/dev/hid`). When the host chose a profile for that player, the pad must go to that user before the console asks "Who's using this controller?". The call for that is `sceMbusBindDeviceWithUserId`, which needs `sceMbusInit` first. `sceMbusInit` froze the helper (see below), so the companion makes these calls:
+
+- **Start:** after `vinput_dev_init`, `sceMbusInit(0, 0)` runs once (`src/vinput_mbus.c`, functions by NID). HELLO's answer says whether it worked.
+- **HOLD:** the engine keeps the companion up while Play Together is open (`vpad.hb {"companion":true}` every 20 s, a 60 s lease), so a bind never waits for the ~0.7 s cold start.
+- **BIND:** the add's handle is the bus's device id. The bind happens at once and is tried again every 1 ms (30 times) while the bus answers 0x809b0005 (it does not know the pad yet). The owner is then read back (`sceMbusGetDeviceInfo_`, +0xC8). Only a pad the helper made under 1 s ago is bound, and each pad only once.
+- **Watch:** about once a second, each bound pad's owner is read.
+  - A pad the console moved to another user (someone answered the question after all) is put back, 5 times at most.
+  - A pad the bus no longer knows is forgotten, as is one the helper removed (FORGET).
+- **Not here:** signing a profile in. `sceUserServiceLogin` needs SceShellCore's authid and skips the passcode, so only profiles that are already signed in are offered.
+- **Source:** ProsperoSunshine PR #33 (`src/platform/ps5/profile_seat.c`, measured on 10.20). Probe it alone first with `payload/tools/mbus-probe`.
+- **After a companion restart,** the pads stay bound (the console keeps that) but are no longer watched.
 
 ## Helper side (`src/vinput_relay.c`)
 

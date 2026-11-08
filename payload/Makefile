@@ -226,7 +226,8 @@ VINPUT_DIR := vinput
 VINPUT_ELF := $(VINPUT_DIR)/ps5u-vinput.elf
 VINPUT_ELF_C := build/vinput_elf.c
 VINPUT_DEPS := $(VINPUT_DIR)/main.c $(VINPUT_DIR)/Makefile src/vinput_companion.c src/vinput_wire.c src/vinput_dev.c \
-        include/vinput.h include/vinput_wire.h include/vinput_companion.h include/vinput_dev.h
+        src/vinput_mbus.c include/vinput.h include/vinput_wire.h include/vinput_companion.h include/vinput_dev.h \
+        include/vinput_mbus.h
 
 SRCS := src/main.c src/runtime.c src/shell_builtin.c src/takeover.c src/takeover_flag.c src/ownership_record.c src/ava1_stop.c src/register.c src/hw_info.c \
         src/drive_sensors.c src/plog.c \
