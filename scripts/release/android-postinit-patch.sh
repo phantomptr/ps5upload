@@ -1212,8 +1212,13 @@ members = '''
     if (!padsActive || i < 0 || !isPad(event.source)) return super.dispatchKeyEvent(event)
     if (event.repeatCount == 0) {
       val pad = padFor(event.deviceId)
-      pad.buttons[i] = if (event.action == android.view.KeyEvent.ACTION_DOWN) 1f else 0f
-      sendPad(pad)
+      // L2/R2 on a pad with trigger axes: the axis says how far it is pulled. Its key comes down
+      // early in the pull, and written as 1 it sent a half pull as a full one until the next move.
+      val analog = (i == 6 && pad.axisL2) || (i == 7 && pad.axisR2)
+      if (!analog) {
+        pad.buttons[i] = if (event.action == android.view.KeyEvent.ACTION_DOWN) 1f else 0f
+        sendPad(pad)
+      }
     }
     super.dispatchKeyEvent(event)
     return true

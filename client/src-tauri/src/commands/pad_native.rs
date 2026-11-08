@@ -252,7 +252,9 @@ pub fn dualsense_standard(buf: &[u8]) -> Option<Standard> {
     // The d-pad is a hat: 0 up, then clockwise in eighths; 8 (or more) is none.
     let hat = b[0] & 0x0f;
     let dir = |set: [u8; 3]| if set.contains(&hat) { 1.0 } else { 0.0 };
-    let trig = |v: u8| f64::from(v) / 255.0;
+    // A trigger is its analog byte. Its digital bit comes on early in the pull, so taking the
+    // larger of the two sent every pull as a full one; the bit counts only when the byte says 0.
+    let trig = |v: u8, digital: f64| if v > 0 { f64::from(v) / 255.0 } else { digital };
     Some(Standard {
         buttons: vec![
             bit(b[0], 0x20), // cross
@@ -261,8 +263,8 @@ pub fn dualsense_standard(buf: &[u8]) -> Option<Standard> {
             bit(b[0], 0x80), // triangle
             bit(b[1], 0x01), // L1
             bit(b[1], 0x02), // R1
-            trig(l2).max(bit(b[1], 0x04)),
-            trig(r2).max(bit(b[1], 0x08)),
+            trig(l2, bit(b[1], 0x04)),
+            trig(r2, bit(b[1], 0x08)),
             bit(b[1], 0x10), // Create
             bit(b[1], 0x20), // Options
             bit(b[1], 0x40), // L3
@@ -1008,6 +1010,27 @@ mod tests {
         }
         // Anything else is not a state report.
         assert_eq!(dualsense_standard(&[0x05; 41]), None);
+    }
+
+    #[test]
+    fn a_half_pulled_trigger_reads_half_though_its_digital_bit_is_on() {
+        // L2 pulled half way with its digital bit (0x04) on, as the pad sends it early in the
+        // pull: half, not all the way.
+        for id in [0x01, 0x31] {
+            let st = dualsense_standard(&ds_full(id, 128, 128, 128, 8, 0x04, 0)).unwrap();
+            assert!(
+                (st.buttons[6] - 128.0 / 255.0).abs() < 1e-9,
+                "L2 half: {}",
+                st.buttons[6]
+            );
+        }
+        // Bluetooth's short report: R2 a fifth of the way, its bit (0x08) on.
+        let short = [0x01, 128, 128, 128, 128, 8, 0x08, 0x00, 0, 51];
+        let st = dualsense_standard(&short).unwrap();
+        assert!((st.buttons[7] - 0.2).abs() < 1e-9, "R2: {}", st.buttons[7]);
+        // A bit with the byte at 0 still presses it.
+        let st = dualsense_standard(&ds_full(0x01, 128, 128, 0, 8, 0x04, 0)).unwrap();
+        assert_eq!(st.buttons[6], 1.0);
         assert_eq!(dualsense_standard(&[0x01; 4]), None);
         assert_eq!(dualsense_standard(&[]), None);
     }
