@@ -48,6 +48,7 @@ import { isTauriEnv } from "../../lib/tauriEnv";
 import { useLangStore, useTr } from "../../state/lang";
 import { catalogText } from "../../lib/payloadCatalogText";
 import UsbAutoloaderModal from "./UsbAutoloaderModal";
+import PayloadUpdatesPanel from "./PayloadUpdatesPanel";
 import { payloadCardLink } from "./payloadTabs";
 import { relativeAge } from "../../lib/formatDate";
 
@@ -572,6 +573,7 @@ export default function CatalogPanel() {
             )}
           </div>
         </div>
+        <PayloadUpdatesPanel host={host} onChanged={() => void refreshInventory()} />
         {addOpen && (
           <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
             <div className="mb-2 flex items-center justify-between">

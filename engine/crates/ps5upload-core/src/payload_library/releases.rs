@@ -341,6 +341,20 @@ impl Library {
         Ok(release_to_info(&entry, &release, 0, None))
     }
 
+    /// The latest release as last fetched, however old, without asking the network: what an
+    /// update check shows once the host's rate limit has answered. `None` with no cache.
+    pub(crate) fn cached_release(&self, id: &str, why: &str) -> Option<ReleaseInfo> {
+        let entry = self.resolve_entry(id).ok()?;
+        let (release, age) =
+            read_cached::<GithubRelease>(&self.cache_path(&entry.id, "release.json"), false)?;
+        Some(release_to_info(
+            &entry,
+            &release,
+            age,
+            Some(why.to_string()),
+        ))
+    }
+
     /// Every release of a payload (the newest 30), newest first, so a user can pin a known-good
     /// build or go back when the latest is unstable.
     pub fn releases(
