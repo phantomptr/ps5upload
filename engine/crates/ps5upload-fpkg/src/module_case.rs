@@ -181,9 +181,28 @@ pub fn tree_fixes(tree: &mut dyn SourceTree) -> Vec<CaseFix> {
 pub fn open(
     path: &std::path::Path,
 ) -> crate::Result<(Box<dyn SourceTree>, Vec<CaseFix>, crate::fself::Signing)> {
-    let (tree, fixes) = CaseFixed::wrap(crate::source::open(path)?);
+    Ok(wrap(crate::source::open(path)?))
+}
+
+/// [`open`] for a PS4 game at `game` with the update at `update` merged in
+/// ([`crate::ps4_merge`]), or for `game` alone when there is no update.
+pub fn open_with_update(
+    game: &std::path::Path,
+    update: Option<&std::path::Path>,
+) -> crate::Result<(Box<dyn SourceTree>, Vec<CaseFix>, crate::fself::Signing)> {
+    match update {
+        Some(update) => Ok(wrap(Box::new(crate::ps4_merge::open(game, update)?))),
+        None => open(game),
+    }
+}
+
+/// A tree with [`open`]'s renames and signing.
+pub fn wrap(
+    tree: Box<dyn SourceTree>,
+) -> (Box<dyn SourceTree>, Vec<CaseFix>, crate::fself::Signing) {
+    let (tree, fixes) = CaseFixed::wrap(tree);
     let (tree, signing) = crate::fself::wrap(tree);
-    Ok((tree, fixes, signing))
+    (tree, fixes, signing)
 }
 
 /// One line per rename, for a log or a readiness detail.
