@@ -85,6 +85,22 @@ export interface AutoLoaderConfig {
    *  that "Quick bring-up" runs against the loader before sending the helper.
    *  Null = bring-up sends only the helper (no pre-helper chain). */
   bringUpPlaylistId: string | null;
+  /** Each console's own bring-up playlist, by roster profile id (payloads depend on the
+   *  console's firmware). A console left out uses `bringUpPlaylistId`, which is now the default
+   *  for consoles added later. Absent until the one-time copy (state/consoleSettings.ts) ran. */
+  bringUpByConsole?: Record<string, string | null>;
+}
+
+/** The bring-up playlist id for one console (roster profile id), or the default. */
+export function bringUpPlaylistIdFor(
+  config: Pick<AutoLoaderConfig, "bringUpPlaylistId" | "bringUpByConsole">,
+  consoleId: string | null | undefined,
+): string | null {
+  const map = config.bringUpByConsole;
+  if (consoleId && map && Object.prototype.hasOwnProperty.call(map, consoleId)) {
+    return map[consoleId] ?? null;
+  }
+  return config.bringUpPlaylistId;
 }
 
 export const DEFAULT_AUTO_LOADER: AutoLoaderConfig = {

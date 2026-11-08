@@ -9,6 +9,7 @@ import { gamesApi } from "../api/games";
 import { setConsoleKeyResolver } from "./tasks";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { withChosen, withPairing, withoutRpUser, type RpUsersPatch } from "../lib/rpUsers";
+import type { KeepPs5AwakeMode } from "./uploadSettings";
 
 /**
  * Multi-PS5 roster.
@@ -84,6 +85,27 @@ export interface PS5Profile {
    *  above are always one of these: the chosen user's, the one Start and Wake use. Absent on a
    *  console paired before 11.5, whose keys above read as its one user. */
   rp_users?: RpUser[] | null;
+  /** This console's own settings (Settings › This PS5, state/consoleSettings.ts). A setting left
+   *  out reads the app-wide default, the value the setting had before it became per console.
+   *  Shared with the profile: the engine's console list and every device that uses the console
+   *  (mesh `c:<address>:settings`). */
+  settings?: Partial<ConsoleSettings> | null;
+}
+
+/** The settings that belong to one console rather than to the app (Settings › This PS5). */
+export interface ConsoleSettings {
+  /** Wake this PS5 from rest mode when an upload is waiting for it. */
+  wake_for_uploads: boolean;
+  /** Reset this PS5's auto-standby timer: never, during work, or while connected. */
+  keep_awake_mode: KeepPs5AwakeMode;
+  /** Put this PS5 in rest mode when its upload queue finishes. */
+  rest_after_upload: boolean;
+  /** Run Quick bring-up on this PS5 by itself once its loader is up (#479). */
+  auto_bring_up: boolean;
+  /** Send the helper to this PS5 again after rest mode or a network drop. */
+  auto_redeploy_on_wake: boolean;
+  /** Allow the install-by-file-path last resort on this PS5 (firmware dependent). */
+  install_path_fallback: boolean;
 }
 
 /** One PS5 user a console is paired as. Secret: the same keys as a profile's own. */
@@ -127,6 +149,10 @@ interface RosterState {
   chooseRpUser: (id: string, registKey: string) => void;
   /** Forget one paired user (by its regist key). */
   removeRpUser: (id: string, registKey: string) => void;
+  /** Change some of this console's own settings (state/consoleSettings.ts). */
+  setConsoleSettings: (id: string, patch: Partial<ConsoleSettings>) => void;
+  /** Write several consoles' settings at once (the one-time migration), keyed by profile id. */
+  fillConsoleSettings: (byId: Record<string, Partial<ConsoleSettings>>) => void;
   /** Take the console list another browser saved (the self-hosted web UI keeps it in the engine,
    *  `state/rosterShare.ts`): this browser's last-seen cache is kept per console, and the
    *  selected console stays selected while it still exists. */
@@ -484,6 +510,37 @@ export const useRosterStore = create<RosterState>((set, get) => ({
   addRpPairing: (id, user) => patchRpUsers(set, id, (p) => withPairing(p, user)),
   chooseRpUser: (id, registKey) => patchRpUsers(set, id, (p) => withChosen(p, registKey)),
   removeRpUser: (id, registKey) => patchRpUsers(set, id, (p) => withoutRpUser(p, registKey)),
+
+  setConsoleSettings: (id, patch) => {
+    set((st) => {
+      let changed = false;
+      const profiles = st.profiles.map((p) => {
+        if (p.id !== id) return p;
+        const cur = p.settings ?? {};
+        const next = { ...cur, ...patch };
+        if (JSON.stringify(next) === JSON.stringify(cur)) return p;
+        changed = true;
+        return { ...p, settings: next };
+      });
+      if (!changed) return {};
+      persist(profiles, st.active_id);
+      return { profiles };
+    });
+  },
+  fillConsoleSettings: (byId) => {
+    set((st) => {
+      let changed = false;
+      const profiles = st.profiles.map((p) => {
+        const fill = byId[p.id];
+        if (!fill) return p;
+        changed = true;
+        return { ...p, settings: { ...(p.settings ?? {}), ...fill } };
+      });
+      if (!changed) return {};
+      persist(profiles, st.active_id);
+      return { profiles };
+    });
+  },
 
   setWakeCredential: (id, credential) => {
     const clean = credential.trim();

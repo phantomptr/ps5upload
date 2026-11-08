@@ -1,4 +1,4 @@
-import { installPathFallbackOptions } from "./installPathFallback";
+import { installPathFallbackOptionsFor } from "./consoleSettings";
 import { displayPath, isRemotePath } from "../lib/remotePath";
 import { useConnectionsStore } from "./connections";
 import { staticTranslator as tx, trStatic } from "../lib/trStatic";
@@ -2238,9 +2238,9 @@ async function runUnifiedInstallOnce(
     title_id: meta.titleId ?? null,
     package_app_ver: meta.packageAppVer ?? null,
     category: meta.category ?? null,
-    // The trial switch (Settings > Beta) only lets the engine consider its last resort;
-    // the engine's own guards decide whether it runs.
-    options: { ...options, ...installPathFallbackOptions() },
+    // The trial switch (Settings › This PS5, the target console's own) only lets the engine
+    // consider its last resort; the engine's own guards decide whether it runs.
+    options: { ...options, ...installPathFallbackOptionsFor(host) },
   });
   if (!start.ok || !start.job) {
     throw new Error(

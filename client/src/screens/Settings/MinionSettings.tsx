@@ -21,23 +21,19 @@ import { useRosterStore } from "../../state/roster";
 
 type Tr = ReturnType<typeof useTr>;
 
-export function MinionSettings() {
-  const host = useConnectionStore((s) => s.host);
-  const up = useConnectionStore((s) => s.payloadStatus === "up");
-  return (
-    <div className="space-y-3">
-      <MinionTileControl key={`${host}:${up}`} host={host} up={up} />
-      <MinionDefaults />
-    </div>
-  );
+/** Settings › This PS5: Minion on one console (on/off, home-screen tile, LAN page). */
+export function MinionConsoleSettings({ host }: { host: string }) {
+  const up = useConnectionStore((s) => s.runtimeByHost[hostOf(host.trim())]?.payloadStatus === "up");
+  return <MinionTileControl key={`${host}:${up}`} host={host} up={up} />;
 }
 
-/** This computer's choices for every console: Minion off on consoles added from now on (#715). */
-function MinionDefaults() {
+/** Settings › App: this computer's choices for every console: Minion off on consoles added from
+ *  now on (#715). */
+export function MinionDefaults() {
   const tr = useTr();
   const [offForNew, setOffForNew] = useState(minionOffForNew);
   return (
-    <div className="space-y-2 border-t border-[var(--glass-edge)] pt-3 text-sm">
+    <div className="space-y-2 text-sm">
       <Toggle
         checked={offForNew}
         onChange={(on) => {

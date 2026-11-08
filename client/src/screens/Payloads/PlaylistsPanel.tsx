@@ -43,6 +43,8 @@ import { isTauriEnv, safeUnlisten } from "../../lib/tauriEnv";
 import { log } from "../../state/logs";
 import { physicalPointInRect } from "./dropZone";
 import { formatAgo } from "../../lib/formatDate";
+import { useRosterStore } from "../../state/roster";
+import { BringUpPlaylistSelect } from "../Settings/ConsoleBringUp";
 
 /**
  * Playlist editor + runner panel for the SendPayload screen.
@@ -498,6 +500,7 @@ function AutoLoaderCard() {
   const autoLoader = usePayloadPlaylistsStore((s) => s.autoLoader);
   const playlists = usePayloadPlaylistsStore((s) => s.playlists);
   const setAutoLoader = usePayloadPlaylistsStore((s) => s.setAutoLoader);
+  const activeConsoleId = useRosterStore((s) => s.active_id);
 
   const selected = autoLoader.playlistId
     ? playlists.find((p) => p.id === autoLoader.playlistId)
@@ -563,28 +566,13 @@ function AutoLoaderCard() {
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
         <span className="text-[var(--color-muted)]">
           {tr(
-            "autoloader_bringup_label",
+            "autoloader_bringup_label_ps5",
             undefined,
-            "Bring-up playlist (kernel R/W, SMP):",
+            "Bring-up playlist for this PS5 (kernel R/W, SMP):",
           )}
         </span>
-        <Select
-          value={autoLoader.bringUpPlaylistId ?? ""}
-          onChange={(e) =>
-            setAutoLoader({ bringUpPlaylistId: e.target.value || null })
-          }
-          block={false}
-          className="min-w-[min(100%,10rem)] text-xs"
-        >
-          <option value="">
-            {tr("autoloader_bringup_none", undefined, "None (send helper only)")}
-          </option>
-          {playlists.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </Select>
+        {/* The selected console's own choice: payloads depend on its firmware. */}
+        <BringUpPlaylistSelect consoleId={activeConsoleId} compact />
       </div>
       {warn && (
         <div className="mt-2 text-xs text-[var(--color-warn)]">

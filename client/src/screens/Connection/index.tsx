@@ -28,7 +28,10 @@ import { pairingAllow } from "../../api/ava1";
 import { parsePS5Firmware } from "../../lib/ps5Firmware";
 import { compareVersions } from "../../lib/semver";
 import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
-import { AlertTriangle, CheckCircle2, CircleDashed, Moon, XCircle, Send, ArrowRight, Radar, Sparkles, Cable, ExternalLink } from "lucide-react";
+import { AlertTriangle, CheckCircle2, CircleDashed, Moon, XCircle, Send, ArrowRight, Radar, Sparkles, Cable, ExternalLink, Settings2 } from "lucide-react";
+import { useRosterStore } from "../../state/roster";
+import { profileForHost } from "../../state/consoleSettings";
+import { ps5SettingsLink } from "../Settings/settingsTabs";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { cleanConsoleAddress, hostOf as bareHostOf } from "../../lib/addr";
 import { PageHeader, Button, Spinner, ErrorCard } from "../../components";
@@ -848,6 +851,8 @@ export default function ConnectionScreen() {
         {host.trim() && <PowerControl host={host.trim()} />}
         {/* "Put this PS5 on Tailscale": Remote Play and PS5Upload from anywhere. */}
         {host.trim() && <TailnetPanel host={host.trim()} />}
+        {/* This console's own settings (Settings › This PS5). */}
+        {host.trim() && <Ps5SettingsPointer host={host.trim()} />}
         {/* Points at Payloads, which the browser build does not have. */}
         {step2 === "ok" && isTauriEnv() && <CompanionSuggestion />}
       </div>
@@ -1362,6 +1367,37 @@ export function SendPayloadPointer() {
         onClick={() => navigate("/payloads?tab=send")}
       >
         {tr("connection_send_payload_open", undefined, "Open Send payload")}
+      </Button>
+    </div>
+  );
+}
+
+/** "Settings for this PS5": its own settings (bring-up, rest mode, wake for uploads...) are in
+ *  Settings › This PS5, opened on this console. */
+export function Ps5SettingsPointer({ host }: { host: string }) {
+  const tr = useTr();
+  const navigate = useNavigate();
+  const consoleId = useRosterStore((s) => profileForHost(host, s.profiles)?.id ?? null);
+  return (
+    <div
+      className="flex flex-wrap items-center gap-2 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] p-3 text-xs"
+      data-testid="connection-ps5-settings"
+    >
+      <Settings2 size={14} className="shrink-0 text-[var(--color-accent)]" aria-hidden />
+      <span className="min-w-[14rem] flex-1 text-[var(--color-muted)]">
+        {tr(
+          "connection_ps5_settings_hint",
+          undefined,
+          "Bring-up, rest mode, waking for uploads and Minion are set for each PS5 in Settings › This PS5.",
+        )}
+      </span>
+      <Button
+        variant="secondary"
+        size="sm"
+        rightIcon={<ArrowRight size={11} className="rtl:rotate-180" />}
+        onClick={() => navigate(ps5SettingsLink(consoleId))}
+      >
+        {tr("connection_ps5_settings_open", undefined, "Settings for this PS5")}
       </Button>
     </div>
   );
