@@ -110,6 +110,7 @@ mod ffi {
         pub fn tn_start(ctx: *mut Ctx) -> c_int;
         pub fn tn_pause(ctx: *mut Ctx);
         pub fn tn_resume(ctx: *mut Ctx);
+        pub fn tn_reauth(ctx: *mut Ctx) -> c_int;
         pub fn tn_destroy(ctx: *mut Ctx);
         pub fn tn_map(
             ctx: *mut Ctx,
@@ -416,6 +417,16 @@ impl Node {
 
     pub fn resume(&self) {
         unsafe { ffi::tn_resume(self.ctx) }
+    }
+
+    /// Renew the sign-in keeping this node (its address and name): a new login URL follows.
+    pub fn reauth(&self) -> Result<(), Error> {
+        // SAFETY: ctx is valid until Drop.
+        let r = unsafe { ffi::tn_reauth(self.ctx) };
+        if r != 0 {
+            return Err(err(r));
+        }
+        Ok(())
     }
 
     pub fn status(&self) -> Status {

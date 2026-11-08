@@ -3442,11 +3442,15 @@
           "authkey": {
             "type": "string"
           },
+          "choice": {
+            "description": "op `system_choice`: \"system\" or \"own\".",
+            "type": "string"
+          },
           "control_url": {
             "type": "string"
           },
           "host": {
-            "description": "op `remember`: a console's LAN address and its tailnet address (what \"Put this PS5 on\nTailscale\" records by itself).",
+            "description": "op `remember`: a console's LAN address and its tailnet address (what \"Put this PS5 on\nTailscale\" records by itself). op `test_path`: the console.",
             "type": "string"
           },
           "hostname": {
@@ -3457,6 +3461,11 @@
           },
           "op": {
             "type": "string"
+          },
+          "secs": {
+            "description": "op `test_path`: how long, 0 to end it.",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
@@ -8545,6 +8554,12 @@
               "host"
             ]
           },
+          "allow": {
+            "type": "string"
+          },
+          "allow_mode": {
+            "type": "string"
+          },
           "authkey": {
             "type": "string"
           },
@@ -8552,6 +8567,9 @@
             "type": "string"
           },
           "hostname": {
+            "type": "string"
+          },
+          "ip": {
             "type": "string"
           },
           "op": {
@@ -24657,6 +24675,17 @@
                       "properties": {
                         "error": {
                           "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
                         }
                       },
                       "type": "object"
@@ -25508,6 +25537,20 @@
                   "anyOf": [
                     {
                       "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "ok": {
+                          "type": "boolean"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
                     },
                     {
                       "properties": {
@@ -35226,7 +35269,8 @@
                     },
                     "sent": {
                       "type": "boolean"
-                    }
+                    },
+                    "tailnet_note": {}
                   },
                   "type": "object"
                 }
@@ -44852,9 +44896,66 @@
         }
       }
     },
+    "/api/tailnet/check": {
+      "get": {
+        "description": "`GET /api/tailnet/check?addr=`: the Connection check by path. The home network first (the\nloader, the helper, Remote Play); when nothing answers there and the console has a Tailscale\naddress, the same over Tailscale. Says which path each check used, and this device's own\nTailscale state. Blocking work: a few connects, at most a couple of seconds.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The Connection check by path",
+        "tags": [
+          "tailnet"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "json-unknown"
+        }
+      }
+    },
     "/api/tailnet/route": {
       "get": {
-        "description": "`GET /api/tailnet/route?addr=&port=&udp=` -> `{dial, via}`: where the engine dials that\nconsole port right now (`dial` null = the console's own address). Opens the local mapping\nwhen the console is away.",
+        "description": "`GET /api/tailnet/route?addr=[&port=&udp=]`: why the engine reaches that console the way it\ndoes now (all in memory: the last home probe and its age, the tailnet address, the way this\ndevice has, the last switch). With a `port`, also `dial`: where it dials that port (null =\nthe console's own address; opens the local mapping when the console is away).",
         "parameters": [
           {
             "in": "query",
@@ -44874,10 +44975,13 @@
           {
             "in": "query",
             "name": "port",
-            "required": true,
+            "required": false,
             "schema": {
               "minimum": 0,
-              "type": "integer"
+              "type": [
+                "integer",
+                "null"
+              ]
             }
           },
           {
@@ -44893,19 +44997,10 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "properties": {
-                    "dial": {
-                      "type": "string"
-                    },
-                    "latency_ms": {},
-                    "via": {}
-                  },
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
-            "description": "Success."
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
           },
           "403": {
             "$ref": "#/components/responses/Error",
@@ -44916,7 +45011,6 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "> `{dial, via}`: where the engine dials that console port right now (`dial` null = the console's own address)",
         "tags": [
           "tailnet"
         ],
@@ -44931,7 +45025,7 @@
             "name": "addr",
             "required": false
           },
-          "response_schema": "literal"
+          "response_schema": "json-unknown"
         }
       }
     },

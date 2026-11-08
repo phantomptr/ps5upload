@@ -114,6 +114,7 @@ mod shared_state;
 mod state_io;
 mod tailnet_api;
 pub(crate) mod tailnet_engine;
+pub(crate) mod tailnet_system;
 mod telemetry;
 mod vinput_api;
 mod wake_login_api;
@@ -4728,10 +4729,16 @@ async fn ps5_power_wake(Json(req): Json<PowerWakeReq>) -> impl IntoResponse {
             "from the saved console"
         }
     );
+    // A PS5 on Tailscale whose home address is silent may be asleep at home (wake works) or
+    // away from this device's network (it cannot: a resting PS5 is off Tailscale, and a wake is
+    // a home-network broadcast). The wake goes out either way; the note says the second plainly.
+    let away_note = tailnet_engine::engine()
+        .home_silent(&host)
+        .then_some(tailnet_engine::WAKE_AWAY_NOTE);
     match tokio::task::spawn_blocking(move || ps5upload_core::ddp::wake(&host, &cred)).await {
         Ok(Ok(())) => (
             StatusCode::OK,
-            Json(serde_json::json!({ "ok": true, "sent": true })),
+            Json(serde_json::json!({ "ok": true, "sent": true, "tailnet_note": away_note })),
         )
             .into_response(),
         Ok(Err(e)) => json_err(StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
@@ -11085,18 +11092,35 @@ async fn ps5_port_check(Query(q): Query<PortCheckQuery>) -> impl IntoResponse {
         );
     }
     let timeout = Duration::from_millis(q.timeout_ms.unwrap_or(1500).clamp(100, 10_000));
+    // Home first, always; a port the console serves to Tailscale goes there only when the
+    // console is away (`ps5upload_core::route`). `via` says which path answered.
     let res = tokio::task::spawn_blocking(move || {
-        ps5upload_core::payload_lifecycle::probe_port(&ip, q.port, timeout)
+        let host = ps5upload_core::events::console_host(&ip);
+        match ps5upload_core::route::dial(&host, q.port, false) {
+            Some(a) => {
+                let (via, _) = tailnet_engine::via_json(&ps5upload_core::route::via(&host));
+                let r = ps5upload_core::payload_lifecycle::probe_port(
+                    &a.ip().to_string(),
+                    a.port(),
+                    timeout,
+                );
+                (r, via)
+            }
+            None => (
+                ps5upload_core::payload_lifecycle::probe_port(&ip, q.port, timeout),
+                "lan",
+            ),
+        }
     })
     .await;
     match res {
-        Ok(Ok(())) => (
+        Ok((Ok(()), via)) => (
             StatusCode::OK,
-            Json(serde_json::json!({ "open": true, "error": null })),
+            Json(serde_json::json!({ "open": true, "error": null, "via": via })),
         ),
-        Ok(Err(e)) => (
+        Ok((Err(e), via)) => (
             StatusCode::OK,
-            Json(serde_json::json!({ "open": false, "error": e })),
+            Json(serde_json::json!({ "open": false, "error": e, "via": via })),
         ),
         Err(e) => (
             StatusCode::OK,
@@ -11967,6 +11991,7 @@ fn build_app_and_mcp(
             get(tailnet_api::engine_status).post(tailnet_api::engine_op),
         )
         .route("/api/tailnet/route", get(tailnet_api::route))
+        .route("/api/tailnet/check", get(tailnet_api::check))
         .route("/api/tailnet/via", get(tailnet_api::via))
         .route(
             "/api/ps5/cleanup/scan/{id}",

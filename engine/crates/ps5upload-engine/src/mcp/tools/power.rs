@@ -63,6 +63,18 @@ pub(super) fn tools() -> Vec<ToolDef> {
             schema: object(json!({ "console": console_optional() }), &[]),
             run: route!(path: "/api/ps5/power/telemetry", done: "The console's power history."),
         },
+        ToolDef {
+            name: "tailnet_route",
+            title: "How the engine reaches a console",
+            description: "Whether the engine reaches a console on the home network or through \
+                          Tailscale right now, and why: the last home check and its age, the \
+                          console's Tailscale address, how this device is on Tailscale (built-in \
+                          or the system app), and when the path last switched. The home network \
+                          always comes first. Read-only and cheap.",
+            kind: Kind::Read,
+            schema: object(json!({ "console": console_optional() }), &[]),
+            run: route!(path: "/api/tailnet/route", done: "How the engine reaches the console."),
+        },
     ]
 }
 

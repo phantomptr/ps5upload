@@ -1,6 +1,7 @@
-//! Where to dial a console. Normally its own (LAN) address; when the engine runs its tailnet
-//! node and the console cannot be reached on the LAN but is on the tailnet, a port on
-//! 127.0.0.1 that the node carries to the console's tailnet address (`ps5upload-tailnet`).
+//! Where to dial a console. The home network always comes first: its own (LAN) address. Only
+//! when that does not answer and the console is on Tailscale: a port on 127.0.0.1 that the
+//! engine's own tailnet node carries to the console's tailnet address (`ps5upload-tailnet`), or,
+//! with the system's Tailscale app on this device, the console's tailnet address itself.
 //!
 //! The engine installs a [`Router`] at start; every place that dials the console asks
 //! [`dial`] first: the helper's AVA1 port (`ps5upload-ava1` pool), Remote Play's session
@@ -19,6 +20,25 @@ pub enum Via {
     TailnetDirect { latency_ms: Option<f64> },
     /// The tailnet through a relay (DERP).
     TailnetRelayed,
+    /// The tailnet through the system's own Tailscale app on this device (its 100.x address,
+    /// dialled directly; the path inside it is the app's to choose).
+    System,
+}
+
+impl Via {
+    /// Not the home network.
+    pub fn is_tailnet(&self) -> bool {
+        *self != Via::Lan
+    }
+}
+
+/// What to say when something only works on the home network and the console is reached
+/// through Tailscale now. `what` is the thing that cannot ("Sending a payload").
+pub fn home_only(what: &str) -> String {
+    format!(
+        "{what} needs your home network. This PS5 is reached through Tailscale right now, \
+         which only carries Remote Play and PS5Upload's own connection."
+    )
 }
 
 pub trait Router: Send + Sync {

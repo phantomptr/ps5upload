@@ -736,6 +736,7 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/stream/tools/ffmpeg/install"),
     ("GET", "/api/tailnet"),
     ("POST", "/api/tailnet"),
+    ("GET", "/api/tailnet/check"),
     ("GET", "/api/tailnet/route"),
     ("GET", "/api/tailnet/via"),
     ("POST", "/api/transfer/7z"),

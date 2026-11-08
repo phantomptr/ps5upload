@@ -99,7 +99,13 @@ fn resolve(host: &str, port: u16) -> Result<SocketAddr> {
 /// matching `ps5-wake`. The asymmetry looks like an oversight but the console
 /// may depend on it, so it is preserved rather than tidied.
 pub fn probe(host: &str, timeout: Duration) -> Result<DdpStatus> {
-    let addr = resolve(host, DDP_PORT)?;
+    // Home first; a console away on Tailscale answers discovery there too (UDP 9302 is on its
+    // tailnet allow-list), which Remote Play's readiness check needs (`route`).
+    let bare = host.split(':').next().unwrap_or(host);
+    let addr = match crate::route::dial(bare, DDP_PORT, true) {
+        Some(a) => a,
+        None => resolve(host, DDP_PORT)?,
+    };
     let pkt = format!("SRCH * HTTP/1.1\ndevice-discovery-protocol-version:{DDP_VERSION}\n\0");
     let sockets = send_every_way(pkt.as_bytes(), addr, true);
     if sockets.is_empty() {
