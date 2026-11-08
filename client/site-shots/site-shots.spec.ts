@@ -136,8 +136,63 @@ function joinState(path: string, internet: boolean) {
   };
 }
 
+// Tailscale (12.0.0): the console and this computer on a made-up tailnet. Addresses in
+// Tailscale's 100.64.0.0/10 range and a made-up tailnet name, never a real node or account.
+const TS_DOMAIN = "tail0000.ts.net.";
+const tsPeer = (name: string, ip: string, path: string, ms: number) => ({
+  name: `${name}.${TS_DOMAIN}`,
+  ip,
+  online: path !== "idle",
+  path,
+  direct: path === "direct" ? "203.0.113.7:41641" : "",
+  derp_region: 1,
+  latency_ms: ms,
+  last_rx_ms: 0,
+});
+const TS_NODE = {
+  ok: true,
+  enabled: true,
+  state: "running",
+  login_url: "",
+  control_url: "https://controlplane.tailscale.com",
+  home_derp: 1,
+  derp_connected: true,
+  home_latency_ms: 12,
+  key_expiry: 0,
+  error: "",
+};
+const TS_CONSOLE = {
+  ...TS_NODE,
+  hostname: "living-room-ps5",
+  ip: "100.101.102.50",
+  name: `living-room-ps5.${TS_DOMAIN}`,
+  udp_port: 41641,
+  endpoints: [],
+  warning: "",
+  serving: { udp_flows: 2, tcp_conns: 3 },
+  peers: [
+    tsPeer("work-laptop", "100.101.102.20", "direct", 18.4),
+    tsPeer("phone", "100.101.102.31", "relayed", -1),
+    tsPeer("tablet", "100.101.102.32", "idle", -1),
+  ],
+};
+const TS_APP = {
+  ...TS_NODE,
+  hostname: "work-laptop",
+  ip: "100.101.102.20",
+  name: `work-laptop.${TS_DOMAIN}`,
+  peers: [
+    tsPeer("living-room-ps5", "100.101.102.50", "direct", 18.4),
+    tsPeer("phone", "100.101.102.31", "relayed", -1),
+  ],
+  consoles: [{ host: HOST, ip: "100.101.102.50", name: "living-room-ps5", via: "direct", latency_ms: 18.4 }],
+};
+
 /** The made-up console, as the engine would answer for it. */
-async function fakeConsole(page: Page, opts: { paired: boolean; theme: "light" | "dark"; lang: string; internet?: boolean }) {
+async function fakeConsole(
+  page: Page,
+  opts: { paired: boolean; theme: "light" | "dark"; lang: string; internet?: boolean; tailnet?: boolean },
+) {
   await page.addInitScript(
     ([host, paired, theme, now, lang]) => {
       const ls = window.localStorage;
@@ -184,6 +239,11 @@ async function fakeConsole(page: Page, opts: { paired: boolean; theme: "light" |
       const path = new URL(route.request().url()).pathname;
       const json = (b: unknown) => route.fulfill({ contentType: "application/json", body: JSON.stringify(b) });
       if (path.startsWith("/api/join")) return json(joinState(path, !!opts.internet));
+      if (opts.tailnet) {
+        if (path === "/api/ps5/tailnet") return json(TS_CONSOLE);
+        if (path === "/api/tailnet") return json(TS_APP);
+        if (path === "/api/tailnet/via") return json({ via: "direct", latency_ms: 18.4 });
+      }
       switch (path) {
         case "/api/version":
           return json({ version: "11.0.4", caps: {} });
@@ -191,6 +251,12 @@ async function fakeConsole(page: Page, opts: { paired: boolean; theme: "light" |
           return json({ ok: true, command_count: 1, instance_id: 1, ps5_kernel: "releases/10.00", ucred_elevated: true });
         case "/api/ps5/rp/session":
           return json({ host: null });
+        // Awake, as the console's own discovery reply says (the power card).
+        case "/api/ps5/power/ddp-status":
+          return json({
+            code: 200, status_text: "Ok", host_id: "000000000000", host_name: "Living Room PS5", host_type: "PS5",
+            system_version: "10000000", running_app_name: "", running_app_titleid: "",
+          });
         case "/api/ps5/remoteplay/readiness":
           return json(READINESS);
         case "/api/profile/info":
@@ -489,6 +555,87 @@ for (const lang of LANGS) {
         });
         await page.waitForTimeout(400);
         await shot(page, "together-net", theme);
+      });
+    });
+
+    // 12.0.0: Play's three tabs, on Play together before a stream: Internet chosen, with its
+    // note and the donation line, and Start and invite.
+    test.describe(`${lang} play together tab ${theme}`, () => {
+      test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1.5 });
+
+      test(`play together tab (${theme})`, async ({ page }) => {
+        await fakeConsole(page, { paired: true, theme, lang, internet: true });
+        await page.addInitScript(() => window.localStorage.setItem("ps5upload.pt_network", "internet"));
+        await page.goto("/play", { waitUntil: "domcontentloaded" });
+        await page.getByRole("radiogroup").getByRole("radio").nth(1).click();
+        await expect(page.getByTestId("pt-start-net-internet-support")).toBeVisible({ timeout: 20_000 });
+        await expect(page.getByTestId("pt-start-invite")).toBeEnabled();
+        await page.mouse.move(8, 8);
+        await page.waitForTimeout(800);
+        await shot(page, "together-tab", theme);
+      });
+    });
+
+    // 12.0.0: Tailscale. The console's panel on the Connection screen, this device's own in
+    // Settings, and the status bar's "via Tailscale" while the home address doesn't answer.
+    test.describe(`${lang} tailscale ${theme}`, () => {
+      test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1.5 });
+      // A panel at the top of its page's own scroll, below the app's top bar.
+      const toTop = (el: HTMLElement | SVGElement) => {
+        let box = el.parentElement;
+        while (box && !(box.scrollHeight > box.clientHeight && /auto|scroll/.test(getComputedStyle(box).overflowY))) box = box.parentElement;
+        if (box) box.scrollTop += el.getBoundingClientRect().top - 96;
+      };
+
+      test(`tailscale: connection and settings (${theme})`, async ({ page }) => {
+        // Internet invites on, so Settings › Play Together above it shows its own options.
+        await fakeConsole(page, { paired: true, theme, lang, tailnet: true, internet: true });
+        await page.goto("/connection", { waitUntil: "domcontentloaded" });
+        const panel = page.getByTestId("tailnet-panel");
+        await expect(panel.getByTestId("tailnet-peers")).toBeVisible({ timeout: 30_000 });
+        await expect(page.getByTestId("tailnet-chip")).toBeVisible({ timeout: 15_000 });
+        await panel.evaluate(toTop);
+        await page.mouse.move(8, 8);
+        await page.waitForTimeout(800);
+        await shot(page, "tailscale-connection", theme);
+
+        await page.goto("/settings", { waitUntil: "domcontentloaded" });
+        const settings = page.getByTestId("tailscale-settings");
+        await expect(settings.getByTestId("app-tailnet-peers")).toBeVisible({ timeout: 30_000 });
+        await expect(page.getByTestId("tailnet-chip")).toBeVisible({ timeout: 15_000 });
+        // The whole section, its heading too, near the bottom of the window above the status bar.
+        await settings.evaluate((el) => {
+          const sec = el.closest("section") ?? el;
+          let box = sec.parentElement;
+          while (box && !(box.scrollHeight > box.clientHeight && /auto|scroll/.test(getComputedStyle(box).overflowY))) box = box.parentElement;
+          if (box) box.scrollTop += sec.getBoundingClientRect().bottom - (window.innerHeight - 64);
+        });
+        await page.mouse.move(8, 8);
+        await page.waitForTimeout(800);
+        await shot(page, "tailscale-settings", theme);
+      });
+    });
+
+    // The chip close up: a sharper picture, cut to the chip and what sits beside it.
+    test.describe(`${lang} tailscale chip ${theme}`, () => {
+      test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 3 });
+
+      test(`tailscale: the status bar's chip (${theme})`, async ({ page }) => {
+        await fakeConsole(page, { paired: true, theme, lang, tailnet: true });
+        await page.goto("/home", { waitUntil: "domcontentloaded" });
+        const chip = page.getByTestId("tailnet-chip");
+        await expect(chip).toBeVisible({ timeout: 30_000 });
+        await page.mouse.move(640, 300);
+        await page.waitForTimeout(800);
+        const b = (await chip.boundingBox())!;
+        const padX = 14;
+        const padY = 8;
+        await page.screenshot({
+          path: `${dir}/tailscale-chip-${theme}.png`,
+          animations: "disabled",
+          caret: "hide",
+          clip: { x: b.x - padX, y: b.y - padY, width: b.width + padX * 2, height: b.height + padY * 2 },
+        });
       });
     });
 

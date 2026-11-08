@@ -88,6 +88,7 @@
       </a>
       <nav class="nav" data-i18n-attr="aria-label:nav.sections" aria-label="Sections">
         <a href="#together" data-i18n="nav.together">Play Together</a>
+        <a href="#tailscale" data-i18n="nav.tailscale">Tailscale</a>
         <a href="#play" data-i18n="nav.play">Play</a>
         <a href="#all" data-i18n="nav.all">All features</a>
         <a href="#guide" data-i18n="nav.guide">Guide</a>
@@ -120,9 +121,9 @@
         <div class="hero-text">
           <div class="hero-pills">
             <p class="eyebrow" id="hero-version" data-i18n="hero.eyebrow">Free and open source</p>
-            <a class="hero-new" href="#together">
-              <span class="hero-new-tag" data-i18n="hero.new_tag">New</span>
-              <span data-i18n="hero.new_text2">Play Together over the internet: friends join from anywhere</span>
+            <a class="hero-new" href="#tailscale">
+              <span class="hero-new-tag" data-i18n="hero.new_tag12">New in 12.0</span>
+              <span data-i18n="hero.new_text3">Play from anywhere with Tailscale, and more</span>
               <span class="hero-new-arrow" aria-hidden="true">→</span>
             </a>
           </div>
@@ -195,8 +196,8 @@
         <ol class="together-steps">
           <li class="card">
             <span class="num">1</span>
-            <h3 data-i18n="together.s1.title">Open Play Together</h3>
-            <p data-i18n="together.s1.text2">While you play, press the people button on the Play bar (on a phone, <b>⋯ › Play Together</b>). Choose <b>This network</b> for friends on your Wi-Fi or <b>Internet</b> for friends anywhere, then share the QR code or the link.</p>
+            <h3 data-i18n="together.s1.title2">Open Play together</h3>
+            <p data-i18n="together.s1.text3">In <b>Play</b>, open the <b>Play together</b> tab. Choose <b>This network</b> for friends on your Wi-Fi or <b>Internet</b> for friends anywhere, press <b>Start and invite</b>, then share the QR code or the link.</p>
           </li>
           <li class="card">
             <span class="num">2</span>
@@ -209,6 +210,25 @@
             <p data-i18n="together.s3.text">On the TV they press PS and pick Quick Play. Each friend is a separate player with your picture and sound, up to three friends at once.</p>
           </li>
         </ol>
+      </div>
+      <div class="wrap">
+        <div class="tour-row together-tab">
+          <div class="tour-text">
+            <h3 data-i18n="together.tab.title">Its own tab in Play</h3>
+            <p data-i18n="together.tab.text">Play has three tabs: <b>Play my PS5</b>, <b>Play together</b> and <b>Join a friend</b>. On Play together, one press of <b>Start and invite</b> wakes the PS5, starts the stream and shows the invite.</p>
+            <ul class="ticks">
+              <li data-i18n="together.tab.t1">Choose where your friends are before you start: this network or the internet</li>
+              <li data-i18n="together.tab.t2">Guests play as the PS5 profile you pick in Settings › Play Together, or the TV asks them</li>
+              <li data-i18n="together.tab.t3">Already playing? The people button on the Play bar opens the same invite</li>
+            </ul>
+          </div>
+          <figure class="shot tilt-r">
+            <picture>
+              <source srcset="assets/shots/together-tab-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="together-tab" />
+              <img src="assets/shots/together-tab-light.webp" data-i18n-attr="alt:alt.together_tab" alt="Play › Play together before a stream: the console, Internet chosen with a note about the server and how to support it, and Start and invite." width="1920" height="1200" loading="lazy" data-theme-img="together-tab" />
+            </picture>
+          </figure>
+        </div>
       </div>
       <div class="wrap">
         <div class="everywhere kbm-touch together-guest">
@@ -232,10 +252,6 @@
         </div>
       </div>
       <div class="wrap">
-        <!-- TODO(tailscale): when the app's own Tailscale ships, it gets a card here ("Your own tailnet":
-             friends on your tailnet join with the This network link, set up from the app), a line in
-             #all under Remote Play & Play Together and Platforms, and a rewrite of the "Play away from
-             home" guide (howto.away) around it. Until then the site names no VPN product. -->
         <div class="grid together-more">
           <div class="card">
             <span class="ico" aria-hidden="true">🌍</span>
@@ -251,6 +267,69 @@
             <span class="ico" aria-hidden="true">🔗</span>
             <h3 data-i18n="together.app.title">Links open in the app</h3>
             <p data-i18n="together.app.text">A friend with PS5Upload is asked whether to open the invite in the app, the way Slack and Zoom links do, or join from <b>Play › Join a friend</b> with the link, the code, a QR scan or <b>Playing nearby</b>.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tailscale (12.0): the app's own tailnet node and the console's, no Tailscale app. -->
+    <section class="section tailscale" id="tailscale" aria-labelledby="tailscale-title">
+      <div class="wrap together-head">
+        <p class="kicker" data-i18n="ts.kicker">New in 12.0</p>
+        <h2 id="tailscale-title" data-i18n="ts.title">Tailscale: your PS5, from anywhere</h2>
+        <p class="section-lead" data-i18n="ts.lead">Play your PS5 from anywhere through your own Tailscale account. There's no Tailscale app to install on any device: the app and the PS5 join your tailnet by themselves.</p>
+      </div>
+      <div class="wrap tour">
+        <div class="tour-row">
+          <div class="tour-text">
+            <h3 data-i18n="ts.console.title">Put the PS5 on your tailnet</h3>
+            <p data-i18n="ts.console.text">On the Connection screen, press <b>Put this PS5 on Tailscale</b> and sign in, on this device or with the QR code on your phone. The PS5 gets its own Tailscale address and lists your other devices.</p>
+            <ul class="ticks">
+              <li data-i18n="ts.console.t1">Only Remote Play and PS5Upload can be reached through it, nothing else on the PS5</li>
+              <li data-i18n="ts.console.t2">Each device shows whether it's direct or relayed, with the delay</li>
+              <li data-i18n="ts.console.t3">Rest mode doesn't undo it: after a wake, the PS5 joins your tailnet again by itself</li>
+            </ul>
+          </div>
+          <figure class="shot tilt-l">
+            <picture>
+              <source srcset="assets/shots/tailscale-connection-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="tailscale-connection" />
+              <img src="assets/shots/tailscale-connection-light.webp" data-i18n-attr="alt:alt.ts_connection" alt="The Connection screen's Tailscale panel: the PS5 on Tailscale at a 100.x address, and the other devices on the tailnet, direct with the delay or relayed." width="1920" height="1200" loading="lazy" data-theme-img="tailscale-connection" />
+            </picture>
+          </figure>
+        </div>
+        <div class="tour-row flip">
+          <div class="tour-text">
+            <h3 data-i18n="ts.device.title">Then each of your devices</h3>
+            <p data-i18n="ts.device.text">On your computer, phone or tablet, open <b>Settings › Tailscale</b> and sign in to the same account. Away from home, connect as usual: when the PS5 doesn't answer at its home address, the app goes through Tailscale by itself.</p>
+            <p data-i18n="ts.device.chip">The status bar says how it's reaching the PS5:</p>
+            <figure class="ts-chip">
+              <img src="assets/shots/tailscale-chip-light.webp" data-i18n-attr="alt:alt.ts_chip" alt="The status bar's chip: via Tailscale (direct, 18.4 ms)." width="228" height="39" loading="lazy" data-theme-img="tailscale-chip" />
+            </figure>
+          </div>
+          <figure class="shot tilt-r">
+            <picture>
+              <source srcset="assets/shots/tailscale-settings-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="tailscale-settings" />
+              <img src="assets/shots/tailscale-settings-light.webp" data-i18n-attr="alt:alt.ts_settings" alt="Settings › Tailscale: this device on Tailscale at its 100.x address, with the PS5 and a phone on the same tailnet." width="1920" height="1200" loading="lazy" data-theme-img="tailscale-settings" />
+            </picture>
+          </figure>
+        </div>
+      </div>
+      <div class="wrap">
+        <div class="grid together-more">
+          <div class="card">
+            <span class="ico" aria-hidden="true">🏠</span>
+            <h3 data-i18n="ts.mine.title">Your own devices: Tailscale</h3>
+            <p data-i18n="ts.mine.text">Your phone, laptop or tablet signs in to your tailnet and reaches the PS5 as if you were home: play it, and use the rest of PS5Upload too.</p>
+          </div>
+          <div class="card">
+            <span class="ico" aria-hidden="true">🎟️</span>
+            <h3 data-i18n="ts.friends.title">Friends: an internet invite</h3>
+            <p data-i18n="ts.friends.text">A friend doesn't need a Tailscale account. Send them an internet invite from <a href="#together">Play Together</a> and they join from their browser as Player 2 to 4.</p>
+          </div>
+          <div class="card">
+            <span class="ico" aria-hidden="true">🧭</span>
+            <h3 data-i18n="ts.headscale.title">Your own server works too</h3>
+            <p data-i18n="ts.headscale.text">Run Headscale? Open <b>Advanced</b> before you sign in and enter your control server. You can name the device there too.</p>
           </div>
         </div>
       </div>
@@ -535,13 +614,15 @@
           </ul>
         </details>
         <details class="all-group" id="all-convert" open>
-          <summary><span class="all-ico" aria-hidden="true">🛠️</span><span class="all-name" data-i18n="all.g.convert">Convert</span><span class="all-count">13</span></summary>
+          <summary><span class="all-ico" aria-hidden="true">🛠️</span><span class="all-name" data-i18n="all.g.convert">Convert</span><span class="all-count">15</span></summary>
           <ul>
             <li data-i18n="all.convert.1">Build an installable package from a decrypted game folder or an image</li>
             <li data-i18n="all.convert.2">Turn a game folder into a disk image (.exfat, .ffpkg or .ffpfs)</li>
             <li data-i18n="all.convert.3">Make images smaller with compression</li>
             <li data-i18n="all.convert.4">Turn an image, a package or a game back into a plain folder</li>
             <li data-i18n="all.convert.5">Write an image straight to the PS5 as it's built, with no copy on your computer</li>
+            <li data-i18n="all.convert.14">Or straight to a server (SMB, NFS, FTP, SFTP or WebDAV); on SMB, NFS and SFTP a cut-off build picks up where it stopped</li>
+            <li data-i18n="all.convert.15">Build PS4 packages from a PS4 game, or from a game merged with its update, every file checked</li>
             <li data-i18n="all.convert.6">Convert PS4 fake packages into an image or a folder</li>
             <li data-i18n="all.convert.7">Merge a PS4 game and its update into one game at the update's version</li>
             <li data-i18n="all.convert.8">Turn PS4 add-ons that have data into a folder</li>
@@ -553,7 +634,7 @@
           </ul>
         </details>
         <details class="all-group" id="all-files" open>
-          <summary><span class="all-ico" aria-hidden="true">📁</span><span class="all-name" data-i18n="all.g.files">Files &amp; servers</span><span class="all-count">10</span></summary>
+          <summary><span class="all-ico" aria-hidden="true">📁</span><span class="all-name" data-i18n="all.g.files">Files &amp; servers</span><span class="all-count">11</span></summary>
           <ul>
             <li data-i18n="all.files.1">Browse the PS5's files like a folder: copy, move, rename, delete and make folders</li>
             <li data-i18n="all.files.2">Download files and folders from the PS5, or a whole folder as a .zip</li>
@@ -565,6 +646,7 @@
             <li data-i18n="all.files.8">Mesh Drive: one folder kept the same on all your devices</li>
             <li data-i18n="all.files.9">Send files from one PS5 to another</li>
             <li data-i18n="all.files.10">See every drive and its free space, and eject USB drives safely</li>
+            <li data-i18n="all.files.11">In the web UI, add files and folders from the phone or computer you're on</li>
           </ul>
         </details>
         <details class="all-group" id="all-saves" open>
@@ -583,10 +665,7 @@
           </ul>
         </details>
         <details class="all-group" id="all-play" open>
-          <summary><span class="all-ico" aria-hidden="true">▶️</span><span class="all-name" data-i18n="all.g.play">Remote Play &amp; Play Together</span><span class="all-count">20</span></summary>
-          <!-- TODO(tailscale): when the app's own Tailscale ships, add one line here ("Play over your
-               tailnet, set up from the app") as all.play.21, and one under Platforms if it also covers the
-               rest of the app away from home. Not before it is released. -->
+          <summary><span class="all-ico" aria-hidden="true">▶️</span><span class="all-name" data-i18n="all.g.play">Remote Play &amp; Play Together</span><span class="all-count">25</span></summary>
           <ul>
             <li data-i18n="all.play.1">Play your PS5 on your computer, phone or tablet, or in a browser</li>
             <li data-i18n="all.play.2">Play wakes the console from rest mode and signs your user in</li>
@@ -608,6 +687,11 @@
             <li data-i18n="all.play.18">Nobody plays until you press Allow; remove anyone, and turn off their PS button</li>
             <li data-i18n="all.play.19">Play on your TV and use the app only to invite friends</li>
             <li data-i18n="all.play.20">A dropped stream or friend reconnects by itself, in the same place</li>
+            <li data-i18n="all.play.21">Play from anywhere through your own Tailscale, with no Tailscale app: direct or relayed, with the delay shown</li>
+            <li data-i18n="all.play.22">Play together has its own tab: Start and invite in one press</li>
+            <li data-i18n="all.play.23">Guests play as the PS5 profile you choose, or the TV asks them</li>
+            <li data-i18n="all.play.24">Phones as controllers and watchers over the internet too, each one allowed by you</li>
+            <li data-i18n="all.play.25">Third-party controllers (8BitDo, Switch Pro, Logitech and more) work right, and Check your controller sets up any other</li>
           </ul>
         </details>
         <details class="all-group" id="all-kbm" open>
@@ -621,7 +705,7 @@
           </ul>
         </details>
         <details class="all-group" id="all-live" open>
-          <summary><span class="all-ico" aria-hidden="true">🔴</span><span class="all-name" data-i18n="all.g.live">Go live</span><span class="all-count">7</span></summary>
+          <summary><span class="all-ico" aria-hidden="true">🔴</span><span class="all-name" data-i18n="all.g.live">Go live</span><span class="all-count">8</span></summary>
           <ul>
             <li data-i18n="all.live.1">Stream your game to YouTube, Twitch, Kick or Facebook from Play</li>
             <li data-i18n="all.live.2">Several sites at once, or any RTMP, RTMPS or SRT server</li>
@@ -630,13 +714,16 @@
             <li data-i18n="all.live.5">Try it on Twitch first without going public</li>
             <li data-i18n="all.live.6">Add the stream to OBS for your own scenes and overlays</li>
             <li data-i18n="all.live.7">Stream keys are stored encrypted and never shown again</li>
+            <li data-i18n="all.live.8">Go live from the web UI in Safari on an iPhone or iPad, with the engine on a computer</li>
           </ul>
         </details>
         <details class="all-group" id="all-console" open>
-          <summary><span class="all-ico" aria-hidden="true">🧰</span><span class="all-name" data-i18n="all.g.console">Console tools</span><span class="all-count">18</span></summary>
+          <summary><span class="all-ico" aria-hidden="true">🧰</span><span class="all-name" data-i18n="all.g.console">Console tools</span><span class="all-count">20</span></summary>
           <ul>
             <li data-i18n="all.console.1">Send payloads from a catalogue, your own lists or files, with playlists and loading at boot</li>
             <li data-i18n="all.console.2">Keep payloads on the console in Payload Manager, the helper too, to start them with no computer</li>
+            <li data-i18n="all.console.19">Payload updates: update one or all, roll back, or keep them up to date by themselves</li>
+            <li data-i18n="all.console.20">Choose which payloads Payload Manager keeps on each console and loads at boot, and sync them</li>
             <li data-i18n="all.console.3">Make a USB stick that loads your payloads</li>
             <li data-i18n="all.console.4">Set up a fresh console in one go: the right payloads, in the right order</li>
             <li data-i18n="all.console.5">Cheats: find, download and switch them on, applied when the game starts</li>
@@ -656,7 +743,7 @@
           </ul>
         </details>
         <details class="all-group" id="all-platforms" open>
-          <summary><span class="all-ico" aria-hidden="true">💻</span><span class="all-name" data-i18n="all.g.platforms">Platforms</span><span class="all-count">10</span></summary>
+          <summary><span class="all-ico" aria-hidden="true">💻</span><span class="all-name" data-i18n="all.g.platforms">Platforms</span><span class="all-count">11</span></summary>
           <ul>
             <li data-i18n="all.platforms.1">Apps for Windows, macOS and Linux, on x64 and ARM</li>
             <li data-i18n="all.platforms.2">An Android app, and an iPhone app to sideload or add from an AltStore, SideStore or Feather source</li>
@@ -665,6 +752,7 @@
             <li data-i18n="all.platforms.5">Several consoles in one app; switch with a tap</li>
             <li data-i18n="all.platforms.6">Computers, phones and Docker can use one PS5 at once and see what the others are doing</li>
             <li data-i18n="all.platforms.7">Finds PS5s on your network, and follows one that changed address</li>
+            <li data-i18n="all.platforms.11">Away from home, the whole app reaches your PS5 through Tailscale, set up from the app</li>
             <li data-i18n="all.platforms.8">Updates itself in the background, and installs the update when you quit</li>
             <li data-i18n="all.platforms.9">Settings backed up every day, to your computer and to each console</li>
             <li data-i18n="all.platforms.10">Light and dark themes, plus OLED black and Peach</li>
@@ -676,7 +764,7 @@
             <li data-i18n="all.agents.1">A built-in MCP server lets AI agents use PS5Upload, with more than 120 tools</li>
             <li data-i18n="all.agents.2">One-click setup for Claude Code, Codex and OpenCode; copy and paste for other agents</li>
             <li data-i18n="all.agents.3">Agents get new tools by themselves when the app updates</li>
-            <li data-i18n="all.agents.4">A read-only mode, and risky tools that ask first</li>
+            <li data-i18n="all.agents.4b">A switch in the app decides whether agents can change things or only look; risky tools ask first</li>
             <li data-i18n="all.agents.5">An HTTP API for everything, described in OpenAPI</li>
             <li data-i18n="all.agents.6">A queue per console runs uploads, installs and conversions in order, and survives restarts</li>
             <li data-i18n="all.agents.7">Live events, so scripts can follow progress</li>
@@ -746,11 +834,11 @@
             <summary data-i18n="howto.together.title">Play together with a friend</summary>
             <div>
               <ol>
-                <li data-i18n="howto.together.s1">Start Play, then press the people button on the picture's bar (on a phone, <b>⋯ › Play Together</b>).</li>
+                <li data-i18n="howto.together.s1b">Open <b>Play › Play together</b> and press <b>Start and invite</b>. Already playing? Press the people button on the picture's bar (on a phone, <b>⋯ › Play Together</b>).</li>
                 <li data-i18n="howto.together.s2">Send your friend the link, or let them scan the QR code. Press <b>Allow</b> when their name pops up.</li>
                 <li data-i18n="howto.together.s3">On the TV, they press PS and pick <b>Quick Play</b> (or their own user), then play.</li>
               </ol>
-              <p class="muted" data-i18n="howto.together.note2">Friend somewhere else? Choose <b>Internet</b> above the QR code and send them that link. The <a href="faq/#short-guides-phone-away-from-home-friends-tv-delay--can-a-friend-who-isn-t-at-my-place-play-together-or-use-a-phone-controller">FAQ</a> has the details (in English).</p>
+              <p class="muted" data-i18n="howto.together.note3">Friend somewhere else? Choose <b>Internet</b> before you start, or above the QR code, and send them that link. The <a href="faq/#short-guides-phone-away-from-home-friends-tv-delay--can-a-friend-who-isn-t-at-my-place-play-together-or-use-a-phone-controller">FAQ</a> has the details (in English).</p>
             </div>
           </details>
           <details class="guide">
@@ -830,12 +918,12 @@
             <summary data-i18n="howto.away.title">Play away from home</summary>
             <div>
               <ol>
-                <li data-i18n="howto.away.s1">PS5Upload works on your home network. Never open its ports to the internet: it has no password.</li>
-                <li data-i18n="howto.away.s2b">Join your home network with a VPN: on your phone or laptop, plus a VPN server at home, on a computer or your router.</li>
-                <li data-i18n="howto.away.s3">Connect to the PS5 at its usual address and play. How smooth it is depends on your home connection's upload speed.</li>
+                <li data-i18n="howto.away.ts1">At home, open <b>Connection</b>, press <b>Put this PS5 on Tailscale</b> and sign in to your Tailscale account (a free one works).</li>
+                <li data-i18n="howto.away.ts2">On the phone or laptop you'll take with you, open <b>Settings › Tailscale</b> and sign in to the same account. No Tailscale app needed.</li>
+                <li data-i18n="howto.away.ts3">Away from home, connect and play as usual. The status bar shows <i>via Tailscale</i>, direct or relayed, with the delay.</li>
               </ol>
-              <p class="muted" data-i18n="howto.away.note">Through a VPN, Stream &amp; install and installs from a link don't work (use Upload &amp; install), and waking from rest mode may not: leave the PS5 on.</p>
-              <p class="muted" data-i18n="howto.away.friends">Only want a friend far away to play along? Send them an internet invite from <a href="#together">Play Together</a> instead: no VPN needed.</p>
+              <p class="muted" data-i18n="howto.away.ts_note">Only Remote Play and PS5Upload can be reached through Tailscale. How smooth it is depends on your home connection's upload speed, and waking the PS5 from rest mode from far away may not work: leave it on. Never open the app's ports to the internet instead: it has no password. Headscale works too, under <b>Advanced</b>.</p>
+              <p class="muted" data-i18n="howto.away.friends2">Only want a friend far away to play along? Send them an internet invite from <a href="#together">Play Together</a> instead: they don't need a Tailscale account.</p>
             </div>
           </details>
           <details class="guide">
