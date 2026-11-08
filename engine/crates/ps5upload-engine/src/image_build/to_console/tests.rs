@@ -459,7 +459,7 @@ fn a_second_try_keeps_the_first_tries_time_until_the_image_is_done() {
     let first = console_stamp(Some(&data), "10.0.0.2", "/data/g.exfat");
     std::thread::sleep(Duration::from_millis(1100));
     assert_eq!(
-        console_stamp(Some(&data), "10.0.0.2:9113", "/data/g.exfat"),
+        console_stamp(Some(&data), "10.0.0.2:9021", "/data/g.exfat"),
         first
     );
     assert_ne!(
@@ -477,7 +477,7 @@ fn a_second_try_keeps_the_first_tries_time_until_the_image_is_done() {
 #[test]
 fn the_job_id_follows_the_plan_the_console_and_the_path() {
     let a = job_id("192.168.1.5", "/data/x.exfat", "k");
-    assert_eq!(a, job_id("192.168.1.5:9113", "/data/x.exfat", "k"));
+    assert_eq!(a, job_id("192.168.1.5:9021", "/data/x.exfat", "k"));
     assert_ne!(a, job_id("192.168.1.6", "/data/x.exfat", "k"));
     assert_ne!(a, job_id("192.168.1.5", "/data/y.exfat", "k"));
     assert_ne!(a, job_id("192.168.1.5", "/data/x.exfat", "k2"));
