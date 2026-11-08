@@ -3088,6 +3088,7 @@
   "fpkg.image.lz4_unavailable": "3d3bfd2c 3U8hH6fxKiIBF2SetwTRoBd4adPc8KJNtAB1gkzUGSJcpxntSVFyV9i0DnIE",
   "fpkg.image.make": "e5232312 7d9fZMRGHbJ827oJbekDLI6pdMl9SACniJTfaEjQQtTTTGNxMSeyKx4ojH8E",
   "fpkg.image.make_compressed": "d23a2e81 -9vNdwEx9TVPnlhYL51yhDCQ4SbmQm6vhpBFR4rYXVgc2C_CYFC9PInBXDFX",
+  "fpkg.image.resume_note": "8af6ce2c 6_z3XOmp-dJ8Sqprmu3_6Nf37x82VbAoXLPcozq1aM-_sgG1IfGJYeMeqKQv",
   "fpkg.image.verify_chunk": "aba8533c TXJuErQ1wKHOS-eEldosxohSeEGO5huu2GGJqP4vkrK0Qdpz_vSAqt2UgDMu",
   "fpkg.image.verify_chunk_body": "7b56e369 PtodmBJG5LH1AGsrTHtjVPqF7BKyQSuLyxex0OTMXqefMsNqXI2-ml9c71xr",
   "fpkg.image.verify_chunk_default": "585a2eaf bZdAreSEMTyQOzlQnE2vz-uJicGFGX_NfJuasO8-OGrF-NZAFjVwfHW6Bily",

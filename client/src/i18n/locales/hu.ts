@@ -4237,6 +4237,7 @@ gate_engine_down_body_v2: "Ehhez a képernyőhöz kell az alkalmazás motorja, a
 "fpkg.image.make": "Játékképfájl készítése",
 "fpkg.image.make_compressed": "Tömörített képfájl készítése",
 "fpkg.image.compress_body_v2": "Általában 40–60%-kal kisebb, tovább tart elkészíteni, és mindig csak olvashatóként csatolódik. Írás közben tömörül, így a lemezen csak a tömörített fájl van.",
+"fpkg.image.resume_note": "Ha az alkalmazás vagy a motor leáll egy kép készítése közben, az újbóli készítés onnan folytatja, ahol abbamaradt, majd minden bájtot visszaolvas. Az LZ4 vagy zstd erőforráscsomagos kép elölről kezdődik.",
 "fpkg.image.level_fast_body": "A leggyorsabban elkészül, kicsit nagyobb.",
 "fpkg.image.level_balanced_body": "Majdnem ugyanolyan kicsi, és többszörösen gyorsabban elkészül.",
 "fpkg.image.level_smallest_body": "A legkisebb fájl: minden blokkon lefut egy második, erősebb kódoló is, ezért többszörös ideig tart.",

@@ -517,13 +517,14 @@ describe("RunCard", () => {
       const zstd = lz4({ on: true, kind: "zstd", readiness: noEmulator });
       expect(lz4Active("ffpkg", zstd)).toBe(true);
       expect(lz4Active("ffpkg", lz4({ on: true }))).toBe(false);
-      expect(idle("ffpkg", zstd)).toContain("zstd asset packs");
+      expect(checkbox(idle("ffpkg", zstd), "zstd asset packs")).not.toBeNull();
       expect(idle("ffpkg", zstd)).not.toContain("AMPR LZ4 asset packs");
       expect(checkbox(idle("exfat", zstd), "AMPR LZ4 asset packs")?.checked).toBe(false);
       expect(checkbox(idle("exfat", zstd), "zstd asset packs")?.checked).toBe(true);
       const notAmpr = lz4({ kind: "zstd", on: true, readiness: { refusal: "no", kind: "no_ampr" } });
       expect(lz4Active("ffpkg", notAmpr)).toBe(false);
-      expect(idle("ffpkg", notAmpr)).not.toContain("zstd asset packs");
+      // The resume note also names zstd asset packs, so look for the option itself.
+      expect(checkbox(idle("ffpkg", notAmpr), "zstd asset packs")).toBeNull();
       // The runtime choice goes with it: the newest release unless the tested one is chosen.
       expect(packOptions("ffpkg", zstd)).toEqual({ zstdLevel: 5, zstdRuntime: "latest" });
       expect(packOptions("ffpkg", lz4({ on: true }))).toBeUndefined();

@@ -4640,6 +4640,7 @@ gate_engine_down_body_v2: "This screen needs the app's engine, which is not answ
 "fpkg.image.make": "Make game image",
 "fpkg.image.make_compressed": "Make compressed image",
 "fpkg.image.compress_body_v2": "Usually 40–60% smaller, slower to make, and always mounted read-only. It is compressed as it is written, so only the compressed file is ever on disk.",
+"fpkg.image.resume_note": "If the app or the engine stops while an image is being made, making it again goes on from where it stopped and then reads every byte back. An image with LZ4 or zstd asset packs starts over.",
 "fpkg.image.level_fast_body": "Quickest to make, a little larger.",
 "fpkg.image.level_balanced_body": "Almost as small, and several times faster to make.",
 "fpkg.image.level_smallest_body": "Smallest file: a second, stronger encoder runs on every block, so it takes several times as long.",

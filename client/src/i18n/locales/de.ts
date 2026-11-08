@@ -3949,6 +3949,7 @@ gate_engine_down_body_v2: "Dieser Bildschirm braucht die Engine der App, die nic
 "fpkg.image.make": "Spielabbild erstellen",
 "fpkg.image.make_compressed": "Komprimiertes Abbild erstellen",
 "fpkg.image.compress_body_v2": "Meist 40–60 % kleiner, langsamer zu erstellen und immer schreibgeschützt eingebunden. Es wird beim Schreiben komprimiert, daher liegt nur die komprimierte Datei auf der Festplatte.",
+"fpkg.image.resume_note": "Wenn die App oder die Engine stoppt, während ein Image erstellt wird, macht ein erneuter Start dort weiter, wo es aufgehört hat, und liest danach jedes Byte zurück. Ein Image mit LZ4- oder zstd-Asset-Packs beginnt von vorn.",
 "fpkg.image.level_fast_body": "Am schnellsten erstellt, etwas größer.",
 "fpkg.image.level_balanced_body": "Fast genauso klein und um ein Vielfaches schneller erstellt.",
 "fpkg.image.level_smallest_body": "Kleinste Datei: Ein zweiter, stärkerer Encoder läuft über jeden Block, daher dauert es ein Mehrfaches länger.",

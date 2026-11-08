@@ -1342,16 +1342,16 @@ pub(crate) async fn exfat_build_handler(
                 &mut report,
             ),
             // A libSceAmpr game gets a fresh ampr_emu.index (#449), as a package does.
-            // A plain exFAT image can go on after a crash: same files, same bytes, as long as the
-            // regenerated index keeps its time.
-            (Ok(tree), None)
-                if inner_name.is_none() && format == crate::image_build::ImageFormat::Exfat =>
-            {
+            // Any image without packs can go on after a crash: same files, same bytes, as long as
+            // the regenerated index and a PFS image keep their time.
+            (Ok(tree), None) => {
                 let stamp = crate::image_build::index_stamp(&partial_out);
                 match crate::image_build::AmprIndexed::wrap_at(&mut *tree, stamp) {
                     Ok(Some(mut indexed)) => crate::image_build::build_resumable(
                         format,
+                        inner_name.as_deref(),
                         level,
+                        stamp,
                         &mut indexed,
                         &output,
                         mode,
@@ -1361,7 +1361,9 @@ pub(crate) async fn exfat_build_handler(
                     ),
                     Ok(None) => crate::image_build::build_resumable(
                         format,
+                        inner_name.as_deref(),
                         level,
+                        stamp,
                         tree,
                         &output,
                         mode,
@@ -1372,31 +1374,6 @@ pub(crate) async fn exfat_build_handler(
                     Err(e) => Err(format!("ampr_emu.index: {e}")),
                 }
             }
-            (Ok(tree), None) => match crate::image_build::AmprIndexed::wrap(&mut *tree) {
-                Ok(Some(mut indexed)) => crate::image_build::build_at(
-                    format,
-                    inner_name.as_deref(),
-                    level,
-                    &mut indexed,
-                    &output,
-                    mode,
-                    verify_chunk,
-                    &cancel,
-                    &mut report,
-                ),
-                Ok(None) => crate::image_build::build_at(
-                    format,
-                    inner_name.as_deref(),
-                    level,
-                    tree,
-                    &output,
-                    mode,
-                    verify_chunk,
-                    &cancel,
-                    &mut report,
-                ),
-                Err(e) => Err(format!("ampr_emu.index: {e}")),
-            },
         };
         drop(writing);
         drop(spooling);

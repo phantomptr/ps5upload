@@ -3948,6 +3948,7 @@ gate_engine_down_body_v2: "Bu ekranın uygulamanın motoruna ihtiyacı var, ama 
 "fpkg.image.make": "Oyun imajı oluştur",
 "fpkg.image.make_compressed": "Sıkıştırılmış imaj oluştur",
 "fpkg.image.compress_body_v2": "Genellikle %40–60 daha küçüktür, oluşturulması daha uzun sürer ve her zaman salt okunur bağlanır. Yazılırken sıkıştırılır, bu yüzden diskte yalnızca sıkıştırılmış dosya bulunur.",
+"fpkg.image.resume_note": "Bir imaj oluşturulurken uygulama veya motor durursa, yeniden oluşturmak kaldığı yerden devam eder ve ardından her baytı geri okur. LZ4 veya zstd varlık paketli bir imaj baştan başlar.",
 "fpkg.image.level_fast_body": "En hızlı oluşturulur, biraz daha büyüktür.",
 "fpkg.image.level_balanced_body": "Neredeyse aynı küçüklükte ve birkaç kat daha hızlı oluşturulur.",
 "fpkg.image.level_smallest_body": "En küçük dosya: her blokta ikinci, daha güçlü bir kodlayıcı çalışır, bu yüzden birkaç kat uzun sürer.",

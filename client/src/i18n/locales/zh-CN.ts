@@ -3900,6 +3900,7 @@ gate_engine_down_body_v2: "此界面需要应用的引擎，但引擎没有响�
 "fpkg.image.make": "制作游戏镜像",
 "fpkg.image.make_compressed": "制作压缩镜像",
 "fpkg.image.compress_body_v2": "通常小 40–60%，制作更慢，且总是以只读方式挂载。它在写入时即被压缩，因此磁盘上只会有压缩后的文件。",
+"fpkg.image.resume_note": "如果制作镜像时应用或引擎停止，再次制作会从停下的地方继续，然后回读每个字节进行检查。带 LZ4 或 zstd 资源包的镜像会从头开始。",
 "fpkg.image.level_fast_body": "制作最快，体积稍大。",
 "fpkg.image.level_balanced_body": "体积几乎一样小，制作速度快好几倍。",
 "fpkg.image.level_smallest_body": "文件最小：每个块都会再用一个更强的编码器压缩一遍，因此耗时长好几倍。",
