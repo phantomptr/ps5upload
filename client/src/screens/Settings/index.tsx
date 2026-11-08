@@ -1,11 +1,18 @@
 import { MarkdownView } from "../../components/MarkdownView";
-import { MinionSettings } from "./MinionSettings";
+import { MinionDefaults } from "./MinionSettings";
+import { GroupHeading, Section } from "./SettingsLayout";
+import { Ps5SettingsTab } from "./Ps5Settings";
+import { settingsTabOf } from "./settingsTabs";
+import { useSearchParams } from "react-router";
+import { Tabs } from "../../components/Tabs";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { writeClipboard } from "../../lib/clipboard";
 import { EMPTY_CORPUS, deleteFakelibSet, loadFakelibCorpus, type FakelibCorpus } from "../../state/fakelibCorpus";
 import { LibrarySourcePicker } from "../Backport/LibrarySourcePicker";
 import {
   Settings as SettingsIcon,
+  AppWindow,
+  Gamepad2,
   Moon as SleepIcon,
   Upload as UploadIcon,
   FileJson,
@@ -19,7 +26,6 @@ import {
   MoonStar,
   Sunrise,
   Gauge,
-  Zap,
   Trash2,
   ExternalLink,
   ALargeSmall,
@@ -74,9 +80,7 @@ import { engineRestart } from "../../lib/engineDiagnosis";
 import { useConnectionStore } from "../../state/connection";
 import { useSaveSettingsStore, DEFAULT_SAVE_PATH } from "../../state/saveSettings";
 import { useBetaFeaturesStore } from "../../state/betaFeatures";
-import { useInstallPathFallbackStore } from "../../state/installPathFallback";
 import { hasBetaItems } from "../../layout/navItems";
-import { useRestAfterUploadStore } from "../../state/restAfterUpload";
 import { userConfigPath, resetAllAppData } from "../../state/userConfig";
 import { failedInstall, useUpdateStore, type UpdatePhase } from "../../state/update";
 import { updateOpenLog, updateQuitForManualInstall } from "../../api/ps5";
@@ -108,44 +112,6 @@ import { trayPossible } from "../../state/tray";
 import { GentleToggle } from "../FpkgConvert/GentleToggle";
 // useAuditLogStore + AuditEntry moved to screens/AuditLog/index.tsx
 // (2.12.0 — promoted out of Settings junk drawer).
-
-/** Full-width band heading that visually groups the cards that follow it.
- *  Implemented as a `col-span-full` sibling in the same grid (not a wrapper)
- *  so it forces a new row and the cards under it flow as their own band. */
-function GroupHeading({ children }: { children: React.ReactNode }) {
-  return (
-    <h2 className="mt-4 border-b border-[var(--color-border)] pb-1.5 text-sm font-semibold text-[var(--color-text)] md:col-span-2 first:mt-0">
-      {children}
-    </h2>
-  );
-}
-
-function Section({
-  title,
-  children,
-  /** When true, the section spans the full grid width instead of sharing a
-   *  row. For settings whose body is tall enough (a warning card, a long
-   *  description) that half-width would look cramped. */
-  full = false,
-}: {
-  title: string;
-  children: React.ReactNode;
-  full?: boolean;
-}) {
-  return (
-    <section
-      className={
-        "surface-panel !rounded-[var(--radius-card)] flex h-full flex-col p-5 " +
-        (full ? "md:col-span-2" : "")
-      }
-    >
-      <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
-        {title}
-      </h2>
-      {children}
-    </section>
-  );
-}
 
 /** Accessibility settings panel (v5 §23).
  *
@@ -537,7 +503,58 @@ function SavePathSection() {
   );
 }
 
+/**
+ * Settings, in two tabs: App (this device, and choices that are the same for every console) and
+ * This PS5 (one console's own settings, with a picker that starts on the selected console).
+ * `/settings#tailscale` opens App at this device's Tailscale; `/settings?tab=ps5&console=<id>`
+ * opens This PS5 on that console (settingsTabs.ts).
+ */
 export default function SettingsScreen() {
+  const tr = useTr();
+  const [params, setParams] = useSearchParams();
+  const tab = settingsTabOf(params);
+  const requested = params.get("console");
+  return (
+    <div className="app-page">
+      <PageHeader
+        icon={SettingsIcon}
+        title={tr("settings", undefined, "Settings")}
+        description={tr(
+          "settings_description_v2",
+          undefined,
+          "App: this device and choices for every console. This PS5: one console's own settings.",
+        )}
+      />
+      <Tabs
+        className="mb-4"
+        variant="segmented"
+        ariaLabel={tr("settings", undefined, "Settings")}
+        value={tab}
+        onChange={(id) =>
+          setParams(
+            id === "ps5" ? { tab: "ps5", ...(requested ? { console: requested } : {}) } : {},
+            { replace: true },
+          )
+        }
+        tabs={[
+          { id: "app", label: tr("settings_tab_app", undefined, "App"), icon: AppWindow },
+          { id: "ps5", label: tr("settings_tab_ps5", undefined, "This PS5"), icon: Gamepad2 },
+        ]}
+      />
+      {tab === "ps5" ? (
+        <Ps5SettingsTab
+          requested={requested}
+          onPick={(id) => setParams({ tab: "ps5", console: id }, { replace: true })}
+        />
+      ) : (
+        <AppSettingsTab />
+      )}
+    </div>
+  );
+}
+
+/** Settings › App: this device's preferences and the choices that are the same for every console. */
+function AppSettingsTab() {
   const { enabled, supported, lastError, setEnabled, syncFromBackend } =
     useKeepAwakeStore();
   const lang = useLangStore((s) => s.lang);
@@ -548,29 +565,17 @@ export default function SettingsScreen() {
     showTransferFiles,
     autoResume,
     queueAutoStart,
-    wakeForUploads,
-    keepPs5AwakeMode,
-    autoRedeployOnWake,
-    autoBringUp,
     systemFileRead,
     bandwidthCapMbps,
     setAlwaysOverwrite,
     setShowTransferFiles,
     setAutoResume,
     setQueueAutoStart,
-    setWakeForUploads,
-    setKeepPs5AwakeMode,
     setBandwidthCapMbps,
-    setAutoRedeployOnWake,
-    setAutoBringUp,
     setSystemFileRead,
   } = useUploadSettingsStore();
-  const restAfterUpload = useRestAfterUploadStore((s) => s.enabled);
-  const setRestAfterUpload = useRestAfterUploadStore((s) => s.setEnabled);
   const betaFeatures = useBetaFeaturesStore((s) => s.enabled);
   const setBetaFeatures = useBetaFeaturesStore((s) => s.setEnabled);
-  const installPathFallback = useInstallPathFallbackStore((s) => s.enabled);
-  const setInstallPathFallback = useInstallPathFallbackStore((s) => s.setEnabled);
   // UA-based, stable for the whole session — safe to read during render.
   const mobile = isMobile();
   const tauri = isTauriEnv();
@@ -596,17 +601,7 @@ export default function SettingsScreen() {
   }, [show.settingsFile]);
 
   return (
-    <div className="app-page">
-      <PageHeader
-        icon={SettingsIcon}
-        title={tr("settings", undefined, "Settings")}
-        description={tr(
-          "settings_description",
-          undefined,
-          "App preferences — language, keep-awake, upload defaults, and where your settings are stored.",
-        )}
-      />
-
+    <>
       {/* Two columns at md and above, and cards STRETCH to their row.
           This was three columns at xl with `items-start`, which is what made
           the page look ragged: every card shrank to its own content, so a
@@ -616,13 +611,14 @@ export default function SettingsScreen() {
           small, and stretching aligns the rows. The max-width stops the page
           sprawling edge-to-edge on a wide monitor, where 3 narrow columns of
           unrelated settings were hardest to scan. */}
-      <div className="grid w-full gap-4 md:grid-cols-2">
+      <div className="grid w-full gap-4 md:grid-cols-2" data-testid="settings-app">
         <GroupHeading>
           {tr("settings_group_general", undefined, "General")}
         </GroupHeading>
 
+        {/* Minion on one console is in This PS5; what happens on consoles added later is here. */}
         <Section title={tr("cw_settings_app_name", undefined, "PS5Upload Minion")}>
-          <MinionSettings />
+          <MinionDefaults />
         </Section>
 
         <Section title={tr("language", undefined, "Language")}>
@@ -741,110 +737,17 @@ export default function SettingsScreen() {
 
         <AccessibilitySection />
 
+        {/* What the engine and this device do for every console. Each console's own Play
+            Together guests and Tailscale are in This PS5. */}
         <GroupHeading>
-          {tr("settings_group_console", undefined, "Console")}
+          {tr("settings_group_network", undefined, "Play Together and Tailscale")}
         </GroupHeading>
-
-        {show.reconnectAfterRest && (
-          <Section
-            title={tr("settings_card_console_connect", undefined, "Connecting")}
-            full
-          >
-            <Toggle
-              checked={autoBringUp}
-              onChange={(checked) => setAutoBringUp(checked)}
-              label={tr("auto_bringup_label", undefined, "Bring up automatically")}
-              hint={tr(
-                "auto_bringup_hint",
-                undefined,
-                "When a saved PS5's loader (elfldr, port 9021) is up and the helper isn't running, the app runs Quick bring-up by itself: your bring-up playlist if you set one, then the helper, then your auto-loader playlist. Once each time the console starts; after rest mode only the helper is sent again. It waits about 90 seconds after the loader appears, so the console's own autoloader can finish first. Off by default.",
-              )}
-            />
-          </Section>
-        )}
-
-        <Section
-          title={tr("settings_card_console_rest", undefined, "Rest mode")}
-          full
-        >
-          <div className="grid gap-3">
-            {show.reconnectAfterRest && (
-              <Toggle
-                checked={autoRedeployOnWake}
-                onChange={(checked) => setAutoRedeployOnWake(checked)}
-                label={tr(
-                  "upload_auto_redeploy_on_wake",
-                  undefined,
-                  "Reconnect automatically after rest mode / network drops",
-                )}
-                hint={tr(
-                  "upload_auto_redeploy_on_wake_hint",
-                  undefined,
-                  "When the PS5's helper goes offline (rest mode, a WiFi switch, or a payload crash), keep trying to re-send it in the background — so the helper, your fan threshold, and the upload port come back by themselves once the console is reachable again, without clicking Connect. On by default.",
-                )}
-              />
-            )}
-
-            <div className="text-sm">
-              <div className="flex items-center gap-2 font-medium">
-                <Zap size={14} />
-                {tr("keep_ps5_awake_mode", "Keep the PS5 awake")}
-              </div>
-              <Select
-                id="keep-ps5-awake-mode"
-                value={keepPs5AwakeMode}
-                onChange={(e) =>
-                  setKeepPs5AwakeMode(
-                    e.target.value as "off" | "transfers" | "always",
-                  )
-                }
-                options={[
-                  { value: "off", label: tr("keep_awake_mode_off", "Off") },
-                  {
-                    value: "transfers",
-                    label: tr("keep_awake_mode_transfers_v2", "During uploads and installs"),
-                  },
-                  {
-                    value: "always",
-                    label: tr(
-                      "keep_awake_mode_always",
-                      "Always while connected",
-                    ),
-                  },
-                ]}
-                block={false}
-                className="mt-1 text-xs"
-              />
-              <div className="mt-0.5 text-xs text-[var(--color-muted)]">
-                {tr(
-                  "keep_ps5_awake_mode_hint_v2",
-                  "Periodically resets the PS5's auto-standby timer so it can't drop into rest mode. “During uploads and installs” protects long uploads (a common cause of failed uploads; default). “Always while connected” keeps every console with a running helper out of rest mode for as long as the app is open. Putting the PS5 to rest manually still works in every mode.",
-                )}
-              </div>
-            </div>
-
-            <Toggle
-              checked={restAfterUpload}
-              onChange={(checked) => setRestAfterUpload(checked)}
-              label={tr(
-                "upload_rest_after",
-                undefined,
-                "Put the PS5 in rest mode after uploads finish",
-              )}
-              hint={tr(
-                "upload_rest_after_hint",
-                undefined,
-                "When a console's upload queue finishes, ask it to enter rest mode — handy for an overnight queue. Only fires when at least one upload actually completed (not after a Stop or an all-failed run). Off by default. Standby may be unavailable on some firmware; you'll get a notice if it's declined.",
-              )}
-            />
-          </div>
-        </Section>
 
         <Section title={tr("pt_button", undefined, "Play Together")} full>
           <PlayTogetherSettings />
         </Section>
 
-        <Section title={tr("tn_title", undefined, "Tailscale")} full>
+        <Section title={tr("tn_title_device", undefined, "Tailscale on this device")} full>
           <TailscaleSettings />
         </Section>
 
@@ -931,17 +834,6 @@ export default function SettingsScreen() {
                     )
               }
             />
-
-            <Toggle
-              checked={wakeForUploads}
-              onChange={(checked) => setWakeForUploads(checked)}
-              label={tr("upload_wake_for_uploads", undefined, "Wake the PS5 for a waiting upload")}
-              hint={tr(
-                "upload_wake_for_uploads_hint",
-                undefined,
-                "When an upload is waiting for a PS5 in rest mode, send it a wake signal and carry on once its helper is back. Only for a console with wake set up on the Connection screen. On by default.",
-              )}
-            />
           </div>
         </Section>
 
@@ -958,34 +850,6 @@ export default function SettingsScreen() {
 
         <Section title={tr("settings_card_workshop_share", undefined, "This computer")} full>
           <GentleToggle />
-        </Section>
-
-        <GroupHeading>
-          {tr("settings_group_installs", undefined, "Installs")}
-        </GroupHeading>
-
-        <Section
-          title={tr(
-            "settings_card_install_fallback",
-            undefined,
-            "When the PS5 cannot fetch a package",
-          )}
-          full
-        >
-          <Toggle
-            checked={installPathFallback}
-            onChange={(on) => setInstallPathFallback(on)}
-            label={tr(
-              "install_path_fallback_label",
-              undefined,
-              "Install by file path when the PS5 cannot reach this computer",
-            )}
-            hint={tr(
-              "install_path_fallback_hint",
-              undefined,
-              "A last resort for a package that is already on the PS5, when the PS5 refuses it from its own storage and cannot fetch it from this computer either. Only used for a base game that is not installed, so it cannot remove anything. Unproven: it has worked on firmware 11.20 and is refused on 13.60. If you try it, please report whether it worked.",
-            )}
-          />
         </Section>
 
         <GroupHeading>
@@ -1160,7 +1024,7 @@ export default function SettingsScreen() {
           </>
         )}
       </div>
-    </div>
+    </>
   );
 }
 

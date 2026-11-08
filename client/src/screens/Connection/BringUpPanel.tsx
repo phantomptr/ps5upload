@@ -1,6 +1,11 @@
 import { CheckCircle2, Zap } from "lucide-react";
+import { Link } from "react-router";
 
-import { Button, Spinner, ErrorCard, Toggle } from "../../components";
+import { Button, Spinner, ErrorCard } from "../../components";
+import { profileForHost } from "../../state/consoleSettings";
+import { useRosterStore } from "../../state/roster";
+import { AutoBringUpToggle, useBringUpPlaylistId } from "../Settings/ConsoleBringUp";
+import { ps5SettingsLink } from "../Settings/settingsTabs";
 import { useConnectionStore } from "../../state/connection";
 import {
   bringUpStatusFor,
@@ -10,7 +15,6 @@ import {
 import { helperSendFor, useHelperSendStore } from "../../state/helperSend";
 import { usePayloadPlaylistsStore } from "../../state/payloadPlaylists";
 import { useTr } from "../../state/lang";
-import { useUploadSettingsStore } from "../../state/uploadSettings";
 import { useHelperReplaceGuard } from "./useHelperReplaceGuard";
 
 /**
@@ -26,17 +30,13 @@ export function BringUpPanel() {
   const status = useBringUpStore((s) => bringUpStatusFor(s, host));
   const run = useBringUpStore((s) => s.run);
   const { guard, dialog: replaceDialog } = useHelperReplaceGuard();
-  const bringUpId = usePayloadPlaylistsStore(
-    (s) => s.autoLoader.bringUpPlaylistId,
-  );
+  // This console's own bring-up playlist and switch (Settings › This PS5 shows the same ones).
+  const consoleId = useRosterStore((s) => profileForHost(host, s.profiles)?.id ?? null);
+  const bringUpId = useBringUpPlaylistId(consoleId);
   const playlists = usePayloadPlaylistsStore((s) => s.playlists);
   const bringUpPlaylist = bringUpId
     ? playlists.find((p) => p.id === bringUpId)
     : undefined;
-
-  // Settings -> Bring up automatically (#479), here too: this is where people connect.
-  const autoBringUp = useUploadSettingsStore((s) => s.autoBringUp);
-  const setAutoBringUp = useUploadSettingsStore((s) => s.setAutoBringUp);
 
   const running = status.kind === "running";
   const canRun = !!host.trim() && !running;
@@ -91,17 +91,25 @@ export function BringUpPanel() {
         </Button>
       </header>
 
-      <Toggle
+      <AutoBringUpToggle
         className="mb-3"
-        checked={autoBringUp}
-        onChange={setAutoBringUp}
-        label={tr("auto_bringup_label", undefined, "Bring up automatically")}
+        consoleId={consoleId}
         hint={tr(
           "bringup_auto_hint_short",
           undefined,
           "Runs this by itself when the PS5's loader is up and the helper isn't, about 90 seconds after the loader appears. Once each time the console starts.",
         )}
       />
+      {consoleId && (
+        <p className="mb-3 text-xs">
+          <Link
+            to={ps5SettingsLink(consoleId)}
+            className="text-[var(--color-accent)] hover:underline"
+          >
+            {tr("bringup_ps5_settings_link", undefined, "Bring-up playlist and other settings for this PS5")}
+          </Link>
+        </p>
+      )}
 
       {status.kind !== "idle" && <BringUpStatusLine status={status} host={host} />}
     </section>
