@@ -9,6 +9,7 @@ import { JoinView } from "./JoinView";
 import { holdWhileJoined, JoinSession } from "./session";
 import type { JoinTransport } from "./rtcTransport";
 import { defaultName, lastName, rememberName } from "./guestName";
+import { OpenOnWifi, useHubDown } from "./OpenOnWifi";
 
 export { NAME_KEY, defaultName } from "./guestName";
 
@@ -44,14 +45,19 @@ export function JoinFlow({
   invite,
   host,
   transport,
+  lanUrl = null,
 }: {
   url: string;
   invite: string | null;
   host: string | null;
   /** An internet invite's WebRTC transport (rtcTransport.ts); absent: the LAN WebSocket. */
   transport?: JoinTransport;
+  /** An internet invite's page on the host's Wi-Fi (lanHint.ts), offered when the hub can't be
+   *  reached; null: the link names none (an older host). */
+  lanUrl?: string | null;
 }) {
   const tr = useTr();
+  const hubDown = useHubDown(transport ? url : null, lanUrl);
   const [name, setName] = useState(() => lastName(defaultName(typeof navigator === "undefined" ? "" : navigator.userAgent)));
   const [session, setSession] = useState<JoinSession | null>(null);
   const [round, setRound] = useState(0);
@@ -88,6 +94,8 @@ export function JoinFlow({
       <JoinView
         key={round}
         session={session}
+        lanUrl={lanUrl}
+        hubDown={hubDown}
         onLeave={() => setSession(null)}
         onAgain={() => {
           session.stop();
@@ -137,6 +145,7 @@ export function JoinFlow({
         >
           {tr("join_button", undefined, "Join")}
         </button>
+        {hubDown && lanUrl && <OpenOnWifi href={lanUrl} className="border-t border-white/10 pt-4" />}
       </form>
     </div>
   );

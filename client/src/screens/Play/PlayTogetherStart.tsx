@@ -4,31 +4,30 @@ import { Play, Settings2, Users } from "lucide-react";
 
 import { Button } from "../../components";
 import { useTr } from "../../state/lang";
-import { InternetHint, saveNetwork, savedNetwork, type NetworkKind } from "./NetworkChoice";
+import { InternetHint } from "./NetworkChoice";
 import { joinApi } from "./playTogetherState";
 
 /**
- * Play › Play together before a stream: what it is, the console, where the friends are (this
- * network or the internet), and one button that starts the stream and makes the invite. The
- * stream starts as Play my PS5's Start does (StreamPanel start); the Play Together panel then
- * shows in its place, opens Play Together and makes the invite for the network picked here
- * (it reads the same remembered choice, NetworkChoice savedNetwork).
+ * Play › Play together before a stream: what it is, the console, where the invite works, and one
+ * button that starts the stream and makes the invite. The stream starts as Play my PS5's Start
+ * does (StreamPanel start); the Play Together panel then shows in its place, opens Play Together
+ * and makes the one link (Settings › App › Play Together › Invites work).
  */
-export function PlayTogetherStart({ host, ...rest }: Omit<PlayTogetherStartViewProps, "internetInvites"> & { host: string | null }) {
-  // Whether the engine makes internet invites, and whether they are on (Settings › Play
-  // Together): read once per console. null: an engine from before them; undefined: not known yet.
-  const [internetInvites, setInternetInvites] = useState<boolean | null | undefined>(undefined);
+export function PlayTogetherStart({ host, ...rest }: Omit<PlayTogetherStartViewProps, "invites"> & { host: string | null }) {
+  // Where invites work (Settings › Play Together): read once per console. null: an engine from
+  // before internet invites; undefined: not known yet.
+  const [invites, setInvites] = useState<"anywhere" | "wifi" | null | undefined>(undefined);
   useEffect(() => {
     if (!host) return;
     let alive = true;
     void joinApi.read(host).then((s) => {
-      if (alive && s) setInternetInvites(s.settings.internetInvites);
+      if (alive && s) setInvites(s.settings.invites);
     });
     return () => {
       alive = false;
     };
   }, [host]);
-  return <PlayTogetherStartView {...rest} internetInvites={host ? internetInvites : undefined} />;
+  return <PlayTogetherStartView {...rest} invites={host ? invites : undefined} />;
 }
 
 /** What Start and invite does: start this console's stream, first stop the stream of another
@@ -60,8 +59,9 @@ export interface PlayTogetherStartViewProps {
   onStart: () => void;
   /** Play as (a console paired as more than one PS5 user), or null. */
   playAs: ReactNode;
-  /** Internet invites: on, off in the settings, null (the engine has none), undefined (not known). */
-  internetInvites: boolean | null | undefined;
+  /** Invites work: "anywhere", "wifi" (the settings say only on the Wi-Fi), null (the engine has
+   *  no internet invites), undefined (not known yet). */
+  invites: "anywhere" | "wifi" | null | undefined;
 }
 
 export function PlayTogetherStartView({
@@ -71,17 +71,10 @@ export function PlayTogetherStartView({
   startLabel,
   onStart,
   playAs,
-  internetInvites,
+  invites,
 }: PlayTogetherStartViewProps) {
   const tr = useTr();
   const navigate = useNavigate();
-  const [network, setNetwork] = useState<NetworkKind>(savedNetwork);
-  const internetOffered = internetInvites !== null;
-  const onInternet = internetOffered && network === "internet";
-  const pick = (kind: NetworkKind) => {
-    setNetwork(kind);
-    saveNetwork(kind);
-  };
   return (
     <section
       aria-labelledby="pt-start-title"
@@ -112,44 +105,26 @@ export function PlayTogetherStartView({
         {playAs}
       </div>
 
-      <div className="space-y-2">
-        <p id="pt-start-where" className="text-xs font-medium text-[var(--color-muted)]">
-          {tr("pt_tab_where", undefined, "Where are your friends?")}
-        </p>
-        <div className="flex flex-wrap gap-1.5" role="group" aria-labelledby="pt-start-where" data-testid="pt-start-net">
-          <button
-            type="button"
-            aria-pressed={!onInternet}
-            onClick={() => pick("home")}
-            className="chip min-h-8 px-3 text-xs max-md:min-h-11"
-            data-testid="pt-start-net-home"
-          >
-            {tr("net_home", undefined, "This network")}
-          </button>
-          {internetOffered && (
-            <button
-              type="button"
-              aria-pressed={onInternet}
-              onClick={() => pick("internet")}
-              className="chip min-h-8 px-3 text-xs max-md:min-h-11"
-              data-testid="pt-start-net-internet"
-            >
-              {tr("net_internet", undefined, "Internet")}
-            </button>
-          )}
+      {/* One link for friends anywhere (the same Wi-Fi included): nothing to choose here. */}
+      {invites === "anywhere" && (
+        <div className="space-y-1" data-testid="pt-start-net">
+          <InternetHint testId="pt-start-net" />
         </div>
-        {onInternet && <InternetHint testId="pt-start-net" />}
-        {onInternet && internetInvites === false && (
-          <div className="flex flex-wrap items-center gap-2" data-testid="pt-start-net-off">
-            <p className="min-w-0 flex-1 text-xs text-[var(--color-warn)]">
-              {tr("pt_net_off", undefined, "Internet invites are off. Turn on Allow internet invites in Settings › Play Together.")}
-            </p>
-            <Button size="sm" variant="ghost" leftIcon={<Settings2 size={14} />} onClick={() => navigate("/settings")}>
-              {tr("picker_open_settings", undefined, "Open settings")}
-            </Button>
-          </div>
-        )}
-      </div>
+      )}
+      {invites === "wifi" && (
+        <div className="flex flex-wrap items-center gap-2" data-testid="pt-start-net-off">
+          <p className="min-w-0 flex-1 text-xs text-[var(--color-muted)]">
+            {tr(
+              "pt_wifi_only_setting",
+              undefined,
+              "Invites work only on your Wi-Fi. For friends somewhere else, set Invites work to Anywhere in Settings › App › Play Together.",
+            )}
+          </p>
+          <Button size="sm" variant="ghost" leftIcon={<Settings2 size={14} />} onClick={() => navigate("/settings")}>
+            {tr("picker_open_settings", undefined, "Open settings")}
+          </Button>
+        </div>
+      )}
 
       <Button
         variant="primary"

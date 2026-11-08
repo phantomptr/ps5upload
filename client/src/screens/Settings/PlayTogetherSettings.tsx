@@ -1,10 +1,17 @@
 import { useEffect, useState } from "react";
 
-import { Button, Input, Textarea, Toggle } from "../../components";
+import {
+  Button,
+  Input,
+  SegmentedControl,
+  Textarea,
+  Toggle,
+} from "../../components";
 import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
 import {
   hubUrlOk,
+  invitesBody,
   joinApi,
   MAX_STUN,
   parseStun,
@@ -12,8 +19,9 @@ import {
   type NetSettingsBody,
 } from "../Play/playTogetherState";
 /**
- * Settings › App › Play Together: internet invites (a link through the signalling hub, the
- * friend's browser connecting straight to this computer over WebRTC). The engine keeps one set of
+ * Settings › App › Play Together: where invites work. Anywhere: one link (through the signalling
+ * hub, the friend's browser connecting straight to this computer over WebRTC, staying on the Wi-Fi
+ * when the friend is on it); Only on my Wi-Fi: the home network's link. The engine keeps one set of
  * these for every console, so any console's address reads and writes it. Which PS5 profile each
  * guest plays as is one console's (Settings › This PS5, PlayTogetherGuestProfiles).
  */
@@ -84,6 +92,8 @@ export function PlayTogetherSettings() {
     );
   }
 
+  const invites =
+    net.invites ?? (net.internetInvites ? "anywhere" : "wifi");
   const hubBad = hub.trim() !== "" && !hubUrlOk(hub);
   const stunList = parseStun(stun);
   const advancedChanged =
@@ -92,20 +102,54 @@ export function PlayTogetherSettings() {
 
   return (
     <div className="space-y-3" data-testid="pt-settings">
-      <div data-testid="pt-set-internet">
-        <Toggle
-          checked={net.internetInvites}
-          onChange={(on) => {
-            setNet({ ...net, internetInvites: on });
-            void save({ internet_invites: on });
+      <div className="space-y-1.5" data-testid="pt-set-internet">
+        <p id="pt-set-invites-label" className="text-sm font-medium">
+          {tr("pt_set_invites", undefined, "Invites work")}
+        </p>
+        <SegmentedControl
+          ariaLabel={tr("pt_set_invites", undefined, "Invites work")}
+          value={invites}
+          onChange={(v) => {
+            const anywhere = v === "anywhere";
+            setNet({
+              ...net,
+              internetInvites: anywhere,
+              invites: anywhere ? "anywhere" : "wifi",
+            });
+            // Both names: an engine from before `invites` reads internet_invites.
+            void save(invitesBody(anywhere ? "anywhere" : "wifi"));
           }}
-          label={tr("pt_set_internet", undefined, "Allow internet invites")}
-          hint={tr(
-            "pt_set_internet_hint",
-            undefined,
-            "Play Together can make a link for friends anywhere, no Tailscale needed. Off: invites work on your home network only.",
-          )}
+          segments={[
+            {
+              value: "anywhere",
+              label: tr(
+                "pt_set_invites_anywhere",
+                undefined,
+                "Anywhere (recommended)",
+              ),
+            },
+            {
+              value: "wifi",
+              label: tr("pt_set_invites_wifi", undefined, "Only on my Wi-Fi"),
+            },
+          ]}
         />
+        <p
+          className="text-xs text-[var(--color-muted)]"
+          data-testid="pt-set-invites-hint"
+        >
+          {invites === "anywhere"
+            ? tr(
+                "pt_set_invites_anywhere_hint",
+                undefined,
+                "One link for every friend: on your Wi-Fi it stays on your Wi-Fi, elsewhere it goes over the internet. With no internet, the link works on your Wi-Fi.",
+              )
+            : tr(
+                "pt_set_invites_wifi_hint",
+                undefined,
+                "Links work only for friends on your Wi-Fi (or your Tailscale network). Nothing goes through the invite service.",
+              )}
+        </p>
       </div>
       <div data-testid="pt-set-upnp">
         <Toggle

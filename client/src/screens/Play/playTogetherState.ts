@@ -25,6 +25,10 @@ export interface JoinGuest {
   via: "lan" | "internet";
   /** An internet guest's connection: "direct", "connecting", "failed", "closed" (null on the LAN). */
   path: string | null;
+  /** How they are connected, from the engine's `link.path`: "lan" (the home network),
+   *  "tailscale", "internet" (direct through both routers); null when the engine doesn't say
+   *  (an older one, or ICE has no pair yet). */
+  netPath: "lan" | "tailscale" | "internet" | null;
   /** Seated in the PS5 profile the host chose for their player ("Guests play as"): its name. */
   playsAs: string | null;
   /** A profile was chosen for their player but couldn't be used, so the TV asks who they are:
@@ -83,12 +87,27 @@ export interface NetInvite {
   hubState: string | null;
   /** Why the hub can't be reached, in the engine's words. */
   hubError: string | null;
+  /** The engine can't reach the hub (hub.rs Room::offline): the invite is the Wi-Fi's for now. */
+  offline: boolean;
+}
+
+/** The one link to share (POST /api/join/invite `share`): where it works, and why it is the
+ *  Wi-Fi's ("setting": Invites work says Only on my Wi-Fi; "offline": no internet here, or the
+ *  invite service is down; "local": none was asked for). */
+export interface ShareLink {
+  url: string | null;
+  works: "anywhere" | "wifi";
+  why: string | null;
 }
 
 /** The host's Play Together choices for internet invites (every console). */
 export interface NetSettings {
   /** Internet invites allowed; null: an engine from before internet invites (none offered). */
   internetInvites: boolean | null;
+  /** Settings › App › Play Together › Invites work: "anywhere" (the one link: the internet
+   *  invite, which works on the Wi-Fi too) or "wifi"; null like internetInvites. An engine from
+   *  before the word says it with internet_invites. */
+  invites: "anywhere" | "wifi" | null;
   hubUrl: string;
   stun: string[];
   upnp: boolean;
@@ -108,6 +127,8 @@ export interface JoinHostState {
     tailscale: string | null;
     /** The internet invite, when the host made one. */
     internet: NetInvite | null;
+    /** The one link (null: an engine from before it, see `shareOf`). */
+    share: ShareLink | null;
   } | null;
   guests: JoinGuest[];
   asks: Array<{ id: number; name: string }>;
@@ -129,7 +150,7 @@ export const EMPTY_JOIN: JoinHostState = {
   invite: null,
   guests: [],
   asks: [],
-  settings: { blockSystemButtons: true, maxPlayers: 3, streamSeat: false, internetInvites: null, hubUrl: "", stun: [], upnp: true, videoTrack: true },
+  settings: { blockSystemButtons: true, maxPlayers: 3, streamSeat: false, internetInvites: null, invites: null, hubUrl: "", stun: [], upnp: true, videoTrack: true },
   netPeers: [],
   seatNext: false,
   nextProfile: null,
@@ -148,7 +169,28 @@ const str = (v: unknown): string | null => (typeof v === "string" && v ? v : nul
 export function readNetInvite(v: unknown): NetInvite | null {
   if (!v || typeof v !== "object") return null;
   const o = v as Record<string, unknown>;
-  return { url: str(o.url), hubState: str(o.state), hubError: str(o.error) };
+  return { url: str(o.url), hubState: str(o.state), hubError: str(o.error), offline: o.offline === true };
+}
+
+/** The invite's one link (`invite.share`), or null. */
+export function readShare(v: unknown): ShareLink | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  return { url: str(o.url), works: o.works === "anywhere" ? "anywhere" : "wifi", why: str(o.why) };
+}
+
+/** How a guest is connected (`link.path`), or null. */
+function readNetPath(link: unknown): JoinGuest["netPath"] {
+  const p = (link as { path?: unknown } | null | undefined)?.path;
+  return p === "lan" || p === "tailscale" || p === "internet" ? p : null;
+}
+
+/** The link to show: the engine's one link, else (an engine from before it) the internet link
+ *  when there is one, else the home network's. */
+export function shareOf(invite: NonNullable<JoinHostState["invite"]>): ShareLink {
+  if (invite.share) return invite.share;
+  if (invite.internet?.url) return { url: invite.internet.url, works: "anywhere", why: null };
+  return { url: invite.url, works: "wifi", why: "local" };
 }
 
 /** The engine's internet peers (`internet.peers`, or the invite's own list). */
@@ -187,6 +229,7 @@ export function readJoinState(v: unknown): JoinHostState {
           urls: Array.isArray(inv.urls) ? inv.urls.filter((u): u is string => typeof u === "string") : [],
           tailscale: typeof inv.tailscale === "string" ? inv.tailscale : null,
           internet: readNetInvite(inv.internet),
+          share: readShare(inv.share),
         }
       : null;
   const guests = (Array.isArray(o.guests) ? o.guests : [])
@@ -209,6 +252,7 @@ export function readJoinState(v: unknown): JoinHostState {
       // An older engine says nothing: the home network.
       via: g.via === "internet" ? ("internet" as const) : ("lan" as const),
       path: str(g.path),
+      netPath: readNetPath(g.link),
       // An older engine says nothing: the TV asks every guest.
       playsAs: str((g.plays_as as Record<string, unknown> | null | undefined)?.name),
       seatNote: str(g.seat_note),
@@ -231,6 +275,14 @@ export function readJoinState(v: unknown): JoinHostState {
       maxPlayers: num(s.max_players) ?? 3,
       streamSeat: s.stream_seat === true,
       internetInvites: typeof s.internet_invites === "boolean" ? s.internet_invites : null,
+      invites:
+        s.invites === "anywhere" || s.invites === "wifi"
+          ? s.invites
+          : typeof s.internet_invites === "boolean"
+            ? s.internet_invites
+              ? "anywhere"
+              : "wifi"
+            : null,
       hubUrl: typeof s.hub_url === "string" ? s.hub_url : "",
       stun: Array.isArray(s.stun) ? s.stun.filter((x): x is string => typeof x === "string") : [],
       upnp: s.upnp !== false,
@@ -428,9 +480,14 @@ async function change(path: string, addr: string, body: object): Promise<JoinHos
   return read(addr);
 }
 
-/** The body of an invite call: `new` only for a fresh link, `internet` only for an internet one. */
-export function inviteBody(renew: boolean, internet = false): { new?: true; internet?: true } {
-  return { ...(renew ? { new: true as const } : {}), ...(internet ? { internet: true as const } : {}) };
+/** The body of an invite call: `new` only for a fresh link, `internet` only for an internet one,
+ *  `share` for the one link (the engine follows Invites work). */
+export function inviteBody(renew: boolean, internet = false, share = false): { new?: true; internet?: true; share?: true } {
+  return {
+    ...(renew ? { new: true as const } : {}),
+    ...(internet ? { internet: true as const } : {}),
+    ...(share ? { share: true as const } : {}),
+  };
 }
 
 /** Like `change`, but a refusal says why (`internet_off`, `hub_url`, `stun`…). */
@@ -447,11 +504,20 @@ async function changeOrWhy(path: string, addr: string, body: object): Promise<Jo
 
 /** The settings of internet invites, as POST /api/join/settings takes them. */
 export interface NetSettingsBody {
+  /** Invites work: "anywhere" or "wifi" (sent with internet_invites, which an engine from before
+   *  the word reads). */
+  invites?: "anywhere" | "wifi";
   internet_invites?: boolean;
   hub_url?: string;
   stun?: string[];
   upnp?: boolean;
   video_track?: boolean;
+}
+
+/** Invites work, as POST /api/join/settings takes it: the word, and the older on/off an engine
+ *  from before the word reads (Allow internet invites off is Only on my Wi-Fi). */
+export function invitesBody(v: "anywhere" | "wifi"): NetSettingsBody {
+  return { invites: v, internet_invites: v === "anywhere" };
 }
 
 /** A hub address the engine takes: `wss://`, or `ws://` only to this computer (join_net::hub_url_ok). */
@@ -503,6 +569,10 @@ export const joinApi = {
    *  address), `closed`… An engine from before internet invites ignores `internet`: the state
    *  then has no `invite.internet`. */
   inviteInternet: (addr: string, renew = false) => changeOrWhy("/api/join/invite", addr, inviteBody(renew, true)),
+  /** The one link (`invite.share`): the internet invite when Invites work says Anywhere and it
+   *  can be made, else the home network's; never refused for that. An engine from before it
+   *  answers the home network's invite (no `share`). */
+  inviteShare: (addr: string, renew = false) => change("/api/join/invite", addr, inviteBody(renew, false, true)),
   decide: (addr: string, id: number, allow: boolean) => change("/api/join/decide", addr, { id, allow }),
   kick: (addr: string, player: number) => change("/api/join/kick", addr, { player }),
   settings: (addr: string, s: { block_system_buttons?: boolean; max_players?: number; stream_seat?: boolean }) =>

@@ -35,12 +35,12 @@ describe("Play Together host state", () => {
   it("reads the engine's answer, players in order", () => {
     const s = readJoinState(engine);
     expect(s.open).toBe(true);
-    expect(s.invite).toEqual({ url: engine.invite.url, code: "4821", expiresMs: 1800000, urls: engine.invite.urls, tailscale: null, internet: null });
+    expect(s.invite).toEqual({ url: engine.invite.url, code: "4821", expiresMs: 1800000, urls: engine.invite.urls, tailscale: null, internet: null, share: null });
     expect(s.ws).toBe(engine.ws);
     expect(s.guests.map((g) => g.name)).toEqual(["Ann", "Ben", "Cy"]);
     expect(s.guests[1]).toMatchObject({ status: "reconnecting", reconnectingLeftS: 42, connected: false });
     expect(s.asks).toEqual([{ id: 11, name: "Dee" }]);
-    expect(s.settings).toEqual({ blockSystemButtons: false, maxPlayers: 3, streamSeat: false, internetInvites: null, hubUrl: "", stun: [], upnp: true, videoTrack: true });
+    expect(s.settings).toEqual({ blockSystemButtons: false, maxPlayers: 3, streamSeat: false, internetInvites: null, invites: null, hubUrl: "", stun: [], upnp: true, videoTrack: true });
     expect(s.seatNext).toBe(false);
   });
 
@@ -82,7 +82,7 @@ describe("Play Together host state", () => {
     const s = readJoinState({ guests: [null, { id: 1 }], asks: "x", invite: { code: 1 } });
     expect(s.invite).toBeNull();
     expect(s.guests).toEqual([
-      { id: 1, name: "", player: 0, status: "playing", reconnectingLeftS: null, rttMs: null, connected: true, behind: false, streamSeat: false, via: "lan", path: null, playsAs: null, seatNote: null, quality: null, carries: null },
+      { id: 1, name: "", player: 0, status: "playing", reconnectingLeftS: null, rttMs: null, connected: true, behind: false, streamSeat: false, via: "lan", path: null, netPath: null, playsAs: null, seatNote: null, quality: null, carries: null },
     ]);
     expect(s.settings.blockSystemButtons).toBe(false);
     expect(readJoinState(null).helperOk).toBe(true);
