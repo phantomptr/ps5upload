@@ -570,9 +570,9 @@ static void test_threads(void) {
 /* ---- Play Together's "Guests play as": a fake companion (the binder) ---- */
 
 static const char *fb_hold = "running";
-static uint32_t fb_signed[4] = {0x2000, 0x3000, 0x1e24b13c, 0};
+static uint32_t fb_signed[4] = {0x2000, 0x3000, 0x10000002, 0};
 static int fb_unknown, fb_bind_rc, fb_code, fb_binds, fb_holds, fb_stop_in_bind;
-static uint32_t fb_fg = 0x1e24b13c, fb_owner_shift;
+static uint32_t fb_fg = 0x10000002, fb_owner_shift;
 static int fb_last_handle = -1, fb_forgot[8], fb_nforgot;
 static uint32_t fb_last_user, fb_last_age;
 
@@ -609,7 +609,7 @@ static const vpad_binder_t FB = {fb_hold_fn, fb_signed_in, fb_bind, fb_forget};
 static void fb_reset(void) {
     fb_hold = "running";
     fb_unknown = fb_bind_rc = fb_code = fb_binds = fb_holds = fb_stop_in_bind = fb_nforgot = 0;
-    fb_fg = 0x1e24b13c;
+    fb_fg = 0x10000002;
     fb_owner_shift = 0;
     fb_last_handle = -1;
 }
@@ -650,9 +650,9 @@ static void test_bind(void) {
           HAS("\"err\":\"vpad_bind_unknown\""));
     fb_unknown = 0;
     /* the user in front (the owner) only with the host's confirmation */
-    CHECK(vopen("{\"slot\":2,\"token\":\"" TOK_A "\",\"bind_user\":505721148}", 0) > 0 &&
+    CHECK(vopen("{\"slot\":2,\"token\":\"" TOK_A "\",\"bind_user\":268435458}", 0) > 0 &&
           HAS("\"err\":\"vpad_bind_owner\""));
-    CHECK(vopen("{\"slot\":2,\"token\":\"" TOK_A "\",\"bind_user\":505721148,\"bind_owner\":false}", 0) > 0 &&
+    CHECK(vopen("{\"slot\":2,\"token\":\"" TOK_A "\",\"bind_user\":268435458,\"bind_owner\":false}", 0) > 0 &&
           HAS("\"err\":\"vpad_bind_owner\""));
     CHECK(f_adds == 0 && g_picks == 0 && fb_binds == 0 && vpad_open_count() == 0);
 
@@ -668,7 +668,7 @@ static void test_bind(void) {
           HAS("\"resumed\":true,\"bound\":true"));
     CHECK(fb_binds == 1 && f_adds == 1);
     /* the owner, confirmed by the host */
-    CHECK(vopen("{\"slot\":3,\"token\":\"" TOK_B "\",\"bind_user\":505721148,\"bind_owner\":true}", 0) > 0 &&
+    CHECK(vopen("{\"slot\":3,\"token\":\"" TOK_B "\",\"bind_user\":268435458,\"bind_owner\":true}", 0) > 0 &&
           HAS("\"bound\":true"));
     /* a bind that fails: the pad stays, unbound (the console will ask), with the code */
     fb_bind_rc = -1;

@@ -718,7 +718,7 @@ mod tests {
             assert_eq!(m.id, m::USER_LIST.id);
             // an older helper prints an id above 0x7fffffff as a negative int
             Ok(Some(
-                br#"{"foreground":-1,"err_fg":0,"err_list":0,"users":[{"id":505721148,"name":"Ann","foreground":true,"err_name":0},{"id":-1879048191,"name":"Guest 1","foreground":false,"err_name":0},{"id":-1,"name":"","foreground":false}]}"#
+                br#"{"foreground":-1,"err_fg":0,"err_list":0,"users":[{"id":268435458,"name":"Ann","foreground":true,"err_name":0},{"id":-1879048191,"name":"Guest 1","foreground":false,"err_name":0},{"id":-1,"name":"","foreground":false}]}"#
                     .to_vec(),
             ))
         });
@@ -730,7 +730,7 @@ mod tests {
             u,
             vec![
                 ConsoleUser {
-                    id: 505721148,
+                    id: 268435458,
                     name: "Ann".into(),
                     foreground: true
                 },

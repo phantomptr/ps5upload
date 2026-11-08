@@ -66,7 +66,7 @@ describe("Guests play as: the host's panel", () => {
 describe("Guests play as: Settings", () => {
   const profiles = {
     users: [
-      { id: 505721148, name: "Me", foreground: true },
+      { id: 268435458, name: "Me", foreground: true },
       { id: 8192, name: "Guest 1", foreground: false },
       { id: 0, name: "nobody", foreground: false },
       { id: 4294967295, name: "nobody either", foreground: false },
@@ -81,7 +81,7 @@ describe("Guests play as: Settings", () => {
   it("reads the signed-in profiles (never 0 or the PS5's 'nobody') and the choices", () => {
     const p = readProfiles(profiles);
     expect(p.users.map((u) => [u.id, u.foreground])).toEqual([
-      [505721148, true],
+      [268435458, true],
       [8192, false],
     ]);
     expect(p.seats).toEqual([{ player: 2, user: 8192, name: "Guest 1", owner: false }]);
@@ -91,7 +91,7 @@ describe("Guests play as: Settings", () => {
 
   it("a profile is on one player at most, and Let the TV ask removes the choice", () => {
     const guest = { id: 8192, name: "Guest 1", foreground: false };
-    const me = { id: 505721148, name: "Me", foreground: true };
+    const me = { id: 268435458, name: "Me", foreground: true };
     let seats = withSeat([], 3, guest, false);
     expect(seats).toEqual([{ player: 3, user: 8192, name: "Guest 1", owner: false }]);
     // chosen for Player 2: it moves there
@@ -116,7 +116,7 @@ describe("Guests play as: Settings", () => {
         return new Response(JSON.stringify({ error: "owner_confirm" }), { status: 409 });
       }),
     );
-    const seats = [{ player: 2, user: 505721148, name: "Me", owner: false }];
+    const seats = [{ player: 2, user: 268435458, name: "Me", owner: false }];
     expect(await joinApi.seats("192.168.1.100", seats)).toEqual({ error: "owner_confirm" });
     expect(calls[0][0]).toMatch(/\/api\/join\/settings$/);
     expect(calls[0][1]).toEqual({ addr: "192.168.1.100", guest_profiles: seats });

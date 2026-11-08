@@ -379,6 +379,8 @@ async fn new_link_revokes_the_old_one_and_internet_invites_off_closes_it() {
         ci,
         h,
         Json(SettingsBody {
+            addr: None,
+            guest_profiles: None,
             block_system_buttons: None,
             max_players: None,
             stream_seat: None,
