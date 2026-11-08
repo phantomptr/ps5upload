@@ -45,7 +45,7 @@ describe("PlayMenu: Stream on a phone (#731)", () => {
   it("says where Go live runs in the phone app, instead of a tile", () => {
     const out = menu({ goLiveHint: true });
     expect(out).not.toContain('data-testid="rp-menu-golive"');
-    expect(out).toContain("Go live runs on a computer: open the web UI from Safari with the engine on a computer");
+    expect(out).toContain("To go live from here, run the engine on a computer and open its web UI in Safari");
   });
 
   it("shows neither in full screen, where the menu has no room", () => {

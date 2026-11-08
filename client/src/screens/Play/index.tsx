@@ -111,7 +111,7 @@ export default function PlayScreen() {
           segments={[
             { value: "mine", label: tr("play_mode_mine", undefined, "Play my PS5"), icon: MonitorPlay },
             // The stream bar's Play Together button has the same icon.
-            { value: "together", label: tr("pt_title", undefined, "Play together"), icon: Users },
+            { value: "together", label: tr("pt_title", undefined, "Play Together"), icon: Users },
             { value: "friend", label: tr("play_mode_friend", undefined, "Join a friend"), icon: LogIn },
           ]}
         />

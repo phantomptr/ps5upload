@@ -91,7 +91,7 @@ export function PlayTogetherStartView({
       <div className="space-y-1">
         <h2 id="pt-start-title" className="flex items-center gap-2 text-sm font-semibold">
           <Users size={16} aria-hidden />
-          {tr("pt_title", undefined, "Play together")}
+          {tr("pt_title", undefined, "Play Together")}
         </h2>
         <p className="text-sm text-[var(--color-muted)]">
           {tr(

@@ -168,7 +168,7 @@ test("Play together page: Internet picked before the stream, Start and invite fr
   await seedConsole(page);
   const posts = await fakeEngine(page, () => "internet");
   await page.goto("/play", { waitUntil: "domcontentloaded" });
-  await page.getByRole("radio", { name: "Play together" }).click({ timeout: 30_000 });
+  await page.getByRole("radio", { name: "Play Together" }).click({ timeout: 30_000 });
   const start = page.getByTestId("pt-start");
   await expect(start).toContainText("No app needed");
   await start.getByTestId("pt-start-net-internet").click();
@@ -186,7 +186,7 @@ test("Play together page: Internet picked before the stream, Start and invite fr
   await expect(panel.getByTestId("pt-addresses-internet")).toHaveAttribute("aria-pressed", "true");
   // The invite takes the focus, and the page stays on Play together.
   await expect(panel).toBeFocused();
-  await expect(page.getByRole("radio", { name: "Play together" })).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByRole("radio", { name: "Play Together" })).toHaveAttribute("aria-checked", "true");
   await expect(page.getByTestId("pt-start")).toHaveCount(0);
 });
 
@@ -194,7 +194,7 @@ test("Play together page: internet invites off is said before the stream; Suppor
   await seedConsole(page);
   await fakeEngine(page, () => "lan", false);
   await page.goto("/play", { waitUntil: "domcontentloaded" });
-  await page.getByRole("radio", { name: "Play together" }).click({ timeout: 30_000 });
+  await page.getByRole("radio", { name: "Play Together" }).click({ timeout: 30_000 });
   await page.getByTestId("pt-start-net-internet").click();
   await expect(page.getByTestId("pt-start-net-off")).toContainText("Internet invites are off");
   await expect(page.getByTestId("pt-start-net-off").getByRole("button", { name: "Open settings" })).toBeVisible();

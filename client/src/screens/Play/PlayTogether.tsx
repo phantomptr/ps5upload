@@ -410,7 +410,7 @@ export function PlayTogetherPanel({
       <div className="flex items-center gap-2">
         <Users size={16} />
         <h3 id="pt-panel-title" className="flex-1 text-sm font-semibold">
-          {tr("pt_title", undefined, "Play together")}
+          {tr("pt_title", undefined, "Play Together")}
         </h3>
         <button
           type="button"

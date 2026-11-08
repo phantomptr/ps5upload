@@ -264,7 +264,7 @@ export function PlayMenu({
           {tr(
             "golive_phone_app_hint",
             undefined,
-            "Go live runs on a computer: open the web UI from Safari with the engine on a computer",
+            "To go live from here, run the engine on a computer and open its web UI in Safari",
           )}
         </p>
       )}

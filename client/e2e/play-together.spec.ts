@@ -121,7 +121,7 @@ test("the host invites, allows a friend, sees their delay and removes them", asy
   await page.getByTestId("rp-toolbar").hover();
   await page.getByTestId("rp-together").click();
   // The stream bar's button switches to Play › Play together.
-  await expect(page.getByRole("radio", { name: "Play together" })).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByRole("radio", { name: "Play Together" })).toHaveAttribute("aria-checked", "true");
 
   // ① Invite: the QR code, the link and the other address.
   const panel = page.getByTestId("pt-panel");
@@ -204,7 +204,7 @@ test("Play together and Play my PS5 are one stream: switching pages never restar
 
   await page.goto("/play", { waitUntil: "domcontentloaded" });
   // Before a stream: Play together explains itself and has one button.
-  await page.getByRole("radio", { name: "Play together" }).click({ timeout: 30_000 });
+  await page.getByRole("radio", { name: "Play Together" }).click({ timeout: 30_000 });
   await expect(page.getByTestId("pt-start")).toContainText("No app needed");
   await expect(page.getByTestId("rp-start")).toHaveCount(0);
   await page.getByTestId("pt-start-invite").click();
@@ -220,10 +220,10 @@ test("Play together and Play my PS5 are one stream: switching pages never restar
   await page.getByRole("radio", { name: "Play my PS5" }).click();
   await expect(panel).toHaveCount(0);
   await expect(page.getByTestId("rp-stop").first()).toBeAttached();
-  await page.getByRole("radio", { name: "Play together" }).click();
+  await page.getByRole("radio", { name: "Play Together" }).click();
   await expect(panel.getByTestId("pt-url")).toHaveText(LINK);
   await page.getByRole("radio", { name: "Join a friend" }).click();
-  await page.getByRole("radio", { name: "Play together" }).click();
+  await page.getByRole("radio", { name: "Play Together" }).click();
   await expect(panel.getByTestId("pt-url")).toHaveText(LINK);
   await expect(page.getByTestId("rp-stop").first()).toBeAttached();
   expect(streams).toBe(1);
@@ -247,7 +247,7 @@ test("Play together with no console set up says so, and Start and invite waits",
   });
   await routeEngine(page, (path) => (path === "/api/version" ? { version: "10.8.0", caps: {} } : path === "/api/ps5/rp/session" ? { host: null } : {}));
   await page.goto("/play", { waitUntil: "domcontentloaded" });
-  await page.getByRole("radio", { name: "Play together" }).click({ timeout: 30_000 });
+  await page.getByRole("radio", { name: "Play Together" }).click({ timeout: 30_000 });
   await expect(page.getByTestId("pt-start-invite")).toBeDisabled();
   await expect(page.getByTestId("play-open-setup")).toBeVisible();
 });
