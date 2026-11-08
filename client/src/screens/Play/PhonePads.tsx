@@ -7,7 +7,7 @@ import { writeClipboard } from "../../lib/clipboard";
 import { getEngineUrl } from "../../state/engine";
 import { useTr } from "../../state/lang";
 import { netInviteNote, NetworkChoice, saveNetwork, savedNetwork, splitByNetwork, urlHost, type NetworkKind } from "./NetworkChoice";
-import { readNetInvite, type NetInvite } from "./playTogetherState";
+import { readNetInvite, readPeers, type NetInvite, type NetPeer } from "./playTogetherState";
 
 /** The phones link of this engine's Remote Play session (pad_link.rs). */
 export interface PadLinkState {
@@ -25,7 +25,10 @@ export interface PadLinkState {
   /** The internet link, once made (POST /api/ps5/rp/pad-link/internet). */
   internet: NetInvite | null;
   pads: Array<{ id: number; name: string; watch?: boolean; control?: boolean; via?: "internet" }>;
-  pending: Array<{ id: number; name: string }>;
+  /** Phones waiting for this computer's answer (an internet phone always asks first). */
+  pending: Array<{ id: number; name: string; watch?: boolean; via?: "internet" }>;
+  /** Internet phones' connections the engine knows of: those still connecting, or that failed. */
+  netPeers: NetPeer[];
 }
 
 /** A phone's name on this computer's list: what it calls itself, in this app's language when it
@@ -56,6 +59,7 @@ const EMPTY: PadLinkState = {
   internet: null,
   pads: [],
   pending: [],
+  netPeers: [],
 };
 
 /** The engine's answer, checked field by field (an older or odd one never breaks the page). */
@@ -94,7 +98,8 @@ export function readPadLink(v: unknown): PadLinkState {
     tailscale: typeof o.tailscale === "string" ? o.tailscale : null,
     pad_ws: typeof o.pad_ws === "string" ? o.pad_ws : null,
     pads: list(o.pads),
-    pending: list(o.pending),
+    pending: list(o.pending).map(({ id, name, watch, via }) => ({ id, name, ...(watch ? { watch } : {}), ...(via ? { via } : {}) })),
+    netPeers: readPeers((o.internet as { peers?: unknown } | null | undefined)?.peers),
   };
 }
 
@@ -273,6 +278,10 @@ export function PhonePadsPanel({
   const base = onInternet ? (link.internet?.url ?? null) : best;
   const shown = base && mode === "watch" ? watchUrl(base) : base;
   const netNote = onInternet ? netInviteNote(tr, netWhy, link.internet) : null;
+  // Internet phones not in yet: still connecting, or whose network could not reach this one (the
+  // engine shows a failure for 30 s).
+  const netConnecting = link.netPeers.filter((p) => p.path === "connecting");
+  const netFailed = link.netPeers.filter((p) => p.path === "failed");
   const copy = async () => {
     if (shown && (await writeClipboard(shown))) {
       setCopied(true);
@@ -465,6 +474,38 @@ export function PhonePadsPanel({
           </div>
         </>
       ) : null}
+      {link.pending.length > 0 && (
+        // Waiting for this computer's answer (the same Allow as over the picture).
+        <ul className="space-y-1.5" data-testid="rp-pad-pending">
+          {link.pending.map((p) => (
+            <li key={p.id} className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="min-w-0 flex-1 truncate">{askText(tr, p)}</span>
+              <Button size="sm" variant="primary" onClick={() => void decidePad(p.id, true)} data-testid="rp-pad-pending-allow">
+                {tr("rp_phone_allow", undefined, "Allow")}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => void decidePad(p.id, false)}>
+                {tr("rp_phone_deny", undefined, "No")}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {netConnecting.length + netFailed.length > 0 && (
+        <ul className="space-y-1" data-testid="rp-pad-net-peers">
+          {netConnecting.map((p) => (
+            <li key={p.gid} className="flex items-center gap-2 text-xs" data-testid="rp-pad-net-peer">
+              <span className="font-medium">{tr("rp_phone_net_phone", undefined, "A phone on the internet")}</span>
+              <span className="text-[var(--color-muted)]">{tr("pt_net_connecting", undefined, "Connecting…")}</span>
+            </li>
+          ))}
+          {netFailed.length > 0 && (
+            <li className="flex items-center gap-2 text-xs text-[var(--color-warn)]" data-testid="rp-pad-net-failed">
+              <span className="font-medium">{tr("rp_phone_net_phone", undefined, "A phone on the internet")}</span>
+              <span>{tr("pt_net_peer_failed", undefined, "Couldn't connect from their network")}</span>
+            </li>
+          )}
+        </ul>
+      )}
       {link.pads.length > 0 && (
         <ul className="space-y-1" data-testid="rp-pad-list">
           {link.pads.map((p) => (
@@ -534,12 +575,21 @@ export function PhonePadsPanel({
   );
 }
 
-/** A phone asking to be a controller: shown over the picture, full screen included. */
+/** What a phone asking wants, in words: to play or to watch, and "· Internet" from afar. */
+export function askText(tr: ReturnType<typeof useTr>, p: PadLinkState["pending"][number]): string {
+  const name = phoneName(tr, p.name);
+  const what = p.watch
+    ? tr("rp_watch_ask", { name }, `${name} wants to watch`)
+    : tr("rp_phone_ask", { name }, `${name} wants to be a controller`);
+  return p.via === "internet" ? `${what} · ${tr("net_internet", undefined, "Internet")}` : what;
+}
+
+/** A phone asking to be a controller (or, over the internet, to watch): shown over the picture,
+ *  full screen included. */
 export function PadAsks({ pending }: { pending: PadLinkState["pending"] }) {
   const tr = useTr();
   if (!pending.length) return null;
   const p = pending[0];
-  const name = phoneName(tr, p.name);
   return (
     <div
       className="pointer-events-auto absolute left-1/2 top-16 z-40 flex -translate-x-1/2 flex-wrap items-center gap-2 rounded-full bg-black/85 px-4 py-2 text-sm text-white shadow-lg"
@@ -549,13 +599,7 @@ export function PadAsks({ pending }: { pending: PadLinkState["pending"] }) {
       onPointerDown={(e) => e.stopPropagation()}
     >
       <Smartphone size={14} />
-      <span>
-        {tr(
-          "rp_phone_ask",
-          { name },
-          `${name} wants to be a controller`,
-        )}
-      </span>
+      <span>{askText(tr, p)}</span>
       <button
         type="button"
         className="rounded-full bg-white px-3 py-1 text-xs font-medium text-black"

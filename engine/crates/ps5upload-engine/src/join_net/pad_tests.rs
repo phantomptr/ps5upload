@@ -64,14 +64,40 @@ fn room_and_key(s: &serde_json::Value) -> (String, String) {
     (get("room"), get("k"))
 }
 
+const DEVICE: &str = "00112233445566778899aabbccddeeff";
+
 /// A phone's hello on its channel, and the stage it is answered.
 async fn hello(g: &mut TestGuest, key: &str, watch: bool) -> serde_json::Value {
-    let mut h =
-        serde_json::json!({"t": key, "name": "pixel", "d": "00112233445566778899aabbccddeeff"});
+    hello_as(g, key, watch, DEVICE).await
+}
+
+async fn hello_as(g: &mut TestGuest, key: &str, watch: bool, device: &str) -> serde_json::Value {
+    let mut h = serde_json::json!({"t": key, "name": "pixel", "d": device});
     if watch {
         h["w"] = 1.into();
     }
     g.text(serde_json::json!({ "hello": h }));
+    g.next_with("stage").await
+}
+
+/// The host answers the internet phone waiting first (as the Allow over the picture does).
+async fn answer_next(allow: bool) {
+    let s = until_pads("an internet phone asking", |s| {
+        s["pending"][0]["via"] == "internet"
+    })
+    .await;
+    let id = s["pending"][0]["id"].as_u64().unwrap();
+    let r = crate::pad_link::decide(Json(
+        serde_json::from_value(serde_json::json!({"id": id, "allow": allow})).unwrap(),
+    ))
+    .await;
+    assert_eq!(r.0["ok"], true);
+}
+
+/// Asks, is allowed, and is in: the next stage after the host's yes.
+async fn allowed_in(g: &mut TestGuest, key: &str, watch: bool) -> serde_json::Value {
+    assert_eq!(hello(g, key, watch).await["stage"], "asking");
+    answer_next(true).await;
     g.next_with("stage").await
 }
 
@@ -135,16 +161,23 @@ async fn a_phone_anywhere_is_a_controller_with_touchpad_motion_and_rumble() {
     let v = hello(&mut bad, "00000000000000000000000000000000", false).await;
     assert_eq!((&v["stage"], &v["why"]), (&"refused".into(), &"key".into()));
 
-    // The link's key: in at once (the QR code's key needs no Allow on the LAN either).
+    // The link's key only lets a phone ask: the host says No, and it is told so, nothing played.
+    let mut nope = connect_guest_on(&hub.url, &room, "pad").await;
+    let v = hello_as(&mut nope, &key, false, "ffeeddccbbaa99887766554433221100").await;
+    assert_eq!(v["stage"], "asking", "{v}");
+    assert!(pad_status().await["pads"].as_array().unwrap().is_empty());
+    answer_next(false).await;
+    assert_eq!(refused_why(&mut nope).await, "denied");
+
+    // Allowed: in.
     let mut g = connect_guest_on(&hub.url, &room, "pad").await;
     assert!(g.answer.contains(&format!("a=fingerprint:sha-256 {fp}")));
-    let v = hello(&mut g, &key, false).await;
+    let v = allowed_in(&mut g, &key, false).await;
     assert_eq!(v["stage"], "joined", "{v}");
-    let st = until_pads("an internet controller", |s| {
+    until_pads("an internet controller", |s| {
         s["pads"][0]["via"] == "internet" && s["pads"][0]["watch"] == false
     })
     .await;
-    let id = st["pads"][0]["id"].as_u64().unwrap();
 
     // Buttons, the touchpad and motion reach the console's pad.
     g.text(serde_json::json!({"pad": {
@@ -179,6 +212,17 @@ async fn a_phone_anywhere_is_a_controller_with_touchpad_motion_and_rumble() {
         }
     }
 
+    // Dropped (a tunnel, a lift): the device the host allowed comes back without asking.
+    drop(g);
+    until_pads("the drop", |s| s["pads"].as_array().unwrap().is_empty()).await;
+    let mut g = connect_guest_on(&hub.url, &room, "pad").await;
+    assert_eq!(hello(&mut g, &key, false).await["stage"], "joined");
+    let id = until_pads("back", |s| s["pads"][0]["via"] == "internet").await["pads"][0]["id"]
+        .as_u64()
+        .unwrap();
+    g.text(serde_json::json!({"pad": {"buttons": 1}}));
+    until("pressed again", || live.merged().buttons == 1).await;
+
     // Disconnect: let go at once, told why, and the device stays out.
     let k = crate::pad_link::kick(Json(
         serde_json::from_value(serde_json::json!({ "id": id })).unwrap(),
@@ -210,6 +254,10 @@ async fn a_watcher_anywhere_gets_the_picture_never_the_controller_and_four_at_mo
 
     let mut w = connect_guest_on(&hub.url, &room, "pad").await;
     w.text(serde_json::json!({"hello": {"t": key, "name": "tablet", "w": 1}}));
+    // No picture before the host allows it.
+    assert_eq!(w.next_with("stage").await["stage"], "asking");
+    assert!(!w.rx.try_recv().is_ok_and(|m| matches!(m, GIn::Binary(_))));
+    answer_next(true).await;
     // Joined, and what the page's player needs first: the codec (in either order).
     let (mut joined, mut codec) = (false, None);
     while !joined || codec.is_none() {
@@ -258,10 +306,16 @@ async fn a_watcher_anywhere_gets_the_picture_never_the_controller_and_four_at_mo
     assert_eq!(live.merged().buttons, 0);
 
     // The watch party's limit holds for watchers from anywhere: four.
+    // (One device, allowed once: the others come in without asking.)
     let mut more = Vec::new();
-    for _ in 0..3 {
+    for i in 0..3 {
         let mut x = connect_guest_on(&hub.url, &room, "pad").await;
-        assert_eq!(hello(&mut x, &key, true).await["stage"], "joined");
+        let v = if i == 0 {
+            allowed_in(&mut x, &key, true).await
+        } else {
+            hello(&mut x, &key, true).await
+        };
+        assert_eq!(v["stage"], "joined");
         more.push(x);
     }
     let mut fifth = connect_guest_on(&hub.url, &room, "pad").await;
@@ -283,10 +337,24 @@ async fn new_link_revokes_the_old_one_and_internet_invites_off_closes_it() {
     let (room1, key1) = room_and_key(&body(net_link(false).await).await);
     until("hosted", || hub.has_host(&room1)).await;
     let mut kept = connect_guest_on(&hub.url, &room1, "pad").await;
-    assert_eq!(hello(&mut kept, &key1, false).await["stage"], "joined");
+    assert_eq!(allowed_in(&mut kept, &key1, false).await["stage"], "joined");
+    // Another phone still waiting for the host's answer when the link is replaced.
+    let mut waiting = connect_guest_on(&hub.url, &room1, "pad").await;
+    let v = hello_as(
+        &mut waiting,
+        &key1,
+        true,
+        "ffeeddccbbaa99887766554433221100",
+    )
+    .await;
+    assert_eq!(v["stage"], "asking");
+    until_pads("asking", |s| s["pending"].as_array().unwrap().len() == 1).await;
 
-    // New link: a new room and key; the old room closes (its link stops working).
+    // New link: a new room and key; the old room closes (its link stops working), the phone
+    // waiting is told so and leaves the list, the one allowed keeps playing.
     let (room2, key2) = room_and_key(&body(net_link(true).await).await);
+    assert_eq!(refused_why(&mut waiting).await, "key");
+    assert!(pad_status().await["pending"].as_array().unwrap().is_empty());
     assert_ne!(room1, room2);
     assert_ne!(key1, key2);
     until("the old room closed", || !hub.has_host(&room1)).await;

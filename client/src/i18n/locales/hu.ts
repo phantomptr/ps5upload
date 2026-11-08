@@ -8439,6 +8439,8 @@ rp_users_add_hint: "Ha másik felhasználóként is játszanál, jelentkezz be a
 "pt_elsewhere_guest": "Máshonnan játszol? Kérd meg a barátodat, hogy Interneten hívjon meg, majd nyisd meg a linkjét a böngészőben.",
 "pad_net_computer": "a számítógép",
 "rp_watch_net_how": "Bárki, akinél ez a link van, bárhonnan nézheti a streamet telefonon, tableten vagy számítógépen (legfeljebb négyen). Interneten keresztül csak néznek: a kontrollert nem lehet átadni nekik.",
+"rp_watch_ask": "{name} nézni szeretne",
+"rp_phone_net_phone": "Egy telefon az interneten",
 };
 
 export default hu;

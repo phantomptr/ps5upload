@@ -36082,7 +36082,7 @@
     },
     "/api/ps5/rp/pad-link/internet": {
       "post": {
-        "description": "`POST /api/ps5/rp/pad-link/internet {new?, console?}`: the link for a phone anywhere\n(`internet.url` in the answer, the status as `GET` has it; the link opens too). A room on the\nsignalling hub in Play Together's settings, with a key of its own; the same one again unless\n`new`, which closes the old room (its link stops working; phones already in keep playing).\n409 `internet_off` when the settings turned internet invites off, 409 `hub_url` when the hub\naddress is not a `wss://` one.",
+        "description": "`POST /api/ps5/rp/pad-link/internet {new?, console?}`: the link for a phone anywhere\n(`internet.url` in the answer, the status as `GET` has it; the link opens too). A room on the\nsignalling hub in Play Together's settings, with a key of its own; the same one again unless\n`new`, which closes the old room (its link stops working; internet phones still waiting to be\nallowed are told so, phones already in keep playing). An internet phone asks like the phone\napp does: the computer allows it (`pending`, `decide`) before it gets the pad or the picture.\n409 `internet_off` when the settings turned internet invites off, 409 `hub_url` when the hub\naddress is not a `wss://` one.",
         "requestBody": {
           "content": {
             "application/json": {

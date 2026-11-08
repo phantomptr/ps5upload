@@ -8151,6 +8151,8 @@ rp_users_add_hint: "Um auch als anderer Benutzer zu spielen, melde dich auf der 
 "pt_elsewhere_guest": "Spielst du von woanders? Bitte deinen Freund, dich über Internet einzuladen, und öffne den Link im Browser.",
 "pad_net_computer": "dem Computer",
 "rp_watch_net_how": "Jeder mit diesem Link kann den Stream von überall auf Handy, Tablet oder Computer ansehen (bis zu vier). Über das Internet wird nur zugeschaut: Der Controller kann nicht übergeben werden.",
+"rp_watch_ask": "{name} möchte zuschauen",
+"rp_phone_net_phone": "Ein Handy über das Internet",
 };
 
 export default de;

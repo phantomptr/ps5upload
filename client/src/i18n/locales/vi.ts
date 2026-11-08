@@ -8145,6 +8145,8 @@ rp_users_add_hint: "Để chơi bằng cả người dùng khác, hãy đăng nh
 "pt_elsewhere_guest": "Chơi từ nơi khác? Nhờ bạn của bạn mời qua Internet, rồi mở liên kết của họ trong trình duyệt.",
 "pad_net_computer": "máy tính",
 "rp_watch_net_how": "Bất kỳ ai có liên kết này đều có thể xem luồng từ bất cứ đâu trên điện thoại, máy tính bảng hoặc máy tính (tối đa bốn người). Qua internet họ chỉ xem: không thể trao tay cầm cho họ.",
+"rp_watch_ask": "{name} muốn xem",
+"rp_phone_net_phone": "Một điện thoại qua internet",
 };
 
 export default vi;

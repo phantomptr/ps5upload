@@ -8160,6 +8160,8 @@ rp_users_add_hint: "다른 사용자로도 플레이하려면 PS5에서 그 사�
 "pt_elsewhere_guest": "다른 곳에서 플레이하나요? 친구에게 인터넷으로 초대해 달라고 한 뒤, 그 링크를 브라우저에서 여세요.",
 "pad_net_computer": "컴퓨터",
 "rp_watch_net_how": "이 링크가 있는 사람은 어디서든 휴대폰, 태블릿, 컴퓨터로 스트림을 볼 수 있습니다(최대 4명). 인터넷으로는 보기만 할 수 있으며 컨트롤러를 넘겨줄 수 없습니다.",
+"rp_watch_ask": "{name}이(가) 시청하려고 합니다",
+"rp_phone_net_phone": "인터넷의 휴대폰",
 };
 
 export default ko;

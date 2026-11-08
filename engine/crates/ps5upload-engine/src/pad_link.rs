@@ -20,7 +20,10 @@
 //!   its own on the hub and a key of its own, both new with each New link (the old link then stops
 //!   working). The website's copy of `/pad` opens a `"pad"` data channel to this engine, checks its
 //!   certificate against `fp`, and sends this socket's messages on it after a first `{"hello":
-//!   {"t", "name", "d", "w"}}` (the query below): in with the key, as the QR code's key is. A
+//!   {"t", "name", "d", "w"}}` (the query below). The key only lets it ask: the computer allows
+//!   it (`decide`) before it gets the pad or the picture, as with an internet Play Together guest,
+//!   and a device it allowed comes back after a drop without asking (New link refuses the ones
+//!   still waiting). A
 //!   watcher there gets the picture as an internet Play Together guest does (a short queue that
 //!   skips to the next keyframe), and only watches: it cannot be handed the controller. Internet
 //!   invites off (Settings › Play Together) closes the room; phones already in keep playing.
@@ -173,7 +176,20 @@ struct Pending {
     id: u64,
     name: String,
     ip: std::net::IpAddr,
-    answer: oneshot::Sender<bool>,
+    /// It asks over the internet (an internet link's phone).
+    net: bool,
+    /// It asks to watch.
+    watch: bool,
+    answer: oneshot::Sender<Answer>,
+}
+
+/// The computer's answer to a phone that asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Answer {
+    Allow,
+    Deny,
+    /// Its internet link was replaced by a New link before anyone answered: told `key`.
+    Revoked,
 }
 
 #[derive(Default)]
@@ -527,7 +543,9 @@ fn status(headers: &HeaderMap, console: Option<&str>) -> serde_json::Value {
                 "via": if p.net.is_some() { "internet" } else { "lan" },
                 "rtt_ms": p.net.as_ref().and_then(|n| n.rtt_ms()),
             })).collect::<Vec<_>>(),
-            "pending": l.pending.iter().map(|p| serde_json::json!({"id": p.id, "name": p.name})).collect::<Vec<_>>(),
+            "pending": l.pending.iter().map(|p| serde_json::json!({
+                "id": p.id, "name": p.name, "via": if p.net { "internet" } else { "lan" }, "watch": p.watch,
+            })).collect::<Vec<_>>(),
         })
     })
 }
@@ -608,7 +626,7 @@ pub async fn set_open(headers: HeaderMap, Json(r): Json<OpenReq>) -> Json<serde_
         l.allowed.clear();
         l.denied.clear();
         for p in l.pending.drain(..) {
-            let _ = p.answer.send(false);
+            let _ = p.answer.send(Answer::Deny);
         }
         l.pads
             .drain(..)
@@ -641,7 +659,9 @@ fn net_refused(code: StatusCode, err: &str) -> Response {
 /// `POST /api/ps5/rp/pad-link/internet {new?, console?}`: the link for a phone anywhere
 /// (`internet.url` in the answer, the status as `GET` has it; the link opens too). A room on the
 /// signalling hub in Play Together's settings, with a key of its own; the same one again unless
-/// `new`, which closes the old room (its link stops working; phones already in keep playing).
+/// `new`, which closes the old room (its link stops working; internet phones still waiting to be
+/// allowed are told so, phones already in keep playing). An internet phone asks like the phone
+/// app does: the computer allows it (`pending`, `decide`) before it gets the pad or the picture.
 /// 409 `internet_off` when the settings turned internet invites off, 409 `hub_url` when the hub
 /// address is not a `wss://` one.
 pub async fn set_internet(headers: HeaderMap, Json(r): Json<InternetReq>) -> Response {
@@ -660,8 +680,16 @@ pub async fn set_internet(headers: HeaderMap, Json(r): Json<InternetReq>) -> Res
             l.key = random_key();
         }
         if r.new || l.net.as_ref().is_none_or(|n| n.room.url() != s.hub_url) {
-            // The old room goes first: its link stops working.
+            // The old room goes first: its link stops working, and the internet phones still
+            // waiting for an answer go with it (those allowed keep playing).
             l.net = None;
+            let (revoked, kept) = std::mem::take(&mut l.pending)
+                .into_iter()
+                .partition::<Vec<_>, _>(|p| p.net);
+            l.pending = kept;
+            for p in revoked {
+                let _ = p.answer.send(Answer::Revoked);
+            }
             let key = random_key()?;
             let room = crate::join_net::hub::Room::start(
                 crate::join_net::Kind::Pad,
@@ -703,7 +731,9 @@ pub async fn decide(Json(r): Json<DecideReq>) -> Json<serde_json::Value> {
     });
     let ok = found.is_some();
     if let Some(p) = found {
-        let _ = p.answer.send(r.allow);
+        let _ = p
+            .answer
+            .send(if r.allow { Answer::Allow } else { Answer::Deny });
     }
     Json(serde_json::json!({ "ok": ok }))
 }
@@ -1004,9 +1034,17 @@ async fn pad_session<S: crate::join::GuestSocket>(
         send_limited(&mut socket, refuse("kicked")).await;
         return;
     }
-    let keyed = net.is_some() || is_expected(&q);
+    // The QR code's key lets a phone on the LAN in at once. Over the internet the link's key only
+    // lets a phone ask (`rtc_session` checked it): the computer allows it, as it allows an
+    // internet Play Together guest, and a device it allowed comes back after a drop.
+    let keyed = match &net {
+        Some(_) => device
+            .as_ref()
+            .is_some_and(|d| with_link(|l| l.allowed.contains(d))),
+        None => is_expected(&q),
+    };
     if !keyed {
-        if q.t.is_some() {
+        if net.is_none() && q.t.is_some() {
             // A QR code from a link closed since (or a guess).
             send_limited(&mut socket, refuse("key")).await;
             return;
@@ -1023,6 +1061,8 @@ async fn pad_session<S: crate::join::GuestSocket>(
                 id,
                 name: name.clone(),
                 ip,
+                net: net.is_some(),
+                watch: q.w == Some(1),
                 answer: tx,
             });
             true
@@ -1031,12 +1071,19 @@ async fn pad_session<S: crate::join::GuestSocket>(
             send_limited(&mut socket, refuse("busy")).await;
             return;
         }
+        crate::log_at!(
+            Info,
+            "together",
+            "pad_link: phone {id} asks to {} ({})",
+            if q.w == Some(1) { "watch" } else { "play" },
+            if net.is_some() { "internet" } else { "LAN" }
+        );
         send_limited(&mut socket, say(serde_json::json!({"stage": "asking"}))).await;
         let answer = tokio::select! {
             a = rx => a.ok(),
             _ = tokio::time::sleep(ASK_WAIT) => None,
             // The phone gave up.
-            _ = async { loop { match socket.recv().await { Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break, _ => {} } } } => Some(false),
+            _ = async { loop { match socket.recv().await { Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break, _ => {} } } } => Some(Answer::Deny),
         };
         with_link(|l| l.pending.retain(|p| p.id != id));
         match answer {
@@ -1044,11 +1091,15 @@ async fn pad_session<S: crate::join::GuestSocket>(
                 send_limited(&mut socket, refuse("no_answer")).await;
                 return;
             }
-            Some(false) => {
+            Some(Answer::Deny) => {
                 send_limited(&mut socket, refuse("denied")).await;
                 return;
             }
-            Some(true) => {
+            Some(Answer::Revoked) => {
+                send_limited(&mut socket, refuse("key")).await;
+                return;
+            }
+            Some(Answer::Allow) => {
                 if let Some(d) = &device {
                     with_link(|l| l.allowed.insert(d.clone()));
                 }

@@ -8152,6 +8152,8 @@ rp_users_add_hint: "Untuk bermain juga sebagai pengguna lain, masuk ke pengguna 
 "pt_elsewhere_guest": "Main dari tempat lain? Minta temanmu mengundang lewat Internet, lalu buka tautannya di browser.",
 "pad_net_computer": "komputer",
 "rp_watch_net_how": "Siapa pun yang punya tautan ini bisa menonton stream dari mana saja, di ponsel, tablet, atau komputer (hingga empat). Lewat internet mereka hanya menonton: kontroler tidak bisa diserahkan kepada mereka.",
+"rp_watch_ask": "{name} ingin menonton",
+"rp_phone_net_phone": "Ponsel lewat internet",
 };
 
 export default id;

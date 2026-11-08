@@ -170,6 +170,11 @@ describe("the phone page over the internet", () => {
     dc.open();
     expect(dc.texts[0]).toEqual({ hello: { t: KEY, name: "android", d: DEVICE } });
     expect(dc.texts[1].pad).toBeTruthy();
+    // The computer allows an internet phone first; waiting is not silence.
+    dc.recv(JSON.stringify({ stage: "asking" }));
+    expect(last()).toEqual({ kind: "asking" });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(last()).toEqual({ kind: "asking" });
     dc.recv(JSON.stringify({ stage: "joined", session: { host: "10.0.0.5", playing: true } }));
     expect(last()).toEqual({ kind: "joined", host: "10.0.0.5", playing: true, passcode: false });
 
@@ -211,6 +216,22 @@ describe("the phone page over the internet", () => {
     expect(netText(tr, "mismatch")).toContain("doesn't match");
     expect(netText(tr, "no_room")).toContain("expired");
     expect(netText(tr, "net_full")).toContain("Four phones");
+  });
+
+  it("told No, or nobody answered: said so, and no second try", async () => {
+    for (const why of ["denied", "no_answer"]) {
+      FakeHub.all = [];
+      FakePC.all = [];
+      stages = [];
+      phone();
+      const { dc } = await connect(0);
+      dc.open();
+      dc.recv(JSON.stringify({ stage: "asking" }));
+      dc.recv(JSON.stringify({ stage: "refused", why }));
+      expect(last()).toEqual({ kind: "refused", why });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(FakeHub.all).toHaveLength(1);
+    }
   });
 
   it("a dropped channel comes back through the hub with the hello again", async () => {

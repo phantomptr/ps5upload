@@ -84,7 +84,15 @@ async function api(path: string, body?: unknown): Promise<Record<string, unknown
 type Link = {
   internet?: { url?: string; state?: string } | null;
   pads?: Array<{ id: number; watch: boolean; via: string }>;
+  pending?: Array<{ id: number; via: string; watch: boolean }>;
 };
+
+/** The host answers the internet phone asking (as Allow / No over the picture do). */
+async function answer(allow: boolean, watch: boolean): Promise<void> {
+  await expect.poll(async () => (await link()).pending?.map((p) => `${p.via} ${p.watch}`), { timeout: 30_000 }).toEqual([`internet ${watch}`]);
+  const id = (await link()).pending![0].id;
+  expect((await api("/api/ps5/rp/pad-link/decide", { id, allow })).ok).toBe(true);
+}
 const link = async () => (await api("/api/ps5/rp/pad-link")) as Link;
 const consolePad = async () => (await api("/e2e/pad")) as { buttons: number };
 
@@ -205,7 +213,12 @@ test("a phone anywhere is a controller: its press reaches the console, the conso
   await page.goto(url, { waitUntil: "domcontentloaded" });
   // An internet link plays in the browser: no "Open in the app?" question.
   await expect(page.getByTestId("open-in-gate")).toHaveCount(0);
+  // Over the internet the host allows the phone first: no controller until then.
+  await expect(page.getByTestId("pad-stage")).toHaveText("Waiting for the computer to allow this phone…", { timeout: 30_000 });
   const cross = page.getByRole("button", { name: "✕" });
+  await expect(cross).toHaveCount(0);
+  expect((await link()).pads).toEqual([]);
+  await answer(true, false);
   await expect(cross).toBeVisible({ timeout: 30_000 });
   expect(logs.some((l) => l.includes("[pad] channel open")), logs.join("\n")).toBe(true);
   await expect.poll(async () => (await link()).pads?.map((p) => `${p.via} ${p.watch}`)).toEqual(["internet false"]);
@@ -236,6 +249,12 @@ test("a watcher anywhere sees the picture over the data channel and has no contr
   const url = await internetLink();
   siteRequests.length = 0;
   await page.goto(`${url}&w=1`, { waitUntil: "domcontentloaded" });
+  // The host says No: the page says so, with Try again.
+  await answer(false, true);
+  await expect(page.getByTestId("pad-stage")).toHaveText("The computer said no.", { timeout: 30_000 });
+  await page.getByTestId("pad-retry").tap();
+  // Asked again, allowed: watching.
+  await answer(true, true);
   await expect(page.getByTestId("pad-stage")).toContainText("Watching", { timeout: 30_000 });
   await expect.poll(async () => (await link()).pads?.map((p) => `${p.via} ${p.watch}`)).toEqual(["internet true"]);
   // The stream (made in this browser), as the console's session hands it to watchers.

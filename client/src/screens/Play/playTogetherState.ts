@@ -107,7 +107,7 @@ export function readNetInvite(v: unknown): NetInvite | null {
 }
 
 /** The engine's internet peers (`internet.peers`, or the invite's own list). */
-function readPeers(v: unknown): NetPeer[] {
+export function readPeers(v: unknown): NetPeer[] {
   return (Array.isArray(v) ? v : [])
     .filter((p): p is Record<string, unknown> => !!p && typeof p === "object" && typeof p.gid === "string")
     .map((p) => ({ gid: p.gid as string, path: str(p.path) ?? "connecting", rttMs: num(p.rtt_ms) }));

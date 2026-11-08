@@ -8096,6 +8096,8 @@ rp_users_add_hint: "Para jugar también como otro usuario, inicia sesión con es
 "pt_elsewhere_guest": "¿Juegas desde otro sitio? Pide a tu amigo que te invite con Internet y abre su enlace en el navegador.",
 "pad_net_computer": "el ordenador",
 "rp_watch_net_how": "Cualquiera con este enlace puede ver la transmisión desde cualquier lugar, en su móvil, tableta u ordenador (hasta cuatro). Por internet solo miran: no se les puede pasar el mando.",
+"rp_watch_ask": "{name} quiere mirar",
+"rp_phone_net_phone": "Un teléfono por internet",
 };
 
 export default es;

@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const renderToStaticMarkup = (el: ReactElement) => ssr(<MemoryRouter>{el}</MemoryRouter>);
 
 import { installWindowStub } from "../../test-utils/storage";
-import { padInternet, PhonePadsPanel, readPadLink, watchUrl } from "./PhonePads";
+import { PadAsks, padInternet, PhonePadsPanel, readPadLink, watchUrl } from "./PhonePads";
 
 // The phone link over the internet (pad_link.rs status, POST /api/ps5/rp/pad-link/internet),
 // field for field as the engine says it.
@@ -18,7 +18,20 @@ const NET_URL = `https://ps5upload.phantomptr.com/pad/#room=r1&k=${NET_KEY}&fp=A
 const engine = {
   open: true,
   internet_invites: true,
-  internet: { url: NET_URL, room: "r1", hub: "hub.phantomptr.com", fp: "AA:BB", state: "hosted", error: null, router: null, peers: [] },
+  internet: {
+    url: NET_URL,
+    room: "r1",
+    hub: "hub.phantomptr.com",
+    fp: "AA:BB",
+    state: "hosted",
+    error: null,
+    router: null,
+    peers: [
+      { gid: "g1", path: "direct", ice: "connected", rtt_ms: 80, since_s: 20, why: null },
+      { gid: "g2", path: "connecting", ice: "checking", rtt_ms: null, since_s: 2, why: null },
+      { gid: "g3", path: "failed", ice: "failed", rtt_ms: null, since_s: 16, why: "timeout" },
+    ],
+  },
   url: LAN_URL,
   tailscale: null,
   urls: [LAN_URL],
@@ -28,7 +41,10 @@ const engine = {
     { id: 2, name: "iphone", since_ms: 0, watch: true, control: false, via: "internet", rtt_ms: 120 },
     { id: 3, name: "ipad", since_ms: 0, watch: true, control: false, via: "lan", rtt_ms: null },
   ],
-  pending: [],
+  pending: [
+    { id: 7, name: "Pixel", via: "internet", watch: true },
+    { id: 8, name: "android", via: "internet", watch: false },
+  ],
 };
 
 afterEach(() => vi.unstubAllGlobals());
@@ -124,6 +140,31 @@ describe("the panel's network choice", () => {
     const out = panel({ ...engine, internet_invites: undefined, internet: undefined });
     expect(out).not.toContain("rp-pad-addresses-internet");
     expect(out).toContain(`data-testid="rp-pad-url">${LAN_URL}<`);
+  });
+
+  it("internet phones waiting for Allow are listed with Allow and No; connecting and failed ones are said", () => {
+    installWindowStub();
+    const out = panel();
+    expect(out).toContain('data-testid="rp-pad-pending"');
+    expect(out.match(/data-testid="rp-pad-pending-allow"/g)).toHaveLength(2);
+    expect(out).toContain("Pixel wants to watch · Internet");
+    expect(out).toContain("Android phone wants to be a controller · Internet");
+    expect(out.match(/data-testid="rp-pad-net-peer"/g)).toHaveLength(1);
+    expect(out).toContain('data-testid="rp-pad-net-failed"');
+    expect(out).toContain("Couldn&#x27;t connect from their network");
+  });
+
+  it("the Allow over the picture says what an internet phone wants", () => {
+    installWindowStub();
+    const s = readPadLink(engine);
+    expect(s.pending).toEqual([
+      { id: 7, name: "Pixel", watch: true, via: "internet" },
+      { id: 8, name: "android", via: "internet" },
+    ]);
+    const out = renderToStaticMarkup(<PadAsks pending={s.pending} />);
+    expect(out).toContain('data-testid="rp-pad-ask"');
+    expect(out).toContain("Pixel wants to watch · Internet");
+    expect(out).toContain('data-testid="rp-pad-allow"');
   });
 
   it("phones from the internet are marked, and a watcher there is never handed the controller", () => {

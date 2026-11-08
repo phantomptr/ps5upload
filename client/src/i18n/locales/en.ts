@@ -8448,6 +8448,8 @@ rp_users_add_hint: "To play as another user too, sign in to that user on the PS5
 "pt_elsewhere_guest": "Playing from somewhere else? Ask your friend to invite you with Internet, then open their link in your browser.",
 "pad_net_computer": "the computer",
 "rp_watch_net_how": "Anyone with this link can watch the stream from anywhere, on their phone, tablet or computer (up to four). Over the internet they only watch: they can't be handed the controller.",
+"rp_watch_ask": "{name} wants to watch",
+"rp_phone_net_phone": "A phone on the internet",
 };
 
 export default en;

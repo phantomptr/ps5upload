@@ -8102,6 +8102,8 @@ rp_users_add_hint: "若也想以其他用户游玩，请在 PS5 上登录该用�
 "pt_elsewhere_guest": "在别处玩？请好友用互联网邀请你，然后在浏览器中打开他们的链接。",
 "pad_net_computer": "电脑",
 "rp_watch_net_how": "任何拿到此链接的人都可以在任何地方用手机、平板或电脑观看直播(最多四人)。通过互联网只能观看,无法把手柄交给他们。",
+"rp_watch_ask": "{name} 想观看",
+"rp_phone_net_phone": "互联网上的手机",
 };
 
 export default zh_CN;

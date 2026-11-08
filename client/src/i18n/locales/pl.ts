@@ -8384,6 +8384,8 @@ rp_users_add_hint: "Aby grać także jako inny użytkownik, zaloguj się na nim 
 "pt_elsewhere_guest": "Grasz z innego miejsca? Poproś znajomego o zaproszenie przez Internet i otwórz jego link w przeglądarce.",
 "pad_net_computer": "komputerze",
 "rp_watch_net_how": "Każdy z tym linkiem może oglądać transmisję z dowolnego miejsca na telefonie, tablecie lub komputerze (do czterech osób). Przez internet tylko oglądają: nie można im przekazać kontrolera.",
+"rp_watch_ask": "{name} chce oglądać",
+"rp_phone_net_phone": "Telefon przez internet",
 };
 
 export default pl;
