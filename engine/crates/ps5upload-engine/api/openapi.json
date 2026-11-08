@@ -11358,6 +11358,64 @@
         ],
         "type": "object"
       },
+      "SeatProfile.request": {
+        "description": "\"Guests play as\": the console profile a guest on Player `player` gets, chosen by the host for\none console (user ids are that console's). The helper seats the guest's pad in it as it is made\n(`vpad.open` with `bind_user`), so the console never asks \"Who's using this controller?\" and the\nguest cannot pick another profile. No entry for a player: the console asks (as before).",
+        "properties": {
+          "name": {
+            "description": "The profile's name as the console showed it when the host chose it.",
+            "type": "string"
+          },
+          "owner": {
+            "description": "The host confirmed this profile although it is their own (the one in front): the guest can\nuse its saves and trophies. Without it the helper refuses that profile.",
+            "type": "boolean"
+          },
+          "player": {
+            "description": "2-4.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "user": {
+            "description": "The console's user id (`user.list`).",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "player",
+          "user"
+        ],
+        "type": "object"
+      },
+      "SeatProfile.response": {
+        "description": "\"Guests play as\": the console profile a guest on Player `player` gets, chosen by the host for\none console (user ids are that console's). The helper seats the guest's pad in it as it is made\n(`vpad.open` with `bind_user`), so the console never asks \"Who's using this controller?\" and the\nguest cannot pick another profile. No entry for a player: the console asks (as before).",
+        "properties": {
+          "name": {
+            "description": "The profile's name as the console showed it when the host chose it.",
+            "type": "string"
+          },
+          "owner": {
+            "description": "The host confirmed this profile although it is their own (the one in front): the guest can\nuse its saves and trophies. Without it the helper refuses that profile.",
+            "type": "boolean"
+          },
+          "player": {
+            "description": "2-4.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "user": {
+            "description": "The console's user id (`user.list`).",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "player",
+          "user",
+          "name",
+          "owner"
+        ],
+        "type": "object"
+      },
       "SessionInfo": {
         "description": "The running session as a stream for a site sees it (Go live checks it against each site's\nlimits, rp_golive.rs).",
         "properties": {
@@ -11476,9 +11534,30 @@
       },
       "SettingsBody": {
         "properties": {
+          "addr": {
+            "description": "The console `guest_profiles` are for (user ids are that console's).",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
           "block_system_buttons": {
             "type": [
               "boolean",
+              "null"
+            ]
+          },
+          "guest_profiles": {
+            "description": "\"Guests play as\": the profile for each guest's player on `addr` (`{player: 2-4, user,\nname, owner}`), replacing the last; empty: the TV asks every guest.",
+            "items": {
+              "$ref": "#/components/schemas/SeatProfile.request"
+            },
+            "type": [
+              "array",
               "null"
             ]
           },
@@ -21861,6 +21940,79 @@
         }
       }
     },
+    "/api/join/profiles": {
+      "get": {
+        "description": "`GET /api/join/profiles?addr=`: the profiles signed in on that console (`users`: `{id, name,\nforeground}`, `foreground` the one in front: the host's own), what the host chose for each\nguest's player (`seats`: `{player, user, name, owner}`), and the helper's companion that seats\nguests in them (`companion`: running, starting, no_bind, unavailable, off; null when not asked\nyet). Only signed-in profiles can be chosen (502 `unreachable` when the console does not\nanswer).",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "companion": {},
+                    "seats": {
+                      "items": {
+                        "$ref": "#/components/schemas/SeatProfile.response"
+                      },
+                      "type": "array"
+                    },
+                    "users": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "play-together"
+        ],
+        "x-ps5upload": {
+          "access": "host-checked",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
     "/api/join/relay": {
       "get": {
         "description": "`GET /api/join/relay?url=ws://<host engine>:<port>/api/join/ws` (this computer only): an app\njoining a friend's Play Together talks to its own engine (an app page may not open a plain\n`ws://` to another machine), which passes the socket through unchanged. Only another engine's\n`/api/join/ws` on a private address.",
@@ -21900,7 +22052,7 @@
     },
     "/api/join/settings": {
       "post": {
-        "description": "`POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,\ninternet_invites?, hub_url?, stun?, upnp?}`: the host's choices (every console). Fewer players\nlets nobody go; it only stops new ones. `stream_seat` off moves a friend on the stream's\ncontroller to a pad of their own. `internet_invites` off closes the internet rooms (guests\nalready in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`\notherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none), `upnp` whether the\nrouter is asked for a port.",
+        "description": "`POST /api/join/settings {block_system_buttons?, max_players?, stream_seat?,\ninternet_invites?, hub_url?, stun?, upnp?}`: the host's choices (every console). Fewer players\nlets nobody go; it only stops new ones. `stream_seat` off moves a friend on the stream's\ncontroller to a pad of their own. `internet_invites` off closes the internet rooms (guests\nalready in keep playing). `hub_url` is the signalling hub (`wss://…`; 400 `hub_url`\notherwise), `stun` the STUN servers (`host:port`, at most 8; empty: none), `upnp` whether the\nrouter is asked for a port.\n\n`guest_profiles` with `addr` (\"Guests play as\" on that console): each guest's player gets the\nprofile the host chose (`{player: 2-4, user, name, owner}`; a player left out: the TV asks).\nOnly signed-in profiles can be seated. The host's own profile (the one in front) needs `owner`\ntrue, the host's confirmation that the guest may use its saves and trophies (409\n`owner_confirm` otherwise); 400 `addr` without a console, 400 `player`, `user` or `duplicate`\nfor a list that is not one profile per player.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -21935,6 +22087,10 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
           "default": {
             "$ref": "#/components/responses/Error",
             "description": "Any other failure, in the same shape."
@@ -21946,6 +22102,15 @@
         ],
         "x-ps5upload": {
           "access": "host-checked",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": false
+          },
           "response_schema": "literal"
         }
       }

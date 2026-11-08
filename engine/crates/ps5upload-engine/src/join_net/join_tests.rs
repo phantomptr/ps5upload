@@ -87,6 +87,8 @@ async fn fake_stun(who: std::net::SocketAddr) -> std::net::SocketAddr {
 
 fn settings_body() -> SettingsBody {
     SettingsBody {
+        addr: None,
+        guest_profiles: None,
         block_system_buttons: None,
         max_players: None,
         stream_seat: None,
