@@ -35,7 +35,7 @@ const BACKOFF_MAX: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 30 
 
 pub(crate) trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}
-type Ws = tokio_tungstenite::WebSocketStream<Box<dyn Io>>;
+pub(crate) type Ws = tokio_tungstenite::WebSocketStream<Box<dyn Io>>;
 
 #[derive(Debug)]
 struct St {
@@ -153,7 +153,7 @@ impl Room {
     }
 }
 
-async fn connect(url: &str) -> Result<Ws, String> {
+pub(crate) async fn connect(url: &str) -> Result<Ws, String> {
     let uri: axum::http::Uri = url.parse().map_err(|_| "bad hub address".to_string())?;
     let host = uri.host().ok_or("bad hub address")?.to_string();
     let tls = uri.scheme_str() == Some("wss");

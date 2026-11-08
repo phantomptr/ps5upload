@@ -62,6 +62,8 @@ use tokio::sync::{mpsc, Notify};
 pub(crate) const PAGE: &str = "https://ps5upload.phantomptr.com/join/";
 /// The phone page that reads an internet phone link (a controller, or `&w=1` to watch).
 pub(crate) const PAD_PAGE: &str = "https://ps5upload.phantomptr.com/pad/";
+/// The page that reads a Share link in a browser (share/mod.rs): file downloads only.
+pub(crate) const SHARE_PAGE: &str = "https://ps5upload.phantomptr.com/share/";
 
 /// What a room's peers come for, and so which session their channel gets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,6 +72,8 @@ pub(crate) enum Kind {
     Join,
     /// The phone link (pad_link.rs): a controller or a watcher.
     Pad,
+    /// A Share link (share/mod.rs): a friend receiving what was shared, over a "share" channel.
+    Share,
 }
 
 impl Kind {
@@ -78,6 +82,7 @@ impl Kind {
         match self {
             Kind::Join => "join",
             Kind::Pad => "pad",
+            Kind::Share => "share",
         }
     }
 
@@ -86,6 +91,7 @@ impl Kind {
         match self {
             Kind::Join => PAGE,
             Kind::Pad => PAD_PAGE,
+            Kind::Share => SHARE_PAGE,
         }
     }
 }

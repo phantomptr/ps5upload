@@ -281,6 +281,18 @@ impl Default for Settings {
 
 static SETTINGS: Mutex<Option<Settings>> = Mutex::new(None);
 
+/// Other modules' tests (share/tests.rs): the hub under test, and the internet invites switch.
+#[cfg(test)]
+pub(crate) fn set_test_hub(hub_url: &str, internet: bool) {
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings {
+        hub_url: hub_url.to_string(),
+        internet_invites: internet,
+        stun: Vec::new(),
+        upnp: false,
+        ..Settings::default()
+    });
+}
+
 pub(crate) fn settings() -> Settings {
     SETTINGS
         .lock()
