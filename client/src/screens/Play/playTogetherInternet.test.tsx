@@ -136,6 +136,28 @@ describe("the internet invite call", () => {
     expect(r?.invite?.share?.url).toBe(NET_URL);
   });
 
+  it("an engine from before the one link (no `share` in its answer): asked for its internet link", async () => {
+    const old = { ...engine, invite: { ...engine.invite, share: undefined, internet: null } };
+    const calls: unknown[] = [];
+    let asked = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
+        if (body) calls.push(body);
+        if (body?.internet) asked = true;
+        const whole = asked ? { ...old, invite: { ...old.invite, internet: engine.invite.internet } } : old;
+        return new Response(JSON.stringify(url.includes("/api/join?") ? whole : {}), { status: 200 });
+      }),
+    );
+    const s = await joinApi.inviteShare("192.168.1.100");
+    expect(calls).toEqual([
+      { addr: "192.168.1.100", share: true },
+      { addr: "192.168.1.100", internet: true },
+    ]);
+    expect(shareOf(s!.invite!)).toEqual({ url: NET_URL, works: "anywhere", why: null });
+  });
+
   it("the home network's invite never asks for internet", async () => {
     const calls = fake(200, { key: KEY });
     await joinApi.invite("192.168.1.100");

@@ -572,7 +572,16 @@ export const joinApi = {
   /** The one link (`invite.share`): the internet invite when Invites work says Anywhere and it
    *  can be made, else the home network's; never refused for that. An engine from before it
    *  answers the home network's invite (no `share`). */
-  inviteShare: (addr: string, renew = false) => change("/api/join/invite", addr, inviteBody(renew, false, true)),
+  inviteShare: async (addr: string, renew = false): Promise<JoinHostState | null> => {
+    const s = await change("/api/join/invite", addr, inviteBody(renew, false, true));
+    // An engine from before the one link (12.0) ignores `share`: its internet link, as its Internet
+    // choice made it (the home network's invite stays when that is refused).
+    if (s?.invite && !s.invite.share && s.settings.internetInvites && !s.invite.internet) {
+      const r = await changeOrWhy("/api/join/invite", addr, inviteBody(false, true));
+      return r.state ?? s;
+    }
+    return s;
+  },
   decide: (addr: string, id: number, allow: boolean) => change("/api/join/decide", addr, { id, allow }),
   kick: (addr: string, player: number) => change("/api/join/kick", addr, { player }),
   settings: (addr: string, s: { block_system_buttons?: boolean; max_players?: number; stream_seat?: boolean }) =>
