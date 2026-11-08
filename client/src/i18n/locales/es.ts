@@ -7492,7 +7492,7 @@ helper_mismatch_boot_copy: "Tu PS5 inició una copia antigua del ayudante que gu
   "play_setup_pair_failed_try_pin": "La vinculación automática no funcionó en esta consola. Vincula con el PIN que muestra la PS5:",
   "play_setup_pair_with_pin": "Vincular con el PIN que muestra la PS5",
   "saves_part_main": "partida principal",
-  "saves_part_missing": "{part} de {game} aún no está en {user}: inicia el juego una vez como {user} y guarda, luego inténtalo de nuevo.",
+  "saves_part_missing": "{user} aún no tiene {part} de {game}, y una partida guardada solo puede reemplazar una ranura que {user} ya tenga. Inicia el juego como {user}, guarda en la misma ranura y vuelve a intentarlo.",
   "saves_share_working": "Guardando la partida de {game} como archivo…",
   "saves_shared_body_v2": "Guardado como {where}. Envíalo a tu amigo o llévalo a tu otra PS5: allí, en Partidas guardadas, elige Copiar a… › Cargar un archivo de partida en {game}.",
   "saves_backed_up": "{game} tiene copia de seguridad",

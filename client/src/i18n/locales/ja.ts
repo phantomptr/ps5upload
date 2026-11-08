@@ -7558,7 +7558,7 @@ helper_mismatch_boot_copy: "PS5 が起動用に保持している古いヘルパ
   "play_setup_pair_failed_try_pin": "この本体では自動ペアリングがうまくいきませんでした。代わりに PS5 に表示される PIN でペアリングしてください：",
   "play_setup_pair_with_pin": "PS5 に表示される PIN でペアリング",
   "saves_part_main": "メインセーブ",
-  "saves_part_missing": "{game} の {part} はまだ {user} にありません。{user} として一度ゲームを起動してセーブしてから、もう一度お試しください。",
+  "saves_part_missing": "{user} にはまだ {game} の {part} がありません。セーブは {user} にすでにあるセーブスロットにしか入れられません。{user} としてゲームを起動し、同じスロットにセーブしてから、もう一度お試しください。",
   "saves_share_working": "{game} のセーブをファイルとして保存中…",
   "saves_shared_body_v2": "{where} として保存しました。友だちに送るか、もう一台の PS5 に持っていき、そこでセーブデータの {game} で コピー先… › セーブファイルを読み込む を選んでください。",
   "saves_backed_up": "{game} をバックアップしました",

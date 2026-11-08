@@ -7547,7 +7547,7 @@ helper_mismatch_boot_copy: "Deine PS5 hat eine ältere Kopie des Helfers gestart
   "play_setup_pair_failed_try_pin": "Die automatische Kopplung hat auf dieser Konsole nicht funktioniert. Kopple stattdessen mit der PIN, die die PS5 anzeigt:",
   "play_setup_pair_with_pin": "Mit der PIN von der PS5 koppeln",
   "saves_part_main": "Hauptspielstand",
-  "saves_part_missing": "{part} von {game} ist noch nicht bei {user}: Starte das Spiel einmal als {user} und speichere, dann versuche es erneut.",
+  "saves_part_missing": "{user} hat {part} von {game} noch nicht, und ein Spielstand kann nur einen Speicherplatz ersetzen, den {user} schon hat. Starte das Spiel als {user}, speichere im selben Speicherplatz und versuche es dann erneut.",
   "saves_share_working": "Spielstand von {game} wird als Datei gespeichert…",
   "saves_shared_body_v2": "Gespeichert als {where}. Schick die Datei deinem Freund oder nimm sie mit zu deiner anderen PS5: Wähle dort in Spielstände bei {game} Kopieren nach… › Spielstanddatei laden.",
   "saves_backed_up": "{game} ist gesichert",

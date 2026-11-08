@@ -7554,7 +7554,7 @@ helper_mismatch_boot_copy: "Seu PS5 iniciou uma cópia antiga do auxiliar que gu
   "play_setup_pair_failed_try_pin": "O pareamento automático não funcionou neste console. Pareie com o PIN exibido no PS5:",
   "play_setup_pair_with_pin": "Parear com o PIN exibido no PS5",
   "saves_part_main": "save principal",
-  "saves_part_missing": "A parte {part} de {game} ainda não está em {user}: inicie o jogo uma vez como {user} e salve, depois tente de novo.",
+  "saves_part_missing": "{user} ainda não tem {part} de {game}, e um salvamento só pode substituir um slot que {user} já tenha. Inicie o jogo como {user}, salve no mesmo slot e tente de novo.",
   "saves_share_working": "Salvando o save de {game} como arquivo…",
   "saves_shared_body_v2": "Salvo como {where}. Envie ao seu amigo ou leve ao seu outro PS5: lá, em Saves, escolha Copiar para… › Carregar um arquivo de save em {game}.",
   "saves_backed_up": "Backup de {game} feito",

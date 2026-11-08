@@ -7844,7 +7844,7 @@ helper_mismatch_boot_copy: "Your PS5 started an older copy of the helper that it
   "play_setup_pair_failed_try_pin": "Automatic pairing did not work on this console. Pair with the PIN shown on the PS5 instead:",
   "play_setup_pair_with_pin": "Pair with the PIN shown on the PS5",
   "saves_part_main": "main save",
-  "saves_part_missing": "{game}'s {part} isn't on {user} yet: start the game once as {user} and save, then try again.",
+  "saves_part_missing": "{user} doesn't have {game}'s {part} yet, and a save can only replace a save slot {user} already has. Start the game as {user}, save in the same slot, then try again.",
   "saves_share_working": "Saving {game}'s save as a file…",
   "saves_shared_body_v2": "Saved as {where}. Send it to your friend, or take it to your other PS5: there, in Save Data, pick Copy to… › Load a save file on {game}.",
   "saves_backed_up": "{game} is backed up",

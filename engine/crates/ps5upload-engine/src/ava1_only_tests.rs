@@ -101,6 +101,7 @@ async fn transfer_dir_with_no_ava1_listener_is_helper_not_ava1() {
         excludes: vec![],
         bandwidth_cap_mbps: None,
         skip_existing: None,
+        unescape_names: false,
     };
     let resp = transfer_dir_handler(State(state_for(&jobs)), Json(req))
         .await
@@ -294,12 +295,44 @@ async fn transfer_download_with_no_ava1_listener_is_helper_not_ava1() {
         dest_dir: dir.to_string_lossy().into_owned(),
         kind: "file".to_string(),
         unsafe_read: false,
+        escape_names: false,
     };
     let resp = transfer_download_handler(State(state_for(&jobs)), Json(req))
         .await
         .into_response();
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
     assert_helper_not_ava1(&jobs).await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #729: a console name this computer can't hold (`a\b`, `CON`) is refused up front, unless the
+/// download keeps names (`escape_names`, the saves code): then it starts.
+#[tokio::test(flavor = "multi_thread")]
+async fn transfer_download_takes_a_name_windows_refuses_only_when_keeping_names() {
+    let dir = std::env::temp_dir().join(format!("p5-ava1only-kept-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for src in ["/data/x/options\\gabindings.xml", "/data/x/CON"] {
+        for escape_names in [false, true] {
+            let jobs: Arc<Mutex<HashMap<Uuid, JobState>>> = Arc::new(Mutex::new(HashMap::new()));
+            let req = TransferDownloadReq {
+                addr: Some("127.0.0.1:9113".to_string()),
+                src_path: src.to_string(),
+                dest_dir: dir.to_string_lossy().into_owned(),
+                kind: "file".to_string(),
+                unsafe_read: false,
+                escape_names,
+            };
+            let resp = transfer_download_handler(State(state_for(&jobs)), Json(req))
+                .await
+                .into_response();
+            if escape_names {
+                assert_eq!(resp.status(), StatusCode::ACCEPTED, "{src}");
+                assert_helper_not_ava1(&jobs).await;
+            } else {
+                assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{src}");
+            }
+        }
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
