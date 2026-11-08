@@ -151,6 +151,11 @@ export { NET_CLOSE, netFailure, type NetWhy };
 export const STUN_SERVERS = ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"];
 /** ICE must reach "connected" (and the channel open) this soon, or the networks can't meet. */
 export const ICE_TIMEOUT_MS = 15_000;
+/** The hub closed with 1001 (going away: it is restarting for an update) before the host
+ *  answered: try again after this long, for at most HUB_BACK_FOR_MS. The hosts reconnect and open
+ *  their rooms again within seconds, so a `no_room` in that time means "not back yet". */
+export const HUB_BACK_WAIT_MS = 1_500;
+export const HUB_BACK_FOR_MS = 20_000;
 
 /** What `new` gives: the parts of WebSocket the session uses. */
 export interface JoinSocket {
@@ -213,6 +218,8 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
     private answered = false;
     /** Candidates from the host that came before the answer. */
     private early: RTCIceCandidateInit[] = [];
+    /** Set while waiting for a restarting hub: until when it is worth trying again. */
+    private hubBackUntil = 0;
 
     constructor(_url?: string) {
       // Asynchronous like a WebSocket's own events: the session sets its handlers first.
@@ -244,11 +251,17 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
         }
         this.onHub(m);
       };
-      hub.onclose = () => {
+      hub.onclose = (e?: CloseEvent) => {
         if (this.hub !== hub) return;
         this.hub = null;
-        // Once the channel is open the hub is not needed; before, nothing goes on without it.
-        if (this.readyState === 0) this.fail("no_hub");
+        // Once the channel is open the hub is not needed.
+        if (this.readyState !== 0) return;
+        // With the host's answer in, ICE may still connect without the hub: let it try (the
+        // ICE timeout still ends it).
+        if (this.answered) return;
+        // The hub restarting (an update): try again once it is back.
+        if (e?.code === 1001 && this.hubRestarting()) return;
+        this.fail("no_hub");
       };
       hub.onerror = () => {
         // onclose follows.
@@ -275,6 +288,8 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
           return;
         case "error":
           log(`hub: error ${m.why ?? "?"}`);
+          // Back from a restart before the host is: its room opens again in a moment.
+          if (m.why === "no_room" && this.hubBackUntil && this.hubRestarting()) return;
           this.fail(m.why === "no_room" ? "no_room" : m.why === "room_full" ? "net_full" : "no_hub");
           return;
       }
@@ -439,10 +454,33 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
       }
     }
 
+    /** The hub is restarting: drop this try and start another after a moment. False once it has
+     *  been away too long (the caller then fails as before). */
+    private hubRestarting(): boolean {
+      const now = Date.now();
+      if (!this.hubBackUntil) this.hubBackUntil = now + HUB_BACK_FOR_MS;
+      if (now >= this.hubBackUntil) return false;
+      log("hub: restarting, trying again");
+      this.clearTimer();
+      this.leaveHub();
+      this.closePeer();
+      this.answered = false;
+      this.early = [];
+      this.timer = setTimeout(() => {
+        this.timer = null;
+        this.begin();
+      }, HUB_BACK_WAIT_MS);
+      return true;
+    }
+
     private teardown(): void {
       this.readyState = 3;
       this.clearTimer();
       this.leaveHub();
+      this.closePeer();
+    }
+
+    private closePeer(): void {
       const pc = this.pc;
       const dc = this.dc;
       this.pc = null;

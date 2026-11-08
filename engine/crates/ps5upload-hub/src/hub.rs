@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, State as AxState};
@@ -35,7 +35,14 @@ pub const GID_LEN: usize = 12;
 const PEER_QUEUE: usize = 64;
 /// The hard frame cap given to the WebSocket layer. Frames between the protocol limit and this
 /// get a `too_large` error; larger ones are cut off by the WebSocket layer itself.
-const HARD_FRAME_FACTOR: usize = 4;
+const HARD_FRAME_FACTOR: usize = 2;
+/// The WebSocket layer's read buffer. Its default (128 KiB, allocated and touched for every
+/// socket) made an idle connection cost about 140 KiB, so 2,000 of them would not fit the 256 MB
+/// machine. Signalling messages are small; a larger frame just takes several reads.
+const READ_BUFFER: usize = 4 * 1024;
+/// A peer that does not take a frame for this long (it stopped reading) is dropped, so a socket
+/// that never reads cannot hold its task, and its connection slot, forever.
+const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// WebSocket close codes the hub uses (4000-4999 are for applications).
 pub const CLOSE_PROTOCOL: u16 = 4000;
@@ -46,6 +53,7 @@ pub const CLOSE_GOING_AWAY: u16 = 1001;
 pub(crate) struct State {
     rooms: HashMap<String, Room>,
     rooms_per_ip: HashMap<IpKey, usize>,
+    conns_per_ip: HashMap<IpKey, usize>,
     joins: RateTable,
 }
 
@@ -54,6 +62,7 @@ impl State {
         Self {
             rooms: HashMap::new(),
             rooms_per_ip: HashMap::new(),
+            conns_per_ip: HashMap::new(),
             joins: RateTable::new(c.max_tracked_ips),
         }
     }
@@ -190,10 +199,64 @@ async fn ws_handler(
         }
     }
     let ip = IpKey::of(client_ip(&shared.config, peer.ip(), &headers));
+    let slot = match ConnSlot::take(&shared, ip) {
+        Ok(s) => s,
+        Err(kind) => {
+            shared.metrics.error(kind);
+            let status = if kind == ErrorKind::ServerFull {
+                StatusCode::SERVICE_UNAVAILABLE
+            } else {
+                StatusCode::TOO_MANY_REQUESTS
+            };
+            return (status, "too many connections\n").into_response();
+        }
+    };
     let hard = shared.config.max_frame_bytes * HARD_FRAME_FACTOR;
+    // The slot moves into the callback: it is given back when the connection ends, or when the
+    // upgrade fails and the callback is dropped without running.
     ws.max_message_size(hard)
         .max_frame_size(hard)
-        .on_upgrade(move |socket| connection(socket, shared, ip))
+        .read_buffer_size(READ_BUFFER)
+        .on_upgrade(move |socket| connection(socket, slot))
+}
+
+/// One open connection, counted against the hub's and its client's limits until dropped.
+struct ConnSlot {
+    shared: Arc<Shared>,
+    ip: IpKey,
+}
+
+impl ConnSlot {
+    fn take(shared: &Arc<Shared>, ip: IpKey) -> Result<ConnSlot, ErrorKind> {
+        let cfg = &shared.config;
+        let mut st = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        if shared.connections.load(Ordering::Relaxed) >= cfg.max_connections {
+            return Err(ErrorKind::ServerFull);
+        }
+        let n = st.conns_per_ip.entry(ip).or_insert(0);
+        if *n >= cfg.max_connections_per_ip {
+            return Err(ErrorKind::TooManyConnections);
+        }
+        *n += 1;
+        shared.connections.fetch_add(1, Ordering::Relaxed);
+        Ok(ConnSlot {
+            shared: shared.clone(),
+            ip,
+        })
+    }
+}
+
+impl Drop for ConnSlot {
+    fn drop(&mut self) {
+        let mut st = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(n) = st.conns_per_ip.get_mut(&self.ip) {
+            *n -= 1;
+            if *n == 0 {
+                st.conns_per_ip.remove(&self.ip);
+            }
+        }
+        self.shared.connections.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 fn random_b64(bytes: usize) -> String {
@@ -230,8 +293,26 @@ fn close_msg(code: u16, reason: &'static str) -> Message {
     }))
 }
 
-async fn connection(socket: WebSocket, shared: Arc<Shared>, ip: IpKey) {
-    shared.connections.fetch_add(1, Ordering::Relaxed);
+type Sink = futures_util::stream::SplitSink<WebSocket, Message>;
+
+/// Sends one frame, giving up after [`SEND_TIMEOUT`] (a peer that stopped reading).
+async fn send_frame(sink: &mut Sink, m: Message) -> Result<(), ()> {
+    match tokio::time::timeout(SEND_TIMEOUT, sink.send(m)).await {
+        Ok(Ok(())) => Ok(()),
+        _ => Err(()),
+    }
+}
+
+async fn send_all(sink: &mut Sink, lines: Vec<String>) -> Result<(), ()> {
+    for l in lines {
+        send_frame(sink, Message::Text(l.into())).await?;
+    }
+    Ok(())
+}
+
+async fn connection(socket: WebSocket, slot: ConnSlot) {
+    let shared = slot.shared.clone();
+    let ip = slot.ip;
     let conn = shared.next_conn.fetch_add(1, Ordering::Relaxed);
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::channel::<Out>(PEER_QUEUE);
@@ -248,8 +329,11 @@ async fn connection(socket: WebSocket, shared: Arc<Shared>, ip: IpKey) {
         tokio::time::Instant::now() + cfg.ping_interval,
         cfg.ping_interval,
     );
-    // A peer that never says anything still has to be checked before the first ping is due.
     let mut shutdown = shared.shutdown.subscribe();
+    // A socket must take a role soon: an idle one would otherwise hold a connection slot for as
+    // long as it answers pings.
+    let hello = tokio::time::sleep(cfg.hello_timeout);
+    tokio::pin!(hello);
 
     loop {
         tokio::select! {
@@ -270,68 +354,69 @@ async fn connection(socket: WebSocket, shared: Arc<Shared>, ip: IpKey) {
                     }
                     Ok(Action::ReplyThenClose(lines)) => {
                         let _ = send_all(&mut sink, lines).await;
-                        let _ = sink.send(close_msg(CLOSE_DONE, "bye")).await;
+                        let _ = send_frame(&mut sink, close_msg(CLOSE_DONE, "bye")).await;
                         break;
                     }
+                    // Counted in the metrics, not logged: any client can send garbage, and a log
+                    // line for each would be volume nobody reads.
                     Err(kind) => {
                         shared.metrics.error(kind);
+                        let text = Message::Text(error_text(kind).into());
                         if kind == ErrorKind::NoPeer {
-                            if sink.send(Message::Text(error_text(kind).into())).await.is_err() {
+                            if send_frame(&mut sink, text).await.is_err() {
                                 break;
                             }
                             continue;
                         }
-                        shared.log("protocol_error", &[("kind", Field::S(kind.as_str()))]);
-                        let _ = sink.send(Message::Text(error_text(kind).into())).await;
-                        let _ = sink.send(close_msg(CLOSE_PROTOCOL, kind.as_str())).await;
+                        let _ = send_frame(&mut sink, text).await;
+                        let _ = send_frame(&mut sink, close_msg(CLOSE_PROTOCOL, kind.as_str())).await;
                         break;
                     }
                 }
             }
             out = rx.recv() => match out {
                 Some(Out::Text(s)) => {
-                    if sink.send(Message::Text(s.into())).await.is_err() {
+                    if send_frame(&mut sink, Message::Text(s.into())).await.is_err() {
                         break;
                     }
                 }
                 Some(Out::Close(code, reason)) => {
-                    let _ = sink.send(close_msg(code, reason)).await;
+                    let _ = send_frame(&mut sink, close_msg(code, reason)).await;
                     break;
                 }
                 None => break,
             },
             _ = kill.notified() => break,
             _ = ping.tick() => {
-                if last_seen.elapsed() >= cfg.peer_timeout {
+                let quiet = last_seen.elapsed();
+                if quiet >= cfg.peer_timeout {
                     shared.metrics.error(ErrorKind::Timeout);
-                    let _ = sink.send(close_msg(CLOSE_GOING_AWAY, "timeout")).await;
+                    let _ = send_frame(&mut sink, close_msg(CLOSE_GOING_AWAY, "timeout")).await;
                     break;
                 }
-                if sink.send(Message::Ping(Default::default())).await.is_err() {
+                // Heard from within the interval (the engine pings the hub every 20 s): no ping
+                // needed, one frame fewer each way.
+                if quiet >= cfg.ping_interval
+                    && send_frame(&mut sink, Message::Ping(Default::default())).await.is_err()
+                {
                     break;
                 }
             }
+            _ = &mut hello, if matches!(role, Role::None) => {
+                shared.metrics.error(ErrorKind::Timeout);
+                let _ = send_frame(&mut sink, close_msg(CLOSE_PROTOCOL, "timeout")).await;
+                break;
+            }
             _ = stopped(&mut shutdown) => {
-                let _ = sink.send(close_msg(CLOSE_GOING_AWAY, "shutdown")).await;
+                let _ = send_frame(&mut sink, close_msg(CLOSE_GOING_AWAY, "shutdown")).await;
                 break;
             }
         }
     }
-    let _ = sink.close().await;
+    let _ = tokio::time::timeout(SEND_TIMEOUT, sink.close()).await;
     disconnect(&shared, role, conn);
-    shared.connections.fetch_sub(1, Ordering::Relaxed);
+    drop(slot);
 }
-
-async fn send_all(
-    sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
-    lines: Vec<String>,
-) -> Result<(), axum::Error> {
-    for l in lines {
-        sink.send(Message::Text(l.into())).await?;
-    }
-    Ok(())
-}
-
 /// The socket is gone: a host leaves its room hostless (its guests are closed), a guest is
 /// removed and its host told.
 fn disconnect(shared: &Shared, role: Role, conn: u64) {
@@ -673,6 +758,7 @@ pub(crate) async fn sweeper(shared: Arc<Shared>, stun_table: Arc<Mutex<RateTable
     let mut tick = tokio::time::interval(cfg.sweep_interval);
     let mut shutdown = shared.shutdown.subscribe();
     let mut last_summary = Instant::now();
+    let mut last_activity = shared.metrics.activity();
     loop {
         tokio::select! {
             _ = tick.tick() => {}
@@ -702,19 +788,27 @@ pub(crate) async fn sweeper(shared: Arc<Shared>, stun_table: Arc<Mutex<RateTable
             .sweep(now, cfg.rate_window);
         if !cfg.summary_interval.is_zero() && last_summary.elapsed() >= cfg.summary_interval {
             last_summary = now;
-            let g = gauges(&shared);
             let m = &shared.metrics;
-            shared.log(
-                "summary",
-                &[
-                    ("rooms", Field::N(g.rooms as u64)),
-                    ("guests", Field::N(g.guests as u64)),
-                    ("connections", Field::N(g.connections as u64)),
-                    ("joins", Field::N(m.joins.load(Ordering::Relaxed))),
-                    ("signals", Field::N(m.signals.load(Ordering::Relaxed))),
-                    ("stun", Field::N(m.stun_requests.load(Ordering::Relaxed))),
-                ],
-            );
+            let activity = m.activity();
+            // Nothing happened since the last one: no line (an idle hub logs nothing).
+            if activity != last_activity {
+                last_activity = activity;
+                let g = gauges(&shared);
+                shared.log(
+                    "summary",
+                    &[
+                        ("rooms", Field::N(g.rooms as u64)),
+                        ("guests", Field::N(g.guests as u64)),
+                        ("connections", Field::N(g.connections as u64)),
+                        ("hosts", Field::N(m.hosts.load(Ordering::Relaxed))),
+                        ("joins", Field::N(m.joins.load(Ordering::Relaxed))),
+                        ("signals", Field::N(m.signals.load(Ordering::Relaxed))),
+                        ("stun", Field::N(m.stun_requests.load(Ordering::Relaxed))),
+                        ("errors", Field::N(m.errors_total())),
+                        ("refused", Field::N(m.refused_total())),
+                    ],
+                );
+            }
         }
     }
 }

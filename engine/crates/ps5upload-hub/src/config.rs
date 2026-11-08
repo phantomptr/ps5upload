@@ -96,13 +96,21 @@ pub struct Config {
     pub max_rooms: usize,
     pub max_rooms_per_ip: usize,
     pub max_stun_per_ip: u32,
+    /// WebSocket connections open at once, in all (refused with HTTP 503 past it).
+    pub max_connections: usize,
+    /// WebSocket connections open at once from one client (refused with HTTP 429 past it).
+    pub max_connections_per_ip: usize,
+    /// A connection must say `host` or `join` this soon after it opens, or it is closed.
+    pub hello_timeout: Duration,
     /// The window the per-minute limits count over.
     pub rate_window: Duration,
     /// A room with no host for this long is removed.
     pub room_idle_ttl: Duration,
-    /// WebSocket ping cadence.
+    /// WebSocket ping cadence. A peer heard from within the last interval is not pinged (the
+    /// engine pings the hub itself), so a quiet peer is pinged at most every two intervals.
     pub ping_interval: Duration,
-    /// A peer that sent nothing (not even a pong) for this long is dropped.
+    /// A peer that sent nothing (not even a pong) for this long is dropped. Must be more than
+    /// twice `ping_interval`.
     pub peer_timeout: Duration,
     /// How often expired rooms and rate counters are swept.
     pub sweep_interval: Duration,
@@ -112,7 +120,8 @@ pub struct Config {
     pub max_signal_data_bytes: usize,
     /// How many IPs the rate tables track before refusing new ones until the next sweep.
     pub max_tracked_ips: usize,
-    /// How often a one-line count summary is logged (zero: never).
+    /// How often a one-line count summary is logged (zero: never). Nothing is logged for an
+    /// interval in which nothing happened.
     pub summary_interval: Duration,
 }
 
@@ -130,17 +139,23 @@ impl Default for Config {
             max_signals_per_host: 200,
             max_joins_per_ip: 30,
             max_rooms: 5_000,
-            max_rooms_per_ip: 3,
+            // A home behind carrier-grade NAT shares its IPv4 with others, and an engine that
+            // restarts opens new rooms while its old ones wait out their reclaim time.
+            max_rooms_per_ip: 8,
             max_stun_per_ip: 60,
+            // Fly's hard_limit is 2000 too; the hub enforces it itself anywhere else.
+            max_connections: 2_000,
+            max_connections_per_ip: 32,
+            hello_timeout: Duration::from_secs(10),
             rate_window: Duration::from_secs(60),
             room_idle_ttl: Duration::from_secs(120),
             ping_interval: Duration::from_secs(20),
             peer_timeout: Duration::from_secs(60),
-            sweep_interval: Duration::from_secs(10),
+            sweep_interval: Duration::from_secs(30),
             max_frame_bytes: 16 * 1024,
             max_signal_data_bytes: 12 * 1024,
             max_tracked_ips: 100_000,
-            summary_interval: Duration::from_secs(300),
+            summary_interval: Duration::from_secs(3600),
         }
     }
 }
@@ -224,13 +239,23 @@ impl Config {
         num(get, "HUB_MAX_ROOMS_PER_IP", &mut c.max_rooms_per_ip)?;
         num(get, "HUB_MAX_STUN_PER_IP", &mut c.max_stun_per_ip)?;
         num(get, "HUB_MAX_TRACKED_IPS", &mut c.max_tracked_ips)?;
+        num(get, "HUB_MAX_CONNECTIONS", &mut c.max_connections)?;
+        num(
+            get,
+            "HUB_MAX_CONNECTIONS_PER_IP",
+            &mut c.max_connections_per_ip,
+        )?;
+        secs(get, "HUB_HELLO_SECS", &mut c.hello_timeout)?;
         secs(get, "HUB_RATE_WINDOW_SECS", &mut c.rate_window)?;
         secs(get, "HUB_ROOM_IDLE_SECS", &mut c.room_idle_ttl)?;
         secs(get, "HUB_PING_SECS", &mut c.ping_interval)?;
         secs(get, "HUB_PEER_TIMEOUT_SECS", &mut c.peer_timeout)?;
         secs(get, "HUB_SUMMARY_SECS", &mut c.summary_interval)?;
-        if c.ping_interval.is_zero() || c.peer_timeout <= c.ping_interval {
-            return Err("HUB_PEER_TIMEOUT_SECS must be longer than HUB_PING_SECS".into());
+        if c.ping_interval.is_zero() || c.peer_timeout <= c.ping_interval * 2 {
+            return Err("HUB_PEER_TIMEOUT_SECS must be more than twice HUB_PING_SECS".into());
+        }
+        if c.hello_timeout.is_zero() {
+            return Err("HUB_HELLO_SECS must be above zero".into());
         }
         if c.rate_window.is_zero() {
             return Err("HUB_RATE_WINDOW_SECS must be above zero".into());
@@ -269,5 +294,12 @@ mod tests {
         assert_eq!(c.trusted_proxies.len(), 2);
         assert!(c.stun_listen.is_empty());
         assert!(Config::from_lookup(|k| (k == "HUB_MAX_ROOMS").then(|| "x".into())).is_err());
+        // A peer must get two ping intervals before it counts as silent.
+        assert!(
+            Config::from_lookup(|k| (k == "HUB_PEER_TIMEOUT_SECS").then(|| "40".into())).is_err()
+        );
+        assert!(
+            Config::from_lookup(|k| (k == "HUB_PEER_TIMEOUT_SECS").then(|| "41".into())).is_ok()
+        );
     }
 }

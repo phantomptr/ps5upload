@@ -760,12 +760,14 @@ async fn logs_hold_no_addresses_ids_or_payloads() {
     let logs = logs.lock().unwrap().clone();
     assert!(logs.iter().any(|l| l.starts_with("hub: started")));
     assert!(logs.iter().any(|l| l.starts_with("hub: summary")));
-    assert!(logs
+    // Bad frames are counted, not logged one by one.
+    assert!(!logs.iter().any(|l| l.contains("protocol_error")));
+    let summary = logs
         .iter()
-        .any(|l| l == "hub: protocol_error kind=room_taken"));
-    assert!(logs
-        .iter()
-        .any(|l| l == "hub: protocol_error kind=bad_json"));
+        .rfind(|l| l.starts_with("hub: summary"))
+        .unwrap();
+    assert!(summary.contains(" errors=3"), "{summary}");
+    assert!(summary.contains(" refused=1"), "{summary}");
     let forbidden = [
         "127.0.0.1",
         "::1",
@@ -808,4 +810,84 @@ async fn metrics_on_a_separate_listener() {
     let m = http_get(private, "/metrics").await;
     assert!(m.starts_with("HTTP/1.1 200"));
     assert_eq!(metric(&m, "hub_rooms"), 0);
+}
+
+#[tokio::test]
+async fn limit_connections_per_ip_and_total() {
+    let t = start(Config {
+        trusted_proxies: vec!["127.0.0.1".parse::<Cidr>().unwrap()],
+        max_connections_per_ip: 2,
+        max_connections: 3,
+        ..cfg()
+    })
+    .await;
+    let status = |e: tokio_tungstenite::tungstenite::Error| match e {
+        tokio_tungstenite::tungstenite::Error::Http(resp) => resp.status().as_u16(),
+        other => panic!("expected an HTTP refusal, got {other:?}"),
+    };
+    let a1 = connect_with(&t, None, Some("203.0.113.1")).await;
+    let _a2 = connect_with(&t, None, Some("203.0.113.1")).await;
+    let e = try_connect(&t, None, Some("203.0.113.1"))
+        .await
+        .expect_err("per client");
+    assert_eq!(status(e), 429);
+    // Another client still gets in, up to the hub's total.
+    let _b1 = connect_with(&t, None, Some("203.0.113.2")).await;
+    let e = try_connect(&t, None, Some("203.0.113.3"))
+        .await
+        .expect_err("total");
+    assert_eq!(status(e), 503);
+    // A closed connection gives its place back.
+    drop(a1);
+    let end = tokio::time::Instant::now() + WAIT;
+    loop {
+        match try_connect(&t, None, Some("203.0.113.1")).await {
+            Ok(_) => break,
+            Err(_) if tokio::time::Instant::now() < end => {
+                tokio::time::sleep(Duration::from_millis(20)).await
+            }
+            Err(e) => panic!("place not given back: {e:?}"),
+        }
+    }
+    let m = t.hub.shared.metrics_text();
+    assert!(metric(&m, "hub_errors_total{kind=\"too_many_connections\"}") >= 1);
+    assert!(metric(&m, "hub_errors_total{kind=\"server_full\"}") >= 1);
+}
+
+#[tokio::test]
+async fn a_socket_without_a_role_is_closed() {
+    let t = start(Config {
+        hello_timeout: Duration::from_millis(200),
+        ..cfg()
+    })
+    .await;
+    let mut idle = connect(&t).await;
+    assert_eq!(recv_close(&mut idle).await, Some(4000));
+    // A host past the same time stays.
+    let r = room(80);
+    let mut h = host(&t, &r, &secret(80)).await;
+    quiet(&mut h, Duration::from_millis(400)).await;
+    let (_g, _) = join(&t, &mut h, &r).await;
+    assert_eq!(metric(&t.hub.shared.metrics_text(), "hub_connections"), 2);
+}
+
+#[tokio::test]
+async fn an_idle_hub_logs_no_summary() {
+    let t = start(Config {
+        summary_interval: Duration::from_millis(1),
+        sweep_interval: Duration::from_millis(10),
+        ..cfg()
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let r = room(81);
+    let _h = host(&t, &r, &secret(81)).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let logs = t.logs.lock().unwrap().clone();
+    let summaries = logs
+        .iter()
+        .filter(|l| l.starts_with("hub: summary"))
+        .count();
+    // One for the room that opened; none for the idle time before or after it.
+    assert_eq!(summaries, 1, "{logs:?}");
 }

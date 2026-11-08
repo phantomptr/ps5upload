@@ -7,6 +7,7 @@
 app = "ps5upload-hub"
 primary_region = "iad"
 # The hub closes every socket cleanly on SIGTERM (code 1001), so hosts reconnect and reclaim.
+# It takes at most 5 s for that (main.rs); the kill timeout leaves room above it.
 kill_signal = "SIGTERM"
 kill_timeout = "10s"
 
@@ -28,9 +29,14 @@ kill_timeout = "10s"
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = "off"
+  # Scale to zero: Fly stops the machine once no WebSocket has been open for a few minutes and
+  # starts it again on the next request (about 1 s, measured). Nothing is lost by stopping: a
+  # stop only happens with no host connected, and a host that connects later sends its room and
+  # secret again, which opens the room on the fresh machine. Guests only ever join a room whose
+  # host is connected, so they never wait for a start. Billing is per second of running time.
+  auto_stop_machines = "stop"
   auto_start_machines = true
-  min_machines_running = 1
+  min_machines_running = 0
   processes = ["app"]
 
   [http_service.concurrency]

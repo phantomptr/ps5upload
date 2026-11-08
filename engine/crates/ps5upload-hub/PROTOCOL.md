@@ -14,8 +14,13 @@ Endpoint: `wss://hub.phantomptr.com/ws`.
 - `Origin`: a browser must come from an allowed origin (by default only
   `https://ps5upload.phantomptr.com`); anything else gets HTTP 403 before the upgrade. A client
   that sends no `Origin` (the engine) is allowed.
-- Keepalive: the hub sends a WebSocket ping every 20 s. A peer that sends nothing at all (no
-  message, no pong) for 60 s is closed with code 1001. Browsers and WebSocket libraries answer
+- Keepalive: the hub sends a WebSocket ping every 20 s to a peer it has not heard from in that
+  time (a peer that pings the hub itself, like the engine, gets none). A peer that sends nothing
+  at all (no message, no pong) for 60 s is closed with code 1001.
+- A new socket must send `host` or `join` within 10 s, or it is closed (4000, reason
+  `timeout`).
+- Connections: at most 32 open at once from one client and 2,000 in all; past either the upgrade
+  is refused with HTTP 429 (per client) or 503 (the hub is full). Browsers and WebSocket libraries answer
   pings on their own; nothing to implement beyond reading the socket.
 - `v` is the protocol version. It is required (`1`) on `host` and `join`, optional on the rest,
   and when present it must be `1`.
@@ -111,7 +116,7 @@ Forwarded as `{"t":"signal","from":"host"|"<gid>","data":<data unchanged>}`.
 | `bad_json` | not JSON, not an object, `t` missing or not a string, a field of the wrong type |
 | `bad_version` | `v` missing on `host`/`join`, or not `1` |
 | `unknown_type` | `t` is not `host`, `join`, `signal`, `leave` |
-| `too_large` | frame over 16 KiB (frames over 64 KiB are cut by the WebSocket layer, code 1009) |
+| `too_large` | frame over 16 KiB (frames over 32 KiB are cut by the WebSocket layer, code 1009) |
 | `bad_frame` | a binary frame |
 | `bad_room` | `room` not 22 base64url characters |
 | `bad_secret` | `secret` not 43 base64url characters |
@@ -123,7 +128,7 @@ Forwarded as `{"t":"signal","from":"host"|"<gid>","data":<data unchanged>}`.
 | `room_full` | `join` to a room with 8 guests |
 | `rate_limited` | over a per-minute limit (below) |
 | `server_full` | `host` when the hub has 5,000 rooms |
-| `too_many_rooms` | `host` from a client that already has 3 rooms |
+| `too_many_rooms` | `host` from a client that already has 8 rooms |
 | `no_peer` | signal to a guest that has gone (not fatal) |
 
 ## Limits (defaults)
@@ -135,7 +140,10 @@ Forwarded as `{"t":"signal","from":"host"|"<gid>","data":<data unchanged>}`.
 | signals per host (all its guests together) | 200 per minute |
 | `join` attempts per client | 30 per minute (found or not) |
 | rooms on the hub | 5,000 |
-| rooms per client | 3 (a room counts toward its creator until removed) |
+| rooms per client | 8 (a room counts toward its creator until removed) |
+| open connections per client | 32 (HTTP 429 past it) |
+| open connections on the hub | 2,000 (HTTP 503 past it) |
+| time to send `host` or `join` | 10 s |
 | room without host | removed after 2 minutes |
 | STUN requests per client (if STUN is on) | 60 per minute (over that: no answer) |
 
@@ -148,12 +156,15 @@ from the proxy's header (last entry) only when the proxy is configured as truste
 |------|---------|
 | 1000 | normal end (`leave`, `closed`) |
 | 1001 | the hub is shutting down, or the peer was silent for 60 s |
-| 1009 | frame over the hard cap (64 KiB) |
+| 1009 | frame over the hard cap (32 KiB) |
 | 4000 | protocol error; the reason is the error kind |
 | 4001 | replaced: the same room was reclaimed from another socket |
 
 On 1001 from a shutdown a host should reconnect (with backoff) and send `host` again with the
-same room and secret; its guests must `join` again.
+same room and secret; its guests must `join` again. The hub keeps rooms in memory only, so
+after a restart the room is new to it: the `host` with the same room and secret opens it again,
+and a guest that comes back before its host gets `no_room` for a moment (the guest page tries
+again for up to 20 s after a 1001).
 
 ## STUN
 
