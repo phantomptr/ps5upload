@@ -163,15 +163,17 @@ describe("links and timing", () => {
   });
 
   it("parses the one link for everywhere (12.1): the internet invite, with the host's own page", () => {
+    // A made-up invite, built here so it does not read as a real one.
+    const inv = "0f".repeat(16);
     const fp = `${"AB:".repeat(31)}CD`;
     const lan = encodeURIComponent("http://192.168.1.20:19113/join");
-    const link = `https://ps5upload.phantomptr.com/join/#room=Demo0Room0Not0Real0000&k=00112233445566778899aabbccddeeff&fp=${fp}&hub=hub.example.com&n=Ann&lan=${lan}`;
+    const link = `https://ps5upload.phantomptr.com/join/#room=Demo0Room0Not0Real0000&k=${inv}&fp=${fp}&hub=hub.example.com&n=Ann&lan=${lan}`;
     expect(parseJoinLink(link)).toEqual({
       origin: "http://192.168.1.20:19113",
-      invite: "00112233445566778899aabbccddeeff",
+      invite: inv,
       name: "Ann",
       code: null,
-      net: { room: "Demo0Room0Not0Real0000", key: "00112233445566778899aabbccddeeff", fp, hub: "hub.example.com" },
+      net: { room: "Demo0Room0Not0Real0000", key: inv, fp, hub: "hub.example.com" },
     });
     // Without its page: the hub's address stands in, the invite still reads.
     const away = parseJoinLink(link.replace(/&lan=.*$/, ""))!;
