@@ -6,7 +6,7 @@ vi.mock("./safeStorage", () => ({
   safeSetItem: (k: string, v: string) => void store.set(k, v),
 }));
 
-import { isSavableRoute, readLastRoute, saveLastRoute } from "./lastRoute";
+import { isSavableRoute, landingRoute, readLastRoute, saveLastRoute } from "./lastRoute";
 
 describe("last route", () => {
   beforeEach(() => store.clear());
@@ -29,5 +29,17 @@ describe("last route", () => {
     expect(readLastRoute()).toBeNull();
     store.set("ps5upload.last_route", "https://evil.example");
     expect(readLastRoute()).toBeNull();
+  });
+
+  it("opens Connection for a fresh install, and never by itself for a returning user", () => {
+    expect(landingRoute(false, "/games")).toBe("/connection");
+    expect(landingRoute(true, null)).toBe("/home");
+    expect(landingRoute(true, "/games?tab=files")).toBe("/games?tab=files");
+    // Left on Connection last time (a console looked down): the next start lands on Home,
+    // not on Connection while the first check still runs.
+    expect(landingRoute(true, "/connection")).toBe("/home");
+    expect(landingRoute(true, "/connection?tab=devices")).toBe("/home");
+    saveLastRoute("/connection", "?tab=health");
+    expect(landingRoute(true)).toBe("/home");
   });
 });

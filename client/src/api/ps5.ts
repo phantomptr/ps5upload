@@ -5,6 +5,7 @@
 // TCP send) stay in-process.
 
 import { trStatic } from "../lib/trStatic";
+import { requestStatusRecheck } from "../lib/statusRecheck";
 import { formatBytes } from "../lib/format";
 import {
   classifySession,
@@ -2437,6 +2438,9 @@ export async function powerWake(
     error?: string;
   };
   if (!res.ok) throw new Error(body.error || `wake failed (${res.status})`);
+  // The console comes up over the next seconds: have the status poller ask it often meanwhile,
+  // so it shows as connected when it is, not at the next 10 s round.
+  requestStatusRecheck({ host, wake: true });
   return { ok: !!body.ok };
 }
 

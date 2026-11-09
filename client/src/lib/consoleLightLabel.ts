@@ -15,6 +15,7 @@ export function consoleLightLabel(light: ConsoleLight, tr: Translator): string {
     case "down":
       return tr("status_ps5_disconnected", undefined, "Not connected");
     default:
-      return tr("status_console_unknown", undefined, "not probed yet");
+      // Not answered yet this run (the app just opened, or the check is being confirmed).
+      return tr("status_console_checking", undefined, "Checking…");
   }
 }

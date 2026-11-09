@@ -107,6 +107,22 @@ pub(super) fn tools() -> Vec<ToolDef> {
             run: |ctx, args| Box::pin(status(ctx, args)),
         },
         ToolDef {
+            name: "consoles_connect_timings",
+            title: "How the last status checks went",
+            description: "The last status check of each console (or of `console`), phase by \
+                          phase, in ms: session reused or opened (`handshake_ms`), a remembered \
+                          verdict answering (`cached_verdict`), a plain TCP connect (`tcp_ms`), \
+                          the status call (`status_ms`), the helper version, the path (lan or \
+                          tailnet) and whether a quiet session was dropped. Sends nothing to a \
+                          console: for \"why did it take so long to show as connected\".",
+            kind: Kind::Read,
+            schema: object(json!({ "console": console_optional() }), &[]),
+            run: route!(
+                path: "/api/ps5/connect-timings",
+                done: "The last status checks."
+            ),
+        },
+        ToolDef {
             name: "consoles_readiness",
             title: "Console readiness",
             description: "Whether a console is in a stable state to install a package: `ready`, \

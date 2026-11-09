@@ -55,6 +55,7 @@
   "/api/ps5/cheats": "cheats",
   "/api/ps5/cleanup": "health",
   "/api/ps5/companions": "consoles",
+  "/api/ps5/connect-timings": "consoles",
   "/api/ps5/console-shares": "console-files",
   "/api/ps5/console-tasks": "jobs",
   "/api/ps5/disk-usage": "console-files",
@@ -287,6 +288,9 @@
   },
   "GET /api/ps5/cleanup/scan/{id}": {
    "summary": "The result of a clean-up scan"
+  },
+  "GET /api/ps5/connect-timings": {
+   "summary": "How each console's last status check went"
   },
   "GET /api/ps5/console-shares": {
    "summary": "The network shares saved on the console"
