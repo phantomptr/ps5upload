@@ -64,8 +64,9 @@
     on-screen controller on phones and tablets; the controller vibrates with the game.
     Third-party controllers (8BitDo, Switch Pro, Logitech and more) are mapped for you, and
     **Check your controller** sets up the buttons of any other.
-  - **Away from home:** Tailscale is built in. Put the PS5 on your tailnet from **Connection**
-    and sign in on each device under **Settings › Tailscale**, with no Tailscale app needed; only
+  - **Away from home:** Tailscale is built in. Put the PS5 on your tailnet from its card in
+    **Connection** and sign in on each device under **Settings › Tailscale**, with no Tailscale
+    app needed. A phone that was never at home finds the PS5 on Tailscale by itself; only
     Remote Play and PS5Upload are reachable through it.
   - Or give the PS5 your computer's keyboard and mouse as its own (any firmware), and use a
     phone as its touchpad and keyboard.
@@ -103,6 +104,14 @@
   screen, port 9180), made for the controller: installed games and the games on your network
   shares and drives, save backups, files (SMB shares, archive extraction, package install,
   payload loading), cheats, fan, processes, clean-up and settings, with no PC nearby.
+- **Your PS5s on one page.** **Connection** shows each PS5 as a card: online or not, how this
+  device reaches it, its helper and firmware. **Add a PS5** scans your home network and your
+  Tailscale network, opens an invite, or takes an address. **Invite a device** gives a new phone
+  or computer a code and link (nothing in it lets anyone in), and with approval on, a new device
+  waits for your **Allow** on any device that uses the PS5 or on the PS5's own page.
+- **Share with a friend.** Send a game's saves, screenshots and clips, cheats, controls and
+  homebrew apps straight to a friend's PS5Upload, after you allow them. Retail games are never
+  shared.
 - **Several devices, one PS5.** Computers, phones and Docker connect at once with no pairing
   code, see what the others are doing (Devices), share your consoles and settings, and stay out
   of each other's way. Settings are backed up daily, to the engine and to each console.
@@ -310,12 +319,14 @@ For per-platform bundles only (no full dev env): `make dist-mac`,
 ## Quick start
 
 1. Jailbreak the PS5 and keep an ELF loader running on port **9021**.
-2. Launch ps5upload and open **Connection**. Enter the PS5's IP address.
-3. Click **Check**, then **Send helper**. The app launches the helper and connects to it. (Other
-   payloads, such as kstuff or etaHEN, are sent from **Payloads → Send payload**.)
+2. Launch ps5upload, open **Connection** and press **Add a PS5**: **Scan** finds it on your
+   network, or type its IP address.
+3. On its card, click **Check**, then **Send helper**. The app launches the helper and connects
+   to it. (Other payloads, such as kstuff or etaHEN, are sent from **Payloads → Send payload**.)
 4. Other computers, phones and Docker setups connect to the same helper with no code; the console
-   remembers each one (**Devices**). To make new devices type a code shown on the TV first, turn
-   on **Ask before a new device can connect** there.
+   remembers each one (**Devices allowed to use it** on its card). **Invite a device** adds the
+   PS5 on a new phone or computer. To approve each new device yourself, turn on **Ask before a
+   new device can connect**: new devices then wait for your **Allow**.
 
 The helper stays until the PS5 reboots, and usually keeps running through rest mode; if the dot
 stays red after a wake, send it again. The app connects to ports **9120**

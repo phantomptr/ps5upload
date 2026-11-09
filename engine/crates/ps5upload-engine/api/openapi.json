@@ -46325,6 +46325,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "The PS5Upload consoles on this device's Tailscale network, or one address probed",
         "tags": [
           "tailnet"
         ],

@@ -20,7 +20,7 @@ More than 120 tools, all of them thin layers over [the engine's API](API.md):
 | Area | Tools (prefix) | For example |
 |---|---|---|
 | The engine | `engine_*`, `logs_*` | Version, status, recent events; log levels per category and the newest log lines |
-| Consoles | `consoles_*`, `tailnet_consoles` | The known ones, find them on the network or on Tailscale, how one stands, make sure the helper runs |
+| Consoles | `consoles_*`, `tailnet_consoles` | The known ones, find them on the network or on Tailscale, how one stands and how its last status checks went, make sure the helper runs |
 | Files | `files_*` | List, read, write, copy, move, delete, hash, extract, mount, eject |
 | Moving things | `upload_*`, `queue_*`, `files_download`, `sources_*`, `jobs_*` | Send a file or folder or archive, line work up per console, follow it, pause or stop it, fetch from a NAS |
 | Installs | `install_*` | Install a package by the best route, check first, wait for it |
@@ -43,6 +43,13 @@ changed for agents:
   only.
 - `together_status` gives each friend `link.path` (`lan`, `tailscale` or `internet`) and
   `link.rtt_ms`.
+
+**Finding and checking consoles.** `tailnet_consoles` lists the PS5Upload consoles on this
+device's Tailscale network (or probes one `addr`): tailnet and home address, whether its helper
+answered, its identity key (`id`) and its entry on the console list. Asking pairs nothing and shows
+nothing on the PS5. `consoles_connect_timings` gives the last status check of each console phase by
+phase (session, connect, status call, path), for "why did it take so long to show as connected";
+it sends nothing to a console. Both are reads, so they stay in read-only mode.
 
 **Share sends an app's things to a friend.** `share_create` makes a link (homebrew apps only: a
 retail game, its updates and add-ons are refused by the engine in any format; saves of any game,
@@ -310,6 +317,12 @@ link (`login_url`) never reaches a tool: whoever opens it first could put this c
 PS5 on a tailnet of their own. Sign in from the app. A Share link (its `url`, `lan_url` and `room`:
 whoever has the room can ask you for the files) is taken out of every read of `/api/share`
 (`share_status`, `api_request`), which says `link_hidden`; `share_create` still answers with it.
+A console's identity key (`id` in `tailnet_consoles`, `key` from `GET /api/ava1/console`, the
+device ids in `/api/mesh`) is public: every console shows it to anyone who connects, and it lets
+nobody in, so it isn't taken out. The app's **Invite a device** link is made in the app from those
+same public facts; no route hands one out. Allowing or declining a device that asks to connect
+(`POST /api/mesh/device`), adding a console found on Tailscale (`POST /api/tailnet/consoles/add`) and
+the Tailscale list's Allow (`POST /api/ps5/tailnet`) are POSTs, so read-only mode refuses them.
 
 **Logs.** Engine log lines and journal events are cleaned where they are written, and again when an
 older journal line is read: a password in a URL, a field or `name=value` named as a key, token, password

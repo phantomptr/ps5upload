@@ -445,6 +445,9 @@
   "GET /api/stream/status": {
    "summary": "Go live: destinations, ffmpeg and whether it is live"
   },
+  "GET /api/tailnet/consoles": {
+   "summary": "The PS5Upload consoles on this device's Tailscale network, or one address probed"
+  },
   "GET /api/version": {
    "summary": "Engine version, capabilities and default console"
   },

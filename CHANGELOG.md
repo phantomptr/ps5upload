@@ -6,6 +6,38 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+Your PS5s, on one page:
+
+- Connection lists each PS5 as a card: online or not, how this device reaches it (home network or Tailscale), its helper and firmware, the ways to reach it, and the devices allowed to use it. Setup steps show only until it is ready.
+- **Add a PS5** finds it on your home network and on your Tailscale network in one scan, opens an invite from another device (scan the code or paste the link), or takes an address. A PS5 found two ways shows once.
+- **Invite a device**: a code and link that add the PS5 on a new phone or computer. The link only says where the PS5 is; it lets nobody in.
+- With "Ask before a new device can connect" on, a new device asks and you press Allow or Decline: on any device that uses the PS5, on its card, or on the PS5's own page. A device can't allow itself.
+- **Devices allowed to use it** shows how each device got in, with Revoke and Block.
+
+Connecting:
+
+- PS5s show as connected in about a second, not ten. One slow answer no longer reads as "Helper isn't running"; a PS5 shows as not reachable only after three checks in a row fail.
+- The app opens on the screen you were last on (or Home), not back on Connection.
+
+Tailscale:
+
+- "Try Tailscale now" works again.
+- Find your PS5 on Tailscale from a phone that was never at home, or add it by its Tailscale address.
+- A PS5 shows the devices its Tailscale list turned away, with Allow and Ignore.
+- Settings › Tailscale lists your devices as online, offline or connected, with Refresh.
+
+Share:
+
+- Homebrew is recognised by how the app was built, so homebrew that borrows a game's ID can be shared, and retail games still can't.
+- Cleaner Share and Receive panels.
+
+Fixes:
+
+- Remote Play: full screen no longer goes black when the system media player shows the picture (#720), and Macs without WebCodecs (macOS 12) can play again (#769).
+- Save Data: an edit made inside an open save is written back even when the file's date didn't change (#770).
+
+## 12.1.0
+
 Play Together:
 
 - One invite link works everywhere. A friend on your Wi-Fi connects over your home network, a friend on Tailscale over Tailscale, anyone else directly over the internet; the app picks the best way by itself. Settings › App › Play Together: "Invites work: Anywhere" or "Only on my Wi-Fi".
