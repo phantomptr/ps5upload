@@ -51,6 +51,20 @@ const BWE_START_KBPS: u64 = 15_000;
 /// The estimate looks this far above the stream's bitrate (to tell whether the link carries it).
 const BWE_HEADROOM: f64 = 1.25;
 
+/// How often a connected pair's binding is checked (str0m's default is 3 s), and how many tries a
+/// check gets. In the path sim (ice_path.rs) a dead path shows after about 15 s instead of about
+/// 21; fewer tries change nothing there (str0m's own pair timeouts rule the rest), so they stay
+/// generous for a lossy link's first checks. The guest's page notices sooner on its own (no
+/// message for 3.5 s) and comes back with its resume token.
+pub(crate) const ICE_MAX_RTO: Duration = Duration::from_millis(1000);
+pub(crate) const ICE_RETRANSMITS: usize = 6;
+
+/// ICE timing for a game ([`ICE_MAX_RTO`], [`ICE_RETRANSMITS`]). Shared with the path sims.
+pub(crate) fn game_ice(b: &mut RtcConfig) {
+    b.set_max_stun_rto(ICE_MAX_RTO);
+    b.set_max_stun_retransmits(ICE_RETRANSMITS);
+}
+
 /// An internet guest's peer connection with the video track on offer: H.264 (H.265 when the offer
 /// has it) with str0m's NACK, RTX, PLI/FIR and transport-cc defaults, a send buffer for the
 /// resends, and the bandwidth estimate. Shared with the link harness (link_sim.rs).
@@ -748,6 +762,7 @@ impl Driver {
             .set_dtls_cert(cert.clone())
             .set_stats_interval(Some(Duration::from_secs(1)))
             .set_sctp_max_buffered_amount(SCTP_BUFFER);
+        game_ice(&mut b);
         // The picture as a video track for a Play Together page that offers one (a pad page's
         // watcher keeps its data channel: pad_link.rs has no track).
         let track = kind == Kind::Join && crate::join::settings().video_track;
