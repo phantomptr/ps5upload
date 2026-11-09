@@ -8085,7 +8085,6 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
   "golive_err_ffmpeg_missing": "Előbb töltsd le a streamelő segédprogramot.",
   "golive_err_no_destinations": "Jelölj be legalább egy helyet, ahová streamelsz.",
   "golive_err_already_live": "Már élő adásban vagy.",
-  "golive_err_srt": "Ez a cél SRT-t használ, amihez számítógép kell. Innen élő adáshoz használj rtmp:// vagy rtmps:// címet.",
   "golive_err_checksum": "A letöltött fájl nem az volt, aminek lennie kellett, ezért töröltük, és nem használtuk. Próbáld újra később.",
   "golive_err_download": "A letöltés nem sikerült. Ellenőrizd a számítógép internetkapcsolatát, és próbáld újra.",
   "golive_err_tls": "Nem lehet biztonságosan csatlakozni ehhez: {site}. A tanúsítványt nem sikerült ellenőrizni. Állítsd az SSL_CERT_FILE-t a számítógép tanúsítványcsomagjára, vagy ellenőrizd a szervercímet.",

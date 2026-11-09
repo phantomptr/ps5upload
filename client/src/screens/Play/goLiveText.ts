@@ -79,12 +79,6 @@ export function problemText(tr: Tr, code: string, fallback: string, site?: strin
       return tr("golive_err_no_destinations", undefined, "Tick at least one place to stream to.");
     case "already_live":
       return tr("golive_err_already_live", undefined, "Already live.");
-    case "srt_unsupported":
-      return tr(
-        "golive_err_srt",
-        undefined,
-        "This destination uses SRT, which needs a computer. Use an rtmp:// or rtmps:// address to go live from here.",
-      );
     case "checksum":
       return tr("golive_err_checksum", undefined, "The download was not the expected file, so it was deleted and not used. Try again later.");
     case "download":

@@ -7807,7 +7807,6 @@ helper_mismatch_boot_copy: "PS5가 부팅용으로 보관한 이전 헬퍼 사�
   "golive_err_ffmpeg_missing": "먼저 스트리밍 도우미를 다운로드하세요.",
   "golive_err_no_destinations": "스트리밍할 곳을 하나 이상 선택하세요.",
   "golive_err_already_live": "이미 라이브 중입니다.",
-  "golive_err_srt": "이 대상은 SRT를 사용하므로 컴퓨터가 필요합니다. 여기서 방송하려면 rtmp:// 또는 rtmps:// 주소를 사용하세요.",
   "golive_err_checksum": "다운로드한 파일이 예상한 파일이 아니어서 사용하지 않고 삭제했습니다. 나중에 다시 시도하세요.",
   "golive_err_download": "다운로드에 실패했습니다. 이 컴퓨터의 인터넷 연결을 확인하고 다시 시도하세요.",
   "golive_err_tls": "{site}에 안전하게 연결할 수 없습니다. 인증서를 확인하지 못했습니다. SSL_CERT_FILE을 이 컴퓨터의 인증서 번들로 설정하거나 서버 주소를 확인하세요.",

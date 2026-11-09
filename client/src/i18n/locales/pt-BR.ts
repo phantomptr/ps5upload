@@ -7805,7 +7805,6 @@ helper_mismatch_boot_copy: "Seu PS5 iniciou uma cópia antiga do auxiliar que gu
   "golive_err_ffmpeg_missing": "Baixe primeiro o auxiliar de transmissão.",
   "golive_err_no_destinations": "Marque pelo menos um lugar para transmitir.",
   "golive_err_already_live": "Já está ao vivo.",
-  "golive_err_srt": "Este destino usa SRT, que precisa de um computador. Use um endereço rtmp:// ou rtmps:// para transmitir ao vivo daqui.",
   "golive_err_checksum": "O download não era o arquivo esperado, então foi apagado e não foi usado. Tente de novo mais tarde.",
   "golive_err_download": "O download falhou. Verifique a conexão deste computador com a internet e tente de novo.",
   "golive_err_tls": "Não foi possível conectar com segurança a {site}: o certificado não pôde ser verificado. Aponte SSL_CERT_FILE para o pacote de certificados deste computador ou confira o endereço do servidor.",

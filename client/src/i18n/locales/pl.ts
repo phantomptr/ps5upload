@@ -8030,7 +8030,6 @@ helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą t
   "golive_err_ffmpeg_missing": "Najpierw pobierz pomocnika do transmisji.",
   "golive_err_no_destinations": "Zaznacz co najmniej jedno miejsce transmisji.",
   "golive_err_already_live": "Transmisja już trwa.",
-  "golive_err_srt": "Ten cel używa SRT, który wymaga komputera. Aby nadawać na żywo stąd, użyj adresu rtmp:// lub rtmps://.",
   "golive_err_checksum": "Pobrany plik nie był tym oczekiwanym, więc został usunięty i nie został użyty. Spróbuj ponownie później.",
   "golive_err_download": "Pobieranie nie powiodło się. Sprawdź połączenie tego komputera z internetem i spróbuj ponownie.",
   "golive_err_tls": "Nie można połączyć się bezpiecznie z {site}: nie udało się sprawdzić certyfikatu. Ustaw SSL_CERT_FILE na pakiet certyfikatów tego komputera albo sprawdź adres serwera.",

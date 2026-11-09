@@ -7743,7 +7743,6 @@ helper_mismatch_boot_copy: "La PS5 ha avviato una copia più vecchia dell'helper
   "golive_err_ffmpeg_missing": "Scarica prima lo strumento di streaming.",
   "golive_err_no_destinations": "Seleziona almeno un posto su cui trasmettere.",
   "golive_err_already_live": "Già in diretta.",
-  "golive_err_srt": "Questa destinazione usa SRT, che richiede un computer. Usa un indirizzo rtmp:// o rtmps:// per andare in diretta da qui.",
   "golive_err_checksum": "Il download non era il file previsto, quindi è stato eliminato e non usato. Riprova più tardi.",
   "golive_err_download": "Il download non è riuscito. Controlla la connessione a Internet di questo computer e riprova.",
   "golive_err_tls": "Impossibile connettersi in modo sicuro a {site}: il certificato non è verificabile. Imposta SSL_CERT_FILE sul pacchetto di certificati di questo computer o controlla l'indirizzo del server.",

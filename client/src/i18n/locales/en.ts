@@ -8094,7 +8094,6 @@ helper_mismatch_boot_copy: "Your PS5 started an older copy of the helper that it
   "golive_err_ffmpeg_missing": "Download the streaming helper first.",
   "golive_err_no_destinations": "Tick at least one place to stream to.",
   "golive_err_already_live": "Already live.",
-  "golive_err_srt": "This destination uses SRT, which needs a computer. Use an rtmp:// or rtmps:// address to go live from here.",
   "golive_err_checksum": "The download was not the expected file, so it was deleted and not used. Try again later.",
   "golive_err_download": "The download failed. Check this computer's internet connection and try again.",
   "golive_err_tls": "Can't make a secure connection to {site}: its certificate could not be checked. Set SSL_CERT_FILE to this computer's certificate bundle, or check the server address.",
