@@ -2919,6 +2919,7 @@ helper_mismatch_body_v3: "Auf der PS5 selbst ist nichts zu tun: Drücke „Helfe
 "pkg.stopped": "Die Installation wurde gestoppt.",
 "pkg.engine_lost_job": "Die Engine dieser App wurde während der Installation neu gestartet und kann sie nicht mehr verfolgen. Die PS5 installiert vielleicht noch, prüfe also dort die Downloads. Das Paket wurde behalten.",
 "pkg.base_unverified": "Die PS5 hat das ganze Paket, aber nach {minutes} Min. erschien es nicht als installiert. Vielleicht läuft die Installation noch, prüfe also die Downloads auf der PS5. Das Paket wurde behalten.",
+"pkg.addon_unverified": "Die PS5 hat das ganze Add-on, aber es wurden keine Dateien davon gefunden, um die Installation zu bestätigen. Ein Add-on, das nur Inhalte freischaltet, hinterlässt keine. Sieh also bei den Add-ons des Spiels auf der PS5 nach. Das Paket wurde behalten.",
 "pkg.space_warning": "{label} braucht zum Installieren etwa {need}, aber das freieste Laufwerk der PS5 hat nur {free}. Das ist eine Schätzung, es passt vielleicht trotzdem. Sonst schaffe Platz (deinstalliere ein Spiel oder lösche abgelegte Pakete) und versuche es erneut.",
 "pkg.space_ask_title": "Nicht genug Platz für {label}?",
 "pkg.eta_s": "noch {n} s",

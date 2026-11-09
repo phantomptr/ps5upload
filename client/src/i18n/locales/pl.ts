@@ -3155,6 +3155,7 @@ helper_mismatch_body_v3: "Na samej PS5 nie trzeba nic robić: naciśnij „Wyśl
 "pkg.stopped": "Instalację zatrzymano.",
 "pkg.engine_lost_job": "Silnik aplikacji uruchomił się ponownie podczas instalacji i nie może jej już śledzić. PS5 może nadal instalować, więc sprawdź tam Pobrane. Pakiet został zachowany.",
 "pkg.base_unverified": "PS5 ma cały pakiet, ale po {minutes} min nie był widoczny jako zainstalowany. Instalacja może nadal trwać, więc sprawdź Pobrane na PS5. Pakiet został zachowany.",
+"pkg.addon_unverified": "PS5 ma cały dodatek, ale nie znaleziono żadnych jego plików, które potwierdzałyby instalację. Dodatek, który tylko odblokowuje zawartość, nie zostawia plików, więc poszukaj go w dodatkach gry na PS5. Pakiet został zachowany.",
 "pkg.space_warning": "{label} wymaga do instalacji około {need}, ale dysk PS5 z największą ilością miejsca ma {free} wolnego. To szacunek, więc może się zmieści. Jeśli nie, zwolnij miejsce (odinstaluj grę lub usuń zapisane pakiety) i spróbuj ponownie.",
 "pkg.space_ask_title": "Za mało miejsca na {label}?",
 "pkg.eta_s": "zostało {n} s",

@@ -2922,6 +2922,7 @@ helper_mismatch_body_v3: "PS5'in kendisinde yapılacak bir şey yok: Yardımcıy
 "pkg.stopped": "Yükleme durduruldu.",
 "pkg.engine_lost_job": "Uygulamanın motoru yükleme sırasında yeniden başladı ve artık takip edemiyor. PS5 hâlâ yüklüyor olabilir, oradaki İndirilenler'e bak. Paket saklandı.",
 "pkg.base_unverified": "PS5'te paketin tamamı var, ama {minutes} dk sonra yüklü görünmüyordu. Hâlâ yükleniyor olabilir, PS5'te İndirilenler'e bak. Paket saklandı.",
+"pkg.addon_unverified": "PS5'te eklentinin tamamı var, ama yüklemeyi doğrulayacak hiçbir dosyası bulunamadı. Yalnızca içerik kilidi açan bir eklenti dosya bırakmaz, bu yüzden PS5'te oyunun eklentilerine bak. Paket saklandı.",
 "pkg.space_warning": "{label} yüklemek için yaklaşık {need} gerektirir, ama PS5'in en boş sürücüsünde {free} boş alan var. Bu bir tahmin, sığabilir. Sığmazsa yer aç (bir oyunu kaldır veya saklanan paketleri temizle) ve tekrar dene.",
 "pkg.space_ask_title": "{label} için yer yetmiyor mu?",
 "pkg.eta_s": "{n} sn kaldı",

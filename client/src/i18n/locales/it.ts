@@ -2868,6 +2868,7 @@ helper_mismatch_body_v3: "Non c'è nulla da fare sulla PS5: premi Invia helper e
 "pkg.stopped": "L’installazione è stata interrotta.",
 "pkg.engine_lost_job": "Il motore dell’app si è riavviato durante l’installazione e non può più seguirla. La PS5 potrebbe ancora installare: controlla lì i Download. Il pacchetto è stato conservato.",
 "pkg.base_unverified": "La PS5 ha tutto il pacchetto, ma dopo {minutes} min non risultava installato. Potrebbe essere ancora in corso: controlla i Download sulla PS5. Il pacchetto è stato conservato.",
+"pkg.addon_unverified": "La PS5 ha tutto il contenuto aggiuntivo, ma non sono stati trovati suoi file per confermare l’installazione. Un contenuto aggiuntivo che sblocca solo contenuti non ne lascia, quindi cercalo tra i contenuti aggiuntivi del gioco sulla PS5. Il pacchetto è stato conservato.",
 "pkg.space_warning": "{label} richiede circa {need} per l’installazione, ma l’unità più libera della PS5 ha {free} liberi. È una stima, quindi potrebbe starci. Altrimenti libera spazio (disinstalla un gioco o elimina i pacchetti salvati) e riprova.",
 "pkg.space_ask_title": "Spazio insufficiente per {label}?",
 "pkg.eta_s": "mancano {n} s",

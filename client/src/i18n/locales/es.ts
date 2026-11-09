@@ -2864,6 +2864,7 @@ helper_mismatch_body_v3: "No hay nada que hacer en la propia PS5: pulsa Enviar a
 "pkg.stopped": "Se detuvo la instalación.",
 "pkg.engine_lost_job": "El motor de esta app se reinició durante la instalación y ya no puede seguirla. La PS5 puede seguir instalando, así que revisa allí Descargas. El paquete se conservó.",
 "pkg.base_unverified": "La PS5 tiene el paquete completo, pero tras {minutes} min no aparecía como instalado. Puede que siga instalándose, así que revisa Descargas en la PS5. El paquete se conservó.",
+"pkg.addon_unverified": "La PS5 tiene el complemento completo, pero no se encontró ningún archivo suyo para confirmar la instalación. Un complemento que solo desbloquea contenido no deja ninguno, así que búscalo en los complementos del juego en la PS5. El paquete se conservó.",
 "pkg.space_warning": "{label} necesita unos {need} para instalarse, pero la unidad con más espacio de la PS5 tiene {free} libres. Es una estimación, así que puede que quepa. Si no, libera espacio (desinstala un juego o borra paquetes guardados) e inténtalo de nuevo.",
 "pkg.space_ask_title": "¿No hay espacio para {label}?",
 "pkg.eta_s": "quedan {n} s",

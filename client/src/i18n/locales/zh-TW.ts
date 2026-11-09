@@ -2868,6 +2868,7 @@ helper_mismatch_body_v3: "PS5 本身無需操作：按「傳送助手」，此�
 "pkg.stopped": "安裝已停止。",
 "pkg.engine_lost_job": "安裝期間應用程式的引擎重新啟動了，已無法繼續追蹤。PS5 可能仍在安裝，請在那裡查看下載。套件已保留。",
 "pkg.base_unverified": "PS5 已有完整的套件，但 {minutes} 分鐘後仍未顯示為已安裝。它可能仍在安裝，請查看 PS5 上的下載。套件已保留。",
+"pkg.addon_unverified": "PS5 已有完整的附加內容，但找不到它的任何檔案來確認安裝。只解鎖內容的附加內容不會留下檔案，請在 PS5 上該遊戲的附加內容中查看。套件已保留。",
 "pkg.space_warning": "安裝 {label} 約需 {need}，但 PS5 上最空的硬碟只有 {free} 可用。這是估算值，可能仍放得下。如果不行，請釋出空間（解除安裝遊戲或清除暫存的套件）後再試一次。",
 "pkg.space_ask_title": "{label} 的空間不足？",
 "pkg.eta_s": "還剩 {n} 秒",
