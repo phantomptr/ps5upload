@@ -170,7 +170,7 @@ pub(super) const CATALOGUE: &[CatalogueEntry] = &[
         role: "Homebrew enabler + jailbreak helper",
         description: "Long-running homebrew enabler with toolbox features. Faster app jailbreak than the on-the-fly path; provides the HijackerCommand IPC many homebrew apps expect on :9028.",
         repo_host: "github.com",
-        repo_owner: "LightningMods",
+        repo_owner: "etaHEN",
         repo_name: "etaHEN",
         asset_name_hint: "etaHEN",
         on_console_marker_path: None,
@@ -178,7 +178,7 @@ pub(super) const CATALOGUE: &[CatalogueEntry] = &[
         ports: &[9028, 2323],
         autoload_priority: 2,
         autoload_delay_ms: 500,
-        homepage: "https://github.com/LightningMods/etaHEN",
+        homepage: "https://github.com/etaHEN/etaHEN",
     },
     CatalogueEntry {
         id: "ftpsrv",

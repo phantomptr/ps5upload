@@ -62,6 +62,7 @@ impl From<&CustomRepo> for PayloadInfo {
             autoload_delay_ms: CUSTOM_AUTOLOAD_DELAY_MS,
             homepage,
             is_custom: true,
+            file_name: String::new(),
         }
     }
 }

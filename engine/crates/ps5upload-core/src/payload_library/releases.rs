@@ -90,6 +90,14 @@ fn ext_priority(name: &str) -> usize {
         .unwrap_or(PAYLOAD_EXT_PRIORITY.len())
 }
 
+/// An asset built for the PS4 (`ftpsrv-ps4.elf`, `klogsrv_ps4.elf`), not this console.
+fn names_ps4(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|part| part == "ps4")
+}
+
 /// Pick the canonical asset of a release using the catalogue hint: `(name, url, size)`, or empty
 /// when the release has none.
 pub(super) fn pick_asset(release: &GithubRelease, hint: &str) -> (String, String, u64) {
@@ -99,9 +107,11 @@ pub(super) fn pick_asset(release: &GithubRelease, hint: &str) -> (String, String
     }
     let lower_hint = hint.to_ascii_lowercase();
     // A hint match with a payload-shaped extension, so a source .zip never beats the runnable
-    // .elf. Within those, .elf > .bin > .lua > .js.
+    // .elf. Within those, .elf > .bin > .lua > .js; then a PS4 build last (ftpsrv and klogsrv
+    // ship `-ps4.elf` beside `-ps5.elf` under one hint, and the first listed was the PS4 one);
+    // then the shortest name (`ftpsrv-ps5.elf` over `ftpsrv-ps5-install.elf`).
     if !hint.is_empty() {
-        let mut best: Option<(usize, &GithubAsset)> = None;
+        let mut best: Option<((usize, bool, usize), &GithubAsset)> = None;
         for a in &release.assets {
             if !a.name.to_ascii_lowercase().contains(&lower_hint) {
                 continue;
@@ -110,19 +120,23 @@ pub(super) fn pick_asset(release: &GithubRelease, hint: &str) -> (String, String
             if prio >= PAYLOAD_EXT_PRIORITY.len() {
                 continue;
             }
-            if best.map(|(p, _)| prio < p).unwrap_or(true) {
-                best = Some((prio, a));
+            let rank = (prio, names_ps4(&a.name), a.name.len());
+            if best.map(|(r, _)| rank < r).unwrap_or(true) {
+                best = Some((rank, a));
             }
         }
         if let Some((_, a)) = best {
             return pack(a);
         }
     }
-    // Any .elf.
+    // Any .elf, a PS4 build last.
+    let elf = |a: &&GithubAsset| a.name.to_ascii_lowercase().ends_with(".elf");
     if let Some(a) = release
         .assets
         .iter()
-        .find(|a| a.name.to_ascii_lowercase().ends_with(".elf"))
+        .filter(elf)
+        .find(|a| !names_ps4(&a.name))
+        .or_else(|| release.assets.iter().find(elf))
     {
         return pack(a);
     }
@@ -192,17 +206,30 @@ fn read_cached<T: serde::de::DeserializeOwned>(path: &Path, respect_ttl: bool) -
 /// Parse a `/releases/latest` body (one object) or a releases-list body (an array, newest first:
 /// the pre-release-only fallback). Returns the release and the single-object JSON to cache, so
 /// the cache file keeps one shape whichever endpoint answered.
-pub(super) fn parse_release_or_newest(body: &str) -> Result<(GithubRelease, String), String> {
+pub(super) fn parse_release_or_newest(
+    body: &str,
+    hint: &str,
+) -> Result<(GithubRelease, String), String> {
     if body.trim_start().starts_with('[') {
-        let mut list: Vec<serde_json::Value> =
-            serde_json::from_str(body).map_err(|e| e.to_string())?;
-        if list.is_empty() {
+        let list: Vec<serde_json::Value> = serde_json::from_str(body).map_err(|e| e.to_string())?;
+        let releases: Vec<(GithubRelease, &serde_json::Value)> = list
+            .iter()
+            .filter_map(|v| serde_json::from_value(v.clone()).ok().map(|r| (r, v)))
+            .collect();
+        // The newest that carries this payload's asset: remoteplay_unlock's newest entry is a
+        // `latest-testing` build under another file name, and its `latest` is the one to use.
+        let lower_hint = hint.to_ascii_lowercase();
+        let carries = |r: &GithubRelease| {
+            !lower_hint.is_empty()
+                && r.assets
+                    .iter()
+                    .any(|a| a.name.to_ascii_lowercase().contains(&lower_hint))
+        };
+        let pick = releases.iter().position(|(r, _)| carries(r)).unwrap_or(0);
+        let Some((release, raw)) = releases.into_iter().nth(pick) else {
             return Err("the repository has no releases".into());
-        }
-        let first = list.swap_remove(0);
-        let release: GithubRelease =
-            serde_json::from_value(first.clone()).map_err(|e| e.to_string())?;
-        return Ok((release, first.to_string()));
+        };
+        return Ok((release, raw.to_string()));
     }
     let release: GithubRelease = serde_json::from_str(body).map_err(|e| e.to_string())?;
     Ok((release, body.to_string()))
@@ -320,15 +347,15 @@ impl Library {
         };
 
         // A repo that publishes only pre-releases (a rolling `latest` built by CI, like
-        // remoteplay_unlock) has no `/releases/latest`: GitHub answers 404. The newest entry of
-        // the list, which includes pre-releases, answers instead.
+        // remoteplay_unlock) has no `/releases/latest`: GitHub answers 404. The list, which
+        // includes pre-releases, answers instead: its newest entry carrying this payload's asset.
         let url = api_url(&entry, "releases/latest");
-        let list_url = api_url(&entry, "releases?per_page=1");
+        let list_url = api_url(&entry, "releases?per_page=10");
         let body = match self.fetch_json(&entry, &url, Some(&list_url)) {
             Ok(b) => b,
             Err(e) => return stale(e),
         };
-        let (release, body) = match parse_release_or_newest(&body) {
+        let (release, body) = match parse_release_or_newest(&body, &entry.asset_name_hint) {
             Ok(r) => r,
             Err(e) => {
                 return stale(LibraryError::new(
@@ -497,9 +524,10 @@ mod tests {
                 asset("kstuff.elf", "https://example/main", 2),
             ],
         );
-        // "kstuff" matches both and the first wins: pinned so a change is noticed.
+        // "kstuff" matches both: the plain build (the shortest name) wins over a variant, wherever
+        // it is listed (ftpsrv lists `-ps5-install.elf` before `-ps5.elf`).
         let (n, _, _) = pick_asset(&r, "kstuff");
-        assert_eq!(n, "kstuff-lowfw.elf");
+        assert_eq!(n, "kstuff.elf");
     }
 
     #[test]
@@ -597,17 +625,65 @@ mod tests {
         let body = r#"[{"tag_name":"latest","name":"latest","body":null,"published_at":"2026-10-30T00:00:00Z",
             "html_url":"https://github.com/earthonion/remoteplay_unlock/releases/tag/latest","prerelease":true,
             "assets":[{"name":"remoteplay_unlock.elf","browser_download_url":"https://example/rp","size":9}]}]"#;
-        let (r, cached) = parse_release_or_newest(body).expect("list parses");
+        let (r, cached) = parse_release_or_newest(body, e.asset_name_hint).expect("list parses");
         assert_eq!(r.tag_name, "latest");
         assert!(r.prerelease);
         assert!(cached.trim_start().starts_with('{'));
         assert_eq!(
-            parse_release_or_newest(&cached).unwrap().0.tag_name,
+            parse_release_or_newest(&cached, e.asset_name_hint)
+                .unwrap()
+                .0
+                .tag_name,
             "latest"
         );
         let (n, _, _) = pick_asset(&r, e.asset_name_hint);
         assert_eq!(n, "remoteplay_unlock.elf");
-        assert!(parse_release_or_newest("[]").is_err());
+        assert!(parse_release_or_newest("[]", e.asset_name_hint).is_err());
+    }
+
+    #[test]
+    fn remoteplay_unlock_skips_a_newer_testing_build_under_another_name() {
+        // The real list on 2026-11-09: `latest-testing` (newest) ships only
+        // remoteplay_unlock_offsets.elf; `latest` ships remoteplay_unlock.elf.
+        let e = row("remoteplay-unlock");
+        let body = r#"[
+            {"tag_name":"latest-testing","prerelease":true,"assets":[{"name":"remoteplay_unlock_offsets.elf","browser_download_url":"https://example/t","size":9}]},
+            {"tag_name":"latest","prerelease":true,"assets":[{"name":"remoteplay_unlock.elf","browser_download_url":"https://example/rp","size":9}]}]"#;
+        let (r, _) = parse_release_or_newest(body, e.asset_name_hint).unwrap();
+        assert_eq!(r.tag_name, "latest");
+        // No release carries the hint: the newest, as before.
+        let (r, _) = parse_release_or_newest(body, "nothing-like-it").unwrap();
+        assert_eq!(r.tag_name, "latest-testing");
+    }
+
+    #[test]
+    fn the_ps5_build_is_picked_over_a_ps4_one_under_the_same_hint() {
+        // ftpsrv v0.22 and klogsrv v0.9 as GitHub lists them: the PS4 build first.
+        let a = |n: &str| GithubAsset {
+            name: n.into(),
+            browser_download_url: format!("https://example/{n}"),
+            size: 1,
+        };
+        let r = release_with(
+            "v0.22",
+            vec![
+                a("ftpsrv-ps4.elf"),
+                a("ftpsrv-ps5-install.elf"),
+                a("ftpsrv-ps5.elf"),
+            ],
+        );
+        assert_eq!(
+            pick_asset(&r, row("ftpsrv").asset_name_hint).0,
+            "ftpsrv-ps5.elf"
+        );
+        let r = release_with("v0.9", vec![a("klogsrv-ps4.elf"), a("klogsrv-ps5.elf")]);
+        assert_eq!(
+            pick_asset(&r, row("klogsrv").asset_name_hint).0,
+            "klogsrv-ps5.elf"
+        );
+        // Without a hint match, any .elf but the PS4 one.
+        assert_eq!(pick_asset(&r, "zzz").0, "klogsrv-ps5.elf");
+        assert!(names_ps4("x_PS4.elf") && !names_ps4("ps45.elf") && !names_ps4("ps5.elf"));
     }
 
     #[test]
@@ -669,7 +745,7 @@ mod tests {
         let (_d, http, lib) = library("latest-404");
         let base = "https://api.github.com/repos/EchoStretch/kstuff-lite";
         http.status(&format!("{base}/releases/latest"), 404);
-        http.ok(&format!("{base}/releases?per_page=1"), LIST.as_bytes());
+        http.ok(&format!("{base}/releases?per_page=10"), LIST.as_bytes());
         let r = lib.release("kstuff-echostretch", false).unwrap();
         assert_eq!(r.tag, "v2");
         // Cached as one object, and the fresh path reads it back.
