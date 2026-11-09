@@ -1,7 +1,30 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import en from "../locales/en.json";
-import { tailnetError, tailnetLine, TailscaleSection } from "./Tailscale";
+import { blockedLines, tailnetError, tailnetLine, TailscaleSection } from "./Tailscale";
+
+describe("console page › Tailscale › turned away", () => {
+  it("names each device the list turned away, only while it lists devices", () => {
+    const st = {
+      enabled: true,
+      state: "running",
+      allow_mode: "listed" as const,
+      blocked_recent: [
+        { ip: "100.64.0.7", name: "pixel-9.tail1.ts.net." },
+        { ip: "100.64.0.8", name: "" },
+      ],
+    };
+    expect(blockedLines(st)).toEqual([
+      { ip: "100.64.0.7", text: "pixel-9 tried to reach this PS5 over Tailscale." },
+      { ip: "100.64.0.8", text: "100.64.0.8 tried to reach this PS5 over Tailscale." },
+    ]);
+    expect(blockedLines({ ...st, allow_mode: "all" })).toEqual([]);
+    expect(blockedLines({ ...st, enabled: false })).toEqual([]);
+    expect(blockedLines({ enabled: true, state: "running", allow_mode: "listed" })).toEqual([]);
+    expect(en.cw_tn_allow).toBe("Allow");
+    expect(en.cw_tn_ignore).toBe("Ignore");
+  });
+});
 
 describe("console page › Tailscale", () => {
   it("says where it stands in words", () => {

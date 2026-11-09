@@ -56,6 +56,22 @@ export interface TailnetStatus {
   allow_mode?: "listed" | "all";
   /** The allowed devices' Tailscale addresses, comma-separated. */
   allow?: string;
+  /** Devices the list turned away lately, newest first (empty while every device is let in).
+   *  Absent from an older helper. */
+  blocked_recent?: TailnetBlocked[];
+}
+
+/** A device that tried to reach the PS5 over Tailscale and was not on its list. */
+export interface TailnetBlocked {
+  ip: string;
+  /** Its name in Tailscale ("" when the PS5 has no name for it). */
+  name: string;
+  port: number;
+  proto: "tcp" | "udp";
+  count: number;
+  /** Unix seconds. */
+  first: number;
+  last: number;
 }
 
 /** The helper predates Tailscale support (the engine answers 501 `unsupported`). */
@@ -91,7 +107,7 @@ export interface TailnetEnable {
   ip?: string;
 }
 
-export type TailnetConsoleOp = "enable" | "disable" | "logout" | "rename" | "renew" | "allow" | "allow_add";
+export type TailnetConsoleOp = "enable" | "disable" | "logout" | "rename" | "renew" | "allow" | "allow_add" | "blocked_ignore";
 
 export function tailnetOp(host: string, op: TailnetConsoleOp, opts: TailnetEnable = {}): Promise<TailnetStatus> {
   return call("/api/ps5/tailnet", {
@@ -124,6 +140,8 @@ export interface AppTailnetConsole {
   /** "lan" | "direct" | "relayed" | "system" */
   via: string;
   latency_ms: number;
+  /** When "Try Tailscale now" last reached it through Tailscale (unix ms; 0 or absent: never). */
+  tested_at?: number;
 }
 
 /** The system's own Tailscale app on this device, as the engine sees it. */
@@ -387,4 +405,101 @@ export async function tailnetVia(host: string): Promise<TailnetVia> {
   } catch {
     return { via: "lan", latency_ms: -1 };
   }
+}
+
+// ---- consoles found on the Tailscale network (engine /api/tailnet/consoles) ----
+
+/** The console list's entry for a found console. */
+export interface ListedConsole {
+  id: string;
+  name: string;
+  host: string;
+}
+
+/** A PS5Upload console on this device's Tailscale network, met at home or not. */
+export interface FoundConsole {
+  /** Its tailnet name without "-ps5u". */
+  name: string;
+  tailnet_name: string;
+  tailnet_ip: string;
+  /** Its home address, when this device knows one. */
+  lan_host: string | null;
+  /** Its AVA1 key (hex): the same console at every address. Null when it did not answer. */
+  id: string | null;
+  /** Its helper answered over Tailscale. */
+  reachable: boolean;
+  via: "builtin" | "system" | null;
+  online: boolean;
+  /** This device is trusted by it already. */
+  paired: boolean;
+  hosts: string[];
+  /** On the console list already: that entry. */
+  listed: ListedConsole | null;
+  error: string | null;
+}
+
+export interface FoundConsoles {
+  backend: "builtin" | "system" | "none";
+  /** A peer list could be read; false on a phone with only the Tailscale app (type the address). */
+  can_list: boolean;
+  consoles: FoundConsole[];
+}
+
+async function readJson<T>(res: Response): Promise<T> {
+  const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok) {
+    throw new Error(typeof body.error === "string" && body.error ? body.error : `request failed (${res.status})`);
+  }
+  return body as T;
+}
+
+/** The consoles on the Tailscale network (the engine keeps the last minute's look unless `refresh`). */
+export async function tailnetConsoles(refresh = false): Promise<FoundConsoles> {
+  const res = await fetch(`${getEngineUrl()}/api/tailnet/consoles${refresh ? "?refresh=1" : ""}`, {
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (res.status === 404) return { backend: "none", can_list: false, consoles: [] };
+  const body = await readJson<Partial<FoundConsoles>>(res);
+  return {
+    backend: body.backend ?? "none",
+    can_list: !!body.can_list,
+    consoles: Array.isArray(body.consoles) ? body.consoles : [],
+  };
+}
+
+export interface AddedConsole {
+  /** "added", "linked" (moved to its home address), "merged" (two entries became one), "exists". */
+  action: "added" | "linked" | "merged" | "exists";
+  console: ListedConsole;
+  found: FoundConsole;
+}
+
+/** Puts a found console (or a typed 100.x address / MagicDNS name) on the console list, once. */
+export async function addTailnetConsole(addr: string, name = ""): Promise<AddedConsole> {
+  const res = await fetch(`${getEngineUrl()}/api/tailnet/consoles/add`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ addr: addr.trim(), name }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  return readJson<AddedConsole>(res);
+}
+
+/** A found console's entry in this app's own list: by the engine's entry id, else at any address
+ *  it is known at. */
+export function rosterMatch<T extends { id: string; host: string }>(
+  found: FoundConsole,
+  profiles: readonly T[],
+): T | null {
+  const addrs = new Set(
+    [found.listed?.host, found.lan_host, found.tailnet_ip, ...(found.hosts ?? [])]
+      .filter((h): h is string => !!h)
+      .map((h) => consoleAddr(h)),
+  );
+  const listedId = found.listed?.id;
+  return (
+    (listedId ? profiles.find((p) => p.id === listedId) : undefined) ??
+    profiles.find((p) => addrs.has(consoleAddr(p.host))) ??
+    null
+  );
 }

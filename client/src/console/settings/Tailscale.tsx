@@ -17,6 +17,17 @@ export interface ConsoleTailnet {
   /** The listed devices' Tailscale addresses, comma-separated. */
   allow?: string;
   peers?: { name: string; ip: string }[];
+  /** Devices the list turned away lately (newest first). */
+  blocked_recent?: { ip: string; name: string }[];
+}
+
+/** "<device> tried to reach this PS5 over Tailscale" for each device the list turned away. */
+export function blockedLines(s: ConsoleTailnet): { ip: string; text: string }[] {
+  if (!s.enabled || s.allow_mode !== "listed") return [];
+  return (s.blocked_recent || []).map((b) => ({
+    ip: b.ip,
+    text: t("cw_tn_blocked", { device: (b.name || "").split(".")[0] || b.ip }),
+  }));
 }
 
 /** Who may reach this PS5 over Tailscale, in words (read-only here: the app sets it); null from
@@ -97,12 +108,12 @@ export function TailscaleSection() {
     return () => window.clearInterval(id);
   }, [st?.enabled, st?.state, read]);
 
-  const run = async (op: "enable" | "disable" | "logout" | "renew") => {
+  const run = async (op: "enable" | "disable" | "logout" | "renew" | "allow_add" | "blocked_ignore", ip?: string) => {
     setBusy(true);
     setErr(null);
     setAskOut(false);
     try {
-      setSt(await call<ConsoleTailnet>("/api/tailnet", { op }));
+      setSt(await call<ConsoleTailnet>("/api/tailnet", ip ? { op, ip } : { op }));
     } catch {
       setErr(t("cw_tn_err_change"));
     } finally {
@@ -172,6 +183,29 @@ export function TailscaleSection() {
               {allowLine(st)}
             </p>
           ) : null}
+          {blockedLines(st).map((b) => (
+            <div className="cw-msg" role="status" data-tn-blocked={b.ip} key={b.ip}>
+              <p>{b.text}</p>
+              <button
+                type="button"
+                className="cw-focusable cw-button cw-msg-action"
+                data-action="tailscale-allow"
+                disabled={busy}
+                onClick={() => void run("allow_add", b.ip)}
+              >
+                <span>{t("cw_tn_allow")}</span>
+              </button>
+              <button
+                type="button"
+                className="cw-focusable cw-button cw-msg-action"
+                data-action="tailscale-ignore"
+                disabled={busy}
+                onClick={() => void run("blocked_ignore", b.ip)}
+              >
+                <span>{t("cw_tn_ignore")}</span>
+              </button>
+            </div>
+          ))}
           {on && st.state === "running" ? (
             <div className="cw-setting">
               <button

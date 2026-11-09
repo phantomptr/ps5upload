@@ -17,9 +17,11 @@ import {
   type AppTailnetStatus,
   type TailnetConsoleOp,
   type TailnetEnable,
+  type TailnetBlocked,
   type TailnetStatus,
 } from "../../api/tailnet";
 import { openExternalUrl } from "../../lib/openExternalUrl";
+import { consoleAddr } from "../../lib/addr";
 import { QrCode } from "../Play/PhonePads";
 import { humanizeCaught } from "../../lib/humanizeError";
 import { TailnetProblems } from "./TailnetProblems";
@@ -136,6 +138,8 @@ export default function TailnetPanel({ host }: { host: string }) {
   const setUp = !!st && (st.enabled || !!st.signed_in);
   const days = st ? expiryDays(st.key_expiry) : null;
   const listed = allowList(st);
+  // Step 3 stays done once "Try Tailscale now" reached this PS5 (the engine keeps it per console).
+  const testedAt = me?.consoles?.find((c) => consoleAddr(c.host) === consoleAddr(host))?.tested_at ?? 0;
   return (
     <section
       className="flex flex-col gap-2 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] p-3"
@@ -170,7 +174,7 @@ export default function TailnetPanel({ host }: { host: string }) {
           )}
         />
         <Step
-          done={testVia !== "" && testVia !== "lan"}
+          done={(testVia !== "" && testVia !== "lan") || testedAt > 0}
           n={3}
           text={tr("tn_step_test", undefined, "Test it now: reach this PS5 through Tailscale from home, to see it work.")}
         />
@@ -290,6 +294,12 @@ export default function TailnetPanel({ host }: { host: string }) {
                   )}
                 </div>
               ) : null}
+              <BlockedNotice
+                blocked={st.blocked_recent ?? []}
+                busy={busy}
+                onAllow={(ip) => void run("allow_add", { ip })}
+                onIgnore={(ip) => void run("blocked_ignore", { ip })}
+              />
               <AllowSection st={st} busy={busy} listed={listed} onSave={(mode, list) => void run("allow", { allow_mode: mode, allow: list.join(",") })} />
             </div>
           ) : state === "wait-approval" ? (
@@ -326,6 +336,47 @@ export default function TailnetPanel({ host }: { host: string }) {
       )}
       {err ? <p className="text-xs text-[var(--color-bad)]">{err}</p> : null}
     </section>
+  );
+}
+
+/** "<device> tried to reach this PS5 over Tailscale: Allow / Ignore", for each device the PS5's
+ *  list turned away lately (the helper's `blocked_recent`). Allow adds it to the list. */
+export function BlockedNotice({
+  blocked,
+  busy,
+  onAllow,
+  onIgnore,
+}: {
+  blocked: TailnetBlocked[];
+  busy: boolean;
+  onAllow: (ip: string) => void;
+  onIgnore: (ip: string) => void;
+}) {
+  const tr = useTr();
+  if (blocked.length === 0) return null;
+  return (
+    <ul className="flex flex-col gap-1 text-xs" data-testid="tailnet-blocked">
+      {blocked.map((b) => (
+        <li
+          key={b.ip}
+          className="flex flex-wrap items-center gap-2 rounded-[var(--radius-field)] border border-[var(--color-warn)] px-2 py-1"
+        >
+          <span className="min-w-0 flex-1">
+            {tr(
+              "tn_blocked_tried",
+              { device: b.name.split(".")[0] || b.ip },
+              "{device} tried to reach this PS5 over Tailscale.",
+            )}
+          </span>
+          <Button size="sm" variant="secondary" disabled={busy} onClick={() => onAllow(b.ip)} data-testid="tailnet-blocked-allow">
+            {tr("tn_blocked_allow", undefined, "Allow")}
+          </Button>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => onIgnore(b.ip)} data-testid="tailnet-blocked-ignore">
+            {tr("tn_blocked_ignore", undefined, "Ignore")}
+          </Button>
+        </li>
+      ))}
+    </ul>
   );
 }
 
