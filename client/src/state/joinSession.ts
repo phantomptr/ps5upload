@@ -9,6 +9,7 @@ import { create } from "zustand";
 
 import { joinSocketUrl, type JoinLink } from "../lib/joinProtocol";
 import { holdWhileJoined, JoinSession } from "../join/session";
+import { hubSocketUrl, rtcTransport } from "../join/rtcTransport";
 import { getEngineUrl } from "./engine";
 import { useJoinPresence } from "./joinPresence";
 
@@ -36,8 +37,13 @@ export const useJoinStore = create<JoinStoreState>((set, get) => ({
   link: null,
   join: (link, name) => {
     get().session?.leave();
+    // The one link for everywhere (12.1): peer to peer through the hub, as the friend's browser
+    // page does; ICE keeps it on the Wi-Fi when both are home. A web view with no WebRTC joins
+    // the host's own page instead, when the link names it.
+    const net = link.net && typeof RTCPeerConnection !== "undefined" ? link.net : null;
     const s = new JoinSession({
-      url: joinRelayUrl(getEngineUrl(), joinSocketUrl(link)),
+      url: net ? hubSocketUrl(net.hub) : joinRelayUrl(getEngineUrl(), joinSocketUrl(link)),
+      ...(net ? { transport: rtcTransport(net, { video: true, log: (m) => console.info(`[join] ${m}`) }) } : {}),
       invite: link.invite,
       code: link.code ?? null,
       name,

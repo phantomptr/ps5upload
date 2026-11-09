@@ -7960,7 +7960,7 @@ helper_mismatch_boot_copy: "Your PS5 started an older copy of the helper that it
 "join_confirm_leave_start": "Starting Play leaves {host}'s game. Continue?",
 "join_app_intro": "Paste the link your friend's Play Together shows. You play their PS5 as Player 2, 3 or 4, with your controller or the on-screen one.",
 "join_link_label": "Your friend's link",
-"join_bad_link": "That isn't a Play Together link. It ends in /join#i=…",
+"join_bad_link_v2": "That isn't a Play Together invite link.",
 "join_title": "Join a friend's game",
 "join_title_body": "Play on {host}'s PS5 as Player 2, 3 or 4.",
 "join_name_label": "Your name",

@@ -149,7 +149,7 @@ export function JoinFlow({
       </form>
     </div>
   );
-  // A link opened in a browser: offer the app first (Slack-style); a typed code has no link. An
-  // internet invite is played in the browser (the app joins LAN links).
-  return invite && !transport ? <OpenInAppGate appLink={joinAppLink(location.href)}>{nameStep}</OpenInAppGate> : nameStep;
+  // A link opened in a browser: offer the app first (Slack-style); a typed code has no link. The
+  // app joins an internet invite too (state/joinSession), so it is offered for every link.
+  return invite ? <OpenInAppGate appLink={joinAppLink(location.href)}>{nameStep}</OpenInAppGate> : nameStep;
 }

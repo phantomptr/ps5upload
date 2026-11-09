@@ -7658,7 +7658,7 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
 "join_confirm_leave_start": "Bắt đầu Chơi sẽ rời khỏi trò chơi của {host}. Tiếp tục?",
 "join_app_intro": "Dán liên kết mà mục Chơi cùng nhau của bạn bè hiển thị. Bạn sẽ chơi trên PS5 của họ với vai Người chơi 2, 3 hoặc 4, bằng tay cầm của bạn hoặc tay cầm trên màn hình.",
 "join_link_label": "Liên kết của bạn bè",
-"join_bad_link": "Đây không phải liên kết Chơi cùng nhau. Liên kết đúng kết thúc bằng /join#i=…",
+"join_bad_link_v2": "Đây không phải liên kết mời Chơi cùng nhau.",
 "join_title": "Vào trò chơi của bạn bè",
 "join_title_body": "Chơi trên PS5 của {host} với vai Người chơi 2, 3 hoặc 4.",
 "join_name_label": "Tên của bạn",

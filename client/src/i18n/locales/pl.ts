@@ -7896,7 +7896,7 @@ helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą t
 "join_confirm_leave_start": "Uruchomienie Graj spowoduje opuszczenie gry {host}. Kontynuować?",
 "join_app_intro": "Wklej link, który pokazuje Graj razem twojego znajomego. Grasz na jego PS5 jako Gracz 2, 3 lub 4 – swoim kontrolerem albo tym na ekranie.",
 "join_link_label": "Link od znajomego",
-"join_bad_link": "To nie jest link Graj razem. Kończy się na /join#i=…",
+"join_bad_link_v2": "To nie jest link z zaproszeniem do Graj razem.",
 "join_title": "Dołącz do gry znajomego",
 "join_title_body": "Graj na PS5 {host} jako Gracz 2, 3 lub 4.",
 "join_name_label": "Twoje imię",

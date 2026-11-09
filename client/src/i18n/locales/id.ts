@@ -7665,7 +7665,7 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
 "join_confirm_leave_start": "Memulai Main akan mengeluarkan Anda dari game {host}. Lanjutkan?",
 "join_app_intro": "Tempel tautan yang ditampilkan Main Bareng milik teman Anda. Anda main di PS5 mereka sebagai Pemain 2, 3, atau 4, dengan kontroler Anda atau kontroler di layar.",
 "join_link_label": "Tautan dari teman Anda",
-"join_bad_link": "Itu bukan tautan Main Bareng. Tautannya berakhiran /join#i=…",
+"join_bad_link_v2": "Itu bukan tautan undangan Main Bareng.",
 "join_title": "Gabung ke game teman",
 "join_title_body": "Main di PS5 milik {host} sebagai Pemain 2, 3, atau 4.",
 "join_name_label": "Nama Anda",

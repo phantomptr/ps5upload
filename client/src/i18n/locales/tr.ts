@@ -7663,7 +7663,7 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
 "join_confirm_leave_start": "Oyna'yı başlatmak seni {host} adlı kişinin oyunundan çıkarır. Devam edilsin mi?",
 "join_app_intro": "Arkadaşının Birlikte Oyna ekranında görünen bağlantıyı yapıştır. Onun PS5'inde kendi kumandanla ya da ekrandaki kumandayla 2., 3. veya 4. Oyuncu olarak oynarsın.",
 "join_link_label": "Arkadaşının bağlantısı",
-"join_bad_link": "Bu bir Birlikte Oyna bağlantısı değil. Doğru bağlantı /join#i=… ile biter",
+"join_bad_link_v2": "Bu bir Birlikte Oyna davet bağlantısı değil.",
 "join_title": "Bir arkadaşının oyununa katıl",
 "join_title_body": "{host} adlı kişinin PS5'inde 2., 3. veya 4. Oyuncu olarak oyna.",
 "join_name_label": "Adın",

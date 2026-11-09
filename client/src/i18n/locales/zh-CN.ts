@@ -7615,7 +7615,7 @@ helper_mismatch_boot_copy: "你的 PS5 启动了为开机保留的旧版助手�
 "join_confirm_leave_start": "开始畅玩会离开 {host} 的游戏。要继续吗？",
 "join_app_intro": "粘贴好友“一起畅玩”里显示的链接。你将作为玩家 2、3 或 4 玩对方的 PS5，可用自己的手柄或屏幕手柄。",
 "join_link_label": "好友的链接",
-"join_bad_link": "这不是一起畅玩的链接。正确的链接以 /join#i=… 结尾",
+"join_bad_link_v2": "这不是一起畅玩的邀请链接。",
 "join_title": "加入好友的游戏",
 "join_title_body": "在 {host} 的 PS5 上作为玩家 2、3 或 4 游玩。",
 "join_name_label": "你的名字",

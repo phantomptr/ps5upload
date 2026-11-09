@@ -7672,7 +7672,7 @@ helper_mismatch_boot_copy: "Votre PS5 a lancé une ancienne copie de l'assistant
 "join_confirm_leave_start": "Lancer Jouer vous fait quitter la partie de {host}. Continuer ?",
 "join_app_intro": "Collez le lien affiché par Jouer ensemble chez votre ami. Vous jouez sur sa PS5 en tant que joueur 2, 3 ou 4, avec votre manette ou celle à l'écran.",
 "join_link_label": "Le lien de votre ami",
-"join_bad_link": "Ce n'est pas un lien Jouer ensemble. Il se termine par /join#i=…",
+"join_bad_link_v2": "Ce n'est pas un lien d'invitation Jouer ensemble.",
 "join_title": "Rejoindre la partie d'un ami",
 "join_title_body": "Jouez sur la PS5 de {host} en tant que joueur 2, 3 ou 4.",
 "join_name_label": "Votre nom",

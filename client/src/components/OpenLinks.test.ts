@@ -12,6 +12,13 @@ describe("ps5upload:// join links", () => {
     expect(openLinkRoute(app)).toBe(`/play?join=${encodeURIComponent(invite)}`);
   });
 
+  it("round-trips an internet invite (12.1's one link) through the app link", () => {
+    const net = `https://ps5upload.phantomptr.com/join/#room=Demo0Room0Not0Real0000&k=abcdefgh12&fp=${"AB:".repeat(31)}CD&hub=hub.example.com&n=Sam`;
+    const app = joinAppLink(net);
+    expect(joinLinkFromAppLink(app)).toBe(net);
+    expect(openLinkRoute(app)).toBe(`/play?join=${encodeURIComponent(net)}`);
+  });
+
   it("takes the path form and ignores case in the action", () => {
     expect(joinLinkFromAppLink(`ps5upload:/join?link=${encodeURIComponent(invite)}`)).toBe(invite);
     expect(joinLinkFromAppLink(`ps5upload://JOIN/?link=${encodeURIComponent(invite)}`)).toBe(invite);

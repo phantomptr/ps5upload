@@ -7671,7 +7671,7 @@ helper_mismatch_boot_copy: "Seu PS5 iniciou uma cópia antiga do auxiliar que gu
 "join_confirm_leave_start": "Iniciar o Jogar faz você sair do jogo de {host}. Continuar?",
 "join_app_intro": "Cole o link que aparece no Jogar juntos do seu amigo. Você joga no PS5 dele como Jogador 2, 3 ou 4, com seu controle ou o da tela.",
 "join_link_label": "Link do seu amigo",
-"join_bad_link": "Esse não é um link do Jogar juntos. Ele termina em /join#i=…",
+"join_bad_link_v2": "Esse não é um link de convite do Jogar juntos.",
 "join_title": "Entrar no jogo de um amigo",
 "join_title_body": "Jogue no PS5 de {host} como Jogador 2, 3 ou 4.",
 "join_name_label": "Seu nome",

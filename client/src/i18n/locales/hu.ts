@@ -7951,7 +7951,7 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
 "join_confirm_leave_start": "A Játék indításával kilépsz {host} játékából. Folytatod?",
 "join_app_intro": "Illeszd be a linket, amit a barátod Közös játéka mutat. 2., 3. vagy 4. játékosként játszol az ő PS5-jén, a saját kontrollereddel vagy a képernyősön.",
 "join_link_label": "A barátod linkje",
-"join_bad_link": "Ez nem Közös játék link. A vége: /join#i=…",
+"join_bad_link_v2": "Ez nem Közös játék meghívólink.",
 "join_title": "Csatlakozás egy barát játékához",
 "join_title_body": "Játssz {host} PS5-jén 2., 3. vagy 4. játékosként.",
 "join_name_label": "A neved",

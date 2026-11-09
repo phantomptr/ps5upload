@@ -195,8 +195,9 @@ test("a friend anywhere joins through the hub, is allowed, plays as Player 2 and
 
   // The same link, from the local copy of the website.
   await page.goto(link.replace(SITE, `${siteOrigin}/join/`), { waitUntil: "domcontentloaded" });
-  // An internet link plays in the browser: no "Open in the app?" question.
-  await expect(page.getByTestId("open-in-gate")).toHaveCount(0);
+  // The app joins internet invites too: the page offers it first; this test plays in the browser.
+  await expect(page.getByTestId("open-in-gate")).toBeVisible({ timeout: 15_000 });
+  await page.getByTestId("open-in-browser").first().click();
   await page.getByTestId("join-name").fill("Ben");
   await page.getByTestId("join-go").click();
   await expect(page.getByTestId("join-stage")).toContainText("to let you in", { timeout: 30_000 });

@@ -7675,7 +7675,7 @@ helper_mismatch_boot_copy: "PS5 が起動用に保持している古いヘルパ
 "join_confirm_leave_start": "プレイを始めると{host}さんのゲームから抜けます。続けますか？",
 "join_app_intro": "フレンドの「いっしょにプレイ」に表示されたリンクを貼り付けてください。自分のコントローラーか画面上のコントローラーで、プレイヤー2・3・4としてフレンドのPS5で遊べます。",
 "join_link_label": "フレンドのリンク",
-"join_bad_link": "「いっしょにプレイ」のリンクではありません。リンクの最後は /join#i=… です。",
+"join_bad_link_v2": "「いっしょにプレイ」の招待リンクではありません。",
 "join_title": "フレンドのゲームに参加",
 "join_title_body": "{host}さんのPS5でプレイヤー2・3・4として遊べます。",
 "join_name_label": "あなたの名前",

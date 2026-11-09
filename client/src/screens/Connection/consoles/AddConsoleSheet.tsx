@@ -113,6 +113,8 @@ function QrScanner({ onInvite, onClose }: { onInvite: (inv: Invite) => void; onC
   const tr = useTr();
   const video = useRef<HTMLVideoElement>(null);
   const [err, setErr] = useState<string | null>(null);
+  // A code in view that isn't an invite: said, so the camera doesn't look stuck.
+  const [wrong, setWrong] = useState(false);
   useEffect(() => {
     let stream: MediaStream | null = null;
     let timer = 0;
@@ -128,13 +130,15 @@ function QrScanner({ onInvite, onClose }: { onInvite: (inv: Invite) => void; onC
         const tick = async () => {
           if (!live || !video.current) return;
           try {
-            for (const code of await det.detect(video.current)) {
+            const codes = await det.detect(video.current);
+            for (const code of codes) {
               const inv = parseInvite(code.rawValue);
               if (inv) {
                 onInvite(inv);
                 return;
               }
             }
+            setWrong(codes.length > 0);
           } catch {
             // A frame it could not read: the next one.
           }
@@ -159,7 +163,11 @@ function QrScanner({ onInvite, onClose }: { onInvite: (inv: Invite) => void; onC
           {tr("cs_add_qr_failed", { err }, "The camera didn't start ({err}). Paste the link instead.")}
         </p>
       ) : (
-        <p className="text-xs text-[var(--color-muted)]">{tr("cs_add_qr_point", undefined, "Point the camera at the invite code.")}</p>
+        <p className="text-xs text-[var(--color-muted)]" data-testid="consoles-qr-hint">
+          {wrong
+            ? tr("cs_add_invite_bad", undefined, "That isn't an invite link. It starts with ps5upload://console.")
+            : tr("cs_add_qr_point", undefined, "Point the camera at the invite code.")}
+        </p>
       )}
       <div>
         <Button size="sm" variant="ghost" onClick={onClose}>

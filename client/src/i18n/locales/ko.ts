@@ -7673,7 +7673,7 @@ helper_mismatch_boot_copy: "PS5가 부팅용으로 보관한 이전 헬퍼 사�
 "join_confirm_leave_start": "플레이를 시작하면 {host} 님의 게임에서 나가요. 계속할까요?",
 "join_app_intro": "친구의 함께 플레이 화면에 보이는 링크를 붙여 넣으세요. 내 컨트롤러나 화면 컨트롤러로 친구의 PS5에서 플레이어 2, 3, 4로 플레이할 수 있어요.",
 "join_link_label": "친구의 링크",
-"join_bad_link": "함께 플레이 링크가 아니에요. 링크는 /join#i=…로 끝나요.",
+"join_bad_link_v2": "함께 플레이 초대 링크가 아니에요.",
 "join_title": "친구 게임에 참여",
 "join_title_body": "{host} 님의 PS5에서 플레이어 2, 3, 4로 플레이하세요.",
 "join_name_label": "내 이름",

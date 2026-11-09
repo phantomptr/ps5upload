@@ -7664,7 +7664,7 @@ helper_mismatch_boot_copy: "Deine PS5 hat eine ältere Kopie des Helfers gestart
 "join_confirm_leave_start": "Wenn du Spielen startest, verlässt du das Spiel von {host}. Weiter?",
 "join_app_intro": "Füge den Link ein, den „Zusammen spielen“ bei deinem Freund anzeigt. Du spielst auf seiner PS5 als Spieler 2, 3 oder 4 – mit deinem Controller oder dem auf dem Bildschirm.",
 "join_link_label": "Link deines Freundes",
-"join_bad_link": "Das ist kein Link für „Zusammen spielen“. Er endet auf /join#i=…",
+"join_bad_link_v2": "Das ist kein Einladungslink für „Zusammen spielen“.",
 "join_title": "Bei Freunden mitspielen",
 "join_title_body": "Spiele auf der PS5 von {host} als Spieler 2, 3 oder 4.",
 "join_name_label": "Dein Name",
