@@ -29,6 +29,7 @@ static void clocks(void) {
     check(!pp_clocks_say_frozen(5, 5), "an ordinary poll is not a wake");
     check(!pp_clocks_say_frozen(45, 45), "a thread throttled under a game (both clocks, under a minute) is not a wake");
     check(pp_clocks_say_frozen(411, 411), "FW 13.60 Pro, measured: both clocks moved 411 s over a rest");
+    check(pp_clocks_say_frozen(5, 284), "FW 13.60 Pro, measured: monotonic moved 284 s, wall clock 5 s (reset on wake)");
     check(pp_clocks_say_frozen(3600, 5), "FW 13.60 rest: wall clock ahead, monotonic stopped");
     check(pp_clocks_say_frozen(20, 5), "a short rest (15 s gap) still counts");
     check(!pp_clocks_say_frozen(14, 5), "a few seconds of drift does not");
