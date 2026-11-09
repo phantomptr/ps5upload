@@ -576,6 +576,16 @@ pub(crate) struct PageReport {
     /// codec it set up (e.g. "avc1.640028"): a page that never drew a picture says why (#720).
     problem: Option<&'static str>,
     codec: Option<String>,
+    /// The sound once it started (#720: an iPhone guest's sound stuttered and the host's log had
+    /// nothing about it): its path ("webcodecs" or "wasm", decoded on the page and scheduled;
+    /// "mse", the media player), and its counters: decoded, covered (a lost packet concealed),
+    /// late (an underrun: it ran dry), dropped (too far ahead), and the media player's jumps.
+    sound: Option<&'static str>,
+    snd_decoded: Option<u64>,
+    snd_concealed: Option<u64>,
+    snd_underruns: Option<u64>,
+    snd_dropped: Option<u64>,
+    snd_jumps: Option<u64>,
     /// Stalled time since the report before (ms), and when this one came.
     stall_ms_recent: u64,
     at: Option<Instant>,
@@ -626,8 +636,43 @@ impl PageReport {
                         && c.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.')
                 })
                 .map(str::to_string),
+            sound: match o.get("snd").and_then(|d| d.as_str()) {
+                Some("webcodecs") => Some("webcodecs"),
+                Some("wasm") => Some("wasm"),
+                Some("mse") => Some("mse"),
+                _ => None,
+            },
+            snd_decoded: n("snd_decoded").map(|x| x as u64),
+            snd_concealed: n("snd_concealed").map(|x| x as u64),
+            snd_underruns: n("snd_underruns").map(|x| x as u64),
+            snd_dropped: n("snd_dropped").map(|x| x as u64),
+            snd_jumps: n("snd_jumps").map(|x| x as u64),
             ..PageReport::default()
         })
+    }
+
+    /// The sound's part of the "left" line, when the page said how its sound went.
+    fn sound_line(&self) -> String {
+        let Some(path) = self.sound else {
+            return String::new();
+        };
+        let mut parts = Vec::new();
+        for (v, what) in [
+            (self.snd_decoded, "decoded"),
+            (self.snd_concealed, "covered"),
+            (self.snd_underruns, "ran dry"),
+            (self.snd_dropped, "dropped"),
+            (self.snd_jumps, "jumps"),
+        ] {
+            if let Some(v) = v {
+                parts.push(format!("{v} {what}"));
+            }
+        }
+        if parts.is_empty() {
+            format!("; sound {path}")
+        } else {
+            format!("; sound {path}: {}", parts.join(", "))
+        }
     }
 
     /// How the picture looks to the guest now: "smooth", "stutters" or "poor", from the time it
@@ -660,6 +705,11 @@ impl PageReport {
             "plis": self.plis,
             "problem": self.problem,
             "codec": self.codec,
+            "sound": self.sound,
+            "snd_underruns": self.snd_underruns,
+            "snd_dropped": self.snd_dropped,
+            "snd_concealed": self.snd_concealed,
+            "snd_jumps": self.snd_jumps,
             "stall_ms_recent": self.stall_ms_recent,
             "age_s": self.at.map(|t| now.saturating_duration_since(t).as_secs()),
             "quality": self.quality(now),
@@ -705,7 +755,7 @@ impl Stats {
         match g.as_ref() {
             None => "the page never reported its picture".into(),
             Some(r) => format!(
-                "picture {} {}{}: {} drawn, {} stalls{}",
+                "picture {} {}{}: {} drawn, {} stalls{}{}",
                 r.decoder.unwrap_or("?"),
                 r.codec.as_deref().unwrap_or("?"),
                 r.problem.map(|p| format!(" ({p})")).unwrap_or_default(),
@@ -714,6 +764,7 @@ impl Stats {
                 r.jitter_ms
                     .map(|j| format!(", jitter {j} ms"))
                     .unwrap_or_default(),
+                r.sound_line(),
             ),
         }
     }
@@ -4845,6 +4896,38 @@ mod tests {
         let v = s.page_json(t1);
         assert_eq!(v["problem"], serde_json::Value::Null);
         assert_eq!(v["codec"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn the_left_line_says_how_the_guests_sound_went() {
+        // #720: an iPhone guest's sound stuttered and the host's log said nothing about it.
+        let t0 = Instant::now();
+        let s = Stats::default();
+        s.page_report(
+            &serde_json::json!({
+                "frames": 300, "decoder": "track", "snd": "wasm", "snd_decoded": 900,
+                "snd_concealed": 4, "snd_underruns": 12, "snd_dropped": 30
+            }),
+            t0,
+        );
+        assert_eq!(
+            s.page_line(),
+            "picture track ?: 300 drawn, 0 stalls; sound wasm: 900 decoded, 4 covered, 12 ran dry, 30 dropped"
+        );
+        assert_eq!(s.page_json(t0)["snd_underruns"], 12);
+        let t1 = t0 + Duration::from_secs(2);
+        s.page_report(
+            &serde_json::json!({"frames": 10, "snd": "mse", "snd_jumps": 3}),
+            t1,
+        );
+        assert!(s.page_line().ends_with("; sound mse: 3 jumps"));
+        // An unknown path is not kept, and with it no sound part.
+        let t2 = t1 + Duration::from_secs(2);
+        s.page_report(
+            &serde_json::json!({"frames": 20, "snd": "<x>", "snd_jumps": 3}),
+            t2,
+        );
+        assert!(!s.page_line().contains("sound"));
     }
 
     #[test]

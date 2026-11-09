@@ -7,7 +7,7 @@
 // from the channel: this wraps it, and shows whichever is in use.
 
 import type { TrackMedia } from "../lib/joinProtocol";
-import type { MsePlayer, WatchPlayer } from "../pad/watchPlayer";
+import type { MsePlayer, SoundReport, WatchPlayer } from "../pad/watchPlayer";
 
 type Inbound = Record<string, number | undefined>;
 
@@ -114,6 +114,11 @@ export class TrackPlayer {
 
   set onSoundFail(f: (() => void) | null) {
     this.inner.onSoundFail = f;
+  }
+
+  /** The sound always plays through the channel's player. */
+  soundReport(): SoundReport | null {
+    return this.inner.soundReport();
   }
 
   startSound(): void {

@@ -391,7 +391,7 @@ export function playRumble(
 export { avcCodecString, isKeyframe, supportedHevc } from "./rpCodec";
 import { avcCodecString, isKeyframe, noPictureStep, supportedHevc } from "./rpCodec";
 import { avcDescription, lengthPrefixed } from "./fmp4";
-import { HOST_MSE_EDGE, MsePlayer, MseSound, mseOpusSupported } from "../pad/watchPlayer";
+import { HOST_MSE_EDGE, MsePlayer, MseSound, mseJumpsText, mseOpusSupported } from "../pad/watchPlayer";
 import {
   beginRpClientSession,
   videoConfigFacts,
@@ -1965,13 +1965,7 @@ export class RemotePlayStream {
   /** On the system's media player: how often it jumped to the live edge (each one a hitch, #720). */
   private mseLogText(): string {
     if (!this.mse) return "";
-    const { seeks, maxLagMs, lastJump: j } = this.mse.videoSeeks;
-    const s = (x: number) => x.toFixed(2);
-    const last = j
-      ? `, the last from ${s(j.at)} s with ${s(j.start)}-${s(j.end)} s buffered in ${j.ranges} range(s), ` +
-        `readyState ${j.readyState}${j.paused ? ", paused" : ""}`
-      : "";
-    return `; media player: ${seeks} jumps to the live edge (most behind ${maxLagMs} ms${last})`;
+    return mseJumpsText(this.mse.videoSeeks);
   }
 
   /** Time a round trip to the engine (answered with `{"pong": t}`). */

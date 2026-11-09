@@ -21,7 +21,7 @@ import {
   type KeyAction,
   type PadState,
 } from "../lib/remotePlayStream";
-import { makeWatchPlayer, type MsePlayer, type WatchPlayer, type WatchProblem } from "../pad/watchPlayer";
+import { makeWatchPlayer, type MsePlayer, type SoundReport, type WatchPlayer, type WatchProblem } from "../pad/watchPlayer";
 import { rpInput } from "../state/rpInput";
 import { setScreenWakeReason } from "../lib/androidScreenWake";
 import { setPadForwardReason } from "../lib/androidPadBridge";
@@ -99,14 +99,18 @@ export function setPadChecking(on: boolean): void {
 
 /** What the page tells the host about its picture: none before the first picture, unless the
  *  picture fails, which the host then hears about with the decoder and codec (#720: an iPhone
- *  that never drew a picture sent nothing, so the host could not say which decoder failed). */
+ *  that never drew a picture sent nothing, so the host could not say which decoder failed). The
+ *  sound's path and counters go with it once the sound started (#720: an iPhone guest's sound
+ *  stuttered and the host's log said nothing about it). */
 export function pageStats(
   stats: { frames: number; snapshot(): Record<string, number | string> | null } | null,
   problem: WatchProblem | null,
+  sound: SoundReport | null = null,
 ): Record<string, number | string> | null {
   if (!stats || (stats.frames === 0 && !problem)) return null;
   const s = stats.snapshot();
-  return s && problem ? { ...s, problem } : s;
+  if (!s) return s;
+  return { ...s, ...(problem ? { problem } : {}), ...(sound ?? {}) };
 }
 
 /** The pad this device is: connected controllers (each through its profile), the keyboard and the
@@ -155,7 +159,7 @@ export class JoinSession {
       onFrame: (d) => this.picture().onMessage(d),
       // How the picture looks here, for the host's panel and log: none before the first picture,
       // unless the picture fails, which the host then hears about (#720).
-      readStats: () => pageStats(this.player?.stats ?? null, this.snap.problem),
+      readStats: () => pageStats(this.player?.stats ?? null, this.snap.problem, this.player?.soundReport() ?? null),
       onCodec: (h, track) => {
         const p = this.picture();
         p.setHevc(h);
