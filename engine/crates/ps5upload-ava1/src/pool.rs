@@ -7,7 +7,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -128,7 +128,15 @@ struct Refusal {
     reason: String,
     detail: String,
     power: Option<Power>,
+    /// When a quick connect last asked whether the console answers again (see
+    /// [`Pool::recheck_due`]); `None`: not yet.
+    rechecked: Option<Instant>,
 }
+
+/// A remembered failure may be looked past (one quick connect to the console's port) once it is
+/// this old, and then at most this often: a console that wakes is seen in seconds, not after the
+/// whole TTL, and a sleeping one costs one refused connect per period.
+pub const RECHECK_EVERY: Duration = Duration::from_secs(2);
 
 /// How long a failed session attempt is repeated without trying again.
 pub const REFUSAL_TTL: Duration = Duration::from_secs(5);
@@ -252,6 +260,18 @@ pub const SUPERSEDED_WARNING: &str = "another ps5upload engine using the same id
 struct Cached {
     session: Arc<Session>,
     counted: Arc<std::sync::atomic::AtomicBool>,
+    /// When the console last proved this session alive (a new Pong, or a reply), in wall-clock
+    /// ms. Wall clock on purpose: a computer that slept for an hour must not read the hour as
+    /// "just heard from it" (the monotonic clock stops during sleep on macOS).
+    alive_at: Arc<AtomicU64>,
+}
+
+/// Wall-clock ms now (0 before 1970: never in practice).
+fn wall_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 struct Churn {
@@ -556,8 +576,29 @@ impl Pool {
                     reason: reason.to_string(),
                     detail: detail.to_string(),
                     power,
+                    rechecked: None,
                 },
             );
+    }
+
+    /// Whether a remembered failure of `console` may be looked past now with one quick connect:
+    /// it is at least [`RECHECK_EVERY`] old, the last recheck as long ago, and it is not "not
+    /// paired" (a session attempt then would show the console's pairing code again). Taking it
+    /// marks the recheck done.
+    pub(crate) fn recheck_due(&self, console: &str) -> bool {
+        let mut m = self.refusals.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(r) = m.get_mut(&host_of(console)) else {
+            return false;
+        };
+        if r.reason == "ava1_not_paired" || r.reason == crate::console::NOT_PAIRED {
+            return false;
+        }
+        let since = r.rechecked.unwrap_or(r.at);
+        if since.elapsed() < RECHECK_EVERY {
+            return false;
+        }
+        r.rechecked = Some(Instant::now());
+        true
     }
 
     /// Forgets a remembered failure: a pairing or any successful session just proved the
@@ -1062,11 +1103,14 @@ impl Pool {
             Ok(kept)
         } else {
             let counted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            // The handshake that just finished is the first proof of life.
+            let alive_at = Arc::new(AtomicU64::new(wall_ms()));
             map.insert(
                 host.clone(),
                 Cached {
                     session: s.clone(),
                     counted: counted.clone(),
+                    alive_at: alive_at.clone(),
                 },
             );
             drop(map);
@@ -1080,9 +1124,17 @@ impl Pool {
             // connections) alive once every user has dropped it.
             let (watched, churn) = (Arc::downgrade(&s), self.churn.clone());
             tokio::spawn(async move {
+                // Each answered Ping changes the round-trip figure: a change is the console
+                // talking (`silent_for` reads it). The link sends a Ping every 2 s.
+                let mut last_rtt = None;
                 loop {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                     let Some(s) = watched.upgrade() else { return };
+                    let rtt = s.rtt();
+                    if rtt.is_some() && rtt != last_rtt {
+                        last_rtt = rtt;
+                        alive_at.store(wall_ms(), Ordering::Relaxed);
+                    }
                     if s.is_closed() {
                         let why = s.closed().await;
                         if !counted.swap(true, Ordering::SeqCst) {
@@ -1094,6 +1146,41 @@ impl Pool {
             });
             Ok(s)
         }
+    }
+
+    /// How long the cached session `s` has gone without a word from the console (no new Pong,
+    /// no reply), by the wall clock. `None`: `s` is not the cached session (another took its
+    /// place, or it was dropped).
+    pub async fn silent_for(&self, console: &str, s: &Arc<Session>) -> Option<Duration> {
+        let map = self.sessions.lock().await;
+        let c = map
+            .get(&host_of(console))
+            .filter(|c| Arc::ptr_eq(&c.session, s))?;
+        Some(Duration::from_millis(
+            wall_ms().saturating_sub(c.alive_at.load(Ordering::Relaxed)),
+        ))
+    }
+
+    /// A reply on `console`'s cached session: it is alive now.
+    pub async fn note_alive(&self, console: &str) {
+        if let Some(c) = self.sessions.lock().await.get(&host_of(console)) {
+            c.alive_at.store(wall_ms(), Ordering::Relaxed);
+        }
+    }
+
+    /// Whether a live session to `console` is cached (a call now reuses it, no handshake).
+    pub async fn has_session(&self, console: &str) -> bool {
+        self.sessions
+            .lock()
+            .await
+            .get(&host_of(console))
+            .is_some_and(|c| !c.session.is_closed())
+    }
+
+    /// The address a connection to `console`'s AVA1 port goes to now: its own, the pool's
+    /// override, or the engine's tailnet mapping of it.
+    pub(crate) fn dial_addr(&self, console: &str) -> String {
+        routed(&self.addr_for(console))
     }
 
     /// Drops the cached session only when it is `failed` (the one the caller just saw break) or

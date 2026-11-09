@@ -162,6 +162,15 @@ import { dropTarget, usePackageViewer } from "../state/packageViewer";
 import { installConvertRunner } from "../lib/convertQueueRunner";
 import { recordAppEvent } from "../lib/appJournal";
 import { engineProbeVerdict } from "../lib/engineUnreachable";
+import {
+  nextCheckDelay,
+  statusAfterMiss,
+  STATUS_SLOW_REASON,
+  UP_MISS_THRESHOLD,
+  WAKE_WINDOW_MS,
+  type CheckOutcome,
+} from "../lib/statusSchedule";
+import { onStatusRecheck } from "../lib/statusRecheck";
 import { useConfirm } from "../components/ConfirmDialog";
 
 // The Convert queue builds through the Convert pipeline wherever the user is in the app.
@@ -175,10 +184,10 @@ installConvertRunner();
  *  - Payload: the PS5's :9120 via `payload_check`, every 10s, and only
  *    when a host is configured (no point spamming DOWN probes against
  *    the default IP if the user hasn't entered theirs). */
-/** Consecutive failed payload probes required before the UI flips a host
- *  from "up" to "down". At a 10s poll interval, 2 means a real drop is
- *  reflected within ~20s, while a single jittery/busy poll is absorbed. */
-const PROBE_MISS_THRESHOLD = 2;
+/** Consecutive failed payload probes required before the UI flips a host from "up" to
+ *  "down": lib/statusSchedule (three, spread over several seconds, so one busy or jittery
+ *  check is absorbed). */
+const PROBE_MISS_THRESHOLD = UP_MISS_THRESHOLD;
 
 /** Same debounce, but while an upload to that console is in flight.
  *
@@ -309,6 +318,8 @@ function useStatusPolling() {
   // uploads on its down→up edge. Same cooldown discipline as the auto-loader
   // — a flapping helper must not loop-restart the queue.
   const uploadResumeFiredAtRef = useRef<Record<string, number>>({});
+  /** Per host: quick checks until this time (a wake was sent, the network came back). */
+  const wakeUntilRef = useRef<Record<string, number>>({});
   // Load the saved queue at startup, not when a Queue panel first mounts:
   // installs from any screen go into it, and must never race the load.
   useEffect(() => {
@@ -425,7 +436,7 @@ function useStatusPolling() {
     }
     const isActive = (key: string) =>
       key === (hostOf(useConnectionStore.getState().host) || "_");
-    const probeOne = async (probedHost: string) => {
+    const probeOne = async (probedHost: string): Promise<CheckOutcome> => {
       const key = hostOf(probedHost) || "_";
       // ── Transfer progress IS the liveness signal ────────────────────
       //
@@ -454,14 +465,14 @@ function useStatusPolling() {
           missCountRef.current[key] = 0;
           setHostStatus(probedHost, { payloadStatus: "up", power: "awake" });
           if (isActive(key)) setStatus({ payloadProbing: false });
-          return;
+          return "up";
         }
       } else {
         delete transferProgressRef.current[key];
       }
       try {
         const s = await payloadCheck(probedHost);
-        if (cancelled) return;
+        if (cancelled) return "blind";
         const prev =
           useConnectionStore.getState().runtimeByHost[key] ??
           EMPTY_HOST_RUNTIME;
@@ -495,7 +506,13 @@ function useStatusPolling() {
             );
           }
           if (isActive(key)) setStatus({ payloadProbing: false });
-          return;
+          return "blind";
+        }
+        // The helper is there and talking, only slow to answer (a long scan): no verdict
+        // either way. Holding what was known keeps a busy console from reading as "down".
+        if (carryOver && s.reason === STATUS_SLOW_REASON) {
+          if (isActive(key)) setStatus({ payloadProbing: false });
+          return "blind";
         }
         if (blindProbeRef.current[key]) {
           blindProbeRef.current[key] = false;
@@ -504,7 +521,8 @@ function useStatusPolling() {
         // Debounce up→down: a reachable probe clears the miss counter; an
         // unreachable one only flips to "down" after MISS_THRESHOLD misses in
         // a row, so one busy/jittery poll holds the last-known "up".
-        let newStatus: "up" | "down";
+        let newStatus: "up" | "down" | "unknown";
+        let outcome: CheckOutcome;
         // Awake, in rest mode or not answering, from the same reply (lib/consolePower).
         const power = powerFromCheck(s) ?? prev.power;
         if (power !== prev.power && (power === "rest" || prev.power === "rest")) {
@@ -521,6 +539,7 @@ function useStatusPolling() {
         if (s.reachable || sessionNeedsAttention(s.session)) {
           missCountRef.current[key] = 0;
           newStatus = "up";
+          outcome = "up";
           // What the console's own page has running, for Activity (#658): one small read with
           // this tick, and only when the helper can answer it.
           if (s.reachable && !sessionNeedsAttention(s.session)) void readConsoleTasks(probedHost);
@@ -534,14 +553,18 @@ function useStatusPolling() {
           // "in rest mode", not "helper isn't running").
           missCountRef.current[key] = PROBE_MISS_THRESHOLD;
           newStatus = "down";
+          outcome = "rest";
         } else {
           const misses = (missCountRef.current[key] ?? 0) + 1;
           missCountRef.current[key] = misses;
           const threshold = transferScreenBusy(probedHost)
             ? PROBE_MISS_THRESHOLD_DURING_TRANSFER
             : PROBE_MISS_THRESHOLD;
-          newStatus =
-            prev.payloadStatus === "up" && misses < threshold ? "up" : "down";
+          // Not believed until confirmed: a console not yet seen this run stays "checking"
+          // through a few quick checks, one that was up holds through a few slower ones. One
+          // failed check is never "Helper isn't running" (lib/statusSchedule).
+          newStatus = statusAfterMiss(prev.payloadStatus, misses, { upThreshold: threshold });
+          outcome = "miss";
         }
         // Keep a copy of the helper's own logs every time it arrives at "up" —
         // including the first sighting after the app starts, which the
@@ -690,6 +713,7 @@ function useStatusPolling() {
         });
         // Clear the active console's "rechecking…" flag once its probe lands.
         if (isActive(key)) setStatus({ payloadProbing: false });
+        const verdict = outcome;
         // The install daemon (:9115) is no longer pre-armed or liveness-polled
         // from the client — the engine brings it up per-install during
         // `POST /api/pkg/install` and restores the main payload afterward.
@@ -729,8 +753,9 @@ function useStatusPolling() {
             warnedNoUcredRef.current[key] = false;
           }
         }
+        return verdict;
       } catch (e) {
-        if (cancelled) return;
+        if (cancelled) return "blind";
         const prev =
           useConnectionStore.getState().runtimeByHost[key] ??
           EMPTY_HOST_RUNTIME;
@@ -749,16 +774,88 @@ function useStatusPolling() {
           );
         }
         if (isActive(key)) setStatus({ payloadProbing: false });
+        return "blind";
       }
     };
-    const tick = () => {
-      for (const h of hosts) void probeOne(h);
+    // Each console on its own timer: asked again soon while a check said nothing or a failure
+    // is being confirmed, every 10 s once settled (lib/statusSchedule). Never two checks of
+    // one console at once; a request that arrives during one runs right after it.
+    const timers: Record<string, ReturnType<typeof setTimeout>> = {};
+    const running = new Set<string>();
+    const again = new Set<string>();
+    const blindStreak: Record<string, number> = {};
+    const lastRun: Record<string, number> = {};
+    const run = async (probedHost: string): Promise<void> => {
+      const key = hostOf(probedHost) || "_";
+      if (running.has(key)) {
+        again.add(key);
+        return;
+      }
+      clearTimeout(timers[key]);
+      running.add(key);
+      lastRun[key] = Date.now();
+      let outcome: CheckOutcome;
+      try {
+        outcome = await probeOne(probedHost);
+      } catch {
+        outcome = "blind";
+      } finally {
+        running.delete(key);
+      }
+      if (cancelled) return;
+      blindStreak[key] = outcome === "blind" ? (blindStreak[key] ?? 0) + 1 : 0;
+      const rt = useConnectionStore.getState().runtimeByHost[key];
+      const delay = again.delete(key)
+        ? 0
+        : nextCheckDelay({
+            outcome,
+            status: rt?.payloadStatus ?? "unknown",
+            streak: outcome === "blind" ? blindStreak[key] : (missCountRef.current[key] ?? 0),
+            engineStarting:
+              useConnectionStore.getState().engineStatus !== "up" && engineStartupGrace(),
+            transferring: transferScreenBusy(probedHost),
+            wakeUntil: wakeUntilRef.current[key],
+          });
+      timers[key] = setTimeout(() => void run(probedHost), delay);
     };
-    tick();
-    const h = setInterval(tick, 10000);
+    // The last state each console was seen in, while its first check runs: its helper version
+    // and kernel from the roster (the light itself says "Checking…" until the check answers).
+    const seen = useRosterStore.getState().profiles;
+    for (const h of hosts) {
+      const key = hostOf(h) || "_";
+      if (useConnectionStore.getState().runtimeByHost[key]) continue;
+      const p = seen.find((x) => (hostOf(x.host) || "_") === key);
+      if (p?.last_seen_payload || p?.last_seen_kernel)
+        setHostStatus(h, {
+          payloadVersion: p.last_seen_payload ?? null,
+          ps5Kernel: p.last_seen_kernel ?? null,
+        });
+    }
+    // Every console at once, right away.
+    for (const h of hosts) void run(h);
+    const recheck = (only: string | undefined, wake: boolean, minGapMs: number) => {
+      for (const h of hosts) {
+        const key = hostOf(h) || "_";
+        if (only && key !== (hostOf(only) || "_")) continue;
+        if (wake) wakeUntilRef.current[key] = Date.now() + WAKE_WINDOW_MS;
+        // Focus can come and go quickly; a console just asked is not asked again.
+        if (Date.now() - (lastRun[key] ?? 0) < minGapMs) continue;
+        void run(h);
+      }
+    };
+    const offRecheck = onStatusRecheck((r) => recheck(r.host, !!r.wake, 0));
+    // Back to the window: what changed while away shows now, not at the next round.
+    const onFocus = () => recheck(undefined, false, 3000);
+    // A network that comes back (Wi-Fi, a laptop waking): every console, often, for a while.
+    const onOnline = () => recheck(undefined, true, 0);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("online", onOnline);
     return () => {
       cancelled = true;
-      clearInterval(h);
+      for (const t of Object.values(timers)) clearTimeout(t);
+      offRecheck();
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("online", onOnline);
     };
   }, [hostsKey, activeHost, setHostStatus, setStatus, visible]);
 }

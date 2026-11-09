@@ -541,6 +541,7 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/ps5/cleanup/scan/{id}"),
     ("POST", "/api/ps5/cleanup/scan/{id}/apply"),
     ("GET", "/api/ps5/companions"),
+    ("GET", "/api/ps5/connect-timings"),
     ("GET", "/api/ps5/console-shares"),
     ("POST", "/api/ps5/console-shares/remove"),
     ("POST", "/api/ps5/console-shares/save"),

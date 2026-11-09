@@ -2237,6 +2237,105 @@
         ],
         "type": "object"
       },
+      "ConnectTiming": {
+        "description": "One console's last status check.",
+        "properties": {
+          "at_ms": {
+            "description": "When the check started, Unix ms.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cached_verdict": {
+            "description": "A failure remembered from a moment ago answered; nothing reached the console.",
+            "type": "boolean"
+          },
+          "console": {
+            "description": "The console, without a port.",
+            "type": "string"
+          },
+          "handshake_ms": {
+            "description": "Opening a new session: the TCP connect, the AVA1 handshake and the pairing check.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ok": {
+            "description": "The helper answered.",
+            "type": "boolean"
+          },
+          "path": {
+            "description": "How the console was reached: `lan`, `tailnet_direct`, `tailnet_relayed` or\n`tailnet_system` (set by the engine).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "The failure's token (`console_rest_mode`, `ava1_unreachable`, ...), or its text when it\nhas none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reused_session": {
+            "description": "A live session was already pooled, so nothing was opened. Absent when a remembered\nfailure answered before a session was asked for.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "stale_session_dropped": {
+            "description": "A pooled session had stopped answering and was dropped (then opened again, or the\nconsole was found gone).",
+            "type": "boolean"
+          },
+          "status_ms": {
+            "description": "The `node.status` call itself (the last attempt).",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tcp_ms": {
+            "description": "A plain TCP connect to the helper's port: the quick look past a remembered failure, or\nthe check that a quiet session's console still answers.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tcp_ok": {
+            "description": "Whether that TCP connect was taken.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "total_ms": {
+            "description": "The whole check, in ms.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "description": "The helper's version from the reply.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "console",
+          "at_ms",
+          "total_ms",
+          "ok",
+          "cached_verdict",
+          "stale_session_dropped"
+        ],
+        "type": "object"
+      },
       "Connection": {
         "properties": {
           "from_root": {
@@ -30046,6 +30145,92 @@
             "required": false
           },
           "response_schema": "struct"
+        }
+      }
+    },
+    "/api/ps5/connect-timings": {
+      "get": {
+        "description": "GET /api/ps5/connect-timings?addr=IP\n\nThe last status check of each console, phase by phase: whether a pooled session was reused\nor a new one opened (`handshake_ms`: the TCP connect, the AVA1 handshake and the pairing\ncheck), whether a verdict remembered from a moment ago answered (`cached_verdict`), the\nplain TCP connect that looks past such a verdict or checks a quiet session (`tcp_ms`,\n`tcp_ok`), the `node.status` call (`status_ms`), the helper's `version`, the `path` (`lan`,\n`tailnet_direct`, `tailnet_relayed`, `tailnet_system`), and whether a session that had gone\nquiet was dropped (`stale_session_dropped`). Read on demand; nothing is logged. With `addr`,\nthat console only (`{ timing: null }` before its first check); without, `{ consoles: [...] }`,\nnewest first.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "timing": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/components/schemas/ConnectTiming"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "consoles": {
+                          "items": {
+                            "$ref": "#/components/schemas/ConnectTiming"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "How each console's last status check went",
+        "tags": [
+          "consoles"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "literal"
         }
       }
     },

@@ -34,6 +34,7 @@ pub mod seq;
 pub mod source;
 pub mod space;
 pub mod telemetry;
+pub mod timings;
 pub mod upload;
 pub mod zip_source;
 mod zip_stored;

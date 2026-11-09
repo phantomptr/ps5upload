@@ -6486,12 +6486,24 @@ async fn ps5_status(
     // legacy JSON (`ucred_elevated` a bool, `prior_instance` only when present). The old
     // transaction fields (runtime_port, shutdown, takeover_requested, active_transactions,
     // last_tx_seq, recovered_transactions) no longer exist; nothing reads them.
+    // A short bound per attempt (`STATUS_TIMEOUT`): the helper answers in milliseconds, and a
+    // session that went quiet is dropped and replaced rather than waited on (AvaTransport's
+    // status path), so a poll answers in seconds even when the console just went away.
     let result = tokio::task::spawn_blocking(move || {
-        let body = ps5upload_core::mgmt::call(&addr, ps5upload_core::mgmt::m::NODE_STATUS, b"")?;
+        let body = ps5upload_core::mgmt::call_with(
+            &addr,
+            ps5upload_core::mgmt::m::NODE_STATUS,
+            ps5upload_core::mgmt::m::NODE_STATUS.label,
+            b"",
+            Some(ps5upload_ava1::mgmt::STATUS_TIMEOUT),
+        )?;
         let json: serde_json::Value = serde_json::from_slice(&body)?;
         Ok::<_, anyhow::Error>(json)
     })
     .await;
+    // The path the check took, for its connect timings.
+    let path = connect_path(&ps5upload_core::route::via(&console));
+    ps5upload_ava1::timings::update(&console, |t| t.path = Some(path.to_string()));
 
     use ps5upload_core::events::{emit, Cat, Level};
     match result {
@@ -6527,6 +6539,39 @@ async fn ps5_status(
     }
 }
 
+/// The connect timings' name for how a console is reached.
+fn connect_path(via: &ps5upload_core::route::Via) -> &'static str {
+    use ps5upload_core::route::Via;
+    match via {
+        Via::Lan => "lan",
+        Via::TailnetDirect { .. } => "tailnet_direct",
+        Via::TailnetRelayed => "tailnet_relayed",
+        Via::System => "tailnet_system",
+    }
+}
+
+/// GET /api/ps5/connect-timings?addr=IP
+///
+/// The last status check of each console, phase by phase: whether a pooled session was reused
+/// or a new one opened (`handshake_ms`: the TCP connect, the AVA1 handshake and the pairing
+/// check), whether a verdict remembered from a moment ago answered (`cached_verdict`), the
+/// plain TCP connect that looks past such a verdict or checks a quiet session (`tcp_ms`,
+/// `tcp_ok`), the `node.status` call (`status_ms`), the helper's `version`, the `path` (`lan`,
+/// `tailnet_direct`, `tailnet_relayed`, `tailnet_system`), and whether a session that had gone
+/// quiet was dropped (`stale_session_dropped`). Read on demand; nothing is logged. With `addr`,
+/// that console only (`{ timing: null }` before its first check); without, `{ consoles: [...] }`,
+/// newest first.
+async fn ps5_connect_timings(Query(q): Query<AddrQuery>) -> impl IntoResponse {
+    match q.addr.filter(|a| !a.trim().is_empty()) {
+        Some(addr) => Json(serde_json::json!({
+            "timing": ps5upload_ava1::timings::last(&addr),
+        })),
+        None => Json(serde_json::json!({
+            "consoles": ps5upload_ava1::timings::all(),
+        })),
+    }
+}
+
 /// The 502 body of a failed status probe: `{ error, reason?, power? }`. `reason` is the token
 /// the error leads with (`console_rest_mode`, `ava1_unreachable`, `helper_not_ava1`,
 /// `not_paired`, ...); `power` is what DDP said (`awake` / `rest` / `unreachable`) when the
@@ -6548,6 +6593,70 @@ fn status_failure_body(
         body["power"] = p.as_str().into();
     }
     body
+}
+
+#[cfg(test)]
+mod connect_timings_tests {
+    use super::*;
+    use ps5upload_core::route::Via;
+
+    #[test]
+    fn each_way_to_a_console_has_its_name() {
+        assert_eq!(connect_path(&Via::Lan), "lan");
+        assert_eq!(
+            connect_path(&Via::TailnetDirect {
+                latency_ms: Some(3.0)
+            }),
+            "tailnet_direct"
+        );
+        assert_eq!(connect_path(&Via::TailnetRelayed), "tailnet_relayed");
+        assert_eq!(connect_path(&Via::System), "tailnet_system");
+    }
+
+    #[tokio::test]
+    async fn the_route_answers_one_console_or_all_without_asking_any() {
+        ps5upload_ava1::timings::record(ps5upload_ava1::timings::ConnectTiming {
+            console: "10.9.8.7".into(),
+            at_ms: 5,
+            ok: true,
+            status_ms: Some(4),
+            ..Default::default()
+        });
+        let one = ps5_connect_timings(Query(AddrQuery {
+            addr: Some("10.9.8.7:9120".into()),
+        }))
+        .await
+        .into_response();
+        assert_eq!(one.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(one.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["timing"]["status_ms"], 4);
+        assert_eq!(v["timing"]["ok"], true);
+        let none = ps5_connect_timings(Query(AddrQuery {
+            addr: Some("10.9.8.6".into()),
+        }))
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(none.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(v["timing"].is_null(), "{v}");
+        let all = ps5_connect_timings(Query(AddrQuery { addr: None }))
+            .await
+            .into_response();
+        let body = axum::body::to_bytes(all.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(v["consoles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["console"] == "10.9.8.7"));
+    }
 }
 
 #[cfg(test)]
@@ -11964,6 +12073,7 @@ fn build_app_and_mcp(
         )
         .route("/api/activity/label", post(activity::label_handler))
         .route("/api/ps5/status", get(ps5_status))
+        .route("/api/ps5/connect-timings", get(ps5_connect_timings))
         .route("/api/ps5/port-check", get(ps5_port_check))
         .route("/api/ps5/toast", post(ps5_toast))
         .route("/api/ps5/readiness", get(ps5_readiness))

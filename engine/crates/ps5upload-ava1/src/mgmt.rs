@@ -37,6 +37,19 @@ pub const RESERVED: usize = 2;
 pub const GENERAL: usize = IN_FLIGHT - RESERVED;
 /// `ERR_BUSY` is retried this many times, with these pauses, and never surfaced as a
 /// payload failure while a retry is left.
+/// How long the connect that checks a quiet session's console may take (`status_rpc`).
+pub const LIVENESS_CONNECT: Duration = Duration::from_millis(500);
+/// A pooled session that has heard nothing from its console for this long (no Pong to the
+/// Pings the link sends every 2 s, no reply) while a status call waits is dead, not busy.
+pub const STALE_SILENCE: Duration = Duration::from_secs(4);
+/// The status route's bound on one `node.status` attempt: a helper answers it in milliseconds,
+/// so waiting longer only holds a client that is trying to show whether the console is there.
+pub const STATUS_TIMEOUT: Duration = Duration::from_secs(2);
+/// The reason token of a status call that timed out on a session whose console is still
+/// talking (its port answers, its Pongs keep coming): the helper is busy, not gone. Not a
+/// verdict about the console.
+pub const STATUS_SLOW: &str = "status_slow";
+
 pub const BUSY_RETRY_DELAYS: [Duration; 3] = [
     Duration::from_millis(100),
     Duration::from_millis(300),
@@ -284,22 +297,34 @@ impl AvaTransport {
     /// nothing is sent to find out). Anything else is the error the person can act on
     /// (`helper_not_ava1`: nothing listening or an older helper; `not_paired`).
     pub(crate) fn ensure(&self, console: &str, label: &str) -> Result<()> {
+        self.ensure_traced(console, label, &mut crate::console::SessionTrace::default())
+    }
+
+    /// [`ensure`](Self::ensure), saying in `trace` what it did (for the connect timings).
+    fn ensure_traced(
+        &self,
+        console: &str,
+        label: &str,
+        trace: &mut crate::console::SessionTrace,
+    ) -> Result<()> {
         use crate::console::{
-            require_in, AVA1_UNREACHABLE, CONSOLE_REST_MODE, HELPER_NOT_AVA1, NOT_PAIRED,
+            require_in_traced, AVA1_UNREACHABLE, CONSOLE_REST_MODE, HELPER_NOT_AVA1, NOT_PAIRED,
         };
-        require_in(self.pool(), console, gen::CAP_MGMT).map_err(|f| match f.reason.as_str() {
-            HELPER_NOT_AVA1 => mgmt::helper_not_ava1_because(label, &f.detail),
-            // The token leads the text so a status route can name it (`reason`).
-            CONSOLE_REST_MODE | AVA1_UNREACHABLE => {
-                mgmt::console_unusable(label, &f.reason, &f.detail)
+        require_in_traced(self.pool(), console, gen::CAP_MGMT, trace).map_err(|f| {
+            match f.reason.as_str() {
+                HELPER_NOT_AVA1 => mgmt::helper_not_ava1_because(label, &f.detail),
+                // The token leads the text so a status route can name it (`reason`).
+                CONSOLE_REST_MODE | AVA1_UNREACHABLE => {
+                    mgmt::console_unusable(label, &f.reason, &f.detail)
+                }
+                NOT_PAIRED => MgmtError {
+                    label: label.to_string(),
+                    status: gen::ERR_NOT_PAIRED,
+                    cause: NOT_PAIRED.into(),
+                }
+                .into(),
+                _ => anyhow::anyhow!("management call {label} failed: {}", f.detail),
             }
-            NOT_PAIRED => MgmtError {
-                label: label.to_string(),
-                status: gen::ERR_NOT_PAIRED,
-                cause: NOT_PAIRED.into(),
-            }
-            .into(),
-            _ => anyhow::anyhow!("management call {label} failed: {}", f.detail),
         })
     }
 
@@ -353,6 +378,8 @@ impl AvaTransport {
                 }
                 Ok(Ok(r)) => r,
             };
+            // Any reply is the console talking: the session is alive (see `Pool::silent_for`).
+            self.pool().note_alive(console).await;
             if reply.status == gen::STATUS_OK {
                 return Ok(reply.body);
             }
@@ -363,6 +390,157 @@ impl AvaTransport {
             }
             return Err(refusal(label, reply.status, &reply.body).into());
         }
+    }
+
+    /// `node.status`, the liveness check every client polls, failing fast on a pooled session
+    /// that went quiet.
+    ///
+    /// A session to a console that went into rest mode, was switched off or lost its network
+    /// looks open for up to 12 s (the link's own dead-peer limit), and every call on it waits
+    /// that long: a status poll answered "the engine did not answer" (the client gives up
+    /// first), and the console stayed "checking" well after it was back. So when the call does
+    /// not answer within `timeout`:
+    ///
+    /// - a plain connect to the helper's port is refused or unanswered: the console is gone.
+    ///   The session is dropped and the answer is `ava1_unreachable` at once (the next check
+    ///   asks DDP whether it is resting);
+    /// - the port answers but the session has heard nothing from the console (no Pong, no
+    ///   reply) for [`STALE_SILENCE`]: the session is dead. It is dropped and the call made once
+    ///   more on a new one;
+    /// - otherwise the helper is alive and only slow (a long scan): the timeout is the answer,
+    ///   and the session, which transfers may be using, is kept.
+    async fn status_rpc(
+        &self,
+        console: &str,
+        label: &str,
+        timeout: Duration,
+        tr: &mut crate::timings::ConnectTiming,
+    ) -> Result<Vec<u8>> {
+        let id = gen::METHOD_NODE_STATUS;
+        let gate = self.gate(console);
+        let mut renewed = false;
+        let mut busy = 0usize;
+        loop {
+            let t = std::time::Instant::now();
+            let session = match tokio::time::timeout(timeout, self.pool().session(console)).await {
+                Err(_) => return Err(anyhow::anyhow!("{}", timeout_message(label, timeout, None))),
+                Ok(Err(e)) => return Err(map_transport_error(label, e)),
+                Ok(Ok(s)) => s,
+            };
+            if renewed && tr.handshake_ms.is_none() {
+                tr.handshake_ms = Some(t.elapsed().as_millis() as u64);
+            }
+            let t = std::time::Instant::now();
+            let attempt = tokio::time::timeout(timeout, async {
+                let _permit = gate.acquire_for(id).await;
+                session
+                    .rpc_within(id, &[], timeout + Duration::from_secs(1))
+                    .await
+            })
+            .await;
+            tr.status_ms = Some(t.elapsed().as_millis() as u64);
+            let reply = match attempt {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => {
+                    let lost =
+                        matches!(e, Ava1Error::Lost(_) | Ava1Error::Closed | Ava1Error::Io(_));
+                    if lost && !renewed {
+                        renewed = true;
+                        self.pool().forget_if(console, &session).await;
+                        continue;
+                    }
+                    return Err(map_transport_error(label, e));
+                }
+                Err(_) if !renewed => {
+                    let t = std::time::Instant::now();
+                    let dial = self.pool().dial_addr(console);
+                    let answers = matches!(
+                        tokio::time::timeout(
+                            LIVENESS_CONNECT,
+                            tokio::net::TcpStream::connect(&dial)
+                        )
+                        .await,
+                        Ok(Ok(_))
+                    );
+                    tr.tcp_ms = Some(t.elapsed().as_millis() as u64);
+                    tr.tcp_ok = Some(answers);
+                    if !answers {
+                        self.pool().forget_if(console, &session).await;
+                        tr.stale_session_dropped = true;
+                        return Err(mgmt::console_unusable(
+                            label,
+                            crate::console::AVA1_UNREACHABLE,
+                            "the console stopped answering on its open connection",
+                        ));
+                    }
+                    let quiet = self.pool().silent_for(console, &session).await;
+                    if quiet.is_some_and(|q| q >= STALE_SILENCE) {
+                        self.pool().forget_if(console, &session).await;
+                        tr.stale_session_dropped = true;
+                        renewed = true;
+                        continue;
+                    }
+                    // Alive and talking, only slow: a client holds what it knew (`STATUS_SLOW`).
+                    return Err(mgmt::console_unusable(
+                        label,
+                        STATUS_SLOW,
+                        &timeout_message(label, timeout, None),
+                    ));
+                }
+                Err(_) => return Err(anyhow::anyhow!("{}", timeout_message(label, timeout, None))),
+            };
+            self.pool().note_alive(console).await;
+            if reply.status == gen::STATUS_OK {
+                return Ok(reply.body);
+            }
+            if reply.status == gen::ERR_BUSY && busy < self.busy_delays.len() {
+                tokio::time::sleep(self.busy_delays[busy]).await;
+                busy += 1;
+                continue;
+            }
+            return Err(refusal(label, reply.status, &reply.body).into());
+        }
+    }
+
+    /// The whole `node.status` call through [`status_rpc`](Self::status_rpc), recorded as the
+    /// console's last check (`crate::timings`).
+    fn status_call(&self, addr: &str, label: &str, timeout: Duration) -> Result<Option<Vec<u8>>> {
+        let t0 = std::time::Instant::now();
+        let mut tr = crate::timings::ConnectTiming {
+            console: host_of(addr),
+            at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0),
+            ..Default::default()
+        };
+        let mut st = crate::console::SessionTrace::default();
+        let r = run_blocking(|| {
+            self.ensure_traced(addr, label, &mut st)?;
+            let body = crate::block_on(self.status_rpc(addr, label, timeout, &mut tr))?;
+            let status = gen::NodeStatus::decode(&body)?;
+            tr.version = Some(status.version.clone()).filter(|v| !v.is_empty());
+            Ok::<_, anyhow::Error>(Some(serde_json::to_vec(&conv::node_status_json(&status))?))
+        });
+        tr.reused_session = st.reused;
+        tr.cached_verdict = st.cached_verdict;
+        if tr.handshake_ms.is_none() {
+            tr.handshake_ms = st.handshake_ms;
+        }
+        if let Some((ok, ms)) = st.recheck {
+            if tr.tcp_ms.is_none() {
+                tr.tcp_ms = Some(ms);
+                tr.tcp_ok = Some(ok);
+            }
+        }
+        tr.total_ms = t0.elapsed().as_millis() as u64;
+        tr.ok = r.is_ok();
+        if let Err(e) = &r {
+            tr.reason = Some(mgmt::error_token(e).unwrap_or_else(|| format!("{e:#}")));
+        }
+        crate::timings::record(tr);
+        log_outcome(addr, label, t0, &r);
+        r
     }
 
     /// One `MgmtText` call: the reply's body and its `more` flag (a paged reply is not the whole answer).
@@ -676,6 +854,9 @@ impl MgmtTransport for AvaTransport {
             body.len(),
             timeout.as_millis()
         );
+        if method.id == gen::METHOD_NODE_STATUS {
+            return self.status_call(addr, label, timeout);
+        }
         let r = run_blocking(|| {
             self.ensure(addr, label)?;
             crate::block_on(self.run(addr, method, label, body, timeout))

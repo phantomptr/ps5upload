@@ -21,6 +21,9 @@ import { getEngineUrl } from "../state/engine";
 import { consoleAddr } from "./addr";
 import { WORDED_ERROR_CODES } from "./payloadErrors";
 
+/** The status probe's HTTP timeout (probes.rs `STATUS_HTTP_TIMEOUT` says the same). */
+const STATUS_HTTP_TIMEOUT_MS = 8_000;
+
 // ── Error types ──────────────────────────────────────────────────────────────
 
 /** Thrown by `browserInvoke` for commands that require the Tauri desktop
@@ -1105,7 +1108,9 @@ export async function browserInvoke<T>(
       const addr = uenc(consoleAddr(ip));
       const url = `${getEngineUrl()}/api/ps5/status?addr=${addr}`;
       try {
-        const r = await fetch(url, { signal: AbortSignal.timeout(5_000) });
+        // Longer than the engine's own worst case (a new session, then the status call: about
+        // 5 s), so a slow console is answered by the engine, never mistaken for no engine.
+        const r = await fetch(url, { signal: AbortSignal.timeout(STATUS_HTTP_TIMEOUT_MS) });
         if (r.ok) {
           const status = (await r.json()) as unknown;
           return { ok: true, reachable: true, engine: true, status } as unknown as T;

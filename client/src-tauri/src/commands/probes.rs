@@ -26,6 +26,12 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 /// of the two actually failed.
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
 const EMBEDDED_PAYLOAD_MAX_BYTES: u64 = 128 * 1024 * 1024;
+/// How long `payload_check` waits for the engine's status route. Longer than the engine's own
+/// worst case (a new session, then the status call: about 5 s), so a console that is slow to
+/// answer is answered by the engine, never mistaken for an engine that is not there (5 s was
+/// shorter than that, and a console that had just gone into rest mode read as "engine
+/// unreachable").
+const STATUS_HTTP_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Generic TCP reachability probe. Mirrors the Electron `port_check` shape:
 /// returns `{ open, error? }`. Used by the UI to know whether an IP is
@@ -128,7 +134,7 @@ pub async fn payload_check(ip: String) -> serde_json::Value {
     let addr = crate::commands::ps5_engine::urlencoding(&ip);
     let url = format!("{engine_url}/api/ps5/status?addr={addr}");
     let client = match crate::engine_http::engine_client_builder()
-        .timeout(Duration::from_secs(5))
+        .timeout(STATUS_HTTP_TIMEOUT)
         .build()
     {
         Ok(c) => c,

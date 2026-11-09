@@ -1,4 +1,4 @@
-import { readLastRoute } from "./lib/lastRoute";
+import { landingRoute } from "./lib/lastRoute";
 import { Activity, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ConnectionScope,
@@ -87,9 +87,8 @@ function ScreenLoader() {
  */
 function LandingRedirect() {
   const hasConsole = useRosterStore((s) => s.profiles.length > 0);
-  // A returning user reopens the screen they were last on.
-  const to = hasConsole ? (readLastRoute() ?? "/home") : "/connection";
-  return <Navigate to={to} replace />;
+  // A returning user reopens the screen they were last on (never Connection by itself).
+  return <Navigate to={landingRoute(hasConsole)} replace />;
 }
 
 /** A screen folded into another: an old link (its query kept, so `?add=1` still opens the
