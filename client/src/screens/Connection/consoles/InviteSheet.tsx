@@ -17,7 +17,7 @@ import { useTr } from "../../../state/lang";
 import { hostOf } from "../../../lib/addr";
 import { humanizeCaught } from "../../../lib/humanizeError";
 import { AskRows } from "./TrustedDevices";
-import { inviteLink, isTailnetIp, shortKey, type Invite } from "./model";
+import { inviteLink, isTailnetIp, type Invite } from "./model";
 
 /** The sheet's body, from what it knows (render-tested on its own). */
 export function InviteView({
@@ -51,7 +51,7 @@ export function InviteView({
         {tr(
           "cs_invite_intro",
           { name: invite.name },
-          "Open this on the new phone or computer: scan the code with its camera, or paste the link in PS5Upload › Consoles › Add a PS5. It adds {name} there.",
+          "Open this on the new phone or computer: scan the code with its camera, or paste the link in PS5Upload › Connection › Add a PS5. It adds {name} there.",
         )}
       </p>
       <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-start">
@@ -69,10 +69,6 @@ export function InviteView({
           <dd className="truncate font-mono">{invite.home ?? "—"}</dd>
           <dt className="text-[var(--color-muted)]">{tr("cs_reach_tailscale", undefined, "Tailscale")}</dt>
           <dd className="truncate font-mono">{invite.tailnet ?? "—"}</dd>
-          <dt className="text-[var(--color-muted)]">{tr("cs_invite_key", undefined, "Console key")}</dt>
-          <dd className="truncate font-mono" data-testid="consoles-invite-key">
-            {invite.key ? shortKey(invite.key) : loading ? "…" : "—"}
-          </dd>
         </dl>
       </div>
       <div className="flex min-w-0 items-center gap-2">
@@ -209,13 +205,22 @@ export function InviteSheet({
         error={error}
         copied={copied}
         onCopy={() => {
+          // No clipboard on a plain-http page (the console's web page on the LAN): say so.
+          const failed = () =>
+            setError(
+              tr("cs_invite_copy_failed", undefined, "This page can't copy. Select the invite link above and copy it yourself."),
+            );
+          if (!navigator.clipboard?.writeText) {
+            failed();
+            return;
+          }
           void navigator.clipboard
-            ?.writeText(inviteLink(invite))
+            .writeText(inviteLink(invite))
             .then(() => {
               setCopied(true);
               window.setTimeout(() => setCopied(false), 2000);
             })
-            .catch(() => undefined);
+            .catch(failed);
         }}
         onAskFirst={(on) => void run(() => meshSettings(host, { require_approval: on }))}
         onAnswer={(op, id) => void run(() => meshDevice(host, op, id))}

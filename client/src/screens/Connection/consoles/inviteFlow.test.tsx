@@ -12,7 +12,7 @@ import { meshDevice, toMeshState } from "../../../api/mesh";
 import { consoleIdentity } from "../../../api/ava1";
 import { usePairingStore } from "../../../state/pairing";
 import { appLinkRoute } from "../../../lib/appLinks";
-import { AskPrompt, pendingAsks } from "./ConsoleAsks";
+import { AskPrompt, onConsolesPage, pendingAsks } from "./ConsoleAsks";
 import { InviteView } from "./InviteSheet";
 import { AddSheetView, type ScanState } from "./AddConsoleSheet";
 import { inviteLink, mergeFound, parseInvite } from "./model";
@@ -104,6 +104,21 @@ describe("Consoles › invite, ask, allow", () => {
     expect(pendingAsks({ "10.0.0.9": { state: st } }, [{ host: "192.168.1.100", name: "x" }], new Set())).toEqual([]);
   });
 
+  it("the prompt never shows an ask from a stale picture, and stands aside on the Consoles page", () => {
+    const st = toMeshState(meshWithAsk);
+    if (!st.supported || st.same) throw new Error("expected a picture");
+    const profiles = [{ host: "192.168.1.100", name: "Living room" }];
+    // The last read failed, or the console's helper is not answering: its old asks may be answered.
+    expect(pendingAsks({ "192.168.1.100": { state: st, error: "timeout" } }, profiles, new Set())).toEqual([]);
+    expect(pendingAsks({ "192.168.1.100": { state: st } }, profiles, new Set(), () => false)).toEqual([]);
+    expect(pendingAsks({ "192.168.1.100": { state: st } }, profiles, new Set(), () => true)).toHaveLength(1);
+    // Each card answers its own asks on the Consoles page; Devices and Health Check are other tabs.
+    expect(onConsolesPage("/connection", "")).toBe(true);
+    expect(onConsolesPage("/connection", "?console=p1")).toBe(true);
+    expect(onConsolesPage("/connection", "?tab=devices")).toBe(false);
+    expect(onConsolesPage("/upload", "")).toBe(false);
+  });
+
   it("Allow and Decline go to the console's mesh as device ops", async () => {
     const calls = fakeEngine({ "/api/mesh/device": () => ({ supported: true, ok: true, rev: 10 }) });
     expect(await meshDevice("192.168.1.100", "allow", ASKER)).toBe(true);
@@ -133,6 +148,22 @@ describe("Consoles › invite, ask, allow", () => {
     expect(calls.filter((c) => c.path === "/api/ava1/pairing/start")).toHaveLength(4);
   });
 
+  it("one failed read does not end the wait for an Allow", async () => {
+    let n = 0;
+    fakeEngine({
+      "/api/ava1/pairing/start": () => {
+        n++;
+        // The second read fails (a busy console); the fourth finds the device allowed.
+        if (n === 2) return { status: 502, error: "timeout" };
+        return { state: n >= 4 ? "accepted" : "closed" };
+      },
+    });
+    await usePairingStore.getState().openFor("192.168.1.100");
+    await usePairingStore.getState().waitForApproval(async () => {});
+    expect(usePairingStore.getState().paired).toBe("192.168.1.100");
+    expect(usePairingStore.getState().error).toBeNull();
+  });
+
   it("stops waiting when the dialog is closed", async () => {
     fakeEngine({ "/api/ava1/pairing/start": () => ({ state: "closed" }) });
     await usePairingStore.getState().openFor("192.168.1.100");
@@ -160,7 +191,9 @@ describe("Consoles › invite, ask, allow", () => {
       />,
     );
     expect(html).toContain('data-testid="consoles-invite-qr"');
-    expect(html).toContain("abab abab");
+    // The console's key rides in the link only: never shown to a person as raw hex.
+    expect(html).not.toContain("abab abab");
+    expect(html).not.toContain("Console key");
     expect(html).toContain("ps5upload://console?");
     expect(html).toContain("lets nobody in by itself");
     expect(html).toContain("Pixel 9 wants to use Living room");

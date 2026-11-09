@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Circle, ExternalLink, Globe, Loader2, Settings2 } from "lucide-react";
 import { useNavigate } from "react-router";
 import { Button } from "../../components";
@@ -39,7 +39,15 @@ const TEST_SECS = 120;
  * Headscale server. A guided setup: this PS5 (1), each device you play from (2), then "Test it
  * now" (3), which sends this PS5 through Tailscale from home so you can see it work.
  */
-export default function TailnetPanel({ host }: { host: string }) {
+export default function TailnetPanel({
+  host,
+  startTest = 0,
+}: {
+  host: string;
+  /** Bumped by the console card's Test: the panel starts "Try Tailscale now" itself, so the test,
+   *  its end and "Back to the home network" live in one place. */
+  startTest?: number;
+}) {
   const tr = useTr();
   const navigate = useNavigate();
   const { confirm, dialog } = useConfirm();
@@ -88,7 +96,9 @@ export default function TailnetPanel({ host }: { host: string }) {
         setTestVia("");
         return;
       }
-      void tailnetVia(host).then((v) => setTestVia(v.via));
+      void tailnetVia(host)
+        .then((v) => setTestVia(v.via))
+        .catch(() => undefined); // the next tick asks again
     }, 2000);
     return () => window.clearInterval(t);
   }, [testUntil, host]);
@@ -133,6 +143,15 @@ export default function TailnetPanel({ host }: { host: string }) {
       setBusy(false);
     }
   };
+
+  // The card's Test: once per press.
+  const testNowRef = useRef(testNow);
+  useEffect(() => {
+    testNowRef.current = testNow;
+  });
+  useEffect(() => {
+    if (startTest > 0) void testNowRef.current(true);
+  }, [startTest]);
 
   const state = st?.state ?? "off";
   const psOn = !!st?.enabled && state === "running" && !!st.ip;

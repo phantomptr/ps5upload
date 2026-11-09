@@ -192,12 +192,6 @@ export function parseInvite(text: string): Invite | null {
   return inv.home || inv.tailnet ? inv : null;
 }
 
-/** A key shown to a person: the first 8 hex digits in two groups ("ab12 cd34"). */
-export function shortKey(key: string | null): string {
-  if (!key) return "";
-  return `${key.slice(0, 4)} ${key.slice(4, 8)}`;
-}
-
 // ---- the Add sheet's merged scan ----
 
 export type FoundSource = "home" | "tailscale" | "invite";
@@ -371,4 +365,13 @@ export function mergeFound(
 /** The address to add a found console at: home first (always tried first), Tailscale otherwise. */
 export function addAddress(r: Pick<FoundRow, "home" | "tailnet">): string {
   return r.home ?? r.tailnet ?? "";
+}
+
+/** Where Add puts a found console. Its home address when this device found it there, or when
+ *  Tailscale is no way in (no Tailscale address, or this device is not on Tailscale). Otherwise its
+ *  Tailscale address: an invite opened away from home names a home address this device can't
+ *  reach, and the engine adds a console by its Tailscale address at the home one it knows. */
+export function addTarget(r: Pick<FoundRow, "home" | "tailnet" | "sources">, onTailscale: boolean): string {
+  if (r.home && (r.sources.includes("home") || !r.tailnet || !onTailscale)) return r.home;
+  return r.tailnet ?? r.home ?? "";
 }

@@ -533,10 +533,28 @@ fn plain_title_id(t: &str) -> Option<&str> {
     Some(t).filter(|t| (4..=16).contains(&t.len()) && t.bytes().all(|b| b.is_ascii_alphanumeric()))
 }
 
-/// How an app on a console was built: its `sce_sys/param.json`, else its `param.sfo`, else the
-/// copy the console keeps in `/user/appmeta/<Title ID>/` (always readable; a retail game's own
-/// `sce_sys` is encrypted). The Title ID for that is the folder's name, else the page's.
-fn console_build(addr: &str, folder: &str, title_hint: Option<&str>) -> retail::Build {
+/// The Title ID whose `/user/appmeta/<Title ID>/` copy stands for an app folder whose own
+/// `sce_sys` can't be read: only an installed app's own folder (`/user/app/<ID>`, the same under
+/// `/mnt/<drive>/`, or `/system_ex/app/<ID>`), where the folder's name is the console's. Any other
+/// folder (one the user named after a homebrew, say) borrows no other app's PARAM: it has none,
+/// and is refused.
+fn appmeta_title_id(folder: &str) -> Option<&str> {
+    let folder = folder.trim_end_matches('/');
+    let (parent, id) = folder.rsplit_once('/')?;
+    let installed = parent == "/user/app"
+        || parent == "/system_ex/app"
+        || parent
+            .strip_prefix("/mnt/")
+            .and_then(|rest| rest.strip_suffix("/user/app"))
+            .is_some_and(|drive| !drive.is_empty() && !drive.contains('/'));
+    installed.then_some(id).and_then(plain_title_id)
+}
+
+/// How an app on a console was built: its `sce_sys/param.json`, else its `param.sfo`, else, for
+/// an installed app's own folder, the copy the console keeps in `/user/appmeta/<Title ID>/`
+/// (always readable; a retail game's own `sce_sys` is encrypted). Nothing the page sends (a Title
+/// ID) picks which PARAM is read.
+fn console_build(addr: &str, folder: &str) -> retail::Build {
     let folder = folder.trim_end_matches('/');
     let read = |p: &str| ps5upload_core::fs_ops::fs_read(addr, p, 0, 1 << 20).ok();
     let from = |dir: &str| {
@@ -554,12 +572,7 @@ fn console_build(addr: &str, folder: &str, title_hint: Option<&str>) -> retail::
     if b.read {
         return b;
     }
-    let id = folder
-        .rsplit('/')
-        .next()
-        .and_then(plain_title_id)
-        .or_else(|| title_hint.and_then(plain_title_id));
-    match id {
+    match appmeta_title_id(folder) {
         Some(id) => from(&format!("/user/appmeta/{}", id.to_ascii_uppercase())),
         None => b,
     }
@@ -648,7 +661,7 @@ pub(crate) fn build_item(
                 .filter(|p| !p.is_empty())
                 .ok_or_else(|| ItemRefused::from("name the app's folder or file".to_string()))?;
             if let Some(addr) = console {
-                let build = console_build(addr, path, title_id);
+                let build = console_build(addr, path);
                 check_app(&build)?;
                 let (files, links) = manifest::walk_console(addr, path)?;
                 item.title_id = Some(build.title_id.clone()).filter(|t| !t.is_empty());
@@ -1002,11 +1015,7 @@ pub async fn create(headers: HeaderMap, Json(b): Json<ShareCreateBody>) -> Respo
 /// identity is read as Share would (`ok: false, code: "retail"` for a commercial game).
 pub async fn check(Json(b): Json<ShareCreateBody>) -> Response {
     let r = tokio::task::spawn_blocking(move || {
-        let title_id = b
-            .title_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|t| !t.is_empty());
+        // The page's title_id is not read here: an app's own PARAM decides (console_build).
         b.items
             .iter()
             .enumerate()
@@ -1022,7 +1031,7 @@ pub async fn check(Json(b): Json<ShareCreateBody>) -> Response {
                     .filter(|p| !p.is_empty())
                 {
                     Some(p) => match spec.console.as_deref() {
-                        Some(addr) => check_app(&console_build(addr, p, title_id)),
+                        Some(addr) => check_app(&console_build(addr, p)),
                         None => {
                             let pb = PathBuf::from(p);
                             match manifest::local_format(&pb) {

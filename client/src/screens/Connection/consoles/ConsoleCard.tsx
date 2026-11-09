@@ -35,7 +35,6 @@ import { cleanConsoleAddress, consoleAddr, hostOf } from "../../../lib/addr";
 import { ps5SettingsLink } from "../../Settings/settingsTabs";
 import {
   allowList,
-  appTailnetOp,
   tailnetOp,
   tailnetStatus,
   TailnetUnsupportedError,
@@ -48,13 +47,14 @@ import { StopHelperButton } from "../StopHelper";
 import { useHelperReplaceGuard } from "../useHelperReplaceGuard";
 import { OnPausedSwitch } from "../TailnetBits";
 import TailnetPanel from "../TailnetPanel";
-import { cardStatus, showChecklist, type CardStatus } from "./model";
+import { cardStatus, isTailnetIp, showChecklist, type CardStatus } from "./model";
 import { SetupChecklist } from "./SetupChecklist";
 import { ElfldrFirstCallout } from "./setupBits";
 import { TrustedDevices, AskRows } from "./TrustedDevices";
 import { InviteSheet } from "./InviteSheet";
 import { meshDevice } from "../../../api/mesh";
 import { resetMeshCursor } from "../../../state/mesh";
+import { consoleBusy } from "../../../lib/usePoll";
 
 // ---- words ----
 
@@ -150,9 +150,11 @@ function HomeAddress({
   onSave: (v: string) => void;
 }) {
   const tr = useTr();
+  /** Kept at its Tailscale address (the engine had no home address for it): no home one yet. */
+  const homeUnknown = isTailnetIp(host);
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(host);
-  useEffect(() => setDraft(host), [host]);
+  const [draft, setDraft] = useState(homeUnknown ? "" : host);
+  useEffect(() => setDraft(isTailnetIp(host) ? "" : host), [host]);
   const save = () => {
     const v = cleanConsoleAddress(draft);
     setEditing(false);
@@ -193,22 +195,34 @@ function HomeAddress({
               variant="ghost"
               aria-label={tr("cancel", undefined, "Cancel")}
               onClick={() => {
-                setDraft(host);
+                setDraft(homeUnknown ? "" : host);
                 setEditing(false);
               }}
             >
               <X size={13} />
             </Button>
           </form>
+        ) : homeUnknown ? (
+          <span className="text-[var(--color-muted)]" data-testid="consoles-home-unknown">
+            {tr("cs_reach_home_unknown", undefined, "Not known yet")}
+          </span>
         ) : (
           <span className="font-mono">{hostOf(host) || "—"}</span>
         )
       }
-      note={tr("cs_reach_home_note", undefined, "Always tried first.")}
+      note={
+        homeUnknown
+          ? tr(
+              "cs_reach_home_unknown_note",
+              undefined,
+              "Added over Tailscale. Press Edit to type its home address (the PS5's network settings show it), or it is filled in when this device finds the PS5 at home.",
+            )
+          : tr("cs_reach_home_note", undefined, "Always tried first.")
+      }
       control={
         editing ? null : (
           <>
-            {inUse ? (
+            {inUse && !homeUnknown ? (
               <Badge tone="good" dot>
                 {tr("cs_reach_in_use", undefined, "In use")}
               </Badge>
@@ -414,6 +428,8 @@ export interface ConsoleCardViewProps {
   onToggleTs: () => void;
   onToggleDevices: () => void;
   onAnswer: (op: "allow" | "decline", id: string) => void;
+  /** An Allow / Decline is on its way: the buttons wait for it. */
+  answerBusy?: boolean;
 }
 
 export function ConsoleCardView(p: ConsoleCardViewProps) {
@@ -496,9 +512,10 @@ export function ConsoleCardView(p: ConsoleCardViewProps) {
         <p className="mt-2 whitespace-pre-wrap text-xs italic text-[var(--color-muted)]">{p.profile.notes}</p>
       ) : null}
 
-      {asks.length > 0 ? (
+      {/* With the device list open its own rows answer the ask: shown once, not twice. */}
+      {asks.length > 0 && !p.devicesOpen ? (
         <div className="mt-3">
-          <AskRows asks={asks} consoleName={p.profile.name} busy={false} onAnswer={p.onAnswer} />
+          <AskRows asks={asks} consoleName={p.profile.name} busy={!!p.answerBusy} onAnswer={p.onAnswer} />
         </div>
       ) : null}
 
@@ -618,6 +635,9 @@ export function ConsoleCard({
   const [devicesOpen, setDevicesOpen] = useState(!!defaultOpen);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [answerBusy, setAnswerBusy] = useState(false);
+  /** Bumped by Test: the Tailscale panel runs the test (one place for it and its end). */
+  const [testNonce, setTestNonce] = useState(0);
 
   const status = cardStatus({
     host,
@@ -642,14 +662,18 @@ export function ConsoleCard({
         if (live && e instanceof TailnetUnsupportedError) setTst(null);
       }
     };
+    // The selected console's list is read by useMeshSync already; nothing is read while data moves
+    // to or from this console (the helper serves the transfer first).
+    const selected = () => useRosterStore.getState().profiles.find((x) => x.id === useRosterStore.getState().active_id);
+    const mine = () => !!selected() && hostOf(selected()!.host) === hostOf(host);
     void read();
-    void pollMesh(host);
+    if (!mine()) void pollMesh(host);
     const id = window.setInterval(() => {
-      if (document.hidden) return;
+      if (document.hidden || consoleBusy(host) || mine()) return;
       void pollMesh(host);
     }, 6000);
     const tid = window.setInterval(() => {
-      if (!document.hidden) void read();
+      if (!document.hidden && !consoleBusy(host)) void read();
     }, 15000);
     return () => {
       live = false;
@@ -669,12 +693,12 @@ export function ConsoleCard({
     await sendHelperTo(host, tr, replacing);
   };
 
-  const ts = async (f: () => Promise<TailnetStatus | unknown>) => {
+  /** A change to the console's own Tailscale: its answer is the console's status. */
+  const ts = async (f: () => Promise<TailnetStatus>) => {
     setTsBusy(true);
     setError(null);
     try {
-      const r = await f();
-      if (r && typeof r === "object" && "state" in r && "enabled" in r) setTst(r as TailnetStatus);
+      setTst(await f());
     } catch (e) {
       setError(tr("tn_failed", { err: humanizeCaught(e) }, "Could not change Tailscale on this PS5: {err}"));
     } finally {
@@ -703,7 +727,7 @@ export function ConsoleCard({
         error={error}
         checklist={<SetupChecklist host={host} status={status} active={profile.id === activeId} />}
         priorKilled={up && runtime.priorInstance === "killed_externally"}
-        tailnetPanel={<TailnetPanel host={host} />}
+        tailnetPanel={<TailnetPanel host={host} startTest={testNonce} />}
         trusted={<TrustedDevices host={host} consoleName={profile.name} state={up ? mesh.state : null} />}
         stop={<StopHelperButton host={host} size="sm" />}
         onUse={() => setActive(profile.id)}
@@ -748,19 +772,28 @@ export function ConsoleCard({
         onSaveHome={(v) => updateHost(profile.id, v)}
         onTsSwitch={(on) => void ts(() => tailnetOp(host, on ? "enable" : "disable"))}
         onTsTest={() => {
+          // The panel runs it (its own answer is this device's Tailscale, never the console's).
           setTsOpen(true);
-          void ts(() => appTailnetOp("test_path", { host, secs: 120 }));
+          setTestNonce((n) => n + 1);
         }}
-        onToggleTs={() => setTsOpen((v) => !v)}
+        onToggleTs={() => {
+          if (tsOpen) setTestNonce(0); // reopening the panel later does not test again
+          setTsOpen((v) => !v);
+        }}
         onToggleDevices={() => setDevicesOpen((v) => !v)}
-        onAnswer={(op, id) =>
+        answerBusy={answerBusy}
+        onAnswer={(op, id) => {
+          if (answerBusy) return;
+          setAnswerBusy(true);
+          setError(null);
           void meshDevice(host, op, id)
             .then(() => {
               resetMeshCursor(host);
               return pollMesh(host);
             })
             .catch((e) => setError(humanizeCaught(e)))
-        }
+            .finally(() => setAnswerBusy(false));
+        }}
       />
       <InviteSheet
         open={inviteOpen}

@@ -622,14 +622,29 @@ static ask_t_ *find_ask(const uint8_t key[32]) {
     return NULL;
 }
 
-/* A new ask; when all are taken, the oldest makes room. */
-static ask_t_ *new_ask(const uint8_t key[32]) {
+/* A new ask. One address asks for one device at a time: a new key from the address of a device
+ * still asking takes that ask's place (*same_ip set), so one stranger cannot fill the list by making
+ * up keys. When all are taken, the oldest that is not allowed makes room: an Allow the owner just
+ * gave holds until that device connects or its time is up. */
+static ask_t_ *new_ask(const uint8_t key[32], uint32_t ip, int *same_ip) {
     int i, pick = -1;
-    for (i = 0; i < MESH_ASKS_MAX; i++)
-        if (!M.asks[i].used) {
-            pick = i;
-            break;
-        }
+    *same_ip = 0;
+    if (ip)
+        for (i = 0; i < MESH_ASKS_MAX; i++)
+            if (M.asks[i].used && M.asks[i].state == ASK_ASKING && M.asks[i].ip == ip) {
+                pick = i;
+                *same_ip = 1;
+                break;
+            }
+    if (pick < 0)
+        for (i = 0; i < MESH_ASKS_MAX; i++)
+            if (!M.asks[i].used) {
+                pick = i;
+                break;
+            }
+    if (pick < 0)
+        for (i = 0; i < MESH_ASKS_MAX; i++)
+            if (M.asks[i].state != ASK_ALLOWED && (pick < 0 || M.asks[i].at_mono < M.asks[pick].at_mono)) pick = i;
     if (pick < 0)
         for (i = 0; i < MESH_ASKS_MAX; i++)
             if (pick < 0 || M.asks[i].at_mono < M.asks[pick].at_mono) pick = i;
@@ -680,11 +695,14 @@ int mesh_admit(const uint8_t key[32], const char *name, uint32_t ip) {
         /* Asking: listed for the owner, once (a device that tries again is the same ask). A declined
          * one is not asked about again until its time is up. */
         if (!a) {
-            a = new_ask(key);
+            int same_ip;
+            a = new_ask(key, ip, &same_ip);
             a->state = ASK_ASKING;
             a->at = now_ms();
             a->at_mono = mono_ms();
-            add_event("ask", key, "%s asks to connect", name && name[0] ? name : "A device");
+            /* Told once per address: a stranger making up keys does not fill the activity list. */
+            if (!same_ip) add_event("ask", key, "%s asks to connect", name && name[0] ? name : "A device");
+            else M.rev++;
         }
         if (a->state == ASK_ASKING) {
             char was[NAME_MAX_];
@@ -1062,6 +1080,18 @@ static int do_device(const uint8_t caller[32], const char *body, size_t n, char 
         if (!a || a->state != ASK_ASKING) {
             pthread_mutex_unlock(&g_mu);
             return fail(out, cap, "not_found");
+        }
+        /* The console page names the address it was opened from ("from"): a device never allows
+         * itself there (with LAN access on, any device on the network can open that page). */
+        if (!strcmp(op, "allow")) {
+            char from[16], at[16];
+            if (webui_json_str(body, n, "from", from, sizeof from) == 1) {
+                ip_text(a->ip, at);
+                if (!strcmp(from, at)) {
+                    pthread_mutex_unlock(&g_mu);
+                    return fail(out, cap, "self_allow");
+                }
+            }
         }
         a->state = !strcmp(op, "allow") ? ASK_ALLOWED : ASK_DECLINED;
         a->at_mono = mono_ms(); /* allowed: its time to connect starts now */

@@ -21,6 +21,7 @@ typedef struct {
     char range[96];     /* the Range header ("" when absent); only streamed downloads read it */
     uint64_t content_length;
     size_t header_len;  /* bytes up to and including the blank line */
+    uint32_t peer;      /* the client's IPv4 address, host order (0 unknown); set by the server */
 } webui_req_t;
 
 enum {

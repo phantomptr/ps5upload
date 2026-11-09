@@ -44,7 +44,7 @@ describe("Settings › Tailscale (this device's own node)", () => {
     expect(html).toContain("Sign in to Tailscale");
     expect(html).toContain("No Tailscale app needed");
     // It says the PS5 joins on its own screen, and leads there.
-    expect(html).toContain("Connection › Put this PS5 on Tailscale");
+    expect(html).toContain("press Set up next to Tailscale on the PS5");
     expect(html).toContain("Open Connection");
   });
 

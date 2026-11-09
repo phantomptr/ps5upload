@@ -429,10 +429,23 @@ function useStatusPolling() {
       transferProgressRef,
       warnedMismatchRef,
       warnedNoUcredRef,
+      blindProbeRef,
+      wakeUntilRef,
     ]) {
       for (const k of Object.keys(ref.current)) {
         if (!liveKeys.has(k)) delete ref.current[k];
       }
+    }
+    // And what was known about it: the same address added again starts as "checking", not with
+    // the old "not reachable" (which would also skip the checks that confirm a "down").
+    const known = useConnectionStore.getState().runtimeByHost;
+    const gone = Object.keys(known).filter((k) => k !== "_" && !liveKeys.has(k));
+    if (gone.length > 0) {
+      useConnectionStore.setState((s) => {
+        const next = { ...s.runtimeByHost };
+        for (const k of gone) delete next[k];
+        return { runtimeByHost: next };
+      });
     }
     const isActive = (key: string) =>
       key === (hostOf(useConnectionStore.getState().host) || "_");

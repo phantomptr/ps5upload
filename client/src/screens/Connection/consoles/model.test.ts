@@ -5,13 +5,13 @@ import type { DiscoveredHost } from "../../../api/ps5";
 import type { FoundConsole } from "../../../api/tailnet";
 import {
   addAddress,
+  addTarget,
   cardStatus,
   deviceVia,
   inviteLink,
   isTailnetIp,
   mergeFound,
   parseInvite,
-  shortKey,
   showChecklist,
   type CardInput,
 } from "./model";
@@ -148,11 +148,6 @@ describe("Consoles › invite links", () => {
     expect(parseInvite("ps5upload://console?h=10.0.0.2&k=zz")).toEqual({ name: "", home: "10.0.0.2", tailnet: null, key: null });
     expect(parseInvite("ps5upload://console?h=%3Cscript%3E")).toBeNull();
   });
-
-  it("shows a key short", () => {
-    expect(shortKey("ab12cd34ef")).toBe("ab12 cd34");
-    expect(shortKey(null)).toBe("");
-  });
 });
 
 const lanHost = (ip: string, patch: Partial<DiscoveredHost> = {}): DiscoveredHost => ({
@@ -201,6 +196,20 @@ describe("Consoles › Add a PS5 merges what it finds", () => {
       sources: ["home", "tailscale"],
     });
     expect(addAddress(rows[0])).toBe("192.168.1.100");
+  });
+
+  it("Add uses the home address found at home, and the Tailscale one for an invite opened away", () => {
+    const both = { home: "192.168.1.100", tailnet: "100.101.4.7" };
+    // Found on the home network now: home, whatever else is known.
+    expect(addTarget({ ...both, sources: ["home", "invite"] }, true)).toBe("192.168.1.100");
+    // Only from an invite (or Tailscale), with this device on Tailscale: the Tailscale address,
+    // which the engine files under the home address it knows.
+    expect(addTarget({ ...both, sources: ["invite"] }, true)).toBe("100.101.4.7");
+    expect(addTarget({ ...both, sources: ["tailscale", "invite"] }, true)).toBe("100.101.4.7");
+    // Not on Tailscale: Tailscale is no way in, so the home address.
+    expect(addTarget({ ...both, sources: ["invite"] }, false)).toBe("192.168.1.100");
+    expect(addTarget({ home: null, tailnet: "100.101.4.7", sources: ["invite"] }, false)).toBe("100.101.4.7");
+    expect(addTarget({ home: "192.168.1.100", tailnet: null, sources: ["invite"] }, true)).toBe("192.168.1.100");
   });
 
   it("merges by identity even when no address is shared", () => {

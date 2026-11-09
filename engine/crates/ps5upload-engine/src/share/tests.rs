@@ -803,3 +803,26 @@ async fn a_link_with_only_a_home_network_hint_is_read() {
         Some("ws://192.168.1.10:19113/api/share/ws")
     );
 }
+
+#[test]
+fn only_an_installed_apps_own_folder_reads_the_consoles_appmeta_copy() {
+    // An installed app: its folder's name is the console's, so appmeta stands for its PARAM.
+    assert_eq!(appmeta_title_id("/user/app/PPSA01234"), Some("PPSA01234"));
+    assert_eq!(appmeta_title_id("/user/app/PPSA01234/"), Some("PPSA01234"));
+    assert_eq!(
+        appmeta_title_id("/mnt/ext0/user/app/PPSA01234"),
+        Some("PPSA01234")
+    );
+    assert_eq!(
+        appmeta_title_id("/system_ex/app/PPSA01234"),
+        Some("PPSA01234")
+    );
+    // A folder the user named after a homebrew (a retail game with its sce_sys taken out) borrows
+    // nothing: it has no PARAM, and is refused as unknown.
+    assert_eq!(appmeta_title_id("/data/homebrew/FAKE77031"), None);
+    assert_eq!(appmeta_title_id("/mnt/usb0/FAKE77031"), None);
+    assert_eq!(appmeta_title_id("/mnt/a/b/user/app/FAKE77031"), None);
+    assert_eq!(appmeta_title_id("/mnt//user/app/FAKE77031"), None);
+    assert_eq!(appmeta_title_id("/user/app/../x"), None);
+    assert_eq!(appmeta_title_id("FAKE77031"), None);
+}

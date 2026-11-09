@@ -11,17 +11,18 @@ import { Modal } from "../../../components/Modal";
 import { useTr, type Translator } from "../../../state/lang";
 import { useRosterStore } from "../../../state/roster";
 import { usePairingStore } from "../../../state/pairing";
+import { requestRosterPull } from "../../../state/rosterShare";
 import { discoverPs5, type DiscoveredHost } from "../../../api/ps5";
 import { addTailnetConsole, tailnetConsoles, type FoundConsoles } from "../../../api/tailnet";
 import { consoleIdentity } from "../../../api/ava1";
 import { cleanConsoleAddress, hostOf } from "../../../lib/addr";
 import { humanizeCaught } from "../../../lib/humanizeError";
-import { addAddress, isTailnetIp, mergeFound, parseInvite, shortKey, type FoundRow, type FoundSource, type Invite } from "./model";
+import { addAddress, addTarget, isTailnetIp, mergeFound, parseInvite, type FoundRow, type FoundSource, type Invite } from "./model";
 
 /** The console list is mirrored from the engine on focus (state/rosterShare.ts): ask for that now
  *  so a console the engine added shows at once. */
 function pullConsoleList() {
-  window.dispatchEvent(new Event("focus"));
+  requestRosterPull();
 }
 
 /** Whether this device can scan a QR code itself (a camera and the browser's barcode reader). */
@@ -79,7 +80,6 @@ function FoundLine({
         <div className="mt-0.5 flex flex-wrap gap-x-3 font-mono text-xs text-[var(--color-muted)]">
           {r.home ? <span>{r.home}</span> : null}
           {r.tailnet ? <span>{r.tailnet}</span> : null}
-          {r.key ? <span title={r.key}>{tr("cs_add_key", { key: shortKey(r.key) }, "key {key}")}</span> : null}
         </div>
         <div className="text-xs text-[var(--color-muted)]">
           {r.helperRunning
@@ -293,7 +293,7 @@ export function AddSheetView({
           {tr(
             "cs_add_invite_hint",
             undefined,
-            "On a device that already uses the PS5: Consoles › Invite a device. Scan its code, or paste its link here. The PS5 then asks before it lets this device in.",
+            "On a device that already uses the PS5, open Connection and press Invite a device on the PS5's card. Scan its code, or paste its link here. The PS5 then asks before it lets this device in.",
           )}
         </p>
         {invite ? (
@@ -449,11 +449,31 @@ export function AddConsoleSheet({
   useEffect(() => {
     if (open) void runScan();
     else {
+      // Closed: nothing carries over to the next Add (an invite already used, say).
       setScan(EMPTY_SCAN);
       setScanningQr(false);
       setError(null);
+      setInvite(initialInvite);
+      setPasted("");
+      setTyped("");
     }
-  }, [open, runScan]);
+  }, [open, runScan, initialInvite]);
+
+  // The engine added it; the list mirror normally brings it in within a second.
+  useEffect(() => {
+    if (!pending) return;
+    const t = window.setTimeout(() => {
+      setPending(null);
+      setError(
+        tr(
+          "cs_add_slow",
+          undefined,
+          "The PS5 was added, but this list hasn't shown it yet. Close this sheet: its card appears on Consoles in a moment.",
+        ),
+      );
+    }, 10_000);
+    return () => window.clearTimeout(t);
+  }, [pending, tr]);
 
   useEffect(() => {
     const inv = parseInvite(pasted);
@@ -469,19 +489,37 @@ export function AddConsoleSheet({
 
   const rows = mergeFound(scan.lan, scan.tailnet?.consoles ?? [], invite, scan.lanKeys, profiles);
 
-  const addAt = async (addr: string, name: string, busyKey: string, fromInvite: boolean) => {
+  const addAt = async (addr: string, name: string, busyKey: string, fromInvite: boolean, inviteKey: string | null = null) => {
     const value = cleanConsoleAddress(addr);
     if (!value) return;
     setBusy(busyKey);
     setError(null);
     try {
+      // An invite names the console's key: the address must answer as that console, or the link
+      // was changed (or the address now belongs to another PS5). One that does not answer yet (its
+      // helper is off) can't be checked, and is added as named.
+      if (fromInvite && inviteKey) {
+        const id = await consoleIdentity(value);
+        if (id && id.key.toLowerCase() !== inviteKey.toLowerCase()) {
+          setError(
+            tr(
+              "cs_add_invite_other_ps5",
+              undefined,
+              "A different PS5 answers at the address in this invite. Ask for a new invite on a device that uses the PS5, or add it with Scan.",
+            ),
+          );
+          return;
+        }
+      }
       const roster = useRosterStore.getState();
+      let pairAt = value;
       const existing = roster.profiles.find((p) => hostOf(p.host) === hostOf(value));
       if (existing) {
         onAdded(existing.id, fromInvite);
       } else if (looksTailnet(value)) {
         // The engine keeps one entry per console, at its home address when it knows one.
         const r = await addTailnetConsole(value, name);
+        pairAt = r.console.host || value;
         setPending({ id: r.console.id, invite: fromInvite });
         pullConsoleList();
       } else {
@@ -489,11 +527,18 @@ export function AddConsoleSheet({
         onAdded(id, fromInvite);
       }
       if (fromInvite) {
-        // The console asks before it lets this device in: the pairing dialog waits for the Allow.
-        void usePairingStore.getState().openFor(value);
+        // The console asks before it lets this device in: the pairing dialog waits for the Allow,
+        // at the address the list keeps for it.
+        void usePairingStore.getState().openFor(pairAt);
       }
     } catch (e) {
-      setError(tr("tn_found_add_failed", { err: humanizeCaught(e) }, "Could not add this PS5: {err}"));
+      setError(
+        tr(
+          "cs_add_failed",
+          { err: humanizeCaught(e) },
+          "Couldn't add this PS5 ({err}). Check that it is on and that the address is right, then press Add again.",
+        ),
+      );
     } finally {
       setBusy(null);
     }
@@ -513,7 +558,11 @@ export function AddConsoleSheet({
         error={error}
         firstRun={firstRun}
         onScan={() => void runScan()}
-        onAdd={(r) => void addAt(addAddress(r), r.name, r.id, r.sources.includes("invite"))}
+        onAdd={(r) => {
+          const invited = r.sources.includes("invite");
+          const onTs = !!scan.tailnet && scan.tailnet.backend !== "none";
+          void addAt(addTarget(r, onTs), r.name, r.id, invited, invited ? r.key : null);
+        }}
         onOpen={(id) => onAdded(id, false)}
         onTyped={setTyped}
         onAddTyped={() => {

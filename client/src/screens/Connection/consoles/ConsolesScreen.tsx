@@ -3,7 +3,7 @@
 // sheet. A console that is not ready shows its setup checklist inside its card; nothing else on
 // the page is setup furniture.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import { Cable, Plus, Radar } from "lucide-react";
 
@@ -50,6 +50,8 @@ export default function ConsolesScreen() {
   const { status: appTailnet } = useTailnet();
   const [params, setParams] = useSearchParams();
   const [appVersion, setAppVersion] = useState<string | null>(null);
+  /** This page's own root: another console's hidden copy of the page has the same cards. */
+  const root = useRef<HTMLDivElement>(null);
   const invite = useMemo(() => parseInvite(params.get("invite") ?? ""), [params]);
   const focusId = params.get("console");
   const [addOpen, setAddOpen] = useState(() => profiles.length === 0 || !!invite || params.get("add") === "1");
@@ -69,7 +71,7 @@ export default function ConsolesScreen() {
   // "Open its card" (the console picker): scroll to it.
   useEffect(() => {
     if (!focusId) return;
-    const el = document.querySelector(`[data-console="${CSS.escape(focusId)}"]`);
+    const el = root.current?.querySelector(`[data-console="${CSS.escape(focusId)}"]`);
     el?.scrollIntoView({ block: "start", behavior: "smooth" });
   }, [focusId, profiles.length]);
 
@@ -98,7 +100,7 @@ export default function ConsolesScreen() {
   const ordered = [...profiles].sort((a, b) => Number(b.id === activeId) - Number(a.id === activeId));
 
   return (
-    <div className="app-page">
+    <div className="app-page" ref={root}>
       <PageHeader
         icon={Cable}
         title={tr("cs_title", undefined, "Consoles")}

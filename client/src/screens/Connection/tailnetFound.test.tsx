@@ -4,11 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 
-import { FoundView, type FoundViewProps } from "./FoundOnTailscale";
 import { BlockedNotice } from "./TailnetPanel";
 import {
   addTailnetConsole,
-  rosterMatch,
   tailnetConsoles,
   type FoundConsole,
 } from "../../api/tailnet";
@@ -27,81 +25,12 @@ const pro: FoundConsole = {
   listed: null,
   error: null,
 };
-const fat: FoundConsole = {
-  ...pro,
-  name: "yunpengs-ps5fat",
-  tailnet_name: "yunpengs-ps5fat-ps5u",
-  tailnet_ip: "100.64.0.11",
-  lan_host: "192.168.1.21",
-  hosts: ["192.168.1.21"],
-  id: "cd".repeat(32),
-};
-
-function view(p: Partial<FoundViewProps>) {
-  const props: FoundViewProps = {
-    found: null,
-    profiles: [],
-    looking: false,
-    busy: null,
-    typed: "",
-    err: "",
-    onLook: () => {},
-    onAdd: () => {},
-    onConnect: () => {},
-    onTyped: () => {},
-    ...p,
-  };
-  return renderToStaticMarkup(<FoundView {...props} />);
-}
 
 function answer(status: number, body: unknown) {
   return vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify(body), { status }));
 }
 
 afterEach(() => vi.unstubAllGlobals());
-
-describe("Found on your Tailscale network", () => {
-  it("lists each console with Add, or Connect when it is on the list already", () => {
-    const out = view({
-      found: { backend: "builtin", can_list: true, consoles: [pro, fat] },
-      // The phone has the Fat already (added at home); the Pro is new.
-      profiles: [{ id: "p1", name: "Fat", host: "192.168.1.21" }],
-    });
-    expect(out).toContain("Found on your Tailscale network");
-    expect(out).toContain("yunpengs-ps5pro");
-    expect(out).toContain("100.64.0.10");
-    expect(out).toContain("at home 192.168.1.21");
-    expect(out.match(/data-testid="tailnet-found-row"/g)?.length).toBe(2);
-    expect(out.match(/data-testid="tailnet-found-add"/g)?.length).toBe(1);
-    expect(out.match(/data-testid="tailnet-found-connect"/g)?.length).toBe(1);
-    // A typed address can always be added.
-    expect(out).toContain('data-testid="tailnet-found-input"');
-  });
-
-  it("says why a console does not answer", () => {
-    const out = view({
-      found: { backend: "builtin", can_list: true, consoles: [{ ...pro, reachable: false, id: null }] },
-    });
-    expect(out).toContain("lets only listed devices in");
-  });
-
-  it("on a phone with only the Tailscale app: type the address, or sign PS5Upload in", () => {
-    const out = view({ found: { backend: "system", can_list: false, consoles: [] } });
-    expect(out).toContain('data-testid="tailnet-found-no-list"');
-    expect(out).toContain('data-testid="tailnet-found-input"');
-  });
-
-  it("off Tailscale: says how to get on, and offers no address field", () => {
-    const out = view({ found: { backend: "none", can_list: false, consoles: [] } });
-    expect(out).toContain('data-testid="tailnet-found-off"');
-    expect(out).not.toContain('data-testid="tailnet-found-input"');
-  });
-
-  it("nothing found on a tailnet it can read", () => {
-    const out = view({ found: { backend: "builtin", can_list: true, consoles: [] } });
-    expect(out).toContain('data-testid="tailnet-found-none"');
-  });
-});
 
 describe("the Add flow", () => {
   it("asks the engine for the list, fresh on Look again", async () => {
@@ -144,16 +73,6 @@ describe("the Add flow", () => {
     await expect(addTailnetConsole("192.168.1.5")).rejects.toThrow(/not a Tailscale address/);
   });
 
-  it("finds the app's own entry by the engine's id, or by any address the console is known at", () => {
-    const profiles = [
-      { id: "a", host: "192.168.1.21" },
-      { id: "b", host: "100.64.0.10:9113" },
-    ];
-    expect(rosterMatch(fat, profiles)?.id).toBe("a");
-    expect(rosterMatch(pro, profiles)?.id).toBe("b");
-    expect(rosterMatch({ ...pro, listed: { id: "a", name: "x", host: "elsewhere" } }, profiles)?.id).toBe("a");
-    expect(rosterMatch({ ...pro, tailnet_ip: "100.64.0.99" }, profiles)).toBeNull();
-  });
 });
 
 describe("a device the PS5's list turned away", () => {

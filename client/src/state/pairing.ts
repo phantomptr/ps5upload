@@ -143,10 +143,20 @@ export const usePairingStore = create<PairingState>((set, get) => {
       if (!host || waiting.has(host)) return;
       waiting.add(host);
       try {
+        let misses = 0;
         for (let attempt = 0; attempt < APPROVAL_ASKS; attempt++) {
           await sleep(APPROVAL_ASK_GAP_MS);
           if (!get().open || get().host !== host || get().view?.state !== "closed") return;
+          const before = get().view;
           await load(host);
+          // One failed read (a busy console, a Wi-Fi blip) does not end the wait: keep waiting
+          // on the same picture, and show the error only after three in a row.
+          if (get().view === null && get().error && misses < 2 && get().host === host) {
+            misses += 1;
+            set({ view: before, error: null });
+            continue;
+          }
+          misses = 0;
           if (get().view?.state !== "closed") return;
         }
       } finally {

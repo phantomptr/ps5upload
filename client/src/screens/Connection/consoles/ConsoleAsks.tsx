@@ -4,12 +4,14 @@
 // console, so the console's own page and every other trusted app see the answer too.
 
 import { useState } from "react";
+import { useLocation } from "react-router";
 import { ShieldCheck, X } from "lucide-react";
 
 import { Button } from "../../../components";
 import { meshDevice, type MeshAsk } from "../../../api/mesh";
 import { pollMesh, resetMeshCursor, useMeshStore } from "../../../state/mesh";
 import { useRosterStore } from "../../../state/roster";
+import { useConnectionStore } from "../../../state/connection";
 import { hostOf } from "../../../lib/addr";
 import { humanizeCaught } from "../../../lib/humanizeError";
 import { useTr } from "../../../state/lang";
@@ -20,16 +22,19 @@ export interface PendingAsk {
   ask: MeshAsk;
 }
 
-/** Every ask on every console this app knows, oldest first, less the ones put off with Later. */
+/** Every ask on every console this app knows, oldest first, less the ones put off with Later.
+ *  Only from a picture that is current: not when the last read failed, nor from a console whose
+ *  helper is not answering (`isUp`), whose old asks may have been answered or run out since. */
 export function pendingAsks(
-  byHost: Record<string, { state: { asks?: MeshAsk[] } | null }>,
+  byHost: Record<string, { state: { asks?: MeshAsk[] } | null; error?: string | null }>,
   profiles: readonly { host: string; name: string }[],
   later: ReadonlySet<string>,
+  isUp: (host: string) => boolean = () => true,
 ): PendingAsk[] {
   const out: PendingAsk[] = [];
   for (const [host, m] of Object.entries(byHost)) {
     const p = profiles.find((x) => hostOf(x.host) === hostOf(host));
-    if (!p) continue;
+    if (!p || m.error || !isUp(host)) continue;
     for (const a of m.state?.asks ?? []) {
       if (later.has(`${hostOf(host)}:${a.id}`)) continue;
       out.push({ host, consoleName: p.name, ask: a });
@@ -115,16 +120,26 @@ export function AskPrompt({
   );
 }
 
-/** Mounted once, over every screen. */
+/** Whether a path is the Consoles page, where each card answers its own asks (the prompt would
+ *  show the same ask twice there). */
+export function onConsolesPage(pathname: string, search: string): boolean {
+  if (pathname !== "/connection") return false;
+  const tab = new URLSearchParams(search).get("tab");
+  return tab !== "devices" && tab !== "health";
+}
+
+/** Mounted once, over every screen but the Consoles page. */
 export function ConsoleAsks() {
   const byHost = useMeshStore((s) => s.byHost);
   const profiles = useRosterStore((s) => s.profiles);
+  const runtimeByHost = useConnectionStore((s) => s.runtimeByHost);
+  const loc = useLocation();
   const [later, setLater] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const all = pendingAsks(byHost, profiles, later);
+  const all = pendingAsks(byHost, profiles, later, (h) => runtimeByHost[hostOf(h)]?.payloadStatus === "up");
   const first = all[0];
-  if (!first) return null;
+  if (!first || onConsolesPage(loc.pathname, loc.search)) return null;
   const answer = async (op: "allow" | "decline") => {
     setBusy(true);
     setError(null);

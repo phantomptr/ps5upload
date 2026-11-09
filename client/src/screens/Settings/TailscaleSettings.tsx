@@ -5,6 +5,7 @@ import { Button } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useTr } from "../../state/lang";
 import { useRosterStore } from "../../state/roster";
+import { requestRosterPull } from "../../state/rosterShare";
 import { DEVICES_READ_MS, DeviceList, orderDevices, peerRows } from "../Connection/TailnetDevices";
 import {
   addTailnetConsole,
@@ -86,9 +87,15 @@ export function TailscaleSettings() {
     setAddErr("");
     try {
       await addTailnetConsole(ip, name.split(".")[0].replace(/-ps5u(-\d+)?$/, ""));
-      window.dispatchEvent(new Event("focus")); // the console list mirror reads the engine's now
+      requestRosterPull(); // the console list mirror reads the engine's now
     } catch (e) {
-      setAddErr(tr("tn_found_add_failed", { err: humanizeCaught(e) }, "Could not add this PS5: {err}"));
+      setAddErr(
+        tr(
+          "cs_add_failed",
+          { err: humanizeCaught(e) },
+          "Couldn't add this PS5 ({err}). Check that it is on and that the address is right, then press Add again.",
+        ),
+      );
     } finally {
       setAdding(null);
     }
@@ -143,9 +150,9 @@ export function TailscaleSettings() {
       <div className="flex flex-wrap items-center gap-2">
         <p className="text-xs text-[var(--color-muted)]" data-testid="tailscale-ps5-step">
           {tr(
-            "tn_app_ps5_step",
+            "tn_app_ps5_step_v2",
             undefined,
-            "Your PS5 joins separately, once, at home: Connection › Put this PS5 on Tailscale.",
+            "Your PS5 joins separately, once, at home: open Connection and press Set up next to Tailscale on the PS5's card.",
           )}
         </p>
         <Button size="sm" variant="ghost" leftIcon={<Cable size={14} />} onClick={() => navigate("/connection")}>

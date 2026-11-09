@@ -405,6 +405,7 @@ static void serve(srv_t *s, int idx, conn_t c) {
     memset(&req, 0, sizeof req);
     rd = read_request(s, c.fd, c.deadline_ms, buf, &req, &got);
     if (rd == RD_DROP) return;
+    req.peer = c.src; /* after the parse, which clears the struct */
 
     /* Writes get what is left of the deadline, but at least a short window. */
     now = mono_ms();

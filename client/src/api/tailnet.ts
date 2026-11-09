@@ -117,11 +117,6 @@ export function tailnetOp(host: string, op: TailnetConsoleOp, opts: TailnetEnabl
   });
 }
 
-/** One line for a peer's path: "direct, 3.2 ms", "relayed", "idle". */
-export function peerPathKind(p: TailnetPeer): "direct" | "relayed" | "idle" {
-  return p.path === "direct" ? "direct" : p.path === "relayed" ? "relayed" : "idle";
-}
-
 /** Days until the node key expires, when that is within a week (Tailscale's default is 180
  *  days, Headscale's none); null otherwise. */
 export function expiryDays(keyExpiry: number, nowS = Date.now() / 1000): number | null {
@@ -485,21 +480,3 @@ export async function addTailnetConsole(addr: string, name = ""): Promise<AddedC
   return readJson<AddedConsole>(res);
 }
 
-/** A found console's entry in this app's own list: by the engine's entry id, else at any address
- *  it is known at. */
-export function rosterMatch<T extends { id: string; host: string }>(
-  found: FoundConsole,
-  profiles: readonly T[],
-): T | null {
-  const addrs = new Set(
-    [found.listed?.host, found.lan_host, found.tailnet_ip, ...(found.hosts ?? [])]
-      .filter((h): h is string => !!h)
-      .map((h) => consoleAddr(h)),
-  );
-  const listedId = found.listed?.id;
-  return (
-    (listedId ? profiles.find((p) => p.id === listedId) : undefined) ??
-    profiles.find((p) => addrs.has(consoleAddr(p.host))) ??
-    null
-  );
-}

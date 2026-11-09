@@ -211,7 +211,8 @@ export function SetupChecklist({
               {check.text}
             </p>
           ) : null}
-          {check?.elfldr ? <ElfldrFirstCallout /> : null}
+          {/* Step 2 shows the same note while it waits: once is enough. */}
+          {check?.elfldr && !(mark2 === "now" || mark2 === "fail") ? <ElfldrFirstCallout /> : null}
           {check && !check.ok && pathNonce > 0 ? <PathCheck host={target} nonce={pathNonce} /> : null}
         </Step>
         <Step n={2} mark={mark2} title={tr("cs_setup_helper", undefined, "Send the PS5Upload helper")} testId="consoles-step-helper">

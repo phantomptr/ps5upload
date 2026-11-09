@@ -49,6 +49,14 @@ export function viaLine(d: ConsoleDevice): string {
   return t(tailnet ? "cw_dev_via_tailscale" : "cw_dev_via_network");
 }
 
+/** A change the helper refused, in words. "self_allow": the page was opened on the device that
+ *  asks (LAN access on), and a device never allows itself. */
+export function meshErrLine(err: string | undefined): string {
+  if (err === "self_allow") return t("cw_dev_self_allow");
+  if (err === "not_found") return t("cw_dev_gone");
+  return t("cw_dev_err");
+}
+
 /** The devices to list: not the blocked ones (those are the app's to manage). */
 export function trustedDevices(m: ConsoleMesh | null): ConsoleDevice[] {
   return (m?.devices || []).filter((d) => !d.blocked);
@@ -83,7 +91,9 @@ export function useConsoleMesh(): {
     setBusy(true);
     setErr(null);
     try {
-      await call("/api/mesh", { op, id });
+      // The helper answers a refused change in the reply ({ok:false, err}), not with an HTTP error.
+      const r = await call<{ ok?: boolean; err?: string }>("/api/mesh", { op, id });
+      if (r && r.ok === false) setErr(meshErrLine(r.err));
       await read();
     } catch {
       setErr(t("cw_dev_err"));

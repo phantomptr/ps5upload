@@ -206,7 +206,7 @@ export function PairingPanel({
             {tr(
               "pairing_closed_body_v4",
               undefined,
-              "This PS5 asks before a new device connects, and it now shows this one as asking. On a device that already uses this PS5 (Consoles), or on the PS5's own page (Settings › Devices), press Allow: this app then gets in by itself. Or press Resend helper, which lets this app in.",
+              "This PS5 asks before a new device connects, and it now shows this one as asking. On a device that already uses this PS5 (Connection), or on the PS5's own page (Settings › Devices), press Allow: this app then gets in by itself. Or press Resend helper, which lets this app in.",
             )}
           </p>
           {waiting ? (

@@ -218,12 +218,13 @@ for (const width of [1280, 390]) {
         await shot(page, `05-add-merged-invite-${tag}`);
       });
 
-      test("Invite a device: the QR code and the console's key", async ({ page }) => {
+      test("Invite a device: the QR code, and the console's key only inside the link", async ({ page }) => {
         await setUp(page, "ready", theme);
         await main(page).getByTestId("consoles-invite-open").click({ timeout: 30_000 });
         const sheet = page.getByRole("dialog", { name: "Invite a device to Living room" });
         await expect(sheet.getByTestId("consoles-invite-qr")).toBeVisible();
-        await expect(sheet.getByTestId("consoles-invite-key")).toHaveText("abab abab");
+        await expect(sheet.getByTestId("consoles-invite-key")).toHaveCount(0);
+        await expect(sheet.getByText("abab abab")).toHaveCount(0);
         await expect(sheet.getByTestId("consoles-invite-link")).toHaveValue(new RegExp(`^ps5upload://console\\?n=Living\\+room&h=${HOST}&t=${TS_IP}&k=${KEY}$`));
         await noSidewaysScroll(page);
         await shot(page, `06-invite-${tag}`);
