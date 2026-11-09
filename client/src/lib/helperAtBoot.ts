@@ -12,6 +12,14 @@
 //   did not come up: the kept copy goes back, and this app's version is not stored there again
 //   (an app update tries again).
 // - Nothing is written when Payload Manager is not running; the switch is hidden then.
+// - The switch here decides (#781): while it is on, a connection that finds the stored helper
+//   missing from the boot list (taken out in Payload Manager, a list rewritten under other keys)
+//   puts it back and logs why. Only turning it off here takes it out; that drops this console's
+//   record, which is what "off" is. A copy deleted in Payload Manager is not stored again: the
+//   record goes and the switch shows off.
+// - The helper counts as listed under any entry Payload Manager starts it from: its slot, its file
+//   name or its path. Every write is read back, and a list that does not hold (or still holds) the
+//   helper afterwards is an error the caller shows, never a silent success.
 //
 // The app's auto-run playlist never sends the helper (lib/playlistOps playlistResendsOurHelper)
 // and the reconnect loop waits for Payload Manager's boot list before sending one
@@ -19,7 +27,7 @@
 // second one from this app.
 
 import type { PmAutoload, PmOverview, PmStoredPayload } from "../api/payloadManager";
-import { autoloadKey } from "../api/payloadManager";
+import { autoloadKeys, listedEntry } from "../api/payloadManager";
 import { isHelperFileName } from "./helperStoredCopies";
 import { safeGetItem, safeSetItem } from "./safeStorage";
 import { LOADER_SETTLE_MS } from "./autoRedeploy";
@@ -84,37 +92,84 @@ export function storedHelper(payloads: readonly PmStoredPayload[]): PmStoredPayl
   return ours.find((p) => p.filename.toLowerCase() === "ps5upload.elf") ?? ours[0] ?? null;
 }
 
-/** Whether the boot list starts `key`. */
-export function listsHelper(autoload: PmAutoload | null, key: string): boolean {
-  return !!autoload?.list.includes(key);
+/** Whether the boot list starts `copy`, under its slot, file name or path. */
+export function listsHelper(autoload: PmAutoload | null, copy: PmStoredPayload | null): boolean {
+  return !!copy && listedEntry(autoload?.list, copy) !== null;
 }
 
+/** The entries that name the helper; the first is the one this app adds. */
+type Keys = string | readonly string[];
+const keysOf = (k: Keys): readonly string[] => (typeof k === "string" ? [k] : k);
+
 /** The boot list with the helper last, behind a pause when something loads before it. Kept as
- *  it is when the helper is already listed (the user may have moved it). */
+ *  it is when the helper is already listed under any of `keys` (the user may have moved it). */
 export function withHelperAtBoot(
   list: readonly string[],
-  key: string,
+  keys: Keys,
 ): { list: string[]; pauseAdded: boolean } {
-  if (list.includes(key)) return { list: [...list], pauseAdded: false };
+  const ks = keysOf(keys);
+  if (list.some((e) => ks.includes(e))) return { list: [...list], pauseAdded: false };
   const before = list.some((e) => !e.startsWith("!"));
   const endsPaused = list.length > 0 && list[list.length - 1].startsWith("!");
   const pause = before && !endsPaused;
-  return { list: [...list, ...(pause ? [BOOT_PAUSE] : []), key], pauseAdded: pause };
+  return { list: [...list, ...(pause ? [BOOT_PAUSE] : []), ks[0]], pauseAdded: pause };
 }
 
-/** The boot list without the helper, and without the pause this app put in front of it. */
+/** The boot list without the helper (under any of `keys`), and without the pause this app put
+ *  in front of it. */
 export function withoutHelperAtBoot(
   list: readonly string[],
-  key: string,
+  keys: Keys,
   pauseAdded: boolean,
 ): string[] {
+  const ks = keysOf(keys);
   const out: string[] = [];
   for (let i = 0; i < list.length; i++) {
-    if (list[i] === key) continue;
-    if (pauseAdded && list[i] === BOOT_PAUSE && list[i + 1] === key) continue;
+    if (ks.includes(list[i])) continue;
+    if (pauseAdded && list[i] === BOOT_PAUSE && ks.includes(list[i + 1])) continue;
     out.push(list[i]);
   }
   return out;
+}
+
+const showList = (a: PmAutoload | null | undefined) =>
+  a ? `enabled=${a.enabled} [${a.list.join(",")}]` : "unreadable";
+
+/** What writing the boot list needs: the write (which answers with the list read back, when the
+ *  engine sends it), a fresh read otherwise, and a log line for each step. */
+interface ListDeps {
+  pmOverview: (host: string) => Promise<PmOverview>;
+  setAutoload: (host: string, enabled: boolean, list: string[]) => Promise<PmAutoload | null | void>;
+  log?: (line: string) => void;
+}
+
+/** Write the boot list, read it back, and check it holds the helper (`want`) or no longer does.
+ *  Throws with what was read back when not, so no caller reports a list that is not there. */
+async function writeBootList(
+  host: string,
+  deps: ListDeps,
+  enabled: boolean,
+  list: string[],
+  copy: PmStoredPayload,
+  want: boolean,
+): Promise<PmAutoload> {
+  deps.log?.(`${host}: writing the boot list enabled=${enabled} [${list.join(",")}]`);
+  let back = (await deps.setAutoload(host, enabled, list)) ?? null;
+  if (!back) {
+    const ov = await deps.pmOverview(host);
+    back = ov.present ? ov.autoload : null;
+  }
+  deps.log?.(`${host}: boot list read back ${showList(back)}`);
+  if (!back) throw new Error("Payload Manager's boot list could not be read back after saving it");
+  if (listsHelper(back, copy) !== want) {
+    const now = back.list.join(", ") || "empty";
+    throw new Error(
+      want
+        ? `Payload Manager's boot list does not include the helper after saving it (it reads: ${now})`
+        : `Payload Manager's boot list still includes the helper after saving it (it reads: ${now})`,
+    );
+  }
+  return back;
 }
 
 /** How long the reconnect loop waits on a console whose loader just came up before sending a
@@ -147,8 +202,7 @@ export function bootVerdict(
   return "wait";
 }
 
-export interface SyncDeps {
-  pmOverview: (host: string) => Promise<PmOverview>;
+export interface SyncDeps extends ListDeps {
   replace: (host: string, path: string) => Promise<"updated" | "unchanged" | "not_found">;
   restore: (host: string, path: string) => Promise<"restored" | "unchanged" | "not_found">;
   bootEpochMs: (host: string) => Promise<number | null>;
@@ -163,7 +217,7 @@ export interface SyncDeps {
 export type SyncResult =
   | { kind: "off" }
   | { kind: "no-pm" }
-  | { kind: "unlisted" }
+  | { kind: "missing" }
   | { kind: "waiting" }
   | { kind: "current" }
   | { kind: "updated"; version: string }
@@ -175,8 +229,9 @@ export type SyncResult =
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-/** Once per connection: judge a pending copy, else bring the stored copy up to this app's
- *  helper. Never writes without Payload Manager answering and listing the helper at boot. */
+/** Once per connection: put the helper back in the boot list when it went missing from it, then
+ *  judge a pending copy, else bring the stored copy up to this app's helper. Never writes without
+ *  Payload Manager answering with its stored payloads and its boot list. */
 export async function syncHelperAtBoot(host: string, deps: SyncDeps): Promise<SyncResult> {
   let rec = deps.load(host);
   if (!rec) return { kind: "off" };
@@ -187,10 +242,37 @@ export async function syncHelperAtBoot(host: string, deps: SyncDeps): Promise<Sy
     return { kind: "error", error: message(e) };
   }
   if (!ov.present || !ov.autoload) return { kind: "no-pm" };
+  // An unread payload list is not an empty one: nothing is decided from it.
+  if (ov.payloadsError) return { kind: "error", error: ov.payloadsError };
   const copy = storedHelper(ov.payloads);
-  // Taken out of the boot list (or deleted) in Payload Manager itself: that choice stands.
-  if (!copy || !listsHelper(ov.autoload, autoloadKey(copy))) return { kind: "unlisted" };
+  deps.log?.(
+    `${host}: boot list ${showList(ov.autoload)}; stored helper ${copy ? `${copy.slot || "-"} ${copy.path}` : "none"}`,
+  );
+  if (!copy) {
+    // Deleted in Payload Manager itself: not stored again, and the switch here shows off.
+    deps.log?.(`${host}: the stored helper was deleted in Payload Manager; "load at boot" is off here now`);
+    deps.save(host, null);
+    return { kind: "missing" };
+  }
   rec = { ...rec, path: copy.path, delayS: ov.autoload.delay_s };
+  if (!listsHelper(ov.autoload, copy)) {
+    // The switch here is on, and only turning it off here takes the helper out (#781): a list
+    // rewritten in Payload Manager, or keyed by a name this copy no longer matches, loses it.
+    const keys = autoloadKeys(copy);
+    deps.log?.(
+      `${host}: the helper is stored but not in the boot list (looked for ${keys.join(" | ")}); putting it back`,
+    );
+    const next = withHelperAtBoot(ov.autoload.list, keys);
+    try {
+      await writeBootList(host, deps, ov.autoload.enabled, next.list, copy, true);
+    } catch (e) {
+      deps.save(host, rec);
+      return { kind: "error", error: message(e) };
+    }
+    rec = { ...rec, pauseAdded: rec.pauseAdded || next.pauseAdded };
+  }
+  if (!ov.autoload.enabled)
+    deps.log?.(`${host}: Payload Manager's boot list is turned off, so nothing in it starts at boot`);
   deps.save(host, rec);
 
   if (rec.pending) {
@@ -252,13 +334,14 @@ export async function syncHelperAtBoot(host: string, deps: SyncDeps): Promise<Sy
   }
 }
 
-export interface EnableDeps {
-  pmOverview: (host: string) => Promise<PmOverview>;
+export interface EnableDeps extends ListDeps {
   /** Store this app's helper as `ps5upload.elf`; `false` when the user declined replacing an
    *  existing folder. */
   store: (host: string) => Promise<boolean>;
   replace: (host: string, path: string) => Promise<"updated" | "unchanged" | "not_found">;
-  setAutoload: (host: string, enabled: boolean, list: string[]) => Promise<void>;
+  /** Asked when Payload Manager's boot list is turned off (nothing in it starts at boot): true
+   *  turns it on in the same write. It is never turned on without asking. */
+  confirmTurnOnAutoload?: () => Promise<boolean>;
   appVersion: () => Promise<string | null>;
   now: () => number;
   load: (host: string) => BootRecord | null;
@@ -271,6 +354,8 @@ export async function enableHelperAtBoot(host: string, deps: EnableDeps): Promis
   const ov = await deps.pmOverview(host);
   if (!ov.present) throw new Error("Payload Manager is not running on this PS5");
   if (!ov.autoload) throw new Error(ov.autoloadError ?? "Payload Manager's boot list could not be read");
+  if (ov.payloadsError) throw new Error(ov.payloadsError);
+  deps.log?.(`${host}: turning "load at boot" on; boot list ${showList(ov.autoload)}`);
   const version = (await deps.appVersion().catch(() => null)) ?? "";
   let copy = storedHelper(ov.payloads);
   let wrote: boolean;
@@ -286,11 +371,12 @@ export async function enableHelperAtBoot(host: string, deps: EnableDeps): Promis
     wrote = r === "updated";
     kept = wrote;
   }
-  const key = autoloadKey(copy);
   const prev = deps.load(host);
-  const next = withHelperAtBoot(ov.autoload.list, key);
-  if (next.list.join("\n") !== ov.autoload.list.join("\n"))
-    await deps.setAutoload(host, ov.autoload.enabled, next.list);
+  const next = withHelperAtBoot(ov.autoload.list, autoloadKeys(copy));
+  const enabled =
+    ov.autoload.enabled || (deps.confirmTurnOnAutoload ? await deps.confirmTurnOnAutoload() : false);
+  // The choice is kept before the list is written: a write that fails here is made again on the
+  // next connection (syncHelperAtBoot), not left as a stored copy nothing starts (#781).
   deps.save(host, {
     path: copy.path,
     version,
@@ -301,23 +387,29 @@ export async function enableHelperAtBoot(host: string, deps: EnableDeps): Promis
     pauseAdded: next.pauseAdded || !!prev?.pauseAdded,
     delayS: ov.autoload.delay_s,
   });
+  if (next.list.join("\n") !== ov.autoload.list.join("\n") || enabled !== ov.autoload.enabled) {
+    await writeBootList(host, deps, enabled, next.list, copy, true);
+  } else {
+    deps.log?.(`${host}: the helper is already in the boot list`);
+  }
   return true;
 }
 
 /** Take the helper out of the boot list (the stored file stays; Payload Manager deletes it). */
 export async function disableHelperAtBoot(
   host: string,
-  deps: Pick<EnableDeps, "pmOverview" | "setAutoload" | "load" | "save">,
+  deps: Pick<EnableDeps, "pmOverview" | "setAutoload" | "load" | "save" | "log">,
 ): Promise<void> {
   const ov = await deps.pmOverview(host);
   if (!ov.present) throw new Error("Payload Manager is not running on this PS5");
   const rec = deps.load(host);
   const copy = storedHelper(ov.payloads);
+  deps.log?.(`${host}: turning "load at boot" off; boot list ${showList(ov.autoload)}`);
   if (ov.autoload && copy) {
-    const key = autoloadKey(copy);
-    const list = withoutHelperAtBoot(ov.autoload.list, key, !!rec?.pauseAdded);
+    const list = withoutHelperAtBoot(ov.autoload.list, autoloadKeys(copy), !!rec?.pauseAdded);
     if (list.length !== ov.autoload.list.length)
-      await deps.setAutoload(host, ov.autoload.enabled, list);
+      await writeBootList(host, deps, ov.autoload.enabled, list, copy, false);
   }
+  // No record is what "off" is: nothing puts the helper back after this.
   deps.save(host, null);
 }

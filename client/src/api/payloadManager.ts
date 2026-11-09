@@ -94,9 +94,12 @@ export async function pmDelete(host: string, filename: string): Promise<void> {
   if (!w.ok) throw new Error(w.error || "delete failed");
 }
 
-export async function pmSetAutoload(host: string, enabled: boolean, list: string[]): Promise<void> {
+/** Write the boot list. The engine reads it back and fails when Payload Manager did not keep
+ *  what was written; the list read back is returned (null from an engine that does not send it). */
+export async function pmSetAutoload(host: string, enabled: boolean, list: string[]): Promise<PmAutoload | null> {
   const w = await post("/api/ps5/pldmgr/autoload", { host: hostOf(host), enabled, list });
   if (!w.ok) throw new Error(w.error || "autoload update failed");
+  return w.autoload ?? null;
 }
 
 export type PmStoreResult =
@@ -150,4 +153,19 @@ export async function pmStoreBytes(
 /** The autoload-list entry that names `p`: its slot on Payload Manager 0.6, else its file name. */
 export function autoloadKey(p: Pick<PmStoredPayload, "slot" | "filename">): string {
   return p.slot || p.filename;
+}
+
+/** Every boot-list entry Payload Manager starts `p` from: its slot, its file name (0.5 lists,
+ *  and 0.6 still matches a bare `.elf`/`.bin` name against stored files) or its path. */
+export function autoloadKeys(p: Pick<PmStoredPayload, "slot" | "filename" | "path">): string[] {
+  return [...new Set([p.slot, p.filename, p.path].filter((k) => !!k))];
+}
+
+/** The entry of `list` that names `p`, if any (see `autoloadKeys`). */
+export function listedEntry(
+  list: readonly string[] | null | undefined,
+  p: Pick<PmStoredPayload, "slot" | "filename" | "path">,
+): string | null {
+  const keys = autoloadKeys(p);
+  return list?.find((e) => keys.includes(e)) ?? null;
 }

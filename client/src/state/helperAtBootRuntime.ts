@@ -32,8 +32,13 @@ import { withConsolePrefix } from "./roster";
 const localHelper = (): Promise<string | null> =>
   isTauriEnv() ? bundledPayloadPath().catch(() => null) : Promise.resolve(null);
 
+/** What was read, written and read back, for a bug report (#781). */
+const bootLog = (line: string) => log.info("helper-boot", line);
+
 const common = {
   pmOverview,
+  setAutoload: pmSetAutoload,
+  log: bootLog,
   appVersion: () => getAppVersion(),
   now: () => Date.now(),
   load: loadBootRecord,
@@ -41,10 +46,12 @@ const common = {
 };
 
 /** Turn "Load the helper at boot" on. `confirmReplace` is asked before storing into an existing
- *  `ps5upload` folder in Payload Manager (it removes that folder's other files). */
+ *  `ps5upload` folder in Payload Manager (it removes that folder's other files);
+ *  `confirmTurnOnAutoload` when Payload Manager's boot list is turned off. */
 export async function turnOnHelperAtBoot(
   host: string,
   confirmReplace: (folder: string) => Promise<boolean>,
+  confirmTurnOnAutoload?: () => Promise<boolean>,
 ): Promise<boolean> {
   const h = hostOf(host);
   const local = await localHelper();
@@ -59,17 +66,12 @@ export async function turnOnHelperAtBoot(
       return r.stored;
     },
     replace: (target, path) => helperReplaceCopy(target, path, local, true),
-    setAutoload: pmSetAutoload,
+    confirmTurnOnAutoload,
   });
 }
 
 export async function turnOffHelperAtBoot(host: string): Promise<void> {
-  await disableHelperAtBoot(hostOf(host), {
-    pmOverview,
-    setAutoload: pmSetAutoload,
-    load: loadBootRecord,
-    save: saveBootRecord,
-  });
+  await disableHelperAtBoot(hostOf(host), common);
 }
 
 const running = new Set<string>();
@@ -130,6 +132,9 @@ function report(host: string, r: SyncResult): void {
           ),
         },
       );
+      return;
+    case "missing":
+      log.warn("helper-boot", `${host}: the helper copy was deleted in Payload Manager; it no longer loads at boot`);
       return;
     case "restore-failed":
       log.warn("helper-boot", `${host}: helper ${r.failed} did not come up at boot; no previous copy put back (${r.error})`);

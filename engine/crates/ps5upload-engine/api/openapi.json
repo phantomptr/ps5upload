@@ -919,6 +919,29 @@
         ],
         "type": "object"
       },
+      "Autoload": {
+        "description": "Payload Manager's boot autoload: on/off, the seconds it waits after boot,\nand the ordered list (`/data/pldmgr/autoload.txt`, one entry a line). An\nentry is a slot (`local/<leaf>`, `repo/<…>`, 0.6), a file name it matches\nagainst its stored files, an absolute path under its folders, or `!<ms>`\nfor a pause. Nothing loads at boot while `enabled` is false.",
+        "properties": {
+          "delay_s": {
+            "type": "integer"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "list": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "enabled",
+          "delay_s",
+          "list"
+        ],
+        "type": "object"
+      },
       "AutoloadReq": {
         "properties": {
           "enabled": {
@@ -35501,7 +35524,7 @@
     },
     "/api/ps5/pldmgr/autoload": {
       "post": {
-        "description": "POST /api/ps5/pldmgr/autoload `{host, enabled, list}` — write the boot autoload\nswitch and ordered list.",
+        "description": "POST /api/ps5/pldmgr/autoload `{host, enabled, list}` — write the boot autoload\nswitch and ordered list, then read it back: `{ok:true, autoload}` with what Payload\nManager now holds, or an error when it did not keep what was written.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -35518,6 +35541,9 @@
               "application/json": {
                 "schema": {
                   "properties": {
+                    "autoload": {
+                      "$ref": "#/components/schemas/Autoload"
+                    },
                     "ok": {
                       "type": "boolean"
                     }
@@ -35541,7 +35567,6 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "Write the boot autoload switch and ordered list",
         "tags": [
           "payloads"
         ],

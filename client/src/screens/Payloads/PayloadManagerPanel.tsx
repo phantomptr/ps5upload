@@ -5,6 +5,8 @@ import { Badge, Button, Callout, ErrorCard, Select, Spinner, Toggle } from "../.
 import { useConfirm } from "../../components/ConfirmDialog";
 import {
   autoloadKey,
+  autoloadKeys,
+  listedEntry,
   pmDelete,
   pmLaunch,
   pmOverview,
@@ -283,7 +285,9 @@ export default function PayloadManagerPanel() {
   const setAutoload = (enabled: boolean, list: string[]) =>
     run(
       "autoload",
-      () => pmSetAutoload(host, enabled, list),
+      async () => {
+        await pmSetAutoload(host, enabled, list);
+      },
       tr("pm_autoload_failed", undefined, "Couldn't update the autoload list"),
     );
 
@@ -296,21 +300,33 @@ export default function PayloadManagerPanel() {
           await turnOffHelperAtBoot(host);
           return;
         }
-        const done = await turnOnHelperAtBoot(host, (folder) =>
-          confirm({
-            title: tr(
-              "payloads_pm_store_confirm_title",
-              { folder },
-              `Replace Payload Manager's "${folder}" folder?`,
-            ),
-            message: tr(
-              "payloads_pm_store_confirm_other",
-              { folder },
-              `Payload Manager already has a "${folder}" folder. Storing into it removes the other files there (an older version, usually).`,
-            ),
-            confirmLabel: tr("payloads_pm_store", undefined, "Store in Payload Manager"),
-            destructive: true,
-          }),
+        const done = await turnOnHelperAtBoot(
+          host,
+          (folder) =>
+            confirm({
+              title: tr(
+                "payloads_pm_store_confirm_title",
+                { folder },
+                `Replace Payload Manager's "${folder}" folder?`,
+              ),
+              message: tr(
+                "payloads_pm_store_confirm_other",
+                { folder },
+                `Payload Manager already has a "${folder}" folder. Storing into it removes the other files there (an older version, usually).`,
+              ),
+              confirmLabel: tr("payloads_pm_store", undefined, "Store in Payload Manager"),
+              destructive: true,
+            }),
+          () =>
+            confirm({
+              title: tr("helper_boot_list_off_title", undefined, "Payload Manager's boot list is off"),
+              message: tr(
+                "helper_boot_list_off_confirm",
+                undefined,
+                "While its boot list is off, Payload Manager starts nothing at boot, the helper included. Turn it on?",
+              ),
+              confirmLabel: tr("helper_boot_turn_on_list", undefined, "Turn on the boot list"),
+            }),
         );
         if (done)
           pushNotification(
@@ -364,9 +380,11 @@ export default function PayloadManagerPanel() {
 
   const autoload = view.autoload;
   const helperCopy = storedHelper(view.payloads);
-  const helperListed = !!helperCopy && listsHelper(autoload, autoloadKey(helperCopy));
+  const helperListed = listsHelper(autoload, helperCopy);
   const bootRecord = loadBootRecord(host);
-  const inList = (p: PmStoredPayload) => !!autoload?.list.includes(autoloadKey(p));
+  // On here and stored, but not in the list right now: the next connection puts it back.
+  const helperOn = helperListed || (!!bootRecord && !!helperCopy);
+  const inList = (p: PmStoredPayload) => listedEntry(autoload?.list, p) !== null;
   const stored = view.payloads.filter((p) => p.path.startsWith("/data/pldmgr/"));
   const onUsb = view.payloads.filter((p) => !p.path.startsWith("/data/pldmgr/"));
 
@@ -381,9 +399,14 @@ export default function PayloadManagerPanel() {
     const rec = recorded ?? (matchId && matchTo?.picked_asset_url ? { id: matchId, tag: "" } : undefined);
     const to = recorded ? pmUpdateFor(recorded, latest[recorded.id]) : (rec && matchTo) || null;
     const listed = inList(p);
-    const key = autoloadKey(p);
+    // The entry that names it now (slot, file name or path), else the one to add.
+    const key = listedEntry(autoload?.list, p) ?? autoloadKey(p);
+    const keys = autoloadKeys(p);
     const order = autoload ? autoload.list.filter((e) => !e.startsWith("!")) : [];
     const pos = order.indexOf(key);
+    // The helper's own entry goes through "Load the PS5Upload helper at boot", so taking it
+    // out here is the switch turned off, not something the next connection undoes.
+    const isHelper = !!helperCopy && p.path === helperCopy.path;
     return (
       <li
         key={p.path}
@@ -430,10 +453,12 @@ export default function PayloadManagerPanel() {
                 size="sm"
                 disabled={busy !== null}
                 onClick={() =>
-                  void setAutoload(
-                    autoload.enabled,
-                    listed ? autoload.list.filter((e) => e !== key) : [...autoload.list, key],
-                  )
+                  void (isHelper
+                    ? setHelperAtBoot(!listed)
+                    : setAutoload(
+                        autoload.enabled,
+                        listed ? autoload.list.filter((e) => !keys.includes(e)) : [...autoload.list, key],
+                      ))
                 }
                 title={tr(
                   "pm_autoload_toggle_tooltip",
@@ -564,7 +589,7 @@ export default function PayloadManagerPanel() {
       {autoload && (
         <section className="surface-panel space-y-2 p-4">
           <Toggle
-            checked={helperListed}
+            checked={helperOn}
             disabled={busy !== null}
             onChange={(on) => void setHelperAtBoot(on)}
             label={tr("helper_boot_label", undefined, "Load the PS5Upload helper at boot")}
@@ -574,14 +599,43 @@ export default function PayloadManagerPanel() {
               "Payload Manager starts the helper after everything above it in its boot list, so Minion and this app work after a restart with no PC. Each time this app connects it brings that copy up to its own helper and keeps the previous one; if a new copy does not start after a restart, the previous one is put back.",
             )}
           />
-          {helperListed && !autoload.enabled && (
-            <p className="text-xs text-[var(--color-warn)]">
-              {tr(
-                "helper_boot_list_off",
-                undefined,
-                "Payload Manager's boot list is turned off above, so nothing starts at boot until you turn it on.",
-              )}
-            </p>
+          {helperOn && !helperListed && (
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-xs text-[var(--color-warn)]">
+                {tr(
+                  "helper_boot_not_listed",
+                  undefined,
+                  "The helper is stored but not in Payload Manager's boot list. This app puts it back the next time it connects.",
+                )}
+              </p>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={busy !== null}
+                onClick={() => void setHelperAtBoot(true)}
+              >
+                {tr("pm_autoload_add", undefined, "Load at boot")}
+              </Button>
+            </div>
+          )}
+          {helperOn && !autoload.enabled && (
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-xs text-[var(--color-warn)]">
+                {tr(
+                  "helper_boot_list_off",
+                  undefined,
+                  "Payload Manager's boot list is turned off above, so nothing starts at boot until you turn it on.",
+                )}
+              </p>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={busy !== null}
+                onClick={() => void setAutoload(true, autoload.list)}
+              >
+                {tr("helper_boot_turn_on_list", undefined, "Turn on the boot list")}
+              </Button>
+            </div>
           )}
           {helperListed && bootRecord?.badVersion && (
             <p className="text-xs text-[var(--color-muted)]">
