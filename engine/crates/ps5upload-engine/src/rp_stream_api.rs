@@ -3046,9 +3046,13 @@ mod tests {
                 .unwrap();
             assert!(s.0.viewer.lock().unwrap().is_some());
             // From here the client reads nothing, so it answers no ping: it is simply gone.
+            // The viewer slot empties a moment before the pad is let go, so wait for both: under
+            // a loaded test run the read could land between the two.
             let released = async {
                 loop {
-                    if s.0.viewer.lock().unwrap().is_none() {
+                    if s.0.viewer.lock().unwrap().is_none()
+                        && s.0.sources.set(u64::MAX - 1, None).buttons == 0
+                    {
                         break;
                     }
                     tokio::time::sleep(Duration::from_millis(20)).await;
