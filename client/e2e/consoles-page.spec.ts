@@ -230,15 +230,17 @@ for (const width of [1280, 390]) {
         await shot(page, `06-invite-${tag}`);
       });
 
-      test("a device asking: Allow / Decline over the page, and Allow reaches the console", async ({ page }) => {
+      test("a device asking: Allow on the card (once, no prompt over it), and Allow reaches the console", async ({ page }) => {
         const answers: unknown[] = [];
         await setUp(page, "asking", theme, (b) => answers.push(b));
-        const prompt = page.getByTestId("console-ask-prompt");
-        await expect(prompt).toBeVisible({ timeout: 30_000 });
-        await expect(prompt).toContainText("Pixel 9 wants to use Living room");
+        const ask = main(page).getByTestId("consoles-ask");
+        await expect(ask).toBeVisible({ timeout: 30_000 });
+        await expect(ask).toHaveCount(1);
+        // The card answers its own asks here: the floating prompt stands aside on this page.
+        await expect(page.getByTestId("console-ask-prompt")).toHaveCount(0);
         await noSidewaysScroll(page);
         await shot(page, `07-approval-${tag}`);
-        await prompt.getByTestId("console-ask-allow").click();
+        await ask.getByTestId("consoles-ask-allow").click();
         await expect.poll(() => answers).toContainEqual({ addr: HOST, op: "allow", id: ASKER });
       });
     });

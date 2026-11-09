@@ -384,7 +384,9 @@ async fn rapid_calls_to_an_unpaired_console_make_one_handshake() {
     let uncached = Arc::new(
         Pool::new(d.join("ava2"))
             .with_addr(addr.clone())
-            .with_refusal_ttl(Duration::ZERO),
+            .with_refusal_ttl(Duration::ZERO)
+            // A not-paired answer has its own, longer memory (pool.rs): off too.
+            .with_not_paired_ttl(Duration::ZERO),
     );
     let (c2, u2, a2) = (cached.clone(), uncached.clone(), addr.clone());
     tokio::task::spawn_blocking(move || {
