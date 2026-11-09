@@ -531,7 +531,7 @@ fn status(headers: &HeaderMap, console: Option<&str>) -> serde_json::Value {
             "internet_invites": internet_invites,
             // The internet link once asked for: `url` (the link), `room`, `hub`, `fp`, `state`
             // (the hub connection), `error`, `router`, `peers` (as Play Together's invite has).
-            "internet": l.net.as_ref().map(|n| n.room.json(&n.key, lan_page.as_deref())),
+            "internet": l.net.as_ref().map(|n| n.room.json(&n.key, lan_page.as_deref(), None)),
             "url": match (bases.first(), &l.key) {
                 (Some(b), Some(k)) => serde_json::Value::String(format!("{b}{prefix}/pad#t={k}")),
                 _ => serde_json::Value::Null,

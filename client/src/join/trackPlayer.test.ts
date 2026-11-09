@@ -144,6 +144,35 @@ describe("the track player", () => {
   });
 });
 
+describe("the sound on the audio track (#720)", () => {
+  const media = () => ({
+    stream: {} as MediaStream,
+    receiver: { getStats: async () => new Map() } as unknown as RTCRtpReceiver,
+    audio: {} as RTCRtpReceiver,
+  });
+
+  it("plays from the <video>: nothing of it reaches the channel's player, after the tap, mutable", () => {
+    const { p, got } = inner();
+    const t = new TrackPlayer(p as unknown as WatchPlayer | MsePlayer);
+    t.setTrack(media(), true);
+    for (const k of [0, 1, 3, 4]) t.onMessage(msg(k));
+    expect(got).toEqual([]);
+    // Silent until the guest's tap (a browser plays sound only after one).
+    expect(t.video.muted).toBe(true);
+    t.startSound();
+    expect(t.video.muted).toBe(false);
+    t.setMuted(true);
+    expect(t.video.muted).toBe(true);
+    t.setMuted(false);
+    expect(t.video.muted).toBe(false);
+    // A resume whose answer had no audio track: the channel's sound again, the <video> silent.
+    t.setTrack(media(), false);
+    expect(t.video.muted).toBe(true);
+    t.onMessage(msg(4));
+    expect(got).toEqual([4]);
+  });
+});
+
 describe("the host's panel: a track that can't carry the stream", () => {
   it("says what it carries only when the engine says it is too slow", () => {
     const track = { bwe_kbps: 9300, stream_kbps: 15000, slow: true };

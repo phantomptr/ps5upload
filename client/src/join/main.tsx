@@ -8,8 +8,11 @@ import "../lib/polyfills";
 import { createRoot } from "react-dom/client";
 import "../index.css";
 import { JoinFlow } from "./JoinFlow";
-import { hubSocketUrl, parseInternetFragment, rtcTransport } from "./rtcTransport";
+import { hubSocketUrl, parseInternetFragment, rtcTransport, type JoinSocket } from "./rtcTransport";
 import { lanPage, lanTarget } from "./lanHint";
+import { hostPath } from "./netPath";
+import { joinTries, raceTransport } from "./pathRace";
+import { fpOf } from "../lib/joinProtocol";
 
 const hash = new URLSearchParams(location.hash.slice(1));
 const host = hash.get("n")?.trim() || null;
@@ -36,5 +39,29 @@ if (net) {
   // The engine may be served under a path (PS5UPLOAD_BASE_URL): the socket is beside this page.
   const prefix = location.pathname.replace(/\/join\/?$/, "");
   const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${prefix}/api/join/ws`;
-  root.render(<JoinFlow url={url} invite={invite} host={host} />);
+  // WebRTC first, signalled on this engine's own socket (no hub): the picture and sound as RTP
+  // into a <video> (an http page has no WebCodecs, and an iPhone's MSE is limited), checked
+  // against the link's certificate when it names one. The plain socket when WebRTC can't connect.
+  const log = (m: string) => console.info(`[join] ${m}`);
+  const page = `${location.origin}${prefix}/join`;
+  const transport =
+    typeof RTCPeerConnection === "undefined"
+      ? undefined
+      : raceTransport(
+          () =>
+            joinTries({
+              net: null,
+              lan: page,
+              ts: null,
+              fp: fpOf(hash.get("fp")),
+              rtc: true,
+              reach: (ws) => ws,
+              rtcMake: (inv, o) => rtcTransport(inv, { video: true, log, ...o }),
+              socket: (u) => new WebSocket(u) as unknown as JoinSocket,
+            }),
+          { room: page, log },
+        );
+  root.render(
+    <JoinFlow url={url} invite={invite} host={host} path={hostPath(location.hostname)} transport={transport} internet={false} />,
+  );
 }

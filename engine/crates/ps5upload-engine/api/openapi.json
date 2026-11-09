@@ -14745,6 +14745,21 @@
         ],
         "type": "object"
       },
+      "engine.game_fps_api.AddrBody": {
+        "properties": {
+          "addr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "engine.helper_copies_api.StoreReq": {
         "properties": {
           "addr": {
@@ -22818,7 +22833,7 @@
     },
     "/api/join/relay": {
       "get": {
-        "description": "`GET /api/join/relay?url=ws://<host engine>:<port>/api/join/ws` (this computer only): an app\njoining a friend's Play Together talks to its own engine (an app page may not open a plain\n`ws://` to another machine), which passes the socket through unchanged. Only another engine's\n`/api/join/ws` on a private address.",
+        "description": "`GET /api/join/relay?url=ws://<host engine>:<port>/api/join/ws` (this computer only): an app\njoining a friend's Play Together talks to its own engine (an app page may not open a plain\n`ws://` to another machine), which passes the socket through unchanged. Only another engine's\n`/api/join/ws`, or its `/api/join/signal` (an internet invite signalled without the hub), on a\nprivate address.",
         "parameters": [
           {
             "in": "query",
@@ -22842,7 +22857,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "A socket that forwards a guest page to the host engine's /api/join/ws",
+        "summary": "A socket that forwards a guest page to the host engine's /api/join/ws or /api/join/signal",
         "tags": [
           "play-together"
         ],
@@ -22913,6 +22928,33 @@
             "required": false
           },
           "response_schema": "literal"
+        }
+      }
+    },
+    "/api/join/signal": {
+      "get": {
+        "description": "`GET /api/join/signal`: an internet invite's signalling straight to this engine, for a guest\nthat reaches it on the home network or over Tailscale (join_net/local_signal.rs). The hub's\nguest protocol, for this engine's own rooms only; the connection it sets up is the same one,\nchecked by the guest against the link's fingerprint.",
+        "responses": {
+          "101": {
+            "description": "Switches to a WebSocket."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many requests"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "An internet invite's signalling straight to this engine, without the hub",
+        "tags": [
+          "play-together"
+        ],
+        "x-ps5upload": {
+          "access": "lan-open",
+          "response_schema": "websocket",
+          "websocket": true
         }
       }
     },
@@ -33925,6 +33967,378 @@
             "required": true
           },
           "response_schema": "literal"
+        }
+      }
+    },
+    "/api/ps5/hw/fps": {
+      "get": {
+        "description": "`GET /api/ps5/hw/fps`: the latest sample; keeps the sampler going for [`WATCH_LEASE`].",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The latest sample; keeps the sampler going for [`WATCH_LEASE`]",
+        "tags": [
+          "hardware"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/ps5/hw/fps/capture": {
+      "get": {
+        "description": "`GET /api/ps5/hw/fps/capture`: the samples from `since` on.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The samples from `since` on",
+        "tags": [
+          "hardware"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/ps5/hw/fps/capture/csv": {
+      "get": {
+        "description": "`GET /api/ps5/hw/fps/capture/csv`: the capture as a CSV file.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/csv; charset=utf-8": {
+                "schema": {
+                  "contentEncoding": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The capture as a CSV file",
+        "tags": [
+          "hardware"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "binary"
+        }
+      }
+    },
+    "/api/ps5/hw/fps/capture/start": {
+      "post": {
+        "description": "`POST /api/ps5/hw/fps/capture/start`: a new capture (the previous one is dropped).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/engine.game_fps_api.AddrBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "A new capture (the previous one is dropped)",
+        "tags": [
+          "hardware"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/ps5/hw/fps/capture/stop": {
+      "post": {
+        "description": "`POST /api/ps5/hw/fps/capture/stop`: ends the capture and keeps it for export.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/engine.game_fps_api.AddrBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Ends the capture and keeps it for export",
+        "tags": [
+          "hardware"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "json-unknown"
         }
       }
     },
@@ -45848,6 +46262,7 @@
                         }
                       ]
                     },
+                    "pipeline": {},
                     "presets": {
                       "items": {},
                       "type": "array"

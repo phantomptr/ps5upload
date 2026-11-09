@@ -31,6 +31,10 @@ struct Place {
     same_lan: bool,
     /// Both are on the tailnet.
     tailnet: bool,
+    /// The engine's computer is on it through the Tailscale app (an interface with its 100.x
+    /// address). PS5Upload's own Tailscale (tailnet_engine.rs) is userspace only: no interface, so
+    /// no socket or candidate there, and no tailnet pair for Play Together.
+    engine_tail_iface: bool,
 }
 
 /// A router mapping: inside (a socket) ↔ outside.
@@ -90,10 +94,23 @@ struct Outcome {
     path: &'static str,
     /// The engine's host candidates' priorities in its answer, by address.
     host_prios: Vec<(SocketAddr, u32)>,
+    /// With `cut`: how long after every packet stopped the engine said the path is gone.
+    dead_after: Option<Duration>,
 }
 
 /// A guest at `place` connects to an engine on the home network that also runs Tailscale.
 fn connect(place: Place) -> Outcome {
+    connect_then(place, false)
+}
+
+/// [`connect`]; with `cut`, every way between them then goes dead (the guest's Wi-Fi drops), and
+/// it runs on until the engine's ICE says so.
+fn connect_then(place: Place, cut: bool) -> Outcome {
+    connect_timed(place, cut, true)
+}
+
+/// [`connect_then`], the engine's ICE timing the game's (`tuned`) or str0m's own.
+fn connect_timed(place: Place, cut: bool, tuned: bool) -> Outcome {
     let t0 = Instant::now();
     let engine_public = a("203.0.113.1:6000");
     let guest_base = if place.same_lan {
@@ -146,12 +163,20 @@ fn connect(place: Place) -> Outcome {
     // The engine, as rtc.rs on_offer makes it: its sockets in the order the system lists them
     // (by address: the tailnet's first), then the STUN candidate.
     let (cert, _) = super::rtc::cert().unwrap();
-    let mut h = Rtc::builder()
+    let mut cfg = Rtc::builder()
         .set_crypto_provider(super::crypto::provider())
         .set_dtls_cert(cert.clone())
-        .set_stats_interval(Some(Duration::from_millis(200)))
-        .build(t0);
-    super::rtc::add_host_candidates(&mut h, [a(ENGINE_TAIL), a(ENGINE_LAN)]);
+        .set_stats_interval(Some(Duration::from_millis(200)));
+    if tuned {
+        super::rtc::game_ice(&mut cfg);
+    }
+    let mut h = cfg.build(t0);
+    let socks: &[&str] = if place.engine_tail_iface {
+        &[ENGINE_TAIL, ENGINE_LAN]
+    } else {
+        &[ENGINE_LAN]
+    };
+    super::rtc::add_host_candidates(&mut h, socks.iter().map(|s| a(s)));
     h.add_local_candidate(
         Candidate::server_reflexive(engine_public, a(ENGINE_LAN), "udp").unwrap(),
     );
@@ -178,7 +203,9 @@ fn connect(place: Place) -> Outcome {
     let mut now = t0;
     let mut open = false;
     let mut pair = None;
-    while now < t0 + Duration::from_secs(30) {
+    let mut cut_at: Option<Instant> = None;
+    let mut dead_after = None;
+    while now < t0 + Duration::from_secs(90) {
         let mut next = now + Duration::from_millis(50);
         for (rtc, engine) in [(&mut h, true), (&mut g, false)] {
             loop {
@@ -191,6 +218,13 @@ fn connect(place: Place) -> Outcome {
                         net.send(now, t.source, t.destination, t.contents.to_vec())
                     }
                     Output::Event(Event::ChannelOpen(..)) if engine => open = true,
+                    Output::Event(Event::IceConnectionStateChange(
+                        str0m::IceConnectionState::Disconnected,
+                    )) if engine => {
+                        if let Some(c) = cut_at {
+                            dead_after.get_or_insert(now.saturating_duration_since(c));
+                        }
+                    }
                     Output::Event(Event::PeerStats(s)) if engine && open => {
                         if let Some(c) = s.selected_candidate_pair {
                             pair = Some((c.local.addr, c.remote.addr));
@@ -201,11 +235,25 @@ fn connect(place: Place) -> Outcome {
             }
         }
         if let Some(p) = pair {
-            return Outcome {
-                pair: p,
-                path: super::rtc::path_of(p.0, p.1),
-                host_prios,
-            };
+            if cut && cut_at.is_none() {
+                // Every way goes dead: nothing routes from here on.
+                net.place = Place {
+                    same_lan: false,
+                    tailnet: false,
+                    engine_tail_iface: false,
+                };
+                net.maps.clear();
+                net.q.clear();
+                cut_at = Some(now);
+            }
+            if !cut || dead_after.is_some() {
+                return Outcome {
+                    pair: p,
+                    path: super::rtc::path_of(p.0, p.1),
+                    host_prios,
+                    dead_after,
+                };
+            }
         }
         if let Some(t) = net.q.iter().map(|p| p.0).min() {
             next = next.min(t);
@@ -242,6 +290,7 @@ fn on_the_same_wifi_the_lan_pair_wins_over_tailscale_and_the_internet() {
     let o = connect(Place {
         same_lan: true,
         tailnet: true,
+        engine_tail_iface: true,
     });
     assert_eq!(o.pair, (a(ENGINE_LAN), a(GUEST_LAN)), "{:?}", o.pair);
     assert_eq!(o.path, "lan");
@@ -256,9 +305,25 @@ fn away_on_tailscale_the_tailnet_pair_wins_over_the_internet() {
     let o = connect(Place {
         same_lan: false,
         tailnet: true,
+        engine_tail_iface: true,
     });
     assert_eq!(o.pair, (a(ENGINE_TAIL), a(GUEST_TAIL)), "{:?}", o.pair);
     assert_eq!(o.path, "tailscale");
+}
+
+/// Away, the host's computer on the tailnet through PS5Upload's own Tailscale only (no interface):
+/// the engine has no tailnet socket, so ICE goes through the routers. Play Together's Tailscale
+/// path needs the Tailscale app on the host's computer.
+#[test]
+fn away_with_only_the_builtin_tailscale_it_goes_over_the_internet() {
+    let o = connect(Place {
+        same_lan: false,
+        tailnet: true,
+        engine_tail_iface: false,
+    });
+    assert_eq!(o.pair.1, a("198.51.100.2:8000"), "{:?}", o.pair);
+    assert_eq!(o.path, "internet");
+    assert!(o.host_prios.iter().all(|(s, _)| *s != a(ENGINE_TAIL)));
 }
 
 /// Away from home without Tailscale: straight through both routers.
@@ -267,9 +332,35 @@ fn away_without_tailscale_it_goes_over_the_internet() {
     let o = connect(Place {
         same_lan: false,
         tailnet: false,
+        engine_tail_iface: true,
     });
     assert_eq!(o.pair.1, a("198.51.100.2:8000"), "{:?}", o.pair);
     assert_eq!(o.path, "internet");
+}
+
+/// The guest's Wi-Fi drops mid-game: the engine's ICE calls the path gone well before str0m's
+/// default timing would (rtc.rs game_ice), so the host's panel and the slot follow sooner. (The
+/// guest's own page notices first: no message for 3.5 s, joinClient SILENCE_MS.)
+#[test]
+fn a_dead_path_shows_sooner_with_the_games_ice_timing() {
+    let place = Place {
+        same_lan: true,
+        tailnet: false,
+        engine_tail_iface: true,
+    };
+    let game = connect_timed(place, true, true)
+        .dead_after
+        .expect("noticed");
+    let stock = connect_timed(place, true, false)
+        .dead_after
+        .expect("noticed");
+    eprintln!("dead path noticed after {game:?} (str0m's own timing: {stock:?})");
+    assert!(game < stock, "{game:?} vs {stock:?}");
+    assert!(game <= Duration::from_secs(16), "{game:?}");
+    assert!(
+        game >= Duration::from_secs(1),
+        "not on one lost packet: {game:?}"
+    );
 }
 
 #[test]

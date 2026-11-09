@@ -133,6 +133,49 @@ fn closed_answers() -> &'static Mutex<HashMap<String, (u32, Instant)>> {
 /// A run of closed answers older than this is over: the next one counts from 1 again.
 const CLOSED_RUN_GAP: Duration = Duration::from_secs(10 * 60);
 
+/// Per console: what discovery said just before the last session start, for the line a closed
+/// start writes (#720: a console on FW 13.00 closed every start for 40 minutes, or until it was
+/// restarted, after sessions that had ended cleanly; the log had nothing about its state).
+fn last_discovery() -> &'static Mutex<HashMap<String, ddp::DdpStatus>> {
+    static M: std::sync::OnceLock<Mutex<HashMap<String, ddp::DdpStatus>>> =
+        std::sync::OnceLock::new();
+    M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn note_discovery(host: &str, status: &ddp::DdpStatus) {
+    if let Ok(mut m) = last_discovery().lock() {
+        m.insert(host.to_string(), status.clone());
+    }
+}
+
+/// The closed start's line: which in a row, what discovery said just before (its status, the app
+/// it said runs, its firmware), and the wait. No names or ids of the console.
+pub(crate) fn closed_line(host: &str, closed: &InitClosed, ddp: Option<&ddp::DdpStatus>) -> String {
+    let seen = match ddp {
+        Some(d) => format!(
+            "discovery said {} {}, running {}, firmware {}",
+            d.code,
+            d.status_text,
+            if d.running_app_titleid.is_empty() {
+                "nothing"
+            } else {
+                d.running_app_titleid.as_str()
+            },
+            if d.system_version.is_empty() {
+                "?"
+            } else {
+                d.system_version.as_str()
+            },
+        ),
+        None => "no discovery answer on record".to_string(),
+    };
+    format!(
+        "rp guard: {host}: the PS5 closed session start {} in a row with no answer ({seen}); asking again in {} s",
+        closed.in_a_row,
+        closed.wait.as_secs()
+    )
+}
+
 /// `host` closed a session start with no answer: counts it and holds off new starts for
 /// [`closed_wait`]. Returns which in a row it is and the wait.
 pub fn closed_answer(host: &str) -> InitClosed {
@@ -151,7 +194,13 @@ pub fn closed_answer(host: &str) -> InitClosed {
         .unwrap_or(1);
     let wait = closed_wait(n);
     hold_off(host, wait);
-    InitClosed { in_a_row: n, wait }
+    let closed = InitClosed { in_a_row: n, wait };
+    let ddp = last_discovery()
+        .lock()
+        .ok()
+        .and_then(|m| m.get(host).cloned());
+    crate::clog!(Info, "rp", "{}", closed_line(host, &closed, ddp.as_ref()));
+    closed
 }
 
 /// The console gave a nonce: whatever held its slot has let go.
@@ -274,6 +323,7 @@ pub fn prepare(
         status.status_text,
         t0.elapsed().as_millis()
     );
+    note_discovery(host, &status);
     match status.code {
         200 => Ok(()),
         620 => {
@@ -372,6 +422,41 @@ mod tests {
             .contains(crate::rp_session::SESSION_INIT_CLOSED));
         slot_answered(host);
         assert_eq!(closed_answer(host).in_a_row, 1);
+    }
+
+    #[test]
+    fn a_closed_start_says_what_discovery_saw_just_before() {
+        let closed = InitClosed {
+            in_a_row: 3,
+            wait: Duration::from_secs(60),
+        };
+        let d = ddp::DdpStatus {
+            code: 200,
+            status_text: "Ok".into(),
+            host_name: "Living room".into(),
+            host_id: "AABBCCDDEEFF".into(),
+            system_version: "13000000".into(),
+            running_app_titleid: "PPSA01234".into(),
+            ..Default::default()
+        };
+        let line = closed_line("10.255.0.7", &closed, Some(&d));
+        assert_eq!(
+            line,
+            "rp guard: 10.255.0.7: the PS5 closed session start 3 in a row with no answer \
+             (discovery said 200 Ok, running PPSA01234, firmware 13000000); asking again in 60 s"
+        );
+        // Nothing that names the console.
+        assert!(!line.contains("Living room") && !line.contains("AABBCCDDEEFF"));
+        let home = ddp::DdpStatus {
+            code: 200,
+            status_text: "Ok".into(),
+            ..Default::default()
+        };
+        assert!(closed_line("h", &closed, Some(&home)).contains("running nothing, firmware ?"));
+        assert!(closed_line("h", &closed, None).contains("no discovery answer on record"));
+        // What prepare saw is what the next closed start reports.
+        note_discovery("10.255.0.8", &d);
+        assert_eq!(last_discovery().lock().unwrap().get("10.255.0.8"), Some(&d));
     }
 
     #[test]

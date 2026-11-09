@@ -91,6 +91,8 @@ export interface JoinStatus {
 export interface TrackMedia {
   stream: MediaStream;
   receiver: RTCRtpReceiver;
+  /** The sound's track, when the answer has one (the engine says `audio` in `joined`). */
+  audio?: RTCRtpReceiver;
 }
 
 export type ServerMessage =
@@ -98,7 +100,7 @@ export type ServerMessage =
   /** A resume held until the host plays again (`{"stage":"waiting","why":"host_stopped"}`). */
   | { kind: "waiting" }
   /** `track`: the pictures come on the internet connection's video track (join/rtcTransport). */
-  | { kind: "joined"; player: number; token: string; hevc: boolean; track: boolean }
+  | { kind: "joined"; player: number; token: string; hevc: boolean; track: boolean; audio: boolean }
   | { kind: "refused"; why: RefuseWhy }
   | { kind: "status"; status: JoinStatus }
   | { kind: "feedback"; rumble: [number, number] | null; light: [number, number, number] | null }
@@ -144,7 +146,7 @@ export function readServerMessage(text: string): ServerMessage | null {
   if (v.stage === "asking") return { kind: "asking" };
   if (v.stage === "waiting") return { kind: "waiting" };
   if (v.stage === "joined" && typeof v.player === "number" && typeof v.token === "string") {
-    return { kind: "joined", player: v.player, token: v.token, hevc: v.hevc === true, track: v.track === true };
+    return { kind: "joined", player: v.player, token: v.token, hevc: v.hevc === true, track: v.track === true, audio: v.audio === true };
   }
   if (v.stage === "refused") {
     const why = String(v.why ?? "");
@@ -252,6 +254,12 @@ export interface InternetInvite {
   hub: string;
 }
 
+/** A SHA-256 DTLS fingerprint as a link carries it (32 hex pairs with colons), upper case; null
+ *  when it is not one. */
+export function fpOf(v: string | null | undefined): string | null {
+  return v && /^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){31}$/.test(v) ? v.toUpperCase() : null;
+}
+
 /** The internet invite in a link's fragment (`location.hash`), or null when it is not one. */
 export function parseInternetFragment(hash: string): InternetInvite | null {
   const p = new URLSearchParams(hash.replace(/^#/, ""));
@@ -261,7 +269,7 @@ export function parseInternetFragment(hash: string): InternetInvite | null {
   const hub = p.get("hub") ?? "";
   if (!/^[A-Za-z0-9_-]{22}$/.test(room)) return null;
   if (!/^[A-Za-z0-9_-]{8,128}$/.test(key)) return null;
-  if (!/^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){31}$/.test(fp)) return null;
+  if (!fpOf(fp)) return null;
   // A host name or address, an optional port: nothing that could add a path, user or scheme.
   if (!/^([A-Za-z0-9.-]{1,253}|\[[0-9A-Fa-f:.]{2,45}\])(:\d{1,5})?$/.test(hub)) return null;
   return { room, key, fp: fp.toUpperCase(), hub };
@@ -281,6 +289,13 @@ export interface JoinLink {
   name: string | null;
   /** An internet invite: joined peer to peer through the hub (join/rtcTransport). */
   net?: InternetInvite;
+  /** The host's own page on their Wi-Fi (`lan`) and on Tailscale (`ts`), when the internet link
+   *  names them: where the app signals without the hub (join/pathRace). */
+  lan?: string | null;
+  ts?: string | null;
+  /** A Wi-Fi link's engine certificate (`&fp=`, since 12.4): its WebRTC join checks the answer
+   *  against it (join/pathRace). */
+  fp?: string | null;
 }
 
 /** The link pasted into the app (or scanned), or null when it is not one. */
@@ -302,14 +317,23 @@ export function parseJoinLink(text: string): JoinLink | null {
   if (net) {
     const lan = lanPage(u.hash, "join");
     const name = new URLSearchParams(u.hash.replace(/^#/, "")).get("n")?.trim() || null;
-    return { origin: lan ? lan.replace(/\/join\/?$/, "") : `https://${net.hub}`, invite: net.key, name, code: null, net };
+    const ts = lanPage(u.hash, "join", "ts");
+    return {
+      origin: lan ? lan.replace(/\/join\/?$/, "") : `https://${net.hub}`,
+      invite: net.key,
+      name,
+      code: null,
+      net,
+      lan,
+      ts,
+    };
   }
   const hash = new URLSearchParams(u.hash.replace(/^#/, ""));
   const invite = hash.get("i") ?? "";
   if (!/^[A-Za-z0-9_-]{8,128}$/.test(invite)) return null;
   const name = hash.get("n")?.trim() || null;
   // With the path the engine is served under (PS5UPLOAD_BASE_URL), if any.
-  return { origin: `${u.origin}${path[1]}`, invite, name, code: null };
+  return { origin: `${u.origin}${path[1]}`, invite, name, code: null, fp: fpOf(hash.get("fp")) };
 }
 
 /** "Open in the PS5Upload app": an invite link as the ps5upload:// link the app opens. */

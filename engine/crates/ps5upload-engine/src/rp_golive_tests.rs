@@ -859,3 +859,79 @@ mod pretend {
         end(&r, &s).await;
     }
 }
+
+// ---- Without ffmpeg (golive_native/: its own tests run the stream itself) ----
+
+static NATIVE: Mutex<Option<Arc<dyn native::audio::AudioCodecs>>> = Mutex::new(None);
+
+/// The pipeline a test below pretends this engine has (a phone's, with the pretend codecs).
+pub(super) fn native_override() -> Option<Arc<dyn native::audio::AudioCodecs>> {
+    NATIVE.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// The pretend phone pipeline until dropped (a failing test included).
+struct NativeOn;
+
+impl NativeOn {
+    fn new() -> Self {
+        *NATIVE.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(Arc::new(native::audio::fake::FakeCodecs {
+                fail_open: false,
+            }));
+        NativeOn
+    }
+}
+
+impl Drop for NativeOn {
+    fn drop(&mut self) {
+        *NATIVE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+#[tokio::test]
+async fn without_ffmpeg_the_status_says_so_and_srt_is_refused() {
+    let _turn = crate::rp_stream_api::LIVE_TEST_LOCK.lock().await;
+    let _native = NativeOn::new();
+    let base = serve().await;
+    let (st, v) = call("GET", format!("{base}/api/stream/status"), None).await;
+    assert_eq!(
+        (st, &v["pipeline"]),
+        (200, &serde_json::json!("native")),
+        "{v}"
+    );
+
+    let d = format!("{base}/api/stream/destinations");
+    let start_url = format!("{base}/api/stream/start");
+    let (_, v) = call(
+        "POST",
+        d.clone(),
+        Some(r#"{"preset":"custom","url":"srt://127.0.0.1:9000","label":"My SRT"}"#),
+    )
+    .await;
+    let srt = v["id"].as_str().expect("added").to_string();
+    let (_, v) = call(
+        "POST",
+        d,
+        Some(r#"{"preset":"custom","url":"rtmp://127.0.0.1:1/live","key":"abcd1234"}"#),
+    )
+    .await;
+    let rtmp = v["id"].as_str().expect("added").to_string();
+
+    let body = serde_json::json!({"destinations": [{"key_id": srt}]}).to_string();
+    let (st, v) = call("POST", start_url.clone(), Some(&body)).await;
+    assert_eq!(
+        (st, v["error"].as_str()),
+        (409, Some("srt_unsupported")),
+        "{v}"
+    );
+    assert!(v["message"].as_str().unwrap().contains("My SRT"), "{v}");
+
+    // RTMP needs no ffmpeg here: it gets as far as the missing session.
+    let body = serde_json::json!({"destinations": [{"key_id": rtmp}]}).to_string();
+    let (st, v) = call("POST", start_url, Some(&body)).await;
+    assert_eq!((st, v["error"].as_str()), (409, Some("no_session")), "{v}");
+
+    let store = golive_dest::store().unwrap();
+    assert!(store.remove(&srt));
+    assert!(store.remove(&rtmp));
+}

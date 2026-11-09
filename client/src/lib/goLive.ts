@@ -111,8 +111,14 @@ export interface FfmpegStatus {
   };
 }
 
+/** What the engine streams with: ffmpeg (a computer), the engine itself with the device's own
+ *  sound converter (the phone apps, #763), or neither (a phone without that converter). Absent
+ *  from older engines: ffmpeg. */
+export type LivePipeline = "ffmpeg" | "native" | "none";
+
 export interface StreamStatus {
   ffmpeg: FfmpegStatus;
+  pipeline?: LivePipeline;
   session: LiveSession | null;
   presets: LivePreset[];
   destinations: LiveDestination[];

@@ -47,14 +47,16 @@ export function npBackupTarget(
   info: ProfileInfo | null,
 ): { uid: number; slot: number; username: string } | null {
   if (!info) return null;
-  let uid = info.uid;
-  let username = info.username.trim();
-  if (uid === 0 && info.users.length === 1) {
-    uid = info.users[0].uid;
-    username = info.users[0].username.trim();
+  // An older helper (or a partial answer) may leave a name or a list out: no target, not a throw.
+  let uid = info.uid ?? 0;
+  let username = (info.username ?? "").trim();
+  const users = info.users ?? [];
+  if (uid === 0 && users.length === 1) {
+    uid = users[0].uid;
+    username = (users[0].username ?? "").trim();
   }
   if (uid === 0 || !username) return null;
-  const slot = info.slots.find((s) => s.name.trim() === username);
+  const slot = (info.slots ?? []).find((s) => (s.name ?? "").trim() === username);
   return slot ? { uid, slot: slot.slot, username } : null;
 }
 

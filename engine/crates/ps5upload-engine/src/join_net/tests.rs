@@ -84,6 +84,11 @@ impl FakeHub {
             .collect()
     }
 
+    /// Guests that ever joined a room on this hub.
+    pub(crate) fn guests_ever(&self) -> u64 {
+        self.st.lock().unwrap().next_gid
+    }
+
     pub(crate) fn host_conns(&self) -> usize {
         self.st.lock().unwrap().host_conns
     }
@@ -230,6 +235,8 @@ pub(crate) enum GIn {
     /// A picture off the video track (an access unit, Annex B), and whether nothing was lost
     /// before it.
     Media(Vec<u8>, bool),
+    /// A sound frame off the audio track (one Opus packet).
+    Audio(Vec<u8>),
 }
 
 pub(crate) enum GOut {
@@ -285,14 +292,27 @@ pub(crate) async fn connect_guest_with(
     label: &str,
     video: bool,
 ) -> TestGuest {
+    let join = serde_json::json!({"v": 1, "t": "join", "room": room});
+    connect_guest_join(hub_url, join, label, video, false).await
+}
+
+/// A home-network join signalled on the engine's own socket (`{"t":"join","lan":true}`,
+/// join_net/local_signal.rs): no room, a "join" channel, a video and an audio section when
+/// `video` (as the pages offer them).
+pub(crate) async fn connect_guest_lan(signal_url: &str, video: bool) -> TestGuest {
+    let join = serde_json::json!({"v": 1, "t": "join", "lan": true});
+    connect_guest_join(signal_url, join, "join", video, video).await
+}
+
+async fn connect_guest_join(
+    hub_url: &str,
+    join: serde_json::Value,
+    label: &str,
+    video: bool,
+    audio: bool,
+) -> TestGuest {
     let (mut hub, _) = tokio_tungstenite::connect_async(hub_url).await.unwrap();
-    hub.send(TMsg::Text(
-        serde_json::json!({"v": 1, "t": "join", "room": room})
-            .to_string()
-            .into(),
-    ))
-    .await
-    .unwrap();
+    hub.send(TMsg::Text(join.to_string().into())).await.unwrap();
     let joined = next_hub(&mut hub).await;
     assert_eq!(joined["t"], "joined", "{joined}");
 
@@ -306,6 +326,8 @@ pub(crate) async fn connect_guest_with(
     let mut api = rtc.sdp_api();
     let cid = api.add_channel(label.into());
     let mid = video.then(|| api.add_media(MediaKind::Video, Direction::RecvOnly, None, None, None));
+    let amid =
+        audio.then(|| api.add_media(MediaKind::Audio, Direction::RecvOnly, None, None, None));
     let (offer, pending): (_, SdpPendingOffer) = api.apply().unwrap();
     let signal = |data: serde_json::Value| {
         TMsg::Text(
@@ -348,7 +370,7 @@ pub(crate) async fn connect_guest_with(
         }
     });
     tokio::spawn(drive(
-        rtc, cid, mid, sock, local, in_tx, out_rx, cand_rx, open_tx,
+        rtc, cid, mid, amid, sock, local, in_tx, out_rx, cand_rx, open_tx,
     ));
     tokio::time::timeout(Duration::from_secs(10), open_rx)
         .await
@@ -384,6 +406,7 @@ async fn drive(
     mut rtc: Rtc,
     cid: ChannelId,
     mid: Option<Mid>,
+    amid: Option<Mid>,
     sock: tokio::net::UdpSocket,
     local: SocketAddr,
     in_tx: mpsc::UnboundedSender<GIn>,
@@ -439,6 +462,9 @@ async fn drive(
                         }
                     }
                     Event::ChannelClose(id) if id == cid => return,
+                    Event::MediaData(d) if Some(d.mid) == amid => {
+                        let _ = in_tx.send(GIn::Audio(d.data.to_vec()));
+                    }
                     Event::MediaData(d) => {
                         let _ = in_tx.send(GIn::Media(d.data.to_vec(), d.contiguous));
                     }
@@ -513,12 +539,28 @@ fn links_and_hub_addresses() {
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     assert_eq!(
-        super::link_for(super::Kind::Join, "R", "K", "AA:BB", "hub.example", None),
+        super::link_for(
+            super::Kind::Join,
+            "R",
+            "K",
+            "AA:BB",
+            "hub.example",
+            None,
+            None
+        ),
         "https://ps5upload.phantomptr.com/join/#room=R&k=K&fp=AA:BB&hub=hub.example"
     );
     // The phone link's: the website's controller page, its own channel label.
     assert_eq!(
-        super::link_for(super::Kind::Pad, "R", "K", "AA:BB", "hub.example", None),
+        super::link_for(
+            super::Kind::Pad,
+            "R",
+            "K",
+            "AA:BB",
+            "hub.example",
+            None,
+            None
+        ),
         "https://ps5upload.phantomptr.com/pad/#room=R&k=K&fp=AA:BB&hub=hub.example"
     );
     // The home network's page as a hint (percent-encoded: it is a fragment value).
@@ -529,16 +571,39 @@ fn links_and_hub_addresses() {
             "K",
             "AA:BB",
             "hub.example",
-            Some("http://192.168.1.10:19113/join")
+            Some("http://192.168.1.10:19113/join"),
+            None
         ),
         "https://ps5upload.phantomptr.com/join/#room=R&k=K&fp=AA:BB&hub=hub.example\
          &lan=http%3A%2F%2F192.168.1.10%3A19113%2Fjoin"
     );
-    // Only an http(s) page is a hint.
-    assert!(
-        !super::link_for(super::Kind::Pad, "R", "K", "F", "h", Some("javascript:x"))
-            .contains("lan=")
+    // With this computer's Tailscale page (the Tailscale app's address) beside it: `ts`, once.
+    let lan = "http://192.168.1.10:19113/join";
+    let ts = "http://100.101.2.3:19113/join";
+    assert_eq!(
+        super::link_for(super::Kind::Join, "R", "K", "F", "h", Some(lan), Some(ts)),
+        "https://ps5upload.phantomptr.com/join/#room=R&k=K&fp=F&hub=h\
+         &lan=http%3A%2F%2F192.168.1.10%3A19113%2Fjoin&ts=http%3A%2F%2F100.101.2.3%3A19113%2Fjoin"
     );
+    assert!(
+        !super::link_for(super::Kind::Join, "R", "K", "F", "h", Some(ts), Some(ts)).contains("ts="),
+        "the Tailscale page is the home one already"
+    );
+    assert!(
+        !super::link_for(super::Kind::Join, "R", "K", "F", "h", None, Some("file:x"))
+            .contains("ts=")
+    );
+    // Only an http(s) page is a hint.
+    assert!(!super::link_for(
+        super::Kind::Pad,
+        "R",
+        "K",
+        "F",
+        "h",
+        Some("javascript:x"),
+        None
+    )
+    .contains("lan="));
     assert_eq!(
         (super::Kind::Join.label(), super::Kind::Pad.label()),
         ("join", "pad")

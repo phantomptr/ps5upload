@@ -16,7 +16,8 @@ const EN_TS = (
 // String literals that LOOK like reasons but are protocol keys / internals, not reasons.
 // vinput_unsupported is the console's keyboard & mouse answer (Settings › Controls shows it), never
 // a job's failure. helper_old is Mesh Drive's status code (detail_code), which MeshDrive/driveDetail words.
-const NOT_REASONS = new Set(["ava1_port", "vinput_unsupported", "helper_old"]);
+// srt_unsupported is Go live's refusal (the phone's own streaming has no SRT), worded by goLiveText.
+const NOT_REASONS = new Set(["ava1_port", "vinput_unsupported", "helper_old", "srt_unsupported"]);
 
 const REASON_LITERAL =
   /"(ava1_[a-z0-9_]+|zip_read_error|[0-9a-z]+_unsupported(?:_layout)?|rar_password_(?:required|wrong)|helper_(?:not_ava1|old|starting|not_running)|not_paired)"/g;

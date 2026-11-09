@@ -279,6 +279,194 @@ async fn an_internet_guest_joins_over_webrtc_plays_and_gets_the_picture() {
     set_live(console, 0);
 }
 
+/// An app guest that reaches this engine (the same Wi-Fi, Tailscale) signals the internet invite
+/// to it directly (`/api/join/signal`): the same peer connection and certificate, the key only on
+/// the channel, and nothing through the hub. A room this engine does not have is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_app_guest_signals_the_internet_invite_to_the_engine_without_the_hub() {
+    let _turn = PARTY_TESTS.lock().await;
+    let hub = FakeHub::start().await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings {
+        hub_url: hub.url.clone(),
+        stun: Vec::new(),
+        upnp: false,
+        ..Settings::default()
+    });
+    let console = "10.77.0.47";
+    set_helper(console, Arc::new(FakeHelper::default()));
+    set_live(console, 1);
+    let s = open_party(console).await;
+    let key = s["invite"]["key"].as_str().unwrap().to_string();
+    let inv = internet_invite(console).await;
+    let room = inv["internet"]["room"].as_str().unwrap().to_string();
+    assert!(internet_room_open(&room));
+    assert!(!internet_room_open("AAAAAAAAAAAAAAAAAAAAAA"));
+
+    let signal = serve().await.replace("/api/join/ws", "/api/join/signal");
+    // Not a room here: refused, the socket closed.
+    {
+        let (mut ws, _) = tokio_tungstenite::connect_async(&signal).await.unwrap();
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message as TMsg;
+        ws.send(TMsg::Text(
+            serde_json::json!({"v": 1, "t": "join", "room": "AAAAAAAAAAAAAAAAAAAAAA"})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        let m = tokio::time::timeout(Duration::from_secs(5), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(m.to_text().unwrap()).unwrap();
+        assert_eq!(v, serde_json::json!({"t": "error", "why": "no_room"}));
+    }
+
+    // The room: the hub's guest protocol, the engine's own answer with the link's certificate.
+    let fp = crate::join_net::fingerprint().unwrap();
+    let mut g = connect_guest(&signal, &room).await;
+    assert!(g.answer.contains(&format!("a=fingerprint:sha-256 {fp}")));
+    g.text(serde_json::json!({"hello": {"invite": key, "name": "Near"}}));
+    assert_eq!(g.next_with("stage").await["stage"], "asking");
+    allow_next(console, true).await;
+    let j = g.next_with("stage").await;
+    assert_eq!(j["stage"], "joined", "{j}");
+    let st = until_state(console, "the guest's path", |s| {
+        s["guests"][0]["link"]["path"].is_string()
+    })
+    .await;
+    assert_eq!(st["guests"][0]["via"], "internet", "an internet invite's guest: {st}");
+    assert_eq!(st["guests"][0]["link"]["path"], "lan");
+    assert_eq!(hub.guests_ever(), 0, "nothing went through the hub");
+
+    g.text(serde_json::json!({"leave": 1}));
+    until_state(console, "left", |s| s["guests"][0]["state"] == "left").await;
+    close_party(console).await;
+    assert!(!internet_room_open(&room), "closed with Play Together");
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    set_live(console, 0);
+}
+
+/// A guest on the home network with the Wi-Fi's own link (no internet invite, no hub at all)
+/// joins over WebRTC signalled on the engine's socket: the link carries the engine's
+/// certificate, the answer has it, the invite key goes in the hello on the channel, the picture
+/// comes on the video track. A home-network join is refused while no Play Together is open.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_home_network_guest_joins_over_webrtc_without_any_hub() {
+    let _turn = PARTY_TESTS.lock().await;
+    let _live_turn = crate::rp_stream_api::LIVE_TEST_LOCK.lock().await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings {
+        internet_invites: false,
+        stun: Vec::new(),
+        upnp: false,
+        ..Settings::default()
+    });
+    let signal = serve().await.replace("/api/join/ws", "/api/join/signal");
+    {
+        // Nothing open: refused.
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message as TMsg;
+        let (mut ws, _) = tokio_tungstenite::connect_async(&signal).await.unwrap();
+        ws.send(TMsg::Text(r#"{"v":1,"t":"join","lan":true}"#.into()))
+            .await
+            .unwrap();
+        let m = tokio::time::timeout(Duration::from_secs(5), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(m.to_text().unwrap(), r#"{"t":"error","why":"no_room"}"#);
+    }
+    let console = "10.77.0.48";
+    set_helper(console, Arc::new(FakeHelper::default()));
+    set_live(console, 1);
+    let live = crate::rp_stream_api::test_live::Session::start(console);
+    let s = open_party(console).await;
+    let key = s["invite"]["key"].as_str().unwrap().to_string();
+    assert!(s["invite"]["internet"].is_null(), "no hub, no room: {s}");
+    let fp = crate::join_net::fingerprint().unwrap();
+    for u in s["invite"]["urls"].as_array().unwrap() {
+        assert!(
+            u.as_str().unwrap().ends_with(&format!("#i={key}&fp={fp}")),
+            "the Wi-Fi's link names the certificate: {u}"
+        );
+    }
+
+    let mut g = crate::join_net::tests::connect_guest_lan(&signal, true).await;
+    assert!(g.answer.contains(&format!("a=fingerprint:sha-256 {fp}")));
+    g.text(serde_json::json!({"hello": {"invite": key, "name": "Near"}}));
+    assert_eq!(g.next_with("stage").await["stage"], "asking");
+    allow_next(console, true).await;
+    let j = g.next_with("stage").await;
+    assert_eq!(j["stage"], "joined", "{j}");
+    assert_eq!(j["track"], true, "the picture on the video track: {j}");
+    let (header, key_au, _) = h264();
+    live.send(0, &header, false);
+    live.picture(&key_au, true);
+    let (got, _) = next_track_picture(&mut g).await;
+    assert!(got.ends_with(&key_au[key_au.len() - 64..]), "the keyframe on the track");
+    // The sound on the Opus audio track beside it (#720), not on the channel: the header (2
+    // channels, 16 bits, 48 kHz, 480 samples a frame), then frames [index u16 BE][Opus packet].
+    assert_eq!(j["audio"], true, "{j}");
+    live.send(3, &[2, 16, 0, 0, 0xbb, 0x80, 0, 0, 0x01, 0xe0], false);
+    for i in 0u16..3 {
+        let mut f = i.to_be_bytes().to_vec();
+        f.extend_from_slice(&[0xfc, 0xff, 0xfe, i as u8]);
+        live.send(4, &f, false);
+    }
+    let mut sound = Vec::new();
+    let until = tokio::time::Instant::now() + Duration::from_secs(10);
+    while sound.len() < 3 {
+        match tokio::time::timeout_at(until, g.rx.recv()).await {
+            Ok(Some(GIn::Audio(p))) => sound.push(p),
+            Ok(Some(GIn::Binary(b))) if matches!(b.first(), Some(3 | 4)) => {
+                panic!("sound on the channel with the audio track on")
+            }
+            Ok(Some(_)) => {}
+            other => panic!("no sound on the track: {other:?} after {}", sound.len()),
+        }
+    }
+    assert_eq!(sound[0], vec![0xfc, 0xff, 0xfe, 0], "the Opus packet as it came");
+    assert_eq!(sound[2], vec![0xfc, 0xff, 0xfe, 2]);
+    let st = until_state(console, "the guest's path", |s| {
+        s["guests"][0]["link"]["path"].is_string()
+    })
+    .await;
+    assert_eq!(st["guests"][0]["link"]["path"], "lan");
+
+    g.text(serde_json::json!({"leave": 1}));
+    until_state(console, "left", |s| s["guests"][0]["state"] == "left").await;
+    close_party(console).await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    set_live(console, 0);
+}
+
+#[test]
+fn the_relay_passes_a_guest_or_a_signalling_socket_only() {
+    assert_eq!(
+        relay_target("ws://192.168.1.5:19113/api/join/ws"),
+        Some(("ws://192.168.1.5:19113/api/join/ws".to_string(), GUEST_MSG_MAX))
+    );
+    // An offer is several KiB: the hub's frame size for a signalling socket.
+    assert_eq!(
+        relay_target("ws://100.101.2.3:19113/api/join/signal"),
+        Some((
+            "ws://100.101.2.3:19113/api/join/signal".to_string(),
+            crate::join_net::local_signal::FRAME_MAX
+        ))
+    );
+    for bad in [
+        "ws://8.8.8.8:19113/api/join/signal",
+        "ws://192.168.1.5:19113/api/join/open",
+        "ws://192.168.1.5:19113/api/join/signal?x=1",
+        "ws://192.168.1.5:19113/api/join/signalx",
+    ] {
+        assert_eq!(relay_target(bad), None, "{bad}");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_hub_room_is_renamed_if_taken_reclaimed_after_a_drop_and_closed_when_turned_off() {
     let _turn = PARTY_TESTS.lock().await;

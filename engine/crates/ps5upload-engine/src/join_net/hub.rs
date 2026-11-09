@@ -126,9 +126,10 @@ impl Room {
             && (st.error.is_some() || self.shared.started.elapsed() >= OFFLINE_AFTER)
     }
 
-    /// The invite's internet half, as the host's page shows it (`key`: the invite's; `lan`: the
-    /// home network's page the link names as its hint, see [`super::link_for`]).
-    pub(crate) fn json(&self, key: &str, lan: Option<&str>) -> serde_json::Value {
+    /// The invite's internet half, as the host's page shows it (`key`: the invite's; `lan` and
+    /// `ts`: this engine's pages on the home network and on Tailscale the link names, see
+    /// [`super::link_for`]).
+    pub(crate) fn json(&self, key: &str, lan: Option<&str>, ts: Option<&str>) -> serde_json::Value {
         let offline = self.offline();
         let id = self.id();
         let hub = super::hub_host(&self.shared.url).unwrap_or_default();
@@ -139,7 +140,7 @@ impl Room {
             .unwrap_or_else(|e| e.into_inner())
             .map(|(a, how)| serde_json::json!({"via": how, "port": a.port()}));
         serde_json::json!({
-            "url": fp.as_ref().map(|fp| super::link_for(self.shared.kind, &id, key, fp, &hub, lan)),
+            "url": fp.as_ref().map(|fp| super::link_for(self.shared.kind, &id, key, fp, &hub, lan, ts)),
             "room": id,
             "hub": hub,
             "fp": fp,

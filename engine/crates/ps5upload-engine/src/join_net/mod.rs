@@ -40,6 +40,7 @@
 pub(crate) mod chunk;
 pub(crate) mod crypto;
 pub(crate) mod hub;
+pub(crate) mod local_signal;
 pub(crate) mod nat;
 pub(crate) mod rtc;
 pub(crate) mod stun;
@@ -159,7 +160,22 @@ pub(crate) struct TrackSt {
     pub under_since: Option<Instant>,
     /// The stream's bitrate (kbit/s): the console cannot change it mid-session.
     pub stream_kbps: Option<u32>,
+    /// When the session put its pictures on the track: the connection check runs from here
+    /// ([`CHECK_FOR`]: str0m's estimate probes up to [`rtc`]'s BWE_HEADROOM over the rate), and
+    /// whether its result was logged.
+    pub on_at: Option<Instant>,
+    pub checked: bool,
+    /// The offer has an audio section with Opus, and the session's sound goes there (#720:
+    /// the browser's jitter buffer and loss concealment, not the page's own player).
+    pub opus: bool,
+    pub audio_on: bool,
 }
+
+/// The connection check at a guest's start: this long of the estimate (with str0m's probing) and
+/// the RTCP round trip and loss before the result counts.
+pub(crate) const CHECK_FOR: Duration = Duration::from_millis(2500);
+/// What a suggestion leaves free over the slowest guest's estimate: it fits at this share of it.
+pub(crate) const FIT_SHARE: f64 = 1.0 / 1.2;
 
 /// The estimate under the stream's bitrate this long: the host is told to lower the quality.
 pub(crate) const SLOW_FOR: Duration = Duration::from_secs(5);
@@ -167,17 +183,41 @@ pub(crate) const SLOW_FOR: Duration = Duration::from_secs(5);
 const SLOW_UNDER: f64 = 0.9;
 
 impl TrackSt {
-    /// A new estimate.
+    /// A new estimate. Under the line ([`SLOW_UNDER`] of the rate) it counts from then; it
+    /// stops counting only once the estimate is back up to the rate itself (hysteresis: one that
+    /// hovers about the line does not start over every second).
     pub(crate) fn estimate(&mut self, kbps: u32, now: Instant) {
         self.bwe_kbps = Some(kbps);
-        let under = self
-            .stream_kbps
-            .is_some_and(|s| (kbps as f64) < s as f64 * SLOW_UNDER);
-        if !under {
+        let Some(s) = self.stream_kbps.map(|s| s as f64) else {
             self.under_since = None;
-        } else if self.under_since.is_none() {
+            return;
+        };
+        let k = kbps as f64;
+        if k >= s {
+            self.under_since = None;
+        } else if k < s * SLOW_UNDER && self.under_since.is_none() {
             self.under_since = Some(now);
         }
+    }
+
+    /// The connection check is still running (the track just started, or no estimate yet).
+    pub(crate) fn measuring(&self, now: Instant) -> bool {
+        self.on
+            && (self.bwe_kbps.is_none()
+                || self
+                    .on_at
+                    .is_none_or(|t| now.saturating_duration_since(t) < CHECK_FOR))
+    }
+
+    /// How long the estimate has stayed under the line, whole seconds (0 when it is not).
+    pub(crate) fn under_s(&self, now: Instant) -> u64 {
+        self.under_since
+            .map_or(0, |t| now.saturating_duration_since(t).as_secs())
+    }
+
+    /// The most this guest carries with room to spare ([`FIT_SHARE`] of the estimate), kbit/s.
+    pub(crate) fn fit_kbps(&self) -> Option<u32> {
+        self.bwe_kbps.map(|k| (k as f64 * FIT_SHARE).round() as u32)
     }
 
     /// The estimate stayed under the stream's bitrate for [`SLOW_FOR`].
@@ -250,12 +290,26 @@ impl PeerInfo {
     /// The offer had a video section the engine can send on (with these codecs).
     pub(crate) fn track_offered(&self, h264: bool, h265: bool) {
         self.with(|s| {
-            s.track = Some(TrackSt {
-                h264,
-                h265,
-                ..TrackSt::default()
-            })
+            let t = s.track.get_or_insert_with(TrackSt::default);
+            t.h264 = h264;
+            t.h265 = h265;
         });
+    }
+
+    /// The offer had an audio section with Opus (rtc.rs). Before or after its video section: the
+    /// track's state is made by whichever came first.
+    pub(crate) fn audio_offered(&self) {
+        self.with(|s| s.track.get_or_insert_with(TrackSt::default).opus = true);
+    }
+
+    /// The session's sound on the audio track, when the offer had one and the pictures go on the
+    /// video track (the two are played together, in sync). True when it goes there.
+    pub(crate) fn use_audio(&self) -> bool {
+        self.track_with(|t| {
+            t.audio_on = t.opus && t.on;
+            t.audio_on
+        })
+        .unwrap_or(false)
     }
 
     /// The session's choice: its pictures (`hevc` or not) on the track, when it can carry them.
@@ -264,6 +318,9 @@ impl PeerInfo {
         self.track_with(|t| {
             t.on = if hevc { t.h265 } else { t.h264 };
             t.stream_kbps = Some(stream_kbps);
+            if t.on && t.on_at.is_none() {
+                t.on_at = Some(Instant::now());
+            }
             t.on
         })
         .unwrap_or(false)
@@ -297,6 +354,8 @@ impl PeerInfo {
             "path": path,
             // Where the picture goes: "track" (RTP) or "channel" (the data channel).
             "video": if on { "track" } else { "channel" },
+            // Where the sound goes: "track" (Opus RTP, beside the picture) or "channel".
+            "audio": if track.as_ref().is_some_and(|t| t.audio_on) { "track" } else { "channel" },
             // The track's numbers (null on the channel): `frames_sent` (access units written),
             // `rtp_packets` (retransmissions included), `nacks` (each answered with a resend from
             // the send buffer), `plis` / `firs` (keyframe asks from the guest's browser), `loss` (its
@@ -314,6 +373,13 @@ impl PeerInfo {
                 "bwe_kbps": t.bwe_kbps,
                 "stream_kbps": t.stream_kbps,
                 "slow": t.slow(now),
+                // The connection check: still running (the first CHECK_FOR of the track), how
+                // long the estimate has stayed under the stream's rate (s, with hysteresis), and
+                // the most it carries with 20% to spare (kbit/s): what a lower quality for
+                // everyone should fit under.
+                "measuring": t.measuring(now),
+                "under_s": t.under_s(now),
+                "fit_kbps": t.fit_kbps(),
             })),
             "rtt_ms": rtt_ms,
             "sent_kbps": sent_kbps,
@@ -471,6 +537,24 @@ impl crate::join::GuestSocket for RtcSocket {
         on
     }
 
+    fn audio_track(&mut self) -> bool {
+        let on = self.info.use_audio();
+        if on {
+            let _ = self.up.send(rtc::Cmd::AudioOn(self.id));
+        }
+        on
+    }
+
+    async fn send_audio(&mut self, m: Message) -> Result<(), ()> {
+        if self.flow.closed.load(Ordering::Relaxed) {
+            return Err(());
+        }
+        match m {
+            Message::Binary(b) => self.up.send(rtc::Cmd::Audio(self.id, b)).map_err(|_| ()),
+            _ => Ok(()),
+        }
+    }
+
     async fn send_video(&mut self, m: Message) -> Result<(), ()> {
         // No back-pressure: str0m sends a picture at once and keeps its packets for resends, so
         // there is no backlog to skip (a lost packet costs a resend, not the picture).
@@ -527,8 +611,11 @@ pub(crate) fn hub_url_ok(url: &str) -> bool {
 
 /// A room's link (an internet invite, or the phone link's), on the website's page for its kind.
 /// `lan`: this engine's own page for the kind on the home network (`http://192.168.1.10:19113/join`),
-/// the hint the page offers as "Open on this Wi-Fi" when it cannot reach the hub. It is no
-/// secret: the page there asks the host, as the link's key does.
+/// the hint the page offers as "Open on this Wi-Fi" when it cannot reach the hub, and where the
+/// app signals without the hub ([`local_signal`]). It is no secret: the page there asks the host,
+/// as the link's key does. `ts`: the same page at this computer's Tailscale address (the Tailscale
+/// app's), when it has one and it is not `lan` already: an app guest on the same tailnet signals
+/// there. Reachable only from inside that tailnet, so no more telling than `lan`.
 pub(crate) fn link_for(
     kind: Kind,
     room: &str,
@@ -536,11 +623,18 @@ pub(crate) fn link_for(
     fp: &str,
     hub: &str,
     lan: Option<&str>,
+    ts: Option<&str>,
 ) -> String {
     let mut s = format!("{}#room={room}&k={key}&fp={fp}&hub={hub}", kind.page());
-    if let Some(l) = lan.filter(|l| l.starts_with("http://") || l.starts_with("https://")) {
+    let page = |p: &&str| p.starts_with("http://") || p.starts_with("https://");
+    let lan = lan.filter(page);
+    if let Some(l) = lan {
         s.push_str("&lan=");
         s.push_str(&pct(l));
+    }
+    if let Some(t) = ts.filter(page).filter(|t| Some(*t) != lan) {
+        s.push_str("&ts=");
+        s.push_str(&pct(t));
     }
     s
 }

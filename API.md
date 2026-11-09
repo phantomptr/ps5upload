@@ -340,6 +340,23 @@ places to start.
   any device that reaches the helper is let in, as before. Each device in `devices` says how it was
   let in (`via`: `network`, `tailscale`, `approved`, or empty for paired with a code).
 
+## Game frame rate
+
+The running game's frame rate is sampled: the engine reads the console display's frame count once
+a second and divides the frames by the time between reads (both taken on the console). It is the
+frames shown in each second, not single-frame times.
+
+- `GET /api/ps5/hw/fps?addr=`: `{state, fps, frames, interval_ms, at_ms, capture}`. Each call keeps
+  the engine sampling for 15 seconds, so the first one may answer `state: "starting"` with no `fps`.
+  `state` is `ok`, `no_game` (no game picture to count), `unsupported` (a helper older than this),
+  `offline` (with `error`), `no_device` or `failed`.
+- `POST /api/ps5/hw/fps/capture/start {addr}` and `.../capture/stop {addr}`: a capture keeps one row
+  a second (and the console's temperatures every 5 seconds) in the engine's memory until the next
+  start, for up to six hours. `capture.stats` has `min_fps`, `avg_fps` (all frames over all the
+  time), `low_1pct_fps` (the slowest 1% of seconds) and `max_fps`.
+- `GET /api/ps5/hw/fps/capture?addr=&since=N`: the rows from `N` on; `GET
+  /api/ps5/hw/fps/capture/csv?addr=`: the same as CSV. 404 `no_capture` when there is none.
+
 ## How far to trust the document
 
 It is built from the code, and CI fails when the two disagree. It never makes up a field, so it says

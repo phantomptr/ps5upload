@@ -6,6 +6,38 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+Play Together:
+
+- Join a friend in the app works again with the one invite link (the invite service refused the app; fixed on the service, so 12.3.0 joins too).
+- Joining picks the shortest way by itself: on the host's Wi-Fi it connects straight to the host, with no internet or invite service needed; over Tailscale it uses the host's Tailscale address; otherwise it goes over the internet. Whichever connects first is used, and a reconnect tries the last good way first.
+- Friends on the host's Wi-Fi now get the picture and sound the way internet friends do (a smooth, low-delay stream), with the old way kept only as a fallback. This should bring back the picture on iPhones on the same Wi-Fi.
+- A friend's sound now plays through the browser's own audio playback, which should end the sound stutter on iPhones.
+- The host sees each friend's connection (Good, OK, or Slow with about how fast) and which way they joined. If a friend's connection can't keep up, it offers a lower quality that fits everyone, only when you tap it.
+- The Play Together panel says plainly that friends don't need Tailscale.
+
+Remote Play:
+
+- On a Mac, the controller keeps working after leaving full screen.
+- When the PS5 refuses to start a new session, the log now says what it reported, and the stutter on older Macs is logged in more detail, to find their causes.
+
+Game frame rate (new):
+
+- Hardware shows the game's frame rate live, sampled once a second, and Capture records a run with a graph, min, average, 1% low and max, and a CSV to export. It reads on the console; it isn't drawn on the TV.
+
+Go live from your phone (new):
+
+- The iPhone and Android apps can go live by themselves, without a computer. The PS5's picture goes out as it is and the sound is converted on the phone. Keep the app open on screen while live. SRT addresses still need a computer.
+
+Agents:
+
+- AI agents that use the newest MCP version (like Codex with it turned on) connect again.
+
+Website:
+
+- Shorter: each section's extra details and the full feature list fold away until you open them.
+
+## 12.3.0
+
 Connecting:
 
 - Connection shows the PS5s your Tailscale network can see that aren't on this device's list yet, with Add. No more going through Settings › Tailscale or a scan to find them. If one doesn't let this device in yet, it says where to allow it.

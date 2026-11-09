@@ -620,6 +620,14 @@ async fn origins() {
     // The engine sends no Origin; the guest page sends its own.
     connect_with(&t, None, None).await;
     connect_with(&t, Some("https://ps5upload.phantomptr.com"), None).await;
+    // The app's own pages (12.3: Join a friend scans an internet invite in the app).
+    for app in [
+        "tauri://localhost",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+    ] {
+        connect_with(&t, Some(app), None).await;
+    }
     let err = try_connect(&t, Some("https://evil.example"), None)
         .await
         .expect_err("refused");

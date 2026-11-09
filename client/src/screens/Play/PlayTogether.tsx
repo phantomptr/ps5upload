@@ -6,12 +6,15 @@ import { Button, Callout, Toggle } from "../../components";
 import { SendHelperButton } from "../../components/SendHelperButton";
 import { delayTone, formatCode, playerColor } from "../../lib/joinProtocol";
 import { useTr } from "../../state/lang";
-import { useRemotePlayStore } from "../../state/remotePlay";
+import { RP_BITRATES, useRemotePlayStore } from "../../state/remotePlay";
+import { useRpQualityStore } from "../../state/rpQuality";
 import { PictureHereToggle, PlayOnTvNote } from "./PictureHere";
 import { QrCode } from "./PhonePads";
 import {
   inviteOn,
   joinApi,
+  linkGrade,
+  lowerForAll,
   playerSlots,
   shareOf,
   slowFriend,
@@ -247,6 +250,30 @@ function PlayerCard({ addr, player, guest }: { addr: string; player: number; gue
                 )}
               </span>
             )}
+            {/* The connection check (their video track's estimate, loss, round trip): a word and
+                about how much it carries, live; under the rate, the line above says it. */}
+            {(() => {
+              const lg = guest.status === "playing" && !guest.carries ? linkGrade(guest.link) : null;
+              if (!lg) return null;
+              const mbps = lg.mbps ?? 0;
+              const text =
+                lg.grade === "measuring"
+                  ? tr("pt_link_checking", undefined, "Checking the connection…")
+                  : lg.grade === "good"
+                    ? tr("pt_link_good", { mbps }, `Good connection, about ${mbps} Mbps`)
+                    : lg.grade === "ok"
+                      ? tr("pt_link_ok", { mbps }, `OK connection, about ${mbps} Mbps`)
+                      : tr("pt_link_slow", { mbps }, `Slow connection, about ${mbps} Mbps`);
+              return (
+                <span
+                  className={`text-xs ${lg.grade === "slow" ? "text-[var(--color-warn)]" : "text-[var(--color-muted)]"}`}
+                  data-testid="pt-player-link"
+                  data-grade={lg.grade}
+                >
+                  {text}
+                </span>
+              );
+            })()}
             {/* What their own page says: the picture stands still at times on their side. */}
             {!guest.behind && !guest.carries && guest.status === "playing" && (guest.quality === "stutters" || guest.quality === "poor") && (
               <span className="text-xs text-[var(--color-warn)]" data-testid="pt-player-stutter" data-quality={guest.quality}>
@@ -401,6 +428,12 @@ export function PlayTogetherPanel({
   const wifiWhy = !onNet && netOffered && invite ? (anywhere ? (one?.why === "offline" ? "offline" : null) : "setting") : null;
   const peers = netPeersView(state.netPeers, dismissed);
   const slow = slowFriend(state);
+  // A guest whose connection has stayed under the stream's rate: a lower rate that fits everyone,
+  // offered once per guest (never applied on its own: every guest shares the PS5's one stream).
+  const lower = lowerForAll(state.guests, RP_BITRATES);
+  const [lowerSeen, setLowerSeen] = useState<Set<number>>(() => new Set());
+  const hasStream = useRemotePlayStore((s) => !!s.stream);
+  const lowerOffer = lower && !lowerSeen.has(lower.guest.id) ? lower : null;
   // The system share sheet (Messages, WhatsApp…), where the device has one: phones mostly.
   const canShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
   const share = async () => {
@@ -581,6 +614,17 @@ export function PlayTogetherPanel({
                 {tr("pt_works_anywhere", undefined, "Works anywhere: on your Wi-Fi and over the internet.")}
               </p>
             )}
+            {/* #720: Play Together never sets up Tailscale; it only uses the Tailscale app's
+                network when both have it and it is the shorter way (join/pathRace, ICE). */}
+            {link && onNet && (
+              <p className="text-xs text-[var(--color-muted)]" data-testid="pt-no-tailscale">
+                {tr(
+                  "pt_no_tailscale_needed",
+                  undefined,
+                  "No Tailscale needed. The link takes the shortest way: your Wi-Fi, Tailscale if you both use the Tailscale app, or the internet.",
+                )}
+              </p>
+            )}
             {link && onNet && <InternetHint testId="pt-addresses" />}
             {link && wifiWhy && (
               <p
@@ -694,7 +738,43 @@ export function PlayTogetherPanel({
         </div>
       )}
 
-      {slow && (
+      {lowerOffer && (
+        <div data-testid="pt-lower" data-to={lowerOffer.toKbps}>
+          <Callout
+            tone="warn"
+            title={tr(
+                  "pt_lower_for_all",
+                  {
+                    name: friendName(tr, lowerOffer.guest.name),
+                    got: Math.round(lowerOffer.gotKbps / 100) / 10,
+                    to: lowerOffer.toKbps / 1000,
+                  },
+                  `${friendName(tr, lowerOffer.guest.name)}'s connection carries about ${Math.round(lowerOffer.gotKbps / 100) / 10} Mbps. Lower the stream to ${lowerOffer.toKbps / 1000} Mbps so everyone keeps up? The picture restarts for a few seconds and everyone keeps their place.`,
+                )}
+          >
+              <div className="flex flex-wrap gap-2">
+                {hasStream && (
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    data-testid="pt-lower-go"
+                    onClick={() => {
+                      setLowerSeen((s) => new Set([...s, lowerOffer.guest.id]));
+                      void useRpQualityStore.getState().restartWith({ bitrateKbps: lowerOffer.toKbps });
+                    }}
+                  >
+                    {tr("pt_lower_to", { to: lowerOffer.toKbps / 1000 }, `Lower to ${lowerOffer.toKbps / 1000} Mbps`)}
+                  </Button>
+                )}
+                <Button size="sm" variant="ghost" data-testid="pt-lower-dismiss" onClick={() => setLowerSeen((s) => new Set([...s, lowerOffer.guest.id]))}>
+                  {tr("rp_phone_close", undefined, "Close")}
+                </Button>
+              </div>
+          </Callout>
+        </div>
+      )}
+
+      {slow && !lowerOffer && (
         <div data-testid="pt-slow">
           <Callout
             tone="warn"

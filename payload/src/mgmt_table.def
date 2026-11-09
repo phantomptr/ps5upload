@@ -200,3 +200,5 @@ MGMT_H1(AVA1_METHOD_VPAD_HB, MGMT_FRAME_VPAD_HB, MGMT_FRAME_VPAD_HB_ACK, 0, hand
 MGMT_H1(AVA1_METHOD_VPAD_CLOSE, MGMT_FRAME_VPAD_CLOSE, MGMT_FRAME_VPAD_CLOSE_ACK, 0, handle_vpad_close, mgmt_call_text_keep)
 MGMT_H1(AVA1_METHOD_VPAD_OUTPUT, MGMT_FRAME_VPAD_OUTPUT, MGMT_FRAME_VPAD_OUTPUT_ACK, 0, handle_vpad_output, mgmt_call_text_keep)
 MGMT_H0(AVA1_METHOD_VPAD_STATUS, MGMT_FRAME_VPAD_STATUS, MGMT_FRAME_VPAD_STATUS_ACK, 0, handle_vpad_status, mgmt_call_text)
+/* ---- the running game's frame count, for the app's sampled frame rate (game_fps.c, #774) ---- */
+MGMT_H0(AVA1_METHOD_HW_FPS, MGMT_FRAME_HW_FPS, MGMT_FRAME_HW_FPS_ACK, 0, handle_hw_fps, mgmt_call_text)

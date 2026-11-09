@@ -38,6 +38,12 @@ export function problemText(tr: Tr, code: string, fallback: string, site?: strin
       return tr("golive_err_all_failed", undefined, "None of the sites took the stream.");
     case "ffmpeg_failed":
       return tr("golive_err_ffmpeg_failed", undefined, "The streaming helper (ffmpeg) could not start on this computer.");
+    case "audio_failed":
+      return tr("golive_err_audio_failed", undefined, "This device couldn't convert the sound for streaming sites, so the stream stopped.");
+    case "audio_unavailable":
+      return tr("golive_native_unavailable", undefined, "This device can't convert the sound for streaming sites, so going live isn't available here.");
+    case "srt_unsupported":
+      return tr("golive_err_srt_unsupported", undefined, "SRT needs PS5Upload on a computer. To go live from here, use an rtmp:// or rtmps:// address.");
     case "destination_missing":
     case "not_found":
       return tr("golive_err_destination_missing", undefined, "That site is gone. Add it again.");

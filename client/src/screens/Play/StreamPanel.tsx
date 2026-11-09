@@ -61,6 +61,7 @@ import {
   COMPACT_QUERY,
   docFullscreen,
   focusForControllers,
+  focusTakenFrom,
   holdControllerHome,
   holdPageStill,
   inAndroidApp,
@@ -82,6 +83,7 @@ import { PlayTogetherStart, togetherStartKind } from "./PlayTogetherStart";
 import { friendsIn, useJoinHost } from "./playTogetherState";
 import { okToStartPlay } from "./JoinAFriend";
 import { useConfirm } from "../../components/ConfirmDialog";
+import { log } from "../../state/logs";
 import { GoLiveBarIcon, GoLiveChip, GoLivePanel, goLiveAvailable, inAppPhoneEngine, useGoLivePolling } from "./GoLivePanel";
 import { GamePanel } from "./game/GamePanel";
 import { LaunchStatus } from "./game/LaunchStatus";
@@ -127,6 +129,9 @@ const BROWSER_ADVICE_KEY = "ps5upload.rp_browser_advice_dismissed";
 const ESC_HOLD_MS = 700;
 /** How long a quick Esc press holds its button down on the console. */
 const ESC_TAP_MS = 80;
+/** After a switch into or out of full screen, how long the Mac's window animation is given before
+ *  the web view's focus is checked again. */
+const FULL_SETTLE_MS = 1000;
 
 export { streamErrorMessage };
 
@@ -516,10 +521,10 @@ export function StreamPanel({
   }, [joinHost, confirm, tr]);
   const otherStream = streaming && !running ? target : null;
   const otherProfile = otherStream ? profiles.find((p) => p.host === otherStream.host) ?? null : null;
-  // The iOS app hands controllers to the page only while it has the focus: take it on show and
-  // whenever a stream starts here.
+  // The iOS and Mac apps hand controllers to the page only while it has the focus: take it on
+  // show and whenever a stream starts here.
   useEffect(() => {
-    focusForControllers();
+    void focusForControllers();
   }, [running]);
   // iOS and the Mac app: the PS button goes to the console during a stream, not to the system's Games overlay
   // (#675). A controller paired later gets the same.
@@ -830,11 +835,30 @@ export function StreamPanel({
   );
   // Into or out of full screen the stage is a new element: keep the keyboard on it, both ways
   // (out of full screen the keys went to the page, and the stream lost its controls: #720).
+  // The Mac app also gives the web view the window's focus back: WebKit sends the controller only
+  // to the key window's first responder, which after full screen may be another view (#720: the
+  // controller worked only in full screen). Asked again once the window's own animation is over;
+  // said in the log when it was needed, so a report shows it. Desktop app only (the command does
+  // nothing outside the Mac).
   const wasFull = useRef(full);
   useEffect(() => {
     if (wasFull.current === full) return;
     wasFull.current = full;
     stage.current?.focus();
+    if (!isTauriEnv() || isMobile()) return;
+    const take = (when: string) =>
+      void focusForControllers().then((was) => {
+        const from = focusTakenFrom(was);
+        if (from) log.info("remote-play", `full screen ${full ? "on" : "off"} (${when}): the focus was on ${from}, given back to the picture`);
+      });
+    take("at once");
+    const later = window.setTimeout(() => {
+      // Not taken from a box of the app the player went to meanwhile.
+      const active = document.activeElement;
+      if (!active || active === document.body) stage.current?.focus();
+      take("after the window settled");
+    }, FULL_SETTLE_MS);
+    return () => window.clearTimeout(later);
   }, [full]);
   // Leaving the screen leaves full screen.
   useEffect(() => () => void setWindowFullscreen(false), []);

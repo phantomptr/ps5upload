@@ -56,6 +56,7 @@ mod folder_build;
 mod fpkg_api;
 mod fpkg_firmware;
 mod frame_decode;
+mod game_fps_api;
 mod games_api;
 mod golive_dest;
 mod golive_ffmpeg;
@@ -892,6 +893,9 @@ fn loopback_allows(cfg: &LoopbackGuardConfig, peer: std::net::IpAddr, path: &str
         // the invite or the resume token itself. The rest of /api/join is the host's.
         || path == "/join"
         || path == "/api/join/ws"
+        // …and an internet invite's signalling straight to this engine (join_net/local_signal),
+        // for this engine's own rooms only: the guest still checks the certificate and the key.
+        || path == "/api/join/signal"
         // A friend receiving a Share (share/mod.rs) on the home network: the page and its
         // socket, which serves only what the sender allowed. The rest of /api/share is the
         // sender's.
@@ -12432,6 +12436,24 @@ fn build_app_and_mcp(
         .route("/api/ps5/hw/power", get(ps5_hw_power))
         .route("/api/ps5/hw/storage", get(ps5_hw_storage))
         .route("/api/ps5/hw/drive-sensors", get(ps5_hw_drive_sensors))
+        // the running game's sampled frame rate, live and captured (#774)
+        .route("/api/ps5/hw/fps", get(game_fps_api::fps_live))
+        .route(
+            "/api/ps5/hw/fps/capture",
+            get(game_fps_api::fps_capture_get),
+        )
+        .route(
+            "/api/ps5/hw/fps/capture/start",
+            post(game_fps_api::fps_capture_start),
+        )
+        .route(
+            "/api/ps5/hw/fps/capture/stop",
+            post(game_fps_api::fps_capture_stop),
+        )
+        .route(
+            "/api/ps5/hw/fps/capture/csv",
+            get(game_fps_api::fps_capture_csv),
+        )
         .route("/api/ps5/proc/list", get(ps5_proc_list))
         .route("/api/ps5/app/lifecycle", post(ps5_app_lifecycle))
         .route("/api/ps5/klog", get(ps5_klog))
@@ -12635,6 +12657,7 @@ fn build_app_and_mcp(
         .route("/join", get(join::page))
         .route("/api/join/ws", get(join::ws))
         .route("/api/join/relay", get(join::relay))
+        .route("/api/join/signal", get(join::signal))
         .route("/api/join", get(join::get_state))
         .route("/api/join/open", post(join::open))
         .route("/api/join/close", post(join::close))
@@ -13506,6 +13529,7 @@ mod loopback_guard_tests {
         let c = cfg(&[]);
         assert!(loopback_allows(&c, ip("192.168.1.30"), "/join"));
         assert!(loopback_allows(&c, ip("192.168.1.30"), "/api/join/ws"));
+        assert!(loopback_allows(&c, ip("100.101.2.3"), "/api/join/signal"));
         // The host's side of Play Together stays on this computer.
         for p in [
             "/api/join",
@@ -13519,6 +13543,7 @@ mod loopback_guard_tests {
             "/api/join/relay",
             "/api/join/ws/x",
             "/api/join/wsx",
+            "/api/join/signal/x",
             "/join/../api/join/open",
             "/joinx",
             "/join/x",

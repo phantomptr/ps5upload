@@ -14,6 +14,7 @@
 // (`netFailure`), which the session shows as the reason the guest is not in the game.
 
 import { NET_CLOSE, netFailure, type InternetInvite, type NetWhy, type TrackMedia } from "../lib/joinProtocol";
+import { selectedPath, type NetPath } from "./netPath";
 
 /** What an internet invite link's fragment carries:
  *  `#room=<id>&k=<invite key>&fp=<SHA-256, upper-case hex with colons>&hub=<host[:port]>`. */
@@ -168,6 +169,16 @@ export interface RtcTransportOptions {
    *  can and its host allows it, and says so in `joined` (`track`); otherwise the pictures stay
    *  on the channel. */
   video?: boolean;
+  /** Where to signal: the hub's socket (the default), or one that speaks its guest side for this
+   *  room alone, the host's own engine (`/api/join/signal`, engine join_net/local_signal.rs), reached
+   *  through this app's engine on the same Wi-Fi or tailnet. The answer is checked against the
+   *  link's `fp` the same way either way. */
+  signalUrl?: string;
+  /** A home-network join (a Wi-Fi link, no room): the host's engine opens a room for this
+   *  connection (`{"t":"join","lan":true}`). The answer is checked against `inv.fp` when the link
+   *  names one; a link without (an older host, a typed address) takes the one certificate the
+   *  answer has, no less than its plain WebSocket would (that has none). */
+  lan?: boolean;
 }
 
 /** The video codecs the track may use, H.264 first (H.265 only where this browser has it: the
@@ -229,13 +240,13 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
       }
       let hub: WebSocket;
       try {
-        hub = new WS(hubSocketUrl(inv.hub));
+        hub = new WS(o.signalUrl ?? hubSocketUrl(inv.hub));
       } catch {
         this.fail("no_hub");
         return;
       }
       this.hub = hub;
-      hub.onopen = () => hub.send(JSON.stringify({ v: 1, t: "join", room: inv.room }));
+      hub.onopen = () => hub.send(JSON.stringify(o.lan ? { v: 1, t: "join", lan: true } : { v: 1, t: "join", room: inv.room }));
       hub.onmessage = (e: MessageEvent) => {
         if (typeof e.data !== "string") return;
         let m: HubMsg;
@@ -319,8 +330,23 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
         } catch {
           // No track here: the pictures come on the channel.
         }
+        // The sound beside the picture as an Opus track (#720): the browser's jitter buffer, loss
+        // concealment and lip sync play it. An engine without one answers it inactive; the sound
+        // then stays on the channel.
+        try {
+          pc.addTransceiver("audio", { direction: "recvonly" });
+        } catch {
+          // No audio track here: the sound comes on the channel.
+        }
         pc.ontrack = (e: RTCTrackEvent) => {
-          if (this.pc === pc) this.media = { stream: e.streams[0] ?? new MediaStream([e.track]), receiver: e.receiver };
+          if (this.pc !== pc) return;
+          // One stream for both, whatever stream ids the answer gave them (one <video> plays both).
+          const stream = this.media?.stream ?? e.streams[0] ?? new MediaStream();
+          if (!stream.getTracks().includes(e.track)) stream.addTrack(e.track);
+          this.media =
+            e.track.kind === "audio"
+              ? { stream, receiver: this.media?.receiver ?? e.receiver, audio: e.receiver }
+              : { stream, receiver: e.receiver, ...(this.media?.audio ? { audio: this.media.audio } : {}) };
         };
       }
       pc.onicecandidate = (e: RTCPeerConnectionIceEvent) => {
@@ -360,8 +386,9 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
       if (!pc) return;
       if (d.type === "answer") {
         if (this.answered || typeof d.sdp !== "string") return;
-        // Only the host's own engine: its certificate is the one the link carries.
-        if (!fingerprintMatches(d.sdp, inv.fp)) {
+        // Only the host's own engine: its certificate is the one the link carries (a home-network
+        // link without one: exactly one certificate, whatever it is).
+        if (inv.fp ? !fingerprintMatches(d.sdp, inv.fp) : sdpFingerprint(d.sdp) === null) {
           log("answer: fingerprint does not match the link");
           this.fail("mismatch");
           return;
@@ -422,6 +449,17 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
           return;
         default:
           return;
+      }
+    }
+
+    /** Which way the connection goes now (the pair ICE selected), or null before it is known. */
+    async netPath(): Promise<NetPath | null> {
+      const pc = this.pc;
+      if (!pc || this.readyState !== 1 || typeof pc.getStats !== "function") return null;
+      try {
+        return selectedPath(await pc.getStats());
+      } catch {
+        return null;
       }
     }
 

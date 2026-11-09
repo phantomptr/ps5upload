@@ -5,8 +5,18 @@
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
-/// The guest page's origin: the only browser origin allowed by default.
+/// The guest page's origin.
 pub const GUEST_PAGE_ORIGIN: &str = "https://ps5upload.phantomptr.com";
+
+/// The PS5Upload app's own pages (Tauri's WebView): `tauri://localhost` on macOS and iOS,
+/// `http://tauri.localhost` on Android and Windows (`https://` when the app opts into it). The
+/// app joins an internet invite from its page, so these are allowed by default next to the guest
+/// page. No website can have these origins, so this does not open the hub to other sites.
+pub const APP_ORIGINS: [&str; 3] = [
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+];
 
 /// An address block (`10.0.0.0/8`, `fdaa::/16`); a bare address is a /32 or /128.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,7 +141,10 @@ impl Default for Config {
             http_listen: "127.0.0.1:8787".parse().expect("static address"),
             metrics_listen: None,
             stun_listen: Vec::new(),
-            allowed_origins: vec![GUEST_PAGE_ORIGIN.to_string()],
+            allowed_origins: std::iter::once(GUEST_PAGE_ORIGIN)
+                .chain(APP_ORIGINS)
+                .map(str::to_string)
+                .collect(),
             trusted_proxies: Vec::new(),
             client_ip_header: "x-forwarded-for".to_string(),
             max_guests_per_room: 8,

@@ -589,9 +589,24 @@ pub(crate) struct FeedReader {
     _leave: Leave,
     pub stats: Arc<ReaderStats>,
     pub session: SessionInfo,
+    /// Opus channels, from the console's audio header.
+    pub channels: u8,
 }
 
 impl FeedReader {
+    /// The next frame as the console sent it, for Go live's own muxer (golive_native/); None
+    /// once the session ended. A reader uses this or `next`, not both.
+    pub(crate) async fn next_event(&mut self) -> Option<FeedEvent> {
+        let ev = self.rx.recv().await?;
+        if let FeedEvent::Video { key, .. } = &ev {
+            self.stats.frames.fetch_add(1, Ordering::Relaxed);
+            if *key {
+                self.stats.keyframes.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        Some(ev)
+    }
+
     /// The next TS bytes; None once the session ended.
     pub(crate) async fn next(&mut self) -> Option<Vec<u8>> {
         loop {
@@ -618,12 +633,14 @@ pub(crate) fn open_reader(who: &str) -> Option<FeedReader> {
         live.host
     );
     let mux = ReaderMux::new(&feed, id, stats.clone());
+    let channels = feed.channels.lock().map(|g| *g).unwrap_or(2);
     Some(FeedReader {
         rx,
         mux,
         _leave: Leave { feed, id },
         stats,
         session,
+        channels,
     })
 }
 

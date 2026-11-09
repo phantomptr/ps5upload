@@ -51,6 +51,20 @@ const BWE_START_KBPS: u64 = 15_000;
 /// The estimate looks this far above the stream's bitrate (to tell whether the link carries it).
 const BWE_HEADROOM: f64 = 1.25;
 
+/// How often a connected pair's binding is checked (str0m's default is 3 s), and how many tries a
+/// check gets. In the path sim (ice_path.rs) a dead path shows after about 15 s instead of about
+/// 21; fewer tries change nothing there (str0m's own pair timeouts rule the rest), so they stay
+/// generous for a lossy link's first checks. The guest's page notices sooner on its own (no
+/// message for 3.5 s) and comes back with its resume token.
+pub(crate) const ICE_MAX_RTO: Duration = Duration::from_millis(1000);
+pub(crate) const ICE_RETRANSMITS: usize = 6;
+
+/// ICE timing for a game ([`ICE_MAX_RTO`], [`ICE_RETRANSMITS`]). Shared with the path sims.
+pub(crate) fn game_ice(b: &mut RtcConfig) {
+    b.set_max_stun_rto(ICE_MAX_RTO);
+    b.set_max_stun_retransmits(ICE_RETRANSMITS);
+}
+
 /// An internet guest's peer connection with the video track on offer: H.264 (H.265 when the offer
 /// has it) with str0m's NACK, RTX, PLI/FIR and transport-cc defaults, a send buffer for the
 /// resends, and the bandwidth estimate. Shared with the link harness (link_sim.rs).
@@ -58,6 +72,7 @@ pub(crate) fn with_track(b: RtcConfig) -> RtcConfig {
     b.clear_codecs()
         .enable_h264(true)
         .enable_h265(true)
+        .enable_opus(true, false)
         .set_send_buffer_video(SEND_BUFFER_VIDEO)
         .enable_bwe(Some(Bitrate::kbps(BWE_START_KBPS)))
 }
@@ -145,6 +160,23 @@ fn has_params(au: &[u8], hevc: bool) -> bool {
 }
 
 /// The video track of one peer: where it goes and what the session sent it.
+/// A guest's sound as an Opus RTP track (#720): the console's Opus packets go on as they came,
+/// so the browser's own jitter buffer, loss concealment and lip sync play them, not the page.
+struct Audio {
+    mid: Mid,
+    pt: Pt,
+    /// The session sends its sound here (else on the data channel).
+    on: bool,
+    /// RTP ticks (48 kHz) per frame, from the sound's header (kind 3): 480 for 10 ms frames.
+    ticks: u64,
+    /// The console's frame index (u16, wraps) as a running count, for the RTP time.
+    last: Option<u16>,
+    count: u64,
+}
+
+/// Opus's RTP clock.
+const OPUS_HZ: u64 = 48_000;
+
 struct Video {
     mid: Mid,
     pts: TrackPts,
@@ -162,6 +194,9 @@ pub(crate) enum Cmd {
     /// A room is open: gather the outside addresses, keep the router mapping. Its kind says which
     /// session its peers' channels get.
     RoomOpen(String, Kind),
+    /// A home-network join's own room (join_net/local_signal.rs): offers are taken in it, with no
+    /// router mapping or STUN asked for.
+    RoomOpenLocal(String, Kind),
     RoomClose(String),
     /// A guest's offer (signal `data.type == "offer"`); `signal` takes what goes back to them.
     Offer {
@@ -188,6 +223,10 @@ pub(crate) enum Cmd {
     Track(u64, bool, u32),
     /// One of the session's video messages for the track: `[0][codec header]` or `[1][AU]`.
     Video(u64, Bytes),
+    /// The session's sound goes on the peer's audio track from now on.
+    AudioOn(u64),
+    /// One of the session's sound messages: `[3][header]` or `[4][u16 BE index][Opus packet]`.
+    Audio(u64, Bytes),
     /// A guest session ended.
     Gone(u64),
     /// The router mapping, made or lost.
@@ -378,6 +417,7 @@ async fn start() -> Option<Arc<Net>> {
         extra: Vec::new(),
         peers: Vec::new(),
         rooms: HashMap::new(),
+        local_rooms: std::collections::HashSet::new(),
         stun_tx: HashMap::new(),
         cmd: cmd.clone(),
         nat_want: None,
@@ -411,6 +451,8 @@ struct Peer {
     track_ok: bool,
     /// The video track, when the offer had one the engine can send on.
     video: Option<Video>,
+    /// The audio track, when the offer had one with Opus.
+    audio: Option<Audio>,
 }
 
 static NEXT_PEER: AtomicU64 = AtomicU64::new(1);
@@ -421,6 +463,9 @@ struct Driver {
     extra: Vec<Candidate>,
     peers: Vec<Peer>,
     rooms: HashMap<String, Kind>,
+    /// The rooms in `rooms` that are home-network joins' own ([`Cmd::RoomOpenLocal`]): they want
+    /// no router mapping.
+    local_rooms: std::collections::HashSet<String>,
     /// STUN requests in flight: transaction id → socket index.
     stun_tx: HashMap<[u8; 12], usize>,
     cmd: mpsc::UnboundedSender<Cmd>,
@@ -613,9 +658,14 @@ impl Driver {
                 self.want_mapping(true);
                 self.gather().await;
             }
+            Cmd::RoomOpenLocal(r, kind) => {
+                self.rooms.insert(r.clone(), kind);
+                self.local_rooms.insert(r);
+            }
             Cmd::RoomClose(r) => {
                 self.rooms.remove(&r);
-                if self.rooms.is_empty() {
+                self.local_rooms.remove(&r);
+                if self.rooms.len() == self.local_rooms.len() {
                     self.want_mapping(false);
                 }
             }
@@ -670,6 +720,21 @@ impl Driver {
             Cmd::Video(id, b) => {
                 if let Some(p) = self.peers.iter_mut().find(|p| p.id == id) {
                     to_track(p, &b, Instant::now());
+                }
+            }
+            Cmd::AudioOn(id) => {
+                if let Some(a) = self
+                    .peers
+                    .iter_mut()
+                    .find(|p| p.id == id)
+                    .and_then(|p| p.audio.as_mut())
+                {
+                    a.on = true;
+                }
+            }
+            Cmd::Audio(id, b) => {
+                if let Some(p) = self.peers.iter_mut().find(|p| p.id == id) {
+                    to_audio(p, &b, Instant::now());
                 }
             }
             Cmd::Gone(id) => {
@@ -736,6 +801,7 @@ impl Driver {
             .set_dtls_cert(cert.clone())
             .set_stats_interval(Some(Duration::from_secs(1)))
             .set_sctp_max_buffered_amount(SCTP_BUFFER);
+        game_ice(&mut b);
         // The picture as a video track for a Play Together page that offers one (a pad page's
         // watcher keeps its data channel: pad_link.rs has no track).
         let track = kind == Kind::Join && crate::join::settings().video_track;
@@ -783,6 +849,7 @@ impl Driver {
             last_src: None,
             track_ok: track,
             video: None,
+            audio: None,
         });
     }
 
@@ -1061,11 +1128,29 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
         Event::ChannelBufferedAmountLow(_) => flush(p),
         // The offer's video section: the track, if the engine may send on it with a codec it has.
         Event::MediaAdded(m) => {
-            if !p.track_ok
-                || p.video.is_some()
-                || m.kind != MediaKind::Video
-                || !matches!(m.direction, Direction::SendOnly | Direction::SendRecv)
-            {
+            if !p.track_ok || !matches!(m.direction, Direction::SendOnly | Direction::SendRecv) {
+                return;
+            }
+            if m.kind == MediaKind::Audio {
+                let opus = p.rtc.writer(m.mid).and_then(|w| {
+                    w.payload_params()
+                        .find(|x| x.spec().codec == Codec::Opus)
+                        .map(|x| x.pt())
+                });
+                if let (None, Some(pt)) = (p.audio.as_ref(), opus) {
+                    p.info.audio_offered();
+                    p.audio = Some(Audio {
+                        mid: m.mid,
+                        pt,
+                        on: false,
+                        ticks: 960,
+                        last: None,
+                        count: 0,
+                    });
+                }
+                return;
+            }
+            if p.video.is_some() || m.kind != MediaKind::Video {
                 return;
             }
             let pts = TrackPts::of(&mut p.rtc, m.mid);
@@ -1104,7 +1189,27 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
         }
         Event::EgressBitrateEstimate(BweKind::Twcc { estimate, .. }) => {
             let kbps = (estimate.as_f64() / 1000.0).round().min(u32::MAX as f64) as u32;
-            p.info.track_with(|t| t.estimate(kbps, Instant::now()));
+            let now = Instant::now();
+            let check = p.info.track_with(|t| {
+                t.estimate(kbps, now);
+                // The connection check done: said once, for a bug report.
+                if t.checked || t.measuring(now) {
+                    return None;
+                }
+                t.checked = true;
+                Some((t.stream_kbps, t.rtcp_rtt_ms, t.loss))
+            });
+            if let Some(Some((stream, rtt, loss))) = check {
+                crate::log_at!(
+                    Info,
+                    "together",
+                    "join: guest {} connection check: about {kbps} kbit/s (stream {}), rtt {} ms, loss {}",
+                    p.info.gid,
+                    stream.map_or("?".into(), |s| s.to_string()),
+                    rtt.map_or("?".into(), |r| r.to_string()),
+                    loss.map_or("?".into(), |l| format!("{:.1}%", l * 100.0)),
+                );
+            }
         }
         Event::PeerStats(s) => {
             // The pair ICE sends on now (this engine's socket, the guest's address): the way the
@@ -1178,6 +1283,45 @@ fn to_track(p: &mut Peer, b: &[u8], now: Instant) {
         }
         _ => {}
     }
+}
+
+/// One of the session's sound messages onto the audio track: the header sets the frame length,
+/// a frame goes out at its own index's time (a lost one leaves its gap, which the browser
+/// conceals).
+fn to_audio(p: &mut Peer, b: &[u8], now: Instant) {
+    let Some(a) = p.audio.as_mut().filter(|a| a.on) else {
+        return;
+    };
+    match b.first() {
+        Some(3) => {
+            if let Some(t) = audio_ticks(&b[1..]) {
+                a.ticks = t;
+            }
+        }
+        Some(4) if b.len() > 3 => {
+            let idx = u16::from_be_bytes([b[1], b[2]]);
+            a.count = match a.last {
+                None => 0,
+                // Forward by the wrapped difference (a late one far behind starts over there).
+                Some(l) => a.count.wrapping_add(idx.wrapping_sub(l) as u64),
+            };
+            a.last = Some(idx);
+            let t = MediaTime::new(a.count.wrapping_mul(a.ticks), Frequency::FORTY_EIGHT_KHZ);
+            let (mid, pt) = (a.mid, a.pt);
+            if let Some(w) = p.rtc.writer(mid) {
+                let _ = w.write(pt, now, t, b[3..].to_vec());
+            }
+        }
+        _ => {}
+    }
+}
+
+/// RTP ticks (48 kHz) per frame from the sound's header: `[channels][?][u32 rate][u32 samples
+/// per frame]` (big-endian, pad/watchPlayer.ts reads it the same way).
+pub(crate) fn audio_ticks(h: &[u8]) -> Option<u64> {
+    let rate = u32::from_be_bytes(h.get(2..6)?.try_into().ok()?) as u64;
+    let spf = u32::from_be_bytes(h.get(6..10)?.try_into().ok()?) as u64;
+    (rate > 0 && spf > 0).then(|| spf * OPUS_HZ / rate)
 }
 
 /// An access unit as the track sends it: a keyframe without its parameter sets gets the codec
@@ -1312,5 +1456,55 @@ mod track_tests {
         t.on = false;
         t.estimate(1_000, t0);
         assert!(!t.slow(t0 + Duration::from_secs(20)), "not on the track");
+    }
+
+    #[test]
+    fn the_sounds_rtp_time_steps_by_its_frame_length_at_48_khz() {
+        // 2 channels, 16 bits, 48 kHz, 480 samples a frame (10 ms): 480 ticks.
+        assert_eq!(
+            super::audio_ticks(&[2, 16, 0, 0, 0xbb, 0x80, 0, 0, 0x01, 0xe0]),
+            Some(480)
+        );
+        // 24 kHz with 240 samples is still 10 ms: 480 ticks of Opus's 48 kHz clock.
+        assert_eq!(
+            super::audio_ticks(&[2, 16, 0, 0, 0x5d, 0xc0, 0, 0, 0, 0xf0]),
+            Some(480)
+        );
+        assert_eq!(
+            super::audio_ticks(&[2, 16, 0, 0, 0xbb, 0x80]),
+            None,
+            "short"
+        );
+        assert_eq!(
+            super::audio_ticks(&[2, 16, 0, 0, 0, 0, 0, 0, 1, 0xe0]),
+            None
+        );
+    }
+
+    #[test]
+    fn the_connection_check_runs_at_the_start_and_counts_slow_seconds_with_hysteresis() {
+        let t0 = Instant::now();
+        let mut t = super::super::TrackSt {
+            on: true,
+            stream_kbps: Some(15_000),
+            on_at: Some(t0),
+            ..Default::default()
+        };
+        assert!(t.measuring(t0 + Duration::from_secs(5)), "no estimate yet");
+        t.estimate(30_000, t0 + Duration::from_secs(1));
+        assert!(t.measuring(t0 + Duration::from_secs(1)));
+        assert!(!t.measuring(t0 + super::super::CHECK_FOR));
+        // 20% to spare over what it carries.
+        assert_eq!(t.fit_kbps(), Some(25_000));
+        // Under the line (90% of the rate): counted from then…
+        t.estimate(9_000, t0 + Duration::from_secs(2));
+        assert_eq!(t.under_s(t0 + Duration::from_secs(12)), 10);
+        // …through an estimate between the line and the rate…
+        t.estimate(14_000, t0 + Duration::from_secs(5));
+        assert_eq!(t.under_s(t0 + Duration::from_secs(12)), 10);
+        // …until it is back up to the rate.
+        t.estimate(15_000, t0 + Duration::from_secs(6));
+        assert_eq!(t.under_s(t0 + Duration::from_secs(12)), 0);
+        assert_eq!(t.fit_kbps(), Some(12_500));
     }
 }

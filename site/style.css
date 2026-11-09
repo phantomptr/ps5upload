@@ -1766,3 +1766,61 @@ code {
 [dir="rtl"] .ts-chip img {
   object-position: right center;
 }
+
+/* ── Folds: a section's secondary parts, closed until asked for (keeps the page short) ── */
+.fold > .fold-sum {
+  list-style: none;
+  display: flex;
+  justify-content: center;
+  margin-top: 28px;
+  margin-bottom: 4px;
+}
+.fold > .fold-sum::-webkit-details-marker {
+  display: none;
+}
+.fold > .fold-sum > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 22px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--card);
+  color: var(--text);
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+.fold > .fold-sum > span::after {
+  content: "▾";
+  color: var(--accent);
+}
+.fold > .fold-sum > span:hover {
+  background: var(--card-2);
+}
+.fold > .fold-sum:focus-visible {
+  outline: none;
+}
+.fold > .fold-sum:focus-visible > span {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.fold-less,
+.fold[open] > .fold-sum > .fold-more {
+  display: none !important;
+}
+.fold[open] > .fold-sum > .fold-less {
+  display: inline-flex !important;
+}
+.fold[open] > .fold-sum > span::after {
+  content: "▴";
+}
+/* The open fold's button goes after what it opened, so "Show less" sits at its end. */
+.fold[open] {
+  display: flex;
+  flex-direction: column;
+}
+.fold[open] > .fold-sum {
+  order: 1;
+}

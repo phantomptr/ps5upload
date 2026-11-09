@@ -279,6 +279,8 @@ describe("the panel", () => {
       expect(out).toContain(`data-testid="pt-url">${esc(NET_URL)}<`);
       expect(out).toContain('data-testid="pt-qr"');
       expect(out).toContain('data-testid="pt-works-anywhere"');
+      // #720: said plainly that Tailscale is nothing to set up for it.
+      expect(out).toContain('data-testid="pt-no-tailscale"');
       expect(out).toContain('data-testid="pt-addresses-internet-hint"');
       expect(out).not.toContain('data-testid="pt-addresses-home"');
       expect(out).not.toContain('data-testid="pt-addresses-internet"');
@@ -286,6 +288,43 @@ describe("the panel", () => {
       // The short code still works for a friend on the same network (Play › Join a friend).
       expect(out).toContain('data-testid="pt-code"');
     }
+  });
+
+  it("each guest's connection check, and a lower rate for everyone once one stays under it", () => {
+    installWindowStub();
+    const track = (o: Record<string, unknown>) => ({
+      frames_sent: 1,
+      bwe_kbps: 30000,
+      stream_kbps: 15000,
+      slow: false,
+      measuring: false,
+      under_s: 0,
+      fit_kbps: 25000,
+      loss: 0,
+      rtcp_rtt_ms: 20,
+      ...o,
+    });
+    const s = readJoinState({
+      ...engine,
+      guests: [
+        { ...engine.guests[0], link: { path: "lan", rtt_ms: 4, track: track({}) } },
+        { ...engine.guests[2], link: { path: "internet", rtt_ms: 55, track: track({ measuring: true }) } },
+      ],
+    });
+    let out = panel(s);
+    expect(out).toMatch(/data-testid="pt-player-link" data-grade="good">Good connection, about 30 Mbps</);
+    expect(out).toContain('data-grade="measuring"');
+    expect(out).not.toContain("pt-lower");
+    // Cy's estimate has stayed under the rate for 12 s: 4.5 Mbps fits with room (offered, not done).
+    out = panel(
+      readJoinState({
+        ...engine,
+        guests: [{ ...engine.guests[2], link: { path: "internet", rtt_ms: 55, track: track({ bwe_kbps: 6000, fit_kbps: 5000, under_s: 12 }) } }],
+      }),
+    );
+    expect(out).toContain('data-testid="pt-lower" data-to="4500"');
+    expect(out).toContain("Lower the stream to 4.5 Mbps so everyone keeps up?");
+    expect(out).not.toContain('data-testid="pt-slow"');
   });
 
   it("no internet right now: the Wi-Fi's link, said to work on the Wi-Fi only", () => {
@@ -302,6 +341,7 @@ describe("the panel", () => {
     expect(out).toContain(`data-testid="pt-url">${engine.invite.url}<`);
     expect(out).toMatch(/data-testid="pt-wifi-only" data-why="offline">Works on your Wi-Fi only \(no internet right now\)\.</);
     expect(out).not.toContain("pt-works-anywhere");
+    expect(out).not.toContain("pt-no-tailscale");
     // The hub's own warning is not repeated.
     expect(out).not.toContain("pt-net-hub-down");
   });

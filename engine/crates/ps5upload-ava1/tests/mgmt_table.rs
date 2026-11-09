@@ -75,6 +75,7 @@ fn the_ids_the_gate_and_the_converters_key_on_are_the_schema_numbers() {
     assert_eq!(m::FS_READ.id, gen::METHOD_FS_READ);
     assert_eq!(m::FS_WRITE.id, gen::METHOD_FS_WRITE);
     assert_eq!(m::HW_INFO.id, gen::METHOD_HW_INFO);
+    assert_eq!(m::HW_FPS.id, gen::METHOD_HW_FPS);
     assert_eq!(m::LOG_KLOG.id, gen::METHOD_LOG_KLOG);
     assert_eq!(m::LOG_SYSLOG.id, gen::METHOD_LOG_SYSLOG);
     assert_eq!(m::FILES_PREFS_GET.id, gen::METHOD_FILES_PREFS_GET);

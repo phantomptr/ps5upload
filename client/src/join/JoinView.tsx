@@ -14,6 +14,7 @@ import { devicePad, useJoinSession, type JoinSession } from "./session";
 import { useAutoHide } from "./autoHide";
 import { PadCheck } from "./PadCheck";
 import { OpenOnWifi } from "./OpenOnWifi";
+import type { NetPath } from "./netPath";
 import { clock } from "../lib/clockText";
 
 type Tr = ReturnType<typeof useTr>;
@@ -31,6 +32,18 @@ export function showsGuide(o: { player: number; guided: boolean; movedOff: boole
 
 /** 42 → "0:42". */
 export { clock };
+
+/** Which way the connection goes, beside the delay: the home network, Tailscale, the internet. */
+export function pathLabel(tr: Tr, path: NetPath): string {
+  switch (path) {
+    case "lan":
+      return tr("join_path_lan", undefined, "Home network");
+    case "tailscale":
+      return tr("join_path_tailscale", undefined, "Tailscale");
+    default:
+      return tr("join_path_internet", undefined, "Internet");
+  }
+}
 
 /** Off the host's stream's controller (they needed it back) with no other controller free. */
 function seatTakenText(tr: Tr, host: string): string {
@@ -440,7 +453,7 @@ export function JoinView({
       >
         <Users size={28} className="text-white/60" />
         <p className="max-w-sm text-base" data-testid="join-ended-text">
-          {endText(tr, stage, host, !!session.opts.transport)}
+          {endText(tr, stage, host, session.opts.internet ?? !!session.opts.transport)}
         </p>
         {/* The invite service can't be reached: on the host's Wi-Fi, their own page still works. */}
         {lanUrl && stage.why === "no_hub" && <OpenOnWifi href={lanUrl} />}
@@ -507,7 +520,9 @@ export function JoinView({
           style={{ color: TONE_COLOR[tone] }}
           data-testid="join-delay"
           data-tone={tone}
+          data-path={snap.path ?? undefined}
         >
+          {snap.path && <span className="text-white/80">{pathLabel(tr, snap.path)} · </span>}
           {Math.round(delay)} ms
         </span>
       )}

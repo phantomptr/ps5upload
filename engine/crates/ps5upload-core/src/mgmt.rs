@@ -104,6 +104,7 @@ methods! {
     (INDEX_STATUS, 68, "INDEX_STATUS"),
     (INDEX_SEARCH, 69, "SEARCH_INDEX"),
     (INDEX_CANCEL, 70, "INDEX_CANCEL"),
+    (HW_FPS, 71, "HW_FPS"),
     (HW_INFO, 72, "HW_INFO"),
     (HW_TEMPS, 73, "HW_TEMPS"),
     (HW_POWER, 74, "HW_POWER"),

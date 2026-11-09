@@ -17,6 +17,16 @@ describe("pageStats (#720)", () => {
     expect(s).toMatchObject({ frames: 1, codec: "avc1.640028" });
     expect(s).not.toHaveProperty("problem");
   });
+
+  it("carries how the sound went once it started", () => {
+    const st = new PictureStats("webcodecs", () => 0);
+    st.drawn();
+    const sound = { snd: "wasm", snd_decoded: 900, snd_concealed: 4, snd_underruns: 12, snd_dropped: 30 };
+    expect(pageStats(st, null, sound)).toMatchObject({ frames: 1, ...sound });
+    expect(pageStats(st, "decode", { snd: "mse", snd_jumps: 3 })).toMatchObject({ problem: "decode", snd: "mse", snd_jumps: 3 });
+    // No picture report, no sound report either (the host keeps "never reported its picture").
+    expect(pageStats(new PictureStats("webcodecs", () => 0), null, sound)).toBeNull();
+  });
 });
 
 /** A socket that never connects (the session's keyboard does not need one). */

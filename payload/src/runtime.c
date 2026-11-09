@@ -91,6 +91,7 @@
 #include "storage_cleanup.h"
 #include "mesh.h"
 #include "tailnet_node.h"
+#include "game_fps.h"
 #include "ava1_server.h"
 
 /* The frame numbers the management table (mgmt_table.def) carries per method. They are not on any wire now:
@@ -368,6 +369,9 @@
 #define MGMT_FRAME_LOG_LEVEL_ACK 365u
 #define MGMT_FRAME_TAILNET 366u
 #define MGMT_FRAME_TAILNET_ACK 367u
+/* the running game's frame count, for the sampled frame rate (game_fps.c, #774) */
+#define MGMT_FRAME_HW_FPS 368u
+#define MGMT_FRAME_HW_FPS_ACK 369u
 #define MGMT_FRAME_SDK_SCAN 214u
 #define MGMT_FRAME_SDK_SCAN_ACK 215u
 #define MGMT_FRAME_SDK_PATCH 216u
@@ -3848,6 +3852,16 @@ static int handle_hw_temps(runtime_state_t *state, const char *request_body, uin
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
     return mgmt_reply(MGMT_FRAME_HW_TEMPS_ACK, body, (uint64_t)written);
+}
+
+/* The display's frame count and the helper's clock, for the app's sampled frame rate (#774). One
+ * ioctl on /dev/dce, no Sony call and no ptrace (game_fps.h). "No game" is an answer, not an error. */
+static int handle_hw_fps(runtime_state_t *state) {
+    char body[GAME_FPS_JSON_MAX];
+    if (!state) return -1;
+    int n = game_fps_read_json(body, sizeof body);
+    if (n <= 0) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
+    return mgmt_reply(MGMT_FRAME_HW_FPS_ACK, body, (uint64_t)n);
 }
 
 static int handle_hw_power(runtime_state_t *state) {

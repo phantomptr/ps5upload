@@ -65,12 +65,12 @@ const PTS_MASK: u64 = (1 << 33) - 1;
 
 /// A 16-bit wrapping index unwrapped into a running count.
 #[derive(Default, Debug)]
-struct Unwrap {
+pub(crate) struct Unwrap {
     last: Option<(u16, i64)>,
 }
 
 impl Unwrap {
-    fn next(&mut self, idx: u16) -> i64 {
+    pub(crate) fn next(&mut self, idx: u16) -> i64 {
         let ext = match self.last {
             None => idx as i64,
             Some((raw, ext)) => ext + idx.wrapping_sub(raw) as i16 as i64,
@@ -84,7 +84,7 @@ impl Unwrap {
 
 /// One stream's presentation clock (see the module comment).
 #[derive(Debug)]
-struct PtsClock {
+pub(crate) struct PtsClock {
     /// One index step in 90 kHz ticks.
     step: f64,
     alpha: f64,
@@ -95,7 +95,7 @@ struct PtsClock {
 }
 
 impl PtsClock {
-    fn new(step: u64, alpha: f64) -> Self {
+    pub(crate) fn new(step: u64, alpha: f64) -> Self {
         PtsClock {
             step: step.max(1) as f64,
             alpha,
@@ -106,7 +106,7 @@ impl PtsClock {
 
     /// The PTS (ticks since the origin) of frame `ext` that arrived at `arrival` ticks: its
     /// smoothed time, on the next free slot of the step grid.
-    fn pts(&mut self, ext: i64, arrival: f64) -> u64 {
+    pub(crate) fn pts(&mut self, ext: i64, arrival: f64) -> u64 {
         let t = self.smoothed(ext, arrival);
         let want = (t / self.step).round().max(0.0) as u64;
         let slot = match self.slot {

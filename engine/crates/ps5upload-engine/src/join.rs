@@ -576,6 +576,16 @@ pub(crate) struct PageReport {
     /// codec it set up (e.g. "avc1.640028"): a page that never drew a picture says why (#720).
     problem: Option<&'static str>,
     codec: Option<String>,
+    /// The sound once it started (#720: an iPhone guest's sound stuttered and the host's log had
+    /// nothing about it): its path ("webcodecs" or "wasm", decoded on the page and scheduled;
+    /// "mse", the media player), and its counters: decoded, covered (a lost packet concealed),
+    /// late (an underrun: it ran dry), dropped (too far ahead), and the media player's jumps.
+    sound: Option<&'static str>,
+    snd_decoded: Option<u64>,
+    snd_concealed: Option<u64>,
+    snd_underruns: Option<u64>,
+    snd_dropped: Option<u64>,
+    snd_jumps: Option<u64>,
     /// Stalled time since the report before (ms), and when this one came.
     stall_ms_recent: u64,
     at: Option<Instant>,
@@ -626,8 +636,43 @@ impl PageReport {
                         && c.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.')
                 })
                 .map(str::to_string),
+            sound: match o.get("snd").and_then(|d| d.as_str()) {
+                Some("webcodecs") => Some("webcodecs"),
+                Some("wasm") => Some("wasm"),
+                Some("mse") => Some("mse"),
+                _ => None,
+            },
+            snd_decoded: n("snd_decoded").map(|x| x as u64),
+            snd_concealed: n("snd_concealed").map(|x| x as u64),
+            snd_underruns: n("snd_underruns").map(|x| x as u64),
+            snd_dropped: n("snd_dropped").map(|x| x as u64),
+            snd_jumps: n("snd_jumps").map(|x| x as u64),
             ..PageReport::default()
         })
+    }
+
+    /// The sound's part of the "left" line, when the page said how its sound went.
+    fn sound_line(&self) -> String {
+        let Some(path) = self.sound else {
+            return String::new();
+        };
+        let mut parts = Vec::new();
+        for (v, what) in [
+            (self.snd_decoded, "decoded"),
+            (self.snd_concealed, "covered"),
+            (self.snd_underruns, "ran dry"),
+            (self.snd_dropped, "dropped"),
+            (self.snd_jumps, "jumps"),
+        ] {
+            if let Some(v) = v {
+                parts.push(format!("{v} {what}"));
+            }
+        }
+        if parts.is_empty() {
+            format!("; sound {path}")
+        } else {
+            format!("; sound {path}: {}", parts.join(", "))
+        }
     }
 
     /// How the picture looks to the guest now: "smooth", "stutters" or "poor", from the time it
@@ -660,6 +705,11 @@ impl PageReport {
             "plis": self.plis,
             "problem": self.problem,
             "codec": self.codec,
+            "sound": self.sound,
+            "snd_underruns": self.snd_underruns,
+            "snd_dropped": self.snd_dropped,
+            "snd_concealed": self.snd_concealed,
+            "snd_jumps": self.snd_jumps,
             "stall_ms_recent": self.stall_ms_recent,
             "age_s": self.at.map(|t| now.saturating_duration_since(t).as_secs()),
             "quality": self.quality(now),
@@ -705,7 +755,7 @@ impl Stats {
         match g.as_ref() {
             None => "the page never reported its picture".into(),
             Some(r) => format!(
-                "picture {} {}{}: {} drawn, {} stalls{}",
+                "picture {} {}{}: {} drawn, {} stalls{}{}",
                 r.decoder.unwrap_or("?"),
                 r.codec.as_deref().unwrap_or("?"),
                 r.problem.map(|p| format!(" ({p})")).unwrap_or_default(),
@@ -714,6 +764,7 @@ impl Stats {
                 r.jitter_ms
                     .map(|j| format!(", jitter {j} ms"))
                     .unwrap_or_default(),
+                r.sound_line(),
             ),
         }
     }
@@ -1045,12 +1096,17 @@ impl Party {
     fn internet_json(&self, inv: Option<&InviteInfo>) -> Option<serde_json::Value> {
         let inv = inv?;
         let room = self.internet.as_ref()?;
-        // The home network's page, the link's hint for a guest who cannot reach the hub.
-        let lan = bases(&self.console, &self.reach)
-            .into_iter()
-            .next()
-            .map(|b| format!("{b}{}/join", crate::host_guard::base_path()));
-        Some(room.json(&inv.key, lan.as_deref()))
+        // The home network's page, the link's hint for a guest who cannot reach the hub (and where
+        // an app guest signals without it), and the same page on Tailscale (the Tailscale app's
+        // address, when this computer has one).
+        let all = bases(&self.console, &self.reach);
+        let page = |b: &String| format!("{b}{}/join", crate::host_guard::base_path());
+        let lan = all.first().map(page);
+        let ts = crate::pad_link::tailscale_ip()
+            .map(|ip| crate::pad_link::ip_base(ip, self.reach.port))
+            .filter(|b| all.contains(b))
+            .map(|b| page(&b));
+        Some(room.json(&inv.key, lan.as_deref(), ts.as_deref()))
     }
 
     fn key_ok(&self, key: &str, now: Instant) -> bool {
@@ -2011,15 +2067,75 @@ pub async fn ws(
         .on_upgrade(move |s| guest_session(s, ip))
 }
 
+/// Signalling sockets (`/api/join/signal`) per address per minute: an app guest opens one for
+/// each way it tries (the home network, Tailscale) on every connect, kept apart from the guest
+/// sockets' own limit.
+static SIGNALS: ConnectLimit = ConnectLimit::new();
+const SIGNALS_PER_MIN: usize = 30;
+
+/// `room` is the internet room of an open Play Together here that still wants it.
+pub(crate) fn internet_room_open(room: &str) -> bool {
+    let keys: Vec<String> = with_parties(|m| {
+        m.iter()
+            .filter(|(_, p)| p.internet.as_ref().is_some_and(|r| r.id() == room))
+            .map(|(k, _)| k.clone())
+            .collect()
+    });
+    keys.iter().any(|k| internet_wanted(k))
+}
+
+/// `GET /api/join/signal`: an internet invite's signalling straight to this engine, for a guest
+/// that reaches it on the home network or over Tailscale (join_net/local_signal.rs). The hub's
+/// guest protocol, for this engine's own rooms only; the connection it sets up is the same one,
+/// checked by the guest against the link's fingerprint.
+pub async fn signal(
+    upgrade: WebSocketUpgrade,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+) -> Response {
+    let ip = peer.ip();
+    let limit = if ip.is_loopback() {
+        LOOPBACK_CONNECTS_PER_MIN
+    } else {
+        SIGNALS_PER_MIN
+    };
+    if !SIGNALS.allow(ip, limit, Instant::now()) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many tries, wait a minute",
+        )
+            .into_response();
+    }
+    upgrade
+        .max_message_size(crate::join_net::local_signal::FRAME_MAX)
+        .max_frame_size(crate::join_net::local_signal::FRAME_MAX)
+        .on_upgrade(|s| {
+            crate::join_net::local_signal::session(s, internet_room_open, || {
+                with_parties(|m| !m.is_empty())
+            })
+        })
+}
+
 #[derive(serde::Deserialize)]
 pub struct RelayQuery {
     url: String,
 }
 
+/// What `/api/join/relay` may pass a socket to, and the largest message the guest's side sends
+/// through: another engine's guest socket, or its signalling socket (an offer is several KiB).
+pub(crate) fn relay_target(url: &str) -> Option<(String, usize)> {
+    crate::pad_link::lan_ws_target(url, "api/join/ws")
+        .map(|t| (t, GUEST_MSG_MAX))
+        .or_else(|| {
+            crate::pad_link::lan_ws_target(url, "api/join/signal")
+                .map(|t| (t, crate::join_net::local_signal::FRAME_MAX))
+        })
+}
+
 /// `GET /api/join/relay?url=ws://<host engine>:<port>/api/join/ws` (this computer only): an app
 /// joining a friend's Play Together talks to its own engine (an app page may not open a plain
 /// `ws://` to another machine), which passes the socket through unchanged. Only another engine's
-/// `/api/join/ws` on a private address.
+/// `/api/join/ws`, or its `/api/join/signal` (an internet invite signalled without the hub), on a
+/// private address.
 pub async fn relay(
     upgrade: WebSocketUpgrade,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
@@ -2030,16 +2146,17 @@ pub async fn relay(
         return r;
     }
     // Said on the socket: a page's WebSocket cannot read the body of a refused upgrade.
-    let Some(target) = crate::pad_link::lan_ws_target(&q.url, "api/join/ws") else {
+    let Some((target, max)) = relay_target(&q.url) else {
         return upgrade.on_upgrade(|mut s| async move {
             let _ = s.send(refused("address")).await;
         });
     };
-    // What the guest sends is held to a guest socket's limit; the host's pictures coming back
-    // are read by the relay's own client socket, which keeps its large one.
+    // What the guest sends is held to a guest socket's limit (a signalling one's: the hub's); the
+    // host's pictures coming back are read by the relay's own client socket, which keeps its
+    // large one.
     upgrade
-        .max_message_size(GUEST_MSG_MAX)
-        .max_frame_size(GUEST_MSG_MAX)
+        .max_message_size(max)
+        .max_frame_size(max)
         .on_upgrade(move |s| async move { crate::pad_link::relay_to(s, &target).await })
 }
 
@@ -2072,6 +2189,18 @@ pub(crate) trait GuestSocket: Send + 'static {
     /// track, which their page offered ([`Self::send_video`]); false: on this socket with the rest.
     fn video_track(&mut self, _hevc: bool, _stream_kbps: u32) -> bool {
         false
+    }
+    /// The sound on an Opus audio track beside the video track ([`Self::send_audio`]); false: on
+    /// this socket.
+    fn audio_track(&mut self) -> bool {
+        false
+    }
+    /// A sound message (`[3][header]`, `[4][index][Opus]`) for the audio track.
+    fn send_audio(
+        &mut self,
+        m: Message,
+    ) -> impl std::future::Future<Output = Result<(), ()>> + Send {
+        self.send(m)
     }
     /// A picture or the codec header for the video track.
     fn send_video(
@@ -2896,12 +3025,15 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
         Some(f) => socket.video_track(f.hevc, f.kbps),
         None => false,
     };
+    // …and its sound beside them on an Opus audio track, when the page offered one too (#720).
+    let audio = track && socket.audio_track();
     crate::log_at!(
         Debug,
         "together",
         "join: Player {player} on {console} connected (socket {gen}): picture {}, hevc {hevc}",
         match (&feed, track) {
             (None, _) => "none (no session)",
+            (Some(_), true) if audio => "on the video track, sound on the audio track",
             (Some(_), true) => "on the video track",
             (Some(_), false) => "on",
         }
@@ -2915,6 +3047,8 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
             "stage": "joined", "player": player, "token": token, "hevc": hevc,
             // The pictures come on the video track (an internet page that offered one), not here.
             "track": track,
+            // …and the sound on the audio track.
+            "audio": audio,
         })))
         .await
         .is_err();
@@ -3016,7 +3150,11 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
                     None => std::future::pending().await,
                 }
             } => match f {
-                Some(m) => if socket.send(m).await.is_err() { break },
+                Some(m) => {
+                    let sound = audio && matches!(&m, Message::Binary(b) if matches!(b.first(), Some(3 | 4)));
+                    let sent = if sound { socket.send_audio(m).await } else { socket.send(m).await };
+                    if sent.is_err() { break }
+                }
                 None => other = None,
             },
             f = async {
@@ -3146,9 +3284,15 @@ fn invite_json(
         return serde_json::Value::Null;
     };
     let prefix = crate::host_guard::base_path();
+    // With this engine's DTLS fingerprint (`fp`): the page there joins over WebRTC signalled on
+    // this engine's own socket (join_net/local_signal.rs) and checks the answer's certificate
+    // against it, as an internet link's page does.
+    let fp = crate::join_net::fingerprint()
+        .map(|f| format!("&fp={f}"))
+        .unwrap_or_default();
     let urls: Vec<String> = bases(console, reach)
         .iter()
-        .map(|b| format!("{b}{prefix}/join#i={}", inv.key))
+        .map(|b| format!("{b}{prefix}/join#i={}{fp}", inv.key))
         .collect();
     serde_json::json!({
         "key": inv.key,
@@ -3745,6 +3889,7 @@ pub(crate) fn router<S: Clone + Send + Sync + 'static>() -> axum::Router<S> {
         .route("/join", get(page))
         .route("/api/join/ws", get(ws))
         .route("/api/join/relay", get(relay))
+        .route("/api/join/signal", get(signal))
         .route("/api/join", get(get_state))
         .route("/api/join/open", post(open))
         .route("/api/join/close", post(close))
@@ -4845,6 +4990,38 @@ mod tests {
         let v = s.page_json(t1);
         assert_eq!(v["problem"], serde_json::Value::Null);
         assert_eq!(v["codec"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn the_left_line_says_how_the_guests_sound_went() {
+        // #720: an iPhone guest's sound stuttered and the host's log said nothing about it.
+        let t0 = Instant::now();
+        let s = Stats::default();
+        s.page_report(
+            &serde_json::json!({
+                "frames": 300, "decoder": "track", "snd": "wasm", "snd_decoded": 900,
+                "snd_concealed": 4, "snd_underruns": 12, "snd_dropped": 30
+            }),
+            t0,
+        );
+        assert_eq!(
+            s.page_line(),
+            "picture track ?: 300 drawn, 0 stalls; sound wasm: 900 decoded, 4 covered, 12 ran dry, 30 dropped"
+        );
+        assert_eq!(s.page_json(t0)["snd_underruns"], 12);
+        let t1 = t0 + Duration::from_secs(2);
+        s.page_report(
+            &serde_json::json!({"frames": 10, "snd": "mse", "snd_jumps": 3}),
+            t1,
+        );
+        assert!(s.page_line().ends_with("; sound mse: 3 jumps"));
+        // An unknown path is not kept, and with it no sound part.
+        let t2 = t1 + Duration::from_secs(2);
+        s.page_report(
+            &serde_json::json!({"frames": 20, "snd": "<x>", "snd_jumps": 3}),
+            t2,
+        );
+        assert!(!s.page_line().contains("sound"));
     }
 
     #[test]
