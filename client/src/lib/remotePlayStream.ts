@@ -410,7 +410,9 @@ const AVC_CANDIDATES = ["avc1.4d4032", "avc1.640032", "avc1.4d4028", "avc1.42e01
 /** False only when this device answers that it decodes none of the H.264 forms; a check that
  *  throws is not a no, so a device with a quirky check still gets to try. */
 export async function canDecodeAvc(width: number, height: number): Promise<boolean> {
-  if (typeof VideoDecoder === "undefined") return false;
+  // No WebCodecs (an older WebKit, #766/#769): the stream goes to the system media player, so ask
+  // it instead. Only a player that says no to every H.264 profile means "no decoder".
+  if (typeof VideoDecoder === "undefined") return mseCanPlayAvc();
   return withDecoderStart(async () => {
     let answered = false;
     for (const codec of AVC_CANDIDATES) {
@@ -424,6 +426,24 @@ export async function canDecodeAvc(width: number, height: number): Promise<boole
       }
     }
     return !answered;
+  });
+}
+
+/** Whether the system media player (MSE) plays H.264 in MP4 here, for any of the profiles the
+ *  PS5 sends. */
+export function mseCanPlayAvc(): boolean {
+  const w = globalThis as {
+    MediaSource?: { isTypeSupported?: (t: string) => boolean };
+    ManagedMediaSource?: { isTypeSupported?: (t: string) => boolean };
+  };
+  const ms = w.ManagedMediaSource ?? w.MediaSource;
+  if (!ms || typeof ms.isTypeSupported !== "function") return false;
+  return AVC_CANDIDATES.some((codec) => {
+    try {
+      return ms.isTypeSupported!(`video/mp4; codecs="${codec}"`);
+    } catch {
+      return false;
+    }
   });
 }
 
