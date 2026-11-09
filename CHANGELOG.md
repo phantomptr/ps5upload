@@ -6,6 +6,10 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+- **Wake & sign in from rest could switch the PS5 off with 12.4.1.** Waking a console with Wake & sign in now asks it the same way 12.4.0 did. If you're on 12.4.1, please update before using Wake & sign in.
+
+## 12.4.1
+
 Remote Play:
 
 - Play connects again after another device or a controller at the console took the session over, or right after a Stop. Before, PS5Upload could keep failing until the PS5 was restarted while other apps got in. It now asks the PS5 to start the same way other Remote Play apps do.
