@@ -344,15 +344,23 @@ friend opens it and asks for some of the items; the sender allows or declines; o
 directly between the two computers (a WebRTC data channel, DTLS-encrypted; the signalling hub only
 introduces them, and on the same network the friend may use the sender's `/api/share/ws`).
 
-**Retail games are refused by the engine**, whatever the request says: an app whose Title ID starts
-with a Sony product prefix (`PPSA`, `CUSA`, `PLAS`, `ECAS`, … in any case, with spaces or dashes),
-whose Content ID names one or carries a store publisher code (`UP0001-`, `EP…`, `JP…`, `HP…`, `KP…`,
-`IP…`) in front of a Title ID of the retail shape, or that can't be identified at all. Updates and
-add-ons carry their game's Title ID and are refused with it. The answer is 403:
+**Retail games are refused by the engine**, whatever the request says. It reads how the app was
+built from its own PARAM (the folder's `sce_sys`, the package or the image; on a console, the copy in
+`/user/appmeta/<Title ID>/` when the app's own is encrypted), never the Title ID or the publisher code,
+which homebrew often borrows. A PS5 app is retail when its `param.json` has a non-zero `sdkVersion` or
+`requiredSystemSoftwareVersion`, a `versionFileUri` on `playstation.net`, an `asa` block, or
+`pubtools.submission: true`; a PS4 app when its `param.sfo` has a non-zero `SYSTEM_VER` or a non-zero
+`sdk_ver=` in `PUBTOOLINFO`. Updates and add-ons carry their game's build fields and are refused too.
+The answer is 403:
 
 ```json
 {"error": "This is a retail game (PPSA01234). PS5Upload only shares homebrew.", "code": "retail", "title_id": "PPSA01234", "item": 0}
 ```
+
+An app with no readable PARAM (an archive, an encrypted package) is refused the same way, with
+`"error": "PS5Upload can't confirm this is homebrew, so it can't share it."` and no `title_id`. Each
+app item in a share's view carries `build: {read, marks}` (the marks found), which the friend's
+engine checks again.
 
 The sender's side:
 

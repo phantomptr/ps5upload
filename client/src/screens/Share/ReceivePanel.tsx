@@ -2,8 +2,8 @@
 // arrives until Accept, and then only once they allow it. When it is here: install the app,
 // use the save, use the controls, read the note.
 
-import { useEffect, useRef, useState } from "react";
-import { Download, Inbox, X } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { CheckCircle2, Download, Inbox, X } from "lucide-react";
 
 import type { CollectionLocation } from "../../api/collection";
 import { localFs } from "../../api/localFs";
@@ -18,7 +18,7 @@ import {
   type OfferedItem,
   type ReceiveView,
 } from "../../api/share";
-import { Button, Callout, Checkbox, Input, ProgressBar, Select } from "../../components";
+import { Button, Callout, Input, ProgressBar, SegmentedControl, Select, Spinner } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { consoleAddr } from "../../lib/addr";
 import { formatBytes } from "../../lib/format";
@@ -32,6 +32,7 @@ import { pushNotification } from "../../state/notifications";
 import { useRemotePlayStore } from "../../state/remotePlay";
 import { SendToPs5 } from "../GameHub/SendToPs5";
 import { ShareHistory } from "./ShareHistory";
+import { ItemRow, KIND_ICON, NameField } from "./ShareParts";
 import { percent, saveShareName, savedShareName } from "./shareModel";
 
 const POLL_MS = 1000;
@@ -86,54 +87,85 @@ export function ReceivePanel({ pending }: { pending?: string | null }) {
   };
 
   return (
-    <div className="space-y-4" data-testid="receive-panel">
+    <div className="mx-auto w-full max-w-xl space-y-4" data-testid="receive-panel">
       {!id && (
         <form
-          className="space-y-3 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-raised)] p-4"
+          className={CARD}
           onSubmit={(e) => {
             e.preventDefault();
             void open();
           }}
         >
-          <div className="flex items-center gap-2">
-            <Inbox size={16} />
-            <h3 className="text-sm font-semibold">{tr("receive_title", undefined, "Receive what a friend shared")}</h3>
+          <div className="flex items-center gap-3">
+            <span aria-hidden className="grid h-10 w-10 shrink-0 place-items-center rounded-[10px] bg-[var(--color-surface-3)]">
+              <Inbox size={18} />
+            </span>
+            <div className="min-w-0">
+              <h3 className="text-base font-semibold">{tr("receive_title", undefined, "Receive what a friend shared")}</h3>
+              <p className="text-sm text-[var(--color-muted)]">
+                {tr("receive_intro_v2", undefined, "Paste their link. You see what they offer before anything arrives.")}
+              </p>
+            </div>
           </div>
-          <p className="text-sm text-[var(--color-muted)]">
-            {tr(
-              "receive_intro",
-              undefined,
-              "Paste the link your friend sent. You see what they offer before anything arrives.",
-            )}
-          </p>
           <Input
             label={tr("receive_link", undefined, "Share link")}
             value={link}
+            placeholder="https://…/share/#room=…"
             onChange={(e) => setLink(e.target.value)}
             data-testid="receive-link"
           />
-          <Input
-            label={tr("share_your_name", undefined, "Your name")}
-            value={name}
-            maxLength={40}
-            onChange={(e) => setName(e.target.value)}
-            data-testid="receive-name"
-          />
+          <NameField value={name} onChange={setName} testId="receive-name" />
           {error && (
-            <p className="text-sm text-[var(--color-warn)]" data-testid="receive-error">
+            <p className="text-sm text-[var(--color-bad)]" data-testid="receive-error">
               {error}
             </p>
           )}
-          <Button type="submit" variant="primary" size="md" disabled={!link.trim() || busy} loading={busy} data-testid="receive-open">
-            {tr("receive_open", undefined, "Open")}
-          </Button>
+          <div className="flex justify-end">
+            <Button type="submit" variant="primary" size="md" disabled={!link.trim() || busy} loading={busy} data-testid="receive-open">
+              {tr("receive_open", undefined, "Open")}
+            </Button>
+          </div>
         </form>
       )}
-      {id && !view && <p className="text-sm text-[var(--color-muted)]">{tr("receive_connecting", undefined, "Connecting to your friend…")}</p>}
+      {id && !view && <Connecting />}
       {id && view && <ReceiveFlow view={view} host={host} onDone={reset} onView={setView} />}
       <ShareHistory key={ended ? "ended" : "running"} />
     </div>
   );
+}
+
+const CARD = "space-y-4 rounded-[var(--radius-panel)] border border-[var(--color-border)] bg-[var(--color-surface-raised)] p-4 sm:p-5";
+
+function Connecting() {
+  const tr = useTr();
+  return (
+    <div className={`${CARD} flex items-center gap-3`} data-testid="receive-connecting">
+      <Spinner size={16} />
+      <p className="text-sm text-[var(--color-muted)]">{tr("receive_connecting", undefined, "Connecting to your friend…")}</p>
+    </div>
+  );
+}
+
+/** Who shared, as the card's header: their initial, name and what. */
+function FromHeader({ from, title, sub }: { from: string; title: string; sub?: ReactNode }) {
+  return (
+    <div className="flex items-center gap-3">
+      <span aria-hidden className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[var(--color-accent)] text-base font-semibold text-[var(--color-accent-contrast)]">
+        {(from.trim()[0] ?? "?").toUpperCase()}
+      </span>
+      <div className="min-w-0">
+        <h3 className="text-base font-semibold [overflow-wrap:anywhere]">{title}</h3>
+        {sub && <p className="text-xs text-[var(--color-muted)]">{sub}</p>}
+      </div>
+    </div>
+  );
+}
+
+/** The refused item's short line. */
+function refusedLine(tr: Tr, why: string): string {
+  if (/retail game/i.test(why)) return tr("share_app_retail_short", undefined, "Retail games can't be shared");
+  if (/can't confirm|can.t tell/i.test(why)) return tr("share_app_unknown_short", undefined, "Can't confirm it's homebrew");
+  return why;
 }
 
 export function ReceiveFlow({
@@ -175,62 +207,78 @@ export function ReceiveFlow({
     }
   };
 
-  const card = "space-y-3 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-raised)] p-4";
-
-  if (view.state === "connecting") {
-    return <p className="text-sm text-[var(--color-muted)]">{tr("receive_connecting", undefined, "Connecting to your friend…")}</p>;
-  }
+  if (view.state === "connecting") return <Connecting />;
   if (view.state === "offered") {
+    const size = view.items.filter((i) => picked.includes(i.id)).reduce((n, i) => n + i.size, 0);
     return (
-      <div className={card} data-testid="receive-offer">
-        <h3 className="text-sm font-semibold [overflow-wrap:anywhere]">
-          {view.title
-            ? tr("receive_offer_title", { name: from, title: view.title }, "{name} shared {title}")
-            : tr("receive_offer_title_plain", { name: from }, "{name} shared something with you")}
-        </h3>
-        <div className="space-y-1">
+      <div className={CARD} data-testid="receive-offer">
+        <FromHeader
+          from={from}
+          title={
+            view.title
+              ? tr("receive_offer_title", { name: from, title: view.title }, "{name} shared {title}")
+              : tr("receive_offer_title_plain", { name: from }, "{name} shared something with you")
+          }
+          sub={view.title_id ?? undefined}
+        />
+        <section className="space-y-2" aria-label={tr("receive_pick", undefined, "What to take")}>
           {view.items.map((i) => (
-            <div key={i.id}>
-              <Checkbox
-                checked={picked.includes(i.id)}
-                disabled={!!i.refused}
-                onChange={(on) => setPicked((p) => (on ? [...p, i.id] : p.filter((x) => x !== i.id)))}
-                label={`${i.name} · ${formatBytes(i.size)}`}
-              />
-              {i.refused && (
-                <p className="ms-6 text-xs text-[var(--color-warn)]" data-testid="receive-item-refused">
-                  {i.refused}
-                </p>
-              )}
-            </div>
+            <ItemRow
+              key={i.id}
+              testId="receive-item"
+              kind={i.kind}
+              name={i.name}
+              size={formatBytes(i.size)}
+              line={offeredLine(tr, i)}
+              checked={picked.includes(i.id)}
+              onChange={(on) => setPicked((p) => (on ? [...p, i.id] : p.filter((x) => x !== i.id)))}
+              unavailable={i.refused ? refusedLine(tr, i.refused) : null}
+              reason={i.refused}
+            />
           ))}
-        </div>
-        {view.items.some((i) => i.kind === "app" && !i.refused) && (
-          <Select
-            label={tr("receive_then", undefined, "When the app arrives")}
-            value={then}
-            onChange={(e) => setThen(e.target.value as "keep" | "install")}
-            options={[
-              { value: "keep", label: tr("receive_keep", undefined, "Keep it in my Collection") },
-              ...(host ? [{ value: "install", label: tr("receive_install", undefined, "Install it to my PS5") }] : []),
-            ]}
-          />
+        </section>
+        {view.items.some((i) => i.kind === "app" && !i.refused && picked.includes(i.id)) && host && (
+          <div className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.06em] text-[var(--color-muted)]">
+              {tr("receive_then", undefined, "When the app arrives")}
+            </p>
+            <SegmentedControl
+              ariaLabel={tr("receive_then", undefined, "When the app arrives")}
+              value={then}
+              onChange={(v) => setThen(v as "keep" | "install")}
+              segments={[
+                { value: "keep", label: tr("receive_keep_v2", undefined, "Keep in Collection") },
+                { value: "install", label: tr("receive_install_v2", undefined, "Install to my PS5") },
+              ]}
+            />
+          </div>
         )}
-        <div className="flex flex-wrap gap-2">
-          <Button variant="primary" size="md" disabled={picked.length === 0 || busy} onClick={() => void accept()} data-testid="receive-accept">
-            {tr("receive_accept", undefined, "Accept")}
-          </Button>
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-[var(--color-border)] pt-4">
+          {size > 0 && (
+            <span className="me-auto text-xs tabular-nums text-[var(--color-muted)]" data-testid="receive-total">
+              {tr("receive_total", { size: formatBytes(size) }, "{size} in all")}
+            </span>
+          )}
           <Button variant="ghost" size="md" disabled={busy} onClick={() => void cancel()} data-testid="receive-decline">
             {tr("receive_no_thanks", undefined, "No thanks")}
+          </Button>
+          <Button variant="primary" size="md" disabled={picked.length === 0 || busy} onClick={() => void accept()} data-testid="receive-accept">
+            {tr("receive_accept", undefined, "Accept")}
           </Button>
         </div>
       </div>
     );
   }
   if (view.state === "asking" || view.state === "receiving" || view.state === "reconnecting") {
+    const pct = percent(view.bytes_done, view.bytes_total);
     return (
-      <div className={card} data-testid="receive-progress">
-        <p className="text-sm">
+      <div className={CARD} data-testid="receive-progress">
+        <FromHeader
+          from={from}
+          title={view.title || from}
+          sub={view.state === "receiving" && view.path ? pathText(tr, view.path) : undefined}
+        />
+        <p className="text-sm" data-testid="receive-progress-text">
           {view.state === "asking"
             ? tr("receive_asking", { name: from }, "Waiting for {name} to allow it…")
             : view.state === "reconnecting"
@@ -241,28 +289,39 @@ export function ReceiveFlow({
                   "Receiving: {done} of {total}",
                 )}
         </p>
-        {view.state !== "asking" && (
-          <ProgressBar value={percent(view.bytes_done, view.bytes_total) / 100} label={tr("receive_progress", undefined, "Receiving")} />
-        )}
-        {view.path && view.state === "receiving" && (
-          <p className="text-xs text-[var(--color-muted)]">{pathText(tr, view.path)}</p>
-        )}
-        <Button size="sm" variant="ghost" leftIcon={<X size={14} />} disabled={busy} onClick={() => void cancel()} data-testid="receive-cancel">
-          {tr("receive_cancel", undefined, "Cancel")}
-        </Button>
+        <div className="flex items-center gap-3">
+          <ProgressBar
+            className="flex-1"
+            value={view.state === "asking" ? null : pct / 100}
+            label={tr("receive_progress", undefined, "Receiving")}
+          />
+          {view.state !== "asking" && <span className="w-10 text-end text-xs tabular-nums text-[var(--color-muted)]">{pct}%</span>}
+        </div>
+        <div className="flex justify-end border-t border-[var(--color-border)] pt-4">
+          <Button size="md" variant="ghost" leftIcon={<X size={14} />} disabled={busy} onClick={() => void cancel()} data-testid="receive-cancel">
+            {tr("receive_cancel", undefined, "Cancel")}
+          </Button>
+        </div>
       </div>
     );
   }
   if (view.state === "done") {
     return (
-      <div className={card} data-testid="receive-done">
-        <h3 className="text-sm font-semibold">{tr("receive_done", { name: from }, "Received from {name}")}</h3>
-        {view.dest && (
-          <p className="break-all text-xs text-[var(--color-muted)]">
-            {tr("receive_where", { path: view.dest }, "Saved in {path}")}
-          </p>
-        )}
-        <div className="space-y-3">
+      <div className={CARD} data-testid="receive-done">
+        <div className="flex items-center gap-3">
+          <span aria-hidden className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[var(--color-good-soft)] text-[var(--color-good)]">
+            <CheckCircle2 size={20} />
+          </span>
+          <div className="min-w-0">
+            <h3 className="text-base font-semibold">{tr("receive_done", { name: from }, "Received from {name}")}</h3>
+            {view.dest && (
+              <p className="truncate font-mono text-xs text-[var(--color-muted)]" title={view.dest} data-testid="receive-dest">
+                {tr("receive_where", { path: view.dest }, "Saved in {path}")}
+              </p>
+            )}
+          </div>
+        </div>
+        <div className="space-y-2">
           {view.received.map((r) => {
             const item = view.items.find((i) => i.id === r.item);
             return item ? (
@@ -270,22 +329,46 @@ export function ReceiveFlow({
             ) : null;
           })}
         </div>
-        <Button size="sm" variant="secondary" onClick={onDone} data-testid="receive-another">
-          {tr("receive_another", undefined, "Open another link")}
-        </Button>
+        <div className="flex justify-end border-t border-[var(--color-border)] pt-4">
+          <Button size="md" variant="primary" onClick={onDone} data-testid="receive-another">
+            {tr("receive_done_button", undefined, "Done")}
+          </Button>
+        </div>
       </div>
     );
   }
   return (
-    <div className={card} data-testid="receive-ended">
+    <div className={CARD} data-testid="receive-ended">
       <p className="text-sm" data-testid="receive-ended-text">
         {endedText(tr, view, from)}
       </p>
-      <Button size="sm" variant="secondary" onClick={onDone} data-testid="receive-another">
-        {tr("receive_another", undefined, "Open another link")}
-      </Button>
+      <div className="flex justify-end">
+        <Button size="md" variant="secondary" onClick={onDone} data-testid="receive-another">
+          {tr("receive_another", undefined, "Open another link")}
+        </Button>
+      </div>
     </div>
   );
+}
+
+/** An offered item's line: what it is. */
+function offeredLine(tr: Tr, i: OfferedItem): string {
+  switch (i.kind) {
+    case "app":
+      return i.title_id ?? tr("receive_kind_app", undefined, "The app");
+    case "save":
+      return tr("receive_kind_save", undefined, "Goes into your own save of the game");
+    case "media":
+      return tr("receive_kind_media", { n: i.files }, "{n} files");
+    case "cheats":
+      return tr("receive_kind_cheats", undefined, "Their cheat file and which are on");
+    case "controls":
+      return tr("receive_kind_controls", undefined, "Button remaps, keyboard and mouse, macros");
+    case "note":
+      return tr("receive_kind_note", undefined, "A note from them");
+    default:
+      return "";
+  }
 }
 
 function pathText(tr: Tr, path: string): string {
@@ -367,10 +450,16 @@ function ReceivedItem({
   autoInstall: boolean;
 }) {
   const tr = useTr();
-  const row = "space-y-2 rounded-[var(--radius-card)] border border-[var(--color-border)] p-3";
+  const Icon = KIND_ICON[item.kind];
   return (
-    <div className={row} data-testid={`received-${item.kind}`}>
-      <p className="text-sm font-medium [overflow-wrap:anywhere]">{item.name}</p>
+    <div
+      className="space-y-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3"
+      data-testid={`received-${item.kind}`}
+    >
+      <p className="flex items-center gap-2 text-sm font-medium [overflow-wrap:anywhere]">
+        <Icon size={15} aria-hidden className="shrink-0 text-[var(--color-muted)]" />
+        {item.name}
+      </p>
       {item.kind === "app" && <ReceivedApp item={item} dir={dir} host={host} autoInstall={autoInstall} />}
       {item.kind === "save" && <ReceivedSave rx={rx} item={item} host={host} />}
       {(item.kind === "controls" || item.kind === "note" || item.kind === "cheats" || item.kind === "stream") && (

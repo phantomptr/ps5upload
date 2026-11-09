@@ -23,8 +23,8 @@ export function saveShareName(name: string): void {
 
 /** Where the app itself can be shared from. */
 export type AppSource =
-  | { kind: "console"; path: string }
-  | { kind: "copy"; path: string; label: string; format: string };
+  | { kind: "console"; path: string; size?: number }
+  | { kind: "copy"; path: string; label: string; format: string; size?: number };
 
 /** The formats the engine can read an app's identity from (not an archive). */
 const SHAREABLE_FORMATS = ["folder", "pkg", "mount.exfat", "mount.ffpkg", "mount.ffpfs", "mount.ffpfsc"];
@@ -43,7 +43,7 @@ export function appSources(consolePath: string | null, copies: CollectionLocatio
     if (!SHAREABLE_FORMATS.includes(c.type)) continue;
     const k = c.pkg?.kind;
     if (k === "patch" || k === "dlc") continue;
-    out.push({ kind: "copy", path: c.absolute_path, label: c.name, format: c.type });
+    out.push({ kind: "copy", path: c.absolute_path, label: c.name, format: c.type, size: c.size_bytes });
   }
   return out;
 }
@@ -113,6 +113,19 @@ export function mediaOf(paths: { path: string }[], titleId: string, title: strin
       const parts = p.split("/");
       return parts.some((s) => s.toUpperCase() === tid || (!!name && s.toLowerCase() === name));
     });
+}
+
+/** How many of a game's media are screenshots and how many are clips (clips live under
+ *  `/video/`). */
+export function mediaCounts(paths: string[]): { shots: number; clips: number } {
+  const clips = paths.filter((p) => /\/video\//i.test(p) || /\.(webm|mp4)$/i.test(p)).length;
+  return { shots: paths.length - clips, clips };
+}
+
+/** "23 h 59 min", "12 min", "under a minute": what is left of a link's life. */
+export function timeLeft(seconds: number): { h: number; m: number } {
+  const s = Math.max(0, Math.floor(seconds));
+  return { h: Math.floor(s / 3600), m: Math.floor((s % 3600) / 60) };
 }
 
 /** Whole percent of a transfer, 0 when nothing is known. */
