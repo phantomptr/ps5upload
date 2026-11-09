@@ -8951,6 +8951,7 @@ rp_users_add_hint: "Ha másik felhasználóként is játszanál, jelentkezz be a
 "game_fps_state_failed": "Ez a konzol nem adott képkockaszámot.",
 "game_fps_capture_start": "Rögzítés indítása",
 "game_fps_capture_stop": "Rögzítés leállítása",
+"game_fps_recording": "Rögzítés",
 "game_fps_export_csv": "CSV exportálása",
 "game_fps_capturing": "Rögzítés: {count} minta",
 "game_fps_capture_done": "Utolsó rögzítés: {count} minta",

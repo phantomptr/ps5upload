@@ -8656,6 +8656,7 @@ rp_users_add_hint: "অন্য ব্যবহারকারী হিসে�
 "game_fps_state_failed": "এই কনসোল ফ্রেমের সংখ্যা দেয়নি।",
 "game_fps_capture_start": "ক্যাপচার শুরু করুন",
 "game_fps_capture_stop": "ক্যাপচার থামান",
+"game_fps_recording": "রেকর্ড হচ্ছে",
 "game_fps_export_csv": "CSV রপ্তানি করুন",
 "game_fps_capturing": "ক্যাপচার চলছে: {count}টি নমুনা",
 "game_fps_capture_done": "শেষ ক্যাপচার: {count}টি নমুনা",

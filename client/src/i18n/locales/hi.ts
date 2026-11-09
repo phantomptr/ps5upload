@@ -8670,6 +8670,7 @@ rp_users_add_hint: "किसी दूसरे उपयोगकर्ता 
 "game_fps_state_failed": "इस कंसोल ने फ़्रेम की गिनती नहीं दी।",
 "game_fps_capture_start": "कैप्चर शुरू करें",
 "game_fps_capture_stop": "कैप्चर रोकें",
+"game_fps_recording": "रिकॉर्ड हो रहा है",
 "game_fps_export_csv": "CSV निर्यात करें",
 "game_fps_capturing": "कैप्चर हो रहा है: {count} नमूने",
 "game_fps_capture_done": "पिछला कैप्चर: {count} नमूने",

@@ -8609,6 +8609,7 @@ rp_users_add_hint: "Per giocare anche come un altro utente, accedi con quell’u
 "game_fps_state_failed": "Questa console non ha fornito un conteggio dei fotogrammi.",
 "game_fps_capture_start": "Avvia registrazione",
 "game_fps_capture_stop": "Ferma registrazione",
+"game_fps_recording": "Registrazione",
 "game_fps_export_csv": "Esporta CSV",
 "game_fps_capturing": "Registrazione: {count} campioni",
 "game_fps_capture_done": "Ultima registrazione: {count} campioni",

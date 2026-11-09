@@ -8672,6 +8672,7 @@ rp_users_add_hint: "Pour jouer aussi avec un autre utilisateur, connectez-vous �
 "game_fps_state_failed": "Cette console n'a pas donné de nombre d'images.",
 "game_fps_capture_start": "Démarrer l'enregistrement",
 "game_fps_capture_stop": "Arrêter l'enregistrement",
+"game_fps_recording": "Enregistrement",
 "game_fps_export_csv": "Exporter en CSV",
 "game_fps_capturing": "Enregistrement : {count} mesures",
 "game_fps_capture_done": "Dernier enregistrement : {count} mesures",

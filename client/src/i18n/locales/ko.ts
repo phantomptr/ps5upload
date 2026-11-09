@@ -8673,6 +8673,7 @@ rp_users_add_hint: "다른 사용자로도 플레이하려면 PS5에서 그 사�
 "game_fps_state_failed": "이 콘솔이 프레임 수를 알려주지 않았습니다.",
 "game_fps_capture_start": "기록 시작",
 "game_fps_capture_stop": "기록 중지",
+"game_fps_recording": "기록 중",
 "game_fps_export_csv": "CSV 내보내기",
 "game_fps_capturing": "기록 중: 샘플 {count}개",
 "game_fps_capture_done": "마지막 기록: 샘플 {count}개",

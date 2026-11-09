@@ -8665,6 +8665,7 @@ rp_users_add_hint: "Untuk bermain juga sebagai pengguna lain, masuk ke pengguna 
 "game_fps_state_failed": "Konsol ini tidak memberikan jumlah frame.",
 "game_fps_capture_start": "Mulai rekam",
 "game_fps_capture_stop": "Hentikan rekam",
+"game_fps_recording": "Merekam",
 "game_fps_export_csv": "Ekspor CSV",
 "game_fps_capturing": "Merekam: {count} sampel",
 "game_fps_capture_done": "Rekaman terakhir: {count} sampel",

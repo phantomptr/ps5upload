@@ -8675,6 +8675,7 @@ rp_users_add_hint: "別のユーザーでもプレイするには、PS5 でそ�
 "game_fps_state_failed": "このコンソールからフレーム数を取得できませんでした。",
 "game_fps_capture_start": "記録を開始",
 "game_fps_capture_stop": "記録を停止",
+"game_fps_recording": "記録中",
 "game_fps_export_csv": "CSV を書き出す",
 "game_fps_capturing": "記録中: {count} サンプル",
 "game_fps_capture_done": "前回の記録: {count} サンプル",

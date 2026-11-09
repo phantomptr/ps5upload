@@ -8663,6 +8663,7 @@ rp_users_add_hint: "หากต้องการเล่นในฐานะ
 "game_fps_state_failed": "เครื่องนี้ไม่ได้ให้จำนวนเฟรม",
 "game_fps_capture_start": "เริ่มบันทึก",
 "game_fps_capture_stop": "หยุดบันทึก",
+"game_fps_recording": "กำลังบันทึก",
 "game_fps_export_csv": "ส่งออก CSV",
 "game_fps_capturing": "กำลังบันทึก: {count} ตัวอย่าง",
 "game_fps_capture_done": "การบันทึกล่าสุด: {count} ตัวอย่าง",

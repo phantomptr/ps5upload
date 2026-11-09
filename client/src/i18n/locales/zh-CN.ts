@@ -8615,6 +8615,7 @@ rp_users_add_hint: "若也想以其他用户游玩，请在 PS5 上登录该用�
 "game_fps_state_failed": "此主机没有提供帧数。",
 "game_fps_capture_start": "开始记录",
 "game_fps_capture_stop": "停止记录",
+"game_fps_recording": "正在记录",
 "game_fps_export_csv": "导出 CSV",
 "game_fps_capturing": "正在记录：{count} 个样本",
 "game_fps_capture_done": "上次记录：{count} 个样本",

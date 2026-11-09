@@ -8609,6 +8609,7 @@ rp_users_add_hint: "Para jugar también como otro usuario, inicia sesión con es
 "game_fps_state_failed": "Esta consola no dio un recuento de fotogramas.",
 "game_fps_capture_start": "Iniciar captura",
 "game_fps_capture_stop": "Detener captura",
+"game_fps_recording": "Grabando",
 "game_fps_export_csv": "Exportar CSV",
 "game_fps_capturing": "Capturando: {count} muestras",
 "game_fps_capture_done": "Última captura: {count} muestras",

@@ -8671,6 +8671,7 @@ rp_users_add_hint: "Para jogar também como outro usuário, entre com esse usuá
 "game_fps_state_failed": "Este console não informou uma contagem de quadros.",
 "game_fps_capture_start": "Iniciar captura",
 "game_fps_capture_stop": "Parar captura",
+"game_fps_recording": "Gravando",
 "game_fps_export_csv": "Exportar CSV",
 "game_fps_capturing": "Capturando: {count} amostras",
 "game_fps_capture_done": "Última captura: {count} amostras",

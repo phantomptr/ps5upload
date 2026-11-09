@@ -8937,6 +8937,7 @@ rp_users_add_hint: "برای بازی به‌عنوان کاربری دیگر ن
 "game_fps_state_failed": "این کنسول تعداد فریم‌ها را نداد.",
 "game_fps_capture_start": "شروع ضبط",
 "game_fps_capture_stop": "توقف ضبط",
+"game_fps_recording": "در حال ضبط",
 "game_fps_export_csv": "خروجی CSV",
 "game_fps_capturing": "در حال ضبط: {count} نمونه",
 "game_fps_capture_done": "آخرین ضبط: {count} نمونه",

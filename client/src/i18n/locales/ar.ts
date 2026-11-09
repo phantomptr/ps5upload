@@ -8656,6 +8656,7 @@ rp_users_add_hint: "للعب باسم مستخدم آخر أيضًا، سجّل 
 "game_fps_state_failed": "لم يُرجع هذا الجهاز عدد الإطارات.",
 "game_fps_capture_start": "بدء التسجيل",
 "game_fps_capture_stop": "إيقاف التسجيل",
+"game_fps_recording": "جارٍ التسجيل",
 "game_fps_export_csv": "تصدير CSV",
 "game_fps_capturing": "جارٍ التسجيل: {count} عيّنة",
 "game_fps_capture_done": "آخر تسجيل: {count} عيّنة",

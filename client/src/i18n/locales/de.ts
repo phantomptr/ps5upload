@@ -8664,6 +8664,7 @@ rp_users_add_hint: "Um auch als anderer Benutzer zu spielen, melde dich auf der 
 "game_fps_state_failed": "Diese Konsole hat keine Bildzahl geliefert.",
 "game_fps_capture_start": "Aufzeichnung starten",
 "game_fps_capture_stop": "Aufzeichnung beenden",
+"game_fps_recording": "Aufnahme läuft",
 "game_fps_export_csv": "CSV exportieren",
 "game_fps_capturing": "Zeichnet auf: {count} Messwerte",
 "game_fps_capture_done": "Letzte Aufzeichnung: {count} Messwerte",

@@ -8663,6 +8663,7 @@ rp_users_add_hint: "Başka bir kullanıcıyla da oynamak için PS5'te o kullanı
 "game_fps_state_failed": "Bu konsol kare sayısı vermedi.",
 "game_fps_capture_start": "Kaydı başlat",
 "game_fps_capture_stop": "Kaydı durdur",
+"game_fps_recording": "Kaydediliyor",
 "game_fps_export_csv": "CSV olarak dışa aktar",
 "game_fps_capturing": "Kaydediliyor: {count} örnek",
 "game_fps_capture_done": "Son kayıt: {count} örnek",

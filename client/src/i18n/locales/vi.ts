@@ -8658,6 +8658,7 @@ rp_users_add_hint: "Để chơi bằng cả người dùng khác, hãy đăng nh
 "game_fps_state_failed": "Máy này không cho biết số khung hình.",
 "game_fps_capture_start": "Bắt đầu ghi",
 "game_fps_capture_stop": "Dừng ghi",
+"game_fps_recording": "Đang ghi",
 "game_fps_export_csv": "Xuất CSV",
 "game_fps_capturing": "Đang ghi: {count} mẫu",
 "game_fps_capture_done": "Lần ghi gần nhất: {count} mẫu",

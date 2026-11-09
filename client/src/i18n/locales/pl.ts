@@ -8896,6 +8896,7 @@ rp_users_add_hint: "Aby grać także jako inny użytkownik, zaloguj się na nim 
 "game_fps_state_failed": "Ta konsola nie podała liczby klatek.",
 "game_fps_capture_start": "Rozpocznij zapis",
 "game_fps_capture_stop": "Zatrzymaj zapis",
+"game_fps_recording": "Nagrywanie",
 "game_fps_export_csv": "Eksportuj CSV",
 "game_fps_capturing": "Zapis: {count} próbek",
 "game_fps_capture_done": "Ostatni zapis: {count} próbek",

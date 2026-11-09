@@ -8609,6 +8609,7 @@ rp_users_add_hint: "Чтобы играть и за другого пользо�
 "game_fps_state_failed": "Эта консоль не сообщила число кадров.",
 "game_fps_capture_start": "Начать запись",
 "game_fps_capture_stop": "Остановить запись",
+"game_fps_recording": "Идёт запись",
 "game_fps_export_csv": "Экспорт в CSV",
 "game_fps_capturing": "Идёт запись: {count} замеров",
 "game_fps_capture_done": "Последняя запись: {count} замеров",
