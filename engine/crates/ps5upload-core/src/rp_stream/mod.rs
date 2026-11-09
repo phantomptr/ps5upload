@@ -724,24 +724,38 @@ pub trait StreamSink {
     }
 }
 
-/// Records the console's hold-off when a session ends, however it ends.
+/// Records how a session ended (and the console's hold-off after it), however it ends.
 struct ReleaseHold {
     host: String,
-    clean: std::cell::Cell<bool>,
+    /// Dropped until the session says otherwise.
+    end: std::cell::RefCell<guard::SessionEnd>,
+}
+
+impl ReleaseHold {
+    fn ended(&self, end: guard::SessionEnd) {
+        *self.end.borrow_mut() = end;
+    }
 }
 
 impl Drop for ReleaseHold {
     fn drop(&mut self) {
-        guard::hold_off(
-            &self.host,
-            if self.clean.get() {
-                guard::RELEASE_AFTER_CLEAN_STOP
-            } else {
-                guard::RELEASE_AFTER_DROP
-            },
-        );
+        guard::session_ended(&self.host, self.end.get_mut().clone());
     }
 }
+
+/// How a stream we closed with a goodbye ended: the PS5's own DISCONNECT (its reason), or ctrl
+/// the PS5 closed, or else us (a stop, or an error on our side).
+fn clean_end(console_reason: Option<&str>, result: &Result<()>) -> guard::SessionEnd {
+    match (console_reason, result) {
+        (Some(r), _) => guard::SessionEnd::ByConsole(r.to_string()),
+        (None, Err(e)) if format!("{e:#}").contains(CTRL_CLOSED_BY_CONSOLE) => {
+            guard::SessionEnd::ByConsole(CTRL_CLOSED_BY_CONSOLE.to_string())
+        }
+        (None, _) => guard::SessionEnd::Stopped,
+    }
+}
+
+const CTRL_CLOSED_BY_CONSOLE: &str = "the console closed the Remote Play control connection";
 
 /// Puts video packets back in order (chiaki-ng's video reorder queue): a
 /// missing packet is waited for up to 16 ms (about a frame), then skipped.
@@ -884,7 +898,7 @@ pub fn run_stream(
     // not ask again until it has had time to let go.
     let _release = ReleaseHold {
         host: host.to_string(),
-        clean: std::cell::Cell::new(false),
+        end: std::cell::RefCell::new(guard::SessionEnd::Dropped),
     };
     sink.progress(Progress::Nonce);
     // Take the nonce once, then retry only the ctrl connection while the console
@@ -996,7 +1010,7 @@ pub fn run_stream(
                 .close_and_wait(DISCONNECT_WAIT)
                 .map(|d| d.as_millis() as u64);
             drop(ctrl);
-            _release.clean.set(true);
+            _release.ended(guard::SessionEnd::Stopped);
             return Ok(report);
         }
         if Instant::now() > deadline {
@@ -1102,9 +1116,7 @@ pub fn run_stream(
         if ctrl.ended() {
             let since = *ctrl_gone.get_or_insert_with(Instant::now);
             if since.elapsed() > CTRL_GONE_GRACE {
-                break Err(anyhow!(
-                    "the console closed the Remote Play control connection"
-                ));
+                break Err(anyhow!(CTRL_CLOSED_BY_CONSOLE));
             }
         }
         if last_heartbeat.elapsed() >= Duration::from_secs(1) {
@@ -1357,7 +1369,7 @@ pub fn run_stream(
         }
     );
     drop(ctrl);
-    _release.clean.set(true);
+    _release.ended(clean_end(report.disconnect_reason.as_deref(), &result));
     report.video = assembler.stats;
     report.av_packets = takion.av_received;
     report.av_bad_mac = takion.av_bad_mac;
@@ -1412,6 +1424,25 @@ mod tests {
         );
         assert_eq!(r.unwrap().video.frames, 0);
         assert!(t0.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_session_the_ps5_ended_is_told_from_our_stop() {
+        // #769: a controller at the console took over, and the PS5 said "Server shutting down".
+        assert_eq!(
+            clean_end(Some("Server shutting down"), &Ok(())),
+            guard::SessionEnd::ByConsole("Server shutting down".into())
+        );
+        assert_eq!(
+            clean_end(None, &Err(anyhow!(CTRL_CLOSED_BY_CONSOLE))),
+            guard::SessionEnd::ByConsole(CTRL_CLOSED_BY_CONSOLE.into())
+        );
+        assert_eq!(clean_end(None, &Ok(())), guard::SessionEnd::Stopped);
+        // An error on our side still went out with a goodbye.
+        assert_eq!(
+            clean_end(None, &Err(anyhow!("the console stopped sending"))),
+            guard::SessionEnd::Stopped
+        );
     }
 
     #[test]
