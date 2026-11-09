@@ -6,6 +6,25 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+Remote Play:
+
+- Play connects again after another device or a controller at the console took the session over, or right after a Stop. Before, PS5Upload could keep failing until the PS5 was restarted while other apps got in. It now asks the PS5 to start the same way other Remote Play apps do.
+
+Installing:
+
+- Add-ons (DLC) no longer sit at 99%. An add-on is now treated as an add-on even when its package doesn't say so, the check after installing ends within about a minute, and an add-on that leaves no files says to look for it in the game's add-ons on the PS5.
+
+PS5 helper and rest mode:
+
+- While the console goes to rest and for a minute after it wakes, the helper holds its background work (fan, cheats, home-screen tile and icon fixes, its own checks) and pauses Tailscale, then picks up again. Tailscale can no longer get stuck in a busy loop when the network goes away.
+- Each rest and wake is written to a small log on the console (power.log), collected by the Bug Report, so a console that switches off in rest can be traced.
+
+Game frame rate:
+
+- While a capture runs, Stop capture is red with a Recording label beside it.
+
+## 12.4.0
+
 Play Together:
 
 - Join a friend in the app works again with the one invite link (the invite service refused the app; fixed on the service, so 12.3.0 joins too).
