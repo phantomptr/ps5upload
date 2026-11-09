@@ -20,10 +20,9 @@ const LEGACY_CARD: Record<string, string> = {
   manager: "payload-manager",
   shadowmount: "shadowmountplus",
   nanodns: "nanodns",
-  hearbridge: "hearbridge",
 };
 
-/** Where an old Payloads tab (`?tab=manager|shadowmount|nanodns|hearbridge|processes|ports`)
+/** Where an old Payloads tab (`?tab=manager|shadowmount|nanodns|processes|ports`)
  *  lives now, or null for a current tab. Integrations became cards on "On your PS5";
  *  Processes and Ports became one Running tab. */
 export function legacyPayloadsTarget(tab: string | null): string | null {

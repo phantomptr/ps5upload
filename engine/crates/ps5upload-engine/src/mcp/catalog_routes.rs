@@ -583,10 +583,6 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/ps5/health/fix"),
     ("GET", "/api/ps5/health/junk"),
     ("GET", "/api/ps5/health/scan"),
-    ("POST", "/api/ps5/hearbridge/action"),
-    ("GET", "/api/ps5/hearbridge/devices"),
-    ("GET", "/api/ps5/hearbridge/saved"),
-    ("GET", "/api/ps5/hearbridge/status"),
     ("GET", "/api/ps5/helper-log-ftp"),
     ("POST", "/api/ps5/helper/replace-copy"),
     ("POST", "/api/ps5/helper/restore-previous"),
@@ -920,10 +916,6 @@ mod tests {
             "pub fn router(",
         )));
         routes.extend(routes_in(function(
-            include_str!("../hearbridge_api.rs"),
-            "pub(crate) fn routes<",
-        )));
-        routes.extend(routes_in(function(
             include_str!("../browser_payload.rs"),
             "pub fn router<",
         )));
@@ -992,7 +984,6 @@ mod tests {
         let known = BTreeSet::from([
             "browser_payload::router",
             "console_tools_api::router",
-            "hearbridge_api::routes",
             "mcp::router",
             "ops_router",
             "payloads_api::router",

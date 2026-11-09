@@ -112,19 +112,44 @@ pub(crate) struct AutoloadReq {
 }
 
 /// POST /api/ps5/pldmgr/autoload `{host, enabled, list}` — write the boot autoload
-/// switch and ordered list.
+/// switch and ordered list, then read it back: `{ok:true, autoload}` with what Payload
+/// Manager now holds, or an error when it did not keep what was written.
 pub(crate) async fn autoload(
     State(_s): State<crate::AppState>,
     Json(req): Json<AutoloadReq>,
 ) -> Response {
     let h = host(&req.host);
     crate::log_info!(
-        "pldmgr autoload: host={h} enabled={} entries={}",
+        "pldmgr autoload: host={h} enabled={} list=[{}]",
         req.enabled,
-        req.list.len()
+        req.list.join(",")
     );
-    match tokio::task::spawn_blocking(move || pm::autoload_set(&h, req.enabled, &req.list)).await {
-        Ok(Ok(())) => Json(serde_json::json!({ "ok": true })).into_response(),
+    let r = tokio::task::spawn_blocking(move || {
+        let before = pm::autoload_get(&h);
+        match &before {
+            Ok(a) => crate::log_info!(
+                "pldmgr autoload: host={h} was enabled={} list=[{}]",
+                a.enabled,
+                a.list.join(",")
+            ),
+            Err(e) => {
+                crate::log_warn!("pldmgr autoload: host={h} could not read the list first: {e}")
+            }
+        }
+        let back = pm::autoload_set_checked(&h, req.enabled, &req.list);
+        match &back {
+            Ok(a) => crate::log_info!(
+                "pldmgr autoload: host={h} read back enabled={} list=[{}]",
+                a.enabled,
+                a.list.join(",")
+            ),
+            Err(e) => crate::log_warn!("pldmgr autoload: host={h} {e}"),
+        }
+        back
+    })
+    .await;
+    match r {
+        Ok(Ok(a)) => Json(serde_json::json!({ "ok": true, "autoload": a })).into_response(),
         Ok(Err(e)) => bad(e),
         Err(e) => bad(format!("{e}")),
     }

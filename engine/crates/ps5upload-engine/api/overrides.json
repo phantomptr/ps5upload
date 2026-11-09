@@ -68,7 +68,6 @@
   "/api/ps5/game-icon": "games",
   "/api/ps5/game-meta": "games",
   "/api/ps5/health": "health",
-  "/api/ps5/hearbridge": "hearbridge",
   "/api/ps5/helper": "payloads",
   "/api/ps5/hw": "hardware",
   "/api/ps5/list-dir": "console-files",
@@ -327,9 +326,6 @@
   },
   "GET /api/ps5/health/scan": {
    "summary": "Run every console health check"
-  },
-  "GET /api/ps5/hearbridge/status": {
-   "summary": "Whether HearBridge answers on the console, and how it stands"
   },
   "GET /api/ps5/hw/info": {
    "summary": "Console hardware and firmware facts"
@@ -984,7 +980,6 @@
   "go-live": "Streaming a session to other sites.",
   "hardware": "Temperatures, fan, clocks.",
   "health": "Health checks, clean-up and network diagnosis.",
-  "hearbridge": "The HearBridge payload's audio headset controls.",
   "install": "Package installs, and package links the console fetches.",
   "jobs": "Watch and stop jobs, long calls and tasks started on the console.",
   "mcp": "The MCP endpoint.",

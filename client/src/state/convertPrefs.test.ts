@@ -67,6 +67,25 @@ describe("convertPrefs", () => {
     expect(third.useConvertPrefs.getState().outputPlace).toBe("folder");
   });
 
+  it("#780: picking an Output folder turns off next-to-its-source, so the folder is used", async () => {
+    const { useConvertPrefs } = await import("./convertPrefs");
+    const { outputFor } = await import("../lib/outputPlace");
+    useConvertPrefs.getState().setOutputPlace("beside");
+    useConvertPrefs.getState().setOutputDir("/out");
+    const s = useConvertPrefs.getState();
+    expect(s.outputPlace).toBe("folder");
+    expect(stored.get("ps5upload.convert.output_place")).toBe("folder");
+    expect(outputFor("/games/Astro Bot", s.outputPlace, s.outputDir)).toEqual({
+      outputDir: "/out",
+      keepBoth: false,
+      beside: false,
+    });
+    // Clearing the field leaves the choice as it is; next-to-source can be turned on again.
+    useConvertPrefs.getState().setOutputPlace("beside");
+    useConvertPrefs.getState().setOutputDir("");
+    expect(useConvertPrefs.getState().outputPlace).toBe("beside");
+  });
+
   it("remembers the .ffpfsc level, Balanced by default and for a corrupt value", async () => {
     const first = await import("./convertPrefs");
     expect(first.useConvertPrefs.getState().imageLevel).toBe("balanced");

@@ -87,26 +87,37 @@ static void *wake_watchdog_thread_fn(void *arg) {
     /* A jump seen, its ucred look not done yet: the look waits until the console has settled. */
     int look_pending = 0;
     int64_t pend_real = 0, pend_mono = 0;
+    /* Elapsed is measured from the END of the previous poll, not just across the sleep: a rest that
+     * begins while this thread is inside a poll (the probe's socket call as the network goes away, a
+     * log flush) would otherwise fall between two measurements and never be seen. Measured on the Pro
+     * (12.4.1, 2026-11-09): a 7-minute rest from the console's menu left no "woke" line at all. */
+    struct timespec last_real, last_mono;
+    while (clock_gettime(CLOCK_REALTIME, &last_real) != 0 || clock_gettime(CLOCK_MONOTONIC, &last_mono) != 0)
+        sleep(WAKE_POLL_S);
     for (;;) {
-        struct timespec real0, mono0, real1, mono1;
-        if (clock_gettime(CLOCK_REALTIME, &real0) != 0 ||
-            clock_gettime(CLOCK_MONOTONIC, &mono0) != 0) {
-            sleep(WAKE_POLL_S);
-            continue;
-        }
+        struct timespec real1, mono1;
         sleep(WAKE_POLL_S);
         if (clock_gettime(CLOCK_REALTIME, &real1) != 0 ||
             clock_gettime(CLOCK_MONOTONIC, &mono1) != 0) {
             continue;
         }
-        int64_t real_elapsed = (int64_t)real1.tv_sec - (int64_t)real0.tv_sec;
-        int64_t mono_elapsed = (int64_t)mono1.tv_sec - (int64_t)mono0.tv_sec;
+        int64_t real_elapsed = (int64_t)real1.tv_sec - (int64_t)last_real.tv_sec;
+        int64_t mono_elapsed = (int64_t)mono1.tv_sec - (int64_t)last_mono.tv_sec;
+        last_real = real1;
+        last_mono = mono1;
 
         PLOG(PLOG_TRACE, PLOG_WAKE, "wake_watchdog: slept %llds (monotonic %llds)", (long long)real_elapsed,
              (long long)mono_elapsed);
         /* Every poll: is the console going to rest, frozen-and-woken, or settled (power_phase.h)? This
          * also pauses the tailnet node while the network is going away or not back yet. */
         int phase = power_phase_poll(real_elapsed, mono_elapsed);
+        {
+            /* A poll that ran long: say where the time went (the next poll counts it as elapsed). */
+            struct timespec after;
+            if (clock_gettime(CLOCK_MONOTONIC, &after) == 0 && (int64_t)after.tv_sec - (int64_t)mono1.tv_sec >= 10)
+                fprintf(stderr, "wake_watchdog: a power check took %llds\n",
+                        (long long)((int64_t)after.tv_sec - (int64_t)mono1.tv_sec));
+        }
 
         if (wake_watchdog_should_look(real_elapsed, mono_elapsed)) {
             if (!look_pending && phase != PP_NORMAL)

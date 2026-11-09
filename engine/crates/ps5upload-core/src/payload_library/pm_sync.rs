@@ -68,7 +68,8 @@ impl PmConsole for HttpPm {
         pm::autoload_get(&self.0)
     }
     fn autoload_set(&self, enabled: bool, list: &[String]) -> Result<(), String> {
-        pm::autoload_set(&self.0, enabled, list)
+        // Read back: a write Payload Manager answered OK but did not keep is an error (#781).
+        pm::autoload_set_checked(&self.0, enabled, list).map(|_| ())
     }
 }
 

@@ -60,7 +60,6 @@ mod game_fps_api;
 mod games_api;
 mod golive_dest;
 mod golive_ffmpeg;
-mod hearbridge_api;
 mod helper_copies_api;
 mod helper_mirror;
 mod helper_stop;
@@ -12568,7 +12567,6 @@ fn build_app_and_mcp(
             "/api/ps5/pldmgr/upload",
             post(pldmgr_api::upload).layer(axum::extract::DefaultBodyLimit::max(128 * 1024 * 1024)),
         )
-        .merge(hearbridge_api::routes())
         .route("/api/ps5/elfldr/ensure", post(ps5_elfldr_ensure))
         .route("/api/ps5/process/kill", post(ps5_process_kill))
         .route("/api/ps5/power/control", post(ps5_power_control))

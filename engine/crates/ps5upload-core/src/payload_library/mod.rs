@@ -108,6 +108,10 @@ pub struct PayloadInfo {
     pub homepage: String,
     /// True for a user-added repo (#93): the UI badges it and offers Remove.
     pub is_custom: bool,
+    /// The file name a download is cached and stored in Payload Manager under
+    /// (`shadowmountplus.elf`), so a copy stored there by hand can be told apart. Empty for a
+    /// custom repo, whose name comes from each release.
+    pub file_name: String,
 }
 
 impl From<&CatalogueEntry> for PayloadInfo {
@@ -126,6 +130,7 @@ impl From<&CatalogueEntry> for PayloadInfo {
             autoload_delay_ms: e.autoload_delay_ms,
             homepage: e.homepage.to_string(),
             is_custom: false,
+            file_name: download::cached_elf_name(e.id, e.asset_name_hint, ""),
         }
     }
 }

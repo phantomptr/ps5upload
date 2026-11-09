@@ -844,17 +844,16 @@ pub fn known_port_name(port: u16, proto: &str) -> Option<&'static str> {
         2159 if tcp => "gdbsrv (debugger)",
         5353 if !tcp => "mDNS",
         8080 if tcp => "websrv",
-        8090 if tcp => "HearBridge",
         9180 if tcp => "PS5Upload Minion",
         12800 if tcp => "DPI installer bridge",
         _ => return None,
     })
 }
 
-/// Whether a well-known port serves a web page (Payload Manager's UI, websrv, HearBridge,
+/// Whether a well-known port serves a web page (Payload Manager's UI, websrv,
 /// the helper's PS5Upload Minion page).
 pub fn known_port_is_web(port: u16) -> bool {
-    port == crate::payload_manager::PAYLOAD_MANAGER_PORT || matches!(port, 8080 | 8090 | 9180)
+    port == crate::payload_manager::PAYLOAD_MANAGER_PORT || matches!(port, 8080 | 9180)
 }
 
 /// The ports held on the console. The helper finds them by binding each port and closing it

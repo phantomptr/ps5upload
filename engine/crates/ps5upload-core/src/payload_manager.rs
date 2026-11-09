@@ -378,8 +378,10 @@ fn upload_path(filename: &str, check_json: &[u8]) -> String {
 }
 
 /// Payload Manager's boot autoload: on/off, the seconds it waits after boot,
-/// and the ordered list. A list entry is a file name it resolves through its
-/// scan folders, or `!<ms>` for a pause.
+/// and the ordered list (`/data/pldmgr/autoload.txt`, one entry a line). An
+/// entry is a slot (`local/<leaf>`, `repo/<…>`, 0.6), a file name it matches
+/// against its stored files, an absolute path under its folders, or `!<ms>`
+/// for a pause. Nothing loads at boot while `enabled` is false.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct Autoload {
     pub enabled: bool,
@@ -421,18 +423,22 @@ fn parse_autoload(json: &[u8]) -> Option<Autoload> {
     })
 }
 
+/// Whether Payload Manager keeps `entry` as one line of its boot list. It takes a file name
+/// (0.5), a slot like "local/x" or "repo/x@y" (0.6), an absolute path under its folders, or a
+/// "!<ms>" pause, and refuses the whole list over a line with a comma or a control character
+/// (its `csv_lines`). Only those are refused here: a list read from it is written back as it
+/// was, whatever else its entries hold. Refusing more (paths, spaces) once made every write
+/// of a list holding such an entry fail, the helper's included (#781).
+fn autoload_entry_ok(entry: &str) -> bool {
+    let e = entry.trim();
+    !e.is_empty() && !e.contains(',') && !e.chars().any(char::is_control)
+}
+
 /// Write the autoload switch and list (`POST /set_config`). Payload Manager
 /// keeps its other settings when they are not sent.
 pub fn autoload_set(ip: &str, enabled: bool, list: &[String]) -> Result<(), String> {
     for entry in list {
-        // A file name (0.5), a slot like "local/x" or "repo/x@y" (0.6), or a "!<ms>"
-        // pause; never a path or anything that breaks the comma list.
-        if entry.contains(',')
-            || entry.contains('"')
-            || entry.starts_with('/')
-            || entry.contains("..")
-            || entry.chars().any(char::is_whitespace)
-        {
+        if !autoload_entry_ok(entry) {
             return Err(format!("{entry:?} cannot be an autoload entry"));
         }
     }
@@ -446,6 +452,37 @@ pub fn autoload_set(ip: &str, enabled: bool, list: &[String]) -> Result<(), Stri
         return Err(format!(
             "Payload Manager refused the config (HTTP {status}: {})",
             String::from_utf8_lossy(&resp).trim()
+        ));
+    }
+    Ok(())
+}
+
+/// [`autoload_set`], then the list read back (`GET /get_config`): Err when Payload Manager
+/// answered OK but does not hold what was written, so a caller never reports a boot list
+/// that is not there (#781). Ok carries what it read back.
+pub fn autoload_set_checked(ip: &str, enabled: bool, list: &[String]) -> Result<Autoload, String> {
+    autoload_set(ip, enabled, list)?;
+    let back =
+        autoload_get(ip).map_err(|e| format!("boot list written, but not read back: {e}"))?;
+    autoload_matches(&back, enabled, list)?;
+    Ok(back)
+}
+
+/// Whether `back` is what was written: the same switch and the same entries in order
+/// (Payload Manager trims each line and drops empty ones).
+fn autoload_matches(back: &Autoload, enabled: bool, list: &[String]) -> Result<(), String> {
+    let wrote: Vec<&str> = list
+        .iter()
+        .map(|e| e.trim())
+        .filter(|e| !e.is_empty())
+        .collect();
+    let read: Vec<&str> = back.list.iter().map(String::as_str).collect();
+    if back.enabled != enabled || wrote != read {
+        return Err(format!(
+            "Payload Manager kept a different boot list: wrote enabled={enabled} [{}], read back enabled={} [{}]",
+            wrote.join(","),
+            back.enabled,
+            read.join(",")
         ));
     }
     Ok(())
@@ -712,23 +749,66 @@ mod tests {
     }
 
     #[test]
-    fn autoload_entries_may_be_0_6_slots_but_never_paths() {
-        for bad in ["a,b", "/data/x.elf", "a/../b", "x y"] {
+    fn autoload_entries_are_refused_only_where_payload_manager_refuses_them() {
+        // A comma or a control character makes Payload Manager refuse the whole list.
+        for bad in ["a,b", "a\rb", "a\nb", "", "  "] {
             assert!(
                 autoload_set("127.0.0.9", true, &[bad.into()]).is_err(),
-                "{bad}"
+                "{bad:?}"
             );
         }
-        // Slots and pauses pass the shape check and reach the network (which fails here).
+        // Everything it keeps passes and reaches the network (which fails here): a list read
+        // from it holding a path or a spaced name is written back as it was (#781).
         for ok in [
             "repo/elfldr@e8cce5d1",
             "local/ps5upload-probe",
             "!3000",
             "kstuff.elf",
+            "/data/pldmgr/payloads/local/kstuff/kstuff.elf",
+            "my payload.elf",
         ] {
             let e = autoload_set("127.0.0.9", true, &[ok.into()]).unwrap_err();
             assert!(!e.contains("cannot be an autoload entry"), "{ok}: {e}");
         }
+    }
+
+    #[test]
+    fn a_boot_list_write_is_checked_against_what_is_read_back() {
+        let back = |enabled, list: &[&str]| Autoload {
+            enabled,
+            delay_s: 5,
+            list: list.iter().map(|s| s.to_string()).collect(),
+        };
+        let wrote: Vec<String> = vec![
+            "local/kstuff".into(),
+            "!3000".into(),
+            "local/ps5upload".into(),
+        ];
+        assert!(autoload_matches(
+            &back(true, &["local/kstuff", "!3000", "local/ps5upload"]),
+            true,
+            &wrote
+        )
+        .is_ok());
+        // Dropped, reordered, or the switch not kept: an error naming both lists.
+        let e =
+            autoload_matches(&back(true, &["local/kstuff", "!3000"]), true, &wrote).unwrap_err();
+        assert!(
+            e.contains("local/ps5upload") && e.contains("read back"),
+            "{e}"
+        );
+        assert!(autoload_matches(
+            &back(true, &["local/ps5upload", "!3000", "local/kstuff"]),
+            true,
+            &wrote
+        )
+        .is_err());
+        assert!(autoload_matches(
+            &back(false, &["local/kstuff", "!3000", "local/ps5upload"]),
+            true,
+            &wrote
+        )
+        .is_err());
     }
 
     #[test]

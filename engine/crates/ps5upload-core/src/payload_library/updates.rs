@@ -141,9 +141,17 @@ pub(crate) fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-/// The numbers of a tag (`v1.2.10-rc1` → [1, 2, 10]) and whether something follows them (a
-/// pre-release suffix). None when it has no number at all (`latest`, `nightly`).
-fn version_parts(tag: &str) -> Option<(Vec<u64>, bool)> {
+/// One piece of what follows a tag's numbers: `beta11` is [Word("beta"), Num(11)]. A word
+/// sorts before a number in the same place.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Piece {
+    Word(String),
+    Num(u64),
+}
+
+/// The numbers of a tag (`v1.2.10-rc1` → [1, 2, 10]) and the pieces that follow them
+/// ([Word("rc"), Num(1)]). None when it has no number at all (`latest`, `nightly`).
+fn version_parts(tag: &str) -> Option<(Vec<u64>, Vec<Piece>)> {
     let start = tag.find(|c: char| c.is_ascii_digit())?;
     let rest = &tag[start..];
     let end = rest
@@ -154,12 +162,60 @@ fn version_parts(tag: &str) -> Option<(Vec<u64>, bool)> {
         .filter(|s| !s.is_empty())
         .map(|s| s.parse().unwrap_or(u64::MAX))
         .collect();
-    (!nums.is_empty()).then_some((nums, end < rest.len()))
+    let mut pieces = Vec::new();
+    let tail = rest[end..].to_ascii_lowercase();
+    let mut chars = tail.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_ascii_alphabetic() {
+            let mut w = String::new();
+            while let Some(&c) = chars.peek().filter(|c| c.is_ascii_alphabetic()) {
+                w.push(c);
+                chars.next();
+            }
+            pieces.push(Piece::Word(w));
+        } else if c.is_ascii_digit() {
+            let mut d = String::new();
+            while let Some(&c) = chars.peek().filter(|c| c.is_ascii_digit()) {
+                d.push(c);
+                chars.next();
+            }
+            pieces.push(Piece::Num(d.parse().unwrap_or(u64::MAX)));
+        } else {
+            chars.next();
+        }
+    }
+    (!nums.is_empty()).then_some((nums, pieces))
+}
+
+/// Where a tag stands against the release its numbers name: a pre-release of it (`beta3`, `rc1`,
+/// `-dr-test1`, `b2`), the release itself, or a later revision of it (`2.5B` after `2.5`).
+fn stage(pieces: &[Piece]) -> u8 {
+    const PRE: &[&str] = &[
+        "alpha", "beta", "rc", "pre", "preview", "test", "testing", "dev", "nightly", "snapshot",
+        "canary",
+    ];
+    if pieces.is_empty() {
+        return 1;
+    }
+    let pre = pieces.iter().enumerate().any(|(i, p)| match p {
+        Piece::Word(w) => {
+            PRE.contains(&w.as_str())
+                || ((w == "a" || w == "b") && matches!(pieces.get(i + 1), Some(Piece::Num(_))))
+        }
+        Piece::Num(_) => false,
+    });
+    if pre {
+        0
+    } else {
+        2
+    }
 }
 
 /// Whether `latest` is newer than `installed`. Numbered tags compare by number, so a newer
-/// pre-release the user picked by hand is not "updated" back to an older stable one. A tag
-/// without numbers (a rolling `latest`) is newer whenever it differs.
+/// pre-release the user picked by hand is not "updated" back to an older stable one. With the
+/// same numbers, a pre-release comes before its release, which comes before a lettered revision,
+/// and two of a kind compare by what follows (`1.7beta10` → `1.7beta11`, ShadowMount+'s tags).
+/// A tag without numbers (a rolling `latest`) is newer whenever it differs.
 pub fn is_newer(latest: &str, installed: &str) -> bool {
     let (latest, installed) = (latest.trim(), installed.trim());
     if latest.is_empty() || latest == installed {
@@ -169,19 +225,18 @@ pub fn is_newer(latest: &str, installed: &str) -> bool {
         return true;
     }
     match (version_parts(latest), version_parts(installed)) {
-        (Some((l, l_suffix)), Some((i, i_suffix))) => {
+        (Some((l, l_rest)), Some((i, i_rest))) => {
             let n = l.len().max(i.len());
             let pad = |v: &[u64]| -> Vec<u64> {
                 let mut v = v.to_vec();
                 v.resize(n, 0);
                 v
             };
-            match pad(&l).cmp(&pad(&i)) {
-                std::cmp::Ordering::Greater => true,
-                std::cmp::Ordering::Less => false,
-                // Same numbers: the release beats its own pre-release, nothing else changes.
-                std::cmp::Ordering::Equal => i_suffix && !l_suffix,
-            }
+            pad(&l)
+                .cmp(&pad(&i))
+                .then_with(|| stage(&l_rest).cmp(&stage(&i_rest)))
+                .then_with(|| l_rest.cmp(&i_rest))
+                .is_gt()
         }
         _ => true,
     }
@@ -646,6 +701,29 @@ mod tests {
     }
 
     #[test]
+    fn pre_releases_and_revisions_of_the_same_numbers_are_ordered() {
+        // ShadowMount+ moves through betas of one version: each is an update.
+        assert!(is_newer("1.7beta11", "1.7beta10"));
+        assert!(!is_newer("1.7beta10", "1.7beta11"));
+        assert!(
+            !is_newer("1.7beta11", "1.7beta12"),
+            "a newer pre-release kept"
+        );
+        assert!(is_newer("1.7", "1.7beta12"), "the release after its betas");
+        assert!(is_newer("1.7beta1", "1.6"));
+        assert!(is_newer("v1.15-beta16", "v1.15-beta15"));
+        assert!(is_newer("1.2-dr-test2", "1.2-dr-test1"));
+        assert!(is_newer("v1.2-rc1", "v1.2-beta3"));
+        assert!(is_newer("1.0b3", "1.0b2"));
+        assert!(is_newer("1.0", "1.0b3"));
+        // A lettered revision (etaHEN 2.5B) comes after its release and before the next letter.
+        assert!(is_newer("2.5B", "2.5"));
+        assert!(is_newer("2.5C", "2.5B"));
+        assert!(!is_newer("2.5", "2.5B"));
+        assert!(!is_newer("2.5B", "2.5b"), "case is not a version");
+    }
+
+    #[test]
     fn a_check_finds_the_newer_release_and_counts_it_once() {
         let (_d, http, lib) = library("check");
         http.ok(&asset("v1"), &elf(1, 64));
@@ -726,7 +804,7 @@ mod tests {
         // Now the host says 403 to everything.
         http.status(LATEST, 403);
         http.status(
-            "https://api.github.com/repos/EchoStretch/kstuff-lite/releases?per_page=1",
+            "https://api.github.com/repos/EchoStretch/kstuff-lite/releases?per_page=10",
             403,
         );
         http.status(smp_latest, 403);

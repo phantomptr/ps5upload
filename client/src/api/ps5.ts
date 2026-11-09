@@ -1992,6 +1992,9 @@ export interface PayloadInfo {
   /** True for a user-added custom repo (#93) — the UI badges it and shows a
    *  Remove control. Undefined/false for curated catalogue entries. */
   is_custom?: boolean;
+  /** The file name a download is cached and stored in Payload Manager under
+   *  (`shadowmountplus.elf`); empty for a custom repo. Older engines omit it. */
+  file_name?: string;
 }
 
 export interface PayloadReleaseInfo {

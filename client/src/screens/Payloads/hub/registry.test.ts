@@ -38,7 +38,6 @@ const CATALOG: PayloadInfo[] = [
   info("ftpsrv", "ftpsrv", "ftpsrv", null, [2121]),
   info("payload-manager", "Payload Manager", null, "/data/pldmgr/pldmgr_config.txt", [8084]),
   info("nanodns", "nanoDNS", "nanodns.elf", "/data/nanodns/nanodns.ini", [53]),
-  info("hearbridge", "HearBridge", "hearbridge.elf", "/data/hearbridge/hearbridge.log", [8090]),
   info("klogsrv", "klogsrv", "klogsrv.elf", "/data/klog/klog.log", [3232]),
 ];
 
@@ -94,10 +93,10 @@ describe("On your PS5 detection", () => {
     const cards = detectHubCards({
       entries: hubEntries(CATALOG),
       processes: [],
-      markers: new Set(["/data/hearbridge/hearbridge.log", "/data/klog/klog.log"]),
+      markers: new Set(["/data/nanodns/nanodns.ini", "/data/klog/klog.log"]),
     });
     expect(cards.map((c) => [c.id, c.state])).toEqual([
-      ["hearbridge", "installed"],
+      ["nanodns", "installed"],
       ["klogsrv", "installed"],
     ]);
   });
@@ -105,19 +104,19 @@ describe("On your PS5 detection", () => {
   it("leaves out what is neither running nor installed, unless a link opened it", () => {
     const entries = hubEntries(CATALOG);
     expect(detectHubCards({ entries, processes: [], markers: new Set() })).toEqual([]);
-    const forced = detectHubCards({ entries, processes: [], markers: new Set(), forceShow: "hearbridge" });
-    expect(forced.map((c) => [c.id, c.state])).toEqual([["hearbridge", "unknown"]]);
+    const forced = detectHubCards({ entries, processes: [], markers: new Set(), forceShow: "nanodns" });
+    expect(forced.map((c) => [c.id, c.state])).toEqual([["nanodns", "unknown"]]);
   });
 
   it("counts an integration whose own API answered as running", () => {
     const cards = detectHubCards({
       entries: hubEntries(CATALOG),
       processes: [],
-      markers: new Set(["/data/hearbridge/hearbridge.log"]),
-      answering: new Set(["hearbridge"]),
+      markers: new Set(["/data/pldmgr/pldmgr_config.txt"]),
+      answering: new Set(["payload-manager"]),
     });
     expect(cards.map((c) => [c.id, c.state, c.integration, c.webPort])).toEqual([
-      ["hearbridge", "running", "hearbridge", 8090],
+      ["payload-manager", "running", "payload-manager", 8084],
     ]);
   });
 
@@ -155,7 +154,7 @@ describe("On your PS5 detection", () => {
   });
 
   it("compares process names without case or extension", () => {
-    expect(normProcName("HearBridge.ELF")).toBe("hearbridge");
+    expect(normProcName("ShadowMountPlus.ELF")).toBe("shadowmountplus");
     expect(normProcName("etaHEN")).toBe("etahen");
     expect(entryFromCatalog(CATALOG[4]).processNames).toEqual(["pldmgr"]);
     expect(entryFromCatalog(CATALOG[5]).webPort).toBeNull();

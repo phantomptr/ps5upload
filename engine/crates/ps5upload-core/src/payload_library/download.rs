@@ -622,7 +622,7 @@ mod tests {
         let n = |hint: &str| cached_elf_name("custom-0a", hint, "");
         assert_eq!(n("kstuff"), "kstuff.elf");
         assert_eq!(n("elfldr-ps5.elf"), "elfldr-ps5.elf");
-        assert_eq!(n("HearBridge-"), "HearBridge.elf");
+        assert_eq!(n("Tool-"), "Tool.elf");
         assert_eq!(n(""), "custom-0a.elf");
         // Leading and trailing punctuation is trimmed; only interior path text falls back.
         assert_eq!(n("..\\x"), "x.elf");

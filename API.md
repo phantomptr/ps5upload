@@ -95,9 +95,6 @@ body for a `POST`.
 - **A saved name.** `GET /api/consoles` lists the consoles the app has saved, without their keys.
   `POST /api/discover` looks for consoles on the network.
 
-The HearBridge route `POST /api/ps5/hearbridge/action` is the one exception: `addr` there means a
-headset, and the console is `host` or `console`.
-
 ## Errors
 
 Every failure of an `/api/` route is JSON, with the status it would have had anyway:
@@ -308,7 +305,7 @@ places to start.
 | `remote-sources` | `/api/remote/*` | NAS and other servers. |
 | `tailnet` | `/api/tailnet`, `/api/tailnet/*` | This device on Tailscale, and the consoles on its tailnet. (The console's own node is `/api/ps5/tailnet`.) |
 | `settings`, `users`, `pairing` | `/api/settings`, `/api/shared/*`; `/api/profile/*`; `/api/ava1/*` | Settings, console users, pairing. |
-| `console-tools`, `hearbridge`, `shadowmount` | `/api/ps5/shell/run`, `/api/ps5/klog`, `/api/ps5/net/*` and the rest of `/api/ps5/*`; `/api/ps5/hearbridge/*`; `/api/ps5/smp/*` | Everything else on the console. |
+| `console-tools`, `shadowmount` | `/api/ps5/shell/run`, `/api/ps5/klog`, `/api/ps5/net/*` and the rest of `/api/ps5/*`; `/api/ps5/smp/*` | Everything else on the console. |
 
 ## Consoles, Tailscale and new devices
 

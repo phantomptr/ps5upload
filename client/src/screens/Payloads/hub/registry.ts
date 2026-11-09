@@ -12,13 +12,12 @@ import type { PayloadInfo, ProcessInfo } from "../../../api/ps5";
 
 /** The payloads with a panel of their own on the card ("Manage"). Adding one = a registry
  *  entry here plus its panel in OnPs5Panel; never a new tab. */
-export type IntegrationId = "shadowmountplus" | "nanodns" | "payload-manager" | "hearbridge" | "hush";
+export type IntegrationId = "shadowmountplus" | "nanodns" | "payload-manager" | "hush";
 
 export const INTEGRATION_IDS: readonly IntegrationId[] = [
   "shadowmountplus",
   "nanodns",
   "payload-manager",
-  "hearbridge",
   "hush",
 ];
 
@@ -47,7 +46,7 @@ export interface HubEntry {
 }
 
 /** Ports the catalogue lists that serve a web page (diagnostics::known_port_is_web). */
-const WEB_PORTS = new Set([8080, 8084, 8090]);
+const WEB_PORTS = new Set([8080, 8084]);
 
 /** Process names the catalogue doesn't carry (it has no hint for these), measured on the
  *  console's process list. */
@@ -84,14 +83,6 @@ export const BUILTIN_ENTRIES: readonly HubEntry[] = [
     processNames: ["pldmgr"],
     marker: "/data/pldmgr/pldmgr_config.txt",
     webPort: 8084,
-    isCustom: false,
-  },
-  {
-    id: "hearbridge",
-    name: "HearBridge",
-    processNames: ["hearbridge"],
-    marker: "/data/hearbridge/hearbridge.log",
-    webPort: 8090,
     isCustom: false,
   },
   {
@@ -151,7 +142,7 @@ export interface DetectInput {
   processes: readonly ProcessInfo[];
   /** Marker paths found on the console. */
   markers: ReadonlySet<string>;
-  /** Integrations whose own API answered (Payload Manager on :8084, HearBridge): running
+  /** Integrations whose own API answered (Payload Manager on :8084): running
    *  even when the process list hasn't been read yet. */
   answering?: ReadonlySet<string>;
   /** Processes known to be an entry's by other evidence than their name (entry id → pids). */

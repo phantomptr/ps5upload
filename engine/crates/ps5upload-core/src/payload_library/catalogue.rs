@@ -170,7 +170,7 @@ pub(super) const CATALOGUE: &[CatalogueEntry] = &[
         role: "Homebrew enabler + jailbreak helper",
         description: "Long-running homebrew enabler with toolbox features. Faster app jailbreak than the on-the-fly path; provides the HijackerCommand IPC many homebrew apps expect on :9028.",
         repo_host: "github.com",
-        repo_owner: "LightningMods",
+        repo_owner: "etaHEN",
         repo_name: "etaHEN",
         asset_name_hint: "etaHEN",
         on_console_marker_path: None,
@@ -178,7 +178,7 @@ pub(super) const CATALOGUE: &[CatalogueEntry] = &[
         ports: &[9028, 2323],
         autoload_priority: 2,
         autoload_delay_ms: 500,
-        homepage: "https://github.com/LightningMods/etaHEN",
+        homepage: "https://github.com/etaHEN/etaHEN",
     },
     CatalogueEntry {
         id: "ftpsrv",
@@ -521,48 +521,6 @@ pub(super) const CATALOGUE: &[CatalogueEntry] = &[
         autoload_priority: 6,
         autoload_delay_ms: 300,
         homepage: "https://github.com/BestPig/BackPork",
-    },
-    CatalogueEntry {
-        // StonedModder/Ghostpad — creates a virtual PS5 controller and
-        // redirects input to it. GitHub-hosted; releases ship `ghostpad.elf`
-        // (the on-console payload) alongside a Windows companion `.exe`. The
-        // `ghostpad.elf` hint is a substring of only the ELF, so pick_asset
-        // never selects the .exe (which isn't a payload extension anyway).
-        id: "ghostpad",
-        display_name: "Ghostpad",
-        role: "Virtual controller + input redirection",
-        description: "Creates a virtual PS5 controller on the console and redirects input to it — useful for input automation, remote control, and accessibility setups. Send the payload to start it; pair it with the upstream's companion app for driving the virtual pad.",
-        repo_host: "github.com",
-        repo_owner: "StonedModder",
-        repo_name: "Ghostpad",
-        asset_name_hint: "ghostpad.elf",
-        on_console_marker_path: None,
-        process_name_hint: Some("ghostpad.elf"),
-        ports: &[],
-        autoload_priority: 4,
-        autoload_delay_ms: 200,
-        homepage: "https://github.com/StonedModder/Ghostpad",
-    },
-    CatalogueEntry {
-        // X-F1REBALL-X/HearBridge-PS5 (GPL-3) — plays the console's audio on ordinary
-        // Bluetooth (A2DP) headphones or speakers through the PS5's own radio, no dongle.
-        // Releases ship one asset, `HearBridge-<version>.elf`, so the hint stops before the
-        // version. Its own web page (pairing, volume, latency, EQ) is on TCP 8090, or the next
-        // free port up to 8095; /data/hearbridge/ holds its state.
-        id: "hearbridge",
-        display_name: "HearBridge",
-        role: "Bluetooth headphones and speakers for PS5 audio",
-        description: "Sends the PS5's game and system audio to ordinary Bluetooth headphones or speakers (A2DP), using the console's own Bluetooth radio, so no dongle is needed. Pair, switch headsets, set volume, latency, EQ and night mode, and keep per-game profiles from its own web page (port 8090), which also adds a HearBridge tile to the home screen. Tested by its author on the original PS5 (CFI-10xx) and the Slim (CFI-2000).",
-        repo_host: "github.com",
-        repo_owner: "X-F1REBALL-X",
-        repo_name: "HearBridge-PS5",
-        asset_name_hint: "HearBridge-",
-        on_console_marker_path: Some("/data/hearbridge/hearbridge.log"),
-        process_name_hint: Some("hearbridge.elf"),
-        ports: &[8090],
-        autoload_priority: 5,
-        autoload_delay_ms: 300,
-        homepage: "https://github.com/X-F1REBALL-X/HearBridge-PS5",
     },
     CatalogueEntry {
         // disco-trooper/hush (GPL-3) — turns off the console's continuous "recent gameplay"

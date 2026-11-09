@@ -24,7 +24,6 @@ pub mod fw_spoof;
 pub mod game_fps;
 pub mod game_meta;
 pub mod health;
-pub mod hearbridge;
 pub mod helper_log_level;
 pub mod host_info;
 pub mod host_names;

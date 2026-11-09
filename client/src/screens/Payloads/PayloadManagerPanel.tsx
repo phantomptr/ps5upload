@@ -5,6 +5,8 @@ import { Badge, Button, Callout, ErrorCard, Select, Spinner, Toggle } from "../.
 import { useConfirm } from "../../components/ConfirmDialog";
 import {
   autoloadKey,
+  autoloadKeys,
+  listedEntry,
   pmDelete,
   pmLaunch,
   pmOverview,
@@ -115,7 +117,7 @@ export default function PayloadManagerPanel() {
     if (!isTauriEnv() || !view?.present) return;
     const ids = new Set(Object.values(pmRecords(hostOf(host))).map((r) => r.id));
     for (const p of view.payloads) {
-      const id = catalogueMatch(p, inventory);
+      const id = catalogueMatch(p, inventory, catalog);
       if (id) ids.add(id);
     }
     let live = true;
@@ -128,7 +130,7 @@ export default function PayloadManagerPanel() {
     return () => {
       live = false;
     };
-  }, [view, host, latest, inventory]);
+  }, [view, host, latest, inventory, catalog]);
 
   const run = async (key: string, work: () => Promise<void>, failTitle: string) => {
     setBusy(key);
@@ -177,35 +179,66 @@ export default function PayloadManagerPanel() {
     );
   };
 
-  /** Downloads the newer release, stores it in Payload Manager (which replaces the old file in
-   *  its folder), keeps its place in the boot list, and drops an old copy left under another name. */
+  /** Downloads the newer release, stores it in Payload Manager in place of the old file (same
+   *  name: its slot and boot-list entry stay), keeps its place in the boot list, and drops an old
+   *  copy left under another name. A new name that would land in a folder Payload Manager
+   *  already has is asked about first, as storing is: that folder may be the user's. */
+  const updateOne = async (p: PmStoredPayload, id: string, to: PayloadReleaseInfo) => {
+    const h = hostOf(host);
+    const local = await payloadsDownload(id, to.picked_asset_url, to.tag);
+    const name = local.path.split(/[\\/]/).pop() || p.filename;
+    if (name === p.filename) {
+      const r = await pmStore(h, name, local.path, true);
+      if (!r.stored) throw new Error("Payload Manager did not store it");
+    } else if (!(await storeConfirmed(name, (c) => pmStore(h, name, local.path, c), true))) {
+      return;
+    }
+    const after = await pmOverview(h);
+    if (after.present) {
+      const fresh =
+        after.payloads.find((x) => x.filename === name && x.path !== p.path) ??
+        after.payloads.find((x) => x.filename === name);
+      const oldKey = listedEntry(after.autoload?.list, p);
+      if (fresh && after.autoload && oldKey) {
+        const swapped = swapAutoloadKey(after.autoload.list, oldKey, autoloadKey(fresh));
+        if (swapped !== after.autoload.list) await pmSetAutoload(h, after.autoload.enabled, swapped);
+      }
+      if (name !== p.filename && after.payloads.some((x) => x.path === p.path)) await pmDelete(h, p.filename);
+    }
+    if (name !== p.filename) forgetPmStore(h, p.filename);
+    recordPmStore(h, name, id, to.tag);
+    pushNotification(
+      "success",
+      withConsolePrefix(host, tr("pm_updated", { name, tag: to.tag }, `Updated ${name} to ${to.tag}`)),
+    );
+  };
+
   const update = (p: PmStoredPayload, id: string, to: PayloadReleaseInfo) =>
     run(
       `update:${p.path}`,
-      async () => {
-        const h = hostOf(host);
-        const local = await payloadsDownload(id, to.picked_asset_url, to.tag);
-        const name = local.path.split(/[\\/]/).pop() || p.filename;
-        const r = await pmStore(h, name, local.path, true);
-        if (!r.stored) throw new Error("Payload Manager did not store it");
-        const after = await pmOverview(h);
-        if (after.present) {
-          const fresh = after.payloads.find((x) => x.filename === name && x.path !== p.path) ??
-            after.payloads.find((x) => x.filename === name);
-          const oldKey = autoloadKey(p);
-          if (fresh && after.autoload?.list.includes(oldKey)) {
-            await pmSetAutoload(h, after.autoload.enabled, swapAutoloadKey(after.autoload.list, oldKey, autoloadKey(fresh)));
-          }
-          if (name !== p.filename && after.payloads.some((x) => x.path === p.path)) await pmDelete(h, p.filename);
-        }
-        if (name !== p.filename) forgetPmStore(h, p.filename);
-        recordPmStore(h, name, id, to.tag);
-        pushNotification(
-          "success",
-          withConsolePrefix(host, tr("pm_updated", { name, tag: to.tag }, `Updated ${name} to ${to.tag}`)),
-        );
-      },
+      () => updateOne(p, id, to),
       tr("pm_update_failed", { name: p.filename }, `Couldn't update ${p.filename}`),
+    );
+
+  /** Every stored copy this app knows a newer release for, one after another; one that fails
+   *  is said and the rest go on. */
+  const updateAll = (items: { p: PmStoredPayload; id: string; to: PayloadReleaseInfo }[]) =>
+    run(
+      "update:all",
+      async () => {
+        for (const { p, id, to } of items) {
+          try {
+            await updateOne(p, id, to);
+          } catch (e) {
+            pushNotification(
+              "error",
+              withConsolePrefix(host, tr("pm_update_failed", { name: p.filename }, `Couldn't update ${p.filename}`)),
+              { body: humanizeCaught(e) },
+            );
+          }
+        }
+      },
+      tr("pm_update_failed", { name: "" }, "Couldn't update"),
     );
 
   /** Stores under `filename`, asking first when Payload Manager already has that folder
@@ -213,6 +246,7 @@ export default function PayloadManagerPanel() {
   const storeConfirmed = async (
     filename: string,
     store: (confirmed: boolean) => Promise<PmStoreResult>,
+    quiet = false,
   ): Promise<boolean> => {
     let r = await store(false);
     if (!r.stored) {
@@ -240,7 +274,8 @@ export default function PayloadManagerPanel() {
       r = await store(true);
       if (!r.stored) return false;
     }
-    pushNotification(
+    if (!quiet)
+      pushNotification(
       "success",
       withConsolePrefix(host, tr("payloads_pm_stored_title", { name: filename }, `Stored ${filename} in Payload Manager`)),
     );
@@ -283,7 +318,9 @@ export default function PayloadManagerPanel() {
   const setAutoload = (enabled: boolean, list: string[]) =>
     run(
       "autoload",
-      () => pmSetAutoload(host, enabled, list),
+      async () => {
+        await pmSetAutoload(host, enabled, list);
+      },
       tr("pm_autoload_failed", undefined, "Couldn't update the autoload list"),
     );
 
@@ -296,21 +333,33 @@ export default function PayloadManagerPanel() {
           await turnOffHelperAtBoot(host);
           return;
         }
-        const done = await turnOnHelperAtBoot(host, (folder) =>
-          confirm({
-            title: tr(
-              "payloads_pm_store_confirm_title",
-              { folder },
-              `Replace Payload Manager's "${folder}" folder?`,
-            ),
-            message: tr(
-              "payloads_pm_store_confirm_other",
-              { folder },
-              `Payload Manager already has a "${folder}" folder. Storing into it removes the other files there (an older version, usually).`,
-            ),
-            confirmLabel: tr("payloads_pm_store", undefined, "Store in Payload Manager"),
-            destructive: true,
-          }),
+        const done = await turnOnHelperAtBoot(
+          host,
+          (folder) =>
+            confirm({
+              title: tr(
+                "payloads_pm_store_confirm_title",
+                { folder },
+                `Replace Payload Manager's "${folder}" folder?`,
+              ),
+              message: tr(
+                "payloads_pm_store_confirm_other",
+                { folder },
+                `Payload Manager already has a "${folder}" folder. Storing into it removes the other files there (an older version, usually).`,
+              ),
+              confirmLabel: tr("payloads_pm_store", undefined, "Store in Payload Manager"),
+              destructive: true,
+            }),
+          () =>
+            confirm({
+              title: tr("helper_boot_list_off_title", undefined, "Payload Manager's boot list is off"),
+              message: tr(
+                "helper_boot_list_off_confirm",
+                undefined,
+                "While its boot list is off, Payload Manager starts nothing at boot, the helper included. Turn it on?",
+              ),
+              confirmLabel: tr("helper_boot_turn_on_list", undefined, "Turn on the boot list"),
+            }),
         );
         if (done)
           pushNotification(
@@ -364,26 +413,44 @@ export default function PayloadManagerPanel() {
 
   const autoload = view.autoload;
   const helperCopy = storedHelper(view.payloads);
-  const helperListed = !!helperCopy && listsHelper(autoload, autoloadKey(helperCopy));
+  const helperListed = listsHelper(autoload, helperCopy);
   const bootRecord = loadBootRecord(host);
-  const inList = (p: PmStoredPayload) => !!autoload?.list.includes(autoloadKey(p));
+  // On here and stored, but not in the list right now: the next connection puts it back.
+  const helperOn = helperListed || (!!bootRecord && !!helperCopy);
+  const inList = (p: PmStoredPayload) => listedEntry(autoload?.list, p) !== null;
   const stored = view.payloads.filter((p) => p.path.startsWith("/data/pldmgr/"));
   const onUsb = view.payloads.filter((p) => !p.path.startsWith("/data/pldmgr/"));
 
   const records = pmRecords(hostOf(host));
   const nameOf = (id: string) => catalog.find((c) => c.id === id)?.display_name ?? id;
-  const row = (p: PmStoredPayload) => {
+  /** What the tab offers for a stored copy: the newer release of the catalogue payload this app
+   *  stored there, or for one stored by hand, the catalogue's release of the same payload
+   *  (Payload Manager keeps no version for it, so "newer" cannot be told). */
+  const offerFor = (p: PmStoredPayload) => {
     const recorded = isRepoManaged(p) ? undefined : records[p.filename];
-    // Stored by hand under the same name as a catalogue download: offer the catalogue's release
-    // (Payload Manager keeps no version for it, so "newer" cannot be told).
-    const matchId = recorded ? null : catalogueMatch(p, inventory);
+    const matchId = recorded ? null : catalogueMatch(p, inventory, catalog);
     const matchTo = matchId ? latest[matchId] : null;
     const rec = recorded ?? (matchId && matchTo?.picked_asset_url ? { id: matchId, tag: "" } : undefined);
     const to = recorded ? pmUpdateFor(recorded, latest[recorded.id]) : (rec && matchTo) || null;
+    return { recorded, matchId, rec, to };
+  };
+  // "Update all" takes what this app stored and knows to be older, not hand-stored copies whose
+  // version is unknown (those are offered one by one).
+  const updatable = stored.flatMap((p) => {
+    const { recorded, to } = offerFor(p);
+    return recorded && to ? [{ p, id: recorded.id, to }] : [];
+  });
+  const row = (p: PmStoredPayload) => {
+    const { recorded, matchId, rec, to } = offerFor(p);
     const listed = inList(p);
-    const key = autoloadKey(p);
+    // The entry that names it now (slot, file name or path), else the one to add.
+    const key = listedEntry(autoload?.list, p) ?? autoloadKey(p);
+    const keys = autoloadKeys(p);
     const order = autoload ? autoload.list.filter((e) => !e.startsWith("!")) : [];
     const pos = order.indexOf(key);
+    // The helper's own entry goes through "Load the PS5Upload helper at boot", so taking it
+    // out here is the switch turned off, not something the next connection undoes.
+    const isHelper = !!helperCopy && p.path === helperCopy.path;
     return (
       <li
         key={p.path}
@@ -430,10 +497,12 @@ export default function PayloadManagerPanel() {
                 size="sm"
                 disabled={busy !== null}
                 onClick={() =>
-                  void setAutoload(
-                    autoload.enabled,
-                    listed ? autoload.list.filter((e) => e !== key) : [...autoload.list, key],
-                  )
+                  void (isHelper
+                    ? setHelperAtBoot(!listed)
+                    : setAutoload(
+                        autoload.enabled,
+                        listed ? autoload.list.filter((e) => !keys.includes(e)) : [...autoload.list, key],
+                      ))
                 }
                 title={tr(
                   "pm_autoload_toggle_tooltip",
@@ -564,7 +633,7 @@ export default function PayloadManagerPanel() {
       {autoload && (
         <section className="surface-panel space-y-2 p-4">
           <Toggle
-            checked={helperListed}
+            checked={helperOn}
             disabled={busy !== null}
             onChange={(on) => void setHelperAtBoot(on)}
             label={tr("helper_boot_label", undefined, "Load the PS5Upload helper at boot")}
@@ -574,14 +643,43 @@ export default function PayloadManagerPanel() {
               "Payload Manager starts the helper after everything above it in its boot list, so Minion and this app work after a restart with no PC. Each time this app connects it brings that copy up to its own helper and keeps the previous one; if a new copy does not start after a restart, the previous one is put back.",
             )}
           />
-          {helperListed && !autoload.enabled && (
-            <p className="text-xs text-[var(--color-warn)]">
-              {tr(
-                "helper_boot_list_off",
-                undefined,
-                "Payload Manager's boot list is turned off above, so nothing starts at boot until you turn it on.",
-              )}
-            </p>
+          {helperOn && !helperListed && (
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-xs text-[var(--color-warn)]">
+                {tr(
+                  "helper_boot_not_listed",
+                  undefined,
+                  "The helper is stored but not in Payload Manager's boot list. This app puts it back the next time it connects.",
+                )}
+              </p>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={busy !== null}
+                onClick={() => void setHelperAtBoot(true)}
+              >
+                {tr("pm_autoload_add", undefined, "Load at boot")}
+              </Button>
+            </div>
+          )}
+          {helperOn && !autoload.enabled && (
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-xs text-[var(--color-warn)]">
+                {tr(
+                  "helper_boot_list_off",
+                  undefined,
+                  "Payload Manager's boot list is turned off above, so nothing starts at boot until you turn it on.",
+                )}
+              </p>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={busy !== null}
+                onClick={() => void setAutoload(true, autoload.list)}
+              >
+                {tr("helper_boot_turn_on_list", undefined, "Turn on the boot list")}
+              </Button>
+            </div>
           )}
           {helperListed && bootRecord?.badVersion && (
             <p className="text-xs text-[var(--color-muted)]">
@@ -664,9 +762,22 @@ export default function PayloadManagerPanel() {
       )}
 
       <section>
-        <header className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
-          {tr("pm_stored_header", { n: stored.length }, `Stored on the PS5 · ${stored.length}`)}
-        </header>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <header className="text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+            {tr("pm_stored_header", { n: stored.length }, `Stored on the PS5 · ${stored.length}`)}
+          </header>
+          {updatable.length > 1 && (
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={busy === "update:all" ? <Spinner size={12} tone="inherit" /> : <Download size={12} />}
+              disabled={busy !== null}
+              onClick={() => void updateAll(updatable)}
+            >
+              {tr("pu_update_all", undefined, "Update all")}
+            </Button>
+          )}
+        </div>
         {stored.length === 0 ? (
           <p className="text-sm text-[var(--color-muted)]">
             {tr(

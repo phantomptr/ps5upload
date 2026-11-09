@@ -61,7 +61,6 @@ const NAV_KEYWORDS: Record<string, string[]> = {
     "shadowmount",
     "etahen",
     "nanodns",
-    "hearbridge",
     "hush",
     "payload manager",
     "processes",

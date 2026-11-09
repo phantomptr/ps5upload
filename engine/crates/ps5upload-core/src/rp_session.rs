@@ -192,6 +192,100 @@ pub(crate) fn make_did(regist_key: &[u8; KEY_SIZE]) -> [u8; 32] {
     did
 }
 
+/// Stage 1 for WAKE & SIGN IN: the session request exactly as 12.4.0 and earlier sent it (half-close,
+/// then read until the console closes). 12.4.1 changed session_init to keep our side open and tear
+/// the connection down itself; on 2026-11-09 both of the owner's consoles (Pro and Phat, 13.60)
+/// powered off about 15 s into a 12.4.1 wake & sign-in from rest, while plain wakes were fine all
+/// day. Until that is understood, the wake path keeps the behaviour proven on hardware for months.
+pub(crate) fn session_init_for_wake(
+    host: &str,
+    regist_key: &[u8; KEY_SIZE],
+) -> Result<[u8; KEY_SIZE]> {
+    // Registration keys are hex-encoded over their significant bytes — the
+    // field is NUL-padded and the console wants only the text before the pad.
+    let end = regist_key.iter().position(|b| *b == 0).unwrap_or(KEY_SIZE);
+    let regist_key_hex: String = regist_key[..end]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+
+    let t0 = std::time::Instant::now();
+    let addr = session_addr(host)?;
+    crate::core_debug!("rp session init: {host} ({addr}) asking, Rp-Version {RP_VERSION}");
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(10)).map_err(|e| {
+        crate::core_debug!(
+            "rp session init: {host}: connect failed after {} ms: {e}",
+            t0.elapsed().as_millis()
+        );
+        anyhow!("connecting for session init: {e}")
+    })?;
+    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
+
+    let req = format!(
+        "GET /sie/ps5/rp/sess/init HTTP/1.1\r\n\
+         Host: {host}:{SESSION_PORT}\r\n\
+         User-Agent: remoteplay Windows\r\n\
+         Connection: close\r\n\
+         Content-Length: 0\r\n\
+         RP-Registkey: {regist_key_hex}\r\n\
+         Rp-Version: {RP_VERSION}\r\n\r\n"
+    );
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| anyhow!("sending session init: {e}"))?;
+    stream.flush().ok();
+    let _ = stream.shutdown(Shutdown::Write);
+
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).map_err(|e| {
+        crate::core_debug!(
+            "rp session init: {host}: reading the reply failed after {} ms ({} bytes in): {e}",
+            t0.elapsed().as_millis(),
+            raw.len()
+        );
+        anyhow!("reading session init reply: {e}")
+    })?;
+    if raw.is_empty() {
+        // Info, not debug: how long the console took to close is the one thing about a held slot
+        // a report at the usual level can show (#720).
+        crate::clog!(
+            Info,
+            "rp",
+            "rp session init: {host}: closed with no reply after {} ms",
+            t0.elapsed().as_millis()
+        );
+        bail!("{SESSION_INIT_CLOSED}");
+    }
+    let reply = split_http(&raw)?;
+    crate::core_debug!(
+        "rp session init: {host}: {} in {} ms",
+        crate::rp_regist::reply_for_log(&reply),
+        t0.elapsed().as_millis()
+    );
+    if reply.code != 200 {
+        let reason = reply
+            .headers
+            .iter()
+            .find(|(k, _)| k == "rp-application-reason")
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("no reason given");
+        bail!("session init refused (HTTP {}): {reason}", reply.code);
+    }
+    let nonce_b64 = reply
+        .headers
+        .iter()
+        .find(|(k, _)| k == "rp-nonce")
+        .map(|(_, v)| v.clone())
+        .ok_or_else(|| anyhow!("session init reply had no RP-Nonce"))?;
+    let nonce = base64::engine::general_purpose::STANDARD
+        .decode(nonce_b64.trim())
+        .map_err(|e| anyhow!("RP-Nonce not base64: {e}"))?;
+    // The console's nonce, as it sent it (no zero-filled buffer in between).
+    <[u8; KEY_SIZE]>::try_from(nonce.as_slice())
+        .map_err(|_| anyhow!("RP-Nonce was {} bytes, expected {KEY_SIZE}", nonce.len()))
+}
+
 /// How long the console has to answer a session init.
 const SESSION_INIT_WAIT: Duration = Duration::from_secs(10);
 /// A session init answered slower than this is logged at info: the PS5 had work to do first
@@ -807,7 +901,7 @@ pub fn login_session_when_ready(
     loop {
         attempt += 1;
         let err = match nonce {
-            None => match session_init(host, &creds.regist_key) {
+            None => match session_init_for_wake(host, &creds.regist_key) {
                 Ok(n) => {
                     nonce = Some(n);
                     continue;
@@ -1153,6 +1247,22 @@ mod tests {
         );
         assert!(req.contains("Connection: close\r\n"), "{req}");
         assert!(req.contains(&format!("RP-Registkey: {}\r\n", "5a".repeat(16))));
+    }
+
+    #[test]
+    fn wake_and_sign_in_keeps_the_old_session_request() {
+        // 2026-11-09: both consoles powered off ~15 s into a 12.4.1 wake & sign-in from rest. The
+        // wake path must keep the request proven on hardware (half-close, read to the console's
+        // close), not the stream start's keep-open read.
+        let src = include_str!("rp_session.rs");
+        let login = src.find("pub fn login_session_when_ready").unwrap();
+        let body = &src[login..login + src[login..].find("\n}\n").unwrap()];
+        assert!(body.contains("session_init_for_wake(host"));
+        assert!(!body.contains(" session_init(host"));
+        let old = src.find("pub(crate) fn session_init_for_wake").unwrap();
+        let old_body = &src[old..old + src[old..].find("\n}\n").unwrap()];
+        assert!(old_body.contains("shutdown(Shutdown::Write)"));
+        assert!(old_body.contains("read_to_end"));
     }
 
     #[test]

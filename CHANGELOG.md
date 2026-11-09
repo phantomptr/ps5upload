@@ -6,6 +6,31 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+PS5 helper and rest mode:
+
+- The helper now notices a rest started from the console's own menu (or when the PS5 goes to rest by itself), not just one PS5Upload asks for. Before, such a rest could slip past it, so Tailscale stayed connected through rest and the helper's after-wake care never ran.
+
+Helper at boot (Payload Manager):
+
+- "Load the PS5Upload helper at boot" keeps the helper in Payload Manager's boot list: it checks the list really changed, puts the helper back on the next connection if it's missing, and offers to turn on Payload Manager's own boot list when that is off. Before, the helper could be stored but never started at boot, so Minion didn't run after a restart.
+
+Payloads:
+
+- Updates are offered for betas and lettered releases too (ShadowMount+ 1.7beta10 to beta11, etaHEN 2.5B to 2.5C), with no more offers to go back to an older version.
+- PS5 builds are picked over PS4 ones (ftpsrv, klogsrv), and Remote Play Unlock gets its normal release, not the testing one.
+- Payloads you stored in Payload Manager by hand are recognised, and Payload Manager has an Update all button that keeps each payload's place in the boot list.
+- Ghostpad and HearBridge are gone from the payload list: their projects are no longer online.
+
+Workshop:
+
+- Picking an Output folder now turns off "Save each next to its source", so your folder is used. Before, the folder was ignored while that box was ticked.
+
+Remote Play:
+
+- Wake & sign in asks the PS5 to start the same way it did before 12.4.1.
+
+## 12.4.1
+
 Remote Play:
 
 - Play connects again after another device or a controller at the console took the session over, or right after a Stop. Before, PS5Upload could keep failing until the PS5 was restarted while other apps got in. It now asks the PS5 to start the same way other Remote Play apps do.

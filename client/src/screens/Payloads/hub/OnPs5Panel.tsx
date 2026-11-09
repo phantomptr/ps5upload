@@ -42,8 +42,6 @@ import NanoDnsScreen from "../../NanoDns";
 import SmpPanel from "./SmpPanel";
 import PayloadManagerPanel from "../PayloadManagerPanel";
 import { PmSummary, SmpSummary } from "./summaries";
-import { HbSummary, HearBridgePanel, useHearBridge } from "./hearbridge";
-import { hbAct } from "../../../api/hearbridge";
 import { HushPanel, HushSummary, useHush, useHushActions } from "../../Hush";
 import {
   detectHubCards,
@@ -97,7 +95,7 @@ async function findMarkers(addr: string, entries: readonly HubEntry[]): Promise<
 /**
  * "On your PS5": one card per payload running or installed on the selected console, with
  * its web page, an update when the catalogue has a newer release, Stop, and (for
- * ShadowMount+, nanoDNS, Payload Manager, HearBridge and Hush) its own panel under Manage.
+ * ShadowMount+, nanoDNS, Payload Manager and Hush) its own panel under Manage.
  */
 export default function OnPs5Panel() {
   return (
@@ -197,15 +195,6 @@ function OnPs5Body() {
     void refreshMarkers();
   }, [refreshMarkers]);
 
-  // HearBridge's own API is read while its card is on screen (or a link opened it); an
-  // answer also counts as running, should its process go by another name.
-  const hbWanted =
-    openId === "hearbridge" ||
-    detectHubCards({ entries, processes: procs, markers }).some((c) => c.integration === "hearbridge");
-  // Every status read lets HearBridge re-query the headset volume, so read slowly unless
-  // its Manage panel is open.
-  const hb = useHearBridge(host, online && hbWanted, openId === "hearbridge");
-  const hbPresent = hb.view?.present === true;
   // Hush keeps its pid in /data/hush/pid.lock (elfldr lists it as payload.elf): its files are
   // read while its card is on screen.
   const hushWanted =
@@ -220,14 +209,11 @@ function OnPs5Body() {
         entries,
         processes: procs,
         markers,
-        answering: hbPresent ? new Set(["hearbridge"]) : undefined,
         pids: hushPid ? new Map([["hush", [hushPid]]]) : undefined,
         forceShow: openId,
       }),
-    [entries, procs, markers, openId, hbPresent, hushPid],
+    [entries, procs, markers, openId, hushPid],
   );
-  const hbVersion = hb.view?.present ? hb.view.status.version || null : null;
-  const hbPort = hb.view?.present ? hb.view.port : null;
 
   const report = useCallback((id: string, r: IntegrationReport) => {
     setReports((prev) => {
@@ -236,9 +222,6 @@ function OnPs5Body() {
       return { ...prev, [id]: r };
     });
   }, []);
-  useEffect(() => {
-    if (hbVersion || hbPort) report("hearbridge", { version: hbVersion, webPort: hbPort });
-  }, [hbVersion, hbPort, report]);
 
   // The newest stable release of each card whose running version is known, so the card
   // can offer an update.
@@ -282,7 +265,6 @@ function OnPs5Body() {
   };
 
   const stop = async (card: HubCard) => {
-    if (card.integration === "hearbridge" && hbPresent) return stopHearBridge();
     const p = card.processes[0];
     if (!p) return;
     const kind = killPrompt(p);
@@ -313,32 +295,6 @@ function OnPs5Body() {
     }
   };
 
-  /** HearBridge has a clean stop of its own (it closes the headset link first). */
-  const stopHearBridge = async () => {
-    const ok = await confirm({
-      title: tr("hb_stop_title", undefined, "Stop HearBridge?"),
-      message: tr(
-        "hb_stop_body",
-        undefined,
-        "HearBridge closes and the headset disconnects. Send it again to start it.",
-      ),
-      confirmLabel: tr("hub_stop", undefined, "Stop"),
-      destructive: true,
-    });
-    if (!ok) return;
-    setBusy("hearbridge");
-    try {
-      await hbAct(host, { action: "stop" });
-      log.info("payloads", "stopped HearBridge");
-    } catch (e) {
-      setError(humanizeCaught(e));
-    } finally {
-      setBusy(null);
-      await hb.refresh();
-      await refreshProcs();
-    }
-  };
-
   const update = async (card: HubCard, tag: string) => {
     const ok = await confirm({
       title: tr("hub_update_confirm_title", { name: card.name, version: tag }, `Update ${card.name} to ${tag}?`),
@@ -363,7 +319,6 @@ function OnPs5Body() {
       );
       setReports((prev) => ({ ...prev, [card.id]: { ...prev[card.id], version: null } }));
       setSummaryRev((n) => n + 1);
-      if (card.integration === "hearbridge") void hb.refresh();
     } catch (e) {
       pushNotification(
         "error",
@@ -449,20 +404,17 @@ function OnPs5Body() {
                 onToggle={() => setOpen(openId === c.id ? null : c.id)}
                 onStop={() => void stop(c)}
                 onUpdate={(t) => void update(c, t)}
-                canStop={c.integration === "hearbridge" && hbPresent ? true : undefined}
                 summary={
-                  c.integration === "hearbridge"
-                    ? () => <HbSummary view={hb.view} />
-                    : c.integration === "hush"
-                      ? () => (
-                          <HushSummary
-                            view={hush.view}
-                            running={c.state === "running"}
-                            busy={hushActions.busy}
-                            onResume={() => void hushActions.run(true, hush.view?.configText ?? null)}
-                          />
-                        )
-                      : c.integration
+                  c.integration === "hush"
+                    ? () => (
+                        <HushSummary
+                          view={hush.view}
+                          running={c.state === "running"}
+                          busy={hushActions.busy}
+                          onResume={() => void hushActions.run(true, hush.view?.configText ?? null)}
+                        />
+                      )
+                    : c.integration
                       ? (fallback) => (
                           <Summary
                             key={summaryRev}
@@ -475,9 +427,7 @@ function OnPs5Body() {
                       : null
                 }
                 panel={
-                  c.integration === "hearbridge" ? (
-                    <HearBridgePanel host={host} view={hb.view} apply={hb.apply} refresh={hb.refresh} />
-                  ) : c.integration === "hush" ? (
+                  c.integration === "hush" ? (
                     <HushPanel host={host} view={hush.view} procs={procs} refresh={hush.refresh} />
                   ) : c.integration ? (
                     <IntegrationPanel id={c.integration} host={host} />
