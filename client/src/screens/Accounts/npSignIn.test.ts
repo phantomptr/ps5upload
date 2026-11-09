@@ -70,6 +70,11 @@ describe("the sign-in backup", () => {
     expect(npBackupTarget(info({}))).toEqual({ uid: 0x10000000, slot: 1, username: "Ava" });
   });
 
+  it("has no target, rather than throwing, when an answer leaves fields out", () => {
+    const partial = { uid: 0 } as unknown as Parameters<typeof npBackupTarget>[0];
+    expect(npBackupTarget(partial)).toBeNull();
+  });
+
   // Measured on the Pro (13.60): the helper read no foreground user (uid 0) while the one
   // local user was signed in, so Undo still has to find that user.
   it("falls back to the only local user when no foreground user is read", () => {
