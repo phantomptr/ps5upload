@@ -127,6 +127,9 @@ static int net_probe(int *err, const char **step) {
         *step = "socket";
         return -1;
     }
+    /* Never wait here: as the console goes to rest a blocking send can sit until the wake. */
+    int fl = fcntl(s, F_GETFL, 0);
+    if (fl >= 0) (void)fcntl(s, F_SETFL, fl | O_NONBLOCK);
     memset(&a, 0, sizeof a);
     a.sin_family = AF_INET;
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -136,7 +139,7 @@ static int net_probe(int *err, const char **step) {
         *step = "bind";
     } else if (getsockname(s, (struct sockaddr *)&a, &alen) != 0) {
         *step = "getsockname";
-    } else if (sendto(s, &b, 1, 0, (struct sockaddr *)&a, sizeof a) != 1) {
+    } else if (sendto(s, &b, 1, MSG_DONTWAIT, (struct sockaddr *)&a, sizeof a) != 1) {
         *step = "sendto";
     } else {
         rc = 0;
