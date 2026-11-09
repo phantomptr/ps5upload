@@ -1053,6 +1053,305 @@ pub(crate) fn document_schema() -> Value {
     })
 }
 
+// ---- a console found on the tailnet (tailnet_discover.rs) ----
+
+/// What adding a console found on the tailnet does to the list: the same console at home and
+/// away is one entry, at its home address when one is known.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TailnetPlan {
+    /// Already listed (at this index), nothing to change.
+    Exists(usize),
+    /// Listed at its tailnet address, and its home address is now known: move it there (same id,
+    /// so its keys and settings follow).
+    Relink(usize, String),
+    /// Listed twice, at home (`keep`) and at its tailnet address (`drop`): one entry, at home.
+    Merge { keep: usize, drop: usize },
+    /// Not listed: a new entry.
+    Add,
+}
+
+/// The plan for a console with tailnet address `tailnet_ip`, home address `lan_host` when known,
+/// and `hosts`: every other address this engine met the same console at (its AVA1 key's pins).
+pub(crate) fn tailnet_plan(
+    list: &[Value],
+    tailnet_ip: &str,
+    lan_host: Option<&str>,
+    hosts: &[String],
+) -> TailnetPlan {
+    let at = |h: &str| {
+        let k = key_of(h);
+        (!k.is_empty())
+            .then(|| list.iter().position(|p| key_of(str_of(p, "host")) == k))
+            .flatten()
+    };
+    let at_lan = lan_host.and_then(at);
+    let at_ts = at(tailnet_ip);
+    match (at_lan, at_ts) {
+        (Some(keep), Some(drop)) if keep != drop => TailnetPlan::Merge { keep, drop },
+        (Some(i), _) => TailnetPlan::Exists(i),
+        (None, Some(i)) => match lan_host {
+            Some(h) => TailnetPlan::Relink(i, h.to_string()),
+            None => TailnetPlan::Exists(i),
+        },
+        (None, None) => hosts
+            .iter()
+            .find_map(|h| at(h))
+            .map(TailnetPlan::Exists)
+            .unwrap_or(TailnetPlan::Add),
+    }
+}
+
+/// `plan` applied to `list`; the entry it ends on (its index). `name` names a new entry.
+fn apply_tailnet_plan(
+    list: &mut Vec<Value>,
+    plan: &TailnetPlan,
+    tailnet_ip: &str,
+    lan_host: Option<&str>,
+    name: &str,
+) -> usize {
+    match plan {
+        TailnetPlan::Exists(i) => *i,
+        TailnetPlan::Relink(i, host) => {
+            if let Some(p) = list[*i].as_object_mut() {
+                // A name that was only the address follows it.
+                if p.get("name").and_then(Value::as_str) == Some(tailnet_ip) {
+                    p.insert("name".into(), host.clone().into());
+                }
+                p.insert("host".into(), host.clone().into());
+            }
+            *i
+        }
+        TailnetPlan::Merge { keep, drop } => {
+            let gone = list[*drop].clone();
+            if let (Some(k), Some(g)) = (list[*keep].as_object_mut(), gone.as_object()) {
+                for (f, v) in g {
+                    let empty = k
+                        .get(f)
+                        .is_none_or(|x| x.is_null() || x.as_str() == Some(""));
+                    if f != "id" && f != "host" && f != "name" && empty && !v.is_null() {
+                        k.insert(f.clone(), v.clone());
+                    }
+                }
+            }
+            list.remove(*drop);
+            if *drop < *keep {
+                keep - 1
+            } else {
+                *keep
+            }
+        }
+        TailnetPlan::Add => {
+            let host = lan_host.unwrap_or(tailnet_ip);
+            let name = name.trim();
+            list.push(json!({
+                "id": new_id(),
+                "name": if name.is_empty() { host } else { name },
+                "host": host,
+                "last_seen_at": null,
+                "last_seen_kernel": null,
+                "last_seen_payload": null,
+            }));
+            list.len() - 1
+        }
+    }
+}
+
+fn tailnet_action(plan: &TailnetPlan) -> &'static str {
+    match plan {
+        TailnetPlan::Exists(_) => "exists",
+        TailnetPlan::Relink(..) => "linked",
+        TailnetPlan::Merge { .. } => "merged",
+        TailnetPlan::Add => "added",
+    }
+}
+
+/// Writes one change to the list as `PUT /api/consoles` does (one writer, keys moved along).
+fn change_list<R>(change: impl FnOnce(&mut Vec<Value>) -> Option<R>) -> Result<Option<R>, String> {
+    migrate();
+    let _g = ROSTER.lock().unwrap_or_else(|e| e.into_inner());
+    let doc = shared_state::read(DOC);
+    let old = profiles_of(doc.value.as_ref());
+    let mut list = old.clone();
+    let Some(r) = change(&mut list) else {
+        return Ok(None);
+    };
+    let mut value = doc
+        .value
+        .clone()
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    let mut keys = lock_keys();
+    if take_keys(&mut keys, &old, &mut list) {
+        keys.save().map_err(|e| format!("{e:#}"))?;
+    }
+    value["profiles"] = Value::Array(list);
+    shared_state::write(DOC, doc.rev, value)?;
+    Ok(Some(r))
+}
+
+/// The console the list has for these addresses (see [`tailnet_plan`]): `{id, name, host}`.
+pub(crate) fn tailnet_listed(tailnet_ip: &str, lan_host: Option<&str>, hosts: &[String]) -> Value {
+    let list = profiles_of(shared_state::read(DOC).value.as_ref());
+    let i = match tailnet_plan(&list, tailnet_ip, lan_host, hosts) {
+        TailnetPlan::Exists(i) | TailnetPlan::Relink(i, _) => i,
+        TailnetPlan::Merge { keep, .. } => keep,
+        TailnetPlan::Add => return Value::Null,
+    };
+    let p = &list[i];
+    json!({ "id": str_of(p, "id"), "name": str_of(p, "name"), "host": str_of(p, "host") })
+}
+
+/// Adds a console found on the tailnet, or finds it: `(action, {id, name, host})`, action being
+/// `added`, `linked` (moved to its home address), `merged` (two entries became one) or `exists`.
+pub(crate) fn tailnet_upsert(
+    name: &str,
+    tailnet_ip: &str,
+    lan_host: Option<&str>,
+    hosts: &[String],
+) -> Result<(&'static str, Value), String> {
+    let r = change_list(|list| {
+        let plan = tailnet_plan(list, tailnet_ip, lan_host, hosts);
+        let i = apply_tailnet_plan(list, &plan, tailnet_ip, lan_host, name);
+        let p = &list[i];
+        Some((
+            tailnet_action(&plan),
+            json!({ "id": str_of(p, "id"), "name": str_of(p, "name"), "host": str_of(p, "host") }),
+        ))
+    })?;
+    r.ok_or_else(|| "nothing changed".to_string())
+}
+
+/// The console at `lan_host` reported tailnet address `tailnet_ip` (reached at home): an entry
+/// added away at that tailnet address becomes the home one (moved, or merged into the entry
+/// already at `lan_host`). Whether the list changed.
+pub(crate) fn link_home(lan_host: &str, tailnet_ip: &str) -> bool {
+    if key_of(lan_host) == key_of(tailnet_ip) {
+        return false;
+    }
+    change_list(|list| {
+        let plan = tailnet_plan(list, tailnet_ip, Some(lan_host), &[]);
+        match plan {
+            TailnetPlan::Relink(..) | TailnetPlan::Merge { .. } => {
+                apply_tailnet_plan(list, &plan, tailnet_ip, Some(lan_host), "");
+                Some(())
+            }
+            _ => None,
+        }
+    })
+    .ok()
+    .flatten()
+    .is_some()
+}
+
+#[cfg(test)]
+mod tailnet_merge_tests {
+    use super::*;
+
+    fn p(id: &str, host: &str) -> Value {
+        json!({"id": id, "name": id, "host": host})
+    }
+
+    #[test]
+    fn the_same_console_at_home_and_away_is_one_entry() {
+        let ts = "100.64.0.9";
+        // Never met: added at home when its home address is known, else at its tailnet address.
+        assert_eq!(
+            tailnet_plan(&[], ts, Some("192.168.1.20"), &[]),
+            TailnetPlan::Add
+        );
+        let mut list = vec![p("a", "10.0.0.2")];
+        let i = apply_tailnet_plan(&mut list, &TailnetPlan::Add, ts, None, "den-ps5u");
+        assert_eq!(
+            (str_of(&list[i], "host"), str_of(&list[i], "name")),
+            (ts, "den-ps5u")
+        );
+        let i = apply_tailnet_plan(&mut list, &TailnetPlan::Add, ts, Some("192.168.1.20"), "");
+        assert_eq!(str_of(&list[i], "host"), "192.168.1.20");
+
+        // Listed at home already (the Mac's case): nothing new, whichever address is asked.
+        let home = vec![p("a", "192.168.1.20")];
+        assert_eq!(
+            tailnet_plan(&home, ts, Some("192.168.1.20"), &[]),
+            TailnetPlan::Exists(0)
+        );
+        // Home address unknown to the probe, but the same key was met there: still that entry.
+        assert_eq!(
+            tailnet_plan(&home, ts, None, &["192.168.1.20".into()]),
+            TailnetPlan::Exists(0)
+        );
+        // With a port, or another spelling: the same entry.
+        let ported = vec![p("a", "192.168.1.20:9113")];
+        assert_eq!(
+            tailnet_plan(&ported, ts, Some("192.168.1.20"), &[]),
+            TailnetPlan::Exists(0)
+        );
+
+        // Added away at its tailnet address (the phone's case), then seen at home: moved.
+        let mut away = vec![
+            p("x", "10.0.0.5"),
+            json!({"id": "b", "name": ts, "host": ts}),
+        ];
+        let plan = tailnet_plan(&away, ts, Some("192.168.1.20"), &[]);
+        assert_eq!(plan, TailnetPlan::Relink(1, "192.168.1.20".into()));
+        let i = apply_tailnet_plan(&mut away, &plan, ts, Some("192.168.1.20"), "");
+        assert_eq!(away.len(), 2);
+        assert_eq!(
+            str_of(&away[i], "id"),
+            "b",
+            "same entry: its keys and settings follow"
+        );
+        assert_eq!(str_of(&away[i], "host"), "192.168.1.20");
+        assert_eq!(
+            str_of(&away[i], "name"),
+            "192.168.1.20",
+            "an address-only name follows"
+        );
+        // Asked again: exists, no duplicate.
+        assert_eq!(
+            tailnet_plan(&away, ts, Some("192.168.1.20"), &[]),
+            TailnetPlan::Exists(1)
+        );
+        assert_eq!(tailnet_plan(&away, ts, None, &[]), TailnetPlan::Add);
+        // (Away, the probe knows no home address: the entry now at home is found by the
+        // addresses its key was met at.)
+        assert_eq!(
+            tailnet_plan(&away, ts, None, &["192.168.1.20".into()]),
+            TailnetPlan::Exists(1)
+        );
+
+        // Listed at both (added away, then added again at home): merged into the home entry.
+        let mut both = vec![
+            json!({"id": "t", "name": "Den", "host": ts, "notes": "fan loud"}),
+            p("h", "192.168.1.20"),
+        ];
+        let plan = tailnet_plan(&both, ts, Some("192.168.1.20"), &[]);
+        assert_eq!(plan, TailnetPlan::Merge { keep: 1, drop: 0 });
+        let i = apply_tailnet_plan(&mut both, &plan, ts, Some("192.168.1.20"), "");
+        assert_eq!(both.len(), 1);
+        assert_eq!(i, 0);
+        assert_eq!(str_of(&both[0], "id"), "h");
+        assert_eq!(
+            str_of(&both[0], "notes"),
+            "fan loud",
+            "what only the dropped one had is kept"
+        );
+        assert_eq!(tailnet_action(&plan), "merged");
+    }
+
+    #[test]
+    fn a_tailnet_entry_without_a_home_address_stays_as_it_is() {
+        let ts = "100.64.0.9";
+        let list = vec![p("t", ts)];
+        assert_eq!(tailnet_plan(&list, ts, None, &[]), TailnetPlan::Exists(0));
+        assert_eq!(tailnet_action(&TailnetPlan::Exists(0)), "exists");
+        // Another console's tailnet address is not this one.
+        assert_eq!(
+            tailnet_plan(&list, "100.64.0.10", None, &[]),
+            TailnetPlan::Add
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

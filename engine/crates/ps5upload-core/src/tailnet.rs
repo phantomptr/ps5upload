@@ -41,6 +41,8 @@ pub enum Op {
     Allow { mode: String, list: String },
     /// Add one device (its tailnet IPv4) to the list.
     AllowAdd { ip: String },
+    /// Stop showing a device the list turned away (`blocked_recent`), until the helper restarts.
+    BlockedIgnore { ip: String },
 }
 
 /// The fields of an op request beyond its name.
@@ -103,12 +105,15 @@ impl Op {
                     list: f.allow.trim().to_string(),
                 }
             }
-            "allow_add" => {
+            "allow_add" | "blocked_ignore" => {
                 if tailnet_ip(&json!({ "ip": f.ip.trim() })).is_none() {
                     bail!("ip must be a Tailscale address (100.64.0.0/10)");
                 }
-                Op::AllowAdd {
-                    ip: f.ip.trim().to_string(),
+                let ip = f.ip.trim().to_string();
+                if op == "allow_add" {
+                    Op::AllowAdd { ip }
+                } else {
+                    Op::BlockedIgnore { ip }
                 }
             }
             other => bail!("unknown op {other:?}"),
@@ -168,6 +173,7 @@ pub fn request_body(op: &Op) -> Value {
             Value::Object(b)
         }
         Op::AllowAdd { ip } => json!({ "op": "allow_add", "ip": ip }),
+        Op::BlockedIgnore { ip } => json!({ "op": "blocked_ignore", "ip": ip }),
         Op::Enable {
             control_url,
             hostname,
@@ -265,6 +271,11 @@ mod tests {
             "100.64.0.7"
         );
         assert!(Op::parse_fields("allow_add", &OpFields::default()).is_err());
+        assert_eq!(
+            request_body(&Op::parse_fields("blocked_ignore", &add).unwrap()),
+            json!({ "op": "blocked_ignore", "ip": "100.64.0.7" })
+        );
+        assert!(Op::parse_fields("blocked_ignore", &OpFields::default()).is_err());
     }
 
     #[test]

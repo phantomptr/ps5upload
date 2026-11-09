@@ -770,6 +770,8 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/tailnet"),
     ("POST", "/api/tailnet"),
     ("GET", "/api/tailnet/check"),
+    ("GET", "/api/tailnet/consoles"),
+    ("POST", "/api/tailnet/consoles/add"),
     ("GET", "/api/tailnet/route"),
     ("GET", "/api/tailnet/via"),
     ("POST", "/api/transfer/7z"),

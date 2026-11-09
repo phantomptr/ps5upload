@@ -97,6 +97,36 @@ pub(super) fn tools() -> Vec<ToolDef> {
             run: route!(method: "POST", path: "/api/discover", done: "Looked for consoles."),
         },
         ToolDef {
+            name: "tailnet_consoles",
+            title: "Find consoles on Tailscale",
+            description: "Lists the PS5Upload consoles on this device's Tailscale network, met at \
+                          home or not: each with its tailnet address, home address when known \
+                          (`lan_host`), whether its helper answered over Tailscale (`reachable`), \
+                          its key (`id`) and the console list's entry for it (`listed`). Asking \
+                          pairs nothing and shows nothing on the PS5. `addr` probes one tailnet \
+                          address or MagicDNS name instead. Answers from the last minute unless \
+                          `refresh` is true.",
+            kind: Kind::Read,
+            schema: object(
+                json!({
+                    "addr": {
+                        "type": "string",
+                        "description": "One console to probe: its 100.x address or its name in Tailscale.",
+                    },
+                    "refresh": {
+                        "type": "boolean",
+                        "description": "Look again now instead of answering from the last minute.",
+                    },
+                    "all": {
+                        "type": "boolean",
+                        "description": "Probe every online peer, not only those named like a console (-ps5u).",
+                    },
+                }),
+                &[],
+            ),
+            run: route!(method: "GET", path: "/api/tailnet/consoles", done: "Looked on Tailscale."),
+        },
+        ToolDef {
             name: "consoles_status",
             title: "Console status",
             description: "Asks a console's PS5Upload helper how it is: helper version, kernel, \

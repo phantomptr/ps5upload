@@ -152,6 +152,72 @@ pub enum ConsoleMatch {
     Unknown,
 }
 
+/// What a console says of itself before a handshake goes further (`Pool::peek_console`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Peeked {
+    /// Its static AVA1 key: the same on every address it answers at.
+    pub key: [u8; 32],
+    /// The name it sends (the helper sends "PS5").
+    pub name: String,
+    /// Its `CAP_*` bits.
+    pub caps: u64,
+}
+
+/// Hs1, then read Hs2 and stop (see `Pool::peek_console`).
+async fn peek(dial: &str, me: &Identity) -> Result<Peeked, Ava1Error> {
+    use ava1::conn::{FrameReader, FrameWriter};
+    use ava1::gen::{HelloInfo, Hs1, Hs2, ServerInfo};
+    use ava1::wire::{FrameMessage, Message};
+    let stream = tokio::net::TcpStream::connect(dial).await?;
+    stream.set_nodelay(true)?;
+    let (rh, wh) = stream.into_split();
+    let (mut r, mut w) = (FrameReader::new(rh), FrameWriter::new(wh));
+    let mut hs = ava1::keys::Handshake::initiator(me)?;
+    let v = ava1::gen::PROTOCOL_VERSION;
+    let hello = HelloInfo {
+        version_min: v,
+        version_max: v,
+        caps: ava1::gen::CAP_DATA_PLANE,
+    }
+    .to_bytes()?;
+    let noise = hs.write(&hello)?;
+    w.send_msg(0, &Hs1 { noise }).await?;
+    let f = r.recv().await?;
+    if f.ty == ava1::gen::Error::TYPE {
+        let e: ava1::gen::Error = f.decode()?;
+        return Err(Ava1Error::Refused {
+            code: e.code,
+            message: e.message,
+        });
+    }
+    let m2: Hs2 = f.decode()?;
+    let info = ServerInfo::decode(&hs.read(&m2.noise)?)?;
+    let key = hs.remote_static().ok_or(Ava1Error::WeakKey)?;
+    // Dropping the stream here ends it: the console waits for message 3, which never comes.
+    Ok(Peeked {
+        key,
+        name: info.name.unwrap_or_default(),
+        caps: info.caps,
+    })
+}
+
+/// The hosts in a pins file (`host hexkey` lines) pinned to `key`.
+fn pinned_hosts(text: &str, key: &[u8; 32]) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let Some((h, k)) = line.split_once(' ') else {
+            continue;
+        };
+        let Some(k) = ava1::hex::decode(k.trim()) else {
+            continue;
+        };
+        if k.as_slice() == key.as_slice() && !out.iter().any(|x: &String| x == h) {
+            out.push(h.to_string());
+        }
+    }
+    out
+}
+
 /// Where a console stands for the pairing dialog.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pairing {
@@ -681,6 +747,33 @@ impl Pool {
         }
     }
 
+    /// Who answers AVA1 at `dial` (an `ip:port` to connect to as it is, no routing): the first
+    /// two handshake messages only (SPEC.md §5 steps 1–2), which carry the console's static key
+    /// and name. The handshake is then dropped before this side says who it is, so the console
+    /// never admits, pairs or lists this device for it, and no code is shown anywhere. Nothing
+    /// is pinned. For finding consoles on a tailnet: the key tells the same console at two
+    /// addresses.
+    pub async fn peek_console(&self, dial: &str, limit: Duration) -> Result<Peeked, Ava1Error> {
+        let me = self
+            .me
+            .clone()
+            .map_err(|why| Ava1Error::Io(io::Error::other(why)))?;
+        tokio::time::timeout(limit, peek(dial, &me))
+            .await
+            .map_err(|_| Ava1Error::Timeout)?
+    }
+
+    /// The addresses whose pinned key is `key` (the same console, met at each of them).
+    pub fn hosts_pinned_to(&self, key: &[u8; 32]) -> Vec<String> {
+        let text = std::fs::read_to_string(self.dir.join("consoles")).unwrap_or_default();
+        pinned_hosts(&text, key)
+    }
+
+    /// Does this engine trust the console with this key (paired, or launched by it)?
+    pub fn knows_key(&self, key: &[u8; 32]) -> bool {
+        self.peers.lock().map(|p| p.contains(key)).unwrap_or(false)
+    }
+
     /// One handshake with the console, pairing not yet settled; and the key it was pinned to.
     async fn connect_raw(&self, console: &str) -> Result<(Session, Option<[u8; 32]>), Ava1Error> {
         let me = self
@@ -1098,6 +1191,90 @@ mod identity_summary_tests {
         assert_eq!(p.paired_count(), 0);
         assert_eq!(Pool::unavailable().identity_prefix(), "none");
         let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+#[cfg(test)]
+mod peek_tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+
+    /// A fake helper: the server side of the AVA1 handshake. Records whether it ever got far
+    /// enough to admit (the point where a real one could pair, list or show a code).
+    async fn fake_helper(key: Arc<Identity>) -> (String, Arc<AtomicBool>) {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap().to_string();
+        let admitted = Arc::new(AtomicBool::new(false));
+        let a2 = admitted.clone();
+        tokio::spawn(async move {
+            let (s, _) = l.accept().await.unwrap();
+            let (rh, wh) = s.into_split();
+            let mut r = ava1::conn::FrameReader::new(rh);
+            let mut w = ava1::conn::FrameWriter::new(wh);
+            let hs1 = r.recv().await.unwrap();
+            let _ = ava1::handshake::server(
+                &mut r,
+                &mut w,
+                hs1,
+                &key,
+                "PS5",
+                |_| {
+                    a2.store(true, Ordering::SeqCst);
+                    ava1::handshake::Admission::Known
+                },
+                ava1::gen::CAP_DATA_PLANE,
+            )
+            .await;
+        });
+        (addr, admitted)
+    }
+
+    #[tokio::test]
+    async fn a_peek_reads_the_key_and_name_and_never_gets_admitted() {
+        let d = std::env::temp_dir().join(format!("p5a-peek-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let pool = Pool::new(d.join("ava"));
+        let console = Arc::new(Identity::generate().unwrap());
+        let (addr, admitted) = fake_helper(console.clone()).await;
+        let got = pool
+            .peek_console(&addr, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(got.key, console.public());
+        assert_eq!(got.name, "PS5");
+        assert_eq!(got.caps, ava1::gen::CAP_DATA_PLANE);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !admitted.load(Ordering::SeqCst),
+            "the console never admitted us"
+        );
+        assert!(pool.hosts_pinned_to(&got.key).is_empty(), "nothing pinned");
+        assert!(!pool.knows_key(&got.key));
+        // Nothing listening: an error, quickly.
+        let dead = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let dead_addr = dead.local_addr().unwrap().to_string();
+        drop(dead);
+        assert!(pool
+            .peek_console(&dead_addr, Duration::from_secs(2))
+            .await
+            .is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn pinned_hosts_are_found_by_key() {
+        let k = [7u8; 32];
+        let other = [8u8; 32];
+        let text = format!(
+            "192.168.1.20 {}\n100.64.0.9 {}\n10.0.0.2 {}\nbad line\n192.168.1.20 {}\n",
+            ava1::hex::encode(&k),
+            ava1::hex::encode(&k),
+            ava1::hex::encode(&other),
+            ava1::hex::encode(&k)
+        );
+        assert_eq!(pinned_hosts(&text, &k), vec!["192.168.1.20", "100.64.0.9"]);
+        assert_eq!(pinned_hosts(&text, &other), vec!["10.0.0.2"]);
+        assert!(pinned_hosts("", &k).is_empty());
     }
 }
 

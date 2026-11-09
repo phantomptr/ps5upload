@@ -114,6 +114,7 @@ mod share;
 mod shared_state;
 mod state_io;
 mod tailnet_api;
+mod tailnet_discover;
 pub(crate) mod tailnet_engine;
 pub(crate) mod tailnet_system;
 mod telemetry;
@@ -12002,6 +12003,8 @@ fn build_app_and_mcp(
         .route("/api/tailnet/route", get(tailnet_api::route))
         .route("/api/tailnet/check", get(tailnet_api::check))
         .route("/api/tailnet/via", get(tailnet_api::via))
+        .route("/api/tailnet/consoles", get(tailnet_discover::consoles))
+        .route("/api/tailnet/consoles/add", post(tailnet_discover::add))
         .route(
             "/api/ps5/cleanup/scan/{id}",
             get(console_cleanup_api::scan_status),

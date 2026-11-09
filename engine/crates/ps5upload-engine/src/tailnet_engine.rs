@@ -58,6 +58,21 @@ pub struct KnownConsole {
     pub ip: Ipv4Addr,
     #[serde(default)]
     pub name: String,
+    /// When "Try Tailscale now" last reached this console through Tailscale (unix ms; 0 never):
+    /// the Connection panel's step 3 stays done.
+    #[serde(default)]
+    pub tested_at: u64,
+}
+
+/// A device in this device's tailnet peer list, from the engine's own node or the system app.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PeerSeen {
+    /// The MagicDNS name's first label ("living-room-ps5u").
+    pub name: String,
+    pub ip: Ipv4Addr,
+    pub online: bool,
+    /// "builtin" or "system".
+    pub source: &'static str,
 }
 
 /// Which tailnet way this device has right now.
@@ -423,22 +438,44 @@ impl TailnetEngine {
         Router::dial(self, &ps5upload_core::events::console_host(host), port, udp)
     }
 
-    /// A console put on Tailscale: remember its tailnet address for when it is away.
+    /// A console put on Tailscale: remember its tailnet address for when it is away. An empty
+    /// `name` keeps the one remembered. A console first added away at its tailnet address
+    /// (`host` = that address) and now remembered under its home address is one console: the
+    /// tailnet-address entry goes, its test result kept.
     pub fn remember(&self, host: &str, ip: Ipv4Addr, name: &str) {
         let host = ps5upload_core::events::console_host(host);
         let mut known = lock(&self.known);
-        if known
-            .iter()
-            .any(|k| k.host == host && k.ip == ip && k.name == name)
+        let placeholder = ip.to_string();
+        let name = if name.is_empty() {
+            known
+                .iter()
+                .find(|k| k.ip == ip && !k.name.is_empty())
+                .map(|k| k.name.clone())
+                .unwrap_or_default()
+        } else {
+            name.to_string()
+        };
+        let stale_placeholder = host != placeholder && known.iter().any(|k| k.host == placeholder);
+        if !stale_placeholder
+            && known
+                .iter()
+                .any(|k| k.host == host && k.ip == ip && k.name == name)
         {
             return;
         }
         let moved = known.iter().any(|k| k.host == host && k.ip != ip);
-        known.retain(|k| k.host != host);
+        let tested_at = known
+            .iter()
+            .filter(|k| k.ip == ip && (k.host == host || k.host == placeholder))
+            .map(|k| k.tested_at)
+            .max()
+            .unwrap_or(0);
+        known.retain(|k| k.host != host && !(stale_placeholder && k.host == placeholder));
         known.push(KnownConsole {
             host: host.clone(),
             ip,
-            name: name.to_string(),
+            name,
+            tested_at,
         });
         save(&self.dir, "consoles.json", &*known);
         drop(known);
@@ -448,6 +485,76 @@ impl TailnetEngine {
                 s.maps.clear();
             }
         }
+    }
+
+    /// Every address this console (by its tailnet address) is remembered under.
+    pub fn known_hosts_for(&self, ip: Ipv4Addr) -> Vec<String> {
+        lock(&self.known)
+            .iter()
+            .filter(|k| k.ip == ip)
+            .map(|k| k.host.clone())
+            .collect()
+    }
+
+    /// The name remembered for a tailnet address, if any.
+    pub fn known_name_for(&self, ip: Ipv4Addr) -> String {
+        lock(&self.known)
+            .iter()
+            .find(|k| k.ip == ip && !k.name.is_empty())
+            .map(|k| k.name.clone())
+            .unwrap_or_default()
+    }
+
+    /// The peers this device sees on the tailnet: the engine's own node's, and the system app's
+    /// where its CLI can be read (never on a phone). `true` when some list could be read at all.
+    pub fn peers_seen(&self) -> (Vec<PeerSeen>, bool) {
+        let mut out = Vec::new();
+        let mut readable = false;
+        if let Some(node) = self.node() {
+            let st = node.status();
+            readable = st.state == "running";
+            for p in st.peers {
+                if let Some(ip) = p.ip {
+                    out.push(PeerSeen {
+                        name: p.name.split('.').next().unwrap_or("").to_string(),
+                        ip,
+                        online: p.online,
+                        source: "builtin",
+                    });
+                }
+            }
+        }
+        if let Some(st) = sys::status() {
+            readable = true;
+            for p in st.peers {
+                if let Some(ip) = p.ipv4 {
+                    if !out.iter().any(|o| o.ip == ip) {
+                        out.push(PeerSeen {
+                            name: p.name,
+                            ip,
+                            online: p.online,
+                            source: "system",
+                        });
+                    }
+                }
+            }
+        }
+        (out, readable)
+    }
+
+    /// Where to dial a tailnet address's `port` from this device, and which way: a local mapping
+    /// of the engine's own node, or the address itself through the system app. None without a
+    /// tailnet way.
+    pub fn tailnet_dial(&self, ip: Ipv4Addr, port: u16) -> Option<(SocketAddr, &'static str)> {
+        if let Some(node) = self.node() {
+            if let Ok(p) = node.map(tn::Proto::Tcp, ip, port, 0) {
+                return Some((SocketAddr::from(([127, 0, 0, 1], p)), "builtin"));
+            }
+        }
+        if sys::detect().detected {
+            return Some((SocketAddr::from((ip, port)), "system"));
+        }
+        None
     }
 
     pub fn known_ip(&self, host: &str) -> Option<Ipv4Addr> {
@@ -552,6 +659,14 @@ impl TailnetEngine {
             Decision::Builtin(_) => "builtin",
             Decision::System(_) => "system",
         };
+        // Once per console: the probe (a connect, for the system app) runs only until it worked.
+        if path != "lan"
+            && self.forced(host)
+            && self.tested_at(host) == 0
+            && self.tailnet_answers(host)
+        {
+            self.note_tested(host);
+        }
         let prev = {
             let mut st = lock(&self.state);
             let s = st.entry(host.to_string()).or_default();
@@ -577,6 +692,42 @@ impl TailnetEngine {
                 "tailnet",
                 &json!({ "host": host, "name": name.split('.').next().unwrap_or(""), "path": path }),
             );
+        }
+    }
+
+    fn tested_at(&self, host: &str) -> u64 {
+        lock(&self.known)
+            .iter()
+            .find(|k| k.host == host)
+            .map(|k| k.tested_at)
+            .unwrap_or(0)
+    }
+
+    /// "Try Tailscale now" reached it: say so for good (the panel's step 3 stays done).
+    fn note_tested(&self, host: &str) {
+        let mut known = lock(&self.known);
+        let mut changed = false;
+        for k in known.iter_mut().filter(|k| k.host == host) {
+            if k.tested_at == 0 {
+                changed = true;
+            }
+            k.tested_at = crate::now_ms();
+        }
+        if changed {
+            save(&self.dir, "consoles.json", &*known);
+        }
+    }
+
+    /// Does the console answer through Tailscale now: online in the node's netmap, or (system
+    /// app) its tailnet address takes a connection on 9120.
+    fn tailnet_answers(&self, host: &str) -> bool {
+        let Some(ip) = self.known_ip(host) else {
+            return false;
+        };
+        match self.backend() {
+            Backend::Builtin => self.online(Backend::Builtin, host, ip) == Some(true),
+            Backend::System => tcp_answers(&ip.to_string(), 9120),
+            Backend::None => false,
         }
     }
 
@@ -686,7 +837,7 @@ impl TailnetEngine {
             .iter()
             .map(|k| {
                 let (via, ms) = via_json(&ps5upload_core::route::via(&k.host));
-                json!({ "host": k.host, "ip": k.ip.to_string(), "name": k.name, "via": via, "latency_ms": ms })
+                json!({ "host": k.host, "ip": k.ip.to_string(), "name": k.name, "via": via, "latency_ms": ms, "tested_at": k.tested_at })
             })
             .collect();
         let peers: Vec<Value> = st
@@ -963,6 +1114,37 @@ mod tests {
         let e = engine_in(&tmp);
         // Ending a test always works.
         assert!(e.test_path("192.0.2.10", 0).is_ok());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_console_added_away_then_met_at_home_is_one_known_console() {
+        let tmp = tmp("placeholder");
+        let e = engine_in(&tmp);
+        // Added away by its tailnet address (no home address known yet).
+        e.remember("100.64.0.9", IP, "den-ps5u");
+        assert_eq!(e.known_hosts_for(IP), vec!["100.64.0.9"]);
+        // "Try Tailscale now" worked once.
+        e.note_tested("100.64.0.9");
+        let tested = lock(&e.known)[0].tested_at;
+        assert!(tested > 0);
+        // Reached at home: the home address takes over, the name and test result kept.
+        e.remember("192.168.1.20", IP, "");
+        let known = lock(&e.known).clone();
+        assert_eq!(known.len(), 1, "{known:?}");
+        assert_eq!(known[0].host, "192.168.1.20");
+        assert_eq!(known[0].name, "den-ps5u");
+        assert_eq!(known[0].tested_at, tested);
+        assert_eq!(e.known_name_for(IP), "den-ps5u");
+        // Kept across a restart, and in the status.
+        let again = TailnetEngine::new(Some(tmp.clone()));
+        assert_eq!(lock(&again.known).clone(), known);
+        let st = again.status_json();
+        assert_eq!(st["consoles"][0]["tested_at"], tested);
+        assert_eq!(st["consoles"][0]["host"], "192.168.1.20");
+        // Remembered again unchanged: still one.
+        again.remember("192.168.1.20", IP, "den-ps5u");
+        assert_eq!(lock(&again.known).len(), 1);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

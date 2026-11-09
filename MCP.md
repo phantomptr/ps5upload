@@ -20,7 +20,7 @@ More than 120 tools, all of them thin layers over [the engine's API](API.md):
 | Area | Tools (prefix) | For example |
 |---|---|---|
 | The engine | `engine_*`, `logs_*` | Version, status, recent events; log levels per category and the newest log lines |
-| Consoles | `consoles_*` | The known ones, find them on the network, how one stands, make sure the helper runs |
+| Consoles | `consoles_*`, `tailnet_consoles` | The known ones, find them on the network or on Tailscale, how one stands, make sure the helper runs |
 | Files | `files_*` | List, read, write, copy, move, delete, hash, extract, mount, eject |
 | Moving things | `upload_*`, `queue_*`, `files_download`, `sources_*`, `jobs_*` | Send a file or folder or archive, line work up per console, follow it, pause or stop it, fetch from a NAS |
 | Installs | `install_*` | Install a package by the best route, check first, wait for it |
