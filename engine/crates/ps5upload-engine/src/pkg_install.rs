@@ -2433,41 +2433,225 @@ pub(crate) fn wait_for_installed_artifact(
     expected_fingerprint: &str,
     idle: std::time::Duration,
     stop: &dyn Fn() -> bool,
-) -> ArtifactWait {
+) -> ArtifactWaitReport {
     const CEILING: std::time::Duration = std::time::Duration::from_secs(4 * 60 * 60);
-    const POLL: std::time::Duration = std::time::Duration::from_secs(5);
-    let started = std::time::Instant::now();
-    let mut idle_from = started;
-    let mut most_seen = 0u64;
     let title = ps5upload_core::pkg_install::title_id_from_content_id(content_id);
-    loop {
-        match verify_installed_artifact(
-            addr,
-            content_id,
-            package_type,
-            expected_size,
-            expected_fingerprint,
-        ) {
-            InstalledArtifactCheck::Match => return ArtifactWait::Landed,
-            InstalledArtifactCheck::Unsupported => return ArtifactWait::CannotTell,
-            InstalledArtifactCheck::Absent | InstalledArtifactCheck::Different => {}
-        }
-        let answered = ps5upload_core::volumes::list_volumes(addr).is_ok();
-        let seen = title.as_deref().map_or(0, |t| {
+    artifact_wait_loop(
+        &mut || {
+            observe_artifact(
+                addr,
+                content_id,
+                package_type,
+                expected_size,
+                expected_fingerprint,
+                title.as_deref(),
+            )
+        },
+        idle,
+        CEILING,
+        ARTIFACT_POLL,
+        stop,
+    )
+}
+
+const ARTIFACT_POLL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// How long an add-on gets to show up once the console has all of it, while nothing about it
+/// grows. An add-on that only unlocks content (#776: 1.2 MB each) leaves no `ac.pkg` under
+/// `/user/addcont` at all, so the base game's 4-minute wait at 99% was all it ever got, and then a
+/// warning. One with data still restarts the window each time its files grow.
+pub(crate) const ADDON_VERIFY_IDLE: std::time::Duration = std::time::Duration::from_secs(60);
+/// The longest an add-on's check runs, growing or not.
+pub(crate) const ADDON_VERIFY_CEILING: std::time::Duration =
+    std::time::Duration::from_secs(20 * 60);
+
+/// The add-on's label: the content id's last part (`EP3969-PPSA11386_00-007FLCOSTUME0001` →
+/// `007FLCOSTUME0001`). Sony names the add-on's folders after it.
+pub(crate) fn addon_label(content_id: &str) -> Option<String> {
+    let label = content_id.trim().splitn(3, '-').nth(2)?;
+    (!label.is_empty() && label.chars().all(|c| c.is_ascii_alphanumeric()))
+        .then(|| label.to_string())
+}
+
+/// Where Sony keeps an installed add-on's metadata, whether or not it carries data:
+/// `/user/appmeta/addcont/<title>/<label>` (the folder the dumper copies an add-on's sce_sys
+/// from). Not yet measured for an add-on that only unlocks content.
+pub(crate) fn addon_appmeta_path(title_id: &str, label: &str) -> String {
+    format!("/user/appmeta/addcont/{title_id}/{label}")
+}
+
+/// Whether the console holds the add-on's metadata folder.
+fn addon_registered(addr: &str, title_id: &str, label: &str) -> bool {
+    ps5upload_core::fs_ops::fs_stat(addr, &addon_appmeta_path(title_id, label))
+        .is_ok_and(|s| s.kind == "dir")
+}
+
+/// Wait for an add-on after the console has all of it: its `ac.pkg` under `/user/addcont`, or its
+/// metadata folder under `/user/appmeta/addcont`. Shorter than a game's wait (see
+/// [`ADDON_VERIFY_IDLE`]), so an add-on with nothing on a drive ends in a clear message instead of
+/// minutes at 99%.
+pub(crate) fn wait_for_installed_addon(
+    addr: &str,
+    content_id: &str,
+    package_type: &str,
+    expected_size: u64,
+    expected_fingerprint: &str,
+    stop: &dyn Fn() -> bool,
+) -> ArtifactWaitReport {
+    let title = ps5upload_core::pkg_install::title_id_from_content_id(content_id);
+    let label = addon_label(content_id);
+    artifact_wait_loop(
+        &mut || {
+            let mut o = observe_artifact(
+                addr,
+                content_id,
+                package_type,
+                expected_size,
+                expected_fingerprint,
+                title.as_deref(),
+            );
+            if !o.matched {
+                if let (Some(t), Some(l)) = (title.as_deref(), label.as_deref()) {
+                    if addon_registered(addr, t, l) {
+                        o.matched = true;
+                        o.check = "registered";
+                    }
+                }
+            }
+            o
+        },
+        ADDON_VERIFY_IDLE,
+        ADDON_VERIFY_CEILING,
+        ARTIFACT_POLL,
+        stop,
+    )
+}
+
+/// One look at the console for an installed package.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ArtifactObservation {
+    /// This package is installed.
+    pub matched: bool,
+    /// Nothing to check it against.
+    pub unsupported: bool,
+    /// The console answered at all (a silent console says nothing against the install).
+    pub answered: bool,
+    /// The title's package files, in bytes, all kinds together.
+    pub seen_bytes: u64,
+    /// What the check found, for the log: `match`, `registered`, `absent`, `different`,
+    /// `unsupported`.
+    pub check: &'static str,
+}
+
+fn observe_artifact(
+    addr: &str,
+    content_id: &str,
+    package_type: &str,
+    expected_size: u64,
+    expected_fingerprint: &str,
+    title: Option<&str>,
+) -> ArtifactObservation {
+    let c = verify_installed_artifact(
+        addr,
+        content_id,
+        package_type,
+        expected_size,
+        expected_fingerprint,
+    );
+    let check = match c {
+        InstalledArtifactCheck::Match => "match",
+        InstalledArtifactCheck::Absent => "absent",
+        InstalledArtifactCheck::Different => "different",
+        InstalledArtifactCheck::Unsupported => "unsupported",
+    };
+    if matches!(
+        c,
+        InstalledArtifactCheck::Match | InstalledArtifactCheck::Unsupported
+    ) {
+        return ArtifactObservation {
+            matched: c == InstalledArtifactCheck::Match,
+            unsupported: c == InstalledArtifactCheck::Unsupported,
+            answered: true,
+            seen_bytes: 0,
+            check,
+        };
+    }
+    ArtifactObservation {
+        matched: false,
+        unsupported: false,
+        answered: ps5upload_core::volumes::list_volumes(addr).is_ok(),
+        seen_bytes: title.map_or(0, |t| {
             installed_pkg_inventory(addr, t)
                 .artifacts
                 .iter()
                 .map(|a| a.size)
                 .sum()
-        });
-        if !answered || seen > most_seen {
-            most_seen = most_seen.max(seen);
+        }),
+        check,
+    }
+}
+
+/// What a wait for an installed package found, and enough about how it went to settle a report
+/// from the log alone (#776 had nothing that said what the 99% was waiting for).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ArtifactWaitReport {
+    pub outcome: ArtifactWait,
+    pub waited_ms: u64,
+    pub checks: u32,
+    /// The last check's finding (see [`ArtifactObservation::check`]).
+    pub last_check: &'static str,
+    /// The most bytes of the title's package files seen.
+    pub most_seen: u64,
+    /// The ceiling ended it, not the idle window.
+    pub hit_ceiling: bool,
+}
+
+/// The waiting rules, apart from the console so they are tested without one. `idle` restarts
+/// whenever the title's files grow, or while the console does not answer; `ceiling` ends it
+/// regardless, so a console that never answers cannot hold the job for good.
+pub(crate) fn artifact_wait_loop(
+    observe: &mut dyn FnMut() -> ArtifactObservation,
+    idle: std::time::Duration,
+    ceiling: std::time::Duration,
+    poll: std::time::Duration,
+    stop: &dyn Fn() -> bool,
+) -> ArtifactWaitReport {
+    let started = std::time::Instant::now();
+    let mut idle_from = started;
+    let mut most_seen = 0u64;
+    let mut checks = 0u32;
+    let report = |outcome, checks, last_check, most_seen, hit_ceiling| ArtifactWaitReport {
+        outcome,
+        waited_ms: started.elapsed().as_millis() as u64,
+        checks,
+        last_check,
+        most_seen,
+        hit_ceiling,
+    };
+    loop {
+        let o = observe();
+        checks += 1;
+        if o.matched {
+            return report(ArtifactWait::Landed, checks, o.check, most_seen, false);
+        }
+        if o.unsupported {
+            return report(ArtifactWait::CannotTell, checks, o.check, most_seen, false);
+        }
+        if !o.answered || o.seen_bytes > most_seen {
+            most_seen = most_seen.max(o.seen_bytes);
             idle_from = std::time::Instant::now();
         }
-        if stop() || idle_from.elapsed() >= idle || started.elapsed() >= CEILING {
-            return ArtifactWait::NotSeen;
+        let hit_ceiling = started.elapsed() >= ceiling;
+        if stop() || idle_from.elapsed() >= idle || hit_ceiling {
+            return report(
+                ArtifactWait::NotSeen,
+                checks,
+                o.check,
+                most_seen,
+                hit_ceiling,
+            );
         }
-        std::thread::sleep(POLL);
+        std::thread::sleep(poll);
     }
 }
 
@@ -5636,5 +5820,119 @@ mod browser_file_intake_tests {
         .await;
         server.abort();
         result.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod addon_verify_tests {
+    use super::{
+        addon_appmeta_path, addon_label, artifact_wait_loop, ArtifactObservation, ArtifactWait,
+    };
+    use std::time::Duration;
+
+    fn obs(matched: bool, answered: bool, seen_bytes: u64) -> ArtifactObservation {
+        ArtifactObservation {
+            matched,
+            unsupported: false,
+            answered,
+            seen_bytes,
+            check: if matched { "match" } else { "absent" },
+        }
+    }
+
+    #[test]
+    fn the_label_is_the_content_ids_last_part() {
+        assert_eq!(
+            addon_label("EP3969-PPSA11386_00-007FLCOSTUME0001").as_deref(),
+            Some("007FLCOSTUME0001")
+        );
+        assert_eq!(
+            addon_appmeta_path("PPSA11386", "007FLCOSTUME0001"),
+            "/user/appmeta/addcont/PPSA11386/007FLCOSTUME0001"
+        );
+        assert_eq!(addon_label("EP3969-PPSA11386_00-"), None);
+        assert_eq!(addon_label("PPSA11386"), None);
+        assert_eq!(addon_label("EP3969-PPSA11386_00-../../x"), None);
+    }
+
+    /// #776: an add-on with nothing on a drive ends when the idle window runs out, with how the
+    /// wait went, instead of holding the job at 99%.
+    #[test]
+    fn nothing_found_ends_at_the_idle_window() {
+        let mut n = 0;
+        let r = artifact_wait_loop(
+            &mut || {
+                n += 1;
+                obs(false, true, 0)
+            },
+            Duration::from_millis(30),
+            Duration::from_secs(5),
+            Duration::from_millis(5),
+            &|| false,
+        );
+        assert_eq!(r.outcome, ArtifactWait::NotSeen);
+        assert!(!r.hit_ceiling);
+        assert!(r.checks >= 2 && r.checks as usize == n, "{r:?}");
+        assert_eq!(r.last_check, "absent");
+        assert!(r.waited_ms >= 30 && r.waited_ms < 5_000, "{r:?}");
+    }
+
+    #[test]
+    fn found_ends_at_once() {
+        let mut calls = 0;
+        let r = artifact_wait_loop(
+            &mut || {
+                calls += 1;
+                obs(calls == 3, true, 0)
+            },
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+            Duration::from_millis(1),
+            &|| false,
+        );
+        assert_eq!(r.outcome, ArtifactWait::Landed);
+        assert_eq!(r.checks, 3);
+    }
+
+    /// Growth and a silent console both restart the window; the ceiling still ends it.
+    #[test]
+    fn growth_or_silence_waits_but_the_ceiling_ends_it() {
+        let mut seen = 0u64;
+        let r = artifact_wait_loop(
+            &mut || {
+                seen += 1;
+                obs(false, true, seen)
+            },
+            Duration::from_millis(20),
+            Duration::from_millis(80),
+            Duration::from_millis(2),
+            &|| false,
+        );
+        assert_eq!(r.outcome, ArtifactWait::NotSeen);
+        assert!(r.hit_ceiling, "{r:?}");
+        assert!(r.most_seen > 1);
+
+        let r = artifact_wait_loop(
+            &mut || obs(false, false, 0),
+            Duration::from_millis(20),
+            Duration::from_millis(80),
+            Duration::from_millis(2),
+            &|| false,
+        );
+        assert_eq!(r.outcome, ArtifactWait::NotSeen);
+        assert!(r.hit_ceiling, "{r:?}");
+    }
+
+    #[test]
+    fn a_stop_ends_it() {
+        let r = artifact_wait_loop(
+            &mut || obs(false, false, 0),
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_millis(1),
+            &|| true,
+        );
+        assert_eq!(r.outcome, ArtifactWait::NotSeen);
+        assert_eq!(r.checks, 1);
     }
 }

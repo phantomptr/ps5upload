@@ -152,6 +152,7 @@ int tn_sock_errno(void)
 }
 
 int tn_poll(struct pollfd *p, unsigned n, int timeout_ms) { return WSAPoll(p, (ULONG)n, timeout_ms); }
+void tn_sleep_ms(int ms) { Sleep(ms > 0 ? (DWORD)ms : 0); }
 #else
 #define SOCK(fd) (fd)
 
@@ -214,6 +215,14 @@ int tn_sock_errno(void)
 }
 
 int tn_poll(struct pollfd *p, unsigned n, int timeout_ms) { return poll(p, (nfds_t)n, timeout_ms); }
+void tn_sleep_ms(int ms)
+{
+	if (ms <= 0)
+		return;
+	struct timespec ts = {.tv_sec = ms / 1000, .tv_nsec = (long)(ms % 1000) * 1000000L};
+	while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
+	}
+}
 #endif
 
 static struct sockaddr_in sin4(uint32_t ip, uint16_t port)
@@ -560,4 +569,14 @@ void tn_mkdir(const char *path)
 #else
 	mkdir(path, 0700);
 #endif
+}
+
+int tn_poll_fail_wait_ms(int interrupted, long long budget_ms)
+{
+	enum { POLL_FAIL_WAIT_MS = 100 };
+	if (interrupted)
+		return 0;
+	if (budget_ms >= 0 && budget_ms < POLL_FAIL_WAIT_MS)
+		return budget_ms < 1 ? 1 : (int)budget_ms;
+	return POLL_FAIL_WAIT_MS;
 }

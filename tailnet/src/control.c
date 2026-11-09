@@ -539,7 +539,7 @@ static int map_poll(tn_ctx *c)
 					return lite;
 				tn_logf(c, 2, "lite map update sent (endpoints/home DERP)");
 			}
-			if (!pf[0].revents && pr >= 0)
+			if (tn_map_poll_keep_waiting(pr, pf[0].revents, left))
 				continue;
 		}
 		int touched, r = tn_h2_step(&c->h2, &touched);
@@ -576,6 +576,10 @@ static int map_poll(tn_ctx *c)
 int tn_control_session(tn_ctx *c)
 {
 	int r;
+	/* A wake's "reconnect control" is answered by this fresh session: left set, it would end the
+	 * session's first good map poll and add another backoff after the wake. */
+	tn_atomic_store(&c->ctl_reconnect, 0);
+	tn_wake_drain(c->kick_r);
 	tn_set_state(c, c->followup[0] ? TN_ST_NEEDS_LOGIN : TN_ST_CONNECTING);
 	if (!c->keys.has_control_key && (r = tn_fetch_control_key(c)) < 0)
 		return r;

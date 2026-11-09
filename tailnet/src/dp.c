@@ -122,6 +122,7 @@ struct tn_dp {
 	uint8_t filter_known;
 	int paused;
 	int64_t udp_retry_at, last_wall_check, wall_off, last_tick;
+	int64_t last_poll_fail_log; /* rate-limits the "poll failed" line */
 	uint32_t nm_gen;
 	int64_t now;
 };
@@ -1431,8 +1432,23 @@ static void *dp_loop(void *arg)
 		}
 		tn_mutex_unlock(&c->dp_mu);
 		int r = tn_poll(pf, (unsigned)n, d->paused ? -1 : timeout);
+		int poll_errno = r < 0 ? tn_sock_raw_errno() : 0;
+		int interrupted = r < 0 && tn_sock_errno() == TN_ERR_INTR;
 		tn_mutex_lock(&c->dp_mu);
 		d->now = tn_now_ms();
+		if (r < 0 && !interrupted) {
+			/* poll() itself failing (the network going away for rest mode): never spin. Wait a
+			 * little with the lock released, and say so at most every 10 s. */
+			if (!d->last_poll_fail_log || d->now - d->last_poll_fail_log >= 10000) {
+				tn_logf(c, 0, "data plane: poll failed (errno %d); backing off", poll_errno);
+				d->last_poll_fail_log = d->now;
+			}
+			tn_mutex_unlock(&c->dp_mu);
+			tn_sleep_ms(tn_poll_fail_wait_ms(0, -1));
+			tn_mutex_lock(&c->dp_mu);
+			d->now = tn_now_ms();
+			continue;
+		}
 		if (r <= 0)
 			continue;
 		for (int i = 0; i < n; i++) {

@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "atomic_file.h"
@@ -58,6 +59,10 @@ static char g_warning[200];
 #define IGNORED_MAX TN_DENIED_MAX
 static uint32_t g_ignored[IGNORED_MAX];
 static int g_n_ignored, g_next_ignored;
+/* The console is going to rest or has not settled after a wake (power_phase.c): the node keeps its
+ * keys and settings but holds no sockets (tn_pause). Under g_mu; a node started meanwhile starts
+ * paused. */
+static int g_paused;
 
 void tailnet_node_set_dir(const char *dir) {
     snprintf(g_dir, sizeof g_dir, "%s", dir);
@@ -173,8 +178,47 @@ static void on_thread(void *user, const char *role) {
     proc_name_set_self("ps5upload-tailnet"); /* every helper thread takes our process name */
 }
 
+/* The node's lines in stderr.log, at most LOG_BURST per minute (a failing network must not fill
+ * /data); what was dropped is counted on the next line that gets through. Called from the node's
+ * two threads. */
+#define LOG_BURST 40
+static pthread_mutex_t g_log_mu = PTHREAD_MUTEX_INITIALIZER;
+static int64_t g_log_window_s;
+static unsigned g_log_n, g_log_dropped;
+
+static int log_allowed(void) {
+    struct timespec ts;
+    int64_t now = clock_gettime(CLOCK_MONOTONIC, &ts) == 0 ? (int64_t)ts.tv_sec : 0;
+    int ok;
+    unsigned dropped = 0;
+    pthread_mutex_lock(&g_log_mu);
+    if (now - g_log_window_s >= 60 || now < g_log_window_s) {
+        g_log_window_s = now;
+        g_log_n = 0;
+        dropped = g_log_dropped;
+        g_log_dropped = 0;
+    }
+    ok = g_log_n < LOG_BURST;
+    if (ok) g_log_n++;
+    else g_log_dropped++;
+    pthread_mutex_unlock(&g_log_mu);
+    if (dropped) fprintf(stderr, "[tailnet] (%u lines not logged in the last minute)\n", dropped);
+    return ok;
+}
+
 static void on_event(void *user, const tn_event *ev) {
     (void)user;
+    /* Every line but state changes and sign-in goes through the limit; those two are rare. */
+    if (ev->type != TN_EV_STATE && ev->type != TN_EV_LOGIN_URL && ev->type != TN_EV_NETMAP && !log_allowed()) {
+        if (ev->type == TN_EV_ERROR || ev->type == TN_EV_WARN) {
+            /* still remembered for the app's status, just not written */
+            pthread_mutex_lock(&g_msg_mu);
+            snprintf(ev->type == TN_EV_ERROR ? g_last_error : g_warning,
+                     ev->type == TN_EV_ERROR ? sizeof g_last_error : sizeof g_warning, "%s", ev->text ? ev->text : "");
+            pthread_mutex_unlock(&g_msg_mu);
+        }
+        return;
+    }
     switch (ev->type) {
     case TN_EV_STATE:
         fprintf(stderr, "[tailnet] state: %s\n", ev->text);
@@ -202,6 +246,11 @@ static void on_event(void *user, const tn_event *ev) {
         break;
     case TN_EV_PATH:
         fprintf(stderr, "[tailnet] %s\n", ev->text);
+        break;
+    case TN_EV_LOG:
+        /* The core's own lines at the level it was given (0: the ones that explain a failure,
+         * e.g. "clock jumped +3600 s: re-establishing paths", "map poll: no message for 120 s"). */
+        fprintf(stderr, "[tailnet] %s\n", ev->text ? ev->text : "");
         break;
     default:
         break;
@@ -245,8 +294,10 @@ static int start_locked(const char *authkey) {
         if (c) tn_destroy(c);
         return -1;
     }
-    fprintf(stderr, "[tailnet] started (%zu KiB)\n", tn_memory_footprint(c) / 1024);
+    fprintf(stderr, "[tailnet] started (%zu KiB)%s\n", tn_memory_footprint(c) / 1024,
+            g_paused ? ", paused until the console has settled" : "");
     g_ctx = c;
+    if (g_paused) tn_pause(c);
     push_allow_locked();
     pthread_mutex_lock(&g_msg_mu);
     g_last_error[0] = 0;
@@ -258,6 +309,41 @@ static int start_locked(const char *authkey) {
 static void push_allow_locked(void) {
     if (!g_ctx) return;
     (void)tn_set_peer_allow(g_ctx, g_set.allow, g_set.allow_all ? -1 : g_set.n_allow);
+}
+
+int tailnet_node_set_paused(int paused) {
+    /* Never wait here: the caller is the wake watchdog, and a start or stop holding g_mu can take a
+     * while (tn_destroy joins the node's threads). It asks again on its next poll. */
+    if (pthread_mutex_trylock(&g_mu) != 0) return -1;
+    paused = paused ? 1 : 0;
+    if (paused != g_paused) {
+        g_paused = paused;
+        if (g_ctx) {
+            if (paused) tn_pause(g_ctx);
+            else tn_resume(g_ctx);
+            fprintf(stderr, "[tailnet] %s\n",
+                    paused ? "paused: the console is going to rest or still waking (no sockets until it settles)"
+                           : "resumed: rejoining the tailnet");
+        }
+    }
+    pthread_mutex_unlock(&g_mu);
+    return 0;
+}
+
+const char *tailnet_node_brief(void) {
+    /* For a log line from the wake watchdog: never waits, not on a start or stop (g_mu) and not on
+     * the data plane (tn_get_status takes its lock). */
+    if (pthread_mutex_trylock(&g_mu) != 0) return "busy";
+    const char *r = !g_ctx ? (g_paused ? "off,paused" : "off") : g_paused ? "on,paused" : "on";
+    pthread_mutex_unlock(&g_mu);
+    return r;
+}
+
+int tailnet_node_paused(void) {
+    pthread_mutex_lock(&g_mu);
+    int p = g_paused;
+    pthread_mutex_unlock(&g_mu);
+    return p;
 }
 
 void tailnet_node_test_rest_wake(void) {

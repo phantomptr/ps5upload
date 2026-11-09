@@ -252,6 +252,33 @@ describe("statusToOutcome — maps the unified verdict to the UI outcome", () =>
     expect(o.errMessage).toContain("The package was kept");
   });
 
+  it("an add-on with nothing to check says so, not 'may still be installing' (#776)", () => {
+    const o = statusToOutcome(
+      status({
+        phase: "done",
+        verdict: "unverified",
+        patch_verdict: null,
+        package_type: "PS5AC",
+        metrics: { ...status({}).metrics, total_bytes: 1_255_292, served_bytes: 1_255_292 },
+      }),
+    );
+    expect(o.unverified).toBe(true);
+    expect(o.installed).toBe(false);
+    expect(o.errMessage).toContain("only unlocks content");
+    expect(o.errMessage).toContain("The package was kept");
+    // A game in the same state keeps its own wording.
+    const game = statusToOutcome(
+      status({
+        phase: "done",
+        verdict: "unverified",
+        patch_verdict: null,
+        package_type: "PS5GD",
+        metrics: { ...status({}).metrics, served_bytes: 10 },
+      }),
+    );
+    expect(game.errMessage).toContain("may still be installing");
+  });
+
   it("a link the console fetches by itself is sent, not installed", () => {
     const o = statusToOutcome(
       status({ phase: "done", verdict: "unverified", patch_verdict: null }),
@@ -286,6 +313,17 @@ describe("sampleFromStatus — drives the live progress bar from metrics", () =>
     );
     expect(s.total).toBe(1000);
     expect(Math.max(s.transferBytes, s.installedBytes)).toBe(400);
+  });
+
+  it("names the check while the engine verifies, instead of a bare 99% (#776)", () => {
+    const s = sampleFromStatus(
+      status({
+        phase: "verify",
+        metrics: { ...status({}).metrics, total_bytes: 1000, served_bytes: 1000 },
+      }),
+    );
+    expect(s.note).toMatch(/Verifying/);
+    expect(sampleFromStatus(status({ phase: "install" })).note).toBeUndefined();
   });
 
   it("is never stalled/unverified — those states are gone", () => {

@@ -41,6 +41,12 @@
  * 5.10 and 9.60: the payload does not survive rest at all, so there every jump
  * this thread sees is something else, and the ucred compare answers "unchanged".
  *
+ * WHEN: never while the console is going to rest or settling after a wake. The
+ * jump only marks a look as pending; the look (and any write) runs on the first
+ * poll where power_phase.h says NORMAL: the loopback network healthy again and a
+ * minute of running time after the wake. Kernel reads and writes racing the
+ * system's own suspend/resume are the prime suspect when a console dies in rest.
+ *
  * Unknown is not permission: if the ucred cannot be read, or no elevation has
  * succeeded yet (no baseline; the frame dispatcher retries that by itself),
  * nothing is written.

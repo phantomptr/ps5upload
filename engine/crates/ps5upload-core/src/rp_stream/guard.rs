@@ -148,8 +148,76 @@ fn note_discovery(host: &str, status: &ddp::DdpStatus) {
     }
 }
 
+/// How our last session with a console ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionEnd {
+    /// We closed it (a stop, or an error on our side): DISCONNECT over Takion, then ctrl closed.
+    Stopped,
+    /// The PS5 ended it, with the reason it gave: "Server shutting down" when a controller at the
+    /// console or another device took over (#769). We still said goodbye and closed ctrl.
+    ByConsole(String),
+    /// It broke off (an error, the page gone) with no clean goodbye.
+    Dropped,
+}
+
+impl SessionEnd {
+    fn describe(&self) -> String {
+        match self {
+            SessionEnd::Stopped => "closed by us".to_string(),
+            SessionEnd::ByConsole(r) => format!("ended by the PS5 ({r:?})"),
+            SessionEnd::Dropped => "broke off".to_string(),
+        }
+    }
+}
+
+/// Per console: how and when our last session there ended.
+fn last_end() -> &'static Mutex<HashMap<String, (SessionEnd, Instant)>> {
+    static M: std::sync::OnceLock<Mutex<HashMap<String, (SessionEnd, Instant)>>> =
+        std::sync::OnceLock::new();
+    M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Our session with `host` ended (it had a nonce). Nothing of it is kept that a new session
+/// would reuse: the nonce, keys and sockets were that session's own. What is kept: a short
+/// hold-off while the console lets go (rule 4; the same after the PS5 ended it itself, it was
+/// not measured apart), a fresh count of closed starts, and how it ended, for the next closed
+/// start's line.
+pub fn session_ended(host: &str, end: SessionEnd) {
+    if let Ok(mut m) = closed_answers().lock() {
+        m.remove(host);
+    }
+    let wait = match end {
+        SessionEnd::Dropped => RELEASE_AFTER_DROP,
+        SessionEnd::Stopped | SessionEnd::ByConsole(_) => RELEASE_AFTER_CLEAN_STOP,
+    };
+    crate::clog!(
+        Info,
+        "rp",
+        "rp guard: {host}: our session {}; next start in {} s at the earliest",
+        end.describe(),
+        wait.as_secs()
+    );
+    hold_off(host, wait);
+    if let Ok(mut m) = last_end().lock() {
+        m.insert(host.to_string(), (end, Instant::now()));
+    }
+}
+
+/// How our last session with `host` ended and how long ago, for a log line.
+fn last_end_text(host: &str) -> String {
+    match last_end().lock().ok().and_then(|m| m.get(host).cloned()) {
+        Some((end, at)) => format!(
+            "our last session here {} {} s before",
+            end.describe(),
+            at.elapsed().as_secs()
+        ),
+        None => "no session of ours here since the engine started".to_string(),
+    }
+}
+
 /// The closed start's line: which in a row, what discovery said just before (its status, the app
-/// it said runs, its firmware), and the wait. No names or ids of the console.
+/// it said runs, its firmware), how our last session there ended, and the wait. No names or ids
+/// of the console.
 pub(crate) fn closed_line(host: &str, closed: &InitClosed, ddp: Option<&ddp::DdpStatus>) -> String {
     let seen = match ddp {
         Some(d) => format!(
@@ -170,8 +238,9 @@ pub(crate) fn closed_line(host: &str, closed: &InitClosed, ddp: Option<&ddp::Ddp
         None => "no discovery answer on record".to_string(),
     };
     format!(
-        "rp guard: {host}: the PS5 closed session start {} in a row with no answer ({seen}); asking again in {} s",
+        "rp guard: {host}: the PS5 closed session start {} in a row with no answer ({seen}; {}); asking again in {} s",
         closed.in_a_row,
+        last_end_text(host),
         closed.wait.as_secs()
     )
 }
@@ -443,7 +512,8 @@ mod tests {
         assert_eq!(
             line,
             "rp guard: 10.255.0.7: the PS5 closed session start 3 in a row with no answer \
-             (discovery said 200 Ok, running PPSA01234, firmware 13000000); asking again in 60 s"
+             (discovery said 200 Ok, running PPSA01234, firmware 13000000; no session of ours \
+             here since the engine started); asking again in 60 s"
         );
         // Nothing that names the console.
         assert!(!line.contains("Living room") && !line.contains("AABBCCDDEEFF"));
@@ -457,6 +527,46 @@ mod tests {
         // What prepare saw is what the next closed start reports.
         note_discovery("10.255.0.8", &d);
         assert_eq!(last_discovery().lock().unwrap().get("10.255.0.8"), Some(&d));
+    }
+
+    #[test]
+    fn a_session_the_ps5_ended_leaves_nothing_behind_but_a_short_wait() {
+        // #769: a controller at the console took the session over ("Server shutting down").
+        // A run of closed starts from before counts from 1 again, the wait is the clean stop's
+        // (not the dropped client's 35 s), and the next closed start's line says how it ended.
+        let kicked = || SessionEnd::ByConsole("Server shutting down".into());
+        let fresh = "10.255.0.10";
+        session_ended(fresh, kicked());
+        let left = held_for(fresh).unwrap();
+        assert!(
+            left <= RELEASE_AFTER_CLEAN_STOP && left > RELEASE_AFTER_CLEAN_STOP / 2,
+            "{left:?}"
+        );
+        let host = "10.255.0.11";
+        closed_answer(host);
+        closed_answer(host);
+        session_ended(host, kicked());
+        let next = closed_answer(host);
+        assert_eq!(next.in_a_row, 1);
+        let line = closed_line(host, &next, None);
+        assert!(
+            line.contains(
+                "our last session here ended by the PS5 (\"Server shutting down\") 0 s before"
+            ),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn how_our_last_session_ended_sets_the_wait() {
+        let host = "10.255.0.12";
+        session_ended(host, SessionEnd::Dropped);
+        assert!(held_for(host).unwrap() > RELEASE_AFTER_CLEAN_STOP);
+        assert!(last_end_text(host).contains("broke off"));
+        let host = "10.255.0.13";
+        session_ended(host, SessionEnd::Stopped);
+        assert!(held_for(host).unwrap() <= RELEASE_AFTER_CLEAN_STOP);
+        assert!(last_end_text(host).contains("closed by us"));
     }
 
     #[test]

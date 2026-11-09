@@ -306,8 +306,16 @@ export function statusToOutcome(st: InstallStatus): PkgInstallOutcome {
   }
   if (st.verdict === "unverified") {
     const minutes = Math.max(1, Math.round((st.metrics.phase_ms?.verify ?? 0) / 60_000));
-    errMessage =
-      st.patch_verdict === null
+    // An add-on the PS5 has all of, with nothing of it on a drive to check (#776): one that only
+    // unlocks content leaves no files, so "may still be installing" would send people looking
+    // in Downloads for nothing.
+    const addOn = /AC$/i.test(st.package_type ?? "") && st.metrics.served_bytes > 0;
+    errMessage = addOn
+      ? trStatic(
+          "pkg.addon_unverified",
+          "The PS5 has the whole add-on, but no files of it were found to confirm the install. An add-on that only unlocks content leaves none, so look for it in the game's add-ons on the PS5. The package was kept.",
+        )
+      : st.patch_verdict === null
         ? st.metrics.served_bytes > 0
           ? tx(
               "pkg.base_unverified",
@@ -414,6 +422,11 @@ export function sampleFromStatus(st: InstallStatus): InstallSample {
     servedRequests: served > 0 ? 1 : 0,
     stalled: false,
     acceptedUnverified: false,
+    // The PS5 has the whole package and the engine is checking it landed: say so, rather than
+    // a bare 99% that reads as stuck (#776).
+    ...(st.phase === "verify"
+      ? { note: trStatic("pkg.verifying", "Verifying the exact installed package on the PS5…") }
+      : {}),
   };
 }
 

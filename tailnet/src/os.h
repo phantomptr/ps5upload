@@ -102,6 +102,12 @@ uint16_t tn_sock_local_port(int fd);
 void tn_sock_setint(int fd, int level, int opt, int v);
 void tn_sock_shutdown_wr(int fd);
 int tn_poll(struct pollfd *p, unsigned n, int timeout_ms);
+/* Sleep this thread for ms milliseconds (no wake-up: callers keep it short). */
+void tn_sleep_ms(int ms);
+/* How long a loop waits before polling again when poll() itself failed: 0 for an interrupt
+ * (retry at once), otherwise a short pause so a vanished network (rest mode: every socket call
+ * fails, errno 163) never turns a loop into a busy spin. `budget_ms` < 0 means no deadline. */
+int tn_poll_fail_wait_ms(int interrupted, long long budget_ms);
 
 /* A wake channel: write side signals, read side is pollable (a pipe; on Windows two
  * connected loopback UDP sockets). */

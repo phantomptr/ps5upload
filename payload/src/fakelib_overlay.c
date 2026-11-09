@@ -308,11 +308,25 @@ static void *overlay_main(void *unused) {
     set_state("watching", NULL, NULL);
     adopt_left_overlay(kq);
     pid_t child = -1;
+    int kev_fails = 0;
     while (!g_overlay.stop) {
         struct kevent event;
         struct timespec timeout = { .tv_sec = 1, .tv_nsec = 0 };
         int n = kevent(kq, NULL, 0, &event, 1, &timeout);
-        if (n < 0) { if (errno == EINTR) continue; set_state("error", NULL, "kevent_failed"); break; }
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            /* One failure is not the end of the watch (a console going to rest fails calls for a while):
+             * wait a second and ask again; give up only after a minute of nothing but failures. */
+            if (kev_fails++ == 0) fprintf(stderr, "fakelib overlay: kevent failed (errno %d); retrying\n", errno);
+            if (kev_fails >= 60) {
+                fprintf(stderr, "fakelib overlay: kevent failed for a minute (errno %d); watch stopped\n", errno);
+                set_state("error", NULL, "kevent_failed");
+                break;
+            }
+            sleep(1);
+            continue;
+        }
+        kev_fails = 0;
         if (n == 0) continue;
         if (event.fflags & NOTE_CHILD) child = (pid_t)event.ident;
         if ((event.fflags & NOTE_EXEC) && child > 0 && event.ident == (uintptr_t)child)

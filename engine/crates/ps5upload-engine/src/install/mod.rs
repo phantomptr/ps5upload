@@ -1214,6 +1214,30 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         req.category.as_deref().unwrap_or("?"),
         req.package_app_ver.as_deref().unwrap_or("?")
     );
+    // A category that says full game, for a package whose header says add-on: go on the header
+    // for every check below (#724, #776). Read only when the category says game. A bare link is
+    // left alone: the console fetches it itself and nothing is verified against it.
+    if let Some(sent) = req
+        .category
+        .clone()
+        .filter(|c| certainly_a_game(c) && !matches!(req.source, Source::Url(_)))
+    {
+        let header = unless_stopped(
+            &state,
+            &job,
+            read_source_header(&req.source, &mgmt, req.options.insecure_tls),
+        )
+        .await
+        .flatten();
+        if let Some(fixed) = category_from_header(&sent, header.as_ref()) {
+            crate::log_at!(
+                Info,
+                "install",
+                "{tag}: the category sent says full game ({sent}), the package's header says add-on: going on {fixed}"
+            );
+            req.category = Some(fixed);
+        }
+    }
     ps5upload_core::events::emit_detail(
         ps5upload_core::events::Cat::Install,
         ps5upload_core::events::Level::Info,
@@ -1957,6 +1981,8 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
     // Whether the console is known to hold the whole package now. A bare link is fetched by the
     // console itself, so nothing here saw any of it.
     let delivered = observable && delivery == DeliveryProgress::Complete;
+    // An add-on the check found nothing of: worded as such (see `ADDON_UNVERIFIED_HINT`).
+    let mut addon_not_seen = false;
     let (verdict, patch_verdict, app_ver_after) = match (&title_id, &patch_ver) {
         (Some(t), Some(pv)) => {
             let (m, t, pv, before) = (mgmt.clone(), t.clone(), pv.clone(), app_ver_before.clone());
@@ -1998,6 +2024,20 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                 _ => None,
             };
             let sid = session_id.clone();
+            let addon = is_addon_type(&ptype);
+            // Say what the 99% waits for, so a report settles it from the log (#776).
+            crate::log_at!(
+                Info,
+                "install",
+                "{tag}: verify: waiting for {} ({ptype}, {cid}): {}",
+                if addon {
+                    "the add-on"
+                } else {
+                    "the package file"
+                },
+                verify_target_text(&cid, &ptype, t, budget)
+            );
+            let (cid_log, ptype_log) = (cid.clone(), ptype.clone());
             let found = tokio::task::spawn_blocking(move || {
                 let fingerprint = console_copy
                     .map(|p| crate::pkg_install::remote_pkg_identity(&m, &p).1)
@@ -2007,23 +2047,58 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                         s.get(&sid).map(|x| x.package_fingerprint.clone())
                     })
                     .unwrap_or_default();
-                crate::pkg_install::wait_for_installed_artifact(
-                    &m,
-                    &cid,
-                    &ptype,
-                    total,
-                    &fingerprint,
-                    budget,
-                    &|| st.jobs.is_cancelled(&jb),
-                )
+                let stop = || st.jobs.is_cancelled(&jb);
+                if addon {
+                    crate::pkg_install::wait_for_installed_addon(
+                        &m,
+                        &cid,
+                        &ptype,
+                        total,
+                        &fingerprint,
+                        &stop,
+                    )
+                } else {
+                    crate::pkg_install::wait_for_installed_artifact(
+                        &m,
+                        &cid,
+                        &ptype,
+                        total,
+                        &fingerprint,
+                        budget,
+                        &stop,
+                    )
+                }
             })
             .await
-            .unwrap_or(crate::pkg_install::ArtifactWait::CannotTell);
+            .ok();
+            let outcome = found.map_or(crate::pkg_install::ArtifactWait::CannotTell, |r| r.outcome);
+            match &found {
+                Some(r) => crate::log_at!(
+                    Info,
+                    "install",
+                    "{tag}: verify: {outcome:?} for {ptype_log} {cid_log} after {} ms, {} checks; last check {}, title files {} bytes{}",
+                    r.waited_ms,
+                    r.checks,
+                    r.last_check,
+                    r.most_seen,
+                    if r.hit_ceiling { ", ceiling reached" } else { "" }
+                ),
+                None => crate::log_at!(
+                    Warn,
+                    "install",
+                    "{tag}: verify: the check for {ptype_log} {cid_log} did not run to the end"
+                ),
+            }
             (
-                match found {
+                match outcome {
                     crate::pkg_install::ArtifactWait::Landed
                     | crate::pkg_install::ArtifactWait::CannotTell => verdict_no_identity(true),
-                    crate::pkg_install::ArtifactWait::NotSeen => Verdict::Unverified,
+                    crate::pkg_install::ArtifactWait::NotSeen => {
+                        if addon {
+                            addon_not_seen = true;
+                        }
+                        Verdict::Unverified
+                    }
                 },
                 None,
                 None,
@@ -2109,7 +2184,11 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             s.hint = Some(h.clone());
         }
         if verdict == Verdict::Unverified {
-            s.hint = Some(unverified_hint(delivered, verify_ms));
+            s.hint = Some(if addon_not_seen && delivered {
+                ADDON_UNVERIFIED_HINT.to_string()
+            } else {
+                unverified_hint(delivered, verify_ms)
+            });
         }
         s.patch_verdict = patch_verdict;
         s.app_ver_after = app_ver_after.clone();
@@ -2134,6 +2213,68 @@ fn unverified_hint(delivered: bool, waited_ms: u64) -> String {
     } else {
         "the PS5 took the link and downloads it by itself; check Downloads on the PS5".to_string()
     }
+}
+
+/// An add-on the console has all of, with nothing of it found on a drive (#776). An add-on that
+/// only unlocks content leaves no files, so this is no sign of a failure.
+pub const ADDON_UNVERIFIED_HINT: &str = "the PS5 has the whole add-on, but no files of it were found to confirm it installed; an add-on that only unlocks content leaves none, so check the game's add-ons on the PS5. The package was kept";
+
+/// The package type is an add-on (`PS5AC`, `PS4AC`).
+pub fn is_addon_type(package_type: &str) -> bool {
+    package_type.to_ascii_uppercase().ends_with("AC")
+}
+
+/// What the verify step looks for, in words for the log.
+pub fn verify_target_text(
+    content_id: &str,
+    package_type: &str,
+    title_id: &str,
+    budget: std::time::Duration,
+) -> String {
+    if is_addon_type(package_type) {
+        let label = crate::pkg_install::addon_label(content_id).unwrap_or_else(|| "?".into());
+        format!(
+            "an ac.pkg with this content id under <drive>/user/addcont/{title_id}/, or {} (idle {} s, at most {} s)",
+            crate::pkg_install::addon_appmeta_path(title_id, &label),
+            crate::pkg_install::ADDON_VERIFY_IDLE.as_secs(),
+            crate::pkg_install::ADDON_VERIFY_CEILING.as_secs()
+        )
+    } else {
+        let file = match package_type.to_ascii_uppercase() {
+            p if p.ends_with("DP") => format!("<drive>/user/patch/{title_id}/patch.pkg"),
+            _ => format!("<drive>/user/app/{title_id}/app.pkg"),
+        };
+        format!(
+            "{file} matching this package (idle {} s, at most 4 h)",
+            budget.as_secs()
+        )
+    }
+}
+
+/// The category to go on when the caller's says full game and the package's own header says
+/// add-on. A PS5 add-on's param.json has no category, so a client that derives the package type
+/// from it sends `PS5GD` (#724). Kept past the image check, that sent the add-on's verify looking
+/// for a game's `app.pkg` it never writes, at 99% for the whole wait (#776). The caller's form is
+/// kept: `PS5GD` becomes `PS5AC`, `gd` becomes `ac`. `None`: keep what was sent.
+pub fn category_from_header(
+    sent: &str,
+    header: Option<&ps5upload_pkg::ReaderMetadata>,
+) -> Option<String> {
+    let h = header?;
+    if !certainly_a_game(sent) {
+        return None;
+    }
+    let (kind, _, _) = ps5upload_pkg::kind::classify(h.content_type, h.content_flags, &h.category);
+    if kind != ps5upload_pkg::kind::Kind::Dlc {
+        return None;
+    }
+    let s = sent.trim();
+    let upper = s.to_ascii_uppercase();
+    Some(if upper.starts_with("PS5") || upper.starts_with("PS4") {
+        format!("{}AC", &upper[..3])
+    } else {
+        "ac".to_string()
+    })
 }
 
 /// Reuse the existing start handler in serve-only mode to create a pkg-host
@@ -2399,6 +2540,69 @@ mod certainly_a_game_tests {
         // A patch's header is not the game either.
         let patch = header_of(ps5_pkg(0x20, 0x4000_0000));
         assert!(!refused("PS5GD", Some(&patch)));
+    }
+
+    /// #776: past the image check, an add-on sent as PS5GD went on being a game, and its verify
+    /// waited for a game's app.pkg it never writes. The header puts it right, in the caller's form.
+    #[test]
+    fn an_add_on_sent_as_a_game_is_verified_as_an_add_on() {
+        use super::category_from_header as fix;
+        let add_on = header_of(ps5_pkg(ADD_ON.0, ADD_ON.1));
+        let game = header_of(ps5_pkg(GAME.0, GAME.1));
+        let patch = header_of(ps5_pkg(0x20, 0x4000_0000));
+        assert_eq!(fix("PS5GD", Some(&add_on)).as_deref(), Some("PS5AC"));
+        assert_eq!(fix("ps4gd", Some(&add_on)).as_deref(), Some("PS4AC"));
+        assert_eq!(fix("gd", Some(&add_on)).as_deref(), Some("ac"));
+        // What it fixes is what the verify step goes on.
+        let ptype =
+            super::package_type_for_verify(&fix("PS5GD", Some(&add_on)).unwrap(), "PPSA11386");
+        assert_eq!(ptype, "PS5AC");
+        assert!(super::is_addon_type(&ptype));
+        assert!(!super::is_addon_type(&super::package_type_for_verify(
+            "PS5GD",
+            "PPSA11386"
+        )));
+        // A game stays a game; an unread header or a category that is not a game changes nothing.
+        assert_eq!(fix("PS5GD", Some(&game)), None);
+        assert_eq!(fix("PS5GD", None), None);
+        assert_eq!(fix("PS5AC", Some(&add_on)), None);
+        assert_eq!(fix("", Some(&add_on)), None);
+        // Patches are out of scope here: their own check reads the version.
+        assert_eq!(fix("PS5GD", Some(&patch)), None);
+    }
+
+    /// The log says what the 99% waits for (#776).
+    #[test]
+    fn the_verify_target_is_named() {
+        let d = std::time::Duration::from_secs(240);
+        let a = super::verify_target_text(
+            "EP3969-PPSA11386_00-007FLCOSTUME0001",
+            "PS5AC",
+            "PPSA11386",
+            d,
+        );
+        assert!(a.contains("/user/addcont/PPSA11386/"), "{a}");
+        assert!(
+            a.contains("/user/appmeta/addcont/PPSA11386/007FLCOSTUME0001"),
+            "{a}"
+        );
+        let g = super::verify_target_text(
+            "EP3969-PPSA11386_00-0000000000000000",
+            "PS5GD",
+            "PPSA11386",
+            d,
+        );
+        assert!(
+            g.contains("/user/app/PPSA11386/app.pkg") && g.contains("240 s"),
+            "{g}"
+        );
+        let p = super::verify_target_text(
+            "EP3969-PPSA11386_00-0000000000000000",
+            "PS5DP",
+            "PPSA11386",
+            d,
+        );
+        assert!(p.contains("/user/patch/PPSA11386/patch.pkg"), "{p}");
     }
 
     /// The stream route reads the header from the file on this computer.

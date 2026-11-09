@@ -755,6 +755,11 @@ int tn_fwd_pollfds(tn_ctx *c, struct pollfd *pf, int cap)
 			ev |= POLLOUT;
 		if (!k->connecting && !k->local_eof && k->pcb && tcp_sndbuf(k->pcb) > 0)
 			ev |= POLLIN;
+		/* Nothing wanted: not polled at all. poll reports a hang-up or an error even with no
+		 * events asked for, and one that nothing here acts on returns poll at once on every
+		 * pass. The tick still runs tcp_from_local for it. */
+		if (!ev)
+			continue;
 		pf[n++] = (struct pollfd){.fd = k->fd, .events = ev};
 	}
 	return n;
@@ -784,14 +789,18 @@ void tn_fwd_io(tn_ctx *c, int fd, short revents, int64_t now)
 		syn_wait *s = &w->syn[i];
 		if (s->fd != fd || s->ready)
 			continue;
-		if (revents & (POLLOUT | POLLERR | POLLHUP))
-			syn_dialed(w, s, tn_sock_error(fd) == 0);
+		if (revents & (POLLOUT | POLLERR | POLLHUP | POLLNVAL))
+			syn_dialed(w, s, !(revents & POLLNVAL) && tn_sock_error(fd) == 0);
 		return;
 	}
 	for (int i = 0; i < TCP_CONNS; i++) {
 		tcp_conn *k = &w->tcp[i];
 		if (!k->used || k->fd != fd)
 			continue;
+		if (tn_fwd_local_broken(revents, k->rxq != NULL)) {
+			conn_abort(k);
+			return;
+		}
 		if (revents & POLLOUT)
 			flush_rx(k);
 		if (k->used && (revents & (POLLIN | POLLHUP | POLLERR)))

@@ -192,8 +192,24 @@ pub(crate) fn make_did(regist_key: &[u8; KEY_SIZE]) -> [u8; 32] {
     did
 }
 
+/// How long the console has to answer a session init.
+const SESSION_INIT_WAIT: Duration = Duration::from_secs(10);
+/// A session init answered slower than this is logged at info: the PS5 had work to do first
+/// (letting go of a session that just ended, or one a controller at the console took over).
+const SESSION_INIT_SLOW: Duration = Duration::from_millis(500);
+
 /// Stage 1: the unencrypted session request. Returns the 16-byte nonce.
 pub(crate) fn session_init(host: &str, regist_key: &[u8; KEY_SIZE]) -> Result<[u8; KEY_SIZE]> {
+    let addr = session_addr(host)?;
+    session_init_at(host, addr, regist_key)
+}
+
+/// [`session_init`] against `addr` (the console's 9295, or a test's fake console).
+fn session_init_at(
+    host: &str,
+    addr: std::net::SocketAddr,
+    regist_key: &[u8; KEY_SIZE],
+) -> Result<[u8; KEY_SIZE]> {
     // Registration keys are hex-encoded over their significant bytes — the
     // field is NUL-padded and the console wants only the text before the pad.
     let end = regist_key.iter().position(|b| *b == 0).unwrap_or(KEY_SIZE);
@@ -203,7 +219,6 @@ pub(crate) fn session_init(host: &str, regist_key: &[u8; KEY_SIZE]) -> Result<[u
         .collect();
 
     let t0 = std::time::Instant::now();
-    let addr = session_addr(host)?;
     crate::core_debug!("rp session init: {host} ({addr}) asking, Rp-Version {RP_VERSION}");
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(10)).map_err(|e| {
         crate::core_debug!(
@@ -212,7 +227,6 @@ pub(crate) fn session_init(host: &str, regist_key: &[u8; KEY_SIZE]) -> Result<[u
         );
         anyhow!("connecting for session init: {e}")
     })?;
-    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
 
     let req = format!(
@@ -228,33 +242,48 @@ pub(crate) fn session_init(host: &str, regist_key: &[u8; KEY_SIZE]) -> Result<[u
         .write_all(req.as_bytes())
         .map_err(|e| anyhow!("sending session init: {e}"))?;
     stream.flush().ok();
-    let _ = stream.shutdown(Shutdown::Write);
+    // Our side stays open until the answer, as chiaki's does (#769, #720). This used to
+    // half-close right after the request (shutdown of our write side, a FIN). A free console
+    // answers in ~130 ms and never noticed. After a controller at the console took over a
+    // session (#769), every start was closed with no answer after ~1 s, while the console's log
+    // showed Remote Play switching on for each one: it had taken the request, worked ~1 s, and
+    // then (most likely seeing our FIN) treated the client as gone. That lasted until a
+    // restart, while chiaki, which keeps its side open, got its nonce from the same console.
 
-    let mut raw = Vec::new();
-    stream.read_to_end(&mut raw).map_err(|e| {
+    let raw = read_http_head(&mut stream, SESSION_INIT_WAIT).map_err(|(e, n)| {
         crate::core_debug!(
-            "rp session init: {host}: reading the reply failed after {} ms ({} bytes in): {e}",
-            t0.elapsed().as_millis(),
-            raw.len()
+            "rp session init: {host}: reading the reply failed after {} ms ({n} bytes in): {e}",
+            t0.elapsed().as_millis()
         );
         anyhow!("reading session init reply: {e}")
     })?;
+    let _ = stream.shutdown(Shutdown::Both);
+    let took = t0.elapsed();
     if raw.is_empty() {
         // Info, not debug: how long the console took to close is the one thing about a held slot
         // a report at the usual level can show (#720).
         crate::clog!(
             Info,
             "rp",
-            "rp session init: {host}: closed with no reply after {} ms",
-            t0.elapsed().as_millis()
+            "rp session init: {host}: closed with no reply after {} ms (our side kept open)",
+            took.as_millis()
         );
         bail!("{SESSION_INIT_CLOSED}");
     }
     let reply = split_http(&raw)?;
+    if took >= SESSION_INIT_SLOW {
+        crate::clog!(
+            Info,
+            "rp",
+            "rp session init: {host}: answered HTTP {} after {} ms (slow: the PS5 had work to do first)",
+            reply.code,
+            took.as_millis()
+        );
+    }
     crate::core_debug!(
         "rp session init: {host}: {} in {} ms",
         crate::rp_regist::reply_for_log(&reply),
-        t0.elapsed().as_millis()
+        took.as_millis()
     );
     if reply.code != 200 {
         let reason = reply
@@ -280,6 +309,56 @@ pub(crate) fn session_init(host: &str, regist_key: &[u8; KEY_SIZE]) -> Result<[u
     let mut out = [0u8; KEY_SIZE];
     out.copy_from_slice(&nonce);
     Ok(out)
+}
+
+/// Read one HTTP answer: up to the end of its head and the `Content-Length` body after it, or
+/// until the peer closes. Never waits for a close the way `read_to_end` does, so the asking side
+/// can stay open. Empty when the peer closed without a byte. On an error, the error and the
+/// bytes in so far; an error once the head is complete just ends the read.
+fn read_http_head(
+    stream: &mut TcpStream,
+    wait: Duration,
+) -> std::result::Result<Vec<u8>, (std::io::Error, usize)> {
+    let deadline = std::time::Instant::now() + wait;
+    let mut raw = Vec::new();
+    let mut buf = [0u8; 2048];
+    // Where the body starts and how long it is, once the head is in.
+    let mut body: Option<(usize, usize)> = None;
+    loop {
+        if let Some((start, len)) = body {
+            if raw.len() >= start + len {
+                return Ok(raw);
+            }
+        }
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return match body {
+                Some(_) => Ok(raw),
+                None => Err((std::io::ErrorKind::TimedOut.into(), raw.len())),
+            };
+        }
+        if let Err(e) = stream.set_read_timeout(Some(left)) {
+            return Err((e, raw.len()));
+        }
+        match stream.read(&mut buf) {
+            Ok(0) => return Ok(raw),
+            Ok(n) => raw.extend_from_slice(&buf[..n]),
+            Err(_) if body.is_some() => return Ok(raw),
+            Err(e) => return Err((e, raw.len())),
+        }
+        if body.is_none() {
+            if let Some(i) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                let head = String::from_utf8_lossy(&raw[..i]);
+                let len = head
+                    .lines()
+                    .filter_map(|l| l.split_once(':'))
+                    .find(|(k, _)| k.trim().eq_ignore_ascii_case("content-length"))
+                    .and_then(|(_, v)| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                body = Some((i + 4, len.min(64 * 1024)));
+            }
+        }
+    }
 }
 
 /// Stage 2: the encrypted ctrl connection. Establishing it is what signs the
@@ -1001,6 +1080,127 @@ mod tests {
         });
         assert_eq!(r.unwrap(), SignIn::PasscodeNeeded);
         assert_eq!(ours, 5);
+    }
+
+    /// A fake console's 9295 for one session init: reads the request, then `answer` decides.
+    /// Returns its address and the thread (which hands back the request it read).
+    fn fake_session_port(
+        answer: impl FnOnce(&mut TcpStream) + Send + 'static,
+    ) -> (std::net::SocketAddr, std::thread::JoinHandle<String>) {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        let t = std::thread::spawn(move || {
+            let (mut c, _) = l.accept().unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut req = Vec::new();
+            let mut b = [0u8; 512];
+            while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = c.read(&mut b).unwrap();
+                assert!(n > 0, "the client closed before its request was in");
+                req.extend_from_slice(&b[..n]);
+            }
+            answer(&mut c);
+            String::from_utf8_lossy(&req).into_owned()
+        });
+        (addr, t)
+    }
+
+    const TEST_NONCE: [u8; KEY_SIZE] = [7u8; KEY_SIZE];
+
+    fn nonce_reply() -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\nRP-Nonce: {}\r\nContent-Length: 0\r\n\r\n",
+            b64(&TEST_NONCE)
+        )
+    }
+
+    /// Whether the client has closed its side (a FIN is waiting), looked at without blocking.
+    fn client_left(c: &mut TcpStream) -> bool {
+        c.set_nonblocking(true).unwrap();
+        let mut b = [0u8; 1];
+        let left = matches!(c.read(&mut b), Ok(0));
+        c.set_nonblocking(false).unwrap();
+        left
+    }
+
+    #[test]
+    fn a_console_slow_to_answer_still_finds_us_there() {
+        // #769: after a controller at the console took over our session, every session init was
+        // closed with no answer after ~1 s (Remote Play switched on at the console each time),
+        // until a restart; chiaki, which keeps its side open, got its nonce. This console works
+        // a while, then answers only a client that has not left: as the PS5 most likely did.
+        let (addr, t) = fake_session_port(|c| {
+            std::thread::sleep(Duration::from_millis(300));
+            if client_left(c) {
+                return; // closed with no answer
+            }
+            c.write_all(nonce_reply().as_bytes()).unwrap();
+            // Connection: close is ours to act on: the console need not close first.
+            std::thread::sleep(Duration::from_secs(3));
+        });
+        let t0 = std::time::Instant::now();
+        let nonce = session_init_at("ps5.test", addr, &[0x5a; KEY_SIZE]).unwrap();
+        assert_eq!(nonce, TEST_NONCE);
+        assert!(
+            t0.elapsed() < Duration::from_secs(2),
+            "waited for the console to close: {:?}",
+            t0.elapsed()
+        );
+        let req = t.join().unwrap();
+        assert!(
+            req.starts_with("GET /sie/ps5/rp/sess/init HTTP/1.1\r\n"),
+            "{req}"
+        );
+        assert!(req.contains("Connection: close\r\n"), "{req}");
+        assert!(req.contains(&format!("RP-Registkey: {}\r\n", "5a".repeat(16))));
+    }
+
+    #[test]
+    fn a_session_init_closed_with_no_answer_says_so() {
+        let (addr, t) = fake_session_port(|_| {});
+        let e = session_init_at("ps5.test", addr, &[1; KEY_SIZE]).unwrap_err();
+        assert!(format!("{e:#}").contains(SESSION_INIT_CLOSED), "{e:#}");
+        t.join().unwrap();
+    }
+
+    #[test]
+    fn a_session_init_refused_in_use_keeps_the_reason() {
+        let (addr, t) = fake_session_port(|c| {
+            c.write_all(
+                b"HTTP/1.1 403 Forbidden\r\nRP-Application-Reason: 80108b10\r\nContent-Length: 0\r\n\r\n",
+            )
+            .unwrap();
+        });
+        let e = session_init_at("ps5.test", addr, &[1; KEY_SIZE]).unwrap_err();
+        let text = format!("{e:#}");
+        assert!(
+            text.contains("HTTP 403") && text.contains("80108b10"),
+            "{text}"
+        );
+        t.join().unwrap();
+    }
+
+    #[test]
+    fn an_answer_in_pieces_with_a_body_is_read_whole() {
+        let (addr, t) = fake_session_port(|c| {
+            let r = format!(
+                "HTTP/1.1 200 OK\r\nRP-Nonce: {}\r\nContent-Length: 4\r\n",
+                b64(&TEST_NONCE)
+            );
+            c.write_all(r.as_bytes()).unwrap();
+            std::thread::sleep(Duration::from_millis(50));
+            c.write_all(b"\r\nab").unwrap();
+            std::thread::sleep(Duration::from_millis(50));
+            c.write_all(b"cd").unwrap();
+            std::thread::sleep(Duration::from_secs(2));
+        });
+        let t0 = std::time::Instant::now();
+        assert_eq!(
+            session_init_at("ps5.test", addr, &[1; KEY_SIZE]).unwrap(),
+            TEST_NONCE
+        );
+        assert!(t0.elapsed() < Duration::from_millis(1500));
+        t.join().unwrap();
     }
 
     #[test]

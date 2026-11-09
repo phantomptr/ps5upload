@@ -15,6 +15,7 @@
 #include "config.h"
 #include "runtime.h"
 #include "hw_info.h"
+#include "power_phase.h"
 
 #include <ps5/kernel.h>
 
@@ -83,6 +84,9 @@ static void *wake_watchdog_thread_fn(void *arg) {
                 state == WAKE_UCRED_SAME ? "unchanged" : state == WAKE_UCRED_CHANGED ? "CHANGED" : "unreadable");
     }
 
+    /* A jump seen, its ucred look not done yet: the look waits until the console has settled. */
+    int look_pending = 0;
+    int64_t pend_real = 0, pend_mono = 0;
     for (;;) {
         struct timespec real0, mono0, real1, mono1;
         if (clock_gettime(CLOCK_REALTIME, &real0) != 0 ||
@@ -100,8 +104,26 @@ static void *wake_watchdog_thread_fn(void *arg) {
 
         PLOG(PLOG_TRACE, PLOG_WAKE, "wake_watchdog: slept %llds (monotonic %llds)", (long long)real_elapsed,
              (long long)mono_elapsed);
-        /* Normal case: we slept roughly WAKE_POLL_S. */
-        if (!wake_watchdog_should_look(real_elapsed, mono_elapsed)) continue;
+        /* Every poll: is the console going to rest, frozen-and-woken, or settled (power_phase.h)? This
+         * also pauses the tailnet node while the network is going away or not back yet. */
+        int phase = power_phase_poll(real_elapsed, mono_elapsed);
+
+        if (wake_watchdog_should_look(real_elapsed, mono_elapsed)) {
+            if (!look_pending && phase != PP_NORMAL)
+                fprintf(stderr, "wake_watchdog: clocks jumped %llds (monotonic %llds); ucred look waits until the "
+                        "console has settled\n", (long long)real_elapsed, (long long)mono_elapsed);
+            look_pending = 1;
+            pend_real = real_elapsed;
+            pend_mono = mono_elapsed;
+        }
+        /* Normal case: no jump to look into. */
+        if (!look_pending) continue;
+        /* Never a kernel read or write while the console is going to rest, or in the minute after a
+         * wake (power_phase.h): the system is suspending or resuming underneath us then. */
+        if (phase != PP_NORMAL) continue;
+        look_pending = 0;
+        real_elapsed = pend_real;
+        mono_elapsed = pend_mono;
 
         /* A jump is a cue, not proof: a clock correction or a throttled thread
          * looks the same as a rest. The ucred decides. */
@@ -133,7 +155,7 @@ static void *wake_watchdog_thread_fn(void *arg) {
             continue;
         }
 
-        /* 2. Re-apply fan threshold if one was pinned. */
+        /* 2. Re-apply fan threshold if one was pinned (the phase is NORMAL here: settled). */
         int pinned = hw_fan_pinned_threshold();
         if (pinned >= HW_FAN_THRESHOLD_MIN && pinned <= HW_FAN_THRESHOLD_MAX) {
             const char *err = NULL;

@@ -212,16 +212,28 @@ export default function GameFpsPanel({ host }: { host: string }) {
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <Button
-          variant={capturing ? "secondary" : "primary"}
+          variant={capturing ? "danger" : "primary"}
           size="sm"
           leftIcon={capturing ? <CircleStop size={12} /> : <Play size={12} />}
           onClick={() => void toggleCapture()}
           disabled={busy || !host}
+          data-testid="game-fps-capture-toggle"
         >
           {capturing
             ? tr("game_fps_capture_stop", undefined, "Stop capture")
             : tr("game_fps_capture_start", undefined, "Start capture")}
         </Button>
+        {/* While a capture runs: a word as well as the red button, so the state never rests on colour (#774). */}
+        {capturing && (
+          <span
+            role="status"
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--color-bad)]"
+            data-testid="game-fps-recording"
+          >
+            <span aria-hidden className="h-2 w-2 animate-pulse rounded-full bg-[var(--color-bad)] motion-reduce:animate-none" />
+            {tr("game_fps_recording", undefined, "Recording")}
+          </span>
+        )}
         <Button
           variant="ghost"
           size="sm"

@@ -329,6 +329,7 @@ webui_tile_result_t webui_tile_settle_with(const webui_tile_sweep_ops_t *o, int 
 
 #include "content_db.h"
 #include "icon_keeper.h"
+#include "power_phase.h"
 #include "proc_identity.h"
 #include "register.h"
 #include "unregister_outcome.h"
@@ -774,6 +775,15 @@ static int sw_wait(void *ctx, unsigned seconds) {
     }
     newer = g_req_gen != c->gen;
     pthread_mutex_unlock(&g_req_mu);
+    /* The wait above is on the wall clock, which jumps ahead on a wake and ends it at once. Never
+     * the next sweep (app.db, Sony register/uninstall) while the console goes to rest or settles
+     * after a wake (power_phase.h). */
+    while (!newer && power_phase_quiet()) {
+        sleep(1);
+        pthread_mutex_lock(&g_req_mu);
+        newer = g_req_gen != c->gen;
+        pthread_mutex_unlock(&g_req_mu);
+    }
     return newer;
 }
 
