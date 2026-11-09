@@ -19,6 +19,7 @@ Payloads:
 - Updates are offered for betas and lettered releases too (ShadowMount+ 1.7beta10 to beta11, etaHEN 2.5B to 2.5C), with no more offers to go back to an older version.
 - PS5 builds are picked over PS4 ones (ftpsrv, klogsrv), and Remote Play Unlock gets its normal release, not the testing one.
 - Payloads you stored in Payload Manager by hand are recognised, and Payload Manager has an Update all button that keeps each payload's place in the boot list.
+- Ghostpad and HearBridge are gone from the payload list: their projects are no longer online.
 
 Workshop:
 
