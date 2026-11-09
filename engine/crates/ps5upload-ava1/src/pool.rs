@@ -524,7 +524,7 @@ impl Pool {
         match m.get(&host) {
             Some(r)
                 if r.at.elapsed()
-                    < if r.reason == "ava1_not_paired" {
+                    < if r.reason == "ava1_not_paired" || r.reason == crate::console::NOT_PAIRED {
                         self.not_paired_ttl
                     } else if matches!(r.power, Some(Power::Rest | Power::Unreachable)) {
                         self.probed_ttl
@@ -1454,5 +1454,26 @@ mod gc_tests {
             "the finished job expires too"
         );
         let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod not_paired_ttl_tests {
+    use super::*;
+
+    /// The reason a refused pairing is stored under is `not_paired` (console.rs NOT_PAIRED): it
+    /// is remembered for the longer not-paired time, not the plain refusal time.
+    #[test]
+    fn a_not_paired_refusal_is_remembered_for_its_own_time() {
+        let d = std::env::temp_dir().join(format!("p5a-np-{}", std::process::id()));
+        let pool = Pool::new(d.join("ava"))
+            .with_refusal_ttl(Duration::from_millis(1))
+            .with_not_paired_ttl(Duration::from_secs(60));
+        pool.note_refusal("192.0.2.9", crate::console::NOT_PAIRED, "not paired");
+        pool.note_refusal("192.0.2.10", "ava1_unreachable", "gone");
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(pool.recent_refusal("192.0.2.9").is_some());
+        assert!(pool.recent_refusal("192.0.2.10").is_none());
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
