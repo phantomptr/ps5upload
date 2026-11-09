@@ -7792,6 +7792,7 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
   "golive_err_ffmpeg_missing": "Hãy tải công cụ hỗ trợ phát trực tiếp trước.",
   "golive_err_no_destinations": "Hãy chọn ít nhất một nơi để phát.",
   "golive_err_already_live": "Đang phát trực tiếp rồi.",
+  "golive_err_srt": "Đích này dùng SRT, cần có máy tính. Hãy dùng địa chỉ rtmp:// hoặc rtmps:// để phát trực tiếp từ đây.",
   "golive_err_checksum": "Tệp tải về không đúng tệp mong đợi nên đã bị xóa và không được dùng. Hãy thử lại sau.",
   "golive_err_download": "Tải về thất bại. Hãy kiểm tra kết nối internet của máy tính này rồi thử lại.",
   "golive_err_tls": "Không thể kết nối an toàn tới {site}: không kiểm tra được chứng chỉ. Đặt SSL_CERT_FILE thành gói chứng chỉ của máy tính này, hoặc kiểm tra địa chỉ máy chủ.",

@@ -7799,6 +7799,7 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
   "golive_err_ffmpeg_missing": "Unduh dulu alat bantu streaming.",
   "golive_err_no_destinations": "Centang setidaknya satu tujuan streaming.",
   "golive_err_already_live": "Sudah siaran langsung.",
+  "golive_err_srt": "Tujuan ini memakai SRT, yang memerlukan komputer. Gunakan alamat rtmp:// atau rtmps:// untuk siaran langsung dari sini.",
   "golive_err_checksum": "Unduhan bukan file yang diharapkan, jadi dihapus dan tidak dipakai. Coba lagi nanti.",
   "golive_err_download": "Unduhan gagal. Periksa koneksi internet komputer ini lalu coba lagi.",
   "golive_err_tls": "Tidak dapat terhubung dengan aman ke {site}: sertifikatnya tidak dapat diperiksa. Atur SSL_CERT_FILE ke bundel sertifikat komputer ini, atau periksa alamat server.",

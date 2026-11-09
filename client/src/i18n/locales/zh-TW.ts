@@ -7743,6 +7743,7 @@ helper_mismatch_boot_copy: "你的 PS5 啟動了為開機保留的舊版助手�
   "golive_err_ffmpeg_missing": "請先下載直播輔助程式。",
   "golive_err_no_destinations": "請至少勾選一個直播目標。",
   "golive_err_already_live": "已經在直播中。",
+  "golive_err_srt": "此目的地使用 SRT，需要電腦。要從這裡直播，請使用 rtmp:// 或 rtmps:// 位址。",
   "golive_err_checksum": "下載的檔案與預期不符，已刪除且未使用。請稍後再試。",
   "golive_err_download": "下載失敗。請檢查這台電腦的網路連線後再試一次。",
   "golive_err_tls": "無法安全連線到 {site}：無法驗證其憑證。請把 SSL_CERT_FILE 設為這台電腦的憑證包，或檢查伺服器位址。",

@@ -7797,6 +7797,7 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
   "golive_err_ffmpeg_missing": "Önce yayın yardımcısını indir.",
   "golive_err_no_destinations": "Yayın yapılacak en az bir yer işaretle.",
   "golive_err_already_live": "Zaten canlı yayında.",
+  "golive_err_srt": "Bu hedef SRT kullanıyor ve bunun için bilgisayar gerekiyor. Buradan canlı yayına çıkmak için rtmp:// veya rtmps:// adresi kullan.",
   "golive_err_checksum": "İndirilen dosya beklenen dosya değildi, bu yüzden silindi ve kullanılmadı. Daha sonra yeniden dene.",
   "golive_err_download": "İndirme başarısız oldu. Bu bilgisayarın internet bağlantısını kontrol et ve yeniden dene.",
   "golive_err_tls": "{site} ile güvenli bağlantı kurulamıyor: sertifikası doğrulanamadı. SSL_CERT_FILE'ı bu bilgisayarın sertifika paketine ayarla veya sunucu adresini kontrol et.",

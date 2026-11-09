@@ -7809,6 +7809,7 @@ helper_mismatch_boot_copy: "PS5 が起動用に保持している古いヘルパ
   "golive_err_ffmpeg_missing": "先に配信用ヘルパーをダウンロードしてください。",
   "golive_err_no_destinations": "配信先を少なくとも 1 つ選んでください。",
   "golive_err_already_live": "すでにライブ配信中です。",
+  "golive_err_srt": "この配信先は SRT を使うため、コンピューターが必要です。ここから配信するには rtmp:// または rtmps:// のアドレスを使ってください。",
   "golive_err_checksum": "ダウンロードしたファイルが想定と違ったため、使わずに削除しました。後でもう一度お試しください。",
   "golive_err_download": "ダウンロードに失敗しました。このPCのインターネット接続を確認して、もう一度お試しください。",
   "golive_err_tls": "{site} に安全に接続できません。証明書を確認できませんでした。SSL_CERT_FILE にこのコンピューターの証明書バンドルを設定するか、サーバーアドレスを確認してください。",
