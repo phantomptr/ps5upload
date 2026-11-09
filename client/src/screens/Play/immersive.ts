@@ -92,10 +92,24 @@ function setAndroidUi(immersive: boolean, landscape: boolean): Promise<void> {
   );
 }
 
-/** The iOS app: make the page the first responder, so controllers (MFi, Backbone, any
- *  Bluetooth pad) reach its Gamepad API; WKWebView gives them only to the first responder. */
-export function focusForControllers(): void {
-  if (isTauriEnv() && isIOS()) void invoke("focus_webview").catch(() => {});
+/** The iOS and Mac apps: make the page the first responder, so controllers (MFi, Backbone, a
+ *  DualSense, any Bluetooth pad) reach its Gamepad API; WKWebView gives them only to the first
+ *  responder (on the Mac, the key window's). Answers what had the focus before on the Mac
+ *  ("webview" when the page already had it, see focus_webview), "" on iOS, null where nothing was
+ *  asked or the app did not answer. */
+export async function focusForControllers(): Promise<string | null> {
+  if (!isTauriEnv() || !(isIOS() || isMacOrLinuxDesktop())) return null;
+  try {
+    return await invoke<string>("focus_webview");
+  } catch {
+    return null;
+  }
+}
+
+/** What `focusForControllers` answered, as the log says it: null when the page had the focus
+ *  already (or nothing was asked), else who had the keyboard and the controllers before. */
+export function focusTakenFrom(was: string | null): string | null {
+  return !was || was === "webview" ? null : was;
 }
 
 /** The iOS and Mac apps: ask for the controller's PS button for the page rather than the

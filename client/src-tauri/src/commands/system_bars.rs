@@ -46,12 +46,16 @@ pub fn android_system_ui(
     }
 }
 
-/// The iOS app: make the web view the first responder. WKWebView hands controllers (Backbone,
-/// Kishi, any MFi or Bluetooth pad) to the page's Gamepad API only while it is the first
-/// responder (WebKit bug 269292), which it may not be after a load or another view took the
-/// focus. Every other platform: a no-op.
+/// The iOS and Mac apps: make the web view the first responder. WKWebView hands controllers
+/// (Backbone, Kishi, any MFi or Bluetooth pad, a DualSense) to the page's Gamepad API only while
+/// it is the first responder (WebKit bug 269292; on the Mac, WebKit gives controller input to the
+/// key window's first responder only), which it may not be after a load, another view took the
+/// focus, or the window left full screen (#720: a Mac lost the controller after full screen and
+/// had it back only in full screen). Answers what had the focus before ("webview" when the web
+/// view already had it, "none", or the class of the view that had it), for the log. Every other
+/// platform: a no-op ("").
 #[tauri::command]
-pub fn focus_webview(window: tauri::WebviewWindow) -> Result<(), String> {
+pub async fn focus_webview(window: tauri::WebviewWindow) -> Result<String, String> {
     #[cfg(target_os = "ios")]
     {
         window
@@ -63,12 +67,65 @@ pub fn focus_webview(window: tauri::WebviewWindow) -> Result<(), String> {
                     let _: bool = unsafe { objc2::msg_send![view, becomeFirstResponder] };
                 }
             })
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        Ok(String::new())
     }
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(target_os = "macos")]
+    {
+        // Async, and the answer awaited on a blocking thread: never on the main thread, where
+        // with_webview runs the closure, nor on a runtime worker.
+        let (tx, rx) = std::sync::mpsc::channel();
+        window
+            .with_webview(move |wv| {
+                let _ = tx.send(mac_focus::focus(wv.ns_window(), wv.inner()));
+            })
+            .map_err(|e| e.to_string())?;
+        tauri::async_runtime::spawn_blocking(move || {
+            rx.recv_timeout(std::time::Duration::from_secs(1))
+                .map_err(|_| "the window did not answer".to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
     {
         let _ = window;
-        Ok(())
+        Ok(String::new())
+    }
+}
+
+/// The Mac app's web view made the window's first responder.
+#[cfg(target_os = "macos")]
+mod mac_focus {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyObject, Bool};
+    use std::ffi::c_void;
+
+    /// Runs on the main thread (`with_webview`). What had the focus before, see `focus_webview`.
+    pub fn focus(window: *mut c_void, webview: *mut c_void) -> String {
+        let (win, view) = (window as *mut AnyObject, webview as *mut AnyObject);
+        if win.is_null() || view.is_null() {
+            return "none".into();
+        }
+        // SAFETY: ns_window() and inner() are the live NSWindow and WKWebView, on the main
+        // thread (AppKit's); firstResponder may be nil and is checked before its class is read.
+        unsafe {
+            let before: *mut AnyObject = msg_send![win, firstResponder];
+            if before == view {
+                return "webview".into();
+            }
+            let was = if before.is_null() {
+                "none".to_string()
+            } else {
+                (*before).class().name().to_string_lossy().into_owned()
+            };
+            let ok: Bool = msg_send![win, makeFirstResponder: view];
+            if ok.as_bool() {
+                was
+            } else {
+                format!("{was} (refused)")
+            }
+        }
     }
 }
 

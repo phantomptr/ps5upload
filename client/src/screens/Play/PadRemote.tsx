@@ -79,7 +79,7 @@ function PadRemoteLive() {
     holdPageStill(true);
     void setWindowFullscreen(true);
     lockLandscape();
-    focusForControllers();
+    void focusForControllers();
     return () => {
       unlockOrientation();
       void setWindowFullscreen(false);
