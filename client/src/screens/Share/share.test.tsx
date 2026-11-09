@@ -107,23 +107,59 @@ describe("what can be shared", () => {
 });
 
 describe("the Share panel", () => {
-  it("shows the engine's retail refusal and leaves the app unticked", () => {
+  /** The opening tag of the element with this test id. */
+  const tag = (html: string, id: string) => new RegExp(`<[^>]*data-testid="${id}"[^>]*>`).exec(html)?.[0] ?? "";
+  /** The app row's own checkbox button. */
+  const appBox = (html: string) =>
+    /<button[^>]*role="checkbox"[^>]*>/.exec(html.slice(html.indexOf('data-testid="share-app"')))?.[0] ?? "";
+
+  it("a refused app is a quiet row: the short reason, the engine's words in the tip, no check", () => {
     const msg = "This is a retail game (PPSA01234). PS5Upload only shares homebrew.";
     const html = render(<SharePick target={target} onMade={() => {}} verdict={msg} />);
-    expect(html).toContain('data-testid="share-app-refused"');
-    expect(html).toContain(msg);
-    // The app's checkbox is off and can't be turned on.
-    const box = /<input[^>]*type="checkbox"[^>]*>/.exec(html.slice(html.indexOf('data-testid="share-app"')))?.[0] ?? "";
-    expect(box).toContain("disabled");
-    expect(box).not.toMatch(/checked=""/);
-    // Stream settings: said, not offered.
-    expect(html).toContain('data-testid="share-stream-none"');
+    expect(tag(html, "share-app")).toContain('data-state="unavailable"');
+    expect(html).toContain("Retail games can&#x27;t be shared");
+    expect(tag(html, "share-app-why")).toContain(`aria-label="${msg}"`);
+    expect(html).toContain('role="tooltip"');
+    expect(appBox(html)).toContain(' disabled=""');
+    expect(appBox(html)).toContain('aria-checked="false"');
+    // No orange warning text, and no line about stream settings.
+    expect(html).not.toContain("color-warn");
+    expect(html).not.toContain("aren&#x27;t kept per game");
   });
 
-  it("a homebrew app is ticked and Share is ready", () => {
+  it("can't-confirm reads as its own short line", () => {
+    const html = render(
+      <SharePick target={target} onMade={() => {}} verdict="PS5Upload can't confirm this is homebrew, so it can't share it." />,
+    );
+    expect(html).toContain("Can&#x27;t confirm it&#x27;s homebrew");
+  });
+
+  it("a homebrew app is picked and Share is ready, with the settings as segments", () => {
     const html = render(<SharePick target={{ ...target, titleId: "PSUP00001" }} onMade={() => {}} verdict="" />);
-    expect(html).not.toContain("share-app-refused");
+    expect(tag(html, "share-app")).toContain('data-state="on"');
+    expect(appBox(html)).toContain('aria-checked="true"');
     expect(html).toContain('data-testid="share-go"');
+    expect(tag(html, "share-go")).not.toContain(' disabled=""');
+    // Lifetime and who: radio groups, 24 hours and one friend chosen.
+    expect(html).toMatch(/role="radio" aria-checked="true"[^>]*>24 hours/);
+    expect(html).toMatch(/role="radio" aria-checked="true"[^>]*>One friend/);
+    expect(html).toContain("The link stops working after you allow the first person.");
+    // The note is one growing line with its placeholder.
+    expect(tag(html, "share-note")).toContain('placeholder="A note for your friend (optional)"');
+    expect(tag(html, "share-note")).toContain('rows="1"');
+    // Your name is shown with an edit button.
+    expect(html).toContain('data-testid="share-name-edit"');
+  });
+
+  it("only what exists is offered: no console, no saves, screenshots, cheats or controls", () => {
+    const html = render(<SharePick target={{ ...target, titleId: "PSUP00001" }} onMade={() => {}} verdict="" />);
+    for (const id of ["share-save", "share-media", "share-cheats", "share-controls"]) expect(html).not.toContain(`data-testid="${id}"`);
+  });
+
+  it("while the engine checks the app, Share waits", () => {
+    const html = render(<SharePick target={target} onMade={() => {}} verdict={null} />);
+    expect(tag(html, "share-app")).toContain('data-state="checking"');
+    expect(tag(html, "share-go")).toContain(' disabled=""');
   });
 
   const made: ShareView = {
@@ -144,21 +180,37 @@ describe("the Share panel", () => {
     ],
   };
 
-  it("shows the link, the QR code and who asks, with Allow and Decline", () => {
-    const html = render(<ShareMade share={made} onChange={() => {}} />);
+  it("shows the link, the QR code, the time left and who asks, with Allow and Decline", () => {
+    const html = render(<ShareMade share={made} onChange={() => {}} onDone={() => {}} />);
     expect(html).toContain('data-testid="share-qr"');
     expect(html).toContain(made.url!.replace(/&/g, "&amp;"));
-    expect(html).toContain("Alex wants: My App, Note");
+    expect(html).toContain("Expires in 23 h 53 min");
+    expect(html).toContain("Alex asks for");
+    expect(html).toContain("My App, Note");
     expect(html.match(/data-testid="share-allow"/g)).toHaveLength(1);
     expect(html.match(/data-testid="share-decline"/g)).toHaveLength(1);
     expect(html).toContain('data-testid="share-cancel"');
-    expect(html).toContain("Sending:");
+    expect(html).toContain('data-testid="share-done"');
+    expect(html).toContain("Sending: 50 B of 100 B");
+    expect(html).toContain('role="progressbar"');
+  });
+
+  it("no one yet: it says it waits", () => {
+    const html = render(<ShareMade share={{ ...made, requests: [] }} onChange={() => {}} />);
+    expect(html).toContain("Waiting for your friend to open the link");
+  });
+
+  it("the native share sheet is offered where the device has one", () => {
+    vi.stubGlobal("navigator", { ...navigator, share: () => Promise.resolve() });
+    const html = render(<ShareMade share={made} onChange={() => {}} />);
+    expect(html).toContain('data-testid="share-native"');
   });
 
   it("a used or cancelled link shows no link", () => {
     const html = render(<ShareMade share={{ ...made, state: "cancelled", requests: [] }} onChange={() => {}} />);
     expect(html).not.toContain("share-qr");
     expect(html).toContain('data-testid="share-state"');
+    expect(html).not.toContain('data-testid="share-cancel"');
   });
 
   it("Allow and Decline post the friend's request", async () => {
@@ -229,20 +281,26 @@ describe("Receive", () => {
     received: [],
   };
 
-  it("shows who shared what, with retail items marked and not chosen", () => {
+  it("shows who shared what, with retail items quiet and not chosen", () => {
     const html = render(<ReceiveFlow view={offer} host="" onDone={() => {}} onView={() => {}} />);
     expect(html).toContain("Sam shared My App");
-    expect(html).toContain("My App · ");
-    expect(html).toContain('data-testid="receive-item-refused"');
-    const boxes = html.match(/<input[^>]*type="checkbox"[^>]*>/g) ?? [];
-    expect(boxes).toHaveLength(3);
-    expect(boxes[0]).toMatch(/checked=""/);
-    expect(boxes[1]).toMatch(/checked=""/);
-    expect(boxes[2]).toContain("disabled");
-    expect(boxes[2]).not.toMatch(/checked=""/);
+    const rows = html.match(/<div[^>]*data-testid="receive-item"[^>]*>/g) ?? [];
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toContain('data-state="on"');
+    expect(rows[1]).toContain('data-state="on"');
+    expect(rows[2]).toContain('data-state="unavailable"');
+    expect(html).toContain('data-testid="receive-item-reason"');
+    expect(html).toContain("Retail games can&#x27;t be shared");
+    expect(html).toContain("1.91 MiB in all");
     expect(html).toContain('data-testid="receive-accept"');
     // No PS5 connected: installing isn't offered.
-    expect(html).not.toContain("Install it to my PS5");
+    expect(html).not.toContain("Install to my PS5");
+  });
+
+  it("with a PS5 connected, the app can be installed when it arrives", () => {
+    const html = render(<ReceiveFlow view={offer} host="192.168.1.5" onDone={() => {}} onView={() => {}} />);
+    expect(html).toMatch(/role="radio" aria-checked="true"[^>]*>Keep in Collection/);
+    expect(html).toContain("Install to my PS5");
   });
 
   it("Accept sends only the items left ticked", async () => {
@@ -263,6 +321,7 @@ describe("Receive", () => {
     );
     expect(going).toContain('data-testid="receive-cancel"');
     expect(going).toContain("Over your home network.");
+    expect(going).toContain("50%");
   });
 
   it("when done, each item has its action", () => {
@@ -278,6 +337,7 @@ describe("Receive", () => {
     };
     const html = render(<ReceiveFlow view={done} host="192.168.1.5" onDone={() => {}} onView={() => {}} />);
     expect(html).toContain("Received from Sam");
+    expect(html).toContain("Saved in /c/Received/My App from Sam");
     expect(html).toContain('data-testid="received-app"');
     expect(html).toContain('data-testid="received-note"');
     expect(html).toContain("It&#x27;s in your Collection now.");

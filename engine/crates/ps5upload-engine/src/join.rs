@@ -572,6 +572,10 @@ pub(crate) struct PageReport {
     jitter_ms: Option<f64>,
     nacks: Option<u64>,
     plis: Option<u64>,
+    /// What stops the picture on the page ("decode": its decoder failed, "no_hevc"), and the
+    /// codec it set up (e.g. "avc1.640028"): a page that never drew a picture says why (#720).
+    problem: Option<&'static str>,
+    codec: Option<String>,
     /// Stalled time since the report before (ms), and when this one came.
     stall_ms_recent: u64,
     at: Option<Instant>,
@@ -608,6 +612,20 @@ impl PageReport {
             jitter_ms: n("jitter_ms").map(|x| (x.min(60_000.0) * 10.0).round() / 10.0),
             nacks: n("nacks").map(|x| x as u64),
             plis: n("plis").map(|x| x as u64),
+            problem: match o.get("problem").and_then(|d| d.as_str()) {
+                Some("decode") => Some("decode"),
+                Some("no_hevc") => Some("no_hevc"),
+                _ => None,
+            },
+            codec: o
+                .get("codec")
+                .and_then(|d| d.as_str())
+                .filter(|c| {
+                    !c.is_empty()
+                        && c.len() <= 40
+                        && c.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.')
+                })
+                .map(str::to_string),
             ..PageReport::default()
         })
     }
@@ -640,6 +658,8 @@ impl PageReport {
             "jitter_ms": self.jitter_ms,
             "nacks": self.nacks,
             "plis": self.plis,
+            "problem": self.problem,
+            "codec": self.codec,
             "stall_ms_recent": self.stall_ms_recent,
             "age_s": self.at.map(|t| now.saturating_duration_since(t).as_secs()),
             "quality": self.quality(now),
@@ -677,6 +697,25 @@ impl Stats {
             .as_ref()
             .map(|r| r.json(now))
             .unwrap_or(serde_json::Value::Null)
+    }
+
+    /// For the "left" line: how the page's picture went, from its last report.
+    fn page_line(&self) -> String {
+        let g = self.page.lock().unwrap_or_else(|e| e.into_inner());
+        match g.as_ref() {
+            None => "the page never reported its picture".into(),
+            Some(r) => format!(
+                "picture {} {}{}: {} drawn, {} stalls{}",
+                r.decoder.unwrap_or("?"),
+                r.codec.as_deref().unwrap_or("?"),
+                r.problem.map(|p| format!(" ({p})")).unwrap_or_default(),
+                r.frames,
+                r.stalls,
+                r.jitter_ms
+                    .map(|j| format!(", jitter {j} ms"))
+                    .unwrap_or_default(),
+            ),
+        }
     }
 
     fn quality(&self, now: Instant) -> Option<&'static str> {
@@ -1174,13 +1213,14 @@ impl Party {
         let n = s.rtt_n.load(Ordering::Relaxed);
         let avg = s.rtt_sum.load(Ordering::Relaxed).checked_div(n);
         fx.push(Effect::Log(format!(
-            "join: Player {} left ({why}) after {}s: rtt avg {} ms, max {} ms; {} pictures skipped to a keyframe; {} pad frames",
+            "join: Player {} left ({why}) after {}s: rtt avg {} ms, max {} ms; {} pictures skipped to a keyframe; {} pad frames; {}",
             g.player,
             now.duration_since(g.joined_at).as_secs(),
             avg.map(|a| a.to_string()).unwrap_or_else(|| "?".into()),
             s.rtt_max.load(Ordering::Relaxed),
             s.skipped.load(Ordering::Relaxed),
             s.pad_frames.load(Ordering::Relaxed),
+            s.page_line(),
         )));
         fx
     }
@@ -4774,6 +4814,37 @@ mod tests {
         assert_eq!(s.page_json(t4)["stall_ms_recent"], 120);
         // A page that stopped reporting says nothing.
         assert_eq!(s.quality(t4 + Duration::from_secs(11)), None);
+    }
+
+    #[test]
+    fn a_guest_page_that_never_drew_says_why_and_the_left_line_has_it() {
+        // #720: an iPhone that showed no picture sent nothing, so the host's log could not say
+        // which decoder failed.
+        let t0 = Instant::now();
+        let s = Stats::default();
+        assert_eq!(s.page_line(), "the page never reported its picture");
+        s.page_report(
+            &serde_json::json!({
+                "frames": 0, "decoder": "webcodecs", "problem": "decode", "codec": "avc1.640028"
+            }),
+            t0,
+        );
+        let v = s.page_json(t0);
+        assert_eq!(v["problem"], "decode");
+        assert_eq!(v["codec"], "avc1.640028");
+        assert_eq!(
+            s.page_line(),
+            "picture webcodecs avc1.640028 (decode): 0 drawn, 0 stalls"
+        );
+        // Only known problems and plain codec strings are kept.
+        let t1 = t0 + Duration::from_secs(2);
+        s.page_report(
+            &serde_json::json!({"frames": 5, "problem": "<b>", "codec": "avc1;<x>"}),
+            t1,
+        );
+        let v = s.page_json(t1);
+        assert_eq!(v["problem"], serde_json::Value::Null);
+        assert_eq!(v["codec"], serde_json::Value::Null);
     }
 
     #[test]

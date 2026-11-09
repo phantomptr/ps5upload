@@ -49,8 +49,11 @@ export function padRoute(pad: PadLink): string {
   return `/play/pad?${q}`;
 }
 
-/** Where an opened ps5upload:// link leads in the app, or null for one it doesn't know. */
+/** Where an opened ps5upload:// link leads in the app, or null for one it doesn't know.
+ *  ps5upload://console?… (an invite to a console, screens/Connection/consoles/model.ts) opens
+ *  Consoles with the Add sheet showing it; the page checks the invite again. */
 export function appLinkRoute(url: string): string | null {
+  if (/^\s*ps5upload:\/\/console[/?]/i.test(url)) return `/connection?invite=${encodeURIComponent(url.trim())}`;
   const a = readAppLink(url);
   if (!a) return null;
   if (a.kind === "join") return `/play?join=${encodeURIComponent(a.link)}`;

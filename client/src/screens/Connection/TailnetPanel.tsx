@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Circle, ExternalLink, Globe, Loader2, Settings2 } from "lucide-react";
 import { useNavigate } from "react-router";
 import { Button } from "../../components";
@@ -17,13 +17,17 @@ import {
   type AppTailnetStatus,
   type TailnetConsoleOp,
   type TailnetEnable,
+  type TailnetBlocked,
   type TailnetStatus,
 } from "../../api/tailnet";
 import { openExternalUrl } from "../../lib/openExternalUrl";
+import { consoleAddr } from "../../lib/addr";
 import { QrCode } from "../Play/PhonePads";
 import { humanizeCaught } from "../../lib/humanizeError";
 import { TailnetProblems } from "./TailnetProblems";
 import { KeyExpiryHint, NameField, OnPausedSwitch, RenewButton } from "./TailnetBits";
+import { DeviceRow, orderDevices, peerRows } from "./TailnetDevices";
+import { useRosterStore } from "../../state/roster";
 
 /** "Test it now" sends the PS5 through Tailscale from home for this long. */
 const TEST_SECS = 120;
@@ -35,7 +39,15 @@ const TEST_SECS = 120;
  * Headscale server. A guided setup: this PS5 (1), each device you play from (2), then "Test it
  * now" (3), which sends this PS5 through Tailscale from home so you can see it work.
  */
-export default function TailnetPanel({ host }: { host: string }) {
+export default function TailnetPanel({
+  host,
+  startTest = 0,
+}: {
+  host: string;
+  /** Bumped by the console card's Test: the panel starts "Try Tailscale now" itself, so the test,
+   *  its end and "Back to the home network" live in one place. */
+  startTest?: number;
+}) {
   const tr = useTr();
   const navigate = useNavigate();
   const { confirm, dialog } = useConfirm();
@@ -84,7 +96,9 @@ export default function TailnetPanel({ host }: { host: string }) {
         setTestVia("");
         return;
       }
-      void tailnetVia(host).then((v) => setTestVia(v.via));
+      void tailnetVia(host)
+        .then((v) => setTestVia(v.via))
+        .catch(() => undefined); // the next tick asks again
     }, 2000);
     return () => window.clearInterval(t);
   }, [testUntil, host]);
@@ -130,12 +144,23 @@ export default function TailnetPanel({ host }: { host: string }) {
     }
   };
 
+  // The card's Test: once per press.
+  const testNowRef = useRef(testNow);
+  useEffect(() => {
+    testNowRef.current = testNow;
+  });
+  useEffect(() => {
+    if (startTest > 0) void testNowRef.current(true);
+  }, [startTest]);
+
   const state = st?.state ?? "off";
   const psOn = !!st?.enabled && state === "running" && !!st.ip;
   const selfOn = !!me && (me.backend === "builtin" ? me.state === "running" : me.backend === "system");
   const setUp = !!st && (st.enabled || !!st.signed_in);
   const days = st ? expiryDays(st.key_expiry) : null;
   const listed = allowList(st);
+  // Step 3 stays done once "Try Tailscale now" reached this PS5 (the engine keeps it per console).
+  const testedAt = me?.consoles?.find((c) => consoleAddr(c.host) === consoleAddr(host))?.tested_at ?? 0;
   return (
     <section
       className="flex flex-col gap-2 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] p-3"
@@ -170,7 +195,7 @@ export default function TailnetPanel({ host }: { host: string }) {
           )}
         />
         <Step
-          done={testVia !== "" && testVia !== "lan"}
+          done={(testVia !== "" && testVia !== "lan") || testedAt > 0}
           n={3}
           text={tr("tn_step_test", undefined, "Test it now: reach this PS5 through Tailscale from home, to see it work.")}
         />
@@ -290,6 +315,12 @@ export default function TailnetPanel({ host }: { host: string }) {
                   )}
                 </div>
               ) : null}
+              <BlockedNotice
+                blocked={st.blocked_recent ?? []}
+                busy={busy}
+                onAllow={(ip) => void run("allow_add", { ip })}
+                onIgnore={(ip) => void run("blocked_ignore", { ip })}
+              />
               <AllowSection st={st} busy={busy} listed={listed} onSave={(mode, list) => void run("allow", { allow_mode: mode, allow: list.join(",") })} />
             </div>
           ) : state === "wait-approval" ? (
@@ -329,6 +360,47 @@ export default function TailnetPanel({ host }: { host: string }) {
   );
 }
 
+/** "<device> tried to reach this PS5 over Tailscale: Allow / Ignore", for each device the PS5's
+ *  list turned away lately (the helper's `blocked_recent`). Allow adds it to the list. */
+export function BlockedNotice({
+  blocked,
+  busy,
+  onAllow,
+  onIgnore,
+}: {
+  blocked: TailnetBlocked[];
+  busy: boolean;
+  onAllow: (ip: string) => void;
+  onIgnore: (ip: string) => void;
+}) {
+  const tr = useTr();
+  if (blocked.length === 0) return null;
+  return (
+    <ul className="flex flex-col gap-1 text-xs" data-testid="tailnet-blocked">
+      {blocked.map((b) => (
+        <li
+          key={b.ip}
+          className="flex flex-wrap items-center gap-2 rounded-[var(--radius-field)] border border-[var(--color-warn)] px-2 py-1"
+        >
+          <span className="min-w-0 flex-1">
+            {tr(
+              "tn_blocked_tried",
+              { device: b.name.split(".")[0] || b.ip },
+              "{device} tried to reach this PS5 over Tailscale.",
+            )}
+          </span>
+          <Button size="sm" variant="secondary" disabled={busy} onClick={() => onAllow(b.ip)} data-testid="tailnet-blocked-allow">
+            {tr("tn_blocked_allow", undefined, "Allow")}
+          </Button>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => onIgnore(b.ip)} data-testid="tailnet-blocked-ignore">
+            {tr("tn_blocked_ignore", undefined, "Ignore")}
+          </Button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function Step({ done, n, text }: { done: boolean; n: number; text: string }) {
   return (
     <li className="flex items-start gap-1.5">
@@ -359,6 +431,7 @@ function AllowSection({
   onSave: (mode: "listed" | "all", list: string[]) => void;
 }) {
   const tr = useTr();
+  const profiles = useRosterStore((s) => s.profiles);
   if (!st.allow_mode) return null;
   const all = st.allow_mode === "all";
   const peers = st.peers.filter((p) => p.ip);
@@ -395,19 +468,20 @@ function AllowSection({
       ) : null}
       {all ? null : (
         <ul className="flex flex-col gap-0.5" data-testid="tailnet-allow-list">
-          {peers.map((p) => (
-            <li key={p.ip}>
-              <label className="flex items-center gap-1.5">
+          {orderDevices(peerRows(peers), { profiles }).map((d) => (
+            <DeviceRow
+              key={d.ip}
+              d={d}
+              lead={
                 <input
                   type="checkbox"
-                  checked={listed.includes(p.ip)}
+                  aria-label={d.name.split(".")[0] || d.ip}
+                  checked={listed.includes(d.ip)}
                   disabled={busy}
-                  onChange={(e) => onSave("listed", toggleAllowed(listed, p.ip, e.target.checked))}
+                  onChange={(e) => onSave("listed", toggleAllowed(listed, d.ip, e.target.checked))}
                 />
-                <span className="truncate">{p.name.split(".")[0] || p.ip}</span>
-                <span className="text-[var(--color-muted)]">{p.ip}</span>
-              </label>
-            </li>
+              }
+            />
           ))}
           {extra.map((ip) => (
             <li key={ip}>

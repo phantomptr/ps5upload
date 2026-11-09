@@ -38,14 +38,20 @@ void tailnet_node_shutdown(void);
  *       which tailnet devices may reach the PS5: every one the tailnet allows, or only these
  *   {"op":"allow_add","ip":"100.a.b.c"}               add one device to the list (the app adds
  *       itself when it talks to the PS5 at home)
- * Answers the status JSON (see tailnet_node.c status_json) into out. Returns its length
- * or -1. */
+ *   {"op":"blocked_ignore","ip":"100.a.b.c"}          stop showing a device the list turned
+ *       away (in memory, until the helper restarts)
+ * Answers the status JSON (see tailnet_node.c status_json) into out. Its "blocked_recent" lists
+ * the devices the list turned away lately (the core's tn_peer_denied: at most 8, one per
+ * address, nothing logged). Returns its length or -1. */
 int tailnet_node_call(const char *body, size_t len, char *out, size_t cap);
 
 /* Is this tailnet IPv4 (host order) allowed by the saved list? For tests. */
 int tailnet_node_allows(unsigned int ip);
 /* Tests: what waking from rest mode runs in the core (the wall clock jumped). */
 void tailnet_node_test_rest_wake(void);
+/* Tests: a TCP connection from this tailnet IPv4 (host order) to `port`, as the core notes one
+ * the list turns away (nothing when the node is off or the address is let in). */
+void tailnet_node_test_denied(unsigned int ip, unsigned int port);
 
 /* Tests: use another state directory (before anything else). */
 void tailnet_node_set_dir(const char *dir);

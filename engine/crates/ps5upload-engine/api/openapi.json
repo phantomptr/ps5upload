@@ -251,48 +251,6 @@
         ],
         "type": "object"
       },
-      "AddBody": {
-        "properties": {
-          "console": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "x-aliases": [
-              "addr",
-              "host"
-            ]
-          },
-          "kind": {
-            "type": "string"
-          },
-          "label": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "position": {
-            "description": "Among the console's waiting items, from 0. Left out, the end of the line.",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "request": {
-            "description": "The body of the kind's route. Its console is this item's."
-          },
-          "stop_on_failure": {
-            "description": "If this item fails, the ones after it are paused for someone to look at.",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "kind"
-        ],
-        "type": "object"
-      },
       "AddRepo": {
         "description": "What a repo is added with.",
         "properties": {
@@ -2279,6 +2237,105 @@
         ],
         "type": "object"
       },
+      "ConnectTiming": {
+        "description": "One console's last status check.",
+        "properties": {
+          "at_ms": {
+            "description": "When the check started, Unix ms.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cached_verdict": {
+            "description": "A failure remembered from a moment ago answered; nothing reached the console.",
+            "type": "boolean"
+          },
+          "console": {
+            "description": "The console, without a port.",
+            "type": "string"
+          },
+          "handshake_ms": {
+            "description": "Opening a new session: the TCP connect, the AVA1 handshake and the pairing check.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ok": {
+            "description": "The helper answered.",
+            "type": "boolean"
+          },
+          "path": {
+            "description": "How the console was reached: `lan`, `tailnet_direct`, `tailnet_relayed` or\n`tailnet_system` (set by the engine).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "The failure's token (`console_rest_mode`, `ava1_unreachable`, ...), or its text when it\nhas none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reused_session": {
+            "description": "A live session was already pooled, so nothing was opened. Absent when a remembered\nfailure answered before a session was asked for.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "stale_session_dropped": {
+            "description": "A pooled session had stopped answering and was dropped (then opened again, or the\nconsole was found gone).",
+            "type": "boolean"
+          },
+          "status_ms": {
+            "description": "The `node.status` call itself (the last attempt).",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tcp_ms": {
+            "description": "A plain TCP connect to the helper's port: the quick look past a remembered failure, or\nthe check that a quiet session's console still answers.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tcp_ok": {
+            "description": "Whether that TCP connect was taken.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "total_ms": {
+            "description": "The whole check, in ms.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "description": "The helper's version from the reply.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "console",
+          "at_ms",
+          "total_ms",
+          "ok",
+          "cached_verdict",
+          "stale_session_dropped"
+        ],
+        "type": "object"
+      },
       "Connection": {
         "properties": {
           "from_root": {
@@ -3457,6 +3514,10 @@
             "type": "string"
           },
           "ip": {
+            "type": "string"
+          },
+          "name": {
+            "description": "op `remember`: the console's name on the tailnet (optional).",
             "type": "string"
           },
           "op": {
@@ -14878,6 +14939,48 @@
         ],
         "type": "object"
       },
+      "engine.queue_api.AddBody": {
+        "properties": {
+          "console": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "addr",
+              "host"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "position": {
+            "description": "Among the console's waiting items, from 0. Left out, the end of the line.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "request": {
+            "description": "The body of the kind's route. Its console is this item's."
+          },
+          "stop_on_failure": {
+            "description": "If this item fails, the ones after it are paused for someone to look at.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
       "engine.remote.api.InspectBody": {
         "properties": {
           "path": {
@@ -15096,6 +15199,26 @@
             "type": "array"
           }
         },
+        "type": "object"
+      },
+      "engine.tailnet_discover.AddBody": {
+        "properties": {
+          "addr": {
+            "description": "The console's tailnet address or MagicDNS name (as found, or typed).",
+            "type": "string",
+            "x-aliases": [
+              "tailnet_ip",
+              "host"
+            ]
+          },
+          "name": {
+            "description": "A name for a new entry; its tailnet name otherwise.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "addr"
+        ],
         "type": "object"
       },
       "engine.wake_login_api.PasscodeReq": {
@@ -15775,6 +15898,71 @@
             "in": "body",
             "name": "addr",
             "required": false
+          },
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/ava1/console": {
+      "get": {
+        "description": "`GET /api/ava1/console?addr=` — who answers at this address: the console's AVA1 key (hex,\nits identity at every address) and the name it gives. Read from the first two handshake\nmessages only (`peek_console`): the console never admits, pairs or lists this device for it,\nshows no code, and nothing is pinned. An invite carries the key, and Add a PS5 tells by it\nthat what the home and Tailscale scans found is one console. 502 when nothing answers.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Read which console answers at an address (its key), without pairing",
+        "tags": [
+          "pairing"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": true
           },
           "response_schema": "json-unknown"
         }
@@ -30025,6 +30213,92 @@
         }
       }
     },
+    "/api/ps5/connect-timings": {
+      "get": {
+        "description": "GET /api/ps5/connect-timings?addr=IP\n\nThe last status check of each console, phase by phase: whether a pooled session was reused\nor a new one opened (`handshake_ms`: the TCP connect, the AVA1 handshake and the pairing\ncheck), whether a verdict remembered from a moment ago answered (`cached_verdict`), the\nplain TCP connect that looks past such a verdict or checks a quiet session (`tcp_ms`,\n`tcp_ok`), the `node.status` call (`status_ms`), the helper's `version`, the `path` (`lan`,\n`tailnet_direct`, `tailnet_relayed`, `tailnet_system`), and whether a session that had gone\nquiet was dropped (`stale_session_dropped`). Read on demand; nothing is logged. With `addr`,\nthat console only (`{ timing: null }` before its first check); without, `{ consoles: [...] }`,\nnewest first.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "timing": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/components/schemas/ConnectTiming"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "consoles": {
+                          "items": {
+                            "$ref": "#/components/schemas/ConnectTiming"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "How each console's last status check went",
+        "tags": [
+          "consoles"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
     "/api/ps5/console-shares": {
       "get": {
         "parameters": [
@@ -41208,7 +41482,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AddBody"
+                "$ref": "#/components/schemas/engine.queue_api.AddBody"
               }
             }
           },
@@ -45912,6 +46186,256 @@
             "required": false
           },
           "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/tailnet/consoles": {
+      "get": {
+        "description": "`GET /api/tailnet/consoles[?refresh=1&all=1&addr=]` — the PS5Upload consoles on this device's\nTailscale network: `{ok, backend, can_list, cached, age_ms, consoles: [{name, tailnet_name,\ntailnet_ip, lan_host, id, reachable, via, online, paired, hosts, listed, error}]}`.\n\n* `backend`: how this device is on Tailscale (`builtin`, `system`, `none`). `can_list`: whether\n  a peer list could be read (false on a phone with only the system Tailscale app: type the\n  address instead, `addr=`).\n* Each console was asked on TCP 9120 through Tailscale: `reachable` when its helper answered,\n  `id` its AVA1 key (hex, the same at every address), `via` `builtin` or `system`, `error`\n  why not. Nothing is paired or pinned by asking, and no code shows on the PS5.\n* `lan_host`: its home address when this engine knows one; `hosts` every address it was met\n  at; `listed`: the console list's entry for it (`{id, name, host}`) or null; `paired`: this\n  engine is trusted by it already.\n* `addr=` probes that one address now (a 100.x address or a MagicDNS name) and answers\n  `{ok, console: {...}}`; 400 `not_tailnet` when it is neither.\n\nAnswered from the last minute's look unless `refresh=1`; nothing is looked for in the\nbackground.",
+        "parameters": [
+          {
+            "description": "One address to probe: a tailnet IPv4 or a MagicDNS name.",
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "host",
+              "console"
+            ]
+          },
+          {
+            "description": "Look again instead of answering from the last minute's list.",
+            "in": "query",
+            "name": "refresh",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Probe every online peer, not only the ones named like a console.",
+            "in": "query",
+            "name": "all",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "console": {},
+                        "ok": {
+                          "type": "boolean"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "age_ms": {},
+                        "backend": {},
+                        "cached": {
+                          "type": "boolean"
+                        },
+                        "can_list": {},
+                        "consoles": {},
+                        "ok": {
+                          "type": "boolean"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "age_ms": {
+                          "type": "integer"
+                        },
+                        "backend": {},
+                        "cached": {
+                          "type": "boolean"
+                        },
+                        "can_list": {},
+                        "consoles": {
+                          "items": {},
+                          "type": "array"
+                        },
+                        "ok": {
+                          "type": "boolean"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The PS5Upload consoles on this device's Tailscale network, or one address probed",
+        "tags": [
+          "tailnet"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "host",
+              "console"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/tailnet/consoles/add": {
+      "post": {
+        "description": "`POST /api/tailnet/consoles/add` `{addr, name?}` — puts a console found on Tailscale (or typed:\na 100.x address or a MagicDNS name) on the console list, probing it first. Answers `{ok,\naction, console: {id, name, host}, found: {...the list entry...}}`; `action` is `added`,\n`linked` (its entry at the tailnet address moved to its home address), `merged` (two entries\nfor it became one) or `exists`.\n\nOne entry per console: at its home address when one is known (so the home network is used\nwhen back home, Tailscale when away), else at its tailnet address, which becomes the home\none when the console is next reached at home. Either way its tailnet address is remembered\nfor the router. A console that does not answer is still added (its list may not let this\ndevice in yet: the PS5 then shows \"tried to reach this PS5\" with Allow).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/engine.tailnet_discover.AddBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "action": {},
+                    "console": {},
+                    "found": {},
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {},
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Puts a console found on Tailscale (or typed: a 100.x address or a MagicDNS name) on the console list, probing it first",
+        "tags": [
+          "tailnet"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "tailnet_ip",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "literal"
         }
       }
     },

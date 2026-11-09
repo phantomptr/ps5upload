@@ -994,6 +994,12 @@ test-payload: payload
 	@cc -O2 -Wall -Wextra -Werror -o $(SELFTEST_DIR)/ps5upload-app-info-selftest \
 		$(PAYLOAD_DIR)/tests/app_info_selftest.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-app-info-selftest
+	@echo "Running file compare self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o $(SELFTEST_DIR)/ps5upload-file-compare-selftest \
+		$(PAYLOAD_DIR)/tests/file_compare_selftest.c $(PAYLOAD_DIR)/src/file_compare.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-file-compare-selftest
+	@echo "✓ the save write-back sees an edit that left the copy's size and mtime as they were"
 	@echo "Running uninstall outcome self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-unregister-outcome-selftest \
@@ -1119,7 +1125,7 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/mesh_selftest.c $(PAYLOAD_DIR)/src/mesh.c $(PAYLOAD_DIR)/src/webui_codec.c \
 		$(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-mesh-selftest
-	@echo "✓ devices connect, are listed, renamed, blocked and pruned; locks lapse; shared documents keep their revision"
+	@echo "✓ devices connect (or ask, and are allowed or declined), are listed, renamed, blocked and pruned; locks lapse; shared documents keep their revision"
 	@echo "Running the tailnet core's unit tests (host build, ASan + UBSan)..."
 	@$(MAKE) -s -C tailnet test
 	@$(MAKE) -s -C tailnet SAN=1 lib

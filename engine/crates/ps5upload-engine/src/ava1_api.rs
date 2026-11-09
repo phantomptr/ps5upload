@@ -314,6 +314,37 @@ pub async fn pairing_allow_handler(
     }
 }
 
+/// `GET /api/ava1/console?addr=` — who answers at this address: the console's AVA1 key (hex,
+/// its identity at every address) and the name it gives. Read from the first two handshake
+/// messages only (`peek_console`): the console never admits, pairs or lists this device for it,
+/// shows no code, and nothing is pinned. An invite carries the key, and Add a PS5 tells by it
+/// that what the home and Tailscale scans found is one console. 502 when nothing answers.
+pub async fn console_handler(Query(q): Query<PairingQuery>) -> Response {
+    let Some(addr) = crate::required_console_addr(q.addr) else {
+        return crate::missing_console_addr();
+    };
+    let dial = ps5upload_core::route::dial_str(
+        &ps5upload_ava1::pool::ava1_addr(&addr),
+        ps5upload_ava1::gen::DEFAULT_PORT,
+    );
+    let peeked = ps5upload_ava1::pool()
+        .peek_console(&dial, std::time::Duration::from_millis(3000))
+        .await;
+    let (code, body) = console_body(peeked.map(|p| (p.key, p.name)).map_err(|e| e.to_string()));
+    (code, Json(body)).into_response()
+}
+
+/// [`console_handler`]'s answer, from what the peek found.
+fn console_body(r: Result<([u8; 32], String), String>) -> (StatusCode, serde_json::Value) {
+    match r {
+        Ok((key, name)) => (
+            StatusCode::OK,
+            serde_json::json!({ "key": ava1::hex::encode(&key), "name": name }),
+        ),
+        Err(e) => (StatusCode::BAD_GATEWAY, serde_json::json!({ "error": e })),
+    }
+}
+
 /// `POST /api/ava1/pairing/forget` `{addr}` — "forget the old console": removes the key
 /// pinned for this address so a different PS5 there can be paired.
 pub async fn pairing_forget_handler(
@@ -391,6 +422,23 @@ mod tests {
             (w["state"].as_str(), w["console_name"].as_str()),
             (Some("wrong_code"), Some("PS5"))
         );
+    }
+
+    #[test]
+    fn the_console_body_is_its_key_in_hex_or_a_bad_gateway() {
+        let mut key = [0u8; 32];
+        key[0] = 0xab;
+        key[31] = 0x01;
+        let (st, b) = super::console_body(Ok((key, "PS5".into())));
+        assert_eq!(st, axum::http::StatusCode::OK);
+        assert_eq!(b["name"], "PS5");
+        let hex = b["key"].as_str().unwrap();
+        assert_eq!(hex.len(), 64);
+        assert!(hex.starts_with("ab") && hex.ends_with("01"));
+        let (st, b) = super::console_body(Err("timed out".into()));
+        assert_eq!(st, axum::http::StatusCode::BAD_GATEWAY);
+        assert_eq!(b["error"], "timed out");
+        assert!(b.get("key").is_none());
     }
 
     #[test]

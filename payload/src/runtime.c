@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include "file_compare.h"
 #include "app_dump.h"
 #include <stdlib.h>
 #include <stdarg.h>
@@ -7587,6 +7588,13 @@ static int save_do_unmount(int *written_back, char *kept, size_t kept_sz) {
         struct stat ist;
         int image_moved = stat(g_save_image, &ist) != 0 || ist.st_mtime != g_save_image_mtime ||
                           ist.st_size != g_save_image_size;
+        /* A save image is a fixed size, and edits made through the mount do not always move the
+         * copy's mtime (FW 9.60, #770: "Nothing changed" and the edit was lost). When neither the
+         * copy nor the real image looks touched, compare the bytes: the copy started as the
+         * image, so any difference is an edit. (Not when the image moved: the game saved, and
+         * that is handled below.) */
+        if (!changed && !image_moved && file_contents_differ(g_save_copy, g_save_image) == 1)
+            changed = 1;
         if (!changed) {
             unlink(g_save_copy);
         } else if (image_moved) {

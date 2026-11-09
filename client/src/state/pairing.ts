@@ -48,6 +48,11 @@ interface PairingState {
    *  after it starts. Measured from a phone: closed at once, paired seconds later, and the
    *  dialog was left explaining a closed window to a console that had already accepted. */
   retryAfterResend: (sleep?: (ms: number) => Promise<void>) => Promise<void>;
+  /** While the window reads closed, asks again every few seconds for a while: a console that asks
+   *  before new devices connect lists this one as asking (mesh asks), and once someone allows it
+   *  (any trusted app, or the console's own page) the next ask gets in. Stops when the dialog
+   *  closes, moves to another console, or the answer is anything but closed. */
+  waitForApproval: (sleep?: (ms: number) => Promise<void>) => Promise<void>;
   /** Sends the six digits the user typed. */
   confirm: (code: string) => Promise<void>;
   /** "Forget the old one and pair this one": clears the pinned key, then pairs afresh. */
@@ -62,6 +67,13 @@ interface PairingState {
  *  on an Android emulator the new helper took over 25 s to start and pair). */
 const RESEND_ASKS = 30;
 const RESEND_ASK_GAP_MS = 2000;
+
+/** Waiting for someone to allow this device: asked again every 4 s for 10 minutes, the time the
+ *  console keeps an ask open. */
+const APPROVAL_ASKS = 150;
+const APPROVAL_ASK_GAP_MS = 4000;
+/** Consoles a wait runs for (one at a time each). */
+const waiting = new Set<string>();
 
 export const usePairingStore = create<PairingState>((set, get) => {
   const load = async (host: string) => {
@@ -121,6 +133,34 @@ export const usePairingStore = create<PairingState>((set, get) => {
         if (!get().open || get().host !== host) return;
         await load(host);
         if (get().view?.state !== "closed") return;
+      }
+    },
+
+    async waitForApproval(
+      sleep = (ms) => new Promise<void>((r) => setTimeout(r, ms)),
+    ) {
+      const { host } = get();
+      if (!host || waiting.has(host)) return;
+      waiting.add(host);
+      try {
+        let misses = 0;
+        for (let attempt = 0; attempt < APPROVAL_ASKS; attempt++) {
+          await sleep(APPROVAL_ASK_GAP_MS);
+          if (!get().open || get().host !== host || get().view?.state !== "closed") return;
+          const before = get().view;
+          await load(host);
+          // One failed read (a busy console, a Wi-Fi blip) does not end the wait: keep waiting
+          // on the same picture, and show the error only after three in a row.
+          if (get().view === null && get().error && misses < 2 && get().host === host) {
+            misses += 1;
+            set({ view: before, error: null });
+            continue;
+          }
+          misses = 0;
+          if (get().view?.state !== "closed") return;
+        }
+      } finally {
+        waiting.delete(host);
       }
     },
 

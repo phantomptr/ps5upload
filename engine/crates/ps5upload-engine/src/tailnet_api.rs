@@ -3,16 +3,20 @@
 //! * `GET  /api/ps5/tailnet?addr=`  -> the console's node: `{ok, enabled, state, login_url, ip,
 //!   name, hostname, signed_in, allow_mode, allow, home_derp, derp_connected, home_latency_ms,
 //!   udp_port, endpoints[], key_expiry, warning, error, serving:{udp_flows, tcp_conns},
-//!   peers:[{name, ip, online, path, direct, derp_region, latency_ms, last_rx_ms}]}`; `state` is
+//!   peers:[{name, ip, online, path, direct, derp_region, latency_ms, last_rx_ms}],
+//!   blocked_recent:[{ip, name, port, proto, count, first, last}]}`; `state` is
 //!   `off`, `connecting`, `needs-login` (open `login_url`), `wait-approval`, `running`, `paused`,
 //!   `backoff` or `signed-out`. `allow_mode` is `listed` (only the devices in `allow`, a
-//!   comma-separated list of tailnet IPs, may reach the PS5) or `all`.
+//!   comma-separated list of tailnet IPs, may reach the PS5) or `all`. `blocked_recent`: the devices
+//!   the list turned away lately (at most 8, newest first, unix-second times; empty with `all`):
+//!   the app offers Allow (`allow_add`) or Ignore (`blocked_ignore`). Absent from an older helper.
 //! * `POST /api/ps5/tailnet` `{addr, op, control_url?, hostname?, authkey?, allow_mode?, allow?,
 //!   ip?}`: `op` is `enable` (join; the first time this answers `needs-login` with a `login_url`
 //!   to open, unless an `authkey` was given; with no `hostname` and none saved, the console's own
 //!   name + "-ps5u"), `disable` (pause: leave, keep the keys), `logout` (leave and forget them),
 //!   `rename` (`hostname`, any time), `renew` (sign in again keeping the node, its address and
-//!   name: a `login_url` follows), `allow` (`allow_mode`, `allow`) or `allow_add` (`ip`).
+//!   name: a `login_url` follows), `allow` (`allow_mode`, `allow`), `allow_add` (`ip`) or
+//!   `blocked_ignore` (`ip`: stop listing it in `blocked_recent` until the helper restarts).
 //!   Answers the same status. Needs an explicit `addr`.
 //!
 //! The engine's own node (Settings › Tailscale; `tailnet_engine.rs`):
@@ -21,11 +25,12 @@
 //!   default_hostname, renamed_to, signed_in, home_derp, derp_connected, home_latency_ms,
 //!   key_expiry, error, warning, backend, system:{detected, ip, iface, choice}, peers:[{name, ip,
 //!   online, path, direct, derp_region, latency_ms}], consoles:[{host, ip, name, via,
-//!   latency_ms}]}`
+//!   latency_ms, tested_at}]}`; `tested_at` (unix ms, 0 never): when "Try Tailscale now" last
+//!   reached that console through Tailscale
 //! * `POST /api/tailnet` `{op, control_url?, hostname?, authkey?, choice?, host?, ip?, secs?}`:
 //!   `op` is `enable`, `disable` (pause), `logout`, `rename`, `renew`, `system_choice`
 //!   (`choice`: `system` to use the system's Tailscale app, `own` to sign PS5Upload in itself),
-//!   `remember` (`host`, `ip`) or `test_path` (`host`, `secs`: send that console through
+//!   `remember` (`host`, `ip`, `name?`) or `test_path` (`host`, `secs`: send that console through
 //!   Tailscale for a while from home, to see it work; 0 ends it) -> the same status
 //! * `GET  /api/tailnet/via?addr=` -> `{via: lan|direct|relayed|system, latency_ms}`
 //! * `GET  /api/tailnet/route?addr=[&port=&udp=]` -> why the engine reaches that console the way
@@ -33,6 +38,8 @@
 //!   testing, last_switch_ms, ...}`; with a `port`, also `dial` (null = its own address)
 //! * `GET  /api/tailnet/check?addr=` -> the Connection check by path: `{home:[{port, open,
 //!   error}], tailnet:{backend, ip, online, checks:[...]}|null, used, device:{...}}`
+//! * `GET  /api/tailnet/consoles` and `POST /api/tailnet/consoles/add`: the consoles on this device's
+//!   Tailscale network, met at home or not (`tailnet_discover.rs`)
 //!
 //! The console then serves only Remote Play (TCP 9295, UDP 9296, 9302) and the helper (TCP 9120)
 //! to the tailnet. Errors are `{error, reason}`; `unsupported` (501) when the helper is older.
@@ -120,6 +127,17 @@ fn remember(addr: &str, r: &mut anyhow::Result<Option<Value>>) {
     if ps5upload_core::route::via(addr).is_tailnet() {
         return;
     }
+    // Reached at home: an entry added away at its tailnet address is this console (it says so
+    // itself), so it becomes the home one, never a second entry.
+    if let Some(ip) = tn::tailnet_ip(v) {
+        if crate::consoles_api::link_home(addr, &ip) {
+            crate::log_at!(
+                Info,
+                "tailnet",
+                "tailnet {addr}: linked to its entry at {ip}"
+            );
+        }
+    }
     let Some(me) = crate::tailnet_engine::engine().self_ip() else {
         return;
     };
@@ -156,6 +174,9 @@ pub(crate) struct EngineOpBody {
     host: String,
     #[serde(default)]
     ip: String,
+    /// op `remember`: the console's name on the tailnet (optional).
+    #[serde(default)]
+    name: String,
     #[serde(default)]
     control_url: String,
     #[serde(default)]
@@ -194,7 +215,7 @@ pub(crate) async fn engine_op(Json(req): Json<EngineOpBody>) -> Response {
                 if req.host.trim().is_empty() {
                     anyhow::bail!("host (the console's LAN address) is required");
                 }
-                e.remember(&req.host, ip, "");
+                e.remember(&req.host, ip, req.name.trim());
             }
             "test_path" => {
                 if req.host.trim().is_empty() {

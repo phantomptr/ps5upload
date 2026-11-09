@@ -2,7 +2,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PadButton } from "../lib/remotePlayStream";
 import { rpInput } from "../state/remotePlay";
-import { GUEST_KEYMAP, JoinSession, devicePad, guestHeld, isPadKey } from "./session";
+import { GUEST_KEYMAP, JoinSession, devicePad, guestHeld, isPadKey, pageStats } from "./session";
+import { PictureStats } from "../pad/watchPlayer";
+
+describe("pageStats (#720)", () => {
+  it("says nothing before the first picture, unless the picture failed: then the decoder, codec and why", () => {
+    const st = new PictureStats("webcodecs", () => 0);
+    expect(pageStats(null, null)).toBeNull();
+    expect(pageStats(st, null)).toBeNull();
+    st.codec = "avc1.640028";
+    expect(pageStats(st, "decode")).toMatchObject({ frames: 0, decoder: "webcodecs", codec: "avc1.640028", problem: "decode" });
+    st.drawn();
+    const s = pageStats(st, null);
+    expect(s).toMatchObject({ frames: 1, codec: "avc1.640028" });
+    expect(s).not.toHaveProperty("problem");
+  });
+});
 
 /** A socket that never connects (the session's keyboard does not need one). */
 class QuietSocket {

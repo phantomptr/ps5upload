@@ -447,6 +447,21 @@ typedef struct {
 /* ip.c: is `ip` allowed by `a`? */
 int tn_peer_allowed(const tn_peer_allow *a, uint32_t ip);
 
+/* The peers the list turned away (tn_peer_denied); under dp_mu. */
+typedef struct {
+	uint32_t n;
+	tn_denied e[TN_DENIED_MAX];
+	uint64_t seq[TN_DENIED_MAX]; /* when each entry was last noted: orders entries in one second */
+	uint64_t next;
+} tn_denied_log;
+/* ip.c: note one refused attempt at `now_s`: a known source counts and moves its time, a new
+ * one takes a free slot or the oldest one's. */
+void tn_denied_note(tn_denied_log *log, uint32_t ip, uint8_t proto, uint16_t port, int64_t now_s);
+/* ip.c: forget the entries `a` now lets in. */
+void tn_denied_prune(tn_denied_log *log, const tn_peer_allow *a);
+/* ip.c: up to max entries into out, most recent first; how many. */
+int tn_denied_copy(const tn_denied_log *log, tn_denied *out, int max);
+
 /* ---------- the context (tailnet.c, control.c) ---------- */
 struct tn_ctx {
 	tn_config cfg;
@@ -498,6 +513,7 @@ struct tn_ctx {
 	tn_serve serve[TN_SERVE_MAX]; /* copied from the config */
 	uint32_t n_serve;
 	tn_peer_allow allow;     /* tn_set_peer_allow; under dp_mu */
+	tn_denied_log denied;    /* what `allow` turned away; under dp_mu */
 	tn_fwd *fwd;
 };
 

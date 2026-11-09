@@ -97,6 +97,36 @@ pub(super) fn tools() -> Vec<ToolDef> {
             run: route!(method: "POST", path: "/api/discover", done: "Looked for consoles."),
         },
         ToolDef {
+            name: "tailnet_consoles",
+            title: "Find consoles on Tailscale",
+            description: "Lists the PS5Upload consoles on this device's Tailscale network, met at \
+                          home or not: each with its tailnet address, home address when known \
+                          (`lan_host`), whether its helper answered over Tailscale (`reachable`), \
+                          its key (`id`) and the console list's entry for it (`listed`). Asking \
+                          pairs nothing and shows nothing on the PS5. `addr` probes one tailnet \
+                          address or MagicDNS name instead. Answers from the last minute unless \
+                          `refresh` is true.",
+            kind: Kind::Read,
+            schema: object(
+                json!({
+                    "addr": {
+                        "type": "string",
+                        "description": "One console to probe: its 100.x address or its name in Tailscale.",
+                    },
+                    "refresh": {
+                        "type": "boolean",
+                        "description": "Look again now instead of answering from the last minute.",
+                    },
+                    "all": {
+                        "type": "boolean",
+                        "description": "Probe every online peer, not only those named like a console (-ps5u).",
+                    },
+                }),
+                &[],
+            ),
+            run: route!(method: "GET", path: "/api/tailnet/consoles", done: "Looked on Tailscale."),
+        },
+        ToolDef {
             name: "consoles_status",
             title: "Console status",
             description: "Asks a console's PS5Upload helper how it is: helper version, kernel, \
@@ -105,6 +135,22 @@ pub(super) fn tools() -> Vec<ToolDef> {
             kind: Kind::Read,
             schema: object(json!({ "console": console_optional() }), &[]),
             run: |ctx, args| Box::pin(status(ctx, args)),
+        },
+        ToolDef {
+            name: "consoles_connect_timings",
+            title: "How the last status checks went",
+            description: "The last status check of each console (or of `console`), phase by \
+                          phase, in ms: session reused or opened (`handshake_ms`), a remembered \
+                          verdict answering (`cached_verdict`), a plain TCP connect (`tcp_ms`), \
+                          the status call (`status_ms`), the helper version, the path (lan or \
+                          tailnet) and whether a quiet session was dropped. Sends nothing to a \
+                          console: for \"why did it take so long to show as connected\".",
+            kind: Kind::Read,
+            schema: object(json!({ "console": console_optional() }), &[]),
+            run: route!(
+                path: "/api/ps5/connect-timings",
+                done: "The last status checks."
+            ),
         },
         ToolDef {
             name: "consoles_readiness",

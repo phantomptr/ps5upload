@@ -177,6 +177,49 @@ int main(void) {
         CHECK(call("{\"op\":\"disable\"}") > 0);
     }
 
+    /* blocked_recent: devices the list turned away, for the app's "<device> tried to reach this
+     * PS5: Allow / Ignore". At most 8, one per address (a repeat counts), newest first; gone once
+     * allowed (allow_add) or ignored (blocked_ignore, in memory); nothing while every device is
+     * let in; nothing while the node is off. */
+    {
+        char ipv[32];
+        CHECK(call("{\"op\":\"allow\",\"allow_mode\":\"listed\",\"allow\":\"100.64.0.5\"}") > 0);
+        CHECK(call("") > 0 && strstr(out, "\"blocked_recent\":[]"));
+        tailnet_node_test_denied(0x64400033u, 9120); /* off: no node, nothing noted */
+        CHECK(call("") > 0 && strstr(out, "\"blocked_recent\":[]"));
+        CHECK(call("{\"op\":\"enable\"}") > 0 && boolean("enabled") == 1);
+        tailnet_node_test_denied(0x64400005u, 9120); /* listed: never noted */
+        tailnet_node_test_denied(0x64400033u, 9120);
+        tailnet_node_test_denied(0x64400033u, 9120);
+        CHECK(call("") > 0 && strstr(out, "\"blocked_recent\":[{\"ip\":\"100.64.0.51\""));
+        CHECK(strstr(out, "\"count\":2") && strstr(out, "\"port\":9120") && strstr(out, "\"proto\":\"tcp\""));
+        CHECK(!strstr(out, "\"ip\":\"100.64.0.5\",\"name\""));
+        /* a flood of addresses: still 8 */
+        for (unsigned i = 0; i < 20; i++) tailnet_node_test_denied(0x64400100u + i, 9295);
+        CHECK(call("") > 0);
+        {
+            int entries = 0;
+            for (const char *p = strstr(out, "\"blocked_recent\""); p && (p = strstr(p, "\"first\":")); p++) entries++;
+            CHECK(entries == 8);
+        }
+        snprintf(ipv, sizeof ipv, "\"ip\":\"100.64.1.19\""); /* 0x64400113: the newest */
+        CHECK(strstr(out, ipv) && !strstr(out, "\"ip\":\"100.64.0.51\",\"name\""));
+        /* Allow: off the list of turned-away devices */
+        CHECK(call("{\"op\":\"allow_add\",\"ip\":\"100.64.1.19\"}") > 0 && boolean("ok") == 1);
+        CHECK(!strstr(strstr(out, "\"blocked_recent\""), ipv));
+        /* Ignore: hidden; a bad address is refused */
+        CHECK(call("{\"op\":\"blocked_ignore\",\"ip\":\"100.64.1.18\"}") > 0 && boolean("ok") == 1);
+        CHECK(!strstr(strstr(out, "\"blocked_recent\""), "\"ip\":\"100.64.1.18\""));
+        CHECK(strstr(strstr(out, "\"blocked_recent\""), "\"ip\":\"100.64.1.17\""));
+        CHECK(call("{\"op\":\"blocked_ignore\",\"ip\":\"10.0.0.1\"}") > 0 && strstr(out, "bad_request"));
+        CHECK(call("{\"op\":\"blocked_ignore\"}") > 0 && strstr(out, "bad_request"));
+        /* every device let in: nothing turned away */
+        CHECK(call("{\"op\":\"allow\",\"allow_mode\":\"all\",\"allow\":\"100.64.0.5\"}") > 0);
+        CHECK(strstr(out, "\"blocked_recent\":[]"));
+        CHECK(call("{\"op\":\"allow\",\"allow_mode\":\"listed\",\"allow\":\"100.64.0.5,100.101.2.3\"}") > 0);
+        CHECK(call("{\"op\":\"disable\"}") > 0 && strstr(out, "\"blocked_recent\":[]"));
+    }
+
     /* Rest mode, in every state the host can reach. The PS5 freezes the process and the core
      * notices the wall clock jump on wake: tailnet_node_test_rest_wake runs that same wake
      * sequence. On: it rejoins (state not off); paused: nothing runs and it stays paused;

@@ -20,16 +20,23 @@ async fn body(r: Response) -> (StatusCode, Value) {
     (s, serde_json::from_slice(&b).unwrap_or(Value::Null))
 }
 
-/// An app folder whose param.json says `title_id` / `content_id`.
+/// An app folder whose param.json says `title_id` / `content_id`, built as homebrew is.
 fn app_folder(title_id: &str, content_id: &str) -> PathBuf {
+    app_with_param(json!({
+        "titleId": title_id,
+        "contentId": content_id,
+        "contentVersion": "01.000.000",
+        "sdkVersion": "0x0000000000000000",
+        "requiredSystemSoftwareVersion": "0x0000000000000000",
+        "versionFileUri": "",
+    }))
+}
+
+/// An app folder with this param.json.
+fn app_with_param(param: Value) -> PathBuf {
     let d = tmp("app");
     std::fs::create_dir_all(d.join("sce_sys")).unwrap();
-    std::fs::write(
-        d.join("sce_sys/param.json"),
-        json!({"titleId": title_id, "contentId": content_id, "contentVersion": "01.000.000"})
-            .to_string(),
-    )
-    .unwrap();
+    std::fs::write(d.join("sce_sys/param.json"), param.to_string()).unwrap();
     std::fs::write(d.join("eboot.bin"), vec![7u8; 300_000]).unwrap();
     std::fs::create_dir_all(d.join("assets/deep")).unwrap();
     std::fs::write(
@@ -40,8 +47,28 @@ fn app_folder(title_id: &str, content_id: &str) -> PathBuf {
     d
 }
 
+/// A PS4 app folder with this param.sfo.
+fn ps4_folder(sfo: Vec<u8>) -> PathBuf {
+    let d = tmp("ps4app");
+    std::fs::create_dir_all(d.join("sce_sys")).unwrap();
+    std::fs::write(d.join("sce_sys/param.sfo"), sfo).unwrap();
+    std::fs::write(d.join("eboot.bin"), vec![7u8; 1000]).unwrap();
+    d
+}
+
 fn create_body(items: Value) -> ShareCreateBody {
     serde_json::from_value(json!({"from": "Sam", "title": "My App", "items": items})).unwrap()
+}
+
+/// The hub settings are one for the whole process: a test that needs them holds this while it
+/// runs, so another test can't switch them under it.
+static HUB: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Holds [`HUB`] with these settings.
+async fn test_hub(url: &str, internet: bool) -> tokio::sync::MutexGuard<'static, ()> {
+    let g = HUB.lock().await;
+    crate::join::set_test_hub(url, internet);
+    g
 }
 
 async fn make(items: Value) -> (StatusCode, Value) {
@@ -50,18 +77,19 @@ async fn make(items: Value) -> (StatusCode, Value) {
 
 #[tokio::test]
 async fn a_retail_app_is_refused_by_the_engine_whatever_the_page_sent() {
-    crate::join::set_test_hub("ws://127.0.0.1:9/ws", false);
-    // The folder says it is a PS5 retail game; the page says nothing about it.
-    let retail = app_folder("PPSA01234", "UP0001-PPSA01234_00-GAMEGAMEGAMEGAME");
+    use super::retail::tests as rt;
+    let _hub = test_hub("ws://127.0.0.1:9/ws", false).await;
+    // ASTRO BOT's own param.json: built by the store. The page says nothing about it.
+    let retail = app_with_param(rt::astro_bot());
     let (s, v) = make(json!([{"kind": "app", "path": retail}])).await;
     assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
     assert_eq!(v["code"], "retail");
-    assert_eq!(v["title_id"], "PPSA01234");
+    assert_eq!(v["title_id"], "PPSA21564");
     assert_eq!(
         v["error"],
-        "This is a retail game (PPSA01234). PS5Upload only shares homebrew."
+        "This is a retail game (PPSA21564). PS5Upload only shares homebrew."
     );
-    // The page claims a homebrew Title ID: the app's own is what counts.
+    // The page claims a homebrew Title ID: the app's own build is what counts.
     let body: ShareCreateBody = serde_json::from_value(json!({
         "title_id": "PSUP00001",
         "items": [{"kind": "app", "path": retail}],
@@ -69,39 +97,41 @@ async fn a_retail_app_is_refused_by_the_engine_whatever_the_page_sent() {
     .unwrap();
     let (s, _) = body_of(create(HeaderMap::new(), Json(body)).await).await;
     assert_eq!(s, StatusCode::FORBIDDEN);
-    // A homebrew Title ID with a store's publisher prefix in the Content ID.
-    let dressed = app_folder("LAPY10010", "UP0001-LAPY10010_00-ABCDEFGHIJKLMNOP");
-    let (s, v) = make(json!([{"kind": "app", "path": dressed}])).await;
-    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
-    // A PS4 update or add-on of a retail game, as a package image or folder.
-    let patch = app_folder("CUSA01234", "EP0001-CUSA01234_00-PATCH00000000001");
-    let (s, _) = make(json!([{"kind": "app", "path": patch}])).await;
+    // Free retail (YouTube): refused.
+    let yt = app_with_param(rt::youtube());
+    let (s, _) = make(json!([{"kind": "app", "path": yt}])).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    // A PS4 retail game and its update, as folders.
+    let (s, _) = make(json!([{"kind": "app", "path": ps4_folder(rt::ps4_retail())}])).await;
     assert_eq!(s, StatusCode::FORBIDDEN);
     // An app with no param at all.
     let bare = tmp("bare");
     std::fs::write(bare.join("eboot.bin"), b"x").unwrap();
     let (s, v) = make(json!([{"kind": "app", "path": bare}])).await;
     assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
-    assert!(v["error"].as_str().unwrap().contains("can't tell"));
+    assert_eq!(
+        v["error"],
+        "PS5Upload can't confirm this is homebrew, so it can't share it."
+    );
     // An archive can't be checked.
     let zip = tmp("zip").join("game.zip");
     std::fs::write(&zip, b"PK").unwrap();
     let (s, _) = make(json!([{"kind": "app", "path": zip}])).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
-    // A retail Title ID from the page is refused before anything is read.
+    // A path that can't be read: no build information.
     let body: ShareCreateBody = serde_json::from_value(json!({
-        "title_id": "ppsa 01234",
-        "items": [{"kind": "app", "path": "/nonexistent"}],
+        "title_id": "FAKE77031",
+        "items": [{"kind": "app", "path": "/nonexistent/app"}],
     }))
     .unwrap();
-    let (s, v) = body_of(create(HeaderMap::new(), Json(body)).await).await;
-    assert_eq!(s, StatusCode::FORBIDDEN);
-    assert_eq!(v["title_id"], "PPSA01234");
+    let (s, _) = body_of(create(HeaderMap::new(), Json(body)).await).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
     // The check route says the same, and makes nothing.
     let (_, v) = body_of(
         check(Json(create_body(json!([
             {"kind": "app", "path": retail},
             {"kind": "note", "text": "hi"},
+            {"kind": "app"},
         ]))))
         .await,
     )
@@ -109,7 +139,39 @@ async fn a_retail_app_is_refused_by_the_engine_whatever_the_page_sent() {
     assert_eq!(v["items"][0]["ok"], false);
     assert_eq!(v["items"][0]["code"], "retail");
     assert_eq!(v["items"][1]["ok"], true);
-    // A homebrew app is made into a share.
+    assert_eq!(v["items"][2]["ok"], false);
+    // Homebrew that borrows a store's Title ID or publisher code is shared: Playden,
+    // ProsperoStore, a CUSA-numbered PS4 homebrew.
+    let borrowed_ps4 = rt::sfo(&[
+        (
+            "CONTENT_ID",
+            rt::SfoField::Text("UP0001-CUSA99999_00-HOMEBREWAPP00000"),
+        ),
+        ("SYSTEM_VER", rt::SfoField::Int(0)),
+        ("TITLE_ID", rt::SfoField::Text("CUSA99999")),
+    ]);
+    for (app, tid) in [
+        (app_with_param(rt::playden()), "FAKE77031"),
+        (
+            app_with_param(rt::prospero_store("PPSA99000", "PROSPEROSTORE000")),
+            "PPSA99000",
+        ),
+        (ps4_folder(rt::ps4_homebrew()), "BREW00083"),
+        (ps4_folder(borrowed_ps4), "CUSA99999"),
+    ] {
+        let body: ShareCreateBody = serde_json::from_value(json!({
+            "title_id": tid,
+            "items": [{"kind": "app", "path": app}],
+        }))
+        .unwrap();
+        let (s, v) = body_of(create(HeaderMap::new(), Json(body)).await).await;
+        assert_eq!(s, StatusCode::OK, "{tid}: {v}");
+        assert_eq!(v["items"][0]["title_id"], tid);
+        assert_eq!(v["items"][0]["build"]["read"], true);
+        assert_eq!(v["items"][0]["build"]["marks"], json!([]));
+        let _ = cancel(axum::extract::Path(v["id"].as_str().unwrap().to_string())).await;
+    }
+    // A homebrew app is made into a share, with its files.
     let hb = app_folder("PSUP00001", "IV0000-PSUP00001_00-HOMEBREW00000000");
     let (s, v) = make(json!([{"kind": "app", "path": hb}])).await;
     assert_eq!(s, StatusCode::OK, "{v}");
@@ -127,6 +189,55 @@ async fn a_retail_app_is_refused_by_the_engine_whatever_the_page_sent() {
     let (s, v) = body_of(create(HeaderMap::new(), Json(body)).await).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     let _ = cancel(axum::extract::Path(v["id"].as_str().unwrap().to_string())).await;
+}
+
+/// Packages and images in the Collection are judged by the PARAM inside them.
+#[test]
+fn a_package_is_judged_by_its_param() {
+    use super::retail::tests as rt;
+    let dir = crate::inspect::test_fixtures::scratch();
+    let retail =
+        crate::inspect::test_fixtures::write_cnt_pkg_sfo(dir.join("r.pkg"), &rt::ps4_retail());
+    let b = local_build(&retail, "pkg");
+    assert!(b.read);
+    assert!(check_app(&b).is_err());
+    assert_eq!(b.title_id, "CUSA00341");
+    let hb =
+        crate::inspect::test_fixtures::write_cnt_pkg_sfo(dir.join("h.pkg"), &rt::ps4_homebrew());
+    assert!(check_app(&local_build(&hb, "pkg")).is_ok());
+    // A PS5 package whose PARAM can't be read: refused, can't tell.
+    let fih = crate::inspect::test_fixtures::write_fih_without_param();
+    let r = check_app(&local_build(&fih, "pkg")).unwrap_err();
+    assert_eq!(
+        r.message,
+        "PS5Upload can't confirm this is homebrew, so it can't share it."
+    );
+}
+
+/// The receiving side reads the sender's build verdict; an older sender's offer has none.
+#[test]
+fn the_receiver_checks_the_offered_build() {
+    let items = wire::offered(&json!({"items": [
+        {"id": "i1", "kind": "app", "name": "A", "title_id": "PPSA21564",
+         "build": {"read": true, "marks": ["sdkVersion"]}},
+        {"id": "i2", "kind": "app", "name": "B", "title_id": "FAKE77031",
+         "build": {"read": true, "marks": []}},
+        {"id": "i3", "kind": "app", "name": "C", "title_id": "PPSA99000"},
+        {"id": "i4", "kind": "app", "name": "D", "build": {"read": false, "marks": []}},
+        {"id": "i5", "kind": "save", "name": "E", "title_id": "PPSA21564"},
+    ]}));
+    assert_eq!(
+        items[0].refused.as_deref(),
+        Some("This is a retail game (PPSA21564). PS5Upload only shares homebrew.")
+    );
+    assert_eq!(items[1].refused, None);
+    assert_eq!(items[2].refused, None);
+    assert!(items[3]
+        .refused
+        .as_deref()
+        .unwrap()
+        .contains("can't confirm"));
+    assert_eq!(items[4].refused, None);
 }
 
 async fn body_of(r: Response) -> (StatusCode, Value) {
@@ -193,7 +304,7 @@ fn same_tree(a: &Path, b: &Path) {
 
 /// A share made directly in the registry (no hub), its room.
 async fn share_of(items: Value, one_use: bool) -> (String, String) {
-    crate::join::set_test_hub("ws://127.0.0.1:9/ws", false);
+    let _hub = test_hub("ws://127.0.0.1:9/ws", false).await;
     let mut b = create_body(items);
     b.one_use = Some(one_use);
     let staging = tmp("staging");
@@ -536,7 +647,7 @@ async fn a_dropped_transfer_resumes_with_its_token_and_a_one_use_link_takes_no_o
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_engines_share_a_homebrew_folder_and_a_save_over_webrtc() {
     let hub = crate::join_net::tests::FakeHub::start().await;
-    crate::join::set_test_hub(&hub.url, true);
+    let _hub = test_hub(&hub.url, true).await;
     let app = app_folder("LAPY10010", "IV0000-LAPY10010_00-HOMEBREW00000000");
     // A shared-save file as Share a save makes it (save_copy.rs): <TITLE>/<image>/files.
     let save_dir = tmp("savezip");
@@ -691,4 +802,27 @@ async fn a_link_with_only_a_home_network_hint_is_read() {
         client::lan_ws(l.lan.as_deref().unwrap()).as_deref(),
         Some("ws://192.168.1.10:19113/api/share/ws")
     );
+}
+
+#[test]
+fn only_an_installed_apps_own_folder_reads_the_consoles_appmeta_copy() {
+    // An installed app: its folder's name is the console's, so appmeta stands for its PARAM.
+    assert_eq!(appmeta_title_id("/user/app/PPSA01234"), Some("PPSA01234"));
+    assert_eq!(appmeta_title_id("/user/app/PPSA01234/"), Some("PPSA01234"));
+    assert_eq!(
+        appmeta_title_id("/mnt/ext0/user/app/PPSA01234"),
+        Some("PPSA01234")
+    );
+    assert_eq!(
+        appmeta_title_id("/system_ex/app/PPSA01234"),
+        Some("PPSA01234")
+    );
+    // A folder the user named after a homebrew (a retail game with its sce_sys taken out) borrows
+    // nothing: it has no PARAM, and is refused as unknown.
+    assert_eq!(appmeta_title_id("/data/homebrew/FAKE77031"), None);
+    assert_eq!(appmeta_title_id("/mnt/usb0/FAKE77031"), None);
+    assert_eq!(appmeta_title_id("/mnt/a/b/user/app/FAKE77031"), None);
+    assert_eq!(appmeta_title_id("/mnt//user/app/FAKE77031"), None);
+    assert_eq!(appmeta_title_id("/user/app/../x"), None);
+    assert_eq!(appmeta_title_id("FAKE77031"), None);
 }

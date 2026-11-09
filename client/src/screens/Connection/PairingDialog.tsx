@@ -22,6 +22,8 @@ export interface PairingPanelProps {
   /** Send the helper again, then pair: a helper this app sends pairs by itself. Absent where
    *  the app cannot send a helper (the browser build). */
   onResend?: () => void;
+  /** A closed window is asked again by itself, waiting for someone to allow this device. */
+  waiting?: boolean;
 }
 
 /** The body and buttons of the pairing dialog, separate from the store so it renders (and
@@ -38,6 +40,7 @@ export function PairingPanel({
   onCancel,
   onForget,
   onResend,
+  waiting = false,
 }: PairingPanelProps) {
   const tr = useTr();
   const [digits, setDigits] = useState("");
@@ -201,11 +204,17 @@ export function PairingPanel({
           </p>
           <p className="text-[var(--color-muted)]">
             {tr(
-              "pairing_closed_body_v3",
+              "pairing_closed_body_v4",
               undefined,
-              "This PS5 asks before a new device connects. On a device that is already connected (your desktop app, say), open Connection and press Let another device pair, then try again here. Or press Resend helper, which lets this app in by itself. The owner can turn the question off in Devices.",
+              "This PS5 asks before a new device connects, and it now shows this one as asking. On a device that already uses this PS5 (Connection), or on the PS5's own page (Settings › Devices), press Allow: this app then gets in by itself. Or press Resend helper, which lets this app in.",
             )}
           </p>
+          {waiting ? (
+            <p className="flex items-center gap-2 text-xs text-[var(--color-muted)]" data-testid="pairing-waiting-approval">
+              <Loader2 size={12} className="animate-spin" aria-hidden />
+              {tr("pairing_waiting_approval", undefined, "Waiting for someone to allow this device…")}
+            </p>
+          ) : null}
         </div>
         <div className="flex items-center justify-end gap-2 border-t border-[var(--color-border)] px-4 py-3">
           <Button variant="ghost" onClick={onCancel}>
@@ -273,7 +282,13 @@ export function PairingDialog() {
   const retryAfterResend = usePairingStore((s) => s.retryAfterResend);
   const dismiss = usePairingStore((s) => s.dismiss);
   const host = usePairingStore((s) => s.host);
+  const waitForApproval = usePairingStore((s) => s.waitForApproval);
   const [sending, setSending] = useState(false);
+  const closed = open && view?.state === "closed";
+  // A closed window waits for someone to allow this device, and asks again by itself.
+  useEffect(() => {
+    if (closed) void waitForApproval();
+  }, [closed, host, waitForApproval]);
   const { guard, dialog: replaceDialog } = useHelperReplaceGuard();
   // The quickest way out of a closed pairing window: a helper this app sends pairs by itself,
   // so send it and ask again.
@@ -306,6 +321,7 @@ export function PairingDialog() {
           busy={busy || sending}
           error={error}
           onResend={resend ? () => void resend() : undefined}
+          waiting={closed}
           onConfirm={(code) => void confirm(code)}
           onForget={() => void forgetAndPair()}
           onRetry={() => void retry()}

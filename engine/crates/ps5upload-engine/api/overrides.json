@@ -55,6 +55,7 @@
   "/api/ps5/cheats": "cheats",
   "/api/ps5/cleanup": "health",
   "/api/ps5/companions": "consoles",
+  "/api/ps5/connect-timings": "consoles",
   "/api/ps5/console-shares": "console-files",
   "/api/ps5/console-tasks": "jobs",
   "/api/ps5/disk-usage": "console-files",
@@ -288,6 +289,9 @@
   "GET /api/ps5/cleanup/scan/{id}": {
    "summary": "The result of a clean-up scan"
   },
+  "GET /api/ps5/connect-timings": {
+   "summary": "How each console's last status check went"
+  },
   "GET /api/ps5/console-shares": {
    "summary": "The network shares saved on the console"
   },
@@ -441,6 +445,9 @@
   "GET /api/stream/status": {
    "summary": "Go live: destinations, ffmpeg and whether it is live"
   },
+  "GET /api/tailnet/consoles": {
+   "summary": "The PS5Upload consoles on this device's Tailscale network, or one address probed"
+  },
   "GET /api/version": {
    "summary": "Engine version, capabilities and default console"
   },
@@ -490,6 +497,9 @@
   },
   "POST /api/ampr/trace/stop": {
    "summary": "Stop recording an AMPR trace"
+  },
+  "GET /api/ava1/console": {
+   "summary": "Read which console answers at an address (its key), without pairing"
   },
   "POST /api/ava1/pairing/allow": {
    "summary": "Open pairing on a console for a short while, from a device it already trusts"

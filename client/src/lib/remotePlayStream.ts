@@ -410,7 +410,9 @@ const AVC_CANDIDATES = ["avc1.4d4032", "avc1.640032", "avc1.4d4028", "avc1.42e01
 /** False only when this device answers that it decodes none of the H.264 forms; a check that
  *  throws is not a no, so a device with a quirky check still gets to try. */
 export async function canDecodeAvc(width: number, height: number): Promise<boolean> {
-  if (typeof VideoDecoder === "undefined") return false;
+  // No WebCodecs (an older WebKit, #766/#769): the stream goes to the system media player, so ask
+  // it instead. Only a player that says no to every H.264 profile means "no decoder".
+  if (typeof VideoDecoder === "undefined") return mseCanPlayAvc();
   return withDecoderStart(async () => {
     let answered = false;
     for (const codec of AVC_CANDIDATES) {
@@ -424,6 +426,24 @@ export async function canDecodeAvc(width: number, height: number): Promise<boole
       }
     }
     return !answered;
+  });
+}
+
+/** Whether the system media player (MSE) plays H.264 in MP4 here, for any of the profiles the
+ *  PS5 sends. */
+export function mseCanPlayAvc(): boolean {
+  const w = globalThis as {
+    MediaSource?: { isTypeSupported?: (t: string) => boolean };
+    ManagedMediaSource?: { isTypeSupported?: (t: string) => boolean };
+  };
+  const ms = w.ManagedMediaSource ?? w.MediaSource;
+  if (!ms || typeof ms.isTypeSupported !== "function") return false;
+  return AVC_CANDIDATES.some((codec) => {
+    try {
+      return ms.isTypeSupported!(`video/mp4; codecs="${codec}"`);
+    } catch {
+      return false;
+    }
   });
 }
 
@@ -767,6 +787,23 @@ export class RemotePlayStream {
    *  (in place on the page) only when its drawing has to fall back to the 2D canvas. */
   get canvas(): HTMLCanvasElement {
     return this.cv;
+  }
+  /** Shows the picture in `host`: the canvas, and the system media player's picture when that
+   *  plays the stream (it sits beside the canvas). Returns how to take it out again. A screen
+   *  that moves its host (full screen is a portal) mounts again: the media player's picture goes
+   *  along instead of staying in the old host, which left it black (#720). */
+  mount(host: HTMLElement): () => void {
+    host.appendChild(this.cv);
+    const el = this.mse?.element;
+    if (el) {
+      host.appendChild(el);
+      this.mse?.resume();
+    }
+    return () => {
+      if (this.cv.parentElement === host) host.removeChild(this.cv);
+      const m = this.mse?.element;
+      if (m && m.parentElement === host) host.removeChild(m);
+    };
   }
   private cv: HTMLCanvasElement;
   private ws: WebSocket | null = null;
@@ -1928,8 +1965,13 @@ export class RemotePlayStream {
   /** On the system's media player: how often it jumped to the live edge (each one a hitch, #720). */
   private mseLogText(): string {
     if (!this.mse) return "";
-    const { seeks, maxLagMs } = this.mse.videoSeeks;
-    return `; media player: ${seeks} jumps to the live edge (most behind ${maxLagMs} ms)`;
+    const { seeks, maxLagMs, lastJump: j } = this.mse.videoSeeks;
+    const s = (x: number) => x.toFixed(2);
+    const last = j
+      ? `, the last from ${s(j.at)} s with ${s(j.start)}-${s(j.end)} s buffered in ${j.ranges} range(s), ` +
+        `readyState ${j.readyState}${j.paused ? ", paused" : ""}`
+      : "";
+    return `; media player: ${seeks} jumps to the live edge (most behind ${maxLagMs} ms${last})`;
   }
 
   /** Time a round trip to the engine (answered with `{"pong": t}`). */

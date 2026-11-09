@@ -108,17 +108,19 @@ export function StopHelperView({
   working,
   message,
   onClick,
+  size = "md",
 }: {
   label: string;
   working: boolean;
   message: string | null;
   onClick: () => void;
+  size?: "sm" | "md";
 }) {
   return (
     <div data-testid="stop-helper">
       <Button
         variant="secondary"
-        size="md"
+        size={size}
         leftIcon={<Power size={14} />}
         onClick={onClick}
         disabled={working}
@@ -135,7 +137,7 @@ export function StopHelperView({
   );
 }
 
-export function StopHelperButton({ host }: { host: string }) {
+export function StopHelperButton({ host, size }: { host: string; size?: "sm" | "md" }) {
   const tr = useTr();
   const { confirm, dialog } = useConfirm();
   const [working, setWorking] = useState(false);
@@ -169,6 +171,7 @@ export function StopHelperButton({ host }: { host: string }) {
         working={working}
         message={message}
         onClick={() => void onClick()}
+        size={size}
       />
     </>
   );

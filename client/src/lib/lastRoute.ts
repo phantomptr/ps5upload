@@ -30,3 +30,14 @@ export function saveLastRoute(pathname: string, search: string): void {
   if (!isSavableRoute(pathname)) return;
   safeSetItem(LAST_ROUTE_KEY, `${pathname}${search}`);
 }
+
+/** Where the app opens. A fresh install (no console yet) goes to Connection: nothing works
+ *  before a console is set up. A returning user goes back to the screen they were last on, or
+ *  Home; but never back to Connection by itself. Connection is where someone goes when a
+ *  console looked down, so reopening there on the next start (while the first check still
+ *  runs) read as "the app sent me to Connection" with the helper running fine. */
+export function landingRoute(hasConsole: boolean, saved: string | null = readLastRoute()): string {
+  if (!hasConsole) return "/connection";
+  if (!saved || saved.split(/[?#]/)[0] === "/connection") return "/home";
+  return saved;
+}

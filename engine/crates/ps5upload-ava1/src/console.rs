@@ -102,19 +102,79 @@ pub fn classify(e: &Ava1Error) -> UploadFailure {
     }
 }
 
+/// How long the quick connect behind a remembered failure may take (see [`require_in_traced`]).
+/// A console in rest mode refuses at once; one that is off or away says nothing.
+pub const RECHECK_TIMEOUT: Duration = Duration::from_millis(300);
+
+/// What one [`require_in_traced`] call did, for the connect timings
+/// (`GET /api/ps5/connect-timings`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionTrace {
+    /// A live session was already pooled (no handshake). `None`: not asked (a remembered
+    /// failure answered).
+    pub reused: Option<bool>,
+    /// A new session's opening: the TCP connect, the AVA1 handshake and the pairing check.
+    pub handshake_ms: Option<u64>,
+    /// A remembered failure answered, with nothing sent to the console.
+    pub cached_verdict: bool,
+    /// The quick connect that looked past a remembered failure: whether the port took it, and
+    /// how long it took.
+    pub recheck: Option<(bool, u64)>,
+}
+
+/// Whether `addr` (`host:port`) takes a TCP connection within `within`. Blocking.
+fn port_answers(addr: &str, within: Duration) -> bool {
+    let Ok(mut it) = std::net::ToSocketAddrs::to_socket_addrs(addr) else {
+        return false;
+    };
+    it.any(|a| std::net::TcpStream::connect_timeout(&a, within).is_ok())
+}
+
 /// Ok when a paired AVA1 session to `console` exists (or opens now) and its node advertises
 /// every bit of `cap`; the session is kept by the pool and reused by the job that follows.
 /// Blocking: call from a blocking thread.
 pub fn require_in(pool: &Pool, console: &str, cap: u64) -> Result<(), UploadFailure> {
+    require_in_traced(pool, console, cap, &mut SessionTrace::default())
+}
+
+/// [`require_in`], saying in `trace` what it did.
+pub fn require_in_traced(
+    pool: &Pool,
+    console: &str,
+    cap: u64,
+    trace: &mut SessionTrace,
+) -> Result<(), UploadFailure> {
     // A failed attempt is repeated for a few seconds without dialling again: the client polls
     // many endpoints, and each fresh handshake with an unpaired console can show a pairing code
     // and count against the console's connection cap, while an unreachable one blocks for the
     // whole probe. A pairing or any successful session clears it (`Pool::clear_refusal`).
+    //
+    // But a console that wakes (or whose helper was just sent) must not wait out the whole
+    // memory, up to 12 s on top of the client's own poll: every couple of seconds one quick
+    // connect asks whether its port answers again. A resting console refuses it at once.
     if let Some((reason, detail)) = pool.recent_refusal(console) {
-        return Err(UploadFailure { reason, detail });
+        let cached = UploadFailure { reason, detail };
+        if !pool.recheck_due(console) {
+            trace.cached_verdict = true;
+            return Err(cached);
+        }
+        let t = std::time::Instant::now();
+        let answers = port_answers(&pool.dial_addr(console), RECHECK_TIMEOUT);
+        trace.recheck = Some((answers, t.elapsed().as_millis() as u64));
+        if !answers {
+            trace.cached_verdict = true;
+            return Err(cached);
+        }
+        pool.clear_refusal(console);
     }
+    let t = std::time::Instant::now();
+    let reused = crate::block_on(pool.has_session(console));
+    trace.reused = Some(reused);
     let session =
         crate::block_on(async { tokio::time::timeout(PROBE_TIMEOUT, pool.session(console)).await });
+    if !reused {
+        trace.handshake_ms = Some(t.elapsed().as_millis() as u64);
+    }
     let (failure, power) = match session {
         // Nothing answered in time: rest mode with DDP up, or off / another network.
         Err(_) => silent(

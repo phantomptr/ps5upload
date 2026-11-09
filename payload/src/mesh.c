@@ -25,6 +25,11 @@
 #define LOCK_TTL_DEFAULT_S 60u
 #define LOCK_TTL_MAX_S 600u
 #define PRUNE_EVERY_MS (3600u * 1000u)
+#define VIA_MAX 12
+/* A device that asked to connect while approval is on: listed for the owner to Allow or Decline
+ * for this long. Allowed, it has the same time to connect; declined, it is not asked about again
+ * until then. */
+#define ASK_TTL_MS (10u * 60u * 1000u)
 
 typedef struct {
     int used;
@@ -35,7 +40,23 @@ typedef struct {
     char kind[KIND_MAX], os[OS_MAX], app[APP_MAX], name[NAME_MAX_], nick[NAME_MAX_];
     char activity[MESH_ACTIVITY_MAX + 1]; /* "" = none */
     uint64_t activity_at;
+    /* How it was let in: "network" (approval off, on the home network), "tailscale" (approval off,
+     * over Tailscale), "approved" (asked, and the owner allowed it); "" when not known (paired with
+     * a code, launched by its app, or listed before 12.2). Kept in v1/via, so an older helper reading
+     * v1/devices sees the file it knows. */
+    char via[VIA_MAX];
 } dev_t_;
+
+enum { ASK_ASKING = 0, ASK_ALLOWED = 1, ASK_DECLINED = 2 };
+
+typedef struct {
+    int used, state;
+    uint8_t key[32];
+    char name[NAME_MAX_];
+    uint32_t ip;
+    uint64_t at;      /* wall ms, for showing */
+    uint64_t at_mono; /* ms, for expiry */
+} ask_t_;
 
 #define OWNER_MAX 40
 
@@ -77,6 +98,7 @@ static struct {
     uint64_t last_prune;
     int require_approval;
     unsigned prune_days;
+    ask_t_ asks[MESH_ASKS_MAX];
 } M;
 
 /* ---- small helpers ---- */
@@ -402,7 +424,28 @@ static void save_devices(void) {
     }
     path_of(path, sizeof path, "devices");
     if (!b.err) (void)write_atomic(path, b.p, b.len);
+    /* How each was let in, beside it: an older helper reads v1/devices as it always did. */
+    b.len = 0;
+    b.err = 0;
+    p[0] = 0;
+    for (i = 0; i < MESH_MAX_DEVICES; i++) {
+        dev_t_ *d = &M.dev[i];
+        if (!d->used || !d->via[0]) continue;
+        to_hex(d->key, hex);
+        putf(&b, "%s\t%s\n", hex, d->via);
+    }
+    path_of(path, sizeof path, "via");
+    if (!b.err) (void)write_atomic(path, b.p, b.len);
     free(p);
+}
+
+/* One of the words a device's `via` may hold, or "". */
+static const char *via_word(const char *s) {
+    static const char *const words[] = { "network", "tailscale", "approved" };
+    size_t i;
+    for (i = 0; i < sizeof words / sizeof words[0]; i++)
+        if (!strcmp(s, words[i])) return words[i];
+    return "";
 }
 
 static void save_settings(void) {
@@ -464,6 +507,19 @@ static void load_devices(void) {
         clean_field(d->nick, sizeof d->nick, f[9]);
         d->used = 1;
         slot++;
+    }
+    free(p);
+    path_of(path, sizeof path, "via");
+    if (!(p = read_all(path, (size_t)MESH_MAX_DEVICES * 128u, &n))) return;
+    save = NULL;
+    for (line = strtok_r(p, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+        char *f[2];
+        uint8_t key[32];
+        int i;
+        if (split_tabs(line, f, 2) != 2 || from_hex(f[0], key) != 0) continue;
+        for (i = 0; i < MESH_MAX_DEVICES; i++)
+            if (M.dev[i].used && !memcmp(M.dev[i].key, key, 32))
+                snprintf(M.dev[i].via, sizeof M.dev[i].via, "%s", via_word(f[1]));
     }
     free(p);
 }
@@ -541,6 +597,63 @@ static int lock_live(const lock_t_ *l, uint64_t t, const mesh_online_t *on, int 
     return l->used && l->until_mono > mono_ms() && is_online(l->by, on, non);
 }
 
+/* Tailscale's addresses (100.64.0.0/10); `ip` in network order. */
+static int is_tailnet_ip(uint32_t ip) {
+    const uint8_t *b = (const uint8_t *)&ip;
+    return b[0] == 100 && (b[1] & 0xC0u) == 64;
+}
+
+/* Under g_mu: asks past their time leave (a visible one changes the picture). */
+static void expire_asks(void) {
+    uint64_t m = mono_ms();
+    int i;
+    for (i = 0; i < MESH_ASKS_MAX; i++) {
+        ask_t_ *a = &M.asks[i];
+        if (!a->used || m - a->at_mono < ASK_TTL_MS) continue;
+        if (a->state == ASK_ASKING) M.rev++;
+        a->used = 0;
+    }
+}
+
+static ask_t_ *find_ask(const uint8_t key[32]) {
+    int i;
+    for (i = 0; i < MESH_ASKS_MAX; i++)
+        if (M.asks[i].used && !memcmp(M.asks[i].key, key, 32)) return &M.asks[i];
+    return NULL;
+}
+
+/* A new ask. One address asks for one device at a time: a new key from the address of a device
+ * still asking takes that ask's place (*same_ip set), so one stranger cannot fill the list by making
+ * up keys. When all are taken, the oldest that is not allowed makes room: an Allow the owner just
+ * gave holds until that device connects or its time is up. */
+static ask_t_ *new_ask(const uint8_t key[32], uint32_t ip, int *same_ip) {
+    int i, pick = -1;
+    *same_ip = 0;
+    if (ip)
+        for (i = 0; i < MESH_ASKS_MAX; i++)
+            if (M.asks[i].used && M.asks[i].state == ASK_ASKING && M.asks[i].ip == ip) {
+                pick = i;
+                *same_ip = 1;
+                break;
+            }
+    if (pick < 0)
+        for (i = 0; i < MESH_ASKS_MAX; i++)
+            if (!M.asks[i].used) {
+                pick = i;
+                break;
+            }
+    if (pick < 0)
+        for (i = 0; i < MESH_ASKS_MAX; i++)
+            if (M.asks[i].state != ASK_ALLOWED && (pick < 0 || M.asks[i].at_mono < M.asks[pick].at_mono)) pick = i;
+    if (pick < 0)
+        for (i = 0; i < MESH_ASKS_MAX; i++)
+            if (pick < 0 || M.asks[i].at_mono < M.asks[pick].at_mono) pick = i;
+    memset(&M.asks[pick], 0, sizeof M.asks[pick]);
+    M.asks[pick].used = 1;
+    memcpy(M.asks[pick].key, key, 32);
+    return &M.asks[pick];
+}
+
 /* ---- public ---- */
 
 int mesh_start(const char *dir, const mesh_hooks_t *hooks, const char *helper_version) {
@@ -565,13 +678,42 @@ int mesh_start(const char *dir, const mesh_hooks_t *hooks, const char *helper_ve
 int mesh_admit(const uint8_t key[32], const char *name, uint32_t ip) {
     uint8_t ev[32];
     int evicted = 0, verdict;
+    const char *via = is_tailnet_ip(ip) ? "tailscale" : "network";
     dev_t_ *d;
+    ask_t_ *a;
     pthread_mutex_lock(&g_mu);
+    expire_asks();
     d = find_dev(key);
+    a = find_ask(key);
     if (d && d->blocked) verdict = -1;
-    else if (M.require_approval) verdict = 0;
-    else {
+    else if (M.require_approval && a && a->state == ASK_ALLOWED) {
         verdict = 1;
+        via = "approved";
+        a->used = 0;
+    } else if (M.require_approval) {
+        verdict = 0;
+        /* Asking: listed for the owner, once (a device that tries again is the same ask). A declined
+         * one is not asked about again until its time is up. */
+        if (!a) {
+            int same_ip;
+            a = new_ask(key, ip, &same_ip);
+            a->state = ASK_ASKING;
+            a->at = now_ms();
+            a->at_mono = mono_ms();
+            /* Told once per address: a stranger making up keys does not fill the activity list. */
+            if (!same_ip) add_event("ask", key, "%s asks to connect", name && name[0] ? name : "A device");
+            else M.rev++;
+        }
+        if (a->state == ASK_ASKING) {
+            char was[NAME_MAX_];
+            snprintf(was, sizeof was, "%s", a->name);
+            clean_field(a->name, sizeof a->name, name);
+            if (strcmp(was, a->name) != 0 || a->ip != ip) M.rev++;
+            a->ip = ip;
+        }
+    } else
+        verdict = 1;
+    if (verdict == 1) {
         /* Listed now; "joined" is told once the device says who it is (hello), with its real name. */
         if (!d && (d = new_dev(key, ev, &evicted)) != NULL) {
             d->first = now_ms();
@@ -581,6 +723,7 @@ int mesh_admit(const uint8_t key[32], const char *name, uint32_t ip) {
         if (d) {
             d->last = now_ms();
             d->ip = ip;
+            snprintf(d->via, sizeof d->via, "%s", via);
         }
         save_devices();
     }
@@ -726,6 +869,7 @@ static int do_state(const uint8_t caller[32], const char *body, size_t n, char *
             M.locks[i].used = 0;
             M.rev++;
         }
+    expire_asks();
     if (since == M.rev) {
         putf(&b, "{\"ok\":true,\"rev\":%llu,\"same\":true}", (unsigned long long)M.rev);
         goto done;
@@ -736,7 +880,19 @@ static int do_state(const uint8_t caller[32], const char *body, size_t n, char *
     putstr(&b, M.helper);
     puts_(&b, ",\"settings\":");
     put_settings(&b);
-    puts_(&b, ",\"devices\":[");
+    puts_(&b, ",\"asks\":[");
+    first = 1;
+    for (i = 0; i < MESH_ASKS_MAX; i++) {
+        ask_t_ *a = &M.asks[i];
+        if (!a->used || a->state != ASK_ASKING) continue;
+        to_hex(a->key, hex);
+        ip_text(a->ip, ipt);
+        putf(&b, "%s{\"id\":\"%s\",\"name\":", first ? "" : ",", hex);
+        putstr(&b, a->name);
+        putf(&b, ",\"ip\":\"%s\",\"at\":%llu}", ipt, (unsigned long long)a->at);
+        first = 0;
+    }
+    puts_(&b, "],\"devices\":[");
     first = 1;
     for (i = 0; i < MESH_MAX_DEVICES; i++) {
         dev_t_ *d = &M.dev[i];
@@ -755,6 +911,8 @@ static int do_state(const uint8_t caller[32], const char *body, size_t n, char *
         putstr(&b, d->os);
         puts_(&b, ",\"app\":");
         putstr(&b, d->app);
+        puts_(&b, ",\"via\":");
+        putstr(&b, d->via);
         putf(&b, ",\"first\":%llu,\"last\":%llu,\"ip\":\"%s\",\"online\":%s,\"blocked\":%s,\"activity\":",
              (unsigned long long)d->first, (unsigned long long)(online ? t : d->last), ipt, online ? "true" : "false",
              d->blocked ? "true" : "false");
@@ -914,6 +1072,37 @@ static int do_device(const uint8_t caller[32], const char *body, size_t n, char 
     pthread_mutex_lock(&g_mu);
     d = find_dev(key);
     me = find_dev(caller);
+    if (!strcmp(op, "allow") || !strcmp(op, "decline")) {
+        /* An answer to a device asking to connect (mesh_admit). */
+        ask_t_ *a;
+        expire_asks();
+        a = find_ask(key);
+        if (!a || a->state != ASK_ASKING) {
+            pthread_mutex_unlock(&g_mu);
+            return fail(out, cap, "not_found");
+        }
+        /* The console page names the address it was opened from ("from"): a device never allows
+         * itself there (with LAN access on, any device on the network can open that page). */
+        if (!strcmp(op, "allow")) {
+            char from[16], at[16];
+            if (webui_json_str(body, n, "from", from, sizeof from) == 1) {
+                ip_text(a->ip, at);
+                if (!strcmp(from, at)) {
+                    pthread_mutex_unlock(&g_mu);
+                    return fail(out, cap, "self_allow");
+                }
+            }
+        }
+        a->state = !strcmp(op, "allow") ? ASK_ALLOWED : ASK_DECLINED;
+        a->at_mono = mono_ms(); /* allowed: its time to connect starts now */
+        add_event(a->state == ASK_ALLOWED ? "allowed" : "declined", caller, "%s %s %s",
+                  me ? shown_name(me) : "The console", a->state == ASK_ALLOWED ? "let in" : "turned away",
+                  a->name[0] ? a->name : "a device");
+        M.rev++;
+        r = snprintf(out, cap, "{\"ok\":true,\"rev\":%llu}", (unsigned long long)M.rev);
+        pthread_mutex_unlock(&g_mu);
+        return r < 0 || (size_t)r >= cap ? -1 : r;
+    }
     if (!d && strcmp(op, "block") != 0) {
         pthread_mutex_unlock(&g_mu);
         return fail(out, cap, "not_found");
@@ -966,6 +1155,8 @@ static int do_settings(const uint8_t caller[32], const char *body, size_t n, cha
     me = find_dev(caller);
     if (webui_json_bool(body, n, "require_approval", &ra) == 1 && ra != M.require_approval) {
         M.require_approval = ra;
+        /* Off: whoever was asking gets in on its next try; there is nothing left to answer. */
+        if (!ra) memset(M.asks, 0, sizeof M.asks);
         add_event("settings", caller, "%s turned %s approval for new devices", me ? shown_name(me) : "A device",
                   ra ? "on" : "off");
         changed = 1;

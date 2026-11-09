@@ -39,6 +39,8 @@ export interface ShareItem {
   format: string | null;
   size: number;
   files: number;
+  /** The app's: how it was built (`marks`: the store's build marks found; none for homebrew). */
+  build?: { read: boolean; marks: string[] } | null;
 }
 
 export type ShareRequestState =

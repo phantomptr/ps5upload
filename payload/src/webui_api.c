@@ -1316,11 +1316,12 @@ static void r_proc_list(const char *b, size_t n, uint8_t *out, int fd) {
 
 /* {op?, hostname?}: Tailscale on this PS5 (AVA1 tailnet, the same call the app's Connection
  * panel makes), so someone at the console can sign it in, pause it or sign it out without a
- * computer. Only status / enable / disable / logout / rename / renew and a device name pass: the
- * control server, its address, an auth key and the allow-list stay the app's to set (the page
- * shows the list read-only). Answers the node's status JSON. */
+ * computer. Only status / enable / disable / logout / rename / renew and a device name pass, and
+ * for a device the list turned away ("<device> tried to reach this PS5"): allow_add and
+ * blocked_ignore with its address. The control server, its address, an auth key and the rest of
+ * the allow-list stay the app's to set. Answers the node's status JSON. */
 static void r_tailnet(const char *b, size_t n, uint8_t *out, int fd) {
-    char op[16], host[64], ehost[160], req[224];
+    char op[20], host[64], ehost[160], ip[24], req[224];
     const uint8_t *t;
     size_t ol, tl;
     int st, k;
@@ -1328,23 +1329,33 @@ static void r_tailnet(const char *b, size_t n, uint8_t *out, int fd) {
         send_error(fd, 413, "too_large", 9);
         return;
     }
+    ip[0] = 0;
     if (webui_json_str(b, n, "op", op, sizeof op) < 0 ||
-        webui_json_str(b, n, "hostname", host, sizeof host) < 0) {
+        webui_json_str(b, n, "hostname", host, sizeof host) < 0 ||
+        webui_json_str(b, n, "ip", ip, sizeof ip) < 0) {
         send_bad(fd, "bad_request");
         return;
     }
     if (!op[0]) snprintf(op, sizeof op, "status");
     if (strcmp(op, "status") && strcmp(op, "enable") && strcmp(op, "disable") && strcmp(op, "logout") &&
-        strcmp(op, "rename") && strcmp(op, "renew")) {
+        strcmp(op, "rename") && strcmp(op, "renew") && strcmp(op, "allow_add") && strcmp(op, "blocked_ignore")) {
         send_bad(fd, "bad_op");
         return;
     }
+    /* An address is digits and dots only (the node checks it is a tailnet one). */
+    for (const char *c = ip; *c; c++)
+        if ((*c < '0' || *c > '9') && *c != '.') {
+            send_bad(fd, "bad_ip");
+            return;
+        }
     if (webui_json_escape(ehost, sizeof ehost, host, strlen(host)) >= sizeof ehost) {
         send_bad(fd, "bad_hostname");
         return;
     }
     if ((!strcmp(op, "enable") || !strcmp(op, "rename")) && host[0])
         k = snprintf(req, sizeof req, "{\"op\":\"%s\",\"hostname\":\"%s\"}", op, ehost);
+    else if (!strcmp(op, "allow_add") || !strcmp(op, "blocked_ignore"))
+        k = snprintf(req, sizeof req, "{\"op\":\"%s\",\"ip\":\"%s\"}", op, ip);
     else
         k = snprintf(req, sizeof req, "{\"op\":\"%s\"}", op);
     if (k < 0 || (size_t)k >= sizeof req) {
@@ -1353,6 +1364,60 @@ static void r_tailnet(const char *b, size_t n, uint8_t *out, int fd) {
     }
     st = call_text(AVA1_METHOD_TAILNET, req, (size_t)k, out, &ol, &t, &tl);
     send_text_reply(fd, st, out, ol, t, tl);
+}
+
+/* {op?, id?}: the devices that use this PS5 (the mesh, the same list the app's Consoles page shows).
+ * No op: the picture ({devices, asks, settings, ...}), so someone at the console sees who is asking
+ * to connect and who may. allow / decline answer a device that asks (approval is on); remove takes a
+ * device off the list (its trust goes with it), block keeps it out. Names, settings and the rest stay
+ * the app's to change. Answers the mesh's JSON. An Allow names the address the page was opened from
+ * (`peer`, host order; 0 or loopback: the PS5's own browser), so a device on the network with LAN
+ * access on never allows itself here. Called with the request's peer by webui_api_route. */
+static void r_mesh_from(const char *b, size_t n, uint8_t *out, int fd, uint32_t peer) {
+    char op[16], id[80], req[200];
+    const uint8_t *t;
+    size_t ol, tl;
+    int st, k;
+    if (n > 512) {
+        send_error(fd, 413, "too_large", 9);
+        return;
+    }
+    op[0] = id[0] = 0;
+    if (webui_json_str(b, n, "op", op, sizeof op) < 0 || webui_json_str(b, n, "id", id, sizeof id) < 0) {
+        send_bad(fd, "bad_request");
+        return;
+    }
+    if (!op[0]) {
+        st = call_text(AVA1_METHOD_MESH_STATE, "{}", 2, out, &ol, &t, &tl);
+        send_text_reply(fd, st, out, ol, t, tl);
+        return;
+    }
+    if (strcmp(op, "allow") && strcmp(op, "decline") && strcmp(op, "remove") && strcmp(op, "block")) {
+        send_bad(fd, "bad_op");
+        return;
+    }
+    /* A device id is its key: 64 hex digits. */
+    if (strlen(id) != 64 || strspn(id, "0123456789abcdefABCDEF") != 64) {
+        send_bad(fd, "bad_id");
+        return;
+    }
+    if (!strcmp(op, "allow") && peer && (peer >> 24) != 127u)
+        k = snprintf(req, sizeof req, "{\"op\":\"%s\",\"id\":\"%s\",\"from\":\"%u.%u.%u.%u\"}", op, id,
+                     (unsigned)(peer >> 24), (unsigned)((peer >> 16) & 255u), (unsigned)((peer >> 8) & 255u),
+                     (unsigned)(peer & 255u));
+    else
+        k = snprintf(req, sizeof req, "{\"op\":\"%s\",\"id\":\"%s\"}", op, id);
+    if (k < 0 || (size_t)k >= sizeof req) {
+        send_bad(fd, "bad_request");
+        return;
+    }
+    st = call_text(AVA1_METHOD_MESH_DEVICE, req, (size_t)k, out, &ol, &t, &tl);
+    send_text_reply(fd, st, out, ol, t, tl);
+}
+
+/* The route table's entry; webui_api_route calls r_mesh_from with the request's peer instead. */
+static void r_mesh(const char *b, size_t n, uint8_t *out, int fd) {
+    r_mesh_from(b, n, out, fd, 0);
 }
 
 /* Whether a game with title id `tid` (other != 0: any other game) runs, from PROCESS_LIST. A list that
@@ -3067,6 +3132,7 @@ static const struct {
     { "/api/apps/icon", r_apps_icon },
     { "/api/proc/list", r_proc_list },
     { "/api/tailnet", r_tailnet },
+    { "/api/mesh", r_mesh },
     { "/api/proc/kill", r_proc_kill },
     { "/api/pkg/info", r_pkg_info },
     { "/api/pkg/icon", r_pkg_icon },
@@ -3268,7 +3334,10 @@ int webui_api_route(const webui_req_t *r, const uint8_t *body, size_t body_len, 
         webui_send_json(fd, 500, "{\"error\":\"out_of_memory\"}");
         return 0;
     }
-    k_routes[i].fn((const char *)body, body_len, out, fd);
+    if (k_routes[i].fn == r_mesh)
+        r_mesh_from((const char *)body, body_len, out, fd, r->peer);
+    else
+        k_routes[i].fn((const char *)body, body_len, out, fd);
     free(out);
     ava1_server_local_rpc_leave();
     return 0;

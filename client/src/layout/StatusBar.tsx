@@ -101,8 +101,10 @@ export default function StatusBar() {
   // Rest mode reads as its own calm state, not as a dropped connection.
   const ps5Light = consoleLight({ payloadStatus, power, session });
   const ps5Tooltip = [
-    ps5Light === "unknown"
-      ? tr("status_ps5_disconnected", undefined, "Not connected")
+    // "Checking…" while unknown, with the helper version and kernel it was last seen with; with
+    // no console on the list there is nothing to check.
+    ps5Light === "unknown" && !activeProfile
+      ? tr("status_ps5_none", undefined, "No PS5 added yet")
       : consoleLightLabel(ps5Light, tr),
     ps5Kernel || null,
     payloadVersion

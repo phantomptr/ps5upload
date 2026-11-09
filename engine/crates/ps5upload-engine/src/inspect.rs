@@ -889,6 +889,11 @@ pub(crate) mod test_fixtures {
             ("CONTENT_ID", "UP0000-CUSA00001_00-TEST000000000000"),
             ("TITLE", "Fixture"),
         ]);
+        write_cnt_pkg_sfo(path, &s)
+    }
+
+    /// A `\x7FCNT` package whose one entry is this PARAM.SFO.
+    pub fn write_cnt_pkg_sfo(path: impl AsRef<Path>, s: &[u8]) -> PathBuf {
         // The CNT header is 0xA0 bytes (content id at 0x40); the table follows it.
         let table = 0x100u32;
         let data_off = table + 0x20;
@@ -902,7 +907,7 @@ pub(crate) mod test_fixtures {
         pkg[e..e + 4].copy_from_slice(&0x1000u32.to_be_bytes());
         pkg[e + 0x10..e + 0x14].copy_from_slice(&data_off.to_be_bytes());
         pkg[e + 0x14..e + 0x18].copy_from_slice(&(s.len() as u32).to_be_bytes());
-        pkg.extend_from_slice(&s);
+        pkg.extend_from_slice(s);
         pkg.resize(pkg.len().max(0x100), 0);
         std::fs::write(path.as_ref(), &pkg).unwrap();
         path.as_ref().to_path_buf()

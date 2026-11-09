@@ -337,8 +337,29 @@ int tn_set_peer_allow(tn_ctx *c, const uint32_t *ips, int n)
 	c->allow.n = n < 0 ? 0 : (uint32_t)n;
 	for (int i = 0; i < n; i++)
 		c->allow.ip[i] = ips[i];
+	tn_denied_prune(&c->denied, &c->allow); /* a device let in is no longer "turned away" */
 	tn_mutex_unlock(&c->dp_mu);
 	return TN_OK;
+}
+
+int tn_peer_denied(tn_ctx *c, tn_denied *out, int max)
+{
+	if (!c || !out || max <= 0)
+		return 0;
+	tn_mutex_lock(&c->dp_mu);
+	int n = tn_denied_copy(&c->denied, out, max);
+	tn_mutex_unlock(&c->dp_mu);
+	return n;
+}
+
+void tn_test_peer_denied(tn_ctx *c, uint32_t ip, uint8_t proto, uint16_t port)
+{
+	if (!c)
+		return;
+	tn_mutex_lock(&c->dp_mu);
+	if (!tn_peer_allowed(&c->allow, ip))
+		tn_denied_note(&c->denied, ip, proto, port, tn_wall_s());
+	tn_mutex_unlock(&c->dp_mu);
 }
 
 void tn_destroy(tn_ctx *c)

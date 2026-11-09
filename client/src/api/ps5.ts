@@ -5,6 +5,7 @@
 // TCP send) stay in-process.
 
 import { trStatic } from "../lib/trStatic";
+import { requestStatusRecheck } from "../lib/statusRecheck";
 import { formatBytes } from "../lib/format";
 import {
   classifySession,
@@ -1922,29 +1923,6 @@ export async function fetchDriveSensors(
   return invoke<DriveSensorList>("ps5_hw_drive_sensors", { addr });
 }
 
-// ─── Scene-tool companion probe ───────────────────────────────────────
-// Not a payload RPC — this is a pure Rust-side network probe that does
-// a TCP connect on each of a hardcoded list of well-known scene-tool
-// ports. Fast, no protocol handshake. Feeds the companion chip strip
-// on the Connection screen so users can see at a glance which scene
-// tools are alive on their PS5 right now.
-
-export interface CompanionStatus {
-  name: string;
-  role: string;
-  port: number;
-  /** The tool serves a web UI on its port; the strip offers to open it. */
-  web?: boolean;
-  reachable: boolean;
-  error?: string;
-}
-
-export async function probeCompanions(
-  host: string,
-): Promise<CompanionStatus[]> {
-  return invoke<CompanionStatus[]>("companion_probe", { host });
-}
-
 // ─── LAN discovery (mDNS-SD + TCP probe) ──────────────────────────────
 // Backed by `discover_ps5` in the Rust command layer. Single one-shot
 // browse — the renderer triggers it from the Connection screen's "Find
@@ -2437,6 +2415,9 @@ export async function powerWake(
     error?: string;
   };
   if (!res.ok) throw new Error(body.error || `wake failed (${res.status})`);
+  // The console comes up over the next seconds: have the status poller ask it often meanwhile,
+  // so it shows as connected when it is, not at the next 10 s round.
+  requestStatusRecheck({ host, wake: true });
   return { ok: !!body.ok };
 }
 

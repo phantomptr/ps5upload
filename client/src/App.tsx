@@ -1,4 +1,4 @@
-import { readLastRoute } from "./lib/lastRoute";
+import { landingRoute } from "./lib/lastRoute";
 import { Activity, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ConnectionScope,
@@ -12,6 +12,7 @@ import { payloadCardLink, RUNNING_LINK } from "./screens/Payloads/payloadTabs";
 import { lazyWithReload } from "./lib/lazyWithReload";
 import AppShell from "./layout/AppShell";
 import { AndroidPipPicture, RemotePlayMini } from "./layout/RemotePlayMini";
+import { ConsoleAsks } from "./screens/Connection/consoles/ConsoleAsks";
 import { useRosterStore } from "./state/roster";
 import { isTauriEnv } from "./lib/tauriEnv";
 
@@ -87,9 +88,8 @@ function ScreenLoader() {
  */
 function LandingRedirect() {
   const hasConsole = useRosterStore((s) => s.profiles.length > 0);
-  // A returning user reopens the screen they were last on.
-  const to = hasConsole ? (readLastRoute() ?? "/home") : "/connection";
-  return <Navigate to={to} replace />;
+  // A returning user reopens the screen they were last on (never Connection by itself).
+  return <Navigate to={landingRoute(hasConsole)} replace />;
 }
 
 /** A screen folded into another: an old link (its query kept, so `?add=1` still opens the
@@ -214,6 +214,8 @@ export default function App() {
       {/* Remote Play over every screen and console (#637): the floating mini player, and only
           the picture while the Android app is in picture in picture. One of each, here. */}
       <RemotePlayMini />
+      {/* "Pixel wants to use Living-room PS5: Allow / Decline", over every screen. */}
+      <ConsoleAsks />
       <AndroidPipPicture />
     </>
   );

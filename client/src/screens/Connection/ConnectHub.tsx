@@ -48,7 +48,7 @@ export function ConnectHub({
             {
               id: "console",
               icon: Cable,
-              label: tr("connect_tab_console", undefined, "Console"),
+              label: tr("cs_tab_consoles", undefined, "Consoles"),
             },
             {
               id: "devices",

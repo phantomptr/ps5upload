@@ -43,3 +43,19 @@ describe("Play on an older WebKit (#766)", () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe("H.264 check without WebCodecs (#769)", () => {
+  it("asks the system media player, and says no only when it plays no H.264", async () => {
+    const { vi } = await import("vitest");
+    const { canDecodeAvc } = await import("./remotePlayStream");
+    vi.stubGlobal("VideoDecoder", undefined);
+    vi.stubGlobal("ManagedMediaSource", undefined);
+    vi.stubGlobal("MediaSource", { isTypeSupported: (t: string) => t.includes("avc1.640032") });
+    expect(await canDecodeAvc(1280, 720)).toBe(true);
+    vi.stubGlobal("MediaSource", { isTypeSupported: () => false });
+    expect(await canDecodeAvc(1280, 720)).toBe(false);
+    vi.stubGlobal("MediaSource", undefined);
+    expect(await canDecodeAvc(1280, 720)).toBe(false);
+    vi.unstubAllGlobals();
+  });
+});

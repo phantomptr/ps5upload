@@ -34,12 +34,13 @@ pub mod seq;
 pub mod source;
 pub mod space;
 pub mod telemetry;
+pub mod timings;
 pub mod upload;
 pub mod zip_source;
 mod zip_stored;
 pub use zip_stored::StoredZipSink;
 
-pub use pool::{pool, ConsoleMatch, Pairing, Pool, JOURNAL_GC_EVERY, JOURNAL_MAX_AGE_S};
+pub use pool::{pool, ConsoleMatch, Pairing, Peeked, Pool, JOURNAL_GC_EVERY, JOURNAL_MAX_AGE_S};
 pub use upload::{PostCommitError, PostCommitKind};
 
 /// Runs a future from blocking code (C15): a runtime handle's `block_on` when the

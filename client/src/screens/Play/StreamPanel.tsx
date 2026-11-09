@@ -667,11 +667,8 @@ export function StreamPanel({
   useEffect(() => {
     const host = canvasHost.current;
     if (!stream || !host || !running || pip === "popup" || pip === "document" || androidPip) return;
-    host.appendChild(stream.canvas);
-    return () => {
-      if (stream.canvas.parentElement === host) host.removeChild(stream.canvas);
-    };
-    // Full screen moves the stage (a portal), so the canvas follows it.
+    return stream.mount(host);
+    // Full screen moves the stage (a portal), so the picture follows it.
   }, [stream, full, running, pip, androidPip]);
 
   // A stream this page does not show (a reload, another window): offer it here. One whose stop is
@@ -831,9 +828,13 @@ export function StreamPanel({
     },
     [full, coarse, menuOpen, showChrome],
   );
-  // Into or out of full screen the stage is a new element: keep the keyboard on it.
+  // Into or out of full screen the stage is a new element: keep the keyboard on it, both ways
+  // (out of full screen the keys went to the page, and the stream lost its controls: #720).
+  const wasFull = useRef(full);
   useEffect(() => {
-    if (full) stage.current?.focus();
+    if (wasFull.current === full) return;
+    wasFull.current = full;
+    stage.current?.focus();
   }, [full]);
   // Leaving the screen leaves full screen.
   useEffect(() => () => void setWindowFullscreen(false), []);

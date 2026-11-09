@@ -3160,6 +3160,15 @@ async fn the_payload_and_console_tools_reach_their_routes() {
     let asked = route_of(&server, "consoles_discover", json!({"timeout_ms": 500})).await;
     assert_eq!(asked["path"], "/api/discover");
     assert_eq!(asked["method"], "POST");
+    let asked = route_of(
+        &server,
+        "tailnet_consoles",
+        json!({"addr": "den-ps5u", "refresh": true}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/tailnet/consoles");
+    assert_eq!(asked["method"], "GET");
+    assert_eq!(asked["query"]["addr"], "den-ps5u");
     let asked = route_of(&server, "payloads_catalog", json!({})).await;
     assert_eq!(asked["path"], "/api/payloads");
     let asked = route_of(&server, "payloads_download", json!({"id": "kstuff"})).await;

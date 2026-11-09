@@ -288,7 +288,7 @@ places to start.
 | Family | Routes | What it's for |
 |---|---|---|
 | `engine` | `/api/version`, `/api/events`, `/api/event-journal`, `/api/engine-logs`, `/api/logs/*`, `/api/diag/*`, `/api/metrics`, `/api/openapi.json`, `/api/mgmt/call` | The engine itself. `/api/mgmt/call` is the raw helper call, for when nothing else fits. |
-| `consoles` | `/api/consoles`, `/api/discover`, `/api/ps5/status`, `/api/ps5/readiness`, `/api/ps5/volumes` | Which consoles there are and how they stand. |
+| `consoles` | `/api/consoles`, `/api/discover`, `/api/ps5/status`, `/api/ps5/readiness`, `/api/ps5/volumes`, `/api/ps5/connect-timings` | Which consoles there are and how they stand. See [Consoles, Tailscale and new devices](#consoles-tailscale-and-new-devices). |
 | `console-files` | `/api/ps5/list-dir`, `/api/ps5/fs/*`, `/api/ps5/disk-usage`, `/api/ps5/console-shares` | Files on the console. |
 | `transfer` | `/api/transfer/*`, `/api/files/upload`, `/api/link/*`, `/api/zip/*`, `/api/7z/*`, `/api/rar/*` | Uploads and downloads. |
 | `jobs` | `/api/jobs/*`, `/api/ops/*`, `/api/ps5/console-tasks`, `/api/activity` | Following and stopping work. |
@@ -306,8 +306,39 @@ places to start.
 | `collection`, `this-computer` | `/api/collection/*`; `/api/local/*` | Game folders and files on this computer. |
 | `mesh` | `/api/mesh/*`, `/api/drive/*` | Devices sharing a console, and Mesh Drive. |
 | `remote-sources` | `/api/remote/*` | NAS and other servers. |
+| `tailnet` | `/api/tailnet`, `/api/tailnet/*` | This device on Tailscale, and the consoles on its tailnet. (The console's own node is `/api/ps5/tailnet`.) |
 | `settings`, `users`, `pairing` | `/api/settings`, `/api/shared/*`; `/api/profile/*`; `/api/ava1/*` | Settings, console users, pairing. |
 | `console-tools`, `hearbridge`, `shadowmount` | `/api/ps5/shell/run`, `/api/ps5/klog`, `/api/ps5/net/*` and the rest of `/api/ps5/*`; `/api/ps5/hearbridge/*`; `/api/ps5/smp/*` | Everything else on the console. |
+
+## Consoles, Tailscale and new devices
+
+- `GET /api/ps5/connect-timings[?addr=]`: the last status check of each console, phase by phase
+  (session reused or opened, a remembered verdict, a plain connect, the status call), with the path
+  (`lan` or `tailnet`) and the helper version. It sends nothing to a console. A status read that
+  times out while the helper is only busy answers `reason: "status_slow"`: hold what you knew.
+- `GET /api/ava1/console?addr=`: which console answers at an address, as `{key, name}` (its AVA1
+  identity key in hex, the same at every address), without pairing. 502 when nothing answers.
+- `GET /api/tailnet/consoles[?refresh=1&all=1&addr=]`: the PS5Upload consoles on this device's
+  Tailscale network, each with its tailnet and home address, whether its helper answered over
+  Tailscale (`reachable`), its key (`id`) and its console-list entry (`listed`). `backend` says how
+  this device is on Tailscale and `can_list` whether a device list could be read (not with only
+  the system Tailscale app: pass `addr=` instead). Answered from the last minute unless
+  `refresh=1`. Asking pairs nothing and shows nothing on the PS5.
+- `POST /api/tailnet/consoles/add {addr, name?}`: puts a console found on Tailscale (or a typed
+  `100.x` address or MagicDNS name) on the console list, one entry per console, at its home address
+  when one is known. `action` is `added`, `linked`, `merged` or `exists`; 400 `not_tailnet` for an
+  address that is neither.
+- The console's own Tailscale (`GET/POST /api/ps5/tailnet`) lists `blocked_recent`: devices its
+  list turned away. `op: "allow_add", ip` adds one to the list, `op: "blocked_ignore", ip` drops
+  it from the notice. This device's `POST /api/tailnet {op: "test_path", host, secs}` sends that
+  console through Tailscale for `secs` seconds (0 ends it); `GET /api/tailnet`'s
+  `consoles[].tested_at` (unix ms, 0 never) records the last time it was reached that way.
+- New devices: with `require_approval` on (`POST /api/mesh/settings`), a device that isn't on a
+  console's list is listed in `asks` of `GET /api/mesh` instead of being let in. `POST
+  /api/mesh/device {addr, op: "allow" | "decline", id}` answers it, from any device the console
+  already trusts; an allowed device gets in on its next try, within ten minutes. With approval off,
+  any device that reaches the helper is let in, as before. Each device in `devices` says how it was
+  let in (`via`: `network`, `tailscale`, `approved`, or empty for paired with a code).
 
 ## How far to trust the document
 
@@ -344,15 +375,21 @@ friend opens it and asks for some of the items; the sender allows or declines; o
 directly between the two computers (a WebRTC data channel, DTLS-encrypted; the signalling hub only
 introduces them, and on the same network the friend may use the sender's `/api/share/ws`).
 
-**Retail games are refused by the engine**, whatever the request says: an app whose Title ID starts
-with a Sony product prefix (`PPSA`, `CUSA`, `PLAS`, `ECAS`, … in any case, with spaces or dashes),
-whose Content ID names one or carries a store publisher code (`UP0001-`, `EP…`, `JP…`, `HP…`, `KP…`,
-`IP…`) in front of a Title ID of the retail shape, or that can't be identified at all. Updates and
-add-ons carry their game's Title ID and are refused with it. The answer is 403:
+**Retail games are refused by the engine**, whatever the request says. It reads how the app was
+built from its own PARAM (the folder's `sce_sys`, the package or the image; for an app installed on a
+console, `/user/app/<Title ID>`, the copy in `/user/appmeta/<Title ID>/` when the app's own is
+encrypted), never the Title ID or the publisher code, which homebrew often borrows, and never a field
+the request sends. Updates and add-ons carry their game's build and are refused too. The answer is
+403:
 
 ```json
 {"error": "This is a retail game (PPSA01234). PS5Upload only shares homebrew.", "code": "retail", "title_id": "PPSA01234", "item": 0}
 ```
+
+An app with no readable PARAM (an archive, an encrypted package) is refused the same way, with
+`"error": "PS5Upload can't confirm this is homebrew, so it can't share it."` and no `title_id`. Each
+app item in a share's view carries `build: {read, marks}` (the marks found), which the friend's
+engine checks again.
 
 The sender's side:
 

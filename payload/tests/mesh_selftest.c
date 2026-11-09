@@ -103,6 +103,100 @@ static void test_admission(void) {
     CHECK(mesh_refused(b) == 0 && mesh_admit(b, "Pixel", 0x0200a8c0u) == 1);
 }
 
+/* With approval on, a new device asks; a device already let in (or the console page) answers. */
+static void test_asks(void) {
+    static const char B[] = "02000000000000000000000000000000000000000000000000000000000000ab";
+    static const char C[] = "03000000000000000000000000000000000000000000000000000000000000ab";
+    char body[160];
+    const char *r;
+    uint8_t b[32], c[32], d[32], e[32];
+    key_of(2, b);
+    key_of(3, c);
+    key_of(4, d);
+    key_of(5, e);
+    start();
+    /* Approval off: let in, and how (Tailscale's 100.64.0.0/10, or the home network). */
+    CHECK(mesh_admit(d, "Laptop away", 0x02014064u) == 1); /* 100.64.1.2 */
+    CHECK(mesh_admit(e, "Desktop", 0x0500a8c0u) == 1);
+    r = call(MESH_STATE, 1, "{}");
+    CHECK(has(r, "\"asks\":[]"));
+    CHECK(has(r, "\"name\":\"Laptop away\",\"nick\":\"\",\"kind\":\"\",\"os\":\"\",\"app\":\"\",\"via\":\"tailscale\""));
+    CHECK(has(r, "\"name\":\"Desktop\",\"nick\":\"\",\"kind\":\"\",\"os\":\"\",\"app\":\"\",\"via\":\"network\""));
+    call(MESH_SETTINGS, 1, "{\"require_approval\":true}");
+    /* It asks once, however often it tries. */
+    CHECK(mesh_admit(b, "Pixel", 0x0200a8c0u) == 0);
+    CHECK(mesh_admit(b, "Pixel", 0x0200a8c0u) == 0);
+    r = call(MESH_STATE, 1, "{}");
+    CHECK(has(r, "\"asks\":[{\"id\":\"0200") && has(r, "\"name\":\"Pixel\",\"ip\":\"192.168.0.2\""));
+    CHECK(has(r, "Pixel asks to connect"));
+    /* Not listed among the devices until it is let in. */
+    CHECK(!has(strstr(r, "\"devices\":[") ? strstr(r, "\"devices\":[") : "", "\"name\":\"Pixel\""));
+    /* Allowed: it gets in on its next try, listed as approved. */
+    snprintf(body, sizeof body, "{\"op\":\"allow\",\"id\":\"%s\"}", B);
+    CHECK(has(call(MESH_DEVICE, 1, body), "\"ok\":true"));
+    r = call(MESH_STATE, 1, "{}");
+    CHECK(has(r, "\"asks\":[]") && has(r, "let in Pixel"));
+    CHECK(mesh_admit(b, "Pixel", 0x0200a8c0u) == 1);
+    CHECK(has(call(MESH_STATE, 1, "{}"), "\"name\":\"Pixel\",\"nick\":\"\",\"kind\":\"\",\"os\":\"\",\"app\":\"\",\"via\":\"approved\""));
+    /* An answer for no ask (twice, or a made-up id) is refused. */
+    CHECK(has(call(MESH_DEVICE, 1, body), "not_found"));
+    /* Declined: still out, and not asked about again. */
+    CHECK(mesh_admit(c, "Stranger", 0x0300a8c0u) == 0);
+    snprintf(body, sizeof body, "{\"op\":\"decline\",\"id\":\"%s\"}", C);
+    CHECK(has(call(MESH_DEVICE, 1, body), "\"ok\":true"));
+    CHECK(mesh_admit(c, "Stranger", 0x0300a8c0u) == 0);
+    r = call(MESH_STATE, 1, "{}");
+    CHECK(has(r, "\"asks\":[]") && has(r, "turned away Stranger"));
+    /* An ask lapses after ten minutes. */
+    key_of(6, c);
+    CHECK(mesh_admit(c, "Tablet", 0x0600a8c0u) == 0);
+    CHECK(has(call(MESH_STATE, 1, "{}"), "\"name\":\"Tablet\",\"ip\""));
+    g_mono += 11u * 60u * 1000u;
+    CHECK(has(call(MESH_STATE, 1, "{}"), "\"asks\":[]"));
+    /* Approval off again: nothing is left asking. */
+    CHECK(mesh_admit(c, "Tablet", 0x0600a8c0u) == 0);
+    call(MESH_SETTINGS, 1, "{\"require_approval\":false}");
+    CHECK(has(call(MESH_STATE, 1, "{}"), "\"asks\":[]"));
+    /* How each got in survives a restart. */
+    reload();
+    r = call(MESH_STATE, 1, "{}");
+    CHECK(has(r, "\"via\":\"approved\"") && has(r, "\"via\":\"tailscale\"") && has(r, "\"via\":\"network\""));
+}
+
+/* The console page never lets a device allow itself; one address cannot fill the list of asks; an
+ * Allow is not pushed out by newer asks. */
+static void test_ask_limits(void) {
+    static const char B[] = "02000000000000000000000000000000000000000000000000000000000000ab";
+    char body[200];
+    const char *r;
+    uint8_t b[32], k[32];
+    int i;
+    start();
+    call(MESH_SETTINGS, 1, "{\"require_approval\":true}");
+    key_of(2, b);
+    CHECK(mesh_admit(b, "Pixel", 0x0200a8c0u) == 0); /* 192.168.0.2 */
+    /* Allowed from the page opened on the asking device itself: refused, still asking. */
+    snprintf(body, sizeof body, "{\"op\":\"allow\",\"id\":\"%s\",\"from\":\"192.168.0.2\"}", B);
+    CHECK(has(call(MESH_DEVICE, 1, body), "self_allow"));
+    CHECK(has(call(MESH_STATE, 1, "{}"), "\"name\":\"Pixel\",\"ip\":\"192.168.0.2\""));
+    /* From another address (or the PS5's own browser, which names none): allowed. */
+    snprintf(body, sizeof body, "{\"op\":\"allow\",\"id\":\"%s\",\"from\":\"192.168.0.9\"}", B);
+    CHECK(has(call(MESH_DEVICE, 1, body), "\"ok\":true"));
+    /* Made-up keys from one address: one ask at a time, told once. */
+    for (i = 0; i < 20; i++) {
+        key_of(40 + i, k);
+        CHECK(mesh_admit(k, "Spam", 0x0700a8c0u) == 0);
+    }
+    r = call(MESH_STATE, 1, "{}");
+    CHECK(strstr(r, "\"name\":\"Spam\"") && !strstr(strstr(r, "\"name\":\"Spam\"") + 1, "\"name\":\"Spam\""));
+    /* Many addresses: the list stays capped, and the Allow given above still holds. */
+    for (i = 0; i < 20; i++) {
+        key_of(80 + i, k);
+        CHECK(mesh_admit(k, "Crowd", (uint32_t)(0x0000a8c0u | ((uint32_t)(10 + i) << 24))) == 0);
+    }
+    CHECK(mesh_admit(b, "Pixel", 0x0200a8c0u) == 1);
+}
+
 static void test_older_app_is_listed(void) {
     const char *r;
     start();
@@ -275,6 +369,8 @@ int main(void) {
         return 2;
     }
     test_admission();
+    test_asks();
+    test_ask_limits();
     test_older_app_is_listed();
     test_hello_and_state();
     test_locks();

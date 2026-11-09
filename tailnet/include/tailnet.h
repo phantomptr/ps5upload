@@ -254,6 +254,25 @@ int tn_reauth(tn_ctx *ctx);
 #define TN_ALLOW_MAX 64
 int tn_set_peer_allow(tn_ctx *ctx, const uint32_t *ips, int n);
 
+/* The peers the list above turned away: a new TCP connection or UDP flow to a served port that
+ * the tailnet's own filter allowed but the app's peer list did not. One entry per source address
+ * (a repeat counts and moves its time; it never takes a second slot), the oldest replaced when
+ * all TN_DENIED_MAX are used. In memory only, nothing logged: the app shows "<device> tried to
+ * reach this PS5". Cleared by tn_set_peer_allow for an address it now lets in. */
+#define TN_DENIED_MAX 8
+typedef struct {
+	uint32_t ip;     /* the peer's tailnet IPv4, host order */
+	uint8_t proto;   /* 6 TCP, 17 UDP */
+	uint16_t port;   /* the served port it asked for */
+	uint32_t count;  /* attempts since it was first noted */
+	int64_t first_s; /* unix seconds */
+	int64_t last_s;  /* unix seconds */
+} tn_denied;
+/* Copy up to max entries, most recent first. Returns how many. Any thread. */
+int tn_peer_denied(tn_ctx *ctx, tn_denied *out, int max);
+/* Tests: note a refused attempt as the data plane would. Any thread. */
+void tn_test_peer_denied(tn_ctx *ctx, uint32_t ip, uint8_t proto, uint16_t port);
+
 /* Tests: run the wake sequence a wall-clock jump (rest mode) runs on the data plane,
  * now, as if the machine had just woken. Any thread. */
 void tn_test_rewake(tn_ctx *ctx);
