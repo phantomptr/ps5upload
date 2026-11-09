@@ -62,6 +62,7 @@
 #include "content_db.h"
 #include "fw_spoof.h"
 #include "kernel_rw_lock.h"
+#include "power_phase.h"
 
 #include <ps5/mdbg.h>
 
@@ -2919,8 +2920,20 @@ static void *watcher_thread(void *arg) {
     uint64_t none_ms = 0; /* when the last look found no game (0: it found one) */
     launch_ev_t ev;
     memset(&ev, 0, sizeof ev);
+    int held = 0;
     while (1) {
         uint64_t wait = CHEATS_SESSION_FULL_EVERY_MS;
+        /* No pass while the console goes to rest or settles after a wake (power_phase.h): a pass
+         * reads and writes the game's memory, and the game is being suspended or resumed then.
+         * Launch events wait in the kqueue; the first pass after it settles puts back what is on. */
+        if (power_phase_quiet()) {
+            if (!held && atomic_load(&g_engine_enabled))
+                fprintf(stderr, "[cheats] passes held while the console goes to rest or settles after a wake\n");
+            held = 1;
+            sleep(1);
+            continue;
+        }
+        held = 0;
         pthread_mutex_lock(&g_pass_lock);
         if (ev.pid > 0) on_launch_locked(&ev, &k);
         if (ev.exited) k.last_full_ms = 0; /* the game closed: end its session now */

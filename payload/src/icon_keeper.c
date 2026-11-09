@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include "content_db.h"
+#include "power_phase.h"
 
 #define KEEPER_PATH "/data/ps5upload/hidden_icons.txt"
 #define KEEPER_TMP KEEPER_PATH ".tmp"
@@ -128,7 +129,10 @@ static void *icon_keeper_thread(void *arg) {
     time_t seen = 0;
     for (;;) {
         time_t m = appdb_mtime();
-        if (m != 0 && m != seen) {
+        /* Not into the system's app.db while the console goes to rest or settles after a wake
+         * (power_phase.h): the system rewrites it then. `seen` stays, so the change is answered
+         * on the first settled poll. */
+        if (m != 0 && m != seen && !power_phase_quiet()) {
             /* Held across the write: an icon_keeper_note(id, 0) (the tile turned on again, which
              * then shows its icon) waits for it, so a pass that loaded the old list cannot hide
              * the icon again right after it was shown. */
