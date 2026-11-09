@@ -11,8 +11,9 @@ Endpoint: `wss://hub.phantomptr.com/ws`.
 
 - WebSocket, **JSON text frames only**, one message per frame, each at most **16 KiB**
   (16384 bytes of UTF-8). A binary frame is an error.
-- `Origin`: a browser must come from an allowed origin (by default only
-  `https://ps5upload.phantomptr.com`); anything else gets HTTP 403 before the upgrade. A client
+- `Origin`: a browser must come from an allowed origin (by default
+  `https://ps5upload.phantomptr.com` and the PS5Upload app's own pages: `tauri://localhost`,
+  `http://tauri.localhost`, `https://tauri.localhost`); anything else gets HTTP 403 before the upgrade. A client
   that sends no `Origin` (the engine) is allowed.
 - Keepalive: the hub sends a WebSocket ping every 20 s to a peer it has not heard from in that
   time (a peer that pings the hub itself, like the engine, gets none). A peer that sends nothing
