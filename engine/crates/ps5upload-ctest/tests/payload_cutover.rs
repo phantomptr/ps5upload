@@ -119,6 +119,18 @@ fn c_payload_binds_only_9120() {
     let ports = std::fs::read_to_string(payload().join("src/net_ports.c")).unwrap();
     assert!(!ports.contains("listen("), "net_ports.c must never listen");
     binders.retain(|p| p != "src/net_ports.c");
+    // The rest-mode check (power_phase.c) binds a UDP socket on the console's loopback, sends
+    // itself one byte and closes it: no listener, nothing reachable from the network.
+    let phase = std::fs::read_to_string(payload().join("src/power_phase.c")).unwrap();
+    assert!(
+        phase.contains("htonl(INADDR_LOOPBACK)") && phase.contains("SOCK_DGRAM"),
+        "power_phase.c's check must stay a loopback UDP socket"
+    );
+    assert!(
+        !phase.contains("listen("),
+        "power_phase.c must never listen"
+    );
+    binders.retain(|p| p != "src/power_phase.c");
     binders.sort();
     assert_eq!(
         binders,
