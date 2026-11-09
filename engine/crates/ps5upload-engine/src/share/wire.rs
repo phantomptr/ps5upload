@@ -11,7 +11,7 @@
 //!
 //! Sender → receiver:
 //! * `{"offer": {"from", "title", "title_id", "items": [{id, kind, name, title_id, format, size,
-//!   files}], "expires_in_s", "one_use"}}`, or `{"refused": {"why"}}` (`expired`, `used`,
+//!   files, build?: {read, marks}}], "expires_in_s", "one_use"}}` (`build`: an app's, retail.rs), or `{"refused": {"why"}}` (`expired`, `used`,
 //!   `cancelled`, `busy`, `no_share`).
 //! * `{"asked": {}}` once the sender has been told; then `{"allowed": {"token", "files": [{item,
 //!   path, size}]}}` or `{"declined": {"why"?}}`.
@@ -430,7 +430,8 @@ pub(crate) struct Offered {
     pub refused: Option<String>,
 }
 
-/// Reads an offer's items; retail apps are marked refused, whatever the sender said.
+/// Reads an offer's items; an app whose build the offer shows to be retail (or unread) is marked
+/// refused.
 pub(crate) fn offered(v: &Value) -> Vec<Offered> {
     v["items"]
         .as_array()
@@ -444,9 +445,12 @@ pub(crate) fn offered(v: &Value) -> Vec<Offered> {
                     };
                     let kind = s("kind").unwrap_or_default();
                     let title_id = s("title_id");
+                    // The sender's reading of how the app was built, checked again here. An
+                    // older sender says nothing: it applied its own, stricter rule.
                     let refused = (kind == "app")
-                        .then(|| super::retail::check(title_id.as_deref(), None).err())
+                        .then(|| super::retail::Build::from_offer(&i["build"], title_id.as_deref()))
                         .flatten()
+                        .and_then(|b| super::retail::check(&b).err())
                         .map(|r| r.message());
                     Offered {
                         id: s("id").unwrap_or_default(),

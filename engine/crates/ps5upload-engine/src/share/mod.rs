@@ -3,8 +3,9 @@
 //! sees what is offered and accepts some of it; the sender is asked, "<name> wants: …", and
 //! allows or declines; only then do the files go, straight from one computer to the other.
 //!
-//! **What can be shared**: the app itself, homebrew only ([`retail`]: the engine refuses a
-//! commercial game, its updates and add-ons in any format, whatever the page sent); saves of any
+//! **What can be shared**: the app itself, homebrew only ([`retail`]: the engine reads how the
+//! app was built from its own PARAM and refuses a commercial game, its updates and add-ons in any
+//! format, whatever the page sent); saves of any
 //! game (the files inside, as Share a save makes them: save_copy.rs); screenshots and clips;
 //! cheats and which are on; controls; stream settings; a note.
 //!
@@ -526,44 +527,66 @@ impl From<retail::Refusal> for ItemRefused {
     }
 }
 
-/// The Title ID and Content ID of an app on a console: its param.json, else its param.sfo.
-fn console_identity(addr: &str, folder: &str) -> (Option<String>, Option<String>) {
+/// A plain Title ID (letters and digits, 4 to 16): one that may name a folder.
+fn plain_title_id(t: &str) -> Option<&str> {
+    let t = t.trim();
+    Some(t).filter(|t| (4..=16).contains(&t.len()) && t.bytes().all(|b| b.is_ascii_alphanumeric()))
+}
+
+/// How an app on a console was built: its `sce_sys/param.json`, else its `param.sfo`, else the
+/// copy the console keeps in `/user/appmeta/<Title ID>/` (always readable; a retail game's own
+/// `sce_sys` is encrypted). The Title ID for that is the folder's name, else the page's.
+fn console_build(addr: &str, folder: &str, title_hint: Option<&str>) -> retail::Build {
     let folder = folder.trim_end_matches('/');
-    let read = |name: &str| {
-        ps5upload_core::fs_ops::fs_read(addr, &format!("{folder}/sce_sys/{name}"), 0, 1 << 20).ok()
+    let read = |p: &str| ps5upload_core::fs_ops::fs_read(addr, p, 0, 1 << 20).ok();
+    let from = |dir: &str| {
+        let b = read(&format!("{dir}/param.json"))
+            .map(|b| retail::Build::from_param_json_bytes(&b))
+            .unwrap_or_default();
+        if b.read {
+            return b;
+        }
+        read(&format!("{dir}/param.sfo"))
+            .map(|b| retail::Build::from_sfo_bytes(&b))
+            .unwrap_or_default()
     };
-    if let Some(b) = read("param.json") {
-        if let Ok(r) = ps5upload_core::game_meta::parse_param_json_bytes(&b) {
-            if r.title_id.is_some() || r.content_id.is_some() {
-                return (r.title_id, r.content_id);
-            }
-        }
+    let b = from(&format!("{folder}/sce_sys"));
+    if b.read {
+        return b;
     }
-    if let Some(b) = read("param.sfo") {
-        if let Ok(r) = ps5upload_core::game_meta::parse_param_sfo_bytes(&b) {
-            return (r.title_id, r.content_id);
-        }
-    }
-    (None, None)
-}
-
-/// The Title ID and Content ID of an app on this computer (any format the Collection reads).
-fn local_identity(path: &Path, format: &str) -> (Option<String>, Option<String>) {
-    match crate::collection::identify::identify(path, format) {
-        Some(i) => (
-            Some(i.title_id).filter(|s| !s.is_empty()),
-            Some(i.content_id).filter(|s| !s.is_empty()),
-        ),
-        None => (None, None),
+    let id = folder
+        .rsplit('/')
+        .next()
+        .and_then(plain_title_id)
+        .or_else(|| title_hint.and_then(plain_title_id));
+    match id {
+        Some(id) => from(&format!("/user/appmeta/{}", id.to_ascii_uppercase())),
+        None => b,
     }
 }
 
-/// The identity check (`identity` stands in for reading the app in the tests).
-pub(crate) fn check_app(
-    title_id: Option<&str>,
-    content_id: Option<&str>,
-) -> Result<(), ItemRefused> {
-    retail::check(title_id, content_id).map_err(ItemRefused::from)
+/// How an app on this computer was built (any format the Collection reads): the PARAM inside
+/// the folder, package or image.
+fn local_build(path: &Path, format: &str) -> retail::Build {
+    if format == "mount.ffpfs" {
+        use ps5upload_fpkg::source::SourceTree;
+        let Ok(mut tree) = ps5_dump_forge_pfs::PfsSource::open(path) else {
+            return retail::Build::default();
+        };
+        return tree
+            .read("sce_sys/param.json")
+            .map(|b| retail::Build::from_param_json_bytes(&b))
+            .unwrap_or_default();
+    }
+    match crate::inspect::inspect_local(path) {
+        Ok(g) => retail::Build::from_inspection(&g),
+        Err(_) => retail::Build::default(),
+    }
+}
+
+/// The rule's verdict on a build, as Share reports it.
+pub(crate) fn check_app(build: &retail::Build) -> Result<(), ItemRefused> {
+    retail::check(build).map_err(ItemRefused::from)
 }
 
 fn inline(path: &str, bytes: Vec<u8>) -> Result<FileEntry, ItemRefused> {
@@ -613,15 +636,11 @@ pub(crate) fn build_item(
         root: None,
         files: Vec::new(),
         links_skipped: 0,
+        build: None,
     };
     match spec.kind {
         ItemKind::App => {
-            // The page's Title ID is checked first: a retail one is refused before anything is read.
-            if let Some(t) = title_id {
-                if retail::check(Some(t), None).is_err() {
-                    return Err(check_app(Some(t), None).unwrap_err());
-                }
-            }
+            // The app's own PARAM decides, never the Title ID the page sent.
             let path = spec
                 .path
                 .as_deref()
@@ -629,10 +648,11 @@ pub(crate) fn build_item(
                 .filter(|p| !p.is_empty())
                 .ok_or_else(|| ItemRefused::from("name the app's folder or file".to_string()))?;
             if let Some(addr) = console {
-                let (t, c) = console_identity(addr, path);
-                check_app(t.as_deref(), c.as_deref())?;
+                let build = console_build(addr, path, title_id);
+                check_app(&build)?;
                 let (files, links) = manifest::walk_console(addr, path)?;
-                item.title_id = t;
+                item.title_id = Some(build.title_id.clone()).filter(|t| !t.is_empty());
+                item.build = Some(build);
                 item.format = Some("folder".into());
                 item.files = files;
                 item.links_skipped = links;
@@ -645,9 +665,10 @@ pub(crate) fn build_item(
                             .to_string(),
                     )
                 })?;
-                let (t, c) = local_identity(&p, format);
-                check_app(t.as_deref(), c.as_deref())?;
-                item.title_id = t;
+                let build = local_build(&p, format);
+                check_app(&build)?;
+                item.title_id = Some(build.title_id.clone()).filter(|t| !t.is_empty());
+                item.build = Some(build);
                 item.format = Some(format.into());
                 if format == "folder" {
                     let (files, links) = manifest::walk_local(&p)?;
@@ -994,31 +1015,27 @@ pub async fn check(Json(b): Json<ShareCreateBody>) -> Response {
                 if spec.kind != ItemKind::App {
                     return json!({"item": i, "ok": true});
                 }
-                let tid = title_id.filter(|t| retail::check(Some(t), None).is_err());
-                let verdict = if let Some(t) = tid {
-                    check_app(Some(t), None)
-                } else if let Some(p) = spec.path.as_deref() {
-                    match spec.console.as_deref() {
-                        Some(addr) => {
-                            let (t, c) = console_identity(addr, p);
-                            check_app(t.as_deref(), c.as_deref())
-                        }
+                let verdict = match spec
+                    .path
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty())
+                {
+                    Some(p) => match spec.console.as_deref() {
+                        Some(addr) => check_app(&console_build(addr, p, title_id)),
                         None => {
                             let pb = PathBuf::from(p);
                             match manifest::local_format(&pb) {
-                                Some(f) => {
-                                    let (t, c) = local_identity(&pb, f);
-                                    check_app(t.as_deref(), c.as_deref())
-                                }
+                                Some(f) => check_app(&local_build(&pb, f)),
                                 None => Err(ItemRefused::from(
                                     "Share an app as a folder, a package or a mount image."
                                         .to_string(),
                                 )),
                             }
                         }
-                    }
-                } else {
-                    check_app(title_id, None)
+                    },
+                    // Nothing to read: nothing shows it is homebrew.
+                    None => check_app(&retail::Build::default()),
                 };
                 match verdict {
                     Ok(()) => json!({"item": i, "ok": true}),
