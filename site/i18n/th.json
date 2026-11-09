@@ -291,6 +291,8 @@
   "faq.search": "ค้นหาคำตอบ หรือรหัสข้อผิดพลาด",
   "faq.title": "คำถามและคำตอบ",
   "faq.topics": "หัวข้อ",
+  "fold.less": "ดูน้อยลง",
+  "fold.more": "ดูเพิ่มเติม",
   "foot.made": "สร้างโดย <a href=\"https://phantomptr.com/\">PhantomPtr</a> PS5Upload เป็นซอฟต์แวร์เสรีภายใต้ GPL-3.0",
   "foot.sony": "ไม่มีส่วนเกี่ยวข้องกับ Sony Interactive Entertainment",
   "guide.kicker": "คู่มือ",

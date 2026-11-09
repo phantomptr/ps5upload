@@ -208,6 +208,10 @@
             </picture>
           </figure>
         </div>
+      </div>
+      <details class="fold">
+        <summary class="fold-sum"><span class="fold-more" data-i18n="fold.more">Show more</span><span class="fold-less" data-i18n="fold.less">Show less</span></summary>
+      <div class="wrap tour">
         <div class="tour-row">
           <div class="tour-text">
             <h3 data-i18n="cs.ask.title">You decide who may use it</h3>
@@ -237,6 +241,7 @@
           </figure>
         </div>
       </div>
+      </details>
     </section>
 
     <!-- Play Together (11.0; over the internet since 11.6) -->
@@ -281,6 +286,8 @@
           </li>
         </ol>
       </div>
+      <details class="fold">
+        <summary class="fold-sum"><span class="fold-more" data-i18n="fold.more">Show more</span><span class="fold-less" data-i18n="fold.less">Show less</span></summary>
       <div class="wrap">
         <div class="tour-row together-tab">
           <div class="tour-text">
@@ -340,6 +347,7 @@
           </div>
         </div>
       </div>
+      </details>
     </section>
 
     <!-- Tailscale (12.0): the app's own tailnet node and the console's, no Tailscale app. -->
@@ -367,6 +375,10 @@
             </picture>
           </figure>
         </div>
+      </div>
+      <details class="fold">
+        <summary class="fold-sum"><span class="fold-more" data-i18n="fold.more">Show more</span><span class="fold-less" data-i18n="fold.less">Show less</span></summary>
+      <div class="wrap tour">
         <div class="tour-row flip">
           <div class="tour-text">
             <h3 data-i18n="ts.device.title">Then each of your devices</h3>
@@ -403,6 +415,7 @@
           </div>
         </div>
       </div>
+      </details>
     </section>
 
     <!-- Share (12.1): homebrew apps and your own player data, straight to a friend. -->
@@ -429,6 +442,10 @@
             </picture>
           </figure>
         </div>
+      </div>
+      <details class="fold">
+        <summary class="fold-sum"><span class="fold-more" data-i18n="fold.more">Show more</span><span class="fold-less" data-i18n="fold.less">Show less</span></summary>
+      <div class="wrap tour">
         <div class="tour-row flip">
           <div class="tour-text">
             <h3 data-i18n="sh.allow.title">Your friend asks, you allow</h3>
@@ -454,6 +471,7 @@
           </figure>
         </div>
       </div>
+      </details>
     </section>
 
     <!-- Play -->
@@ -500,6 +518,10 @@
             </picture>
           </figure>
         </div>
+      </div>
+      <details class="fold">
+        <summary class="fold-sum"><span class="fold-more" data-i18n="fold.more">Show more</span><span class="fold-less" data-i18n="fold.less">Show less</span></summary>
+      <div class="wrap tour">
         <div class="tour-row">
           <div class="tour-text">
             <h3 data-i18n="play.phones.title">Phones as controllers and screens</h3>
@@ -582,6 +604,7 @@
           <div class="chip-card"><span class="ico" aria-hidden="true">🖼️</span><b data-i18n="chips.mini.title">Mini player</b><span data-i18n="chips.mini.text">The game in a corner while you use the rest of the app.</span></div>
         </div>
       </div>
+      </details>
     </section>
 
     <!-- Feature tour -->
@@ -622,6 +645,10 @@
             </picture>
           </figure>
         </div>
+      </div>
+      <details class="fold">
+        <summary class="fold-sum"><span class="fold-more" data-i18n="fold.more">Show more</span><span class="fold-less" data-i18n="fold.less">Show less</span></summary>
+      <div class="wrap tour">
         <div class="tour-row">
           <div class="tour-text">
             <h3 data-i18n="tour.saves.title">Saves and files</h3>
@@ -680,6 +707,7 @@
           </div>
         </div>
       </div>
+      </details>
     </section>
 
     <!-- Everything it does: one line per feature in the app today, grouped (from README, FAQ.md,
@@ -695,7 +723,7 @@
           <a class="btn small" href="faq/" data-i18n="all.faq">Questions? Read the FAQ</a>
         </div>
         <div class="all-grid">
-        <details class="all-group" id="all-send" open>
+        <details class="all-group" id="all-send">
           <summary><span class="all-ico" aria-hidden="true">📤</span><span class="all-name" data-i18n="all.g.send">Send &amp; install</span><span class="all-count">16</span></summary>
           <ul>
             <li data-i18n="all.send.1">Send games, apps, folders, disk images and archives at the full speed of your network, every file checked</li>
@@ -716,7 +744,7 @@
             <li data-i18n="all.send.16">Keeps your computer awake during transfers and installs</li>
           </ul>
         </details>
-        <details class="all-group" id="all-games" open>
+        <details class="all-group" id="all-games">
           <summary><span class="all-ico" aria-hidden="true">🎮</span><span class="all-name" data-i18n="all.g.games">Games &amp; library</span><span class="all-count">13</span></summary>
           <ul>
             <li data-i18n="all.games.1">Every game in one grid: on your computer, on network shares, installed, and on the PS5's drives</li>
@@ -734,7 +762,7 @@
             <li data-i18n="all.games.13">Screenshots and clips from the PS5, with HDR shots kept as HDR</li>
           </ul>
         </details>
-        <details class="all-group" id="all-convert" open>
+        <details class="all-group" id="all-convert">
           <summary><span class="all-ico" aria-hidden="true">🛠️</span><span class="all-name" data-i18n="all.g.convert">Convert</span><span class="all-count">15</span></summary>
           <ul>
             <li data-i18n="all.convert.1">Build an installable package from a decrypted game folder or an image</li>
@@ -754,7 +782,7 @@
             <li data-i18n="all.convert.13">Fixes for games that need them, and backport tools for older firmware</li>
           </ul>
         </details>
-        <details class="all-group" id="all-files" open>
+        <details class="all-group" id="all-files">
           <summary><span class="all-ico" aria-hidden="true">📁</span><span class="all-name" data-i18n="all.g.files">Files &amp; servers</span><span class="all-count">11</span></summary>
           <ul>
             <li data-i18n="all.files.1">Browse the PS5's files like a folder: copy, move, rename, delete and make folders</li>
@@ -770,7 +798,7 @@
             <li data-i18n="all.files.11">In the web UI, add files and folders from the phone or computer you're on</li>
           </ul>
         </details>
-        <details class="all-group" id="all-saves" open>
+        <details class="all-group" id="all-saves">
           <summary><span class="all-ico" aria-hidden="true">💾</span><span class="all-name" data-i18n="all.g.saves">Saves</span><span class="all-count">10</span></summary>
           <ul>
             <li data-i18n="all.saves.1">Back up saves on a schedule or with one press</li>
@@ -785,7 +813,7 @@
             <li data-i18n="all.saves.10">While you play, snapshot the game's save in one press</li>
           </ul>
         </details>
-        <details class="all-group" id="all-play" open>
+        <details class="all-group" id="all-play">
           <summary><span class="all-ico" aria-hidden="true">▶️</span><span class="all-name" data-i18n="all.g.play">Remote Play &amp; Play Together</span><span class="all-count">27</span></summary>
           <ul>
             <li data-i18n="all.play.1">Play your PS5 on your computer, phone or tablet, or in a browser</li>
@@ -817,7 +845,7 @@
             <li data-i18n="all.play.27">Over the internet the picture is a video stream that holds 60 fps, and the panel shows how each friend is connected</li>
           </ul>
         </details>
-        <details class="all-group" id="all-connect" open>
+        <details class="all-group" id="all-connect">
           <summary><span class="all-ico" aria-hidden="true">🔗</span><span class="all-name" data-i18n="all.g.connect">Your PS5s &amp; Share</span><span class="all-count">9</span></summary>
           <ul>
             <li data-i18n="all.connect.1">Every PS5 on one page: online or not, home network or Tailscale, helper, firmware and who may use it</li>
@@ -831,7 +859,7 @@
             <li data-i18n="all.connect.9">Your friend asks and you allow; it goes straight between you, on your Wi-Fi or over the internet</li>
           </ul>
         </details>
-        <details class="all-group" id="all-kbm" open>
+        <details class="all-group" id="all-kbm">
           <summary><span class="all-ico" aria-hidden="true">⌨️</span><span class="all-name" data-i18n="all.g.kbm">Keyboard &amp; mouse</span><span class="all-count">5</span></summary>
           <ul>
             <li data-i18n="all.kbm.1">Give the PS5 your computer's keyboard and mouse as its own</li>
@@ -841,7 +869,7 @@
             <li data-i18n="all.kbm.5">Type into the PS5's on-screen keyboard from your device</li>
           </ul>
         </details>
-        <details class="all-group" id="all-live" open>
+        <details class="all-group" id="all-live">
           <summary><span class="all-ico" aria-hidden="true">🔴</span><span class="all-name" data-i18n="all.g.live">Go live</span><span class="all-count">8</span></summary>
           <ul>
             <li data-i18n="all.live.1">Stream your game to YouTube, Twitch, Kick or Facebook from Play</li>
@@ -854,7 +882,7 @@
             <li data-i18n="all.live.8">Go live from the web UI in Safari on an iPhone or iPad, with the engine on a computer</li>
           </ul>
         </details>
-        <details class="all-group" id="all-console" open>
+        <details class="all-group" id="all-console">
           <summary><span class="all-ico" aria-hidden="true">🧰</span><span class="all-name" data-i18n="all.g.console">Console tools</span><span class="all-count">20</span></summary>
           <ul>
             <li data-i18n="all.console.1">Send payloads from a catalogue, your own lists or files, with playlists and loading at boot</li>
@@ -879,7 +907,7 @@
             <li data-i18n="all.console.18">Bug Report: the app's, the engine's and the console's logs in one zip, private details removed</li>
           </ul>
         </details>
-        <details class="all-group" id="all-platforms" open>
+        <details class="all-group" id="all-platforms">
           <summary><span class="all-ico" aria-hidden="true">💻</span><span class="all-name" data-i18n="all.g.platforms">Platforms</span><span class="all-count">12</span></summary>
           <ul>
             <li data-i18n="all.platforms.1">Apps for Windows, macOS and Linux, on x64 and ARM</li>
@@ -896,7 +924,7 @@
             <li data-i18n="all.platforms.10">Light and dark themes, plus OLED black and Peach</li>
           </ul>
         </details>
-        <details class="all-group" id="all-agents" open>
+        <details class="all-group" id="all-agents">
           <summary><span class="all-ico" aria-hidden="true">🤖</span><span class="all-name" data-i18n="all.g.agents">AI agents &amp; scripts</span><span class="all-count">9</span></summary>
           <ul>
             <li data-i18n="all.agents.1">A built-in MCP server lets AI agents use PS5Upload, with more than 120 tools</li>

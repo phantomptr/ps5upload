@@ -15,7 +15,7 @@
 
 const REPO = "phantomptr/ps5upload";
 const API = `https://api.github.com/repos/${REPO}/releases?per_page=12`;
-const NEWS_COUNT = 4;
+const NEWS_COUNT = 2;
 
 // ── Language ───────────────────────────────────────────────────────────────
 
@@ -138,16 +138,19 @@ document.getElementById("theme").addEventListener("click", () => {
 
 // ── Everything it does ─────────────────────────────────────────────────────
 
-// Open on a wide screen (two columns to scan), closed on a phone (a list of groups to pick from).
+// Closed (a list of groups to pick from, keeping the page short); "Open all" opens every one.
 const allGroups = [...document.querySelectorAll(".all-group")];
-if (window.matchMedia("(max-width: 760px)").matches) for (const d of allGroups) d.open = false;
+for (const d of allGroups) d.open = false;
 document.getElementById("all-open")?.addEventListener("click", () => allGroups.forEach((d) => (d.open = true)));
 document.getElementById("all-close")?.addEventListener("click", () => allGroups.forEach((d) => (d.open = false)));
-// A link to one group (#all-saves) opens it.
+// A link to something folded away (#all-saves, #keyboard-mouse) opens what holds it.
 const openGroup = () => {
   // No hash: "" is not an element (`"" && …` stays "", and "".classList is undefined).
   const el = location.hash ? document.getElementById(location.hash.slice(1)) : null;
-  if (el?.classList.contains("all-group")) el.open = true;
+  if (!el) return;
+  if (el.classList.contains("all-group")) el.open = true;
+  for (let d = el.parentElement?.closest("details"); d; d = d.parentElement?.closest("details")) d.open = true;
+  if (el.closest(".fold")) el.scrollIntoView();
 };
 window.addEventListener("hashchange", openGroup);
 openGroup();
