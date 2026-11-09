@@ -156,7 +156,7 @@ pub(crate) async fn call(
     method: &str,
     params: &Value,
 ) -> Result<Value, RpcError> {
-    let result = match (method, era) {
+    let mut result = match (method, era) {
         ("ping", _) => json!({}),
         ("server/discover", Era::Modern) => discover(state),
         ("initialize", Era::Legacy) => initialize(state, params),
@@ -169,7 +169,30 @@ pub(crate) async fn call(
         ("prompts/get", _) => prompts::get(params)?,
         _ => return Err(RpcError::method_not_found(method)),
     };
+    if era == Era::Modern && CACHEABLE.contains(&method) {
+        cache_hints(&mut result);
+    }
     Ok(era.finish(result))
+}
+
+/// The methods whose complete modern results carry caching hints (2026-07-28 caching: a client
+/// rejects these results without them, #772).
+const CACHEABLE: [&str; 6] = [
+    "server/discover",
+    "tools/list",
+    "prompts/list",
+    "resources/list",
+    "resources/templates/list",
+    "resources/read",
+];
+
+/// Don't keep it, and keep it to this client: the tool list changes when the owner switches
+/// agents to read-only, and a read is the console's live state.
+fn cache_hints(result: &mut Value) {
+    if let Some(object) = result.as_object_mut() {
+        object.insert("ttlMs".to_string(), json!(0));
+        object.insert("cacheScope".to_string(), json!("private"));
+    }
 }
 
 async fn call_tool(state: &McpState, caller: &Caller, params: &Value) -> Result<Value, RpcError> {
@@ -210,6 +233,21 @@ mod tests {
 
         let out = Era::Legacy.finish(json!({"tools": []}));
         assert_eq!(out, json!({"tools": []}));
+    }
+
+    #[test]
+    fn cacheable_modern_results_carry_cache_hints() {
+        // #772: a 2026-07-28 client refuses server/discover and tools/list without them.
+        let mut out = json!({"tools": []});
+        cache_hints(&mut out);
+        assert_eq!(out["ttlMs"], 0);
+        assert_eq!(out["cacheScope"], "private");
+        for m in ["server/discover", "tools/list", "resources/read"] {
+            assert!(CACHEABLE.contains(&m));
+        }
+        for m in ["tools/call", "prompts/get", "ping", "initialize"] {
+            assert!(!CACHEABLE.contains(&m));
+        }
     }
 
     #[test]
