@@ -12148,6 +12148,7 @@ fn build_app_and_mcp(
             post(console_shares_api::remove),
         )
         .route("/api/ava1/identity", get(ava1_api::identity_handler))
+        .route("/api/ava1/console", get(ava1_api::console_handler))
         .route("/api/ava1/pairing", get(ava1_api::pairing_handler))
         .route(
             "/api/ava1/pairing/confirm",

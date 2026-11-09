@@ -1125,7 +1125,7 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/mesh_selftest.c $(PAYLOAD_DIR)/src/mesh.c $(PAYLOAD_DIR)/src/webui_codec.c \
 		$(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-mesh-selftest
-	@echo "✓ devices connect, are listed, renamed, blocked and pruned; locks lapse; shared documents keep their revision"
+	@echo "✓ devices connect (or ask, and are allowed or declined), are listed, renamed, blocked and pruned; locks lapse; shared documents keep their revision"
 	@echo "Running the tailnet core's unit tests (host build, ASan + UBSan)..."
 	@$(MAKE) -s -C tailnet test
 	@$(MAKE) -s -C tailnet SAN=1 lib

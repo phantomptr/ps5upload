@@ -302,6 +302,7 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/ampr/trace/generate"),
     ("POST", "/api/ampr/trace/start"),
     ("POST", "/api/ampr/trace/stop"),
+    ("GET", "/api/ava1/console"),
     ("GET", "/api/ava1/pairing"),
     ("POST", "/api/ava1/pairing/allow"),
     ("POST", "/api/ava1/pairing/cancel"),

@@ -1366,6 +1366,48 @@ static void r_tailnet(const char *b, size_t n, uint8_t *out, int fd) {
     send_text_reply(fd, st, out, ol, t, tl);
 }
 
+/* {op?, id?}: the devices that use this PS5 (the mesh, the same list the app's Consoles page shows).
+ * No op: the picture ({devices, asks, settings, ...}), so someone at the console sees who is asking
+ * to connect and who may. allow / decline answer a device that asks (approval is on); remove takes a
+ * device off the list (its trust goes with it), block keeps it out. Names, settings and the rest stay
+ * the app's to change. Answers the mesh's JSON. */
+static void r_mesh(const char *b, size_t n, uint8_t *out, int fd) {
+    char op[16], id[80], req[160];
+    const uint8_t *t;
+    size_t ol, tl;
+    int st, k;
+    if (n > 512) {
+        send_error(fd, 413, "too_large", 9);
+        return;
+    }
+    op[0] = id[0] = 0;
+    if (webui_json_str(b, n, "op", op, sizeof op) < 0 || webui_json_str(b, n, "id", id, sizeof id) < 0) {
+        send_bad(fd, "bad_request");
+        return;
+    }
+    if (!op[0]) {
+        st = call_text(AVA1_METHOD_MESH_STATE, "{}", 2, out, &ol, &t, &tl);
+        send_text_reply(fd, st, out, ol, t, tl);
+        return;
+    }
+    if (strcmp(op, "allow") && strcmp(op, "decline") && strcmp(op, "remove") && strcmp(op, "block")) {
+        send_bad(fd, "bad_op");
+        return;
+    }
+    /* A device id is its key: 64 hex digits. */
+    if (strlen(id) != 64 || strspn(id, "0123456789abcdefABCDEF") != 64) {
+        send_bad(fd, "bad_id");
+        return;
+    }
+    k = snprintf(req, sizeof req, "{\"op\":\"%s\",\"id\":\"%s\"}", op, id);
+    if (k < 0 || (size_t)k >= sizeof req) {
+        send_bad(fd, "bad_request");
+        return;
+    }
+    st = call_text(AVA1_METHOD_MESH_DEVICE, req, (size_t)k, out, &ol, &t, &tl);
+    send_text_reply(fd, st, out, ol, t, tl);
+}
+
 /* Whether a game with title id `tid` (other != 0: any other game) runs, from PROCESS_LIST. A list that
  * cannot be read counts as running: a guard never passes on a guess. */
 static int game_running(uint8_t *out, const char *tid, int other) {
@@ -3078,6 +3120,7 @@ static const struct {
     { "/api/apps/icon", r_apps_icon },
     { "/api/proc/list", r_proc_list },
     { "/api/tailnet", r_tailnet },
+    { "/api/mesh", r_mesh },
     { "/api/proc/kill", r_proc_kill },
     { "/api/pkg/info", r_pkg_info },
     { "/api/pkg/icon", r_pkg_icon },

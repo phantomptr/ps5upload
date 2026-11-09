@@ -15903,6 +15903,71 @@
         }
       }
     },
+    "/api/ava1/console": {
+      "get": {
+        "description": "`GET /api/ava1/console?addr=` — who answers at this address: the console's AVA1 key (hex,\nits identity at every address) and the name it gives. Read from the first two handshake\nmessages only (`peek_console`): the console never admits, pairs or lists this device for it,\nshows no code, and nothing is pinned. An invite carries the key, and Add a PS5 tells by it\nthat what the home and Tailscale scans found is one console. 502 when nothing answers.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Read which console answers at an address (its key), without pairing",
+        "tags": [
+          "pairing"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "json-unknown"
+        }
+      }
+    },
     "/api/ava1/pairing": {
       "get": {
         "description": "`GET /api/ava1/pairing?addr=` — read-only: what is already known (`accepted` for a live\nsession, `code` while a handshake is pending, `none` otherwise). It never opens a\nhandshake, so a headerless or prefetching request cannot make a console show a code.",
