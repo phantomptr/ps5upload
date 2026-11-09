@@ -44,6 +44,7 @@
 #include "hw_bg_read.h"
 #include "fan_servo.h"
 #include "mp1_clock.h"
+#include "power_phase.h"
 #include "cpu_measure.h"
 #include "config.h"
 
@@ -1459,6 +1460,17 @@ static void hw_fan_note_stock(int ours_c) {
 
 /* One watcher tick: GET, and SET only when the system put another target in. */
 static void hw_fan_watch_tick(void) {
+    /* No fan ioctl while the console goes to rest or in the minute after a wake (power_phase.h): the
+     * fan controller is being powered down or brought back then, and after a wake the console sets
+     * its own target first. The pin stays; the first settled tick puts it back. */
+    static int held_logged;
+    if (power_phase_quiet()) {
+        if (!held_logged && atomic_load(&g_pinned_threshold_c) > 0)
+            fprintf(stderr, "fan: re-apply held while the console goes to rest or settles after a wake\n");
+        held_logged = 1;
+        return;
+    }
+    held_logged = 0;
     pthread_mutex_lock(&g_fan_set_mtx);
     int pinned = atomic_load(&g_pinned_threshold_c);
     if (pinned < HW_FAN_THRESHOLD_MIN || pinned > HW_FAN_THRESHOLD_MAX || g_fan_guard.failing) {

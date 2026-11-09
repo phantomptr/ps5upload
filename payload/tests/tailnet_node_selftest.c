@@ -245,6 +245,48 @@ int main(void) {
         tailnet_node_test_rest_wake(); /* paused: nothing to wake */
         CHECK(call("") > 0 && str("state", v, sizeof v) == 1 && !strcmp(v, "off") && boolean("enabled") == 0);
     }
+    /* The console going to rest (power_phase.c pauses the node): no sockets, then rejoin. Paused
+     * while off, a node switched on starts paused; interleaved with wakes, renames and stops. */
+    CHECK(tailnet_node_paused() == 0);
+    CHECK(call("{\"op\":\"enable\"}") > 0 && boolean("enabled") == 1);
+    for (int i = 0; i < 40; i++) {
+        CHECK(tailnet_node_set_paused(1) == 0 && tailnet_node_paused() == 1);
+        CHECK(!strcmp(tailnet_node_brief(), "on,paused"));
+        if (i % 3 == 0) tailnet_node_test_rest_wake(); /* a wake seen by the core while paused */
+        usleep((useconds_t)(i % 5) * 400);
+        CHECK(call("") > 0 && str("state", v, sizeof v) == 1 && strcmp(v, "off") != 0);
+        if (i % 4 == 0) {
+            char req[128];
+            snprintf(req, sizeof req, "{\"op\":\"rename\",\"hostname\":\"rest-%d\"}", i);
+            CHECK(call(req) > 0 && boolean("enabled") == 1); /* restarted under the new name, still paused */
+            CHECK(tailnet_node_paused() == 1);
+        }
+        if (i % 5 == 0) {
+            CHECK(call("{\"op\":\"disable\"}") > 0 && !strcmp(tailnet_node_brief(), "off,paused"));
+            CHECK(call("{\"op\":\"enable\"}") > 0 && boolean("enabled") == 1); /* starts paused */
+        }
+        CHECK(tailnet_node_set_paused(0) == 0 && tailnet_node_paused() == 0);
+        CHECK(tailnet_node_set_paused(0) == 0); /* again: nothing to do */
+    }
+    {
+        /* a few seconds paused: the core reports it */
+        CHECK(tailnet_node_set_paused(1) == 0);
+        int seen = 0;
+        for (int i = 0; i < 50 && !seen; i++) {
+            usleep(100 * 1000);
+            seen = call("") > 0 && str("state", v, sizeof v) == 1 && !strcmp(v, "paused");
+        }
+        CHECK(seen);
+        CHECK(tailnet_node_set_paused(0) == 0);
+        int left = 0;
+        for (int i = 0; i < 50 && !left; i++) {
+            usleep(100 * 1000);
+            left = call("") > 0 && str("state", v, sizeof v) == 1 && strcmp(v, "paused") != 0;
+        }
+        CHECK(left);
+    }
+    CHECK(call("{\"op\":\"disable\"}") > 0 && !strcmp(tailnet_node_brief(), "off"));
+
     /* a restart while paused stays paused; switched on later it starts cleanly */
     tailnet_node_shutdown();
     tailnet_node_set_dir(dir);

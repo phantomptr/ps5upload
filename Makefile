@@ -1362,6 +1362,16 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/wake_watchdog_selftest.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-wake-watchdog-selftest
 	@echo "✓ only a ucred that really changed is written again: a clock jump or a throttled thread never is"
+	@echo "Running power-phase self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o $(SELFTEST_DIR)/ps5upload-power-phase-selftest \
+		$(PAYLOAD_DIR)/tests/power_phase_selftest.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-power-phase-selftest
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
+		-o $(SELFTEST_DIR)/ps5upload-power-phase-live-selftest \
+		$(PAYLOAD_DIR)/tests/power_phase_live_selftest.c $(PAYLOAD_DIR)/src/power_phase.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-power-phase-live-selftest
+	@echo "✓ going to rest and the minute after a wake: no fan or kernel work, tailnet without sockets until the network is back"
 	@echo "Running process-identity self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-proc-identity-selftest \

@@ -62,6 +62,7 @@
 #include "sys_registry.h"
 #include "profile.h"
 #include "sony_api_lock.h"
+#include "power_phase.h"
 #include "net_probe.h"
 #include "net_ports.h"
 #include "files_handoff.h"
@@ -4759,6 +4760,9 @@ typedef struct {
 /* Runs on the deferred power thread only, which holds no lock: take sony_api_lock so a reboot or
  * power-off never overlaps another Sony call (the lock is held until the console goes down). */
 static void power_do_action(int action) {
+    /* Before the lock: from here until the console has settled after the wake, the fan re-apply and
+     * the wake watchdog's kernel work hold off and the tailnet node drops its sockets (power_phase.h). */
+    if (action == SC_ACTION_STANDBY) power_phase_note_standby();
     pthread_mutex_lock(&sony_api_lock);
     if (action == SC_ACTION_REBOOT) {
         sceSystemServiceRequestReboot();
@@ -4774,7 +4778,8 @@ static void power_do_action(int action) {
         void *h = dlsym(RTLD_DEFAULT, "sceSystemStateMgrEnterStandby");
         if (h) {
             int (*enter_standby)(void) = (int (*)(void))h;
-            enter_standby();
+            int rc = enter_standby();
+            fprintf(stderr, "[power] sceSystemStateMgrEnterStandby returned 0x%x\n", (unsigned)rc);
         }
     }
     pthread_mutex_unlock(&sony_api_lock);

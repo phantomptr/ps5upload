@@ -432,8 +432,12 @@ int vcomp_run(const vcomp_cfg_t *cfg) {
         if (poll(p, (nfds_t)np, STEP_MS) < 0 && errno != EINTR) usleep(STEP_MS * 1000);
         now = vc_now_ms();
 
+        /* A listener in an error state, or an accept that keeps failing (a console going to rest
+         * fails every socket call for a while), makes poll return at once: pace it, never spin. */
+        if (p[0].revents & (POLLERR | POLLHUP | POLLNVAL)) usleep(STEP_MS * 1000);
         if (p[0].revents & POLLIN) {
             int nfd = accept(lfd, NULL, NULL);
+            if (nfd < 0 && errno != EINTR) usleep(STEP_MS * 1000);
             if (nfd >= 0) {
                 if (cfd >= 0) {
                     close(nfd); /* one helper at a time */

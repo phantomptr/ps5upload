@@ -223,6 +223,10 @@ async function fetchPayloadLogs(host: string): Promise<{
     // The helper's own captured stderr — its rich per-failure diagnostics.
     ["/data/ps5upload/stderr.log", "stderr.log"],
     ["/data/ps5upload/startup.log", "startup.log"],
+    // Rest/wake transitions only (the helper's power phase, each line flushed to disk): what the
+    // helper held and did as the console went to rest and woke, kept apart from stderr.log's rotation.
+    ["/data/ps5upload/power.log.old", "power_old.log"],
+    ["/data/ps5upload/power.log", "power.log"],
     ["/data/ps5upload_startup.log", "startup_early.log"],
     ["/data/ps5upload/runtime/active_instance.txt", "active_instance.txt"],
     // The AVA1 job event log (open / resume / done / fail with status, bytes and lanes; the

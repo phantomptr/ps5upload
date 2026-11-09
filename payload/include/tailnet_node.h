@@ -8,8 +8,10 @@
  *   UDP 9302  Remote Play discovery/wake -> 127.0.0.1:9302 (relayed)
  *   TCP 9120  this helper (AVA1)         -> 127.0.0.1:9120 (lwIP, spliced)
  * Nothing else reaches the console from the tailnet, and the console never dials out
- * over it. Rest mode: the core notices the clock jump on wake, rebinds, re-handshakes
- * and opens a new control session by itself; errno 163 on any socket is a rebuild
+ * over it. Rest mode: the wake watchdog's power phase (power_phase.h) pauses the node
+ * (no sockets) while the console goes to rest and until it has settled after a wake, then
+ * resumes it; the core also notices the clock jump on wake by itself, rebinds,
+ * re-handshakes and opens a new control session; errno 163 on any socket is a rebuild
  * with backoff, never fatal. */
 #ifndef PS5UPLOAD_TAILNET_NODE_H
 #define PS5UPLOAD_TAILNET_NODE_H
@@ -44,6 +46,18 @@ void tailnet_node_shutdown(void);
  * the devices the list turned away lately (the core's tn_peer_denied: at most 8, one per
  * address, nothing logged). Returns its length or -1. */
 int tailnet_node_call(const char *body, size_t len, char *out, size_t cap);
+
+/* Rest mode (power_phase.c): 1 drops every connection and keeps the node idle with no sockets
+ * (tn_pause) while the console goes to rest and until it has settled after a wake; 0 rejoins
+ * (tn_resume: new control session, UDP rebind, DERP, netcheck). Kept while the node is off, so a
+ * node started meanwhile starts paused. Never blocks: -1 when a start or stop holds the node's
+ * lock (ask again later), else 0. */
+int tailnet_node_set_paused(int paused);
+/* The value last set (tests, diagnostics). */
+int tailnet_node_paused(void);
+/* For a log line: "off", "on", "off,paused", "on,paused", or "busy" while a start or stop holds
+ * the node's lock. Never blocks. */
+const char *tailnet_node_brief(void);
 
 /* Is this tailnet IPv4 (host order) allowed by the saved list? For tests. */
 int tailnet_node_allows(unsigned int ip);
