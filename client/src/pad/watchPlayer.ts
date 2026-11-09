@@ -229,6 +229,8 @@ export class PictureStats {
   private q: number[] = [];
   private sum = 0;
   private cnt = 0;
+  /** The codec the decoder was set up with (e.g. "avc1.640028"), for the host's log. */
+  codec = "";
 
   constructor(
     private readonly decoder: "webcodecs" | "mse",
@@ -284,6 +286,7 @@ export class PictureStats {
   snapshot(): Record<string, number | string> {
     const on = this.d ? this.now() - this.d : 0;
     const v: Record<string, number | string> = { ...this.n, decoder: this.decoder };
+    if (this.codec) v.codec = this.codec;
     if (on > STALL_MS) {
       v.stalls = this.n.stalls + 1;
       v.stall_ms = this.n.stall_ms + on;
@@ -455,9 +458,11 @@ export class WatchPlayer {
     try {
       const codec = this.hevc ? await hevcFor(header) : avcCodecString(header);
       if (!codec) {
+        this.problemShown = true;
         this.onProblem("no_hevc");
         return;
       }
+      this.stats.codec = codec;
       // H.264 in AVC form, its parameter sets as the description (WebKitGTK decodes no Annex B).
       const description = this.hevc ? undefined : (avcDescription(header) ?? undefined);
       try {
@@ -491,6 +496,8 @@ export class WatchPlayer {
       this.video = v;
       this.sawKey = false;
     } catch {
+      // Said until a picture is drawn (unflagged, a picture later left it on show for good).
+      this.problemShown = true;
       this.onProblem("decode");
     } finally {
       this.opening = false;
@@ -973,6 +980,11 @@ export class MseTrack {
   /** Jumps to the live edge so far, and the most the picture was behind before one, s. */
   seeks = 0;
   maxLagS = 0;
+  /** The last jump: where the playhead was, what was buffered (s), and the element's state. A
+   *  macOS 13 report had every jump about as far behind as the whole session (#720): this says
+   *  whether the playhead was stuck or the times were off. */
+  lastJump: { at: number; start: number; end: number; ranges: number; readyState: number; paused: boolean } | null =
+    null;
 
   /** How far behind the buffered end it may fall before it catches up or jumps. */
   setEdge(e: Latency | Edge): void {
@@ -1048,6 +1060,14 @@ export class MseTrack {
       if (act.seekTo !== null) {
         this.seeks++;
         this.maxLagS = Math.max(this.maxLagS, lag);
+        this.lastJump = {
+          at: el.currentTime,
+          start,
+          end,
+          ranges: sb.buffered.length,
+          readyState: el.readyState,
+          paused: el.paused,
+        };
         el.currentTime = Math.max(start, act.seekTo);
       }
       if (el.playbackRate !== act.rate) el.playbackRate = act.rate;
@@ -1272,12 +1292,22 @@ export class MsePlayer {
   }
 
   /** Jumps to the live edge so far and the most the picture was behind before one, for the log. */
-  get videoSeeks(): { seeks: number; maxLagMs: number } {
-    return { seeks: this.video.seeks, maxLagMs: Math.round(this.video.maxLagS * 1000) };
+  get videoSeeks(): { seeks: number; maxLagMs: number; lastJump: MseTrack["lastJump"] } {
+    return {
+      seeks: this.video.seeks,
+      maxLagMs: Math.round(this.video.maxLagS * 1000),
+      lastJump: this.video.lastJump,
+    };
   }
 
   get element(): HTMLElement {
     return this.wrap;
+  }
+
+  /** The element was moved in the page (taking it out pauses it): plays on. */
+  resume(): void {
+    const v = this.video.el;
+    if (v.paused) void v.play()?.catch?.(() => {});
   }
 
   setHevc(hevc: boolean): void {
@@ -1352,7 +1382,9 @@ export class MsePlayer {
     const rect = spsVisibleRect(header, this.hevc) ?? { w: 1920, h: 1080 };
     const v = videoInit(header, this.hevc, rect);
     if (!v) return;
+    this.stats.codec = /codecs="([^"]+)"/.exec(v.mime)?.[1] ?? "";
     if (!this.video.open(v.mime, v.init)) {
+      this.problemShown = true;
       this.onProblem(this.hevc ? "no_hevc" : "decode");
       return;
     }

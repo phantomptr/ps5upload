@@ -381,11 +381,9 @@ function MiniPlayer({ win, onBack }: { win: Window; onBack: () => void }) {
   useEffect(() => {
     const host = canvasHost.current;
     if (!stream || !host) return;
-    host.appendChild(stream.canvas);
+    const unmount = stream.mount(host);
     stage.current?.focus();
-    return () => {
-      if (stream.canvas.parentElement === host) host.removeChild(stream.canvas);
-    };
+    return unmount;
   }, [stream]);
 
   useEffect(() => {

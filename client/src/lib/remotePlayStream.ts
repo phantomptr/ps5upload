@@ -788,6 +788,23 @@ export class RemotePlayStream {
   get canvas(): HTMLCanvasElement {
     return this.cv;
   }
+  /** Shows the picture in `host`: the canvas, and the system media player's picture when that
+   *  plays the stream (it sits beside the canvas). Returns how to take it out again. A screen
+   *  that moves its host (full screen is a portal) mounts again: the media player's picture goes
+   *  along instead of staying in the old host, which left it black (#720). */
+  mount(host: HTMLElement): () => void {
+    host.appendChild(this.cv);
+    const el = this.mse?.element;
+    if (el) {
+      host.appendChild(el);
+      this.mse?.resume();
+    }
+    return () => {
+      if (this.cv.parentElement === host) host.removeChild(this.cv);
+      const m = this.mse?.element;
+      if (m && m.parentElement === host) host.removeChild(m);
+    };
+  }
   private cv: HTMLCanvasElement;
   private ws: WebSocket | null = null;
   private video: VideoDecoder | null = null;
@@ -1948,8 +1965,13 @@ export class RemotePlayStream {
   /** On the system's media player: how often it jumped to the live edge (each one a hitch, #720). */
   private mseLogText(): string {
     if (!this.mse) return "";
-    const { seeks, maxLagMs } = this.mse.videoSeeks;
-    return `; media player: ${seeks} jumps to the live edge (most behind ${maxLagMs} ms)`;
+    const { seeks, maxLagMs, lastJump: j } = this.mse.videoSeeks;
+    const s = (x: number) => x.toFixed(2);
+    const last = j
+      ? `, the last from ${s(j.at)} s with ${s(j.start)}-${s(j.end)} s buffered in ${j.ranges} range(s), ` +
+        `readyState ${j.readyState}${j.paused ? ", paused" : ""}`
+      : "";
+    return `; media player: ${seeks} jumps to the live edge (most behind ${maxLagMs} ms${last})`;
   }
 
   /** Time a round trip to the engine (answered with `{"pong": t}`). */

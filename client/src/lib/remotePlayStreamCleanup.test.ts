@@ -616,6 +616,46 @@ describe("RemotePlayStream with a decoder that never shows a picture (#683)", ()
     vi.restoreAllMocks();
   });
 
+  it("#720: full screen moves the picture's host: the media player's picture goes along and plays on", async () => {
+    failingDecoders();
+    mediaPage();
+    const s = new RemotePlayStream({ ...options(), decoding: "mse" });
+    await s.start();
+    open(s, false);
+    await settle();
+    const mse = (s as unknown as { mse: { element: object; video: { el: { paused: boolean; play(): Promise<void> } } } })
+      .mse;
+    const plays = vi.spyOn(mse.video.el, "play");
+    const host = () => {
+      const kids: object[] = [];
+      const h = {
+        kids,
+        appendChild(c: { parentElement: unknown }) {
+          kids.push(c);
+          c.parentElement = h;
+        },
+        removeChild(c: { parentElement: unknown }) {
+          kids.splice(kids.indexOf(c), 1);
+          c.parentElement = null;
+        },
+      };
+      return h;
+    };
+    const windowed = host();
+    const unmount = s.mount(windowed as unknown as HTMLElement);
+    expect(windowed.kids).toEqual([s.canvas, mse.element]);
+    // Into full screen: the old host is let go and a new one takes both.
+    unmount();
+    expect(windowed.kids).toEqual([]);
+    const full = host();
+    s.mount(full as unknown as HTMLElement);
+    expect(full.kids).toEqual([s.canvas, mse.element]);
+    // A <video> taken out of the page pauses: it is played again.
+    expect(plays).toHaveBeenCalled();
+    s.stop();
+    vi.restoreAllMocks();
+  });
+
   it("#720: no Opus in WebCodecs or MSE: the WebAssembly decoder feeds the same worklet", async () => {
     mediaPage();
     vi.stubGlobal("AudioDecoder", undefined);

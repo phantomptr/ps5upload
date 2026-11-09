@@ -97,6 +97,18 @@ export function setPadChecking(on: boolean): void {
   padChecking = on;
 }
 
+/** What the page tells the host about its picture: none before the first picture, unless the
+ *  picture fails, which the host then hears about with the decoder and codec (#720: an iPhone
+ *  that never drew a picture sent nothing, so the host could not say which decoder failed). */
+export function pageStats(
+  stats: { frames: number; snapshot(): Record<string, number | string> | null } | null,
+  problem: WatchProblem | null,
+): Record<string, number | string> | null {
+  if (!stats || (stats.frames === 0 && !problem)) return null;
+  const s = stats.snapshot();
+  return s && problem ? { ...s, problem } : s;
+}
+
 /** The pad this device is: connected controllers (each through its profile), the keyboard and the
  *  on-screen one, merged. */
 export function devicePad(): PadState {
@@ -141,12 +153,17 @@ export class JoinSession {
       onStatus: (status) => this.set({ status, host: status.host ?? this.snap.host }),
       onRtt: (rttMs) => this.set({ rttMs }),
       onFrame: (d) => this.picture().onMessage(d),
-      // How the picture looks here, for the host's panel (none before the first picture).
-      readStats: () => (this.player && this.player.stats.frames > 0 ? this.player.stats.snapshot() : null),
+      // How the picture looks here, for the host's panel and log: none before the first picture,
+      // unless the picture fails, which the host then hears about (#720).
+      readStats: () => pageStats(this.player?.stats ?? null, this.snap.problem),
       onCodec: (h, track) => {
         const p = this.picture();
         p.setHevc(h);
-        if (p instanceof TrackPlayer) p.setTrack(track);
+        if (p instanceof TrackPlayer) {
+          p.setTrack(track);
+          // The pictures come on the track now: a problem the channel's decoder had is not on show.
+          if (track && this.snap.problem) this.set({ problem: null });
+        }
       },
       onRumble: (strong, weak) => {
         const pads = gamepadsOf(typeof navigator === "undefined" ? undefined : navigator);

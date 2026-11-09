@@ -73,10 +73,7 @@ export function RemotePlayMini() {
   useEffect(() => {
     const host = canvasHost.current;
     if (!visible || !stream || !host) return;
-    host.appendChild(stream.canvas);
-    return () => {
-      if (stream.canvas.parentElement === host) host.removeChild(stream.canvas);
-    };
+    return stream.mount(host);
   }, [visible, stream]);
 
   // From where it was dropped to its corner.
@@ -226,10 +223,7 @@ export function AndroidPipPicture() {
   useEffect(() => {
     const el = host.current;
     if (!inPip || !stream || !el) return;
-    el.appendChild(stream.canvas);
-    return () => {
-      if (stream.canvas.parentElement === el) el.removeChild(stream.canvas);
-    };
+    return stream.mount(el);
   }, [inPip, stream]);
   if (!inPip) return null;
   // The stream ended in the small window: say so rather than show the app's screens in it, until
