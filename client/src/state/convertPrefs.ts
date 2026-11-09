@@ -161,6 +161,13 @@ export const useConvertPrefs = create<ConvertPrefs>((set) => ({
   },
   setOutputDir: (dir) => {
     safeSetItem(KEY_DIR, dir);
+    // #780: choosing an Output folder means outputs go there. With "next to its source" still
+    // on, the folder picked was silently ignored and everything landed beside the input.
+    if (dir.trim()) {
+      safeSetItem(KEY_PLACE, "folder");
+      set({ outputDir: dir, outputPlace: "folder" });
+      return;
+    }
     set({ outputDir: dir });
   },
   setCompression: (c) => {
