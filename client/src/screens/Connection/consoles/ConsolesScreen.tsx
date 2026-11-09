@@ -14,6 +14,7 @@ import { useTailnet } from "../../../state/useTailnet";
 import { getAppVersion } from "../../../lib/appVersion";
 import { ConsoleCard } from "./ConsoleCard";
 import { AddConsoleSheet } from "./AddConsoleSheet";
+import { TailnetFound } from "./TailnetFound";
 import { parseInvite } from "./model";
 
 /** First run: nothing on the list yet. */
@@ -47,7 +48,7 @@ export default function ConsolesScreen() {
   const profiles = useRosterStore((s) => s.profiles);
   const activeId = useRosterStore((s) => s.active_id);
   const setActive = useRosterStore((s) => s.setActive);
-  const { status: appTailnet } = useTailnet();
+  const { status: appTailnet, setPaused: setTailnetPaused, busy: tailnetBusy } = useTailnet();
   const [params, setParams] = useSearchParams();
   const [appVersion, setAppVersion] = useState<string | null>(null);
   /** This page's own root: another console's hidden copy of the page has the same cards. */
@@ -119,6 +120,12 @@ export default function ConsolesScreen() {
       />
       <div className="grid gap-4" data-testid="consoles-list">
         {profiles.length === 0 ? <EmptyConsoles onAdd={() => setAddOpen(true)} /> : null}
+        <TailnetFound
+          appTailnet={appTailnet}
+          onAdded={onAdded}
+          onResume={() => void setTailnetPaused(false)}
+          resuming={tailnetBusy}
+        />
         {ordered.map((p) => (
           <ConsoleCard
             key={p.id}

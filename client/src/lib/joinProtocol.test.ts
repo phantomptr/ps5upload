@@ -162,6 +162,29 @@ describe("links and timing", () => {
     );
   });
 
+  it("parses the one link for everywhere (12.1): the internet invite, with the host's own page", () => {
+    // A made-up invite, built here so it does not read as a real one.
+    const inv = "0f".repeat(16);
+    const fp = `${"AB:".repeat(31)}CD`;
+    const lan = encodeURIComponent("http://192.168.1.20:19113/join");
+    const link = `https://ps5upload.phantomptr.com/join/#room=Demo0Room0Not0Real0000&k=${inv}&fp=${fp}&hub=hub.example.com&n=Ann&lan=${lan}`;
+    expect(parseJoinLink(link)).toEqual({
+      origin: "http://192.168.1.20:19113",
+      invite: inv,
+      name: "Ann",
+      code: null,
+      net: { room: "Demo0Room0Not0Real0000", key: inv, fp, hub: "hub.example.com" },
+    });
+    // Without its page: the hub's address stands in, the invite still reads.
+    const away = parseJoinLink(link.replace(/&lan=.*$/, ""))!;
+    expect(away.origin).toBe("https://hub.example.com");
+    expect(away.net?.room).toBe("Demo0Room0Not0Real0000");
+    // A page that isn't the engine's join page is ignored, not followed.
+    expect(parseJoinLink(link.replace(lan, encodeURIComponent("http://evil.example/x")))!.origin).toBe("https://hub.example.com");
+    // A broken fingerprint is no invite.
+    expect(parseJoinLink(link.replace(fp, "AB:CD"))).toBeNull();
+  });
+
   it("colours a delay", () => {
     expect([null, 20, 59, 60, 119, 120, 400].map(delayTone)).toEqual(["none", "good", "good", "fair", "fair", "slow", "slow"]);
   });

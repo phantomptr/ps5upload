@@ -669,7 +669,7 @@ test("the app joins a friend from Play, and asks before starting its own Play", 
   await page.getByTestId("join-link").fill("http://192.168.1.9:19113/join#i=bad");
   await page.getByTestId("join-app-name").fill("Ben");
   await page.getByTestId("join-app-go").click();
-  await expect(page.getByText("That isn't a Play Together link.")).toBeVisible();
+  await expect(page.getByText("That isn't a Play Together invite link.")).toBeVisible();
   await page.getByTestId("join-link").fill(LINK);
   await page.getByTestId("join-app-go").click();
   await expect(page.getByTestId("join-player")).toHaveText("Playing at Ann's · You are Player 2", { timeout: 30_000 });

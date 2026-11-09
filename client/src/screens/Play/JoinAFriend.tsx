@@ -287,7 +287,7 @@ export function JoinAFriend({ pending, onPendingDone }: { pending?: string | nul
               }}
               placeholder={EXAMPLE_LINK}
               leftIcon={<Link2 size={14} />}
-              error={bad === "link" ? tr("join_bad_link", undefined, "That isn't a Play Together link. It ends in /join#i=…") : undefined}
+              error={bad === "link" ? tr("join_bad_link_v2", undefined, "That isn't a Play Together invite link.") : undefined}
               data-testid="join-link"
             />
           </div>
@@ -455,6 +455,8 @@ function QrScanner({ onFound, onClose }: { onFound: (link: string) => void; onCl
   // "denied": the camera permission was refused (ask again, or the app's settings).
   const [failed, setFailed] = useState<false | "denied" | "other">(false);
   const [attempt, setAttempt] = useState(0);
+  // A code in view that isn't an invite: said, so the camera doesn't look stuck.
+  const [wrong, setWrong] = useState(false);
   useEffect(() => {
     let stream: MediaStream | null = null;
     let timer = 0;
@@ -475,6 +477,7 @@ function QrScanner({ onFound, onClose }: { onFound: (link: string) => void; onCl
             const found = await det.detect(v);
             const hit = found.map((f) => f.rawValue).find((r) => !!parseJoinLink(r));
             if (hit) return onFoundRef.current(hit);
+            setWrong(found.length > 0);
           } catch {
             // The next frame.
           }
@@ -518,7 +521,11 @@ function QrScanner({ onFound, onClose }: { onFound: (link: string) => void; onCl
       ) : (
         <>
           <video ref={video} muted playsInline className="max-h-[70dvh] w-full max-w-md rounded-xl bg-black object-cover" />
-          <p className="text-sm text-white/80">{tr("join_scan_hint", undefined, "Point the camera at the QR code on your friend's screen.")}</p>
+          <p className="text-sm text-white/80" data-testid="join-scan-hint">
+            {wrong
+              ? tr("join_bad_link_v2", undefined, "That isn't a Play Together invite link.")
+              : tr("join_scan_hint", undefined, "Point the camera at the QR code on your friend's screen.")}
+          </p>
         </>
       )}
       <Button size="sm" variant="secondary" onClick={onClose}>

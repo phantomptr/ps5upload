@@ -594,7 +594,7 @@ export function ShareMade({
               </span>
             </p>
             <p className="text-xs text-[var(--color-muted)]">
-              {tr("share_open_where", undefined, "Your friend opens it in PS5Upload: Play › Receive.")}
+              {tr("share_open_where_v2", undefined, "Your friend opens the link, or pastes it in PS5Upload › Share.")}
             </p>
           </div>
         </section>

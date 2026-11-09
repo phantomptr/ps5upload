@@ -54,6 +54,7 @@ const PadRemoteScreen = lazyWithReload(() => import("./screens/Play/PadRemote"))
 const HealthScreen = lazyWithReload(() => import("./screens/Health"));
 const NotificationsScreen = lazyWithReload(() => import("./screens/Notifications"));
 const CheatsScreen = lazyWithReload(() => import("./screens/Cheats"));
+const ShareScreen = lazyWithReload(() => import("./screens/Share"));
 const GameHubScreen = lazyWithReload(() => import("./screens/GameHub"));
 const PayloadsScreen = lazyWithReload(() => import("./screens/Payloads"));
 const FirstRunScreen = lazyWithReload(() => import("./screens/FirstRun"));
@@ -416,6 +417,14 @@ function AppRoutes({ location }: { location: Location }) {
           element={
             <Suspense fallback={<ScreenLoader />}>
               <CheatsScreen />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/share"
+          element={
+            <Suspense fallback={<ScreenLoader />}>
+              <ShareScreen />
             </Suspense>
           }
         />

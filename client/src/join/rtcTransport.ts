@@ -13,31 +13,12 @@
 // A connection that cannot be made closes with a CloseEvent whose reason is `net:<why>`
 // (`netFailure`), which the session shows as the reason the guest is not in the game.
 
-import { NET_CLOSE, netFailure, type NetWhy, type TrackMedia } from "../lib/joinProtocol";
+import { NET_CLOSE, netFailure, type InternetInvite, type NetWhy, type TrackMedia } from "../lib/joinProtocol";
 
 /** What an internet invite link's fragment carries:
  *  `#room=<id>&k=<invite key>&fp=<SHA-256, upper-case hex with colons>&hub=<host[:port]>`. */
-export interface InternetInvite {
-  room: string;
-  key: string;
-  fp: string;
-  hub: string;
-}
-
-/** The internet invite in a link's fragment (`location.hash`), or null when it is not one. */
-export function parseInternetFragment(hash: string): InternetInvite | null {
-  const p = new URLSearchParams(hash.replace(/^#/, ""));
-  const room = p.get("room") ?? "";
-  const key = p.get("k") ?? "";
-  const fp = p.get("fp") ?? "";
-  const hub = p.get("hub") ?? "";
-  if (!/^[A-Za-z0-9_-]{22}$/.test(room)) return null;
-  if (!/^[A-Za-z0-9_-]{8,128}$/.test(key)) return null;
-  if (!/^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){31}$/.test(fp)) return null;
-  // A host name or address, an optional port: nothing that could add a path, user or scheme.
-  if (!/^([A-Za-z0-9.-]{1,253}|\[[0-9A-Fa-f:.]{2,45}\])(:\d{1,5})?$/.test(hub)) return null;
-  return { room, key, fp: fp.toUpperCase(), hub };
-}
+// The invite's shape and parser live with the other link parsers (lib/joinProtocol).
+export { parseInternetFragment, type InternetInvite } from "../lib/joinProtocol";
 
 /** The hub's socket: `wss://<hub>/ws`, or `ws://` to this computer only (a hub under test). */
 export function hubSocketUrl(hub: string): string {

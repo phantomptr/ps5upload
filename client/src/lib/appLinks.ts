@@ -3,7 +3,7 @@
 //   ps5upload://join?link=<Play Together invite>   → Play › Join a friend, the invite filled in
 //   ps5upload://pad?link=<phone controller link>   → this device as the controller (or, with the
 //                                                      link's w=1, watching)
-//   ps5upload://receive?link=<a friend's Share link> → Play › Receive, the link filled in
+//   ps5upload://receive?link=<a friend's Share link> → Share, the link filled in
 //
 // The page (join/JoinFlow, pad/PadApp's page) offers it; the shell hands it to the app
 // (open_links.rs), and components/OpenLinks routes it. Everything a link carries is checked
@@ -57,7 +57,7 @@ export function appLinkRoute(url: string): string | null {
   const a = readAppLink(url);
   if (!a) return null;
   if (a.kind === "join") return `/play?join=${encodeURIComponent(a.link)}`;
-  if (a.kind === "receive") return `/play?receive=${encodeURIComponent(a.link)}`;
+  if (a.kind === "receive") return `/share?receive=${encodeURIComponent(a.link)}`;
   return padRoute(a.pad);
 }
 

@@ -6,6 +6,7 @@
 // picture and sound as binary messages (the watch party's kinds, pad/watchPlayer.ts).
 
 import type { PadState } from "./remotePlayStream";
+import { lanPage } from "../join/lanHint";
 
 /** Why the host's engine did not let a guest in. Anything else reads as "refused". */
 export type RefuseWhy =
@@ -243,7 +244,32 @@ export const RESUME_WINDOW_MS = 60_000;
  *  HOST_RESTART_WINDOW): they wait for the host to play again. */
 export const HOST_RESTART_WINDOW_MS = 60_000;
 
-/** A Play Together link a friend shared: `http://<computer>:<port>/join#i=<key>[&n=<name>]`. */
+/** An internet invite: the hub's room, the invite key, the host's DTLS fingerprint and the hub. */
+export interface InternetInvite {
+  room: string;
+  key: string;
+  fp: string;
+  hub: string;
+}
+
+/** The internet invite in a link's fragment (`location.hash`), or null when it is not one. */
+export function parseInternetFragment(hash: string): InternetInvite | null {
+  const p = new URLSearchParams(hash.replace(/^#/, ""));
+  const room = p.get("room") ?? "";
+  const key = p.get("k") ?? "";
+  const fp = p.get("fp") ?? "";
+  const hub = p.get("hub") ?? "";
+  if (!/^[A-Za-z0-9_-]{22}$/.test(room)) return null;
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(key)) return null;
+  if (!/^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){31}$/.test(fp)) return null;
+  // A host name or address, an optional port: nothing that could add a path, user or scheme.
+  if (!/^([A-Za-z0-9.-]{1,253}|\[[0-9A-Fa-f:.]{2,45}\])(:\d{1,5})?$/.test(hub)) return null;
+  return { room, key, fp: fp.toUpperCase(), hub };
+}
+
+/** A Play Together link a friend shared: `http://<computer>:<port>/join#i=<key>[&n=<name>]`, or
+ *  since 12.1 the one link for everywhere, `https://ps5upload.phantomptr.com/join/#room=…&k=…`
+ *  (its `net`, with the host's own page as `lan` when the link names it). */
 export interface JoinLink {
   /** `http://<computer>:<port>` */
   origin: string;
@@ -253,6 +279,8 @@ export interface JoinLink {
   code?: string | null;
   /** The host's name, when the link carries it. */
   name: string | null;
+  /** An internet invite: joined peer to peer through the hub (join/rtcTransport). */
+  net?: InternetInvite;
 }
 
 /** The link pasted into the app (or scanned), or null when it is not one. */
@@ -268,6 +296,14 @@ export function parseJoinLink(text: string): JoinLink | null {
   if (u.protocol !== "http:" && u.protocol !== "https:") return null;
   const path = /^(.*)\/join\/?$/.exec(u.pathname);
   if (!path) return null;
+  // The one link for everywhere (12.1): its origin is the host's own page when the link names it
+  // (an app on the same Wi-Fi can fall back to it), else the hub's.
+  const net = parseInternetFragment(u.hash);
+  if (net) {
+    const lan = lanPage(u.hash, "join");
+    const name = new URLSearchParams(u.hash.replace(/^#/, "")).get("n")?.trim() || null;
+    return { origin: lan ? lan.replace(/\/join\/?$/, "") : `https://${net.hub}`, invite: net.key, name, code: null, net };
+  }
   const hash = new URLSearchParams(u.hash.replace(/^#/, ""));
   const invite = hash.get("i") ?? "";
   if (!/^[A-Za-z0-9_-]{8,128}$/.test(invite)) return null;

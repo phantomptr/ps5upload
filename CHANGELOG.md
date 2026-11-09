@@ -6,6 +6,26 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+Connecting:
+
+- Connection shows the PS5s your Tailscale network can see that aren't on this device's list yet, with Add. No more going through Settings › Tailscale or a scan to find them. If one doesn't let this device in yet, it says where to allow it.
+- When Tailscale is paused on this device, Connection offers to turn it back on.
+
+Play Together:
+
+- An invite link opens in the PS5Upload app again. Since 12.1 the invite is one https link for everywhere, and the app couldn't read it: the page stopped offering the app, and the app's QR scanner ignored the code. The app now joins it directly, at home or over the internet.
+- The QR scanners in Join a friend and Add a PS5 say when the code in view is the wrong kind, instead of looking stuck.
+
+Share:
+
+- Receive moved out of Play into its own Share screen in Games & Content, with what you've sent and received. Share links and old links land there.
+
+Website:
+
+- New sections for every PS5 on one page and for Share, updated Play Together and Tailscale sections, and new screenshots in all 21 languages.
+
+## 12.2.0
+
 Your PS5s, on one page:
 
 - Connection lists each PS5 as a card: online or not, how this device reaches it (home network or Tailscale), its helper and firmware, the ways to reach it, and the devices allowed to use it. Setup steps show only until it is ready.

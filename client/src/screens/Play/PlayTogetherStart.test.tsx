@@ -32,7 +32,7 @@ const view = (p: Partial<PlayTogetherStartViewProps> = {}) =>
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Play's pages", () => {
-  it("Play my PS5, Play Together, Join a friend, Receive, in that order; Play my PS5 first", async () => {
+  it("Play my PS5, Play Together, Join a friend, in that order; Play my PS5 first (Receive is on Share)", async () => {
     installWindowStub();
     const { default: PlayScreen } = await import("./index");
     const out = html(<PlayScreen />, "/play");
@@ -41,7 +41,6 @@ describe("Play's pages", () => {
       ["Play my PS5", "true"],
       ["Play Together", "false"],
       ["Join a friend", "false"],
-      ["Receive", "false"],
     ]);
     expect(out).toContain('data-testid="stream-panel" data-together="false"');
   });
@@ -55,12 +54,12 @@ describe("Play's pages", () => {
     expect(out).not.toContain("stream-panel");
   });
 
-  it("a Share link lands on Receive, filled in", async () => {
+  it("a Share link lands on the Share screen, filled in", async () => {
     installWindowStub();
-    const { default: PlayScreen } = await import("./index");
+    const { default: ShareScreen } = await import("../Share");
     const link = "http://10.0.0.5:19113/share#room=AbCdEfGhIjKlMnOpQrStUv";
-    const out = html(<PlayScreen />, `/play?receive=${encodeURIComponent(link)}`);
-    expect(out).toMatch(/role="radio" aria-checked="true"[^>]*>(?:<svg[\s\S]*?<\/svg>)?Receive</);
+    const out = html(<ShareScreen />, `/share?receive=${encodeURIComponent(link)}`);
+    expect(out).toContain('data-testid="share-screen"');
     expect(out).toContain('data-testid="receive-panel"');
     expect(out).toContain(link.replace(/&/g, "&amp;"));
   });

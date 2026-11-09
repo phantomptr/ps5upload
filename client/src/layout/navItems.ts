@@ -39,6 +39,7 @@ import {
   Eraser,
   FolderSync,
   ArchiveRestore,
+  Inbox,
 } from "lucide-react";
 
 export interface NavItem {
@@ -117,6 +118,13 @@ export const NAV_ITEMS: NavItem[] = [
     key: "captures",
     fallback: "Screenshots & Clips",
     icon: ImageIcon,
+  },
+  // A friend's Share link opens here, beside what you sent and received (12.3; was Play › Receive).
+  {
+    to: "/share",
+    key: "share_screen_title",
+    fallback: "Share",
+    icon: Inbox,
   },
 
   // Browse the console's files and look after the drives.
