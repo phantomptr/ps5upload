@@ -160,7 +160,18 @@ pub(crate) struct TrackSt {
     pub under_since: Option<Instant>,
     /// The stream's bitrate (kbit/s): the console cannot change it mid-session.
     pub stream_kbps: Option<u32>,
+    /// When the session put its pictures on the track: the connection check runs from here
+    /// ([`CHECK_FOR`]: str0m's estimate probes up to [`rtc`]'s BWE_HEADROOM over the rate), and
+    /// whether its result was logged.
+    pub on_at: Option<Instant>,
+    pub checked: bool,
 }
+
+/// The connection check at a guest's start: this long of the estimate (with str0m's probing) and
+/// the RTCP round trip and loss before the result counts.
+pub(crate) const CHECK_FOR: Duration = Duration::from_millis(2500);
+/// What a suggestion leaves free over the slowest guest's estimate: it fits at this share of it.
+pub(crate) const FIT_SHARE: f64 = 1.0 / 1.2;
 
 /// The estimate under the stream's bitrate this long: the host is told to lower the quality.
 pub(crate) const SLOW_FOR: Duration = Duration::from_secs(5);
@@ -168,17 +179,41 @@ pub(crate) const SLOW_FOR: Duration = Duration::from_secs(5);
 const SLOW_UNDER: f64 = 0.9;
 
 impl TrackSt {
-    /// A new estimate.
+    /// A new estimate. Under the line ([`SLOW_UNDER`] of the rate) it counts from then; it
+    /// stops counting only once the estimate is back up to the rate itself (hysteresis: one that
+    /// hovers about the line does not start over every second).
     pub(crate) fn estimate(&mut self, kbps: u32, now: Instant) {
         self.bwe_kbps = Some(kbps);
-        let under = self
-            .stream_kbps
-            .is_some_and(|s| (kbps as f64) < s as f64 * SLOW_UNDER);
-        if !under {
+        let Some(s) = self.stream_kbps.map(|s| s as f64) else {
             self.under_since = None;
-        } else if self.under_since.is_none() {
+            return;
+        };
+        let k = kbps as f64;
+        if k >= s {
+            self.under_since = None;
+        } else if k < s * SLOW_UNDER && self.under_since.is_none() {
             self.under_since = Some(now);
         }
+    }
+
+    /// The connection check is still running (the track just started, or no estimate yet).
+    pub(crate) fn measuring(&self, now: Instant) -> bool {
+        self.on
+            && (self.bwe_kbps.is_none()
+                || self
+                    .on_at
+                    .is_none_or(|t| now.saturating_duration_since(t) < CHECK_FOR))
+    }
+
+    /// How long the estimate has stayed under the line, whole seconds (0 when it is not).
+    pub(crate) fn under_s(&self, now: Instant) -> u64 {
+        self.under_since
+            .map_or(0, |t| now.saturating_duration_since(t).as_secs())
+    }
+
+    /// The most this guest carries with room to spare ([`FIT_SHARE`] of the estimate), kbit/s.
+    pub(crate) fn fit_kbps(&self) -> Option<u32> {
+        self.bwe_kbps.map(|k| (k as f64 * FIT_SHARE).round() as u32)
     }
 
     /// The estimate stayed under the stream's bitrate for [`SLOW_FOR`].
@@ -265,6 +300,9 @@ impl PeerInfo {
         self.track_with(|t| {
             t.on = if hevc { t.h265 } else { t.h264 };
             t.stream_kbps = Some(stream_kbps);
+            if t.on && t.on_at.is_none() {
+                t.on_at = Some(Instant::now());
+            }
             t.on
         })
         .unwrap_or(false)
@@ -315,6 +353,13 @@ impl PeerInfo {
                 "bwe_kbps": t.bwe_kbps,
                 "stream_kbps": t.stream_kbps,
                 "slow": t.slow(now),
+                // The connection check: still running (the first CHECK_FOR of the track), how
+                // long the estimate has stayed under the stream's rate (s, with hysteresis), and
+                // the most it carries with 20% to spare (kbit/s): what a lower quality for
+                // everyone should fit under.
+                "measuring": t.measuring(now),
+                "under_s": t.under_s(now),
+                "fit_kbps": t.fit_kbps(),
             })),
             "rtt_ms": rtt_ms,
             "sent_kbps": sent_kbps,

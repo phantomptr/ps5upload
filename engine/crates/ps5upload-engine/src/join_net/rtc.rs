@@ -1116,7 +1116,27 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
         }
         Event::EgressBitrateEstimate(BweKind::Twcc { estimate, .. }) => {
             let kbps = (estimate.as_f64() / 1000.0).round().min(u32::MAX as f64) as u32;
-            p.info.track_with(|t| t.estimate(kbps, Instant::now()));
+            let now = Instant::now();
+            let check = p.info.track_with(|t| {
+                t.estimate(kbps, now);
+                // The connection check done: said once, for a bug report.
+                if t.checked || t.measuring(now) {
+                    return None;
+                }
+                t.checked = true;
+                Some((t.stream_kbps, t.rtcp_rtt_ms, t.loss))
+            });
+            if let Some(Some((stream, rtt, loss))) = check {
+                crate::log_at!(
+                    Info,
+                    "together",
+                    "join: guest {} connection check: about {kbps} kbit/s (stream {}), rtt {} ms, loss {}",
+                    p.info.gid,
+                    stream.map_or("?".into(), |s| s.to_string()),
+                    rtt.map_or("?".into(), |r| r.to_string()),
+                    loss.map_or("?".into(), |l| format!("{:.1}%", l * 100.0)),
+                );
+            }
         }
         Event::PeerStats(s) => {
             // The pair ICE sends on now (this engine's socket, the guest's address): the way the
@@ -1324,5 +1344,32 @@ mod track_tests {
         t.on = false;
         t.estimate(1_000, t0);
         assert!(!t.slow(t0 + Duration::from_secs(20)), "not on the track");
+    }
+
+    #[test]
+    fn the_connection_check_runs_at_the_start_and_counts_slow_seconds_with_hysteresis() {
+        let t0 = Instant::now();
+        let mut t = super::super::TrackSt {
+            on: true,
+            stream_kbps: Some(15_000),
+            on_at: Some(t0),
+            ..Default::default()
+        };
+        assert!(t.measuring(t0 + Duration::from_secs(5)), "no estimate yet");
+        t.estimate(30_000, t0 + Duration::from_secs(1));
+        assert!(t.measuring(t0 + Duration::from_secs(1)));
+        assert!(!t.measuring(t0 + super::super::CHECK_FOR));
+        // 20% to spare over what it carries.
+        assert_eq!(t.fit_kbps(), Some(25_000));
+        // Under the line (90% of the rate): counted from then…
+        t.estimate(9_000, t0 + Duration::from_secs(2));
+        assert_eq!(t.under_s(t0 + Duration::from_secs(12)), 10);
+        // …through an estimate between the line and the rate…
+        t.estimate(14_000, t0 + Duration::from_secs(5));
+        assert_eq!(t.under_s(t0 + Duration::from_secs(12)), 10);
+        // …until it is back up to the rate.
+        t.estimate(15_000, t0 + Duration::from_secs(6));
+        assert_eq!(t.under_s(t0 + Duration::from_secs(12)), 0);
+        assert_eq!(t.fit_kbps(), Some(12_500));
     }
 }

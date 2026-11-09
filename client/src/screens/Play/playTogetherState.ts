@@ -41,6 +41,22 @@ export interface JoinGuest {
    *  stream's bitrate (kbit/s both): the host should lower the stream's quality, since the console
    *  can't change it mid-stream. Null otherwise (the data channel, an older engine). */
   carries: { kbps: number; streamKbps: number } | null;
+  /** The connection check of a guest on the video track (engine join_net TrackSt): the estimate
+   *  (str0m's TWCC, probing over the rate at the start), the stream's rate, what it carries with
+   *  20% to spare, how long it has stayed under the rate, the loss and RTCP round trip; null off
+   *  the track (the data channel, the plain socket, an older engine). */
+  link: GuestLink | null;
+}
+
+export interface GuestLink {
+  measuring: boolean;
+  kbps: number | null;
+  streamKbps: number | null;
+  fitKbps: number | null;
+  underS: number;
+  /** 0-1. */
+  loss: number | null;
+  rttMs: number | null;
 }
 
 /** A PS5 profile signed in on the console (GET /api/join/profiles). */
@@ -214,6 +230,63 @@ export function readCarries(link: unknown): JoinGuest["carries"] {
   return t?.slow === true && kbps != null && streamKbps != null ? { kbps, streamKbps } : null;
 }
 
+/** The connection check off `link.track`, or null when the guest has no track. */
+export function readLink(link: unknown): GuestLink | null {
+  const t = (link as { track?: Record<string, unknown> | null } | null | undefined)?.track;
+  if (!t || typeof t !== "object") return null;
+  return {
+    measuring: t.measuring === true,
+    kbps: num(t.bwe_kbps),
+    streamKbps: num(t.stream_kbps),
+    fitKbps: num(t.fit_kbps),
+    underS: num(t.under_s) ?? 0,
+    loss: num(t.loss),
+    rttMs: num(t.rtcp_rtt_ms),
+  };
+}
+
+export type LinkGrade = "measuring" | "good" | "ok" | "slow";
+
+/** A guest's connection in a word for the host's panel, with about how many Mbit/s it carries:
+ *  "slow" under the stream's rate (or losing 5%, or a 150 ms round trip), "ok" without 20% to
+ *  spare (or 2% loss, or 80 ms), else "good"; "measuring" while the check runs. Null with no
+ *  check (off the track). */
+export function linkGrade(l: GuestLink | null): { grade: LinkGrade; mbps: number | null } | null {
+  if (!l) return null;
+  const mbps = l.kbps == null ? null : l.kbps >= 10_000 ? Math.round(l.kbps / 1000) : Math.round(l.kbps / 100) / 10;
+  if (l.measuring || l.kbps == null) return { grade: "measuring", mbps: null };
+  const loss = l.loss ?? 0;
+  const rtt = l.rttMs ?? 0;
+  const need = l.streamKbps ?? 0;
+  if (l.underS > 0 || (need > 0 && l.kbps < need * 0.9) || loss >= 0.05 || rtt >= 150) return { grade: "slow", mbps };
+  if ((need > 0 && l.kbps < need * 1.2) || loss >= 0.02 || rtt >= 80) return { grade: "ok", mbps };
+  return { grade: "good", mbps };
+}
+
+/** How long a guest's estimate stays under the stream's rate before a lower quality is offered. */
+export const SUGGEST_AFTER_S = 10;
+
+/** A lower bitrate that fits every guest: offered when a playing guest's estimate has stayed under
+ *  the stream's rate for SUGGEST_AFTER_S, the highest of `rates` (Settings › Picture's, kbit/s)
+ *  under the slowest such guest's estimate with 20% to spare and under the rate now; the lowest
+ *  one when nothing fits. Null when nobody needs it (or nothing lower exists). Only offered,
+ *  never applied: every guest shares the PS5's one stream, and a new rate restarts it. */
+export function lowerForAll(
+  guests: readonly JoinGuest[],
+  rates: readonly number[],
+): { guest: JoinGuest; gotKbps: number; toKbps: number } | null {
+  const slow = guests
+    .filter((g) => g.status === "playing" && g.link && g.link.underS >= SUGGEST_AFTER_S && g.link.fitKbps != null)
+    .sort((a, b) => (a.link!.fitKbps ?? 0) - (b.link!.fitKbps ?? 0));
+  const g = slow[0];
+  if (!g?.link) return null;
+  const now = g.link.streamKbps ?? Infinity;
+  const lower = rates.filter((r) => r > 0 && r < now).sort((a, b) => b - a);
+  if (!lower.length) return null;
+  const to = lower.find((r) => r <= g.link!.fitKbps!) ?? lower[lower.length - 1];
+  return { guest: g, gotKbps: g.link.kbps ?? g.link.fitKbps!, toKbps: to };
+}
+
 /** The engine's answer, checked field by field (an older or odd one never breaks the page). */
 export function readJoinState(v: unknown): JoinHostState {
   const o = (v ?? {}) as Record<string, unknown>;
@@ -258,6 +331,7 @@ export function readJoinState(v: unknown): JoinHostState {
       seatNote: str(g.seat_note),
       quality: readQuality(g.quality),
       carries: readCarries(g.link),
+      link: readLink(g.link),
     }))
     .sort((a, b) => a.player - b.player);
   // Friends asking to join: the engine's `pending` (`asks` kept for an older one).
