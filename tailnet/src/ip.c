@@ -149,3 +149,61 @@ int tn_peer_allowed(const tn_peer_allow *a, uint32_t ip)
 			return 1;
 	return 0;
 }
+
+void tn_denied_note(tn_denied_log *log, uint32_t ip, uint8_t proto, uint16_t port, int64_t now_s)
+{
+	uint32_t n = log->n < TN_DENIED_MAX ? log->n : TN_DENIED_MAX;
+	for (uint32_t i = 0; i < n; i++) {
+		tn_denied *e = &log->e[i];
+		if (e->ip != ip)
+			continue;
+		if (e->count < UINT32_MAX)
+			e->count++;
+		e->last_s = now_s;
+		e->proto = proto;
+		e->port = port;
+		log->seq[i] = ++log->next;
+		return;
+	}
+	uint32_t slot = n;
+	if (n == TN_DENIED_MAX) {
+		slot = 0; /* the one noted longest ago (by order: many arrive in one second) */
+		for (uint32_t i = 1; i < n; i++)
+			if (log->seq[i] < log->seq[slot])
+				slot = i;
+	} else {
+		log->n = n + 1;
+	}
+	log->e[slot] = (tn_denied){.ip = ip, .proto = proto, .port = port, .count = 1, .first_s = now_s, .last_s = now_s};
+	log->seq[slot] = ++log->next;
+}
+
+void tn_denied_prune(tn_denied_log *log, const tn_peer_allow *a)
+{
+	uint32_t k = 0, n = log->n < TN_DENIED_MAX ? log->n : TN_DENIED_MAX;
+	for (uint32_t i = 0; i < n; i++)
+		if (!tn_peer_allowed(a, log->e[i].ip)) {
+			log->seq[k] = log->seq[i];
+			log->e[k++] = log->e[i];
+		}
+	log->n = k;
+}
+
+int tn_denied_copy(const tn_denied_log *log, tn_denied *out, int max)
+{
+	uint32_t n = log->n < TN_DENIED_MAX ? log->n : TN_DENIED_MAX;
+	uint32_t order[TN_DENIED_MAX];
+	for (uint32_t i = 0; i < n; i++) {
+		/* insertion by when it was last noted, newest first (eight entries at most) */
+		uint32_t j = i;
+		while (j > 0 && log->seq[order[j - 1]] < log->seq[i]) {
+			order[j] = order[j - 1];
+			j--;
+		}
+		order[j] = i;
+	}
+	int k = max < (int)n ? max : (int)n;
+	for (int i = 0; i < k; i++)
+		out[i] = log->e[order[i]];
+	return k < 0 ? 0 : k;
+}

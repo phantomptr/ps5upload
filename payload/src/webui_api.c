@@ -1316,11 +1316,12 @@ static void r_proc_list(const char *b, size_t n, uint8_t *out, int fd) {
 
 /* {op?, hostname?}: Tailscale on this PS5 (AVA1 tailnet, the same call the app's Connection
  * panel makes), so someone at the console can sign it in, pause it or sign it out without a
- * computer. Only status / enable / disable / logout / rename / renew and a device name pass: the
- * control server, its address, an auth key and the allow-list stay the app's to set (the page
- * shows the list read-only). Answers the node's status JSON. */
+ * computer. Only status / enable / disable / logout / rename / renew and a device name pass, and
+ * for a device the list turned away ("<device> tried to reach this PS5"): allow_add and
+ * blocked_ignore with its address. The control server, its address, an auth key and the rest of
+ * the allow-list stay the app's to set. Answers the node's status JSON. */
 static void r_tailnet(const char *b, size_t n, uint8_t *out, int fd) {
-    char op[16], host[64], ehost[160], req[224];
+    char op[20], host[64], ehost[160], ip[24], req[224];
     const uint8_t *t;
     size_t ol, tl;
     int st, k;
@@ -1328,23 +1329,33 @@ static void r_tailnet(const char *b, size_t n, uint8_t *out, int fd) {
         send_error(fd, 413, "too_large", 9);
         return;
     }
+    ip[0] = 0;
     if (webui_json_str(b, n, "op", op, sizeof op) < 0 ||
-        webui_json_str(b, n, "hostname", host, sizeof host) < 0) {
+        webui_json_str(b, n, "hostname", host, sizeof host) < 0 ||
+        webui_json_str(b, n, "ip", ip, sizeof ip) < 0) {
         send_bad(fd, "bad_request");
         return;
     }
     if (!op[0]) snprintf(op, sizeof op, "status");
     if (strcmp(op, "status") && strcmp(op, "enable") && strcmp(op, "disable") && strcmp(op, "logout") &&
-        strcmp(op, "rename") && strcmp(op, "renew")) {
+        strcmp(op, "rename") && strcmp(op, "renew") && strcmp(op, "allow_add") && strcmp(op, "blocked_ignore")) {
         send_bad(fd, "bad_op");
         return;
     }
+    /* An address is digits and dots only (the node checks it is a tailnet one). */
+    for (const char *c = ip; *c; c++)
+        if ((*c < '0' || *c > '9') && *c != '.') {
+            send_bad(fd, "bad_ip");
+            return;
+        }
     if (webui_json_escape(ehost, sizeof ehost, host, strlen(host)) >= sizeof ehost) {
         send_bad(fd, "bad_hostname");
         return;
     }
     if ((!strcmp(op, "enable") || !strcmp(op, "rename")) && host[0])
         k = snprintf(req, sizeof req, "{\"op\":\"%s\",\"hostname\":\"%s\"}", op, ehost);
+    else if (!strcmp(op, "allow_add") || !strcmp(op, "blocked_ignore"))
+        k = snprintf(req, sizeof req, "{\"op\":\"%s\",\"ip\":\"%s\"}", op, ip);
     else
         k = snprintf(req, sizeof req, "{\"op\":\"%s\"}", op);
     if (k < 0 || (size_t)k >= sizeof req) {

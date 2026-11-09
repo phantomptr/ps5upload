@@ -804,6 +804,19 @@ static int filter_allows(const tn_dp *d, uint32_t src, uint8_t proto, uint16_t p
 }
 
 /* With serve rules: the hard allow-list AND the tailnet filter for new flows. */
+/* A new connection or flow to a served port: the tailnet's filter and the app's peer list both
+ * let it in. One the filter allows but the list does not is noted (tn_peer_denied): the app can
+ * offer to add that device. Nothing is logged per packet. */
+static int new_flow_ok(tn_ctx *c, const tn_dp *d, const tn_ip_info *ip)
+{
+	if (!filter_allows(d, ip->src, ip->proto, ip->dport))
+		return 0;
+	if (tn_peer_allowed(&c->allow, ip->src))
+		return 1;
+	tn_denied_note(&c->denied, ip->src, ip->proto, ip->dport, tn_wall_s());
+	return 0;
+}
+
 static int inbound_ok(tn_ctx *c, const tn_dp *d, const tn_ip_info *ip)
 {
 	if (!c->n_serve)
@@ -817,11 +830,9 @@ static int inbound_ok(tn_ctx *c, const tn_dp *d, const tn_ip_info *ip)
 		return 0;
 	/* A new flow also needs the app's own peer list (tn_set_peer_allow). */
 	if (ip->proto == TN_IPPROTO_TCP) /* only a SYN opens a connection */
-		return (ip->tcp_flags & 0x12) != 0x02 ||
-		       (tn_peer_allowed(&c->allow, ip->src) && filter_allows(d, ip->src, ip->proto, ip->dport));
+		return (ip->tcp_flags & 0x12) != 0x02 || new_flow_ok(c, d, ip);
 	if (ip->proto == TN_IPPROTO_UDP)
-		return tn_fwd_has_udp_flow(c, ip->src, ip->sport, ip->dport) ||
-		       (tn_peer_allowed(&c->allow, ip->src) && filter_allows(d, ip->src, ip->proto, ip->dport));
+		return tn_fwd_has_udp_flow(c, ip->src, ip->sport, ip->dport) || new_flow_ok(c, d, ip);
 	return 0;
 }
 

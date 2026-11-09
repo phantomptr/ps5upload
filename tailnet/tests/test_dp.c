@@ -215,9 +215,49 @@ static void test_peer_allow(void)
 	CHECK(!tn_peer_allowed(&a, 0x64400002u));
 }
 
+/* What the peer list turned away (tn_peer_denied): one entry per address, a repeat counts and
+ * moves its time, the oldest goes when all are used, newest first, and an address let in later is
+ * forgotten. */
+static void test_denied_log(void)
+{
+	tn_denied_log log;
+	memset(&log, 0, sizeof log);
+	tn_denied out[TN_DENIED_MAX + 2];
+	CHECK(tn_denied_copy(&log, out, TN_DENIED_MAX) == 0);
+	tn_denied_note(&log, 0x64400005u, 6, 9120, 100);
+	tn_denied_note(&log, 0x64400006u, 17, 9302, 102);
+	tn_denied_note(&log, 0x64400005u, 6, 9120, 105); /* a SYN retransmit: same slot, newest now */
+	CHECK(log.n == 2);
+	CHECK(tn_denied_copy(&log, out, TN_DENIED_MAX) == 2);
+	CHECK(out[0].ip == 0x64400005u && out[0].count == 2 && out[0].first_s == 100 && out[0].last_s == 105);
+	CHECK(out[1].ip == 0x64400006u && out[1].proto == 17 && out[1].port == 9302 && out[1].count == 1);
+	/* a flood of new addresses never grows past the cap; the oldest go */
+	for (uint32_t i = 0; i < 20; i++)
+		tn_denied_note(&log, 0x64400100u + i, 6, 9295, 200 + i);
+	CHECK(log.n == TN_DENIED_MAX);
+	CHECK(tn_denied_copy(&log, out, TN_DENIED_MAX + 2) == TN_DENIED_MAX);
+	CHECK(out[0].ip == 0x64400100u + 19 && out[TN_DENIED_MAX - 1].ip == 0x64400100u + 12);
+	CHECK(tn_denied_copy(&log, out, 3) == 3 && out[0].ip == 0x64400100u + 19 && out[2].ip == 0x64400100u + 17);
+	/* one address let in: gone from the log, the rest kept */
+	tn_peer_allow a = {.all = 0, .n = 1, .ip = {0x64400100u + 19}};
+	tn_denied_prune(&log, &a);
+	CHECK(log.n == TN_DENIED_MAX - 1);
+	CHECK(tn_denied_copy(&log, out, TN_DENIED_MAX) == TN_DENIED_MAX - 1 && out[0].ip == 0x64400100u + 18);
+	/* everyone let in: empty */
+	a.all = 1;
+	tn_denied_prune(&log, &a);
+	CHECK(log.n == 0 && tn_denied_copy(&log, out, TN_DENIED_MAX) == 0);
+	/* a flood within one second: still the newest kept, in order */
+	for (uint32_t i = 0; i < 20; i++)
+		tn_denied_note(&log, 0x64400200u + i, 6, 9120, 500);
+	CHECK(tn_denied_copy(&log, out, TN_DENIED_MAX) == TN_DENIED_MAX);
+	CHECK(out[0].ip == 0x64400200u + 19 && out[TN_DENIED_MAX - 1].ip == 0x64400200u + 12);
+}
+
 int main(void)
 {
 	test_peer_allow();
+	test_denied_log();
 	test_wg();
 	test_disco();
 	test_stun();

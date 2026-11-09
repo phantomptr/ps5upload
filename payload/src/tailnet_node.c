@@ -53,6 +53,11 @@ static tn_ctx *g_ctx;
 static pthread_mutex_t g_msg_mu = PTHREAD_MUTEX_INITIALIZER;
 static char g_last_error[160];
 static char g_warning[200];
+/* Devices the list turned away that the user chose to ignore (op blocked_ignore), under g_mu.
+ * In memory only: after a restart a device that tries again is shown again. */
+#define IGNORED_MAX TN_DENIED_MAX
+static uint32_t g_ignored[IGNORED_MAX];
+static int g_n_ignored, g_next_ignored;
 
 void tailnet_node_set_dir(const char *dir) {
     snprintf(g_dir, sizeof g_dir, "%s", dir);
@@ -261,6 +266,25 @@ void tailnet_node_test_rest_wake(void) {
     pthread_mutex_unlock(&g_mu);
 }
 
+void tailnet_node_test_denied(unsigned int ip, unsigned int port) {
+    pthread_mutex_lock(&g_mu);
+    if (g_ctx) tn_test_peer_denied(g_ctx, ip, 6, (uint16_t)port);
+    pthread_mutex_unlock(&g_mu);
+}
+
+static int ignored_locked(uint32_t ip) {
+    for (int i = 0; i < g_n_ignored; i++)
+        if (g_ignored[i] == ip) return 1;
+    return 0;
+}
+
+static void ignore_locked(uint32_t ip) {
+    if (ignored_locked(ip)) return;
+    g_ignored[g_next_ignored] = ip;
+    g_next_ignored = (g_next_ignored + 1) % IGNORED_MAX;
+    if (g_n_ignored < IGNORED_MAX) g_n_ignored++;
+}
+
 int tailnet_node_allows(unsigned int ip) {
     pthread_mutex_lock(&g_mu);
     load_settings();
@@ -302,7 +326,8 @@ static int put(char *out, size_t cap, size_t *len, const char *fmt, const char *
  *  "ip":"100.x.y.z","name":…,"home_derp":900,"derp_connected":true,"home_latency_ms":1.2,
  *  "udp_port":41641,"endpoints":["a.b.c.d:p",…],"key_expiry":unix|0,"warning":…,"error":…,
  *  "serving":{"udp_flows":n,"tcp_conns":n},"peers":[{"name","ip","online","path","direct",
- *  "derp_region","latency_ms","last_rx_ms"}…]} — caller holds g_mu. */
+ *  "derp_region","latency_ms","last_rx_ms"}…],"blocked_recent":[{"ip","name","port","proto",
+ *  "count","first","last"}…]} — caller holds g_mu. */
 static int status_json(char *out, size_t cap) {
     tn_status st;
     static tn_peer_status ps[64];
@@ -366,6 +391,29 @@ static int status_json(char *out, size_t cap) {
         if (n < 0 || (size_t)n >= cap - len) return -1;
         len += (size_t)n;
     }
+    /* "blocked_recent": devices the list turned away (newest first), named from the peer list,
+     * without the ones the user chose to ignore. Only while listing devices: with every device
+     * let in there is nothing to turn away. */
+    if (put(out, cap, &len, "],\"blocked_recent\":[%s", "") < 0) return -1;
+    if (g_ctx && !g_set.allow_all) {
+        tn_denied den[TN_DENIED_MAX];
+        int nd = tn_peer_denied(g_ctx, den, TN_DENIED_MAX), shown = 0;
+        for (int i = 0; i < nd; i++) {
+            if (ignored_locked(den[i].ip)) continue;
+            const char *name = "";
+            for (uint32_t j = 0; j < st.n_peers && j < 64; j++)
+                if (ps[j].addr4 == den[i].ip) name = ps[j].name;
+            json_escape_into(name, e2, sizeof e2);
+            n = snprintf(out + len, cap - len,
+                         "%s{\"ip\":\"%s\",\"name\":\"%s\",\"port\":%u,\"proto\":\"%s\",\"count\":%u,\"first\":%lld,\"last\":%lld}",
+                         shown ? "," : "", tn_ip4_str(den[i].ip, ip), e2, (unsigned)den[i].port,
+                         den[i].proto == 17 ? "udp" : "tcp", (unsigned)den[i].count, (long long)den[i].first_s,
+                         (long long)den[i].last_s);
+            if (n < 0 || (size_t)n >= cap - len) return -1;
+            len += (size_t)n;
+            shown++;
+        }
+    }
     if (put(out, cap, &len, "]}%s", "") < 0) return -1;
     return (int)len;
 }
@@ -376,7 +424,7 @@ static int err_json(char *out, size_t cap, const char *err) {
 }
 
 int tailnet_node_call(const char *body, size_t len, char *out, size_t cap) {
-    char op[16] = "status", url[256] = "", host[64] = "", key[256] = "", addr[64] = "";
+    char op[20] = "status", url[256] = "", host[64] = "", key[256] = "", addr[64] = "";
     if (len > 4096) return err_json(out, cap, "bad_request");
     if (len > 0 && webui_json_str(body, len, "op", op, sizeof op) < 0) return err_json(out, cap, "bad_request");
     pthread_mutex_lock(&g_mu);
@@ -471,6 +519,16 @@ int tailnet_node_call(const char *body, size_t len, char *out, size_t cap) {
         g_set = next;
         if (save_settings() != 0) fprintf(stderr, "[tailnet] settings not saved (errno %d)\n", errno);
         push_allow_locked();
+    } else if (!strcmp(op, "blocked_ignore")) {
+        /* "Ignore" on "<device> tried to reach this PS5": stop showing it (until a restart). */
+        char ipbuf[24] = "";
+        uint32_t ip = 0;
+        if (webui_json_str(body, len, "ip", ipbuf, sizeof ipbuf) == 1) ip = parse_tailnet_ip(ipbuf, strlen(ipbuf));
+        if (!ip) {
+            pthread_mutex_unlock(&g_mu);
+            return err_json(out, cap, "bad_request");
+        }
+        ignore_locked(ip);
     } else if (strcmp(op, "status") != 0) {
         pthread_mutex_unlock(&g_mu);
         return err_json(out, cap, "unknown_op");
