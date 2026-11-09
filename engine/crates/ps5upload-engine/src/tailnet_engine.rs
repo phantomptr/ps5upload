@@ -409,7 +409,9 @@ impl TailnetEngine {
                 save(&self.dir, "settings.json", &*s);
             }
             "status" | "" => {}
-            "remember" => {}
+            // Done by the route before this (tailnet_api::engine_op): here they only answer the
+            // status, like "status".
+            "remember" | "test_path" => {}
             other => anyhow::bail!("unknown op {other:?}"),
         }
         Ok(self.status_json())
@@ -843,6 +845,10 @@ mod tests {
             "Living room laptop"
         );
         assert!(e.op("rename", "", "   ", "", "").is_err());
+        // The route has done these by the time it asks for the status (#768: "Try Tailscale
+        // now" answered `unknown op "test_path"`).
+        assert!(e.op("test_path", "", "", "", "").is_ok());
+        assert!(e.op("remember", "", "", "", "").is_ok());
         assert!(e.op("rename", "", &"x".repeat(64), "", "").is_err());
         // A sign-in kept on disk reads as signed in (off is then a pause).
         std::fs::write(tmp.join("tailnet-state.json"), "{}").unwrap();
