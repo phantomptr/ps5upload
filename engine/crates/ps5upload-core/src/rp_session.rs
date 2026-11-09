@@ -240,7 +240,11 @@ pub(crate) fn session_init(host: &str, regist_key: &[u8; KEY_SIZE]) -> Result<[u
         anyhow!("reading session init reply: {e}")
     })?;
     if raw.is_empty() {
-        crate::core_debug!(
+        // Info, not debug: how long the console took to close is the one thing about a held slot
+        // a report at the usual level can show (#720).
+        crate::clog!(
+            Info,
+            "rp",
             "rp session init: {host}: closed with no reply after {} ms",
             t0.elapsed().as_millis()
         );
