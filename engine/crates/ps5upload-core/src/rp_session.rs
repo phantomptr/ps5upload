@@ -397,12 +397,9 @@ fn session_init_at(
     let nonce = base64::engine::general_purpose::STANDARD
         .decode(nonce_b64.trim())
         .map_err(|e| anyhow!("RP-Nonce not base64: {e}"))?;
-    if nonce.len() != KEY_SIZE {
-        bail!("RP-Nonce was {} bytes, expected {KEY_SIZE}", nonce.len());
-    }
-    let mut out = [0u8; KEY_SIZE];
-    out.copy_from_slice(&nonce);
-    Ok(out)
+    // The console's nonce, as it sent it (no zero-filled buffer in between).
+    <[u8; KEY_SIZE]>::try_from(nonce.as_slice())
+        .map_err(|_| anyhow!("RP-Nonce was {} bytes, expected {KEY_SIZE}", nonce.len()))
 }
 
 /// Read one HTTP answer: up to the end of its head and the `Content-Length` body after it, or
