@@ -332,20 +332,25 @@ Open a game's page (or **Share…** on a Collection item) and press **Share**. Y
 - **Saves of any game**, homebrew or retail: that's your progress, not the game. Your friend puts
   it into their own save of the game; their trophies and account stay theirs.
 - **Screenshots and clips** of that game, which **cheats** you have on, your
-  **controls** (button remaps, keyboard and mouse, macros), and **a short note**. Stream settings
-  aren't kept per game, so there are none to share.
+  **controls** (button remaps, keyboard and mouse, macros), and **a short note**.
 
 PS5Upload **never shares a retail game**: not as a folder, dump, image or package, and not its
-updates or add-ons. It checks the game itself, not just the name you see, and says "This is a
-retail game (PPSA01234). PS5Upload only shares homebrew." Sharing games you bought would be
-piracy, and PS5Upload is for your own console and homebrew.
+updates or add-ons. It doesn't go by the Title ID or the publisher code, which homebrew often
+borrows. It reads how the app was built from its own `param.json` (PS5) or `param.sfo` (PS4):
+a game made with Sony's publishing tools carries an SDK version, a required system software
+version, a link to Sony's update server or the store's signature, and homebrew doesn't. Then it
+says "This is a retail game (PPSA01234). PS5Upload only shares homebrew." When it can't read
+that information at all (an archive, an encrypted package), it says "PS5Upload can't confirm
+this is homebrew, so it can't share it." Sharing games you bought would be piracy, and
+PS5Upload is for your own console and homebrew.
 
 You get a link and a QR code. Your friend opens it in **Play › Receive**, sees what you offer and
 picks what they want; nothing is sent until you press **Allow**. The files go straight from your
 computer to theirs, encrypted (over your Wi-Fi, Tailscale or the internet). PS5Upload's hub only
-introduces the two computers and never sees the files. A link stops working after 24 hours (you
-can pick 1 hour or 7 days) and, unless you turn it off, after the first friend you allow. You can
-cancel a share at any time.
+introduces the two computers and never sees the files. A link stops working after 1 hour, 24
+hours or 7 days, as you choose. With **One friend**, it also stops working once you allow the
+first person; with **Anyone with the link**, you can allow several friends. You can cancel a
+share at any time.
 
 **Q: Can the app wake the PS5 without turning on the TV?**
 Yes. The TV comes on because of HDMI-CEC: a PS5 that wakes up tells the TV to turn on and switch

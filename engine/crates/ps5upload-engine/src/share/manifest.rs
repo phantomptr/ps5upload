@@ -94,6 +94,8 @@ pub(crate) struct Item {
     pub files: Vec<FileEntry>,
     /// Symbolic links found and left out.
     pub links_skipped: usize,
+    /// For the app: how it was built (retail.rs), which the friend's side checks too.
+    pub build: Option<super::retail::Build>,
 }
 
 impl Item {
@@ -103,7 +105,7 @@ impl Item {
 
     /// The item as the friend sees it before accepting: names and sizes only.
     pub(crate) fn listing(&self) -> serde_json::Value {
-        serde_json::json!({
+        let mut v = serde_json::json!({
             "id": self.id,
             "kind": self.kind.word(),
             "name": self.name,
@@ -111,7 +113,11 @@ impl Item {
             "format": self.format,
             "size": self.size(),
             "files": self.files.len(),
-        })
+        });
+        if let Some(b) = &self.build {
+            v["build"] = b.json();
+        }
+        v
     }
 }
 
@@ -464,6 +470,7 @@ pub(crate) mod tests {
             root: Some(root.to_path_buf()),
             files,
             links_skipped: links,
+            build: None,
         }
     }
 

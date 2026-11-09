@@ -1,7 +1,8 @@
 // "Shared with Alex, Nov 9" / "Received from Sam, Nov 9": both ways, from the engine's small
-// history file (GET /api/share), read when this shows.
+// history file (GET /api/share), read when this shows. Folded away under "Past shares".
 
 import { useEffect, useState } from "react";
+import { ArrowDownLeft, ArrowUpRight, ChevronRight } from "lucide-react";
 
 import { shareList, type ShareHistoryEntry } from "../../api/share";
 import { formatDate } from "../../lib/formatDate";
@@ -22,16 +23,23 @@ export function ShareHistory({ initial }: { initial?: ShareHistoryEntry[] }) {
   }, [initial]);
   if (!items || items.length === 0) return null;
   return (
-    <section className="space-y-1" data-testid="share-history">
-      <h3 className="text-sm font-semibold">{tr("share_history", undefined, "History")}</h3>
-      <ul className="space-y-1 text-sm">
-        {items.slice(0, 20).map((h, i) => (
-          <li key={`${h.at_ms}-${i}`} className="text-[var(--color-muted)] [overflow-wrap:anywhere]">
-            {historyLine(tr, h)}
-          </li>
-        ))}
+    <details className="group" data-testid="share-history">
+      <summary className="flex min-h-9 cursor-pointer list-none items-center gap-1.5 text-xs font-medium text-[var(--color-muted)] hover:text-[var(--color-text)] [&::-webkit-details-marker]:hidden">
+        <ChevronRight size={14} aria-hidden className="transition-transform group-open:rotate-90" />
+        {tr("share_history_n", { n: items.length }, "Past shares ({n})")}
+      </summary>
+      <ul className="mt-1 divide-y divide-[var(--color-border)] rounded-[var(--radius-card)] border border-[var(--color-border)] text-sm">
+        {items.slice(0, 20).map((h, i) => {
+          const Icon = h.dir === "sent" ? ArrowUpRight : ArrowDownLeft;
+          return (
+            <li key={`${h.at_ms}-${i}`} className="flex items-center gap-2 px-3 py-2 text-[var(--color-muted)]">
+              <Icon size={14} aria-hidden className="shrink-0" />
+              <span className="min-w-0 [overflow-wrap:anywhere]">{historyLine(tr, h)}</span>
+            </li>
+          );
+        })}
       </ul>
-    </section>
+    </details>
   );
 }
 
