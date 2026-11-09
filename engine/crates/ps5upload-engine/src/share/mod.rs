@@ -199,7 +199,7 @@ impl Entry {
             // network's link only (invites work only on the Wi-Fi, or the hub can't be reached).
             "works": works,
             "room": self.room_id(),
-            "hub_state": self.room.as_ref().map(|r| r.json("", None)["state"].clone()),
+            "hub_state": self.room.as_ref().map(|r| r.json("", None, None)["state"].clone()),
             "items": self.items.iter().map(|i| i.listing()).collect::<Vec<_>>(),
             "requests": requests,
         })

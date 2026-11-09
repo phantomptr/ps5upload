@@ -84,6 +84,11 @@ impl FakeHub {
             .collect()
     }
 
+    /// Guests that ever joined a room on this hub.
+    pub(crate) fn guests_ever(&self) -> u64 {
+        self.st.lock().unwrap().next_gid
+    }
+
     pub(crate) fn host_conns(&self) -> usize {
         self.st.lock().unwrap().host_conns
     }
@@ -513,12 +518,28 @@ fn links_and_hub_addresses() {
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     assert_eq!(
-        super::link_for(super::Kind::Join, "R", "K", "AA:BB", "hub.example", None),
+        super::link_for(
+            super::Kind::Join,
+            "R",
+            "K",
+            "AA:BB",
+            "hub.example",
+            None,
+            None
+        ),
         "https://ps5upload.phantomptr.com/join/#room=R&k=K&fp=AA:BB&hub=hub.example"
     );
     // The phone link's: the website's controller page, its own channel label.
     assert_eq!(
-        super::link_for(super::Kind::Pad, "R", "K", "AA:BB", "hub.example", None),
+        super::link_for(
+            super::Kind::Pad,
+            "R",
+            "K",
+            "AA:BB",
+            "hub.example",
+            None,
+            None
+        ),
         "https://ps5upload.phantomptr.com/pad/#room=R&k=K&fp=AA:BB&hub=hub.example"
     );
     // The home network's page as a hint (percent-encoded: it is a fragment value).
@@ -529,16 +550,39 @@ fn links_and_hub_addresses() {
             "K",
             "AA:BB",
             "hub.example",
-            Some("http://192.168.1.10:19113/join")
+            Some("http://192.168.1.10:19113/join"),
+            None
         ),
         "https://ps5upload.phantomptr.com/join/#room=R&k=K&fp=AA:BB&hub=hub.example\
          &lan=http%3A%2F%2F192.168.1.10%3A19113%2Fjoin"
     );
-    // Only an http(s) page is a hint.
-    assert!(
-        !super::link_for(super::Kind::Pad, "R", "K", "F", "h", Some("javascript:x"))
-            .contains("lan=")
+    // With this computer's Tailscale page (the Tailscale app's address) beside it: `ts`, once.
+    let lan = "http://192.168.1.10:19113/join";
+    let ts = "http://100.101.2.3:19113/join";
+    assert_eq!(
+        super::link_for(super::Kind::Join, "R", "K", "F", "h", Some(lan), Some(ts)),
+        "https://ps5upload.phantomptr.com/join/#room=R&k=K&fp=F&hub=h\
+         &lan=http%3A%2F%2F192.168.1.10%3A19113%2Fjoin&ts=http%3A%2F%2F100.101.2.3%3A19113%2Fjoin"
     );
+    assert!(
+        !super::link_for(super::Kind::Join, "R", "K", "F", "h", Some(ts), Some(ts)).contains("ts="),
+        "the Tailscale page is the home one already"
+    );
+    assert!(
+        !super::link_for(super::Kind::Join, "R", "K", "F", "h", None, Some("file:x"))
+            .contains("ts=")
+    );
+    // Only an http(s) page is a hint.
+    assert!(!super::link_for(
+        super::Kind::Pad,
+        "R",
+        "K",
+        "F",
+        "h",
+        Some("javascript:x"),
+        None
+    )
+    .contains("lan="));
     assert_eq!(
         (super::Kind::Join.label(), super::Kind::Pad.label()),
         ("join", "pad")

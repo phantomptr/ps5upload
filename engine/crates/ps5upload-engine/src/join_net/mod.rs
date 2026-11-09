@@ -40,6 +40,7 @@
 pub(crate) mod chunk;
 pub(crate) mod crypto;
 pub(crate) mod hub;
+pub(crate) mod local_signal;
 pub(crate) mod nat;
 pub(crate) mod rtc;
 pub(crate) mod stun;
@@ -527,8 +528,11 @@ pub(crate) fn hub_url_ok(url: &str) -> bool {
 
 /// A room's link (an internet invite, or the phone link's), on the website's page for its kind.
 /// `lan`: this engine's own page for the kind on the home network (`http://192.168.1.10:19113/join`),
-/// the hint the page offers as "Open on this Wi-Fi" when it cannot reach the hub. It is no
-/// secret: the page there asks the host, as the link's key does.
+/// the hint the page offers as "Open on this Wi-Fi" when it cannot reach the hub, and where the
+/// app signals without the hub ([`local_signal`]). It is no secret: the page there asks the host,
+/// as the link's key does. `ts`: the same page at this computer's Tailscale address (the Tailscale
+/// app's), when it has one and it is not `lan` already: an app guest on the same tailnet signals
+/// there. Reachable only from inside that tailnet, so no more telling than `lan`.
 pub(crate) fn link_for(
     kind: Kind,
     room: &str,
@@ -536,11 +540,18 @@ pub(crate) fn link_for(
     fp: &str,
     hub: &str,
     lan: Option<&str>,
+    ts: Option<&str>,
 ) -> String {
     let mut s = format!("{}#room={room}&k={key}&fp={fp}&hub={hub}", kind.page());
-    if let Some(l) = lan.filter(|l| l.starts_with("http://") || l.starts_with("https://")) {
+    let page = |p: &&str| p.starts_with("http://") || p.starts_with("https://");
+    let lan = lan.filter(page);
+    if let Some(l) = lan {
         s.push_str("&lan=");
         s.push_str(&pct(l));
+    }
+    if let Some(t) = ts.filter(page).filter(|t| Some(*t) != lan) {
+        s.push_str("&ts=");
+        s.push_str(&pct(t));
     }
     s
 }

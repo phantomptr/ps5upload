@@ -258,6 +258,7 @@ fn access_of(route: &Route, analysis: &Analysis) -> &'static str {
         || path == "/api/pad/ws"
         || path == "/join"
         || path == "/api/join/ws"
+        || path == "/api/join/signal"
         || path == "/share"
         || path == "/api/share/ws"
     {

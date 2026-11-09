@@ -31,6 +31,10 @@ struct Place {
     same_lan: bool,
     /// Both are on the tailnet.
     tailnet: bool,
+    /// The engine's computer is on it through the Tailscale app (an interface with its 100.x
+    /// address). PS5Upload's own Tailscale (tailnet_engine.rs) is userspace only: no interface, so
+    /// no socket or candidate there, and no tailnet pair for Play Together.
+    engine_tail_iface: bool,
 }
 
 /// A router mapping: inside (a socket) ↔ outside.
@@ -151,7 +155,12 @@ fn connect(place: Place) -> Outcome {
         .set_dtls_cert(cert.clone())
         .set_stats_interval(Some(Duration::from_millis(200)))
         .build(t0);
-    super::rtc::add_host_candidates(&mut h, [a(ENGINE_TAIL), a(ENGINE_LAN)]);
+    let socks: &[&str] = if place.engine_tail_iface {
+        &[ENGINE_TAIL, ENGINE_LAN]
+    } else {
+        &[ENGINE_LAN]
+    };
+    super::rtc::add_host_candidates(&mut h, socks.iter().map(|s| a(s)));
     h.add_local_candidate(
         Candidate::server_reflexive(engine_public, a(ENGINE_LAN), "udp").unwrap(),
     );
@@ -242,6 +251,7 @@ fn on_the_same_wifi_the_lan_pair_wins_over_tailscale_and_the_internet() {
     let o = connect(Place {
         same_lan: true,
         tailnet: true,
+        engine_tail_iface: true,
     });
     assert_eq!(o.pair, (a(ENGINE_LAN), a(GUEST_LAN)), "{:?}", o.pair);
     assert_eq!(o.path, "lan");
@@ -256,9 +266,25 @@ fn away_on_tailscale_the_tailnet_pair_wins_over_the_internet() {
     let o = connect(Place {
         same_lan: false,
         tailnet: true,
+        engine_tail_iface: true,
     });
     assert_eq!(o.pair, (a(ENGINE_TAIL), a(GUEST_TAIL)), "{:?}", o.pair);
     assert_eq!(o.path, "tailscale");
+}
+
+/// Away, the host's computer on the tailnet through PS5Upload's own Tailscale only (no interface):
+/// the engine has no tailnet socket, so ICE goes through the routers. Play Together's Tailscale
+/// path needs the Tailscale app on the host's computer.
+#[test]
+fn away_with_only_the_builtin_tailscale_it_goes_over_the_internet() {
+    let o = connect(Place {
+        same_lan: false,
+        tailnet: true,
+        engine_tail_iface: false,
+    });
+    assert_eq!(o.pair.1, a("198.51.100.2:8000"), "{:?}", o.pair);
+    assert_eq!(o.path, "internet");
+    assert!(o.host_prios.iter().all(|(s, _)| *s != a(ENGINE_TAIL)));
 }
 
 /// Away from home without Tailscale: straight through both routers.
@@ -267,6 +293,7 @@ fn away_without_tailscale_it_goes_over_the_internet() {
     let o = connect(Place {
         same_lan: false,
         tailnet: false,
+        engine_tail_iface: true,
     });
     assert_eq!(o.pair.1, a("198.51.100.2:8000"), "{:?}", o.pair);
     assert_eq!(o.path, "internet");

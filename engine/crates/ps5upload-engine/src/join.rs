@@ -1096,12 +1096,17 @@ impl Party {
     fn internet_json(&self, inv: Option<&InviteInfo>) -> Option<serde_json::Value> {
         let inv = inv?;
         let room = self.internet.as_ref()?;
-        // The home network's page, the link's hint for a guest who cannot reach the hub.
-        let lan = bases(&self.console, &self.reach)
-            .into_iter()
-            .next()
-            .map(|b| format!("{b}{}/join", crate::host_guard::base_path()));
-        Some(room.json(&inv.key, lan.as_deref()))
+        // The home network's page, the link's hint for a guest who cannot reach the hub (and where
+        // an app guest signals without it), and the same page on Tailscale (the Tailscale app's
+        // address, when this computer has one).
+        let all = bases(&self.console, &self.reach);
+        let page = |b: &String| format!("{b}{}/join", crate::host_guard::base_path());
+        let lan = all.first().map(page);
+        let ts = crate::pad_link::tailscale_ip()
+            .map(|ip| crate::pad_link::ip_base(ip, self.reach.port))
+            .filter(|b| all.contains(b))
+            .map(|b| page(&b));
+        Some(room.json(&inv.key, lan.as_deref(), ts.as_deref()))
     }
 
     fn key_ok(&self, key: &str, now: Instant) -> bool {
@@ -2062,15 +2067,71 @@ pub async fn ws(
         .on_upgrade(move |s| guest_session(s, ip))
 }
 
+/// Signalling sockets (`/api/join/signal`) per address per minute: an app guest opens one for
+/// each way it tries (the home network, Tailscale) on every connect, kept apart from the guest
+/// sockets' own limit.
+static SIGNALS: ConnectLimit = ConnectLimit::new();
+const SIGNALS_PER_MIN: usize = 30;
+
+/// `room` is the internet room of an open Play Together here that still wants it.
+pub(crate) fn internet_room_open(room: &str) -> bool {
+    let keys: Vec<String> = with_parties(|m| {
+        m.iter()
+            .filter(|(_, p)| p.internet.as_ref().is_some_and(|r| r.id() == room))
+            .map(|(k, _)| k.clone())
+            .collect()
+    });
+    keys.iter().any(|k| internet_wanted(k))
+}
+
+/// `GET /api/join/signal`: an internet invite's signalling straight to this engine, for a guest
+/// that reaches it on the home network or over Tailscale (join_net/local_signal.rs). The hub's
+/// guest protocol, for this engine's own rooms only; the connection it sets up is the same one,
+/// checked by the guest against the link's fingerprint.
+pub async fn signal(
+    upgrade: WebSocketUpgrade,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+) -> Response {
+    let ip = peer.ip();
+    let limit = if ip.is_loopback() {
+        LOOPBACK_CONNECTS_PER_MIN
+    } else {
+        SIGNALS_PER_MIN
+    };
+    if !SIGNALS.allow(ip, limit, Instant::now()) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many tries, wait a minute",
+        )
+            .into_response();
+    }
+    upgrade
+        .max_message_size(crate::join_net::local_signal::FRAME_MAX)
+        .max_frame_size(crate::join_net::local_signal::FRAME_MAX)
+        .on_upgrade(|s| crate::join_net::local_signal::session(s, internet_room_open))
+}
+
 #[derive(serde::Deserialize)]
 pub struct RelayQuery {
     url: String,
 }
 
+/// What `/api/join/relay` may pass a socket to, and the largest message the guest's side sends
+/// through: another engine's guest socket, or its signalling socket (an offer is several KiB).
+pub(crate) fn relay_target(url: &str) -> Option<(String, usize)> {
+    crate::pad_link::lan_ws_target(url, "api/join/ws")
+        .map(|t| (t, GUEST_MSG_MAX))
+        .or_else(|| {
+            crate::pad_link::lan_ws_target(url, "api/join/signal")
+                .map(|t| (t, crate::join_net::local_signal::FRAME_MAX))
+        })
+}
+
 /// `GET /api/join/relay?url=ws://<host engine>:<port>/api/join/ws` (this computer only): an app
 /// joining a friend's Play Together talks to its own engine (an app page may not open a plain
 /// `ws://` to another machine), which passes the socket through unchanged. Only another engine's
-/// `/api/join/ws` on a private address.
+/// `/api/join/ws`, or its `/api/join/signal` (an internet invite signalled without the hub), on a
+/// private address.
 pub async fn relay(
     upgrade: WebSocketUpgrade,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
@@ -2081,16 +2142,17 @@ pub async fn relay(
         return r;
     }
     // Said on the socket: a page's WebSocket cannot read the body of a refused upgrade.
-    let Some(target) = crate::pad_link::lan_ws_target(&q.url, "api/join/ws") else {
+    let Some((target, max)) = relay_target(&q.url) else {
         return upgrade.on_upgrade(|mut s| async move {
             let _ = s.send(refused("address")).await;
         });
     };
-    // What the guest sends is held to a guest socket's limit; the host's pictures coming back
-    // are read by the relay's own client socket, which keeps its large one.
+    // What the guest sends is held to a guest socket's limit (a signalling one's: the hub's); the
+    // host's pictures coming back are read by the relay's own client socket, which keeps its
+    // large one.
     upgrade
-        .max_message_size(GUEST_MSG_MAX)
-        .max_frame_size(GUEST_MSG_MAX)
+        .max_message_size(max)
+        .max_frame_size(max)
         .on_upgrade(move |s| async move { crate::pad_link::relay_to(s, &target).await })
 }
 
@@ -3796,6 +3858,7 @@ pub(crate) fn router<S: Clone + Send + Sync + 'static>() -> axum::Router<S> {
         .route("/join", get(page))
         .route("/api/join/ws", get(ws))
         .route("/api/join/relay", get(relay))
+        .route("/api/join/signal", get(signal))
         .route("/api/join", get(get_state))
         .route("/api/join/open", post(open))
         .route("/api/join/close", post(close))

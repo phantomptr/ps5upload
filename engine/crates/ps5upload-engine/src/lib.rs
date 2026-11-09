@@ -893,6 +893,9 @@ fn loopback_allows(cfg: &LoopbackGuardConfig, peer: std::net::IpAddr, path: &str
         // the invite or the resume token itself. The rest of /api/join is the host's.
         || path == "/join"
         || path == "/api/join/ws"
+        // …and an internet invite's signalling straight to this engine (join_net/local_signal),
+        // for this engine's own rooms only: the guest still checks the certificate and the key.
+        || path == "/api/join/signal"
         // A friend receiving a Share (share/mod.rs) on the home network: the page and its
         // socket, which serves only what the sender allowed. The rest of /api/share is the
         // sender's.
@@ -12654,6 +12657,7 @@ fn build_app_and_mcp(
         .route("/join", get(join::page))
         .route("/api/join/ws", get(join::ws))
         .route("/api/join/relay", get(join::relay))
+        .route("/api/join/signal", get(join::signal))
         .route("/api/join", get(join::get_state))
         .route("/api/join/open", post(join::open))
         .route("/api/join/close", post(join::close))
@@ -13525,6 +13529,7 @@ mod loopback_guard_tests {
         let c = cfg(&[]);
         assert!(loopback_allows(&c, ip("192.168.1.30"), "/join"));
         assert!(loopback_allows(&c, ip("192.168.1.30"), "/api/join/ws"));
+        assert!(loopback_allows(&c, ip("100.101.2.3"), "/api/join/signal"));
         // The host's side of Play Together stays on this computer.
         for p in [
             "/api/join",
@@ -13538,6 +13543,7 @@ mod loopback_guard_tests {
             "/api/join/relay",
             "/api/join/ws/x",
             "/api/join/wsx",
+            "/api/join/signal/x",
             "/join/../api/join/open",
             "/joinx",
             "/join/x",

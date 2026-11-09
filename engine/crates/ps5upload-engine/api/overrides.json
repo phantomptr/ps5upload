@@ -198,7 +198,10 @@
    "summary": "A finished job's transfer summary"
   },
   "GET /api/join/relay": {
-   "summary": "A socket that forwards a guest page to the host engine's /api/join/ws"
+   "summary": "A socket that forwards a guest page to the host engine's /api/join/ws or /api/join/signal"
+  },
+  "GET /api/join/signal": {
+   "summary": "An internet invite's signalling straight to this engine, without the hub"
   },
   "GET /api/local/list-dir": {
    "summary": "List a folder on this computer"

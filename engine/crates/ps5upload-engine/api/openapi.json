@@ -22833,7 +22833,7 @@
     },
     "/api/join/relay": {
       "get": {
-        "description": "`GET /api/join/relay?url=ws://<host engine>:<port>/api/join/ws` (this computer only): an app\njoining a friend's Play Together talks to its own engine (an app page may not open a plain\n`ws://` to another machine), which passes the socket through unchanged. Only another engine's\n`/api/join/ws` on a private address.",
+        "description": "`GET /api/join/relay?url=ws://<host engine>:<port>/api/join/ws` (this computer only): an app\njoining a friend's Play Together talks to its own engine (an app page may not open a plain\n`ws://` to another machine), which passes the socket through unchanged. Only another engine's\n`/api/join/ws`, or its `/api/join/signal` (an internet invite signalled without the hub), on a\nprivate address.",
         "parameters": [
           {
             "in": "query",
@@ -22857,7 +22857,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "A socket that forwards a guest page to the host engine's /api/join/ws",
+        "summary": "A socket that forwards a guest page to the host engine's /api/join/ws or /api/join/signal",
         "tags": [
           "play-together"
         ],
@@ -22928,6 +22928,33 @@
             "required": false
           },
           "response_schema": "literal"
+        }
+      }
+    },
+    "/api/join/signal": {
+      "get": {
+        "description": "`GET /api/join/signal`: an internet invite's signalling straight to this engine, for a guest\nthat reaches it on the home network or over Tailscale (join_net/local_signal.rs). The hub's\nguest protocol, for this engine's own rooms only; the connection it sets up is the same one,\nchecked by the guest against the link's fingerprint.",
+        "responses": {
+          "101": {
+            "description": "Switches to a WebSocket."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many requests"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "An internet invite's signalling straight to this engine, without the hub",
+        "tags": [
+          "play-together"
+        ],
+        "x-ps5upload": {
+          "access": "lan-open",
+          "response_schema": "websocket",
+          "websocket": true
         }
       }
     },
