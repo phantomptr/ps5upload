@@ -8328,6 +8328,7 @@ rp_users_add_hint: "Untuk bermain juga sebagai pengguna lain, masuk ke pengguna 
 "cs_ts_found_body": "PS5 ini ada di jaringan Tailscale-mu tetapi belum ada di daftar perangkat ini. Tambahkan satu untuk memakainya dari sini, di rumah atau di luar.",
 "cs_ts_paused": "Tailscale dijeda di perangkat ini, jadi PS5 di luar rumah tidak bisa dijangkau. Nyalakan untuk memakainya dari mana saja.",
 "cs_ts_resume": "Nyalakan",
+"cs_ts_found_blocked": "PS5 ini belum mengizinkan perangkat ini masuk lewat Tailscale. Izinkan di perangkat yang sudah memakai PS5 ini (kartunya di Koneksi), atau di halaman PS5 itu sendiri.",
 "cs_ask_line": "{device} ingin memakai {console}",
 "cs_ask_more": "{count} lagi menunggu",
 "cs_card_checking": "Memeriksa…",

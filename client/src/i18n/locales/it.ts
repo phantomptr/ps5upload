@@ -8272,6 +8272,7 @@ rp_users_add_hint: "Per giocare anche come un altro utente, accedi con quell’u
 "cs_ts_found_body": "Queste PS5 sono sulla tua rete Tailscale ma non ancora nell'elenco di questo dispositivo. Aggiungine una per usarla da qui, a casa o fuori.",
 "cs_ts_paused": "Tailscale è in pausa su questo dispositivo, quindi le PS5 fuori casa non sono raggiungibili. Attivalo per usarle da ovunque.",
 "cs_ts_resume": "Attiva",
+"cs_ts_found_blocked": "Non fa ancora entrare questo dispositivo tramite Tailscale. Consentilo su un dispositivo che usa già questa PS5 (la sua scheda in Connessione) o sulla pagina della PS5.",
 "cs_ask_line": "{device} vuole usare {console}",
 "cs_ask_more": "Altri {count} in attesa",
 "cs_card_checking": "Verifica…",

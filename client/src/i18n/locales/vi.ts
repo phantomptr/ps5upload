@@ -8321,6 +8321,7 @@ rp_users_add_hint: "Để chơi bằng cả người dùng khác, hãy đăng nh
 "cs_ts_found_body": "Những PS5 này đang ở trên mạng Tailscale của bạn nhưng chưa có trong danh sách của thiết bị này. Thêm một máy để dùng từ đây, ở nhà hay ở xa.",
 "cs_ts_paused": "Tailscale đang tạm dừng trên thiết bị này, nên không kết nối được các PS5 ở xa nhà. Bật lên để dùng chúng từ bất cứ đâu.",
 "cs_ts_resume": "Bật",
+"cs_ts_found_blocked": "Máy này chưa cho thiết bị này vào qua Tailscale. Hãy cho phép trên một thiết bị đã dùng PS5 này (thẻ của nó trong Kết nối) hoặc trên trang riêng của PS5.",
 "cs_ask_line": "{device} muốn dùng {console}",
 "cs_ask_more": "Còn {count} yêu cầu đang chờ",
 "cs_card_checking": "Đang kiểm tra…",

@@ -185,6 +185,15 @@ export function TailnetFound({
                 {c.tailnet_ip}
                 {c.lan_host ? ` · ${c.lan_host}` : ""}
               </p>
+              {!c.reachable && (
+                <p className="text-xs text-[var(--color-warn)]" data-testid="consoles-ts-found-blocked">
+                  {tr(
+                    "cs_ts_found_blocked",
+                    undefined,
+                    "It doesn't let this device in over Tailscale yet. Allow it on a device that already uses this PS5 (its card in Connection), or on the PS5's own page.",
+                  )}
+                </p>
+              )}
             </div>
             <Button
               size="sm"

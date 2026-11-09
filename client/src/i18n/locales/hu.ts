@@ -8614,6 +8614,7 @@ rp_users_add_hint: "Ha másik felhasználóként is játszanál, jelentkezz be a
 "cs_ts_found_body": "Ezek a PS5-ök a Tailscale-hálózatodon vannak, de még nincsenek az eszköz listáján. Adj hozzá egyet, hogy innen használd, otthon vagy távol.",
 "cs_ts_paused": "A Tailscale szüneteltetve van ezen az eszközön, ezért az otthonon kívüli PS5-ök nem érhetők el. Kapcsold be, hogy bárhonnan használhasd őket.",
 "cs_ts_resume": "Bekapcsolás",
+"cs_ts_found_blocked": "Még nem engedi be ezt az eszközt Tailscale-en. Engedélyezd egy olyan eszközön, amely már használja ezt a PS5-öt (a kártyáján a Kapcsolat alatt), vagy a PS5 saját oldalán.",
 "cs_ask_line": "{device} használná ezt: {console}",
 "cs_ask_more": "Még {count} várakozik",
 "cs_card_checking": "Ellenőrzés…",

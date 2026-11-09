@@ -8336,6 +8336,7 @@ rp_users_add_hint: "다른 사용자로도 플레이하려면 PS5에서 그 사�
 "cs_ts_found_body": "이 PS5들은 Tailscale 네트워크에 있지만 아직 이 기기의 목록에는 없습니다. 추가하면 집에서도 밖에서도 여기서 쓸 수 있습니다.",
 "cs_ts_paused": "이 기기에서 Tailscale이 일시정지되어 집 밖의 PS5에 연결할 수 없습니다. 켜면 어디서든 쓸 수 있습니다.",
 "cs_ts_resume": "켜기",
+"cs_ts_found_blocked": "이 PS5가 아직 Tailscale로 이 기기를 들여보내지 않아요. 이 PS5를 이미 쓰는 기기(연결의 카드)나 PS5 자체 페이지에서 허용하세요.",
 "cs_ask_line": "{device}이(가) {console}을(를) 사용하려고 합니다",
 "cs_ask_more": "{count}개 더 대기 중",
 "cs_card_checking": "확인 중…",

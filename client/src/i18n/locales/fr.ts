@@ -8335,6 +8335,7 @@ rp_users_add_hint: "Pour jouer aussi avec un autre utilisateur, connectez-vous �
 "cs_ts_found_body": "Ces PS5 sont sur votre réseau Tailscale, mais pas encore dans la liste de cet appareil. Ajoutez-en une pour l'utiliser d'ici, chez vous ou ailleurs.",
 "cs_ts_paused": "Tailscale est en pause sur cet appareil : les PS5 hors de chez vous sont injoignables. Activez-le pour les utiliser de partout.",
 "cs_ts_resume": "Activer",
+"cs_ts_found_blocked": "Elle ne laisse pas encore entrer cet appareil via Tailscale. Autorisez-le sur un appareil qui utilise déjà cette PS5 (sa carte dans Connexion), ou sur la page de la PS5.",
 "cs_ask_line": "{device} veut utiliser {console}",
 "cs_ask_more": "{count} autres en attente",
 "cs_card_checking": "Vérification…",

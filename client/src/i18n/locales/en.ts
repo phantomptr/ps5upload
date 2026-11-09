@@ -8626,6 +8626,7 @@ rp_users_add_hint: "To play as another user too, sign in to that user on the PS5
 "cs_ts_found_body": "These PS5s are on your Tailscale network but not on this device's list yet. Add one to use it from here, at home or away.",
 "cs_ts_paused": "Tailscale is paused on this device, so PS5s away from home can't be reached. Turn it on to use them from anywhere.",
 "cs_ts_resume": "Turn on",
+"cs_ts_found_blocked": "It doesn't let this device in over Tailscale yet. Allow it on a device that already uses this PS5 (its card in Connection), or on the PS5's own page.",
 "cs_ask_line": "{device} wants to use {console}",
 "cs_ask_more": "{count} more waiting",
 "cs_card_checking": "Checking…",

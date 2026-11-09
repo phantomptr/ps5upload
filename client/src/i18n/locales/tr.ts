@@ -8326,6 +8326,7 @@ rp_users_add_hint: "Başka bir kullanıcıyla da oynamak için PS5'te o kullanı
 "cs_ts_found_body": "Bu PS5'ler Tailscale ağınızda ama henüz bu cihazın listesinde değil. Birini ekleyin ve buradan, evde ya da dışarıda kullanın.",
 "cs_ts_paused": "Bu cihazda Tailscale duraklatıldı, bu yüzden ev dışındaki PS5'lere ulaşılamıyor. Her yerden kullanmak için açın.",
 "cs_ts_resume": "Aç",
+"cs_ts_found_blocked": "Bu PS5 henüz bu cihazı Tailscale üzerinden içeri almıyor. Bu PS5'i zaten kullanan bir cihazda (Bağlantı'daki kartında) ya da PS5'in kendi sayfasında izin verin.",
 "cs_ask_line": "{device}, {console} cihazını kullanmak istiyor",
 "cs_ask_more": "{count} tane daha bekliyor",
 "cs_card_checking": "Denetleniyor…",

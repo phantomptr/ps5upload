@@ -8278,6 +8278,7 @@ rp_users_add_hint: "若也想以其他用户游玩，请在 PS5 上登录该用�
 "cs_ts_found_body": "这些 PS5 在你的 Tailscale 网络中，但还不在这台设备的列表里。添加一台，就能在这里使用它，在家或外出都行。",
 "cs_ts_paused": "这台设备上的 Tailscale 已暂停，所以无法连接不在家里的 PS5。打开它即可随处使用。",
 "cs_ts_resume": "开启",
+"cs_ts_found_blocked": "它还不允许此设备通过 Tailscale 连接。请在已经使用这台 PS5 的设备上（连接 中它的卡片）或在 PS5 自己的页面上允许。",
 "cs_ask_line": "{device} 想使用 {console}",
 "cs_ask_more": "还有 {count} 个在等待",
 "cs_card_checking": "正在检查…",
