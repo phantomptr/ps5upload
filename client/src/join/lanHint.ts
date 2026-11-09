@@ -11,9 +11,10 @@
 export const HUB_PROBE_MS = 4000;
 
 /** The home network's page the link names (`lan`), or null: http(s) only, ending in /join or /pad
- *  (an engine served under a path keeps it), no fragment or query of its own. */
-export function lanPage(hash: string, kind: "join" | "pad"): string | null {
-  const raw = new URLSearchParams(hash.replace(/^#/, "")).get("lan");
+ *  (an engine served under a path keeps it), no fragment or query of its own. `param` "ts": the
+ *  same page at the host's Tailscale address (engine join_net link_for). */
+export function lanPage(hash: string, kind: "join" | "pad", param: "lan" | "ts" = "lan"): string | null {
+  const raw = new URLSearchParams(hash.replace(/^#/, "")).get(param);
   if (!raw) return null;
   try {
     const u = new URL(raw);

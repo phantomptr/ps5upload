@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { endText, showsGuide } from "./JoinView";
+import { endText, pathLabel, showsGuide } from "./JoinView";
 
 // The fallback with the variables filled in (what an untranslated key shows).
 const tr = ((_key: string, vars?: Record<string, string | number> | string, fallback?: string) => {
@@ -8,6 +8,14 @@ const tr = ((_key: string, vars?: Record<string, string | number> | string, fall
   const v = typeof vars === "object" ? vars : {};
   return text.replace(/\{(\w+)\}/g, (m, k: string) => (k in v ? String(v[k]) : m));
 }) as Parameters<typeof endText>[0];
+
+describe("guest page: which way the game comes", () => {
+  it("names the path beside the delay", () => {
+    expect(pathLabel(tr, "lan")).toBe("Home network");
+    expect(pathLabel(tr, "tailscale")).toBe("Tailscale");
+    expect(pathLabel(tr, "internet")).toBe("Internet");
+  });
+});
 
 describe("guest page: the host's stream's controller (#687, #720)", () => {
   it("Player 1 plays as the host's user: no 'press PS, pick Quick Play' guide", () => {

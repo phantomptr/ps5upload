@@ -281,6 +281,10 @@ export interface JoinLink {
   name: string | null;
   /** An internet invite: joined peer to peer through the hub (join/rtcTransport). */
   net?: InternetInvite;
+  /** The host's own page on their Wi-Fi (`lan`) and on Tailscale (`ts`), when the internet link
+   *  names them: where the app signals without the hub (join/pathRace). */
+  lan?: string | null;
+  ts?: string | null;
 }
 
 /** The link pasted into the app (or scanned), or null when it is not one. */
@@ -302,7 +306,16 @@ export function parseJoinLink(text: string): JoinLink | null {
   if (net) {
     const lan = lanPage(u.hash, "join");
     const name = new URLSearchParams(u.hash.replace(/^#/, "")).get("n")?.trim() || null;
-    return { origin: lan ? lan.replace(/\/join\/?$/, "") : `https://${net.hub}`, invite: net.key, name, code: null, net };
+    const ts = lanPage(u.hash, "join", "ts");
+    return {
+      origin: lan ? lan.replace(/\/join\/?$/, "") : `https://${net.hub}`,
+      invite: net.key,
+      name,
+      code: null,
+      net,
+      lan,
+      ts,
+    };
   }
   const hash = new URLSearchParams(u.hash.replace(/^#/, ""));
   const invite = hash.get("i") ?? "";

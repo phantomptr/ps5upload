@@ -25,6 +25,7 @@ import { makeWatchPlayer, type MsePlayer, type SoundReport, type WatchPlayer, ty
 import { rpInput } from "../state/rpInput";
 import { setScreenWakeReason } from "../lib/androidScreenWake";
 import { setPadForwardReason } from "../lib/androidPadBridge";
+import type { NetPath } from "./netPath";
 import type { JoinTransport } from "./rtcTransport";
 import { TrackPlayer } from "./trackPlayer";
 
@@ -42,6 +43,8 @@ export interface JoinSnapshot {
   host: string | null;
   /** The guest muted the game's sound (remembered on this device). */
   muted: boolean;
+  /** Which way the connection goes while joined (join/netPath), when it is known. */
+  path: NetPath | null;
 }
 
 const MUTED_KEY = "ps5upload.join.muted";
@@ -58,7 +61,13 @@ export interface JoinSessionOptions {
   code?: string | null;
   name: string;
   host: string | null;
+  /** The way a plain socket goes (the host's page on their Wi-Fi: join/netPath hostPath). An
+   *  internet invite's transport says it itself once joined. */
+  path?: NetPath | null;
 }
+
+/** How often the way is read again while joined (ICE may move to another pair). */
+export const PATH_EVERY_MS = 5000;
 
 /** A guest's keyboard (#654): Remote Play's default keys, except Escape, which stays the
  *  browser's (it leaves full screen). */
@@ -142,6 +151,7 @@ export class JoinSession {
       noSound: false,
       host: opts.host,
       muted: readMuted(),
+      path: null,
     };
     this.client = new JoinClient({
       url: opts.url,
@@ -152,6 +162,7 @@ export class JoinSession {
       readPad: devicePad,
       onStage: (stage) => {
         this.set({ stage });
+        if (stage.kind === "joined") void this.readPath();
         if (stage.kind === "refused" || stage.kind === "ended") this.teardown();
       },
       onStatus: (status) => this.set({ status, host: status.host ?? this.snap.host }),
@@ -195,6 +206,21 @@ export class JoinSession {
     return this.player;
   }
 
+  /** Which way the connection goes now: the transport's own word (an internet invite's selected
+   *  pair), else what the plain socket's address says. */
+  async readPath(): Promise<void> {
+    const s = this.client.socket as { netPath?: () => Promise<NetPath | null> } | null;
+    let path: NetPath | null = this.opts.path ?? null;
+    if (s?.netPath) {
+      try {
+        path = (await s.netPath()) ?? null;
+      } catch {
+        path = null;
+      }
+    }
+    if (path !== this.snap.path) this.set({ path });
+  }
+
   /** The element the picture is drawn in (moved into whichever view shows it). */
   get element(): HTMLElement {
     return this.picture().element;
@@ -234,7 +260,11 @@ export class JoinSession {
     document.addEventListener("visibilitychange", vis);
     window.addEventListener("blur", blur);
     window.addEventListener("focus", focus);
+    const pathTimer = setInterval(() => {
+      if (this.client.current.kind === "joined") void this.readPath();
+    }, PATH_EVERY_MS);
     this.cleanups.push(() => {
+      clearInterval(pathTimer);
       document.removeEventListener("visibilitychange", vis);
       window.removeEventListener("blur", blur);
       window.removeEventListener("focus", focus);

@@ -14,6 +14,7 @@
 // (`netFailure`), which the session shows as the reason the guest is not in the game.
 
 import { NET_CLOSE, netFailure, type InternetInvite, type NetWhy, type TrackMedia } from "../lib/joinProtocol";
+import { selectedPath, type NetPath } from "./netPath";
 
 /** What an internet invite link's fragment carries:
  *  `#room=<id>&k=<invite key>&fp=<SHA-256, upper-case hex with colons>&hub=<host[:port]>`. */
@@ -168,6 +169,11 @@ export interface RtcTransportOptions {
    *  can and its host allows it, and says so in `joined` (`track`); otherwise the pictures stay
    *  on the channel. */
   video?: boolean;
+  /** Where to signal: the hub's socket (the default), or one that speaks its guest side for this
+   *  room alone, the host's own engine (`/api/join/signal`, engine join_net/local_signal.rs), reached
+   *  through this app's engine on the same Wi-Fi or tailnet. The answer is checked against the
+   *  link's `fp` the same way either way. */
+  signalUrl?: string;
 }
 
 /** The video codecs the track may use, H.264 first (H.265 only where this browser has it: the
@@ -229,7 +235,7 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
       }
       let hub: WebSocket;
       try {
-        hub = new WS(hubSocketUrl(inv.hub));
+        hub = new WS(o.signalUrl ?? hubSocketUrl(inv.hub));
       } catch {
         this.fail("no_hub");
         return;
@@ -422,6 +428,17 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
           return;
         default:
           return;
+      }
+    }
+
+    /** Which way the connection goes now (the pair ICE selected), or null before it is known. */
+    async netPath(): Promise<NetPath | null> {
+      const pc = this.pc;
+      if (!pc || this.readyState !== 1 || typeof pc.getStats !== "function") return null;
+      try {
+        return selectedPath(await pc.getStats());
+      } catch {
+        return null;
       }
     }
 

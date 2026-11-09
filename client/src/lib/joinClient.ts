@@ -142,6 +142,11 @@ export class JoinClient {
     return this.stage;
   }
 
+  /** The socket now (an internet invite's transport says which way it goes: join/pathRace). */
+  get socket(): WebSocket | null {
+    return this.ws;
+  }
+
   /** The token this guest resumes with (tests). */
   get resumeToken(): string | null {
     return this.token;

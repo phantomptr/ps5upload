@@ -10,6 +10,7 @@ import "../index.css";
 import { JoinFlow } from "./JoinFlow";
 import { hubSocketUrl, parseInternetFragment, rtcTransport } from "./rtcTransport";
 import { lanPage, lanTarget } from "./lanHint";
+import { hostPath } from "./netPath";
 
 const hash = new URLSearchParams(location.hash.slice(1));
 const host = hash.get("n")?.trim() || null;
@@ -36,5 +37,5 @@ if (net) {
   // The engine may be served under a path (PS5UPLOAD_BASE_URL): the socket is beside this page.
   const prefix = location.pathname.replace(/\/join\/?$/, "");
   const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${prefix}/api/join/ws`;
-  root.render(<JoinFlow url={url} invite={invite} host={host} />);
+  root.render(<JoinFlow url={url} invite={invite} host={host} path={hostPath(location.hostname)} />);
 }

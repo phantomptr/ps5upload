@@ -8,6 +8,7 @@ import { OpenInAppGate } from "../components/OpenInAppGate";
 import { JoinView } from "./JoinView";
 import { holdWhileJoined, JoinSession } from "./session";
 import type { JoinTransport } from "./rtcTransport";
+import type { NetPath } from "./netPath";
 import { defaultName, lastName, rememberName } from "./guestName";
 import { OpenOnWifi, useHubDown } from "./OpenOnWifi";
 
@@ -46,6 +47,7 @@ export function JoinFlow({
   host,
   transport,
   lanUrl = null,
+  path = null,
 }: {
   url: string;
   invite: string | null;
@@ -55,6 +57,8 @@ export function JoinFlow({
   /** An internet invite's page on the host's Wi-Fi (lanHint.ts), offered when the hub can't be
    *  reached; null: the link names none (an older host). */
   lanUrl?: string | null;
+  /** The way the plain socket goes (join/netPath hostPath of this page's address). */
+  path?: NetPath | null;
 }) {
   const tr = useTr();
   const hubDown = useHubDown(transport ? url : null, lanUrl);
@@ -66,7 +70,7 @@ export function JoinFlow({
     // Remembered on this device: the next invite has it filled in.
     const clean = rememberName(n);
     if (!clean) return;
-    const s = new JoinSession({ url, invite, name: clean, host, transport });
+    const s = new JoinSession({ url, invite, name: clean, host, transport, path });
     setSession(s);
     setRound((r) => r + 1);
     s.start();

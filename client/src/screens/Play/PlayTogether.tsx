@@ -581,6 +581,17 @@ export function PlayTogetherPanel({
                 {tr("pt_works_anywhere", undefined, "Works anywhere: on your Wi-Fi and over the internet.")}
               </p>
             )}
+            {/* #720: Play Together never sets up Tailscale; it only uses the Tailscale app's
+                network when both have it and it is the shorter way (join/pathRace, ICE). */}
+            {link && onNet && (
+              <p className="text-xs text-[var(--color-muted)]" data-testid="pt-no-tailscale">
+                {tr(
+                  "pt_no_tailscale_needed",
+                  undefined,
+                  "No Tailscale needed. The link takes the shortest way: your Wi-Fi, Tailscale if you both use the Tailscale app, or the internet.",
+                )}
+              </p>
+            )}
             {link && onNet && <InternetHint testId="pt-addresses" />}
             {link && wifiWhy && (
               <p

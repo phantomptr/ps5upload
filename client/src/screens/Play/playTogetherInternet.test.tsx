@@ -279,6 +279,8 @@ describe("the panel", () => {
       expect(out).toContain(`data-testid="pt-url">${esc(NET_URL)}<`);
       expect(out).toContain('data-testid="pt-qr"');
       expect(out).toContain('data-testid="pt-works-anywhere"');
+      // #720: said plainly that Tailscale is nothing to set up for it.
+      expect(out).toContain('data-testid="pt-no-tailscale"');
       expect(out).toContain('data-testid="pt-addresses-internet-hint"');
       expect(out).not.toContain('data-testid="pt-addresses-home"');
       expect(out).not.toContain('data-testid="pt-addresses-internet"');
@@ -302,6 +304,7 @@ describe("the panel", () => {
     expect(out).toContain(`data-testid="pt-url">${engine.invite.url}<`);
     expect(out).toMatch(/data-testid="pt-wifi-only" data-why="offline">Works on your Wi-Fi only \(no internet right now\)\.</);
     expect(out).not.toContain("pt-works-anywhere");
+    expect(out).not.toContain("pt-no-tailscale");
     // The hub's own warning is not repeated.
     expect(out).not.toContain("pt-net-hub-down");
   });

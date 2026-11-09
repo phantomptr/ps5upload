@@ -174,7 +174,13 @@ describe("links and timing", () => {
       name: "Ann",
       code: null,
       net: { room: "Demo0Room0Not0Real0000", key: inv, fp, hub: "hub.example.com" },
+      lan: "http://192.168.1.20:19113/join",
+      ts: null,
     });
+    // With the host's Tailscale page too (`ts`): where the app also signals without the hub.
+    const ts = encodeURIComponent("http://100.101.2.3:19113/join");
+    expect(parseJoinLink(`${link}&ts=${ts}`)?.ts).toBe("http://100.101.2.3:19113/join");
+    expect(parseJoinLink(`${link}&ts=${encodeURIComponent("http://100.101.2.3:19113/x")}`)?.ts).toBeNull();
     // Without its page: the hub's address stands in, the invite still reads.
     const away = parseJoinLink(link.replace(/&lan=.*$/, ""))!;
     expect(away.origin).toBe("https://hub.example.com");
