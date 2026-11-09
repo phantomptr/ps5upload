@@ -50,9 +50,10 @@ int main(void) {
      * check only that a poll right away keeps holding */
     check(power_phase_poll(5, 5) == PP_WAKING, "inside the settle minute: still waking");
 
-    /* a throttled thread (both clocks overran) is not a wake */
+    /* a throttled thread (both clocks overran, under a minute) is not a wake; past a minute both
+     * clocks moving is a rest on FW 13.60 (measured), see pp_clocks_say_frozen */
     int calls = g_pause_calls;
-    power_phase_poll(90, 90);
+    power_phase_poll(45, 45);
     check(g_pause_calls >= calls && !g_paused, "a throttled poll does not pause the tailnet");
 
     printf("power_phase_live_selftest: %s\n", failures ? "FAILED" : "ok");

@@ -63,6 +63,16 @@ static const char *lock_state(pthread_mutex_t *m) {
 
 /* One line, one write(2) (no interleaving with other threads), then fsync when it marks a
  * transition: the page cache does not survive the console crashing or losing power. */
+/* One whole write, retried a few times 100 ms apart: around a rest or wake a write can fail for a
+ * moment (a "settled" line once went missing from both logs). A partial write is kept as it is. */
+static void write_retry(int fd, const char *buf, size_t len) {
+    for (int tries = 0; tries < 5; tries++) {
+        ssize_t w = write(fd, buf, len);
+        if (w >= 0) return;
+        if (errno != EINTR) usleep(100 * 1000);
+    }
+}
+
 static void pp_log(int durable, const char *fmt, ...) {
     char line[640];
     struct tm tm;
@@ -78,7 +88,7 @@ static void pp_log(int durable, const char *fmt, ...) {
     size_t len = (size_t)n + (size_t)m;
     if (len > sizeof line - 2) len = sizeof line - 2;
     line[len++] = '\n';
-    (void)write(STDERR_FILENO, line, len);
+    write_retry(STDERR_FILENO, line, len);
     if (!durable) return;
     (void)fsync(STDERR_FILENO);
     /* The transitions alone, also in their own small file: stderr.log keeps one .old generation, so
@@ -87,13 +97,11 @@ static void pp_log(int durable, const char *fmt, ...) {
     if (stat(POWER_LOG_PATH, &st) == 0 && st.st_size > POWER_LOG_MAX) (void)rename(POWER_LOG_PATH, POWER_LOG_PATH ".old");
     int fd = open(POWER_LOG_PATH, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd < 0) return;
-    char pid[24];
-    int pn = snprintf(pid, sizeof pid, "pid=%d ", (int)getpid());
-    /* "[power] <time> " then the pid, then the rest */
+    /* "[power] <time> pid=<n> <rest>" in ONE write: three writes once left a line without its time. */
+    char out[sizeof line + 24];
     size_t head = (size_t)n <= len ? (size_t)n : len;
-    (void)write(fd, line, head);
-    if (pn > 0) (void)write(fd, pid, (size_t)pn);
-    (void)write(fd, line + head, len - head);
+    int on = snprintf(out, sizeof out, "%.*spid=%d %.*s", (int)head, line, (int)getpid(), (int)(len - head), line + head);
+    if (on > 0) write_retry(fd, out, (size_t)on < sizeof out ? (size_t)on : sizeof out - 1);
     (void)fsync(fd);
     close(fd);
 }

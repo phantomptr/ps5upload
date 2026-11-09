@@ -75,9 +75,16 @@ static inline void pp_init(pp_state *s) {
     s->wakes = 0;
 }
 
+/* Both clocks moving this far across one 5 s poll: the process was frozen. Measured on the Pro
+ * (13.60, 2026-11-09): BOTH clocks advanced 411 s over a rest, so the wall-ahead-of-monotonic test
+ * alone never saw that wake. Same line the wake watchdog uses (realtime AND monotonic > 60 s); a
+ * thread a game throttles stalls seconds, not a minute. */
+#define PP_FROZEN_BOTH_S 60
+
 /* Did the clocks' movement across one poll say the process was frozen? */
 static inline int pp_clocks_say_frozen(int64_t real_elapsed_s, int64_t mono_elapsed_s) {
-    return real_elapsed_s - mono_elapsed_s > PP_FROZEN_GAP_S;
+    if (real_elapsed_s - mono_elapsed_s > PP_FROZEN_GAP_S) return 1;
+    return real_elapsed_s > PP_FROZEN_BOTH_S && mono_elapsed_s > PP_FROZEN_BOTH_S;
 }
 
 /* Does a failing socket call with this errno say "the network is going away"? Resource limits
