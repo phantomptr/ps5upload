@@ -83,7 +83,11 @@ test("deep links: ?tab=ps5&console= opens that console, #tailscale opens App", a
 test("Connection links to This PS5 for the selected console", async ({ page }) => {
   await setUp(page);
   await page.goto("/connection", { waitUntil: "domcontentloaded" });
-  await main(page).getByRole("button", { name: "Settings for this PS5" }).click({ timeout: 30_000 });
+  // Consoles: one card per PS5, each with its own link.
+  await main(page)
+    .locator(`[data-console="${A.id}"]`)
+    .getByRole("button", { name: "Settings for this PS5" })
+    .click({ timeout: 30_000 });
   await expect(page).toHaveURL(new RegExp(`/settings\\?tab=ps5&console=${A.id}`));
   await expect(main(page).getByTestId("settings-ps5-picker")).toHaveValue(A.id);
 });

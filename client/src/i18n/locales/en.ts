@@ -8645,7 +8645,7 @@ rp_users_add_hint: "To play as another user too, sign in to that user on the PS5
 "cs_card_helper_pairing": "Helper runs · waiting to let this device in",
 "cs_card_helper_sending": "Sending the helper…",
 "cs_card_helper_stopped": "Helper stopped by you",
-"cs_card_helper_unknown": "Helper —",
+"cs_card_helper_unknown": "Checking the helper…",
 "cs_card_helper_update": "Helper {v} · update available",
 "cs_card_invite": "Invite a device",
 "cs_card_kernel_no": "No kernel access: installs fail",

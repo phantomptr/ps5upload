@@ -90,7 +90,7 @@ function helperChip(tr: Translator, s: CardStatus): { text: string; tone: "good"
     case "missing":
       return { text: tr("cs_card_helper_missing", undefined, "Helper not running"), tone: "warn" };
     default:
-      return { text: tr("cs_card_helper_unknown", undefined, "Helper —"), tone: "neutral" };
+      return { text: tr("cs_card_helper_unknown", undefined, "Checking the helper…"), tone: "neutral" };
   }
 }
 
@@ -129,7 +129,7 @@ function ReachRow({
         </span>
         <div className="min-w-0 flex-1 basis-40">
           <div className="text-xs font-medium text-[var(--color-muted)]">{label}</div>
-          {value ? <div className="min-w-0 truncate text-sm">{value}</div> : null}
+          {value ? <div className="min-w-0 break-words text-sm">{value}</div> : null}
         </div>
         {control ? <div className="flex shrink-0 flex-wrap items-center gap-2">{control}</div> : null}
       </div>
@@ -442,7 +442,7 @@ export function ConsoleCardView(p: ConsoleCardViewProps) {
             </h2>
             {p.active ? <Badge tone="accent">{tr("cs_card_selected", undefined, "Selected")}</Badge> : null}
           </div>
-          <p className="mt-0.5 truncate text-sm text-[var(--color-muted)]" data-testid="console-card-status">
+          <p className="mt-0.5 break-words text-sm text-[var(--color-muted)]" data-testid="console-card-status">
             {statusLine(tr, s)}
           </p>
         </div>

@@ -104,7 +104,7 @@ function DeviceLine({
             </Badge>
           ) : null}
         </div>
-        <div className="truncate text-xs text-[var(--color-muted)]">
+        <div className="break-words text-xs text-[var(--color-muted)]">
           {viaText(tr, deviceVia(d))}
           {d.ip ? ` · ${d.ip}` : ""}
         </div>
