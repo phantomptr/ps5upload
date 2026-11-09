@@ -214,8 +214,12 @@ static int nap(tn_ctx *c, int64_t ms)
 		int r = tn_poll(&p, 1, t);
 		if (r > 0)
 			return 1;
-		if (r < 0 && tn_sock_errno() != TN_ERR_INTR)
-			return 0;
+		if (r < 0 && tn_sock_errno() != TN_ERR_INTR) {
+			/* poll() itself failing (rest mode takes the network away) must not end the nap
+			 * early: that turned the backoff into an immediate retry. Sleep instead. */
+			int64_t left = ms >= 0 ? end - tn_now_ms() : -1;
+			tn_sleep_ms(tn_poll_fail_wait_ms(0, left));
+		}
 	}
 }
 

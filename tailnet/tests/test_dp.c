@@ -254,8 +254,23 @@ static void test_denied_log(void)
 	CHECK(out[0].ip == 0x64400200u + 19 && out[TN_DENIED_MAX - 1].ip == 0x64400200u + 12);
 }
 
+/* Rest mode takes the network away: a failed poll() waits instead of spinning. */
+static void test_poll_fail_wait(void)
+{
+	CHECK(tn_poll_fail_wait_ms(1, -1) == 0);     /* an interrupt retries at once */
+	CHECK(tn_poll_fail_wait_ms(0, -1) == 100);   /* no deadline: a short pause */
+	CHECK(tn_poll_fail_wait_ms(0, 5000) == 100); /* never longer than the pause */
+	CHECK(tn_poll_fail_wait_ms(0, 40) == 40);    /* never past the nap's end */
+	CHECK(tn_poll_fail_wait_ms(0, 0) == 1);      /* and never zero: no spin */
+	CHECK(tn_poll_fail_wait_ms(0, -5) >= 1);
+	int64_t t0 = tn_now_ms();
+	tn_sleep_ms(30);
+	CHECK(tn_now_ms() - t0 >= 25);
+}
+
 int main(void)
 {
+	test_poll_fail_wait();
 	test_peer_allow();
 	test_denied_log();
 	test_wg();
