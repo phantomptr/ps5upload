@@ -1,59 +1,84 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { useNavigate } from "react-router";
 import {
   Cable,
   ChevronDown,
+  ChevronRight,
   Plus,
-  Trash2,
-  Pencil,
   Check,
   ChevronUp,
   ChevronDown as ChevronDownIcon,
+  ListOrdered,
 } from "lucide-react";
-import {
-  useRosterStore,
-  useActiveProfile,
-  type PS5Profile,
-} from "../state/roster";
-import { useTr } from "../state/lang";
-// Direct import (not via components/index.ts barrel) — the barrel
-// re-exports from this module's parent surface, which Rollup flags
-// as a circular dep warning at build time. Direct path keeps the
-// chunk graph clean.
-import { useConfirm } from "../components/ConfirmDialog";
+import { useRosterStore, useActiveProfile, type PS5Profile } from "../state/roster";
+import { useTr, type Translator } from "../state/lang";
 import { Modal } from "../components/Modal";
 import { parsePS5Firmware } from "../lib/ps5Firmware";
 import { menuKeyTarget } from "../lib/menuKeys";
-import { formatDate } from "../lib/formatDate";
 import { useFitOnScreen } from "../components/useFitOnScreen";
 import { useBackDismiss } from "../lib/systemBack";
 import { consoleOnTailnet, useTailnet, type ConsoleOnTailnet } from "../state/useTailnet";
+import { useHostRuntime, type HostRuntime } from "../state/connection";
+import { hostOf } from "../lib/addr";
+
+/** How one console is reached right now, for the picker: a status dot and the path in words. */
+export function pickerPath(
+  tr: Translator,
+  host: string,
+  rt: HostRuntime,
+  tailnet: ConsoleOnTailnet | null,
+): { dot: "good" | "warn" | "rest" | "off"; text: string } {
+  const answering = rt.payloadStatus === "up" || rt.session === "needs_pairing" || rt.power === "awake";
+  if (rt.power === "rest") return { dot: "rest", text: tr("cs_card_rest", undefined, "In rest mode") };
+  if (!answering) {
+    return rt.payloadStatus === "down" || rt.power === "unreachable"
+      ? { dot: "off", text: tr("cs_card_offline", undefined, "Not reachable") }
+      : { dot: "off", text: hostOf(host) };
+  }
+  const dot = rt.payloadStatus === "up" && rt.session !== "needs_pairing" ? "good" : "warn";
+  if (tailnet && tailnet.via !== "lan")
+    return { dot, text: tr("cs_pick_via_tailscale", { ip: tailnet.ip }, "Tailscale {ip}") };
+  return { dot, text: tr("cs_pick_via_home", { ip: hostOf(host) }, "Home {ip}") };
+}
+
+const DOT: Record<"good" | "warn" | "rest" | "off", string> = {
+  good: "bg-[var(--color-good)]",
+  warn: "bg-[var(--color-warn)]",
+  rest: "bg-[var(--color-accent-bright)]",
+  off: "bg-[var(--color-muted)] opacity-60",
+};
+
+function StatusDot({ dot }: { dot: keyof typeof DOT }) {
+  return <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${DOT[dot]}`} aria-hidden />;
+}
+
+/** One console's path line (its own runtime, read per row). */
+function PathLine({ p, tailnet }: { p: PS5Profile; tailnet: ReturnType<typeof useTailnet>["status"] }) {
+  const tr = useTr();
+  const rt = useHostRuntime(p.host);
+  const path = pickerPath(tr, p.host, rt, consoleOnTailnet(tailnet, p.host));
+  return (
+    <div className="flex min-w-0 items-center gap-1.5 text-xs text-[var(--color-muted)]" data-testid="roster-path">
+      <StatusDot dot={path.dot} />
+      <span className="truncate">{path.text}</span>
+    </div>
+  );
+}
 
 /**
  * Sidebar dropdown for switching between known PS5s.
  *
- * Always renders; when no profiles exist it shows an "Add PS5"
- * affordance directly. When one profile exists it acts as a
- * compact identity badge (with the dropdown still available for
- * Manage). When multiple profiles exist it surfaces the picker.
- *
- * Mounting strategy: lives in the sidebar between the brand header
- * and the nav, so it's always visible regardless of which screen
- * the user is on. Switching active profile invalidates the
- * connection store's host, which kicks off AppShell's status poll
- * for the new PS5 — no manual refresh needed downstream.
- *
- * Click-outside dismissal: a single document listener wired via
- * useEffect. We capture-phase to avoid race conditions with the
- * inner button's onClick (which would otherwise re-open right
- * after the document handler closed it).
+ * Each row shows the console's status dot and how it is reached right now (home or Tailscale).
+ * Adding a console, and changing one, happen on the Consoles page (Connection): "Add a PS5"
+ * opens its Add sheet, and "Manage PS5s" only orders the list and opens a console's card.
  */
 export default function RosterPicker() {
   const tr = useTr();
+  const navigate = useNavigate();
   const profiles = useRosterStore((s) => s.profiles);
   const setActive = useRosterStore((s) => s.setActive);
   const active = useActiveProfile();
   const [open, setOpen] = useState(false);
-  // Each console's Tailscale address, shown under its home address once it is on Tailscale.
   const { status: tailnet } = useTailnet();
   const [manageOpen, setManageOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -63,13 +88,10 @@ export default function RosterPicker() {
   const menuId = useId();
 
   const menuItems = () =>
-    Array.from(
-      menuRef.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]') ?? [],
-    );
+    Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]') ?? []);
 
-  // Opening moves focus into the list (the console on show, else the first
-  // row), so the arrow keys work straight away. It used to stay on the
-  // trigger, with nothing announcing that a menu had opened.
+  // Opening moves focus into the list (the console on show, else the first row), so the arrow
+  // keys work straight away.
   useEffect(() => {
     if (!open) return;
     const items = menuItems();
@@ -85,18 +107,13 @@ export default function RosterPicker() {
 
   const onMenuKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape" || e.key === "Tab") {
-      // Tab closes rather than walking out of an open menu into the page.
       e.preventDefault();
       e.stopPropagation();
       closeMenu();
       return;
     }
     const items = menuItems();
-    const next = menuKeyTarget(
-      e.key,
-      items.indexOf(document.activeElement as HTMLElement),
-      items.length,
-    );
+    const next = menuKeyTarget(e.key, items.indexOf(document.activeElement as HTMLElement), items.length);
     if (next === null) return;
     e.preventDefault();
     items[next]?.focus();
@@ -105,20 +122,13 @@ export default function RosterPicker() {
   useEffect(() => {
     if (!open) return;
     function onClick(e: MouseEvent) {
-      if (
-        wrapperRef.current &&
-        !wrapperRef.current.contains(e.target as Node)
-      ) {
-        setOpen(false);
-      }
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) setOpen(false);
     }
     document.addEventListener("mousedown", onClick, true);
     return () => document.removeEventListener("mousedown", onClick, true);
   }, [open]);
 
-  const fwLabel = active?.last_seen_kernel
-    ? (parsePS5Firmware(active.last_seen_kernel) ?? "—")
-    : null;
+  const fwLabel = active?.last_seen_kernel ? (parsePS5Firmware(active.last_seen_kernel) ?? "—") : null;
 
   return (
     <div className="relative mx-4 mb-1" ref={wrapperRef}>
@@ -128,7 +138,6 @@ export default function RosterPicker() {
         type="button"
         onClick={() => setOpen((v) => !v)}
         onKeyDown={(e) => {
-          // Down opens it, as on a native menu button.
           if (e.key === "ArrowDown" && !open) {
             e.preventDefault();
             setOpen(true);
@@ -137,10 +146,6 @@ export default function RosterPicker() {
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
-        // min-h-11 (44px) meets the touch-target floor (mobile-design
-        // §4.1). It's only +3px over the natural height, so desktop is
-        // visually unchanged — no need to make it conditional.
-        // A glass pill, like the reference's search field.
         className="flex min-h-12 w-full items-center gap-2.5 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] py-1.5 ps-1.5 pe-4 text-start text-xs shadow-[var(--edge-highlight),var(--shadow-1)] transition-colors hover:bg-[var(--color-float)]"
       >
         <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--color-accent-soft)] text-[var(--color-accent-bright)]">
@@ -151,12 +156,9 @@ export default function RosterPicker() {
             <>
               <div className="truncate font-medium text-[var(--color-text)]">
                 {active.name}
+                {fwLabel && <span className="font-normal text-[var(--color-muted)]">{` · FW ${fwLabel}`}</span>}
               </div>
-              <div className="truncate text-xs text-[var(--color-muted)]">
-                {active.host}
-                {fwLabel && ` · FW ${fwLabel}`}
-              </div>
-              <TailnetLine on={consoleOnTailnet(tailnet, active.host)} />
+              <PathLine p={active} tailnet={tailnet} />
             </>
           ) : (
             <span className="text-[var(--color-muted)]">
@@ -166,9 +168,7 @@ export default function RosterPicker() {
         </div>
         <ChevronDown
           size={12}
-          className={`shrink-0 text-[var(--color-muted)] transition-transform ${
-            open ? "rotate-180" : ""
-          }`}
+          className={`shrink-0 text-[var(--color-muted)] transition-transform ${open ? "rotate-180" : ""}`}
         />
       </button>
 
@@ -183,7 +183,7 @@ export default function RosterPicker() {
           style={menuFit}
         >
           {profiles.length > 1 && (
-            <ul className="max-h-40 overflow-y-auto" role="none">
+            <ul className="max-h-48 overflow-y-auto" role="none">
               {profiles.map((p) => (
                 <li key={p.id} role="none">
                   <button
@@ -199,19 +199,13 @@ export default function RosterPicker() {
                     }`}
                   >
                     {p.id === active?.id ? (
-                      <Check
-                        size={11}
-                        className="shrink-0 text-[var(--color-good)]"
-                      />
+                      <Check size={11} className="shrink-0 text-[var(--color-good)]" />
                     ) : (
                       <span className="w-[11px] shrink-0" />
                     )}
                     <div className="min-w-0 flex-1">
                       <div className="truncate">{p.name}</div>
-                      <div className="truncate text-xs text-[var(--color-muted)]">
-                        {p.host}
-                      </div>
-                      <TailnetLine on={consoleOnTailnet(tailnet, p.host)} />
+                      <PathLine p={p} tailnet={tailnet} />
                     </div>
                   </button>
                 </li>
@@ -222,313 +216,124 @@ export default function RosterPicker() {
             type="button"
             role="menuitem"
             onClick={() => {
-              // Focus goes back to the trigger first, so the dialog has
-              // somewhere to return it to when it closes (this row is gone).
               closeMenu();
-              setManageOpen(true);
+              navigate("/connection?add=1");
             }}
             className="flex w-full items-center gap-2 border-t border-[var(--color-border)] px-4 py-2 text-start text-xs hover:bg-[var(--color-surface-3)]"
+            data-testid="roster-add"
           >
-            <Pencil size={11} />
-            {tr("roster_manage", undefined, "Manage PS5s")}
+            <Plus size={11} />
+            {tr("cs_add_title", undefined, "Add a PS5")}
           </button>
+          {profiles.length > 0 && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                // Focus goes back to the trigger first, so the dialog has somewhere to return
+                // it to when it closes (this row is gone).
+                closeMenu();
+                setManageOpen(true);
+              }}
+              className="flex w-full items-center gap-2 px-4 py-2 text-start text-xs hover:bg-[var(--color-surface-3)]"
+              data-testid="roster-manage"
+            >
+              <ListOrdered size={11} />
+              {tr("roster_manage", undefined, "Manage PS5s")}
+            </button>
+          )}
         </div>
       )}
 
-      {manageOpen && <RosterManageModal onClose={() => setManageOpen(false)} />}
+      {manageOpen && <RosterManageModal tailnet={tailnet} onClose={() => setManageOpen(false)} />}
     </div>
   );
 }
 
-function RosterManageModal({ onClose }: { onClose: () => void }) {
-  const { status: tailnetStatus } = useTailnet();
+/** Manage PS5s: the order of the list (the console tabs and this picker follow it), and a way to
+ *  each console's card, where it is renamed, re-addressed or removed. */
+export function RosterManageModal({
+  onClose,
+  tailnet,
+}: {
+  onClose: () => void;
+  tailnet: ReturnType<typeof useTailnet>["status"];
+}) {
   const tr = useTr();
+  const navigate = useNavigate();
   const profiles = useRosterStore((s) => s.profiles);
-  const add = useRosterStore((s) => s.add);
-  const remove = useRosterStore((s) => s.remove);
-  const rename = useRosterStore((s) => s.rename);
   const reorder = useRosterStore((s) => s.reorder);
-  const updateHost = useRosterStore((s) => s.updateHost);
-  const setNotes = useRosterStore((s) => s.setNotes);
   const active = useActiveProfile();
-  const { confirm: confirmDialog, dialog: confirmDialogNode } = useConfirm();
-
-  const [newName, setNewName] = useState("");
-  const [newHost, setNewHost] = useState("");
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editName, setEditName] = useState("");
-  const [editHost, setEditHost] = useState("");
-  const [editNotes, setEditNotes] = useState("");
-
-  function handleAdd() {
-    if (!newHost.trim()) return;
-    add({ name: newName, host: newHost });
-    setNewName("");
-    setNewHost("");
-  }
-
-  function startEdit(p: PS5Profile) {
-    setEditingId(p.id);
-    setEditName(p.name);
-    setEditHost(p.host);
-    setEditNotes(p.notes ?? "");
-  }
-
-  function commitEdit() {
-    if (!editingId) return;
-    rename(editingId, editName);
-    updateHost(editingId, editHost);
-    setNotes(editingId, editNotes);
-    setEditingId(null);
-  }
 
   return (
-    <>
-      {/* Nested delete-confirmation renders its own top-level scrim, so it
-          sits outside the Modal panel and isn't dismissed by it. */}
-      {confirmDialogNode}
-      <Modal
-        open
-        onClose={onClose}
-        title={tr("roster_manage_title", undefined, "Manage PS5s")}
-        size="lg"
-      >
-        <div className="p-4 text-sm">
-          {profiles.length === 0 && (
-            <p className="mb-3 text-xs text-[var(--color-muted)]">
-              {tr(
-                "roster_empty",
-                undefined,
-                "No PS5s yet. Add one below to get started.",
-              )}
-            </p>
-          )}
-          {profiles.length > 1 && (
-            <p className="mb-2 text-[0.7rem] text-[var(--color-muted)]">
-              {tr(
-                "roster_order_hint",
-                undefined,
-                "This order sets the console tabs and the picker.",
-              )}
-            </p>
-          )}
-          <ul className="space-y-2">
-            {profiles.map((p, index) => (
-              <li
-                key={p.id}
-                className={`rounded-[var(--radius-field)] border p-3 text-xs ${
-                  p.id === active?.id
-                    ? "border-[var(--color-accent)]"
-                    : "border-[var(--color-border)]"
-                }`}
-              >
-                {editingId === p.id ? (
-                  <div className="space-y-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <input
-                        value={editName}
-                        onChange={(e) => setEditName(e.target.value)}
-                        placeholder={tr("roster_edit_name_placeholder", "Name")}
-                        className="flex-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1"
-                      />
-                      <input
-                        value={editHost}
-                        onChange={(e) => setEditHost(e.target.value)}
-                        placeholder="192.168.1.50"
-                        inputMode="url"
-                        autoCapitalize="off"
-                        autoCorrect="off"
-                        spellCheck={false}
-                        className="flex-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1"
-                      />
-                    </div>
-                    <textarea
-                      value={editNotes}
-                      onChange={(e) => setEditNotes(e.target.value)}
-                      rows={3}
-                      maxLength={2000}
-                      placeholder={tr(
-                        "roster_notes_placeholder",
-                        undefined,
-                        "Notes (e.g. firmware quirks, do-not-update warnings)",
-                      )}
-                      className="w-full resize-y rounded-[var(--radius-field)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1 text-xs"
-                    />
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={commitEdit}
-                        className="inline-flex items-center gap-1 rounded-full bg-[image:var(--accent-fill)] px-3 py-1 text-xs font-semibold text-[var(--color-accent-contrast)] shadow-[var(--accent-glow)] hover:brightness-105 disabled:opacity-50"
-                      >
-                        {tr("save", undefined, "Save")}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setEditingId(null)}
-                        className="rounded-md px-2 py-1 text-[var(--color-muted)]"
-                      >
-                        {tr("cancel", undefined, "Cancel")}
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <div className="min-w-0 flex-1">
-                      <div className="font-medium">{p.name}</div>
-                      <div className="text-[var(--color-muted)]">{p.host}</div>
-                      <TailnetLine on={consoleOnTailnet(tailnetStatus, p.host)} />
-                      {p.last_seen_at && (
-                        <div className="mt-0.5 text-xs text-[var(--color-muted)]">
-                          {tr(
-                            "roster_last_seen",
-                            {
-                              when: formatDate(p.last_seen_at * 1000),
-                            },
-                            `last seen: ${formatDate(p.last_seen_at * 1000)}`,
-                          )}
-                          {p.last_seen_payload &&
-                            ` · ps5upload v${p.last_seen_payload}`}
-                        </div>
-                      )}
-                      {p.notes && (
-                        <div className="mt-1 whitespace-pre-wrap rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-xs italic text-[var(--color-muted)]">
-                          {p.notes}
-                        </div>
-                      )}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => startEdit(p)}
-                      aria-label={tr("roster_edit", undefined, "Edit PS5")}
-                      title={tr("roster_edit", undefined, "Edit PS5")}
-                      className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]"
-                    >
-                      <Pencil size={12} />
-                    </button>
-                    <button
-                      type="button"
-                      disabled={index === 0}
-                      onClick={() => reorder(index, index - 1)}
-                      aria-label={tr(
-                        "roster_move_up_aria",
-                        { name: p.name },
-                        `Move ${p.name} up`,
-                      )}
-                      title={tr("roster_move_up", undefined, "Move up")}
-                      className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-30"
-                    >
-                      <ChevronUp size={12} />
-                    </button>
-                    <button
-                      type="button"
-                      disabled={index === profiles.length - 1}
-                      onClick={() => reorder(index, index + 1)}
-                      aria-label={tr(
-                        "roster_move_down_aria",
-                        { name: p.name },
-                        `Move ${p.name} down`,
-                      )}
-                      title={tr("roster_move_down", undefined, "Move down")}
-                      className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-30"
-                    >
-                      <ChevronDownIcon size={12} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        const ok = await confirmDialog({
-                          title: tr(
-                            "roster_remove_title",
-                            { name: p.name },
-                            `Remove "${p.name}"?`,
-                          ),
-                          message: tr(
-                            "roster_remove_body",
-                            undefined,
-                            "Profile and notes are deleted from this app. The PS5 itself isn't touched.",
-                          ),
-                          destructive: true,
-                          confirmLabel: tr("remove", undefined, "Remove"),
-                        });
-                        if (ok) remove(p.id);
-                      }}
-                      aria-label={tr(
-                        "roster_remove_aria",
-                        { name: p.name },
-                        `Remove ${p.name}`,
-                      )}
-                      title={tr("remove", undefined, "Remove")}
-                      className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-bad-soft)] hover:text-[var(--color-bad)]"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
-
-          <div className="mt-4 border-t border-[var(--color-border)] pt-4">
-            <h3 className="mb-2 text-xs font-semibold">
-              {tr("roster_add_title", undefined, "Add a PS5")}
-            </h3>
-            <div className="flex flex-wrap items-center gap-2">
-              <input
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder={tr(
-                  "roster_name_placeholder",
-                  undefined,
-                  "Living-room PS5",
-                )}
-                className="flex-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1 text-xs"
-              />
-              <input
-                value={newHost}
-                onChange={(e) => setNewHost(e.target.value)}
-                placeholder="192.168.1.50"
-                inputMode="url"
-                autoCapitalize="off"
-                autoCorrect="off"
-                spellCheck={false}
-                className="flex-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1 text-xs"
-              />
+    <Modal open onClose={onClose} title={tr("roster_manage_title", undefined, "Manage PS5s")} size="md">
+      <div className="p-4 text-sm" data-testid="roster-manage-modal">
+        {profiles.length > 1 && (
+          <p className="mb-2 text-xs text-[var(--color-muted)]">
+            {tr("roster_order_hint", undefined, "This order sets the console tabs and the picker.")}
+          </p>
+        )}
+        <ul className="space-y-2">
+          {profiles.map((p, index) => (
+            <li
+              key={p.id}
+              className={`flex items-center gap-2 rounded-[var(--radius-field)] border p-2.5 text-xs ${
+                p.id === active?.id ? "border-[var(--color-accent)]" : "border-[var(--color-border)]"
+              }`}
+            >
+              <div className="flex shrink-0 flex-col">
+                <button
+                  type="button"
+                  disabled={index === 0}
+                  onClick={() => reorder(index, index - 1)}
+                  aria-label={tr("roster_move_up_aria", { name: p.name }, `Move ${p.name} up`)}
+                  title={tr("roster_move_up", undefined, "Move up")}
+                  className="rounded-full p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  <ChevronUp size={13} />
+                </button>
+                <button
+                  type="button"
+                  disabled={index === profiles.length - 1}
+                  onClick={() => reorder(index, index + 1)}
+                  aria-label={tr("roster_move_down_aria", { name: p.name }, `Move ${p.name} down`)}
+                  title={tr("roster_move_down", undefined, "Move down")}
+                  className="rounded-full p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  <ChevronDownIcon size={13} />
+                </button>
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-medium">{p.name}</div>
+                <PathLine p={p} tailnet={tailnet} />
+              </div>
               <button
                 type="button"
-                onClick={handleAdd}
-                disabled={!newHost.trim()}
-                className="inline-flex items-center gap-1 rounded-full bg-[image:var(--accent-fill)] px-3 py-1 text-xs font-semibold text-[var(--color-accent-contrast)] shadow-[var(--accent-glow)] hover:brightness-105 disabled:opacity-50"
+                onClick={() => {
+                  onClose();
+                  navigate(`/connection?console=${encodeURIComponent(p.id)}`);
+                }}
+                className="inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium text-[var(--color-accent-bright)] hover:bg-[var(--color-accent-soft)]"
+                data-testid="roster-open-card"
               >
-                <Plus size={11} />
-                {tr("add", undefined, "Add")}
+                {tr("cs_pick_open", undefined, "Open")}
+                <ChevronRight size={12} className="rtl:rotate-180" />
               </button>
-            </div>
-          </div>
-        </div>
-      </Modal>
-    </>
-  );
-}
-
-/** "Tailscale 100.x.y.z", and "· in use" while the home network does not answer and Tailscale
- *  carries this console. Nothing for a console that is not on Tailscale. */
-function TailnetLine({ on }: { on: ConsoleOnTailnet | null }) {
-  const tr = useTr();
-  if (!on) return null;
-  const inUse = on.via !== "lan";
-  return (
-    <div className="truncate text-xs text-[var(--color-muted)]" data-testid="roster-tailnet">
-      {tr("roster_tailnet", { ip: on.ip }, "Tailscale {ip}")}
-      {inUse ? (
-        <span className="text-[var(--color-accent-bright)]">
-          {" · "}
-          {on.via === "direct"
-            ? tr("roster_tailnet_in_use_direct", { ms: on.latencyMs >= 0 ? Math.round(on.latencyMs) : "?" }, "in use, direct {ms} ms")
-            : on.via === "system"
-              ? tr("roster_tailnet_in_use_system", undefined, "in use, through the Tailscale app")
-              : tr("roster_tailnet_in_use_relayed", undefined, "in use, relayed")}
-        </span>
-      ) : null}
-    </div>
+            </li>
+          ))}
+        </ul>
+        <button
+          type="button"
+          onClick={() => {
+            onClose();
+            navigate("/connection?add=1");
+          }}
+          className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-[image:var(--accent-fill)] px-3 py-1.5 text-xs font-semibold text-[var(--color-accent-contrast)] shadow-[var(--accent-glow)] hover:brightness-105"
+        >
+          <Plus size={12} />
+          {tr("cs_add_title", undefined, "Add a PS5")}
+        </button>
+      </div>
+    </Modal>
   );
 }

@@ -102,6 +102,27 @@ export async function pairingAllow(host: string): Promise<void> {
   await readWire(res);
 }
 
+/** Who answers at `host`: the console's AVA1 key (hex, the same console at every address) and the
+ *  name it gives, read without pairing (engine `GET /api/ava1/console`). null when nothing answers
+ *  or the engine predates the route. */
+export async function consoleIdentity(
+  host: string,
+): Promise<{ key: string; name: string } | null> {
+  try {
+    const q = new URLSearchParams({ addr: consoleAddr(host) });
+    const res = await fetch(`${getEngineUrl()}/api/ava1/console?${q}`, {
+      signal: AbortSignal.timeout(6_000),
+    });
+    if (!res.ok) return null;
+    const body = (await res.json().catch(() => ({}))) as { key?: unknown; name?: unknown };
+    return typeof body.key === "string" && /^[0-9a-f]{64}$/i.test(body.key)
+      ? { key: body.key.toLowerCase(), name: typeof body.name === "string" ? body.name : "" }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /** "Forget the old console": removes the key pinned for this address so a different PS5
  *  there can be paired. */
 export async function pairingForget(host: string): Promise<void> {

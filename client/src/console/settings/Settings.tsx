@@ -19,6 +19,7 @@ import {
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { forgetPhoneUrl } from "../ui/PhoneHandoff";
 import { TailscaleSection } from "./Tailscale";
+import { DevicesSection } from "./Devices";
 
 /** /api/settings (payload/src/webui_api.c send_settings). */
 export interface WebSettings {
@@ -392,6 +393,8 @@ export function SettingsView(p: SettingsViewProps) {
       </section>
 
       {p.turnedOff || p.noTailscale ? null : <TailscaleSection />}
+
+      {p.turnedOff ? null : <DevicesSection />}
 
       <section className="cw-home-section" data-setting="about">
         <h2 className="cw-h2">{t("cw_settings_about")}</h2>

@@ -46,6 +46,21 @@ export interface MeshDevice {
   online: boolean;
   blocked: boolean;
   activity: MeshActivityItem[];
+  /** How the console let it in (12.2 helpers): "network" (on the home network, approval off),
+   *  "tailscale" (over Tailscale, approval off), "approved" (it asked and someone allowed it), or
+   *  "" when not known (paired with a code, launched by its app, or listed by an older helper). */
+  via?: string;
+}
+
+/** A device asking to use the console while it asks before new devices connect (12.2 helpers).
+ *  Any device already let in, or the console's own page, answers Allow or Decline. */
+export interface MeshAsk {
+  /** Its key (hex): what Allow and Decline name. */
+  id: string;
+  name: string;
+  ip: string;
+  /** When it first asked (the console's clock, ms). */
+  at: number;
 }
 
 export interface MeshLock {
@@ -74,6 +89,8 @@ export interface MeshState {
   you: string;
   helper: string;
   settings: MeshSettings;
+  /** Devices asking to connect now; absent from an older helper. */
+  asks?: MeshAsk[];
   devices: MeshDevice[];
   locks: MeshLock[];
   events: MeshEvent[];
@@ -190,7 +207,11 @@ export function toMeshState(b: Record<string, unknown>): MeshStateAnswer {
         online: d.online === true,
         blocked: d.blocked === true,
         activity: toItems(d.activity),
+        via: typeof d.via === "string" ? d.via : undefined,
       })),
+    asks: (Array.isArray(b.asks) ? b.asks : [])
+      .filter((a): a is Record<string, unknown> => !!a && typeof a === "object" && typeof (a as { id?: unknown }).id === "string")
+      .map((a) => ({ id: str(a.id), name: str(a.name), ip: str(a.ip), at: num(a.at) })),
     locks: (Array.isArray(b.locks) ? b.locks : [])
       .filter((l): l is Record<string, unknown> => !!l && typeof l === "object")
       .map((l) => ({ name: str(l.name), label: str(l.label), by: str(l.by), until: num(l.until) })),
@@ -248,7 +269,7 @@ export async function meshLock(
 
 export async function meshDevice(
   host: string,
-  op: "rename" | "remove" | "block" | "unblock",
+  op: "rename" | "remove" | "block" | "unblock" | "allow" | "decline",
   id: string,
   name?: string,
 ): Promise<boolean> {

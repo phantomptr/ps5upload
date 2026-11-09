@@ -51,9 +51,12 @@ describe("pairing_dialog_takes_the_code_from_the_console_screen", () => {
   it("explains how to reopen a closed pairing window and offers a retry", () => {
     const html = panel({ view: { state: "closed" } });
     expect(html).toContain("The PS5 is not accepting new pairings");
-    expect(html).toContain("already connected");
-    expect(html).toContain("Let another device pair");
+    // The console lists this device as asking: any device it trusts, or its own page, allows it.
+    expect(html).toContain("shows this one as asking");
+    expect(html).toContain("press Allow");
     expect(html).toContain("Try again");
+    expect(html).not.toContain("pairing-waiting-approval");
+    expect(panel({ view: { state: "closed" }, waiting: true })).toContain("Waiting for someone to allow this device");
     expect(html).not.toContain("pairing-code-input");
   });
 

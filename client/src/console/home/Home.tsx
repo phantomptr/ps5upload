@@ -10,6 +10,7 @@ import { t } from "../strings";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { pollWhileVisible } from "../ui/visiblePoll";
 import { TaskRow } from "./TaskRow";
+import { HomeDeviceAsks } from "../settings/Devices";
 import { useJobs, visibleJobs, type Job } from "./useJobs";
 
 /** Free space moves with every write: re-read this often while Home is open. */
@@ -241,6 +242,8 @@ export function HomeView(p: HomeViewProps) {
   return (
     <div className="cw-home">
       <h1 className="cw-h1">{t("cw_nav_home")}</h1>
+      {/* A device asking to use this PS5 (Allow / Decline), where someone at the TV sees it. */}
+      <HomeDeviceAsks />
       {p.message ? (
         <div className={`cw-msg is-${p.message.tone}`} role={p.message.tone === "error" ? "alert" : "status"}>
           {p.message.text}
