@@ -290,14 +290,25 @@ pub(crate) async fn connect_guest_with(
     label: &str,
     video: bool,
 ) -> TestGuest {
+    let join = serde_json::json!({"v": 1, "t": "join", "room": room});
+    connect_guest_join(hub_url, join, label, video).await
+}
+
+/// A home-network join signalled on the engine's own socket (`{"t":"join","lan":true}`,
+/// join_net/local_signal.rs): no room, a "join" channel, a video section when `video`.
+pub(crate) async fn connect_guest_lan(signal_url: &str, video: bool) -> TestGuest {
+    let join = serde_json::json!({"v": 1, "t": "join", "lan": true});
+    connect_guest_join(signal_url, join, "join", video).await
+}
+
+async fn connect_guest_join(
+    hub_url: &str,
+    join: serde_json::Value,
+    label: &str,
+    video: bool,
+) -> TestGuest {
     let (mut hub, _) = tokio_tungstenite::connect_async(hub_url).await.unwrap();
-    hub.send(TMsg::Text(
-        serde_json::json!({"v": 1, "t": "join", "room": room})
-            .to_string()
-            .into(),
-    ))
-    .await
-    .unwrap();
+    hub.send(TMsg::Text(join.to_string().into())).await.unwrap();
     let joined = next_hub(&mut hub).await;
     assert_eq!(joined["t"], "joined", "{joined}");
 

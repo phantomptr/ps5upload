@@ -162,6 +162,9 @@ pub(crate) enum Cmd {
     /// A room is open: gather the outside addresses, keep the router mapping. Its kind says which
     /// session its peers' channels get.
     RoomOpen(String, Kind),
+    /// A home-network join's own room (join_net/local_signal.rs): offers are taken in it, with no
+    /// router mapping or STUN asked for.
+    RoomOpenLocal(String, Kind),
     RoomClose(String),
     /// A guest's offer (signal `data.type == "offer"`); `signal` takes what goes back to them.
     Offer {
@@ -378,6 +381,7 @@ async fn start() -> Option<Arc<Net>> {
         extra: Vec::new(),
         peers: Vec::new(),
         rooms: HashMap::new(),
+        local_rooms: std::collections::HashSet::new(),
         stun_tx: HashMap::new(),
         cmd: cmd.clone(),
         nat_want: None,
@@ -421,6 +425,9 @@ struct Driver {
     extra: Vec<Candidate>,
     peers: Vec<Peer>,
     rooms: HashMap<String, Kind>,
+    /// The rooms in `rooms` that are home-network joins' own ([`Cmd::RoomOpenLocal`]): they want
+    /// no router mapping.
+    local_rooms: std::collections::HashSet<String>,
     /// STUN requests in flight: transaction id → socket index.
     stun_tx: HashMap<[u8; 12], usize>,
     cmd: mpsc::UnboundedSender<Cmd>,
@@ -613,9 +620,14 @@ impl Driver {
                 self.want_mapping(true);
                 self.gather().await;
             }
+            Cmd::RoomOpenLocal(r, kind) => {
+                self.rooms.insert(r.clone(), kind);
+                self.local_rooms.insert(r);
+            }
             Cmd::RoomClose(r) => {
                 self.rooms.remove(&r);
-                if self.rooms.is_empty() {
+                self.local_rooms.remove(&r);
+                if self.rooms.len() == self.local_rooms.len() {
                     self.want_mapping(false);
                 }
             }

@@ -64,6 +64,9 @@ export interface JoinSessionOptions {
   /** The way a plain socket goes (the host's page on their Wi-Fi: join/netPath hostPath). An
    *  internet invite's transport says it itself once joined. */
   path?: NetPath | null;
+  /** An internet invite (its words for a dropped connection are the internet's); absent: it is
+   *  one when it has a transport. A Wi-Fi link's WebRTC join is not. */
+  internet?: boolean;
 }
 
 /** How often the way is read again while joined (ICE may move to another pair). */
@@ -213,7 +216,7 @@ export class JoinSession {
     let path: NetPath | null = this.opts.path ?? null;
     if (s?.netPath) {
       try {
-        path = (await s.netPath()) ?? null;
+        path = (await s.netPath()) ?? this.opts.path ?? null;
       } catch {
         path = null;
       }

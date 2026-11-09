@@ -453,7 +453,7 @@ export function JoinView({
       >
         <Users size={28} className="text-white/60" />
         <p className="max-w-sm text-base" data-testid="join-ended-text">
-          {endText(tr, stage, host, !!session.opts.transport)}
+          {endText(tr, stage, host, session.opts.internet ?? !!session.opts.transport)}
         </p>
         {/* The invite service can't be reached: on the host's Wi-Fi, their own page still works. */}
         {lanUrl && stage.why === "no_hub" && <OpenOnWifi href={lanUrl} />}

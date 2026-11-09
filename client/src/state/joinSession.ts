@@ -7,11 +7,11 @@
 
 import { create } from "zustand";
 
-import { joinSocketUrl, type InternetInvite, type JoinLink } from "../lib/joinProtocol";
+import { joinSocketUrl, type JoinLink } from "../lib/joinProtocol";
 import { urlPath } from "../join/netPath";
-import { raceTransport, type PathTry } from "../join/pathRace";
+import { joinTries, raceTransport } from "../join/pathRace";
 import { holdWhileJoined, JoinSession } from "../join/session";
-import { hubSocketUrl, rtcTransport, type JoinSocket, type JoinTransport } from "../join/rtcTransport";
+import { hubSocketUrl, rtcTransport, type JoinSocket } from "../join/rtcTransport";
 import { getEngineUrl } from "./engine";
 import { useJoinPresence } from "./joinPresence";
 
@@ -21,38 +21,6 @@ import { useJoinPresence } from "./joinPresence";
 export function joinRelayUrl(engineUrl: string, target: string): string {
   const base = engineUrl.replace(/^http/, "ws").replace(/\/$/, "");
   return `${base}/api/join/relay?url=${encodeURIComponent(target)}`;
-}
-
-/** The host engine's signalling socket beside its page (`http://host:port[/prefix]/join` →
- *  `ws://host:port[/prefix]/api/join/signal`), or null when it is not such a page. */
-export function signalSocketUrl(page: string): string | null {
-  if (!/^https?:\/\/[^/]+(\/.*)?\/join\/?$/.test(page)) return null;
-  return page.replace(/^http/, "ws").replace(/\/join\/?$/, "/api/join/signal");
-}
-
-/** The ways the app tries an internet invite, best first: signalled through the host's own engine
- *  on their Wi-Fi (the link's `lan`) and on Tailscale (`ts`), both through this app's engine (an
- *  app page may not open a plain ws:// to another machine), and through the hub. Each is the same
- *  WebRTC connection with the link's fingerprint checked (join/pathRace). */
-export function joinTries(
-  link: Pick<JoinLink, "lan" | "ts">,
-  net: InternetInvite,
-  engineUrl: string,
-  make: (inv: InternetInvite, signalUrl?: string) => JoinTransport,
-): PathTry[] {
-  const out: PathTry[] = [];
-  for (const [via, page] of [
-    ["lan", link.lan],
-    ["tailscale", link.ts],
-  ] as const) {
-    const sig = page ? signalSocketUrl(page) : null;
-    if (!sig) continue;
-    const T = make(net, joinRelayUrl(engineUrl, sig));
-    out.push({ via, make: () => new T("") as unknown as JoinSocket });
-  }
-  const H = make(net);
-  out.push({ via: "hub", make: () => new H("") as unknown as JoinSocket });
-  return out;
 }
 
 interface JoinStoreState {
@@ -72,23 +40,37 @@ export const useJoinStore = create<JoinStoreState>((set, get) => ({
   join: (link, name) => {
     get().session?.leave();
     // The one link for everywhere (12.1): peer to peer, as the friend's browser page does; ICE
-    // keeps it on the Wi-Fi when both are home. A web view with no WebRTC joins the host's own
-    // page instead, when the link names it. On the host's Wi-Fi (or tailnet) it signals through the host's own engine too, racing the
-    // hub (join/pathRace): no internet or hub needed at home, and the first way to open plays.
-    const net = link.net && typeof RTCPeerConnection !== "undefined" ? link.net : null;
+    // keeps it on the Wi-Fi when both are home. It is signalled through the host's own engine on
+    // their Wi-Fi or tailnet too, racing the hub, and a Wi-Fi link joins over WebRTC the same way
+    // (join/pathRace): no internet or hub needed at home. The plain socket (through this app's
+    // engine: an app page may not open ws:// to another machine) only when WebRTC can't connect,
+    // or this web view has none.
     const log = (m: string) => console.info(`[join] ${m}`);
     const engineUrl = getEngineUrl();
-    const transport = net
+    const rtc = typeof RTCPeerConnection !== "undefined";
+    const net = link.net ?? null;
+    const transport = rtc
       ? raceTransport(
-          () => joinTries(link, net, engineUrl, (inv, signalUrl) => rtcTransport(inv, { video: true, log, ...(signalUrl ? { signalUrl } : {}) })),
-          { room: net.room, log },
+          () =>
+            joinTries({
+              net,
+              lan: link.lan ?? (net ? null : `${link.origin}/join`),
+              ts: link.ts ?? null,
+              fp: net?.fp ?? link.fp ?? null,
+              rtc,
+              reach: (ws) => joinRelayUrl(engineUrl, ws),
+              rtcMake: (inv, o) => rtcTransport(inv, { video: true, log, ...o }),
+              socket: (url) => new WebSocket(url) as unknown as JoinSocket,
+            }),
+          { room: net?.room ?? link.origin, log },
         )
       : null;
     const path = net ? null : urlPath(link.origin);
     const s = new JoinSession({
-      url: net ? hubSocketUrl(net.hub) : joinRelayUrl(engineUrl, joinSocketUrl(link)),
+      url: net && rtc ? hubSocketUrl(net.hub) : joinRelayUrl(engineUrl, joinSocketUrl(link)),
       ...(transport ? { transport } : {}),
       path,
+      internet: !!net,
       invite: link.invite,
       code: link.code ?? null,
       name,

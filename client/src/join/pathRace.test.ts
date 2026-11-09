@@ -3,8 +3,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { JoinClient, type JoinStage } from "../lib/joinClient";
 import { NET_CLOSE } from "../lib/joinProtocol";
 import { IDLE_PAD } from "../lib/remotePlayStream";
-import { joinRelayUrl, joinTries, signalSocketUrl } from "../state/joinSession";
-import { finalClose, forgetPaths, LOCAL_HEAD_START_MS, raceTransport, startPlan, type PathTry, type RaceSocket, type SignalVia } from "./pathRace";
+import { joinRelayUrl } from "../state/joinSession";
+import {
+  finalClose,
+  forgetPaths,
+  joinTries,
+  LOCAL_HEAD_START_MS,
+  raceTransport,
+  signalSocketUrl,
+  socketBeside,
+  SOCKET_AFTER_MS,
+  startPlan,
+  type PathTry,
+  type RaceSocket,
+  type SignalVia,
+  type TryPlan,
+} from "./pathRace";
 import { rtcTransport, type InternetInvite, type JoinSocket } from "./rtcTransport";
 
 const FP = Array.from({ length: 32 }, (_, i) => (i * 5 + 17).toString(16).toUpperCase().padStart(2, "0")).join(":");
@@ -16,12 +30,14 @@ const close = (why: string | null): CloseEvent =>
   ({ type: "close", code: why ? NET_CLOSE : 1006, reason: why ? `net:${why}` : "", wasClean: false }) as CloseEvent;
 
 describe("the plan", () => {
-  it("starts the local tries at once and the hub's after the head start, unless the hub worked last", () => {
-    expect(startPlan(["lan", "tailscale", "hub"], null)).toEqual([0, 0, LOCAL_HEAD_START_MS]);
+  it("starts the local tries at once, the hub's after the head start, the socket last; what worked last at once", () => {
+    expect(startPlan(["lan", "tailscale", "hub", "socket"], null)).toEqual([0, 0, LOCAL_HEAD_START_MS, SOCKET_AFTER_MS]);
     expect(startPlan(["lan", "hub"], "lan")).toEqual([0, LOCAL_HEAD_START_MS]);
     expect(startPlan(["lan", "hub"], "hub")).toEqual([0, 0]);
-    // A link with no page of the host's: the hub at once.
+    expect(startPlan(["lan", "socket"], "socket")).toEqual([0, 0]);
+    // A link with no page of the host's: the hub at once; no WebRTC here: the socket at once.
     expect(startPlan(["hub"], null)).toEqual([0]);
+    expect(startPlan(["socket"], null)).toEqual([0]);
   });
 
   it("ends with the hub's reason, unless only a try at the host's engine got further", () => {
@@ -41,32 +57,74 @@ describe("the plan", () => {
   });
 });
 
-describe("the host's signalling socket", () => {
-  it("sits beside the host's page, under its path", () => {
-    expect(signalSocketUrl("http://192.168.1.20:19113/join")).toBe("ws://192.168.1.20:19113/api/join/signal");
-    expect(signalSocketUrl("https://nas.local/ps5/join/")).toBe("wss://nas.local/ps5/api/join/signal");
-    expect(signalSocketUrl("http://192.168.1.20:19113/pad")).toBeNull();
-    expect(signalSocketUrl("javascript:alert(1)//join")).toBeNull();
+describe("the ways to try", () => {
+  const LAN = "http://192.168.1.20:19113/join";
+  const TS = "http://100.101.2.3:19113/join";
+  const ENGINE = "http://127.0.0.1:19113";
+  const made: Array<{ inv: InternetInvite; o: Record<string, unknown> }> = [];
+  const sockets: string[] = [];
+  const plan = (o: Partial<TryPlan>): TryPlan => ({
+    net: null,
+    lan: null,
+    ts: null,
+    fp: null,
+    rtc: true,
+    reach: (ws) => joinRelayUrl(ENGINE, ws),
+    rtcMake: (inv, opts) => {
+      made.push({ inv, o: opts });
+      return class {} as unknown as typeof WebSocket;
+    },
+    socket: (url) => {
+      sockets.push(url);
+      return {} as JoinSocket;
+    },
+    ...o,
+  });
+  beforeEach(() => {
+    made.length = 0;
+    sockets.length = 0;
   });
 
-  it("is tried through this app's engine for each page the link names, the hub last", () => {
-    const urls: Array<string | undefined> = [];
-    const tries = joinTries(
-      { lan: "http://192.168.1.20:19113/join", ts: "http://100.101.2.3:19113/join" },
-      INV,
-      "http://127.0.0.1:19113",
-      (_inv, signalUrl) => {
-        urls.push(signalUrl);
-        return class {} as unknown as typeof WebSocket;
-      },
-    );
-    expect(tries.map((t) => t.via)).toEqual(["lan", "tailscale", "hub"]);
-    expect(urls).toEqual([
-      joinRelayUrl("http://127.0.0.1:19113", "ws://192.168.1.20:19113/api/join/signal"),
-      joinRelayUrl("http://127.0.0.1:19113", "ws://100.101.2.3:19113/api/join/signal"),
-      undefined,
+  it("finds the host's sockets beside its page, under its path", () => {
+    expect(signalSocketUrl(LAN)).toBe("ws://192.168.1.20:19113/api/join/signal");
+    expect(signalSocketUrl("https://nas.local/ps5/join/")).toBe("wss://nas.local/ps5/api/join/signal");
+    expect(socketBeside(LAN, "api/join/ws")).toBe("ws://192.168.1.20:19113/api/join/ws");
+    expect(signalSocketUrl("http://192.168.1.20:19113/pad")).toBeNull();
+    expect(signalSocketUrl("javascript:alert(1)//join")).toBeNull();
+    expect(signalSocketUrl("http://192.168.1.20:19113/join?x=/join")).toBeNull();
+  });
+
+  it("an internet link: its room on the Wi-Fi and tailnet pages, the hub, the plain socket last", () => {
+    const tries = joinTries(plan({ net: INV, lan: LAN, ts: TS, fp: FP }));
+    expect(tries.map((t) => [t.via, !!t.pinned])).toEqual([
+      ["lan", true],
+      ["tailscale", true],
+      ["hub", true],
+      ["socket", false],
     ]);
-    expect(joinTries({ lan: null, ts: null }, INV, "http://127.0.0.1:19113", () => class {} as unknown as typeof WebSocket).map((t) => t.via)).toEqual(["hub"]);
+    expect(made.map((m) => m.o)).toEqual([
+      { signalUrl: joinRelayUrl(ENGINE, "ws://192.168.1.20:19113/api/join/signal") },
+      { signalUrl: joinRelayUrl(ENGINE, "ws://100.101.2.3:19113/api/join/signal") },
+      {},
+    ]);
+    expect(made.every((m) => m.inv === INV)).toBe(true);
+    tries[3].make();
+    expect(sockets).toEqual([joinRelayUrl(ENGINE, "ws://192.168.1.20:19113/api/join/ws")]);
+    // Without a page of the host's: the hub alone.
+    expect(joinTries(plan({ net: INV })).map((t) => t.via)).toEqual(["hub"]);
+  });
+
+  it("a Wi-Fi link: WebRTC signalled on the host's page (its certificate pinned when the link has it), then the socket", () => {
+    const tries = joinTries(plan({ lan: LAN, fp: FP }));
+    expect(tries.map((t) => [t.via, !!t.pinned])).toEqual([
+      ["lan", true],
+      ["socket", false],
+    ]);
+    expect(made[0].o).toEqual({ signalUrl: joinRelayUrl(ENGINE, "ws://192.168.1.20:19113/api/join/signal"), lan: true });
+    expect(made[0].inv.fp).toBe(FP);
+    expect(joinTries(plan({ lan: LAN }))[0].pinned).toBe(false);
+    // No WebRTC in this web view: the socket alone.
+    expect(joinTries(plan({ lan: LAN, rtc: false })).map((t) => t.via)).toEqual(["socket"]);
   });
 });
 
@@ -214,6 +272,57 @@ describe("the race", () => {
     of("hub")[0].fail("no_room");
     await vi.advanceTimersByTimeAsync(0);
     expect(stages[stages.length - 1]).toEqual({ kind: "ended", why: "no_room" });
+  });
+
+  it("a Wi-Fi link: WebRTC first, the plain socket only when it can't connect", async () => {
+    const c = client(raceTransport(tries(["lan", "socket"]), { room: ROOM }));
+    c.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeTry.all.map((t) => t.via)).toEqual(["lan"]);
+    // ICE slow: the socket after its wait…
+    await vi.advanceTimersByTimeAsync(SOCKET_AFTER_MS);
+    expect(FakeTry.all.map((t) => t.via)).toEqual(["lan", "socket"]);
+    of("socket")[0].open();
+    expect(of("lan")[0].closed).toBe(true);
+    // …and on a reconnect the socket goes at once (it is what worked).
+    of("socket")[0].msg(JSON.stringify({ stage: "joined", player: 2, token: "T", hevc: false }));
+    of("socket")[0].fail(null);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(FakeTry.all.map((t) => t.via)).toEqual(["lan", "socket", "lan", "socket"]);
+    c.stop();
+  });
+
+  it("WebRTC failed outright (an older host, no UDP): the socket at once", async () => {
+    const c = client(raceTransport(tries(["lan", "socket"]), { room: ROOM }));
+    c.start();
+    await vi.advanceTimersByTimeAsync(0);
+    of("lan")[0].fail("no_hub");
+    expect(of("socket")).toHaveLength(1);
+    c.stop();
+  });
+
+  it("another certificate on a pinned try: never the socket (it would hand over the key)", async () => {
+    const pinned = (vias: SignalVia[]) => () => vias.map((via) => ({ via, make: () => new FakeTry(via), pinned: via !== "socket" }));
+    const c = client(raceTransport(pinned(["lan", "socket"]), { room: ROOM }));
+    c.start();
+    await vi.advanceTimersByTimeAsync(0);
+    of("lan")[0].fail("mismatch");
+    await vi.advanceTimersByTimeAsync(SOCKET_AFTER_MS * 2);
+    expect(of("socket")).toHaveLength(0);
+    expect(stages[stages.length - 1]).toEqual({ kind: "ended", why: "mismatch" });
+    // An internet link: the hub (pinned too) still goes on; the socket never.
+    FakeTry.all = [];
+    stages = [];
+    forgetPaths();
+    const c2 = client(raceTransport(pinned(["lan", "hub", "socket"]), { room: ROOM }));
+    c2.start();
+    await vi.advanceTimersByTimeAsync(0);
+    of("lan")[0].fail("mismatch");
+    expect(of("hub")).toHaveLength(1);
+    of("hub")[0].fail("no_hub");
+    await vi.advanceTimersByTimeAsync(SOCKET_AFTER_MS * 2);
+    expect(of("socket")).toHaveLength(0);
+    expect(stages[stages.length - 1]).toEqual({ kind: "ended", why: "no_hub" });
   });
 
   it("leaving closes every try", async () => {

@@ -48,6 +48,7 @@ export function JoinFlow({
   transport,
   lanUrl = null,
   path = null,
+  internet,
 }: {
   url: string;
   invite: string | null;
@@ -59,9 +60,11 @@ export function JoinFlow({
   lanUrl?: string | null;
   /** The way the plain socket goes (join/netPath hostPath of this page's address). */
   path?: NetPath | null;
+  /** An internet invite (absent: one when it has a transport). */
+  internet?: boolean;
 }) {
   const tr = useTr();
-  const hubDown = useHubDown(transport ? url : null, lanUrl);
+  const hubDown = useHubDown(transport && internet !== false ? url : null, lanUrl);
   const [name, setName] = useState(() => lastName(defaultName(typeof navigator === "undefined" ? "" : navigator.userAgent)));
   const [session, setSession] = useState<JoinSession | null>(null);
   const [round, setRound] = useState(0);
@@ -70,7 +73,7 @@ export function JoinFlow({
     // Remembered on this device: the next invite has it filled in.
     const clean = rememberName(n);
     if (!clean) return;
-    const s = new JoinSession({ url, invite, name: clean, host, transport, path });
+    const s = new JoinSession({ url, invite, name: clean, host, transport, path, ...(internet === undefined ? {} : { internet }) });
     setSession(s);
     setRound((r) => r + 1);
     s.start();

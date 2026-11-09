@@ -148,7 +148,12 @@ describe("links and timing", () => {
       invite: "00112233445566778899aabbccddeeff",
       name: "Ann",
       code: null,
+      fp: null,
     });
+    // Since 12.4 the Wi-Fi's link names the engine's certificate: its WebRTC join checks it.
+    const fp = `${"ab:".repeat(31)}cd`;
+    expect(parseJoinLink(`http://192.168.1.9:19113/join#i=abcdefgh12&fp=${fp}`)?.fp).toBe(fp.toUpperCase());
+    expect(parseJoinLink("http://192.168.1.9:19113/join#i=abcdefgh12&fp=AB:CD")?.fp).toBeNull();
     expect(parseJoinLink(" 10.0.0.2:19113/join#i=abcdefgh12 ")?.origin).toBe("http://10.0.0.2:19113");
     expect(parseJoinLink("http://192.168.1.9:19113/pad#t=00112233445566778899aabbccddeeff")).toBeNull();
     expect(parseJoinLink("http://192.168.1.9:19113/join")).toBeNull();

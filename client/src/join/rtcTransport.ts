@@ -174,6 +174,11 @@ export interface RtcTransportOptions {
    *  through this app's engine on the same Wi-Fi or tailnet. The answer is checked against the
    *  link's `fp` the same way either way. */
   signalUrl?: string;
+  /** A home-network join (a Wi-Fi link, no room): the host's engine opens a room for this
+   *  connection (`{"t":"join","lan":true}`). The answer is checked against `inv.fp` when the link
+   *  names one; a link without (an older host, a typed address) takes the one certificate the
+   *  answer has, no less than its plain WebSocket would (that has none). */
+  lan?: boolean;
 }
 
 /** The video codecs the track may use, H.264 first (H.265 only where this browser has it: the
@@ -241,7 +246,7 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
         return;
       }
       this.hub = hub;
-      hub.onopen = () => hub.send(JSON.stringify({ v: 1, t: "join", room: inv.room }));
+      hub.onopen = () => hub.send(JSON.stringify(o.lan ? { v: 1, t: "join", lan: true } : { v: 1, t: "join", room: inv.room }));
       hub.onmessage = (e: MessageEvent) => {
         if (typeof e.data !== "string") return;
         let m: HubMsg;
@@ -366,8 +371,9 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
       if (!pc) return;
       if (d.type === "answer") {
         if (this.answered || typeof d.sdp !== "string") return;
-        // Only the host's own engine: its certificate is the one the link carries.
-        if (!fingerprintMatches(d.sdp, inv.fp)) {
+        // Only the host's own engine: its certificate is the one the link carries (a home-network
+        // link without one: exactly one certificate, whatever it is).
+        if (inv.fp ? !fingerprintMatches(d.sdp, inv.fp) : sdpFingerprint(d.sdp) === null) {
           log("answer: fingerprint does not match the link");
           this.fail("mismatch");
           return;

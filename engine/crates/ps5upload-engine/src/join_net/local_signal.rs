@@ -33,12 +33,31 @@ fn frame(v: serde_json::Value) -> Message {
     Message::Text(v.to_string().into())
 }
 
-/// The room a guest's first frame asks for, if it is a well-formed join.
-pub(crate) fn join_room(text: &str) -> Option<String> {
+/// What a guest's first frame asks for.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Join {
+    /// An internet invite's room (the link's `room`).
+    Room(String),
+    /// The home network's own join (`"lan": true`): a page or app that reached this engine on
+    /// its LAN or tailnet with a home-network link, which has no room. The connection gets a room
+    /// of its own for as long as this socket lives; who may play is still the hello's to say
+    /// (the invite key, a code, or the host's Allow), on the channel, as on `/api/join/ws`.
+    Lan,
+}
+
+/// What a guest's first frame asks for, if it is a well-formed join.
+pub(crate) fn join_of(text: &str) -> Option<Join> {
     let v: serde_json::Value = serde_json::from_str(text).ok()?;
     if v.get("t").and_then(|t| t.as_str()) != Some("join") {
         return None;
     }
+    if v.get("room").is_none() && v.get("lan").and_then(|l| l.as_bool()) == Some(true) {
+        return Some(Join::Lan);
+    }
+    join_room(&v).map(Join::Room)
+}
+
+fn join_room(v: &serde_json::Value) -> Option<String> {
     let room = v.get("room")?.as_str()?;
     // A room id is the engine's own (random_b64(16): 22 characters).
     (!room.is_empty()
@@ -50,8 +69,12 @@ pub(crate) fn join_room(text: &str) -> Option<String> {
 }
 
 /// One guest's signalling socket. `open` says whether a room is one of this engine's open Play
-/// Together rooms.
-pub(crate) async fn session(mut s: WebSocket, open: impl Fn(&str) -> bool) {
+/// Together rooms; `lan_open`, whether a Play Together is open at all (a home-network join).
+pub(crate) async fn session(
+    mut s: WebSocket,
+    open: impl Fn(&str) -> bool,
+    lan_open: impl Fn() -> bool,
+) {
     let first = tokio::time::timeout(HELLO_WAIT, async {
         loop {
             match s.recv().await {
@@ -64,11 +87,15 @@ pub(crate) async fn session(mut s: WebSocket, open: impl Fn(&str) -> bool) {
     .await
     .ok()
     .flatten();
-    let Some(room) = first.as_deref().and_then(join_room) else {
+    let Some(join) = first.as_deref().and_then(join_of) else {
         return;
     };
     let no_room = || frame(serde_json::json!({"t": "error", "why": "no_room"}));
-    if !open(&room) {
+    let allowed = match &join {
+        Join::Room(r) => open(r),
+        Join::Lan => lan_open(),
+    };
+    if !allowed {
         let _ = s.send(no_room()).await;
         return;
     }
@@ -76,6 +103,25 @@ pub(crate) async fn session(mut s: WebSocket, open: impl Fn(&str) -> bool) {
         let _ = s.send(no_room()).await;
         return;
     };
+    // A home-network join: a room of its own in the driver while this socket lives (no router
+    // mapping, no STUN: the peer is on this engine's network). The peer outlives it.
+    let local_room = match join {
+        Join::Lan => match super::random_b64(9) {
+            Some(r) => Some(format!("lan-{r}")),
+            None => return,
+        },
+        Join::Room(_) => None,
+    };
+    let room = match (&join, &local_room) {
+        (Join::Room(r), _) => r.clone(),
+        (_, Some(r)) => r.clone(),
+        _ => return,
+    };
+    if let Some(r) = &local_room {
+        let _ = net
+            .cmd
+            .send(Cmd::RoomOpenLocal(r.clone(), super::Kind::Join));
+    }
     // Not the hub's ids: a guest here never meets one from the hub in the driver's peers.
     let Some(gid) = super::random_b64(9).map(|r| format!("lan-{r}")) else {
         return;
@@ -141,7 +187,13 @@ pub(crate) async fn session(mut s: WebSocket, open: impl Fn(&str) -> bool) {
         }
     }
     // As the hub's `left`: a peer that did not connect goes; a connected one keeps playing.
-    let _ = net.cmd.send(Cmd::Left { room, gid });
+    let _ = net.cmd.send(Cmd::Left {
+        room: room.clone(),
+        gid,
+    });
+    if local_room.is_some() {
+        let _ = net.cmd.send(Cmd::RoomClose(room));
+    }
     let _ = s.send(Message::Close(None)).await;
 }
 
@@ -150,25 +202,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_a_well_formed_join_names_a_room() {
+    fn only_a_well_formed_join_names_a_room_or_the_home_network() {
         let room = "AbCdEfGhIjKlMnOpQrSt_-";
         assert_eq!(
-            join_room(&serde_json::json!({"v": 1, "t": "join", "room": room}).to_string())
-                .as_deref(),
-            Some(room)
+            join_of(&serde_json::json!({"v": 1, "t": "join", "room": room}).to_string()),
+            Some(Join::Room(room.into()))
+        );
+        assert_eq!(join_of(r#"{"v":1,"t":"join","lan":true}"#), Some(Join::Lan));
+        assert_eq!(join_of(r#"{"t":"join","lan":1}"#), None);
+        assert_eq!(
+            join_of(r#"{"t":"join","room":"a/b","lan":true}"#),
+            None,
+            "a bad room is no home-network join"
         );
         assert_eq!(
-            join_room(r#"{"t":"host","room":"abc","secret":"x"}"#),
+            join_of(r#"{"t":"host","room":"abc","secret":"x"}"#),
             None,
             "never a host"
         );
-        assert_eq!(join_room(r#"{"t":"join","room":""}"#), None);
-        assert_eq!(join_room(r#"{"t":"join","room":"a/b"}"#), None);
-        assert_eq!(join_room(r#"{"t":"join","room":7}"#), None);
+        assert_eq!(join_of(r#"{"t":"join","room":""}"#), None);
+        assert_eq!(join_of(r#"{"t":"join","room":7}"#), None);
         assert_eq!(
-            join_room(&format!(r#"{{"t":"join","room":"{}"}}"#, "a".repeat(65))),
+            join_of(&format!(r#"{{"t":"join","room":"{}"}}"#, "a".repeat(65))),
             None
         );
-        assert_eq!(join_room("not json"), None);
+        assert_eq!(join_of("not json"), None);
     }
 }

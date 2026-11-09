@@ -2108,7 +2108,11 @@ pub async fn signal(
     upgrade
         .max_message_size(crate::join_net::local_signal::FRAME_MAX)
         .max_frame_size(crate::join_net::local_signal::FRAME_MAX)
-        .on_upgrade(|s| crate::join_net::local_signal::session(s, internet_room_open))
+        .on_upgrade(|s| {
+            crate::join_net::local_signal::session(s, internet_room_open, || {
+                with_parties(|m| !m.is_empty())
+            })
+        })
 }
 
 #[derive(serde::Deserialize)]
@@ -3259,9 +3263,15 @@ fn invite_json(
         return serde_json::Value::Null;
     };
     let prefix = crate::host_guard::base_path();
+    // With this engine's DTLS fingerprint (`fp`): the page there joins over WebRTC signalled on
+    // this engine's own socket (join_net/local_signal.rs) and checks the answer's certificate
+    // against it, as an internet link's page does.
+    let fp = crate::join_net::fingerprint()
+        .map(|f| format!("&fp={f}"))
+        .unwrap_or_default();
     let urls: Vec<String> = bases(console, reach)
         .iter()
-        .map(|b| format!("{b}{prefix}/join#i={}", inv.key))
+        .map(|b| format!("{b}{prefix}/join#i={}{fp}", inv.key))
         .collect();
     serde_json::json!({
         "key": inv.key,
