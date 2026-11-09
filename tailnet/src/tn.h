@@ -431,6 +431,24 @@ int tn_fwd_input(tn_ctx *c, const uint8_t *pkt, const tn_ip_info *ip, int64_t no
 int tn_fwd_has_udp_flow(tn_ctx *c, uint32_t rip, uint16_t rport, uint16_t port);
 int tn_fwd_pollfds(tn_ctx *c, struct pollfd *pf, int cap);
 void tn_fwd_io(tn_ctx *c, int fd, short revents, int64_t now);
+/* A spliced TCP connection's local socket after poll: 1 when it is broken for good (error, invalid,
+ * or hung up with data still queued for it that can never be delivered). poll reports these with no
+ * events asked for and keeps reporting them, so leaving the connection as it is would spin the data
+ * plane (a console going to rest breaks local sockets this way). A hang-up with nothing queued is
+ * an ordinary close: the read sees EOF. */
+static inline int tn_fwd_local_broken(short revents, int have_rxq)
+{
+	if (revents & (POLLERR | POLLNVAL))
+		return 1;
+	return (revents & POLLHUP) && !(revents & (POLLIN | POLLOUT)) && have_rxq;
+}
+/* Map poll (control.c): keep waiting after a poll that saw nothing on the connection? Never once
+ * the watchdog deadline has passed: the read below then reports the timeout instead of the loop
+ * polling with a zero timeout forever. */
+static inline int tn_map_poll_keep_waiting(int pr, short conn_revents, int64_t left_ms)
+{
+	return !conn_revents && pr >= 0 && left_ms > 0;
+}
 void tn_fwd_tick(tn_ctx *c, int64_t now);
 int tn_fwd_sleep_ms(tn_ctx *c);
 int tn_fwd_map(tn_ctx *c, uint8_t proto, uint32_t rip, uint16_t rport, uint16_t want, uint16_t *lport);

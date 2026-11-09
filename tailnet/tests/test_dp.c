@@ -268,9 +268,32 @@ static void test_poll_fail_wait(void)
 	CHECK(tn_now_ms() - t0 >= 25);
 }
 
+/* Rest mode breaks sockets in ways poll keeps reporting: the data plane and the control thread
+ * must act on them, never poll again at once forever. */
+static void test_no_spin_on_dead_sockets(void)
+{
+	/* the forwarder's local socket */
+	CHECK(tn_fwd_local_broken(POLLERR, 0));
+	CHECK(tn_fwd_local_broken(POLLNVAL, 0));
+	CHECK(tn_fwd_local_broken(POLLERR | POLLIN, 1));
+	CHECK(tn_fwd_local_broken(POLLHUP, 1));          /* the app is gone, data for it can never go */
+	CHECK(!tn_fwd_local_broken(POLLHUP, 0));         /* an ordinary close: lwIP sends what it has */
+	CHECK(!tn_fwd_local_broken(POLLHUP | POLLIN, 1)); /* the read sees EOF first */
+	CHECK(!tn_fwd_local_broken(POLLHUP | POLLOUT, 1));
+	CHECK(!tn_fwd_local_broken(POLLIN, 0));
+	CHECK(!tn_fwd_local_broken(POLLOUT, 1));
+	/* the map poll after its watchdog deadline: read (and time out), do not poll again */
+	CHECK(tn_map_poll_keep_waiting(0, 0, 1000));   /* a 60 s slice ended, deadline ahead */
+	CHECK(!tn_map_poll_keep_waiting(0, 0, 0));     /* deadline reached */
+	CHECK(!tn_map_poll_keep_waiting(0, 0, -5000)); /* long past (the old loop spun here) */
+	CHECK(!tn_map_poll_keep_waiting(1, POLLIN, 1000));
+	CHECK(!tn_map_poll_keep_waiting(-1, 0, 1000)); /* poll failed: the read reports it */
+}
+
 int main(void)
 {
 	test_poll_fail_wait();
+	test_no_spin_on_dead_sockets();
 	test_peer_allow();
 	test_denied_log();
 	test_wg();
