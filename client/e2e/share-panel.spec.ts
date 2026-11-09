@@ -229,7 +229,7 @@ for (const width of [1280, 390]) {
 
     test(`Receive: offer, progress, done (${width}px, ${theme})`, async ({ page }) => {
       const state = await setup(page, width, theme);
-      await page.goto(`/play?receive=${encodeURIComponent(LINK)}`, { waitUntil: "domcontentloaded" });
+      await page.goto(`/share?receive=${encodeURIComponent(LINK)}`, { waitUntil: "domcontentloaded" });
       await expect(page.getByTestId("receive-link")).toHaveValue(LINK, { timeout: 60_000 });
       await expect(page.getByTestId("receive-name-shown")).toHaveText("Sam's MacBook");
       await shot(page, `receive-open-${width}-${theme}`);
@@ -267,3 +267,16 @@ for (const width of [1280, 390]) {
     });
   }
 }
+
+// Receive moved from Play to its own Share screen (12.3): an old /play?receive= link lands there,
+// with the link filled in, and Play has no Receive tab any more.
+test("an old Play › Receive link opens the Share screen", async ({ page }) => {
+  await setup(page, 1280, "light");
+  await page.goto(`/play?receive=${encodeURIComponent(LINK)}`, { waitUntil: "domcontentloaded" });
+  await expect(page).toHaveURL(/\/share$/, { timeout: 60_000 });
+  await expect(page.getByTestId("share-screen")).toBeVisible();
+  await expect(page.getByTestId("receive-link")).toHaveValue(LINK);
+  await page.goto("/play", { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("radio", { name: "Play Together" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("radio", { name: "Receive" })).toHaveCount(0);
+});

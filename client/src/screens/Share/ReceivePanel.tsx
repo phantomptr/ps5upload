@@ -1,4 +1,4 @@
-// Play › Receive: open a friend's Share link. Their name and what they offer show first; nothing
+// Share › Receive: open a friend's Share link. Their name and what they offer show first; nothing
 // arrives until Accept, and then only once they allow it. When it is here: install the app,
 // use the save, use the controls, read the note.
 

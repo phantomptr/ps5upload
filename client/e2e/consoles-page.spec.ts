@@ -98,6 +98,10 @@ async function setUp(page: Page, state: State, theme: "light" | "dark", onDevice
         return json(route, { supported: true, ok: true, rev: 3 });
       }
       if (path === "/api/ava1/console") return json(route, { key: KEY, name: "PS5" });
+      if (path === "/api/tailnet/consoles/add") {
+        onDevice?.({ add: route.request().postDataJSON() });
+        return json(route, { action: "added", console: { id: "p2", name: "office", host: "192.168.1.120" }, found: {} });
+      }
       if (path === "/api/discover")
         return json(route, {
           ok: true,
@@ -228,6 +232,19 @@ for (const width of [1280, 390]) {
         await expect(sheet.getByTestId("consoles-invite-link")).toHaveValue(new RegExp(`^ps5upload://console\\?n=Living\\+room&h=${HOST}&t=${TS_IP}&k=${KEY}$`));
         await noSidewaysScroll(page);
         await shot(page, `06-invite-${tag}`);
+      });
+
+      test("a PS5 on Tailscale that isn't on the list: offered on the page, with Add", async ({ page }) => {
+        const sent: unknown[] = [];
+        await setUp(page, "ready", theme, (b) => sent.push(b));
+        const found = main(page).getByTestId("consoles-ts-found");
+        await expect(found).toBeVisible({ timeout: 30_000 });
+        await expect(found.getByTestId("consoles-ts-found-row")).toHaveCount(1);
+        await expect(found.getByTestId("consoles-ts-found-row")).toContainText("office");
+        await noSidewaysScroll(page);
+        await shot(page, `08-ts-found-${tag}`);
+        await found.getByTestId("consoles-ts-found-add").click();
+        await expect.poll(() => sent).toContainEqual({ add: { addr: "100.101.9.9", name: "office" } });
       });
 
       test("a device asking: Allow on the card (once, no prompt over it), and Allow reaches the console", async ({ page }) => {

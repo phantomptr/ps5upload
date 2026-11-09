@@ -373,7 +373,7 @@ archive, an encrypted package, a folder missing its `sce_sys`), it says "PS5Uplo
 this is homebrew, so it can't share it." Sharing games you bought would be piracy, and PS5Upload
 is for your own console and homebrew.
 
-You get a link and a QR code. Your friend opens it in **Play › Receive**, sees what you offer and
+You get a link and a QR code. Your friend opens the link (or pastes it in PS5Upload's **Share** screen), sees what you offer and
 picks what they want; nothing is sent until you press **Allow**. The files go straight from your
 computer to theirs, encrypted (over your Wi-Fi, Tailscale or the internet). PS5Upload's hub only
 introduces the two computers and never sees the files. A link stops working after 1 hour, 24

@@ -75,9 +75,9 @@ describe("ps5upload:// controller links", () => {
 
 describe("ps5upload:// receive links", () => {
   const share = "https://ps5upload.phantomptr.com/share/#room=AbCdEfGhIjKlMnOpQrStUv&fp=AA:BB&hub=hub.phantomptr.com";
-  it("opens Play › Receive with the Share link", async () => {
+  it("opens Share with the Share link", async () => {
     const { receiveAppLink } = await import("../lib/appLinks");
-    expect(openLinkRoute(receiveAppLink(share))).toBe(`/play?receive=${encodeURIComponent(share)}`);
+    expect(openLinkRoute(receiveAppLink(share))).toBe(`/share?receive=${encodeURIComponent(share)}`);
   });
   it("refuses anything that isn't a Share link", () => {
     expect(openLinkRoute("ps5upload://receive?link=https%3A%2F%2Fevil%2Fx")).toBeNull();
