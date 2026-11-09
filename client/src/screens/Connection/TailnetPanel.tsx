@@ -26,6 +26,8 @@ import { QrCode } from "../Play/PhonePads";
 import { humanizeCaught } from "../../lib/humanizeError";
 import { TailnetProblems } from "./TailnetProblems";
 import { KeyExpiryHint, NameField, OnPausedSwitch, RenewButton } from "./TailnetBits";
+import { DeviceRow, orderDevices, peerRows } from "./TailnetDevices";
+import { useRosterStore } from "../../state/roster";
 
 /** "Test it now" sends the PS5 through Tailscale from home for this long. */
 const TEST_SECS = 120;
@@ -410,6 +412,7 @@ function AllowSection({
   onSave: (mode: "listed" | "all", list: string[]) => void;
 }) {
   const tr = useTr();
+  const profiles = useRosterStore((s) => s.profiles);
   if (!st.allow_mode) return null;
   const all = st.allow_mode === "all";
   const peers = st.peers.filter((p) => p.ip);
@@ -446,19 +449,20 @@ function AllowSection({
       ) : null}
       {all ? null : (
         <ul className="flex flex-col gap-0.5" data-testid="tailnet-allow-list">
-          {peers.map((p) => (
-            <li key={p.ip}>
-              <label className="flex items-center gap-1.5">
+          {orderDevices(peerRows(peers), { profiles }).map((d) => (
+            <DeviceRow
+              key={d.ip}
+              d={d}
+              lead={
                 <input
                   type="checkbox"
-                  checked={listed.includes(p.ip)}
+                  aria-label={d.name.split(".")[0] || d.ip}
+                  checked={listed.includes(d.ip)}
                   disabled={busy}
-                  onChange={(e) => onSave("listed", toggleAllowed(listed, p.ip, e.target.checked))}
+                  onChange={(e) => onSave("listed", toggleAllowed(listed, d.ip, e.target.checked))}
                 />
-                <span className="truncate">{p.name.split(".")[0] || p.ip}</span>
-                <span className="text-[var(--color-muted)]">{p.ip}</span>
-              </label>
-            </li>
+              }
+            />
           ))}
           {extra.map((ip) => (
             <li key={ip}>

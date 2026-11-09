@@ -4,11 +4,13 @@ import { useLocation, useNavigate } from "react-router";
 import { Button } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useTr } from "../../state/lang";
+import { useRosterStore } from "../../state/roster";
+import { DEVICES_READ_MS, DeviceList, orderDevices, peerRows } from "../Connection/TailnetDevices";
 import {
+  addTailnetConsole,
   appTailnetOp,
   appTailnetStatus,
   expiryDays,
-  peerPathKind,
   shouldAskSystemChoice,
   type AppTailnetOp,
   type AppTailnetOpts,
@@ -47,13 +49,50 @@ export function TailscaleSettings() {
     }
   }, []);
 
+  // Every few seconds while the screen is visible (sign-in, connecting and the device list move on
+  // their own), and at once when it comes back to the front. Nothing while hidden.
   useEffect(() => {
     void refresh();
     const t = window.setInterval(() => {
-      if (st?.enabled && !document.hidden) void refresh();
-    }, 3000);
-    return () => window.clearInterval(t);
-  }, [refresh, st?.enabled]);
+      if (!document.hidden) void refresh();
+    }, DEVICES_READ_MS);
+    const now = () => {
+      if (!document.hidden) void refresh();
+    };
+    window.addEventListener("focus", now);
+    document.addEventListener("visibilitychange", now);
+    return () => {
+      window.clearInterval(t);
+      window.removeEventListener("focus", now);
+      document.removeEventListener("visibilitychange", now);
+    };
+  }, [refresh]);
+
+  const profiles = useRosterStore((s) => s.profiles);
+  const [refreshing, setRefreshing] = useState(false);
+  const [adding, setAdding] = useState<string | null>(null);
+  const [addErr, setAddErr] = useState("");
+  const refreshNow = async () => {
+    setRefreshing(true);
+    try {
+      await refresh();
+    } finally {
+      setRefreshing(false);
+    }
+  };
+  /** A PS5 on the tailnet that is not on this app's list: the Tailscale add flow. */
+  const addPs5 = async (ip: string, name: string) => {
+    setAdding(ip);
+    setAddErr("");
+    try {
+      await addTailnetConsole(ip, name.split(".")[0].replace(/-ps5u(-\d+)?$/, ""));
+      window.dispatchEvent(new Event("focus")); // the console list mirror reads the engine's now
+    } catch (e) {
+      setAddErr(tr("tn_found_add_failed", { err: humanizeCaught(e) }, "Could not add this PS5: {err}"));
+    } finally {
+      setAdding(null);
+    }
+  };
 
   const run = async (op: AppTailnetOp, opts: AppTailnetOpts = {}) => {
     setBusy(true);
@@ -255,29 +294,18 @@ export function TailscaleSettings() {
                   "When a PS5 on Tailscale does not answer at home, the app reaches it through Tailscale by itself.",
                 )}
               </p>
-              {st.peers.length === 0 ? (
-                <p className="text-xs text-[var(--color-muted)]">
-                  {tr("tn_no_peers", undefined, "No other devices on your Tailscale network yet.")}
-                </p>
-              ) : (
-                <ul className="flex flex-col gap-0.5 text-xs" data-testid="app-tailnet-peers">
-                  {st.peers.map((p) => {
-                    const kind = peerPathKind(p);
-                    return (
-                      <li key={p.ip} className="flex justify-between gap-2">
-                        <span className="truncate">{p.name.split(".")[0] || p.ip}</span>
-                        <span className="text-[var(--color-muted)]">
-                          {kind === "direct"
-                            ? tr("tn_path_direct", { ms: p.latency_ms >= 0 ? p.latency_ms.toFixed(1) : "?" }, "direct, {ms} ms")
-                            : kind === "relayed"
-                              ? tr("tn_path_relayed", undefined, "relayed through Tailscale's servers")
-                              : tr("tn_path_idle", undefined, "idle")}
-                        </span>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
+              <DeviceList
+                devices={orderDevices(peerRows(st.peers), {
+                  self: st.ip ? { name: st.name, ip: st.ip } : null,
+                  consoles: st.consoles ?? [],
+                  profiles,
+                })}
+                refreshing={refreshing}
+                onRefresh={() => void refreshNow()}
+                onAdd={(d) => void addPs5(d.ip, d.name)}
+                adding={adding}
+              />
+              {addErr ? <p className="text-xs text-[var(--color-bad)]">{addErr}</p> : null}
             </div>
           ) : state === "wait-approval" ? (
             <p className="text-xs">
