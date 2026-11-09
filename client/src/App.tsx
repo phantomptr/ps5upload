@@ -458,11 +458,9 @@ function AppRoutes({ location }: { location: Location }) {
         <Route path="/nanodns" element={<Navigate to={payloadCardLink("nanodns")} replace />} />
         <Route path="/nano-dns" element={<Navigate to={payloadCardLink("nanodns")} replace />} />
         <Route path="/shadowmount" element={<Navigate to={payloadCardLink("shadowmountplus")} replace />} />
-        <Route path="/hearbridge" element={<Navigate to={payloadCardLink("hearbridge")} replace />} />
         <Route path="/payloads/manager" element={<Navigate to={payloadCardLink("payload-manager")} replace />} />
         <Route path="/payloads/shadowmount" element={<Navigate to={payloadCardLink("shadowmountplus")} replace />} />
         <Route path="/payloads/nanodns" element={<Navigate to={payloadCardLink("nanodns")} replace />} />
-        <Route path="/payloads/hearbridge" element={<Navigate to={payloadCardLink("hearbridge")} replace />} />
         <Route path="/payloads/ports" element={<Navigate to={RUNNING_LINK} replace />} />
         <Route path="/ports" element={<Navigate to={RUNNING_LINK} replace />} />
         {/* The wizard's whole point is step 2: download the payload ELFs to

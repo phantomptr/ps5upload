@@ -72,7 +72,6 @@ describe("old Payloads links", () => {
       ["/payloads/manager", "payload-manager"],
       ["/payloads/shadowmount", "shadowmountplus"],
       ["/payloads/nanodns", "nanodns"],
-      ["/payloads/hearbridge", "hearbridge"],
     ]) {
       expect(app, from).toContain(`path="${from}" element={<Navigate to={payloadCardLink("${card}")} replace />}`);
     }

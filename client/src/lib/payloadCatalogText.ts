@@ -27,8 +27,6 @@ export const CATALOG_KEYS: Record<string, [role: string, description: string]> =
   "klogsrv": ["payload_role_klogsrv", "payload_desc_klogsrv"],
   "nanodns": ["payload_role_nanodns", "payload_desc_nanodns"],
   "backpork": ["payload_role_backpork", "payload_desc_backpork"],
-  "ghostpad": ["payload_role_ghostpad", "payload_desc_ghostpad"],
-  "hearbridge": ["payload_role_hearbridge", "payload_desc_hearbridge"],
   "hush": ["payload_role_hush", "payload_desc_hush"],
   "remoteplay-unlock": ["payload_role_remoteplay_unlock", "payload_desc_remoteplay_unlock"],
   "ps5debug-ng": ["payload_role_ps5debug_ng", "payload_desc_ps5debug_ng"],

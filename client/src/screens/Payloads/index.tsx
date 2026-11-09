@@ -27,7 +27,7 @@ import {
  *   - **send**: arbitrary ELF/BIN/JS/LUA/JAR picker. Includes
  *     playlists and recent-sends history.
  *   - **ps5** ("On your PS5"): a card per payload running or installed on the
- *     console; ShadowMount+, nanoDNS, Payload Manager and HearBridge open
+ *     console; ShadowMount+, nanoDNS, Payload Manager and Hush open
  *     their own panel from the card. Available in the browser and native apps.
  *   - **running**: every process running on the console (stop or restart one), then the
  *     ports in use (found by binding each port, so a port can't be tied to a pid; the two
