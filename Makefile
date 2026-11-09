@@ -994,6 +994,12 @@ test-payload: payload
 	@cc -O2 -Wall -Wextra -Werror -o $(SELFTEST_DIR)/ps5upload-app-info-selftest \
 		$(PAYLOAD_DIR)/tests/app_info_selftest.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-app-info-selftest
+	@echo "Running file compare self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o $(SELFTEST_DIR)/ps5upload-file-compare-selftest \
+		$(PAYLOAD_DIR)/tests/file_compare_selftest.c $(PAYLOAD_DIR)/src/file_compare.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-file-compare-selftest
+	@echo "✓ the save write-back sees an edit that left the copy's size and mtime as they were"
 	@echo "Running uninstall outcome self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-unregister-outcome-selftest \
