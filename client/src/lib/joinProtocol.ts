@@ -91,6 +91,8 @@ export interface JoinStatus {
 export interface TrackMedia {
   stream: MediaStream;
   receiver: RTCRtpReceiver;
+  /** The sound's track, when the answer has one (the engine says `audio` in `joined`). */
+  audio?: RTCRtpReceiver;
 }
 
 export type ServerMessage =
@@ -98,7 +100,7 @@ export type ServerMessage =
   /** A resume held until the host plays again (`{"stage":"waiting","why":"host_stopped"}`). */
   | { kind: "waiting" }
   /** `track`: the pictures come on the internet connection's video track (join/rtcTransport). */
-  | { kind: "joined"; player: number; token: string; hevc: boolean; track: boolean }
+  | { kind: "joined"; player: number; token: string; hevc: boolean; track: boolean; audio: boolean }
   | { kind: "refused"; why: RefuseWhy }
   | { kind: "status"; status: JoinStatus }
   | { kind: "feedback"; rumble: [number, number] | null; light: [number, number, number] | null }
@@ -144,7 +146,7 @@ export function readServerMessage(text: string): ServerMessage | null {
   if (v.stage === "asking") return { kind: "asking" };
   if (v.stage === "waiting") return { kind: "waiting" };
   if (v.stage === "joined" && typeof v.player === "number" && typeof v.token === "string") {
-    return { kind: "joined", player: v.player, token: v.token, hevc: v.hevc === true, track: v.track === true };
+    return { kind: "joined", player: v.player, token: v.token, hevc: v.hevc === true, track: v.track === true, audio: v.audio === true };
   }
   if (v.stage === "refused") {
     const why = String(v.why ?? "");

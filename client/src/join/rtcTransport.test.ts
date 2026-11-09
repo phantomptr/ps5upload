@@ -582,16 +582,22 @@ describe("the picture as a video track", () => {
     expect(trackCodecs(null)).toEqual([]);
   });
 
+  /** A MediaStream as far as the transport uses it. */
+  const fakeStream = () => {
+    const tracks: unknown[] = [];
+    return { getTracks: () => tracks, addTrack: (t: unknown) => void tracks.push(t) };
+  };
+
   /** A session over a transport that offers the track (`video`), up to the channel's open. */
   async function joinOver(video: boolean) {
-    const got: Array<{ hevc: boolean; track: unknown }> = [];
+    const got: Array<{ hevc: boolean; track: unknown; audio?: boolean }> = [];
     const c = new JoinClient({
       url: "ws://127.0.0.1:8787/ws",
       invite: KEY,
       name: "Ben",
       readPad: () => ({ ...IDLE_PAD }),
       onStage: () => {},
-      onCodec: (hevc, track) => got.push({ hevc, track }),
+      onCodec: (hevc, track, audio) => got.push({ hevc, track, ...(track ? { audio } : {}) }),
       storage: new MemStorage(),
       WebSocketImpl: transport(video),
       now: () => Date.now(),
@@ -612,21 +618,44 @@ describe("the picture as a video track", () => {
 
   it("offers a receive-only video section, and a newer engine's track plays it", async () => {
     const { c, pc, dc, got } = await joinOver(true);
-    expect(pc.transceivers.map((t) => [t.kind, t.init])).toEqual([["video", { direction: "recvonly" }]]);
+    // The picture's section, and the sound's beside it (#720).
+    expect(pc.transceivers.map((t) => [t.kind, t.init])).toEqual([
+      ["video", { direction: "recvonly" }],
+      ["audio", { direction: "recvonly" }],
+    ]);
     // The answer's track: the browser's stream and receiver.
-    const stream = { id: "S" };
+    const stream = fakeStream();
     const receiver = { getStats: async () => new Map() };
-    pc.ontrack?.({ streams: [stream], track: {}, receiver });
+    const video = { kind: "video" };
+    pc.ontrack?.({ streams: [stream], track: video, receiver });
     dc.open();
     dc.recv(JSON.stringify({ stage: "joined", player: 2, token: "T", hevc: false, track: true }));
-    expect(got).toEqual([{ hevc: false, track: { stream, receiver } }]);
+    expect(got).toEqual([{ hevc: false, track: { stream, receiver }, audio: false }]);
+    expect(stream.getTracks()).toEqual([video]);
+    c.stop();
+  });
+
+  it("plays the sound from its audio track when the engine sends it there, in the picture's stream", async () => {
+    const { c, pc, dc, got } = await joinOver(true);
+    const stream = fakeStream();
+    const receiver = { getStats: async () => new Map() };
+    const sound = { getStats: async () => new Map() };
+    const video = { kind: "video" };
+    const audio = { kind: "audio" };
+    pc.ontrack?.({ streams: [stream], track: video, receiver });
+    // Its own stream id: still the one stream (one <video> plays both, in sync).
+    pc.ontrack?.({ streams: [fakeStream()], track: audio, receiver: sound });
+    dc.open();
+    dc.recv(JSON.stringify({ stage: "joined", player: 2, token: "T", hevc: false, track: true, audio: true }));
+    expect(got).toEqual([{ hevc: false, track: { stream, receiver, audio: sound }, audio: true }]);
+    expect(stream.getTracks()).toEqual([video, audio]);
     c.stop();
   });
 
   it("an older engine (no `track` in joined) keeps the pictures on the channel, track or not", async () => {
     const { c, pc, dc, got } = await joinOver(true);
     // An older engine still answers the video section (str0m takes it) but never sends on it.
-    pc.ontrack?.({ streams: [{ id: "S" }], track: {}, receiver: {} });
+    pc.ontrack?.({ streams: [fakeStream()], track: { kind: "video" }, receiver: {} });
     dc.open();
     dc.recv(JSON.stringify({ stage: "joined", player: 2, token: "T", hevc: false }));
     expect(got).toEqual([{ hevc: false, track: null }]);

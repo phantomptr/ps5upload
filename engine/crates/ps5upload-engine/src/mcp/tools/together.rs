@@ -21,6 +21,7 @@ pub(super) fn tools() -> Vec<ToolDef> {
                           `link.rtt_ms`; for internet guests also (round trip, `sent_kbps`, bytes queued and \
                           buffered on the data channel, the backlog's peaks, `send_waits`; \
                           `video`: `track` when the picture goes as an RTP video track, else \
+                          `channel`; `audio`: `track` when the sound goes as an Opus RTP track, else \
                           `channel`; `track`: frames_sent, rtp_packets, nacks, plis, firs, loss, \
                           rtcp_rtt_ms, bwe_kbps against stream_kbps, and `slow` when the \
                           estimate stays under the stream's bitrate: lower the stream's quality; \

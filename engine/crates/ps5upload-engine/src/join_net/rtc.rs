@@ -72,6 +72,7 @@ pub(crate) fn with_track(b: RtcConfig) -> RtcConfig {
     b.clear_codecs()
         .enable_h264(true)
         .enable_h265(true)
+        .enable_opus(true, false)
         .set_send_buffer_video(SEND_BUFFER_VIDEO)
         .enable_bwe(Some(Bitrate::kbps(BWE_START_KBPS)))
 }
@@ -159,6 +160,23 @@ fn has_params(au: &[u8], hevc: bool) -> bool {
 }
 
 /// The video track of one peer: where it goes and what the session sent it.
+/// A guest's sound as an Opus RTP track (#720): the console's Opus packets go on as they came,
+/// so the browser's own jitter buffer, loss concealment and lip sync play them, not the page.
+struct Audio {
+    mid: Mid,
+    pt: Pt,
+    /// The session sends its sound here (else on the data channel).
+    on: bool,
+    /// RTP ticks (48 kHz) per frame, from the sound's header (kind 3): 480 for 10 ms frames.
+    ticks: u64,
+    /// The console's frame index (u16, wraps) as a running count, for the RTP time.
+    last: Option<u16>,
+    count: u64,
+}
+
+/// Opus's RTP clock.
+const OPUS_HZ: u64 = 48_000;
+
 struct Video {
     mid: Mid,
     pts: TrackPts,
@@ -205,6 +223,10 @@ pub(crate) enum Cmd {
     Track(u64, bool, u32),
     /// One of the session's video messages for the track: `[0][codec header]` or `[1][AU]`.
     Video(u64, Bytes),
+    /// The session's sound goes on the peer's audio track from now on.
+    AudioOn(u64),
+    /// One of the session's sound messages: `[3][header]` or `[4][u16 BE index][Opus packet]`.
+    Audio(u64, Bytes),
     /// A guest session ended.
     Gone(u64),
     /// The router mapping, made or lost.
@@ -429,6 +451,8 @@ struct Peer {
     track_ok: bool,
     /// The video track, when the offer had one the engine can send on.
     video: Option<Video>,
+    /// The audio track, when the offer had one with Opus.
+    audio: Option<Audio>,
 }
 
 static NEXT_PEER: AtomicU64 = AtomicU64::new(1);
@@ -698,6 +722,21 @@ impl Driver {
                     to_track(p, &b, Instant::now());
                 }
             }
+            Cmd::AudioOn(id) => {
+                if let Some(a) = self
+                    .peers
+                    .iter_mut()
+                    .find(|p| p.id == id)
+                    .and_then(|p| p.audio.as_mut())
+                {
+                    a.on = true;
+                }
+            }
+            Cmd::Audio(id, b) => {
+                if let Some(p) = self.peers.iter_mut().find(|p| p.id == id) {
+                    to_audio(p, &b, Instant::now());
+                }
+            }
             Cmd::Gone(id) => {
                 if let Some(p) = self.peers.iter_mut().find(|p| p.id == id) {
                     p.to_session = None;
@@ -810,6 +849,7 @@ impl Driver {
             last_src: None,
             track_ok: track,
             video: None,
+            audio: None,
         });
     }
 
@@ -1088,11 +1128,29 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
         Event::ChannelBufferedAmountLow(_) => flush(p),
         // The offer's video section: the track, if the engine may send on it with a codec it has.
         Event::MediaAdded(m) => {
-            if !p.track_ok
-                || p.video.is_some()
-                || m.kind != MediaKind::Video
-                || !matches!(m.direction, Direction::SendOnly | Direction::SendRecv)
-            {
+            if !p.track_ok || !matches!(m.direction, Direction::SendOnly | Direction::SendRecv) {
+                return;
+            }
+            if m.kind == MediaKind::Audio {
+                let opus = p.rtc.writer(m.mid).and_then(|w| {
+                    w.payload_params()
+                        .find(|x| x.spec().codec == Codec::Opus)
+                        .map(|x| x.pt())
+                });
+                if let (None, Some(pt)) = (p.audio.as_ref(), opus) {
+                    p.info.audio_offered();
+                    p.audio = Some(Audio {
+                        mid: m.mid,
+                        pt,
+                        on: false,
+                        ticks: 960,
+                        last: None,
+                        count: 0,
+                    });
+                }
+                return;
+            }
+            if p.video.is_some() || m.kind != MediaKind::Video {
                 return;
             }
             let pts = TrackPts::of(&mut p.rtc, m.mid);
@@ -1227,6 +1285,45 @@ fn to_track(p: &mut Peer, b: &[u8], now: Instant) {
     }
 }
 
+/// One of the session's sound messages onto the audio track: the header sets the frame length,
+/// a frame goes out at its own index's time (a lost one leaves its gap, which the browser
+/// conceals).
+fn to_audio(p: &mut Peer, b: &[u8], now: Instant) {
+    let Some(a) = p.audio.as_mut().filter(|a| a.on) else {
+        return;
+    };
+    match b.first() {
+        Some(3) => {
+            if let Some(t) = audio_ticks(&b[1..]) {
+                a.ticks = t;
+            }
+        }
+        Some(4) if b.len() > 3 => {
+            let idx = u16::from_be_bytes([b[1], b[2]]);
+            a.count = match a.last {
+                None => 0,
+                // Forward by the wrapped difference (a late one far behind starts over there).
+                Some(l) => a.count.wrapping_add(idx.wrapping_sub(l) as u64),
+            };
+            a.last = Some(idx);
+            let t = MediaTime::new(a.count.wrapping_mul(a.ticks), Frequency::FORTY_EIGHT_KHZ);
+            let (mid, pt) = (a.mid, a.pt);
+            if let Some(w) = p.rtc.writer(mid) {
+                let _ = w.write(pt, now, t, b[3..].to_vec());
+            }
+        }
+        _ => {}
+    }
+}
+
+/// RTP ticks (48 kHz) per frame from the sound's header: `[channels][?][u32 rate][u32 samples
+/// per frame]` (big-endian, pad/watchPlayer.ts reads it the same way).
+pub(crate) fn audio_ticks(h: &[u8]) -> Option<u64> {
+    let rate = u32::from_be_bytes(h.get(2..6)?.try_into().ok()?) as u64;
+    let spf = u32::from_be_bytes(h.get(6..10)?.try_into().ok()?) as u64;
+    (rate > 0 && spf > 0).then(|| spf * OPUS_HZ / rate)
+}
+
 /// An access unit as the track sends it: a keyframe without its parameter sets gets the codec
 /// header in front.
 pub(crate) fn track_au(au: &[u8], hevc: bool, header: Option<&[u8]>) -> Vec<u8> {
@@ -1359,6 +1456,29 @@ mod track_tests {
         t.on = false;
         t.estimate(1_000, t0);
         assert!(!t.slow(t0 + Duration::from_secs(20)), "not on the track");
+    }
+
+    #[test]
+    fn the_sounds_rtp_time_steps_by_its_frame_length_at_48_khz() {
+        // 2 channels, 16 bits, 48 kHz, 480 samples a frame (10 ms): 480 ticks.
+        assert_eq!(
+            super::audio_ticks(&[2, 16, 0, 0, 0xbb, 0x80, 0, 0, 0x01, 0xe0]),
+            Some(480)
+        );
+        // 24 kHz with 240 samples is still 10 ms: 480 ticks of Opus's 48 kHz clock.
+        assert_eq!(
+            super::audio_ticks(&[2, 16, 0, 0, 0x5d, 0xc0, 0, 0, 0, 0xf0]),
+            Some(480)
+        );
+        assert_eq!(
+            super::audio_ticks(&[2, 16, 0, 0, 0xbb, 0x80]),
+            None,
+            "short"
+        );
+        assert_eq!(
+            super::audio_ticks(&[2, 16, 0, 0, 0, 0, 0, 0, 1, 0xe0]),
+            None
+        );
     }
 
     #[test]

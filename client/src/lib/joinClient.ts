@@ -61,7 +61,7 @@ export interface JoinClientOptions {
   onFrame?: (data: ArrayBuffer) => void;
   /** The session's codec, and its video track when the pictures come on one (an internet socket
    *  that has it, and the engine said `track`); null: they come on the socket. */
-  onCodec?: (hevc: boolean, track: TrackMedia | null) => void;
+  onCodec?: (hevc: boolean, track: TrackMedia | null, audio?: boolean) => void;
   onRumble?: (strong: number, weak: number) => void;
   onLight?: (rgb: [number, number, number]) => void;
   /** The picture's numbers (drawn, dropped, stalls…), sent to the host every STATS_EVERY_PINGS
@@ -252,7 +252,11 @@ export class JoinClient {
         } catch {
           // Private mode: a reload asks again.
         }
-        this.o.onCodec?.(m.hevc, (m.track && (this.ws as { media?: TrackMedia | null } | null)?.media) || null);
+        {
+          const media = (m.track && (this.ws as { media?: TrackMedia | null } | null)?.media) || null;
+          // The sound on the track too: the engine said so and the answer brought it.
+          this.o.onCodec?.(m.hevc, media, !!media && m.audio && !!media.audio);
+        }
         this.setStage({ kind: "joined", player: m.player, hevc: m.hevc });
         this.sendPad(true);
         return;

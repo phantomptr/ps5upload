@@ -330,8 +330,23 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
         } catch {
           // No track here: the pictures come on the channel.
         }
+        // The sound beside the picture as an Opus track (#720): the browser's jitter buffer, loss
+        // concealment and lip sync play it. An engine without one answers it inactive; the sound
+        // then stays on the channel.
+        try {
+          pc.addTransceiver("audio", { direction: "recvonly" });
+        } catch {
+          // No audio track here: the sound comes on the channel.
+        }
         pc.ontrack = (e: RTCTrackEvent) => {
-          if (this.pc === pc) this.media = { stream: e.streams[0] ?? new MediaStream([e.track]), receiver: e.receiver };
+          if (this.pc !== pc) return;
+          // One stream for both, whatever stream ids the answer gave them (one <video> plays both).
+          const stream = this.media?.stream ?? e.streams[0] ?? new MediaStream();
+          if (!stream.getTracks().includes(e.track)) stream.addTrack(e.track);
+          this.media =
+            e.track.kind === "audio"
+              ? { stream, receiver: this.media?.receiver ?? e.receiver, audio: e.receiver }
+              : { stream, receiver: e.receiver, ...(this.media?.audio ? { audio: this.media.audio } : {}) };
         };
       }
       pc.onicecandidate = (e: RTCPeerConnectionIceEvent) => {

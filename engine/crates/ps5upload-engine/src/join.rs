@@ -2190,6 +2190,18 @@ pub(crate) trait GuestSocket: Send + 'static {
     fn video_track(&mut self, _hevc: bool, _stream_kbps: u32) -> bool {
         false
     }
+    /// The sound on an Opus audio track beside the video track ([`Self::send_audio`]); false: on
+    /// this socket.
+    fn audio_track(&mut self) -> bool {
+        false
+    }
+    /// A sound message (`[3][header]`, `[4][index][Opus]`) for the audio track.
+    fn send_audio(
+        &mut self,
+        m: Message,
+    ) -> impl std::future::Future<Output = Result<(), ()>> + Send {
+        self.send(m)
+    }
     /// A picture or the codec header for the video track.
     fn send_video(
         &mut self,
@@ -3013,12 +3025,15 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
         Some(f) => socket.video_track(f.hevc, f.kbps),
         None => false,
     };
+    // …and its sound beside them on an Opus audio track, when the page offered one too (#720).
+    let audio = track && socket.audio_track();
     crate::log_at!(
         Debug,
         "together",
         "join: Player {player} on {console} connected (socket {gen}): picture {}, hevc {hevc}",
         match (&feed, track) {
             (None, _) => "none (no session)",
+            (Some(_), true) if audio => "on the video track, sound on the audio track",
             (Some(_), true) => "on the video track",
             (Some(_), false) => "on",
         }
@@ -3032,6 +3047,8 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
             "stage": "joined", "player": player, "token": token, "hevc": hevc,
             // The pictures come on the video track (an internet page that offered one), not here.
             "track": track,
+            // …and the sound on the audio track.
+            "audio": audio,
         })))
         .await
         .is_err();
@@ -3133,7 +3150,11 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
                     None => std::future::pending().await,
                 }
             } => match f {
-                Some(m) => if socket.send(m).await.is_err() { break },
+                Some(m) => {
+                    let sound = audio && matches!(&m, Message::Binary(b) if matches!(b.first(), Some(3 | 4)));
+                    let sent = if sound { socket.send_audio(m).await } else { socket.send(m).await };
+                    if sent.is_err() { break }
+                }
                 None => other = None,
             },
             f = async {

@@ -174,11 +174,11 @@ export class JoinSession {
       // How the picture looks here, for the host's panel and log: none before the first picture,
       // unless the picture fails, which the host then hears about (#720).
       readStats: () => pageStats(this.player?.stats ?? null, this.snap.problem, this.player?.soundReport() ?? null),
-      onCodec: (h, track) => {
+      onCodec: (h, track, audio) => {
         const p = this.picture();
         p.setHevc(h);
         if (p instanceof TrackPlayer) {
-          p.setTrack(track);
+          p.setTrack(track, !!audio);
           // The pictures come on the track now: a problem the channel's decoder had is not on show.
           if (track && this.snap.problem) this.set({ problem: null });
         }

@@ -165,6 +165,10 @@ pub(crate) struct TrackSt {
     /// whether its result was logged.
     pub on_at: Option<Instant>,
     pub checked: bool,
+    /// The offer has an audio section with Opus, and the session's sound goes there (#720:
+    /// the browser's jitter buffer and loss concealment, not the page's own player).
+    pub opus: bool,
+    pub audio_on: bool,
 }
 
 /// The connection check at a guest's start: this long of the estimate (with str0m's probing) and
@@ -286,12 +290,26 @@ impl PeerInfo {
     /// The offer had a video section the engine can send on (with these codecs).
     pub(crate) fn track_offered(&self, h264: bool, h265: bool) {
         self.with(|s| {
-            s.track = Some(TrackSt {
-                h264,
-                h265,
-                ..TrackSt::default()
-            })
+            let t = s.track.get_or_insert_with(TrackSt::default);
+            t.h264 = h264;
+            t.h265 = h265;
         });
+    }
+
+    /// The offer had an audio section with Opus (rtc.rs). Before or after its video section: the
+    /// track's state is made by whichever came first.
+    pub(crate) fn audio_offered(&self) {
+        self.with(|s| s.track.get_or_insert_with(TrackSt::default).opus = true);
+    }
+
+    /// The session's sound on the audio track, when the offer had one and the pictures go on the
+    /// video track (the two are played together, in sync). True when it goes there.
+    pub(crate) fn use_audio(&self) -> bool {
+        self.track_with(|t| {
+            t.audio_on = t.opus && t.on;
+            t.audio_on
+        })
+        .unwrap_or(false)
     }
 
     /// The session's choice: its pictures (`hevc` or not) on the track, when it can carry them.
@@ -336,6 +354,8 @@ impl PeerInfo {
             "path": path,
             // Where the picture goes: "track" (RTP) or "channel" (the data channel).
             "video": if on { "track" } else { "channel" },
+            // Where the sound goes: "track" (Opus RTP, beside the picture) or "channel".
+            "audio": if track.as_ref().is_some_and(|t| t.audio_on) { "track" } else { "channel" },
             // The track's numbers (null on the channel): `frames_sent` (access units written),
             // `rtp_packets` (retransmissions included), `nacks` (each answered with a resend from
             // the send buffer), `plis` / `firs` (keyframe asks from the guest's browser), `loss` (its
@@ -515,6 +535,24 @@ impl crate::join::GuestSocket for RtcSocket {
             let _ = self.up.send(rtc::Cmd::Track(self.id, hevc, stream_kbps));
         }
         on
+    }
+
+    fn audio_track(&mut self) -> bool {
+        let on = self.info.use_audio();
+        if on {
+            let _ = self.up.send(rtc::Cmd::AudioOn(self.id));
+        }
+        on
+    }
+
+    async fn send_audio(&mut self, m: Message) -> Result<(), ()> {
+        if self.flow.closed.load(Ordering::Relaxed) {
+            return Err(());
+        }
+        match m {
+            Message::Binary(b) => self.up.send(rtc::Cmd::Audio(self.id, b)).map_err(|_| ()),
+            _ => Ok(()),
+        }
     }
 
     async fn send_video(&mut self, m: Message) -> Result<(), ()> {

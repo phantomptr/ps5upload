@@ -235,6 +235,8 @@ pub(crate) enum GIn {
     /// A picture off the video track (an access unit, Annex B), and whether nothing was lost
     /// before it.
     Media(Vec<u8>, bool),
+    /// A sound frame off the audio track (one Opus packet).
+    Audio(Vec<u8>),
 }
 
 pub(crate) enum GOut {
@@ -291,14 +293,15 @@ pub(crate) async fn connect_guest_with(
     video: bool,
 ) -> TestGuest {
     let join = serde_json::json!({"v": 1, "t": "join", "room": room});
-    connect_guest_join(hub_url, join, label, video).await
+    connect_guest_join(hub_url, join, label, video, false).await
 }
 
 /// A home-network join signalled on the engine's own socket (`{"t":"join","lan":true}`,
-/// join_net/local_signal.rs): no room, a "join" channel, a video section when `video`.
+/// join_net/local_signal.rs): no room, a "join" channel, a video and an audio section when
+/// `video` (as the pages offer them).
 pub(crate) async fn connect_guest_lan(signal_url: &str, video: bool) -> TestGuest {
     let join = serde_json::json!({"v": 1, "t": "join", "lan": true});
-    connect_guest_join(signal_url, join, "join", video).await
+    connect_guest_join(signal_url, join, "join", video, video).await
 }
 
 async fn connect_guest_join(
@@ -306,6 +309,7 @@ async fn connect_guest_join(
     join: serde_json::Value,
     label: &str,
     video: bool,
+    audio: bool,
 ) -> TestGuest {
     let (mut hub, _) = tokio_tungstenite::connect_async(hub_url).await.unwrap();
     hub.send(TMsg::Text(join.to_string().into())).await.unwrap();
@@ -322,6 +326,8 @@ async fn connect_guest_join(
     let mut api = rtc.sdp_api();
     let cid = api.add_channel(label.into());
     let mid = video.then(|| api.add_media(MediaKind::Video, Direction::RecvOnly, None, None, None));
+    let amid =
+        audio.then(|| api.add_media(MediaKind::Audio, Direction::RecvOnly, None, None, None));
     let (offer, pending): (_, SdpPendingOffer) = api.apply().unwrap();
     let signal = |data: serde_json::Value| {
         TMsg::Text(
@@ -364,7 +370,7 @@ async fn connect_guest_join(
         }
     });
     tokio::spawn(drive(
-        rtc, cid, mid, sock, local, in_tx, out_rx, cand_rx, open_tx,
+        rtc, cid, mid, amid, sock, local, in_tx, out_rx, cand_rx, open_tx,
     ));
     tokio::time::timeout(Duration::from_secs(10), open_rx)
         .await
@@ -400,6 +406,7 @@ async fn drive(
     mut rtc: Rtc,
     cid: ChannelId,
     mid: Option<Mid>,
+    amid: Option<Mid>,
     sock: tokio::net::UdpSocket,
     local: SocketAddr,
     in_tx: mpsc::UnboundedSender<GIn>,
@@ -455,6 +462,9 @@ async fn drive(
                         }
                     }
                     Event::ChannelClose(id) if id == cid => return,
+                    Event::MediaData(d) if Some(d.mid) == amid => {
+                        let _ = in_tx.send(GIn::Audio(d.data.to_vec()));
+                    }
                     Event::MediaData(d) => {
                         let _ = in_tx.send(GIn::Media(d.data.to_vec(), d.contiguous));
                     }

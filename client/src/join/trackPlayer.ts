@@ -1,8 +1,10 @@
 // An internet guest's picture as a WebRTC video track (#762's design): the engine sends the
 // console's pictures as RTP (join_net/rtc.rs), and the browser's own jitter buffer, retransmission
-// requests (NACK), keyframe requests (PLI) and decoder play them in a <video>. The sound, the
-// status and the controller stay on the data channel, so the sound plays through the page's own
-// player (pad/watchPlayer) as before. When the engine sends no track (an older engine, the host's
+// requests (NACK), keyframe requests (PLI) and decoder play them in a <video>. The sound comes as
+// an Opus track beside it when the engine sends one (#720: the browser's jitter buffer, loss
+// concealment and lip sync, where the page's own player stuttered on an iPhone), played by the
+// same <video>; otherwise it stays on the data channel and plays through the page's own player
+// (pad/watchPlayer) as before. The status and the controller stay on the channel. When the engine sends no track (an older engine, the host's
 // setting off, an H.265 session this browser has no track for) the same player shows the pictures
 // from the channel: this wraps it, and shows whichever is in use.
 
@@ -63,6 +65,11 @@ export class TrackPlayer {
   private readonly wrap = document.createElement("div");
   private media: TrackMedia | null = null;
   private trackStats: TrackStats | null = null;
+  /** The sound plays from the <video> (the audio track). */
+  private audio = false;
+  /** The guest started the sound (a tap: browsers play sound only after one) and muted it. */
+  private soundOn = false;
+  private muted = false;
 
   constructor(readonly inner: WatchPlayer | MsePlayer) {
     const v = this.video;
@@ -83,9 +90,12 @@ export class TrackPlayer {
     return this.trackStats ?? this.inner.stats;
   }
 
-  /** The pictures on this track (a new connection brings a new one), or on the channel (null). */
-  setTrack(m: TrackMedia | null): void {
+  /** The pictures on this track (a new connection brings a new one), or on the channel (null);
+   *  `audio`: the sound on its audio track too. */
+  setTrack(m: TrackMedia | null, audio = false): void {
     this.media = m;
+    this.audio = !!m && audio;
+    this.applySound();
     this.trackStats = m ? new TrackStats(m.receiver) : null;
     this.video.style.display = m ? "" : "none";
     this.inner.element.style.display = m ? "none" : "";
@@ -102,10 +112,17 @@ export class TrackPlayer {
   }
 
   /** One binary message from the engine: on the track, its pictures never come here (only the
-   *  sound does). */
+   *  sound does, unless it is on the audio track as well). */
   onMessage(buf: ArrayBuffer): void {
-    if (this.media && new Uint8Array(buf)[0] <= 1) return;
+    const kind = new Uint8Array(buf)[0];
+    if (this.media && kind <= 1) return;
+    if (this.audio && (kind === 3 || kind === 4)) return;
     this.inner.onMessage(buf);
+  }
+
+  /** The <video>'s own sound: on only with the audio track, after the guest's tap, unmuted. */
+  private applySound(): void {
+    this.video.muted = !(this.audio && this.soundOn && !this.muted);
   }
 
   setHevc(h: boolean): void {
@@ -123,11 +140,15 @@ export class TrackPlayer {
 
   startSound(): void {
     this.inner.startSound();
+    this.soundOn = true;
+    this.applySound();
     if (this.media) this.play();
   }
 
   setMuted(m: boolean): void {
     this.inner.setMuted(m);
+    this.muted = m;
+    this.applySound();
   }
 
   resumeSound(): void {

@@ -407,6 +407,29 @@ async fn a_home_network_guest_joins_over_webrtc_without_any_hub() {
     live.picture(&key_au, true);
     let (got, _) = next_track_picture(&mut g).await;
     assert!(got.ends_with(&key_au[key_au.len() - 64..]), "the keyframe on the track");
+    // The sound on the Opus audio track beside it (#720), not on the channel: the header (2
+    // channels, 16 bits, 48 kHz, 480 samples a frame), then frames [index u16 BE][Opus packet].
+    assert_eq!(j["audio"], true, "{j}");
+    live.send(3, &[2, 16, 0, 0, 0xbb, 0x80, 0, 0, 0x01, 0xe0], false);
+    for i in 0u16..3 {
+        let mut f = i.to_be_bytes().to_vec();
+        f.extend_from_slice(&[0xfc, 0xff, 0xfe, i as u8]);
+        live.send(4, &f, false);
+    }
+    let mut sound = Vec::new();
+    let until = tokio::time::Instant::now() + Duration::from_secs(10);
+    while sound.len() < 3 {
+        match tokio::time::timeout_at(until, g.rx.recv()).await {
+            Ok(Some(GIn::Audio(p))) => sound.push(p),
+            Ok(Some(GIn::Binary(b))) if matches!(b.first(), Some(3 | 4)) => {
+                panic!("sound on the channel with the audio track on")
+            }
+            Ok(Some(_)) => {}
+            other => panic!("no sound on the track: {other:?} after {}", sound.len()),
+        }
+    }
+    assert_eq!(sound[0], vec![0xfc, 0xff, 0xfe, 0], "the Opus packet as it came");
+    assert_eq!(sound[2], vec![0xfc, 0xff, 0xfe, 2]);
     let st = until_state(console, "the guest's path", |s| {
         s["guests"][0]["link"]["path"].is_string()
     })
