@@ -594,7 +594,7 @@ mod tests {
         );
         assert_eq!(home_of(&["100.64.0.9".into()], ts), None);
         assert_eq!(
-            home_of(&["100.64.0.9:9113".into(), "100.70.1.1".into()], ts),
+            home_of(&["100.64.0.9:9021".into(), "100.70.1.1".into()], ts),
             None
         );
         assert_eq!(home_of(&[], ts), None);

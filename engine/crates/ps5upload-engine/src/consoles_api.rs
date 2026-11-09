@@ -1280,7 +1280,7 @@ mod tailnet_merge_tests {
             TailnetPlan::Exists(0)
         );
         // With a port, or another spelling: the same entry.
-        let ported = vec![p("a", "192.168.1.20:9113")];
+        let ported = vec![p("a", "192.168.1.20:9021")];
         assert_eq!(
             tailnet_plan(&ported, ts, Some("192.168.1.20"), &[]),
             TailnetPlan::Exists(0)

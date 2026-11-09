@@ -31,6 +31,12 @@ async function fakeApp(page: Page, notes: string) {
       plugins: {},
     };
     w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+    // A PS5 on the list: with none, the app opens on Add a PS5, which covers the notice.
+    window.localStorage.setItem("ps5upload.host", "192.0.2.10");
+    window.localStorage.setItem(
+      "ps5upload.roster.v1",
+      JSON.stringify({ profiles: [{ id: "ps5", name: "PS5", host: "192.0.2.10" }], active_id: "ps5" }),
+    );
   }, notes);
   await page.route(
     (u) => u.pathname.startsWith("/api/"),
