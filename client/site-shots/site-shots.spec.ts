@@ -163,38 +163,150 @@ const TS_NODE = {
 };
 const TS_CONSOLE = {
   ...TS_NODE,
-  hostname: "living-room-ps5",
+  hostname: "living-room-ps5u",
   ip: "100.101.102.50",
-  name: `living-room-ps5.${TS_DOMAIN}`,
+  name: `living-room-ps5u.${TS_DOMAIN}`,
+  signed_in: true,
+  allow_mode: "listed",
+  allow: "100.101.102.20,100.101.102.31",
+  blocked_recent: [{ ip: "100.101.102.77", name: `old-tablet.${TS_DOMAIN}`, port: 9120, proto: "tcp", count: 2, first: NOW - 600, last: NOW - 300 }],
   udp_port: 41641,
   endpoints: [],
   warning: "",
   serving: { udp_flows: 2, tcp_conns: 3 },
   peers: [
-    tsPeer("work-laptop", "100.101.102.20", "direct", 18.4),
-    tsPeer("phone", "100.101.102.31", "relayed", -1),
-    tsPeer("tablet", "100.101.102.32", "idle", -1),
+    tsPeer("work-laptop-ps5u", "100.101.102.20", "direct", 18.4),
+    tsPeer("phone-ps5u", "100.101.102.31", "relayed", -1),
+    tsPeer("old-tablet", "100.101.102.77", "idle", -1),
   ],
 };
 const TS_APP = {
   ...TS_NODE,
-  hostname: "work-laptop",
+  hostname: "work-laptop-ps5u",
   ip: "100.101.102.20",
-  name: `work-laptop.${TS_DOMAIN}`,
+  name: `work-laptop-ps5u.${TS_DOMAIN}`,
+  signed_in: true,
+  backend: "builtin",
+  default_hostname: "work-laptop-ps5u",
   peers: [
-    tsPeer("living-room-ps5", "100.101.102.50", "direct", 18.4),
-    tsPeer("phone", "100.101.102.31", "relayed", -1),
+    tsPeer("living-room-ps5u", "100.101.102.50", "direct", 18.4),
+    tsPeer("phone-ps5u", "100.101.102.31", "relayed", -1),
   ],
-  consoles: [{ host: HOST, ip: "100.101.102.50", name: "living-room-ps5", via: "direct", latency_ms: 18.4 }],
+  consoles: [{ host: HOST, ip: "100.101.102.50", name: "living-room-ps5u", via: "direct", latency_ms: 18.4, tested_at: (NOW - 86400) * 1000 }],
 };
+
+// 12.1.0 / 12.2.0: the Consoles page, a device asking, Add a PS5, Invite a device, and Share.
+// Made-up devices, keys and links (the shapes of e2e/consoles-page.spec.ts and share-panel.spec.ts).
+const OFFICE = HOST.replace(/\.50$/, ".51");
+const CONSOLE_KEY = "ab".repeat(32);
+const HB_ID = "HBRW00001";
+const SHARE_LINK = "https://ps5upload.phantomptr.com/share/#room=Demo0Share0Not0Real00&fp=AB&hub=hub.example.com";
+const meshDevice = (id: string, name: string, kind: string, os: string, ip: string, online: boolean, via: string, agoS: number) => ({
+  id: id.repeat(32).slice(0, 64), name, nick: "", kind, os, app: "12.3.0", first: 1, last: Date.now() - agoS * 1000, ip, online, blocked: false, activity: [], via,
+});
+function meshState(asking: boolean) {
+  return {
+    supported: true,
+    rev: asking ? 2 : 1,
+    now: Date.now(),
+    you: "me".padEnd(64, "0"),
+    helper: "12.3.0",
+    settings: { require_approval: true, prune_days: 90 },
+    asks: asking ? [{ id: "cd".repeat(32), name: "Mia's phone", ip: "192.168.1.34", at: Date.now() - 4000 }] : [],
+    devices: [
+      { ...meshDevice("me", "MacBook", "desktop", "macOS", COMPUTER, true, "", 0), id: "me".padEnd(64, "0") },
+      meshDevice("11", "Pixel 9", "android", "Android 16", "192.168.1.31", true, "approved", 60),
+      meshDevice("22", "Work laptop", "desktop", "Windows", "100.101.102.20", false, "tailscale", 86400),
+      meshDevice("33", "iPad", "ios", "iPadOS", "192.168.1.32", false, "paired", 3 * 86400),
+    ],
+    locks: [],
+    events: [],
+    ev: 1,
+  };
+}
+function consolesAnswer(asking: boolean) {
+  return (path: string) => {
+    if (path === "/api/mesh/state") return meshState(asking);
+    if (path === "/api/mesh/me") return { id: "me", name: "MacBook", kind: "desktop", os: "macOS", app: "12.3.0" };
+    if (path === "/api/mesh/device") return { supported: true, ok: true, rev: 3 };
+    if (path === "/api/tailnet")
+      return { ...TS_APP, consoles: [{ host: HOST, ip: "100.101.102.50", name: "living-room-ps5u", via: "lan", latency_ms: 18.4, tested_at: Date.now() - 86400_000 }] };
+    if (path === "/api/ava1/console") return { key: CONSOLE_KEY, name: "PS5" };
+    if (path === "/api/discover")
+      return {
+        ok: true, scanned_ms: 2900, browsed_services: [],
+        candidates: [
+          { ip: OFFICE, hostname: "PS5-Office", all_ips: [OFFICE], services: [], loader_port_open: true, payload_port_open: true, confidence: 90, likely_ps5: true },
+          { ip: "192.168.1.60", hostname: "PS5-Bedroom", all_ips: ["192.168.1.60"], services: [], loader_port_open: true, payload_port_open: false, confidence: 60, likely_ps5: true },
+        ],
+      };
+    if (path === "/api/tailnet/consoles")
+      return {
+        backend: "builtin", can_list: true,
+        consoles: [
+          { name: "office", tailnet_name: "office-ps5u", tailnet_ip: "100.101.102.51", lan_host: OFFICE, id: CONSOLE_KEY, reachable: true, via: "builtin", online: true, paired: false, hosts: [], listed: null, error: null },
+        ],
+      };
+    return undefined;
+  };
+}
+function shareAnswer(state: { share: Record<string, unknown> }) {
+  return (path: string, req: import("@playwright/test").Request) => {
+    const m = req.method();
+    if (path === "/api/mesh/me") return { id: "me", name: "Alex's MacBook", kind: "desktop", os: "macOS", app: "12.3.0" };
+    if (path === "/api/ps5/apps/installed") return { titles: [{ title_id: HB_ID, title_name: "Pocket Galaxy", origin: "folder" }] };
+    if (path === `/api/games/${HB_ID}`)
+      return {
+        title_id: HB_ID, title: "Pocket Galaxy", platform: "PS5", cover: null, copies: [],
+        consoles: [{ host: HOST, read_at: NOW, installed: true, version: "01.000", registered_from: `/user/app/${HB_ID}`, dlc_missing: [] }],
+      };
+    if (path === "/api/share/check") return { items: [{ item: 0, ok: true }] };
+    if (path === "/api/ps5/saves/list")
+      return { saves: [{ title_id: HB_ID, user_id: 0x10000000, path: `/user/home/10000000/savedata_prospero/${HB_ID}`, size: 1_200_000, mtime: NOW, kind: "ps5" }] };
+    if (path === "/api/ps5/screenshots/list")
+      return { items: [1, 2, 3, 4].map((n) => ({ path: `/user/av_contents/photo/${HB_ID}/shot${n}.jxr`, size: 2_000_000, mtime: NOW - n })) };
+    if (path === "/api/ps5/videos/list") return { items: [{ path: `/user/av_contents/video/${HB_ID}/clip.webm`, size: 30_000_000, mtime: NOW }] };
+    if (path === "/api/ps5/cheats/get") return { mods: [{ name: "Infinite fuel", on: true }, { name: "Warp drive", on: true }, { name: "All ships", on: false }] };
+    if (path === "/api/share" && m === "POST") return state.share;
+    if (path === "/api/share") return { shares: [], receives: [], history: [] };
+    if (path === "/api/share/s1") return state.share;
+    if (path === "/api/share/receive" && m === "POST") return { id: "r1" };
+    if (path === "/api/share/receive/r1")
+      return {
+        id: "r1", state: "offered", from: "Sam", title: "Pocket Galaxy", title_id: HB_ID,
+        items: [
+          { id: "i1", kind: "app", name: "Pocket Galaxy", title_id: HB_ID, format: "folder", size: 182_000_000, files: 40, refused: null },
+          { id: "i2", kind: "save", name: "Pocket Galaxy save", title_id: HB_ID, format: null, size: 1_200_000, files: 1, refused: null },
+          { id: "i3", kind: "media", name: "4 screenshots, 1 clip", title_id: HB_ID, format: null, size: 38_000_000, files: 5, refused: null },
+          { id: "i4", kind: "note", name: "Note", title_id: null, format: null, size: 40, files: 1, refused: null },
+        ],
+        accepted: [], expires_in_s: 3600, bytes_done: 0, bytes_total: 0, error: null, path: null, dest: null, received: [],
+      };
+    return undefined;
+  };
+}
+const shareMade = (requests: unknown[]) => ({
+  id: "s1", state: "open", from: "Alex's MacBook", title: "Pocket Galaxy", title_id: HB_ID, one_use: false,
+  expires_in_s: 86_340, url: SHARE_LINK, lan_url: null, works: "anywhere", items: [], requests,
+});
 
 /** The made-up console, as the engine would answer for it. */
 async function fakeConsole(
   page: Page,
-  opts: { paired: boolean; theme: "light" | "dark"; lang: string; internet?: boolean; tailnet?: boolean },
+  opts: {
+    paired: boolean;
+    theme: "light" | "dark";
+    lang: string;
+    internet?: boolean;
+    tailnet?: boolean;
+    /** A second PS5 on the list (12.2.0's Consoles page). */
+    two?: boolean;
+    /** Answers first; undefined falls through to the rest. */
+    extra?: (path: string, req: import("@playwright/test").Request) => unknown;
+  },
 ) {
   await page.addInitScript(
-    ([host, paired, theme, now, lang]) => {
+    ([host, paired, theme, now, lang, two]) => {
       const ls = window.localStorage;
       ls.setItem("ps5upload.theme", theme);
       ls.setItem("ps5upload.lang", lang);
@@ -212,6 +324,7 @@ async function fakeConsole(
                 ? { wake_regist_key: "00000000000000000000000000000001", wake_rp_key: "00000000000000000000000000000002" }
                 : {}),
             },
+            ...(two ? [{ id: "p2", name: "Office PS5", host: host.replace(/\.50$/, ".51") }] : []),
           ],
         }),
       );
@@ -222,7 +335,7 @@ async function fakeConsole(
       );
       if (paired) ls.setItem("ps5upload.play_setup.v1", JSON.stringify({ rest: { [host]: true }, played: {}, homeHidden: false }));
     },
-    [HOST, opts.paired, opts.theme, NOW, opts.lang] as const,
+    [HOST, opts.paired, opts.theme, NOW, opts.lang, !!opts.two] as const,
   );
   await page.route("**/api/collection/games/*/cover*", (route) => {
     const id = new URL(route.request().url()).pathname.split("/")[4];
@@ -230,6 +343,7 @@ async function fakeConsole(
   });
   await page.route("**/api/ps5/app-icon*", (route) => {
     const id = new URL(route.request().url()).searchParams.get("title_id") ?? "PPSA90001";
+    if (id === HB_ID) return route.fulfill({ contentType: "image/png", body: art("PPSA90005") });
     return route.fulfill({ contentType: "image/png", body: art(GAMES.some((g) => g[0] === id) ? id : "PPSA90001") });
   });
   let tick = 0;
@@ -238,6 +352,10 @@ async function fakeConsole(
     async (route) => {
       const path = new URL(route.request().url()).pathname;
       const json = (b: unknown) => route.fulfill({ contentType: "application/json", body: JSON.stringify(b) });
+      if (opts.extra) {
+        const got = await opts.extra(path, route.request());
+        if (got !== undefined) return json(got);
+      }
       if (path.startsWith("/api/join")) return json(joinState(path, !!opts.internet));
       if (opts.tailnet) {
         if (path === "/api/ps5/tailnet") return json(TS_CONSOLE);
@@ -246,9 +364,9 @@ async function fakeConsole(
       }
       switch (path) {
         case "/api/version":
-          return json({ version: "11.0.4", caps: {} });
+          return json({ version: "12.3.0", caps: {} });
         case "/api/ps5/status":
-          return json({ ok: true, command_count: 1, instance_id: 1, ps5_kernel: "releases/10.00", ucred_elevated: true });
+          return json({ ok: true, command_count: 1, instance_id: 1, ps5_kernel: "releases/10.00", ucred_elevated: true, version: "12.3.0" });
         case "/api/ps5/rp/session":
           return json({ host: null });
         // Awake, as the console's own discovery reply says (the power card).
@@ -590,9 +708,10 @@ for (const lang of LANGS) {
       test(`tailscale: connection and settings (${theme})`, async ({ page }) => {
         // Internet invites on, so Settings › Play Together above it shows its own options.
         await fakeConsole(page, { paired: true, theme, lang, tailnet: true, internet: true });
-        await page.goto("/connection", { waitUntil: "domcontentloaded" });
+        // 12.1.0: the console's Tailscale lives in Settings › This PS5, with who may reach it.
+        await page.goto("/settings?tab=ps5&console=p1", { waitUntil: "domcontentloaded" });
         const panel = page.getByTestId("tailnet-panel");
-        await expect(panel.getByTestId("tailnet-peers")).toBeVisible({ timeout: 30_000 });
+        await expect(panel.getByTestId("tailnet-allow")).toBeVisible({ timeout: 30_000 });
         await expect(page.getByTestId("tailnet-chip")).toBeVisible({ timeout: 15_000 });
         await panel.evaluate(toTop);
         await page.mouse.move(8, 8);
@@ -613,6 +732,107 @@ for (const lang of LANGS) {
         await page.mouse.move(8, 8);
         await page.waitForTimeout(800);
         await shot(page, "tailscale-settings", theme);
+      });
+    });
+
+    // 12.2.0: every PS5 on one page, a device asking to use one, Add a PS5 and Invite a device.
+    test.describe(`${lang} consoles ${theme}`, () => {
+      test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1.5 });
+      const ready = async (page: Page) => {
+        const card = page.locator("[data-scroll-root]:visible").getByTestId("console-card").first();
+        await expect(card).toHaveAttribute("data-ready", "1", { timeout: 30_000 });
+        return card;
+      };
+
+      test(`consoles, add, invite (${theme})`, async ({ page }) => {
+        await fakeConsole(page, { paired: true, theme, lang, tailnet: true, two: true, extra: consolesAnswer(false) });
+        await page.goto("/connection", { waitUntil: "domcontentloaded" });
+        await ready(page);
+        await page.mouse.move(8, 8);
+        await page.waitForTimeout(1500);
+        await shot(page, "consoles", theme);
+
+        const main = page.locator("[data-scroll-root]:visible");
+        await main.getByTestId("consoles-add-open").click();
+        const add = page.getByRole("dialog").first();
+        await expect(add.getByTestId("consoles-found-row").nth(1)).toBeVisible({ timeout: 30_000 });
+        await page.mouse.move(8, 8);
+        await page.waitForTimeout(2500);
+        await shot(page, "add-ps5", theme);
+        await page.keyboard.press("Escape");
+        await expect(add).toHaveCount(0);
+
+        await main.getByTestId("consoles-invite-open").first().click();
+        const invite = page.getByRole("dialog").first();
+        await expect(invite.getByTestId("consoles-invite-qr")).toBeVisible({ timeout: 15_000 });
+        await page.mouse.move(8, 8);
+        await page.waitForTimeout(800);
+        await shot(page, "invite", theme);
+      });
+
+      test(`a device asking, and who may use it (${theme})`, async ({ page }) => {
+        await fakeConsole(page, { paired: true, theme, lang, tailnet: true, extra: consolesAnswer(true) });
+        await page.goto("/connection", { waitUntil: "domcontentloaded" });
+        const card = await ready(page);
+        // 12.3: a PS5 on Tailscale that isn't on the list, offered at the top of the page.
+        await expect(page.locator("[data-scroll-root]:visible").getByTestId("consoles-ts-found")).toBeVisible({ timeout: 30_000 });
+        await page.mouse.move(8, 8);
+        await page.waitForTimeout(800);
+        await shot(page, "ts-found", theme);
+        await expect(card.getByTestId("consoles-ask")).toBeVisible({ timeout: 15_000 });
+        await card.getByTestId("consoles-devices-toggle").click();
+        await expect(card.getByTestId("consoles-trusted-device")).toHaveCount(4);
+        await card.getByTestId("consoles-ask").evaluate((el) => {
+          let box = el.parentElement;
+          while (box && !(box.scrollHeight > box.clientHeight && /auto|scroll/.test(getComputedStyle(box).overflowY))) box = box.parentElement;
+          if (box) box.scrollTop += el.getBoundingClientRect().top - 110;
+        });
+        await page.mouse.move(8, 8);
+        await page.waitForTimeout(800);
+        await shot(page, "approval", theme);
+      });
+    });
+
+    // 12.1.0: Share. A homebrew app with its save, screenshots and cheats, then the link with a
+    // friend asking; and a friend's Receive.
+    test.describe(`${lang} share ${theme}`, () => {
+      test.use({ viewport: { width: 1280, height: 860 }, deviceScaleFactor: 1.5 });
+
+      test(`share and receive (${theme})`, async ({ page }) => {
+        const state = { share: shareMade([]) as Record<string, unknown> };
+        await page.addInitScript((id) => window.localStorage.setItem("ps5upload.rp_controls.v1", JSON.stringify({ [id]: {} })), HB_ID);
+        await fakeConsole(page, { paired: true, theme, lang, extra: shareAnswer(state) });
+        await page.goto(`/games/${HB_ID}`, { waitUntil: "domcontentloaded" });
+        await page.getByTestId("game-share").click({ timeout: 60_000 });
+        await expect(page.getByTestId("share-panel")).toBeVisible();
+        await expect(page.getByTestId("share-app")).toHaveAttribute("data-state", "on", { timeout: 15_000 });
+        await page.getByTestId("share-save").getByRole("checkbox").click();
+        await page.getByTestId("share-media").getByRole("checkbox").click();
+        await page.getByTestId("share-note").fill("Try the asteroid level!");
+        await page.getByTestId("share-panel").evaluate((el) => el.parentElement?.scrollTo(0, 0));
+        await page.mouse.move(8, 8);
+        await page.waitForTimeout(800);
+        await shot(page, "share", theme);
+
+        state.share = shareMade([
+          { request: 1, name: "Sam", wants: ["i1", "i2"], wants_names: ["Pocket Galaxy", "Pocket Galaxy save"], state: "asking", bytes_done: 0, bytes_total: 0, why: null },
+          { request: 2, name: "Jo", wants: ["i1"], wants_names: ["Pocket Galaxy"], state: "sending", bytes_done: 61_000_000, bytes_total: 182_000_000, why: null },
+        ]);
+        await page.getByTestId("share-go").click();
+        await expect(page.getByTestId("share-qr")).toBeVisible();
+        await expect(page.getByTestId("share-request")).toHaveCount(2, { timeout: 10_000 });
+        await page.mouse.move(8, 8);
+        await page.waitForTimeout(800);
+        await shot(page, "share-link", theme);
+
+        await page.goto(`/share?receive=${encodeURIComponent(SHARE_LINK)}`, { waitUntil: "domcontentloaded" });
+        await expect(page.getByTestId("receive-link")).toHaveValue(SHARE_LINK, { timeout: 60_000 });
+        await page.getByTestId("receive-open").click();
+        await expect(page.getByTestId("receive-offer")).toBeVisible();
+        await expect(page.getByTestId("receive-item")).toHaveCount(4);
+        await page.mouse.move(8, 8);
+        await page.waitForTimeout(800);
+        await shot(page, "receive", theme);
       });
     });
 
@@ -807,6 +1027,9 @@ for (const lang of LANGS) {
             [lang] as const,
           );
           await page.goto(`/join/#${NET_FRAGMENT}`, { waitUntil: "domcontentloaded" });
+          // 12.3: an invite offers the app first; the picture is the in-browser name step.
+          await expect(page.getByTestId("open-in-gate")).toBeVisible({ timeout: 30_000 });
+          await page.getByTestId("open-in-browser").first().click();
           await expect(page.getByTestId("join-name-step")).toBeVisible({ timeout: 30_000 });
           await page.getByTestId("join-name").fill("Sam");
           await page.getByTestId("join-name").blur();

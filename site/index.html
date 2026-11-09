@@ -87,8 +87,10 @@
         <span>PS5Upload</span>
       </a>
       <nav class="nav" data-i18n-attr="aria-label:nav.sections" aria-label="Sections">
+        <a href="#consoles" data-i18n="nav.consoles">Your PS5s</a>
         <a href="#together" data-i18n="nav.together">Play Together</a>
         <a href="#tailscale" data-i18n="nav.tailscale">Tailscale</a>
+        <a href="#share" data-i18n="nav.share">Share</a>
         <a href="#play" data-i18n="nav.play">Play</a>
         <a href="#all" data-i18n="nav.all">All features</a>
         <a href="#guide" data-i18n="nav.guide">Guide</a>
@@ -121,9 +123,9 @@
         <div class="hero-text">
           <div class="hero-pills">
             <p class="eyebrow" id="hero-version" data-i18n="hero.eyebrow">Free and open source</p>
-            <a class="hero-new" href="#tailscale">
-              <span class="hero-new-tag" data-i18n="hero.new_tag12">New in 12.0</span>
-              <span data-i18n="hero.new_text3">Play from anywhere with Tailscale, and more</span>
+            <a class="hero-new" href="#consoles">
+              <span class="hero-new-tag" data-i18n="hero.new_tag122">PS5Upload 12</span>
+              <span data-i18n="hero.new_text122">Play together from anywhere, Tailscale built in, Share, and every PS5 on one page</span>
               <span class="hero-new-arrow" aria-hidden="true">→</span>
             </a>
           </div>
@@ -169,11 +171,79 @@
       </ul>
     </section>
 
+    <!-- Your PS5s (12.2): the Consoles page, Add a PS5, invites and approval. -->
+    <section class="section tailscale" id="consoles" aria-labelledby="consoles-title">
+      <div class="wrap together-head">
+        <p class="kicker" data-i18n="cs.kicker">New in 12.2</p>
+        <h2 id="consoles-title" data-i18n="cs.title">Every PS5, on one page</h2>
+        <p class="section-lead" data-i18n="cs.lead">Connection shows each PS5 as a card: whether it's online, how this device reaches it, its helper and firmware, and who may use it. Setup steps show only until it's ready.</p>
+      </div>
+      <div class="wrap tour">
+        <div class="tour-row">
+          <div class="tour-text">
+            <h3 data-i18n="cs.card.title">Everything about a PS5, at a glance</h3>
+            <p data-i18n="cs.card.text">Each card says whether the PS5 is online and how this device gets there: your home network first, or Tailscale when you're away. Its helper, firmware and the ways to reach it are right there, with Invite, Resend helper and its settings one press away.</p>
+            <ul class="ticks">
+              <li data-i18n="cs.card.t1">Shows as connected in about a second when the app opens</li>
+              <li data-i18n="cs.card.t2">One slow answer no longer reads as offline: it takes three failed checks in a row</li>
+              <li data-i18n="cs.card.t3">Settings like keep awake and rest after uploads are kept for each PS5</li>
+            </ul>
+          </div>
+          <figure class="shot tilt-l">
+            <picture>
+              <source srcset="assets/shots/consoles-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="consoles" />
+              <img src="assets/shots/consoles-light.webp" data-i18n-attr="alt:alt.consoles" alt="Connection: the Living Room PS5's card, online on the home network, with its helper, firmware, Tailscale address and Invite a device." width="1920" height="1200" loading="lazy" data-theme-img="consoles" />
+            </picture>
+          </figure>
+        </div>
+        <div class="tour-row flip">
+          <div class="tour-text">
+            <h3 data-i18n="cs.add.title">Add a PS5 in one scan</h3>
+            <p data-i18n="cs.add.text2">A PS5 already on your Tailscale network shows up on the page by itself, ready to add. One scan looks on your home network and on Tailscale, and a PS5 found both ways shows once. You can also scan an invite's code, paste its link or type an address.</p>
+          </div>
+          <figure class="shot tilt-r">
+            <picture>
+              <source srcset="assets/shots/add-ps5-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="add-ps5" />
+              <img src="assets/shots/add-ps5-light.webp" data-i18n-attr="alt:alt.add_ps5" alt="Add a PS5: what the scan found on the home network and on Tailscale, an invite field and an address field." width="1920" height="1200" loading="lazy" data-theme-img="add-ps5" />
+            </picture>
+          </figure>
+        </div>
+        <div class="tour-row">
+          <div class="tour-text">
+            <h3 data-i18n="cs.ask.title">You decide who may use it</h3>
+            <p data-i18n="cs.ask.text">Turn on <b>Ask before a new device can connect</b> and a new phone or computer has to ask first. Press Allow or Decline on any device that uses the PS5, on its card, or on the PS5's own page. A device can't allow itself.</p>
+            <ul class="ticks">
+              <li data-i18n="cs.ask.t1">See how each device got in: paired, invited and allowed, the home network or Tailscale</li>
+              <li data-i18n="cs.ask.t2">Revoke a device, or block it for good</li>
+            </ul>
+          </div>
+          <figure class="shot tilt-l">
+            <picture>
+              <source srcset="assets/shots/approval-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="approval" />
+              <img src="assets/shots/approval-light.webp" data-i18n-attr="alt:alt.approval" alt="A phone asking to use the Living Room PS5 with Allow and Decline, above the list of devices allowed to use it." width="1920" height="1200" loading="lazy" data-theme-img="approval" />
+            </picture>
+          </figure>
+        </div>
+        <div class="tour-row flip">
+          <div class="tour-text">
+            <h3 data-i18n="cs.invite.title">Invite your other devices</h3>
+            <p data-i18n="cs.invite.text">A QR code and a link that add the PS5 to a new phone or computer, with its home and Tailscale addresses. The link only says where the PS5 is: it lets nobody in by itself.</p>
+          </div>
+          <figure class="shot tilt-r">
+            <picture>
+              <source srcset="assets/shots/invite-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="invite" />
+              <img src="assets/shots/invite-light.webp" data-i18n-attr="alt:alt.invite" alt="Invite a device: a QR code and a link with the PS5's home and Tailscale addresses." width="1920" height="1200" loading="lazy" data-theme-img="invite" />
+            </picture>
+          </figure>
+        </div>
+      </div>
+    </section>
+
     <!-- Play Together (11.0; over the internet since 11.6) -->
     <section class="section together" id="together" aria-labelledby="together-title">
       <div class="together-glow" aria-hidden="true"></div>
       <div class="wrap together-head">
-        <p class="kicker" data-i18n="together.kicker2">New in 11.6: over the internet</p>
+        <p class="kicker" data-i18n="together.kicker3">One link, from anywhere</p>
         <h2 id="together-title" data-i18n="together.title">Play Together: your friends, on your PS5</h2>
         <p class="section-lead" data-i18n="together.lead2">Send a link and friends join the game you're playing as Player 2, 3 and 4, each with their own controller, from your Wi-Fi or from anywhere. They need no PS5 and no app: a browser on a phone, tablet or computer will do.</p>
       </div>
@@ -182,7 +252,7 @@
           <div class="screen">
             <picture>
               <source srcset="assets/shots/together-net-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="together-net" />
-              <img src="assets/shots/together-net-light.webp" data-i18n-attr="alt:alt.together_net" alt="The Play Together panel with Internet chosen: a QR code and the invite link, a friend asking to join with Allow, and Sam playing as Player 2 over the internet." width="1600" height="1000" loading="lazy" data-theme-img="together-net" />
+              <img src="assets/shots/together-net-light.webp" data-i18n-attr="alt:alt.together_net2" alt="The Play Together panel: a QR code and one invite link that works on your Wi-Fi and over the internet, and a friend asking to join with Allow." width="1600" height="1000" loading="lazy" data-theme-img="together-net" />
             </picture>
           </div>
         </figure>
@@ -197,7 +267,7 @@
           <li class="card">
             <span class="num">1</span>
             <h3 data-i18n="together.s1.title2">Open Play Together</h3>
-            <p data-i18n="together.s1.text3">In <b>Play</b>, open the <b>Play Together</b> tab. Choose <b>This network</b> for friends on your Wi-Fi or <b>Internet</b> for friends anywhere, press <b>Start and invite</b>, then share the QR code or the link.</p>
+            <p data-i18n="together.s1.text4">In <b>Play</b>, open the <b>Play Together</b> tab, press <b>Start and invite</b>, then share the QR code or the link. The same link works for friends on your Wi-Fi, on Tailscale or anywhere on the internet.</p>
           </li>
           <li class="card">
             <span class="num">2</span>
@@ -217,7 +287,7 @@
             <h3 data-i18n="together.tab.title">Its own tab in Play</h3>
             <p data-i18n="together.tab.text">Play has three tabs: <b>Play my PS5</b>, <b>Play Together</b> and <b>Join a friend</b>. On Play Together, one press of <b>Start and invite</b> wakes the PS5, starts the stream and shows the invite.</p>
             <ul class="ticks">
-              <li data-i18n="together.tab.t1">Choose where your friends are before you start: this network or the internet</li>
+              <li data-i18n="together.tab.t1b">One invite for everyone: for each friend the app picks your home network, Tailscale or the internet</li>
               <li data-i18n="together.tab.t2">Guests play as the PS5 profile you pick in Settings › Play Together, or the TV asks them</li>
               <li data-i18n="together.tab.t3">Already playing? The people button on the Play bar opens the same invite</li>
             </ul>
@@ -225,7 +295,7 @@
           <figure class="shot tilt-r">
             <picture>
               <source srcset="assets/shots/together-tab-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="together-tab" />
-              <img src="assets/shots/together-tab-light.webp" data-i18n-attr="alt:alt.together_tab" alt="Play › Play Together before a stream: the console, Internet chosen with a note about the server and how to support it, and Start and invite." width="1920" height="1200" loading="lazy" data-theme-img="together-tab" />
+              <img src="assets/shots/together-tab-light.webp" data-i18n-attr="alt:alt.together_tab2" alt="Play › Play Together before a stream: the console, a note that invites work from anywhere, and Start and invite." width="1920" height="1200" loading="lazy" data-theme-img="together-tab" />
             </picture>
           </figure>
         </div>
@@ -256,7 +326,7 @@
           <div class="card">
             <span class="ico" aria-hidden="true">🌍</span>
             <h3 data-i18n="together.net.title">Friends anywhere, no relay</h3>
-            <p data-i18n="together.net.text">Choose Internet and the link works from anywhere, a phone on mobile data too. A small server only introduces you: the picture, sound and controls go straight between you and your friend.</p>
+            <p data-i18n="together.net.text2">The link works from anywhere, a phone on mobile data too, and the picture comes as a video stream that holds 60 fps when a few packets go missing. A small server only introduces you: picture, sound and controls go straight between you. On a network that blocks direct connections, Tailscale gets through.</p>
           </div>
           <div class="card">
             <span class="ico" aria-hidden="true">🛡️</span>
@@ -275,7 +345,7 @@
     <!-- Tailscale (12.0): the app's own tailnet node and the console's, no Tailscale app. -->
     <section class="section tailscale" id="tailscale" aria-labelledby="tailscale-title">
       <div class="wrap together-head">
-        <p class="kicker" data-i18n="ts.kicker">New in 12.0</p>
+        <p class="kicker" data-i18n="ts.kicker2">Built in</p>
         <h2 id="tailscale-title" data-i18n="ts.title">Tailscale: your PS5, from anywhere</h2>
         <p class="section-lead" data-i18n="ts.lead">Play your PS5 from anywhere through your own Tailscale account. There's no Tailscale app to install on any device: the app and the PS5 join your tailnet by themselves.</p>
       </div>
@@ -283,24 +353,24 @@
         <div class="tour-row">
           <div class="tour-text">
             <h3 data-i18n="ts.console.title">Put the PS5 on your tailnet</h3>
-            <p data-i18n="ts.console.text">On the Connection screen, press <b>Put this PS5 on Tailscale</b> and sign in, on this device or with the QR code on your phone. The PS5 gets its own Tailscale address and lists your other devices.</p>
+            <p data-i18n="ts.console.text2">On the PS5's card in Connection, press <b>Set up</b> next to Tailscale and sign in, on this device or with the QR code on your phone. The PS5 gets its own Tailscale address, named after it with <b>-ps5u</b>.</p>
             <ul class="ticks">
-              <li data-i18n="ts.console.t1">Only Remote Play and PS5Upload can be reached through it, nothing else on the PS5</li>
-              <li data-i18n="ts.console.t2">Each device shows whether it's direct or relayed, with the delay</li>
-              <li data-i18n="ts.console.t3">Rest mode doesn't undo it: after a wake, the PS5 joins your tailnet again by itself</li>
+              <li data-i18n="ts.console.t1b">Only the devices you tick can reach it, and only Remote Play and PS5Upload answer</li>
+              <li data-i18n="ts.console.t2b">A device that was turned away shows up, with Allow and Ignore</li>
+              <li data-i18n="ts.console.t3b">Pause it without signing out: the PS5 sleeps and wakes safely either way</li>
             </ul>
           </div>
           <figure class="shot tilt-l">
             <picture>
               <source srcset="assets/shots/tailscale-connection-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="tailscale-connection" />
-              <img src="assets/shots/tailscale-connection-light.webp" data-i18n-attr="alt:alt.ts_connection" alt="The Connection screen's Tailscale panel: the PS5 on Tailscale at a 100.x address, and the other devices on the tailnet, direct with the delay or relayed." width="1920" height="1200" loading="lazy" data-theme-img="tailscale-connection" />
+              <img src="assets/shots/tailscale-connection-light.webp" data-i18n-attr="alt:alt.ts_connection2" alt="Tailscale for this PS5: on Tailscale at a 100.x address, a device that was turned away with Allow and Ignore, and the devices ticked to reach it." width="1920" height="1200" loading="lazy" data-theme-img="tailscale-connection" />
             </picture>
           </figure>
         </div>
         <div class="tour-row flip">
           <div class="tour-text">
             <h3 data-i18n="ts.device.title">Then each of your devices</h3>
-            <p data-i18n="ts.device.text">On your computer, phone or tablet, open <b>Settings › Tailscale</b> and sign in to the same account. Away from home, connect as usual: when the PS5 doesn't answer at its home address, the app goes through Tailscale by itself.</p>
+            <p data-i18n="ts.device.text2">On your computer, phone or tablet, open <b>Settings › Tailscale</b> and sign in to the same account, or let PS5Upload use the Tailscale app you already have. Your home network always comes first: only when the PS5 doesn't answer there does the app go through Tailscale, and it tells you when it switches.</p>
             <p data-i18n="ts.device.chip">The status bar says how it's reaching the PS5:</p>
             <figure class="ts-chip">
               <img src="assets/shots/tailscale-chip-light.webp" data-i18n-attr="alt:alt.ts_chip" alt="The status bar's chip: via Tailscale (direct, 18.4 ms)." width="228" height="39" loading="lazy" data-theme-img="tailscale-chip" />
@@ -331,6 +401,57 @@
             <h3 data-i18n="ts.headscale.title">Your own server works too</h3>
             <p data-i18n="ts.headscale.text">Run Headscale? Open <b>Advanced</b> before you sign in and enter your control server. You can name the device there too.</p>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Share (12.1): homebrew apps and your own player data, straight to a friend. -->
+    <section class="section tailscale" id="share" aria-labelledby="share-title">
+      <div class="wrap together-head">
+        <p class="kicker" data-i18n="sh.kicker">New in 12.1</p>
+        <h2 id="share-title" data-i18n="sh.title">Share: your stuff, straight to a friend</h2>
+        <p class="section-lead" data-i18n="sh.lead">Every game and Collection item has Share. Send a friend your saves, screenshots and clips, which cheats are on, your controls, a note, and homebrew apps.</p>
+      </div>
+      <div class="wrap tour">
+        <div class="tour-row">
+          <div class="tour-text">
+            <h3 data-i18n="sh.pick.title">Pick what to send</h3>
+            <p data-i18n="sh.pick.text">Choose the app, its save, your captures, cheats and controls, add a note, then press Share. You get a link and a QR code that work on your Wi-Fi and over the internet.</p>
+            <ul class="ticks">
+              <li data-i18n="sh.pick.t1">A save goes into your friend's own save of the game: trophies and your account stay yours</li>
+              <li data-i18n="sh.pick.t2">Homebrew only: retail games, their updates and add-ons can't be shared, in any format</li>
+            </ul>
+          </div>
+          <figure class="shot tilt-l">
+            <picture>
+              <source srcset="assets/shots/share-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="share" />
+              <img src="assets/shots/share-light.webp" data-i18n-attr="alt:alt.share" alt="Share for a homebrew app: the app, its save and screenshots ticked, cheats and controls to add, and a note." width="1920" height="1290" loading="lazy" data-theme-img="share" />
+            </picture>
+          </figure>
+        </div>
+        <div class="tour-row flip">
+          <div class="tour-text">
+            <h3 data-i18n="sh.allow.title">Your friend asks, you allow</h3>
+            <p data-i18n="sh.allow.text2">Your friend opens the link, in their browser or in PS5Upload's <b>Share</b> screen, and picks what to take. Nothing moves until you press <b>Allow</b>, and then it goes straight between you, never through a server.</p>
+          </div>
+          <figure class="shot tilt-r">
+            <picture>
+              <source srcset="assets/shots/share-link-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="share-link" />
+              <img src="assets/shots/share-link-light.webp" data-i18n-attr="alt:alt.share_link" alt="The share's QR code and link, a friend asking with Allow and Decline, and another friend receiving." width="1920" height="1290" loading="lazy" data-theme-img="share-link" />
+            </picture>
+          </figure>
+        </div>
+        <div class="tour-row">
+          <div class="tour-text">
+            <h3 data-i18n="sh.receive.title">Receive</h3>
+            <p data-i18n="sh.receive.text">Your friend sees who shared what, picks the items, and keeps the app in their Collection or installs it to their PS5.</p>
+          </div>
+          <figure class="shot tilt-l">
+            <picture>
+              <source srcset="assets/shots/receive-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="receive" />
+              <img src="assets/shots/receive-light.webp" data-i18n-attr="alt:alt.receive2" alt="Share: a friend's share with the app, its save, screenshots and a note, and Accept." width="1920" height="1290" loading="lazy" data-theme-img="receive" />
+            </picture>
+          </figure>
         </div>
       </div>
     </section>
@@ -665,7 +786,7 @@
           </ul>
         </details>
         <details class="all-group" id="all-play" open>
-          <summary><span class="all-ico" aria-hidden="true">▶️</span><span class="all-name" data-i18n="all.g.play">Remote Play &amp; Play Together</span><span class="all-count">25</span></summary>
+          <summary><span class="all-ico" aria-hidden="true">▶️</span><span class="all-name" data-i18n="all.g.play">Remote Play &amp; Play Together</span><span class="all-count">27</span></summary>
           <ul>
             <li data-i18n="all.play.1">Play your PS5 on your computer, phone or tablet, or in a browser</li>
             <li data-i18n="all.play.2">Play wakes the console from rest mode and signs your user in</li>
@@ -692,6 +813,22 @@
             <li data-i18n="all.play.23">Guests play as the PS5 profile you choose, or the TV asks them</li>
             <li data-i18n="all.play.24">Phones as controllers and watchers over the internet too, each one allowed by you</li>
             <li data-i18n="all.play.25">Third-party controllers (8BitDo, Switch Pro, Logitech and more) work right, and Check your controller sets up any other</li>
+            <li data-i18n="all.play.26">One invite link for your Wi-Fi, Tailscale and the internet: the app picks the way for each friend</li>
+            <li data-i18n="all.play.27">Over the internet the picture is a video stream that holds 60 fps, and the panel shows how each friend is connected</li>
+          </ul>
+        </details>
+        <details class="all-group" id="all-connect" open>
+          <summary><span class="all-ico" aria-hidden="true">🔗</span><span class="all-name" data-i18n="all.g.connect">Your PS5s &amp; Share</span><span class="all-count">9</span></summary>
+          <ul>
+            <li data-i18n="all.connect.1">Every PS5 on one page: online or not, home network or Tailscale, helper, firmware and who may use it</li>
+            <li data-i18n="all.connect.2">Add a PS5 with one scan of your home network and your Tailscale network</li>
+            <li data-i18n="all.connect.3">Invite a device: a QR code or link that adds the PS5 on a new phone or computer</li>
+            <li data-i18n="all.connect.4">Ask before a new device can connect: Allow or Decline from any device or the PS5's own page</li>
+            <li data-i18n="all.connect.5">See how each device got in, and revoke or block it</li>
+            <li data-i18n="all.connect.6">Connects in about a second; a PS5 shows as unreachable only after three failed checks</li>
+            <li data-i18n="all.connect.7">Settings kept for each PS5: keep awake, rest after uploads, wake for uploads and more</li>
+            <li data-i18n="all.connect.8">Share saves, screenshots and clips, cheats, controls, a note and homebrew apps with a friend</li>
+            <li data-i18n="all.connect.9">Your friend asks and you allow; it goes straight between you, on your Wi-Fi or over the internet</li>
           </ul>
         </details>
         <details class="all-group" id="all-kbm" open>
@@ -743,7 +880,7 @@
           </ul>
         </details>
         <details class="all-group" id="all-platforms" open>
-          <summary><span class="all-ico" aria-hidden="true">💻</span><span class="all-name" data-i18n="all.g.platforms">Platforms</span><span class="all-count">11</span></summary>
+          <summary><span class="all-ico" aria-hidden="true">💻</span><span class="all-name" data-i18n="all.g.platforms">Platforms</span><span class="all-count">12</span></summary>
           <ul>
             <li data-i18n="all.platforms.1">Apps for Windows, macOS and Linux, on x64 and ARM</li>
             <li data-i18n="all.platforms.2">An Android app, and an iPhone app to sideload or add from an AltStore, SideStore or Feather source</li>
@@ -753,6 +890,7 @@
             <li data-i18n="all.platforms.6">Computers, phones and Docker can use one PS5 at once and see what the others are doing</li>
             <li data-i18n="all.platforms.7">Finds PS5s on your network, and follows one that changed address</li>
             <li data-i18n="all.platforms.11">Away from home, the whole app reaches your PS5 through Tailscale, set up from the app</li>
+            <li data-i18n="all.platforms.12">Tailscale your way: home network first, only the devices you add, pause without signing out, or use the Tailscale app you already have</li>
             <li data-i18n="all.platforms.8">Updates itself in the background, and installs the update when you quit</li>
             <li data-i18n="all.platforms.9">Settings backed up every day, to your computer and to each console</li>
             <li data-i18n="all.platforms.10">Light and dark themes, plus OLED black and Peach</li>
