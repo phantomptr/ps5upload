@@ -37,11 +37,16 @@ type Tr = ReturnType<typeof useTr>;
 
 export { presetName, problemText };
 
-/** Go live runs in the engine (with ffmpeg), so it depends on where the engine runs, not on the
- *  screen: the desktop app, and the web UI on any device, a phone's Safari included (#731). Only
- *  the phone apps lack it: their engine is the app's own, on the phone, with no ffmpeg. */
-export function goLiveAvailable(p: { tauri: boolean; mobile: boolean }): boolean {
-  return !inAppPhoneEngine(p);
+/** Go live runs in the engine: with ffmpeg on a computer (the desktop app, and the web UI on any
+ *  device, a phone's Safari included, #731), and in the phone apps by the app's own engine with
+ *  the phone's sound converter, no ffmpeg (#763). The status says when a phone can't. */
+export function goLiveAvailable(_p: { tauri: boolean; mobile: boolean }): boolean {
+  return true;
+}
+
+/** The engine needs ffmpeg for this status (not when it streams by itself). */
+export function needsFfmpeg(status: Pick<StreamStatus, "pipeline">): boolean {
+  return (status.pipeline ?? "ffmpeg") === "ffmpeg";
 }
 
 /** The phone app (Tauri on Android/iOS): its engine always runs inside it, on the phone. */
@@ -525,6 +530,7 @@ function GoLiveTab({ status }: { status: StreamStatus }) {
   const chosen = status.destinations.filter((d) => d.enabled);
   const fix = useMemo(() => playFix(status.session, chosen), [status.session, chosen]);
   const blocked = chosen.some((d) => (d.checks ?? []).some((c) => c.blocking));
+  const ready = status.pipeline === "native" || (needsFfmpeg(status) && status.ffmpeg.installed);
   const needMbps = (uploadNeededKbps(status.session, chosen.length) / 1000).toFixed(1);
 
   if (isLive(run) && run) return <LiveView run={run} />;
@@ -541,7 +547,24 @@ function GoLiveTab({ status }: { status: StreamStatus }) {
           </Callout>
         </div>
       )}
-      {!status.ffmpeg.installed && <FfmpegPrompt status={status} />}
+      {status.pipeline === "none" && (
+        <div data-testid="golive-native-unavailable">
+          <Callout
+            tone="warn"
+            title={tr("golive_native_unavailable", undefined, "This device can't convert the sound for streaming sites, so going live isn't available here.")}
+          />
+        </div>
+      )}
+      {status.pipeline === "native" && isMobile() && (
+        <p className="text-xs text-[var(--color-muted)]" data-testid="golive-phone-note">
+          {tr(
+            "golive_phone_keep_open",
+            undefined,
+            "The phone sends the stream itself. Keep PS5Upload open on screen while you're live: the stream stops if the app goes to the background or the phone locks.",
+          )}
+        </p>
+      )}
+      {needsFfmpeg(status) && !status.ffmpeg.installed && <FfmpegPrompt status={status} />}
       {lastFailed?.error && (
         <div data-testid="golive-failed">
           <Callout tone="error" title={tr("golive_stopped", undefined, "The stream stopped")}>
@@ -641,7 +664,7 @@ function GoLiveTab({ status }: { status: StreamStatus }) {
             variant="danger"
             size="md"
             leftIcon={<Radio size={15} />}
-            disabled={busy || !chosen.length || !status.ffmpeg.installed || blocked || !status.session}
+            disabled={busy || !chosen.length || !ready || blocked || !status.session}
             onClick={() => void start()}
             data-testid="golive-start"
           >

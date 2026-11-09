@@ -48,6 +48,19 @@ function status(over: Partial<StreamStatus> = {}): StreamStatus {
   };
 }
 
+/** A saved site, ready to go live to. */
+const youtube: StreamStatus["destinations"][number] = {
+  id: "yt-1",
+  preset: "youtube",
+  label: "YouTube",
+  server: "",
+  bandwidth_test: false,
+  enabled: true,
+  key_hint: "…abcd",
+  name: "YouTube",
+  checks: [],
+};
+
 const run = (over: Partial<LiveRun> = {}): LiveRun => ({
   phase: "live",
   error: null,
@@ -88,11 +101,11 @@ const set = (s: Partial<ReturnType<typeof useGoLiveStore.getState>>) => {
 describe("The Stream panel", () => {
   afterEach(() => set({ status: null, loadError: null, actionError: null, busy: false }));
 
-  it("follows where the engine runs, not the screen (#731)", () => {
+  it("is offered everywhere the engine runs (#731, #763)", () => {
     // Desktop app: its engine is on the computer.
     expect(goLiveAvailable({ tauri: true, mobile: false })).toBe(true);
-    // The phone apps: their engine is the app's own, on the phone, with no ffmpeg.
-    expect(goLiveAvailable({ tauri: true, mobile: true })).toBe(false);
+    // The phone apps: their own engine streams without ffmpeg (the status says if it can't).
+    expect(goLiveAvailable({ tauri: true, mobile: true })).toBe(true);
     // The web UI in a phone's Safari: the engine (and ffmpeg) is on a computer.
     expect(goLiveAvailable({ tauri: false, mobile: true })).toBe(true);
     expect(goLiveAvailable({ tauri: false, mobile: false })).toBe(true);
@@ -109,6 +122,29 @@ describe("The Stream panel", () => {
     const out = html(<GoLivePanel onClose={() => {}} />);
     expect(out).toContain("PS5Upload needs a free helper (ffmpeg, about 28 MB) to convert the sound for streaming sites. Download it?");
     expect(out).toContain('data-testid="golive-ffmpeg-download"');
+  });
+
+  it("needs no ffmpeg when the engine streams by itself (the phone apps, #763)", () => {
+    const s = status({ pipeline: "native", destinations: [youtube] });
+    s.ffmpeg.installed = false;
+    s.ffmpeg.supported = false;
+    set({ status: s });
+    const out = html(<GoLivePanel onClose={() => {}} />);
+    expect(out).not.toContain('data-testid="golive-ffmpeg"');
+    expect(out).not.toContain('data-testid="golive-native-unavailable"');
+    expect(out).toMatch(/<button[^>]*data-testid="golive-start"/);
+    expect(out).not.toMatch(/<button[^>]*disabled=""[^>]*data-testid="golive-start"/);
+  });
+
+  it("says when a phone can't convert the sound, and offers no start", () => {
+    const s = status({ pipeline: "none", destinations: [youtube] });
+    s.ffmpeg.installed = false;
+    set({ status: s });
+    const out = html(<GoLivePanel onClose={() => {}} />);
+    expect(out).toContain('data-testid="golive-native-unavailable"');
+    expect(out).toContain("going live isn&#x27;t available here");
+    expect(out).not.toContain('data-testid="golive-ffmpeg"');
+    expect(out).toMatch(/<button[^>]*disabled=""[^>]*data-testid="golive-start"/);
   });
 
   it("says what to do when the ffmpeg download can't run here (a Docker image)", () => {
