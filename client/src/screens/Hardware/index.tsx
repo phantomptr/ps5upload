@@ -29,6 +29,7 @@ import {
 import { useTr } from "../../state/lang";
 import { useConfirm } from "../../components/ConfirmDialog";
 import PowerTelemetryPanel from "./PowerTelemetryPanel";
+import GameFpsPanel from "./GameFpsPanel";
 import NetworkPanel from "./NetworkPanel";
 import PeripheralPanel from "./PeripheralPanel";
 import { FwSpoofCard } from "./FwSpoofCard";
@@ -945,6 +946,8 @@ export default function HardwareScreen() {
                   concat would produce a doubled ip:port which Connection
                   ::connect's SocketAddr parse rejects with a BAD_
                   GATEWAY, leaving the panel silently broken. */}
+              {/* The running game's sampled frame rate: live readout and capture (#774). */}
+              <GameFpsPanel key={`fps-${host}`} host={host} />
               <PowerTelemetryPanel mgmtAddr={mgmtAddr(host)} />
               <NetworkPanel mgmtAddr={mgmtAddr(host)} />
               <PeripheralPanel mgmtAddr={mgmtAddr(host)} model={info?.model} />

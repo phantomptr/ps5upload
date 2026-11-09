@@ -48,6 +48,7 @@ pub const METHOD_INDEX_START: u16 = 67;
 pub const METHOD_INDEX_STATUS: u16 = 68;
 pub const METHOD_INDEX_SEARCH: u16 = 69;
 pub const METHOD_INDEX_CANCEL: u16 = 70;
+pub const METHOD_HW_FPS: u16 = 71;
 pub const METHOD_HW_INFO: u16 = 72;
 pub const METHOD_HW_TEMPS: u16 = 73;
 pub const METHOD_HW_POWER: u16 = 74;

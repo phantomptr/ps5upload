@@ -86,6 +86,7 @@ fn is_read_only(method: u16) -> bool {
             | gen::METHOD_LOG_SYSLOG
             | gen::METHOD_NET_INTERFACES
             | gen::METHOD_NET_REACH
+            | gen::METHOD_HW_FPS
             | gen::METHOD_HW_INFO
             | gen::METHOD_HW_TEMPS
             | gen::METHOD_HW_POWER

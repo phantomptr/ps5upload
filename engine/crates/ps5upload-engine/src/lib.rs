@@ -56,6 +56,7 @@ mod folder_build;
 mod fpkg_api;
 mod fpkg_firmware;
 mod frame_decode;
+mod game_fps_api;
 mod games_api;
 mod golive_dest;
 mod golive_ffmpeg;
@@ -12432,6 +12433,24 @@ fn build_app_and_mcp(
         .route("/api/ps5/hw/power", get(ps5_hw_power))
         .route("/api/ps5/hw/storage", get(ps5_hw_storage))
         .route("/api/ps5/hw/drive-sensors", get(ps5_hw_drive_sensors))
+        // the running game's sampled frame rate, live and captured (#774)
+        .route("/api/ps5/hw/fps", get(game_fps_api::fps_live))
+        .route(
+            "/api/ps5/hw/fps/capture",
+            get(game_fps_api::fps_capture_get),
+        )
+        .route(
+            "/api/ps5/hw/fps/capture/start",
+            post(game_fps_api::fps_capture_start),
+        )
+        .route(
+            "/api/ps5/hw/fps/capture/stop",
+            post(game_fps_api::fps_capture_stop),
+        )
+        .route(
+            "/api/ps5/hw/fps/capture/csv",
+            get(game_fps_api::fps_capture_csv),
+        )
         .route("/api/ps5/proc/list", get(ps5_proc_list))
         .route("/api/ps5/app/lifecycle", post(ps5_app_lifecycle))
         .route("/api/ps5/klog", get(ps5_klog))

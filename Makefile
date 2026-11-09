@@ -1321,6 +1321,12 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/mp1_clock_selftest.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-mp1-clock-selftest
 	@echo "✓ clock reads are bounded, cached for 2 s, stop for good after one refusal (not a busy moment), and never change a clock"
+	@echo "Running game frame count (/dev/dce) self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o $(SELFTEST_DIR)/ps5upload-game-fps-selftest \
+		$(PAYLOAD_DIR)/tests/game_fps_selftest.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-game-fps-selftest
+	@echo "✓ the frame count is read from what the kernel wrote, \"no game\" is an answer, a failure reopens the device, and the reply keys are the engine's"
 	@echo "Running measured CPU clock self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-cpu-measure-selftest \

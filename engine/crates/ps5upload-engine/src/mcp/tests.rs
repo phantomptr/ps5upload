@@ -2642,6 +2642,21 @@ async fn each_post_tool_sends_what_its_route_reads() {
     assert_eq!(asked["path"], "/api/ps5/hw/fan-threshold");
     reads_as::<crate::FanThresholdReq>(&asked["body"]);
 
+    for (action, path) in [
+        ("start", "/api/ps5/hw/fps/capture/start"),
+        ("stop", "/api/ps5/hw/fps/capture/stop"),
+    ] {
+        let asked = route_of(
+            &server,
+            "hw_fps_capture",
+            json!({"console": c, "action": action}),
+        )
+        .await;
+        assert_eq!(asked["path"], path);
+        assert_eq!(asked["body"]["addr"], c);
+        reads_as::<crate::game_fps_api::AddrBody>(&asked["body"]);
+    }
+
     let asked = route_of(
         &server,
         "saves_backup_now",
@@ -2782,6 +2797,7 @@ async fn each_read_tool_asks_its_route_with_the_console_as_addr() {
             json!({"title_id": "PPSA00001"}),
         ),
         ("hw_power", "/api/ps5/hw/power", json!({})),
+        ("hw_fps", "/api/ps5/hw/fps", json!({})),
         ("power_telemetry", "/api/ps5/power/telemetry", json!({})),
         ("devices_list", "/api/mesh/state", json!({})),
         ("drive_list", "/api/drive", json!({})),
