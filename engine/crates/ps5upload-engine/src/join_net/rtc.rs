@@ -114,6 +114,14 @@ pub(crate) struct KeepUp {
 }
 
 impl KeepUp {
+    /// The last second's look found the link clean (no loss, at most a NACK or two, the round
+    /// trip at its usual).
+    pub(crate) fn clean_now(&self) -> bool {
+        self.clean_s > 0
+    }
+}
+
+impl KeepUp {
     /// Once a second: the rate to raise the estimate to, or None. `nacks` is str0m's running
     /// count, `loss` the guest's last report, `rtt_ms` the round trip now.
     pub(crate) fn second(
@@ -521,6 +529,10 @@ struct Video {
     /// floor set for a guest on the home network (kbit/s; 0: none).
     keep_up: KeepUp,
     floor_kbps: u32,
+    /// A home-network guest on a clean link: the estimate is held at this (kbit/s; 0: not held),
+    /// and the times it was put back there ([`hold_estimate`]).
+    pin_kbps: u32,
+    pinned: u64,
 }
 
 /// The log says a guest fell behind at most this often (the counts carry the rest).
@@ -1516,6 +1528,8 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
                 noted: None,
                 keep_up: KeepUp::default(),
                 floor_kbps: 0,
+                pin_kbps: 0,
+                pinned: 0,
             });
         }
         // The guest's browser asks for a keyframe (its decoder lost the picture): the session's
@@ -1538,8 +1552,9 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
             });
         }
         Event::EgressBitrateEstimate(BweKind::Twcc { estimate, .. }) => {
-            let kbps = (estimate.as_f64() / 1000.0).round().min(u32::MAX as f64) as u32;
+            let mut kbps = (estimate.as_f64() / 1000.0).round().min(u32::MAX as f64) as u32;
             if let Some(v) = p.video.as_mut() {
+                kbps = hold_estimate(&mut p.rtc, v, kbps);
                 v.catchup.estimate(kbps);
             }
             let now = Instant::now();
@@ -1625,7 +1640,30 @@ fn keep_up(p: &mut Peer) {
             p.info.gid
         );
     }
-    let Some(to) = v.keep_up.second(est, stream, loss, nacks, rtt, now) else {
+    let raise = v.keep_up.second(est, stream, loss, nacks, rtt, now);
+    // On a clean home network the estimate is held over the stream's rate between these looks
+    // too (hold_estimate): str0m paces at its estimate, which a home network's clean link was
+    // seen to cap at 6-9 Mbit/s for a 15 Mbit/s stream even padded (#720, 12.4.6), dropping
+    // pictures whenever the game moved.
+    let pin = match stream {
+        Some(k) if lan && v.keep_up.clean_now() => (k as f64 * BWE_HEADROOM) as u32,
+        _ => 0,
+    };
+    if pin != v.pin_kbps {
+        let was = v.pin_kbps;
+        crate::log_at!(
+            Info,
+            "together",
+            "join: guest {} estimate {} {} kbit/s (home network, clean link: {}; put back {} times so far)",
+            p.info.gid,
+            if pin > 0 { "held at" } else { "no longer held at" },
+            if pin > 0 { pin } else { was },
+            if pin > 0 { "yes" } else { "no" },
+            v.pinned,
+        );
+        v.pin_kbps = pin;
+    }
+    let Some(to) = raise else {
         return;
     };
     v.catchup.aim(&mut p.rtc, to);
@@ -1645,6 +1683,18 @@ fn keep_up(p: &mut Peer) {
     }
 }
 
+/// A new estimate on a held link ([`Video::pin_kbps`]): one under the stream's rate is put back to
+/// the held rate at once, so str0m's pacer never sends under the stream. Returns the estimate
+/// that stands.
+fn hold_estimate(rtc: &mut Rtc, v: &mut Video, kbps: u32) -> u32 {
+    if v.pin_kbps == 0 || (kbps as f64) * BWE_HEADROOM >= v.pin_kbps as f64 {
+        return kbps;
+    }
+    rtc.bwe().reset(Bitrate::kbps(v.pin_kbps as u64));
+    v.pinned += 1;
+    v.pin_kbps
+}
+
 /// str0m's minimum (padded up to, [`Video::floor_kbps`]) and desired rate for a stream of `kbps`.
 fn set_rates(rtc: &mut Rtc, floor_kbps: u32, kbps: u32) {
     rtc.bwe().set_bitrate(
@@ -1656,6 +1706,7 @@ fn set_rates(rtc: &mut Rtc, floor_kbps: u32, kbps: u32) {
 /// The session chose the track: the payload type for its codec, and the estimate aimed at its
 /// bitrate.
 fn track_on(p: &mut Peer, hevc: bool, kbps: u32) {
+    let lan = p.info.net_path() == Some("lan");
     let Some(v) = p.video.as_mut() else { return };
     v.hevc = hevc;
     let h264 = v.header.as_deref().and_then(h264_profile);
@@ -1666,6 +1717,13 @@ fn track_on(p: &mut Peer, hevc: bool, kbps: u32) {
     };
     if kbps > 0 {
         v.catchup.aim(&mut p.rtc, kbps);
+        // A home-network guest starts with the estimate held (keep_up lets go if the first
+        // seconds are not clean): the first pictures are not held to an estimate still settling.
+        if lan {
+            v.pin_kbps = (kbps as f64 * BWE_HEADROOM) as u32;
+            set_rates(&mut p.rtc, kbps, kbps);
+            v.floor_kbps = kbps;
+        }
     }
 }
 
