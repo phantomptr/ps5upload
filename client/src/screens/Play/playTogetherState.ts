@@ -684,6 +684,31 @@ export const joinApi = {
   },
 };
 
+/** How often, and for how long, the panel asks again while the host's stream is starting. */
+export const OPEN_RETRY_MS = 2000;
+export const OPEN_RETRY_FOR_MS = 90_000;
+
+/** Opens Play Together for the panel. While the host's stream is not up yet the engine answers
+ *  `not_playing`: after "Lower to" restarts the stream at a new bitrate, the panel shows again with
+ *  the new session's first try, seconds before the PS5 lets go of the old one (#720: it said "Play
+ *  Together could not start" and stayed so while friends could come back). So that answer is asked
+ *  again every `everyMs` for up to `forMs`, while `alive()`; null when the panel went away. */
+export async function openWhenPlaying(
+  addr: string,
+  alive: () => boolean,
+  everyMs = OPEN_RETRY_MS,
+  forMs = OPEN_RETRY_FOR_MS,
+  wait: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+): Promise<JoinReply | null> {
+  for (let waited = 0; ; waited += everyMs) {
+    const reply = await joinApi.open(addr);
+    if (!alive()) return null;
+    if (reply.error !== "not_playing" || waited + everyMs > forMs) return reply;
+    await wait(everyMs);
+    if (!alive()) return null;
+  }
+}
+
 /** Sets one guest player's profile (`withSeat`). When the PS5 can't say which profile is the host's
  *  own (`owner_unknown`), the chosen one may be: `ask` puts the same question as for the host's own,
  *  and a yes saves it as confirmed (`owner`). A no changes nothing (`cancelled`). */

@@ -6812,6 +6812,7 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "web_update_how_app": "Halaman ini berasal dari PS5Upload di komputer lain. Perbarui aplikasinya di sana, dan halaman ini ikut diperbarui.",
 "rp_err_unreachable": "PS5 tidak merespons di jaringan. Periksa apakah menyala, di jaringan yang sama, dan Remote Play aktif di pengaturannya.",
 "rp_err_video": "PS5 menolak ukuran gambar itu. Coba 720p.",
+"rp_err_no_session_id": "PS5 menerima stream tetapi tidak selesai memulainya. Lihat TV, mungkin PS5 sedang menanyakan sesuatu. Game yang dimulai pengguna PS5 lain juga bisa menahannya: beralih ke pengguna Anda atau tutup game itu, lalu tekan Mulai.",
 "rp_err_wake": "PS5 dalam mode istirahat dan tidak bangun. Periksa apakah tersambung ke listrik dan di Pengaturan › Sistem › Hemat Daya › Fitur yang Tersedia dalam Mode Istirahat, «Tetap Terhubung ke Internet» dan «Aktifkan Menyalakan PS5 dari Jaringan» aktif.",
 "rp_fullscreen": "Layar penuh",
 "rp_pip": "Gambar dalam gambar",

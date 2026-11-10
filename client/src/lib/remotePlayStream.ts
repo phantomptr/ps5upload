@@ -576,7 +576,8 @@ export interface StreamStats {
   soundMissing?: "none" | "format" | "device";
   fps: number;
   mbps: number;
-  decodeMs: number;
+  /** null: not measured (the system's media player decodes, Settings › Video decoding). */
+  decodeMs: number | null;
   codec: string;
   /** The stream is the console's HDR one. */
   hdr?: boolean;
@@ -615,6 +616,14 @@ export interface AudioHealth {
   concealed: number;
   /** Sound dropped to catch up after the page stalled, ms. */
   trimmedMs: number;
+}
+
+/** A video record's picture bytes, for the Mbit/s: what follows its kind byte (1: an access unit),
+ *  and a timed one's 8-byte time (7). Any other record carries no picture: 0. */
+export function videoRecordBytes(kind: number, length: number): number {
+  if (kind === 1) return Math.max(0, length - 1);
+  if (kind === 7) return Math.max(0, length - 9);
+  return 0;
 }
 
 /** The sound's part of the latency log line. */
@@ -657,7 +666,8 @@ export interface StreamError {
   /** Stable, from the engine: busy, held (our last session, still not let go after minutes of
    *  waiting), in_use (another device has the console), busy_other, asleep,
    *  unreachable, keys, wake_failed, passcode_cancelled, passcode_timeout, video_refused, lost
-   *  (dropped mid-stream), other — or client-side: decode, no_decoder, socket, console_ended (the
+   *  (dropped mid-stream), no_session_id (the console took the session, never finished starting
+   *  it), other — or client-side: decode, no_decoder, socket, console_ended (the
    *  console ended it; `detail` is what it said), no_session (over while the socket was away). */
   code: string;
   retryS?: number;
@@ -1455,7 +1465,8 @@ export class RemotePlayStream {
         soundMissing: this.soundMissing,
         fps: this.decoded - lastDecoded,
         mbps: ((this.bytes - lastBytes) * 8) / 1e6,
-        decodeMs: this.decodeMs,
+        // The system's media player decodes out of sight: no time to show (it said 0.0 ms, #720).
+        decodeMs: this.mse ? null : this.decodeMs,
         codec: this.codec,
         hdr: this.codecChoice === "h265_hdr",
         audioMs: this.audioMs,
@@ -2886,6 +2897,8 @@ export class RemotePlayStream {
     if (kind === 1) {
       mse.onMessage(whole);
       this.decoded++;
+      // Counted here too: the media player's stream said 0.0 Mbit/s (#720).
+      this.bytes += videoRecordBytes(kind, b.length);
       return true;
     }
     if (kind === 7) {
@@ -2896,6 +2909,7 @@ export class RemotePlayStream {
       out.set(b.subarray(9), 1);
       mse.onMessage(out.buffer);
       this.decoded++;
+      this.bytes += videoRecordBytes(kind, b.length);
       return true;
     }
     if ((kind === 3 || kind === 4) && this.mseSound) {

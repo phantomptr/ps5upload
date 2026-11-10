@@ -15,6 +15,7 @@ import {
   joinApi,
   linkGrade,
   lowerForAll,
+  openWhenPlaying,
   playerSlots,
   shareOf,
   slowFriend,
@@ -367,12 +368,13 @@ export function PlayTogetherPanel({
     saveNetwork(kind);
   };
 
-  // Opening the panel opens Play Together with a fresh invite (the engine keeps an open one).
+  // Opening the panel opens Play Together with a fresh invite (the engine keeps an open one). While
+  // the stream is still starting (a restart at a new bitrate) it asks again (#720).
   useEffect(() => {
     let alive = true;
     void (async () => {
-      const reply = await joinApi.open(addr);
-      if (!alive) return;
+      const reply = await openWhenPlaying(addr, () => alive);
+      if (!alive || !reply) return;
       if (!reply.state) {
         setWhy(reply.error);
         setFailed(reply.error !== "old_helper");

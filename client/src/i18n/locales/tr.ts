@@ -6810,6 +6810,7 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "web_update_how_app": "Bu sayfa başka bir bilgisayardaki PS5Upload'dan geliyor. Uygulamayı orada güncelleyin, bu sayfa da onunla güncellenir.",
 "rp_err_unreachable": "PS5 ağda yanıt vermiyor. Açık olduğunu, aynı ağda olduğunu ve ayarlarında Remote Play'in etkin olduğunu kontrol et.",
 "rp_err_video": "PS5 bu görüntü boyutunu reddetti. 720p dene.",
+"rp_err_no_session_id": "PS5 yayını kabul etti ama başlatmayı bitirmedi. PS5 bir şey soruyor olabilir, TV'ye bak. Başka bir PS5 kullanıcısının başlattığı bir oyun da onu bekletebilir: kendi kullanıcına geç ya da o oyunu kapat, sonra Başlat'a bas.",
 "rp_err_wake": "PS5 dinlenme modunda ve uyanmadı. Prize takılı olduğunu ve Ayarlar › Sistem › Güç Tasarrufu › Dinlenme Modunda Kullanılabilen Özellikler altında «İnternete Bağlı Kal» ile «PS5'in Ağ Üzerinden Açılmasını Etkinleştir» seçeneklerinin açık olduğunu kontrol et.",
 "rp_fullscreen": "Tam ekran",
 "rp_pip": "Resim içinde resim",

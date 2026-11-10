@@ -92,8 +92,9 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
 use ps5upload_core::rp_stream::{
     run_stream, valid_passcode, Codec, ControllerState, KeyboardEvent, KeyboardInput, MicInput,
-    Passcode, Progress, StreamConfig, StreamSink, PASSCODE_CANCELLED, PASSCODE_CONSOLE_GAVE_UP,
-    PASSCODE_TIMEOUT, PASSCODE_TOO_MANY, PASSCODE_WAIT,
+    Passcode, Progress, StreamConfig, StreamSink, CTRL_CLOSED_BEFORE_SESSION_ID,
+    CTRL_NO_SESSION_ID, PASSCODE_CANCELLED, PASSCODE_CONSOLE_GAVE_UP, PASSCODE_TIMEOUT,
+    PASSCODE_TOO_MANY, PASSCODE_WAIT,
 };
 use tokio::sync::mpsc;
 
@@ -1746,6 +1747,13 @@ fn error_status(e: &anyhow::Error) -> serde_json::Value {
             ("passcode_timeout", None)
         }
         None if text.contains("Nagare") || text.contains("AvCap") => ("video_refused", None),
+        // The console took the session and then never finished starting it (#720): the app says
+        // what can hold it up on the PS5's side instead of "The stream stopped".
+        None if text.contains(CTRL_NO_SESSION_ID)
+            || text.contains(CTRL_CLOSED_BEFORE_SESSION_ID) =>
+        {
+            ("no_session_id", None)
+        }
         // Mid-stream: the console went quiet or closed the control connection.
         None if text.contains("console stopped sending")
             || text.contains("closed the Remote Play control connection") =>
@@ -2767,6 +2775,25 @@ mod tests {
         assert_eq!(code(PASSCODE_TIMEOUT), "passcode_timeout");
         assert_eq!(code(PASSCODE_CONSOLE_GAVE_UP), "passcode_timeout");
         assert_eq!(code(PASSCODE_TOO_MANY), "passcode_too_many");
+    }
+
+    /// #720: the console took the session and never sent its session id (the reporter's words,
+    /// then with what it did send): its own code, not "other".
+    #[test]
+    fn a_console_that_never_sends_its_session_id_has_its_own_code() {
+        let code = |t: &str| error_status(&anyhow::anyhow!(t.to_string()))["code"].clone();
+        assert_eq!(
+            code("the console never sent a session id over ctrl"),
+            "no_session_id"
+        );
+        assert_eq!(
+            code(&format!("{CTRL_NO_SESSION_ID} (heard: 0x00fe x3)")),
+            "no_session_id"
+        );
+        assert_eq!(
+            code(&format!("{CTRL_CLOSED_BEFORE_SESSION_ID} (heard: nothing)")),
+            "no_session_id"
+        );
     }
 
     #[test]

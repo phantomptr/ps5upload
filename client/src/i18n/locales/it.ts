@@ -6756,6 +6756,7 @@ library_compressed_hint: "Le immagini compresse richiedono ShadowMount+ per gioc
 "web_update_how_app": "Questa pagina viene da PS5Upload su un altro computer. Aggiorna l'app lì e questa pagina si aggiornerà con essa.",
 "rp_err_unreachable": "La PS5 non risponde in rete. Controlla che sia accesa, sulla stessa rete e che Remote Play sia attivo nelle sue impostazioni.",
 "rp_err_video": "La PS5 ha rifiutato quella dimensione dell'immagine. Prova 720p.",
+"rp_err_no_session_id": "La PS5 ha accettato lo stream ma non ha finito di avviarlo. Guarda la TV nel caso la PS5 stia chiedendo qualcosa. Anche un gioco avviato da un altro utente della PS5 può bloccarlo: passa al tuo utente o chiudi quel gioco, poi premi Avvia.",
 "rp_err_wake": "La PS5 è in modalità di riposo e non si è riattivata. Controlla che sia collegata alla corrente e che in Impostazioni › Sistema › Risparmio energetico › Funzioni disponibili in modalità di riposo siano attivi «Rimani connesso a Internet» e «Abilita accensione della PS5 dalla rete».",
 "rp_fullscreen": "Schermo intero",
 "rp_pip": "Picture in picture",

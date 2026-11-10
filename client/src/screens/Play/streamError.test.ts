@@ -33,6 +33,13 @@ describe("streamErrorMessage", () => {
     expect(`${cancelled} ${timeout}`).not.toContain("cannot enter it");
   });
 
+  it("says why a session the PS5 took never started, not just that it stopped (#720)", () => {
+    const m = streamErrorMessage(tr, { code: "no_session_id", detail: "the console never sent a session id over ctrl" });
+    expect(m).toContain("another PS5 user");
+    expect(m).toContain("press Start");
+    expect(m).not.toBe(streamErrorMessage(tr, { code: "other", detail: "" }));
+  });
+
   it("after five wrong passcodes says to enter it on the PS5", () => {
     expect(streamErrorMessage(tr, { code: "passcode_too_many", detail: "" })).toBe(
       "Too many wrong passcodes; enter it on the PS5.",
