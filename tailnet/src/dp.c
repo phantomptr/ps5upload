@@ -35,6 +35,10 @@
 #define DISCO_PING_INTERVAL_MS 5000
 #define PING_TIMEOUT_MS 5000
 #define RESTUN_MS 23000
+/* Nobody talking to us: Go stops its periodic re-STUN altogether once idle for 45 s
+ * (magicsock shouldDoPeriodicReSTUNLocked); we keep a slow one so the endpoints control
+ * hands out do not go stale. A netcheck is ~1-4 STUN packets per region. */
+#define RESTUN_IDLE_MS 300000
 #define NETCHECK_DEADLINE_MS 3000
 #define DERP_IDLE_CLOSE_MS 60000
 #define DERP_DEAD_MS 130000
@@ -123,6 +127,7 @@ struct tn_dp {
 	int paused;
 	int64_t udp_retry_at, last_wall_check, wall_off, last_tick;
 	int64_t last_poll_fail_log; /* rate-limits the "poll failed" line */
+	long down_seen;             /* the network-down episode (c->down_seq) already logged */
 	uint32_t nm_gen;
 	int64_t now;
 };
@@ -162,6 +167,8 @@ static void udp_close(tn_dp *d)
 static int udp_open(tn_ctx *c, tn_dp *d)
 {
 	udp_close(d);
+	if (d->paused)
+		return TN_E_STATE; /* paused or the network going away: no sockets */
 	int fd = tn_sock_open(SOCK_DGRAM);
 	if (fd < 0)
 		return TN_E_IO;
@@ -180,12 +187,14 @@ static int udp_open(tn_ctx *c, tn_dp *d)
 	return TN_OK;
 }
 
-static void udp_send(tn_ctx *c, tn_dp *d, tn_ep4 ep, const uint8_t *p, size_t n)
+static void udp_send(tn_ctx *c, tn_dp *d, int kind, tn_ep4 ep, const uint8_t *p, size_t n)
 {
-	if (d->udp < 0 || !ep.ip || !ep.port)
+	if (d->paused || d->udp < 0 || !ep.ip || !ep.port)
 		return;
 	if (tn_sock_sendto(d->udp, p, n, ep.ip, ep.port) < 0) {
 		int e = tn_sock_raw_errno(), k = tn_sock_errno();
+		if (tn_net_check(c, kind, e))
+			return; /* the network is going away: everything closes at the top of the loop */
 		if (k != TN_ERR_OTHER)
 			return; /* one unreachable endpoint, or a full buffer: a lost datagram */
 		/* Anything else (ENETDOWN, the PS5's errno 163, EBADF): rebuild the socket
@@ -474,6 +483,8 @@ static void conn_open(tn_ctx *c, tn_dp *d, tn_derpc *k, int32_t region)
 		node.derp_port > 0 ? node.derp_port : 443, node.insecure_for_tests ? " [insecure_for_tests]" : "");
 	k->last_use = d->now;
 	if (r2 < 0) {
+		if (k->sys_err)
+			tn_net_check(c, TN_NK_DERP, k->sys_err);
 		k->backoff_ms = k->backoff_ms ? k->backoff_ms * 2 : 1000;
 		if (k->backoff_ms > 30000)
 			k->backoff_ms = 30000;
@@ -483,8 +494,14 @@ static void conn_open(tn_ctx *c, tn_dp *d, tn_derpc *k, int32_t region)
 
 static void conn_fail(tn_ctx *c, tn_dp *d, tn_derpc *k, int err)
 {
-	tn_logf(c, 1, "derp %d: closed (%s)", k->region, tn_strerror(err));
+	int se = k->sys_err;
+	if (se)
+		tn_logf(c, 1, "derp %d: closed (%s, errno %d)", k->region, tn_strerror(err), se);
+	else
+		tn_logf(c, 1, "derp %d: closed (%s)", k->region, tn_strerror(err));
 	tn_derpc_close(k);
+	if (se)
+		tn_net_check(c, TN_NK_DERP, se);
 	k->backoff_ms = k->backoff_ms ? k->backoff_ms * 2 : 1000;
 	if (k->backoff_ms > 30000)
 		k->backoff_ms = 30000;
@@ -494,6 +511,8 @@ static void conn_fail(tn_ctx *c, tn_dp *d, tn_derpc *k, int err)
 /* The connection for a region, opening one (evicting the idlest non-home) if needed. */
 static tn_derpc *conn_get(tn_ctx *c, tn_dp *d, int32_t region)
 {
+	if (d->paused)
+		return NULL; /* paused or the network going away: never a new connection */
 	tn_derpc *k = conn_for(d, region);
 	if (k)
 		return k;
@@ -543,7 +562,7 @@ static void disco_send(tn_ctx *c, tn_dp *d, dp_peer *p, const dp_src *to, const 
 	if (to->derp)
 		derp_send(c, d, to->region, p->key, pkt, m);
 	else
-		udp_send(c, d, to->ep, pkt, m);
+		udp_send(c, d, TN_NK_UDP_SEND, to->ep, pkt, m);
 }
 
 static void send_ping(tn_ctx *c, tn_dp *d, dp_peer *p, dp_ep *e)
@@ -686,7 +705,7 @@ static void path_send(tn_ctx *c, tn_dp *d, dp_peer *p, const uint8_t *pkt, size_
 {
 	int direct = !c->cfg.no_direct && p->best >= 0;
 	if (direct)
-		udp_send(c, d, p->ep[p->best].ep, pkt, n);
+		udp_send(c, d, TN_NK_UDP_SEND, p->ep[p->best].ep, pkt, n);
 	if (!direct || !trusted(d, p))
 		derp_send(c, d, peer_region(p), p->key, pkt, n);
 	p->tx_bytes += n;
@@ -697,7 +716,7 @@ static void reply_send(tn_ctx *c, tn_dp *d, dp_peer *p, const dp_src *to, const 
 	if (to->derp)
 		derp_send(c, d, to->region, p->key, pkt, n);
 	else
-		udp_send(c, d, to->ep, pkt, n);
+		udp_send(c, d, TN_NK_UDP_SEND, to->ep, pkt, n);
 }
 
 static void initiate(tn_ctx *c, tn_dp *d, dp_peer *p)
@@ -983,7 +1002,7 @@ static void probe_send(tn_ctx *c, tn_dp *d, dp_probe *pr)
 	if (!pr->first_sent)
 		pr->first_sent = d->now;
 	pr->tries++;
-	udp_send(c, d, (tn_ep4){.ip = pr->ip, .port = pr->port}, req, sizeof req);
+	udp_send(c, d, TN_NK_STUN, (tn_ep4){.ip = pr->ip, .port = pr->port}, req, sizeof req);
 }
 
 static void local_endpoints(tn_dp *d, tn_ep4 *out, uint32_t *n, uint32_t cap)
@@ -1121,12 +1140,14 @@ static void handle_stun(tn_ctx *c, tn_dp *d, const uint8_t *p, size_t n)
 
 static void on_udp(tn_ctx *c, tn_dp *d)
 {
-	for (int i = 0; i < 256 && d->udp >= 0; i++) {
+	for (int i = 0; i < 256 && d->udp >= 0 && !tn_atomic_load(&c->net_down); i++) {
 		uint32_t sip;
 		uint16_t sport;
 		ssize_t n = tn_sock_recvfrom(d->udp, d->buf, sizeof d->buf, &sip, &sport);
 		if (n < 0) {
 			int e = tn_sock_raw_errno(), k = tn_sock_errno();
+			if (tn_net_check(c, TN_NK_UDP_RECV, e))
+				return;
 			if (k == TN_ERR_AGAIN || k == TN_ERR_INTR || k == TN_ERR_REFUSED || k == TN_ERR_RESET)
 				return;
 			tn_logf(c, 1, "udp: receive failed (errno %d); rebinding", e);
@@ -1220,6 +1241,14 @@ static void emit_path(tn_ctx *c, tn_dp *d, dp_peer *p)
 	tn_emit(c, TN_EV_PATH, 0, text);
 }
 
+static int any_active(const tn_dp *d)
+{
+	for (uint32_t i = 0; i < d->n_peers; i++)
+		if (d->peers[i].used && d->peers[i].last_active && d->now - d->peers[i].last_active < SESSION_ACTIVE_MS)
+			return 1;
+	return 0;
+}
+
 static void tick(tn_ctx *c, tn_dp *d)
 {
 	/* Rest mode without tn_pause: the wall clock jumped while monotonic time did
@@ -1235,8 +1264,9 @@ static void tick(tn_ctx *c, tn_dp *d)
 	}
 	if (d->udp < 0 && d->now >= d->udp_retry_at && udp_open(c, d) < 0)
 		d->udp_retry_at = d->now + 2000;
-	/* netcheck */
-	if (!d->nc_running && d->now >= d->nc_next && d->n_regions)
+	/* netcheck: every 23 s while a peer is active (or we have no home yet), every 5 min when idle */
+	if (!d->nc_running && d->now >= d->nc_next && d->n_regions &&
+	    (!d->home || (!d->n_eps && !c->cfg.no_direct) || any_active(d) || d->now - (d->nc_next - RESTUN_MS) >= RESTUN_IDLE_MS))
 		netcheck_start(c, d);
 	if (d->nc_running) {
 		int pending = 0;
@@ -1369,12 +1399,26 @@ static void *dp_loop(void *arg)
 	d->now = tn_now_ms();
 	while (!tn_atomic_load(&c->req_stop)) {
 		d->now = tn_now_ms();
-		if (tn_atomic_load(&c->req_pause)) {
+		int down = (int)tn_atomic_load(&c->net_down);
+		if (tn_atomic_load(&c->req_pause) || down) {
 			if (!d->paused) {
-				tn_logf(c, 1, "data plane paused");
-				close_all(d);
-				drop_sessions(c, d);
+				/* paused first: dropping the forwarder's connections makes lwIP send RSTs, and
+				 * those must not dial a new DERP connection or touch the UDP port */
 				d->paused = 1;
+				drop_sessions(c, d);
+				close_all(d);
+				if (!down)
+					tn_logf(c, 1, "data plane paused");
+			}
+			long seq = tn_atomic_load(&c->down_seq);
+			if (down && seq != d->down_seen) {
+				/* Logged only now, with every socket of this thread already closed. */
+				char text[160];
+				int e = (int)tn_atomic_load(&c->down_errno);
+				d->down_seen = seq;
+				snprintf(text, sizeof text, "network going away (errno %d on %s): every tailnet socket closed, "
+					 "none opened until it is back", e, tn_nk_name((int)tn_atomic_load(&c->down_kind)));
+				tn_emit(c, TN_EV_NET_DOWN, e, text); /* the one line (an app logs it) */
 			}
 		} else if (d->paused) {
 			d->paused = 0;
@@ -1436,6 +1480,8 @@ static void *dp_loop(void *arg)
 		int interrupted = r < 0 && tn_sock_errno() == TN_ERR_INTR;
 		tn_mutex_lock(&c->dp_mu);
 		d->now = tn_now_ms();
+		if (r < 0 && !interrupted && !d->paused && tn_net_check(c, TN_NK_POLL, poll_errno))
+			continue; /* closes everything at the top */
 		if (r < 0 && !interrupted) {
 			/* poll() itself failing (the network going away for rest mode): never spin. Wait a
 			 * little with the lock released, and say so at most every 10 s. */
@@ -1454,6 +1500,8 @@ static void *dp_loop(void *arg)
 		for (int i = 0; i < n; i++) {
 			if (!pf[i].revents)
 				continue;
+			if (kind[i] != 0 && tn_atomic_load(&c->net_down))
+				break; /* stop touching sockets: the top of the loop closes them all */
 			if (kind[i] == 0) {
 				drain(c->dp_wake_r);
 			} else if (kind[i] == 1) {

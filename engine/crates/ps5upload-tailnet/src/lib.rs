@@ -281,6 +281,9 @@ unsafe extern "C" fn event_trampoline(user: *mut c_void, ev: *const ffi::Event) 
         5 => Event::Error(text),
         6 => Event::Path(text),
         7 => Event::Warning(text),
+        // The network went away (every socket closed) / came back: the node resumes by itself.
+        8 => Event::Log(format!("network down: {text}")),
+        9 => Event::Log(format!("network up: {text}")),
         _ => return,
     };
     let handler = cb.handler.clone();

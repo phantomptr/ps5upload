@@ -74,6 +74,8 @@ typedef struct {
 	int wake_fd;          /* readable = stop/pause requested */
 	int64_t deadline;     /* tn_now_ms() deadline for the current operation, 0 = none */
 	int err;              /* last TN_E_* from a low-level call */
+	int sys_err;          /* platform errno of the last failed socket call (0 = none, or EOF) */
+	uint32_t ip;          /* the address dialed, host order (0 until connected) */
 	tn_tls *tls;          /* NULL for plain TCP */
 	br_sslio_context ioc;
 	uint8_t pre[4096];    /* bytes read past an HTTP header, served first */
@@ -375,6 +377,7 @@ struct tn_derpc {
 	char host[TN_HOST_MAX];
 	int64_t t_start, last_rx, last_use, retry_at;
 	int32_t backoff_ms;
+	int sys_err;           /* platform errno of the last failed socket call (0 = none, or EOF) */
 	const tn_derp_keys *keys;
 	uint8_t server_key[32];
 	br_ssl_client_context sc;
@@ -480,6 +483,109 @@ void tn_denied_prune(tn_denied_log *log, const tn_peer_allow *a);
 /* ip.c: up to max entries into out, most recent first; how many. */
 int tn_denied_copy(const tn_denied_log *log, tn_denied *out, int max);
 
+/* ---------- network-down self-suspend (tailnet.c) ----------
+ *
+ * A socket call that fails the way calls fail while the network goes away (tn_errno_net_down; the
+ * PS5's errno 163 for the ~25 s before it rests) makes the node close EVERY socket it holds (the
+ * UDP port, every DERP connection, the control connection, the forwarder's flows and connections)
+ * and open none until it is resumed: by tn_resume, or (TN_NETPOL_SELF_RESUME, the default) by
+ * itself once the network has been healthy for a while. The thread that sees the error only sets
+ * an atomic and wakes the two threads; each closes its own sockets at once. */
+enum {
+	TN_NK_UDP_SEND = 1, /* the WireGuard/disco port, sending */
+	TN_NK_UDP_RECV,     /* the same port, receiving */
+	TN_NK_STUN,         /* netcheck's STUN requests (same port) */
+	TN_NK_DERP,         /* a DERP connection (connect, TLS, frames) */
+	TN_NK_CONTROL,      /* the control connection */
+	TN_NK_FWD,          /* the forwarder's local sockets */
+	TN_NK_POLL,         /* the data plane's poll() itself */
+	TN_NK_CONTROL_STREAK, /* control connections failing back to back (TN_NETPOL_CONTROL_STREAK) */
+	TN_NK_TEST
+};
+const char *tn_nk_name(int kind);
+
+#define TN_RESUME_BASE_MS 30000   /* healthy network before a first self-resume */
+#define TN_RESUME_MAX_MS 300000   /* ... doubled per suspend in a row, capped */
+#define TN_FLAP_WINDOW_MS 600000  /* suspends closer than this count as "in a row" */
+#define TN_PROBE_EVERY_MS 2000    /* health probe while suspended */
+#define TN_STREAK_WINDOW_MS 10000 /* control errors this close together are a streak */
+#define TN_STREAK_ERRS 2
+
+typedef struct {
+	int64_t down_at;       /* the last suspend, ms (monotonic) */
+	int64_t healthy_since; /* the first healthy probe of the current run, 0 = none */
+	uint32_t recent;       /* suspends in a row (each within TN_FLAP_WINDOW_MS of the one before) */
+	uint32_t total;
+	int64_t base_ms;       /* healthy time a first suspend needs */
+} tn_susp;
+
+static inline void tn_susp_init(tn_susp *s, int64_t base_ms)
+{
+	s->down_at = s->healthy_since = 0;
+	s->recent = s->total = 0;
+	s->base_ms = base_ms > 0 ? base_ms : TN_RESUME_BASE_MS;
+}
+
+static inline void tn_susp_on_down(tn_susp *s, int64_t now)
+{
+	s->recent = s->total && now - s->down_at < TN_FLAP_WINDOW_MS ? s->recent + 1 : 1;
+	s->total++;
+	s->down_at = now;
+	s->healthy_since = 0;
+}
+
+/* How long the network must stay healthy before resuming: doubles with each suspend in a row (no
+ * flapping between a network that comes and goes and a reconnect storm), capped. */
+static inline int64_t tn_susp_need_ms(const tn_susp *s)
+{
+	uint32_t sh = s->recent > 1 ? s->recent - 1 : 0;
+	if (sh > 8)
+		sh = 8;
+	int64_t need = s->base_ms << sh;
+	int64_t cap = s->base_ms > TN_RESUME_MAX_MS ? s->base_ms : TN_RESUME_MAX_MS;
+	return need > cap ? cap : need;
+}
+
+/* One health probe while suspended. 1 = resume now. */
+static inline int tn_susp_on_probe(tn_susp *s, int healthy, int64_t now)
+{
+	if (!healthy) {
+		s->healthy_since = 0;
+		return 0;
+	}
+	if (!s->healthy_since)
+		s->healthy_since = now;
+	return now - s->healthy_since >= tn_susp_need_ms(s);
+}
+
+/* Control connections failing back to back (TN_NETPOL_CONTROL_STREAK). With the backoff doubling
+ * from 1 s, two connection errors within 10 s only happen right after it was reset (a session that
+ * ran, a resume): what the PS5 showed in the seconds before it froze for rest. */
+typedef struct {
+	int64_t first;
+	uint32_t n;
+} tn_ctl_streak;
+
+/* A control session ended with a connection-class error (conn_err) or another one. 1 = a streak. */
+static inline int tn_ctl_streak_note(tn_ctl_streak *k, int conn_err, int64_t now)
+{
+	if (!conn_err) {
+		k->n = 0;
+		return 0;
+	}
+	if (k->n && now - k->first > TN_STREAK_WINDOW_MS)
+		k->n = 0;
+	if (!k->n)
+		k->first = now;
+	if (++k->n < TN_STREAK_ERRS)
+		return 0;
+	k->n = 0;
+	return 1;
+}
+
+/* Is a control session's result a connection error (not a refusal: a refusal proves the path)? */
+int tn_ctl_conn_err(int r, int raw_errno);
+
 /* ---------- the context (tailnet.c, control.c) ---------- */
 struct tn_ctx {
 	tn_config cfg;
@@ -533,7 +639,26 @@ struct tn_ctx {
 	tn_peer_allow allow;     /* tn_set_peer_allow; under dp_mu */
 	tn_denied_log denied;    /* what `allow` turned away; under dp_mu */
 	tn_fwd *fwd;
+
+	/* network-down self-suspend */
+	tn_atomic net_down;      /* 1: every socket closed, none opened until resumed */
+	tn_atomic down_kind, down_errno, down_seq; /* the signal that did it (TN_NK_*, platform errno) */
+	tn_atomic pol_self_resume, pol_streak;     /* tn_set_net_policy */
+	tn_atomic route_ip;      /* the control address last dialed: the health probe's route check */
+	tn_atomic resume_base_ms;/* tests: TN_RESUME_BASE_MS */
+	int64_t probe_ms;        /* last confirming probe (under mu): at most one a second */
+	int probe_res, probe_valid;
+	tn_susp susp;            /* control thread */
+	tn_ctl_streak streak;    /* control thread */
+	long susp_seen;          /* control thread: the down_seq it has accounted for */
 };
+
+/* A socket call of `kind` failed with platform errno `raw`. In the "network is going away" class,
+ * and (for anything but the PS5's errno 163) confirmed by a probe that the network really is going,
+ * the node suspends. Any thread, any lock; never blocks. 1 when the node is (now) down. */
+int tn_net_check(tn_ctx *c, int kind, int raw);
+/* Suspend now (no confirmation). Any thread, any lock, never blocks. */
+void tn_net_down_signal(tn_ctx *c, int kind, int raw);
 
 void tn_emit(tn_ctx *c, tn_event_type type, int err, const char *text);
 void tn_logf(tn_ctx *c, int level, const char *fmt, ...)

@@ -323,6 +323,12 @@ static void on_event(void *user, const tn_event *ev)
 	case TN_EV_WARN:
 		printf("warning: %s\n", ev->text);
 		break;
+	case TN_EV_NET_DOWN:
+		printf("network down: %s\n", ev->text);
+		break;
+	case TN_EV_NET_UP:
+		printf("network up: %s\n", ev->text);
+		break;
 	}
 	fflush(stdout);
 }

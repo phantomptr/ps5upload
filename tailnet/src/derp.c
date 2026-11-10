@@ -110,13 +110,17 @@ int tn_derpc_open(tn_derpc *d, const tn_derp_node *node, int32_t region, const t
 	d->port = (uint16_t)(node->derp_port > 0 ? node->derp_port : 443);
 	tn_strlcpy(d->host, node->host, sizeof d->host);
 	d->t_start = d->last_rx = now;
+	d->sys_err = 0;
 	d->fd = tn_sock_open(SOCK_STREAM);
-	if (d->fd < 0)
+	if (d->fd < 0) {
+		d->sys_err = tn_sock_raw_errno();
 		return TN_E_IO;
+	}
 	tn_sock_setint(d->fd, IPPROTO_TCP, TCP_NODELAY, 1);
 	tn_sock_nosigpipe(d->fd);
 	tn_sock_nonblock(d->fd);
 	if (tn_sock_connect(d->fd, d->ip, d->port) < 0) {
+		d->sys_err = tn_sock_raw_errno();
 		tn_derpc_close(d);
 		return TN_E_IO;
 	}
@@ -152,10 +156,13 @@ short tn_derpc_events(const tn_derpc *d)
 	return ev;
 }
 
-static int sock_err(void)
+static int sock_err(tn_derpc *d)
 {
 	int e = tn_sock_errno();
-	return (e == TN_ERR_AGAIN || e == TN_ERR_INTR) ? 0 : TN_E_IO;
+	if (e == TN_ERR_AGAIN || e == TN_ERR_INTR)
+		return 0;
+	d->sys_err = tn_sock_raw_errno(); /* the PS5's errno 163 in rest mode, among others */
+	return TN_E_IO;
 }
 
 /* Move bytes between the socket, the TLS engine and our in/out buffers until
@@ -176,7 +183,7 @@ static int pump(tn_derpc *d)
 			if (n > 0) {
 				br_ssl_engine_sendrec_ack(e, (size_t)n);
 				moved = 1;
-			} else if (n < 0 && sock_err() < 0) {
+			} else if (n < 0 && sock_err(d) < 0) {
 				return TN_E_IO;
 			}
 		} else if ((s & BR_SSL_SENDAPP) && d->out_len) {
@@ -209,8 +216,8 @@ static int pump(tn_derpc *d)
 				moved = 1;
 			} else if (n == 0) {
 				return TN_E_IO;
-			} else if (sock_err() < 0) {
-				return TN_E_IO; /* includes errno 163 on the PS5 in rest mode */
+			} else if (sock_err(d) < 0) {
+				return TN_E_IO;
 			}
 		}
 		if (!moved)
@@ -354,8 +361,11 @@ int tn_derpc_io(tn_derpc *d, short revents, tn_derp_frame_cb cb, void *u, int64_
 	if (d->st == TN_DC_CONNECTING) {
 		if (!(revents & (POLLOUT | POLLERR | POLLHUP)))
 			return TN_OK;
-		if (tn_sock_error(d->fd) != 0)
+		int se = tn_sock_error(d->fd);
+		if (se != 0) {
+			d->sys_err = se > 0 ? se : 0; /* the connect's own error (SO_ERROR) */
 			return TN_E_IO;
+		}
 		d->st = TN_DC_TLS;
 	}
 	for (int rounds = 0; rounds < 64; rounds++) {

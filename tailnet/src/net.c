@@ -192,6 +192,7 @@ static int wait_fd(tn_tr *tr, short ev)
 		if (r < 0) {
 			if (tn_sock_errno() == TN_ERR_INTR)
 				continue;
+			tr->sys_err = tn_sock_raw_errno();
 			return TN_E_IO;
 		}
 		if (tr->wake_fd >= 0 && (p[1].revents & POLLIN))
@@ -212,8 +213,10 @@ static int sock_read(tn_tr *tr, void *buf, size_t n)
 		int e = tn_sock_errno();
 		if (e == TN_ERR_INTR)
 			continue;
-		if (e != TN_ERR_AGAIN)
-			return TN_E_IO; /* includes the PS5's errno 163 in rest mode */
+		if (e != TN_ERR_AGAIN) {
+			tr->sys_err = tn_sock_raw_errno(); /* the PS5's errno 163 in rest mode, among others */
+			return TN_E_IO;
+		}
 		int w = wait_fd(tr, POLLIN);
 		if (w < 0)
 			return w;
@@ -229,8 +232,10 @@ static int sock_write(tn_tr *tr, const void *buf, size_t n)
 		int e = tn_sock_errno();
 		if (e == TN_ERR_INTR)
 			continue;
-		if (e != TN_ERR_AGAIN)
+		if (e != TN_ERR_AGAIN) {
+			tr->sys_err = tn_sock_raw_errno();
 			return TN_E_IO;
+		}
 		int w = wait_fd(tr, POLLOUT);
 		if (w < 0)
 			return w;
@@ -278,23 +283,29 @@ int tn_tr_dial(tn_tr *tr, const char *host, const char *addr, int port, tn_tls *
 		}
 	}
 	tr->fd = tn_sock_open(SOCK_STREAM);
-	if (tr->fd < 0)
+	if (tr->fd < 0) {
+		tr->sys_err = tn_sock_raw_errno();
 		return TN_E_IO;
+	}
 	tn_sock_setint(tr->fd, IPPROTO_TCP, TCP_NODELAY, 1);
 	tn_sock_nosigpipe(tr->fd);
 	tn_sock_nonblock(tr->fd);
 	int cr = tn_sock_connect(tr->fd, ntohl(sa.sin_addr.s_addr), (uint16_t)port);
 	if (cr < 0) {
+		tr->sys_err = tn_sock_raw_errno();
 		tn_tr_close(tr);
 		return TN_E_IO;
 	}
 	if (cr > 0) {
-		int w = wait_fd(tr, POLLOUT);
-		if (w < 0 || tn_sock_error(tr->fd) != 0) {
+		int w = wait_fd(tr, POLLOUT), se = w < 0 ? 0 : tn_sock_error(tr->fd);
+		if (w < 0 || se != 0) {
+			if (se > 0)
+				tr->sys_err = se; /* the connect's own error (SO_ERROR) */
 			tn_tr_close(tr);
 			return w < 0 ? w : TN_E_IO;
 		}
 	}
+	tr->ip = ntohl(sa.sin_addr.s_addr);
 	if (tls) {
 		uint8_t seed[32];
 		tr->tls = tls;

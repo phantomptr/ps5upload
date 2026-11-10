@@ -126,6 +126,13 @@ static int again(void)
 	return e == TN_ERR_AGAIN || e == TN_ERR_INTR;
 }
 
+/* A local (127.0.0.1) socket call just failed: in rest every socket call fails (errno 163), and
+ * the node then closes everything. Reads errno first, so call it before anything else. */
+static void local_failed(tn_fwd *w)
+{
+	tn_net_check(w->c, TN_NK_FWD, tn_sock_raw_errno());
+}
+
 static int open_local(int type)
 {
 	int fd = tn_sock_open(type);
@@ -182,10 +189,12 @@ static void udp_from_peer(tn_fwd *w, const tn_ip_info *ip, const tn_serve *r, in
 	if (!f)
 		return;
 	f->last = now;
-	if (tn_sock_send(f->fd, ip->payload, ip->plen) < 0 && !again() && tn_sock_errno() != TN_ERR_REFUSED)
+	if (tn_sock_send(f->fd, ip->payload, ip->plen) < 0 && !again() && tn_sock_errno() != TN_ERR_REFUSED) {
+		local_failed(w);
 		udp_close(f); /* errno 163 (rest) and friends: the next datagram makes a new one */
-	else
+	} else {
 		w->udp_in++;
+	}
 }
 
 static void udp_out(tn_fwd *w, uint16_t sport, uint32_t dip, uint16_t dport, size_t n)
@@ -201,8 +210,10 @@ static void udp_from_local(tn_fwd *w, udp_flow *f, int64_t now)
 	for (int i = 0; i < 64; i++) {
 		ssize_t n = tn_sock_recv(f->fd, w->buf + 28, sizeof w->buf - 28);
 		if (n < 0) {
-			if (!again() && tn_sock_errno() != TN_ERR_REFUSED && tn_sock_errno() != TN_ERR_RESET)
+			if (!again() && tn_sock_errno() != TN_ERR_REFUSED && tn_sock_errno() != TN_ERR_RESET) {
+				local_failed(w);
 				udp_close(f);
+			}
 			return;
 		}
 		f->last = now;
@@ -274,6 +285,8 @@ static void flush_rx(tcp_conn *k)
 		if (n < 0) {
 			if (again())
 				return;
+			if (g_fwd)
+				local_failed(g_fwd);
 			conn_abort(k);
 			return;
 		}
@@ -394,6 +407,7 @@ static void tcp_from_local(tn_fwd *w, tcp_conn *k)
 		}
 		if (again())
 			break;
+		local_failed(w);
 		conn_abort(k);
 		return;
 	}
@@ -507,6 +521,8 @@ static int syn_from_peer(tn_fwd *w, const uint8_t *pkt, const tn_ip_info *ip, co
 	s->len = (uint16_t)ip->len;
 	memcpy(s->syn, pkt, ip->len);
 	int rc = tn_sock_connect(fd, LOOPBACK, local_port(r));
+	if (rc < 0)
+		local_failed(w);
 	if (rc == 0)
 		syn_dialed(w, s, 1);
 	else if (rc < 0)
