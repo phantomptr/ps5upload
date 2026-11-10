@@ -8,6 +8,17 @@ What's new in ps5upload, written for humans.
 
 PS5 helper and rest mode:
 
+- Fixed a rare problem where a PS5 with Tailscale turned on could switch itself off while in rest mode. The helper's Tailscale now closes all its connections the moment the console starts going to rest, whatever starts it (PS5Upload, the console's menu, the console resting by itself, or a background download wake), and opens them again once the console is awake and settled. Each step is written to the console's power.log.
+
+Transfers:
+
+- Large files are now checked on the PS5 after they're written: the console reads each one back from its drive and compares it with what was sent, and a file that doesn't match is sent again. It can be turned off in Settings ("Check files on the PS5 after writing").
+- A resumed conversion checks its whole image, so a source file edited between runs can't leave old and new data mixed.
+
+## 12.4.2
+
+PS5 helper and rest mode:
+
 - The helper now notices a rest started from the console's own menu (or when the PS5 goes to rest by itself), not just one PS5Upload asks for. Before, such a rest could slip past it, so Tailscale stayed connected through rest and the helper's after-wake care never ran.
 
 Helper at boot (Payload Manager):
