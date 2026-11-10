@@ -1881,16 +1881,20 @@ static int data_rpc(uint16_t method, const uint8_t *body, uint32_t body_len, uin
 static int g_rb_cap = 1, g_rb_corrupt_n, g_rb_last = -1;
 static uint64_t g_rb_corrupt_at;
 static void rb_hook(ava1_job_t *j, int point, uint32_t id) {
+    (void)id;
     if (point == AVA1_HOOK_COMMIT_VERIFIED || point == AVA1_HOOK_READBACK)
         __atomic_store_n(&g_rb_last, j->readback, __ATOMIC_SEQ_CST);
-    if (point == AVA1_HOOK_READBACK && __atomic_load_n(&g_rb_corrupt_n, __ATOMIC_SEQ_CST) > 0 && j->lf[id] &&
-        j->lf[id]->fd >= 0) {
-        uint8_t b;
-        uint64_t at = __atomic_load_n(&g_rb_corrupt_at, __ATOMIC_SEQ_CST);
-        if (pread(j->lf[id]->fd, &b, 1, (off_t)at) == 1) {
-            b ^= 0xa5;
-            if (pwrite(j->lf[id]->fd, &b, 1, (off_t)at) == 1) __atomic_sub_fetch(&g_rb_corrupt_n, 1, __ATOMIC_SEQ_CST);
-        }
+}
+/* AVA1 1.0.9 reads a large file back while it still arrives, so the byte is changed right before the read
+ * that covers it (live or at the commit), not once before the commit's pass: by then it may be checked. */
+static void rb_read_hook(ava1_job_t *j, uint32_t id, uint64_t off, uint64_t len, int fd, int live) {
+    uint64_t at = __atomic_load_n(&g_rb_corrupt_at, __ATOMIC_SEQ_CST);
+    uint8_t b;
+    (void)j, (void)id, (void)live;
+    if (at < off || at >= off + len || __atomic_load_n(&g_rb_corrupt_n, __ATOMIC_SEQ_CST) <= 0) return;
+    if (pread(fd, &b, 1, (off_t)at) == 1) {
+        b ^= 0xa5;
+        if (pwrite(fd, &b, 1, (off_t)at) == 1) __atomic_sub_fetch(&g_rb_corrupt_n, 1, __ATOMIC_SEQ_CST);
     }
 }
 void ava1_test_readback_cap(int on) { __atomic_store_n(&g_rb_cap, on, __ATOMIC_SEQ_CST); }
@@ -1899,6 +1903,7 @@ void ava1_test_readback_corrupt(int n, uint64_t at) {
     __atomic_store_n(&g_rb_corrupt_n, n, __ATOMIC_SEQ_CST);
     __atomic_store_n(&g_rb_last, -1, __ATOMIC_SEQ_CST);
     ava1_apply_hook = rb_hook;
+    ava1_apply_rb_hook = rb_read_hook;
 }
 int ava1_test_readback_corrupt_left(void) { return __atomic_load_n(&g_rb_corrupt_n, __ATOMIC_SEQ_CST); }
 int ava1_test_readback_last(void) { return __atomic_load_n(&g_rb_last, __ATOMIC_SEQ_CST); }
