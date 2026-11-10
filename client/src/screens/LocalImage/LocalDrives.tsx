@@ -193,7 +193,7 @@ export function LocalDrivesCard({ drives, quiet = false }: { drives: LocalDrives
             key={a.device}
             className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-[var(--color-border)] p-3"
           >
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 flex-1 basis-[12rem]">
               <div className="truncate text-sm font-medium">{basename(a.image)}</div>
               <div className="mt-0.5 truncate font-mono text-xs text-[var(--color-muted)]">
                 {a.mount_point ||

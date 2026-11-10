@@ -41,7 +41,7 @@ export function ServersCardView(props: {
       </div>
       {props.connections.length === 0 ? (
         <div className="flex flex-wrap items-center gap-3">
-          <p className="flex-1 text-xs text-[var(--color-muted)]">
+          <p className="min-w-0 flex-1 basis-[12rem] text-xs text-[var(--color-muted)]">
             {tr(
               "v5_home_servers_empty",
               undefined,

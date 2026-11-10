@@ -313,7 +313,7 @@ export function ServersSection() {
             <li key={c.id}>
               <Card>
                 <div className="flex flex-wrap items-center gap-3">
-                  <div className="min-w-0 flex-1">
+                  <div className="min-w-0 flex-1 basis-[12rem]">
                     <div className="flex items-center gap-2">
                       <span className="truncate font-medium">{c.name}</span>
                       <span className="rounded bg-[var(--color-surface-3)] px-1.5 text-xs text-[var(--color-muted)]">

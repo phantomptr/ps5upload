@@ -350,7 +350,7 @@ export function JoinAFriend({ pending, onPendingDone }: { pending?: string | nul
               const who = j.host_name || deviceName(device);
               return (
                 <li key={j.ws} className="flex flex-wrap items-center gap-2 text-sm" data-testid="join-nearby-host">
-                  <span className="min-w-0 flex-1">
+                  <span className="min-w-0 flex-1 basis-[12rem]">
                     <span className="font-medium">
                       {tr("join_nearby_host", { name: who, console: j.console_name }, `${who}'s ${j.console_name}`)}
                     </span>

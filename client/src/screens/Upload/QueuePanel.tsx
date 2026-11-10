@@ -1474,7 +1474,7 @@ export function QueueRow({
 
       {isActive && !isRecovering && !isInstall && item.stalledForMs != null && (
         <div className="mt-2 flex flex-wrap items-center gap-2 rounded-[var(--radius-field)] bg-[var(--color-warn)]/10 px-2 py-1.5 text-xs text-[var(--color-warn)]">
-          <span className="min-w-0 flex-1">
+          <span className="min-w-0 flex-1 basis-[12rem]">
             {tr(
               "queue_stalled",
               { time: formatDuration(item.stalledForMs / 1000) },
@@ -1534,7 +1534,7 @@ export function QueueRow({
 
       {isPending && item.paused && (
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[var(--color-muted)]">
-          <span className="min-w-0 flex-1">
+          <span className="min-w-0 flex-1 basis-[12rem]">
             {item.paused === "sendNow"
               ? tr(
                   "queue_paused_for_send_now",
@@ -1560,7 +1560,7 @@ export function QueueRow({
 
       {isPending && item.interrupted && !item.waitingForWake && !item.paused && (
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[var(--color-muted)]">
-          <span className="min-w-0 flex-1">
+          <span className="min-w-0 flex-1 basis-[12rem]">
             {tr(
               "queue_interrupted",
               undefined,

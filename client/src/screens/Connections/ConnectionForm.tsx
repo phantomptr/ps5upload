@@ -433,7 +433,7 @@ export function ConnectionFormView(p: ConnectionFormProps) {
           {failed.host_key && (
             <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-card)] border border-[var(--glass-edge)] p-2 text-xs">
               <AlertTriangle size={14} className="text-[var(--color-warn)]" />
-              <span className="min-w-0 flex-1">
+              <span className="min-w-0 flex-1 basis-[12rem]">
                 {/changed/i.test(failed.error)
                   ? tr("conn_host_key_changed", undefined, "This server's key has changed since you last connected:")
                   : tr("conn_host_key_new", undefined, "First connection to this server. Its key fingerprint is:")}{" "}

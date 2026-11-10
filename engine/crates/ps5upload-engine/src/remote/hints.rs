@@ -24,6 +24,10 @@ pub fn hint_for(error: &str) -> Option<&'static str> {
         Some("The server's TLS certificate was not accepted. For a NAS with a self-signed certificate over WebDAV, turn on \"Accept a self-signed certificate\".")
     } else if has(&["propfind", "not a webdav"]) {
         Some("Put the server's WebDAV root in Start folder, e.g. /remote.php/dav/files/USER for Nextcloud or /dav for Alist, and check the port.")
+    } else if has(&["mount service wasn't found"]) {
+        Some("Port is the NFS port, usually 2049. The server's portmapper (port 111) says where its mount service is: check that it runs and that the server's firewall lets port 111 and the mount service's port through.")
+    } else if has(&["doesn't serve nfs"]) {
+        Some("Port is the NFS port, usually 2049.")
     } else if has(&[
         "refused",
         "timed out",

@@ -1,6 +1,7 @@
 //! NFS exports: an NFSv3 client (RFC 1813) over ONC RPC on TCP (RFC 5531), for NAS boxes and Linux
-//! servers. The portmapper (RFC 1833) says where the MOUNT service is; a server without one (go-nfs,
-//! rclone) is asked on the NFS port. Calls carry AUTH_SYS with the connection's `uid:gid`, the
+//! servers. The portmapper (RFC 1833), asked over TCP and then UDP, says where the MOUNT service
+//! is, and a MOUNT service reachable only over UDP is called over UDP; a server without a
+//! portmapper (go-nfs, rclone) is asked on the NFS port. Calls carry AUTH_SYS with the connection's `uid:gid`, the
 //! connection's user field, from a source port below 1024 when this system allows it: exports marked
 //! "secure", the Linux default, refuse any other.
 //!
@@ -43,6 +44,9 @@ const TYPE_DIR: u32 = 2;
 const NOT_SUPPORTED: u32 = 10004;
 const STALE: u32 = 70;
 const STEP: Duration = Duration::from_secs(30);
+/// A TCP connect: a server that drops it silently (a firewall) is given up on after this, so the
+/// mount service's UDP port is tried without a long wait (#796).
+const CONNECT: Duration = Duration::from_secs(10);
 const MAX_RECORD: usize = 64 << 20;
 /// The most entries a folder listing takes: a server that never ends one isn't waited for.
 const MAX_LISTED: usize = 2_000_000;
@@ -204,6 +208,7 @@ fn wcc_data(i: &mut In) {
 /// One TCP connection to an RPC program, with record marking and one call at a time.
 struct Rpc {
     stream: TcpStream,
+    port: u16,
     program: u32,
     version: u32,
     uid: u32,
@@ -211,38 +216,218 @@ struct Rpc {
     next_xid: u32,
 }
 
-async fn dial(host: &str, port: u16) -> Result<TcpStream, RemoteError> {
+/// What a program is called in a message.
+fn program_name(program: u32) -> &'static str {
+    match program {
+        PORTMAP => "the portmapper",
+        MOUNT => "the mount service",
+        _ => "NFS",
+    }
+}
+
+/// An ONC RPC call message: the header, AUTH_SYS (none for the portmapper), the arguments.
+fn call_message(
+    xid: u32,
+    program: u32,
+    version: u32,
+    proc: u32,
+    (uid, gid): (u32, u32),
+    args: &Xdr,
+) -> Xdr {
+    let mut m = Xdr::default()
+        .u32(xid)
+        .u32(0) // a call
+        .u32(2)
+        .u32(program)
+        .u32(version)
+        .u32(proc);
+    m = if program == PORTMAP {
+        m.u32(0).u32(0)
+    } else {
+        let cred = Xdr::default()
+            .u32(0)
+            .opaque(b"ps5upload")
+            .u32(uid)
+            .u32(gid)
+            .u32(1)
+            .u32(gid);
+        m.u32(1).opaque(&cred.0)
+    };
+    m = m.u32(0).u32(0); // verifier
+    m.0.extend_from_slice(&args.0);
+    m
+}
+
+async fn address(host: &str, port: u16) -> Result<std::net::SocketAddr, RemoteError> {
     let addrs: Vec<_> = tokio::net::lookup_host((host, port))
         .await
         .map_err(|e| RemoteError::Unreachable(format!("{host}: {e}")))?
         .collect();
-    let addr = addrs
+    addrs
         .first()
         .copied()
-        .ok_or_else(|| RemoteError::Unreachable(format!("{host}: no address")))?;
+        .ok_or_else(|| RemoteError::Unreachable(format!("{host}: no address")))
+}
+
+/// Binds a source port below 1024 when this system allows it: exports marked "secure" want one,
+/// and only an administrator (or a PS5 payload) can bind it. A phone app or a desktop app run as
+/// a normal user gets an ordinary port.
+fn bind_low(mut bind: impl FnMut(std::net::SocketAddr) -> std::io::Result<()>, v4: bool) {
+    let any: std::net::IpAddr = if v4 {
+        std::net::Ipv4Addr::UNSPECIFIED.into()
+    } else {
+        std::net::Ipv6Addr::UNSPECIFIED.into()
+    };
+    for local in (665..1024u16).rev().take(32) {
+        match bind((any, local).into()) {
+            Ok(()) => return,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => break,
+            Err(_) => {}
+        }
+    }
+}
+
+async fn dial(host: &str, port: u16) -> Result<TcpStream, RemoteError> {
+    let addr = address(host, port).await?;
     let socket = if addr.is_ipv4() {
         TcpSocket::new_v4()
     } else {
         TcpSocket::new_v6()
     }
     .map_err(|e| RemoteError::Io(e.to_string()))?;
-    // Exports marked "secure" want a port below 1024, which only an administrator can bind.
-    for local in (665..1024u16).rev().take(32) {
-        let any: std::net::IpAddr = if addr.is_ipv4() {
-            std::net::Ipv4Addr::UNSPECIFIED.into()
-        } else {
-            std::net::Ipv6Addr::UNSPECIFIED.into()
-        };
-        match socket.bind((any, local).into()) {
-            Ok(()) => break,
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => break,
-            Err(_) => {}
-        }
-    }
-    tokio::time::timeout(STEP, socket.connect(addr))
+    bind_low(|a| socket.bind(a), addr.is_ipv4());
+    tokio::time::timeout(CONNECT, socket.connect(addr))
         .await
-        .map_err(|_| RemoteError::Unreachable(format!("{host}:{port}: no answer after 30 s")))?
+        .map_err(|_| {
+            RemoteError::Unreachable(format!(
+                "{host}:{port}: no answer after {} s",
+                CONNECT.as_secs()
+            ))
+        })?
         .map_err(|e| RemoteError::Unreachable(format!("{host}:{port}: {e}")))
+}
+
+/// One RPC program over UDP: servers whose portmapper or mount service only speaks UDP. Each
+/// call is sent again while no reply comes, as RPC over UDP expects.
+struct UdpRpc {
+    socket: tokio::net::UdpSocket,
+    port: u16,
+    program: u32,
+    version: u32,
+    uid: u32,
+    gid: u32,
+    next_xid: u32,
+}
+
+impl UdpRpc {
+    async fn open(
+        host: &str,
+        port: u16,
+        program: u32,
+        version: u32,
+        (uid, gid): (u32, u32),
+    ) -> Result<Self, RemoteError> {
+        let addr = address(host, port).await?;
+        let any: std::net::SocketAddr = if addr.is_ipv4() {
+            (std::net::Ipv4Addr::UNSPECIFIED, 0).into()
+        } else {
+            (std::net::Ipv6Addr::UNSPECIFIED, 0).into()
+        };
+        let mut socket = None;
+        bind_low(
+            |a| {
+                std::net::UdpSocket::bind(a).map(|s| {
+                    socket = Some(s);
+                })
+            },
+            addr.is_ipv4(),
+        );
+        let socket = match socket {
+            Some(s) => s,
+            None => std::net::UdpSocket::bind(any).map_err(|e| RemoteError::Io(e.to_string()))?,
+        };
+        socket
+            .set_nonblocking(true)
+            .map_err(|e| RemoteError::Io(e.to_string()))?;
+        let socket =
+            tokio::net::UdpSocket::from_std(socket).map_err(|e| RemoteError::Io(e.to_string()))?;
+        socket
+            .connect(addr)
+            .await
+            .map_err(|e| RemoteError::Unreachable(format!("{host}:{port}: {e}")))?;
+        Ok(Self {
+            socket,
+            port,
+            program,
+            version,
+            uid,
+            gid,
+            next_xid: 0x5055_0000,
+        })
+    }
+
+    async fn call(&mut self, proc: u32, args: &Xdr, tries: u32) -> Result<Vec<u8>, RemoteError> {
+        let xid = self.next_xid;
+        self.next_xid = self.next_xid.wrapping_add(1);
+        let m = call_message(
+            xid,
+            self.program,
+            self.version,
+            proc,
+            (self.uid, self.gid),
+            args,
+        );
+        let mut buf = vec![0u8; 65_536];
+        for attempt in 1..=tries {
+            self.socket
+                .send(&m.0)
+                .await
+                .map_err(|e| RemoteError::Unreachable(format!("UDP port {}: {e}", self.port)))?;
+            let wait = Duration::from_millis(700 * u64::from(attempt));
+            let reply = tokio::time::timeout(wait, async {
+                loop {
+                    // A refused port shows here as an error (ICMP port unreachable).
+                    let n = self.socket.recv(&mut buf).await.map_err(|e| {
+                        RemoteError::Unreachable(format!("UDP port {}: {e}", self.port))
+                    })?;
+                    if let Some(results) =
+                        parse_reply(&buf[..n], xid).map_err(|e| self.in_context(e))?
+                    {
+                        return Ok::<_, RemoteError>(results);
+                    }
+                }
+            })
+            .await;
+            if let Ok(r) = reply {
+                return r;
+            }
+        }
+        Err(RemoteError::Unreachable(format!(
+            "{} gave no answer on UDP port {}",
+            program_name(self.program),
+            self.port
+        )))
+    }
+
+    fn in_context(&self, e: RemoteError) -> RemoteError {
+        unavailable_in_context(e, self.program, self.port, "UDP ")
+    }
+}
+
+/// PROG_UNAVAIL says which program wasn't there and on which port.
+fn unavailable_in_context(e: RemoteError, program: u32, port: u16, via: &str) -> RemoteError {
+    match e {
+        RemoteError::Unreachable(m) if m == PROG_UNAVAIL_TEXT => RemoteError::Unreachable(format!(
+            "NFS: {via}port {port} doesn't serve {}{}",
+            program_name(program),
+            if program == NFS {
+                " (it is usually at port 2049)"
+            } else {
+                ""
+            }
+        )),
+        other => other,
+    }
 }
 
 impl Rpc {
@@ -256,6 +441,7 @@ impl Rpc {
     ) -> Result<Self, RemoteError> {
         Ok(Self {
             stream: dial(host, port).await?,
+            port,
             program,
             version,
             uid,
@@ -267,27 +453,14 @@ impl Rpc {
     async fn call(&mut self, proc: u32, args: &Xdr) -> Result<Vec<u8>, RemoteError> {
         let xid = self.next_xid;
         self.next_xid = self.next_xid.wrapping_add(1);
-        let mut m = Xdr::default()
-            .u32(xid)
-            .u32(0) // a call
-            .u32(2)
-            .u32(self.program)
-            .u32(self.version)
-            .u32(proc);
-        m = if self.program == PORTMAP {
-            m.u32(0).u32(0)
-        } else {
-            let cred = Xdr::default()
-                .u32(0)
-                .opaque(b"ps5upload")
-                .u32(self.uid)
-                .u32(self.gid)
-                .u32(1)
-                .u32(self.gid);
-            m.u32(1).opaque(&cred.0)
-        };
-        m = m.u32(0).u32(0); // verifier
-        m.0.extend_from_slice(&args.0);
+        let m = call_message(
+            xid,
+            self.program,
+            self.version,
+            proc,
+            (self.uid, self.gid),
+            args,
+        );
         let mark = 0x8000_0000u32 | m.0.len() as u32;
         let io = |e: std::io::Error| RemoteError::Io(format!("NFS: {e}"));
         let exchange = async {
@@ -298,7 +471,9 @@ impl Rpc {
             self.stream.write_all(&m.0).await.map_err(io)?;
             loop {
                 let record = self.read_record().await?;
-                if let Some(results) = parse_reply(&record, xid)? {
+                if let Some(results) = parse_reply(&record, xid)
+                    .map_err(|e| unavailable_in_context(e, self.program, self.port, ""))?
+                {
                     return Ok(results);
                 }
             }
@@ -332,6 +507,9 @@ impl Rpc {
     }
 }
 
+/// PROG_UNAVAIL before the caller says which program and port it was.
+const PROG_UNAVAIL_TEXT: &str = "NFS: that program isn't available on this port";
+
 /// The results of a reply to `xid`; `None` for a reply to anything else.
 fn parse_reply(record: &[u8], xid: u32) -> Result<Option<Vec<u8>>, RemoteError> {
     let mut i = In::new(record);
@@ -358,9 +536,7 @@ fn parse_reply(record: &[u8], xid: u32) -> Result<Option<Vec<u8>>, RemoteError> 
     }
     match accept {
         0 => Ok(Some(record[i.at..].to_vec())),
-        1 => Err(RemoteError::Unreachable(
-            "NFS: that program isn't available on this port".to_string(),
-        )),
+        1 => Err(RemoteError::Unreachable(PROG_UNAVAIL_TEXT.to_string())),
         2 => Err(RemoteError::Io(
             "NFS: the server doesn't speak NFS version 3".to_string(),
         )),
@@ -424,9 +600,109 @@ fn parse_ids(text: &str) -> Result<(u32, u32), RemoteError> {
     }
 }
 
+/// Where the mount service answers.
+#[derive(Clone, Debug)]
+struct MountAt {
+    /// Its TCP and UDP ports, 0 where it has none.
+    ports: Ports,
+    /// Why the NFS port is tried: what the portmapper said (or didn't).
+    guessed: Option<String>,
+}
+
+/// One program's connection, over TCP or UDP.
+enum Link {
+    Tcp(Rpc),
+    Udp(UdpRpc),
+}
+
+impl Link {
+    async fn call(&mut self, proc: u32, args: &Xdr) -> Result<Vec<u8>, RemoteError> {
+        match self {
+            Link::Tcp(r) => r.call(proc, args).await,
+            Link::Udp(r) => r.call(proc, args, 4).await,
+        }
+    }
+}
+
+fn upper_first(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().chain(c).collect(),
+        None => String::new(),
+    }
+}
+
+/// A program's TCP and UDP ports, 0 for neither.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Ports {
+    tcp: u16,
+    udp: u16,
+}
+
+/// The ports the portmapper gives `program`; `None` when it lists neither.
+async fn ask_portmapper(
+    pm: &mut Link,
+    program: u32,
+    version: u32,
+) -> Result<Option<Ports>, RemoteError> {
+    let mut found = Ports::default();
+    for (proto, udp) in [(6u32, false), (17, true)] {
+        let reply = pm
+            .call(
+                GETPORT,
+                &Xdr::default().u32(program).u32(version).u32(proto).u32(0),
+            )
+            .await?;
+        let mut i = In::new(&reply);
+        let port = i.u32();
+        if i.bad {
+            return Err(RemoteError::Io(
+                "NFS: malformed portmapper reply".to_string(),
+            ));
+        }
+        let port = u16::try_from(port).unwrap_or(0);
+        if udp {
+            found.udp = port;
+        } else {
+            found.tcp = port;
+        }
+    }
+    Ok((found != Ports::default()).then_some(found))
+}
+
+/// Asks the portmapper (RFC 1833) at `pm_port` where `program` is: over TCP, and over UDP when
+/// TCP gets nowhere, as some servers only answer there. `Err` says why neither answered.
+async fn portmap_lookup(
+    host: &str,
+    pm_port: u16,
+    program: u32,
+    version: u32,
+) -> Result<Option<Ports>, String> {
+    let tcp = tokio::time::timeout(Duration::from_secs(3), async {
+        let mut pm = Link::Tcp(Rpc::open(host, pm_port, PORTMAP, 2, 0, 0).await?);
+        ask_portmapper(&mut pm, program, version).await
+    })
+    .await;
+    let tcp_failed = match tcp {
+        Ok(Ok(found)) => return Ok(found),
+        Ok(Err(RemoteError::Unreachable(m))) => m,
+        Ok(Err(e)) => e.to_string(),
+        Err(_) => "no answer after 3 s".to_string(),
+    };
+    let udp = tokio::time::timeout(Duration::from_secs(4), async {
+        let mut pm = Link::Udp(UdpRpc::open(host, pm_port, PORTMAP, 2, (0, 0)).await?);
+        ask_portmapper(&mut pm, program, version).await
+    })
+    .await;
+    match udp {
+        Ok(Ok(found)) => Ok(found),
+        _ => Err(tcp_failed),
+    }
+}
+
 struct State {
     nfs: Rpc,
-    mount_port: Option<u16>,
+    mount_at: Option<MountAt>,
     exports: Option<Vec<String>>,
     roots: HashMap<String, Vec<u8>>,
     /// Handles of paths already looked up, by export and path.
@@ -436,6 +712,8 @@ struct State {
 struct Inner {
     host: String,
     port: u16,
+    /// The portmapper's port: 111, another only in tests.
+    portmap: u16,
     uid: u32,
     gid: u32,
     /// The export of the connection, `/volume1/games`; empty for all of them.
@@ -475,35 +753,91 @@ impl Inner {
         }
     }
 
-    async fn mount_port(&self) -> u16 {
-        if let Some(p) = self.state.lock().await.mount_port {
-            return p;
+    /// Where the mount service is: the portmapper's answer, or the NFS port when it has none.
+    async fn mount_at(&self) -> MountAt {
+        if let Some(at) = self.state.lock().await.mount_at.clone() {
+            return at;
         }
-        let mut port = self.port;
-        let asked = async {
-            let mut pm = Rpc::open(&self.host, 111, PORTMAP, 2, 0, 0).await?;
-            let args = Xdr::default().u32(MOUNT).u32(3).u32(6).u32(0);
-            pm.call(GETPORT, &args).await
+        let at = match portmap_lookup(&self.host, self.portmap, MOUNT, 3).await {
+            Ok(Some(ports)) => MountAt {
+                ports,
+                guessed: None,
+            },
+            found => MountAt {
+                ports: Ports {
+                    tcp: self.port,
+                    udp: 0,
+                },
+                guessed: Some(match found {
+                    Err(why) => format!(
+                        "the portmapper at port {} didn't answer ({why})",
+                        self.portmap
+                    ),
+                    _ => format!(
+                        "the portmapper at port {} doesn't list a version 3 mount service",
+                        self.portmap
+                    ),
+                }),
+            },
         };
-        if let Ok(Ok(reply)) = tokio::time::timeout(Duration::from_secs(3), asked).await {
-            let mut i = In::new(&reply);
-            let p = i.u32();
-            if !i.bad && p > 0 && p < 65536 {
-                port = p as u16;
+        crate::engine_log::record(
+            "info",
+            format!(
+                "nfs: {}: mount service at TCP port {}, UDP port {}{}",
+                self.host,
+                at.ports.tcp,
+                at.ports.udp,
+                at.guessed
+                    .as_deref()
+                    .map(|g| format!(" ({g})"))
+                    .unwrap_or_default()
+            ),
+        );
+        self.state.lock().await.mount_at = Some(at.clone());
+        at
+    }
+
+    /// A call to the mount service, saying what to check when it isn't where it was looked for.
+    async fn mount_call(&self, proc: u32, args: Xdr) -> Result<Vec<u8>, RemoteError> {
+        let at = self.mount_at().await;
+        let Ports { tcp, udp } = at.ports;
+        // TCP first; UDP when there is no TCP port or a firewall lets only UDP through.
+        let tcp_link = if tcp != 0 {
+            Some(Rpc::open(&self.host, tcp, MOUNT, 3, self.uid, self.gid).await)
+        } else {
+            None
+        };
+        let done = match tcp_link {
+            Some(Ok(rpc)) => Link::Tcp(rpc).call(proc, &args).await,
+            Some(Err(e)) if udp == 0 => Err(e),
+            _ => match UdpRpc::open(&self.host, udp, MOUNT, 3, (self.uid, self.gid)).await {
+                Ok(rpc) => Link::Udp(rpc).call(proc, &args).await,
+                Err(e) => Err(e),
+            },
+        };
+        match (done, &at.guessed) {
+            (Err(RemoteError::Unreachable(m)), Some(why)) => {
+                Err(RemoteError::Unreachable(format!(
+                    "NFS: the server's mount service wasn't found. {}, and the NFS port {} \
+                     doesn't answer for it either ({}). Check that the server runs its \
+                     portmapper (rpcbind) and mount service, and that its firewall lets port {} \
+                     through",
+                    upper_first(why),
+                    tcp,
+                    m.trim_start_matches("NFS: "),
+                    self.portmap
+                )))
             }
+            (done, _) => done,
         }
-        self.state.lock().await.mount_port = Some(port);
-        port
     }
 
     async fn mount(&self, export: &str) -> Result<Vec<u8>, RemoteError> {
         if let Some(h) = self.state.lock().await.roots.get(export) {
             return Ok(h.clone());
         }
-        let port = self.mount_port().await;
-        let mut m = Rpc::open(&self.host, port, MOUNT, 3, self.uid, self.gid).await?;
-        let reply = m
-            .call(MNT, &Xdr::default().opaque(export.as_bytes()))
+        let reply = self
+            .mount_call(MNT, Xdr::default().opaque(export.as_bytes()))
             .await?;
         let mut i = In::new(&reply);
         match i.u32() {
@@ -538,10 +872,14 @@ impl Inner {
         if let Some(e) = &self.state.lock().await.exports {
             return Ok(e.clone());
         }
-        let port = self.mount_port().await;
-        let mut m = Rpc::open(&self.host, port, MOUNT, 3, self.uid, self.gid).await?;
         let mut list = Vec::new();
-        if let Ok(reply) = m.call(EXPORT, &Xdr::default()).await {
+        // A mount service that won't list its exports may still mount one; one that isn't there
+        // at all says so.
+        let listed = self.mount_call(EXPORT, Xdr::default()).await;
+        if let Err(e @ RemoteError::Unreachable(_)) = listed {
+            return Err(e);
+        }
+        if let Ok(reply) = listed {
             let mut i = In::new(&reply);
             while !i.bad && i.u32() != 0 {
                 let dir = i.text();
@@ -869,6 +1207,11 @@ pub struct NfsFs {
 
 impl NfsFs {
     pub async fn connect(conn: &Connection) -> Result<Self, RemoteError> {
+        Self::connect_via(conn, 111).await
+    }
+
+    /// `connect` with the portmapper at `portmap`: 111, another only in tests.
+    async fn connect_via(conn: &Connection, portmap: u16) -> Result<Self, RemoteError> {
         let (uid, gid) = parse_ids(&conn.user)?;
         let share = conn.share.trim().trim_matches('/');
         let root = if share.is_empty() {
@@ -881,16 +1224,33 @@ impl NfsFs {
             .trim()
             .trim_start_matches('[')
             .trim_end_matches(']');
-        let nfs = Rpc::open(host, conn.port, NFS, 3, uid, gid).await?;
+        // The port given, or where the portmapper says NFS is when nothing answers there.
+        let (nfs, port) = match Rpc::open(host, conn.port, NFS, 3, uid, gid).await {
+            Ok(nfs) => (nfs, conn.port),
+            Err(e) => match portmap_lookup(host, portmap, NFS, 3).await {
+                Ok(Some(Ports { tcp: p, .. })) if p != 0 && p != conn.port => {
+                    crate::engine_log::record(
+                        "info",
+                        format!(
+                            "nfs: {host}: nothing at port {} ({e}); the portmapper puts NFS at {p}",
+                            conn.port
+                        ),
+                    );
+                    (Rpc::open(host, p, NFS, 3, uid, gid).await?, p)
+                }
+                _ => return Err(e),
+            },
+        };
         let inner = Arc::new(Inner {
             host: host.to_string(),
-            port: conn.port,
+            port,
+            portmap,
             uid,
             gid,
             root,
             state: Mutex::new(State {
                 nfs,
-                mount_port: None,
+                mount_at: None,
                 exports: None,
                 roots: HashMap::new(),
                 handles: HashMap::new(),
@@ -1309,6 +1669,39 @@ mod tests {
         let _ = std::fs::remove_file(&src);
     }
 
+    /// Against a real server with a portmapper and a mount service on a port of its own (#796):
+    /// `NFS_TEST=host:port NFS_PORTMAP=port NFS_EXPORT=/export`. unfs3 and rpcbind in Docker do:
+    /// `rpcbind -w; unfsd -m 20048 -n 2049`, with the portmapper published at NFS_PORTMAP and
+    /// 20048 published as itself, TCP and UDP.
+    #[tokio::test]
+    #[ignore = "needs an NFS server with a portmapper"]
+    async fn a_real_server_with_a_portmapper() {
+        let target = std::env::var("NFS_TEST").expect("NFS_TEST=host:port");
+        let (host, port) = target.split_once(':').unwrap();
+        let pm: u16 = std::env::var("NFS_PORTMAP").map_or(111, |p| p.parse().unwrap());
+        let mut conn = nfs_conn(port.parse().unwrap());
+        conn.host = host.to_string();
+        conn.share = std::env::var("NFS_EXPORT").expect("NFS_EXPORT=/export");
+        let fs = NfsFs::connect_via(&conn, pm).await.unwrap();
+        let listed = fs.list("/", None).await.unwrap();
+        println!(
+            "listed {:?}",
+            listed.entries.iter().map(|e| &e.name).collect::<Vec<_>>()
+        );
+        conn.share = String::new();
+        let fs = NfsFs::connect_via(&conn, pm).await.unwrap();
+        println!(
+            "exports {:?}",
+            fs.list("/", None)
+                .await
+                .unwrap()
+                .entries
+                .iter()
+                .map(|e| &e.name)
+                .collect::<Vec<_>>()
+        );
+    }
+
     #[test]
     fn exports_make_a_tree() {
         let all = vec![
@@ -1373,6 +1766,294 @@ mod tests {
         assert_eq!(i.opaque(100), b"abcde");
         assert_eq!(i.u32(), 3);
         assert!(!i.bad);
+    }
+
+    /// What a fake server serves: the programs it answers, and the portmapper's table of
+    /// `(program, protocol) -> port` when it is one.
+    #[derive(Clone, Default)]
+    struct Fake {
+        mount: bool,
+        nfs: bool,
+        map: Vec<((u32, u32), u16)>,
+    }
+
+    impl Fake {
+        /// The accept_stat and results for a call, PROG_UNAVAIL for a program it doesn't serve.
+        fn answer(&self, program: u32, proc: u32, args: &[u8]) -> (u32, Vec<u8>) {
+            match program {
+                PORTMAP if !self.map.is_empty() && proc == GETPORT => {
+                    let mut i = In::new(args);
+                    let (prog, _vers, proto) = (i.u32(), i.u32(), i.u32());
+                    let port = self
+                        .map
+                        .iter()
+                        .find(|(k, _)| *k == (prog, proto))
+                        .map_or(0, |(_, p)| u32::from(*p));
+                    (0, Xdr::default().u32(port).0)
+                }
+                MOUNT if self.mount && proc == MNT => (
+                    0,
+                    Xdr::default().u32(0).opaque(b"root-handle").u32(1).u32(1).0,
+                ),
+                MOUNT if self.mount && proc == EXPORT => {
+                    (0, Xdr::default().u32(1).opaque(b"/PS4 NFS").u32(0).u32(0).0)
+                }
+                NFS if self.nfs && proc == READDIRPLUS => (
+                    0,
+                    Xdr::default()
+                        .u32(0)
+                        .u32(0)
+                        .fixed(&[0; 8])
+                        .u32(1)
+                        .u64(1)
+                        .opaque(b"game")
+                        .u64(1)
+                        .u32(1)
+                        .u32(TYPE_DIR)
+                        .fixed(&[0; 80]) // the rest of fattr3
+                        .u32(0)
+                        .u32(0)
+                        .u32(1)
+                        .0,
+                ),
+                NFS if self.nfs => (0, Xdr::default().u32(NOT_SUPPORTED).0),
+                _ => (1, Vec::new()),
+            }
+        }
+
+        fn reply(&self, call: &[u8]) -> Vec<u8> {
+            let mut i = In::new(call);
+            let xid = i.u32();
+            i.u32(); // a call
+            i.u32(); // RPC version
+            let (program, _version, proc) = (i.u32(), i.u32(), i.u32());
+            i.u32();
+            i.opaque(400); // credentials
+            i.u32();
+            i.opaque(400); // verifier
+            let (accept, results) = self.answer(program, proc, &call[i.at..]);
+            let mut r = Xdr::default()
+                .u32(xid)
+                .u32(1)
+                .u32(0)
+                .u32(0)
+                .u32(0)
+                .u32(accept);
+            r.0.extend_from_slice(&results);
+            r.0
+        }
+
+        async fn tcp(self) -> u16 {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            self.serve_tcp(listener);
+            port
+        }
+
+        fn serve_tcp(self, listener: tokio::net::TcpListener) {
+            tokio::spawn(async move {
+                while let Ok((mut s, _)) = listener.accept().await {
+                    let fake = self.clone();
+                    tokio::spawn(async move {
+                        let mut head = [0u8; 4];
+                        while s.read_exact(&mut head).await.is_ok() {
+                            let n = (u32::from_be_bytes(head) & 0x7FFF_FFFF) as usize;
+                            let mut call = vec![0u8; n];
+                            if s.read_exact(&mut call).await.is_err() {
+                                return;
+                            }
+                            let r = fake.reply(&call);
+                            let mark = 0x8000_0000u32 | r.len() as u32;
+                            let _ = s.write_all(&mark.to_be_bytes()).await;
+                            let _ = s.write_all(&r).await;
+                        }
+                    });
+                }
+            });
+        }
+
+        fn serve_udp(self, socket: tokio::net::UdpSocket) {
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 65_536];
+                while let Ok((n, from)) = socket.recv_from(&mut buf).await {
+                    let _ = socket.send_to(&self.reply(&buf[..n]), from).await;
+                }
+            });
+        }
+
+        async fn udp(self) -> u16 {
+            let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            let port = socket.local_addr().unwrap().port();
+            self.serve_udp(socket);
+            port
+        }
+    }
+
+    /// A port with nothing listening on it (TCP).
+    async fn closed_port() -> u16 {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        l.local_addr().unwrap().port()
+    }
+
+    fn nfs_conn(port: u16) -> Connection {
+        let mut conn = crate::remote::store::conn("t", crate::remote::store::Protocol::Nfs);
+        conn.host = "127.0.0.1".to_string();
+        conn.port = port;
+        conn.user = "1000:1000".to_string();
+        conn.share = "PS4 NFS".to_string();
+        conn.start_path = String::new();
+        conn
+    }
+
+    fn nfs_only() -> Fake {
+        Fake {
+            nfs: true,
+            ..Fake::default()
+        }
+    }
+
+    fn mount_only() -> Fake {
+        Fake {
+            mount: true,
+            ..Fake::default()
+        }
+    }
+
+    fn portmapper(map: Vec<((u32, u32), u16)>) -> Fake {
+        Fake {
+            map,
+            ..Fake::default()
+        }
+    }
+
+    async fn lists_the_game(fs: NfsFs) {
+        let listed = fs.list("/", None).await.unwrap();
+        assert_eq!(listed.entries.len(), 1);
+        assert_eq!(listed.entries[0].name, "game");
+    }
+
+    /// #796: NFS at 2049 and the mount service on a port of its own, which only the portmapper
+    /// knows. The NFS port answers PROG_UNAVAIL for MOUNT.
+    #[tokio::test]
+    async fn the_mount_service_is_found_through_the_portmapper() {
+        let nfs = nfs_only().tcp().await;
+        let mount = mount_only().tcp().await;
+        let pm = portmapper(vec![((MOUNT, 6), mount)]).tcp().await;
+        let fs = NfsFs::connect_via(&nfs_conn(nfs), pm).await.unwrap();
+        lists_the_game(fs).await;
+    }
+
+    #[tokio::test]
+    async fn a_mount_service_only_on_udp_is_used_over_udp() {
+        let nfs = nfs_only().tcp().await;
+        let mount = mount_only().udp().await;
+        let pm = portmapper(vec![((MOUNT, 17), mount)]).tcp().await;
+        let fs = NfsFs::connect_via(&nfs_conn(nfs), pm).await.unwrap();
+        lists_the_game(fs).await;
+    }
+
+    /// A firewall that lets only UDP through to the mount service.
+    #[tokio::test]
+    async fn a_mount_service_closed_on_tcp_is_tried_over_udp() {
+        let nfs = nfs_only().tcp().await;
+        let mount = mount_only().udp().await;
+        let closed = closed_port().await;
+        let pm = portmapper(vec![((MOUNT, 6), closed), ((MOUNT, 17), mount)])
+            .tcp()
+            .await;
+        let fs = NfsFs::connect_via(&nfs_conn(nfs), pm).await.unwrap();
+        lists_the_game(fs).await;
+    }
+
+    #[tokio::test]
+    async fn a_portmapper_only_on_udp_is_asked_over_udp() {
+        let nfs = nfs_only().tcp().await;
+        let mount = mount_only().tcp().await;
+        // UDP at a port where nothing listens on TCP.
+        let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let pm = socket.local_addr().unwrap().port();
+        portmapper(vec![((MOUNT, 6), mount)]).serve_udp(socket);
+        let fs = NfsFs::connect_via(&nfs_conn(nfs), pm).await.unwrap();
+        lists_the_game(fs).await;
+    }
+
+    /// go-nfs and rclone have no portmapper and answer MOUNT on the NFS port.
+    #[tokio::test]
+    async fn without_a_portmapper_the_nfs_port_is_asked() {
+        let both = Fake {
+            mount: true,
+            nfs: true,
+            ..Fake::default()
+        }
+        .tcp()
+        .await;
+        let fs = NfsFs::connect_via(&nfs_conn(both), closed_port().await)
+            .await
+            .unwrap();
+        lists_the_game(fs).await;
+        // A portmapper that doesn't list MOUNT is the same.
+        let pm = portmapper(vec![((NFS, 6), both)]).tcp().await;
+        let fs = NfsFs::connect_via(&nfs_conn(both), pm).await.unwrap();
+        lists_the_game(fs).await;
+    }
+
+    /// No mount service anywhere: the message says which service, which ports, and what to check,
+    /// not "that program isn't available on this port".
+    #[tokio::test]
+    async fn a_missing_mount_service_says_what_to_check() {
+        let nfs = nfs_only().tcp().await;
+        let pm = closed_port().await;
+        let Err(RemoteError::Unreachable(m)) = NfsFs::connect_via(&nfs_conn(nfs), pm).await else {
+            panic!("expected Unreachable");
+        };
+        assert!(m.contains("mount service wasn't found"), "{m}");
+        assert!(
+            m.contains(&format!("portmapper at port {pm} didn't answer")),
+            "{m}"
+        );
+        assert!(m.contains(&format!("NFS port {nfs}")), "{m}");
+        let shown = RemoteError::Unreachable(m).to_string();
+        assert!(super::super::hints::hint_for(&shown)
+            .unwrap()
+            .contains("port 111"));
+
+        let pm = portmapper(vec![((NFS, 6), nfs)]).tcp().await;
+        let Err(RemoteError::Unreachable(m)) = NfsFs::connect_via(&nfs_conn(nfs), pm).await else {
+            panic!("expected Unreachable");
+        };
+        assert!(m.contains("doesn't list a version 3 mount service"), "{m}");
+    }
+
+    #[tokio::test]
+    async fn nfs_is_found_through_the_portmapper_when_the_port_is_wrong() {
+        let both = Fake {
+            mount: true,
+            nfs: true,
+            ..Fake::default()
+        }
+        .tcp()
+        .await;
+        let pm = portmapper(vec![((NFS, 6), both), ((MOUNT, 6), both)])
+            .tcp()
+            .await;
+        let fs = NfsFs::connect_via(&nfs_conn(closed_port().await), pm)
+            .await
+            .unwrap();
+        lists_the_game(fs).await;
+    }
+
+    #[tokio::test]
+    async fn a_port_that_isnt_nfs_is_named() {
+        let mount = mount_only().tcp().await;
+        let pm = portmapper(vec![((MOUNT, 6), mount)]).tcp().await;
+        let Err(RemoteError::Unreachable(m)) = NfsFs::connect_via(&nfs_conn(mount), pm).await
+        else {
+            panic!("expected Unreachable");
+        };
+        assert!(
+            m.contains(&format!("port {mount} doesn't serve NFS")),
+            "{m}"
+        );
     }
 
     #[test]

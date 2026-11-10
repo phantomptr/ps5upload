@@ -521,7 +521,7 @@ export function SpacePlanner({
     >
       <header className="flex flex-wrap items-center gap-2">
         <Wand2 size={16} aria-hidden />
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 basis-[12rem]">
           <div className="text-sm font-semibold">{tr("cleanup_plan_title", undefined, "Make room for a game")}</div>
           <div className="text-xs text-[var(--color-muted)]">
             {tr(

@@ -113,7 +113,7 @@ export function PlayTogetherStartView({
       )}
       {invites === "wifi" && (
         <div className="flex flex-wrap items-center gap-2" data-testid="pt-start-net-off">
-          <p className="min-w-0 flex-1 text-xs text-[var(--color-muted)]">
+          <p className="min-w-0 flex-1 basis-[12rem] text-xs text-[var(--color-muted)]">
             {tr(
               "pt_wifi_only_setting",
               undefined,

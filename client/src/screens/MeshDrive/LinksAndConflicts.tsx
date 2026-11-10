@@ -439,7 +439,7 @@ export function ConflictsDialog({
               </div>
               {naming?.copy === c.copy ? (
                 <div className="mt-2 flex flex-wrap items-end gap-2">
-                  <div className="min-w-0 flex-1">
+                  <div className="min-w-0 flex-1 basis-[12rem]">
                     <Input
                       label={tr("drive_conflict_new_name", undefined, "Name for the copy")}
                       value={naming.name}

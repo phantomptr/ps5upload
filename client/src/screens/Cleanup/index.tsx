@@ -565,7 +565,7 @@ export default function CleanupScreen() {
               ) : (
                 <>
                   <div className="sticky top-0 z-10 flex flex-wrap items-center gap-3 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface-2)] px-3 py-2">
-                    <div className="min-w-0 flex-1 text-sm" data-testid="cleanup-selected">
+                    <div className="min-w-0 flex-1 basis-[12rem] text-sm" data-testid="cleanup-selected">
                       {totals.count === 0
                         ? tr("cw_cleanup_selected_none", undefined, "Nothing selected")
                         : tr(
