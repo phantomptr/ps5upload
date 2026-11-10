@@ -44,6 +44,9 @@ const TYPE_DIR: u32 = 2;
 const NOT_SUPPORTED: u32 = 10004;
 const STALE: u32 = 70;
 const STEP: Duration = Duration::from_secs(30);
+/// A TCP connect: a server that drops it silently (a firewall) is given up on after this, so the
+/// mount service's UDP port is tried without a long wait (#796).
+const CONNECT: Duration = Duration::from_secs(10);
 const MAX_RECORD: usize = 64 << 20;
 /// The most entries a folder listing takes: a server that never ends one isn't waited for.
 const MAX_LISTED: usize = 2_000_000;
@@ -293,9 +296,14 @@ async fn dial(host: &str, port: u16) -> Result<TcpStream, RemoteError> {
     }
     .map_err(|e| RemoteError::Io(e.to_string()))?;
     bind_low(|a| socket.bind(a), addr.is_ipv4());
-    tokio::time::timeout(STEP, socket.connect(addr))
+    tokio::time::timeout(CONNECT, socket.connect(addr))
         .await
-        .map_err(|_| RemoteError::Unreachable(format!("{host}:{port}: no answer after 30 s")))?
+        .map_err(|_| {
+            RemoteError::Unreachable(format!(
+                "{host}:{port}: no answer after {} s",
+                CONNECT.as_secs()
+            ))
+        })?
         .map_err(|e| RemoteError::Unreachable(format!("{host}:{port}: {e}")))
 }
 
