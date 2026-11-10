@@ -101,9 +101,6 @@ import {
   resolveMoveDestination,
   sourceBasename,
 } from "../../lib/moveTarget";
-import {
-  imageBasename,
-} from "../../lib/mountPaths";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { Modal } from "../../components/Modal";
 import { useEditSessionStore } from "../../state/editSession";
@@ -112,6 +109,7 @@ import {
   findOwningImage,
   libraryForHost,
   refreshLibraryAfterChange,
+  registeredForImage,
   type RegisteredTitle,
 } from "../../state/library";
 import { useElapsed } from "../../lib/useElapsed";
@@ -599,11 +597,7 @@ function LibraryRowImpl({
   // ever show its filename and a generic glyph, which is what made a library
   // of disk images look like it had no cover art at all.
   const registeredTitle =
-    entry.kind === "image"
-      ? (registeredBySource.get(entry.path) ??
-        registeredBySource.get(imageBasename(entry.path)) ??
-        null)
-      : null;
+    entry.kind === "image" ? registeredForImage(registeredBySource, entry.path) : null;
 
   // Metadata fetch: skipped for disk images (single file, no sce_sys
   // inside) and for generic "folder" kind under non-game scopes.

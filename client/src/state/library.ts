@@ -7,7 +7,7 @@ import {
   type Volume,
 } from "../api/ps5";
 import { hostOf, transferAddr } from "../lib/addr";
-import { imageBasename, smpMountImageBasename } from "../lib/mountPaths";
+import { imageBasename, SMP_MOUNT_ROOT, smpMountImageBasename } from "../lib/mountPaths";
 
 /** What the console knows about a title we registered from a given source
  *  path. A `.exfat`/`.ffpkg` row has no readable `sce_sys/` of its own (the
@@ -290,10 +290,11 @@ export function refreshLibrary(host: string): Promise<void> {
           return { titles: [], registeredUnavailable: true, incomplete: true };
         }),
       ]);
-      // Two ways a registered title points back at a row:
+      // Three ways a registered title points back at a row:
       //   1. its source IS the row's path: folder games, and any image ps5upload mounted itself.
       //   2. its source is a ShadowMount+ mount point, which encodes only the image's basename.
-      // Both go into one map; images look themselves up under both keys.
+      //   3. its source is a ShadowMount+ mount point named after the game instead: the title ID.
+      // All go into one map; images look themselves up with `registeredForImage`.
       const registeredBySource = new Map<string, RegisteredTitle>();
       const titles = registered.titles ?? [];
       const pkgInstalled = new Set(
@@ -308,6 +309,9 @@ export function refreshLibrary(host: string): Promise<void> {
         registeredBySource.set(t.source, title);
         const smpBasename = smpMountImageBasename(t.source);
         if (smpBasename) registeredBySource.set(smpBasename, title);
+        if (t.source.startsWith(`${SMP_MOUNT_ROOT}/`)) {
+          registeredBySource.set(smpTitleKey(t.titleId), title);
+        }
       }
       // image_path → mount_point, for any mount point (the payload's tracker still decides
       // what Unmount may touch).
@@ -344,18 +348,39 @@ export function driveTitleIds(slot: LibrarySlot): Set<string> {
   return out;
 }
 
+/** The `registeredBySource` key of a title ShadowMount+ mounted from an image; never a path or
+ *  a basename. */
+function smpTitleKey(titleId: string): string {
+  return `smp-title:${titleId.toUpperCase()}`;
+}
+
+/** The title registered from a disk image: by its path, by its basename, or by a title ID in
+ *  its file name when ShadowMount+ named the mount after the game. The last matches only titles
+ *  ShadowMount+ mounted, never a folder or package install. */
+export function registeredForImage(
+  registeredBySource: Map<string, RegisteredTitle>,
+  path: string,
+): RegisteredTitle | null {
+  const base = imageBasename(path);
+  const byName = registeredBySource.get(path) ?? registeredBySource.get(base);
+  if (byName) return byName;
+  for (const id of base.toUpperCase().match(/[A-Z]{4}\d{5}/g) ?? []) {
+    const title = registeredBySource.get(smpTitleKey(id));
+    if (title) return title;
+  }
+  return null;
+}
+
 /** The title a drive entry belongs to, or null when nothing links it to one: a folder's own
- *  id; for an image, the title registered from it (by its path, or the basename ShadowMount+
- *  names its mount after), else the game folder inside it while it is mounted. */
+ *  id; for an image, the title registered from it (`registeredForImage`), else the game folder
+ *  inside it while it is mounted. */
 export function entryTitleId(
   e: LibraryEntry,
   slot: Pick<LibrarySlot, "registeredBySource" | "entries" | "mountMap" | "pendingMounts">,
 ): string | null {
   if (e.titleId) return e.titleId;
   if (e.kind !== "image") return null;
-  const registered =
-    slot.registeredBySource.get(e.path)?.titleId ??
-    slot.registeredBySource.get(imageBasename(e.path))?.titleId;
+  const registered = registeredForImage(slot.registeredBySource, e.path)?.titleId;
   if (registered) return registered;
   const mount = slot.mountMap.get(e.path) ?? slot.pendingMounts.get(e.path);
   if (!mount) return null;
