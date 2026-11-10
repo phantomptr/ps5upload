@@ -2,6 +2,7 @@
  * and the status JSON. The control server here is a closed local port, so the node runs
  * and retries; the protocol and the forwarder are tested in tailnet/ (make -C tailnet test,
  * tailnet/testbed/m2-check.sh and m3-check.sh). Built with ASan + UBSan. */
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -284,6 +285,59 @@ int main(void) {
             left = call("") > 0 && str("state", v, sizeof v) == 1 && strcmp(v, "paused") != 0;
         }
         CHECK(left);
+    }
+    {
+        /* The core closing every socket by itself (errno 163 on one of them: a rest the console did
+         * not announce). power_phase takes the signal once; the node stays closed (no self-resume
+         * on the console) until power_phase resumes it, and a set_paused(0) never resumes an episode
+         * power_phase has not taken. */
+        int e = 0, got = 0;
+        char what[160] = "";
+        while (tailnet_node_take_down(&e, what, sizeof what)) {
+        }
+        tailnet_node_test_net_down(163);
+        for (int i = 0; i < 50 && !got; i++) {
+            usleep(50 * 1000);
+            got = tailnet_node_take_down(&e, what, sizeof what);
+        }
+        CHECK(got && e == 163 && strstr(what, "errno 163"));
+        CHECK(!tailnet_node_take_down(&e, what, sizeof what)); /* once per episode */
+        CHECK(tailnet_node_net_down() && !strcmp(tailnet_node_brief(), "on,closed"));
+        usleep(1200 * 1000);
+        CHECK(tailnet_node_net_down()); /* never back by itself here */
+        CHECK(call("") > 0 && str("state", v, sizeof v) == 1 && !strcmp(v, "paused"));
+        /* power_phase: going down (pause), then settled (resume) */
+        CHECK(tailnet_node_set_paused(1) == 0 && !strcmp(tailnet_node_brief(), "on,paused,closed"));
+        CHECK(tailnet_node_set_paused(0) == 0 && !tailnet_node_net_down());
+        int back = 0;
+        for (int i = 0; i < 50 && !back; i++) {
+            usleep(100 * 1000);
+            back = call("") > 0 && str("state", v, sizeof v) == 1 && strcmp(v, "paused") != 0;
+        }
+        CHECK(back);
+        /* its pause never landed: the settled poll's set_paused(0) resumes a taken episode */
+        tailnet_node_test_net_down(163);
+        got = 0;
+        for (int i = 0; i < 50 && !got; i++) {
+            usleep(50 * 1000);
+            got = tailnet_node_take_down(&e, what, sizeof what);
+        }
+        CHECK(got && tailnet_node_net_down());
+        CHECK(tailnet_node_set_paused(0) == 0 && !tailnet_node_net_down());
+        /* ... but never one it has not taken yet (the signal still pending) */
+        tailnet_node_test_net_down(163);
+        for (int i = 0; i < 50 && !tailnet_node_net_down(); i++) usleep(20 * 1000);
+        usleep(200 * 1000); /* the core's event is out: pending */
+        CHECK(tailnet_node_set_paused(0) == 0 && tailnet_node_net_down());
+        CHECK(tailnet_node_take_down(&e, what, sizeof what) == 1);
+        CHECK(tailnet_node_set_paused(1) == 0 && tailnet_node_set_paused(0) == 0 && !tailnet_node_net_down());
+        /* a stop and start while closed: the new node starts clean */
+        tailnet_node_test_net_down(ENETDOWN);
+        for (int i = 0; i < 50 && !tailnet_node_net_down(); i++) usleep(20 * 1000);
+        CHECK(call("{\"op\":\"rename\",\"hostname\":\"after-close\"}") > 0 && boolean("enabled") == 1);
+        CHECK(!tailnet_node_net_down());
+        while (tailnet_node_take_down(&e, what, sizeof what)) {
+        }
     }
     CHECK(call("{\"op\":\"disable\"}") > 0 && !strcmp(tailnet_node_brief(), "off"));
 

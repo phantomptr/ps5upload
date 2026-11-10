@@ -11,8 +11,10 @@
  * over it. Rest mode: the wake watchdog's power phase (power_phase.h) pauses the node
  * (no sockets) while the console goes to rest and until it has settled after a wake, then
  * resumes it; the core also notices the clock jump on wake by itself, rebinds,
- * re-handshakes and opens a new control session; errno 163 on any socket is a rebuild
- * with backoff, never fatal. */
+ * re-handshakes and opens a new control session. errno 163 (or another "network going
+ * away" errno, or control connections failing back to back) on any of its sockets makes
+ * the core close every socket at once and stay closed until power_phase resumes it: the
+ * earliest going-down signal for a rest the console starts by itself. */
 #ifndef PS5UPLOAD_TAILNET_NODE_H
 #define PS5UPLOAD_TAILNET_NODE_H
 
@@ -49,15 +51,28 @@ int tailnet_node_call(const char *body, size_t len, char *out, size_t cap);
 
 /* Rest mode (power_phase.c): 1 drops every connection and keeps the node idle with no sockets
  * (tn_pause) while the console goes to rest and until it has settled after a wake; 0 rejoins
- * (tn_resume: new control session, UDP rebind, DERP, netcheck). Kept while the node is off, so a
+ * (tn_resume: new control session, UDP rebind, DERP, netcheck), also a core that closed itself
+ * (tailnet_node_take_down) once that signal has been taken. Kept while the node is off, so a
  * node started meanwhile starts paused. Never blocks: -1 when a start or stop holds the node's
  * lock (ask again later), else 0. */
 int tailnet_node_set_paused(int paused);
 /* The value last set (tests, diagnostics). */
 int tailnet_node_paused(void);
-/* For a log line: "off", "on", "off,paused", "on,paused", or "busy" while a start or stop holds
- * the node's lock. Never blocks. */
+/* For a log line: "off", "on", "off,paused", "on,paused", "on,closed" / "on,paused,closed" (the
+ * core closed its sockets by itself), or "busy" while a start or stop holds the node's lock.
+ * Never blocks. */
 const char *tailnet_node_brief(void);
+
+/* The core closed every socket by itself because the network is going away (a socket error like
+ * errno 163, or control connections failing back to back): power_phase's earliest going-down
+ * signal for a rest the console did not announce. Returns 1 once per episode (errno and a
+ * description filled in), else 0. Lock-free, never blocks. The node stays closed until
+ * tailnet_node_set_paused(0) finds the console settled (the core never resumes by itself here). */
+int tailnet_node_take_down(int *err, char *what, size_t cap);
+/* Tests: the core goes down as if a socket call had failed with this errno. */
+void tailnet_node_test_net_down(int err);
+/* Tests: 1 while the core is closed after going down by itself. */
+int tailnet_node_net_down(void);
 
 /* Is this tailnet IPv4 (host order) allowed by the saved list? For tests. */
 int tailnet_node_allows(unsigned int ip);

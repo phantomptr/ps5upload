@@ -1,6 +1,6 @@
 //! Copying AVA1's progress into the counters the engine's ticker reads.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -36,6 +36,8 @@ struct Counters {
     resumed: Arc<AtomicU64>,
     resumed_out: Option<Arc<AtomicU64>>,
     rates: Mutex<RateHistory>,
+    /// The job asked the console to read its large files back (JF_READBACK, #783).
+    readback: AtomicBool,
 }
 
 /// The longest `RateHistory` kept: past it every other point goes and the step doubles.
@@ -125,6 +127,7 @@ impl Bridge {
             resumed,
             resumed_out: cfg.progress_bytes_resumed.clone(),
             rates: Mutex::new(RateHistory::new(Instant::now())),
+            readback: AtomicBool::new(false),
         });
         let ticker = counters.clone();
         let handle = tokio::spawn(async move {
@@ -136,6 +139,25 @@ impl Bridge {
         .abort_handle();
         Bridge { handle, counters }
     }
+
+    /// Whether this attempt asked the console to read its large files back: then the stretch
+    /// where every byte is on the console but files are still being committed is reported as
+    /// `verifying` (the read-back is most of it).
+    pub fn set_readback(&self, on: bool) {
+        self.counters.readback.store(on, Ordering::Relaxed);
+    }
+}
+
+/// Every byte of the job is durable on the console but not every file is done: with the
+/// read-back on, the console is reading the last large files back from its drive.
+pub fn verifying(p: &Progress, readback: bool) -> bool {
+    let total = p.bytes_total.load(Ordering::Relaxed);
+    let files = p.files_total.load(Ordering::Relaxed);
+    readback
+        && total > 0
+        && p.bytes_durable.load(Ordering::Relaxed) >= total
+        && p.files_durable.load(Ordering::Relaxed) < files
+        && !p.settling.load(Ordering::Relaxed)
 }
 
 impl Counters {
@@ -163,6 +185,10 @@ impl Counters {
             );
             l.settling
                 .store(p.settling.load(Ordering::Relaxed), Ordering::Relaxed);
+            l.verifying.store(
+                !last && verifying(p, self.readback.load(Ordering::Relaxed)),
+                Ordering::Relaxed,
+            );
             l.unswept
                 .store(p.unswept.load(Ordering::Relaxed), Ordering::Relaxed);
             l.unswept_peak
@@ -232,6 +258,24 @@ pub fn bottleneck_name(b: u8) -> &'static str {
 #[cfg(test)]
 mod live_tests {
     use super::*;
+
+    #[test]
+    fn verifying_is_the_stretch_after_the_last_byte_with_the_read_back_on() {
+        let p = Progress::default();
+        p.bytes_total.store(100, Ordering::Relaxed);
+        p.files_total.store(3, Ordering::Relaxed);
+        p.bytes_durable.store(60, Ordering::Relaxed);
+        p.files_durable.store(1, Ordering::Relaxed);
+        assert!(!verifying(&p, true), "bytes still on their way");
+        p.bytes_durable.store(100, Ordering::Relaxed);
+        assert!(verifying(&p, true));
+        assert!(!verifying(&p, false), "not asked for: just finishing");
+        p.settling.store(true, Ordering::Relaxed);
+        assert!(!verifying(&p, true), "settling has its own line");
+        p.settling.store(false, Ordering::Relaxed);
+        p.files_durable.store(3, Ordering::Relaxed);
+        assert!(!verifying(&p, true), "every file done");
+    }
 
     #[test]
     fn the_rate_history_keeps_a_point_per_step_and_thins_a_long_job() {

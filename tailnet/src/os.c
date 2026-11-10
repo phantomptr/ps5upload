@@ -87,6 +87,74 @@ void tn_thread_join(tn_thread t) { pthread_join(t, NULL); }
 
 /* ---------------- sockets ---------------- */
 
+static tn_atomic g_fault_ops, g_fault_errno, g_sock_live, g_sock_opens;
+
+void tn_test_sock_fault(int ops, int raw)
+{
+	tn_atomic_store(&g_fault_errno, raw);
+	tn_atomic_store(&g_fault_ops, raw ? ops : 0);
+}
+
+long tn_test_sock_live(void) { return tn_atomic_load(&g_sock_live); }
+long tn_test_sock_opens(void) { return tn_atomic_load(&g_sock_opens); }
+
+static void set_sock_errno(int raw);
+
+/* 1 (errno set) when a test asked for this kind of call to fail. */
+static int faulted(int op)
+{
+	if (!(tn_atomic_load(&g_fault_ops) & op))
+		return 0;
+	set_sock_errno((int)tn_atomic_load(&g_fault_errno));
+	return 1;
+}
+
+static void count_open(int fd)
+{
+	if (fd >= 0) {
+		tn_atomic_inc(&g_sock_live);
+		tn_atomic_inc(&g_sock_opens);
+	}
+}
+
+static void count_close(void)
+{
+#if defined(_MSC_VER) && !defined(__clang__)
+	InterlockedDecrement(&g_sock_live);
+#else
+	__atomic_sub_fetch(&g_sock_live, 1, __ATOMIC_SEQ_CST);
+#endif
+}
+
+int tn_errno_is_sony_rest(int raw)
+{
+#ifdef _WIN32
+	(void)raw;
+	return 0;
+#else
+	return raw == TN_ERRNO_SONY_REST;
+#endif
+}
+
+int tn_errno_refused(int raw)
+{
+#ifdef _WIN32
+	return raw == WSAECONNREFUSED;
+#else
+	return raw == ECONNREFUSED;
+#endif
+}
+
+int tn_errno_net_down(int raw)
+{
+#ifdef _WIN32
+	return raw == WSAENETDOWN || raw == WSAENETUNREACH || raw == WSAEHOSTDOWN || raw == WSAEADDRNOTAVAIL;
+#else
+	return raw == TN_ERRNO_SONY_REST || raw == ENETDOWN || raw == ENETUNREACH || raw == EHOSTDOWN ||
+	       raw == EADDRNOTAVAIL;
+#endif
+}
+
 #ifdef _WIN32
 #define SOCK(fd) ((SOCKET)(intptr_t)(fd))
 
@@ -99,6 +167,8 @@ int tn_os_init(void)
 	return WSAStartup(MAKEWORD(2, 2), &w) == 0 ? 0 : -1;
 }
 
+static void set_sock_errno(int raw) { WSASetLastError(raw); }
+
 int tn_sock_open(int type)
 {
 	SOCKET s = socket(AF_INET, type, 0);
@@ -110,13 +180,16 @@ int tn_sock_open(int type)
 		DWORD got = 0;
 		WSAIoctl(s, _WSAIOW(IOC_VENDOR, 12) /* SIO_UDP_CONNRESET */, &off, sizeof off, NULL, 0, &got, NULL, NULL);
 	}
+	count_open((int)s);
 	return (int)s;
 }
 
 void tn_sock_close(int fd)
 {
-	if (fd >= 0)
+	if (fd >= 0) {
 		closesocket(SOCK(fd));
+		count_close();
+	}
 }
 
 void tn_sock_nonblock(int fd)
@@ -158,6 +231,8 @@ void tn_sleep_ms(int ms) { Sleep(ms > 0 ? (DWORD)ms : 0); }
 
 int tn_os_init(void) { return 0; }
 
+static void set_sock_errno(int raw) { errno = raw; }
+
 int tn_sock_open(int type)
 {
 	int fd = socket(AF_INET, type, 0);
@@ -166,13 +241,16 @@ int tn_sock_open(int type)
 		if (fl >= 0)
 			fcntl(fd, F_SETFD, fl | FD_CLOEXEC);
 	}
+	count_open(fd);
 	return fd;
 }
 
 void tn_sock_close(int fd)
 {
-	if (fd >= 0)
+	if (fd >= 0) {
 		close(fd);
+		count_close();
+	}
 }
 
 void tn_sock_nonblock(int fd) { fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK); }
@@ -238,6 +316,8 @@ static struct sockaddr_in sin4(uint32_t ip, uint16_t port)
 int tn_sock_connect(int fd, uint32_t ip, uint16_t port)
 {
 	struct sockaddr_in sa = sin4(ip, port);
+	if (faulted(TN_FAULT_CONNECT))
+		return -1;
 	if (connect(SOCK(fd), (struct sockaddr *)&sa, sizeof sa) == 0)
 		return 0;
 	return tn_sock_errno() == TN_ERR_AGAIN ? 1 : -1;
@@ -247,6 +327,8 @@ int tn_sock_error(int fd)
 {
 	int e = 0;
 	socklen_t l = sizeof e;
+	if (tn_atomic_load(&g_fault_ops) & TN_FAULT_CONNECT)
+		return (int)tn_atomic_load(&g_fault_errno); /* a connect that failed later */
 	if (getsockopt(SOCK(fd), SOL_SOCKET, SO_ERROR, (char *)&e, &l) != 0)
 		return -1;
 	return e;
@@ -254,6 +336,8 @@ int tn_sock_error(int fd)
 
 ssize_t tn_sock_send(int fd, const void *p, size_t n)
 {
+	if (faulted(TN_FAULT_SEND))
+		return -1;
 #ifdef _WIN32
 	return send(SOCK(fd), (const char *)p, n > INT_MAX ? INT_MAX : (int)n, 0);
 #else
@@ -263,6 +347,8 @@ ssize_t tn_sock_send(int fd, const void *p, size_t n)
 
 ssize_t tn_sock_recv(int fd, void *p, size_t n)
 {
+	if (faulted(TN_FAULT_RECV))
+		return -1;
 #ifdef _WIN32
 	return recv(SOCK(fd), (char *)p, n > INT_MAX ? INT_MAX : (int)n, 0);
 #else
@@ -273,6 +359,8 @@ ssize_t tn_sock_recv(int fd, void *p, size_t n)
 ssize_t tn_sock_sendto(int fd, const void *p, size_t n, uint32_t ip, uint16_t port)
 {
 	struct sockaddr_in sa = sin4(ip, port);
+	if (faulted(TN_FAULT_SEND))
+		return -1;
 #ifdef _WIN32
 	return sendto(SOCK(fd), (const char *)p, (int)n, 0, (struct sockaddr *)&sa, sizeof sa);
 #else
@@ -285,6 +373,8 @@ ssize_t tn_sock_recvfrom(int fd, void *p, size_t n, uint32_t *ip, uint16_t *port
 	struct sockaddr_in sa;
 	socklen_t sl = sizeof sa;
 	memset(&sa, 0, sizeof sa);
+	if (faulted(TN_FAULT_RECV))
+		return -1;
 #ifdef _WIN32
 	ssize_t r = recvfrom(SOCK(fd), (char *)p, (int)n, 0, (struct sockaddr *)&sa, &sl);
 #else
@@ -309,10 +399,12 @@ int tn_sock_accept(int fd)
 {
 #ifdef _WIN32
 	SOCKET s = accept(SOCK(fd), NULL, NULL);
-	return s == INVALID_SOCKET ? -1 : (int)s;
+	int a = s == INVALID_SOCKET ? -1 : (int)s;
 #else
-	return accept(fd, NULL, NULL);
+	int a = accept(fd, NULL, NULL);
 #endif
+	count_open(a);
+	return a;
 }
 
 uint16_t tn_sock_local_port(int fd)
@@ -579,4 +671,55 @@ int tn_poll_fail_wait_ms(int interrupted, long long budget_ms)
 	if (budget_ms >= 0 && budget_ms < POLL_FAIL_WAIT_MS)
 		return budget_ms < 1 ? 1 : (int)budget_ms;
 	return POLL_FAIL_WAIT_MS;
+}
+
+/* ---------------- network health probe ---------------- */
+
+#ifdef _WIN32
+#define PROBE_CLOSE(s) closesocket(s)
+#define PROBE_BAD(s) ((s) == INVALID_SOCKET)
+typedef SOCKET probe_sock;
+#else
+#define PROBE_CLOSE(s) close(s)
+#define PROBE_BAD(s) ((s) < 0)
+typedef int probe_sock;
+#endif
+
+static int probe_err(void)
+{
+	int e = tn_sock_raw_errno();
+	return e ? e : -1;
+}
+
+int tn_net_probe(uint32_t route_ip)
+{
+	/* Raw calls, not tn_sock_*: never faulted by tests, never counted as the node's sockets, and both
+	 * closed before returning. Nonblocking: nothing here may wait (the network is going away). */
+	int err = 0;
+	probe_sock s = socket(AF_INET, SOCK_DGRAM, 0);
+	if (PROBE_BAD(s))
+		return probe_err();
+#ifdef _WIN32
+	u_long one = 1;
+	ioctlsocket(s, FIONBIO, &one);
+#else
+	fcntl(s, F_SETFL, fcntl(s, F_GETFL) | O_NONBLOCK);
+#endif
+	struct sockaddr_in a = sin4(0x7f000001u, 0);
+	socklen_t al = sizeof a;
+	char b = 'p';
+	if (bind(s, (struct sockaddr *)&a, sizeof a) != 0 || getsockname(s, (struct sockaddr *)&a, &al) != 0 ||
+	    sendto(s, &b, 1, 0, (struct sockaddr *)&a, sizeof a) != 1)
+		err = probe_err();
+	PROBE_CLOSE(s);
+	if (err || !route_ip)
+		return err;
+	s = socket(AF_INET, SOCK_DGRAM, 0);
+	if (PROBE_BAD(s))
+		return probe_err();
+	struct sockaddr_in r = sin4(route_ip, 443);
+	if (connect(s, (struct sockaddr *)&r, sizeof r) != 0) /* UDP: a route lookup, nothing is sent */
+		err = probe_err();
+	PROBE_CLOSE(s);
+	return err;
 }

@@ -91,6 +91,28 @@ int tn_sock_error(int fd);          /* SO_ERROR, 0 = fine */
 int tn_sock_errno(void);            /* last socket error as a TN_ERR_* class */
 enum { TN_ERR_OTHER = 0, TN_ERR_AGAIN, TN_ERR_INTR, TN_ERR_REFUSED, TN_ERR_UNREACH, TN_ERR_RESET };
 int tn_sock_raw_errno(void);        /* the platform's number, for logs */
+/* Does a socket call failing with this platform errno say "the network is going away"? The PS5's
+ * errno 163 (Sony's 0xA3: every socket call fails with it for the ~25 s before the console rests),
+ * ENETDOWN, ENETUNREACH, EHOSTDOWN, EADDRNOTAVAIL (and their Winsock twins). Not EHOSTUNREACH (one
+ * absent LAN host, e.g. a peer's stale endpoint), not resource limits, not retries, not a refusal. */
+int tn_errno_net_down(int raw);
+/* Only the PS5's going-to-rest errno: proof on its own, no second look needed. */
+#define TN_ERRNO_SONY_REST 163
+int tn_errno_is_sony_rest(int raw);
+/* ECONNREFUSED: the far end answered, so the path works. */
+int tn_errno_refused(int raw);
+/* Is the network usable right now, asked without sending anything off the machine: a loopback UDP
+ * socket that sends one byte to itself, and a UDP socket connect()ed to `route_ip` (a route lookup;
+ * nothing is sent). 0 healthy, else the errno of the first step that failed. These two sockets are
+ * opened and closed inside the call and are not counted by tn_test_sock_live. */
+int tn_net_probe(uint32_t route_ip);
+/* Tests: make socket calls fail with `raw` errno (0 = stop). ops: TN_FAULT_* bits. Sticky until
+ * cleared. Probes (tn_net_probe) and wake channels are never faulted. */
+enum { TN_FAULT_SEND = 1, TN_FAULT_RECV = 2, TN_FAULT_CONNECT = 4 };
+void tn_test_sock_fault(int ops, int raw);
+/* Tests: sockets opened (tn_sock_open/accept) and not yet closed, and opened ever, process-wide. */
+long tn_test_sock_live(void);
+long tn_test_sock_opens(void);
 ssize_t tn_sock_send(int fd, const void *p, size_t n);
 ssize_t tn_sock_recv(int fd, void *p, size_t n);
 ssize_t tn_sock_sendto(int fd, const void *p, size_t n, uint32_t ip, uint16_t port);

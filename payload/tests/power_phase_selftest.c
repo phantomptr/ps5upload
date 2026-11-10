@@ -127,6 +127,77 @@ static void dark_wakes(void) {
     check(s.wakes == 50, "every wake counted");
 }
 
+/* The tailnet core closed its sockets by itself (errno 163 on one of them, or control connections
+ * failing back to back): the earliest signal of a rest the console starts on its own. */
+static int64_t hold_until_normal(pp_state *s, int64_t *now) {
+    int64_t start = *now;
+    for (int i = 0; i < 400 && s->phase != PP_NORMAL; i++) poll_once(s, now, 5, 5, 1, 0);
+    return *now - start;
+}
+
+static void tailnet_closed_itself(void) {
+    pp_state s;
+    int64_t now = 1000;
+    pp_init(&s);
+    check(pp_on_tailnet_down(&s, now) && s.phase == PP_GOING_DOWN && s.why == PP_WHY_TAILNET,
+          "the core closed its sockets: going down");
+    check(pp_quiet(&s) && !pp_net_usable(&s), "fan/kernel work held, tailnet kept paused");
+    /* the console froze right after: the next poll sees the wake */
+    poll_once(&s, &now, 900, 5, 1, 0);
+    check(s.phase == PP_WAKING, "then frozen and woken: waking (the core stays closed until it settles)");
+    poll_once(&s, &now, 5, 5, 1, 0);
+    check(pp_net_usable(&s), "two healthy probes after the wake: tailnet back");
+
+    /* a false alarm (no rest followed): back after the hold, each one in a row waits twice as long */
+    pp_init(&s);
+    now = 5000;
+    int64_t want[] = {30, 60, 120, 240, 480, 480};
+    for (int k = 0; k < 6; k++) {
+        pp_on_tailnet_down(&s, now);
+        check(pp_tailnet_hold_s(&s) == want[k], k == 0   ? "first false alarm: 30 s hold"
+                                                : k < 4  ? "in a row: the hold doubles"
+                                                         : "capped at 8 minutes");
+        poll_once(&s, &now, 5, 5, 1, 0);
+        check(!pp_net_usable(&s), "still closed right after");
+        int64_t took = hold_until_normal(&s, &now);
+        check(s.phase == PP_NORMAL && took + 5 >= want[k] && took <= want[k] + 10, "normal again after the hold, not earlier");
+    }
+    /* quiet for the window: the next one is a first one again */
+    now += PP_TAILNET_WINDOW_S;
+    pp_on_tailnet_down(&s, now);
+    check(s.tn_downs == 1 && pp_tailnet_hold_s(&s) == PP_NET_HOLD_S, "after a quiet quarter hour: 30 s again");
+
+    /* our standby request already running: the core's signal keeps the standby hold */
+    pp_init(&s);
+    now = 0;
+    pp_on_standby(&s, now);
+    check(!pp_on_tailnet_down(&s, 10) && s.why == PP_WHY_STANDBY && s.down_s == 10,
+          "during our standby: same episode, the hold counts from the latest signal");
+}
+
+/* Measured on the Phat (12.4.1, 2026-11-09): the console woke in the background, the tailnet came
+ * back, and the console rested again seconds later without the probe ever failing. */
+static void background_wake_then_rest(void) {
+    pp_state s;
+    int64_t now = 0;
+    pp_init(&s);
+    pp_on_standby(&s, now);
+    poll_once(&s, &now, 3600, 5, 1, 0); /* background wake */
+    poll_once(&s, &now, 5, 5, 1, 0);
+    check(s.phase == PP_WAKING && pp_net_usable(&s), "woke in the background: tailnet resumed");
+    now += 3;
+    check(pp_on_tailnet_down(&s, now) && s.phase == PP_GOING_DOWN, "its control connections fail: going down again");
+    check(!pp_net_usable(&s), "tailnet closed and kept paused");
+    int64_t wake_s = s.wake_s;
+    hold_until_normal(&s, &now);
+    check(now - wake_s >= PP_SETTLE_S && now - s.down_s >= PP_NET_HOLD_S,
+          "no rest came: normal only after both the hold and the wake's settle minute");
+    /* or the rest came: frozen and woken again */
+    pp_on_tailnet_down(&s, now);
+    poll_once(&s, &now, 1800, 5, 0, PP_ERRNO_SONY_REST);
+    check(s.phase == PP_WAKING && !pp_net_usable(&s), "the rest came: waking, network not back yet");
+}
+
 int main(void) {
     printf("power_phase_selftest\n");
     fresh();
@@ -137,6 +208,8 @@ int main(void) {
     blip();
     ignored_standby();
     dark_wakes();
+    tailnet_closed_itself();
+    background_wake_then_rest();
     printf("power_phase_selftest: %s\n", failures ? "FAILED" : "ok");
     return failures ? 1 : 0;
 }

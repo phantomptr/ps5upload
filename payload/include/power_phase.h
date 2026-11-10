@@ -10,9 +10,12 @@
  * console is going to rest" or "it just woke", so this module infers it:
  *
  *   NORMAL      nothing going on.
- *   GOING_DOWN  our own standby request (power.control), or a loopback socket probe failing the way
- *               it does while the console goes to rest. Left without a wake only after the probe
- *               has been healthy again for a while (the request was ignored, or it was a blip).
+ *   GOING_DOWN  our own standby request (power.control), the tailnet core closing its sockets by
+ *               itself (a socket of its failed with errno 163 or another "network going away" errno,
+ *               or its control connections failed back to back: tailnet_node_take_down), or a
+ *               loopback socket probe failing the way it does while the console goes to rest. Left
+ *               without a wake only after the probe has been healthy again for a while (the request
+ *               was ignored, or it was a blip).
  *   WAKING      the clocks jumped apart (the process was frozen). Stays until the network probe is
  *               healthy and a minute of running time has passed.
  *
@@ -20,6 +23,17 @@
  * kernel (the fan re-apply, the wake watchdog's ucred look and re-elevation) waits while the phase
  * is not NORMAL, and the tailnet node stays paused (no sockets) while the network is not usable.
  * Nothing here ever does a kernel or hardware call by itself.
+ *
+ * Why no system suspend notification: the SDK's stubs export sceSystemServiceEnableSuspendNotification
+ * / DeclareReadyForSuspend, sceLncUtil*SuspendNotification, sceSystemServiceReceiveEvent and
+ * sceSysCoreReceiveEvent, but there is no header for any of them, they are meant for a registered
+ * application or daemon (an ELF-loader payload is neither), and the suspend notification expects a
+ * DeclareReadyForSuspend answer: a payload that registers and then answers late or never could stall
+ * or break the console's own suspend, the very thing this module exists to stay out of. None has
+ * been tried on hardware. sceKernelIsMainOnStandbyMode (libkernel_sys) is a query with an unknown
+ * prototype and unknown meaning during the going-down window. So the signals stay our own: our
+ * standby request, the tailnet core closing its sockets on the first socket error that says the
+ * network is going away, and the loopback probe.
  *
  * The decisions are pure (static inline below) so the host self-test runs them; power_phase.c
  * keeps the one live state, runs the probe, and logs each transition with both clocks.
@@ -38,6 +52,7 @@ enum {
     PP_WHY_NONE = 0,
     PP_WHY_STANDBY = 1, /* power.control standby from this helper */
     PP_WHY_NET = 2,     /* the loopback probe failed with a "network is going away" errno */
+    PP_WHY_TAILNET = 3, /* the tailnet core closed its sockets: one of them failed that way */
 };
 
 /* After a wake: a minute of running time before fan and kernel work (monotonic seconds). */
@@ -50,6 +65,12 @@ enum {
 #define PP_NET_HOLD_S 30
 /* Our own standby request that never put the console to rest. */
 #define PP_STANDBY_HOLD_S 180
+/* The tailnet core going down by itself with no rest following: back to NORMAL this long after it,
+ * doubled for each one in a row (within PP_TAILNET_WINDOW_S of the one before), at most
+ * PP_TAILNET_HOLD_MAX_S. The core then reconnects; one that keeps failing waits longer each time
+ * instead of flapping. */
+#define PP_TAILNET_WINDOW_S 900
+#define PP_TAILNET_HOLD_MAX_S 480
 /* Healthy probes in a row before the network counts as back. */
 #define PP_OK_PROBES 2
 /* The errno the PS5 returns from socket calls while it goes to rest (0xA3). */
@@ -63,6 +84,8 @@ typedef struct {
     int ok_streak;     /* healthy probes in a row */
     uint32_t downs;    /* going-down episodes seen */
     uint32_t wakes;    /* wakes seen */
+    uint32_t tn_downs; /* the tailnet core going down by itself, in a row (PP_TAILNET_WINDOW_S) */
+    int64_t tn_down_s; /* monotonic s of the last one */
 } pp_state;
 
 static inline void pp_init(pp_state *s) {
@@ -73,6 +96,15 @@ static inline void pp_init(pp_state *s) {
     s->ok_streak = PP_OK_PROBES; /* a fresh helper starts with a working network */
     s->downs = 0;
     s->wakes = 0;
+    s->tn_downs = 0;
+    s->tn_down_s = 0;
+}
+
+/* How long a GOING_DOWN that the tailnet core started waits for a rest before it is a false alarm. */
+static inline int64_t pp_tailnet_hold_s(const pp_state *s) {
+    uint32_t sh = s->tn_downs > 1 ? s->tn_downs - 1 : 0;
+    int64_t hold = (int64_t)PP_NET_HOLD_S << (sh > 4 ? 4 : sh);
+    return hold > PP_TAILNET_HOLD_MAX_S ? PP_TAILNET_HOLD_MAX_S : hold;
 }
 
 /* Either clock moving this far across one 5 s poll: the process was frozen. Measured on the Pro
@@ -105,6 +137,24 @@ static inline int pp_on_standby(pp_state *s, int64_t now_s) {
     return changed;
 }
 
+/* The tailnet core closed its sockets by itself (tailnet_node_take_down). 1 when the phase changed.
+ * From WAKING too: a console the system woke in the background can rest again within seconds
+ * (measured on the Phat, 12.4.1), and the settle minute still counts from the wake. */
+static inline int pp_on_tailnet_down(pp_state *s, int64_t now_s) {
+    s->tn_downs = s->tn_downs && now_s - s->tn_down_s < PP_TAILNET_WINDOW_S ? s->tn_downs + 1 : 1;
+    s->tn_down_s = now_s;
+    s->ok_streak = 0;
+    if (s->phase == PP_GOING_DOWN) {
+        if (s->down_s < now_s) s->down_s = now_s; /* the hold counts from the latest signal */
+        return 0;
+    }
+    s->phase = PP_GOING_DOWN;
+    s->why = PP_WHY_TAILNET;
+    s->down_s = now_s;
+    s->downs++;
+    return 1;
+}
+
 /* The clocks jumped apart: the process was frozen. 1 (always a transition worth logging). */
 static inline int pp_on_wake(pp_state *s, int64_t now_s) {
     s->phase = PP_WAKING;
@@ -119,8 +169,11 @@ static inline int pp_on_wake(pp_state *s, int64_t now_s) {
 static inline int pp_on_tick(pp_state *s, int64_t now_s) {
     if (s->ok_streak < PP_OK_PROBES) return 0;
     if (s->phase == PP_GOING_DOWN) {
-        int64_t hold = s->why == PP_WHY_STANDBY ? PP_STANDBY_HOLD_S : PP_NET_HOLD_S;
+        int64_t hold = s->why == PP_WHY_STANDBY   ? PP_STANDBY_HOLD_S
+                       : s->why == PP_WHY_TAILNET ? pp_tailnet_hold_s(s)
+                                                  : PP_NET_HOLD_S;
         if (now_s - s->down_s < hold) return 0;
+        if (s->wakes && now_s - s->wake_s < PP_SETTLE_S) return 0; /* a wake's settle minute still runs */
     } else if (s->phase == PP_WAKING) {
         if (now_s - s->wake_s < PP_SETTLE_S) return 0;
     } else {
@@ -165,7 +218,10 @@ static inline const char *pp_phase_name(int phase) {
 }
 
 static inline const char *pp_why_name(int why) {
-    return why == PP_WHY_STANDBY ? "standby_request" : why == PP_WHY_NET ? "socket_errors" : "none";
+    return why == PP_WHY_STANDBY   ? "standby_request"
+           : why == PP_WHY_NET     ? "socket_errors"
+           : why == PP_WHY_TAILNET ? "tailnet_closed_itself"
+                                   : "none";
 }
 
 /* ── The live state (power_phase.c, console build) ─────────────────────── */

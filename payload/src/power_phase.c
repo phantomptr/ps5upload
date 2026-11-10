@@ -25,7 +25,9 @@
 #include "tailnet_node.h"
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
-static pp_state g_pp = {PP_NORMAL, PP_WHY_NONE, 0, 0, PP_OK_PROBES, 0, 0};
+static pp_state g_pp = {PP_NORMAL, PP_WHY_NONE, 0, 0, PP_OK_PROBES, 0, 0, 0, 0};
+/* What apply_tailnet_locked last asked the node for (-1 = nothing yet): each change is a line. */
+static int g_tn_want = -1;
 static atomic_int g_phase = PP_NORMAL;
 
 /* Probe failures are logged once per episode, again when the errno or step changes, and at most
@@ -169,7 +171,15 @@ static void log_size_guard(int quiet) {
 /* The tailnet node follows the phase; a node busy starting or stopping is asked again next poll.
  * Caller holds g_mu. */
 static void apply_tailnet_locked(void) {
-    (void)tailnet_node_set_paused(!pp_net_usable(&g_pp));
+    int want = !pp_net_usable(&g_pp);
+    if (tailnet_node_set_paused(want) != 0) return; /* busy starting or stopping: next poll */
+    if (want == g_tn_want) return;
+    /* One line per change, written after the node has been told (its fsync never delays a pause). */
+    int first = g_tn_want < 0;
+    g_tn_want = want;
+    if (!first || want)
+        pp_log(1, "tailnet %s (phase=%s why=%s)", want ? "paused: no sockets until the console has settled" : "resumed",
+               pp_phase_name(g_pp.phase), pp_why_name(g_pp.why));
 }
 
 static void log_transition_locked(const char *what, int64_t real_elapsed, int64_t mono_elapsed) {
@@ -196,18 +206,29 @@ int power_phase_poll(int64_t real_elapsed_s, int64_t mono_elapsed_s) {
     /* Outside the lock: the standby path must never wait on a socket call. */
     int ok = net_probe(&err, &step) == 0;
     int64_t now = mono_s();
+    /* The tailnet core closing its sockets by itself: a socket of its saw the network going away
+     * (errno 163 ...) before our probe did, or its control connections failed back to back. */
+    int tn_err = 0;
+    char tn_what[160] = "";
+    int tn_down = tailnet_node_take_down(&tn_err, tn_what, sizeof tn_what);
 
     pthread_mutex_lock(&g_mu);
     int before = g_pp.phase;
+    /* Before the wake: a core that closed itself and then froze reports both on this poll, in that
+     * order. */
+    int tn_changed = tn_down ? pp_on_tailnet_down(&g_pp, now) : 0;
     if (jumped) {
         pp_on_wake(&g_pp, now);
         g_fail_logged_step = NULL;
         g_fail_count = 0;
     }
-    int changed = pp_on_probe(&g_pp, ok, err, now);
+    int changed = pp_on_probe(&g_pp, ok, err, now) | tn_changed;
     atomic_store(&g_phase, g_pp.phase);
     /* Pause first: a slow fsync below must not delay taking the tailnet's sockets down. */
     apply_tailnet_locked();
+    if (tn_down)
+        pp_log(1, "tailnet closed its sockets by itself (errno %d): %s; %u in a row, hold %llds", tn_err, tn_what,
+               (unsigned)g_pp.tn_downs, (long long)pp_tailnet_hold_s(&g_pp));
 
     if (!ok) {
         g_fail_count++;

@@ -102,6 +102,22 @@ export function SettlingLine({ live }: { live: JobLive }) {
   );
 }
 
+/** Every byte is on the console and it is reading the last large files back from its drive to
+ *  check them (#783). */
+export function VerifyingLine({ live }: { live: JobLive }) {
+  const tr = useTr();
+  if (!live.verifying || live.settling) return null;
+  return (
+    <div
+      className="flex flex-wrap items-center gap-x-1.5 text-xs text-[var(--color-muted)]"
+      data-testid="verifying-line"
+    >
+      <Loader2 size={12} className="animate-spin" aria-hidden />
+      <span>{tr("upload_phase_verifying", undefined, "Verifying on the PS5…")}</span>
+    </div>
+  );
+}
+
 /** A finished upload whose files the console has not confirmed saved (the engine's commit_ack warning):
  *  a warning in the result, never a clean success. */
 export function UnsettledLine({ live }: { live: JobLive | undefined }) {
@@ -132,6 +148,7 @@ export function JobLiveNotes({ live }: { live: JobLive | undefined }) {
       <SkippingLine live={live} />
       <BottleneckLine cause={live.bottleneck} />
       <SettlingLine live={live} />
+      <VerifyingLine live={live} />
     </div>
   );
 }

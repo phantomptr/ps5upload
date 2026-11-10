@@ -80,7 +80,7 @@ LIB := $(BUILD)/libtailnet.a
 BRLIB := $(BUILD)/libbearssl.a
 LWLIB := $(BUILD)/liblwip.a
 TNCTL := $(BUILD)/tnctl
-TESTS := test_crypto test_hpack test_noise test_netmap test_dp
+TESTS := test_crypto test_hpack test_noise test_netmap test_dp test_netdown
 TEST_BINS := $(addprefix $(BUILD)/,$(TESTS))
 
 .PHONY: all lib test ps5 ps5-link win size clean check-bearssl

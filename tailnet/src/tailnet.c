@@ -163,6 +163,8 @@ int tn_create(const tn_config *cfg, tn_ctx **out)
 	}
 	c->cfg.serve = c->serve;
 	c->allow.all = 1;
+	c->pol_self_resume = 1;
+	tn_susp_init(&c->susp, TN_RESUME_BASE_MS);
 	if ((r = tn_dp_create(c)) < 0 || (r = tn_fwd_create(c)) < 0)
 		goto fail;
 	if ((r = tn_state_load(&c->keys, c->state_dir, c->control_url)) < 0)
@@ -223,6 +225,135 @@ static int nap(tn_ctx *c, int64_t ms)
 	}
 }
 
+/* ---------------- network-down self-suspend ---------------- */
+
+const char *tn_nk_name(int kind)
+{
+	switch (kind) {
+	case TN_NK_UDP_SEND: return "udp send";
+	case TN_NK_UDP_RECV: return "udp receive";
+	case TN_NK_STUN: return "stun send";
+	case TN_NK_DERP: return "derp connection";
+	case TN_NK_CONTROL: return "control connection";
+	case TN_NK_FWD: return "forwarder socket";
+	case TN_NK_POLL: return "data plane poll";
+	case TN_NK_CONTROL_STREAK: return "control connections failing back to back";
+	case TN_NK_TEST: return "test";
+	default: return "socket";
+	}
+}
+
+int tn_ctl_conn_err(int r, int raw_errno)
+{
+	if (r != TN_E_IO && r != TN_E_TIMEOUT && r != TN_E_DNS)
+		return 0;
+	return !tn_errno_refused(raw_errno);
+}
+
+void tn_net_down_signal(tn_ctx *c, int kind, int raw)
+{
+	if (!c || tn_atomic_load(&c->net_down))
+		return;
+	/* What did it, for the one log line (a second signal racing this one may win the text). */
+	tn_atomic_store(&c->down_kind, kind);
+	tn_atomic_store(&c->down_errno, raw);
+	if (tn_atomic_xchg(&c->net_down, 1))
+		return;
+	tn_atomic_inc(&c->down_seq);
+	/* Both threads close their own sockets the moment they see this: the control thread's blocking
+	 * calls all poll c->wake_r, the data plane polls dp_wake_r. */
+	tn_wake_signal(c->wake_w);
+	tn_dp_wake(c);
+}
+
+static uint32_t probe_route(tn_ctx *c)
+{
+	uint32_t ip = (uint32_t)tn_atomic_load(&c->route_ip);
+	return ip ? ip : 0x01010101u; /* before a first control dial: any public address (a lookup only) */
+}
+
+int tn_net_check(tn_ctx *c, int kind, int raw)
+{
+	if (!c || !tn_errno_net_down(raw))
+		return 0;
+	if (tn_atomic_load(&c->net_down))
+		return 1;
+	if (!tn_errno_is_sony_rest(raw)) {
+		/* ENETUNREACH and friends can be about one destination: ask the machine itself (nothing
+		 * leaves it), at most once a second. The PS5's 163 needs no second look. */
+		int64_t now = tn_now_ms();
+		tn_mutex_lock(&c->mu);
+		if (!c->probe_valid || now - c->probe_ms >= 1000) {
+			c->probe_res = tn_net_probe(probe_route(c));
+			c->probe_ms = now;
+			c->probe_valid = 1;
+		}
+		int pe = c->probe_res;
+		tn_mutex_unlock(&c->mu);
+		if (!pe || !tn_errno_net_down(pe))
+			return 0; /* the network works: that one destination is out of reach */
+	}
+	tn_net_down_signal(c, kind, raw);
+	return 1;
+}
+
+int tn_net_down(tn_ctx *c) { return c ? (int)tn_atomic_load(&c->net_down) : 0; }
+
+void tn_set_net_policy(tn_ctx *c, int flags)
+{
+	if (!c)
+		return;
+	tn_atomic_store(&c->pol_self_resume, (flags & TN_NETPOL_SELF_RESUME) ? 1 : 0);
+	tn_atomic_store(&c->pol_streak, (flags & TN_NETPOL_CONTROL_STREAK) ? 1 : 0);
+	wake(c); /* a suspended control thread re-reads it */
+}
+
+void tn_test_net_down(tn_ctx *c, int raw) { tn_net_down_signal(c, TN_NK_TEST, raw); }
+
+void tn_test_resume_ms(tn_ctx *c, int ms)
+{
+	if (c)
+		tn_atomic_store(&c->resume_base_ms, ms);
+}
+
+/* Back up after a down episode: the data plane runs the wake sequence (rebind UDP, reconnect DERP,
+ * netcheck) and the control loop starts a fresh session at once. */
+static void net_up(tn_ctx *c, const char *why)
+{
+	if (!tn_atomic_xchg(&c->net_down, 0))
+		return;
+	c->backoff_ms = 0;
+	tn_emit(c, TN_EV_NET_UP, 0, why); /* the one line (an app logs it) */
+	tn_dp_wake(c);
+}
+
+/* Control thread, while down: account for a new episode, then wait (for tn_resume, or for the
+ * network to stay healthy long enough when the node may resume by itself). */
+static void suspended(tn_ctx *c)
+{
+	long seq = tn_atomic_load(&c->down_seq);
+	if (seq != c->susp_seen) {
+		c->susp_seen = seq;
+		long base = tn_atomic_load(&c->resume_base_ms);
+		c->susp.base_ms = base > 0 ? base : TN_RESUME_BASE_MS;
+		tn_susp_on_down(&c->susp, tn_now_ms());
+	}
+	tn_set_state(c, TN_ST_PAUSED);
+	if (!tn_atomic_load(&c->pol_self_resume)) {
+		nap(c, -1); /* tn_resume (or a policy change, or stop) wakes it */
+		return;
+	}
+	if (nap(c, TN_PROBE_EVERY_MS))
+		return; /* woken: the top of the loop decides again */
+	int pe = tn_net_probe(probe_route(c));
+	if (tn_susp_on_probe(&c->susp, pe == 0, tn_now_ms())) {
+		char why[96];
+		snprintf(why, sizeof why, "the network was healthy for %.1f s (suspend %u in a row)",
+			 tn_susp_need_ms(&c->susp) / 1000.0, (unsigned)c->susp.recent);
+		net_up(c, why);
+	}
+}
+
 static void *loop(void *arg)
 {
 	tn_ctx *c = arg;
@@ -240,16 +371,39 @@ static void *loop(void *arg)
 			nap(c, -1);
 			continue;
 		}
+		if (tn_atomic_load(&c->net_down)) {
+			suspended(c);
+			continue;
+		}
 		int r = tn_control_session(c);
 		if (tn_atomic_load(&c->req_stop))
 			break;
 		if (r == TN_E_WAKE)
-			continue; /* pause or stop: handled at the top */
+			continue; /* pause, stop or the network going away: handled at the top */
 		if (r == TN_E_SIGNED_OUT) {
 			tn_set_state(c, TN_ST_SIGNED_OUT);
 			tn_netmap_reset(&c->nms);
 		}
-		tn_emit(c, TN_EV_ERROR, r, tn_strerror(r));
+		int se = c->tr.sys_err;
+		if (c->tr.ip)
+			tn_atomic_store(&c->route_ip, (long)c->tr.ip);
+		/* The network going away? Decided (and the data plane told) before the error line: an
+		 * app's log write can be slow while the console goes to rest. */
+		int down = tn_net_check(c, TN_NK_CONTROL, se);
+		if (tn_ctl_streak_note(&c->streak, tn_ctl_conn_err(r, se), tn_now_ms()) && !down &&
+		    tn_atomic_load(&c->pol_streak)) {
+			tn_net_down_signal(c, TN_NK_CONTROL_STREAK, se);
+			down = 1;
+		}
+		if (se) {
+			char text[96];
+			snprintf(text, sizeof text, "%s (errno %d)", tn_strerror(r), se);
+			tn_emit(c, TN_EV_ERROR, r, text);
+		} else {
+			tn_emit(c, TN_EV_ERROR, r, tn_strerror(r));
+		}
+		if (down)
+			continue; /* the top of the loop waits, no backoff */
 		/* Exponential backoff, capped (auto.go:63); never a busy retry. */
 		c->backoff_ms = c->backoff_ms ? c->backoff_ms * 2 : BACKOFF_MIN_MS;
 		if (c->backoff_ms > BACKOFF_MAX_MS)
@@ -310,6 +464,8 @@ void tn_resume(tn_ctx *c)
 	 * the data plane rebinds UDP, drops WireGuard keys and disco trust, reconnects
 	 * DERP and runs netcheck (tn_dp_rewake). */
 	tn_atomic_store(&c->req_pause, 0);
+	if (tn_atomic_xchg(&c->net_down, 0)) /* a down episode ends here too: the app decided */
+		tn_emit(c, TN_EV_NET_UP, 0, "resumed by the app");
 	c->backoff_ms = 0;
 	wake(c);
 	tn_dp_wake(c);

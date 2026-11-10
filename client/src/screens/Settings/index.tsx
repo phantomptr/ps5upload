@@ -567,9 +567,11 @@ function AppSettingsTab() {
     queueAutoStart,
     systemFileRead,
     bandwidthCapMbps,
+    verifyWrites,
     setAlwaysOverwrite,
     setShowTransferFiles,
     setAutoResume,
+    setVerifyWrites,
     setQueueAutoStart,
     setBandwidthCapMbps,
     setSystemFileRead,
@@ -833,6 +835,21 @@ function AppSettingsTab() {
                       "If an upload drops mid-transfer, resume it from where it left off once the PS5's helper answers again, retrying a few times before giving up. This page cannot re-send the helper itself: if the PS5 restarted, send it again first. Fatal problems like the PS5 running out of space still stop right away. On by default.",
                     )
               }
+            />
+
+            <Toggle
+              checked={verifyWrites}
+              onChange={(checked) => setVerifyWrites(checked)}
+              label={tr(
+                "settings_verify_writes",
+                undefined,
+                "Check files on the PS5 after writing",
+              )}
+              hint={tr(
+                "settings_verify_writes_hint",
+                undefined,
+                "After each large file is saved, the PS5 reads it back from its drive and checks it against what was sent. A file that doesn't match is sent again. Adds a little time at the end of very large files. Needs an up-to-date helper. On by default.",
+              )}
             />
           </div>
         </Section>

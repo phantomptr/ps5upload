@@ -27,6 +27,7 @@ const KEY_AUTO_REDEPLOY_ON_WAKE = "ps5upload.auto_redeploy_on_wake";
 const KEY_AUTO_BRING_UP = "ps5upload.auto_bring_up";
 const KEY_SYSTEM_FILE_READ = "ps5upload.system_file_read";
 const KEY_WAKE_FOR_UPLOADS = "ps5upload.wake_for_uploads";
+const KEY_VERIFY_WRITES = "ps5upload.verify_writes";
 
 // 6.0 upgrade: 5.x saved a user-picked stream count here. AVA1 sizes its lanes itself, so the
 // setting is gone and its stale value is dropped once (every other setting carries over as is).
@@ -123,6 +124,15 @@ function loadWakeForUploads(): boolean {
   return safeGetItem(KEY_WAKE_FOR_UPLOADS) !== "false";
 }
 
+/** "Check files on the console after writing" (#783): the console reads each large file back from
+ *  its drive and checks it against what was sent; a file that does not match is sent again. The
+ *  engine reads it from the shared settings (settings_api.rs `verify_writes`), so every upload
+ *  honours it. Default ON; stored as "false" only when the user turns it off. */
+function loadVerifyWrites(): boolean {
+  if (typeof window === "undefined") return true;
+  return safeGetItem(KEY_VERIFY_WRITES) !== "false";
+}
+
 /** Auto-redeploy the helper when a console goes offline and the app is
  *  open. Default ON: the PS5's payload dies every time the console rests
  *  (Sony tears down userspace on suspend), and without re-deploying it the
@@ -185,6 +195,8 @@ interface UploadSettingsState {
   queueAutoStart: boolean;
   /** Wake a sleeping console for a waiting upload. See loadWakeForUploads. */
   wakeForUploads: boolean;
+  /** The console checks each large file on its drive after writing it. See loadVerifyWrites. */
+  verifyWrites: boolean;
   /** Keep-PS5-awake policy — see KeepPs5AwakeMode. */
   keepPs5AwakeMode: KeepPs5AwakeMode;
   /** Auto-redeploy the bundled helper to a console after it goes offline
@@ -206,6 +218,7 @@ interface UploadSettingsState {
   setAutoResume: (on: boolean) => void;
   setQueueAutoStart: (on: boolean) => void;
   setWakeForUploads: (on: boolean) => void;
+  setVerifyWrites: (on: boolean) => void;
   setKeepPs5AwakeMode: (mode: KeepPs5AwakeMode) => void;
   setAutoRedeployOnWake: (on: boolean) => void;
   setAutoBringUp: (on: boolean) => void;
@@ -220,6 +233,7 @@ export const useUploadSettingsStore = create<UploadSettingsState>((set) => ({
   autoResume: loadAutoResume(),
   queueAutoStart: loadQueueAutoStart(),
   wakeForUploads: loadWakeForUploads(),
+  verifyWrites: loadVerifyWrites(),
   keepPs5AwakeMode: loadKeepPs5AwakeMode(),
   autoRedeployOnWake: loadAutoRedeployOnWake(),
   autoBringUp: loadAutoBringUp(),
@@ -261,6 +275,10 @@ export const useUploadSettingsStore = create<UploadSettingsState>((set) => ({
     safeSetItem(KEY_WAKE_FOR_UPLOADS, wakeForUploads ? "true" : "false");
     set({ wakeForUploads });
   },
+  setVerifyWrites: (verifyWrites) => {
+    safeSetItem(KEY_VERIFY_WRITES, verifyWrites ? "true" : "false");
+    set({ verifyWrites });
+  },
   setKeepPs5AwakeMode: (keepPs5AwakeMode) => {
     safeSetItem(KEY_KEEP_PS5_AWAKE_MODE, keepPs5AwakeMode);
     // Mirror into the legacy boolean so a downgrade to an older build
@@ -293,7 +311,7 @@ export const useUploadSettingsStore = create<UploadSettingsState>((set) => ({
 
 // A change synced from another device shows at once (lib/liveSettings).
 registerSettingReload(
-  [KEY_ALWAYS_OVERWRITE, KEY_SHOW_FILES, KEY_BANDWIDTH_CAP, KEY_AUTO_RESUME, KEY_QUEUE_AUTO_START, KEY_KEEP_PS5_AWAKE, KEY_AUTO_BRING_UP, KEY_SYSTEM_FILE_READ, KEY_WAKE_FOR_UPLOADS, "ps5upload.keep_ps5_awake_mode"],
+  [KEY_ALWAYS_OVERWRITE, KEY_SHOW_FILES, KEY_BANDWIDTH_CAP, KEY_AUTO_RESUME, KEY_QUEUE_AUTO_START, KEY_KEEP_PS5_AWAKE, KEY_AUTO_BRING_UP, KEY_SYSTEM_FILE_READ, KEY_WAKE_FOR_UPLOADS, KEY_VERIFY_WRITES, "ps5upload.keep_ps5_awake_mode"],
   () =>
     useUploadSettingsStore.setState({
       alwaysOverwrite: loadAlwaysOverwrite(),
@@ -302,6 +320,7 @@ registerSettingReload(
       autoResume: loadAutoResume(),
       queueAutoStart: loadQueueAutoStart(),
       wakeForUploads: loadWakeForUploads(),
+      verifyWrites: loadVerifyWrites(),
       keepPs5AwakeMode: loadKeepPs5AwakeMode(),
       autoBringUp: loadAutoBringUp(),
       systemFileRead: loadSystemFileRead(),

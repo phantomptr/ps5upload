@@ -45,6 +45,8 @@ describe("isAutoRecoverable", () => {
   it.each([
     "ava1_exists",
     "ava1_cross_device",
+    // #783: the console read a file back wrong three times and already re-sent it twice
+    "ava1_verify_failed",
     "ava1_refused_1",
     "ava1_refused_2",
     "ava1_refused_3",

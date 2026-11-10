@@ -5,6 +5,7 @@
 
 #include <errno.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -63,6 +64,14 @@ static int g_n_ignored, g_next_ignored;
  * keys and settings but holds no sockets (tn_pause). Under g_mu; a node started meanwhile starts
  * paused. */
 static int g_paused;
+/* The core closed every socket by itself (TN_EV_NET_DOWN: the network going away, e.g. errno 163
+ * as the console starts to rest) and not yet seen by power_phase (tailnet_node_take_down). Set from
+ * the node's own threads in on_event: atomics only, never a lock that could wait. */
+static atomic_int g_down_pending, g_down_errno;
+/* power_phase has taken a down episode (so it is GOING_DOWN or later) and the node has not been
+ * resumed since: only such an episode may be resumed by a set_paused(0) that changes nothing. */
+static atomic_int g_down_taken;
+static char g_down_what[160]; /* under g_msg_mu */
 
 void tailnet_node_set_dir(const char *dir) {
     snprintf(g_dir, sizeof g_dir, "%s", dir);
@@ -208,8 +217,11 @@ static int log_allowed(void) {
 
 static void on_event(void *user, const tn_event *ev) {
     (void)user;
-    /* Every line but state changes and sign-in goes through the limit; those two are rare. */
-    if (ev->type != TN_EV_STATE && ev->type != TN_EV_LOGIN_URL && ev->type != TN_EV_NETMAP && !log_allowed()) {
+    /* Every line but state changes, sign-in and the network going away or coming back goes through
+     * the limit; those are rare (the last two once per episode), and a dropped going-away line would
+     * also drop power_phase's signal. */
+    if (ev->type != TN_EV_STATE && ev->type != TN_EV_LOGIN_URL && ev->type != TN_EV_NETMAP &&
+        ev->type != TN_EV_NET_DOWN && ev->type != TN_EV_NET_UP && !log_allowed()) {
         if (ev->type == TN_EV_ERROR || ev->type == TN_EV_WARN) {
             /* still remembered for the app's status, just not written */
             pthread_mutex_lock(&g_msg_mu);
@@ -246,6 +258,19 @@ static void on_event(void *user, const tn_event *ev) {
         break;
     case TN_EV_PATH:
         fprintf(stderr, "[tailnet] %s\n", ev->text);
+        break;
+    case TN_EV_NET_DOWN:
+        /* Its sockets are already closed; power_phase takes it as a going-down signal on its next
+         * poll (pauses the node, and resumes it only once the console has settled). */
+        pthread_mutex_lock(&g_msg_mu);
+        snprintf(g_down_what, sizeof g_down_what, "%s", ev->text ? ev->text : "");
+        pthread_mutex_unlock(&g_msg_mu);
+        atomic_store(&g_down_errno, ev->err);
+        atomic_store(&g_down_pending, 1);
+        fprintf(stderr, "[tailnet] %s\n", ev->text ? ev->text : "network going away");
+        break;
+    case TN_EV_NET_UP:
+        fprintf(stderr, "[tailnet] network back: %s\n", ev->text ? ev->text : "");
         break;
     case TN_EV_LOG:
         /* The core's own lines at the level it was given (0: the ones that explain a failure,
@@ -297,6 +322,10 @@ static int start_locked(const char *authkey) {
     fprintf(stderr, "[tailnet] started (%zu KiB)%s\n", tn_memory_footprint(c) / 1024,
             g_paused ? ", paused until the console has settled" : "");
     g_ctx = c;
+    /* The console's rest/wake tracking (power_phase) decides when it comes back, never the core on
+     * its own; two control errors in a row also count as the network going away (what the PS5
+     * showed in the seconds before it froze for a rest it did not announce). */
+    tn_set_net_policy(c, TN_NETPOL_CONTROL_STREAK);
     if (g_paused) tn_pause(c);
     push_allow_locked();
     pthread_mutex_lock(&g_msg_mu);
@@ -319,22 +348,60 @@ int tailnet_node_set_paused(int paused) {
     if (paused != g_paused) {
         g_paused = paused;
         if (g_ctx) {
-            if (paused) tn_pause(g_ctx);
-            else tn_resume(g_ctx);
+            if (paused) {
+                tn_pause(g_ctx);
+            } else {
+                tn_resume(g_ctx); /* also ends a down episode of the core */
+                atomic_store(&g_down_taken, 0);
+            }
             fprintf(stderr, "[tailnet] %s\n",
                     paused ? "paused: the console is going to rest or still waking (no sockets until it settles)"
                            : "resumed: rejoining the tailnet");
         }
+    } else if (!paused && g_ctx && tn_net_down(g_ctx) && atomic_load(&g_down_taken)) {
+        /* Down by itself, the episode taken by power_phase, which now says the console has settled,
+         * but its pause never landed (the lock was busy then): resume here, the one path. A down
+         * episode power_phase has not taken yet is never resumed. */
+        atomic_store(&g_down_taken, 0);
+        tn_resume(g_ctx);
+        fprintf(stderr, "[tailnet] resumed after closing its sockets: the console has settled\n");
     }
     pthread_mutex_unlock(&g_mu);
     return 0;
+}
+
+int tailnet_node_take_down(int *err, char *what, size_t cap) {
+    if (!atomic_exchange(&g_down_pending, 0)) return 0;
+    atomic_store(&g_down_taken, 1);
+    if (err) *err = atomic_load(&g_down_errno);
+    if (what && cap) {
+        pthread_mutex_lock(&g_msg_mu);
+        snprintf(what, cap, "%s", g_down_what);
+        pthread_mutex_unlock(&g_msg_mu);
+    }
+    return 1;
+}
+
+void tailnet_node_test_net_down(int err) {
+    pthread_mutex_lock(&g_mu);
+    if (g_ctx) tn_test_net_down(g_ctx, err);
+    pthread_mutex_unlock(&g_mu);
+}
+
+int tailnet_node_net_down(void) {
+    pthread_mutex_lock(&g_mu);
+    int d = g_ctx ? tn_net_down(g_ctx) : 0;
+    pthread_mutex_unlock(&g_mu);
+    return d;
 }
 
 const char *tailnet_node_brief(void) {
     /* For a log line from the wake watchdog: never waits, not on a start or stop (g_mu) and not on
      * the data plane (tn_get_status takes its lock). */
     if (pthread_mutex_trylock(&g_mu) != 0) return "busy";
-    const char *r = !g_ctx ? (g_paused ? "off,paused" : "off") : g_paused ? "on,paused" : "on";
+    const char *r = !g_ctx ? (g_paused ? "off,paused" : "off")
+                    : tn_net_down(g_ctx) ? (g_paused ? "on,paused,closed" : "on,closed")
+                    : g_paused ? "on,paused" : "on";
     pthread_mutex_unlock(&g_mu);
     return r;
 }

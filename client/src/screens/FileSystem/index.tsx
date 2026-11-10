@@ -4559,7 +4559,12 @@ function UploadProgressDetail({
             )}
           </span>
         )}
-        {finishing && (
+        {finishing && live?.verifying && !live.settling && (
+          <span className="text-[var(--color-muted)]" data-testid="fs-upload-verifying">
+            {tr("upload_phase_verifying", undefined, "Verifying on the PS5…")}
+          </span>
+        )}
+        {finishing && !(live?.verifying && !live.settling) && (
           <span className="text-[var(--color-warn)]">
             {tr(
               "upload_phase_settling",

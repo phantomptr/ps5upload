@@ -4593,6 +4593,11 @@ export function humanizeJobErrorReason(
     ).replace("{code}", refused[1]);
   }
   switch (reason) {
+    case "ava1_verify_failed":
+      return trStatic(
+        "joberr.ava1_verify_failed",
+        "A file kept coming out different on the PS5's drive from what was sent, so the transfer stopped. Try again; if it happens again, the drive may be failing, or another app on the PS5 may be changing the file.",
+      );
     case "ava1_file_too_large":
       return trStatic(
         "joberr.file_too_large",

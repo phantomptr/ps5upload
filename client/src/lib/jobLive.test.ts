@@ -56,6 +56,14 @@ describe("job live notes", () => {
     expect(jobLiveFromSnapshot({ settling: undefined })).toBeUndefined();
   });
 
+  it("verifying (#783) shows while the console reads files back, never while settling", () => {
+    expect(jobLiveFromSnapshot({ verifying: true })?.verifying).toBe(true);
+    expect(jobLiveFromSnapshot({ verifying: false })).toBeUndefined();
+    const both = jobLiveFromSnapshot({ verifying: true, settling: true });
+    expect(both?.settling).toBe(true);
+    expect(both?.verifying).toBeUndefined();
+  });
+
   it("carries the settle counts only while settling, never below zero or above the total", () => {
     expect(
       jobLiveFromSnapshot({ settling: true, settle_files_left: 30, settle_files_total: 100 }),

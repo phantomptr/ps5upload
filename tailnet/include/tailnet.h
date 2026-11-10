@@ -151,7 +151,11 @@ typedef enum {
 	TN_EV_LOG,          /* ev.text = diagnostic line */
 	TN_EV_ERROR,        /* ev.err + ev.text; the node retries by itself */
 	TN_EV_PATH,         /* a peer's path changed (direct/relayed); ev.text describes it */
-	TN_EV_WARN          /* something the user should know, e.g. the key expires soon */
+	TN_EV_WARN,         /* something the user should know, e.g. the key expires soon */
+	TN_EV_NET_DOWN,     /* the network is going away: every socket is closed (tn_net_down); ev.err =
+			     * the platform errno that said so (0 for a control-error streak), ev.text
+			     * names it. Sent once per episode, after the sockets are closed. */
+	TN_EV_NET_UP        /* resumed after TN_EV_NET_DOWN (by itself or by tn_resume); ev.text says why */
 } tn_event_type;
 
 typedef struct {
@@ -240,6 +244,29 @@ void tn_stop(tn_ctx *ctx);
  * netmap stay in memory. Resume runs the wake sequence (new control session). */
 void tn_pause(tn_ctx *ctx);
 void tn_resume(tn_ctx *ctx);
+
+/* The network going away (a laptop losing Wi-Fi; a PS5 about to rest, when every socket call fails
+ * with errno 163): on the first socket error that says so (ENETDOWN, ENETUNREACH, EHOSTDOWN,
+ * EADDRNOTAVAIL, the PS5's 163; anything but 163 confirmed by a probe that sends nothing off the
+ * machine), the node closes EVERY socket it holds (UDP, DERP, control, the forwarder's flows and
+ * connections; tn_map listeners on 127.0.0.1 stay) and opens none until it is resumed. State reads
+ * TN_ST_PAUSED meanwhile; TN_EV_NET_DOWN / TN_EV_NET_UP mark the episode. 1 while down. Any thread. */
+int tn_net_down(tn_ctx *ctx);
+enum {
+	/* Resume by itself once the network has been healthy (a loopback probe and a route lookup to the
+	 * control server) for 30 s, doubling with each suspend in a row up to 5 min. Default on. Off: only
+	 * tn_resume resumes (the PS5 helper, whose rest/wake tracking decides). */
+	TN_NETPOL_SELF_RESUME = 1,
+	/* Two control connection errors within 10 s count as the network going away too (the PS5: what
+	 * it showed in the seconds before it froze for rest). Default off: on a desktop that would drop
+	 * working peer paths over a control-server hiccup. */
+	TN_NETPOL_CONTROL_STREAK = 2
+};
+void tn_set_net_policy(tn_ctx *ctx, int flags);
+/* Tests: go down as if a socket call of the data plane had failed with errno `raw`. */
+void tn_test_net_down(tn_ctx *ctx, int raw);
+/* Tests: the healthy time a first self-resume needs, in ms (0 = the default 30 s). */
+void tn_test_resume_ms(tn_ctx *ctx, int ms);
 /* Free everything (calls tn_stop first). */
 void tn_destroy(tn_ctx *ctx);
 /* Renew the sign-in while keeping this node: a new node key that names the old one
