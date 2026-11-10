@@ -56,13 +56,23 @@ for (const width of [1280, 412]) {
     await picker.selectOption(B.id);
     await expect(restSwitch(page)).toHaveAttribute("aria-checked", "true");
 
-    // Kept with each console's profile.
-    const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("ps5upload.roster.v1") ?? "{}"));
-    const byId = Object.fromEntries(
-      (saved.profiles as { id: string; settings?: { rest_after_upload?: boolean } }[]).map((p) => [p.id, p.settings]),
-    );
-    expect(byId[A.id]?.rest_after_upload).toBe(false);
-    expect(byId[B.id]?.rest_after_upload).toBe(true);
+    // Kept with each console's profile. Saving can land a moment after the click (CI failed reading
+    // it at once), so wait for the stored values rather than read them a single time.
+    await expect
+      .poll(
+        async () => {
+          const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("ps5upload.roster.v1") ?? "{}"));
+          const byId = Object.fromEntries(
+            ((saved.profiles ?? []) as { id: string; settings?: { rest_after_upload?: boolean } }[]).map((p) => [
+              p.id,
+              p.settings,
+            ]),
+          );
+          return [byId[A.id]?.rest_after_upload, byId[B.id]?.rest_after_upload];
+        },
+        { timeout: 10_000 },
+      )
+      .toEqual([false, true]);
 
     // No sideways scroll on a phone.
     const overflow = await main(page).evaluate((el) => el.scrollWidth - el.clientWidth);
