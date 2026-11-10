@@ -350,7 +350,8 @@ function ConsoleRow({
   return (
     <li className="py-3 first:pt-0 last:pb-0" data-testid={`game-console-${host}`}>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <div className="min-w-0 flex-1">
+        {/* A floor for the name: with none, the buttons never wrap and squeeze it to a letter a line. */}
+        <div className="min-w-[12rem] flex-1">
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <span className="font-medium">{name}</span>
             {connected && (
