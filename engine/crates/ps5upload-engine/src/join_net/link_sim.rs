@@ -54,6 +54,9 @@ pub(crate) struct StreamCfg {
     pub fps: u32,
     /// A keyframe's size over an average picture's.
     pub key_ratio: f64,
+    /// The first this many seconds are a still screen (a menu: pictures at 5% of the rate),
+    /// then the game moves at the full rate (#720: the estimate follows what is sent).
+    pub quiet_s: u32,
 }
 
 impl StreamCfg {
@@ -62,6 +65,7 @@ impl StreamCfg {
         kbps: 15_000,
         fps: 60,
         key_ratio: 6.0,
+        quiet_s: 0,
     };
 }
 
@@ -181,6 +185,8 @@ pub(crate) struct Report {
     /// (kbit/s, past the first estimates; 0 without one).
     pub nacks: u64,
     pub plis: u64,
+    /// Times the estimate was raised back on a clean link (rtc.rs KeepUp).
+    pub raised: u64,
     pub bwe_p50: u32,
     pub bwe_min: u32,
 }
@@ -208,6 +214,7 @@ impl Report {
             max_backlog: v.iter().map(|r| r.max_backlog).max().unwrap_or(0),
             nacks: u(|r| r.nacks as f64) as u64,
             plis: u(|r| r.plis as f64) as u64,
+            raised: u(|r| r.raised as f64) as u64,
             bwe_p50: u(|r| r.bwe_p50 as f64) as u32,
             bwe_min: v.iter().map(|r| r.bwe_min).min().unwrap_or(0),
         }
@@ -215,7 +222,7 @@ impl Report {
 
     pub(crate) fn row(&self) -> String {
         format!(
-            "{:3.0}s {:5.1} fps | {:3} stalls {:6.0} ms (worst {:5.0}) | jitter {:5.1} ms | lat p50 {:5.0} p95 {:5.0} p99 {:5.0} | skips host {:4} guest {:4} | keys {:3} | {:6.0} kbps | backlog max {:4} KiB | nacks {:5} plis {:3} | bwe p50 {:6} min {:6}",
+            "{:3.0}s {:5.1} fps | {:3} stalls {:6.0} ms (worst {:5.0}) | jitter {:5.1} ms | lat p50 {:5.0} p95 {:5.0} p99 {:5.0} | skips host {:4} guest {:4} | keys {:3} | {:6.0} kbps | backlog max {:4} KiB | nacks {:5} plis {:3} | bwe p50 {:6} min {:6} | raised {:3}",
             self.secs,
             self.fps,
             self.stalls,
@@ -233,7 +240,8 @@ impl Report {
             self.nacks,
             self.plis,
             self.bwe_p50,
-            self.bwe_min
+            self.bwe_min,
+            self.raised
         )
     }
 }
@@ -339,8 +347,11 @@ struct Host {
     skips: u64,
     keyframes: u64,
     max_backlog: usize,
-    /// The track's catch-up (rtc.rs).
+    /// The track's catch-up (rtc.rs), the estimate kept up on a clean link, and the guest's
+    /// last loss report.
     catchup: super::rtc::Catchup,
+    keep_up: super::rtc::KeepUp,
+    loss: Option<f32>,
     /// The stream's bitrate (the estimate is aimed at it), and what the track's stats said: the
     /// bandwidth estimates (kbit/s), NACKs and PLIs received.
     kbps: u32,
@@ -455,6 +466,8 @@ pub(crate) fn run(link: LinkCfg, stream: StreamCfg, pol: Policy, secs: u64, seed
         keyframes: 0,
         max_backlog: 0,
         catchup: super::rtc::Catchup::default(),
+        keep_up: super::rtc::KeepUp::default(),
+        loss: None,
         kbps: stream.kbps,
         bwe: Vec::new(),
         nacks: 0,
@@ -620,10 +633,12 @@ pub(crate) fn run(link: LinkCfg, stream: StreamCfg, pol: Policy, secs: u64, seed
                 host.key_due = None;
                 host.keyframes += 1;
             }
+            let still = next_frame.duration_since(t0) < Duration::from_secs(stream.quiet_s as u64);
+            let rate: f64 = if still { 0.05 } else { 1.0 };
             let size = if key {
-                mean * stream.key_ratio
+                mean * stream.key_ratio * rate.max(0.3)
             } else {
-                mean * (0.6 + 0.8 * sizes.f())
+                mean * rate * (0.6 + 0.8 * sizes.f())
             } as usize;
             let mut m = vec![0u8; size.max(STAMP)];
             m[0] = KIND_VIDEO;
@@ -816,11 +831,26 @@ fn drain_host(h: &mut Host, net: &mut Link, now: Instant, pol: &Policy) -> Optio
                         h.bwe.push(kbps);
                         h.catchup.estimate(kbps);
                     }
-                    Event::PeerStats(s) if std::env::var_os("LINK_SIM_TRACE").is_some() => {
-                        eprintln!("peer: bwe_tx {:?}", s.bwe_tx);
+                    Event::PeerStats(s) => {
+                        if std::env::var_os("LINK_SIM_TRACE").is_some() {
+                            eprintln!("peer: bwe_tx {:?}", s.bwe_tx);
+                        }
+                        // rtc.rs keep_up, once a second as the engine's stats come.
+                        if pol.rtp_catchup {
+                            let rtt = s.rtt.map(|d| (d.as_millis() as u32).max(1));
+                            let est = h.bwe.last().copied();
+                            if let Some(to) =
+                                h.keep_up
+                                    .second(est, Some(h.kbps), h.loss, h.nacks, rtt, now)
+                            {
+                                h.catchup.aim(&mut h.rtc, to);
+                                h.bwe.push(to);
+                            }
+                        }
                     }
                     Event::MediaEgressStats(s) => {
                         h.nacks = s.nacks;
+                        h.loss = s.loss.or(h.loss);
                         h.plis = s.plis;
                         if std::env::var_os("LINK_SIM_TRACE").is_some() {
                             eprintln!(
@@ -1065,6 +1095,7 @@ fn report(h: &Host, g: &Guest, start: Instant, end: Instant, period: Duration) -
         max_backlog: h.max_backlog,
         nacks: h.nacks,
         plis: h.plis,
+        raised: h.keep_up.raised,
         ..Report::default()
     };
     // The estimates past the first few (it starts at the stream's bitrate and probes).
@@ -1262,6 +1293,10 @@ fn link_sim_table() {
             println!("== {name} at {k} kbit/s: {pol:?}");
             let stream = StreamCfg {
                 kbps: k,
+                quiet_s: std::env::var("LINK_SIM_QUIET")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0),
                 ..StreamCfg::DEFAULT
             };
             let link_only = std::env::var("LINK_SIM_LINK").ok();

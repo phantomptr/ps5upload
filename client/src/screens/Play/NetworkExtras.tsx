@@ -16,10 +16,11 @@ import { tailnetVia } from "../../api/tailnet";
 /** What the delay that can be measured comes to, ms: the round trip to the engine (null until
  *  it answers) and the time a frame takes from arriving to being drawn. The console's own leg
  *  to the engine has no clock both ends share, so it is not in here. */
-export function latencyParts(s: Pick<StreamStats, "rttMs" | "decodeMs">): { engine: number | null; decode: number } {
+export function latencyParts(s: Pick<StreamStats, "rttMs" | "decodeMs">): { engine: number | null; decode: number | string } {
   return {
     engine: s.rttMs === null ? null : Math.round(s.rttMs),
-    decode: Math.max(0, Math.round(s.decodeMs)),
+    // "?" where the system's media player decodes: its time can't be read (it said 0, #720).
+    decode: s.decodeMs === null ? "?" : Math.max(0, Math.round(s.decodeMs)),
   };
 }
 

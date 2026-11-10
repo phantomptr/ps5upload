@@ -7043,6 +7043,7 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "web_update_how_app": "Ta strona pochodzi z PS5Upload na innym komputerze. Zaktualizuj tam aplikację, a ta strona zaktualizuje się razem z nią.",
 "rp_err_unreachable": "PS5 nie odpowiada w sieci. Sprawdź, czy jest włączona, w tej samej sieci i czy Remote Play jest włączone w jej ustawieniach.",
 "rp_err_video": "PS5 odrzuciła ten rozmiar obrazu. Spróbuj 720p.",
+"rp_err_no_session_id": "PS5 przyjęła stream, ale nie dokończyła jego uruchamiania. Spójrz na telewizor, czy PS5 o coś nie pyta. Gra uruchomiona przez innego użytkownika PS5 też może go wstrzymać: przełącz się na swojego użytkownika lub zamknij tę grę, a potem naciśnij Start.",
 "rp_err_wake": "PS5 jest w trybie spoczynku i się nie wybudziła. Sprawdź, czy jest podłączona do prądu i czy w Ustawienia › System › Oszczędzanie energii › Funkcje dostępne w trybie spoczynku włączone są „Pozostań połączony z internetem” i „Włącz uruchamianie PS5 przez sieć”.",
 "rp_fullscreen": "Pełny ekran",
 "rp_pip": "Obraz w obrazie",

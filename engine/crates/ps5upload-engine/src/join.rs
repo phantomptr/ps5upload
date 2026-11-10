@@ -3450,8 +3450,11 @@ fn touch_reach(console: &str, headers: &HeaderMap) {
 /// `POST /api/join/open {addr}`: open Play Together for the session being played on `addr`,
 /// with an invite ready (409 `not_playing` when none runs, 409 `old_helper` when the helper has
 /// no guest controllers: "Update the helper to play together"; 502 when the console does not
-/// answer). Opening an open one changes nothing. (Nearby apps learn of it from the host app's
-/// mesh presence, which the app publishes from `GET /api/join`.)
+/// answer). Opening an open one changes nothing, also while its host's stream restarts (a new
+/// bitrate from the panel's "Lower to", #720): the party waits [`HOST_RESTART_WINDOW`] for them,
+/// so the panel opened again before the new session is up gets that party, not `not_playing`.
+/// (Nearby apps learn of it from the host app's mesh presence, which the app publishes from
+/// `GET /api/join`.)
 pub async fn open(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
@@ -3460,10 +3463,14 @@ pub async fn open(
     if let Some(r) = guard(&peer, &headers) {
         return r;
     }
+    let key = host_key(&b.addr);
     let Some(session) = session_of(&b.addr) else {
+        if with_party(&key, |_| ()).is_some() {
+            touch_reach(&b.addr, &headers);
+            return Json(state_json(&b.addr)).into_response();
+        }
         return bad(StatusCode::CONFLICT, "not_playing");
     };
-    let key = host_key(&b.addr);
     if with_party(&key, |_| ()).is_none() {
         // An older helper has no guest controllers: the host is told before anyone is invited.
         let c = b.addr.clone();
@@ -7314,6 +7321,25 @@ mod tests {
             (s["playing"].as_bool(), s["players_in"].as_u64()),
             (Some(false), Some(1))
         );
+        // The host's panel opens again while their stream restarts at a new bitrate (#720): the
+        // party that waits for them, with its invite, not `not_playing`.
+        let (ci, h) = local();
+        let r = open(
+            ci,
+            h,
+            Json(AddrBody {
+                addr: console.into(),
+            }),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::OK);
+        let s = body(r).await;
+        assert_eq!(
+            (s["open"].as_bool(), s["players_in"].as_u64()),
+            (Some(true), Some(1)),
+            "{s}"
+        );
+        assert_eq!(s["invite"]["key"], key.as_str());
         let mut sam3 = guest(&url, serde_json::json!({"hello": {"resume": token}})).await;
         assert_eq!(next(&mut sam3).await["stage"], "waiting");
         until("pad removed after the grace", || {

@@ -73,6 +73,14 @@ export function streamErrorMessage(tr: Tr, e: StreamError): string {
         undefined,
         "The PS5 stopped waiting for the passcode. Press Start and enter it again.",
       );
+    case "no_session_id":
+      // The console took the session and then never sent its session id (#720: right after a
+      // restart, a game another PS5 user started was running).
+      return tr(
+        "rp_err_no_session_id",
+        undefined,
+        "The PS5 accepted the stream but did not finish starting it. Look at the TV in case the PS5 is asking something. A game started by another PS5 user can also hold it up: switch to your user or close that game, then press Start.",
+      );
     case "video_refused":
       return tr("rp_err_video", undefined, "The PS5 refused that picture size. Try 720p.");
     case "decode":

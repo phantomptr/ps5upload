@@ -6805,6 +6805,7 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "web_update_how_app": "Trang này đến từ PS5Upload trên một máy tính khác. Cập nhật ứng dụng ở đó, trang này sẽ cập nhật theo.",
 "rp_err_unreachable": "PS5 không phản hồi trên mạng. Hãy kiểm tra máy đang bật, cùng mạng và đã bật Remote Play trong cài đặt.",
 "rp_err_video": "PS5 từ chối kích thước hình đó. Hãy thử 720p.",
+"rp_err_no_session_id": "PS5 đã nhận luồng nhưng chưa khởi động xong. Hãy nhìn TV phòng khi PS5 đang hỏi gì đó. Một trò chơi do người dùng PS5 khác mở cũng có thể giữ nó lại: chuyển sang người dùng của bạn hoặc đóng trò chơi đó, rồi nhấn Bắt đầu.",
 "rp_err_wake": "PS5 đang ở chế độ nghỉ và không thức dậy. Hãy kiểm tra máy đã cắm điện và trong Cài đặt › Hệ thống › Tiết kiệm điện › Tính năng khả dụng ở chế độ nghỉ đã bật «Luôn kết nối Internet» và «Cho phép bật PS5 qua mạng».",
 "rp_fullscreen": "Toàn màn hình",
 "rp_pip": "Hình trong hình",

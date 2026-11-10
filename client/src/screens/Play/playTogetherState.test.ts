@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { friendsIn, inviteOn, joinApi, playerSlots, presenceJoin, readJoinState, slowFriend, streamSeatFriend } from "./playTogetherState";
+import { friendsIn, inviteOn, joinApi, openWhenPlaying, playerSlots, presenceJoin, readJoinState, slowFriend, streamSeatFriend } from "./playTogetherState";
 import { nearbyJoins } from "../../state/mesh";
 import type { MeshDevice } from "../../api/mesh";
 import { guestStatusText } from "./PlayTogether";
@@ -229,5 +229,48 @@ describe("New link (#657)", () => {
   it("an engine that says no is a null, for the panel to show", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "closed" }), { status: 409 })));
     expect(await joinApi.invite("192.0.2.9", true)).toBeNull();
+  });
+});
+
+describe("opening while the stream restarts (#720)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const answers = (list: Array<{ status: number; body: unknown }>) => {
+    const f = vi.fn(async () => {
+      const a = list.length > 1 ? list.shift()! : list[0];
+      return new Response(JSON.stringify(a.body), { status: a.status });
+    });
+    vi.stubGlobal("fetch", f);
+    return f;
+  };
+  const noWait = async () => {};
+
+  it("asks again while the engine says not_playing, then has the party", async () => {
+    const f = answers([
+      { status: 409, body: { error: "not_playing" } },
+      { status: 409, body: { error: "not_playing" } },
+      { status: 200, body: engine },
+    ]);
+    const r = await openWhenPlaying("192.0.2.9", () => true, 2000, 90_000, noWait);
+    expect(r?.state?.open).toBe(true);
+    expect(f).toHaveBeenCalledTimes(3);
+  });
+
+  it("any other refusal is the answer at once", async () => {
+    const f = answers([{ status: 409, body: { error: "old_helper" } }]);
+    expect(await openWhenPlaying("192.0.2.9", () => true, 2000, 90_000, noWait)).toEqual({ error: "old_helper" });
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives up after its time, and stops when the panel went away", async () => {
+    const f = answers([{ status: 409, body: { error: "not_playing" } }]);
+    expect(await openWhenPlaying("192.0.2.9", () => true, 2000, 6000, noWait)).toEqual({ error: "not_playing" });
+    expect(f).toHaveBeenCalledTimes(4);
+    let alive = true;
+    const g = answers([{ status: 409, body: { error: "not_playing" } }]);
+    const r = await openWhenPlaying("192.0.2.9", () => alive, 2000, 90_000, async () => {
+      alive = false;
+    });
+    expect(r).toBeNull();
+    expect(g).toHaveBeenCalledTimes(1);
   });
 });

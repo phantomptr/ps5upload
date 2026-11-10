@@ -7098,6 +7098,7 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "web_update_how_app": "Ez az oldal egy másik gépen futó PS5Uploadtól jön. Ott frissítsd az alkalmazást, és ez az oldal vele együtt frissül.",
 "rp_err_unreachable": "A PS5 nem válaszol a hálózaton. Ellenőrizd, hogy be van-e kapcsolva, ugyanazon a hálózaton van-e, és hogy a Remote Play be van-e kapcsolva a beállításaiban.",
 "rp_err_video": "A PS5 elutasította ezt a képméretet. Próbáld 720p-vel.",
+"rp_err_no_session_id": "A PS5 elfogadta a streamet, de nem fejezte be az indítását. Nézz a tévére, hátha a PS5 kérdez valamit. Egy másik PS5-felhasználó által indított játék is feltarthatja: válts a saját felhasználódra, vagy zárd be azt a játékot, majd nyomd meg az Indítást.",
 "rp_err_wake": "A PS5 pihenő módban van, és nem ébredt fel. Ellenőrizd, hogy áram alatt van-e, és hogy a Beállítások › Rendszer › Energiatakarékosság › Pihenő módban elérhető funkciók alatt be van-e kapcsolva az „Internetkapcsolat fenntartása” és a „PS5 bekapcsolása a hálózaton keresztül”.",
 "rp_fullscreen": "Teljes képernyő",
 "rp_pip": "Kép a képben",

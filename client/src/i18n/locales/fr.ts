@@ -6819,6 +6819,7 @@ library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour
 "web_update_how_app": "Cette page vient de PS5Upload sur un autre ordinateur. Mettez l'application à jour là-bas, et cette page suivra.",
 "rp_err_unreachable": "La PS5 ne répond pas sur le réseau. Vérifiez qu'elle est allumée, sur le même réseau, et que la Lecture à distance est activée dans ses paramètres.",
 "rp_err_video": "La PS5 a refusé cette taille d'image. Essayez 720p.",
+"rp_err_no_session_id": "La PS5 a accepté le flux mais n'a pas fini de le démarrer. Regardez la télé au cas où la PS5 demande quelque chose. Un jeu lancé par un autre utilisateur de la PS5 peut aussi le bloquer : passez à votre utilisateur ou fermez ce jeu, puis appuyez sur Démarrer.",
 "rp_err_wake": "La PS5 est en mode repos et ne s'est pas réveillée. Vérifiez qu'elle est branchée et que, dans Paramètres › Système › Économie d'énergie › Fonctions disponibles en mode repos, « Rester connecté à Internet » et « Activer la mise sous tension de la PS5 depuis le réseau » sont activés.",
 "rp_fullscreen": "Plein écran",
 "rp_pip": "Image dans l'image",

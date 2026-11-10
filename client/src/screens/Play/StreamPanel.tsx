@@ -152,6 +152,19 @@ export function streamErrorHelp(tr: Tr, e: StreamError, linux = isLinuxDesktop()
   );
 }
 
+/** The stats line's values. The decode time is "?" where the system's media player decodes (it
+ *  can't be read there; the line said 0.0 ms, #720). */
+export function statsLineValues(stats: StreamStats) {
+  return {
+    fps: stats.fps,
+    mbps: stats.mbps.toFixed(1),
+    ms: stats.decodeMs === null ? "?" : stats.decodeMs.toFixed(1),
+    codec: stats.codec.startsWith("hev") || stats.codec.startsWith("hvc") ? (stats.hdr ? "HEVC HDR" : "HEVC") : "H.264",
+    loss: stats.lossPct.toFixed(2),
+    audio: Math.round(stats.audioMs),
+  };
+}
+
 function StatsLine({
   stats,
   light,
@@ -163,14 +176,7 @@ function StatsLine({
   style?: React.CSSProperties;
 }) {
   const tr = useTr();
-  const v = {
-    fps: stats.fps,
-    mbps: stats.mbps.toFixed(1),
-    ms: stats.decodeMs.toFixed(1),
-    codec: stats.codec.startsWith("hev") || stats.codec.startsWith("hvc") ? (stats.hdr ? "HEVC HDR" : "HEVC") : "H.264",
-    loss: stats.lossPct.toFixed(2),
-    audio: Math.round(stats.audioMs),
-  };
+  const v = statsLineValues(stats);
   return (
     <div
       className={`pointer-events-none absolute z-20 rounded-md bg-black/60 px-2 py-1 font-mono text-[11px] leading-4 text-white/85 ${style ? "" : "bottom-3 left-3"}`}
@@ -180,7 +186,8 @@ function StatsLine({
     >
       {light && (
         <span
-          className="me-1.5 inline-block h-2 w-2 rounded-full align-middle"
+          // A ring: a game's dark or off light bar (0,0,0) was a black hole on the black bar (#720).
+          className="me-1.5 inline-block h-2 w-2 rounded-full align-middle ring-1 ring-white/50"
           style={{ background: `rgb(${light[0]},${light[1]},${light[2]})` }}
           title={tr("rp_light_bar", undefined, "Light bar")}
         />

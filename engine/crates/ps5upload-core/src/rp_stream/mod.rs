@@ -85,6 +85,13 @@ const CTRL_HEARTBEAT_REP: u16 = 0x01fe;
 /// How long the ctrl handshake waits for the session id (and, after a passcode went out, for
 /// the console's verdict; chiaki allows 10 s there).
 const CTRL_SESSION_WAIT: Duration = Duration::from_secs(15);
+/// The console took the session (session init and ctrl answered) and then never sent its session
+/// id (#720: seen twice right after a restart at a new bitrate, while a game another PS5 user
+/// started was running). The engine's "no_session_id".
+pub const CTRL_NO_SESSION_ID: &str = "the console never sent a session id over ctrl";
+/// The same, the console closing ctrl instead.
+pub const CTRL_CLOSED_BEFORE_SESSION_ID: &str =
+    "the console closed ctrl before sending a session id";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Codec {
@@ -451,6 +458,7 @@ fn await_session_id(
     let mut deadline = Instant::now() + CTRL_SESSION_WAIT;
     let mut flow = PinFlow::new(PASSCODE_WAIT);
     let mut page = SinkPrompt(sink);
+    let mut heard = Heard::default();
     s.set_read_timeout(Some(Duration::from_millis(250)))?;
     loop {
         if pending.len() >= 8 {
@@ -467,6 +475,7 @@ fn await_session_id(
                     payload = auth_decrypt(brt, amb, *remote_counter, &raw_payload);
                     *remote_counter += 1;
                 }
+                heard.add(kind);
                 if flow.on_message(kind, &payload, &mut page)? {
                     continue;
                 }
@@ -496,11 +505,12 @@ fn await_session_id(
                 deadline = Instant::now() + CTRL_SESSION_WAIT;
             }
         } else if Instant::now() > deadline {
-            bail!("the console never sent a session id over ctrl");
+            // What it did send, for the log: what it was busy with (#720).
+            bail!("{CTRL_NO_SESSION_ID} (heard: {heard})");
         }
         match s.read(&mut buf) {
             Ok(0) if flow.involved() => bail!(PASSCODE_CONSOLE_GAVE_UP),
-            Ok(0) => bail!("the console closed ctrl before sending a session id"),
+            Ok(0) => bail!("{CTRL_CLOSED_BEFORE_SESSION_ID} (heard: {heard})"),
             Ok(n) => pending.extend_from_slice(&buf[..n]),
             Err(e)
                 if matches!(
@@ -509,6 +519,38 @@ fn await_session_id(
                 ) => {}
             Err(e) => return Err(anyhow!("reading ctrl: {e}")),
         }
+    }
+}
+
+/// The ctrl messages a console sent while the session id was awaited, by kind, in the order first
+/// seen: "0x00fe x3, 0x0030" ("nothing" when it stayed silent).
+#[derive(Default)]
+struct Heard(Vec<(u16, u32)>);
+
+impl Heard {
+    fn add(&mut self, kind: u16) {
+        match self.0.iter_mut().find(|(k, _)| *k == kind) {
+            Some((_, n)) => *n += 1,
+            None => self.0.push((kind, 1)),
+        }
+    }
+}
+
+impl std::fmt::Display for Heard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0.is_empty() {
+            return f.write_str("nothing");
+        }
+        for (i, (kind, n)) in self.0.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "{kind:#06x}")?;
+            if *n > 1 {
+                write!(f, " x{n}")?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1700,6 +1742,34 @@ mod tests {
         assert_eq!(r.unwrap().as_bytes(), SESSION);
         assert_eq!(page.asked, vec![false]);
         assert_eq!(ours, 6, "the reply used one counter");
+    }
+
+    /// #720: a console that takes ctrl and never sends its session id. The error names what it
+    /// did send (for the log), and keeps the words the engine's "no_session_id" is picked by.
+    #[test]
+    fn no_session_id_says_what_the_console_sent() {
+        let mut page = PinPage {
+            asked: vec![],
+            answers: Default::default(),
+        };
+        let (r, _) = with_console(&mut page, |mut c| {
+            let mut n = 1u64;
+            c.write_all(&console_msg(CTRL_HEARTBEAT_REQ, &[], &mut n))
+                .unwrap();
+            c.write_all(&console_msg(CTRL_HEARTBEAT_REQ, &[], &mut n))
+                .unwrap();
+            c.write_all(&console_msg(0x0099, &[7], &mut n)).unwrap();
+            for _ in 0..2 {
+                assert_eq!(read_msg(&mut c).0, CTRL_HEARTBEAT_REP);
+            }
+        });
+        let e = format!("{:#}", r.unwrap_err());
+        assert!(e.contains(CTRL_CLOSED_BEFORE_SESSION_ID), "{e}");
+        assert!(e.ends_with("(heard: 0x00fe x2, 0x0099)"), "{e}");
+        let mut h = Heard::default();
+        assert_eq!(h.to_string(), "nothing");
+        h.add(CTRL_LOGIN);
+        assert_eq!(h.to_string(), "0x0005");
     }
 
     #[test]
