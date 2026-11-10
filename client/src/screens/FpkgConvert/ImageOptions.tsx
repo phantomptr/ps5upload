@@ -1,3 +1,5 @@
+import { AlertTriangle, Info } from "lucide-react";
+
 import { Button, Toggle } from "../../components";
 import type { AmprLz4Options, AmprPacksReadiness, FfpfscLevel, ImageFormat, ZstdPacks } from "../../api/fpkg";
 import {
@@ -149,6 +151,7 @@ export function ZstdOption({ lz4, folder }: { lz4: Lz4Choice; folder?: boolean }
           </span>
         </span>
       </label>
+      {on && <PacksWarning />}
       {on && <ZstdRuntimeChoice />}
       {on && (
         <label className="ms-6 flex items-center gap-2 text-xs">
@@ -223,15 +226,7 @@ function Lz4Option({ lz4 }: { lz4: Lz4Choice }) {
           </span>
         </label>
       )}
-      {kind === "no_ampr" ? (
-        <div className="text-xs text-[var(--color-muted)]">
-          {tr(
-            "fpkg.image.lz4_no_ampr",
-            undefined,
-            "This game does not read its files through AMPR, so nothing in it could serve asset packs. Compress it into a .ffpfsc instead: ShadowMount+ decompresses that for any game.",
-          )}
-        </div>
-      ) : refusal && kind === "runtime" ? (
+      {refusal && kind === "runtime" ? (
         // The checkbox above fixes this one: say so, rather than that packs are unavailable (#449).
         <div className="text-xs text-[var(--color-warn)]">
           {tr(
@@ -255,6 +250,7 @@ function Lz4Option({ lz4 }: { lz4: Lz4Choice }) {
           </div>
         )
       )}
+      {lz4.on && lz4.kind === "lz4" && !refusal && <PacksWarning />}
       {lz4.on && lz4.kind === "lz4" && !refusal && (
         <div className="text-xs text-[var(--color-muted)]" data-testid="lz4-placement-note">
           {tr(
@@ -293,6 +289,120 @@ function Lz4Option({ lz4 }: { lz4: Lz4Choice }) {
         </div>
       )}
     </div>
+  );
+}
+
+/** Under a pack option that is on: a packed game needs ShadowMount+ to mount it. */
+function PacksWarning() {
+  const tr = useTr();
+  return (
+    <div className="ms-6 flex items-start gap-1.5 text-xs text-[var(--color-warn)]" data-testid="packs-warning">
+      <AlertTriangle size={13} className="mt-px shrink-0" aria-hidden />
+      <span>
+        {tr(
+          "fpkg.image.packs_shadowmount_only",
+          undefined,
+          "A packed game only plays when ShadowMount+ mounts it. PS5Upload's own mount can't read the packs. Plain images work either way.",
+        )}
+      </span>
+    </div>
+  );
+}
+
+/** One muted line where the pack options would be, saying why they aren't: no game checked
+ *  yet (`lz4` absent), a game that doesn't read through AMPR, or (an image) LZ4 needing .exfat.
+ *  Nothing when every pack option is offered. */
+export function PacksNote({
+  lz4,
+  format,
+  folder,
+}: {
+  lz4: Lz4Choice | undefined;
+  format?: ImageFormat;
+  folder?: boolean;
+}) {
+  const tr = useTr();
+  const text = !lz4
+    ? folder
+      ? tr(
+          "fpkg.folder.packs_pending",
+          undefined,
+          "zstd asset packs appear here for games that read their files through AMPR.",
+        )
+      : tr(
+          "fpkg.image.packs_pending",
+          undefined,
+          "Asset packs (LZ4, zstd) appear here for games that read their files through AMPR.",
+        )
+    : lz4.readiness.kind === "no_ampr"
+      ? tr(
+          "fpkg.image.packs_no_ampr",
+          undefined,
+          "Asset packs: not offered, this game doesn't read its files through AMPR.",
+        )
+      : !folder && format !== "exfat"
+        ? tr(
+            "fpkg.image.packs_lz4_needs_exfat",
+            undefined,
+            "LZ4 asset packs need an .exfat image. zstd asset packs work with this one.",
+          )
+        : null;
+  if (!text) return null;
+  return (
+    <p className="text-xs text-[var(--color-muted)]" data-testid="packs-note">
+      {text}
+    </p>
+  );
+}
+
+/** Format names, the same in every language. */
+const FORMAT_NAMES = {
+  ffpkg: ".ffpkg (UFS2)",
+  exfat: ".exfat",
+  ffpfs: ".ffpfs (PFS)",
+  ffpfsc: ".ffpfsc",
+};
+
+/** "Which image should I make?": a few plain lines on each kind of image and on asset packs.
+ *  A native disclosure, so it opens by keyboard and touch alike. */
+function WhichImageHelp() {
+  const tr = useTr();
+  const rows: [string, string][] = [
+    [FORMAT_NAMES.ffpkg, tr("fpkg.image.which_ffpkg", undefined, "Recommended. Works best.")],
+    [FORMAT_NAMES.exfat, tr("fpkg.image.which_exfat", undefined, "The common format other tools use.")],
+    [FORMAT_NAMES.ffpfs, tr("fpkg.image.which_ffpfs", undefined, "Sony's own format. Experimental.")],
+    [
+      FORMAT_NAMES.ffpfsc,
+      tr(
+        "fpkg.image.which_ffpfsc",
+        undefined,
+        "Compression: shrinks the whole image, and the PS5 unpacks it while reading. Fast, Balanced or Smallest trade making time for size.",
+      ),
+    ],
+    [
+      tr("fpkg.image.which_packs_label", undefined, "Asset packs (AMPR games only)"),
+      tr(
+        "fpkg.image.which_packs",
+        undefined,
+        "Compress the game's data and add a small replacement for Sony's AMPR library that unpacks it. Only ShadowMount+ loads that replacement, so a packed game must be mounted by ShadowMount+.",
+      ),
+    ],
+  ];
+  return (
+    <details className="text-xs" data-testid="which-image">
+      <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 rounded text-[var(--color-accent)] [&::-webkit-details-marker]:hidden">
+        <Info size={13} className="shrink-0" aria-hidden />
+        {tr("fpkg.image.which_title", undefined, "Which image should I make?")}
+      </summary>
+      <dl className="mt-1.5 flex flex-col gap-1 leading-relaxed text-[var(--color-muted)]">
+        {rows.map(([name, body]) => (
+          <div key={name}>
+            <dt className="inline font-medium text-[var(--color-text)]">{name}</dt>{" "}
+            <dd className="inline">{body}</dd>
+          </div>
+        ))}
+      </dl>
+    </details>
   );
 }
 
@@ -359,11 +469,14 @@ export function ImageChoice({
   onChoice,
   lz4,
   level,
+  packsNote,
 }: {
   format: ImageFormat;
   compress: boolean;
   onChoice: (format: ImageFormat, compress: boolean) => void;
   lz4?: Lz4Choice;
+  /** Say why no pack option shows before a game is checked (Convert's ③, not a queued game). */
+  packsNote?: boolean;
   /** One game's own compression level (a game in the queue); else the remembered one. */
   level?: { value: FfpfscLevel; onChange: (level: FfpfscLevel) => void };
 }) {
@@ -402,6 +515,7 @@ export function ImageChoice({
   ];
   return (
     <div className="mt-1 space-y-2" data-testid="image-choice">
+      <WhichImageHelp />
       <div className="grid gap-2 2xl:grid-cols-3">
         {options.map((o) => (
           <button
@@ -443,8 +557,9 @@ export function ImageChoice({
       </label>
       {compress && !packing && <FfpfscLevelOption own={level} />}
       {lz4?.readiness.emulator_missing && !packing && <AmprEmuOption />}
-      {lz4 && format === "exfat" && <Lz4Option lz4={lz4} />}
+      {lz4 && lz4.readiness.kind !== "no_ampr" && format === "exfat" && <Lz4Option lz4={lz4} />}
       {lz4 && lz4.readiness.kind !== "no_ampr" && <ZstdOption lz4={lz4} />}
+      {(lz4 || packsNote) && <PacksNote lz4={lz4} format={format} />}
       <VerifyChunkOption />
       <p className="text-xs leading-relaxed text-[var(--color-muted)]">
         {tr(

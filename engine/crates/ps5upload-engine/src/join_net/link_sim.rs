@@ -96,6 +96,9 @@ pub(crate) struct Policy {
     pub rtp_engine: bool,
     /// …with its bandwidth estimate (and so str0m's pacer); false: measured without.
     pub rtp_bwe: bool,
+    /// …dropping pictures to the next keyframe when its send queue falls behind (rtc.rs
+    /// `Catchup`, #720); false: every picture written, as before.
+    pub rtp_catchup: bool,
 }
 
 impl Policy {
@@ -115,6 +118,7 @@ impl Policy {
             rtp_video: false,
             rtp_engine: false,
             rtp_bwe: true,
+            rtp_catchup: false,
         }
     }
 
@@ -134,6 +138,17 @@ impl Policy {
             rtp_video: false,
             rtp_engine: false,
             rtp_bwe: true,
+            rtp_catchup: false,
+        }
+    }
+
+    /// The engine as it sends an internet guest who offered a video track (rtc.rs).
+    pub(crate) fn track() -> Policy {
+        Policy {
+            rtp_video: true,
+            rtp_engine: true,
+            rtp_catchup: true,
+            ..Policy::now()
         }
     }
 }
@@ -252,6 +267,8 @@ struct Link {
     /// (arrival, seq) → (to_host, bytes)
     q: BinaryHeap<Reverse<InFlight>>,
     seq: u64,
+    /// Packets the narrow hop's full queue dropped, toward the guest.
+    overflow: u64,
 }
 
 impl Link {
@@ -263,6 +280,7 @@ impl Link {
             let start = w.free_at.max(now);
             let queued = start.saturating_duration_since(now);
             if queued > Duration::from_millis(cfg.queue_ms as u64) {
+                self.overflow += !to_host as u64;
                 return; // the narrow hop's queue is full
             }
             let tx = Duration::from_secs_f64(
@@ -321,6 +339,8 @@ struct Host {
     skips: u64,
     keyframes: u64,
     max_backlog: usize,
+    /// The track's catch-up (rtc.rs).
+    catchup: super::rtc::Catchup,
     /// The stream's bitrate (the estimate is aimed at it), and what the track's stats said: the
     /// bandwidth estimates (kbit/s), NACKs and PLIs received.
     kbps: u32,
@@ -410,6 +430,7 @@ pub(crate) fn run(link: LinkCfg, stream: StreamCfg, pol: Policy, secs: u64, seed
         ],
         q: BinaryHeap::new(),
         seq: 0,
+        overflow: 0,
     };
     let mut sizes = Rng(seed.wrapping_mul(31) | 1);
     let mut host = Host {
@@ -433,6 +454,7 @@ pub(crate) fn run(link: LinkCfg, stream: StreamCfg, pol: Policy, secs: u64, seed
         skips: 0,
         keyframes: 0,
         max_backlog: 0,
+        catchup: super::rtc::Catchup::default(),
         kbps: stream.kbps,
         bwe: Vec::new(),
         nacks: 0,
@@ -542,6 +564,19 @@ pub(crate) fn run(link: LinkCfg, stream: StreamCfg, pol: Policy, secs: u64, seed
         while !guest.dq.is_empty() && guest.busy_until <= now {
             let gen = guest.dq.pop_front().unwrap();
             guest.shown.push((guest.busy_until, gen));
+            if trace {
+                if let Some(t) = started {
+                    let lat = guest.busy_until.saturating_duration_since(t).as_micros() as i64
+                        - gen as i64;
+                    if lat > 600_000 {
+                        eprintln!(
+                            "late: shown at {:.2}s, {} ms",
+                            guest.busy_until.saturating_duration_since(t).as_secs_f64(),
+                            lat / 1000
+                        );
+                    }
+                }
+            }
             if !guest.dq.is_empty() {
                 guest.busy_until += DECODE;
             }
@@ -551,14 +586,19 @@ pub(crate) fn run(link: LinkCfg, stream: StreamCfg, pol: Policy, secs: u64, seed
             next_trace += Duration::from_millis(250);
             let b = backlog(&mut host);
             eprintln!(
-                "t={:6.2}s backlog {:7} vq {} rx {:9} shown {} skips {} drops {}",
+                "t={:6.2}s backlog {:7} vq {} rx {:9} shown {} skips {} drops {} | track queue {:?} bwe {:?} behind {} saw_key {}",
                 now.duration_since(t_start).as_secs_f64(),
                 b,
                 host.vq.len(),
                 guest.bytes,
                 guest.shown.len(),
                 host.skips,
-                guest.drops
+                guest.drops,
+                host.mid
+                    .map(|m| super::rtc::track_queue(&mut host.rtc, m, now)),
+                host.bwe.last(),
+                host.catchup.behind(),
+                guest.saw_key,
             );
         }
         // The console's stream thread: an asked-for keyframe (its 500 ms gate).
@@ -593,7 +633,7 @@ pub(crate) fn run(link: LinkCfg, stream: StreamCfg, pol: Policy, secs: u64, seed
             m[13] = key as u8;
             frame_no += 1;
             if pol.rtp_video {
-                to_track(&mut host, &m, key, gen, now);
+                to_track(&mut host, &pol, &m, key, gen, now);
             } else {
                 to_player(&mut host, &pol, m, key, now);
             }
@@ -610,6 +650,12 @@ pub(crate) fn run(link: LinkCfg, stream: StreamCfg, pol: Policy, secs: u64, seed
             host.oq.push_back(vec![b'{'; 300]);
             next_status += Duration::from_secs(1);
         }
+    }
+    if trace {
+        eprintln!(
+            "link: {} packets dropped by the full queue toward the guest",
+            net.overflow
+        );
     }
     report(&host, &guest, started.unwrap_or(t0), now, period)
 }
@@ -650,6 +696,16 @@ fn lag_ask(h: &mut Host, pol: &Policy, now: Instant) {
         h.key_asked = Some(now);
         h.any_key_asked = Some(now);
         h.want_key = true;
+    }
+}
+
+/// The session's keyframe ask (join.rs KeyAsk, one a second), then rp_stream_api's `lag_ask`.
+fn session_key_ask(h: &mut Host, pol: &Policy, now: Instant) {
+    if h.guest_ask
+        .is_none_or(|t| now.saturating_duration_since(t) >= Duration::from_secs(1))
+    {
+        h.guest_ask = Some(now);
+        lag_ask(h, pol, now);
     }
 }
 
@@ -713,6 +769,10 @@ fn drain_host(h: &mut Host, net: &mut Link, now: Instant, pol: &Policy) -> Optio
     let mut to = None;
     for _ in 0..2 {
         pump(h, pol);
+        // rtc.rs `poll`: pictures waiting for the track go as str0m's queue drains.
+        if pol.rtp_catchup && h.catchup.waiting(now).0 > 0 {
+            pump_track(h, pol, now);
+        }
         loop {
             match h.rtc.poll_output() {
                 Ok(Output::Timeout(t)) => {
@@ -732,11 +792,16 @@ fn drain_host(h: &mut Host, net: &mut Link, now: Instant, pol: &Policy) -> Optio
                         // at its bitrate.
                         h.mid = Some(m.mid);
                         h.pt = super::rtc::TrackPts::of(&mut h.rtc, m.mid).h264_for(Some(0x64));
-                        let k = h.kbps as u64;
-                        h.rtc.bwe().reset(Bitrate::kbps(k));
-                        h.rtc
-                            .bwe()
-                            .set_bitrate(Bitrate::kbps(0), Bitrate::kbps(k * 5 / 4));
+                        if pol.rtp_catchup {
+                            h.catchup.aim(&mut h.rtc, h.kbps);
+                        } else {
+                            // Before #720: no minimum (no padding past str0m's 50 kbit/s).
+                            let k = h.kbps as u64;
+                            h.rtc.bwe().reset(Bitrate::kbps(k));
+                            h.rtc
+                                .bwe()
+                                .set_bitrate(Bitrate::kbps(0), Bitrate::kbps(k * 5 / 4));
+                        }
                     }
                     Event::MediaAdded(m) => {
                         h.mid = Some(m.mid);
@@ -747,7 +812,12 @@ fn drain_host(h: &mut Host, net: &mut Link, now: Instant, pol: &Policy) -> Optio
                         });
                     }
                     Event::EgressBitrateEstimate(BweKind::Twcc { estimate, .. }) => {
-                        h.bwe.push((estimate.as_f64() / 1000.0) as u32);
+                        let kbps = (estimate.as_f64() / 1000.0).round() as u32;
+                        h.bwe.push(kbps);
+                        h.catchup.estimate(kbps);
+                    }
+                    Event::PeerStats(s) if std::env::var_os("LINK_SIM_TRACE").is_some() => {
+                        eprintln!("peer: bwe_tx {:?}", s.bwe_tx);
                     }
                     Event::MediaEgressStats(s) => {
                         h.nacks = s.nacks;
@@ -760,14 +830,7 @@ fn drain_host(h: &mut Host, net: &mut Link, now: Instant, pol: &Policy) -> Optio
                         }
                     }
                     // The guest's PLI: the same gates as its keyframe ask.
-                    Event::KeyframeRequest(_) => {
-                        if h.guest_ask.is_none_or(|t| {
-                            now.saturating_duration_since(t) >= Duration::from_secs(1)
-                        }) {
-                            h.guest_ask = Some(now);
-                            lag_ask(h, pol, now);
-                        }
-                    }
+                    Event::KeyframeRequest(_) => session_key_ask(h, pol, now),
                     // The page's {"keyframe": true}: join.rs KeyAsk, then lag_ask.
                     Event::ChannelData(d)
                         if !d.binary
@@ -862,9 +925,10 @@ fn stamp_of(au: &[u8]) -> Option<Vec<u8>> {
     )
 }
 
-/// The console's picture straight onto the track (RTP has no backlog to skip: str0m sends it at
-/// once, keeps it for retransmission, and a lost piece costs that frame only on the receiver).
-fn to_track(h: &mut Host, m: &[u8], key: bool, gen_us: u64, now: Instant) {
+/// The console's picture onto the track (rtc.rs `to_track`): str0m paces it out at its estimate
+/// and keeps it for retransmission; a picture that would wait too long in its queue is dropped
+/// with the rest up to the next keyframe, which is asked for as the engine does (`Catchup`).
+fn to_track(h: &mut Host, pol: &Policy, m: &[u8], key: bool, gen_us: u64, now: Instant) {
     if h.need_key && !key {
         return;
     }
@@ -873,9 +937,32 @@ fn to_track(h: &mut Host, m: &[u8], key: bool, gen_us: u64, now: Instant) {
         return;
     };
     let au = annex_b(m, key);
+    let t = MediaTime::new(gen_us * 90 / 1000, Frequency::NINETY_KHZ);
+    if pol.rtp_catchup {
+        h.catchup.push(super::rtc::TrackPic {
+            key,
+            at: now,
+            rtp: t,
+            data: au,
+        });
+        pump_track(h, pol, now);
+        return;
+    }
     if let Some(w) = h.rtc.writer(mid) {
-        let t = MediaTime::new(gen_us * 90 / 1000, Frequency::NINETY_KHZ);
         let _ = w.write(pt, now, t, au);
+    }
+}
+
+/// rtc.rs `pump_track`: the pictures waiting go as str0m's queue takes them, the keyframe ask
+/// through the session's gates.
+fn pump_track(h: &mut Host, pol: &Policy, now: Instant) {
+    let (Some(mid), Some(pt)) = (h.mid, h.pt) else {
+        return;
+    };
+    let c = h.catchup.pump(&mut h.rtc, mid, pt, now);
+    h.skips = h.catchup.dropped;
+    if c.ask {
+        session_key_ask(h, pol, now);
     }
 }
 
@@ -1036,6 +1123,9 @@ pub(crate) fn links() -> Vec<(&'static str, LinkCfg)> {
         queue_ms: 60,
     };
     vec![
+        // The same Wi-Fi (a home-network guest on the track): a short trip, some jitter.
+        ("wifi 2ms", l(2, 4, 0.0, 0)),
+        ("wifi 2ms 1%", l(2, 4, 0.01, 0)),
         ("30ms clean", l(30, 2, 0.0, 0)),
         ("30ms 0.5%", l(30, 5, 0.005, 0)),
         ("30ms 1%", l(30, 5, 0.01, 0)),
@@ -1045,6 +1135,8 @@ pub(crate) fn links() -> Vec<(&'static str, LinkCfg)> {
         ("80ms 2%", l(80, 10, 0.02, 0)),
         ("30ms 25M up", l(30, 5, 0.0, 25_000)),
         ("30ms 12M up", l(30, 5, 0.0, 12_000)),
+        // #720's guests: a link that carries a fifth of the stream.
+        ("30ms 3M up", l(30, 5, 0.0, 3_000)),
         ("30ms 0.5% 25M", l(30, 5, 0.005, 25_000)),
     ]
 }
@@ -1062,6 +1154,32 @@ fn a_clean_link_shows_every_picture() {
     assert!(r.fps > 55.0, "{}", r.row());
     assert_eq!(r.stalls, 0, "{}", r.row());
     assert_eq!(r.host_skips, 0, "{}", r.row());
+}
+
+/// #720: a guest whose link carries less than the stream gets fresh pictures, never ones that
+/// fall further behind: the track drops pictures to the next keyframe instead of queueing them.
+/// Before, at 12 Mbit/s: 1.2 fps over a second late; at 3 Mbit/s: nothing at all. At 3 Mbit/s a
+/// keyframe alone takes most of a second (more while str0m's estimate is under the link), and
+/// the first after the 15 Mbit/s start floods the link: a picture now and then, never worse.
+#[test]
+fn a_link_slower_than_the_stream_keeps_the_picture_fresh() {
+    // (link, seconds, at least fps, latency p50 and p99 under, ms)
+    for (cap_kbps, secs, fps, p50, p99) in [
+        (12_000, 10, 3.0, 400.0, 700.0),
+        (3_000, 30, 0.2, 1_200.0, 3_000.0),
+    ] {
+        let link = LinkCfg {
+            rtt_ms: 30,
+            jitter_ms: 5,
+            loss: 0.0,
+            cap_kbps,
+            queue_ms: 60,
+        };
+        let r = run(link, StreamCfg::DEFAULT, Policy::track(), secs, 7);
+        assert!(r.fps > fps, "{cap_kbps}: {}", r.row());
+        assert!(r.lat_p50 < p50, "{cap_kbps}: {}", r.row());
+        assert!(r.lat_p99 < p99, "{cap_kbps}: {}", r.row());
+    }
 }
 
 /// The table: every link, the engine before and now. Run with `--release --ignored --nocapture`.
@@ -1111,6 +1229,11 @@ fn link_sim_table() {
         (
             // The engine's track (rtc.rs with_track).
             "track",
+            Policy::track(),
+        ),
+        (
+            // …writing every picture, however far behind the link is (before #720).
+            "track-nocatchup",
             Policy {
                 rtp_video: true,
                 rtp_engine: true,
@@ -1124,6 +1247,7 @@ fn link_sim_table() {
                 rtp_video: true,
                 rtp_engine: true,
                 rtp_bwe: false,
+                rtp_catchup: true,
                 ..Policy::now()
             },
         ),

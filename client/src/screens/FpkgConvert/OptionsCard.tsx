@@ -10,7 +10,7 @@ import type { MakeKind } from "../../state/convertPrefs";
 import type { OutputPlace } from "../../lib/outputPlace";
 import { useTr } from "../../state/lang";
 import { CompressionTiles } from "./CompressionTiles";
-import { FullVerifyOption, ImageChoice, ZstdOption, type Lz4Choice } from "./ImageOptions";
+import { FullVerifyOption, ImageChoice, PacksNote, ZstdOption, type Lz4Choice } from "./ImageOptions";
 import { NextGameNote } from "./MakeCard";
 import { prettyBytes } from "./RunCard";
 
@@ -160,6 +160,7 @@ export function OptionsCard(props: OptionsCardProps) {
                 compress={props.image.compress}
                 onChoice={props.image.onChoice}
                 lz4={props.image.lz4}
+                packsNote
               />
             )}
           </div>
@@ -174,8 +175,10 @@ export function OptionsCard(props: OptionsCardProps) {
             </div>
             {/* A game that reads through AMPR can have its folder in zstd packs (LZ4 packs are
                 for .exfat images only). */}
-            {props.image?.lz4 && props.image.lz4.readiness.kind !== "no_ampr" && (
+            {props.image?.lz4 && props.image.lz4.readiness.kind !== "no_ampr" ? (
               <ZstdOption lz4={props.image.lz4} folder />
+            ) : (
+              <PacksNote lz4={props.image?.lz4} folder />
             )}
           </div>
         ) : ps4Package ? (
