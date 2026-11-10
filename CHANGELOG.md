@@ -6,6 +6,25 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+Play Together:
+
+- A friend whose connection can't keep up with the stream no longer falls further and further behind. Their picture now skips ahead to a fresh one, so the delay stays short instead of growing to several seconds. You and other friends aren't affected. A very slow connection still shows a choppy picture; lowering the quality (offered in the Play Together panel) is the fix for that.
+
+Convert:
+
+- The image options now explain the asset packs (LZ4, zstd): why they aren't offered for a game, and that a packed game only plays when ShadowMount+ mounts it. A "Which image should I make?" note explains the image types and compression in plain words.
+
+Games:
+
+- Disk images that ShadowMount+ mounts under the game's name are now linked to their game, so they show its title and cover instead of "not linked to a game". Thanks to kh-mitya.
+- On a game's page, the Consoles card no longer squeezes a console's name into a column one letter wide. Thanks to kh-mitya.
+
+PS5 helper:
+
+- After PS5Upload updates its helper in a Payload Manager slot, Payload Manager now shows the right version, and no longer offers an older release as an "update". Thanks to kh-mitya.
+
+## 12.4.4
+
 Transfers:
 
 - The check that reads files back on the PS5 now runs while a large file is still arriving, so it adds almost no time: a 4 GiB file to a PS5 Pro took 60 s with the check, against 83 s in 12.4.3 and about 62 s with no check.
