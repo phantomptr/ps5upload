@@ -8,6 +8,10 @@ What's new in ps5upload, written for humans.
 
 Play Together:
 
+- Fixed friends' picture lagging behind, even on a fast home network. On a quiet screen (a menu) the stream sends very little, and the app wrongly took that as a slow connection. When the game got busy again, it held the picture back while it caught up, so friends fell seconds behind. Friends on your home network now get the full rate all the time, and friends over the internet get it back as soon as their connection shows it can carry it.
+- After "Lower quality" restarts the stream, Play Together now reopens by itself instead of saying it couldn't start.
+- When the PS5 accepts a Remote Play start but never finishes it, the app now says so and what to check (the TV may be asking something, or a game started by another user may be holding it up), instead of only "The stream stopped".
+- The stream's status bar no longer shows 0.0 Mbit/s and a decode time of 0 ms when the system's media player shows the picture. The light bar's dot is now visible on the dark bar too.
 - A friend whose connection can't keep up with the stream no longer falls further and further behind. Their picture now skips ahead to a fresh one, so the delay stays short instead of growing to several seconds. You and other friends aren't affected. A very slow connection still shows a choppy picture; lowering the quality (offered in the Play Together panel) is the fix for that.
 
 Convert:
