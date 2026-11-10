@@ -110,6 +110,15 @@ const SETTINGS: &[Setting] = &[
         description: "Upload speed limit in MB/s. 0 means no limit.",
     },
     Setting {
+        name: "verify_writes",
+        key: "ps5upload.verify_writes",
+        kind: TRUE_FALSE,
+        default: Default_::Bool(true),
+        description: "After each large file is written, the console reads it back from its drive \
+                      and checks it against what was sent; a file that does not match is sent \
+                      again. Needs a helper that can (an older one writes without the check).",
+    },
+    Setting {
         name: "auto_resume",
         key: "ps5upload.auto_resume",
         kind: TRUE_FALSE,
@@ -540,6 +549,20 @@ pub(crate) fn document_schema() -> Value {
     })
 }
 
+/// A switch's value as the app has it now (its default when unset or unreadable). The engine
+/// reads the few settings that change how it moves data this way.
+pub(crate) fn flag(name: &str) -> bool {
+    let Some(s) = SETTINGS.iter().find(|s| s.name == name) else {
+        return false;
+    };
+    let doc = shared_state::read(DOC);
+    let entries = entries_of(doc.value.as_ref());
+    let raw = entries.get(s.key).and_then(|e| e.get("v"));
+    decode(s, raw.and_then(|v| v.as_str()))
+        .as_bool()
+        .unwrap_or(false)
+}
+
 fn answer(doc: &shared_state::Doc) -> Value {
     let (settings, set) = typed(&entries_of(doc.value.as_ref()));
     json!({"rev": doc.rev, "settings": settings, "set": set})
@@ -643,6 +666,16 @@ mod tests {
 
     fn setting(name: &str) -> &'static Setting {
         SETTINGS.iter().find(|s| s.name == name).unwrap()
+    }
+
+    /// #783: the read-back is on unless the app stored "false"; a name that is not a switch is off.
+    #[test]
+    fn verify_writes_is_on_by_default_and_reads_like_the_app() {
+        let s = setting("verify_writes");
+        assert_eq!(decode(s, None), json!(true));
+        assert_eq!(decode(s, Some("false")), json!(false));
+        assert_eq!(decode(s, Some("junk")), json!(true));
+        assert!(!flag("no_such_setting"));
     }
 
     /// What the app itself reads from each stored spelling.

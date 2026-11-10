@@ -263,7 +263,9 @@ int ava1_payload_start(void) {
                 fprintf(stderr, "ava1: data layer did not start (%d); transfers are unavailable\n", rc);
             else {
                 cfg.data = ava1_data_hooks();
-                cfg.caps = AVA1_CAP_DATA_PLANE | AVA1_CAP_SHARED_JOBS; /* the data layer's own rules (SPEC.md §18.5) */
+                /* the data layer's own rules (SPEC.md §18.5), and the read-back of large files on request
+                 * (JF_READBACK, SPEC.md §13.5; #783) */
+                cfg.caps = AVA1_CAP_DATA_PLANE | AVA1_CAP_SHARED_JOBS | AVA1_CAP_READBACK;
                 g_data_on = 1;
                 fsj_register_ops(); /* job.run: delete, chmod -R, hash, crc32 (the table adds the rest) */
                 webui_pkg_register_ops(); /* job.run: the console page's package install */

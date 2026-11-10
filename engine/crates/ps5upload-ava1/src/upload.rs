@@ -473,6 +473,11 @@ pub(crate) fn refusal(status: u16, message: String) -> UploadFailure {
     {
         // AVA1 1.0.7: a link (or a file) where a folder of the job goes, inside the destination.
         "ava1_path_link".into()
+    } else if status == gen::ERR_VERIFY && message.contains("reads back") {
+        // The console read a file back from its drive and it differed from what was sent,
+        // every try (JF_READBACK, #783). Other ERR_VERIFY (a copy's source that changed) keep
+        // the generic reason.
+        "ava1_verify_failed".into()
     } else {
         refusal_reason(status)
     };
@@ -705,6 +710,60 @@ pub fn upload_with_in(
     upload_with_seq_in(pool, console, job_id, manifest, source, None, opts, cfg)
 }
 
+/// Whether a job asks the console to read its large files back from the drive before it counts
+/// them written (AVA1 `JF_READBACK`, SPEC.md §13.5; #783). Every other check hashes the bytes
+/// as they arrive, so this is the one that sees what the drive holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Readback {
+    /// Asked for: the helper advertises `CAP_READBACK` and the setting is on.
+    On,
+    /// The setting is off (or the job is not an upload).
+    Off,
+    /// The setting is on but the helper predates the read-back: the files are written as
+    /// before, unchecked on the drive, and the job says so.
+    Unsupported,
+}
+
+impl Readback {
+    pub fn choose(wanted: bool, kind: u8, peer_caps: u64) -> Readback {
+        if !wanted || kind != gen::JOB_UPLOAD {
+            Readback::Off
+        } else if peer_caps & gen::CAP_READBACK != 0 {
+            Readback::On
+        } else {
+            Readback::Unsupported
+        }
+    }
+
+    /// The word the finished job's `commit_ack` carries as `readback`.
+    pub fn word(self) -> &'static str {
+        match self {
+            Readback::On => "on",
+            Readback::Off => "off",
+            Readback::Unsupported => "unsupported",
+        }
+    }
+
+    /// The `JobOpen` flags with the read-back asked for when it is on.
+    pub fn flags(self, flags: u32) -> u32 {
+        if self == Readback::On {
+            flags | gen::JF_READBACK
+        } else {
+            flags & !gen::JF_READBACK
+        }
+    }
+}
+
+/// Bytes the console reported durable beyond the job's size: what it asked for again after a
+/// file failed a check (its read-back from the drive, or the root of what arrived) and the
+/// sender sent it again. A resume resets the count to what the console holds, and a frame
+/// applied twice is one range, so neither adds to it.
+pub fn rechecked_bytes(p: &Progress) -> u64 {
+    p.bytes_durable
+        .load(Ordering::Relaxed)
+        .saturating_sub(p.bytes_total.load(Ordering::Relaxed))
+}
+
 /// `upload_with_in` for a forward-only source (`seq`, SPEC.md section 17): one decode
 /// thread replaces the random readers and `source` is never read.
 #[allow(clippy::too_many_arguments)]
@@ -755,9 +814,13 @@ pub fn upload_with_seq_in(
         progress.clone(),
         resumed.clone(),
     );
+    // What the job asked the console for, the last attempt's answer (the helper may be
+    // replaced between attempts); said in the log once when the helper cannot do it.
+    let mut readback = Readback::Off;
+    let mut told_unsupported = false;
     let outcome = crate::block_on(async {
         SessionGate::identity(pool)?;
-        let _bridge = Bridge::start_resumed(progress.clone(), cfg, resumed.clone());
+        let bridge = Bridge::start_resumed(progress.clone(), cfg, resumed.clone());
         let mut backoff = Duration::from_millis(250);
         let mut gate = SessionGate::default();
         let mut busy = 0u32;
@@ -795,11 +858,24 @@ pub fn upload_with_seq_in(
                 progress.bytes_durable.load(Ordering::Relaxed)
             );
             progress.telemetry.lock().unwrap().peer_key = Some(session.peer_key());
+            readback = Readback::choose(cfg.verify_writes, opts.kind, session.peer_caps());
+            if readback == Readback::Unsupported && !told_unsupported {
+                told_unsupported = true;
+                ps5upload_core::clog!(
+                    Warn,
+                    "transfer",
+                    "ava1 send {} to {console}: the helper cannot read files back after writing them \
+                     (it predates the check); this upload is written without it. Update the helper \
+                     to have large files checked on the drive.",
+                    hex(&job_id)
+                );
+            }
+            bridge.set_readback(readback == Readback::On);
             let mut link = session.job(job_id);
             let o = SendOptions {
                 kind: opts.kind,
                 policy: opts.policy,
-                flags: opts.flags,
+                flags: readback.flags(opts.flags),
                 root: opts.root.clone(),
                 // Must stay gen::LARGE_CUTOFF (only tests may change it, C18).
                 cutoff: opts.cutoff,
@@ -829,6 +905,21 @@ pub fn upload_with_seq_in(
                     let _ = std::fs::remove_dir_all(&persist);
                     let skipped_files = progress.skipped_files.load(Ordering::Relaxed);
                     let skipped_bytes = progress.skipped_bytes.load(Ordering::Relaxed);
+                    let rechecked = rechecked_bytes(&progress);
+                    if rechecked > 0 {
+                        // Loud on purpose (#783): a file did not check out on the console and was
+                        // sent again. The helper's own log names the file and where it differed.
+                        ps5upload_core::clog!(
+                            Warn,
+                            "transfer",
+                            "ava1 send {} to {console}:{dest}: the console found {rechecked} bytes \
+                             that did not match what was sent (read back from its drive: {}) and \
+                             they were sent again; the job ended with every file checked. See \
+                             the helper's stderr.log for the files.",
+                            hex(&job_id),
+                            readback.word()
+                        );
+                    }
                     let mut body = serde_json::json!({
                         "protocol": "ava1",
                         "files": r.files,
@@ -845,6 +936,11 @@ pub fn upload_with_seq_in(
                         // Every byte the console held when the job first opened, partly
                         // written files included (a resumed single file has no skipped files).
                         "resumed_bytes": resumed.load(Ordering::Acquire).max(skipped_bytes),
+                        // Whether the console read the large files back from its drive (#783):
+                        // "on", "off" (the setting) or "unsupported" (an older helper).
+                        "readback": readback.word(),
+                        // Bytes sent again because a file did not check out on the console.
+                        "rechecked_bytes": rechecked,
                     });
                     // The bytes are durable, but the console did not confirm its files settled in place
                     // (SPEC.md §15.7): the job's snapshot says so instead of a clean success.
@@ -1706,6 +1802,13 @@ mod failure_reason_tests {
         assert_eq!(refusal_reason(gen::ERR_EXISTS), "ava1_exists");
         assert_eq!(refusal_reason(gen::ERR_CROSS_DEVICE), "ava1_cross_device");
         assert_eq!(refusal_reason(gen::ERR_STALLED), "ava1_stalled");
+        let f = refusal(
+            gen::ERR_VERIFY,
+            "a file reads back from the drive different from what was sent, every try".into(),
+        );
+        assert_eq!(f.reason, "ava1_verify_failed");
+        let f = refusal(gen::ERR_VERIFY, "source changed while copying".into());
+        assert_eq!(f.reason, format!("ava1_refused_{}", gen::ERR_VERIFY));
         assert_eq!(refusal_reason(65535), "ava1_refused_65535");
         // Every typed refusal (upload, download, relay, copy) goes through `refusal`.
         let f = refusal(gen::ERR_STALLED, "no data".into());
@@ -1715,6 +1818,48 @@ mod failure_reason_tests {
         assert_eq!(f.reason, "ava1_file_too_large");
         let f = refusal(gen::ERR_IO, "write failed: Input/output error".into());
         assert_eq!(f.reason, format!("ava1_refused_{}", gen::ERR_IO));
+    }
+}
+
+#[cfg(test)]
+mod readback_tests {
+    use super::*;
+
+    #[test]
+    fn the_read_back_is_asked_only_of_a_helper_that_can_and_only_for_uploads() {
+        let can = gen::CAP_DATA_PLANE | gen::CAP_READBACK;
+        let old = gen::CAP_DATA_PLANE | gen::CAP_MGMT;
+        assert_eq!(Readback::choose(true, gen::JOB_UPLOAD, can), Readback::On);
+        assert_eq!(
+            Readback::choose(true, gen::JOB_UPLOAD, old),
+            Readback::Unsupported
+        );
+        assert_eq!(Readback::choose(false, gen::JOB_UPLOAD, can), Readback::Off);
+        assert_eq!(
+            Readback::choose(true, gen::JOB_DOWNLOAD, can),
+            Readback::Off
+        );
+        let single = gen::JF_SINGLE_FILE;
+        assert_eq!(Readback::On.flags(single), single | gen::JF_READBACK);
+        // An older helper refuses a flag it does not know: never sent unless asked for.
+        assert_eq!(Readback::Unsupported.flags(single), single);
+        assert_eq!(Readback::Off.flags(single | gen::JF_READBACK), single);
+        assert_eq!(
+            [Readback::On, Readback::Off, Readback::Unsupported].map(Readback::word),
+            ["on", "off", "unsupported"]
+        );
+    }
+
+    #[test]
+    fn rechecked_bytes_are_what_the_console_made_durable_past_the_job() {
+        let p = Progress::default();
+        p.bytes_total.store(10 << 20, Ordering::Relaxed);
+        p.bytes_durable.store(10 << 20, Ordering::Relaxed);
+        assert_eq!(rechecked_bytes(&p), 0);
+        p.bytes_durable.store(13 << 20, Ordering::Relaxed); // a 3 MiB file went twice
+        assert_eq!(rechecked_bytes(&p), 3 << 20);
+        p.bytes_durable.store(1, Ordering::Relaxed); // mid-job
+        assert_eq!(rechecked_bytes(&p), 0);
     }
 }
 

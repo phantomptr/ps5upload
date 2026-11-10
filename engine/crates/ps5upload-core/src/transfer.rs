@@ -63,6 +63,12 @@ pub struct TransferConfig {
     /// Folder uploads: the folder was downloaded with its names kept (`host_names`), and
     /// each file goes to the console under the exact name it had there (#729).
     pub unescape_names: bool,
+    /// Ask the console to read each large file back from its drive after writing it and check
+    /// it against what was sent (AVA1 `JF_READBACK`, SPEC.md §13.5; #783). A file that does not
+    /// match is sent again. Only a helper that advertises `CAP_READBACK` is asked; an older one
+    /// writes as before and the job says it was not checked. The app's "Check files on the
+    /// console after writing" setting (on by default).
+    pub verify_writes: bool,
 }
 
 impl TransferConfig {
@@ -83,6 +89,7 @@ impl TransferConfig {
             source_fs: None,
             renames: Vec::new(),
             unescape_names: false,
+            verify_writes: true,
         }
     }
 
@@ -209,6 +216,9 @@ pub struct LiveNotes {
     pub resumed_bytes: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Files are still settling on the console after the job finished.
     pub settling: std::sync::atomic::AtomicBool,
+    /// Every byte is on the console and it is reading the last large files back to check them
+    /// (`TransferConfig::verify_writes` on a helper that can): "Verifying on the console".
+    pub verifying: std::sync::atomic::AtomicBool,
     /// The files the console still reports unswept while `settling` (0 outside it), and the
     /// most it reported: the numerator and denominator of "Finishing on the console: N left".
     pub unswept: std::sync::atomic::AtomicU32,

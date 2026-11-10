@@ -40,6 +40,7 @@ export const SHARED_KEYS: readonly string[] = [
   "ps5upload.auto_resume",
   "ps5upload.queue_auto_start",
   "ps5upload.wake_for_uploads",
+  "ps5upload.verify_writes",
   "ps5upload.keep_ps5_awake_mode",
   "ps5upload.keep_ps5_awake",
   "ps5upload.auto_bring_up",

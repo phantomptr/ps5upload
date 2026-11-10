@@ -479,12 +479,13 @@ pub(crate) fn stream_to_console(
         .collect();
     let want_empty: Vec<String> = source.empty_dirs().to_vec();
     let data: u64 = want_sizes.values().sum();
+    // A part file from an earlier try: AVA1 goes on from it.
+    let held = target
+        .files
+        .stat(&format!("{}.ava-part", target.path))
+        .map_or(0, |(n, _)| n.min(size));
     if let Some(room) = &target.room {
-        // A part file from an earlier try is credited: AVA1 goes on from it.
-        let held = target
-            .files
-            .stat(&format!("{}.ava-part", target.path))
-            .map_or(0, |(n, _)| n.min(size));
+        // What it holds is credited.
         room_check(size, held, room).map_err(no_room)?;
     }
     let key = format!(
@@ -556,6 +557,15 @@ pub(crate) fn stream_to_console(
     let passes = seq.passes.load(Ordering::Relaxed);
     let sent_at = started.elapsed();
     let hashes = hashing.hashes(cancel).map_err(anyhow::Error::msg)?;
+    // A job that went on from an earlier try (a part file on the console, or another pass after a
+    // dropped connection) is read back whole, as a local build that resumes is: the job id can't
+    // see a source file edited to the same size, and the console keeps the bytes it already holds
+    // (the image's entry has no mtime), so a sample could miss old bytes next to new ones (#783).
+    let mode = if held > 0 || passes > 1 {
+        VerifyMode::Full
+    } else {
+        mode
+    };
 
     // The read-back, on the console. A failure here removes the image: it is not what was built.
     let checked = (|| -> Result<ps5upload_fpkg::sample::VerifySummary, String> {

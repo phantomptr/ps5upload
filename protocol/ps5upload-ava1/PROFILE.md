@@ -38,6 +38,7 @@ Related files in this directory:
 | job event log | `/data/ps5upload/ava/events.log` (one line per job open, resume, done and fail with status, bytes, files and lanes; 1 MiB, rolled to `events.log.old`), read with `fs.read` like the other log files | `ava1_events_set_path` in `ava1_glue.c` |
 | timing flag (CLIENT_CONTRACT §4.2.1) | `/data/ps5upload/debug/ava1-timing` | `-DAVA1_TIMING_FLAG` in `payload/Makefile` |
 | durable-by-log off flag | `/data/ps5upload/debug/ava1-log-small-off` | `-DAVA1_LOG_SMALL_OFF_FLAG` in `payload/Makefile` |
+| read-back (#783) | none: the engine asks per upload with `JF_READBACK` when the helper advertises `CAP_READBACK` and the app's `verify_writes` setting is on (default). Each mismatch is a `readback-mismatch` line in the helper's stderr.log and in events.log | `payload/src/ava1_glue.c` (caps) |
 | helper stderr (the timing and end-of-job lines) | `/data/ps5upload/stderr.log` | the payload |
 | takeover flag (§9.1) | `/data/ps5upload/runtime/takeover` | `payload/src/takeover.c` |
 | shared send records (SPEC §18.6) | `/data/ps5upload/c2c/<job id hex>.json` on the receiving console, written with `fs.write` | the engine |
@@ -283,6 +284,14 @@ shows nothing for it. Code that matches on these fields points here (`client/src
 | `measure_done_bytes` | u64 | With `phase: "measuring"`: a RAR's entries of unknown size are being decoded to learn them, this many bytes so far. `total_bytes` includes them once it ends. |
 | `bottleneck` | string | AVA1's words: `network`, `source`, `console drive`, `console workers`, `console memory`, `none`. A finished job carries the same word in `commit_ack.bottleneck`. |
 | `settling` | bool | Files are still settling on the console after the job finished (the engine sees `unswept` > 0 in `job.status`): the client shows "Finishing on the console…". Sent on the job while it settles; absent or `false` shows nothing. |
+| `verifying` | bool | The job asked for the read-back (`JF_READBACK`, SPEC §13.5; #783), every byte is durable on the console and files are still being committed: the console is reading the last large files back from its drive. The client shows "Verifying on the PS5…". Never with `settling`. |
+
+A finished upload's `commit_ack` also carries `readback`: `"on"` (the console read each large file back
+from its drive before it counted it written), `"off"` (the `verify_writes` setting is off) or
+`"unsupported"` (the helper does not advertise `CAP_READBACK`; the engine logs it once per job), and
+`rechecked_bytes`: bytes the console asked for again because a file did not check out (its read-back,
+or the root of what arrived); the engine logs a warning when it is not 0. A job whose file kept reading
+back wrong ends with reason `ava1_verify_failed` (not retried by the queue).
 
 **Job summaries** (review 009 #4). Every finished, failed or cancelled transfer leaves one
 `job_summary` JSON in `<data dir>/jobs/<job id>.json` on the engine's machine (the newest 200 are

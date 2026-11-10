@@ -77,6 +77,9 @@ const FATAL_REASON_SUBSTRINGS = [
 
 const AVA1_FATAL_REASON_PREFIXES = [
   "ava1_exists",
+  // A file kept reading back from the PS5's drive different from what was sent (#783): the
+  // console already sent it again twice; another run would only do the same.
+  "ava1_verify_failed",
   "ava1_cross_device",
   // Download/copy failures a retry cannot change (engine download.rs / copy.rs).
   "ava1_local_io",
@@ -232,7 +235,12 @@ export function isAutoRecoverable(
  *  write does not earn it: those just try again. */
 export function recoveryResendsHelper(reason: string | null | undefined): boolean {
   const r = (reason ?? "").toLowerCase();
-  return !(r === "source_read_failed" || r === "ava1_stalled" || /^ava1_refused_\d+$/.test(r));
+  return !(
+    r === "source_read_failed" ||
+    r === "ava1_stalled" ||
+    r === "ava1_verify_failed" ||
+    /^ava1_refused_\d+$/.test(r)
+  );
 }
 
 /**
