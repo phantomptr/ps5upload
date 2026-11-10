@@ -22598,7 +22598,7 @@
     },
     "/api/join/open": {
       "post": {
-        "description": "`POST /api/join/open {addr}`: open Play Together for the session being played on `addr`,\nwith an invite ready (409 `not_playing` when none runs, 409 `old_helper` when the helper has\nno guest controllers: \"Update the helper to play together\"; 502 when the console does not\nanswer). Opening an open one changes nothing. (Nearby apps learn of it from the host app's\nmesh presence, which the app publishes from `GET /api/join`.)",
+        "description": "`POST /api/join/open {addr}`: open Play Together for the session being played on `addr`,\nwith an invite ready (409 `not_playing` when none runs, 409 `old_helper` when the helper has\nno guest controllers: \"Update the helper to play together\"; 502 when the console does not\nanswer). Opening an open one changes nothing, also while its host's stream restarts (a new\nbitrate from the panel's \"Lower to\", #720): the party waits [`HOST_RESTART_WINDOW`] for them,\nso the panel opened again before the new session is up gets that party, not `not_playing`.\n(Nearby apps learn of it from the host app's mesh presence, which the app publishes from\n`GET /api/join`.)",
         "requestBody": {
           "content": {
             "application/json": {
