@@ -6,6 +6,13 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+Transfers:
+
+- The check that reads files back on the PS5 now runs while a large file is still arriving, so it adds almost no time: a 4 GiB file to a PS5 Pro took 60 s with the check, against 83 s in 12.4.3 and about 62 s with no check.
+- The check now reads from the drive itself, not from a copy still held in the console's memory, so it can catch a fault on the drive.
+
+## 12.4.3
+
 PS5 helper and rest mode:
 
 - Fixed a rare problem where a PS5 with Tailscale turned on could switch itself off while in rest mode. The helper's Tailscale now closes all its connections the moment the console starts going to rest, whatever starts it (PS5Upload, the console's menu, the console resting by itself, or a background download wake), and opens them again once the console is awake and settled. Each step is written to the console's power.log.
