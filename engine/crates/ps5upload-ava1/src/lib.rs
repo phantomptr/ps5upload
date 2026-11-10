@@ -16,13 +16,6 @@ pub mod app_gen;
 pub mod gen {
     pub use crate::app_gen::*;
     pub use ava1::gen::*;
-    /// Job flag: the receiver reads each large file back from its drive before it commits it
-    /// (SPEC.md §11.8, §13.5; #783). Sent only to a node that advertises [`CAP_READBACK`].
-    /// Defined here until the `ava1` crate the engine pins carries it (the C node in
-    /// third_party/ava1 already does); the same value as the schema's.
-    pub const JF_READBACK: u32 = 32;
-    /// `ServerInfo.caps` bit: the node understands [`JF_READBACK`].
-    pub const CAP_READBACK: u64 = 8;
 }
 pub mod c2c;
 pub mod c2c_record;

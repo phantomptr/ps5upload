@@ -17,7 +17,7 @@ blake3 = "1"
 
 [dependencies]
 # Same version as engine/Cargo.toml (the third_party/ava1 submodule's tag).
-ava1 = "=1.0.7"
+ava1 = "=1.0.8"
 # Tauri core + the native file dialogs. File reads/writes go through our
 # own commands (see commands/save_text_file.rs), and links open through
 # tauri-plugin-opener below.
