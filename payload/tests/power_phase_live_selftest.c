@@ -21,6 +21,14 @@ int tailnet_node_set_paused(int paused) {
     return 0;
 }
 const char *tailnet_node_brief(void) { return g_paused ? "on,paused" : "on"; }
+static int g_down_pending;
+int tailnet_node_take_down(int *err, char *what, size_t cap) {
+    if (!g_down_pending) return 0;
+    g_down_pending = 0;
+    *err = 163;
+    snprintf(what, cap, "network going away (errno 163 on udp receive)");
+    return 1;
+}
 int hw_fan_pinned_threshold(void) { return 0; }
 
 static int failures;
@@ -55,6 +63,15 @@ int main(void) {
     int calls = g_pause_calls;
     power_phase_poll(45, 45);
     check(g_pause_calls >= calls && !g_paused, "a throttled poll does not pause the tailnet");
+
+    /* the tailnet core closed its sockets by itself (a rest the console started on its own): the next
+     * poll is going down and keeps the node paused; a freeze after it is a wake as usual */
+    g_down_pending = 1;
+    check(power_phase_poll(5, 5) == PP_GOING_DOWN && g_paused, "the core closed itself: going down, node kept paused");
+    check(!g_down_pending, "the signal is taken once");
+    check(power_phase_poll(5, 5) == PP_GOING_DOWN && g_paused, "healthy probes inside the hold: still paused");
+    g_down_pending = 1;
+    check(power_phase_poll(1800, 5) == PP_WAKING && g_paused, "closed, then frozen: woke, paused until the network is back");
 
     printf("power_phase_live_selftest: %s\n", failures ? "FAILED" : "ok");
     return failures ? 1 : 0;
