@@ -134,7 +134,7 @@ fn replace(
     // A kept copy is found beside the file by its name (restore_previous): renaming the file to
     // the new version would leave it behind under the old name.
     if !keep_previous {
-        follow_version(console, path, env!("CARGO_PKG_VERSION"));
+        follow_version(console, path, env!("CARGO_PKG_VERSION"), bytes);
     }
     Ok(Outcome::Updated(bytes.len()))
 }
@@ -156,32 +156,128 @@ fn renamed_for_version(name: &str, version: &str) -> Option<String> {
 
 /// Payload Manager lists a slot's file by the name in its `meta.json`, so a name carrying the old
 /// version kept saying so after the bytes were replaced. It moves with the version where that file
-/// names it, and the file's text follows. Best effort: the new bytes are already in place, and a
-/// name that stays is only out of date.
-fn follow_version(console: &dyn Console, path: &str, version: &str) {
+/// names it, and the file's text follows. The slot's `version`, `checksum`, `url` and
+/// `source_direct` are set for the bytes now in it (`slot_fields`), so Payload Manager neither
+/// shows the old version nor offers an older release as an update. Best effort: the new bytes
+/// are already in place, and a slot that stays as it was is only out of date.
+fn follow_version(console: &dyn Console, path: &str, version: &str, bytes: &[u8]) {
     let Some((dir, name)) = path.rsplit_once('/') else {
-        return;
-    };
-    let Some(to) = renamed_for_version(name, version) else {
         return;
     };
     let meta_path = format!("{dir}/meta.json");
     let Some(meta) = console.read_text(&meta_path) else {
         return;
     };
-    let target = format!("{dir}/{to}");
-    if !meta.contains(name) || console.exists(&target) {
-        return;
+    let mut moved = None;
+    if let Some(to) = renamed_for_version(name, version) {
+        let target = format!("{dir}/{to}");
+        if meta.contains(name) && !console.exists(&target) && console.rename(path, &target).is_ok()
+        {
+            moved = Some((target, to));
+        }
     }
-    if console.rename(path, &target).is_err() {
+    let renamed = match &moved {
+        Some((_, to)) => meta.replace(name, to),
+        None => meta.clone(),
+    };
+    let text = slot_fields(&renamed, version, bytes);
+    if text == meta {
         return;
     }
     // Back as it was if the slot can't be told: a slot naming a missing file wouldn't start.
-    if console
-        .write(&meta_path, meta.replace(name, &to).as_bytes())
-        .is_err()
-    {
-        let _ = console.rename(&target, path);
+    if console.write(&meta_path, text.as_bytes()).is_err() {
+        if let Some((target, _)) = moved {
+            let _ = console.rename(&target, path);
+        }
+    }
+}
+
+/// The fields of a Payload Manager `meta.json` that describe its file, set for the helper this
+/// engine just wrote: `version` (keeping a leading `v` when the slot had one), `checksum` (the
+/// SHA-256 of those bytes) and `url` / `source_direct` (this version's release asset). Only
+/// fields the slot already has change, the rest of the text stays as Payload Manager wrote it,
+/// and text that would no longer parse is left alone.
+fn slot_fields(meta: &str, version: &str, bytes: &[u8]) -> String {
+    let release = format!(
+        "https://github.com/phantomptr/ps5upload/releases/download/v{version}/ps5upload-{version}.elf"
+    );
+    let checksum = sha256_hex(bytes);
+    let mut text = meta.to_string();
+    if let Some(old) = string_field(&text, "version") {
+        let new = if old.starts_with('v') {
+            format!("v{version}")
+        } else {
+            version.to_string()
+        };
+        text = set_string_field(&text, "version", &new);
+    }
+    if string_field(&text, "checksum").is_some() {
+        text = set_string_field(&text, "checksum", &checksum);
+    }
+    for key in ["url", "source_direct"] {
+        if string_field(&text, key).is_some() {
+            text = set_string_field(&text, key, &release);
+        }
+    }
+    let parsed = |t: &str| serde_json::from_str::<serde_json::Value>(t).is_ok();
+    if parsed(&text) || !parsed(meta) {
+        text
+    } else {
+        meta.to_string()
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Where the string value of `"key": "…"` sits in `text`, quotes included.
+fn string_field_span(text: &str, key: &str) -> Option<(usize, usize)> {
+    let quoted = format!("\"{key}\"");
+    let mut from = 0;
+    while let Some(i) = text[from..].find(&quoted) {
+        let after_key = from + i + quoted.len();
+        let rest = &text[after_key..];
+        let colon = rest.len() - rest.trim_start().len();
+        if rest[colon..].starts_with(':') {
+            let value = &rest[colon + 1..];
+            let start = after_key + colon + 1 + (value.len() - value.trim_start().len());
+            if text[start..].starts_with('"') {
+                let mut escaped = false;
+                for (j, c) in text[start + 1..].char_indices() {
+                    match c {
+                        _ if escaped => escaped = false,
+                        '\\' => escaped = true,
+                        '"' => return Some((start, start + 1 + j + 1)),
+                        _ => {}
+                    }
+                }
+            }
+            return None;
+        }
+        from = after_key;
+    }
+    None
+}
+
+/// The string value of `"key"` in `text`, when it has one.
+fn string_field(text: &str, key: &str) -> Option<String> {
+    let (start, end) = string_field_span(text, key)?;
+    serde_json::from_str(&text[start..end]).ok()
+}
+
+/// `text` with the string value of `"key"` set to `value`; unchanged when it has none.
+fn set_string_field(text: &str, key: &str, value: &str) -> String {
+    match string_field_span(text, key) {
+        Some((start, end)) => {
+            let quoted = serde_json::to_string(value).unwrap_or_default();
+            format!("{}{}{}", &text[..start], quoted, &text[end..])
+        }
+        None => text.to_string(),
     }
 }
 
@@ -529,7 +625,7 @@ mod tests {
             meta: Some(r#"{"file":"ps5upload-1.0.0.elf","x":1}"#.into()),
             ..Default::default()
         };
-        follow_version(&slot, path, "2.0.0");
+        follow_version(&slot, path, "2.0.0", b"");
         assert_eq!(
             slot.moves.borrow()[0].1,
             "/data/pldmgr/slot/ps5upload-2.0.0.elf"
@@ -543,11 +639,11 @@ mod tests {
             meta: Some("{}".into()),
             ..Default::default()
         };
-        follow_version(&unnamed, path, "2.0.0");
+        follow_version(&unnamed, path, "2.0.0", b"");
         assert!(unnamed.moves.borrow().is_empty());
 
         let no_meta = Slot::default();
-        follow_version(&no_meta, path, "2.0.0");
+        follow_version(&no_meta, path, "2.0.0", b"");
         assert!(no_meta.moves.borrow().is_empty());
 
         let taken = Slot {
@@ -555,7 +651,7 @@ mod tests {
             taken: true,
             ..Default::default()
         };
-        follow_version(&taken, path, "2.0.0");
+        follow_version(&taken, path, "2.0.0", b"");
         assert!(taken.moves.borrow().is_empty(), "never replaces a file");
 
         let failing = Slot {
@@ -563,7 +659,7 @@ mod tests {
             fail_write: true,
             ..Default::default()
         };
-        follow_version(&failing, path, "2.0.0");
+        follow_version(&failing, path, "2.0.0", b"");
         let moves = failing.moves.borrow();
         assert_eq!(moves.len(), 2);
         assert_eq!(moves[1].1, path, "put back when the meta can't be written");
