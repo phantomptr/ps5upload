@@ -74,6 +74,11 @@ export function lz4SavedNothing(
   );
 }
 
+/** An image or folder build that packed the game's files (LZ4 or zstd): its pack stage ran. */
+export function usedPacks(p: { mode: string; stageMs: Partial<Record<string, number>> }): boolean {
+  return (p.mode === "image" || p.mode === "folder") && p.stageMs.pack !== undefined;
+}
+
 export interface RunCardProps {
   pipeline: Pipeline;
   /** The stream-install task, while one runs. */
@@ -535,6 +540,21 @@ export function RunCard(props: RunCardProps) {
             </span>
           )}
         </div>
+        {usedPacks(p) && (
+          <div className="text-sm text-[var(--color-warn)]" data-testid="packs-mount-note">
+            {folder
+              ? tr(
+                  "fpkg.folder.done_packs",
+                  undefined,
+                  "Mount this folder with ShadowMount+: PS5Upload's own mount can't read its asset packs.",
+                )
+              : tr(
+                  "fpkg.image.done_packs",
+                  undefined,
+                  "Mount this image with ShadowMount+: PS5Upload's own mount can't read its asset packs.",
+                )}
+          </div>
+        )}
         {lz4SavedNothing(p, props.sourceBytes) && (
           <div className="text-sm text-[var(--color-warn)]">
             {tr(

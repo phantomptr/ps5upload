@@ -11,10 +11,11 @@ vi.mock("../../state/lang", () => ({
 }));
 
 import type { Pipeline } from "../../state/fpkgConversion";
-import { ImageChoice, ZstdOption, folderPackOptions, folderPacks, packOptions } from "./ImageOptions";
+import { ImageChoice, PacksNote, ZstdOption, folderPackOptions, folderPacks, packOptions } from "./ImageOptions";
 import {
   RunCard,
   deleteLabel,
+  usedPacks,
   lz4Active,
   type Lz4Choice,
   type OutputChoiceProps,
@@ -656,6 +657,62 @@ describe("RunCard", () => {
       const html = renderToStaticMarkup(<ZstdOption lz4={zstd} folder />);
       expect(html).toContain("LZ4 packs are not offered here");
       expect(html).toContain('data-testid="zstd-runtime"');
+    });
+
+    it("says why packs aren't offered instead of hiding them", () => {
+      // No game checked yet: where they'll appear (Convert's ③ only, not a queued game).
+      const pending = renderToStaticMarkup(
+        <ImageChoice format="ffpkg" compress={false} onChoice={noop} packsNote />,
+      );
+      expect(pending).toContain("Asset packs (LZ4, zstd) appear here for games that read their files through AMPR.");
+      expect(idle("ffpkg", undefined)).not.toContain('data-testid="packs-note"');
+      expect(renderToStaticMarkup(<PacksNote lz4={undefined} folder />)).toContain("zstd asset packs appear here");
+      // A game that doesn't read through AMPR: one line, no options.
+      const notAmpr = lz4({ readiness: { refusal: "no", kind: "no_ampr" } });
+      for (const format of ["exfat", "ffpkg"] as const) {
+        const out = idle(format, notAmpr);
+        expect(out).toContain("Asset packs: not offered, this game doesn&#x27;t read its files through AMPR.");
+        expect(out).not.toContain('data-testid="lz4-option"');
+        expect(out).not.toContain('data-testid="zstd-option"');
+      }
+      expect(renderToStaticMarkup(<PacksNote lz4={notAmpr} folder />)).toContain("Asset packs: not offered");
+      // An AMPR game: LZ4 needs .exfat, zstd stays offered.
+      const ffpkg = idle("ffpkg", lz4());
+      expect(ffpkg).toContain("LZ4 asset packs need an .exfat image. zstd asset packs work with this one.");
+      expect(ffpkg).toContain('data-testid="zstd-option"');
+      expect(idle("exfat", lz4())).not.toContain('data-testid="packs-note"');
+      expect(renderToStaticMarkup(<PacksNote lz4={lz4()} folder />)).toBe("");
+    });
+
+    it("warns that a packed game needs ShadowMount+ while a pack option is on", () => {
+      const warning = "A packed game only plays when ShadowMount+ mounts it.";
+      expect(idle("exfat", lz4())).not.toContain(warning);
+      expect(idle("exfat", lz4({ on: true }))).toContain(warning);
+      expect(idle("ffpkg", lz4({ on: true, kind: "zstd" }))).toContain(warning);
+      expect(renderToStaticMarkup(<ZstdOption lz4={lz4({ on: true, kind: "zstd" })} folder />)).toContain(warning);
+      // Not under LZ4 that the game refuses.
+      const refused = lz4({ on: true, readiness: { runtime_version: null, refusal: "x" } });
+      expect(idle("exfat", refused)).not.toContain(warning);
+    });
+
+    it("explains which image to make, in a disclosure anyone can open", () => {
+      const out = idle("ffpkg", undefined);
+      expect(out).toMatch(/<details[^>]*data-testid="which-image"[^>]*><summary[^>]*>[\s\S]*Which image should I make\?/);
+      for (const name of [".ffpkg (UFS2)", ".exfat", ".ffpfs (PFS)", ".ffpfsc", "Asset packs (AMPR games only)"]) {
+        expect(out).toContain(name);
+      }
+      expect(out).toContain("so a packed game must be mounted by ShadowMount+.");
+    });
+
+    it("tells a finished packed build to mount it with ShadowMount+", () => {
+      const note = "Mount this image with ShadowMount+";
+      const image = { ...done, mode: "image" as const, packagePath: "/out/a.exfat" };
+      expect(html({ ...image, stageMs: { pack: 10, write: 20 } })).toContain(note);
+      expect(html({ ...image, stageMs: { write: 20 } })).not.toContain(note);
+      expect(
+        html({ ...done, mode: "folder" as const, packagePath: "/out/g", stageMs: { pack: 10 } }),
+      ).toContain("Mount this folder with ShadowMount+");
+      expect(usedPacks({ mode: "convert", stageMs: { pack: 1 } })).toBe(false);
     });
 
     it("says why, and cannot be turned on, when the game's ampr_emu cannot serve packs", () => {

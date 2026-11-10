@@ -218,7 +218,9 @@ describe("OptionsCard for an image", () => {
     expect(out).toContain(".ffpkg (UFS2), recommended");
     expect(out).toContain("Compress it into a .ffpfsc");
     expect(out).not.toContain("fpkg-language");
-    expect(out).not.toContain("Balanced");
+    // The package's compression tiles are a radiogroup (the "Which image" help names the
+    // .ffpfsc levels in prose, so look for the control, not the word).
+    expect(out).not.toContain('role="radiogroup"');
     const pkg = renderToStaticMarkup(<OptionsCard {...props} make="pkg" language="" onLanguage={() => {}} />);
     expect(pkg).toContain("fpkg-language");
   });
