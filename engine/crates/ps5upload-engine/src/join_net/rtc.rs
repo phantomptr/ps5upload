@@ -74,6 +74,97 @@ const TRACK_FLOOR_KBPS: u32 = 500;
 /// str0m's pacer sends at its estimate times this (pacer/control.rs PACING_FACTOR).
 const PACING_FACTOR: f64 = 1.1;
 
+/// The estimate is raised back to the stream's rate when it fell under this share of it on a
+/// clean link ([`KeepUp`]).
+const KEEP_UP_UNDER: f64 = 0.9;
+/// …a clean link: under this loss (the guest's reports), at most this many NACKs in the second,
+/// and a round trip at most this much over the lowest seen.
+const KEEP_UP_LOSS: f32 = 0.02;
+const KEEP_UP_NACKS: u64 = 2;
+const KEEP_UP_RTT_RISE_MS: u32 = 30;
+/// …after the link stayed clean this many seconds in a row; a raise followed within
+/// [`KEEP_UP_WATCH`] by loss, NACKs or a rising round trip failed (the link is really that slow):
+/// the next one waits [`KEEP_UP_EVERY`] doubled per failure, and after [`KEEP_UP_TRIES`] failures
+/// this guest's estimate is left alone.
+const KEEP_UP_CLEAN_S: u32 = 3;
+const KEEP_UP_WATCH: Duration = Duration::from_secs(5);
+const KEEP_UP_EVERY: Duration = Duration::from_secs(2);
+const KEEP_UP_TRIES: u32 = 3;
+
+/// The estimate kept at the stream's rate on a clean link (#720). Over a light picture (a menu:
+/// a fraction of the rate) the congestion control only sees that fraction acknowledged, and any
+/// blip of delay takes the estimate down to about it: on a wired home network, 1-2 Mbit/s for a
+/// 10 Mbit/s stream. A browser's encoder follows the estimate; the console cannot, so when the
+/// game moves again str0m's pacer holds its pictures to a little over that estimate while it
+/// climbs back (about 8% a second), and the guest falls seconds behind. A link that is really
+/// too slow shows it as loss or a rising round trip, and is left to the estimate and
+/// [`Catchup`]. Shared with the link harness (link_sim.rs).
+#[derive(Default, Debug)]
+pub(crate) struct KeepUp {
+    min_rtt_ms: Option<u32>,
+    nacks: Option<u64>,
+    /// Seconds in a row the link was clean.
+    clean_s: u32,
+    /// The last raise, and whether the link stayed clean since; raises that failed.
+    last: Option<Instant>,
+    watching: bool,
+    failed: u32,
+    /// Times the estimate was raised.
+    pub raised: u64,
+}
+
+impl KeepUp {
+    /// Once a second: the rate to raise the estimate to, or None. `nacks` is str0m's running
+    /// count, `loss` the guest's last report, `rtt_ms` the round trip now.
+    pub(crate) fn second(
+        &mut self,
+        estimate_kbps: Option<u32>,
+        stream_kbps: Option<u32>,
+        loss: Option<f32>,
+        nacks: u64,
+        rtt_ms: Option<u32>,
+        now: Instant,
+    ) -> Option<u32> {
+        let new_nacks = nacks.saturating_sub(self.nacks.unwrap_or(nacks));
+        self.nacks = Some(nacks);
+        if let Some(r) = rtt_ms {
+            self.min_rtt_ms = Some(self.min_rtt_ms.map_or(r, |m| m.min(r)));
+        }
+        let clean = loss.unwrap_or(0.0) < KEEP_UP_LOSS
+            && new_nacks <= KEEP_UP_NACKS
+            && match (rtt_ms, self.min_rtt_ms) {
+                (Some(r), Some(m)) => r <= m + KEEP_UP_RTT_RISE_MS,
+                _ => false,
+            };
+        let since = self.last.map(|t| now.saturating_duration_since(t));
+        if self.watching {
+            if !clean {
+                self.watching = false;
+                self.failed += 1;
+            } else if since.is_some_and(|d| d >= KEEP_UP_WATCH) {
+                self.watching = false;
+            }
+        }
+        self.clean_s = if clean { self.clean_s + 1 } else { 0 };
+        let (est, stream) = (estimate_kbps?, stream_kbps?);
+        if stream == 0 || (est as f64) >= stream as f64 * KEEP_UP_UNDER {
+            return None;
+        }
+        let wait = KEEP_UP_EVERY * 2u32.pow(self.failed.min(5));
+        if self.failed >= KEEP_UP_TRIES
+            || self.watching
+            || self.clean_s < KEEP_UP_CLEAN_S
+            || since.is_some_and(|d| d < wait)
+        {
+            return None;
+        }
+        self.last = Some(now);
+        self.watching = true;
+        self.raised += 1;
+        Some(stream)
+    }
+}
+
 /// A picture waiting for the track.
 #[derive(Debug, Clone)]
 pub(crate) struct TrackPic {
@@ -426,6 +517,10 @@ struct Video {
     catchup: Catchup,
     counted: (u64, u64),
     noted: Option<Instant>,
+    /// The estimate kept at the stream's rate on a clean link ([`KeepUp`]), and the padding
+    /// floor set for a guest on the home network (kbit/s; 0: none).
+    keep_up: KeepUp,
+    floor_kbps: u32,
 }
 
 /// The log says a guest fell behind at most this often (the counts carry the rest).
@@ -1419,6 +1514,8 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
                 catchup: Catchup::default(),
                 counted: (0, 0),
                 noted: None,
+                keep_up: KeepUp::default(),
+                floor_kbps: 0,
             });
         }
         // The guest's browser asks for a keyframe (its decoder lost the picture): the session's
@@ -1484,11 +1581,76 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
                     .with(|st| st.rtt_ms = Some((rtt.as_millis() as u32).max(1)));
             }
             p.info.sent(s.peer_bytes_tx, s.timestamp);
+            keep_up(p);
             flush(p);
             p.flow.second();
         }
         _ => {}
     }
+}
+
+/// Once a second: the estimate back at the stream's rate when it fell on a clean link
+/// ([`KeepUp`]), said in the log at most every [`BEHIND_NOTE_EVERY`].
+fn keep_up(p: &mut Peer) {
+    let now = Instant::now();
+    let rtt = p.info.rtt_ms();
+    let Some((est, stream, loss, nacks)) = p.info.track_with(|t| {
+        (
+            t.on.then_some(t.bwe_kbps).flatten(),
+            t.stream_kbps,
+            t.loss,
+            t.nacks,
+        )
+    }) else {
+        return;
+    };
+    let lan = p.info.net_path() == Some("lan");
+    let Some(v) = p.video.as_mut() else { return };
+    // A guest on the home network: str0m pads up to the stream's rate when the picture is light,
+    // so the estimate sees the link carry the whole rate and never falls to a still menu's
+    // trickle. Free on a home network; an internet guest's data is not padded.
+    let floor = match stream {
+        Some(k) if lan && est.is_some() => k,
+        _ => 0,
+    };
+    if floor != v.floor_kbps {
+        v.floor_kbps = floor;
+        if let Some(k) = stream {
+            set_rates(&mut p.rtc, floor, k);
+        }
+        crate::log_at!(
+            Info,
+            "together",
+            "join: guest {} on the home network: the track is padded up to {floor} kbit/s",
+            p.info.gid
+        );
+    }
+    let Some(to) = v.keep_up.second(est, stream, loss, nacks, rtt, now) else {
+        return;
+    };
+    v.catchup.aim(&mut p.rtc, to);
+    set_rates(&mut p.rtc, v.floor_kbps, to);
+    p.info.track_with(|t| t.estimate(to, now));
+    let raised = v.keep_up.raised;
+    if raised == 1 || raised % 10 == 0 {
+        crate::log_at!(
+            Info,
+            "together",
+            "join: guest {} estimate {} kbit/s on a clean link (rtt {} ms, loss {}): raised to the stream's {to} kbit/s ({raised} times)",
+            p.info.gid,
+            est.map_or("?".into(), |e| e.to_string()),
+            rtt.map_or("?".into(), |r| r.to_string()),
+            loss.map_or("?".into(), |l| format!("{:.1}%", l * 100.0)),
+        );
+    }
+}
+
+/// str0m's minimum (padded up to, [`Video::floor_kbps`]) and desired rate for a stream of `kbps`.
+fn set_rates(rtc: &mut Rtc, floor_kbps: u32, kbps: u32) {
+    rtc.bwe().set_bitrate(
+        Bitrate::kbps(floor_kbps as u64),
+        Bitrate::kbps((kbps as f64 * BWE_HEADROOM) as u64),
+    );
 }
 
 /// The session chose the track: the payload type for its codec, and the estimate aimed at its
@@ -1885,5 +2047,70 @@ mod track_tests {
         t.estimate(15_000, t0 + Duration::from_secs(6));
         assert_eq!(t.under_s(t0 + Duration::from_secs(12)), 0);
         assert_eq!(t.fit_kbps(), Some(12_500));
+    }
+
+    /// #720: on a wired home network the estimate fell to 1.5 Mbit/s over a still menu with no
+    /// loss at all. After three clean seconds it is raised back to the stream's rate, and again
+    /// whenever it falls while the link stays clean.
+    #[test]
+    fn keep_up_raises_a_fallen_estimate_on_a_clean_link() {
+        let t0 = Instant::now();
+        let mut k = KeepUp::default();
+        let s = |k: &mut KeepUp, i: u64, est: u32| {
+            k.second(
+                Some(est),
+                Some(10_000),
+                Some(0.0),
+                0,
+                Some(2),
+                t0 + Duration::from_secs(i),
+            )
+        };
+        assert_eq!(s(&mut k, 0, 9_500), None, "near the rate: left alone");
+        assert_eq!(s(&mut k, 1, 1_500), None, "one clean second is not enough");
+        assert_eq!(s(&mut k, 2, 1_500), Some(10_000));
+        assert_eq!(s(&mut k, 3, 1_400), None, "not again at once");
+        assert_eq!(s(&mut k, 8, 1_400), Some(10_000), "it stayed clean: again");
+        assert_eq!(k.raised, 2);
+    }
+
+    /// A link that is really slow loses packets once the estimate is raised: after three such
+    /// raises its estimate is left alone, and a lossy or delayed link is never raised.
+    #[test]
+    fn keep_up_leaves_a_really_slow_link_alone() {
+        let t0 = Instant::now();
+        let mut k = KeepUp::default();
+        let mut nacks = 0;
+        let mut raised = 0;
+        for i in 0..120u64 {
+            let r = k.second(
+                Some(1_000),
+                Some(15_000),
+                Some(0.0),
+                nacks,
+                Some(30),
+                t0 + Duration::from_secs(i),
+            );
+            if r.is_some() {
+                raised += 1;
+                nacks += 40; // the raise floods it
+            }
+        }
+        assert_eq!(raised, KEEP_UP_TRIES);
+
+        let mut lossy = KeepUp::default();
+        let mut rising = KeepUp::default();
+        for i in 0..30u64 {
+            let at = t0 + Duration::from_secs(i);
+            assert_eq!(
+                lossy.second(Some(1_000), Some(15_000), Some(0.05), 0, Some(30), at),
+                None
+            );
+            let rtt = if i == 0 { 30 } else { 120 };
+            assert_eq!(
+                rising.second(Some(1_000), Some(15_000), Some(0.0), 0, Some(rtt), at),
+                None
+            );
+        }
     }
 }
