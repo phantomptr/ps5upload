@@ -878,6 +878,7 @@ function askView(p: FilesViewProps) {
           name={a.name}
           path={joinPath(path, a.name)}
           busy={p.busy != null}
+          volumes={p.volumes ?? []}
           onStart={(start) => p.onExtract?.(a.name, start)}
           onCancel={p.onDismiss}
         />
@@ -1883,7 +1884,12 @@ export function Files({ ctx }: { ctx: SectionContext }) {
             return;
           }
           const msg = extractMessage(done, start.merge);
-          if (done.end === "done") focusName.current = baseName(start.dest);
+          if (done.end === "done") {
+            // Extracted into another folder: open it, with the new folder focused.
+            const into = parentPath(start.dest);
+            if (into !== path) go(into, baseName(start.dest));
+            else focusName.current = baseName(start.dest);
+          }
           if (done.end === "done" && start.deleteAfter && msg) {
             // Only when every entry came out: a skipped unsafe path or link keeps the archive.
             const r = toExtractResult(opResult<unknown>(done.status));
@@ -1914,7 +1920,7 @@ export function Files({ ctx }: { ctx: SectionContext }) {
         () => undefined,
       );
     },
-    [path, refresh],
+    [path, refresh, go],
   );
 
   const onMkdir = useCallback(

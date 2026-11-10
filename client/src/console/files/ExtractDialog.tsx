@@ -2,14 +2,16 @@ import { useEffect, useState } from "react";
 import { formatBytes } from "../../lib/format";
 import { archiveFolderName } from "../../lib/archiveName";
 import { ApiError } from "../api";
+import type { Volume } from "../home/Home";
 import { t } from "../strings";
 import { topModal } from "../nav";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Modal } from "../ui/Modal";
 import { refocusIfLost } from "../ui/restoreFocus";
 import { filesErrorText } from "./Files";
-import { joinPath } from "./move";
+import { joinPath, volumeOf } from "./move";
 import { freeName, statOrNull } from "./paste";
+import { PathPicker } from "./PathPicker";
 import { extractInfo, type ExtractInfo } from "./opJob";
 
 type Load = { info: ExtractInfo } | { error: string | null; generic: boolean } | null;
@@ -76,10 +78,16 @@ export function extractErrorText(err: unknown): string | null {
   return filesErrorText(err);
 }
 
+/** Whether something is at `p` already. */
+async function isTaken(p: string): Promise<boolean> {
+  return (await statOrNull(p)) != null;
+}
+
 /**
- * Extract an archive on the console into a folder next to it (named after
- * it; the archive stays). Before it starts: where it writes, the archive's
- * size and parts, the free space there. A folder already there offers Keep
+ * Extract an archive on the console into a new folder (named after it; the
+ * archive stays): next to it, or in a folder picked with Change… on any
+ * drive. Before it starts: where it writes, the archive's size and parts,
+ * the free space there. A folder already there offers Keep
  * both (a new folder, "name (2)"), Merge (files already there are skipped)
  * and Merge and replace (they are overwritten: confirmed first, as a danger).
  * Start hands it to Files, which runs it as the page's one batch.
@@ -92,9 +100,11 @@ export function ExtractDialog({
   onStart,
   onCancel,
   load = extractInfo,
-  taken = async (p: string) => (await statOrNull(p)) != null,
+  taken = isTaken,
   initial = null,
   confirming = false,
+  volumes = [],
+  startParent = null,
 }: {
   dir: string;
   name: string;
@@ -109,6 +119,10 @@ export function ExtractDialog({
   initial?: ExtractInfo | null;
   /** Merge and replace is being confirmed already (tests). */
   confirming?: boolean;
+  /** The console's drives: where Change… starts, and the free space of another drive. */
+  volumes?: Volume[];
+  /** Another folder to extract into, already picked (tests). */
+  startParent?: string | null;
 }) {
   const [state, setState] = useState<Load>(initial ? { info: initial } : null);
   const [outName, setOutName] = useState<string | null>(null);
@@ -116,6 +130,11 @@ export function ExtractDialog({
   const [nameError, setNameError] = useState<string | null>(null);
   const [confirmReplace, setConfirmReplace] = useState(confirming);
   const [deleteAfter, setDeleteAfter] = useState(false);
+  // Where the new folder goes: the archive's folder unless Change… picked another.
+  const [parent, setParent] = useState(startParent ?? dir);
+  const [picking, setPicking] = useState(false);
+  // Another folder: whether the new folder's name is taken there (null while checking).
+  const [otherTaken, setOtherTaken] = useState<boolean | null>(null);
   const preset = initial != null;
   useEffect(() => {
     if (preset) return;
@@ -139,17 +158,45 @@ export function ExtractDialog({
   const info = state && "info" in state ? state.info : null;
   const generic = !!state && "generic" in state && state.generic;
   const folder = outName ?? info?.name ?? archiveFolderName(name);
-  const dest = joinPath(dir, folder);
-  const exists = !!info && info.exists && outName == null;
-  const canStart = !busy && !naming && !exists && (info != null || generic);
+  const elsewhere = parent !== dir;
+  const dest = joinPath(parent, folder);
   useEffect(() => {
-    if (!exists) refocusIfLost(topModal(), ['[data-action="extract-go"]', "[data-nav-default]"]);
-  }, [exists]);
+    if (!elsewhere) return;
+    let live = true;
+    setOtherTaken(null);
+    taken(dest).then(
+      (yes) => {
+        if (live) setOtherTaken(yes);
+      },
+      () => {
+        // Not readable: let the helper decide (it refuses a folder already there).
+        if (live) setOtherTaken(false);
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [elsewhere, dest, taken]);
+  const exists = outName == null && (elsewhere ? otherTaken === true : !!info && info.exists);
+  const checking = elsewhere && otherTaken == null;
+  const canStart = !busy && !naming && !exists && !checking && (info != null || generic);
+  const otherVolume = elsewhere ? volumeOf(parent, volumes) : null;
+  const free = elsewhere ? (otherVolume ? otherVolume.free_bytes : null) : info ? info.free : null;
+  useEffect(() => {
+    if (!exists && !picking) refocusIfLost(topModal(), ['[data-action="extract-go"]', '[data-action="extract-to"]', "[data-nav-default]"]);
+  }, [exists, picking]);
+
+  const pickParent = (d: string) => {
+    setPicking(false);
+    setOutName(null);
+    setNameError(null);
+    setParent(d);
+  };
 
   const keepBoth = () => {
     setNaming(true);
     setNameError(null);
-    freeName(dir, folder, true, taken).then(
+    freeName(parent, folder, true, taken).then(
       (n) => {
         setNaming(false);
         setOutName(n);
@@ -168,7 +215,7 @@ export function ExtractDialog({
       {state == null ? <p className="cw-dim">{t("cw_home_loading")}</p> : null}
       {state != null && (info || generic) ? (
         <>
-          <p>{t("cw_files_extract_body")}</p>
+          <p>{t("cw_files_extract_body_v2")}</p>
           <dl className="cw-info">
             <div>
               <dt className="cw-dim">{t("cw_files_extract_into")}</dt>
@@ -176,6 +223,12 @@ export function ExtractDialog({
                 {dest}
               </dd>
             </div>
+            {elsewhere || (info && free != null) ? (
+              <div>
+                <dt className="cw-dim">{t("cw_files_unpack_free")}</dt>
+                <dd data-extract-free="">{free != null ? formatBytes(free) : "—"}</dd>
+              </div>
+            ) : null}
             {info ? (
               <>
                 <div>
@@ -186,13 +239,18 @@ export function ExtractDialog({
                       : formatBytes(info.size)}
                   </dd>
                 </div>
-                <div>
-                  <dt className="cw-dim">{t("cw_files_unpack_free")}</dt>
-                  <dd>{info.free != null ? formatBytes(info.free) : "—"}</dd>
-                </div>
               </>
             ) : null}
           </dl>
+          <button type="button" className="cw-focusable cw-button" data-action="extract-to" onClick={() => setPicking(true)}>
+            <span>{t("cw_files_extract_change")}</span>
+          </button>
+          {elsewhere ? (
+            <button type="button" className="cw-focusable cw-button" data-action="extract-beside" onClick={() => pickParent(dir)}>
+              <span>{t("cw_files_extract_beside")}</span>
+            </button>
+          ) : null}
+          {checking ? <p className="cw-dim">{t("cw_home_loading")}</p> : null}
           <p className="cw-dim">{t("cw_files_extract_space_note")}</p>
           {exists ? (
             <p className="cw-field-error" role="alert" data-extract-blocked="exists">
@@ -263,6 +321,17 @@ export function ExtractDialog({
           </button>
         )}
       </div>
+      {/* Over the dialog, which stays mounted: ○ returns to it with what was chosen. */}
+      {picking ? (
+        <PathPicker
+          title={t("cw_files_extract_to")}
+          subtitle={name}
+          volumes={volumes}
+          start={parent}
+          onPick={pickParent}
+          onCancel={() => setPicking(false)}
+        />
+      ) : null}
       {/* Over the dialog, which stays mounted: ○ returns to Merge and replace, not to a re-opened dialog. */}
       {confirmReplace ? (
         <ConfirmDialog

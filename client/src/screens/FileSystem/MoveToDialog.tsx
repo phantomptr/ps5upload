@@ -1,13 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowUp, Clock, Folder, FolderInput, HardDrive, Usb } from "lucide-react";
+import { FolderInput, HardDrive, Usb } from "lucide-react";
 
-import { fsListDir, type Volume } from "../../api/ps5";
+import type { Volume } from "../../api/ps5";
 import { Button, Modal } from "../../components";
 import { formatBytes } from "../../lib/format";
-import { planMove, quickDestinations, recentDestinations } from "../../lib/moveTo";
+import { planMove, quickDestinations } from "../../lib/moveTo";
 import { useTr } from "../../state/lang";
-import { consoleParentDir as parentDir } from "../../lib/consolePath";
-import { humanizeCaught } from "../../lib/humanizeError";
+import { ConsoleFolderBrowser, DestButton } from "./ConsoleFolderBrowser";
 
 export interface MoveItem {
   path: string;
@@ -39,40 +38,12 @@ export function MoveToDialog({
 }) {
   const tr = useTr();
   const [dest, setDest] = useState(startPath);
-  const [dirs, setDirs] = useState<string[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
-  const recent = useMemo(() => (open ? recentDestinations(host) : []), [open, host]);
   const quick = useMemo(() => quickDestinations(volumes), [volumes]);
 
   useEffect(() => {
     if (open) setDest(startPath);
   }, [open, startPath]);
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    setDirs(null);
-    setListError(null);
-    fsListDir(addr, dest)
-      .then((entries) => {
-        if (cancelled) return;
-        setDirs(
-          entries
-            .filter((e) => e.kind === "dir")
-            .map((e) => e.name)
-            .sort((a, b) => a.localeCompare(b)),
-        );
-      })
-      .catch((e) => {
-        if (!cancelled) {
-          setDirs([]);
-          setListError(humanizeCaught(e));
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, addr, dest]);
 
   const plan = planMove(items, dest, volumes);
   const blocked = plan.fits === "no" || plan.intoItself || plan.alreadyThere || !!listError;
@@ -100,21 +71,6 @@ export function MoveToDialog({
                 { size: formatBytes(plan.bytes) },
                 `Another drive: copies ${formatBytes(plan.bytes)}, checks it, then removes the originals.`,
               );
-
-  const destButton = (path: string, label: React.ReactNode, key: string) => (
-    <button
-      key={key}
-      type="button"
-      onClick={() => setDest(path)}
-      className={`border rounded-[var(--radius-card)] transition-[background-color,border-color,box-shadow] flex w-full items-center gap-2 px-3.5 py-2.5 text-start text-xs ${
-        dest === path
-          ? "border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] ring-1 ring-[color-mix(in_srgb,var(--color-accent)_30%,transparent)]"
-          : "border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-raised)]"
-      }`}
-    >
-      {label}
-    </button>
-  );
 
   return (
     <Modal
@@ -144,80 +100,27 @@ export function MoveToDialog({
               const external =
                 volume.path.startsWith("/mnt/usb") || volume.path.startsWith("/mnt/ext");
               const Icon = external ? Usb : HardDrive;
-              return destButton(
-                path,
-                <>
+              return (
+                <DestButton key={`q:${path}`} path={path} selected={dest === path} onPick={setDest}>
                   <Icon size={14} className="shrink-0" />
                   <span className="min-w-0 flex-1 truncate font-mono">{path}</span>
                   <span className="shrink-0 text-[var(--color-muted)]">
                     {formatBytes(volume.free_bytes)} {tr("fs_free", undefined, "free")}
                   </span>
-                </>,
-                `q:${path}`,
+                </DestButton>
               );
             })}
           </div>
         </div>
 
-        {recent.length > 0 && (
-          <div>
-            <div className="mb-1 text-[11px] font-semibold uppercase text-[var(--color-muted)]">
-              {tr("fs_move_recent", undefined, "Recent")}
-            </div>
-            <div className="grid gap-1">
-              {recent.map((path) =>
-                destButton(
-                  path,
-                  <>
-                    <Clock size={14} className="shrink-0" />
-                    <span className="min-w-0 flex-1 truncate font-mono">{path}</span>
-                  </>,
-                  `r:${path}`,
-                ),
-              )}
-            </div>
-          </div>
-        )}
-
-        <div>
-          <div className="mb-1 flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setDest(parentDir(dest))}
-              disabled={dest === "/"}
-              aria-label={tr("fs_up", undefined, "Up")}
-              className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-1 disabled:opacity-40"
-            >
-              <ArrowUp size={14} />
-            </button>
-            <span className="min-w-0 flex-1 truncate font-mono text-xs" title={dest}>
-              {dest}
-            </span>
-          </div>
-          <div className="max-h-56 overflow-y-auto rounded-[var(--radius-card)] border border-[var(--glass-edge)]">
-            {dirs === null ? (
-              <div className="p-2 text-xs text-[var(--color-muted)]">
-                {tr("loading", undefined, "Loading…")}
-              </div>
-            ) : dirs.length === 0 ? (
-              <div className="p-2 text-xs text-[var(--color-muted)]">
-                {tr("fs_move_no_subfolders", undefined, "No folders inside.")}
-              </div>
-            ) : (
-              dirs.map((name) => (
-                <button
-                  key={name}
-                  type="button"
-                  onClick={() => setDest(dest === "/" ? `/${name}` : `${dest}/${name}`)}
-                  className="flex w-full items-center gap-2 px-2 py-1.5 text-start text-xs hover:bg-[var(--color-surface-3)]"
-                >
-                  <Folder size={14} className="shrink-0 text-[var(--color-muted)]" />
-                  <span className="truncate">{name}</span>
-                </button>
-              ))
-            )}
-          </div>
-        </div>
+        <ConsoleFolderBrowser
+          open={open}
+          host={host}
+          addr={addr}
+          dest={dest}
+          onDest={setDest}
+          onListError={setListError}
+        />
 
         <p
           className={`rounded-[var(--radius-field)] border px-3 py-2 text-sm ${
