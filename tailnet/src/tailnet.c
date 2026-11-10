@@ -387,6 +387,14 @@ static void *loop(void *arg)
 		int se = c->tr.sys_err;
 		if (c->tr.ip)
 			tn_atomic_store(&c->route_ip, (long)c->tr.ip);
+		/* The network going away? Decided (and the data plane told) before the error line: an
+		 * app's log write can be slow while the console goes to rest. */
+		int down = tn_net_check(c, TN_NK_CONTROL, se);
+		if (tn_ctl_streak_note(&c->streak, tn_ctl_conn_err(r, se), tn_now_ms()) && !down &&
+		    tn_atomic_load(&c->pol_streak)) {
+			tn_net_down_signal(c, TN_NK_CONTROL_STREAK, se);
+			down = 1;
+		}
 		if (se) {
 			char text[96];
 			snprintf(text, sizeof text, "%s (errno %d)", tn_strerror(r), se);
@@ -394,13 +402,8 @@ static void *loop(void *arg)
 		} else {
 			tn_emit(c, TN_EV_ERROR, r, tn_strerror(r));
 		}
-		if (tn_net_check(c, TN_NK_CONTROL, se))
-			continue; /* down: the top of the loop waits, no backoff */
-		if (tn_ctl_streak_note(&c->streak, tn_ctl_conn_err(r, se), tn_now_ms()) &&
-		    tn_atomic_load(&c->pol_streak)) {
-			tn_net_down_signal(c, TN_NK_CONTROL_STREAK, se);
-			continue;
-		}
+		if (down)
+			continue; /* the top of the loop waits, no backoff */
 		/* Exponential backoff, capped (auto.go:63); never a busy retry. */
 		c->backoff_ms = c->backoff_ms ? c->backoff_ms * 2 : BACKOFF_MIN_MS;
 		if (c->backoff_ms > BACKOFF_MAX_MS)

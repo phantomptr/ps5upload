@@ -323,11 +323,75 @@ static void test_node(void)
 	rmdir(dir);
 }
 
+/* A "control server" that accepts and hangs up at once: every control attempt ends in a connection
+ * error with no errno (EOF), the way the PS5's did in the seconds before it froze for rest. */
+static volatile int hangup_stop;
+static void *hangup_server(void *arg)
+{
+	int lfd = *(int *)arg;
+	while (!hangup_stop) {
+		struct pollfd p = {.fd = lfd, .events = POLLIN};
+		if (poll(&p, 1, 50) == 1) {
+			int a = accept(lfd, NULL, NULL);
+			if (a >= 0)
+				close(a);
+		}
+	}
+	return NULL;
+}
+
+static void test_control_streak(void)
+{
+	char dir[] = "/tmp/tn-streak-XXXXXX";
+	CHECK(mkdtemp(dir) != NULL);
+	uint16_t cport = 0;
+	int lfd = raw_sock(SOCK_STREAM, &cport);
+	CHECK(lfd >= 0);
+	pthread_t th;
+	hangup_stop = 0;
+	pthread_create(&th, NULL, hangup_server, &lfd);
+	char url[64];
+	snprintf(url, sizeof url, "http://127.0.0.1:%u", cport);
+	tn_config cfg;
+	memset(&cfg, 0, sizeof cfg);
+	cfg.state_dir = dir;
+	cfg.control_url = url;
+	cfg.cb = on_event;
+	tn_ctx *c = NULL;
+	CHECK(tn_create(&cfg, &c) == TN_OK);
+	if (!c)
+		return;
+	int down0 = 0, up0 = 0, down = 0, up = 0;
+	counts(&down0, &up0);
+	/* default policy (a desktop): a streak is not a down signal */
+	CHECK(tn_start(c) == TN_OK);
+	tn_sleep_ms(2500); /* errors at ~0 s and ~1 s */
+	counts(&down, &up);
+	CHECK(down == down0 && !tn_net_down(c));
+	/* the PS5 helper's policy: the next two errors close everything */
+	tn_set_net_policy(c, TN_NETPOL_CONTROL_STREAK);
+	tn_resume(c); /* backoff from 1 s again */
+	WAIT_FOR((counts(&down, &up), down == down0 + 1), 6000);
+	CHECK(down == down0 + 1 && tn_net_down(c));
+	CHECK(strstr(ev_down_text, "back to back") != NULL); /* errno 0 (EOF) or ECONNRESET */
+	WAIT_FOR(tn_test_sock_live() == 0, 2000);
+	CHECK(tn_test_sock_live() == 0);
+	tn_destroy(c);
+	hangup_stop = 1;
+	pthread_join(th, NULL);
+	close(lfd);
+	char path[128];
+	snprintf(path, sizeof path, "%s/tailnet-state.json", dir);
+	unlink(path);
+	rmdir(dir);
+}
+
 int main(void)
 {
 	test_errno_class();
 	test_resume_rule();
 	test_streak_rule();
 	test_node();
+	test_control_streak();
 	return tt_done("test_netdown");
 }
