@@ -10,6 +10,10 @@ Play Together:
 
 - Fixed the picture stuttering for friends on your home network, mostly at higher quality (like the default 15 Mbit/s). 12.4.5 only got part of the way: the app still held the picture to about 8 Mbit/s on a fast network and dropped pictures whenever the game got busy. Friends on your home network now always get the full rate while the connection stays clean. Tested on a PS5 Pro at 15 Mbit/s: no dropped pictures.
 
+Files:
+
+- Extract can now put an archive's contents in any folder on the PS5, on any drive: from an external drive to the internal one, for example, and into a folder you name. The extract dialog has an "Extract to" choice (it still starts at the archive's own folder), shows the free space on the chosen drive, and offers to merge if that folder already exists. This works on the console's own file page too.
+
 ## 12.4.6
 
 Phone app:
