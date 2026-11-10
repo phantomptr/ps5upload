@@ -417,7 +417,7 @@ export default function FAQScreen({ embedded = false }: { embedded?: boolean } =
               </nav>
               <article className="min-w-0">
                 <div className="mb-3 flex flex-wrap items-center gap-2">
-                  <h2 className="flex-1 text-lg font-semibold text-[var(--color-text)]">{topic.title}</h2>
+                  <h2 className="flex-1 basis-[12rem] text-lg font-semibold text-[var(--color-text)]">{topic.title}</h2>
                   {topic.items.length > 1 && (
                     <Button variant="ghost" size="sm" onClick={() => setTopicOpen(!allOpen)}>
                       {allOpen

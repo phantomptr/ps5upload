@@ -85,7 +85,7 @@ export function UnlinkedFiles() {
       {unlinked.length > 0 && (
         <div className="surface-panel flex flex-wrap items-center gap-3 !rounded-[var(--radius-card)] px-5 py-3 text-sm">
           <FileArchive size={15} className="shrink-0 text-[var(--color-muted)]" aria-hidden />
-          <span className="min-w-0 flex-1">
+          <span className="min-w-0 flex-1 basis-[12rem]">
             {tr(
               "games_unlinked_line",
               { n: unlinked.length },

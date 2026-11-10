@@ -1673,7 +1673,7 @@ export default function InstallPackageScreen({
 
       <section data-testid="install-library">
         <header className="mb-2 flex flex-wrap items-center gap-2">
-          <h3 className="flex-1 text-sm font-semibold">
+          <h3 className="flex-1 basis-[12rem] text-sm font-semibold">
             {tr(
               "install.library.title",
               undefined,

@@ -89,7 +89,7 @@ export function KeptByAppView({
         <ul className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] divide-y divide-[var(--color-border)]">
           {rows.map((r) => (
             <li key={r.path} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
-              <div className="min-w-0 flex-1">
+              <div className="min-w-0 flex-1 basis-[12rem]">
                 <div className="font-medium">
                   {label(r.key)}
                   <span className="ms-2 font-mono text-xs text-[var(--color-muted)]">{r.drive}</span>

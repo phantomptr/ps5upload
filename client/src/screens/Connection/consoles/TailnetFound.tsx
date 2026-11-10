@@ -179,7 +179,7 @@ export function TailnetFound({
             className="flex flex-wrap items-center gap-2 rounded-[var(--radius-field)] bg-[var(--color-surface)] px-3 py-2"
             data-testid="consoles-ts-found-row"
           >
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 flex-1 basis-[12rem]">
               <p className="text-sm font-medium [overflow-wrap:anywhere]">{c.name || c.tailnet_name}</p>
               <p className="font-mono text-xs text-[var(--color-muted)]">
                 {c.tailnet_ip}

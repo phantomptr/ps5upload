@@ -382,7 +382,7 @@ export function BlockedNotice({
           key={b.ip}
           className="flex flex-wrap items-center gap-2 rounded-[var(--radius-field)] border border-[var(--color-warn)] px-2 py-1"
         >
-          <span className="min-w-0 flex-1">
+          <span className="min-w-0 flex-1 basis-[12rem]">
             {tr(
               "tn_blocked_tried",
               { device: b.name.split(".")[0] || b.ip },

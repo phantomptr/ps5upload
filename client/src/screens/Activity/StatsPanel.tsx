@@ -55,7 +55,7 @@ export function StatsPanel({ entries }: { entries: ActivityEntry[] }) {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <p className="min-w-0 flex-1 text-xs text-[var(--color-muted)]">
+        <p className="min-w-0 flex-1 basis-[12rem] text-xs text-[var(--color-muted)]">
           {tr(
             "stats_description_v2",
             { count: ACTIVITY_HISTORY_LIMIT },

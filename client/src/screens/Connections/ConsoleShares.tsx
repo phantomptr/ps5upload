@@ -217,7 +217,7 @@ export function ConsoleShares({ pcServers }: { pcServers: Connection[] }) {
           <ul className="space-y-1">
             {list.map((s) => (
               <li key={s.id} className="flex flex-wrap items-center gap-2">
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0 flex-1 basis-[12rem]">
                   <div className="truncate text-sm font-medium">{s.name}</div>
                   <div className="truncate text-xs text-[var(--color-muted)]">
                     {s.host}
@@ -309,7 +309,7 @@ export function ConsoleShares({ pcServers }: { pcServers: Connection[] }) {
       title={tr("cshares_title", undefined, "Shares on the PS5")}
       right={
         host && up && shares !== "unsupported" ? (
-          <div className="flex gap-1">
+          <div className="flex flex-wrap justify-end gap-1">
             <Button variant="ghost" size="sm" onClick={() => void load()}>
               <RefreshCw size={14} />
               {tr("refresh", undefined, "Refresh")}

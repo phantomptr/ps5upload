@@ -21,7 +21,8 @@ export function SectionHeading({
 }) {
   return (
     <div className="flex flex-wrap items-start justify-between gap-3">
-      <div className="min-w-0 flex-1">
+      {/* A 16rem basis: with a zero basis the actions never wrap and squeeze this to a word a line (#794). */}
+      <div className="min-w-0 flex-1 basis-[16rem]">
         <h2 id={id} className="flex items-center gap-2 text-base font-semibold">
           {Icon && <Icon size={16} className="shrink-0 text-[var(--color-accent)]" aria-hidden />}
           {title}

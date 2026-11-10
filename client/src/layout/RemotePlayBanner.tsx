@@ -35,7 +35,7 @@ function JoinBanner() {
     >
       <div className="flex flex-wrap items-center gap-3">
         <MonitorPlay size={18} className="shrink-0 text-[var(--color-accent)]" />
-        <p className="min-w-0 flex-1 text-sm font-medium">
+        <p className="min-w-0 flex-1 basis-[12rem] text-sm font-medium">
           {tr("join_banner_playing", { host }, `You're in ${host}'s game`)}
         </p>
         <Button size="sm" variant="primary" onClick={() => navigate("/play")}>

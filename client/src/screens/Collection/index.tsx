@@ -1076,7 +1076,7 @@ export default function CollectionScreen({ embedded = false }: { embedded?: bool
           {consoleStates && cCounts.addons > 0 && (
             // The one-click catch-up, where it can be seen rather than in the ⋯ menu.
             <div className="surface-panel mb-5 flex flex-wrap items-center gap-3 !rounded-[var(--radius-card)] px-5 py-3 text-sm">
-              <span className="min-w-0 flex-1">
+              <span className="min-w-0 flex-1 basis-[12rem]">
                 {tr(
                   "collection.uptodate_banner",
                   { u: cCounts.update, d: cCounts.dlc },
@@ -1098,7 +1098,7 @@ export default function CollectionScreen({ embedded = false }: { embedded?: bool
           )}
           {s.filter === "smaller" && shrinkable.length > 0 && (
             <div className="surface-panel mb-5 flex flex-wrap items-center gap-3 !rounded-[var(--radius-card)] px-5 py-3 text-sm">
-              <span className="min-w-0 flex-1">
+              <span className="min-w-0 flex-1 basis-[12rem]">
                 {tr(
                   "collection.smaller_banner",
                   { n: shrinkable.length },

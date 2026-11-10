@@ -158,7 +158,7 @@ export function NextStep({
       className="surface-panel flex flex-wrap items-center gap-3 !rounded-[var(--radius-card)] px-5 py-3 text-sm"
       data-testid="game-next-step"
     >
-      <span className="min-w-0 flex-1">
+      <span className="min-w-0 flex-1 basis-[12rem]">
         <span className="text-[var(--color-muted)]">{where.join(" · ")}</span>
         {step && (
           <>

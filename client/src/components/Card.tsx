@@ -57,12 +57,14 @@ export function Card({
     : "";
 
   const header = title && (
-    <header className="mb-3 flex items-center justify-between gap-2">
+    // Wraps: when the title and `right` don't fit on one line (a phone), `right` moves below the
+    // title. Without the wrap, `right` kept its width and squeezed the title to a letter a line (#794).
+    <header className="mb-3 flex flex-wrap items-center justify-between gap-2">
       <div className="flex min-w-0 items-center gap-2 text-[0.9375rem] font-semibold tracking-[-0.01em] text-[var(--color-text)]">
         {Icon && <Icon size={16} className="shrink-0 text-[var(--color-accent-bright)]" />}
         <span className="min-w-0">{title}</span>
       </div>
-      {right && <div className="shrink-0">{right}</div>}
+      {right && <div className="ms-auto max-w-full shrink-0">{right}</div>}
     </header>
   );
 

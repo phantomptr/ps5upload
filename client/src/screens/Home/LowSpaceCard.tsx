@@ -48,7 +48,7 @@ export function LowSpaceCard({ host }: { host: string }) {
     <Card>
       <div className="flex flex-wrap items-center gap-3" data-testid="home-low-space">
         <Eraser size={18} className="shrink-0 text-[var(--color-warn)]" />
-        <div className="min-w-0 flex-1 text-sm">
+        <div className="min-w-0 flex-1 basis-[12rem] text-sm">
           <div className="font-medium">
             {tr("home_low_space_title", { drive: low.path, free: formatBytes(low.free_bytes) }, `${low.path} has ${formatBytes(low.free_bytes)} free`)}
           </div>

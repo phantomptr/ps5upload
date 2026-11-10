@@ -2487,7 +2487,7 @@ function TransferStatus({ onRetry }: { onRetry: () => void }) {
             role="status"
             className="mb-3 flex flex-wrap items-center gap-3 rounded-[var(--radius-field)] border border-[color-mix(in_srgb,var(--color-warn)_40%,transparent)] bg-[var(--color-warn-soft)] px-4 py-3 text-xs"
           >
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 flex-1 basis-[12rem]">
               <div className="font-semibold text-[var(--color-warn)]">
                 {tr(
                   "upload_lost_contact_title",
