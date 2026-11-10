@@ -146,6 +146,10 @@ pub(crate) struct TrackSt {
     pub on: bool,
     /// Access units written to the track.
     pub frames: u64,
+    /// Pictures dropped because the link fell behind, and the times it did (each a jump to the
+    /// next keyframe: rtc.rs `Catchup`).
+    pub dropped: u64,
+    pub jumps: u64,
     /// From str0m's egress stats: RTP packets sent (retransmissions included), NACKs, PLIs and
     /// FIRs received, the loss the guest reported, the RTCP round trip.
     pub packets: u64,
@@ -361,9 +365,13 @@ impl PeerInfo {
             // the send buffer), `plis` / `firs` (keyframe asks from the guest's browser), `loss` (its
             // receiver reports, 0-1), `rtcp_rtt_ms`, `bwe_kbps` (the bandwidth estimate),
             // `stream_kbps`, and `slow`: the estimate stayed under the stream's rate (lower the
-            // stream's quality: the console cannot change it mid-session).
+            // stream's quality: the console cannot change it mid-session). `behind_jumps` /
+            // `behind_dropped`: the times the link fell behind and the guest was skipped to the
+            // next keyframe, and the pictures that cost.
             "track": track.filter(|t| t.on).map(|t| serde_json::json!({
                 "frames_sent": t.frames,
+                "behind_jumps": t.jumps,
+                "behind_dropped": t.dropped,
                 "rtp_packets": t.packets,
                 "nacks": t.nacks,
                 "plis": t.plis,

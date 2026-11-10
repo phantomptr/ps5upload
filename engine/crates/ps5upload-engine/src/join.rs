@@ -1268,13 +1268,24 @@ impl Party {
         let s = &g.stats;
         let n = s.rtt_n.load(Ordering::Relaxed);
         let avg = s.rtt_sum.load(Ordering::Relaxed).checked_div(n);
+        // An internet guest's video track drops pictures itself when the link falls behind.
+        let (dropped, jumps) = g
+            .net
+            .as_ref()
+            .and_then(|n| n.track_with(|t| (t.dropped, t.jumps)))
+            .unwrap_or_default();
         fx.push(Effect::Log(format!(
-            "join: Player {} left ({why}) after {}s: rtt avg {} ms, max {} ms; {} pictures skipped to a keyframe; {} pad frames; {}",
+            "join: Player {} left ({why}) after {}s: rtt avg {} ms, max {} ms; {} pictures skipped to a keyframe{}; {} pad frames; {}",
             g.player,
             now.duration_since(g.joined_at).as_secs(),
             avg.map(|a| a.to_string()).unwrap_or_else(|| "?".into()),
             s.rtt_max.load(Ordering::Relaxed),
-            s.skipped.load(Ordering::Relaxed),
+            s.skipped.load(Ordering::Relaxed) + dropped,
+            if jumps > 0 {
+                format!(" ({jumps} times the link fell behind on the video track)")
+            } else {
+                String::new()
+            },
             s.pad_frames.load(Ordering::Relaxed),
             s.page_line(),
         )));

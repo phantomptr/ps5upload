@@ -51,6 +51,240 @@ const BWE_START_KBPS: u64 = 15_000;
 /// The estimate looks this far above the stream's bitrate (to tell whether the link carries it).
 const BWE_HEADROOM: f64 = 1.25;
 
+/// A guest whose link carries less than the stream (#720: about 2 Mbit/s for a 15 Mbit/s stream).
+/// str0m's pacer sends at its estimate, and a picture written to the track waits in its queue
+/// until the pacer gets to it (up to its 2 s drain): the guest's picture fell seconds behind, and
+/// a written picture can't be taken back. So the track keeps its own short queue in front of
+/// str0m's ([`Catchup`]) and writes a picture only when str0m's queue is down to
+/// [`TRACK_FEED`]: a picture that waited there longer than this is dropped, with every one after
+/// it up to the next keyframe, and a keyframe that comes takes the place of every picture still
+/// waiting. That guest jumps to a fresh picture; the host's stream, and every other guest, are not
+/// touched (the keyframe is asked for through the session's gates).
+pub(crate) const TRACK_LAG_MAX: Duration = Duration::from_millis(400);
+/// A picture goes to str0m once its queue would send what it holds within this.
+const TRACK_FEED: Duration = Duration::from_millis(20);
+/// The keyframe is asked for once a picture waited this long (so that it comes before one has to
+/// be dropped), and while pictures are dropped, again this often (the session's gates hold the
+/// asks to theirs).
+const TRACK_ASK_AT: Duration = Duration::from_millis(200);
+const TRACK_ASK_EVERY: Duration = Duration::from_millis(500);
+/// str0m's queue's wait is reckoned at the rate it was seen to drain at (before that, the
+/// estimate), never below this.
+const TRACK_FLOOR_KBPS: u32 = 500;
+/// str0m's pacer sends at its estimate times this (pacer/control.rs PACING_FACTOR).
+const PACING_FACTOR: f64 = 1.1;
+
+/// A picture waiting for the track.
+#[derive(Debug, Clone)]
+pub(crate) struct TrackPic {
+    pub key: bool,
+    /// When it came, its RTP time, and the access unit as the track sends it.
+    pub at: Instant,
+    pub rtp: MediaTime,
+    pub data: Vec<u8>,
+}
+
+/// What [`Catchup`] did, for the counts, the log and the keyframe ask.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Caught {
+    /// Pictures written to str0m.
+    pub written: u64,
+    /// Ask the console for a keyframe now.
+    pub ask: bool,
+    /// The guest just fell behind: pictures are dropped up to the next keyframe.
+    pub fell: bool,
+}
+
+/// The track's catch-up ([`TRACK_LAG_MAX`]). Shared with the link harness (link_sim.rs).
+#[derive(Default, Debug)]
+pub(crate) struct Catchup {
+    waiting: VecDeque<TrackPic>,
+    /// Pictures are dropped up to the next keyframe; `fell`: that just began (not reported yet).
+    need_key: bool,
+    fell: bool,
+    asked: Option<Instant>,
+    /// The bandwidth estimate (kbit/s), and the rate str0m's queue was seen to drain at (bytes/s):
+    /// the estimate is a smoothed one, and the pacer can send far under it for a while.
+    estimate_kbps: Option<u32>,
+    drained: Option<f64>,
+    /// str0m's last look at its queue: when, the bytes it held, and the bytes written since.
+    seen: Option<(Instant, usize)>,
+    since: usize,
+    /// Pictures dropped (left waiting too long, or passed over by a newer keyframe), and the
+    /// times pictures were dropped.
+    pub dropped: u64,
+    pub jumps: u64,
+}
+
+impl Catchup {
+    /// The track carries a stream of `kbps`: the estimate is aimed at it (it starts there and
+    /// probes up to [`BWE_HEADROOM`] over it).
+    pub(crate) fn aim(&mut self, rtc: &mut Rtc, kbps: u32) {
+        self.estimate(kbps);
+        rtc.bwe().reset(Bitrate::kbps(kbps as u64));
+        rtc.bwe().set_bitrate(
+            Bitrate::kbps(0),
+            Bitrate::kbps((kbps as f64 * BWE_HEADROOM) as u64),
+        );
+    }
+
+    pub(crate) fn estimate(&mut self, kbps: u32) {
+        self.estimate_kbps = Some(kbps);
+    }
+
+    /// Pictures are being dropped up to the next keyframe.
+    #[cfg(test)]
+    pub(crate) fn behind(&self) -> bool {
+        self.need_key
+    }
+
+    /// Pictures waiting, and how long the oldest has.
+    pub(crate) fn waiting(&self, now: Instant) -> (usize, Duration) {
+        let oldest = self
+            .waiting
+            .front()
+            .map_or(Duration::ZERO, |p| now.saturating_duration_since(p.at));
+        (self.waiting.len(), oldest)
+    }
+
+    /// A new picture: a keyframe takes the place of every picture still waiting; one that is not
+    /// waits its turn, or is dropped while the guest waits for a keyframe.
+    pub(crate) fn push(&mut self, pic: TrackPic) {
+        if pic.key {
+            if !self.waiting.is_empty() {
+                self.dropped += self.waiting.len() as u64;
+                self.jumps += 1;
+                self.waiting.clear();
+            }
+            self.need_key = false;
+        } else {
+            // One waiting past TRACK_LAG_MAX already (str0m's queue does not drain) is dropped
+            // now, not on its turn: the queue stays short however long str0m stalls.
+            let first = self.waiting.iter().position(|p| !p.key);
+            if let Some(i) = first
+                .filter(|&i| pic.at.saturating_duration_since(self.waiting[i].at) > TRACK_LAG_MAX)
+            {
+                self.drop_from(i);
+            }
+            if self.need_key {
+                self.dropped += 1;
+                return;
+            }
+        }
+        self.waiting.push_back(pic);
+    }
+
+    /// The pictures waiting from `i` on are dropped: the guest waits for a keyframe.
+    fn drop_from(&mut self, i: usize) {
+        self.dropped += (self.waiting.len() - i) as u64;
+        self.waiting.truncate(i);
+        self.need_key = true;
+        self.fell = true;
+        self.jumps += 1;
+    }
+
+    /// How long str0m's queue takes to send `bytes`.
+    fn drain(&self, bytes: usize) -> Duration {
+        let est = self.estimate_kbps.unwrap_or(BWE_START_KBPS as u32) as f64 * PACING_FACTOR;
+        let rate = self
+            .drained
+            .unwrap_or(est * 125.0)
+            .max(TRACK_FLOOR_KBPS as f64 * 125.0);
+        Duration::from_secs_f64(bytes as f64 / rate)
+    }
+
+    /// str0m's view of its queue ([`track_queue`]): its bytes, its oldest packet's wait, and when
+    /// it looked. A new look tells the rate the queue drains at (while it never ran dry); the
+    /// bytes written since the look are added to it.
+    fn queue(&mut self, q: (usize, Duration, Option<Instant>)) -> (usize, Duration) {
+        let (bytes, oldest, at) = q;
+        if let Some(at) = at {
+            match self.seen {
+                Some((t, _)) if t == at => {}
+                prev => {
+                    if let Some((t, was)) = prev {
+                        let dt = at.saturating_duration_since(t).as_secs_f64();
+                        let out = (was + self.since).saturating_sub(bytes);
+                        if bytes > 0 && out > 0 && dt >= 0.002 {
+                            let r = out as f64 / dt;
+                            self.drained = Some(self.drained.map_or(r, |d| d * 0.7 + r * 0.3));
+                        }
+                    }
+                    self.seen = Some((at, bytes));
+                    self.since = 0;
+                }
+            }
+        }
+        (bytes + self.since, oldest)
+    }
+
+    /// The next picture for str0m, if its queue (`queued` bytes, the oldest waiting `oldest`) is
+    /// short enough. A picture that waited past [`TRACK_LAG_MAX`] is dropped with the rest up to
+    /// the next keyframe.
+    fn next(&mut self, queued: usize, oldest: Duration, now: Instant) -> Option<TrackPic> {
+        if self.drain(queued).max(oldest) > TRACK_FEED {
+            return None;
+        }
+        let pic = self.waiting.front()?;
+        if !pic.key && now.saturating_duration_since(pic.at) > TRACK_LAG_MAX {
+            self.drop_from(0);
+            return None;
+        }
+        self.waiting.pop_front()
+    }
+
+    /// Writes what str0m's queue takes now to the track `mid` of `rtc` (payload type `pt`), and
+    /// says whether to ask for a keyframe. Called with each new picture and as str0m's queue
+    /// drains (each time the driver polls the peer).
+    pub(crate) fn pump(&mut self, rtc: &mut Rtc, mid: Mid, pt: Pt, now: Instant) -> Caught {
+        let mut c = Caught::default();
+        loop {
+            let (queued, oldest) = self.queue(track_queue(rtc, mid, now));
+            let Some(pic) = self.next(queued, oldest, now) else {
+                break;
+            };
+            let size = pic.data.len();
+            let Some(w) = rtc.writer(mid) else { break };
+            if w.write(pt, now, pic.rtp, pic.data).is_ok() {
+                self.since += size;
+                c.written += 1;
+            }
+        }
+        c.fell = std::mem::take(&mut self.fell);
+        // The keyframe: asked for once a picture waited long, or while pictures are dropped.
+        let (_, waited) = self.waiting(now);
+        let want = self.need_key || waited >= TRACK_ASK_AT;
+        if want
+            && self
+                .asked
+                .is_none_or(|t| now.saturating_duration_since(t) >= TRACK_ASK_EVERY)
+        {
+            self.asked = Some(now);
+            c.ask = true;
+        }
+        c
+    }
+}
+
+/// The video track's send queue in str0m (pacer and resends): its bytes, how long the oldest has
+/// waited, and when str0m looked (at its last timeout).
+pub(crate) fn track_queue(
+    rtc: &mut Rtc,
+    mid: Mid,
+    now: Instant,
+) -> (usize, Duration, Option<Instant>) {
+    rtc.direct_api()
+        .stream_tx_by_mid(mid, None)
+        .and_then(|s| s.queue_info())
+        .map(|q| {
+            let oldest = q
+                .first_unsent()
+                .map_or(Duration::ZERO, |t| now.saturating_duration_since(t));
+            (q.byte_size(), oldest, Some(q.created_at()))
+        })
+        .unwrap_or_default()
+}
+
 /// How often a connected pair's binding is checked (str0m's default is 3 s), and how many tries a
 /// check gets. In the path sim (ice_path.rs) a dead path shows after about 15 s instead of about
 /// 21; fewer tries change nothing there (str0m's own pair timeouts rule the rest), so they stay
@@ -187,7 +421,15 @@ struct Video {
     /// joins at that keyframe needs (a browser asks for a keyframe until it has the SPS).
     header: Option<Vec<u8>>,
     t0: Instant,
+    /// The pictures' way onto the track ([`Catchup`]), its counts as the peer's state last had
+    /// them, and when the log last said the guest fell behind.
+    catchup: Catchup,
+    counted: (u64, u64),
+    noted: Option<Instant>,
 }
+
+/// The log says a guest fell behind at most this often (the counts carry the rest).
+const BEHIND_NOTE_EVERY: Duration = Duration::from_secs(10);
 
 /// What the driver is asked.
 pub(crate) enum Cmd {
@@ -977,6 +1219,14 @@ fn poll(
     cmd: &mpsc::UnboundedSender<Cmd>,
     now: Instant,
 ) -> Instant {
+    // Pictures waiting for the track go as str0m's queue drains.
+    if p.rtc.is_alive()
+        && p.video
+            .as_ref()
+            .is_some_and(|v| v.catchup.waiting(now).0 > 0)
+    {
+        pump_track(p, now);
+    }
     loop {
         if !p.rtc.is_alive() {
             return now + Duration::from_millis(50);
@@ -1166,6 +1416,9 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
                 hevc: false,
                 header: None,
                 t0: Instant::now(),
+                catchup: Catchup::default(),
+                counted: (0, 0),
+                noted: None,
             });
         }
         // The guest's browser asks for a keyframe (its decoder lost the picture): the session's
@@ -1189,6 +1442,9 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
         }
         Event::EgressBitrateEstimate(BweKind::Twcc { estimate, .. }) => {
             let kbps = (estimate.as_f64() / 1000.0).round().min(u32::MAX as f64) as u32;
+            if let Some(v) = p.video.as_mut() {
+                v.catchup.estimate(kbps);
+            }
             let now = Instant::now();
             let check = p.info.track_with(|t| {
                 t.estimate(kbps, now);
@@ -1247,16 +1503,13 @@ fn track_on(p: &mut Peer, hevc: bool, kbps: u32) {
         v.pts.h264_for(h264)
     };
     if kbps > 0 {
-        let k = kbps as f64;
-        p.rtc.bwe().reset(Bitrate::kbps(kbps as u64));
-        p.rtc
-            .bwe()
-            .set_bitrate(Bitrate::kbps(0), Bitrate::kbps((k * BWE_HEADROOM) as u64));
+        v.catchup.aim(&mut p.rtc, kbps);
     }
 }
 
-/// One of the session's video messages onto the track: the codec header is kept, a picture is
-/// written (str0m packetizes it, sends it at once and keeps it for resends).
+/// One of the session's video messages for the track: the codec header is kept, a picture joins
+/// the track's queue ([`Catchup`]), which writes it to str0m (it packetizes it, paces it out at
+/// its estimate and keeps it for resends) once str0m's queue is short.
 fn to_track(p: &mut Peer, b: &[u8], now: Instant) {
     let Some(v) = p.video.as_mut() else { return };
     let (Some(&kind), Some(body)) = (b.first(), b.get(1..)) else {
@@ -1270,18 +1523,61 @@ fn to_track(p: &mut Peer, b: &[u8], now: Instant) {
             v.header = Some(body.to_vec());
         }
         1 => {
-            let Some(pt) = v.pt else { return };
-            let data = track_au(body, v.hevc, v.header.as_deref());
-            let us = now.saturating_duration_since(v.t0).as_micros() as u64;
-            let t = MediaTime::new(us * 90 / 1000, Frequency::NINETY_KHZ);
-            let mid = v.mid;
-            if let Some(w) = p.rtc.writer(mid) {
-                if w.write(pt, now, t, data).is_ok() {
-                    p.info.track_with(|t| t.frames += 1);
-                }
+            if v.pt.is_none() {
+                return;
             }
+            let us = now.saturating_duration_since(v.t0).as_micros() as u64;
+            v.catchup.push(TrackPic {
+                key: crate::rp_stream_api::is_keyframe(body, v.hevc),
+                at: now,
+                rtp: MediaTime::new(us * 90 / 1000, Frequency::NINETY_KHZ),
+                data: track_au(body, v.hevc, v.header.as_deref()),
+            });
+            pump_track(p, now);
         }
         _ => {}
+    }
+}
+
+/// The track's queue into str0m's as it takes them ([`Catchup::pump`]): the counts, the log line
+/// when the guest fell behind, and the keyframe ask.
+fn pump_track(p: &mut Peer, now: Instant) {
+    let Some(v) = p.video.as_mut() else { return };
+    let Some(pt) = v.pt else { return };
+    let c = v.catchup.pump(&mut p.rtc, v.mid, pt, now);
+    let counts = (v.catchup.dropped, v.catchup.jumps);
+    if c.written > 0 || counts != v.counted {
+        v.counted = counts;
+        p.info.track_with(|t| {
+            t.frames += c.written;
+            (t.dropped, t.jumps) = counts;
+        });
+    }
+    if c.fell
+        && v.noted
+            .is_none_or(|t| now.saturating_duration_since(t) >= BEHIND_NOTE_EVERY)
+    {
+        v.noted = Some(now);
+        let (bwe, stream) = p
+            .info
+            .track_with(|t| (t.bwe_kbps, t.stream_kbps))
+            .unwrap_or_default();
+        let (dropped, jumps) = counts;
+        crate::log_at!(
+            Info,
+            "together",
+            "join: guest {} fell behind on the video track (a picture waited over {} ms; estimate {} kbit/s, stream {}): skipped to the next keyframe ({jumps} times, {dropped} pictures so far)",
+            p.info.gid,
+            TRACK_LAG_MAX.as_millis(),
+            bwe.map_or("?".into(), |k| k.to_string()),
+            stream.map_or("?".into(), |s| s.to_string()),
+        );
+    }
+    // The session's own keyframe ask, with its gates (as a PLI from the browser).
+    if c.ask {
+        if let Some(tx) = &p.to_session {
+            let _ = tx.try_send(Message::Text(r#"{"keyframe":true}"#.into()));
+        }
     }
 }
 
@@ -1419,6 +1715,89 @@ mod track_tests {
             track_au(&hevc_idr, true, Some(&hevc_hdr)),
             [&hevc_hdr[..], &hevc_idr].concat()
         );
+    }
+
+    #[test]
+    fn a_picture_that_waited_too_long_is_dropped_up_to_the_next_keyframe() {
+        let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        let pic = |key: bool, at: Instant| TrackPic {
+            key,
+            at,
+            rtp: MediaTime::new(0, Frequency::NINETY_KHZ),
+            data: vec![0; if key { 180_000 } else { 30_000 }],
+        };
+        let mut c = Catchup::default();
+        c.estimate(10_000); // 11 Mbit/s paced: 1,375 bytes a ms
+                            // str0m's queue short: the picture goes at once.
+        c.push(pic(false, ms(0)));
+        assert!(c.next(0, Duration::ZERO, ms(0)).is_some());
+        // str0m's queue long (73 ms to send): the next ones wait their turn…
+        c.push(pic(false, ms(16)));
+        c.push(pic(false, ms(33)));
+        assert!(c.next(100_000, Duration::ZERO, ms(33)).is_none());
+        // …or the oldest packet's wait says so, whatever the estimate.
+        assert!(c.next(1_000, Duration::from_millis(50), ms(40)).is_none());
+        assert_eq!(c.waiting(ms(216)), (2, Duration::from_millis(200)));
+        // Its turn after TRACK_LAG_MAX: dropped, with the rest; the guest waits for a keyframe.
+        assert!(c.next(0, Duration::ZERO, ms(500)).is_none());
+        assert!(c.fell && c.behind());
+        c.push(pic(false, ms(516)));
+        assert_eq!(
+            c.waiting(ms(516)).0,
+            0,
+            "dropped while waiting for a keyframe"
+        );
+        // The keyframe: the guest is back, at a fresh picture.
+        c.push(pic(true, ms(533)));
+        assert!(!c.behind());
+        assert!(c.next(0, Duration::ZERO, ms(533)).is_some_and(|p| p.key));
+        assert_eq!((c.jumps, c.dropped), (1, 3));
+        // A keyframe takes the place of pictures still waiting (no wait for them to age).
+        c.push(pic(false, ms(550)));
+        c.push(pic(false, ms(566)));
+        c.push(pic(true, ms(583)));
+        assert_eq!(c.waiting(ms(583)).0, 1);
+        assert_eq!((c.jumps, c.dropped), (2, 5));
+        // A keyframe that waited past TRACK_LAG_MAX still goes: it is where the guest catches up.
+        assert!(c.next(0, Duration::ZERO, ms(1500)).is_some_and(|p| p.key));
+        // str0m stalled: a picture past TRACK_LAG_MAX is dropped as the next one comes, not kept.
+        c.push(pic(true, ms(2000)));
+        for i in 1..=26 {
+            c.push(pic(false, ms(2000 + i * 16)));
+        }
+        assert_eq!(c.waiting(ms(2416)).0, 27, "the keyframe and 26 pictures");
+        assert!(!c.behind());
+        c.push(pic(false, ms(2432)));
+        assert!(c.behind());
+        assert_eq!(c.waiting(ms(2432)).0, 1, "the keyframe, still the way back");
+    }
+
+    #[test]
+    fn the_queue_is_reckoned_at_the_rate_it_drains_at() {
+        let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        let mut c = Catchup::default();
+        c.estimate(10_000);
+        // Before it was seen to drain: at the estimate (1,375 bytes a ms).
+        assert_eq!(c.drain(137_500), Duration::from_millis(100));
+        // str0m looked: 100 kB queued; 30 kB written since; 10 ms later it holds 30 kB: 100 kB
+        // left in 10 ms.
+        assert_eq!(
+            c.queue((100_000, Duration::ZERO, Some(ms(0)))),
+            (100_000, Duration::ZERO)
+        );
+        c.since += 30_000;
+        assert_eq!(
+            c.queue((100_000, Duration::ZERO, Some(ms(0)))).0,
+            130_000,
+            "the same look"
+        );
+        c.queue((30_000, Duration::ZERO, Some(ms(10))));
+        assert_eq!(c.drain(100_000), Duration::from_millis(10));
+        // A queue that ran dry tells nothing of the rate.
+        c.queue((0, Duration::ZERO, Some(ms(500))));
+        assert_eq!(c.drain(100_000), Duration::from_millis(10));
     }
 
     #[test]
