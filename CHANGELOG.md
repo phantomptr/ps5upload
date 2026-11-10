@@ -6,6 +6,16 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+Phone app:
+
+- Fixed text squeezed into a column one letter wide in some menus on phones (Network Shares, Shared Folders and others). When a label and its buttons don't fit side by side, the buttons now move below the label.
+
+Network shares:
+
+- Fixed "Can't reach NFS: that program isn't available on this port" with many NFS servers (Linux, NAS, Windows). The app now finds the server's mount service over UDP as well as TCP, and when it still can't, the message says which service and port to check.
+
+## 12.4.5
+
 Play Together:
 
 - Fixed friends' picture lagging behind, even on a fast home network. On a quiet screen (a menu) the stream sends very little, and the app wrongly took that as a slow connection. When the game got busy again, it held the picture back while it caught up, so friends fell seconds behind. Friends on your home network now get the full rate all the time, and friends over the internet get it back as soon as their connection shows it can carry it.
