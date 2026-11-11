@@ -390,7 +390,9 @@ fn wire_bytes(r: &ps5upload_core::transfer::TransferResult, progress: &AtomicU64
 async fn a_stopped_upload_resumes_and_sends_only_what_is_missing() {
     for (z, name) in [(Z::Zstd, "r.tar.zst"), (Z::None, "r.tar")] {
         let d = temp_dir(&format!("resume-{}", z as u8));
-        let want = files(40, 64 * 1024 - 20);
+        // Far more than the cut, so the cancel lands long before the end even when the durable
+        // count trails the wire (CI finished a 2.6 MB upload before 1 MiB showed as durable).
+        let want = files(240, 64 * 1024 - 20);
         let arc = d.join(name);
         std::fs::write(&arc, tar_of(&want, z)).unwrap();
         let total: u64 = want.iter().map(|(_, v)| v.len() as u64).sum();
