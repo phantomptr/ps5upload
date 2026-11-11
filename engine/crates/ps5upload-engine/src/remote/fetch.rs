@@ -360,15 +360,19 @@ fn plan_copy(
         .unwrap_or("server")
         .to_string();
     // What the server calls it lands as one file here, whatever this computer is: `CON`, `a:b`
-    // or `x.` is a device, a stream or another name on Windows (and a listed folder's own files
-    // get the same rule from `safe_join`).
-    if let Some(why) = ps5upload_core::transfer::host_unsafe_component(&name) {
+    // or `x.` is a device, a stream or another name on Windows, and `\x` joined to a folder
+    // there is a path from the drive's root (a listed folder's own files get the same rule from
+    // `safe_join`). A RAR set's other volumes are named by the server's listing: the same rule.
+    if let Some((bad, why)) = std::iter::once(name.as_str())
+        .chain(siblings.iter().map(|(_, e)| e.name.as_str()))
+        .find_map(|n| unsafe_leaf(n).map(|why| (n, why)))
+    {
         if made_dir {
             let _ = std::fs::remove_dir_all(&dest_dir);
         }
         return Err((
             StatusCode::BAD_REQUEST,
-            format!("{name:?} cannot be saved on this computer: {why}."),
+            format!("{bad:?} cannot be saved on this computer: {why}."),
         ));
     }
     let dest = dest_dir.join(&name);
@@ -541,6 +545,37 @@ fn no_room_message(free: u64, need: u64) -> Option<String> {
     })
 }
 
+/// Why one name from a server cannot be a single file or folder name on this computer, whatever
+/// this computer is: it would be more than one path component, or a path of its own. On Windows
+/// `base.join("\\x")` is `\x` on the base's drive and `base.join("C:x")` leaves the base
+/// altogether, so a name is checked as text, never by what this OS's `Path` makes of it.
+pub(crate) fn unsafe_leaf(name: &str) -> Option<&'static str> {
+    if name.is_empty() || name == "." || name == ".." {
+        return Some("not a name");
+    }
+    if name.contains(['/', '\\']) {
+        return Some("a name with a path separator");
+    }
+    if name.contains('\0') {
+        return Some("a name with a NUL");
+    }
+    // `:` (a drive or a stream), device names, a trailing dot or space.
+    ps5upload_core::transfer::host_unsafe_component(name)
+}
+
+/// The size to copy of a file the listing gave as `listed` bytes and that opened as `opened`
+/// bytes. The opened file's own size is the one that counts: a listing can give a link's own
+/// length (SFTP), or be out of date. A listing that disagrees is refused, not copied short (or
+/// past what the disk was checked for); one that gave no size is taken at the file's.
+fn copy_size(name: &str, listed: u64, opened: u64) -> Result<u64, String> {
+    if listed != 0 && listed != opened {
+        return Err(format!(
+            "{name} is {opened} bytes on the server, but its folder listed {listed} (a link, or it changed); it was not copied."
+        ));
+    }
+    Ok(opened)
+}
+
 /// `dest` + a relative path from a server listing, refusing anything that would land outside
 /// `dest`: `..`, an absolute path, a drive prefix, or a backslash (a separator on Windows).
 fn safe_join(dest: &Path, rel: &str) -> Result<PathBuf, String> {
@@ -613,12 +648,24 @@ async fn copy_all(job: CopyJob<'_>) -> Result<u64, String> {
             })
             .await?
         };
+        let size = match copy_size(&entry.name, entry.size, file.size()) {
+            Ok(size) => size,
+            Err(e) => {
+                let _ = blocking(move || {
+                    drop(out);
+                    let _ = std::fs::remove_file(&partial);
+                    Ok(())
+                })
+                .await;
+                return Err(e);
+            }
+        };
         let mut off = 0u64;
-        while off < entry.size {
+        while off < size {
             if job.cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 return Err("cancelled".into());
             }
-            let len = CHUNK.min(entry.size - off);
+            let len = CHUNK.min(size - off);
             let bytes = file
                 .read_at(off, len)
                 .await
@@ -857,12 +904,9 @@ pub(crate) async fn inspect_folder(r: &Remote, remote: &str) -> Response {
         Err(e) => return Json(super::api::failure_body(&e)).into_response(),
     };
     let result: Result<serde_json::Value, String> = async {
-        let name = p
-            .path
-            .rsplit('/')
-            .find(|s| !s.is_empty())
-            .unwrap_or("game")
-            .to_string();
+        // The folder's own name, when it can be one here (see `unsafe_leaf`): the mirror is
+        // removed and made again below, and must be inside the engine's folder.
+        let name = inspect_mirror_name(&p.path);
         // Every other folder looked at since the engine started stays until this runs.
         let _ =
             tokio::task::spawn_blocking(|| sweep_stale_copies_in(&inspect_root(), STALE_COPY_AGE))
@@ -913,6 +957,16 @@ pub(crate) async fn inspect_folder(r: &Remote, remote: &str) -> Response {
         )
             .into_response(),
     }
+}
+
+/// What the mirror of server folder `path` is called under its hash: the folder's name, or
+/// `game` when that name is not a plain one on every computer.
+fn inspect_mirror_name(path: &str) -> String {
+    path.rsplit('/')
+        .find(|s| !s.is_empty())
+        .filter(|n| unsafe_leaf(n).is_none())
+        .unwrap_or("game")
+        .to_string()
 }
 
 /// The sum of `sizes`, or `None` when it overflows.
@@ -1210,6 +1264,141 @@ mod tests {
         assert_eq!(out["result"]["meta_source"], "param.json");
         assert_eq!(out["result"]["file_count"], 2);
         assert_eq!(out["result"]["path"], format!("remote://{id}/g"));
+    }
+
+    /// Checked as text, so the same on every OS: on Windows each of these, joined to a folder,
+    /// is a path outside it.
+    #[test]
+    fn a_server_name_that_is_a_path_is_never_a_file_name() {
+        for bad in [
+            "\\Windows\\Temp\\x",
+            "\\x",
+            "a\\b",
+            "\\\\host\\share",
+            "a/b",
+            "/etc",
+            "C:",
+            "C:x",
+            "c:\\x",
+            "a\0b",
+            "..",
+            ".",
+            "",
+            "..\\x",
+        ] {
+            assert!(unsafe_leaf(bad).is_some(), "{bad:?}");
+            assert_ne!(inspect_mirror_name(&format!("/games/{bad}")), bad);
+        }
+        assert_eq!(inspect_mirror_name("/games/\\Windows"), "game");
+        assert_eq!(inspect_mirror_name("/games/My Game/"), "My Game");
+        assert_eq!(inspect_mirror_name("/"), "game");
+        for ok in ["Game.pkg", "ゲーム", "a b (1).rar", "..hidden"] {
+            assert!(unsafe_leaf(ok).is_none(), "{ok}");
+        }
+    }
+
+    /// A file or a RAR volume whose name starts with a backslash is refused before anything is
+    /// made for it.
+    #[tokio::test]
+    async fn a_backslash_name_is_refused_as_a_copy_and_as_a_rar_volume() {
+        let (r, id) = setup(&[
+            ("/dl/\\evil.pkg", b"x"),
+            ("/set/g.part1.rar", b"one"),
+            ("/set/g.part2.rar", b"two"),
+        ]);
+        let dest_dir = crate::remote::store::test_dir();
+        let (d, _jobs) = deps(plenty);
+        let (code, out) = json_of(
+            start_fetch(
+                Arc::clone(&r),
+                d,
+                FetchBody {
+                    path: format!("remote://{id}/dl/%5Cevil.pkg"),
+                    dest_dir: Some(dest_dir.display().to_string()),
+                },
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "{out}");
+        // The listing's own name for a set's volume, as a hostile server would give it.
+        let (d, _jobs) = deps(plenty);
+        let entry = |name: &str| Entry {
+            name: name.to_string(),
+            is_dir: false,
+            size: 3,
+            mtime: None,
+        };
+        let refused = plan_copy(
+            &d,
+            &FetchBody {
+                path: String::new(),
+                dest_dir: Some(dest_dir.display().to_string()),
+            },
+            "/set/g.part1.rar",
+            &[(String::new(), entry("g.part1.rar"))],
+            &[("/set/g.part2.rar".into(), entry("\\g.part2.rar"))],
+        );
+        assert_eq!(refused.err().map(|e| e.0), Some(StatusCode::BAD_REQUEST));
+        assert_eq!(std::fs::read_dir(&dest_dir).unwrap().count(), 0);
+        let _ = std::fs::remove_dir_all(&dest_dir);
+    }
+
+    #[test]
+    fn the_opened_files_size_is_the_one_copied() {
+        assert_eq!(copy_size("a", 100, 100), Ok(100));
+        // No size in the listing: the file's own.
+        assert_eq!(copy_size("a", 0, 100), Ok(100));
+        // A link's own length, or a file that changed: refused, not cut short.
+        assert!(copy_size("a", 12, 100).is_err());
+        assert!(copy_size("a", 100, 12).is_err());
+    }
+
+    /// A listing that gives a link's own length (SFTP) used to end the copy after that many
+    /// bytes, as Done.
+    #[tokio::test]
+    async fn a_listing_with_the_wrong_size_fails_the_copy_and_leaves_nothing() {
+        let (r, id) = setup(&[("/g/big.bin", &[7u8; 1000])]);
+        let dest_dir = crate::remote::store::test_dir();
+        std::fs::create_dir_all(&dest_dir).unwrap();
+        let run = |listed: u64, dest: PathBuf| {
+            let (r, id) = (Arc::clone(&r), id.clone());
+            async move {
+                let fs = r.pool.fs(&r.store, &id).await.unwrap();
+                copy_all(CopyJob {
+                    _fs: fs,
+                    pool: Arc::clone(&r.pool),
+                    store: Arc::clone(&r.store),
+                    id,
+                    base: "/g".into(),
+                    is_dir: true,
+                    files: vec![(
+                        "big.bin".into(),
+                        Entry {
+                            name: "big.bin".into(),
+                            is_dir: false,
+                            size: listed,
+                            mtime: None,
+                        },
+                    )],
+                    siblings: Vec::new(),
+                    dest,
+                    cancel: Arc::default(),
+                    backoff: crate::remote::pool::Backoff::instant(),
+                    report: &|_| {},
+                })
+                .await
+            }
+        };
+        let short = dest_dir.join("short");
+        let e = run(12, short.clone()).await.unwrap_err();
+        assert!(e.contains("listed 12"), "{e}");
+        assert!(!short.join("big.bin").exists());
+        assert!(!short.join("big.bin.partial").exists());
+        let whole = dest_dir.join("whole");
+        assert_eq!(run(0, whole.clone()).await, Ok(1));
+        assert_eq!(std::fs::read(whole.join("big.bin")).unwrap(), [7u8; 1000]);
+        let _ = std::fs::remove_dir_all(&dest_dir);
     }
 
     #[test]

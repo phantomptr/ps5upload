@@ -573,8 +573,14 @@ impl DavItem {
 /// The text between `<[prefix:]name ...>` and `</[prefix:]name>`, prefix-agnostic. An
 /// empty element (`<D:collection/>`) yields `Some("")`.
 fn element<'a>(xml: &'a str, name: &str) -> Option<(&'a str, &'a str)> {
-    let lower = xml.to_ascii_lowercase();
-    let name = name.to_ascii_lowercase();
+    let (body, after) = element_at(&xml.to_ascii_lowercase(), &name.to_ascii_lowercase())?;
+    Some((&xml[body], &xml[after..]))
+}
+
+/// [`element`] on text already in lower case (`name` too): where the body is, and where the text
+/// after the element starts. ASCII lower-casing keeps every byte offset, so the offsets hold for
+/// the original text. A caller that looks for one element after another lower-cases once.
+fn element_at(lower: &str, name: &str) -> Option<(std::ops::Range<usize>, usize)> {
     let mut from = 0;
     while let Some(lt) = lower[from..].find('<') {
         let start = from + lt;
@@ -594,14 +600,14 @@ fn element<'a>(xml: &'a str, name: &str) -> Option<(&'a str, &'a str)> {
             let self_closing = rest[..gt].ends_with('/');
             let body_start = start + 1 + gt + 1;
             if self_closing {
-                return Some((&xml[body_start..body_start], &xml[body_start..]));
+                return Some((body_start..body_start, body_start));
             }
             // The matching close tag: the first `</…name>` after the body (no nesting of
             // same-named elements in a PROPFIND body).
-            let close = find_close(&lower[body_start..], &name)?;
+            let close = find_close(&lower[body_start..], name)?;
             let body_end = body_start + close;
             let after = lower[body_end..].find('>').map(|g| body_end + g + 1)?;
-            return Some((&xml[body_start..body_end], &xml[after..]));
+            return Some((body_start..body_end, after));
         }
         from = start + 1;
     }
@@ -636,9 +642,13 @@ fn unescape(s: &str) -> String {
 /// put an absolute URL in `href`.
 pub(crate) fn parse_multistatus(xml: &str) -> Vec<DavItem> {
     let mut out = Vec::new();
-    let mut rest = xml;
-    while let Some((body, after)) = element(rest, "response") {
-        rest = after;
+    // Lower-cased once: doing it again for what was left after each response made a big
+    // folder's listing take time with the square of its size (minutes for 50,000 files).
+    let lower = xml.to_ascii_lowercase();
+    let mut at = 0;
+    while let Some((body, after)) = element_at(&lower[at..], "response") {
+        let body = &xml[at + body.start..at + body.end];
+        at += after;
         let Some((href, _)) = element(body, "href") else {
             continue;
         };
@@ -1062,6 +1072,31 @@ mod tests {
   <d:propstat><d:prop><d:resourcetype/><d:getcontentlength>12345</d:getcontentlength><d:getlastmodified>Thu, 01 Jan 1970 00:00:10 GMT</d:getlastmodified></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>
  </d:response>
 </d:multistatus>"#;
+
+    /// 20,000 files in one folder: the text left after each response was lower-cased again,
+    /// about 40 GB of copying for this 4 MB answer.
+    #[test]
+    fn a_big_listing_is_read_in_time_with_its_size_not_its_square() {
+        let mut xml = String::from("<D:multistatus xmlns:D=\"DAV:\">");
+        for i in 0..20_000 {
+            xml.push_str(&format!(
+                "<D:response><D:href>/dav/Folder/File%20{i:05}.BIN</D:href><D:propstat><D:prop>\
+                 <D:getcontentlength>{i}</D:getcontentlength><D:resourcetype/>\
+                 <D:getlastmodified>Sat, 11 Oct 2026 09:00:00 GMT</D:getlastmodified>\
+                 </D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>"
+            ));
+        }
+        xml.push_str("</D:multistatus>");
+        let started = std::time::Instant::now();
+        let items = parse_multistatus(&xml);
+        let took = started.elapsed();
+        assert_eq!(items.len(), 20_000);
+        // Case and bytes are the original's, not the lower-cased copy's.
+        assert_eq!(items[7].path, "/dav/Folder/File 00007.BIN");
+        assert_eq!(items[19_999].size, 19_999);
+        assert!(!items[0].is_dir && items[0].mtime.is_some());
+        assert!(took < std::time::Duration::from_secs(10), "took {took:?}");
+    }
 
     #[test]
     fn parses_a_nextcloud_listing_with_any_prefix_and_absolute_hrefs() {
