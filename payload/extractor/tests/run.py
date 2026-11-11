@@ -11,6 +11,7 @@ The RAR fixtures are libarchive's own test archives (tests/fixtures/README.md).
 """
 import bz2
 import io
+import hashlib
 import json
 import lzma
 import os
@@ -338,6 +339,16 @@ def test_rar(root):
     check("rar5", s["state"] == "done" and s["files"] == 1 and len(tree(os.path.join(root, "o5"))["test.bin"]) == 1200, s)
     s = run(root, os.path.join(root, "rar5-symlink.rar"), os.path.join(root, "osl"))
     check("rar5 symlink", s["state"] == "done" and s["links"] == 2, s)
+    # #801: a RAR5 dictionary over libarchive's 64 MiB cap (made with RAR 7.23 -md128m: 87.5 MiB
+    # of text, so the declared window is 128 MiB), plain and solid.
+    copy_fixtures(root, ["rar5-dict128m.rar", "rar5-dict128m-solid.rar"])
+    for name in ("rar5-dict128m.rar", "rar5-dict128m-solid.rar"):
+        out = os.path.join(root, "od-" + name)
+        s = run(root, os.path.join(root, name), out)
+        body = tree(out).get("big-dict.bin", b"") if s["state"] == "done" else b""
+        check(f"{name} (dictionary over 64 MiB)",
+              s["state"] == "done" and len(body) == 91750400
+              and hashlib.sha256(body).hexdigest().startswith("3beb294098a675c2"), s)
 
 
 def test_rar_multivolume(root):

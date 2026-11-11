@@ -26,6 +26,12 @@
 #include "archive_platform.h"
 #include "archive_endian.h"
 
+/* PS5Upload (#801): the largest RAR5 window the extractor allocates; the
+ * extractor's Makefile sets it, this default is libarchive's own. */
+#ifndef PS5U_RAR5_MAX_WINDOW
+#define PS5U_RAR5_MAX_WINDOW (64 * 1024 * 1024)
+#endif
+
 #ifdef HAVE_ERRNO_H
 #include <errno.h>
 #endif
@@ -1972,9 +1978,25 @@ static int process_head_file(struct archive_read* a, struct rar5 *rar5,
 		return ARCHIVE_FATAL;
 	}
 
+	/* PS5Upload (#801): a file that is not solid never refers back further
+	 * than its own start, so it needs a window only as large as itself
+	 * (rounded up to a power of two), as UnRAR does: a 4 GiB dictionary on a
+	 * 300 MiB file takes 512 MiB, not 4 GiB. Solid files keep the declared
+	 * window (the next file may refer into this one). */
+	if(rar5->file.dir == 0 && (compression_info & SOLID) == 0) {
+		uint64_t need = g_unpack_window_size;
+		while(need < unpacked_size && need < window_size)
+			need <<= 1;
+		if(need < window_size)
+			window_size = need;
+	}
+
 	/* Check if window_size is a sane value. Also, if the file is not
-	 * declared as a directory, disallow window_size == 0. */
-	if(window_size > (64 * 1024 * 1024) ||
+	 * declared as a directory, disallow window_size == 0. RAR5 declares up
+	 * to 4 GiB; PS5Upload allows what the console can hold
+	 * (PS5U_RAR5_MAX_WINDOW, set by the extractor's build; libarchive's own
+	 * cap was 64 MiB). */
+	if(window_size > (uint64_t)(PS5U_RAR5_MAX_WINDOW) ||
 	    (rar5->file.dir == 0 && window_size == 0))
 	{
 		archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
@@ -2736,10 +2758,9 @@ static int init_unpack(struct rar5 *rar5) {
 		rar5->cstate.window_buf = calloc(1, rar5->cstate.window_size);
 		if(rar5->cstate.window_buf == NULL)
 			return ARCHIVE_FATAL;
-		rar5->cstate.filtered_buf = calloc(1,
-		    rar5->cstate.window_size);
-		if(rar5->cstate.filtered_buf == NULL)
-			return ARCHIVE_FATAL;
+		/* PS5Upload (#801): run_filter frees and allocates filtered_buf at
+		 * the filter's own size before every use, so a window-sized one
+		 * here only doubled the memory a large dictionary takes. */
 	}
 
 	clear_data_ready_stack(rar5);
