@@ -191,7 +191,8 @@ curl -s 'http://127.0.0.1:19113/api/queue?console=192.168.1.100'
 ```
 
 - **`kind`** picks the route, and `request` is that route's body without the console:
-  `upload_file`, `upload_dir`, `upload_zip`, `upload_7z`, `upload_rar`, `upload_file_list`,
+  `upload_file`, `upload_dir`, `upload_zip`, `upload_7z`, `upload_rar`, `upload_tar` (a tar,
+  plain or compressed, or a lone `.zst`), `upload_file_list`,
   `link_download`, `download`, `install`. Also `label`, `position` and `stop_on_failure` (if this
   item fails, the ones after it are paused). An item's request can be at most 1 MiB; send a list of
   100,000 files to `/api/transfer/file-list` directly.
@@ -287,7 +288,7 @@ places to start.
 | `engine` | `/api/version`, `/api/events`, `/api/event-journal`, `/api/engine-logs`, `/api/logs/*`, `/api/diag/*`, `/api/metrics`, `/api/openapi.json`, `/api/mgmt/call` | The engine itself. `/api/mgmt/call` is the raw helper call, for when nothing else fits. |
 | `consoles` | `/api/consoles`, `/api/discover`, `/api/ps5/status`, `/api/ps5/readiness`, `/api/ps5/volumes`, `/api/ps5/connect-timings` | Which consoles there are and how they stand. See [Consoles, Tailscale and new devices](#consoles-tailscale-and-new-devices). |
 | `console-files` | `/api/ps5/list-dir`, `/api/ps5/fs/*`, `/api/ps5/disk-usage`, `/api/ps5/console-shares` | Files on the console. |
-| `transfer` | `/api/transfer/*`, `/api/files/upload`, `/api/link/*`, `/api/zip/*`, `/api/7z/*`, `/api/rar/*` | Uploads and downloads. |
+| `transfer` | `/api/transfer/*`, `/api/files/upload`, `/api/link/*`, `/api/zip/*`, `/api/7z/*`, `/api/rar/*`, `/api/tar/*` | Uploads and downloads. |
 | `jobs` | `/api/jobs/*`, `/api/ops/*`, `/api/ps5/console-tasks`, `/api/activity` | Following and stopping work. |
 | `queue` | `/api/queue/*` | The engine's own line of uploads, downloads and installs. |
 | `install` | `/api/pkg/*`, `/api/ps5/pkg/*`, `/pkg-host/*` | Package installs and links. |

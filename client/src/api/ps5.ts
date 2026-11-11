@@ -175,6 +175,24 @@ export async function sevenzInspectStream(
   });
 }
 
+// ── tar / .zst (mirror the 7z helpers) ────────────────────────────────────
+// `.tar`, `.tar.zst`/`.tzst`, `.tar.gz`/`.tgz`, `.tar.xz`/`.txz`, `.tar.bz2`/`.tbz2`/`.tbz`, and a
+// lone `.zst` (one file, named without `.zst`). A tar has no index: a compressed one is decoded
+// once to list it, so this inspect takes as long as reading the archive (progress ticks count
+// the files listed; the heartbeat keeps the watchdog quiet). The engine keeps the listing, so
+// the upload that follows starts at once.
+export async function tarInspectStream(
+  archivePath: string,
+  onProgress: (p: ZipInspectProgress) => void,
+): Promise<ZipInspect> {
+  const channel = new Channel<ZipInspectProgress>();
+  channel.onmessage = onProgress;
+  return invoke<ZipInspect>("tar_inspect_stream", {
+    req: { archive_path: archivePath },
+    onProgress: channel,
+  });
+}
+
 // ─── Profile (avatar + offline-account username) ──────────────────────────
 
 /** One offline-account name slot. */
@@ -696,6 +714,30 @@ export async function startTransfer7z(
   bandwidthCapMbps?: number,
 ): Promise<string> {
   const res = await invoke<{ job_id: string }>("transfer_7z", {
+    req: {
+      archive_path: archivePath,
+      dest_root: destRoot,
+      addr,
+      tx_id: txId ?? null,
+      excludes: excludes ?? [],
+      bandwidth_cap_mbps:
+        bandwidthCapMbps && bandwidthCapMbps > 0 ? bandwidthCapMbps : null,
+    },
+  });
+  return res.job_id;
+}
+
+/** Start a tar or `.zst` upload. Same contract as `startTransfer7z`. A compressed tar that was
+ *  not inspected first is listed inside the job (its `phase` is "listing" until then). */
+export async function startTransferTar(
+  archivePath: string,
+  destRoot: string,
+  addr: string,
+  txId?: string | null,
+  excludes?: string[],
+  bandwidthCapMbps?: number,
+): Promise<string> {
+  const res = await invoke<{ job_id: string }>("transfer_tar", {
     req: {
       archive_path: archivePath,
       dest_root: destRoot,
@@ -4675,7 +4717,7 @@ export function humanizeJobErrorReason(
     case "ava1_zip_unsupported":
       return trStatic(
         "joberr.zip_unsupported",
-        "This .zip uses something the uploader can't stream (encryption, a compression method other than Deflate or Stored, or an unsafe or duplicate file path). Extract it on your computer and upload the folder instead.",
+        "This .zip uses something the uploader can't stream (encryption, a compression method other than Deflate, Zstandard or Stored, or an unsafe or duplicate file path). Extract it on your computer and upload the folder instead.",
       );
     case "7z_unsupported":
     case "ava1_7z_unsupported":
@@ -4798,6 +4840,32 @@ export function humanizeJobErrorReason(
       return trStatic(
         "joberr.ava1_7z_unsafe_path",
         "This .7z contains a file path that is unsafe (it leaves its own folder). Extract it on your computer and upload the folder instead.",
+      );
+    // A tar (plain or compressed) or a lone .zst (engine ps5upload-ava1 upload.rs `tar_failure`).
+    case "tar_read_error":
+      return trStatic(
+        "joberr.tar_read_error",
+        "The archive could not be read (the file or its drive may have gone away mid-read). Check the source is still connected, then click Retry.",
+      );
+    case "ava1_tar_corrupt":
+      return trStatic(
+        "joberr.ava1_tar_corrupt",
+        "This archive could not be read: it is damaged or incomplete. Download it again or re-create it, then retry.",
+      );
+    case "ava1_tar_unsafe_path":
+      return trStatic(
+        "joberr.ava1_tar_unsafe_path",
+        "This archive contains a file path that is unsafe (it leaves its own folder). Extract it on your computer and upload the folder instead.",
+      );
+    case "ava1_tar_unsupported":
+      return trStatic(
+        "joberr.ava1_tar_unsupported",
+        "This archive holds something the uploader can't unpack (a sparse file, two names that differ only in case, or one volume of a multi-volume tar). Extract it on your computer and upload the folder instead.",
+      );
+    case "ava1_tar_memory":
+      return trStatic(
+        "joberr.ava1_tar_memory",
+        "This archive was compressed with a larger memory window (zstd --long) than this device allows for unpacking. Upload it from a computer with more memory, or compress it again without --long.",
       );
     case "rar_password_required":
     case "rar_password_wrong":

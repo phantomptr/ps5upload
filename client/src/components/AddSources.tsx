@@ -16,7 +16,12 @@ import { useTr } from "../state/lang";
 export const GAME_FILE_FILTERS: NonNullable<PickPathOptions["filters"]> = [
   {
     name: "Game image, package or archive",
-    extensions: ["exfat", "ffpkg", "ffpfs", "ffpfsc", "pkg", "zip", "7z", "rar"],
+    // A dialog filter matches the last extension only: "zst", "gz", "xz" and "bz2" cover the
+    // compressed tars (.tar.zst …) and a lone .zst.
+    extensions: [
+      "exfat", "ffpkg", "ffpfs", "ffpfsc", "pkg", "zip", "7z", "rar",
+      "tar", "zst", "tzst", "gz", "tgz", "xz", "txz", "bz2", "tbz2", "tbz",
+    ],
   },
 ];
 

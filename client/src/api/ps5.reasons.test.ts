@@ -39,6 +39,8 @@ const REQUIRED = [
   "ava1_7z_encrypted", "ava1_7z_unsafe_path", "ava1_copy_lost", "ava1_copy_failed",
   "ava1_local_io", "ava1_bad_manifest", "zip_read_error", "helper_not_ava1", "not_paired",
   "helper_starting", "ava1_failed", "helper_not_running",
+  "tar_read_error", "ava1_tar_corrupt", "ava1_tar_unsafe_path", "ava1_tar_unsupported",
+  "ava1_tar_memory",
 ];
 
 describe("every engine reason is humanized", () => {

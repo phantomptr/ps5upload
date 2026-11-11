@@ -8,6 +8,7 @@ import {
   inspectFolder,
   rarInspect,
   sevenzInspectStream,
+  tarInspectStream,
   zipInspectStream,
 } from "../api/ps5";
 import { remoteApi } from "../api/remote";
@@ -111,7 +112,11 @@ export async function inspectSource(
     const zipInfo =
       fmt === "rar"
         ? await rarInspect(path, password)
-        : await (fmt === "7z" ? sevenzInspectStream : zipInspectStream)(path, () => {});
+        : await (fmt === "7z"
+            ? sevenzInspectStream
+            : fmt === "tar"
+              ? tarInspectStream
+              : zipInspectStream)(path, () => {});
     return { ...base, kind: "archive", zipInfo };
   }
   return { ...base, kind: isImagePath(path) ? "image" : "file" };

@@ -100,6 +100,7 @@
   "/api/share": "share",
   "/api/speed-test": "transfer",
   "/api/stream": "go-live",
+  "/api/tar": "transfer",
   "/api/transfer": "transfer",
   "/api/version": "engine",
   "/api/workshop": "workshop",
@@ -933,8 +934,17 @@
   "POST /api/transfer/ps5-to-ps5": {
    "summary": "Copy between two consoles"
   },
+  "POST /api/tar/inspect": {
+   "summary": "Read a tar or .zst archive on this computer"
+  },
+  "POST /api/tar/inspect/stream": {
+   "summary": "Read a tar or .zst archive, with progress lines"
+  },
   "POST /api/transfer/rar": {
    "summary": "Upload a RAR archive to the console, unpacked"
+  },
+  "POST /api/transfer/tar": {
+   "summary": "Upload a tar or .zst archive to the console, unpacked"
   },
   "POST /api/zip/inspect": {
    "summary": "Read a ZIP archive on this computer"

@@ -366,6 +366,8 @@ pub fn run() {
             commands::zip_inspect_stream,
             commands::transfer_7z,
             commands::sevenz_inspect_stream,
+            commands::transfer_tar,
+            commands::tar_inspect_stream,
             commands::transfer_rar,
             commands::rar_inspect,
             commands::profile_info,

@@ -2536,6 +2536,7 @@ async fn each_post_tool_sends_what_its_route_reads() {
         ("zip", "/api/transfer/zip"),
         ("7z", "/api/transfer/7z"),
         ("rar", "/api/transfer/rar"),
+        ("tar", "/api/transfer/tar"),
     ] {
         let asked = server
             .tool(
@@ -2549,6 +2550,7 @@ async fn each_post_tool_sends_what_its_route_reads() {
         match format {
             "zip" => reads_as::<crate::TransferZipReq>(body),
             "7z" => reads_as::<crate::Transfer7zReq>(body),
+            "tar" => reads_as::<crate::TransferTarReq>(body),
             _ => reads_as::<crate::TransferRarReq>(body),
         }
     }

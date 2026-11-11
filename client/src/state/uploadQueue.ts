@@ -21,6 +21,7 @@ import {
   startTransferZip,
   startTransfer7z,
   startTransferRar,
+  startTransferTar,
   uploadQueueLoad,
   UPLOAD_QUEUE_KEY,
   uploadQueueSave,
@@ -1488,7 +1489,9 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
           bandwidthCap,
         );
       } else {
-        const start = fmt === "7z" ? startTransfer7z : startTransferZip;
+        // A tar is listed first when nobody inspected it (the job's "listing" phase).
+        const start =
+          fmt === "7z" ? startTransfer7z : fmt === "tar" ? startTransferTar : startTransferZip;
         jobId = await start(
           archivePath,
           item.resolvedDest,

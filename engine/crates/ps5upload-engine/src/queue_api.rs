@@ -73,6 +73,9 @@ pub(crate) enum ItemKind {
     Upload7z,
     #[serde(rename = "upload_rar")]
     UploadRar,
+    /// A tar (plain or compressed) or a lone `.zst`.
+    #[serde(rename = "upload_tar")]
+    UploadTar,
     #[serde(rename = "upload_file_list")]
     UploadFileList,
     #[serde(rename = "link_download")]
@@ -91,7 +94,7 @@ pub(crate) enum ItemKind {
 
 /// The kinds, by the names a client uses.
 const KIND_NAMES: &str = "upload_file, upload_dir, upload_zip, upload_7z, upload_rar, \
-                          upload_file_list, link_download, download, install, image_build, \
+                          upload_tar, upload_file_list, link_download, download, install, image_build, \
                           package_build, folder_build";
 
 impl ItemKind {
@@ -106,6 +109,7 @@ impl ItemKind {
             ItemKind::UploadZip => "/api/transfer/zip",
             ItemKind::Upload7z => "/api/transfer/7z",
             ItemKind::UploadRar => "/api/transfer/rar",
+            ItemKind::UploadTar => "/api/transfer/tar",
             ItemKind::UploadFileList => "/api/transfer/file-list",
             ItemKind::LinkDownload => "/api/link/download",
             ItemKind::Download => "/api/transfer/download",
@@ -153,6 +157,7 @@ impl ItemKind {
             ItemKind::UploadRar => reads::<crate::TransferRarReq>(body),
             #[cfg(any(target_os = "android", target_os = "ios"))]
             ItemKind::UploadRar => Err("rar archives need the desktop app's engine".to_string()),
+            ItemKind::UploadTar => reads::<crate::TransferTarReq>(body),
             ItemKind::UploadFileList => reads::<crate::TransferFileListReq>(body),
             ItemKind::LinkDownload => reads::<crate::LinkDownloadReq>(body),
             ItemKind::Download => reads::<crate::TransferDownloadReq>(body),
@@ -341,7 +346,7 @@ fn default_label(kind: ItemKind, body: &Value) -> String {
         ItemKind::UploadFile => field("src"),
         ItemKind::UploadDir => field("src_dir"),
         ItemKind::UploadZip => field("zip_path"),
-        ItemKind::Upload7z | ItemKind::UploadRar => field("archive_path"),
+        ItemKind::Upload7z | ItemKind::UploadRar | ItemKind::UploadTar => field("archive_path"),
         ItemKind::UploadFileList => field("dest_root"),
         ItemKind::LinkDownload => field("url"),
         ItemKind::Download => field("src_path"),
@@ -1836,6 +1841,18 @@ mod tests {
         assert_eq!(with_secrets(&item)["password"], "hunter2");
         let stored = serde_json::to_string(&item).unwrap();
         assert!(!stored.contains("hunter2"), "{stored}");
+    }
+
+    #[test]
+    fn a_tar_item_names_its_route_its_request_and_its_label() {
+        let kind = ItemKind::parse("upload_tar").unwrap();
+        assert_eq!(kind.route(), "/api/transfer/tar");
+        assert!(kind.resumes());
+        let body = json!({ "archive_path": "/g/Game.tar.zst", "dest_root": "/data/g" });
+        kind.check(&body).unwrap();
+        assert!(kind.check(&json!({ "dest_root": "/d" })).is_err());
+        assert_eq!(default_label(kind, &body), "Game.tar.zst");
+        assert!(KIND_NAMES.contains("upload_tar"));
     }
 
     fn test_item(kind: ItemKind, request: Value, secrets: Secrets) -> Item {

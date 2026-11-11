@@ -32,6 +32,7 @@ import { useShallow } from "zustand/react/shallow";
 import {
   useUploadStore,
   payloadCanMountImage,
+  archiveExtension,
   archiveFormat,
   type ExcludeMode,
   type PickedSource,
@@ -174,8 +175,7 @@ function detectedLabel(
         label: tr("upload_kind_game_folder", "Game folder"),
       };
     case "archive": {
-      const fmt = archiveFormat(source.path);
-      const ext = fmt ? `.${fmt}` : "";
+      const ext = archiveExtension(source.path) ?? "";
       return {
         icon: FileArchive,
         label: tr("upload_kind_archive", { ext }, "Compressed archive ({ext})"),
@@ -1184,7 +1184,7 @@ function Step1Picker({
                 ["upload_drop_kind_pkg", "Packages (.pkg, .fpkg): installed as a game, update or DLC, streamed from here or uploaded first."],
                 ["upload_drop_kind_game", "Game folders and game dumps: copied to the PS5; they can go on the home screen."],
                 ["upload_drop_kind_image", "Disk images (.exfat, .ffpkg, .ffpfs, .ffpfsc): copied to the PS5; they can be mounted."],
-                ["upload_drop_kind_archive", "Archives (.zip, .7z, .rar): unpacked onto the PS5, or sent as they are — you choose."],
+                ["upload_drop_kind_archive", "Archives (.zip, .7z, .rar, .tar, .tar.zst, .tar.gz, .tar.xz, .tar.bz2, .zst): unpacked onto the PS5, or sent as they are — you choose."],
                 ["upload_drop_kind_other", "Any other file or folder: copied as it is."],
               ] as const
             ).map(([key, text]) => (
@@ -2072,9 +2072,10 @@ function MirrorToRosterButton({
         startTransferZip,
         startTransfer7z,
         startTransferRar,
+        startTransferTar,
         waitForJob,
       } = await import("../../api/ps5");
-      const kind = archiveKindOf(srcPath);
+      const kind = archiveFormat(srcPath);
       // Same path rule as the one-shot upload, so a mirror lands exactly
       // where the primary PS5 got it — including the archive subfolder /
       // flat-extract choice.
@@ -2102,7 +2103,9 @@ function MirrorToRosterButton({
                   ? await startTransfer7z(srcPath, dest, addr, null, excludes)
                   : kind === "rar"
                     ? await startTransferRar(srcPath, dest, addr, null, null, excludes)
-                    : await startTransferZip(srcPath, dest, addr, null, excludes)
+                    : kind === "tar"
+                      ? await startTransferTar(srcPath, dest, addr, null, excludes)
+                      : await startTransferZip(srcPath, dest, addr, null, excludes)
                 : await startTransferDir(srcPath, dest, addr, null, excludes);
           await waitForJob(jobId);
           pushNotification("info", tr("upload_notif_mirrored", { name: p.name }, "Mirrored to {name}"), {
@@ -3536,8 +3539,7 @@ function ArchiveExtractModeCard({
   const tr = useTr();
   // The archive's own extension, so the copy reads ".rar"/".7z"/".zip" instead
   // of a hardcoded ".zip" that was wrong for the other two formats.
-  const fmt = archiveFormat(sourcePath);
-  const ext = fmt ? `.${fmt}` : tr("upload_archive_word", "archive");
+  const ext = archiveExtension(sourcePath) ?? tr("upload_archive_word", "archive");
   const subfolderDest = resolveUploadDest(
     destinationVolume,
     destinationSubpath,

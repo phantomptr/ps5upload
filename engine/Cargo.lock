@@ -1138,6 +1138,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 
 [[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2611,9 +2621,11 @@ dependencies = [
  "flate2",
  "libc",
  "ps5upload-core",
+ "ruzstd",
  "serde",
  "serde_json",
  "sevenz-rust2",
+ "tar",
  "thiserror",
  "tokio",
  "zip",
@@ -2628,19 +2640,26 @@ dependencies = [
  "anyhow",
  "base64 0.23.1",
  "blake3",
+ "bzip2",
  "cfb-mode",
+ "crc32fast",
+ "flate2",
  "getrandom 0.4.3",
  "hmac",
  "if-addrs",
  "image",
  "k256",
  "libc",
+ "lzma-rust2 0.25.0",
  "mdns-sd",
+ "ruzstd",
  "serde",
  "serde_json",
  "sevenz-rust2",
  "sha2 0.11.1",
  "socket2",
+ "tar",
+ "thiserror",
  "ureq",
  "zip",
 ]
@@ -3237,6 +3256,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
+name = "ruzstd"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69e4ce4a039f42bf25920b95667e4d789e98749ab11bbb8d2c2936f788421bb5"
+dependencies = [
+ "twox-hash",
+]
+
+[[package]]
 name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3795,6 +3823,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
 ]
 
 [[package]]

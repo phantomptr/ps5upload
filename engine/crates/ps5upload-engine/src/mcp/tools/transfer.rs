@@ -86,10 +86,12 @@ pub(super) fn tools() -> Vec<ToolDef> {
         ToolDef {
             name: "upload_archive",
             title: "Upload an archive's contents",
-            description: "Unpacks a zip, 7z or rar on the computer the engine runs on and sends \
-                          its contents to a console, so they land already extracted in \
-                          `dest_root`, replacing files with the same names. Rar works in the \
-                          desktop app's engine only. Answers with a job_id: jobs_wait follows it.",
+            description: "Unpacks a zip, 7z, rar or tar on the computer the engine runs on and \
+                          sends its contents to a console, so they land already extracted in \
+                          `dest_root`, replacing files with the same names. `tar` covers .tar, \
+                          .tar.zst/.tzst, .tar.gz/.tgz, .tar.xz/.txz, .tar.bz2/.tbz2 and a lone \
+                          .zst (one file, named without .zst). Rar works in the desktop app's \
+                          engine only. Answers with a job_id: jobs_wait follows it.",
             kind: OVERWRITES,
             schema: object(
                 json!({
@@ -97,7 +99,7 @@ pub(super) fn tools() -> Vec<ToolDef> {
                     "archive": text("The archive on the engine's computer: its full path."),
                     "format": {
                         "type": "string",
-                        "enum": ["zip", "7z", "rar"],
+                        "enum": ["zip", "7z", "rar", "tar"],
                         "description": "The archive's format.",
                     },
                     "dest_root": text("The final folder on the console."),
@@ -145,6 +147,7 @@ fn archive_route(format: &str) -> Option<(&'static str, &'static str)> {
         "zip" => Some(("/api/transfer/zip", "zip_path")),
         "7z" => Some(("/api/transfer/7z", "archive_path")),
         "rar" => Some(("/api/transfer/rar", "archive_path")),
+        "tar" => Some(("/api/transfer/tar", "archive_path")),
         _ => None,
     }
 }
@@ -153,7 +156,7 @@ async fn archive(ctx: ToolCtx, args: Args) -> ToolResult {
     let format = args.required("format")?;
     let Some((path, field)) = archive_route(format) else {
         return Err(ToolOutput::error(format!(
-            "`format` must be zip, 7z or rar, not {format}."
+            "`format` must be zip, 7z, rar or tar, not {format}."
         )));
     };
     let mut body = without_nulls(json!({

@@ -9,6 +9,8 @@
 // this layout; merging contents would clobber other directories
 // living under the same subpath.
 
+import { stripTarSuffix } from "./tarNames";
+
 /** Last path component of `p`, tolerant of both POSIX and Windows
  *  separators. `C:\\foo\\bar` → `bar`; `/Users/me/thing/` → `thing`. */
 export function basename(p: string): string {
@@ -75,7 +77,7 @@ export function resolveUploadDest(
     //
     // Safe for a lone archive that merely has `.partN` in its name: the
     // only effect is a folder called `Game` instead of `Game.part1`.
-    name = raw
+    name = stripTarSuffix(raw)
       .replace(/\.(zip|7z|rar)$/i, "")
       .replace(/\.part\d+$/i, "");
   }

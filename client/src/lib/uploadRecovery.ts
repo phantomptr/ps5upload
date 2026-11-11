@@ -97,6 +97,9 @@ const AVA1_FATAL_REASON_PREFIXES = [
   "ava1_rar_",
   "ava1_7z_",
   "ava1_zip_",
+  // A tar or .zst: damaged, an unsafe path, a sparse file, a zstd window over this device's
+  // memory cap. `tar_read_error` (the file stopped reading) is NOT here: it may clear.
+  "ava1_tar_",
   "rar_password_required",
   "rar_password_wrong",
   // Console to console (#444): another device drives the send now (retrying here would take

@@ -183,6 +183,101 @@ pub fn upload_zip(
     upload_zip_in(pool(), cfg, job_id, dest_root, zip_path)
 }
 
+/// The typed failure for a tar the source refused or could not read (`ava1_tar_*`).
+fn tar_failure(e: &anyhow::Error) -> Option<UploadFailure> {
+    use ps5upload_core::tar_archive::{tar_fault_of, TarFault};
+    let f = e.chain().find_map(|c| tar_fault_of(c))?;
+    let reason = match f {
+        TarFault::Corrupt(_) => "ava1_tar_corrupt",
+        TarFault::UnsafePath(_) => "ava1_tar_unsafe_path",
+        TarFault::Unsupported(_) => "ava1_tar_unsupported",
+        TarFault::TooMuchMemory(_) => "ava1_tar_memory",
+    };
+    Some(UploadFailure {
+        reason: reason.into(),
+        detail: f.to_string(),
+    })
+}
+
+/// A failed listing of a tar as the job's error: a cancel is `transfer_cancelled`, an archive
+/// that cannot be sent is its typed `ava1_tar_*` failure, and a read error is `tar_read_error`
+/// (retryable, like `zip_read_error`).
+pub fn tar_open_error(e: io::Error, archive: &Path) -> anyhow::Error {
+    if e.to_string() == ps5upload_core::tar_archive::TAR_LISTING_CANCELLED {
+        return anyhow!("transfer_cancelled");
+    }
+    let e = anyhow::Error::from(e);
+    match tar_failure(&e) {
+        Some(f) => f.into(),
+        None => UploadFailure {
+            reason: "tar_read_error".into(),
+            detail: format!("could not read the archive {}: {e:#}", archive.display()),
+        }
+        .into(),
+    }
+}
+
+/// Uploads a tar (plain or compressed) or a lone `.zst`. A plain tar is sent like a folder (its
+/// files are byte ranges of the archive); anything compressed is decoded in order on one thread
+/// and a resume decodes from the start, discarding what the console holds. A compressed tar is
+/// first decoded once to list it (the job shows that as its "listing" phase; a cancel stops it),
+/// unless the Upload screen's inspect already did and the listing is cached.
+pub fn upload_tar_in(
+    pool: &Pool,
+    cfg: &TransferConfig,
+    job_id: [u8; 16],
+    dest_root: &str,
+    archive: &Path,
+) -> Result<TransferResult> {
+    use ps5upload_core::tar_archive::TarWatch;
+    let watch = TarWatch {
+        cancel: cfg.cancel.as_deref(),
+        live: cfg.progress_live.as_deref(),
+        on_files: None,
+    };
+    let (manifest, source) = match crate::tar_source::TarSource::open(archive, &cfg.excludes, watch)
+    {
+        Ok(v) => v,
+        Err(e) => return Err(tar_open_error(e, archive)),
+    };
+    // The job's plan may have had no listing yet (a compressed tar nobody inspected): now the
+    // bar has its total.
+    if let Some(total) = &cfg.progress_total {
+        let listed = manifest
+            .entries
+            .iter()
+            .filter(|e| e.kind == gen::ENTRY_FILE)
+            .fold(0u64, |sum, e| sum.saturating_add(e.size));
+        total.store(listed, Ordering::Release);
+    }
+    // The wire job id names the archive's contents (as a 7z's does): a changed archive must not
+    // resume a journal written for the old one.
+    let wire_id = sevenz_job_id(job_id, &source.identity());
+    let source = Arc::new(source);
+    let mut opts = SendOptions::upload(dest_root);
+    if source.sequential() {
+        opts.seq = Some(source.clone());
+    }
+    let mut r =
+        upload_with_in(pool, &cfg.addr, wire_id, manifest, source, opts, cfg).map_err(|e| {
+            match tar_failure(&e) {
+                Some(f) => f.into(),
+                None => e,
+            }
+        })?;
+    r.tx_id_hex = hex(&job_id);
+    Ok(r)
+}
+
+pub fn upload_tar(
+    cfg: &TransferConfig,
+    job_id: [u8; 16],
+    dest_root: &str,
+    archive: &Path,
+) -> Result<TransferResult> {
+    upload_tar_in(pool(), cfg, job_id, dest_root, archive)
+}
+
 /// Retained for the engine's error mapping; AVA1 no longer raises it. Duplicate paths,
 /// case clashes, file/directory clashes and unsafe paths in a RAR are terminal
 /// (`ava1_rar_unsupported`).

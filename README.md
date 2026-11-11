@@ -23,8 +23,8 @@
 
 ## What it does
 
-- **Fast, resumable uploads** of games, folders, disk images and `.zip` / `.7z` / `.rar`
-  archives (unpacked on the way with nothing extracted to your disk, or sent as they are: a
+- **Fast, resumable uploads** of games, folders, disk images and `.zip` / `.7z` / `.rar` / tar
+  (`.tar`, `.tar.zst`, `.tar.gz`, `.tar.xz`, `.tar.bz2`) / `.zst` archives (unpacked on the way with nothing extracted to your disk, or sent as they are: a
   game archive unpacks, anything else is sent as the file, and you can choose either). Everything runs over
   **AVA1**, one encrypted connection on port 9120. Every file is verified, and an upload
   continues after a dropped connection, a helper restart or rest mode. A job that will not

@@ -4,6 +4,7 @@ import {
   inspectFolder,
   zipInspectStream,
   sevenzInspectStream,
+  tarInspectStream,
   rarInspect,
   type FolderInspectResult,
   type WrappedGameHint,
@@ -13,6 +14,7 @@ import { useConnectionStore } from "./connection";
 import { hostOf } from "../lib/addr";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { isInstallPackagePath } from "../lib/pkgDropDedupe";
+import { isTarArchiveName, tarSuffix } from "../lib/tarNames";
 import { remoteApi } from "../api/remote";
 import { materializeRemote } from "../lib/materialize";
 import { isRemotePath } from "../lib/remotePath";
@@ -192,8 +194,11 @@ export function payloadCanMountImage(path: string): boolean {
  *  `.rar` was originally out of scope on the grounds that scene releases are
  *  split + encrypted; UnRAR handles both, so it is supported now — but only
  *  where the UnRAR code is compiled in, which is not Android (see engine
- *  `caps.rar`). */
-export function archiveFormat(path: string): "zip" | "7z" | "rar" | null {
+ *  `caps.rar`).
+ *
+ *  "tar" is the tar family and a lone `.zst` (`TAR_SUFFIXES` in lib/tarNames): one engine route
+ *  (`/api/transfer/tar`) reads them all, on every platform. */
+export function archiveFormat(path: string): "zip" | "7z" | "rar" | "tar" | null {
   const p = path.toLowerCase();
   if (p.endsWith(".zip")) return "zip";
   if (p.endsWith(".7z")) return "7z";
@@ -202,10 +207,19 @@ export function archiveFormat(path: string): "zip" | "7z" | "rar" | null {
   // Old-style `.r00`/`.r01` parts accompany a `.rar`, so the `.rar` is what
   // the user picks. RAR is desktop-only (see engine `caps.rar`).
   if (p.endsWith(".rar")) return "rar";
+  if (isTarArchiveName(p)) return "tar";
   return null;
 }
 
-/** A `.zip` or `.7z` game dump — the engine decompresses it on the host and
+/** The archive's own ending as people write it (".zip", ".tar.zst", ".tgz", ".zst"), or null
+ *  when it is not an archive the upload unpacks. */
+export function archiveExtension(path: string): string | null {
+  const fmt = archiveFormat(path);
+  if (fmt === null) return null;
+  return fmt === "tar" ? tarSuffix(path) : `.${fmt}`;
+}
+
+/** A `.zip`, `.7z`, `.rar` or tar game dump — the engine decompresses it on the host and
  *  streams the files in. */
 function isArchivePath(path: string): boolean {
   return archiveFormat(path) !== null;
@@ -405,8 +419,10 @@ export const useUploadStore = create<UploadState>((set, get) => ({
           // the catch surfaces so the Upload screen shows the password field.
           zipInfo = await rarInspect(path, get().rarPassword);
         } else {
-          // Same inspect-stream shape for zip + 7z — pick by extension.
-          const inspect = fmt === "7z" ? sevenzInspectStream : zipInspectStream;
+          // Same inspect-stream shape for zip, 7z and tar — pick by extension. A compressed
+          // tar is decoded to list it, so its scan takes as long as reading the archive.
+          const inspect =
+            fmt === "7z" ? sevenzInspectStream : fmt === "tar" ? tarInspectStream : zipInspectStream;
           zipInfo = await inspect(path, (p) => {
             // Stale-result guard: if the user dropped another file mid-scan,
             // ignore late ticks from the previous one. Without this the

@@ -3,6 +3,7 @@
 // phase it is allowed from, so a stray click cannot act on the wrong package or reset a run.
 
 import { installErrorLink } from "../lib/installErrorDoc";
+import { isTarArchiveName, stripTarSuffix } from "../lib/tarNames";
 import { create } from "zustand";
 
 import { t as translate } from "../i18n";
@@ -696,18 +697,22 @@ function beginRun(mode: PipelineMode, source: string, host: string | null, stage
   });
 }
 
-/** `.zip`, `.7z` or `.rar` (a multi-part set starts at its first `.partN.rar`). */
+/** `.zip`, `.7z` or `.rar` (a multi-part set starts at its first `.partN.rar`), or a tar /
+ *  `.zst` (lib/tarNames). */
 export function isArchiveSource(path: string): boolean {
-  return /\.(zip|7z|rar)$/i.test(path.trim());
+  return /\.(zip|7z|rar)$/i.test(path.trim()) || isTarArchiveName(path.trim());
 }
 
 /** What an image made from an archive is called: the archive's name without its extension
- *  or `.partN` (`Game.part1.rar` → `Game`). Its unpack folder's name means nothing. */
+ *  or `.partN` (`Game.part1.rar` → `Game`, `Game.tar.zst` → `Game`). Its unpack folder's name
+ *  means nothing. */
 export function archiveStem(path: string): string {
   const name = path.trim().split(/[\\/]/).pop() ?? "";
   // Trailing dots and spaces are not allowed at the end of a Windows file name, and the engine
   // would only refuse it after a long unpack.
-  return name.replace(/(\.part\d+)?\.(zip|7z|rar)$/i, "").replace(/[. ]+$/, "");
+  return stripTarSuffix(name)
+    .replace(/(\.part\d+)?\.(zip|7z|rar)$/i, "")
+    .replace(/[. ]+$/, "");
 }
 
 /** A game image (`.exfat`, `.ffpkg`/`.ufs2`, `.ffpfs`, `.ffpfsc`) or a package (`.pkg`): what
