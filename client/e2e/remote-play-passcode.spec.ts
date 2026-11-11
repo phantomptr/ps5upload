@@ -89,7 +89,7 @@ test("the passcode prompt sends four digits, asks again after a wrong one, and g
 
   // Never kept anywhere the page stores things.
   const stored = await page.evaluate(() => JSON.stringify({ ...window.localStorage }) + JSON.stringify({ ...window.sessionStorage }));
-  expect(stored).not.toContain("1234");
+  expect(stored).not.toMatch(/(?<![0-9a-f])1234(?![0-9a-f])/i); // not the same digits inside a random id
   expect(stored).not.toContain("5678");
 });
 
