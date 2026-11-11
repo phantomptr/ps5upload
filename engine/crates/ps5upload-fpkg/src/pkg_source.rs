@@ -52,6 +52,13 @@ const MAX_META_BYTES: u64 = 2 << 30;
 const MAX_DEPTH: u32 = 64;
 /// Inodes an inner superblock may claim (the same bound [`crate::inner::read`] uses).
 const MAX_INODES: u64 = 4_000_000;
+/// Directory entries a walk reads in all. A sound package names each inode once, so this is the
+/// inode bound; a crafted one whose directories point at each other's blocks stops here.
+const MAX_ENTRIES: usize = MAX_INODES as usize;
+/// Bytes of the paths a walk keeps, as the exFAT and UFS2 readers bound theirs.
+const MAX_PATH_BYTES: usize = 256 << 20;
+/// The most reserved for a read ahead of its bytes; the rest grows as blocks really decode.
+const PREALLOC: u64 = 16 << 20;
 
 const DIRENT_FILE: i32 = plan::DIRENT_FILE as i32;
 const DIRENT_DIR: i32 = plan::DIRENT_DIR as i32;
@@ -187,6 +194,9 @@ impl Outer {
             return Err(bad("a file in the outer image is larger than the image"));
         }
         let mut out = Vec::with_capacity(need as usize);
+        // The tables this file has been through. A sound file reaches each once; a crafted one
+        // whose tables name each other would otherwise be walked 1820 times per level.
+        let mut seen = HashSet::new();
         for d in node
             .direct
             .iter()
@@ -198,7 +208,14 @@ impl Outer {
             if out.len() as u64 >= need || table.block == 0 {
                 break;
             }
-            self.walk_table(u64::from(table.block), level as u32, need, &mut out)?;
+            walk_table(
+                &mut |block| self.block(block).map(<[u8]>::to_vec),
+                u64::from(table.block),
+                level as u32,
+                need,
+                &mut seen,
+                &mut out,
+            )?;
         }
         if (out.len() as u64) < need {
             return Err(bad(
@@ -207,25 +224,42 @@ impl Outer {
         }
         Ok(out)
     }
+}
 
-    fn walk_table(&mut self, block: u64, level: u32, need: u64, out: &mut Vec<u32>) -> Result<()> {
-        let table = self.block(block)?.to_vec();
-        for slot in 0..outer::PER_INDIRECT {
-            if out.len() as u64 >= need {
-                return Ok(());
-            }
-            let child = le32(&table, slot * 36 + 32);
-            if child == 0 {
-                continue;
-            }
-            if level == 0 {
-                out.push(child);
-            } else {
-                self.walk_table(u64::from(child), level - 1, need, out)?;
-            }
-        }
-        Ok(())
+/// One indirect table of a file, through `read`: its records name data blocks at level 0 and the
+/// tables of the level below otherwise. `seen` holds the tables the file has been through.
+fn walk_table(
+    read: &mut dyn FnMut(u64) -> Result<Vec<u8>>,
+    block: u64,
+    level: u32,
+    need: u64,
+    seen: &mut HashSet<u64>,
+    out: &mut Vec<u32>,
+) -> Result<()> {
+    if !seen.insert(block) {
+        return Err(bad(format!(
+            "a file in the outer image reaches its block table {block} twice; the package is damaged"
+        )));
     }
+    let table = read(block)?;
+    for slot in 0..outer::PER_INDIRECT {
+        if out.len() as u64 >= need {
+            return Ok(());
+        }
+        let child = table
+            .get(slot * 36 + 32..slot * 36 + 36)
+            .map(|b| le32(b, 0))
+            .ok_or_else(|| bad("a block table in the outer image is cut short"))?;
+        if child == 0 {
+            continue;
+        }
+        if level == 0 {
+            out.push(child);
+        } else {
+            walk_table(read, u64::from(child), level - 1, need, seen, out)?;
+        }
+    }
+    Ok(())
 }
 
 /// One file of the outer image (`pfs_image.dat` or `naps_pkg_layout.dat`), by its block list.
@@ -530,7 +564,7 @@ impl PkgSource {
                     .filter(|t| *t <= MAX_META_BYTES)
                     .ok_or_else(|| bad("the package's inner image ends before its metadata"))?;
                 let tail = self.image.read(&mut self.outer, meta_base, tail_len)?;
-                let plain = crate::pfsc::parse(&tail)?.decompress()?;
+                let plain = crate::pfsc::parse(&tail)?.decompress_capped(region)?;
                 if plain.len() as u64 != region {
                     return Err(bad(
                         "the package's metadata region does not expand to the size its layout gives",
@@ -593,7 +627,8 @@ impl PkgSource {
             return Err(bad("the flat layout is read by file, not by mount offset"));
         };
         let end = at.saturating_add(len);
-        let mut out = Vec::with_capacity(len as usize);
+        // `len` is a file's own claim; what is reserved for it is not.
+        let mut out = Vec::with_capacity(len.min(PREALLOC) as usize);
         let mut i = blocks.partition_point(|b| b.logical + b.len <= at);
         let mut pos = at;
         while pos < end {
@@ -667,12 +702,12 @@ impl PkgSource {
         };
         let mut found: Vec<Found> = Vec::new();
         let mut empty = Vec::new();
-        let mut seen = HashSet::new();
+        let mut budget = Budget::default();
         walk.dir(
             plan::FIRST_DIR_INODE as usize,
             "",
             0,
-            &mut seen,
+            &mut budget,
             &mut found,
             &mut empty,
         )?;
@@ -919,6 +954,21 @@ struct InnerInode {
     afid: i32,
 }
 
+/// What a walk has been through, so a crafted package cannot make it go round or grow without
+/// end: the inner image is the file's own claim from the first byte.
+#[derive(Default)]
+struct Budget {
+    /// Directory inodes already walked.
+    inodes: HashSet<usize>,
+    /// Directory blocks already walked, by offset: two inodes naming one block is the same loop
+    /// with a different inode number on it.
+    blocks: HashSet<u64>,
+    /// Entries read so far, every directory's, against [`MAX_ENTRIES`].
+    listed: usize,
+    /// Bytes of the paths kept so far, against [`MAX_PATH_BYTES`].
+    path_bytes: usize,
+}
+
 impl Walk<'_> {
     fn inode(&self, i: usize) -> Result<InnerInode> {
         let raw = (i < self.count)
@@ -941,14 +991,14 @@ impl Walk<'_> {
         ino: usize,
         prefix: &str,
         depth: u32,
-        seen: &mut HashSet<usize>,
+        budget: &mut Budget,
         files: &mut Vec<Found>,
         empty: &mut Vec<String>,
     ) -> Result<()> {
         if depth > MAX_DEPTH {
             return Err(bad("the package's directories nest deeper than 64 levels"));
         }
-        if !seen.insert(ino) {
+        if !budget.inodes.insert(ino) {
             return Err(bad(format!(
                 "the package's directories loop at inode {ino}"
             )));
@@ -960,18 +1010,33 @@ impl Walk<'_> {
             )));
         }
         let block = self.region.at(node.offset, node.size.min(MAX_META_BYTES))?;
+        if !block.is_empty() && !budget.blocks.insert(node.offset) {
+            return Err(bad(format!(
+                "the package's directories share the block at {:#x} (inode {ino})",
+                node.offset
+            )));
+        }
         let mut children = 0usize;
         let mut o = 0usize;
-        while o + 16 <= block.len() {
+        while block.len() - o >= 16 {
             let child = le32(block, o) as usize;
             let kind = crate::i32le(block, o + 4);
             let name_len = le32(block, o + 8) as usize;
             let ent_size = le32(block, o + 12) as usize;
-            if ent_size == 0 || o + 16 + name_len > block.len() {
+            // Compared as what is left, never added up: the two lengths are the file's.
+            let left = block.len() - o;
+            if ent_size == 0 || name_len > left - 16 {
                 break;
             }
+            budget.listed += 1;
+            if budget.listed > MAX_ENTRIES {
+                return Err(bad(format!(
+                    "the package's directories hold more than {MAX_ENTRIES} entries"
+                )));
+            }
             let name = String::from_utf8_lossy(&block[o + 16..o + 16 + name_len]).into_owned();
-            o += ent_size;
+            // An entry that claims to run past the block ends the directory after it.
+            o += ent_size.min(left);
             if name == "." || name == ".." {
                 continue;
             }
@@ -981,10 +1046,14 @@ impl Walk<'_> {
                 )));
             }
             let path = format!("{prefix}{name}");
+            budget.path_bytes += path.len();
+            if budget.path_bytes > MAX_PATH_BYTES {
+                return Err(bad("the package's paths are over 256 MiB"));
+            }
             match kind {
                 DIRENT_DIR => {
                     children += usize::from(!is_junk(&name));
-                    self.dir(child, &format!("{path}/"), depth + 1, seen, files, empty)?;
+                    self.dir(child, &format!("{path}/"), depth + 1, budget, files, empty)?;
                 }
                 DIRENT_FILE => {
                     children += usize::from(!is_junk(&name));
@@ -1121,5 +1190,211 @@ mod tests {
     fn the_source_is_send() {
         fn send<T: Send>() {}
         send::<PkgSource>();
+    }
+
+    /// A crafted inner image for the walk: inodes in one table block, directory blocks after.
+    struct Crafted {
+        table: Vec<u8>,
+        region: Vec<u8>,
+    }
+
+    impl Crafted {
+        fn new() -> Self {
+            Self {
+                table: vec![0u8; BLOCK as usize],
+                region: Vec::new(),
+            }
+        }
+
+        fn inode(&mut self, i: usize, mode: u16, size: u64, offset: u64) {
+            let o = inode_offset(i);
+            self.table[o..o + 2].copy_from_slice(&mode.to_le_bytes());
+            self.table[o + 8..o + 16].copy_from_slice(&size.to_le_bytes());
+            self.table[o + 0x60..o + 0x68].copy_from_slice(&offset.to_le_bytes());
+        }
+
+        /// Appends a directory block of `entries` and returns its `(offset, size)`.
+        fn dir(&mut self, entries: &[(u32, i32, &str)]) -> (u64, u64) {
+            let at = self.region.len();
+            for (ino, kind, name) in entries {
+                let size = (16 + name.len()).next_multiple_of(8) as u32;
+                let mut e = vec![0u8; size as usize];
+                e[0..4].copy_from_slice(&ino.to_le_bytes());
+                e[4..8].copy_from_slice(&kind.to_le_bytes());
+                e[8..12].copy_from_slice(&(name.len() as u32).to_le_bytes());
+                e[12..16].copy_from_slice(&size.to_le_bytes());
+                e[16..16 + name.len()].copy_from_slice(name.as_bytes());
+                self.region.extend_from_slice(&e);
+            }
+            (at as u64, (self.region.len() - at) as u64)
+        }
+
+        fn walk(&self, count: usize) -> Result<Vec<String>> {
+            let region = Region {
+                base: 0,
+                bytes: &self.region,
+            };
+            let walk = Walk {
+                region: &region,
+                table: &self.table,
+                count,
+            };
+            let (mut found, mut empty) = (Vec::new(), Vec::new());
+            walk.dir(4, "", 0, &mut Budget::default(), &mut found, &mut empty)?;
+            Ok(found.into_iter().map(|f| f.path).collect())
+        }
+    }
+
+    #[test]
+    fn a_sound_tree_walks() {
+        let mut c = Crafted::new();
+        let (root, root_len) = c.dir(&[(5, DIRENT_DIR, "data"), (6, DIRENT_FILE, "eboot.bin")]);
+        let (data, data_len) = c.dir(&[(7, DIRENT_FILE, "a.bin")]);
+        c.inode(4, 0x4000, root_len, root);
+        c.inode(5, 0x4000, data_len, data);
+        c.inode(6, 0x8000, 10, 0);
+        c.inode(7, 0x8000, 10, 0);
+        assert_eq!(c.walk(8).unwrap(), ["data/a.bin", "eboot.bin"]);
+    }
+
+    /// Two directory inodes that name one block are a loop the inode set alone does not see:
+    /// every inode is new, the block is not.
+    #[test]
+    fn a_directory_block_walked_twice_is_refused() {
+        let mut c = Crafted::new();
+        let (root, root_len) = c.dir(&[(5, DIRENT_DIR, "a"), (6, DIRENT_DIR, "b")]);
+        let (shared, shared_len) = c.dir(&[(7, DIRENT_FILE, "f")]);
+        c.inode(4, 0x4000, root_len, root);
+        c.inode(5, 0x4000, shared_len, shared);
+        c.inode(6, 0x4000, shared_len, shared);
+        c.inode(7, 0x8000, 1, 0);
+        let e = c.walk(8).unwrap_err().to_string();
+        assert!(e.contains("share the block"), "{e}");
+    }
+
+    #[test]
+    fn a_directory_that_names_itself_is_refused() {
+        let mut c = Crafted::new();
+        let (root, root_len) = c.dir(&[(4, DIRENT_DIR, "again")]);
+        c.inode(4, 0x4000, root_len, root);
+        assert!(c.walk(8).unwrap_err().to_string().contains("loop"));
+    }
+
+    /// The entry budget stops a walk whatever the entries are, the skipped `.` ones included.
+    #[test]
+    fn the_entry_budget_ends_a_walk() {
+        let mut c = Crafted::new();
+        let (root, root_len) = c.dir(&[(4, DIRENT_DIR, "."), (6, DIRENT_FILE, "f")]);
+        c.inode(4, 0x4000, root_len, root);
+        c.inode(6, 0x8000, 1, 0);
+        let region = Region {
+            base: 0,
+            bytes: &c.region,
+        };
+        let walk = Walk {
+            region: &region,
+            table: &c.table,
+            count: 8,
+        };
+        let mut budget = Budget {
+            listed: MAX_ENTRIES - 1,
+            ..Budget::default()
+        };
+        let e = walk
+            .dir(4, "", 0, &mut budget, &mut Vec::new(), &mut Vec::new())
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("entries"), "{e}");
+        let mut budget = Budget {
+            path_bytes: MAX_PATH_BYTES,
+            ..Budget::default()
+        };
+        let e = walk
+            .dir(4, "", 0, &mut budget, &mut Vec::new(), &mut Vec::new())
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("256 MiB"), "{e}");
+    }
+
+    /// An entry whose lengths claim more than the block holds ends the directory; it is not
+    /// added up into an index past it.
+    #[test]
+    fn an_entry_past_its_block_ends_the_directory() {
+        let mut c = Crafted::new();
+        let (root, root_len) = c.dir(&[(6, DIRENT_FILE, "f"), (6, DIRENT_FILE, "g")]);
+        c.inode(4, 0x4000, root_len, root);
+        c.inode(6, 0x8000, 1, 0);
+        // The first entry claims the largest size; the second a name longer than the block.
+        c.region[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(c.walk(8).unwrap(), ["f"]);
+        c.region[12..16].copy_from_slice(&24u32.to_le_bytes());
+        c.region[24 + 8..24 + 12].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(c.walk(8).unwrap(), ["f"]);
+    }
+
+    fn table_of(children: &[u32]) -> Vec<u8> {
+        let mut t = vec![0u8; BLOCK as usize];
+        for (slot, child) in children.iter().enumerate() {
+            t[slot * 36 + 32..slot * 36 + 36].copy_from_slice(&child.to_le_bytes());
+        }
+        t
+    }
+
+    /// Tables that name each other at every slot: 1820 children a level, four levels deep, is
+    /// ten trillion reads without the visited set. With it the walk ends at the second visit.
+    #[test]
+    fn tables_that_name_each_other_are_refused_at_once() {
+        let full = table_of(&vec![9u32; outer::PER_INDIRECT]);
+        let mut reads = 0u32;
+        let mut out = Vec::new();
+        let e = walk_table(
+            &mut |_| {
+                reads += 1;
+                Ok(full.clone())
+            },
+            9,
+            4,
+            u64::MAX,
+            &mut HashSet::new(),
+            &mut out,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("twice"), "{e}");
+        assert_eq!(reads, 1);
+    }
+
+    #[test]
+    fn a_sound_table_gives_its_blocks_in_order() {
+        let top = table_of(&[20, 21]);
+        let (a, b) = (table_of(&[100, 101]), table_of(&[102, 0, 103]));
+        let mut out = Vec::new();
+        walk_table(
+            &mut |block| {
+                Ok(match block {
+                    10 => top.clone(),
+                    20 => a.clone(),
+                    21 => b.clone(),
+                    other => panic!("read of block {other}"),
+                })
+            },
+            10,
+            1,
+            4,
+            &mut HashSet::new(),
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(out, [100, 101, 102, 103]);
+        // A table shorter than a block is an error, not an index past it.
+        let e = walk_table(
+            &mut |_| Ok(vec![0u8; 40]),
+            10,
+            0,
+            4,
+            &mut HashSet::new(),
+            &mut Vec::new(),
+        );
+        assert!(e.is_err());
     }
 }

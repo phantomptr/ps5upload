@@ -286,9 +286,12 @@ pub fn parse_cheat_filename(filename: &str) -> (String, String) {
         return (String::new(), String::new());
     };
     // A title id is four letters then five digits (CUSA12345 / PPSA12345).
-    let looks_like_title = title.len() == 9
-        && title[..4].chars().all(|c| c.is_ascii_alphabetic())
-        && title[4..].chars().all(|c| c.is_ascii_digit());
+    // On bytes: a community index is someone else's text, and nine bytes of it need not split
+    // into characters at the fourth.
+    let id = title.as_bytes();
+    let looks_like_title = id.len() == 9
+        && id[..4].iter().all(u8::is_ascii_alphabetic)
+        && id[4..].iter().all(u8::is_ascii_digit);
     if !looks_like_title {
         return (String::new(), String::new());
     }
@@ -1546,6 +1549,15 @@ mod cheat_filename_tests {
     fn a_name_that_breaks_the_convention_still_lists() {
         // Empty rather than an error: such an entry must still appear in the
         // browser, it just cannot be filtered on.
+        assert_eq!(
+            parse_cheat_filename("ab\u{20AC}cdef_01.00.json"),
+            (String::new(), String::new()),
+            "nine bytes that do not split into characters at the fourth are not a title id"
+        );
+        assert_eq!(
+            parse_cheat_filename("\u{20AC}\u{20AC}\u{20AC}.json"),
+            (String::new(), String::new())
+        );
         assert_eq!(
             parse_cheat_filename("readme.md"),
             (String::new(), String::new())

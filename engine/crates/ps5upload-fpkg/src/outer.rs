@@ -1,5 +1,7 @@
 //! The outer PFS of a finalized image: decrypt, superblock, inodes, dirents.
 
+use std::collections::HashSet;
+
 use crate::cnt::Cnt;
 use crate::crypto::{derive_ekpfs, derive_xts_keys, sha3};
 use crate::fih::Fih;
@@ -229,21 +231,40 @@ where
             }
         }
     }
+    // The tables this file has been through: a sound file reaches each once. Without it a
+    // crafted package whose tables name each other is read 1820 times per level.
+    let mut seen = HashSet::new();
     for (level, table) in node.indirect.iter().enumerate() {
         if table.block == 0 {
             continue;
         }
-        if !table_ok(&mut read, table.block as u64, level as u32, &table.digest)? {
+        if !table_ok(
+            &mut read,
+            table.block as u64,
+            level as u32,
+            &table.digest,
+            &mut seen,
+        )? {
             return Ok(false);
         }
     }
     Ok(true)
 }
 
-fn table_ok<F>(read: &mut F, block: u64, level: u32, digest: &[u8; 32]) -> Result<bool>
+fn table_ok<F>(
+    read: &mut F,
+    block: u64,
+    level: u32,
+    digest: &[u8; 32],
+    seen: &mut HashSet<u64>,
+) -> Result<bool>
 where
     F: FnMut(u64) -> Result<Vec<u8>>,
 {
+    // A table reached twice is damage, whatever its digest says.
+    if !seen.insert(block) {
+        return Ok(false);
+    }
     let bytes = read(block)?;
     if sha3(&bytes) != *digest {
         return Ok(false);
@@ -253,13 +274,17 @@ where
     }
     for slot in 0..PER_INDIRECT {
         let at = slot * BLOCK_SIG_LEN;
-        let child = le32(&bytes, at + 32) as u64;
+        // A reader may hand back less than a block; the records it lacks are not there.
+        let Some(sig) = bytes.get(at..at + BLOCK_SIG_LEN) else {
+            return Ok(false);
+        };
+        let child = le32(sig, 32) as u64;
         if child == 0 {
             continue;
         }
         let mut record = [0u8; 32];
-        record.copy_from_slice(&bytes[at..at + 32]);
-        if !table_ok(read, child, level - 1, &record)? {
+        record.copy_from_slice(&sig[..32]);
+        if !table_ok(read, child, level - 1, &record, seen)? {
             return Ok(false);
         }
     }
@@ -310,7 +335,18 @@ impl OuterImage {
     /// by the inode's size.
     /// Follows one indirect table: its records point at data blocks at level 0, or at
     /// the tables of the level below otherwise.
-    fn walk_table(&self, block: u64, level: u32, size: u64, out: &mut Vec<u8>) {
+    fn walk_table(
+        &self,
+        block: u64,
+        level: u32,
+        size: u64,
+        seen: &mut HashSet<u64>,
+        out: &mut Vec<u8>,
+    ) {
+        // A table reached twice is a loop: its blocks are not read again.
+        if !seen.insert(block) {
+            return;
+        }
         let Some(table) = self.plaintext.get(block as usize) else {
             return;
         };
@@ -329,7 +365,7 @@ impl OuterImage {
                     None => return,
                 }
             } else {
-                self.walk_table(child, level - 1, size, out);
+                self.walk_table(child, level - 1, size, seen, out);
             }
         }
     }
@@ -337,18 +373,22 @@ impl OuterImage {
     /// Every indirect table's plaintext must be the block its parent (or the dinode)
     /// recorded a digest for. This is the check that makes the deeper levels trustworthy.
     pub fn indirect_ok(&self, node: &Dinode) -> bool {
+        let mut seen = HashSet::new();
         for (level, table) in node.indirect.iter().enumerate() {
             if table.block == 0 {
                 continue;
             }
-            if !self.table_ok(table.block as u64, level as u32, &table.digest) {
+            if !self.table_ok(table.block as u64, level as u32, &table.digest, &mut seen) {
                 return false;
             }
         }
         true
     }
 
-    fn table_ok(&self, block: u64, level: u32, digest: &[u8; 32]) -> bool {
+    fn table_ok(&self, block: u64, level: u32, digest: &[u8; 32], seen: &mut HashSet<u64>) -> bool {
+        if !seen.insert(block) {
+            return false;
+        }
         let Some(bytes) = self.plaintext.get(block as usize) else {
             return false;
         };
@@ -366,7 +406,7 @@ impl OuterImage {
             }
             let mut record = [0u8; 32];
             record.copy_from_slice(&bytes[at..at + 32]);
-            if !self.table_ok(child, level - 1, &record) {
+            if !self.table_ok(child, level - 1, &record, seen) {
                 return false;
             }
         }
@@ -387,13 +427,19 @@ impl OuterImage {
         }
         // The dinode's slots are indirect levels: slot 0's records point at data blocks,
         // slot 1's at tables like slot 0's, and so on. Unused slots are zeroed.
+        // A file is no larger than the image it is in, whatever its inode says: a table whose
+        // records all name one block would otherwise be copied out until that size is met.
+        let size = node
+            .size
+            .min((self.plaintext.len() as u64).saturating_mul(BLOCK));
+        let mut seen = HashSet::new();
         for (level, table) in node.indirect.iter().enumerate() {
-            if out.len() as u64 >= node.size || table.block == 0 {
+            if out.len() as u64 >= size || table.block == 0 {
                 break;
             }
-            self.walk_table(table.block as u64, level as u32, node.size, &mut out);
+            self.walk_table(table.block as u64, level as u32, size, &mut seen, &mut out);
         }
-        out.truncate(node.size as usize);
+        out.truncate(usize::try_from(size).unwrap_or(usize::MAX));
         out
     }
 
@@ -410,10 +456,12 @@ impl OuterImage {
         let limit = (size as usize).min(block.len());
         let mut out = Vec::new();
         let mut o = 0usize;
-        while o + 16 <= limit {
+        while limit - o >= 16 {
             let name_len = le32(block, o + 8) as usize;
             let ent_size = le32(block, o + 12) as usize;
-            if ent_size == 0 || o + 16 + name_len > limit {
+            // Compared as what is left, never added up: both lengths are the file's.
+            let left = limit - o;
+            if ent_size == 0 || name_len > left - 16 {
                 break;
             }
             out.push(Dirent {
@@ -421,7 +469,7 @@ impl OuterImage {
                 kind: i32le(block, o + 4),
                 name: String::from_utf8_lossy(&block[o + 16..o + 16 + name_len]).into_owned(),
             });
-            o += ent_size;
+            o += ent_size.min(left);
         }
         out
     }
@@ -514,5 +562,135 @@ mod tests {
             names(2),
             [".", "..", "pfs_image.dat", "naps_pkg_layout.dat"]
         );
+    }
+
+    fn table_block(children: &[u32], blocks: &[Vec<u8>]) -> Vec<u8> {
+        let mut t = vec![0u8; BLOCK as usize];
+        for (slot, child) in children.iter().enumerate() {
+            let at = slot * BLOCK_SIG_LEN;
+            if let Some(b) = blocks.get(*child as usize) {
+                t[at..at + 32].copy_from_slice(&sha3(b));
+            }
+            t[at + 32..at + 36].copy_from_slice(&child.to_le_bytes());
+        }
+        t
+    }
+
+    fn dinode(size: u64, indirect: &[(usize, u32, [u8; 32])]) -> Dinode {
+        let zero = DirectBlock {
+            digest: [0; 32],
+            block: 0,
+        };
+        let mut node = Dinode {
+            mode: 0x8000,
+            nlink: 1,
+            flags: 0,
+            size,
+            size_compressed: size,
+            blocks: 0,
+            direct: [zero; 12],
+            indirect: [zero; 5],
+        };
+        for (level, block, digest) in indirect {
+            node.indirect[*level] = DirectBlock {
+                digest: *digest,
+                block: *block,
+            };
+        }
+        node
+    }
+
+    fn image_of(plaintext: Vec<Vec<u8>>) -> OuterImage {
+        OuterImage {
+            superblock: Superblock {
+                index: 0,
+                dinode_count: 1,
+                ndblock: 1,
+                inode_table_block: 0,
+                inode_table_digest: [0; 32],
+                seed: [0; 16],
+                mode: crate::ImageMode::Native,
+                icv_ok: true,
+            },
+            plaintext,
+            verdicts: vec![],
+        }
+    }
+
+    /// A table whose every record names itself, digest and all, cannot be built (a block
+    /// cannot hold its own digest) — but two files' worth of records naming one sound table
+    /// can. The check reads it once and calls the second visit damage, rather than reading it
+    /// 1820 times a level.
+    #[test]
+    fn a_table_reached_twice_is_damage_and_read_once() {
+        let leaf = table_block(&[], &[]);
+        // Block 1 is the leaf; block 2 names it at every slot.
+        let blocks = vec![vec![0u8; BLOCK as usize], leaf.clone()];
+        let top = table_block(&vec![1u32; PER_INDIRECT], &blocks);
+        let node = dinode(0, &[(1, 2, sha3(&top))]);
+
+        let mut reads = 0u32;
+        let ok = verify_dinode(&node, false, |b| {
+            reads += 1;
+            Ok(match b {
+                1 => leaf.clone(),
+                2 => top.clone(),
+                other => panic!("read of block {other}"),
+            })
+        })
+        .unwrap();
+        assert!(!ok);
+        assert_eq!(reads, 2, "the top table and the leaf, once each");
+
+        let img = image_of(vec![blocks[0].clone(), leaf, top]);
+        assert!(!img.indirect_ok(&node));
+    }
+
+    /// Slot 0 names a table of data blocks, slot 1 a table of such tables.
+    #[test]
+    fn a_sound_two_level_file_verifies_and_reads() {
+        let data_a = vec![0xAAu8; BLOCK as usize];
+        let data_b = vec![0xBBu8; BLOCK as usize];
+        let mut blocks = vec![vec![0u8; BLOCK as usize], data_a.clone(), data_b.clone()];
+        let first = table_block(&[1], &blocks);
+        blocks.push(first.clone());
+        let leaf = table_block(&[2], &blocks);
+        blocks.push(leaf);
+        let top = table_block(&[4], &blocks);
+        blocks.push(top.clone());
+        let node = dinode(BLOCK * 2 - 5, &[(0, 3, sha3(&first)), (1, 5, sha3(&top))]);
+        let img = image_of(blocks.clone());
+        assert!(img.indirect_ok(&node));
+        assert!(verify_dinode(&node, false, |b| Ok(blocks[b as usize].clone())).unwrap());
+        let data = img.file_data(&node);
+        assert_eq!(data.len() as u64, BLOCK * 2 - 5);
+        assert_eq!(&data[..BLOCK as usize], &data_a[..]);
+        assert_eq!(data[BLOCK as usize], 0xBB);
+    }
+
+    /// An inode that claims an enormous size over a table naming one block at every slot reads
+    /// no more than the image holds.
+    #[test]
+    fn a_file_reads_no_more_than_its_image() {
+        let data = vec![7u8; BLOCK as usize];
+        let blocks = vec![vec![0u8; BLOCK as usize], data];
+        let leaf = table_block(&vec![1u32; PER_INDIRECT], &blocks);
+        let node = dinode(u64::MAX, &[(0, 2, sha3(&leaf))]);
+        let img = image_of(vec![blocks[0].clone(), blocks[1].clone(), leaf]);
+        assert_eq!(img.file_data(&node).len() as u64, 3 * BLOCK);
+    }
+
+    #[test]
+    fn a_dirent_with_impossible_lengths_ends_the_directory() {
+        let mut block = vec![0u8; 64];
+        block[0..4].copy_from_slice(&5u32.to_le_bytes());
+        block[8..12].copy_from_slice(&1u32.to_le_bytes());
+        block[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+        block[16] = b'a';
+        let got = OuterImage::parse_dirents(&block, u64::MAX);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].name, "a");
+        block[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(OuterImage::parse_dirents(&block, 64).is_empty());
     }
 }

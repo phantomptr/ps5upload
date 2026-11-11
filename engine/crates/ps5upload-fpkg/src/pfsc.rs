@@ -347,17 +347,42 @@ pub struct Container {
     pub digest_ok: bool,
 }
 
+/// The largest logical block a container may declare. The writer's is 256 KiB; the bound keeps a
+/// damaged header from sizing a buffer by its lie.
+const MAX_BLOCK: u32 = 16 << 20;
+/// What [`Container::decompress`] expands to at most. A caller that knows the size it expects
+/// passes it to [`Container::decompress_capped`] instead.
+pub const MAX_LOGICAL: u64 = 2 << 30;
+/// The most reserved ahead of decoding; the rest grows as blocks really decode.
+const PREALLOC: usize = 16 << 20;
+/// The low 44 bits of a boundary word: the cumulative offset.
+const OFFSET_MASK: u64 = 0xFFF_FFFF_FFFF;
+
 impl Container {
     /// The container's logical payload: a verbatim block is its own bytes on disk, a deflated one
     /// is inflated back to its logical length.
     pub fn decompress(&self) -> crate::Result<Vec<u8>> {
+        self.decompress_capped(MAX_LOGICAL)
+    }
+
+    /// [`Container::decompress`], refused when the header declares more than `max` bytes. Every
+    /// size here is the file's own claim, so nothing is allocated from one before it is checked.
+    pub fn decompress_capped(&self, max: u64) -> crate::Result<Vec<u8>> {
         if self.algorithm != ALG_ZLIB as u8 {
             return format_err(format!(
                 "container declares algorithm {}; only zlib ({ALG_ZLIB}) blocks are decoded here",
                 self.algorithm
             ));
         }
-        let mut out = Vec::with_capacity(self.logical_size as usize);
+        if self.logical_size > max {
+            return format_err(format!(
+                "container declares {} bytes, more than the {max} it may hold here",
+                self.logical_size
+            ));
+        }
+        let block_size = u64::from(self.block_size);
+        let mut out = Vec::with_capacity((self.logical_size as usize).min(PREALLOC));
+        let mut buf = Vec::new();
         for (i, ((_, _, payload_len, logical_len), payload)) in
             self.blocks.iter().zip(&self.payloads).enumerate()
         {
@@ -367,12 +392,27 @@ impl Container {
                     payload.len()
                 ));
             }
+            if *logical_len > block_size || out.len() as u64 + *logical_len > self.logical_size {
+                return format_err(format!(
+                    "block {i} claims {logical_len} logical bytes, more than the container allows"
+                ));
+            }
             if *payload_len == *logical_len {
                 out.extend_from_slice(payload);
                 continue;
             }
-            let mut buf = vec![0u8; *logical_len as usize];
-            flate2::read::ZlibDecoder::new(&payload[..]).read_exact(&mut buf)?;
+            buf.clear();
+            // Bounded by the block's own length, and read as it decodes: a block that claims
+            // more than its stream holds is an error, not a buffer of that size.
+            flate2::read::ZlibDecoder::new(&payload[..])
+                .take(*logical_len)
+                .read_to_end(&mut buf)?;
+            if buf.len() as u64 != *logical_len {
+                return format_err(format!(
+                    "block {i} decodes to {} bytes where its boundary entry says {logical_len}",
+                    buf.len()
+                ));
+            }
             out.extend_from_slice(&buf);
         }
         if out.len() as u64 != self.logical_size {
@@ -388,6 +428,9 @@ impl Container {
 
 /// Parse a container. Blocks are returned as they sit on disk; only the stored profile can be
 /// turned back into logical bytes here.
+///
+/// Every offset, size and count is the file's own claim: each is checked against the container
+/// before it is used, so a damaged or crafted one is an error and never a panic.
 pub fn parse(container: &[u8]) -> crate::Result<Container> {
     if container.len() < OFF1 || u32::from_le_bytes(container[0..4].try_into().unwrap()) != MAGIC {
         return crate::format_err("not a PFSC container");
@@ -396,63 +439,98 @@ pub fn parse(container: &[u8]) -> crate::Result<Container> {
     let le32 = |at: usize| u32::from_le_bytes(container[at..at + 4].try_into().unwrap());
     let le64 = |at: usize| u64::from_le_bytes(container[at..at + 8].try_into().unwrap());
     let version = le16(4);
-    let sections = le16(6);
+    let sections = le16(6) as usize;
     let block_size = le32(8);
     let algorithm = container[0x10];
     let param0c = le32(0x0C);
     let param10 = le64(0x10);
     let logical_size = le64(0x18);
+    if block_size == 0 || block_size > MAX_BLOCK {
+        return format_err(format!(
+            "PFSC container declares an impossible block size ({block_size:#x})"
+        ));
+    }
+    // The directory itself must lie inside the container before any entry of it is read.
+    if 0x48 + sections * DIR_ENTRY > container.len() {
+        return format_err(format!(
+            "PFSC container declares {sections} sections, more than it has room for"
+        ));
+    }
 
-    let mut dir = Vec::new();
-    for i in 0..sections as usize {
+    let mut dir = Vec::with_capacity(sections);
+    for i in 0..sections {
         let p = 0x48 + i * DIR_ENTRY;
         let id = le16(p);
         let off = le32(p + 2) as u64 | ((le16(p + 6) as u64) << 32);
         let size = le32(p + 10) as u64 | ((le16(p + 14) as u64) << 32);
-        dir.push((id, off as usize, size as usize));
+        dir.push((id, off, size));
     }
     let section = |id: u16| {
         dir.iter()
             .find(|(i, _, _)| *i == id)
             .map(|(_, o, s)| (*o, *s))
     };
-    let (off3, sec3) = section(3).ok_or_else(|| Error::Format("no boundary table".into()))?;
-    let (off4, sec4) = section(4).ok_or_else(|| Error::Format("no block digests".into()))?;
-    let (off7, _) = section(7).ok_or_else(|| Error::Format("no block data".into()))?;
-    let (off2, sec2) = section(2).unwrap_or((0, 0));
-
-    // The boundary table has one entry per block plus a sentinel holding the totals.
-    let entry = |i: usize| {
-        let e = off3 + i * DIR_ENTRY;
-        (le64(e), le64(e + 8))
+    // A section's bytes, or an error when it does not lie inside the container.
+    let bytes_of = |what: &str, (off, size): (u64, u64)| -> crate::Result<&[u8]> {
+        usize::try_from(off)
+            .ok()
+            .zip(usize::try_from(size).ok())
+            .and_then(|(o, s)| container.get(o..o.checked_add(s)?))
+            .ok_or_else(|| Error::Format(format!("PFSC {what} runs past the container")))
     };
-    let count = sec3 / DIR_ENTRY - 1;
+    let boundaries = bytes_of(
+        "boundary table",
+        section(3).ok_or_else(|| Error::Format("no boundary table".into()))?,
+    )?;
+    let digests = bytes_of(
+        "block digests",
+        section(4).ok_or_else(|| Error::Format("no block digests".into()))?,
+    )?;
+    let (off7, _) = section(7).ok_or_else(|| Error::Format("no block data".into()))?;
+    let shuffle = match section(2) {
+        Some(s) => bytes_of("shuffle table", s)?,
+        None => &[],
+    };
+
+    // The boundary table has one entry per block plus a sentinel holding the totals. It lies
+    // inside the container, so the count is bounded by the container's own length.
+    let count = (boundaries.len() / DIR_ENTRY)
+        .checked_sub(1)
+        .ok_or_else(|| Error::Format("PFSC boundary table has no entries".into()))?;
+    let word = |at: usize| u64::from_le_bytes(boundaries[at..at + 8].try_into().unwrap());
+    let entry = |i: usize| (word(i * DIR_ENTRY), word(i * DIR_ENTRY + 8));
     let mut blocks = Vec::with_capacity(count);
     let mut payloads = Vec::with_capacity(count);
     for i in 0..count {
         let (first, second) = entry(i);
         let (next_first, next_second) = entry(i + 1);
-        let payload_len = (next_first & 0xFFF_FFFF_FFFF) - (first & 0xFFF_FFFF_FFFF);
-        let logical_len = (next_second & 0xFFF_FFFF_FFFF) - (second & 0xFFF_FFFF_FFFF);
+        let backwards = || Error::Format(format!("PFSC block {i}'s boundaries run backwards"));
+        let payload_len = (next_first & OFFSET_MASK)
+            .checked_sub(first & OFFSET_MASK)
+            .ok_or_else(backwards)?;
+        let logical_len = (next_second & OFFSET_MASK)
+            .checked_sub(second & OFFSET_MASK)
+            .ok_or_else(backwards)?;
         let hint = ((second >> SIZE_HINT_SHIFT) & SIZE_HINT_MASK) + 1;
-        let at = off7 + (first & 0xFFF_FFFF_FFFF) as usize;
-        payloads.push(
-            container[at.min(container.len())..(at + payload_len as usize).min(container.len())]
-                .to_vec(),
-        );
+        // A payload cut short by the end of the container is returned as far as it goes;
+        // `decompress` refuses it by its length.
+        let len = container.len() as u64;
+        let at = off7.saturating_add(first & OFFSET_MASK).min(len);
+        let end = at.saturating_add(payload_len).min(len);
+        payloads.push(container[at as usize..end as usize].to_vec());
         blocks.push((first >> FLAG_SHIFT, hint, payload_len, logical_len));
     }
 
-    let digest_ok = sec2 > 0
+    let digest_ok = !shuffle.is_empty()
         && container[0x28..0x48]
             == file_digest(
                 block_size,
                 param0c,
                 param10,
                 logical_size,
-                &container[off2..off2 + sec2],
-                &container[off3..off3 + sec3],
-                &container[off4..off4 + sec4],
+                shuffle,
+                boundaries,
+                digests,
             );
 
     Ok(Container {
@@ -598,5 +676,98 @@ mod tests {
         let mut c = vec![7u8; 1000];
         c[999] = 8;
         assert_ne!(block_signature(&c), a);
+    }
+
+    fn set_dir(c: &mut [u8], index: usize, offset: u64, size: u64) {
+        let p = 0x48 + index * DIR_ENTRY;
+        c[p + 2..p + 6].copy_from_slice(&(offset as u32).to_le_bytes());
+        c[p + 6..p + 8].copy_from_slice(&((offset >> 32) as u16).to_le_bytes());
+        c[p + 10..p + 14].copy_from_slice(&(size as u32).to_le_bytes());
+        c[p + 14..p + 16].copy_from_slice(&((size >> 32) as u16).to_le_bytes());
+    }
+
+    fn refused(c: &[u8]) -> String {
+        match parse(c).and_then(|c| c.decompress()) {
+            Ok(_) => panic!("a damaged container must not read"),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    /// Every header field a crafted container can lie in is an error, never a panic or an
+    /// allocation the size of the lie.
+    #[test]
+    fn a_crafted_header_is_an_error_not_a_panic() {
+        let good = write_zlib(&vec![3u8; 1000]).unwrap().container;
+        assert!(parse(&good).unwrap().decompress().is_ok());
+
+        // More sections than the container has room for.
+        let mut c = good.clone();
+        c[6..8].copy_from_slice(&u16::MAX.to_le_bytes());
+        assert!(refused(&c).contains("sections"));
+
+        // A boundary table too short to hold even its sentinel (the count underflowed).
+        let mut c = good.clone();
+        set_dir(&mut c, 2, OFF1 as u64, 8);
+        assert!(refused(&c).contains("no entries"));
+
+        // Sections placed past the end: boundary table, digests, shuffle table.
+        for (index, what) in [(2, "boundary table"), (3, "block digests"), (1, "shuffle")] {
+            let mut c = good.clone();
+            set_dir(&mut c, index, 0xFFFF_FFFF_FFFF, 32);
+            assert!(refused(&c).contains(what), "{what}");
+            let mut c = good.clone();
+            set_dir(&mut c, index, 0x100, 0xFFFF_FFFF_FFFF);
+            assert!(refused(&c).contains(what), "{what}");
+        }
+
+        // A block-data offset far past the end reads as an empty payload, not a slice panic.
+        let mut c = good.clone();
+        set_dir(&mut c, 6, 0xFFFF_FFFF_FFFF, 0);
+        assert!(refused(&c).contains("bytes on disk"));
+
+        // Boundaries that run backwards.
+        let mut c = good.clone();
+        let off3 = align(align(OFF1 + 20, 8) + 64, 8);
+        c[off3..off3 + 8].copy_from_slice(&0x0FFF_FFFFu64.to_le_bytes());
+        assert!(refused(&c).contains("backwards"));
+
+        // A logical size of 32 TiB: refused before anything is reserved for it.
+        let mut c = good.clone();
+        c[0x18..0x20].copy_from_slice(&(1u64 << 45).to_le_bytes());
+        assert!(refused(&c).contains("more than"));
+
+        // One block that claims 16 TiB of logical bytes.
+        let mut c = good.clone();
+        c[off3 + 24..off3 + 32].copy_from_slice(&(1u64 << 43).to_le_bytes());
+        c[0x18..0x20].copy_from_slice(&1000u64.to_le_bytes());
+        assert!(refused(&c).contains("logical bytes"));
+
+        // An impossible block size.
+        let mut c = good.clone();
+        c[8..12].copy_from_slice(&0u32.to_le_bytes());
+        assert!(refused(&c).contains("block size"));
+    }
+
+    #[test]
+    fn a_caller_can_cap_what_a_container_expands_to() {
+        let c = parse(&write_zlib(&vec![3u8; 5000]).unwrap().container).unwrap();
+        assert_eq!(c.decompress_capped(5000).unwrap().len(), 5000);
+        assert!(c.decompress_capped(4999).is_err());
+    }
+
+    /// Any truncation or single-byte change of the header and tables parses or errors.
+    #[test]
+    fn a_mangled_container_never_panics() {
+        let good = write_zlib(&vec![9u8; 3000]).unwrap().container;
+        for cut in 0..good.len().min(0x200) {
+            let _ = parse(&good[..cut]).and_then(|c| c.decompress());
+        }
+        for at in 4..0x140 {
+            for v in [0x00, 0x7F, 0xFF] {
+                let mut c = good.clone();
+                c[at] = v;
+                let _ = parse(&c).and_then(|c| c.decompress());
+            }
+        }
     }
 }

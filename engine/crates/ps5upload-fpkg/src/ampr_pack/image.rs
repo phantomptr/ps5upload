@@ -85,7 +85,7 @@ fn readiness_for_packs(tree: &mut dyn SourceTree) -> Option<Readiness> {
             emulator_missing: false,
         });
     };
-    let support = match tree.read(&module) {
+    let support = match crate::source::read_small(tree, &module, crate::source::MAX_ARTWORK_BYTES) {
         Ok(bytes) => runtime_support(&bytes),
         Err(e) => {
             return Some(Readiness {

@@ -16,11 +16,15 @@ impl Reader {
     /// Open the pack set whose manifest is `index_name` in `tree` (a folder, an image), with its
     /// `.crc` sidecar when the tree has one.
     pub fn open(tree: &mut dyn SourceTree, index_name: &str) -> Result<Self> {
-        let manifest = Manifest::parse(&tree.read(index_name)?)?;
+        let manifest = Manifest::parse(&crate::source::read_small(
+            tree,
+            index_name,
+            crate::source::MAX_INDEX_BYTES,
+        )?)?;
         let crc_name = format!("{index_name}.crc");
         let crcs = if tree.files().iter().any(|f| f.path == crc_name) {
             Some(parse_crc_sidecar(
-                &tree.read(&crc_name)?,
+                &crate::source::read_small(tree, &crc_name, crate::source::MAX_INDEX_BYTES)?,
                 &manifest.build_id,
                 manifest.chunks.len(),
             )?)
@@ -115,7 +119,8 @@ impl Reader {
         if !f.packed() {
             return format_err(format!("{} is loose", self.manifest.path(i)?));
         }
-        let mut out = Vec::with_capacity(f.logical_size as usize);
+        // The size is the manifest's claim; what is reserved for it is not.
+        let mut out = Vec::with_capacity((f.logical_size as usize).min(16 << 20));
         for local in 0..f.chunk_count {
             out.extend_from_slice(&self.read_chunk(i, local, tree, dir)?);
         }

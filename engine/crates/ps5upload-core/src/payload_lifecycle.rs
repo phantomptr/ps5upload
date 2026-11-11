@@ -839,19 +839,47 @@ mod tests {
         |_: &mut Vec<u8>| {}
     }
 
-    fn temp_file(name: &str, content: &[u8]) -> std::path::PathBuf {
+    /// A file in a folder of its own, removed with the folder when the test ends, whichever way
+    /// it ends. One of these is a 128 MiB sparse file; left behind on every run they add up.
+    struct TempFile {
+        dir: std::path::PathBuf,
+        path: std::path::PathBuf,
+    }
+
+    impl std::ops::Deref for TempFile {
+        type Target = std::path::Path;
+        fn deref(&self) -> &std::path::Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn temp_file(name: &str, content: &[u8]) -> TempFile {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
             "ps5upload-send-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join(name);
-        std::fs::write(&p, content).unwrap();
-        p
+        let path = dir.join(name);
+        std::fs::write(&path, content).unwrap();
+        TempFile { dir, path }
+    }
+
+    #[test]
+    fn a_test_file_goes_with_its_test() {
+        let file = temp_file("gone.elf", b"x");
+        let dir = file.dir.clone();
+        assert!(file.exists());
+        drop(file);
+        assert!(!dir.exists());
     }
 
     fn listen_once() -> (u16, std::thread::JoinHandle<Vec<u8>>) {
@@ -929,7 +957,7 @@ mod tests {
         let p = temp_file("huge.elf", b"");
         std::fs::File::options()
             .write(true)
-            .open(&p)
+            .open(&*p)
             .unwrap()
             .set_len(PAYLOAD_FILE_MAX_BYTES + 1)
             .unwrap();

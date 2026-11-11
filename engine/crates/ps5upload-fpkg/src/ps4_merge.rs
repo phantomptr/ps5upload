@@ -81,7 +81,7 @@ fn params_of(tree: &mut dyn SourceTree, what: &str) -> Result<(String, Vec<u8>, 
             "the {what} has no sce_sys/param.sfo, so it isn't a PS4 {what}"
         ));
     };
-    let bytes = tree.read(&path)?;
+    let bytes = crate::source::read_small(tree, &path, crate::source::MAX_PARAM_BYTES)?;
     let params = sfo_params(&bytes).map_err(|e| {
         crate::Error::Format(format!("the {what}'s sce_sys/param.sfo can't be read: {e}"))
     })?;
