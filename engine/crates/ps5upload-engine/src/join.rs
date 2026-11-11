@@ -1269,23 +1269,32 @@ impl Party {
         let n = s.rtt_n.load(Ordering::Relaxed);
         let avg = s.rtt_sum.load(Ordering::Relaxed).checked_div(n);
         // An internet guest's video track drops pictures itself when the link falls behind.
-        let (dropped, jumps) = g
+        let track = g
             .net
             .as_ref()
-            .and_then(|n| n.track_with(|t| (t.dropped, t.jumps)))
-            .unwrap_or_default();
+            .and_then(|n| n.track_with(|t| t.on.then_some((t.dropped, t.jumps, t.wait_max_ms))))
+            .flatten();
+        let dropped = track.map_or(0, |t| t.0);
+        // …and its datagrams at the engine's socket (#720): the ones that had to wait for room
+        // there, and the ones that never went out.
+        let udp = g.net.as_ref().map(|n| n.udp()).map_or(String::new(), |u| {
+            format!(
+                "; {} datagrams out ({} waited for the socket, {} lost there)",
+                u.sent, u.waited, u.lost
+            )
+        });
         fx.push(Effect::Log(format!(
-            "join: Player {} left ({why}) after {}s: rtt avg {} ms, max {} ms; {} pictures skipped to a keyframe{}; {} pad frames; {}",
+            "join: Player {} left ({why}) after {}s: rtt avg {} ms, max {} ms; {} pictures skipped to a keyframe{}; {} pad frames; {}{udp}",
             g.player,
             now.duration_since(g.joined_at).as_secs(),
             avg.map(|a| a.to_string()).unwrap_or_else(|| "?".into()),
             s.rtt_max.load(Ordering::Relaxed),
             s.skipped.load(Ordering::Relaxed) + dropped,
-            if jumps > 0 {
-                format!(" ({jumps} times the link fell behind on the video track)")
-            } else {
-                String::new()
-            },
+            track.map_or(String::new(), |(_, jumps, waited_ms)| {
+                format!(
+                    " ({jumps} times the link fell behind on the video track, a picture waited up to {waited_ms} ms for it)"
+                )
+            }),
             s.pad_frames.load(Ordering::Relaxed),
             s.page_line(),
         )));
