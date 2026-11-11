@@ -1176,7 +1176,7 @@ int sc_apply_start(const char *body, size_t n, char *out, size_t cap) {
         int m = 0;
         for (int i = 0; i < k; i++) {
             int dup = 0;
-            if (ids[i] == 0 || (int)ids[i] > G.n_items) {
+            if (ids[i] == 0 || ids[i] > (uint32_t)G.n_items) { /* unsigned: an id of 2^31 or more is not "negative, so in range" */
                 err = "bad_request";
                 break;
             }

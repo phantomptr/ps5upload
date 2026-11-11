@@ -32,6 +32,18 @@ static inline int image_mount_kind(const char *fstype, const char *from) {
     return IMAGE_MOUNT_NO;
 }
 
+/* Whether `from` (statfs's f_mntfromname) is one of the units fs.mount attaches an image to:
+ * "/dev/lvd<N>" or "/dev/md<N>". fs.unmount takes a mount off in passes (an image can sit on another
+ * image at one path), and after the first pass it may only go on while what is mounted there is still
+ * one of these: the drive, the nullfs or the system folder that our mount was put on top of is not
+ * ours to unmount, least of all with MNT_FORCE. */
+static inline int image_mount_from_is_unit(const char *from) {
+    if (!from) return 0;
+    if (strncmp(from, "/dev/lvd", 8) == 0) return from[8] >= '0' && from[8] <= '9';
+    if (strncmp(from, "/dev/md", 7) == 0) return from[7] >= '0' && from[7] <= '9';
+    return 0;
+}
+
 /* What statfs says about the mount holding `path`: its f_fstypename and f_mntfromname copied into
  * `fstype` and `from` (NUL-terminated). Non-zero when statfs failed. */
 typedef int (*image_mount_look_fn)(const char *path, char *fstype, size_t fstype_n, char *from,

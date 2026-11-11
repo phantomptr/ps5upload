@@ -11,6 +11,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -642,12 +643,72 @@ static void test_companion_bind(void) {
     comp_end(c);
 }
 
+/* ---- something on the companion's port that answers TOO MUCH (mode 3) ----
+ * Every request gets rc OK and the longest payload a frame can carry (60 bytes after the rc), where
+ * the real companion's answers are 0 to 9. The relay's callers read answers into 8- and 16-byte
+ * buffers on the stack. */
+static pthread_t g_rogue_th;
+static int g_rogue_on, g_rogue_stop, g_rogue_answers;
+
+static void *rogue_main(void *arg) {
+    struct sockaddr_in a;
+    int one = 1, ls = socket(AF_INET, SOCK_STREAM, 0);
+    (void)arg;
+    memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET;
+    a.sin_port = htons((uint16_t)g_port);
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    if (bind(ls, (struct sockaddr *)&a, sizeof a) != 0 || listen(ls, 4) != 0) {
+        close(ls);
+        return NULL;
+    }
+    while (!__atomic_load_n(&g_rogue_stop, __ATOMIC_ACQUIRE)) {
+        struct pollfd p = {ls, POLLIN, 0};
+        uint8_t in[VWIRE_MAX_FRAME], pl[VWIRE_MAX_PAYLOAD], out[VWIRE_MAX_FRAME];
+        struct timeval to = {1, 0};
+        vwire_frame_t f;
+        size_t have = 0;
+        int fd, used = 0;
+        if (poll(&p, 1, 50) <= 0) continue;
+        fd = accept(ls, NULL, NULL);
+        if (fd < 0) continue;
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &to, sizeof to);
+        while (have < sizeof in && used == 0) {
+            ssize_t got = recv(fd, in + have, sizeof in - have, 0);
+            if (got <= 0) break;
+            have += (size_t)got;
+            used = vwire_decode(in, have, &f);
+        }
+        if (used > 0) {
+            int k;
+            memset(pl, 0xEE, sizeof pl);
+            vwire_put32(pl, (uint32_t)VWIRE_RC_OK);
+            k = vwire_encode(out, sizeof out, (uint8_t)(f.type | VWIRE_REPLY), f.seq, pl, sizeof pl);
+            if (k > 0 && send(fd, out, (size_t)k, 0) == k) __atomic_add_fetch(&g_rogue_answers, 1, __ATOMIC_RELEASE);
+        }
+        nap(30);
+        close(fd);
+    }
+    close(ls);
+    return NULL;
+}
+
+static void rogue_end(void) {
+    if (!g_rogue_on) return;
+    __atomic_store_n(&g_rogue_stop, 1, __ATOMIC_RELEASE);
+    pthread_join(g_rogue_th, NULL);
+    g_rogue_on = 0;
+    __atomic_store_n(&g_rogue_stop, 0, __ATOMIC_RELEASE);
+}
+
 /* ---- the relay ---- */
 
 static int fake_launch(void *ctx) {
     (void)ctx;
     pthread_mutex_lock(&l_mu);
     l_launches++;
+    if (l_mode == 3 && !g_rogue_on) g_rogue_on = pthread_create(&g_rogue_th, NULL, rogue_main, NULL) == 0;
     if (l_mode == 0) {
         if (g_comp && DONE(g_comp)) {
             comp_end(g_comp);
@@ -929,6 +990,29 @@ static void test_relay_no_loader(void) {
     CHECK(wait_for(second_launch, 3000));
 }
 
+/* An answer longer than the request can have (mode 3) is not copied past the caller's buffer and is
+ * not taken for a companion: the relay never reports one running, and this process is still here to
+ * say so (the copy used to run 44 bytes past a 16-byte stack buffer). */
+static void test_relay_overlong_answer(void) {
+    long long until;
+    int ok = 0;
+    relay_setup(3);
+    __atomic_store_n(&g_rogue_answers, 0, __ATOMIC_RELEASE);
+    until = now_ms() + 1500;
+    while (now_ms() < until) {
+        session("{\"op\":\"open\",\"id\":7,\"mouse\":true,\"keyboard\":true}");
+        if (has("\"ok\":true")) ok = 1;
+        nap(20);
+    }
+    CHECK(!ok);
+    CHECK(!caps_has_running());
+    CHECK(vinput_relay_pid() <= 0);
+    CHECK(__atomic_load_n(&g_rogue_answers, __ATOMIC_ACQUIRE) >= 1); /* it was asked, and answered */
+    pthread_mutex_lock(&l_mu);
+    rogue_end();
+    pthread_mutex_unlock(&l_mu);
+}
+
 /* A companion that never gets through Init (mode 2: the loader took it, nothing answers; on an
  * untested firmware an Init that hangs, maybe unkillably): ended by pid, and NOT started again on its
  * own, neither by the engine's quick "starting" re-asks nor after a while. A fresh open (the mode
@@ -1042,6 +1126,7 @@ int main(void) {
     test_relay();
     test_relay_bind();
     test_relay_no_loader();
+    test_relay_overlong_answer();
     test_relay_init_failure_not_retried();
 
     vinput_set_backend(NULL);

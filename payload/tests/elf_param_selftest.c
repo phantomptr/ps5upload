@@ -342,6 +342,66 @@ int main(void) {
         CHECK(n == 0);
     }
 
+    /* Offsets that WRAP when added. `phoff + table size` and `offset + size`
+     * are 64-bit sums of values read from the file; a corrupt one made the sum
+     * small again, passed the bound and was then read far outside the buffer. */
+    {
+        elf_reset(1);
+        wr64(0x20, 0xFFFFFFFFFFFFFFF0ull); /* + 0x38 wraps to 0x28 */
+        n = elf_find_param_sites(g_elf, g_len, sites, 8, &st);
+        CHECK(n == -1);
+        CHECK(st == ELF_PARAM_MALFORMED);
+    }
+    {
+        elf_reset(1);
+        size_t ph = PHOFF;
+        wr32(ph + 0x00, PT_SCE_PROCPARAM);
+        wr64(ph + 0x08, 0x7FFFFFFFFFFFFFF0ull);
+        wr64(ph + 0x20, 0x8000000000000020ull); /* the sum wraps to 0x10 */
+        g_len = 0x300;
+        n = elf_find_param_sites(g_elf, g_len, sites, 8, &st);
+        CHECK(n == 0);
+    }
+    {
+        /* Wrapped file, param segment found through its PT_LOAD, whose table
+         * entry gives a file offset that wraps back INTO the file once the
+         * segment's distance is added: 0x...FF00 + 0x200 = 0x100, where a
+         * matching magic is waiting. It must not be taken for the segment. */
+        elf_reset(2);
+        elf_put_segment(0, 0x00000001u /* PT_LOAD */, 0, 0x1000, 0, 0, 0);
+        elf_put_segment(1, PT_SCE_PROCPARAM, 0x200, 0x40,
+                        SCE_PROCESS_PARAM_MAGIC, SCE_PARAM_PS5_SDK_OFFSET,
+                        0x10000000u);
+        g_len = 0x240;
+        size_t base = self_wrap(SELF_MAGIC_PS5, 1);
+        (void)base;
+        self_put_entry(0, 0, 0xFFFFFFFFFFFFFF00ull, 0x1000);
+        g_self[0x100 + SCE_PARAM_MAGIC_OFFSET + 0] = (unsigned char)(SCE_PROCESS_PARAM_MAGIC & 0xff);
+        g_self[0x100 + SCE_PARAM_MAGIC_OFFSET + 1] = (unsigned char)((SCE_PROCESS_PARAM_MAGIC >> 8) & 0xff);
+        g_self[0x100 + SCE_PARAM_MAGIC_OFFSET + 2] = (unsigned char)((SCE_PROCESS_PARAM_MAGIC >> 16) & 0xff);
+        g_self[0x100 + SCE_PARAM_MAGIC_OFFSET + 3] = (unsigned char)((SCE_PROCESS_PARAM_MAGIC >> 24) & 0xff);
+        n = elf_find_param_sites(g_self, g_self_len, sites, 8, &st);
+        CHECK(n == 0);
+    }
+    {
+        /* A PT_LOAD whose offset + size wraps does not "contain" anything. */
+        elf_reset(2);
+        elf_put_segment(1, PT_SCE_PROCPARAM, 0x200, 0x40,
+                        SCE_PROCESS_PARAM_MAGIC, SCE_PARAM_PS5_SDK_OFFSET,
+                        0x10000000u);
+        g_len = 0x240;
+        size_t ph0 = PHOFF;
+        wr32(ph0 + 0x00, 0x00000001u);
+        wr64(ph0 + 0x08, 0x100);                  /* l_off */
+        wr64(ph0 + 0x20, 0xFFFFFFFFFFFFFF00ull);  /* l_off + l_filesz == 0 */
+        (void)self_wrap(SELF_MAGIC_PS5, 1);
+        self_put_entry(0, 0, 0x60, 0xFFFFFFFFFFFFFF00ull);
+        n = elf_find_param_sites(g_self, g_self_len, sites, 8, &st);
+        /* Covered by that load (0x200 is past 0x100 and the size is huge), so it
+         * maps to 0x60 + 0x100, which holds no param magic. */
+        CHECK(n == 0);
+    }
+
     /* Never write past the caller's array. */
     {
         elf_reset(3);

@@ -222,6 +222,22 @@ int main(void) {
     make_patchable_elf(fakelib, sizeof(fakelib), 0x09040001u);
     CHECK(write_bytes(fakelib_path, fakelib, sizeof(fakelib)) == 0);
 
+    /* `.bak` files this tool did not make. Restore used to rename EVERY `.bak`
+     * in the tree over its "original" — the AMPR index tool keeps the game's
+     * own index as ampr_emu.index.bak, so Restore silently undid that too —
+     * and a `.bak` of another size beside an executable made the patch fail
+     * ("could not back up"). None of them may be touched, and none may get in
+     * the way. */
+    char idx_path[2048], idx_bak[2048], foreign_elf_bak[2048], note_bak[2048];
+    snprintf(idx_path, sizeof(idx_path), "%s/ampr_emu.index", game);
+    snprintf(idx_bak, sizeof(idx_bak), "%s/ampr_emu.index.bak", game);
+    snprintf(foreign_elf_bak, sizeof(foreign_elf_bak), "%s.bak", elf_path);
+    snprintf(note_bak, sizeof(note_bak), "%s/sce_sys/param.json.old.bak", game);
+    CHECK(write_bytes(idx_path, "new index", 9) == 0);
+    CHECK(write_bytes(idx_bak, "the game's own index", 20) == 0);
+    CHECK(write_bytes(foreign_elf_bak, "someone's copy", 14) == 0);
+    CHECK(write_bytes(note_bak, "{}", 2) == 0);
+
     char scan[8192];
     size_t scan_len = 0;
     CHECK(sdk_changer_scan(scan, sizeof(scan), &scan_len) == 0);
@@ -235,7 +251,7 @@ int main(void) {
     CHECK(sdk_changer_patch(pkg_title_id, "0x04000031", 1, detail,
                             sizeof(detail)) != 0);
     char pkg_bak[2048];
-    snprintf(pkg_bak, sizeof(pkg_bak), "%s.bak", pkg_meta_param);
+    snprintf(pkg_bak, sizeof(pkg_bak), "%s" BACKUP_SUFFIX, pkg_meta_param);
     CHECK(!exists(pkg_bak));
 
     memset(detail, 0, sizeof(detail));
@@ -275,7 +291,7 @@ int main(void) {
         CHECK(read_bytes(libc2, back2, sizeof(back2), 0) == 0);
         CHECK(memcmp(back2 + 64, "4h6F1LLbTiw#A#B", 15) == 0);
         char libc2_bak[2048];
-        snprintf(libc2_bak, sizeof(libc2_bak), "%s.bak", libc2);
+        snprintf(libc2_bak, sizeof(libc2_bak), "%s" BACKUP_SUFFIX, libc2);
         CHECK(!exists(libc2_bak));
     }
     {
@@ -296,16 +312,16 @@ int main(void) {
     CHECK(read_u32_at(elf_path, 0x200 + SCE_PARAM_PS4_SDK_OFFSET) ==
           0x09040001u);
     char fakelib_bak[2048];
-    snprintf(fakelib_bak, sizeof(fakelib_bak), "%s.bak", fakelib_path);
+    snprintf(fakelib_bak, sizeof(fakelib_bak), "%s" BACKUP_SUFFIX, fakelib_path);
     CHECK(!exists(fakelib_bak));
 
     char source_bak[2048], meta_bak[2048], elf_bak[2048];
     char signed_bak[2048], asset_bak[2048];
-    snprintf(source_bak, sizeof(source_bak), "%s.bak", source_param);
-    snprintf(meta_bak, sizeof(meta_bak), "%s.bak", meta_param);
-    snprintf(elf_bak, sizeof(elf_bak), "%s.bak", elf_path);
-    snprintf(signed_bak, sizeof(signed_bak), "%s.bak", signed_path);
-    snprintf(asset_bak, sizeof(asset_bak), "%s.bak", asset_path);
+    snprintf(source_bak, sizeof(source_bak), "%s" BACKUP_SUFFIX, source_param);
+    snprintf(meta_bak, sizeof(meta_bak), "%s" BACKUP_SUFFIX, meta_param);
+    snprintf(elf_bak, sizeof(elf_bak), "%s" BACKUP_SUFFIX, elf_path);
+    snprintf(signed_bak, sizeof(signed_bak), "%s" BACKUP_SUFFIX, signed_path);
+    snprintf(asset_bak, sizeof(asset_bak), "%s" BACKUP_SUFFIX, asset_path);
     CHECK(exists(source_bak));
     CHECK(exists(meta_bak));
     CHECK(exists(elf_bak));
@@ -315,7 +331,7 @@ int main(void) {
     /* libc.prx is backed up too, so restore must put it back with the rest —
      * a backport that leaves the symbol swapped is not "restored". */
     char libc_bak[2048];
-    snprintf(libc_bak, sizeof(libc_bak), "%s.bak", libc_path);
+    snprintf(libc_bak, sizeof(libc_bak), "%s" BACKUP_SUFFIX, libc_path);
     CHECK(exists(libc_bak));
 
     int restored = 0;
@@ -333,6 +349,166 @@ int main(void) {
     CHECK(!exists(meta_bak));
     CHECK(!exists(elf_bak));
     CHECK(!exists(libc_bak));
+
+    /* The foreign `.bak` files are exactly as they were, and so is what they
+     * sit beside. */
+    {
+        unsigned char got[32] = {0};
+        CHECK(read_bytes(idx_path, got, 9, 0) == 0);
+        CHECK(memcmp(got, "new index", 9) == 0);
+        CHECK(read_bytes(idx_bak, got, 20, 0) == 0);
+        CHECK(memcmp(got, "the game's own index", 20) == 0);
+        CHECK(read_bytes(foreign_elf_bak, got, 14, 0) == 0);
+        CHECK(memcmp(got, "someone's copy", 14) == 0);
+        CHECK(exists(note_bak));
+    }
+
+    /* A title patched by a helper from before the suffix changed: its backups
+     * are plain `.bak`. Restore must still put those back — and only those. */
+    {
+        const char *old_id = "CUSA33333";
+        char game3[2048], sce3[2048], app3[2048], trk3[2048];
+        snprintf(game3, sizeof(game3), "%s/game3", root);
+        snprintf(sce3, sizeof(sce3), "%s/sce_sys", game3);
+        snprintf(app3, sizeof(app3), "%s/%s", g_test_app_base, old_id);
+        CHECK(mkdir_tree(sce3) == 0);
+        CHECK(mkdir_tree(app3) == 0);
+        snprintf(trk3, sizeof(trk3), "%s/mount.lnk", app3);
+        CHECK(write_bytes(trk3, game3, strlen(game3)) == 0);
+
+        char elf3[2048], elf3_bak[2048], par3[2048], par3_bak[2048];
+        char pak3[2048], pak3_bak[2048], prx3[2048], prx3_bak[2048];
+        char lone_bak[2048], lone[2048];
+        snprintf(elf3, sizeof(elf3), "%s/eboot.bin", game3);
+        snprintf(elf3_bak, sizeof(elf3_bak), "%s.bak", elf3);
+        snprintf(par3, sizeof(par3), "%s/param.json", sce3);
+        snprintf(par3_bak, sizeof(par3_bak), "%s.bak", par3);
+        snprintf(pak3, sizeof(pak3), "%s/data.pak", game3);
+        snprintf(pak3_bak, sizeof(pak3_bak), "%s.bak", pak3);
+        snprintf(prx3, sizeof(prx3), "%s/other.prx", game3);
+        snprintf(prx3_bak, sizeof(prx3_bak), "%s.bak", prx3);
+        snprintf(lone, sizeof(lone), "%s/gone.sprx", game3);
+        snprintf(lone_bak, sizeof(lone_bak), "%s.bak", lone);
+
+        unsigned char now_elf[0x240], orig_elf[0x240];
+        make_patchable_elf(now_elf, sizeof(now_elf), 0x04000031u);
+        make_patchable_elf(orig_elf, sizeof(orig_elf), 0x10000000u);
+        CHECK(write_bytes(elf3, now_elf, sizeof(now_elf)) == 0);
+        CHECK(write_bytes(elf3_bak, orig_elf, sizeof(orig_elf)) == 0);
+        const char *now_par =
+            "{\"titleId\":\"CUSA33333\",\"sdkVersion\":\"0x0400003100000000\"}";
+        const char *orig_par =
+            "{\"titleId\":\"CUSA33333\",\"sdkVersion\":\"0x1000000000000000\"}";
+        CHECK(write_bytes(par3, now_par, strlen(now_par)) == 0);
+        CHECK(write_bytes(par3_bak, orig_par, strlen(orig_par)) == 0);
+        /* Same size as its neighbour, but not a type this tool ever backed up. */
+        CHECK(write_bytes(pak3, "AAAA", 4) == 0);
+        CHECK(write_bytes(pak3_bak, "BBBB", 4) == 0);
+        /* A patchable type, but not the size of the file beside it: an
+         * in-place patch cannot have produced that pair. */
+        CHECK(write_bytes(prx3, "CCCCCCCC", 8) == 0);
+        CHECK(write_bytes(prx3_bak, "DDDD", 4) == 0);
+        /* And one with no original beside it at all. */
+        CHECK(write_bytes(lone_bak, "EEEE", 4) == 0);
+
+        /* Patching again keeps the old backup as THE backup: a second one,
+         * taken now, would hold the already-patched file. */
+        char d3[512] = {0};
+        CHECK(sdk_changer_patch(old_id, "0x05000000", 0, d3, sizeof(d3)) == 0);
+        CHECK(read_u32_at(elf3, 0x200 + SCE_PARAM_PS5_SDK_OFFSET) != 0x04000031u);
+        char elf3_own[2048], par3_own[2048];
+        snprintf(elf3_own, sizeof(elf3_own), "%s" BACKUP_SUFFIX, elf3);
+        snprintf(par3_own, sizeof(par3_own), "%s" BACKUP_SUFFIX, par3);
+        CHECK(!exists(elf3_own));
+        CHECK(!exists(par3_own));
+        CHECK(exists(elf3_bak));
+        CHECK(exists(par3_bak));
+
+        int restored3 = 0;
+        char r3[256] = {0};
+        CHECK(sdk_changer_restore(old_id, &restored3, r3, sizeof(r3)) == 0);
+        CHECK(restored3 == 2);
+        CHECK(read_u32_at(elf3, 0x200 + SCE_PARAM_PS5_SDK_OFFSET) == 0x10000000u);
+        CHECK(!exists(elf3_bak));
+        CHECK(!exists(par3_bak));
+        {
+            char got[128] = {0};
+            CHECK(read_bytes(par3, (unsigned char *)got, strlen(orig_par), 0) == 0);
+            CHECK(strcmp(got, orig_par) == 0);
+            unsigned char four[4];
+            CHECK(read_bytes(pak3, four, 4, 0) == 0 && memcmp(four, "AAAA", 4) == 0);
+            CHECK(read_bytes(pak3_bak, four, 4, 0) == 0 && memcmp(four, "BBBB", 4) == 0);
+            CHECK(read_bytes(prx3_bak, four, 4, 0) == 0 && memcmp(four, "DDDD", 4) == 0);
+            unsigned char eight[8];
+            CHECK(read_bytes(prx3, eight, 8, 0) == 0 && memcmp(eight, "CCCCCCCC", 8) == 0);
+            CHECK(exists(lone_bak));
+            CHECK(!exists(lone));
+        }
+
+        /* A `.bak` that only LOOKS like ours next to one of our own backups:
+         * ours is the original, whichever the folder lists first, and the
+         * other stays. Same size on purpose — after the restore it would pass
+         * for an old backup if it were judged then. */
+        unsigned char third[0x240];
+        make_patchable_elf(third, sizeof(third), 0x10000000u);
+        CHECK(write_bytes(elf3, third, sizeof(third)) == 0);
+        memset(d3, 0, sizeof(d3));
+        /* eboot.bin has no `.bak` now, so this patch gives it one of ours. */
+        CHECK(sdk_changer_patch(old_id, "0x04000031", 0, d3, sizeof(d3)) == 0);
+        CHECK(exists(elf3_own));
+        unsigned char decoy[0x240];
+        make_patchable_elf(decoy, sizeof(decoy), 0x77000000u);
+        CHECK(write_bytes(elf3_bak, decoy, sizeof(decoy)) == 0);
+        restored3 = 0;
+        CHECK(sdk_changer_restore(old_id, &restored3, r3, sizeof(r3)) == 0);
+        CHECK(restored3 == 2); /* eboot.bin and param.json, from our backups */
+        CHECK(read_u32_at(elf3, 0x200 + SCE_PARAM_PS5_SDK_OFFSET) == 0x10000000u);
+        CHECK(exists(elf3_bak));
+        CHECK(read_u32_at(elf3_bak, 0x200 + SCE_PARAM_PS5_SDK_OFFSET) == 0x77000000u);
+        CHECK(!exists(elf3_own));
+    }
+
+    /* A list that does not fit its buffer is cut at a whole entry and SAYS so.
+     * It used to look complete, or (when the tail did not fit either) come
+     * back as an error the handler ignored, i.e. an empty reply. Every buffer
+     * size either yields a whole document or a plain failure. */
+    {
+        char full_scan[8192];
+        size_t full_len = 0;
+        CHECK(sdk_changer_scan(full_scan, sizeof(full_scan), &full_len) == 0);
+        CHECK(strstr(full_scan, "\"truncated\":false") != NULL);
+        CHECK(strstr(full_scan, "\"title_id\":\"CUSA54321\"") != NULL);
+        int saw_cut = 0, saw_cut_with_titles = 0;
+        for (size_t cap = 1; cap <= full_len + 2; cap++) {
+            char *small = malloc(cap);
+            CHECK(small != NULL);
+            if (!small) break;
+            size_t got = 0;
+            int rc = sdk_changer_scan(small, cap, &got);
+            if (rc == 0) {
+                CHECK(got < cap && got == strlen(small));
+                CHECK(strncmp(small, "{\"titles\":[", 11) == 0);
+                CHECK(got > 0 && small[got - 1] == '}');
+                CHECK(strstr(small, "],\"truncated\":") != NULL);
+                CHECK(strstr(small, "\"overlay\":{\"state\":\"watching\"") != NULL);
+                int depth = 0, bad = 0;
+                for (size_t i = 0; i < got; i++) {
+                    if (small[i] == '{') depth++;
+                    if (small[i] == '}' && --depth < 0) bad = 1;
+                }
+                CHECK(depth == 0 && !bad);
+                if (strstr(small, "\"truncated\":true")) {
+                    saw_cut = 1;
+                    if (strstr(small, "\"title_id\"")) saw_cut_with_titles = 1;
+                    CHECK(got < full_len);
+                } else {
+                    CHECK(got == full_len);
+                }
+            }
+            free(small);
+        }
+        CHECK(saw_cut && saw_cut_with_titles);
+    }
 
     rm_tree(root);
     printf("sdk_changer_file_selftest: %s\n",

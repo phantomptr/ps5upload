@@ -31,11 +31,7 @@
 
 static pthread_mutex_t g_backup_lock = PTHREAD_MUTEX_INITIALIZER;
 
-/* Same-second coalescing: if a snapshot for this tag was created in the
- * last second, reuse it. This lets a multi-file snapshot call append
- * files into one directory instead of scattering them. */
-static char  g_last_tag[64] = "";
-static time_t g_last_ts = 0;
+/* The folder of the snapshot being taken (under g_backup_lock). */
 static char  g_last_path[1024] = "";
 
 static int mkpath_p(const char *path) {
@@ -84,18 +80,27 @@ static int copy_file(const char *src, const char *dst) {
     return rc == -2 ? BACKUP_CANCELLED : rc;
 }
 
-static const char *snapshot_dir_for(const char *tag) {
-    time_t now = time(NULL);
-    if (g_last_ts != 0 && now - g_last_ts < 1 && strcmp(g_last_tag, tag) == 0) {
-        return g_last_path;
+/* A NEW, empty folder for one snapshot of `tag`: <root>/<tag>/<seconds>, or NULL.
+ *
+ * It must be one this call MADE. Snapshots are named by the second, so two of one tag inside a
+ * second were given the same folder (mkdir -p does not mind one that exists): the second wrote
+ * into the first, and when the second was cancelled or copied nothing, the clean-up removed the
+ * folder — the first snapshot with it. So the name is tried with a plain mkdir and, while it is
+ * taken, the next second is tried: the folder that comes back did not exist before, and deleting
+ * it can only delete this snapshot. */
+#define SNAPSHOT_NAME_TRIES 120
+static const char *snapshot_dir_new(const char *tag) {
+    char tagdir[640];
+    long long stamp = (long long)time(NULL);
+    snprintf(tagdir, sizeof(tagdir), "%s/%s", BACKUPS_ROOT, tag);
+    mkpath_p(tagdir);
+    for (int i = 0; i < SNAPSHOT_NAME_TRIES; i++) {
+        int n = snprintf(g_last_path, sizeof(g_last_path), "%s/%lld", tagdir, stamp + i);
+        if (n < 0 || (size_t)n >= sizeof(g_last_path)) return NULL;
+        if (mkdir(g_last_path, 0777) == 0) return g_last_path;
+        if (errno != EEXIST) return NULL;
     }
-    snprintf(g_last_path, sizeof(g_last_path), "%s/%s/%lld",
-             BACKUPS_ROOT, tag, (long long)now);
-    mkpath_p(g_last_path);
-    strncpy(g_last_tag, tag, sizeof(g_last_tag) - 1);
-    g_last_tag[sizeof(g_last_tag) - 1] = 0;
-    g_last_ts = now;
-    return g_last_path;
+    return NULL;
 }
 
 static void manifest_append(const char *snap_dir, const char *snap_basename,
@@ -221,10 +226,13 @@ int backup_snapshot(const char *tag, const char *src_path,
     if (stat(src_path, &st) != 0) return -1;
 
     pthread_mutex_lock(&g_backup_lock);
-    /* Reset coalescing so each explicit snapshot gets its own dir. */
-    g_last_ts = 0;
-    const char *snap = snapshot_dir_for(tag);
+    /* Each snapshot gets a folder of its own, made here (snapshot_dir_new). */
+    const char *snap = snapshot_dir_new(tag);
     int file_count = 0;
+    if (!snap) {
+        pthread_mutex_unlock(&g_backup_lock);
+        return -1;
+    }
 
     if (S_ISDIR(st.st_mode)) {
         snapshot_tree_inner(snap, src_path, 0, &file_count);
@@ -275,7 +283,7 @@ int backup_snapshot(const char *tag, const char *src_path,
     if (out_bytes) *out_bytes = total_bytes;
 
     /* Nothing was copied (an empty save, or a source that vanished): the
-     * directory snapshot_dir_for made is removed, or it showed up in the
+     * directory snapshot_dir_new made is removed, or it showed up in the
      * backup list as a 0-file "snapshot" of a backup that failed. */
     if (file_count == 0) {
         rm_rf(snap);

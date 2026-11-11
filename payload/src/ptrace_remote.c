@@ -255,11 +255,19 @@ intptr_t pt_resolve(pid_t pid, const char *nid) {
     /* libkernel handle = 0x1; libkernel_sys handle = 0x2001. Most
      * APIs we'd resolve live in one or the other. Try libkernel
      * first because that's where sceLncUtilLaunchApp,
-     * sceKernelGetCpuTemperature etc. live on PS5. */
-    if ((addr = kernel_dynlib_resolve(pid, 0x1, nid)) != 0) {
-        return addr;
-    }
-    return kernel_dynlib_resolve(pid, 0x2001, nid);
+     * sceKernelGetCpuTemperature etc. live on PS5.
+     *
+     * Kernel reads: inside the shared kernel-R/W lock, like every other one
+     * (kernel_rw_lock.h). This runs with SceShellUI ptrace-stopped, and the
+     * kernel-R/W window has no lock of its own. Innermost, as in sys_ptrace():
+     * the caller holds g_rpc_mtx and never kernel_rw_lock (pt_syscall takes it
+     * only inside each sys_ptrace call, which has returned before and starts
+     * after this), and nothing is locked or called back while it is held. */
+    pthread_mutex_lock(&kernel_rw_lock);
+    addr = kernel_dynlib_resolve(pid, 0x1, nid);
+    if (addr == 0) addr = kernel_dynlib_resolve(pid, 0x2001, nid);
+    pthread_mutex_unlock(&kernel_rw_lock);
+    return addr;
 }
 
 int pt_attach(pid_t pid) {

@@ -109,6 +109,11 @@ int main(void) {
     CHECK(scr_parse_id_list("{\"item_ids\":[-1]}", 17, "item_ids", ids, 8) == -1);
     CHECK(scr_parse_id_list("{\"x\":1}", 7, "item_ids", ids, 8) == -1);
     CHECK(scr_parse_id_list("{\"item_ids\":[1,2,3]}", 20, "item_ids", ids, 2) == -1);
+    /* Ids are 32-bit UNSIGNED and the list hands the top half through as it is, so whoever range-checks
+     * them (sc_apply_start) must compare unsigned: as an int, 2147483649 is negative and "<= n_items". */
+    CHECK(scr_parse_id_list("{\"item_ids\":[2147483649,4294967295]}", 35, "item_ids", ids, 8) == 2 &&
+          ids[0] == 2147483649u && ids[1] == 4294967295u && (int)ids[0] < 0);
+    CHECK(scr_parse_id_list("{\"item_ids\":[4294967296]}", 25, "item_ids", ids, 8) == -1);
 
     /* drives */
     CHECK(strcmp(scr_drive_of("/user/patch/CUSA07842"), "internal") == 0);

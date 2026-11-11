@@ -463,7 +463,11 @@ static int copy_sce_sys_to_appmeta(const char *src_sce_sys,
         n = snprintf(dp, sizeof(dp), "%s/%s", user_appmeta_dir, e->d_name);
         if (n < 0 || (size_t)n >= sizeof(dp)) { rc = -1; break; }
         struct stat st;
-        if (stat(sp, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+        /* lstat, as in copy_dir_recursive above and for the same reason: a
+         * dump's sce_sys/icon0.png that is a LINK to a system file would be
+         * followed and its target copied into /user/appmeta/<id>/. Links are
+         * skipped. */
+        if (lstat(sp, &st) != 0 || !S_ISREG(st.st_mode)) continue;
         if (copy_file_bytes(sp, dp) != 0) { rc = -1; break; }
     }
     closedir(d);
@@ -2039,7 +2043,11 @@ int launch_title(const char *title_id, const char **err_reason_out,
 
     (void)shellui_rpc_init();
     if (shellui_rpc_ready()) {
-        int rc = shellui_rpc_launch_app(title_id, fg_user);
+        /* rc > 0 means "Sony's function ran and refused"; the code it gave is
+         * in sony_code (an error code has bit 31 set and does not survive as a
+         * positive int — see shellui_launch_result). */
+        uint32_t sony_code = 0;
+        int rc = shellui_rpc_launch_app(title_id, fg_user, &sony_code);
         if (rc == 0 || rc == -2) {
             /* 0 / -2 mean the ShellUI request was dispatched, not that the
              * title started. When the launcher above had already REFUSED it
@@ -2084,13 +2092,18 @@ int launch_title(const char *title_id, const char **err_reason_out,
                  * whether the suppression fired, and the symptom is hard to
                  * reproduce on demand. */
                 fprintf(stderr,
-                        "[payload2] launch %s: shellui rc=%d but the title is "
+                        "[payload2] launch %s: shellui rc=0x%08x but the title is "
                         "running — suppressing the retry\n",
-                        title_id, rc);
+                        title_id, (unsigned int)sony_code);
                         return 0;
             }
+            fprintf(stderr,
+                    "[payload2] launch %s: shellui rc=0x%08x and the title is "
+                    "not running — one retry\n",
+                    title_id, (unsigned int)sony_code);
             usleep(250000);
-            int rc2 = shellui_rpc_launch_app(title_id, fg_user);
+            uint32_t sony_code2 = 0;
+            int rc2 = shellui_rpc_launch_app(title_id, fg_user, &sony_code2);
             if (rc2 == 0 || rc2 == -2) {
                         return 0;
             }
@@ -2104,7 +2117,7 @@ int launch_title(const char *title_id, const char **err_reason_out,
                  * PS5, before main even runs). */
                 if (reason_buf && reason_cap > 0) {
                     snprintf(reason_buf, reason_cap,
-                             "launch_sony_error_0x%08x", (unsigned int)rc2);
+                             "launch_sony_error_0x%08x", (unsigned int)sony_code2);
                     if (err_reason_out) *err_reason_out = reason_buf;
                 } else if (err_reason_out) {
                     *err_reason_out = "launch_sony_error";

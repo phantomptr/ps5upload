@@ -517,6 +517,10 @@ void webui_smb_copy(const char *b, size_t n, uint8_t *out, int fd) {
         fail(fd, "path_not_allowed", NULL);
         goto done;
     }
+    /* Counted like every other daemon call (enter/leave): the first request after a start waits
+     * for the daemon to come up, and uncounted ones parked every web worker behind it, the page's
+     * own files with them. Over the limit the page is told "busy" at once. */
+    if (enter(fd) != 0) goto done;
     sj_init(&req, 0);
     sj_raw(&req, "\"op\":\"copy\"");
     conn_fields(&req, s);
@@ -526,6 +530,7 @@ void webui_smb_copy(const char *b, size_t n, uint8_t *out, int fd) {
     sj_fmt(&req, ",\"overwrite\":%s", overwrite ? "true" : "false");
     fprintf(stderr, "[smb] copy %s %s share %s\n", down ? "from" : "to", s->host, s->share);
     (void)ask(fd, &req, SMB_QUICK_MS, 0);
+    leave();
 done:
     if (s) wipe_share(s);
     free(s);
@@ -548,11 +553,13 @@ void webui_smb_delete(const char *b, size_t n, uint8_t *out, int fd) {
         fail(fd, "bad_path", NULL);
         goto done;
     }
+    if (enter(fd) != 0) goto done; /* counted, as in webui_smb_copy */
     sj_init(&req, 0);
     sj_raw(&req, "\"op\":\"remove\"");
     conn_fields(&req, s);
     sj_kv_str(&req, 1, "path", rel);
     (void)ask(fd, &req, SMB_QUICK_MS, 0);
+    leave();
 done:
     if (s) wipe_share(s);
     free(s);
@@ -745,7 +752,15 @@ void webui_library_scan(const char *b, size_t n, uint8_t *out, int fd) {
         sj_kv_str(&req, 1, "path", s->start_path);
         fprintf(stderr, "[smb] library scan of %s share %s\n", s->host, s->share);
     }
-    (void)ask(fd, &req, SMB_QUICK_MS, 0);
+    /* Counted, as in webui_smb_copy. Refused: the request (it carries the password) is wiped here,
+     * as ask() would have. */
+    if (enter(fd) != 0) {
+        if (req.buf) crypto_wipe(req.buf, req.cap);
+        sj_free(&req);
+    } else {
+        (void)ask(fd, &req, SMB_QUICK_MS, 0);
+        leave();
+    }
     if (s) wipe_share(s);
     free(s);
 }

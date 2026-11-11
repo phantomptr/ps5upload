@@ -24,7 +24,14 @@
 #ifndef APPMETA_BASE
 #define APPMETA_BASE "/user/appmeta"
 #endif
-#define BACKUP_SUFFIX ".bak"
+/* Our own suffix, so Restore can tell the backups this tool made from a `.bak`
+ * that came with the game or that someone left beside a file: Restore renames a
+ * backup OVER its original, and doing that to a foreign `.bak` replaces a game
+ * file with something we never looked at. Helpers before this suffix wrote plain
+ * `.bak`; those are still honoured, under the conditions of
+ * legacy_backup_is_ours(). */
+#define BACKUP_SUFFIX ".ps5upload-sdk.bak"
+#define LEGACY_BACKUP_SUFFIX ".bak"
 #define SDK_PATH_MAX 1024
 #define SDK_COPY_BUF (64u * 1024u)
 
@@ -128,6 +135,42 @@ static int suffixed_path(const char *path, const char *suffix,
     return n >= 0 && (size_t)n < out_cap ? 0 : -1;
 }
 
+/* The file types this tool rewrites, and so the only ones it ever backed up. */
+static int is_patchable_elf_name(const char *name) {
+    const char *dot = strrchr(name, '.');
+    if (!dot) return 0;
+    return strcasecmp(dot, ".bin") == 0 ||
+           strcasecmp(dot, ".self") == 0 ||
+           strcasecmp(dot, ".sprx") == 0 ||
+           strcasecmp(dot, ".prx") == 0 ||
+           strcasecmp(dot, ".elf") == 0;
+}
+
+/* Is `<path>.bak` a backup an OLDER helper made of `path`?
+ *
+ * Those helpers named their backups plain `.bak`, which is also what a game
+ * dump or a person's own copy is called, so the name alone proves nothing.
+ * What an old backup of ours always is:
+ *   - beside a file of a type we patch (an ELF by extension, or param.json);
+ *   - a regular file (not a link, not a folder);
+ *   - exactly the size of that file as it is now: ELF and libc patches are
+ *     written in place, and a param.json version is replaced by one of the
+ *     same 18 characters.
+ * Anything else is left alone by both Restore and make_backup(). `path` is the
+ * ORIGINAL's path; it must exist. */
+static int legacy_backup_is_ours(const char *path) {
+    const char *name = strrchr(path, '/');
+    name = name ? name + 1 : path;
+    if (!is_patchable_elf_name(name) && strcmp(name, "param.json") != 0) return 0;
+
+    char bak[SDK_PATH_MAX];
+    if (suffixed_path(path, LEGACY_BACKUP_SUFFIX, bak, sizeof(bak)) != 0) return 0;
+    struct stat orig_st, bak_st;
+    if (lstat(path, &orig_st) != 0 || !S_ISREG(orig_st.st_mode)) return 0;
+    if (lstat(bak, &bak_st) != 0 || !S_ISREG(bak_st.st_mode)) return 0;
+    return bak_st.st_size == orig_st.st_size;
+}
+
 /* Create a durable, same-directory backup without loading a potentially huge
  * ELF into memory. Existing valid backups are deliberately retained so a
  * second patch still restores the true original. */
@@ -143,12 +186,18 @@ static int make_backup(const char *path) {
     }
 
     struct stat bak_st;
-    if (stat(bak, &bak_st) == 0) {
+    if (lstat(bak, &bak_st) == 0) {
         return S_ISREG(bak_st.st_mode) && bak_st.st_size == src_st.st_size
                    ? 0
                    : -1;
     }
     if (errno != ENOENT) return -1;
+
+    /* A backup an older helper made already holds the true original: keep it
+     * as the one backup rather than saving the patched file beside it (Restore
+     * would then have two candidates for one name). A `.bak` that is not ours
+     * is neither trusted nor in the way: the name below cannot collide. */
+    if (legacy_backup_is_ours(path)) return 0;
 
     int in_fd = open(path, O_RDONLY);
     if (in_fd < 0) return -1;
@@ -418,13 +467,7 @@ static void walk_and_patch(const char *dir_path, uint32_t target_sdk,
         }
         if (!S_ISREG(st.st_mode)) continue;
 
-        const char *dot = strrchr(de->d_name, '.');
-        if (!dot) continue;
-        if (strcasecmp(dot, ".bin") == 0 ||
-            strcasecmp(dot, ".self") == 0 ||
-            strcasecmp(dot, ".sprx") == 0 ||
-            strcasecmp(dot, ".prx") == 0 ||
-            strcasecmp(dot, ".elf") == 0) {
+        if (is_patchable_elf_name(de->d_name)) {
             int n = patch_binary_sdk(full, target_sdk);
             if (n > 0) *patched_count += n;
             else if (n == PATCH_SIGNED && signed_count) (*signed_count)++;
@@ -434,42 +477,71 @@ static void walk_and_patch(const char *dir_path, uint32_t target_sdk,
     closedir(dir);
 }
 
+static int name_ends_with(const char *name, const char *suffix) {
+    size_t namelen = strlen(name);
+    size_t suffixlen = strlen(suffix);
+    return namelen > suffixlen &&
+           strcmp(name + namelen - suffixlen, suffix) == 0;
+}
+
+/* Restore only the backups this tool made: its own suffix, or an older
+ * helper's plain `.bak` that legacy_backup_is_ours() recognises. Every other
+ * `.bak` in a game folder (the AMPR index tool's ampr_emu.index.bak, a copy
+ * someone kept) stays exactly where it is; renaming those over their
+ * "original" is what this used to do.
+ *
+ * Two passes over each folder. The old-style backups are judged FIRST, while
+ * the files beside them are still as the patch left them: a `.bak` with one of
+ * our own backups next to it is not ours (make_backup() never makes both), and
+ * that has to be read before the second pass renames our own backup away. */
 static void walk_and_restore(const char *dir_path, int *restored_count) {
-    DIR *dir = opendir(dir_path);
-    if (!dir) return;
-    struct dirent *de;
-    while ((de = readdir(dir))) {
-        if (de->d_name[0] == '.') continue;
+    for (int pass = 0; pass < 2; pass++) {
+        const int legacy = pass == 0;
+        const char *suffix = legacy ? LEGACY_BACKUP_SUFFIX : BACKUP_SUFFIX;
+        DIR *dir = opendir(dir_path);
+        if (!dir) return;
+        struct dirent *de;
+        while ((de = readdir(dir))) {
+            if (de->d_name[0] == '.') continue;
 
-        char full[SDK_PATH_MAX];
-        int pn = snprintf(full, sizeof(full), "%s/%s", dir_path, de->d_name);
-        if (pn < 0 || (size_t)pn >= sizeof(full)) continue;
+            char full[SDK_PATH_MAX];
+            int pn = snprintf(full, sizeof(full), "%s/%s", dir_path, de->d_name);
+            if (pn < 0 || (size_t)pn >= sizeof(full)) continue;
 
-        struct stat st;
-        if (lstat(full, &st) != 0) continue;
+            struct stat st;
+            if (lstat(full, &st) != 0) continue;
 
-        if (S_ISDIR(st.st_mode)) {
-            walk_and_restore(full, restored_count);
-            continue;
-        }
-        if (!S_ISREG(st.st_mode)) continue;
+            if (S_ISDIR(st.st_mode)) {
+                if (!legacy) walk_and_restore(full, restored_count);
+                continue;
+            }
+            if (!S_ISREG(st.st_mode)) continue;
+            if (!name_ends_with(de->d_name, suffix)) continue;
+            /* Our suffix ends in `.bak` too: never the old-style pass's. */
+            if (legacy && name_ends_with(de->d_name, BACKUP_SUFFIX)) continue;
 
-        size_t namelen = strlen(de->d_name);
-        size_t suffixlen = strlen(BACKUP_SUFFIX);
-        if (namelen > suffixlen &&
-            strcmp(de->d_name + namelen - suffixlen, BACKUP_SUFFIX) == 0) {
             char orig[SDK_PATH_MAX];
             size_t fulllen = strlen(full);
+            size_t suffixlen = strlen(suffix);
             if (fulllen - suffixlen >= sizeof(orig)) continue;
             memcpy(orig, full, fulllen - suffixlen);
             orig[fulllen - suffixlen] = '\0';
+            if (legacy) {
+                char own[SDK_PATH_MAX];
+                struct stat own_st;
+                if (suffixed_path(orig, BACKUP_SUFFIX, own, sizeof(own)) != 0 ||
+                    lstat(own, &own_st) == 0 || !legacy_backup_is_ours(orig)) {
+                    continue;
+                }
+            }
 
+            /* Same folder, the suffix stripped: never crosses a mount. */
             if (rename(full, orig) == 0) {
                 *restored_count += 1;
             }
         }
+        closedir(dir);
     }
-    closedir(dir);
 }
 
 static int is_title_id(const char *title_id);
@@ -486,8 +558,28 @@ int sdk_changer_scan(char *buf, size_t cap, size_t *written) {
         return 0;
     }
 
+    /* The reply's tail is sized FIRST and its room kept back from the list, so
+     * a console with more titles than fit still gets a whole, valid document
+     * that says it was cut ("truncated":true). It used to stop at the first
+     * entry that did not fit and then either look complete, or fail to fit the
+     * tail and send nothing at all. */
+    char overlay[256];
+    int overlay_n = fakelib_overlay_status_json(overlay, sizeof(overlay));
+    if (overlay_n < 0 || (size_t)overlay_n >= sizeof(overlay)) {
+        closedir(dir);
+        return -1;
+    }
+#define SDK_SCAN_TAIL_FMT "],\"truncated\":%s,\"overlay\":%s}"
+    const size_t tail_room = sizeof(SDK_SCAN_TAIL_FMT) + 8 + (size_t)overlay_n;
+
     int n = snprintf(buf, cap, "{\"titles\":[");
+    if (n < 0 || (size_t)n >= cap || cap - (size_t)n <= tail_room) {
+        closedir(dir);
+        return -1;
+    }
+    const size_t limit = cap - tail_room; /* the list may use buf[0, limit) */
     int first = 1;
+    int truncated = 0;
 
     struct dirent *de;
     while ((de = readdir(dir))) {
@@ -531,23 +623,25 @@ int sdk_changer_scan(char *buf, size_t cap, size_t *written) {
         json_escape(source, esc_source, sizeof(esc_source));
 
         const char *sep = first ? "" : ",";
-        first = 0;
-        int more = snprintf(buf + n, cap - (size_t)n,
+        int more = snprintf(buf + n, limit - (size_t)n,
             "%s{\"title_id\":\"%s\",\"name\":\"%s\","
             "\"sdk_version\":\"%s\",\"fw_required\":\"%s\","
             "\"patchable\":%s,\"source\":\"%s\"}",
             sep, esc_tid, esc_name, esc_sdk, esc_fw,
             patchable ? "true" : "false", esc_source);
-        if (more < 0 || (size_t)(n + more) >= cap) break;
+        if (more < 0 || (size_t)more >= limit - (size_t)n) {
+            /* Does not fit: the tail below overwrites the cut entry. */
+            truncated = 1;
+            break;
+        }
+        first = 0;
         n += more;
     }
     closedir(dir);
 
-    char overlay[256];
-    int overlay_n = fakelib_overlay_status_json(overlay, sizeof(overlay));
-    if (overlay_n < 0 || (size_t)overlay_n >= sizeof(overlay)) return -1;
-    int end = snprintf(buf + n, cap - (size_t)n, "],\"overlay\":%s}", overlay);
-    if (end < 0 || (size_t)(n + end) >= cap) return -1;
+    int end = snprintf(buf + n, cap - (size_t)n, SDK_SCAN_TAIL_FMT,
+                       truncated ? "true" : "false", overlay);
+    if (end < 0 || (size_t)end >= cap - (size_t)n) return -1;
     n += end;
     if (written) *written = (size_t)n;
     return 0;
@@ -782,7 +876,7 @@ int sdk_changer_restore(const char *title_id, int *restored_count,
     if (restored_count) *restored_count = count;
 
     if (count == 0) {
-        if (err) snprintf(err, err_cap, "no .bak files found for %s", title_id);
+        if (err) snprintf(err, err_cap, "no SDK Changer backups found for %s", title_id);
     }
 
     return 0;

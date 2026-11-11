@@ -1342,6 +1342,14 @@ static int t_same_device(const char *a, const char *b) {
         if (!realpath(a, ra) || !realpath(b, rb)) return -1;
         return strcmp(ra, rb) == 0 ? 1 : 0;
     }
+    if (v == 1) {
+        /* As the payload's hook does (ava1_glue.c same_device: lstat of the source, stat of the folder):
+         * a path that is not there has no device, so the answer is "unknown", never "same". A hook that
+         * said "same" for anything hid fs.delete answering fs_delete_device_unknown for a path already
+         * gone. */
+        struct stat sa, sb;
+        if (lstat(a, &sa) != 0 || stat(b, &sb) != 0) return -1;
+    }
     return v;
 }
 static int g_deny_write;

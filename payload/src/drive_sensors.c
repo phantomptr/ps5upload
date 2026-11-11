@@ -31,6 +31,7 @@
 #include <cam/scsi/scsi_pass.h>
 
 #include "drive_sensors.h"
+#include "json_escape.h"
 
 #define MAX_DA_DEVS     10
 #define LOG_SENSE_TEMP  0x0D
@@ -152,7 +153,14 @@ append_drive_json(char *buf, size_t cap, size_t pos, int first,
     pos += (size_t)n;
 
     if (ident && ident[0]) {
-        n = snprintf(buf + pos, cap - pos, ",\"ident\":\"%s\"", ident);
+        /* The drive's own text (model, serial), straight from the device: escaped, and anything
+         * outside ASCII replaced. One `"`, backslash or stray byte in it made the whole reply
+         * invalid JSON, and the engine drops a reply it cannot parse. */
+        char ident_esc[2 * DISK_IDENT_SIZE + 2];
+        json_escape_into(ident, ident_esc, sizeof(ident_esc));
+        for (char *p = ident_esc; *p; p++)
+            if ((unsigned char)*p >= 0x7f) *p = '?';
+        n = snprintf(buf + pos, cap - pos, ",\"ident\":\"%s\"", ident_esc);
         if ((size_t)n >= cap - pos) { pos = cap - 1; goto close_obj; }
         pos += (size_t)n;
     }
@@ -177,8 +185,11 @@ append_drive_json(char *buf, size_t cap, size_t pos, int first,
         pos += (size_t)n;
 
         if (mount_point && mount_point[0]) {
+            /* A mount point is a path, and a path may hold a quote or a backslash. */
+            char mp_esc[2 * MNAMELEN + 2];
+            json_escape_into(mount_point, mp_esc, sizeof(mp_esc));
             n = snprintf(buf + pos, cap - pos,
-                ",\"mount_point\":\"%s\"", mount_point);
+                ",\"mount_point\":\"%s\"", mp_esc);
             if ((size_t)n >= cap - pos) { pos = cap - 1; goto close_obj; }
             pos += (size_t)n;
         }

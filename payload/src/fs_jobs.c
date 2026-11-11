@@ -296,6 +296,15 @@ static int chmod_rf_in(const char *path, unsigned mode, int depth, const fsj_hoo
     }
     /* A link that leads into the trust store is not chmod'ed (chmod follows it). */
     if (S_ISLNK(st.st_mode) && path_in_protected(path)) return 0;
+    /* Nor is any link FOUND in the tree: chmod(2) changes what a link points at, and this runs as
+     * root, so one link in a game folder (to /system, to another title) had its target's mode
+     * rewritten by a chmod -R of the folder. The path the request itself names (depth 0) went
+     * through the path policy, which resolves it; what the walk meets below it did not. Counted,
+     * as the size walk counted it. */
+    if (S_ISLNK(st.st_mode) && depth > 0) {
+        visited(h, 0);
+        return 0;
+    }
     /* chmod first, then descend: a partial failure still updated the top. */
     if (chmod(path, (mode_t)mode) != 0) {
         failed(h, path, "chmod");
@@ -630,12 +639,15 @@ static int op_delete(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t n)
         return AVA1_ERR_PATH;
     }
     parent_of(path, parent, sizeof parent);
+    /* Already gone: nothing to do. BEFORE the device question, because the real same_device hook
+     * (ava1_glue.c) lstat()s the path to answer it and can only say "unknown" for one that is not
+     * there, which turned deleting something already deleted into fs_delete_device_unknown. */
+    if (lstat(path, &st) != 0 && errno == ENOENT) return AVA1_STATUS_OK;
     dev = cfg->same_device ? cfg->same_device(path, parent) : -1;
     if (dev != 1) { /* 0: a mount point; -1: cannot tell, which is not "safe" */
         ava1_op_message(c, dev == 0 ? "fs_delete_path_is_mount_point" : "fs_delete_device_unknown");
         return AVA1_ERR_PATH;
     }
-    if (lstat(path, &st) != 0 && errno == ENOENT) return AVA1_STATUS_OK; /* nothing to do */
     ava1_op_message(c, "counting");
     count_rc = fsj_tree_size(path, &bytes, &files, 0, &walk);
     if (count_rc == -2) {

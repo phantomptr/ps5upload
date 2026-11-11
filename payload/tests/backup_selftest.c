@@ -250,6 +250,48 @@ static void keeps_the_new_one_whatever_the_clock_says(void) {
     CHECK(snapshot_exists("t4", far + 1));
 }
 
+/* Snapshots are named by the second. Two of one tag inside a second were given the SAME folder: the
+ * second wrote into the first, and one that was then cancelled or copied nothing removed the folder,
+ * and the first snapshot with it. Each gets a folder of its own, and a failed one removes only its own. */
+static void two_in_one_second_do_not_share_a_folder(void) {
+    char a[512], b[512], empty[512];
+    int64_t ts1 = 0, ts2 = 0, ts3 = 0;
+    int files = 0, restored = 0;
+    uint64_t bytes = 0;
+
+    snprintf(a, sizeof a, "%s/fast-a", g_root);
+    snprintf(b, sizeof b, "%s/fast-b", g_root);
+    snprintf(empty, sizeof empty, "%s/fast-empty", g_root);
+    put(a, "the first");
+    put(b, "the second one");
+    mkdir(empty, 0777);
+
+    CHECK(backup_snapshot("t5", a, &ts1, &files, &bytes) == 0);
+    CHECK(backup_snapshot("t5", b, &ts2, &files, &bytes) == 0);
+    CHECK(ts1 != ts2);
+    CHECK(count_snapshots("t5") == 2);
+    CHECK(files == 1 && bytes == strlen("the second one")); /* only its own file, not the first's too */
+
+    /* Cancelled straight after: it goes, the two before it stay. */
+    g_cancelled = 1;
+    CHECK(backup_snapshot("t5", a, &ts3, &files, &bytes) == BACKUP_CANCELLED);
+    g_cancelled = 0;
+    CHECK(count_snapshots("t5") == 2);
+    /* Nothing to copy straight after: the same. */
+    CHECK(backup_snapshot("t5", empty, &ts3, &files, &bytes) == -1);
+    CHECK(count_snapshots("t5") == 2);
+    CHECK(snapshot_exists("t5", ts1) && snapshot_exists("t5", ts2));
+
+    /* And each still restores what it took. */
+    put(a, "changed");
+    put(b, "changed");
+    CHECK(backup_restore("t5", ts1, &restored) == 0 && restored == 1);
+    CHECK(same_text(a, "the first"));
+    CHECK(same_text(b, "changed"));
+    CHECK(backup_restore("t5", ts2, &restored) == 0 && restored == 1);
+    CHECK(same_text(b, "the second one"));
+}
+
 /* Any folder can lie under the backups folder: none of it may break the reply. */
 static void list_survives_strange_folders(void) {
     char p[1024], name[260], big[4096];
@@ -387,6 +429,7 @@ int main(void) {
     nothing_to_back_up();
     keeps_the_newest_five();
     keeps_the_new_one_whatever_the_clock_says();
+    two_in_one_second_do_not_share_a_folder();
     list_survives_strange_folders();
     list_stays_inside_its_buffer();
     damaged_manifest();
