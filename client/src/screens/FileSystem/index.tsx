@@ -4009,13 +4009,15 @@ export default function FileSystemScreen() {
               <strong>{tr("queue_title", undefined, "Queue")} · {uploadQueue.items.length}</strong>
               {uploadQueue.error && <p role="alert">{uploadQueue.error}</p>}
               {uploadQueue.items.map((item) => (
-                <div key={item.id} className="mt-2 flex items-center gap-2">
-                  <span className="min-w-0 flex-1 break-all">
-                    {item.paused && <span className="me-1 rounded bg-[var(--color-warn)]/15 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-[var(--color-warn)]" data-testid="fs-upload-paused">{tr("queue_paused", undefined, "Paused")}</span>}
+                // Wraps: on a phone the buttons go below the name, which used to be squeezed to a few letters a line beside them (#794).
+                <div key={item.id} className="mt-2 flex flex-wrap items-center gap-2">
+                  <span className="min-w-0 flex-1 basis-[12rem] break-all" data-testid="fs-upload-queue-text">
+                    {item.paused && <span className="me-1 inline-block whitespace-nowrap break-normal rounded bg-[var(--color-warn)]/15 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-[var(--color-warn)]" data-testid="fs-upload-paused">{tr("queue_paused", undefined, "Paused")}</span>}
                     {item.request.steps?.flatMap((s) => s.kind === "list" ? s.files.map((f) => f.name) : [s.name]).join(", ")} → {item.request.destDir}
                     {item.paused === "sendNow" && <span className="block text-[var(--color-muted)]">{tr("queue_paused_for_send_now", undefined, "Paused for a Send now. It carries on by itself after.")}</span>}
                     {item.error && <span className="block text-[var(--color-bad)]">{humanizePs5Error(item.error) || item.error}</span>}
                   </span>
+                  <span className="ms-auto flex max-w-full flex-wrap items-center gap-2">
                   {item.paused ? (
                     <Button size="sm" variant="secondary" data-testid="fs-upload-resume-item" onClick={() => resumeFsUploadItem(host, item.id, fsUploadDeps)}>
                       {tr("queue_resume", undefined, "Resume")}
@@ -4028,6 +4030,7 @@ export default function FileSystemScreen() {
                   <Button size="sm" variant="ghost" disabled={uploadQueue.running && uploadQueue.currentId === item.id} onClick={() => removeFsUploadQueued(host, item.id, fsUploadDeps)}>
                     {tr("queue_remove", undefined, "Remove from queue")}
                   </Button>
+                  </span>
                 </div>
               ))}
               {uploadQueue.paused && !uploadStopped && (

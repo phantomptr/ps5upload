@@ -2481,10 +2481,10 @@ function ExternalPackages({ host }: { host: string }) {
             return (
               <li
                 key={p.path}
-                className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] flex items-center gap-3 p-2"
+                className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] flex flex-wrap items-center gap-3 p-2"
               >
                 <GameIcon host={host} titleId={titleId} size={44} />
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0 flex-1 basis-[12rem]">
                   <div className="flex items-center gap-2">
                     <PlatformBadge platform={platform} />
                     <span

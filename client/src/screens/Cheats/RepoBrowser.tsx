@@ -374,9 +374,9 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
             <div className="space-y-1.5">
               {visible.map((e) => (
                 <Card key={e.filename}>
-                  <div className="flex items-center justify-between gap-3 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3 p-3">
                     <GameIcon host={hostOf(addr)} titleId={titleIdOf(e.filename)} size={40} />
-                    <div className="min-w-0 flex-1">
+                    <div className="min-w-0 flex-1 basis-[12rem]">
                       <div className="truncate text-sm font-medium">
                         {displayTitle(e, namesByTitleId)}
                       </div>

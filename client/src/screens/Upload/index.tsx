@@ -3359,9 +3359,9 @@ function PkgFinisherCard({
   const label = pkgInfo?.title?.trim() || pkgInfo?.contentId || null;
   return (
     <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-3 p-4">
-      <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+      <div className="mb-2 flex flex-wrap items-center gap-2 text-sm font-medium">
         <Package size={16} className="text-[var(--color-muted)]" />
-        <span className="flex-1">
+        <span className="flex-1 basis-[8rem]">
           {tr("upload_pkg_card_title", "Package install")}
         </span>
         {onView && (

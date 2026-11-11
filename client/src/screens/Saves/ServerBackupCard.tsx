@@ -82,9 +82,9 @@ export default function ServerBackupCard({
       className="mb-4 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4"
       data-testid="server-save-backup"
     >
-      <header className="mb-1 flex items-center gap-2">
+      <header className="mb-1 flex flex-wrap items-center gap-2">
         <Server size={14} />
-        <h3 className="flex-1 text-sm font-semibold">
+        <h3 className="flex-1 basis-[8rem] text-sm font-semibold">
           {tr("saves_server_title", undefined, "Backups to a network share")}
         </h3>
         <Button

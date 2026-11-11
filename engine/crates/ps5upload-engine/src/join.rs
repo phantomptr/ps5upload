@@ -3447,8 +3447,46 @@ fn touch_reach(console: &str, headers: &HeaderMap) {
     });
 }
 
+/// What a `not_playing` refusal says beside the code, for a bug report: the console that was
+/// asked for (`asked`), the console this engine is streaming as its session was started
+/// (`streaming`, null when none runs) and whether that session is on its way out (`stopping`).
+/// A stream on show with `streaming` null is a page showing another engine's session; a
+/// `streaming` that is not `asked` is the panel and the stream naming the console differently.
+fn not_playing_json(asked: &str, live: Option<(String, bool)>) -> serde_json::Value {
+    serde_json::json!({
+        "error": "not_playing",
+        "asked": asked,
+        "streaming": live.as_ref().map(|(host, _)| host),
+        "stopping": live.is_some_and(|(_, stopping)| stopping),
+    })
+}
+
+/// The `not_playing` refusal of [`open`], and a line in the log. The panel asks again every 2 s
+/// while the stream starts, so the same finding is logged once a minute.
+fn not_playing(asked: &str) -> Response {
+    static LAST: Mutex<Option<(String, Instant)>> = Mutex::new(None);
+    let v = not_playing_json(asked, crate::rp_stream_api::live_brief());
+    let line = format!(
+        "join: open asked for {asked}, no session runs for it (streaming: {}, stopping: {})",
+        v["streaming"].as_str().unwrap_or("none"),
+        v["stopping"]
+    );
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    let again = last
+        .as_ref()
+        .is_some_and(|(l, at)| *l == line && at.elapsed() < Duration::from_secs(60));
+    if !again {
+        crate::log_at!(Info, "together", "{line}");
+        *last = Some((line, Instant::now()));
+    }
+    drop(last);
+    (StatusCode::CONFLICT, Json(v)).into_response()
+}
+
 /// `POST /api/join/open {addr}`: open Play Together for the session being played on `addr`,
-/// with an invite ready (409 `not_playing` when none runs, 409 `old_helper` when the helper has
+/// with an invite ready (409 `not_playing` when none runs, with what the engine found instead:
+/// `asked`, `streaming` (the console it is streaming, or null) and `stopping`; 409 `old_helper`
+/// when the helper has
 /// no guest controllers: "Update the helper to play together"; 502 when the console does not
 /// answer). Opening an open one changes nothing, also while its host's stream restarts (a new
 /// bitrate from the panel's "Lower to", #720): the party waits [`HOST_RESTART_WINDOW`] for them,
@@ -3469,7 +3507,7 @@ pub async fn open(
             touch_reach(&b.addr, &headers);
             return Json(state_json(&b.addr)).into_response();
         }
-        return bad(StatusCode::CONFLICT, "not_playing");
+        return not_playing(&b.addr);
     };
     if with_party(&key, |_| ()).is_none() {
         // An older helper has no guest controllers: the host is told before anyone is invited.
@@ -7579,6 +7617,36 @@ mod tests {
             }),
         )
         .await;
+    }
+
+    /// "Play Together could not start (not_playing)" over a running picture (a phone, Discord):
+    /// the refusal says which console was asked for and what the engine is streaming.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn not_playing_says_what_was_asked_and_what_is_streaming() {
+        let _turn = PARTY_TESTS.lock().await;
+        let (ci, h) = local();
+        let r = open(
+            ci,
+            h,
+            Json(AddrBody {
+                addr: "10.77.0.250:9295".into(),
+            }),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::CONFLICT);
+        let v = body(r).await;
+        assert_eq!(v["error"], "not_playing");
+        assert_eq!(v["asked"], "10.77.0.250:9295");
+        assert!(v.get("streaming").is_some() && v["stopping"].is_boolean());
+
+        assert_eq!(
+            not_playing_json("10.0.0.2", None),
+            serde_json::json!({"error": "not_playing", "asked": "10.0.0.2", "streaming": null, "stopping": false})
+        );
+        assert_eq!(
+            not_playing_json("10.0.0.2", Some(("ps5.lan".into(), true))),
+            serde_json::json!({"error": "not_playing", "asked": "10.0.0.2", "streaming": "ps5.lan", "stopping": true})
+        );
     }
 
     fn seat_settings() -> Settings {

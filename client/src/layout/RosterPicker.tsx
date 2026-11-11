@@ -277,7 +277,7 @@ export function RosterManageModal({
           {profiles.map((p, index) => (
             <li
               key={p.id}
-              className={`flex items-center gap-2 rounded-[var(--radius-field)] border p-2.5 text-xs ${
+              className={`flex flex-wrap items-center gap-2 rounded-[var(--radius-field)] border p-2.5 text-xs ${
                 p.id === active?.id ? "border-[var(--color-accent)]" : "border-[var(--color-border)]"
               }`}
             >
@@ -303,7 +303,7 @@ export function RosterManageModal({
                   <ChevronDownIcon size={13} />
                 </button>
               </div>
-              <div className="min-w-0 flex-1">
+              <div className="min-w-0 flex-1 basis-[12rem]">
                 <div className="truncate font-medium">{p.name}</div>
                 <PathLine p={p} tailnet={tailnet} />
               </div>

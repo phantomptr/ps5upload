@@ -167,6 +167,16 @@ test("the host invites, allows a friend, sees their delay and removes them", asy
   await expect.poll(() => posts.find((p) => p.path === "/api/join/kick")?.body).toEqual({ addr: "192.168.1.100", player: 2 });
   await expect(card.getByTestId("pt-player-status")).toHaveText("Left", { timeout: 10_000 });
 
+  // On a phone the long "Use a phone as your controller, or let someone watch" wraps inside the
+  // panel (it ran past the right edge, cut off).
+  const wide = page.viewportSize();
+  await page.setViewportSize({ width: 360, height: 800 });
+  const phones = await panel.getByTestId("pt-phones").boundingBox();
+  const panelBox = await panel.boundingBox();
+  expect((phones?.x ?? 0) + (phones?.width ?? 0)).toBeLessThanOrEqual((panelBox?.x ?? 0) + (panelBox?.width ?? 0));
+  expect((phones?.x ?? 0) + (phones?.width ?? 0)).toBeLessThanOrEqual(360);
+  if (wide) await page.setViewportSize(wide);
+
   // The phones panel is one click away.
   await panel.getByTestId("pt-phones").click();
   await expect(page.getByTestId("rp-phone-pads")).toBeVisible();

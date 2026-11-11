@@ -111,6 +111,8 @@ runInline("script inventory", "node", ["scripts/audit-scripts.mjs", "--strict"])
 runInline("i18n coverage", "node", ["scripts/i18n-coverage.mjs", "--strict"]);
 runInline("i18n orphan keys", "node", ["scripts/find-orphan-i18n.mjs", "--max", "0"]);
 runInline("dead exports", "node", ["scripts/check-dead-exports.mjs"]);
+// Reads the screens with the client's TypeScript (client/node_modules).
+runInline("phone squeeze (labels beside buttons)", "node", ["scripts/check-phone-squeeze.mjs"]);
 runInline("git whitespace", "git", ["diff", "--check"]);
 
 const engineSteps = [

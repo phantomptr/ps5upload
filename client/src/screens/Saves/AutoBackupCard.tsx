@@ -46,9 +46,9 @@ export default function AutoBackupCard() {
       className="mb-4 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4"
       data-testid="auto-save-backup"
     >
-      <header className="mb-1 flex items-center gap-2">
+      <header className="mb-1 flex flex-wrap items-center gap-2">
         <History size={14} />
-        <h3 className="flex-1 text-sm font-semibold">
+        <h3 className="flex-1 basis-[8rem] text-sm font-semibold">
           {tr("saves_auto_title", undefined, "Automatic backups")}
         </h3>
         <Button

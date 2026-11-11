@@ -192,7 +192,7 @@ function MemberRow({
     .filter(Boolean)
     .join(" · ");
   return (
-    <li className="flex min-w-0 items-start gap-3 py-2">
+    <li className="flex flex-wrap min-w-0 items-start gap-3 py-2">
       <span
         className={`mt-1.5 size-2 shrink-0 rounded-full ${online ? "bg-[var(--color-good)]" : "bg-[var(--color-border)]"}`}
         title={
@@ -204,7 +204,7 @@ function MemberRow({
         }
         aria-hidden
       />
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 basis-[12rem]">
         <p className="flex flex-wrap items-center gap-x-2 text-sm">
           <KindGlyph kind={m.kind ?? ""} />
           <span className="truncate font-medium">{name}</span>

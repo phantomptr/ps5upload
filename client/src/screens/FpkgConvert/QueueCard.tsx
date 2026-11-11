@@ -148,8 +148,8 @@ export function QueueCard(p: QueueCardProps) {
           <ul className="divide-y divide-[var(--color-border)] rounded-[var(--radius-card)] border border-[var(--glass-edge)]">
             {p.items.map((i, idx) => (
               <li key={i.id} className="flex flex-col">
-              <div className="flex items-center gap-2 px-3 py-2 text-sm">
-                <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+                <div className="min-w-0 flex-1 basis-[12rem]">
                   <div className="flex min-w-0 items-center gap-1.5">
                     <span className="truncate font-medium" title={i.source}>
                       {nameOf(i.source)}
