@@ -76,10 +76,17 @@ const APPROVAL_ASK_GAP_MS = 4000;
 const waiting = new Set<string>();
 
 export const usePairingStore = create<PairingState>((set, get) => {
+  /** One answer is awaited at a time, for the console the dialog is on. An answer that comes
+   *  back after the dialog moved to another console (or closed) is dropped: console A's late
+   *  "accepted" used to close B's dialog, and A's code screen showed under B's name. */
+  let request = 0;
+  const stale = (mine: number, host: string) => mine !== request || get().host !== host;
   const load = async (host: string) => {
+    const mine = ++request;
     set({ busy: true, error: null });
     try {
       const view = await pairingStatus(host);
+      if (stale(mine, host)) return;
       // Already paired (the console trusts us after all): nothing to compare.
       if (view.state === "accepted") {
         set({ busy: false, view, open: false, paired: hostOf(host) });
@@ -93,6 +100,7 @@ export const usePairingStore = create<PairingState>((set, get) => {
       }
       set({ busy: false, view });
     } catch (e) {
+      if (stale(mine, host)) return;
       set({
         busy: false,
         view: null,
@@ -168,9 +176,11 @@ export const usePairingStore = create<PairingState>((set, get) => {
       const { host, view } = get();
       if (!host || (view?.state !== "code" && view?.state !== "wrong_code"))
         return;
+      const mine = ++request;
       set({ busy: true, error: null });
       try {
         const next = await pairingConfirm(host, code);
+        if (stale(mine, host)) return;
         if (next.state === "accepted") {
           set({ busy: false, open: false, view: next, paired: hostOf(host) });
         } else if (next.state === "none") {
@@ -180,6 +190,7 @@ export const usePairingStore = create<PairingState>((set, get) => {
           set({ busy: false, view: next });
         }
       } catch (e) {
+        if (stale(mine, host)) return;
         set({
           busy: false,
           error: e instanceof Error ? e.message : String(e),
@@ -190,17 +201,22 @@ export const usePairingStore = create<PairingState>((set, get) => {
     async forgetAndPair() {
       const { host } = get();
       if (!host) return;
+      const mine = ++request;
       set({ busy: true, error: null });
       try {
         await pairingForget(host);
       } catch (e) {
+        if (stale(mine, host)) return;
         set({ busy: false, error: e instanceof Error ? e.message : String(e) });
         return;
       }
+      if (stale(mine, host)) return;
       await load(host);
     },
 
     close() {
+      // Whatever is still on its way was for the dialog that just closed.
+      request += 1;
       set({ open: false, view: null, error: null, busy: false });
     },
 
@@ -210,6 +226,7 @@ export const usePairingStore = create<PairingState>((set, get) => {
       // dismissing the dialog hands it back (best effort: it also expires on its own).
       if (host) void pairingCancel(host);
       const key = hostOf(host) || "_";
+      request += 1;
       set((s) => ({
         open: false,
         view: null,

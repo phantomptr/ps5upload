@@ -744,6 +744,17 @@ export function shouldRestAfterRun(
     it.sourceKind === "install" || (it.sourceKind === "pkg" && it.installAfterUpload !== false);
   if (thisRun.some((it) => it.status === "failed" || installed(it))) return false;
   if (items.some((it) => hostOf(it.addr) === h && it.status === "running")) return false;
+  // Another console's queue may be copying FROM this one (console to console): asleep, that
+  // copy dies. Its rows live under the destination's address, so look at every queue.
+  if (
+    items.some(
+      (it) =>
+        (it.status === "pending" || it.status === "running") &&
+        !!it.fromConsole &&
+        hostOf(it.fromConsole) === h,
+    )
+  )
+    return false;
   return thisRun.some((it) => it.status === "done" && it.sourceKind !== "pkg");
 }
 
@@ -790,6 +801,34 @@ export function retryPatch(it: QueueItem): Partial<QueueItem> {
     installNote: null,
     installJobId: null,
   };
+}
+
+/** What "Retry failed" makes of one failed row: the same as its own Retry (`retryPatch`), so a
+ *  package that only failed at its install installs again from the copy on the console instead
+ *  of being sent whole again. Pure. */
+export function retryFailedRow(it: QueueItem): QueueItem {
+  const next: QueueItem = { ...it, ...retryPatch(it) };
+  return it.sourceKind === "install" && it.installPhase
+    ? {
+        ...next,
+        installPhase: null,
+        installPct: null,
+        installProgress: null,
+        installNote: null,
+        fallbackToUpload: false,
+      }
+    : next;
+}
+
+/** Whether a finished upload's source may be deleted ("Delete source after upload"). Not when
+ *  the engine stopped waiting for the console to confirm the files saved (`unsettled`): the
+ *  warning then tells the user to send it again if the console loses power, which needs the
+ *  source. Pure. */
+export function mayDeleteSourceAfterUpload(
+  it: Pick<QueueItem, "deleteSourceAfterUpload">,
+  live: Pick<JobLive, "unsettled"> | null | undefined,
+): boolean {
+  return !!it.deleteSourceAfterUpload && !live?.unsettled;
 }
 
 /** A running row Pause can stop: an upload still sending. Not an install, and not a row
@@ -1172,8 +1211,10 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
           await sleep(2000);
           continue;
         }
-        if (s.state === "finished" && s.result.ok) {
-          // What the page would have done had it stayed open.
+        const unverified = s.state === "finished" && s.result.ok && !!s.result.unverified;
+        if (s.state === "finished" && s.result.ok && !unverified) {
+          // What the page would have done had it stayed open. Never on an unconfirmed install:
+          // that would record it as installed and delete the staged package.
           const row = get().items.find((it) => it.id === r.id);
           if (row) await afterInstallFoundDone(row, s.result);
         }
@@ -1181,13 +1222,12 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
           s.state === "finished" && s.result.ok
             ? {
                 status: "done",
-                installPhase: s.result.mayNotLaunch ? "warn" : "done",
+                installPhase: unverified ? "unverified" : s.result.mayNotLaunch ? "warn" : "done",
                 installPct: 100,
                 error: null,
-                installNote: trStatic(
-                  "queue_install_finished_away",
-                  "Finished while the page was closed.",
-                ),
+                installNote: unverified
+                  ? (s.result.message ?? null)
+                  : trStatic("queue_install_finished_away", "Finished while the page was closed."),
               }
             : {
                 status: "failed",
@@ -1360,8 +1400,9 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
         ? [trStatic("queue_may_not_launch", "Installed, but it may not launch on this firmware.")]
         : [],
       registeredAs: null,
-      installPhase: (r.mayNotLaunch ? "warn" : "done") as QueueItem["installPhase"],
-      installedTitle: item.displayName,
+      // Unconfirmed: the row says "verify on PS5 (package kept)", with the installer's words.
+      installPhase: (r.unverified ? "unverified" : r.mayNotLaunch ? "warn" : "done") as QueueItem["installPhase"],
+      installedTitle: r.unverified ? null : item.displayName,
       // The installer's own closing words (e.g. "Sent to the PS5 — it
       // downloads on its own") belong on the finished row.
       installNote: r.message ?? null,
@@ -1958,7 +1999,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
             } else if (r.unverified) {
               // Not a failure, not confirmed either: the row finishes with a note and the staged
               // pkg stays, since only a CONFIRMED install may delete it.
-              installPhase = "warn";
+              installPhase = "unverified";
               mountWarnings.push(r.errMessage);
               log.info(
                 "install",
@@ -2311,7 +2352,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
           // with now. (Local paths are not copies and are left alone.)
           void releaseCopy(next.sourcePath);
           releaseArchiveCopy(next.id);
-          if (next.deleteSourceAfterUpload) {
+          if (mayDeleteSourceAfterUpload(next, live)) {
             void deleteSourceAfterUpload(next.sourcePath, next.addr);
           }
           // The last row sent now finished: the upload it paused goes on next.
@@ -3124,17 +3165,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       set((s) => ({
         items: s.items.map((it) => {
           if (!mine(it) || it.status !== "failed") return it;
-          const pending = { ...it, status: "pending" as const };
-          return it.sourceKind === "install" && it.installPhase
-            ? {
-                ...pending,
-                installPhase: null,
-                installPct: null,
-                installProgress: null,
-                installNote: null,
-                fallbackToUpload: false,
-              }
-            : pending;
+          return retryFailedRow(it);
         }),
       }));
       scheduleSave();

@@ -115,14 +115,16 @@ async function build(item: ConvertItem) {
   return outcome(swap);
 }
 
-async function handOff(item: ConvertItem, packagePath: string) {
+export async function handOff(item: ConvertItem, packagePath: string) {
   const host = item.host!;
   const store = pkgLibraryStore(host).getState();
   const r =
     item.then === "upload" ? await store.uploadInstall(packagePath, host) : await store.installStream(packagePath, host);
   // Only a package this engine built, and only after its install verified.
-  if (r.ok && item.deleteAfterInstall) await fpkg.deletePackage(packagePath).catch(() => {});
-  return { ok: !!r.ok, message: r.message };
+  // An install the PS5 took but nobody could confirm keeps its package.
+  const confirmed = r.ok && !r.unverified;
+  if (confirmed && item.deleteAfterInstall) await fpkg.deletePackage(packagePath).catch(() => {});
+  return { ok: !!r.ok, ...(r.ok && r.unverified ? { unverified: true as const } : {}), message: r.message };
 }
 
 let installed = false;

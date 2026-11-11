@@ -236,6 +236,29 @@ describe("installRarPackages", () => {
     expect(r.message).toBe("out of space");
     expect(installFromConsolePath).not.toHaveBeenCalled();
   });
+  it("an install the PS5 took but nobody confirmed keeps the unpacked packages", async () => {
+    vi.mocked(rarPackages).mockResolvedValue([{ path: "b.pkg", size: 20 }]);
+    probeAs({ "b.pkg": { category: "gd", title_id: "PPSA1" } });
+    installFromConsolePath.mockResolvedValue({
+      ok: true,
+      unverified: true,
+      message: "It may still be installing, so check Downloads on the PS5. The package was kept.",
+    });
+    const r = await installRarPackages({ host: HOST, archivePath: "/x/M.rar" });
+    expect(r.removed).toBeUndefined();
+    expect(fsDelete).not.toHaveBeenCalled();
+    expect(r.outcomes).toEqual([
+      {
+        entry: "b.pkg",
+        consolePath: "/user/data/ps5upload/pkg_library/rar_M/b.pkg",
+        status: "unverified",
+        message: "It may still be installing, so check Downloads on the PS5. The package was kept.",
+      },
+    ]);
+    // Not counted as installed, and the folder is said to be still there.
+    expect(r.message).toContain("Installed 0 of 1");
+    expect(r.message).toContain("still in /user/data/ps5upload/pkg_library/rar_M");
+  });
 });
 
 describe("space and clean-up", () => {
@@ -285,6 +308,9 @@ describe("space and clean-up", () => {
     expect(shouldRemoveUnpacked([{ status: "installed" }, { status: "installed" }])).toBe(true);
     expect(shouldRemoveUnpacked([{ status: "installed" }, { status: "failed" }])).toBe(false);
     expect(shouldRemoveUnpacked([{ status: "installed" }, { status: "skipped" }])).toBe(false);
+    // An install nobody could confirm may still be reading its file.
+    expect(shouldRemoveUnpacked([{ status: "installed" }, { status: "unverified" }])).toBe(false);
+    expect(shouldRemoveUnpacked([{ status: "unverified" }])).toBe(false);
   });
 
   it("still reports the installs when deleting the folder fails", async () => {

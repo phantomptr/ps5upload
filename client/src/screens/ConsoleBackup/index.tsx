@@ -27,7 +27,9 @@ import { humanizePs5Error } from "../../lib/humanizeError";
 import { pickPath } from "../../lib/pickPath";
 import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
+import { useConfirm } from "../../components/ConfirmDialog";
 import { ResetGuide } from "./Guide";
+import { restoreAfterConfirm, restoreConfirmOptions } from "./restoreConfirm";
 
 type Tr = ReturnType<typeof useTr>;
 type View = "backup" | "restore" | "guide";
@@ -372,10 +374,15 @@ function RestorePane({
   };
 
   const fromUsers = useMemo(() => (manifest ? usersWithSaves(manifest) : []), [manifest]);
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const start = async () => {
     setError(null);
     try {
-      await consoleBackupApi.restore(addr, dir, [...picked], map);
+      // It replaces files on the PS5: asked first, like the snapshot restore.
+      const ran = await restoreAfterConfirm(confirm, restoreConfirmOptions(tr), () =>
+        consoleBackupApi.restore(addr, dir, [...picked], map),
+      );
+      if (!ran) return;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -477,6 +484,7 @@ function RestorePane({
           </Button>
         </>
       )}
+      {confirmDialog}
     </div>
   );
 }

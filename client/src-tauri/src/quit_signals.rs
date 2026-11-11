@@ -18,7 +18,7 @@ pub fn spawn<R: Runtime>(app: AppHandle<R>) {
             signal(SignalKind::interrupt()),
             signal(SignalKind::hangup()),
         ) else {
-            eprintln!("[tauri] cannot handle quit signals");
+            quiet_line("[tauri] cannot handle quit signals");
             return;
         };
         let mut asked = false;
@@ -29,12 +29,30 @@ pub fn spawn<R: Runtime>(app: AppHandle<R>) {
                 _ = hup.recv() => "SIGHUP",
             };
             if asked {
-                eprintln!("[tauri] {name} again: exiting now");
+                quiet_line(&format!("[tauri] {name} again: exiting now"));
                 std::process::exit(1);
             }
             asked = true;
-            eprintln!("[tauri] {name}: quitting");
+            quiet_line(&format!("[tauri] {name}: quitting"));
             app.exit(0);
         }
     });
+}
+
+/// SIGHUP is what arrives when the terminal that started the app closes, and stderr is that
+/// terminal: `eprintln!` panics on it, and the task died before `app.exit` ran.
+fn quiet_line(text: &str) {
+    let _ = crate::crash_hook::stderr_line(text);
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn nothing_here_prints_with_a_macro_that_panics_on_a_closed_stderr() {
+        let source = include_str!("quit_signals.rs");
+        assert!(!source.contains(concat!("eprint", "ln!(")));
+        assert!(!source.contains(concat!("print", "ln!(")));
+        // Writing to stderr through the helper never panics.
+        super::quiet_line("[tauri] test line");
+    }
 }

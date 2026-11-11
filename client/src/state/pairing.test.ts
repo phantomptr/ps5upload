@@ -37,6 +37,42 @@ describe("pairing store", () => {
     expect(s.paired).toBe("10.0.0.2");
   });
 
+  it("a late answer for one console never lands in another console's dialog", async () => {
+    let answerA: (v: unknown) => void = () => {};
+    api.pairingStatus.mockImplementation((host: string) =>
+      host === "10.0.0.2" ? new Promise((r) => (answerA = r)) : Promise.resolve(CODE),
+    );
+    const a = usePairingStore.getState().openFor("10.0.0.2");
+    await usePairingStore.getState().openFor("10.0.0.3");
+    expect(usePairingStore.getState()).toMatchObject({ open: true, host: "10.0.0.3", view: CODE, busy: false });
+    // A's console accepted meanwhile: that used to close B's dialog and call A paired here.
+    answerA({ state: "accepted" });
+    await a;
+    expect(usePairingStore.getState()).toMatchObject({ open: true, host: "10.0.0.3", view: CODE, paired: null });
+  });
+
+  it("a late confirm answer for one console does not close another console's dialog", async () => {
+    let answerA: (v: unknown) => void = () => {};
+    api.pairingStatus.mockResolvedValue(CODE);
+    api.pairingConfirm.mockImplementation(() => new Promise((r) => (answerA = r)));
+    await usePairingStore.getState().openFor("10.0.0.2");
+    const sent = usePairingStore.getState().confirm("004821");
+    await usePairingStore.getState().openFor("10.0.0.3");
+    answerA({ state: "accepted" });
+    await sent;
+    expect(usePairingStore.getState()).toMatchObject({ open: true, host: "10.0.0.3", view: CODE, paired: null });
+  });
+
+  it("an answer that arrives after the dialog closed stays out of it", async () => {
+    let answer: (v: unknown) => void = () => {};
+    api.pairingStatus.mockImplementation(() => new Promise((r) => (answer = r)));
+    const opening = usePairingStore.getState().openFor("10.0.0.2");
+    usePairingStore.getState().close();
+    answer(CODE);
+    await opening;
+    expect(usePairingStore.getState()).toMatchObject({ open: false, view: null, busy: false });
+  });
+
   it("explains a closed window and can try again", async () => {
     api.pairingStatus.mockResolvedValueOnce({ state: "closed" });
     await usePairingStore.getState().openFor("10.0.0.2");

@@ -297,6 +297,18 @@ describe("Receive", () => {
     expect(html).not.toContain("Install to my PS5");
   });
 
+  it("starts with what is offered ticked even though it first showed Connecting", () => {
+    const props = { host: "", onDone: () => {}, onView: () => {} };
+    const connecting = ReceiveFlow({ ...props, view: { ...offer, state: "connecting", items: [] } });
+    const offered = ReceiveFlow({ ...props, view: offer });
+    expect(render(connecting)).toContain('data-testid="receive-connecting"');
+    // The offer is another component than the connecting card, so React mounts it when the items
+    // arrive and its selection starts from them. (One component for both kept the empty
+    // selection it made while connecting: nothing was ticked, and Accept sent nothing.)
+    expect(offered.type).not.toBe(connecting.type);
+    expect(render(offered).match(/data-testid="receive-item"[^>]*data-state="on"/g) ?? []).toHaveLength(2);
+  });
+
   it("with a PS5 connected, the app can be installed when it arrives", () => {
     const html = render(<ReceiveFlow view={offer} host="192.168.1.5" onDone={() => {}} onView={() => {}} />);
     expect(html).toMatch(/role="radio" aria-checked="true"[^>]*>Keep in Collection/);

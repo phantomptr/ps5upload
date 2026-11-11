@@ -28,14 +28,28 @@ export interface StreamLaunch extends LaunchTarget {
 
 interface State {
   pending: StreamLaunch | null;
+  /** A console (its roster host) whose stream was asked for from another screen, with no game
+   *  to start. The stream panel takes it and starts through its own guards (leave a friend's
+   *  game first, a payload that blocks the picture), which a direct store start would skip. */
+  streamOnly: string | null;
+  requestStream: (host: string) => void;
+  /** Hand the stream-only request over (once): the host, or null when there is none. */
+  takeStream: () => string | null;
   request: (host: string, t: LaunchTarget) => void;
   set: (p: Partial<StreamLaunch>) => void;
   clear: () => void;
 }
 
 /** One "play on the stream" at a time: the latest request replaces an earlier one. */
-export const useStreamLaunch = create<State>((set) => ({
+export const useStreamLaunch = create<State>((set, get) => ({
   pending: null,
+  streamOnly: null,
+  requestStream: (host) => set({ streamOnly: host }),
+  takeStream: () => {
+    const host = get().streamOnly;
+    if (host) set({ streamOnly: null });
+    return host;
+  },
   request: (host, t) => set({ pending: { ...t, host: hostOf(host) || host, stage: "stream" } }),
   set: (p) => set((s) => (s.pending ? { pending: { ...s.pending, ...p } } : s)),
   clear: () => set({ pending: null }),

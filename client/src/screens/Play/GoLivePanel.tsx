@@ -28,7 +28,8 @@ import { isMobile } from "../../lib/platform";
 import { getEngineUrl, isLoopbackUrl } from "../../state/engine";
 import { useGoLiveStore } from "../../state/goLive";
 import { useTr } from "../../state/lang";
-import { presetName, problemText, runSite } from "./goLiveText";
+import { presetName, problemText, removeAfterConfirm, removeConfirmOptions, runSite } from "./goLiveText";
+import { useConfirm } from "../../components/ConfirmDialog";
 import { useRemotePlayStore } from "../../state/remotePlay";
 import { useRpQualityStore } from "../../state/rpQuality";
 import { PictureHereToggle } from "./PictureHere";
@@ -331,6 +332,7 @@ function DestinationRow({ d, disabled }: { d: LiveDestination; disabled: boolean
   const setEnabled = useGoLiveStore((s) => s.setEnabled);
   const setTest = useGoLiveStore((s) => s.setBandwidthTest);
   const remove = useGoLiveStore((s) => s.remove);
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const site = presetName(tr, d.preset);
   return (
     <li className="space-y-1 rounded-md border border-[var(--color-border)] p-2" data-testid="golive-dest">
@@ -357,7 +359,7 @@ function DestinationRow({ d, disabled }: { d: LiveDestination; disabled: boolean
         <button
           type="button"
           disabled={disabled}
-          onClick={() => void remove(d.id)}
+          onClick={() => void removeAfterConfirm(confirm, removeConfirmOptions(tr, d.label), () => remove(d.id))}
           aria-label={tr("golive_remove", { name: d.label }, `Remove ${d.label}`)}
           className="flex h-10 w-10 shrink-0 items-center justify-center rounded hover:bg-[var(--color-surface-3)] disabled:opacity-40 sm:h-7 sm:w-7"
           data-testid="golive-dest-remove"
@@ -365,6 +367,7 @@ function DestinationRow({ d, disabled }: { d: LiveDestination; disabled: boolean
           <Trash2 size={14} />
         </button>
       </div>
+      {confirmDialog}
       {d.key_lost && (
         <p className="ps-6 text-xs text-[var(--color-danger,#dc2626)]" data-testid="golive-key-lost">
           {tr("golive_key_lost", undefined, "The saved stream key can't be read. Remove this site and add it again.")}

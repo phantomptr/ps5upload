@@ -7,6 +7,8 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import {
   canResumeUnattended,
   isInstallWork,
+  mayDeleteSourceAfterUpload,
+  retryFailedRow,
   retryPatch,
   shouldRestAfterRun,
   type QueueItem,
@@ -103,5 +105,83 @@ describe("shouldRestAfterRun", () => {
   });
   it("does not look at another console", () => {
     expect(shouldRestAfterRun([up({ addr: "10.0.0.3:9113" })], "10.0.0.2", started, false)).toBe(false);
+  });
+});
+
+describe("Retry failed", () => {
+  it("installs a package that failed at its install from the copy on the console, like Retry", () => {
+    const failed = row({ status: "failed", uploadDone: true, installPhase: "error", error: "refused" });
+    const next = retryFailedRow(failed);
+    expect(next.status).toBe("pending");
+    expect(next.sourceKind).toBe("install");
+    expect(next.install).toEqual({ via: "library", path: "/data/pkg/P.pkg" });
+    // Not an upload any more: the run does not reset it to send the bytes again.
+    expect(next.uploadDone).toBe(false);
+    expect(next).toEqual({ ...failed, ...retryPatch(failed) });
+  });
+  it("sends again a package that never got there, and clears a failed install row", () => {
+    expect(retryFailedRow(row({ status: "failed", uploadDone: false })).sourceKind).toBe("pkg");
+    const install = retryFailedRow(
+      row({
+        status: "failed",
+        sourceKind: "install",
+        installPhase: "error",
+        installPct: 40,
+        installNote: "x",
+        fallbackToUpload: true,
+      }),
+    );
+    expect(install.status).toBe("pending");
+    expect(install.installPhase).toBeNull();
+    expect(install.installPct).toBeNull();
+    expect(install.installNote).toBeNull();
+    expect(install.fallbackToUpload).toBe(false);
+  });
+});
+
+describe("rest after upload with a console-to-console copy", () => {
+  const started = 1000;
+  const up = (over: Partial<QueueItem>) =>
+    row({ sourceKind: "folder", status: "done", completedAt: 2000, ...over });
+  const copy = (over: Partial<QueueItem>) =>
+    row({ id: "c", sourceKind: "folder", addr: "10.0.0.3:9113", fromConsole: "10.0.0.2", ...over });
+  it("never rests a console another console's queue copies from, running or still to come", () => {
+    expect(
+      shouldRestAfterRun([up({}), copy({ status: "running", completedAt: null })], "10.0.0.2", started, false),
+    ).toBe(false);
+    expect(
+      shouldRestAfterRun([up({}), copy({ status: "pending", completedAt: null })], "10.0.0.2", started, false),
+    ).toBe(false);
+    expect(
+      shouldRestAfterRun(
+        [up({}), copy({ status: "running", completedAt: null, fromConsole: "10.0.0.2:9113" })],
+        "10.0.0.2",
+        started,
+        false,
+      ),
+    ).toBe(false);
+  });
+  it("rests once that copy is over, or when it reads from some other console", () => {
+    expect(shouldRestAfterRun([up({}), copy({ status: "done" })], "10.0.0.2", started, false)).toBe(true);
+    expect(shouldRestAfterRun([up({}), copy({ status: "failed" })], "10.0.0.2", started, false)).toBe(true);
+    expect(
+      shouldRestAfterRun(
+        [up({}), copy({ status: "running", completedAt: null, fromConsole: "10.0.0.9" })],
+        "10.0.0.2",
+        started,
+        false,
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("delete source after upload", () => {
+  it("only after an upload the console confirmed saved", () => {
+    expect(mayDeleteSourceAfterUpload({ deleteSourceAfterUpload: true }, undefined)).toBe(true);
+    expect(mayDeleteSourceAfterUpload({ deleteSourceAfterUpload: true }, { unsettled: false })).toBe(true);
+    // "Not confirmed saved: send it again if the console loses power" needs the source.
+    expect(mayDeleteSourceAfterUpload({ deleteSourceAfterUpload: true }, { unsettled: true })).toBe(false);
+    expect(mayDeleteSourceAfterUpload({ deleteSourceAfterUpload: false }, undefined)).toBe(false);
+    expect(mayDeleteSourceAfterUpload({}, undefined)).toBe(false);
   });
 });

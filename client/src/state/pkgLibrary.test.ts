@@ -1815,6 +1815,22 @@ describe("installAll as one activity row", () => {
       lastError: { message: "1 of 2 failed" },
     });
   });
+
+  it("does not count an install nobody could confirm as installed", async () => {
+    seed([entry({ name: "A.pkg" }), entry({ name: "B.pkg" })]);
+    registerInstallExecutor(async (req) =>
+      req.via === "library" && req.path.endsWith("B.pkg")
+        ? { ok: true, unverified: true, message: "Check Downloads on the PS5. The package was kept." }
+        : { ok: true },
+    );
+    const { useNotificationsStore } = await import("./notifications");
+    useNotificationsStore.setState({ entries: [] });
+    await pkgLibraryStore(HOST).getState().installAll(HOST);
+    expect(batch()[0]).toMatchObject({ status: "done" });
+    const summary = useNotificationsStore.getState().entries.find((n) => n.title === "Installed: 1");
+    expect(summary).toMatchObject({ level: "warning" });
+    expect(summary?.body).toContain("Not confirmed: 1");
+  });
 });
 
 describe("uploadInstall (Convert's Upload & install)", () => {

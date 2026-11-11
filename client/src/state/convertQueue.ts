@@ -117,7 +117,9 @@ export type ConvertItemChange = Partial<
 export interface ConvertRunner {
   /** `installed`: the build also installed it (a console dump's swap runs inside the build). */
   build(item: ConvertItem): Promise<{ ok: boolean; packagePath?: string; message?: string; installed?: boolean; cancelled?: boolean }>;
-  handOff(item: ConvertItem, packagePath: string): Promise<{ ok: boolean; message?: string }>;
+  /** `unverified`: the PS5 took the install but it could not be confirmed (package kept);
+   *  `message` says what to check. */
+  handOff(item: ConvertItem, packagePath: string): Promise<{ ok: boolean; unverified?: true; message?: string }>;
   /** Resolves once this computer can start the next build (a build started by hand finishes
    *  first). The queue waits here before it takes the next game, so a game waiting behind a
    *  hand-started build still says Waiting, and can be removed, changed or stopped. */
@@ -299,7 +301,13 @@ export const useConvertQueue = create<ConvertQueueState>((set, get) => {
           void r0
             .handOff(next, pkg)
             .then((h) =>
-              patch(next.id, h.ok ? { status: "done" } : { status: "failed", error: h.message ?? "The install did not finish." }),
+              patch(
+                next.id,
+                h.ok
+                  ? // Unconfirmed is not a failure, but the row must say so: its note shows by the row.
+                    { status: "done", ...(h.unverified && h.message ? { error: h.message } : {}) }
+                  : { status: "failed", error: h.message ?? "The install did not finish." },
+              ),
             )
             .catch((e: unknown) => patch(next.id, { status: "failed", error: String(e) }));
         }

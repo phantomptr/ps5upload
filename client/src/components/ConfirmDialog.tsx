@@ -53,6 +53,13 @@ interface PendingState extends ConfirmOptions {
   resolve: (ok: boolean) => void;
 }
 
+/** Which button a confirm opens on. The affirmative one, so Enter confirms without a Tab, except
+ *  for a destructive action: there an Enter still held from the press that opened the dialog
+ *  (or pressed by habit) must cancel, not delete. */
+export function confirmInitialFocus(destructive: boolean | undefined): "confirm" | "cancel" {
+  return destructive ? "cancel" : "confirm";
+}
+
 export function useConfirm(): {
   confirm: (opts: ConfirmOptions) => Promise<boolean>;
   dialog: React.ReactNode;
@@ -193,7 +200,15 @@ export function useConfirm(): {
           </ul>
         )}
         <div className="flex items-center justify-end gap-2">
-          <Button variant="ghost" size="sm" onClick={() => settle(false)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => settle(false)}
+            // A destructive confirm starts on Cancel: an Enter still held from the press that
+            // opened the dialog (or pressed by habit) must not delete anything.
+            autoFocus={confirmInitialFocus(pending.destructive) === "cancel"}
+            data-testid="confirm-cancel"
+          >
             {pending.cancelLabel ?? tr("cancel", undefined, "Cancel")}
           </Button>
           <Button
@@ -201,8 +216,9 @@ export function useConfirm(): {
             size="sm"
             onClick={() => settle(true)}
             // Auto-focus so the user can confirm with Enter without
-            // tabbing first.
-            autoFocus
+            // tabbing first. Not for a destructive action: Cancel has the focus there.
+            autoFocus={confirmInitialFocus(pending.destructive) === "confirm"}
+            data-testid="confirm-ok"
           >
             {pending.confirmLabel ?? tr("confirm", undefined, "Confirm")}
           </Button>

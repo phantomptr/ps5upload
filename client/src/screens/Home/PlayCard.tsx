@@ -45,10 +45,11 @@ export function PlayCard() {
   const name = profile?.name || setup.host;
 
   const play = () => {
+    // Asked of the Play screen, not started here: its Start has guards (a friend's game this
+    // app joined is left first, a payload that blocks the picture is asked about) that a
+    // direct start would skip.
     if (profile?.wake_regist_key && profile.wake_rp_key && !streaming) {
-      void useRemotePlayStore
-        .getState()
-        .start({ host: profile.host, name: profile.name, registKey: profile.wake_regist_key, rpKey: profile.wake_rp_key });
+      useStreamLaunch.getState().requestStream(profile.host);
     }
     navigate("/play");
   };
