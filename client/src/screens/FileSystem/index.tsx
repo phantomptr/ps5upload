@@ -5,7 +5,7 @@ import { consoleAddr, hostOf } from "../../lib/addr";
 import { trStatic } from "../../lib/trStatic";
 import { rememberDestination } from "../../lib/moveTo";
 import { MoveToDialog, type MoveItem } from "./MoveToDialog";
-import { ExtractDialog, type ExtractAfter, type ExtractChoice } from "./ExtractDialog";
+import { ExtractDialog, extractDest, type ExtractAfter, type ExtractChoice } from "./ExtractDialog";
 import { extractCause, isExtractableArchive, needsPassword } from "../../lib/archiveName";
 import { extractedNext } from "../../lib/extractNext";
 import { SendToConsoleDialog } from "./SendToConsoleDialog";
@@ -120,7 +120,6 @@ import {
   fsMkdir,
   fsCopy,
   fsListDir,
-  volumeForPath,
   fsOpStatus,
   fsOpCancel,
   jobStatus,
@@ -2091,7 +2090,7 @@ export default function FileSystemScreen() {
   ) => {
     if (!host?.trim() || extractOp) return;
     const src = joinPath(dir, entry.name);
-    const dest = joinPath(dir, choice.folder);
+    const dest = extractDest(choice);
     const addr = consoleAddr(host);
     const opId = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
     setExtractOp({ name: entry.name, opId, done: 0, total: 0, stopping: false });
@@ -2127,6 +2126,8 @@ export default function FileSystemScreen() {
         replace: choice.replace,
       });
       task.done();
+      // Another folder than the archive's: offer it again next time, under Recent.
+      if (choice.parent !== dir) rememberDestination(hostOf(host), choice.parent);
       const extra = [
         out.skipped > 0
           ? tr("fs_extract_done_skipped", { n: out.skipped }, `${out.skipped} files already there were skipped.`)
@@ -3277,11 +3278,13 @@ export default function FileSystemScreen() {
           open
           name={extractAsk.entry.name}
           dir={extractAsk.dir}
-          exists={extractAsk.dir === path ? extractNameTaken : () => false}
+          exists={extractAsk.dir === path ? extractNameTaken : undefined}
           passwordAsk={extractAsk.passwordAsk}
           initial={extractAsk.choice}
           archiveBytes={extractAsk.entry.size}
-          freeBytes={volumes ? (volumeForPath(volumes, extractAsk.dir)?.free_bytes ?? null) : null}
+          host={hostOf(host)}
+          addr={consoleAddr(host)}
+          volumes={volumes ?? []}
           onCancel={() => setExtractAsk(null)}
           onConfirm={(choice, after) => {
             const ask = extractAsk;

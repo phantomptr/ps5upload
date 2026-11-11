@@ -121,6 +121,41 @@ describe("extract dialog", () => {
     expect(html).not.toContain('data-action="extract-go"');
   });
 
+  it("offers Change… to extract elsewhere; beside the archive needs no way back", () => {
+    const html = go(INFO);
+    expect(html).toContain('data-action="extract-to"');
+    expect(html).toContain(t("cw_files_extract_change"));
+    expect(html).not.toContain('data-action="extract-beside"');
+  });
+
+  it("another drive: writes there, shows that drive's free space, and checks the folder before Extract", () => {
+    const html = renderToStaticMarkup(
+      <ExtractDialog
+        dir="/data/x"
+        name="g.zip"
+        path="/data/x/g.zip"
+        busy={false}
+        onStart={vi.fn()}
+        onCancel={vi.fn()}
+        initial={INFO}
+        volumes={[vol("/data"), { ...vol("/mnt/usb0"), free_bytes: 777 }]}
+        startParent="/mnt/usb0/games"
+        taken={() => new Promise(() => undefined)}
+      />,
+    );
+    expect(html).toMatch(/data-extract-out=""[^>]*>\/mnt\/usb0\/games\/g</);
+    expect(html).toMatch(new RegExp(`data-extract-free=""[^>]*>${formatBytes(777)}<`));
+    expect(html).toContain('data-action="extract-beside"');
+    expect(html).toContain(t("cw_files_extract_beside").replace("'", "&#x27;"));
+    // Whether "g" is there already is not known yet: Extract waits for the check.
+    expect(html).toMatch(/data-action="extract-go"[^>]*disabled/);
+  });
+
+  it("Files hands the dialog the console's drives for Change…", () => {
+    const el = find(FilesView(props({ ask: { kind: "extract", name: "g.zip" } })), ExtractDialog);
+    expect(el.props.volumes).toEqual([vol("/data")]);
+  });
+
   it("Merge and Extract hand their choice to onExtract", () => {
     const onExtract = vi.fn();
     const el = find(FilesView(props({ onExtract, ask: { kind: "extract", name: "g.zip" } })), ExtractDialog);
