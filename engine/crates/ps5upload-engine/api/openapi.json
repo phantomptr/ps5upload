@@ -11658,11 +11658,16 @@
               "$ref": "#/components/schemas/SdkTitle"
             },
             "type": "array"
+          },
+          "truncated": {
+            "description": "The console has more titles than fit its reply and stopped listing at a\nwhole entry. Declared for the same reason as `overlay`: a field missing\nhere is dropped on the way to the client, and the list would look\ncomplete. Absent (false) from helpers that predate it.",
+            "type": "boolean"
           }
         },
         "required": [
           "titles",
-          "error"
+          "error",
+          "truncated"
         ],
         "type": "object"
       },

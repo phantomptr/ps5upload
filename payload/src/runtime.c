@@ -7750,6 +7750,63 @@ static int save_do_unmount(int *written_back, char *kept, size_t kept_sz) {
     return 0;
 }
 
+/* Is something mounted on the save mount point? Told two ways, either is enough: the mount
+ * table names this path, or the folder is on another device than the folder holding it. */
+static int save_mount_point_busy(void) {
+    struct stat mp_st, par_st;
+    if (fs_mounted_on(SAVE_MOUNT_POINT, NULL)) return 1;
+    return stat(SAVE_MOUNT_POINT, &mp_st) == 0 && stat("/data/ps5upload", &par_st) == 0 &&
+           mp_st.st_dev != par_st.st_dev;
+}
+
+/* A save this helper did not open is mounted: the helper that opened it was replaced (a resend,
+ * an app update) or died, and which image it was is gone with it. Close it here, so the person
+ * is not told to restart the console: unmount it, and keep every copy it left in SAVE_COPY_DIR
+ * as `<name>.unsaved` (the same name a failed write-back keeps its edits under), since any of
+ * them may hold edits and the next open of that save would truncate it. Nothing is written back:
+ * the image it belongs to is not known. A sealed key left beside the copies is removed.
+ * 0: the mount point is free; -1: still mounted, nothing was touched. */
+static int save_release_orphan(void) {
+    SceFsUmountSaveDataOpt uopt;
+    memset(&uopt, 0, sizeof uopt);
+    sceFsInitUmountSaveDataOpt(&uopt);
+    errno = 0;
+    int rc = sceFsUmountSaveData(&uopt, SAVE_MOUNT_POINT, 0, 0);
+    int ue = errno; /* read before sync() can overwrite it */
+    sync();
+    if ((rc < 0 && ue != EINVAL && ue != ENOENT) || save_mount_point_busy()) {
+        fprintf(stderr, "[payload2] save: a save left open by an earlier helper could not be closed "
+                        "(rc=%d errno=%d)\n", rc, ue);
+        return -1;
+    }
+    int kept = 0;
+    DIR *d = opendir(SAVE_COPY_DIR);
+    if (d) {
+        struct dirent *de;
+        while ((de = readdir(d)) != NULL) {
+            const char *n = de->d_name;
+            size_t nl = strlen(n);
+            if (strcmp(n, ".") == 0 || strcmp(n, "..") == 0) continue;
+            if (nl > 8 && strcmp(n + nl - 8, ".unsaved") == 0) continue;
+            char path[1024], to[1024 + 16];
+            struct stat st;
+            if (snprintf(path, sizeof path, SAVE_COPY_DIR "/%s", n) >= (int)sizeof path) continue;
+            if (lstat(path, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+            if (nl > 4 && strcmp(n + nl - 4, ".bin") == 0 && st.st_size <= 4096) {
+                unlink(path); /* the sealed key of the save that was open */
+                continue;
+            }
+            snprintf(to, sizeof to, "%s.unsaved", path);
+            if (rename(path, to) == 0) kept++; /* same folder: one device */
+        }
+        closedir(d);
+    }
+    sync();
+    fprintf(stderr, "[payload2] save: closed a save left open by an earlier helper; %d copy(ies) kept "
+                    "as .unsaved in " SAVE_COPY_DIR "\n", kept);
+    return 0;
+}
+
 static int save_do_mount(const char *image, char *err, size_t err_sz, int *is_ps4_out) {
     const char *bname = strrchr(image, '/');
     bname = bname ? bname + 1 : image;
@@ -7785,19 +7842,12 @@ static int save_do_mount(const char *image, char *err, size_t err_sz, int *is_ps
      * mounted. So nothing is copied and nothing is mounted while the mount
      * point is in use. Told two ways, either is enough: the mount table names
      * this path, or the folder is on another device than the folder holding it. */
-    {
-        struct stat mp_st, par_st;
-        int busy = fs_mounted_on(SAVE_MOUNT_POINT, NULL);
-        if (!busy && stat(SAVE_MOUNT_POINT, &mp_st) == 0 && stat("/data/ps5upload", &par_st) == 0 &&
-            mp_st.st_dev != par_st.st_dev)
-            busy = 1;
-        if (busy) {
-            snprintf(err, err_sz,
-                     "save_mount_point_busy: a save opened before the helper was last restarted is "
-                     "still mounted, so another cannot be opened; restart the console to close it "
-                     "(its edits are in " SAVE_COPY_DIR ")");
-            return -1;
-        }
+    if (save_mount_point_busy() && save_release_orphan() != 0) {
+        snprintf(err, err_sz,
+                 "save_mount_point_busy: a save opened before the helper was last restarted is "
+                 "still mounted and could not be closed, so another cannot be opened; restart the "
+                 "console to close it (its edits are in " SAVE_COPY_DIR ")");
+        return -1;
     }
     mkdir("/data/ps5upload", 0777);
     mkdir(SAVE_COPY_DIR, 0777);

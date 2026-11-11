@@ -1412,6 +1412,13 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
              * directory mv is too complex for shell tab (use cp -r +
              * rm -r explicitly). */
             struct stat sst;
+            if (lstat(argv[i], &sst) != 0) {
+                /* A source that is not there is that, not a cross-FS limit. */
+                len = shell_appendf(&out, &cap, len,
+                                     "mv: %s: %s\n", argv[i], strerror(errno));
+                any_err = 1;
+                continue;
+            }
             if (stat(argv[i], &sst) != 0 || !S_ISREG(sst.st_mode)) {
                 len = shell_appendf(&out, &cap, len,
                                      "mv: %s -> %s: cross-FS, only files supported\n",

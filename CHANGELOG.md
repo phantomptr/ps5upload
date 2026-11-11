@@ -6,6 +6,49 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+This release is the result of a full review of the app, the engine and the PS5 helper. Most of it is small fixes for rare cases.
+
+Play Together:
+
+- Fixed the picture skipping for friends at higher quality (like the default 15 Mbit/s) when the game is busy. The app could only send about two thirds of what a 15 Mbit/s picture needs, so pictures were dropped. In our test on this computer at 15 Mbit/s, about half the pictures were dropped before and none after.
+- On a home connection that can't carry the quality you chose, the app now backs off by itself instead of flooding the link. Lowering the quality is still the fix for a slow link.
+- The numbers shown for a friend's connection (lost packets, round trip) were sometimes the sound's, not the picture's. Fixed.
+- On a phone, starting Play Together keeps trying while the game is still starting, and says what it found if it can't.
+
+Files and the console shell:
+
+- Actions in Console Files, Saves and game rows always act on the folder that was open when you asked, even if you browsed elsewhere while a dialog was up.
+- "Show on TV" no longer changes the folder under a text file you're editing.
+- Moving something onto a drive's mount point is refused instead of attempted.
+- The shell's `mv` works from the folder you're in, never renames across drives, and says so when the file isn't there. `cat` and similar commands refuse devices and pipes.
+- Changing permissions on a whole folder skips links.
+- Mounting an image twice at once, or onto a folder that's already a mount point, is refused. Unmounting an image can no longer unmount the drive underneath it.
+
+Accounts and saves:
+
+- Delete User now asks whether to delete that user's saves too. The default keeps them.
+- If a save was left open when the helper was updated or re-sent, the next one you open closes it first and keeps its copy (as `.unsaved` in `/data/ps5upload/save_open`). Before, the new save was mounted on top of the old one.
+
+Installs, Convert and Workshop:
+
+- If the app can't confirm an install finished, it keeps the package instead of deleting it.
+- If a dump swap can't be confirmed, your dump stays parked and you choose what to do.
+- Broken or hand-crafted packages and images now give an error instead of crashing the app or using huge amounts of memory.
+- SDK Changer keeps a durable backup and restores from it. A launch error from the PS5 is shown as the error it is.
+
+Sharing and server sources:
+
+- Copies from a server always copy the whole file, a stopped Share can be cancelled cleanly, and odd file names from the other side can't land outside the folder you chose.
+- Leftover temporary files are cleaned up by age, so a second running copy of the app doesn't lose its files.
+
+App:
+
+- Bug reports hide more private details (keys and tokens inside settings).
+- The update check retries, and the confirm dialogs focus Cancel first.
+- On a phone, the Files queue row no longer squeezes its text beside the buttons.
+
+## 12.4.9
+
 Upload:
 
 - Upload with unpacking on the way now takes tar archives: `.tar`, `.tar.zst`/`.tzst`, `.tar.gz`/`.tgz`, `.tar.xz`/`.txz` and `.tar.bz2`/`.tbz2`, plus a single `.zst` file and zip archives compressed with zstd. They're unpacked on your computer or phone as they're sent, so the PS5 gets the files, not the archive. zstd unpacks at over 1 GB/s on a recent computer, so your network sets the speed. A plain `.tar` isn't decoded at all, and an interrupted upload picks up inside the file it stopped at.
