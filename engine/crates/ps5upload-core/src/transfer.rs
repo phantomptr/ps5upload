@@ -492,7 +492,7 @@ pub fn inspect_zip_with_progress(
                 .filter(|raw| raw.compression() == zip::CompressionMethod::ZSTD)
                 .map(|raw| (raw.crc32(), raw.size()));
             let read = match zstd {
-                // zstd (method 93): the zip crate has no zstd here, ruzstd decodes the raw bytes.
+                // zstd (method 93): the zip crate has no zstd feature here; tar_archive decodes the raw bytes.
                 Some((crc, size)) => match archive.by_name_raw(original_name.as_bytes()) {
                     Ok(raw) => crate::tar_archive::ZipZstdEntry::new(raw, crc, size)
                         .take(MAX_PARAM_JSON)

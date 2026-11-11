@@ -7,8 +7,9 @@
 //! name says it is a tar; the first bytes say how it is compressed, so a `.tgz` that is really
 //! zstd (or a plain tar) still opens, as GNU tar's own detection does.
 //!
-//! Every decoder is pure Rust: zstd is `ruzstd`, gzip is `flate2` on miniz_oxide, xz is
-//! `lzma-rust2`, bzip2 is `bzip2` on `libbz2-rs-sys`.
+//! Decoders: zstd is C zstd through the `zstd` crate (the same build the engine already links
+//! through ps5-dump-forge-zstd, about three times ruzstd's speed); gzip is `flate2`, xz is
+//! `lzma-rust2`, bzip2 is `bzip2` on `libbz2-rs-sys`, all pure Rust.
 //!
 //! A tar has no index: its file list is the headers spread through the stream. A plain `.tar`
 //! is listed by seeking from header to header (instant), and its files are byte ranges of the
@@ -30,7 +31,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
+use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -196,14 +197,17 @@ pub fn zstd_max_window() -> u64 {
     })
 }
 
+/// Rounded down to a power of two: zstd's limit is a window log, and the header check and
+/// the decoder's `windowLogMax` must agree.
 fn select_max_window(configured: Option<&str>, memory: Option<u64>, phone: bool) -> u64 {
+    let pow2 = |v: u64| 1u64 << (63 - v.max(1).leading_zeros());
     if let Some(mb) = configured.and_then(|v| v.trim().parse::<u64>().ok()) {
-        return mb.saturating_mul(MIB).clamp(MIB, ZSTD_WINDOW_CEIL);
+        return pow2(mb.saturating_mul(MIB).clamp(MIB, ZSTD_WINDOW_CEIL));
     }
     let ceil = if phone { 512 * MIB } else { ZSTD_WINDOW_CEIL };
-    memory.map_or(ZSTD_WINDOW_FLOOR, |m| {
+    pow2(memory.map_or(ZSTD_WINDOW_FLOOR, |m| {
         (m / 8).clamp(ZSTD_WINDOW_FLOOR, ceil.max(ZSTD_WINDOW_FLOOR))
-    })
+    }))
 }
 
 /// This computer's memory, or the container's limit when that is lower (Linux cgroups).
@@ -269,71 +273,147 @@ fn dictionary_too_big(allowed: u64) -> io::Error {
 
 // ─── zstd ─────────────────────────────────────────────────────────────────────
 
-/// A zstd stream as a `Read`: every frame in turn (a `.zst` may hold several, `pzstd` and
-/// `cat a.zst b.zst` make them), skippable frames passed over, each frame's content checksum
-/// checked, and a window over `max_window` refused before anything is allocated.
-pub struct ZstdReader<R: BufRead> {
+/// What a frame's first bytes say.
+#[derive(Debug, PartialEq, Eq)]
+enum FrameHead {
+    /// A zstd frame needing this window (its content size, for a single-segment frame).
+    Zstd { window: u64 },
+    /// A skippable frame (metadata): C zstd passes over it.
+    Skippable,
+    /// Not enough bytes yet to tell.
+    Short,
+    /// Neither magic number.
+    Bad(u32),
+}
+
+/// Reads a frame header far enough to know its window (RFC 8878 §3.1.1.1).
+fn frame_head(h: &[u8]) -> FrameHead {
+    if h.len() < 4 {
+        return FrameHead::Short;
+    }
+    let magic = u32::from_le_bytes([h[0], h[1], h[2], h[3]]);
+    if magic >> 4 == 0x0184_D2A5 {
+        return FrameHead::Skippable;
+    }
+    if magic != 0xFD2F_B528 {
+        return FrameHead::Bad(magic);
+    }
+    let Some(&fhd) = h.get(4) else {
+        return FrameHead::Short;
+    };
+    if fhd & 0x20 == 0 {
+        // Window_Descriptor: 2^(10 + exponent), plus eighths of that by the mantissa.
+        let Some(&wd) = h.get(5) else {
+            return FrameHead::Short;
+        };
+        let base = 1u64 << (10 + u32::from(wd >> 3));
+        return FrameHead::Zstd {
+            window: base + (base / 8) * u64::from(wd & 7),
+        };
+    }
+    // Single segment: the window is the content size.
+    let dict_len = [0usize, 1, 2, 4][usize::from(fhd & 3)];
+    let fcs_len = [1usize, 2, 4, 8][usize::from(fhd >> 6)];
+    let at = 5 + dict_len;
+    let Some(bytes) = h.get(at..at + fcs_len) else {
+        return FrameHead::Short;
+    };
+    let mut v = [0u8; 8];
+    v[..fcs_len].copy_from_slice(bytes);
+    let size = u64::from_le_bytes(v) + if fcs_len == 2 { 256 } else { 0 };
+    FrameHead::Zstd { window: size }
+}
+
+/// The longest frame header (magic, descriptor, window, dictionary id, content size).
+const FRAME_HEAD_MAX: usize = 18;
+
+/// A zstd stream as a `Read`, decoded by C zstd (the `zstd` crate the engine already links):
+/// every frame in turn (`pzstd` and `cat a.zst b.zst` make several), skippable frames passed
+/// over, each frame's content checksum checked by zstd itself. Before a frame is handed to the
+/// decoder its header is read here and a window over `max_window` is refused, so nothing is
+/// allocated for it and the error names the size it needs; the decoder's own `windowLogMax`
+/// is set from the same cap as a second guard.
+pub struct ZstdReader<R: Read> {
     src: R,
-    dec: ruzstd::decoding::FrameDecoder,
+    dec: zstd::stream::raw::Decoder<'static>,
     max_window: u64,
-    in_frame: bool,
+    /// Compressed input read from `src`, `start..end` not yet given to the decoder.
+    buf: Box<[u8]>,
+    start: usize,
+    end: usize,
+    eof: bool,
+    /// The next input byte starts a frame.
+    at_frame: bool,
     frames: u64,
 }
 
-impl<R: BufRead> ZstdReader<R> {
+impl<R: Read> ZstdReader<R> {
     pub fn new(src: R) -> Self {
         Self::with_max_window(src, zstd_max_window())
     }
 
     pub fn with_max_window(src: R, max_window: u64) -> Self {
-        let mut dec = ruzstd::decoding::FrameDecoder::new();
-        dec.set_max_window_size(max_window);
+        let mut dec = zstd::stream::raw::Decoder::new().expect("a zstd decoding context");
+        // The cap as a window log (it is a power of two; zstd takes 10..=31 here).
+        let log = (63 - max_window.max(1).leading_zeros()).clamp(10, 31);
+        dec.set_parameter(zstd::stream::raw::DParameter::WindowLogMax(log))
+            .expect("windowLogMax in range");
         Self {
             src,
             dec,
             max_window,
-            in_frame: false,
+            buf: vec![0u8; 256 << 10].into_boxed_slice(),
+            start: 0,
+            end: 0,
+            eof: false,
+            at_frame: true,
             frames: 0,
         }
     }
 
-    /// Opens the next frame; false at the end of the stream.
-    fn next_frame(&mut self) -> io::Result<bool> {
-        use ruzstd::decoding::errors::{
-            FrameDecoderError as F, FrameHeaderError, ReadFrameHeaderError,
-        };
+    /// Reads more input unless at the end, keeping what is unread; true when it added some.
+    fn refill(&mut self) -> io::Result<bool> {
+        if self.eof {
+            return Ok(false);
+        }
+        if self.start > 0 {
+            self.buf.copy_within(self.start..self.end, 0);
+            self.end -= self.start;
+            self.start = 0;
+        }
         loop {
-            if self.src.fill_buf()?.is_empty() {
-                if self.frames == 0 {
-                    return Err(corrupt("the zstd stream is empty"));
+            match self.src.read(&mut self.buf[self.end..]) {
+                Ok(0) => {
+                    self.eof = true;
+                    return Ok(false);
                 }
-                return Ok(false);
-            }
-            match self.dec.reset(&mut self.src) {
-                Ok(()) => {
-                    self.in_frame = true;
-                    self.frames += 1;
+                Ok(n) => {
+                    self.end += n;
                     return Ok(true);
                 }
-                Err(F::ReadFrameHeaderError(ReadFrameHeaderError::SkipFrame {
-                    length, ..
-                })) => {
-                    let n = io::copy(
-                        &mut (&mut self.src).take(u64::from(length)),
-                        &mut io::sink(),
-                    )?;
-                    if n != u64::from(length) {
-                        return Err(corrupt("a zstd skippable frame is cut short"));
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// At a frame boundary: refuse a window over the cap before zstd sees it. False at the end.
+    fn check_frame(&mut self) -> io::Result<bool> {
+        loop {
+            match frame_head(&self.buf[self.start..self.end]) {
+                FrameHead::Short if self.end - self.start < FRAME_HEAD_MAX && self.refill()? => {
+                    continue
+                }
+                FrameHead::Short if self.start == self.end => {
+                    if self.frames == 0 {
+                        return Err(corrupt("the zstd stream is empty"));
                     }
-                    self.frames += 1;
+                    return Ok(false);
                 }
-                Err(F::WindowSizeTooBig { requested, max }) => {
-                    return Err(window_too_big(requested, max))
+                FrameHead::Short => {
+                    return Err(corrupt("the zstd stream ends inside a frame header"))
                 }
-                Err(F::FrameHeaderError(FrameHeaderError::WindowTooBig { got })) => {
-                    return Err(window_too_big(got, self.max_window))
-                }
-                Err(F::ReadFrameHeaderError(ReadFrameHeaderError::BadMagicNumber(m))) => {
+                FrameHead::Bad(m) => {
                     return Err(corrupt(format!(
                         "not a zstd frame (it starts with {m:#010x}){}",
                         if self.frames > 0 {
@@ -343,47 +423,84 @@ impl<R: BufRead> ZstdReader<R> {
                         }
                     )))
                 }
-                Err(e) => return Err(corrupt(format!("zstd frame header: {e}"))),
+                FrameHead::Zstd { window } if window > self.max_window => {
+                    return Err(window_too_big(window, self.max_window))
+                }
+                FrameHead::Zstd { .. } | FrameHead::Skippable => {
+                    self.at_frame = false;
+                    self.frames += 1;
+                    return Ok(true);
+                }
             }
         }
     }
 }
 
-impl<R: BufRead> Read for ZstdReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if buf.is_empty() {
+/// zstd's own error, as a fault. "Frame requires too much memory for decoding" is its
+/// windowLogMax refusal (`ZSTD_error_frameParameter_windowTooLarge`); the header check above
+/// catches that first, so this only names the cap.
+fn zstd_error(e: io::Error, max_window: u64) -> io::Error {
+    let msg = e.to_string();
+    if msg.contains("Frame requires too much memory") {
+        fault(TarFault::TooMuchMemory(format!(
+            "this archive was compressed with a zstd window (zstd --long) larger than the {} \
+             this computer allows for one. Unpack it on a computer with more memory, set \
+             PS5UPLOAD_ZSTD_MAX_WINDOW_MB higher and restart the app, or compress it again \
+             without --long",
+            human_mib(max_window)
+        )))
+    } else {
+        corrupt(format!("zstd: {msg}"))
+    }
+}
+
+impl<R: Read> Read for ZstdReader<R> {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        use zstd::stream::raw::{InBuffer, Operation, OutBuffer};
+        if out.is_empty() {
             return Ok(0);
         }
         loop {
-            if !self.in_frame && !self.next_frame()? {
+            if self.at_frame && !self.check_frame()? {
                 return Ok(0);
             }
-            if self.dec.can_collect() > 0 {
-                let n = self.dec.read(buf)?;
-                if n > 0 {
-                    return Ok(n);
+            if self.start == self.end && !self.refill()? {
+                // The decoder may still hold output for the input it has had.
+                let mut ob = OutBuffer::around(&mut *out);
+                let hint = self
+                    .dec
+                    .run(&mut InBuffer::around(&[]), &mut ob)
+                    .map_err(|e| zstd_error(e, self.max_window))?;
+                let produced = ob.pos();
+                if hint == 0 {
+                    self.at_frame = true;
                 }
-            }
-            if self.dec.is_finished() {
-                if let (Some(want), Some(got)) = (
-                    self.dec.get_checksum_from_data(),
-                    self.dec.get_calculated_checksum(),
-                ) {
-                    if want != got {
-                        return Err(corrupt(format!(
-                            "a zstd frame fails its checksum (stored {want:08x}, computed {got:08x})"
-                        )));
-                    }
+                if produced > 0 {
+                    return Ok(produced);
                 }
-                self.in_frame = false;
-                continue;
+                if hint == 0 {
+                    continue;
+                }
+                return Err(corrupt(
+                    "the zstd stream ends inside a frame: the archive is cut short (a download \
+                     that did not finish?)",
+                ));
             }
-            self.dec
-                .decode_blocks(
-                    &mut self.src,
-                    ruzstd::decoding::BlockDecodingStrategy::UptoBlocks(1),
-                )
-                .map_err(|e| corrupt(format!("zstd: {e}")))?;
+            let mut ib = InBuffer::around(&self.buf[self.start..self.end]);
+            let mut ob = OutBuffer::around(&mut *out);
+            let hint = self
+                .dec
+                .run(&mut ib, &mut ob)
+                .map_err(|e| zstd_error(e, self.max_window))?;
+            self.start += ib.pos();
+            let produced = ob.pos();
+            // 0: a frame is decoded and flushed; the next byte starts another.
+            if hint == 0 {
+                self.at_frame = true;
+            }
+            if produced > 0 {
+                return Ok(produced);
+            }
         }
     }
 }
@@ -474,7 +591,7 @@ pub fn zst_content_size(path: &Path) -> io::Result<Option<u64>> {
 /// 3.14: its raw bytes decoded with [`ZstdReader`], its size and CRC-32 checked at the end.
 /// Errors are `InvalidData` (a damaged entry).
 pub struct ZipZstdEntry<R: Read> {
-    inner: ZstdReader<BufReader<R>>,
+    inner: ZstdReader<R>,
     crc: crc32fast::Hasher,
     want_crc: u32,
     want_size: u64,
@@ -484,7 +601,7 @@ pub struct ZipZstdEntry<R: Read> {
 impl<R: Read> ZipZstdEntry<R> {
     pub fn new(raw: R, crc: u32, size: u64) -> Self {
         Self {
-            inner: ZstdReader::new(BufReader::with_capacity(64 << 10, raw)),
+            inner: ZstdReader::new(raw),
             crc: crc32fast::Hasher::new(),
             want_crc: crc,
             want_size: size,

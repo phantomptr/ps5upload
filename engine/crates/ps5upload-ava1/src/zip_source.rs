@@ -11,7 +11,7 @@ use ava1::source::{ReadAt, Source, SourceMeta};
 #[derive(Clone, Copy)]
 struct Located {
     stored: bool,
-    /// Compressed with zstd (method 93) rather than deflate; decoded by ruzstd.
+    /// Compressed with zstd (method 93) rather than deflate; decoded by `tar_archive::ZstdReader`.
     zstd: bool,
     data_start: u64,
     compressed: u64,
@@ -102,7 +102,7 @@ impl ZipSource {
                 let (stored, zstd) = match entry.compression() {
                     zip::CompressionMethod::Stored => (true, false),
                     zip::CompressionMethod::Deflated => (false, false),
-                    // The zip crate is built without its C zstd: the raw stream is ruzstd's.
+                    // The zip crate is built without its zstd feature: tar_archive decodes the raw stream.
                     m if m == zip::CompressionMethod::ZSTD => (false, true),
                     other => {
                         return Err(io::Error::new(

@@ -1,5 +1,5 @@
 //! Tar and `.zst` fixtures are built here: the `tar` crate writes the archives, and each
-//! codec's own encoder compresses them (ruzstd, flate2, lzma-rust2, bzip2). A few zstd frames
+//! codec's own encoder compresses them (zstd, flate2, lzma-rust2, bzip2). A few zstd frames
 //! are written by hand where an exact header matters (a 2 GiB window, a content size).
 
 use super::*;
@@ -87,7 +87,11 @@ fn compress(codec: Codec, data: &[u8]) -> Vec<u8> {
     match codec {
         Codec::None => data.to_vec(),
         Codec::Zstd => {
-            ruzstd::encoding::compress_to_vec(data, ruzstd::encoding::CompressionLevel::Fastest)
+            // Streamed (no content size in the header, as `tar --zstd` writes), with a checksum.
+            let mut e = zstd::stream::Encoder::new(Vec::new(), 1).unwrap();
+            e.include_checksum(true).unwrap();
+            e.write_all(data).unwrap();
+            e.finish().unwrap()
         }
         Codec::Gzip => {
             let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
@@ -376,12 +380,37 @@ fn a_huge_zstd_window_is_refused_before_it_is_allocated_and_named() {
         }
         other => panic!("{other:?}: {e}"),
     }
-    // Under the cap it decodes.
+    // Under the cap it decodes (a 64 MiB window, window log 26: no 2 GiB allocation in a test).
+    let fits = frame(0x00, Some(16 << 3), &[], b"x", None);
     let mut out = Vec::new();
-    ZstdReader::with_max_window(&big[..], ZSTD_WINDOW_CEIL)
+    ZstdReader::with_max_window(&fits[..], ZSTD_WINDOW_FLOOR)
         .read_to_end(&mut out)
         .unwrap();
     assert_eq!(out, b"x");
+    // zstd's own windowLogMax is the second guard: with the header check out of the way (a
+    // cap raised past what the decoder was told), zstd refuses the frame itself, and its
+    // "Frame requires too much memory for decoding" becomes the same memory fault.
+    let mut r = ZstdReader::with_max_window(&big[..], ZSTD_WINDOW_FLOOR);
+    r.max_window = u64::MAX;
+    let e = r.read_to_end(&mut Vec::new()).unwrap_err();
+    assert!(
+        matches!(tar_fault_of(&e), Some(TarFault::TooMuchMemory(m)) if m.contains("--long")),
+        "{e}"
+    );
+    // Exactly the cap is allowed; one step over is not.
+    let at_cap = frame(0x00, Some(17 << 3), &[], b"x", None); // 128 MiB
+    let mut out = Vec::new();
+    ZstdReader::with_max_window(&at_cap[..], ZSTD_WINDOW_FLOOR)
+        .read_to_end(&mut out)
+        .unwrap();
+    let over = frame(0x00, Some((17 << 3) | 1), &[], b"x", None); // 144 MiB
+    let e = ZstdReader::with_max_window(&over[..], ZSTD_WINDOW_FLOOR)
+        .read_to_end(&mut Vec::new())
+        .unwrap_err();
+    assert!(
+        matches!(tar_fault_of(&e), Some(TarFault::TooMuchMemory(m)) if m.contains("144 MiB")),
+        "{e}"
+    );
     // Through the tar path the same refusal reaches the caller.
     let d = temp_dir("window");
     let p = d.join("w.tar.zst");
@@ -475,7 +504,7 @@ fn a_lone_zst_is_its_one_file_sized_from_the_headers_or_by_decoding() {
     let mut want = b"hello".to_vec();
     want.extend_from_slice(&body);
     assert_eq!(got.files["save.bin"], want);
-    // ruzstd's encoder writes no content size: the file is decoded once to learn it.
+    // A streamed zstd encode writes no content size: the file is decoded once to learn it.
     let data = noise(7, 200_000);
     let p = d.join("g.exfat.zst");
     std::fs::write(&p, compress(Codec::Zstd, &data)).unwrap();

@@ -1,6 +1,6 @@
 //! Tar and `.zst` uploads over AVA1, and zip entries compressed with zstd: the tar source
 //! (`TarSource`) against the Rust folder host on 127.0.0.1, as `sevenz.rs` does for 7z.
-//! Archives are written here (the `tar` crate, ruzstd's encoder, flate2); every wait is bounded.
+//! Archives are written here (the `tar` crate, zstd's encoder, flate2); every wait is bounded.
 
 use std::collections::BTreeMap;
 use std::io::{self, Write};
@@ -73,9 +73,7 @@ fn tar_of(files: &[(String, Vec<u8>)], z: Z) -> Vec<u8> {
     let raw = b.into_inner().unwrap();
     match z {
         Z::None => raw,
-        Z::Zstd => {
-            ruzstd::encoding::compress_to_vec(&raw[..], ruzstd::encoding::CompressionLevel::Fastest)
-        }
+        Z::Zstd => zstd::encode_all(&raw[..], 1).unwrap(),
         Z::Gzip => {
             let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
             e.write_all(&raw).unwrap();
@@ -259,11 +257,7 @@ async fn plain_and_compressed_tars_and_a_lone_zst_land_unpacked() {
     // A lone .zst is its one file, named without .zst.
     let data = noise(77, 300_000);
     let arc = d.join("disc.exfat.zst");
-    std::fs::write(
-        &arc,
-        ruzstd::encoding::compress_to_vec(&data[..], ruzstd::encoding::CompressionLevel::Fastest),
-    )
-    .unwrap();
+    std::fs::write(&arc, zstd::encode_all(&data[..], 1).unwrap()).unwrap();
     upload(&d, &arc, "out-zst").await.unwrap();
     let got = read_tree(&d.join("share/out-zst"));
     assert_eq!(got.keys().collect::<Vec<_>>(), vec!["disc.exfat"]);
@@ -471,8 +465,7 @@ fn zstd_zip(files: &[(&str, &[u8])], corrupt_crc: bool) -> Vec<u8> {
     let mut out = Vec::new();
     let mut central = Vec::new();
     for (name, data) in files {
-        let comp =
-            ruzstd::encoding::compress_to_vec(*data, ruzstd::encoding::CompressionLevel::Fastest);
+        let comp = zstd::encode_all(*data, 1).unwrap();
         let crc = crc32fast::hash(data) ^ u32::from(corrupt_crc);
         let off = out.len() as u32;
         let common = |v: &mut Vec<u8>| {
