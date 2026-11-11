@@ -5,7 +5,11 @@ import { Layers } from "lucide-react";
 import type { ImageFormat } from "../../api/fpkg";
 import { Button, Checkbox, Select } from "../../components";
 import { DEFAULT_IMAGE_SUBPATH, imageDrive } from "../../lib/imageUpload";
+import { pickPath } from "../../lib/pickPath";
+import { isTauriEnv } from "../../lib/tauriEnv";
 import { useConnectionStore } from "../../state/connection";
+import { useConvertPrefs } from "../../state/convertPrefs";
+import { pickLocalPath } from "../../state/localPicker";
 import { useFpkgConversion } from "../../state/fpkgConversion";
 import { useTr } from "../../state/lang";
 import { imageFolderPath, useConsoleVolumes } from "../FpkgConvert/ImageDestination";
@@ -33,6 +37,23 @@ export function SendAsImageCard({
   const [choice, setChoice] = useState<Choice>("ffpfsc");
   const [deleteAfter, setDeleteAfter] = useState(true);
   const [started, setStarted] = useState(false);
+  // The image is built in Workshop's Output folder (the same setting, changed here or there):
+  // before, it always went to the engine's default, ~/Downloads/fpkgs.
+  const outputDir = useConvertPrefs((s) => s.outputDir);
+  const setOutputDir = useConvertPrefs((s) => s.setOutputDir);
+  const changeOutput = async () => {
+    try {
+      const picked = !isTauriEnv()
+        ? await pickLocalPath({
+            mode: "folder",
+            title: tr("fpkg.pickOutputHost", undefined, "Choose an output folder on the engine host"),
+          })
+        : await pickPath({ mode: "folder", title: tr("fpkg.pickOutput", undefined, "Choose an output folder") });
+      if (picked) setOutputDir(picked);
+    } catch {
+      // Closed, or no picker here: the folder stays as it was.
+    }
+  };
 
   const mine =
     pipeline.phase !== "idle" &&
@@ -47,7 +68,7 @@ export function SendAsImageCard({
   const start = () => {
     if (!host) return;
     const format: ImageFormat = choice === "exfat" ? "exfat" : "ffpkg";
-    void buildImage(sourcePath, undefined, choice === "ffpfsc", format, {
+    void buildImage(sourcePath, outputDir.trim() || undefined, choice === "ffpfsc", format, {
       host,
       volume: destinationVolume,
       subpath: destinationSubpath || DEFAULT_IMAGE_SUBPATH,
@@ -118,6 +139,15 @@ export function SendAsImageCard({
             undefined,
             "Build the image, then upload it",
           )}
+        </Button>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-[var(--color-muted)]">
+        <span>{tr("fpkg.output", undefined, "Output folder")}:</span>
+        <span className="min-w-0 basis-[12rem] break-all font-mono" data-testid="upload-image-output">
+          {outputDir.trim() || tr("fpkg.outputHint", undefined, "Default: ~/Downloads/fpkgs")}
+        </span>
+        <Button variant="ghost" size="sm" onClick={() => void changeOutput()}>
+          {tr("fpkg.change", undefined, "Change")}
         </Button>
       </div>
       <Checkbox
