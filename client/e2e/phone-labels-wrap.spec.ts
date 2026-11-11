@@ -95,7 +95,7 @@ test("Files: a paused queue row's name has the row, its buttons go below", async
                 request: {
                   queueId: "q1",
                   host,
-                  addr: `${host}:9113`,
+                  addr: `${host}:9120`,
                   destDir: "/data",
                   srcPaths: [],
                   steps: [{ kind: "one", src: `/home/me/${name}`, name, txId: "tx1" }],

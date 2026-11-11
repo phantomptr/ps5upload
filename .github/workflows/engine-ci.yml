@@ -181,6 +181,8 @@ jobs:
       # the engine's lock that leaves it behind fails the hub's `cargo build --locked` only at
       # deploy time. Checked here too because the hub's own job is skipped when this lane runs.
       - name: The hub's deploy lock matches the engine's
+        env:
+          HUB_LOCK_ONLINE: "1"
         run: |
           sh engine/crates/ps5upload-hub/deploy/refresh-lock.sh
           if ! git diff --exit-code -- engine/crates/ps5upload-hub/deploy/Cargo.lock; then

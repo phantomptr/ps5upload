@@ -535,7 +535,9 @@ async fn fs_rename_onto_a_mount_point_is_refused() {
         .await;
     assert_eq!(
         (st, cause(&b).as_str()),
-        (gen::ERR_CROSS_DEVICE, "fs_move_cross_mount")
+        // By its own name, not as a crossing: the app answers a crossing with a copy INTO the
+        // destination, which would pour the folder into the drive's root.
+        (gen::ERR_PATH, "fs_move_dest_is_mount_point")
     );
     assert!(
         r.path("srcdir").exists() && r.path("mnt2").exists(),
