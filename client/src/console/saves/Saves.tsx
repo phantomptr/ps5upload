@@ -20,6 +20,7 @@ import {
   loadBackups,
   loadSaves,
   loadUsers,
+  oneAtATime,
   restore,
   SAVE_KINDS,
   saveIconPath,
@@ -358,6 +359,7 @@ export function Saves({ ctx }: { ctx: SectionContext }) {
   const [sizes, setSizes] = useState<Map<string, number>>(new Map());
   const [open, setOpen] = useState<string | null>(ctx.params?.title ?? null);
   const [ask, setAsk] = useState<SaveAsk | null>(null);
+  const [confirmGate] = useState(oneAtATime);
   const [askError, setAskError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [places, setPlaces] = useState<BackupPlace[]>(() => backupPlaces([]));
@@ -535,7 +537,10 @@ export function Saves({ ctx }: { ctx: SectionContext }) {
     await reloadBackups(u, s.titleId, where);
   };
 
-  const doConfirm = async () => {
+  // Confirm pressed twice ran two restores: Restore asks the console whether the game runs
+  // before it sets `st.task`, so the second press found nothing in the way. It runs through
+  // `confirmGate`, which refuses a press while one is under way.
+  const confirmOnce = async () => {
     if (!ask || st.task || !user || !openSave) return;
     const u = user;
     const s = openSave;
@@ -639,7 +644,7 @@ export function Saves({ ctx }: { ctx: SectionContext }) {
           setAskError(null);
           setAsk(a);
         }}
-        onConfirm={() => void doConfirm()}
+        onConfirm={() => void confirmGate(confirmOnce)}
         onCloseGame={(id) => void closeGame(id)}
       />
     </div>

@@ -167,14 +167,15 @@ describe("extract dialog", () => {
   it("asks for a password with a masked box and runs the same extract again", () => {
     const onExtract = vi.fn();
     const start = { dest: "/data/x/g", merge: false, replace: false };
-    const el = find(FilesView(props({ onExtract, ask: { kind: "extractpw", name: "g.zip", start, wrong: true } })), TextPrompt);
+    const el = find(FilesView(props({ onExtract, ask: { kind: "extractpw", name: "g.zip", start, wrong: true, dir: "/data/began" } })), TextPrompt);
     expect(el.props.secret).toBe(true);
     const html = renderToStaticMarkup(el);
     expect(html).toContain('type="password"');
     expect(html).toContain(t("cw_files_extract_pw_wrong"));
     expect((el.props.check as (v: string) => string | null)("")).toBe(t("cw_files_extract_pw_empty"));
     (el.props.onSubmit as (v: string) => void)("hunter2");
-    expect(onExtract).toHaveBeenCalledWith("g.zip", start, "hunter2");
+    // With the folder the extract began in: the folder shown may be another by now.
+    expect(onExtract).toHaveBeenCalledWith("g.zip", start, "hunter2", "/data/began");
   });
 });
 

@@ -466,6 +466,14 @@ function LibraryRowImpl({
     downloading && dl ? { bytesReceived: dl.sent, totalBytes: dl.total } : null;
   // When this row appeared: a download that was already running then is older than the
   // row's own timer.
+  /** A confirmed delete / chmod is running: set before the first await, so a second press
+   *  in the same frame (before `busy` has rendered) is dropped too. */
+  const confirmRunning = useRef(false);
+  // Another operation began (a Move, a download, a mount) with the "Yes, delete" row still
+  // open: it goes, so it cannot be pressed mid-operation or once that one has ended.
+  useEffect(() => {
+    if (confirmClosesFor(busy)) setConfirm(null);
+  }, [busy]);
   const [rowShownAtMs] = useState(() => Date.now());
   const [error, setError] = useState<string | null>(null);
   // After a failed download: the folder it was going to, so Resume can carry on there.
@@ -662,6 +670,9 @@ function LibraryRowImpl({
   };
 
   const runDelete = async () => {
+    // "Yes, delete" pressed twice, or while a Move of this row runs: one operation at a time.
+    if (!confirmRunAllowed(busy, confirmRunning.current)) return;
+    confirmRunning.current = true;
     setBusy("delete");
     setError(null);
     // Library row Delete shows up in the global ActivityBar so the
@@ -702,11 +713,14 @@ function LibraryRowImpl({
         .finish(activityId, okOutcome ? "done" : "failed", {
           error: errMsg ?? undefined,
         });
+      confirmRunning.current = false;
       setBusy(null);
       setConfirm(null);
     }
   };
   const runChmod = async () => {
+    if (!confirmRunAllowed(busy, confirmRunning.current)) return;
+    confirmRunning.current = true;
     setBusy("chmod");
     setError(null);
     // Recursive chmod on a 100k-file game folder takes seconds-to-
@@ -751,6 +765,7 @@ function LibraryRowImpl({
         .finish(activityId, okOutcome ? "done" : "failed", {
           error: errMsg ?? undefined,
         });
+      confirmRunning.current = false;
       setBusy(null);
       setConfirm(null);
     }
@@ -2643,6 +2658,7 @@ function LibraryRowImpl({
         <ConfirmRow
           confirm={confirm}
           tied={tiedToConsole}
+          busy={busy !== null}
           onCancel={() => setConfirm(null)}
           onRun={confirm.kind === "delete" ? runDelete : runChmod}
         />
@@ -3667,15 +3683,29 @@ function LibraryThumb({
   );
 }
 
-function ConfirmRow({
+/** Whether a confirmed delete / chmod may start: nothing else runs on the row, and it is not
+ *  already under way (`running` covers a second press before `busy` has rendered). */
+export function confirmRunAllowed(busy: string | null, running: boolean): boolean {
+  return busy === null && !running;
+}
+
+/** An operation other than the confirm row's own began: the row closes. */
+export function confirmClosesFor(busy: string | null): boolean {
+  return busy !== null && busy !== "delete" && busy !== "chmod";
+}
+
+export function ConfirmRow({
   confirm,
   tied,
+  busy,
   onCancel,
   onRun,
 }: {
   confirm: PendingConfirm;
   /** The row is registered or mounted on the console: a delete takes it off first. */
   tied: boolean;
+  /** Something runs on this row: the action waits (no second delete, none during a Move). */
+  busy: boolean;
   onCancel: () => void;
   onRun: () => void;
 }) {
@@ -3711,6 +3741,7 @@ function ConfirmRow({
           variant={kind === "delete" ? "danger" : "primary"}
           size="sm"
           onClick={onRun}
+          disabled={busy}
         >
           {runLabel}
         </Button>

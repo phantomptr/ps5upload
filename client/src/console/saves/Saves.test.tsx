@@ -12,6 +12,7 @@ import {
   loadBackups,
   loadSaves,
   loadUsers,
+  oneAtATime,
   parseBackupName,
   parseUsers,
   restore,
@@ -311,5 +312,29 @@ describe("Saves section", () => {
     expect(out).toContain(`data-place="${usb}"`);
     expect(out).toMatch(new RegExp(`aria-pressed="true"[^>]*data-place="${usb}"`));
     expect(out).toContain(t("cw_saves_where_usb", { path: `${usb}/${U}/PPSA04609` }));
+  });
+});
+
+describe("oneAtATime: Confirm pressed twice", () => {
+  it("runs the first press and refuses the second until the first has ended", async () => {
+    const gate = oneAtATime();
+    let finish: (v: string) => void = () => undefined;
+    // A restore that is still asking the console whether the game runs.
+    const restoreOnce = vi.fn(() => new Promise<string>((r) => (finish = r)));
+    const first = gate(restoreOnce);
+    const second = gate(restoreOnce);
+    expect(await second).toBeUndefined();
+    expect(restoreOnce).toHaveBeenCalledTimes(1);
+    finish("done");
+    expect(await first).toBe("done");
+    // Free again afterwards.
+    void gate(restoreOnce);
+    expect(restoreOnce).toHaveBeenCalledTimes(2);
+  });
+
+  it("is free again after a run that failed", async () => {
+    const gate = oneAtATime();
+    await expect(gate(() => Promise.reject(new Error("no")))).rejects.toThrow("no");
+    expect(await gate(() => Promise.resolve(1))).toBe(1);
   });
 });

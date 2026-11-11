@@ -291,3 +291,28 @@ export async function deleteBackup(user: string, titleId: string, backup: string
   if (!STAMP.test(backup)) throw new ApiError(400, "bad_backup");
   await runJob(d, "/api/fs/delete", { path: `${backupsDir(user, titleId, root)}/${backup}` });
 }
+
+/**
+ * One run at a time, decided before anything is awaited. A dialog's Confirm that first asks the
+ * console something (Restore reads /api/status) has not set its "working" state yet when a
+ * second press arrives: this refuses that press (it answers undefined, nothing runs).
+ */
+export function oneAtATime(): <T>(run: () => Promise<T>) => Promise<T | undefined> {
+  let running = false;
+  return function <T>(run: () => Promise<T>): Promise<T | undefined> {
+    if (running) return Promise.resolve(undefined);
+    running = true;
+    let work: Promise<T>;
+    try {
+      work = run();
+    } catch (e) {
+      running = false;
+      return Promise.reject(e);
+    }
+    const free = () => {
+      running = false;
+    };
+    work.then(free, free);
+    return work;
+  };
+}
