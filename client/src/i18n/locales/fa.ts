@@ -3083,6 +3083,10 @@ roster_share_unsaved: "تغییرات فهرست کنسول‌های شما هن
 
   // ── Pre-existing tr() keys that were missing ─────────────────────
   "profile.username.deleteConfirm": "این پروفایل کاربر حذف شود؟",
+  "profile.username.wipeSavesTitle": "ذخیره‌های این کاربر هم حذف شوند؟",
+  "profile.username.wipeSavesBody": "بازی‌های ذخیره‌شدهٔ او روی PS5 می‌تواند همراه کاربر حذف شود یا بماند. ذخیره‌های حذف‌شده قابل بازگردانی نیستند.",
+  "profile.username.wipeSavesYes": "حذف ذخیره‌ها",
+  "profile.username.wipeSavesNo": "نگه‌داشتن ذخیره‌ها",
   "profile.username.deleteTitle": "حذف کاربر",
   "profile.username.deleteSignedIn": "این کاربر روی PS5 وارد شده است. آنجا از حسابش خارج شوید، سپس حذفش کنید.",
   "profile.username.deleteStateUnknown": "بررسی نشد چه کسی روی PS5 وارد شده است. دوباره تلاش کنید.",
@@ -3675,6 +3679,7 @@ v5_home_servers_connect: "اتصال به NAS یا سرور",
 "fpkg.deleteDump": "حذف dump قدیمی",
 "fpkg.keepDump": "نگهش دار کنار گذاشته",
 "fpkg.swapPending": "یک جابجایی ناتمام برای {title}: dump در {path} کنار گذاشته شده.",
+"fpkg.swapUnconfirmed": "PS5 نصب {title} را تأیید نکرد. ابتدا بازی را روی PS5 بررسی کنید. دامپ در {path} کنار گذاشته شده است.",
 "fpkg.swapRollback": "برگرداندن dump",
 "fpkg.stage.extract": "باز کردن آرشیو",
 "fpkg.archiveSource": "یک آرشیو. هنگام شروع به پوشه‌ی خروجی باز می‌شود، و با پایان یافتن اجرا حذف می‌شود.",

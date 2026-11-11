@@ -18,7 +18,7 @@ function fakeConsole(opts: {
   running?: boolean;
   /** Listings of /user/app/<id> that still show SMP's links before it lets go. */
   linkPolls?: number;
-  install?: { ok: boolean; message?: string };
+  install?: { ok: boolean; unverified?: boolean; message?: string };
 }) {
   const files = new Map(Object.entries(opts.files ?? {}));
   const calls: string[] = [];
@@ -120,6 +120,22 @@ describe("replacing a dump with its package", () => {
     const r = await runSwap(input, c.deps, () => {});
     expect(r.ok).toBe(false);
     expect(c.calls.some((x) => x.startsWith("move"))).toBe(false);
+  });
+
+  it("keeps the dump parked and the swap listed when the PS5 cannot confirm the install", async () => {
+    const c = fakeConsole({
+      files: { [input.dump]: "img" },
+      install: { ok: true, unverified: true, message: "verify on PS5" },
+    });
+    const r = await runSwap(input, c.deps, () => {});
+    expect(r).toMatchObject({ ok: true, unconfirmed: true, message: "verify on PS5" });
+    const parked = "/data/ps5upload/parked/PPSA30528.exfat";
+    // Not moved back (an install may still be going), not called installed (the dump is the
+    // only copy known good): parked, with the swap still journaled for the person to decide.
+    expect(c.files.has(parked)).toBe(true);
+    expect(c.files.has(input.dump)).toBe(false);
+    const j = JSON.parse(c.files.get(journalPathFor("PPSA30528"))!) as SwapJournal;
+    expect(j.step).toBe("unconfirmed");
   });
 
   it("moves the dump back when the install fails, and clears the journal", async () => {

@@ -26,11 +26,19 @@ export function SwapJournalsView(props: {
         <Callout
           key={j.titleId}
           tone="warn"
-          title={tr(
-            "fpkg.swapPending",
-            { title: j.titleId, path: j.parked },
-            "An unfinished swap for {title}: the dump is set aside at {path}.",
-          )}
+          title={
+            j.step === "unconfirmed"
+              ? tr(
+                  "fpkg.swapUnconfirmed",
+                  { title: j.titleId, path: j.parked },
+                  "The PS5 did not confirm the install of {title}. Check the game on the PS5 first. The dump is set aside at {path}.",
+                )
+              : tr(
+                  "fpkg.swapPending",
+                  { title: j.titleId, path: j.parked },
+                  "An unfinished swap for {title}: the dump is set aside at {path}.",
+                )
+          }
         >
           <div className="flex flex-wrap gap-2">
             {j.step === "installed" ? (
@@ -40,6 +48,18 @@ export function SwapJournalsView(props: {
                 </Button>
                 <Button size="sm" disabled={!!props.busy} onClick={() => props.onFinish(j, "keep")}>
                   {tr("fpkg.keepDump", undefined, "Keep it parked")}
+                </Button>
+              </>
+            ) : j.step === "unconfirmed" ? (
+              <>
+                <Button size="sm" disabled={!!props.busy} onClick={() => props.onRollback(j)}>
+                  {tr("fpkg.swapRollback", undefined, "Put the dump back")}
+                </Button>
+                <Button size="sm" disabled={!!props.busy} onClick={() => props.onFinish(j, "keep")}>
+                  {tr("fpkg.keepDump", undefined, "Keep it parked")}
+                </Button>
+                <Button size="sm" variant="danger" disabled={!!props.busy} onClick={() => props.onFinish(j, "delete")}>
+                  {tr("fpkg.deleteDump", undefined, "Delete the old dump")}
                 </Button>
               </>
             ) : (

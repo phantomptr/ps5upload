@@ -2910,6 +2910,10 @@ roster_share_unsaved: "A konzollista módosításai még nincsenek mentve a kisz
 
   // ── Már létező tr() kulcsok, amelyek hiányoztak ─────────────────────
   "profile.username.deleteConfirm": "Törlöd ezt a felhasználói profilt?",
+  "profile.username.wipeSavesTitle": "Törlöd a felhasználó mentéseit is?",
+  "profile.username.wipeSavesBody": "A PS5-ön lévő mentett játékai törölhetők a felhasználóval együtt, vagy megtarthatók. A törölt mentések nem hozhatók vissza.",
+  "profile.username.wipeSavesYes": "Mentések törlése",
+  "profile.username.wipeSavesNo": "Mentések megtartása",
   "profile.username.deleteTitle": "Felhasználó törlése",
   "profile.username.deleteSignedIn": "Ez a felhasználó be van jelentkezve a PS5-ön. Ott jelentkeztesd ki, majd töröld.",
   "profile.username.deleteStateUnknown": "Nem sikerült ellenőrizni, ki van bejelentkezve a PS5-ön. Próbáld újra.",
@@ -3696,6 +3700,7 @@ cshares_delete_body: "A Minion többé nem mutatja. A szerveren semmi sem válto
 "fpkg.deleteDump": "Régi dump törlése",
 "fpkg.keepDump": "Maradjon félretéve",
 "fpkg.swapPending": "Befejezetlen csere: {title} – a dump félre van téve itt: {path}.",
+"fpkg.swapUnconfirmed": "A PS5 nem erősítette meg a(z) {title} telepítését. Előbb ellenőrizd a játékot a PS5-ön. A dump félre van téve itt: {path}.",
 "fpkg.swapRollback": "Dump visszatétele",
 "fpkg.stage.extract": "Archívum kicsomagolása",
 "fpkg.archiveSource": "egy archívum. Indításkor a kimeneti mappába csomagolódik ki, és a futás végén törlődik.",

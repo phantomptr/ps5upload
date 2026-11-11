@@ -24,7 +24,8 @@ export interface SwapDeps {
   isRunning(titleId: string): Promise<boolean>;
   isRegistered(titleId: string): Promise<boolean>;
   unregister(titleId: string): Promise<void>;
-  install(packagePath: string): Promise<{ ok: boolean; message?: string }>;
+  /** `unverified`: the PS5 accepted the install but it could not be confirmed. */
+  install(packagePath: string): Promise<{ ok: boolean; unverified?: boolean; message?: string }>;
   sleep(ms: number): Promise<void>;
   now(): number;
 }
@@ -42,8 +43,10 @@ export type SwapStep = "park" | "release" | "install";
 export interface SwapJournal extends SwapInput {
   v: 1;
   parked: string;
-  /** What has happened: "parking" (about to move), "parked", "installing", "installed". */
-  step: "parking" | "parked" | "installing" | "installed";
+  /** What has happened: "parking" (about to move), "parked", "installing", "installed", or
+   *  "unconfirmed" (the PS5 took the install but it could not be confirmed: the dump stays
+   *  parked, and the person chooses to put it back, keep it parked or delete it). */
+  step: "parking" | "parked" | "installing" | "installed" | "unconfirmed";
   at: number;
 }
 
@@ -52,6 +55,8 @@ export interface SwapResult {
   message?: string;
   /** The dump was moved back after a failure. */
   rolledBack?: boolean;
+  /** The install could not be confirmed: the dump is still parked, nothing was undone. */
+  unconfirmed?: boolean;
   journal?: SwapJournal;
 }
 
@@ -160,7 +165,7 @@ export async function runSwap(
   onStep("install");
   journal.step = "installing";
   await writeJournal(journal, deps).catch(() => {});
-  let result: { ok: boolean; message?: string };
+  let result: { ok: boolean; unverified?: boolean; message?: string };
   try {
     result = await deps.install(input.packagePath);
   } catch (e) {
@@ -168,6 +173,14 @@ export async function runSwap(
   }
   if (!result.ok) {
     return undo(`The install did not finish${result.message ? ` (${result.message})` : ""}.`);
+  }
+  if (result.unverified) {
+    // Not a failure and not a success: moving the dump back could put it beside an install
+    // still going, and calling it installed would offer to delete the only good copy. The dump
+    // stays parked and the swap stays listed.
+    journal.step = "unconfirmed";
+    await writeJournal(journal, deps).catch(() => {});
+    return { ok: true, unconfirmed: true, journal, message: result.message };
   }
   journal.step = "installed";
   await writeJournal(journal, deps).catch(() => {});

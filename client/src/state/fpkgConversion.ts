@@ -492,6 +492,18 @@ async function runReplace(packagePath: string, host: string, dump: string) {
     return;
   }
   const cur = running()!;
+  if (r.unconfirmed) {
+    // The result card does not offer to delete the dump: the swap stays in Convert's list of
+    // unfinished swaps, with all three choices.
+    installDone(
+      packagePath,
+      startedMs - cur.startedMs,
+      Date.now() - startedMs,
+      null,
+      r.message ?? trStatic("queue_install_unverified", "install accepted; verify on PS5 (package kept)"),
+    );
+    return;
+  }
   installDone(packagePath, startedMs - cur.startedMs, Date.now() - startedMs, r.journal ?? null);
   pushNotification("success", trStatic("fpkg_installed_on_ps5", "Installed on the PS5"), {
     body: trStatic("fpkg_dump_set_aside", "The old dump is set aside. Delete it or keep it on the Convert screen."),

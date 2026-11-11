@@ -2616,6 +2616,10 @@ shortcuts_activate: "Otwórz / aktywuj",
 
   // ── Pre-existing tr() keys that were missing ─────────────────────
   "profile.username.deleteConfirm": "Usunąć ten profil użytkownika?",
+  "profile.username.wipeSavesTitle": "Usunąć też zapisy tego użytkownika?",
+  "profile.username.wipeSavesBody": "Jego zapisane gry na PS5 można usunąć razem z użytkownikiem albo zachować. Usuniętych zapisów nie da się przywrócić.",
+  "profile.username.wipeSavesYes": "Usuń zapisy",
+  "profile.username.wipeSavesNo": "Zachowaj zapisy",
   "profile.username.deleteTitle": "Usuń użytkownika",
   "profile.username.deleteSignedIn": "Ten użytkownik jest zalogowany na PS5. Wyloguj go tam, a następnie usuń.",
   "profile.username.deleteStateUnknown": "Nie udało się sprawdzić, kto jest zalogowany na PS5. Spróbuj ponownie.",
@@ -3578,6 +3582,7 @@ cshares_delete_body: "Minion przestanie go pokazywać. Na serwerze nic się nie 
 "fpkg.deleteDump": "Usuń stary zrzut",
 "fpkg.keepDump": "Zachowaj odłożony",
 "fpkg.swapPending": "Niedokończona zamiana dla {title}: zrzut odłożono do {path}.",
+"fpkg.swapUnconfirmed": "PS5 nie potwierdziło instalacji {title}. Najpierw sprawdź grę na PS5. Zrzut jest odłożony w {path}.",
 "fpkg.swapRollback": "Przywróć zrzut",
 "fpkg.stage.extract": "Rozpakuj archiwum",
 "fpkg.archiveSource": "archiwum. Po starcie jest rozpakowywane do folderu wyjściowego, a po zakończeniu usuwane.",
