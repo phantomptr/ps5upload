@@ -6,6 +6,13 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+Upload:
+
+- Upload with unpacking on the way now takes tar archives: `.tar`, `.tar.zst`/`.tzst`, `.tar.gz`/`.tgz`, `.tar.xz`/`.txz` and `.tar.bz2`/`.tbz2`, plus a single `.zst` file and zip archives compressed with zstd. They're unpacked on your computer or phone as they're sent, so the PS5 gets the files, not the archive. zstd unpacks at over 1 GB/s on a recent computer, so your network sets the speed. A plain `.tar` isn't decoded at all, and an interrupted upload picks up inside the file it stopped at.
+- An archive packed with zstd's "long" mode that needs more memory than this device can give is refused with a message that says how much it needs, instead of running out of memory.
+
+## 12.4.8
+
 Files:
 
 - Extracting a RAR archive on the PS5 no longer fails with "Declared dictionary size is not supported". Archives packed with a large dictionary (up to 4 GB, common for big games) now extract on the console. Tested on a PS5 Pro with a 4 GB-dictionary multi-part archive.
