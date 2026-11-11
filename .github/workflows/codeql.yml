@@ -92,7 +92,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           REF: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}
-          SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.merge_commit_sha || github.sha }}
+          # The commit this run analysed. For a pull request that is this run's own merge
+          # commit: the event's merge_commit_sha can still be the previous push's when two
+          # pushes land close together, and then no analysis ever matches it.
+          SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           # The uploads just made turn into analyses, then alerts, after a short delay: wait

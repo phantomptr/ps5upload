@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.4.10
 
 This release is the result of a full review of the app, the engine and the PS5 helper. Most of it is small fixes for rare cases.
 
