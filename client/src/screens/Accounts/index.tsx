@@ -648,10 +648,23 @@ function UserRow({
       destructive: true,
     });
     if (!confirmed) return;
+    // The saves are a choice of their own, and keeping them is the default (the focused button):
+    // before 12.4.10 the helper misread this flag and always kept them.
+    const wipeSaves = await confirm({
+      title: tr("profile.username.wipeSavesTitle", undefined, "Delete this user's saves too?"),
+      message: tr(
+        "profile.username.wipeSavesBody",
+        undefined,
+        "Their saved games on the PS5 can be deleted with the user, or kept. Deleted saves cannot be brought back.",
+      ),
+      confirmLabel: tr("profile.username.wipeSavesYes", undefined, "Delete the saves"),
+      cancelLabel: tr("profile.username.wipeSavesNo", undefined, "Keep the saves"),
+      destructive: true,
+    });
     setDeleting(true);
     setError(null);
     try {
-      await userDelete(uid, true, addr);
+      await userDelete(uid, wipeSaves, addr);
       onChanged();
     } catch (e) {
       const refusal = userDeleteRefusal(e);

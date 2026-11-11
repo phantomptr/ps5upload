@@ -26,6 +26,7 @@ extern "C" {
         interval_us: c_int,
     ) -> c_int;
     fn takeover_wait_port_free(port: c_int, max_ms: c_int, interval_ms: c_int) -> c_int;
+    fn takeover_port_responding(port: c_int) -> c_int;
     fn takeover_flag_poll_start(
         dir: *const c_char,
         nonce: u64,
@@ -182,6 +183,40 @@ fn flag_file_takeover_exits_the_old_instance() {
         !flag_path(&c).exists(),
         "the flag is removed after a successful takeover"
     );
+}
+
+/// The probe is bounded. An instance that holds the port but has stopped accepting fills its backlog,
+/// and from then on a connect gets no answer at all: a blocking connect waits out the kernel's retries
+/// (over a minute) for every single probe. Whatever this platform does with a full backlog (some
+/// complete the handshake anyway), each probe must come back soon, and never as "free".
+#[test]
+fn a_probe_of_a_listener_that_never_accepts_is_bounded() {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = l.local_addr().unwrap();
+    let port = addr.port() as c_int;
+    // Fill the backlog: connections nobody accepts, until one gets no answer (or plenty are queued).
+    let mut held = Vec::new();
+    for _ in 0..400 {
+        match TcpStream::connect_timeout(&addr, Duration::from_millis(100)) {
+            Ok(s) => held.push(s),
+            Err(_) => break,
+        }
+    }
+    for _ in 0..3 {
+        let t0 = Instant::now();
+        let busy = unsafe { takeover_port_responding(port) };
+        let took = t0.elapsed();
+        assert_eq!(
+            busy, 1,
+            "a held port is never reported free (took {took:?})"
+        );
+        assert!(
+            took < Duration::from_secs(3),
+            "one probe took {took:?}: it must not wait out the kernel's connect retries"
+        );
+    }
+    drop(held);
+    drop(l);
 }
 
 #[test]

@@ -28,7 +28,10 @@ pub(super) fn tools() -> Vec<ToolDef> {
                           the connection check: `measuring` for the track's first 2.5 s, \
                           `under_s` seconds under the rate, `fit_kbps` what it carries with 20% \
                           to spare; `behind_jumps` times the link fell behind and the guest was \
-                          skipped to the next keyframe, `behind_dropped` the pictures that cost), \
+                          skipped to the next keyframe, `behind_dropped` the pictures that cost, `wait_max_ms` the longest a \
+                          picture waited to go out, `queue_peak_bytes`, `drain_kbps`; \
+                          `udp_sent` / `udp_waited` / `udp_lost`: datagrams at the engine's \
+                          socket, those it had no room for at once, those that never went), \
                           `skipped` pictures and `key_asks`, and `page`: what the guest's own \
                           page last said about its picture (frames drawn, dropped, late, \
                           decode_ms, stalls, stall_ms) with `quality` in a word (smooth, \

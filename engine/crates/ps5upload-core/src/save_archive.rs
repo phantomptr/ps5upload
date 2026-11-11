@@ -1190,6 +1190,7 @@ mod tests {
         let plain = scratch.join("b.zip");
         zip_folder(&scratch, "PPSA01234", &plain).unwrap();
         assert_eq!(zip_comment(&plain).unwrap(), "");
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     #[test]

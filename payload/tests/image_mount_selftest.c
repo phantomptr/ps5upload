@@ -48,6 +48,20 @@ static int walk(const struct fake_mount *table, const char *path) {
 
 int main(void) {
     /* images */
+    /* fs.unmount's later passes: only another image unit may be unmounted after the first layer.
+     * What an image was mounted OVER (a drive, a nullfs, a system folder, a sandbox's own mount) is
+     * not: those passes used to unmount it too, with MNT_FORCE. */
+    CHECK(image_mount_from_is_unit("/dev/lvd0") && image_mount_from_is_unit("/dev/lvd12"));
+    CHECK(image_mount_from_is_unit("/dev/md3"));
+    CHECK(!image_mount_from_is_unit("/dev/da1p1"));       /* a USB drive */
+    CHECK(!image_mount_from_is_unit("/dev/ssd0.user"));   /* the internal drive */
+    CHECK(!image_mount_from_is_unit("/dev/nvme1"));       /* the M.2 drive */
+    CHECK(!image_mount_from_is_unit("/mnt/ps5upload/G")); /* a nullfs view, even of an image */
+    CHECK(!image_mount_from_is_unit("/system_ex/common_ex/lib"));
+    CHECK(!image_mount_from_is_unit("tmpfs") && !image_mount_from_is_unit("") && !image_mount_from_is_unit(NULL));
+    CHECK(!image_mount_from_is_unit("/dev/lvd") && !image_mount_from_is_unit("/dev/md"));
+    CHECK(!image_mount_from_is_unit("/dev/lvdx") && !image_mount_from_is_unit("/dev/mdctl"));
+
     CHECK(image_mount_kind("exfatfs", "/dev/lvd2") == IMAGE_MOUNT_YES);
     CHECK(image_mount_kind("ufs", "/dev/md3") == IMAGE_MOUNT_YES);
     CHECK(image_mount_kind("nullfs", "/mnt/shadowmnt/G_ca51a0d7") == IMAGE_MOUNT_YES);

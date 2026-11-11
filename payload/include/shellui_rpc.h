@@ -45,8 +45,13 @@ int shellui_rpc_ready(void);
  *
  * Return codes:
  *    0  — Sony's launcher accepted the call. Game launched.
- *   >0  — Sony returned an error code (0x8094* family for various
- *         launcher errors).
+ *   >0  — (SHELLUI_LAUNCH_SONY_CODE) the function ran and returned
+ *         something other than 0: a Sony error code (0x8094* family
+ *         for various launcher errors). The code itself is written to
+ *         `*sony_code_out` — it does NOT fit this return value: every
+ *         Sony error has bit 31 set, so as an `int` it is negative,
+ *         and returning it directly made a real refusal look like the
+ *         -1 "never ran" case below.
  *   -1  — Pre-dispatch RPC machinery failure: couldn't attach to
  *         ShellUI, scratch mmap failed, symbol unresolved. The
  *         remote function never ran; caller may retry or fall back.
@@ -64,8 +69,42 @@ int shellui_rpc_ready(void);
  * uses a guaranteed-non-zero value. Pass <= 0 to fall back to
  * fetching it via a remote sceUserServiceGetForegroundUser RPC into
  * ShellUI — slightly slower and historically unreliable on the very
- * first launch after a fresh register. */
-int shellui_rpc_launch_app(const char *title_id, int user_id_hint);
+ * first launch after a fresh register.
+ * `sony_code_out` (may be NULL): the function's own return value when
+ * the result is SHELLUI_LAUNCH_SONY_CODE, 0 otherwise. */
+int shellui_rpc_launch_app(const char *title_id, int user_id_hint,
+                           uint32_t *sony_code_out);
+
+#define SHELLUI_LAUNCH_SONY_CODE 1
+
+/* Turn pt_call()'s result for sceLncUtilLaunchApp into the return codes
+ * above. Pure, so the host tests can pin it (shellui_launch_selftest.c).
+ *
+ * `rax` is the remote function's whole return register, or -1 when
+ * pt_call itself failed; `dispatched` / `timed_out` / `tracee_lost` are
+ * pt_call_was_dispatched(), pt_call_timed_out() and pt_tracee_was_lost().
+ *
+ * The function returns an `int`, i.e. the low 32 bits. They are classified
+ * HERE, as an unsigned value, before anything narrows them: the old
+ * `return (int)rax` turned 0x80940005 into a negative number, which the
+ * caller (launch_title, `rc > 0` = "Sony refused") could only read as "the
+ * call never ran" — so it skipped the is-it-running check and the single
+ * retry, fired three more launch requests in-process, and reported
+ * launch_all_strategies_failed with the real code lost. */
+static inline int shellui_launch_result(long rax, int dispatched,
+                                        int timed_out, int tracee_lost,
+                                        uint32_t *sony_code_out) {
+    if (sony_code_out) *sony_code_out = 0;
+    if (rax == -1) {
+        /* pt_call failed. If the function was dispatched and nothing went
+         * wrong with the tracee it most likely ran: soft success. */
+        return (dispatched && !timed_out && !tracee_lost) ? -2 : -1;
+    }
+    uint32_t code = (uint32_t)((unsigned long)rax & 0xFFFFFFFFul);
+    if (code == 0) return 0;
+    if (sony_code_out) *sony_code_out = code;
+    return SHELLUI_LAUNCH_SONY_CODE;
+}
 
 /* Crash-time recovery: best-effort PT_DETACH any target we have an
  * active attach on. Called from main.c's fatal-signal handler so

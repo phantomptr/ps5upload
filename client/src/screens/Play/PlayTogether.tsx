@@ -15,7 +15,7 @@ import {
   joinApi,
   linkGrade,
   lowerForAll,
-  openWhenPlaying,
+  openUntilPlaying,
   playerSlots,
   shareOf,
   slowFriend,
@@ -373,14 +373,17 @@ export function PlayTogetherPanel({
   useEffect(() => {
     let alive = true;
     void (async () => {
-      const reply = await openWhenPlaying(addr, () => alive);
-      if (!alive || !reply) return;
-      if (!reply.state) {
-        setWhy(reply.error);
-        setFailed(reply.error !== "old_helper");
-        return;
-      }
-      const opened = reply.state;
+      // A refusal is shown; `not_playing` is asked again for as long as the panel is up, so a
+      // session that comes up late opens it (it stayed on "could not start" over a running picture).
+      const opened = await openUntilPlaying(
+        addr,
+        () => alive,
+        (reply) => {
+          setWhy(reply.found ? `${reply.error}: ${reply.found}` : reply.error);
+          setFailed(reply.error !== "old_helper");
+        },
+      );
+      if (!alive || !opened) return;
       setWhy(null);
       setFailed(false);
       onState(opened);
@@ -502,7 +505,7 @@ export function PlayTogetherPanel({
         </div>
       )}
       {failed && (
-        <p className="text-sm text-[var(--color-warn)]" data-testid="pt-failed">
+        <p className="text-sm text-[var(--color-warn)] [overflow-wrap:anywhere]" data-testid="pt-failed">
           {why === "host_not_local"
             ? tr(
                 "pt_host_not_local",
@@ -840,7 +843,16 @@ export function PlayTogetherPanel({
       )}
 
       <div className="flex flex-wrap gap-2">
-        <Button size="sm" variant="ghost" leftIcon={<Smartphone size={14} />} onClick={onPhones} data-testid="pt-phones">
+        {/* A long label: on a phone it wraps inside the panel (a button is one line and keeps its
+            width by default, so this one ran past the right edge). */}
+        <Button
+          size="sm"
+          variant="ghost"
+          leftIcon={<Smartphone size={14} className="shrink-0" />}
+          onClick={onPhones}
+          data-testid="pt-phones"
+          className="max-w-full shrink! rounded-2xl! text-start whitespace-normal! [&>span]:overflow-visible [&>span]:whitespace-normal"
+        >
           {tr("pt_phones_link", undefined, "Use a phone as your controller, or let someone watch")}
         </Button>
         {state.open && (

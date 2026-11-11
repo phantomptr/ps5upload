@@ -6824,6 +6824,45 @@ fn speed_test_dir() -> std::path::PathBuf {
         .join("speedtest")
 }
 
+/// Removes every file and folder in `dir` last changed before `cutoff`; how many went. For the
+/// engine's own scratch folders at its start, by age: what this engine or another on the same
+/// data folder made lately stays.
+pub(crate) fn sweep_older_than(dir: &std::path::Path, cutoff: std::time::SystemTime) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for e in entries.flatten() {
+        // The entry itself, never what a link points at.
+        let old = std::fs::symlink_metadata(e.path())
+            .and_then(|m| m.modified())
+            .is_ok_and(|t| t < cutoff);
+        if old && ps5upload_core::archive_extract::remove_path_retrying(&e.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// A speed test whose client never asked for the cleanup (a closed tab, a crash) has its files
+/// removed after this long: up to 2 GiB sent and 2 GiB back. Longer than the slowest test.
+const SPEED_TEST_KEEP: std::time::Duration = std::time::Duration::from_secs(2 * 60 * 60);
+
+/// Counts the speed tests prepared, so a timer removes only its own test's files.
+static SPEED_TEST_RUN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Removes the speed test's folder if `run` is still the latest test. Whether it did.
+fn expire_speed_test(
+    dir: &std::path::Path,
+    run: u64,
+    latest: &std::sync::atomic::AtomicU64,
+) -> bool {
+    if latest.load(std::sync::atomic::Ordering::SeqCst) != run {
+        return false;
+    }
+    ps5upload_core::archive_extract::remove_path_retrying(dir).is_ok()
+}
+
 /// Smallest and largest speed-test file, in MiB. Small enough to finish quickly on Wi-Fi,
 /// large enough at the top that a fast link is measured over seconds, not milliseconds.
 const SPEED_TEST_MIN_MIB: u64 = 16;
@@ -6879,6 +6918,16 @@ async fn speed_test_prepare_handler(Json(req): Json<SpeedTestPrepareReq>) -> imp
     let path = dir.join("ps5upload-speedtest.bin");
     let back = dir.join("back");
     let (p, b) = (path.clone(), back.clone());
+    let run = SPEED_TEST_RUN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    {
+        let dir = dir.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(SPEED_TEST_KEEP).await;
+            let _ =
+                tokio::task::spawn_blocking(move || expire_speed_test(&dir, run, &SPEED_TEST_RUN))
+                    .await;
+        });
+    }
     let r = tokio::task::spawn_blocking(move || {
         // A previous run's files, if it was interrupted.
         let _ = std::fs::remove_dir_all(&b);
@@ -12319,6 +12368,14 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // Server copies an earlier run left behind (an extract that failed, then the app closed)
     // are removed here: nothing else knows them after a restart.
     tokio::task::spawn_blocking(remote::fetch::sweep_stale_copies);
+    // The same for a share's made files and a speed test's, by age: another engine may be
+    // running on this data folder, and what it made lately is in use.
+    tokio::task::spawn_blocking(|| {
+        share::sweep_left_shares();
+        if let Some(cutoff) = std::time::SystemTime::now().checked_sub(SPEED_TEST_KEEP) {
+            sweep_older_than(&speed_test_dir(), cutoff);
+        }
+    });
     tokio::task::spawn_blocking(settings_backup::seal_old_backups);
     // Graceful shutdown: when the parent-watcher fires (stdin EOF), the
     // SHUTDOWN Notify wakes this future, axum stops
@@ -15692,7 +15749,41 @@ mod archive_packages_tests {
 
 #[cfg(test)]
 mod speed_test_file_tests {
-    use super::{speed_test_size_mib, write_speed_test_file};
+    use super::{expire_speed_test, speed_test_size_mib, sweep_older_than, write_speed_test_file};
+
+    /// What an earlier run left goes at the start once it is old enough (a share's zip, a speed
+    /// test's 2 GiB); anything younger may be another engine's and stays.
+    #[test]
+    fn the_start_sweep_takes_what_was_there_before_and_nothing_newer() {
+        let dir = std::env::temp_dir().join(format!("ps5upload-sweep-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("old-share")).unwrap();
+        std::fs::write(dir.join("old-share").join("save.zip"), b"x").unwrap();
+        std::fs::write(dir.join("ps5upload-speedtest.bin"), b"x").unwrap();
+        let now = std::time::SystemTime::now();
+        // Younger than the age asked for: nothing goes.
+        let before = now - std::time::Duration::from_secs(3600);
+        assert_eq!(sweep_older_than(&dir, before), 0);
+        assert!(dir.join("old-share").join("save.zip").exists());
+        let after = now + std::time::Duration::from_secs(3600);
+        assert_eq!(sweep_older_than(&dir, after), 2);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        // A folder that is not there is nothing to sweep.
+        assert_eq!(sweep_older_than(&dir.join("none"), after), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_forgotten_speed_test_is_removed_unless_a_newer_one_runs() {
+        let dir = std::env::temp_dir().join(format!("ps5upload-speedexp-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("back")).unwrap();
+        std::fs::write(dir.join("ps5upload-speedtest.bin"), b"x").unwrap();
+        let latest = std::sync::atomic::AtomicU64::new(2);
+        // The first test's timer, with a second test running: its files stay.
+        assert!(!expire_speed_test(&dir, 1, &latest));
+        assert!(dir.join("ps5upload-speedtest.bin").exists());
+        assert!(expire_speed_test(&dir, 2, &latest));
+        assert!(!dir.exists());
+    }
 
     #[test]
     fn the_size_is_kept_within_bounds() {

@@ -9,6 +9,7 @@ vi.mock("../../state/remotePlay", async () => {
 import type { LiveCheck, LiveRun, StreamStatus } from "../../lib/goLive";
 import { useGoLiveStore } from "../../state/goLive";
 import { GoLiveChip, GoLivePanel, goLiveAvailable, obsFeedAvailable, ObsFeedView, problemText } from "./GoLivePanel";
+import { removeAfterConfirm, removeConfirmOptions } from "./goLiveText";
 
 // No DOM here (vitest runs in node): static markup, asserting on what is shown.
 const html = (node: React.ReactNode) => renderToStaticMarkup(<>{node}</>);
@@ -385,5 +386,32 @@ describe("engine error codes", () => {
   it("says HTTP errors in words and passes an unknown code's sentence on", () => {
     expect(problemText(tr, "http_500", "HTTP 500")).toBe("The engine refused that (HTTP 500). Try again.");
     expect(problemText(tr, "brand_new", "A sentence from a newer engine.")).toBe("A sentence from a newer engine.");
+  });
+});
+
+describe("removing a saved site", () => {
+  const tr = ((_k: string, vars?: Record<string, string | number>, fallback?: string) =>
+    (fallback ?? _k).replace(/\{(\w+)\}/g, (_, k: string) => String(vars?.[k]))) as Parameters<
+    typeof removeConfirmOptions
+  >[0];
+
+  it("asks first, saying the stream key goes with it", () => {
+    const o = removeConfirmOptions(tr, "My Twitch");
+    expect(o.destructive).toBe(true);
+    expect(o.title).toBe("Remove My Twitch");
+    expect(o.message).toContain("stream key");
+    expect(o.confirmLabel).toBe("Remove");
+  });
+
+  it("keeps the site and its key when the user says no", async () => {
+    const remove = vi.fn();
+    expect(await removeAfterConfirm(async () => false, removeConfirmOptions(tr, "X"), remove)).toBe(false);
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("removes it once the user says yes", async () => {
+    const remove = vi.fn();
+    expect(await removeAfterConfirm(async () => true, removeConfirmOptions(tr, "X"), remove)).toBe(true);
+    expect(remove).toHaveBeenCalledTimes(1);
   });
 });

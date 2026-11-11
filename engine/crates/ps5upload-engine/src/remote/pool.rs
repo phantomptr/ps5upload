@@ -244,6 +244,16 @@ impl RemoteFile for Retrying {
                 Err(e) => Err(e),
             };
             match reopened {
+                // The file is read as the one that was opened: a different size after the
+                // reconnect is a different file, and its bytes do not belong after the first's.
+                Ok(f) if f.size() != self.size => {
+                    return Err(RemoteError::Io(format!(
+                        "{} changed on the server while it was being read ({} bytes, now {})",
+                        self.path,
+                        self.size,
+                        f.size()
+                    )));
+                }
                 Ok(f) => {
                     *self.inner.lock().unwrap_or_else(|e| e.into_inner()) = Arc::clone(&f);
                     match f.read_at(offset, len).await {
@@ -544,5 +554,36 @@ mod tests {
         assert_eq!(f.read_at(0, 5).await.unwrap(), b"hello");
         mem.fail_next_reads(4);
         assert!(f.read_at(0, 5).await.is_err());
+    }
+
+    /// A file replaced while the connection was away is not carried on with.
+    #[tokio::test]
+    async fn a_file_that_changed_size_across_a_reconnect_fails_the_read() {
+        let mem = Arc::new(MemFs::new(&[("/a", b"hello")]));
+        let r = testing::remote_with_shared(Arc::clone(&mem), None);
+        let id = r
+            .store
+            .add(conn("NAS", Protocol::Smb), Secret::None)
+            .unwrap()
+            .conn
+            .id;
+        let fs = r.pool.fs(&r.store, &id).await.unwrap();
+        let raw = fs.open("/a").await.unwrap();
+        let f = retrying(
+            Arc::clone(&r.pool),
+            Arc::clone(&r.store),
+            id.clone(),
+            "/a".into(),
+            raw,
+            Backoff::instant(),
+        );
+        mem.add(&[("/a", b"hello, world")]);
+        mem.fail_next_reads(1);
+        let e = f.read_at(0, 5).await.unwrap_err();
+        assert!(e.to_string().contains("changed on the server"), "{e}");
+        // The same size again: the read goes on.
+        mem.add(&[("/a", b"HELLO")]);
+        mem.fail_next_reads(1);
+        assert_eq!(f.read_at(0, 5).await.unwrap(), b"HELLO");
     }
 }

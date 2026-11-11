@@ -64,6 +64,7 @@ import {
   type BatchOptions,
   type BatchResult,
 } from "./move";
+import { extractLeftSomething, extractOpensDest, stillAsking } from "./askGuard";
 import { batchOptions, currentBatch, startBatch, stopBatch, useBatch, waitJob, type BatchProgress } from "./batch";
 import {
   askConflict,
@@ -136,7 +137,7 @@ export type FilesAsk =
   /** Extract an archive into a folder next to it. */
   | { kind: "extract"; name: string }
   /** The archive has a password (`wrong`: the one given was refused): ask, then run `start` again. */
-  | { kind: "extractpw"; name: string; start: ExtractStart; wrong: boolean }
+  | { kind: "extractpw"; name: string; start: ExtractStart; wrong: boolean; /** The archive's folder (the one shown may be another by now). */ dir: string }
   | { kind: "mkdir" }
   /** A new, empty file (then opened in the editor). */
   | { kind: "newfile" }
@@ -346,6 +347,8 @@ export interface FilesViewProps {
   onEntry: (e: Entry) => void;
   onLoadMore: () => void;
   onRetry?: () => void;
+  /** The viewer's text editor opened or closed. */
+  onEditing?: (editing: boolean) => void;
   onToggleSelecting: () => void;
   onToggleItem: (name: string) => void;
   onAsk: (ask: FilesAsk) => void;
@@ -362,7 +365,8 @@ export interface FilesViewProps {
   /** Send `name` (a .elf/.bin in the folder shown) to the console's payload loader. */
   onLoadPayload?: (name: string) => void;
   /** Extract `name` (an archive in the folder shown) as `start` says; `password` once one was asked for. */
-  onExtract?: (name: string, start: ExtractStart, password?: string) => void;
+  /** `dir`: the archive's folder, when it is not (or may no longer be) the one shown. */
+  onExtract?: (name: string, start: ExtractStart, password?: string, dir?: string) => void;
   onMkdir: (name: string) => void;
   onPicked: (op: "copy" | "move", names: string[], destDir: string) => void;
   /** Open `dir` in Files with `name` focused (a search result); null name: the folder itself. */
@@ -896,7 +900,7 @@ function askView(p: FilesViewProps) {
           initial=""
           secret
           check={(v) => (v ? null : t("cw_files_extract_pw_empty"))}
-          onSubmit={(v) => p.onExtract?.(a.name, a.start, v)}
+          onSubmit={(v) => p.onExtract?.(a.name, a.start, v, a.dir)}
           onCancel={p.onDismiss}
         />
       );
@@ -931,6 +935,7 @@ function askView(p: FilesViewProps) {
           images={a.type === "image" ? (p.shown ?? p.dir.entries).filter((e) => e.kind !== "dir" && viewKind(e.name) === "image").map((e) => e.name) : undefined}
           onOpenImage={(name) => p.onAsk({ kind: "view", name, type: "image" })}
           startEditing={a.edit}
+          onEditing={p.onEditing}
           onSaved={() => p.onRetry?.()}
           onClose={p.onDismiss}
         />
@@ -1377,11 +1382,22 @@ export function Files({ ctx }: { ctx: SectionContext }) {
   const root = useRef<HTMLDivElement>(null);
   /** False once Files unmounts: a batch that ends later reports to no one (it ran to the end anyway). */
   const mounted = useRef(true);
+  /** The viewer's text editor is open (a folder change from the PC waits for it). */
+  const editingRef = useRef(false);
+  const onEditing = useCallback((editing: boolean) => {
+    editingRef.current = editing;
+  }, []);
   /** The folder shown now (a batch that ends later checks it is still the same). */
   const pathRef = useRef(path);
   useEffect(() => {
     pathRef.current = path;
   }, [path]);
+  /** The dialog open now: a late answer checks it is still the one that asked, and a
+   *  finished extract leaves the folder alone while one is open. */
+  const askRef = useRef(ask);
+  useEffect(() => {
+    askRef.current = ask;
+  }, [ask]);
   /** Where focus was last in the list (to put it back when that row goes). */
   const lastAnchor = useRef<FocusAnchor | null>(null);
   /** After the next load, focus this row ("" = the first one), then forget it. */
@@ -1416,6 +1432,13 @@ export function Files({ ctx }: { ctx: SectionContext }) {
     setView((v) => (v.filter ? { ...v, filter: "" } : v));
     setRowLimit(ROW_WINDOW);
     selectAfterLoad.current = false;
+    // Another folder: an open dialog holds bare names of the folder left, and its buttons
+    // join them with the folder shown. It closes with the folder it was about.
+    if (next !== pathRef.current) {
+      setAsk(null);
+      setAskBusy(false);
+      setAskError(null);
+    }
     setPath(next);
   }, []);
 
@@ -1425,7 +1448,14 @@ export function Files({ ctx }: { ctx: SectionContext }) {
   // already opened at must open it again after the user browsed elsewhere.
   const params = ctx.params;
   useEffect(() => {
-    if (params?.path != null) go(params.path, params.focus ?? "");
+    if (params?.path == null) return;
+    // The text editor is open: the PC's "Show on TV" does not take the folder (and the edits)
+    // away under it.
+    if (editingRef.current && params.path !== pathRef.current) {
+      setMessage({ tone: "info", text: t("cw_files_edit_unsaved") });
+      return;
+    }
+    go(params.path, params.focus ?? "");
   }, [params, go]);
   // Opened by the PC ("Show on TV"): say so, or that the folder is gone.
   useHandoffNotice(ctx.params, setMessage);
@@ -1822,19 +1852,25 @@ export function Files({ ctx }: { ctx: SectionContext }) {
   const onLoadPayload = useCallback(
     (name: string) => {
       if (path == null) return;
+      const asked = askRef.current;
       setAskBusy(true);
       setAskError(null);
       loadPayload(joinPath(path, name)).then(
         () => {
           if (!mounted.current) return;
-          setAskBusy(false);
-          setAsk(null);
+          if (stillAsking(askRef.current, asked)) {
+            setAskBusy(false);
+            setAsk(null);
+          }
           setMessage({ tone: "info", text: t("cw_payload_done", { name }) });
         },
         (e: unknown) => {
           if (!mounted.current) return;
+          const text = payloadErrorText(e, filesErrorText) ?? t("cw_payload_err_send");
+          // The dialog that asked is gone (closed, or another is open): say it in the status line.
+          if (!stillAsking(askRef.current, asked)) return setMessage({ tone: "error", text });
           setAskBusy(false);
-          setAskError(payloadErrorText(e, filesErrorText) ?? t("cw_payload_err_send"));
+          setAskError(text);
         },
       );
     },
@@ -1842,9 +1878,11 @@ export function Files({ ctx }: { ctx: SectionContext }) {
   );
 
   const onExtract = useCallback(
-    (name: string, start: ExtractStart, password?: string) => {
-      if (path == null || currentBatch()) return;
-      const src = joinPath(path, name);
+    (name: string, start: ExtractStart, password?: string, askedIn?: string) => {
+      // The password prompt of an extract that began in another folder names that folder.
+      const began = askedIn ?? path;
+      if (began == null || currentBatch()) return;
+      const src = joinPath(began, name);
       setAsk(null);
       setMessage(null);
       let end: OpEnd | { end: "error"; error: unknown } = { end: "gone" };
@@ -1870,7 +1908,7 @@ export function Files({ ctx }: { ctx: SectionContext }) {
           }
           return r;
         },
-        [src, path],
+        [src, began],
       );
       run?.then(
         () => {
@@ -1879,21 +1917,23 @@ export function Files({ ctx }: { ctx: SectionContext }) {
           const cause = done.end === "failed" ? opCause(done.status) : done.end === "error" && done.error instanceof ApiError ? done.error.code : "";
           if (cause === "fs_extract_password_required" || cause === "fs_extract_wrong_password") {
             // Not a failure yet: ask for the password and run the same extract again.
-            setAsk({ kind: "extractpw", name, start, wrong: cause === "fs_extract_wrong_password" });
+            setAsk({ kind: "extractpw", name, start, wrong: cause === "fs_extract_wrong_password", dir: began });
             refresh();
             return;
           }
           const msg = extractMessage(done, start.merge);
           if (done.end === "done") {
             // Extracted into another folder: open it, with the new folder focused.
+            // Not when the user went elsewhere or has a dialog open: the result says where it went.
             const into = parentPath(start.dest);
-            if (into !== path) go(into, baseName(start.dest));
-            else focusName.current = baseName(start.dest);
+            if (extractOpensDest(into, began, pathRef.current, askRef.current != null)) go(into, baseName(start.dest));
+            else if (into === pathRef.current) focusName.current = baseName(start.dest);
           }
           if (done.end === "done" && start.deleteAfter && msg) {
-            // Only when every entry came out: a skipped unsafe path or link keeps the archive.
+            // Only when every entry came out: a file skipped because one was already there, an
+            // unsafe path or a link keeps the archive.
             const r = toExtractResult(opResult<unknown>(done.status));
-            if (r.unsafe > 0 || r.links > 0) {
+            if (extractLeftSomething(r)) {
               setMessage({ ...msg, text: `${msg.text} ${t("cw_files_extract_kept_archive")}` });
               refresh();
               return;
@@ -2123,16 +2163,25 @@ export function Files({ ctx }: { ctx: SectionContext }) {
   /** Eject / Unmount: the dialog stays open (busy) until the helper answers; a failure shows in it. */
   const volumeCall = useCallback(
     (route: string, body: object, done: string, onError?: (e: unknown) => boolean) => {
+      const asked = askRef.current;
       setAskBusy(true);
       setAskError(null);
       call(route, body).then(
         () => {
-          setAskBusy(false);
-          setAsk(null);
+          if (stillAsking(askRef.current, asked)) {
+            setAskBusy(false);
+            setAsk(null);
+          }
           setMessage({ tone: "info", text: done });
           setVolumesTick((n) => n + 1);
         },
         (e: unknown) => {
+          // The dialog that asked is gone (closed, or another is open): say it in the status line.
+          if (!stillAsking(askRef.current, asked)) {
+            const text = volumeErrorText(e);
+            if (text) setMessage({ tone: "error", text });
+            return;
+          }
           setAskBusy(false);
           if (onError?.(e)) return;
           setAskError(volumeErrorText(e));
@@ -2194,18 +2243,26 @@ export function Files({ ctx }: { ctx: SectionContext }) {
   const onShareRemove = useCallback(
     (id: string) => {
       const name = shares?.find((x) => x.id === id)?.name ?? id;
+      const asked = askRef.current;
       setAskBusy(true);
       setAskError(null);
       removeShare(id).then(
         () => {
-          setAskBusy(false);
-          setAsk(null);
+          if (stillAsking(askRef.current, asked)) {
+            setAskBusy(false);
+            setAsk(null);
+          }
           setSharesTick((n) => n + 1);
           setMessage({ tone: "info", text: t("cw_files_smb_removed", { name }) });
         },
         (e: unknown) => {
+          const text = filesErrorText(e);
+          if (!stillAsking(askRef.current, asked)) {
+            if (text) setMessage({ tone: "error", text });
+            return;
+          }
           setAskBusy(false);
-          setAskError(filesErrorText(e));
+          setAskError(text);
         },
       );
     },
@@ -2275,6 +2332,7 @@ export function Files({ ctx }: { ctx: SectionContext }) {
         onEntry={onEntry}
         onLoadMore={onLoadMore}
         onRetry={refresh}
+        onEditing={onEditing}
         onRetryVolumes={() => setVolumesTick((n) => n + 1)}
         onToggleSelecting={onToggleSelecting}
         onToggleItem={onToggleItem}

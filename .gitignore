@@ -253,6 +253,7 @@ PS5Upload-android.apk.idsig
 *.p12
 *.pepk
 *.pfx
+*.mobileprovision
 key.properties
 
 # Vendored SQLite amalgamation, fetched + checksum-verified by

@@ -72,7 +72,9 @@ test("Wake & sign in asks for the passcode, asks again after a wrong one, then s
   await expect(page.getByText("Woken and signed in").first()).toBeVisible();
   // Never kept in the page's storage.
   const stored = await page.evaluate(() => JSON.stringify(window.localStorage));
-  expect(stored).not.toContain("1234");
+  // As a value of its own: a random id or a time in the audit log can hold the same four digits
+  // ("0d123478-…" failed this once), and that is not the passcode being kept.
+  expect(stored).not.toMatch(/(?<![0-9a-f])1234(?![0-9a-f])/i);
 });
 
 test("Cancel leaves the PS5 at its sign-in screen and says so", async ({ page }) => {

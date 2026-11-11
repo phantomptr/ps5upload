@@ -42,7 +42,8 @@ void takeover_flag_identity(const char *dir, takeover_flag_id_t *out);
 /* 1 when a flag is present, holds a nonce other than `my_nonce`, and is not the `stale` one. */
 int takeover_flag_asks_us_to_exit(const char *dir, uint64_t my_nonce, const takeover_flag_id_t *stale);
 
-/* 1 when something accepts a TCP connection on 127.0.0.1:port. */
+/* 1 when something accepts a TCP connection on 127.0.0.1:port, or when that could not be ruled out
+ * (only a refused connect is 0). Bounded: about half a second at most, never a blocking connect. */
 int takeover_port_responding(int port);
 
 /* Writes the flag, then waits until none of `ports` answers on loopback: `attempts` checks,

@@ -317,7 +317,9 @@ fn build_mode(
         .warnings()
         .map(|c| format!("{}: {}", c.name, c.detail))
         .collect();
-    let param_json = tree.read("sce_sys/param.json").unwrap_or_default();
+    let param_json =
+        source::read_small(tree.as_mut(), "sce_sys/param.json", source::MAX_PARAM_BYTES)
+            .unwrap_or_default();
     // A "free" or "upgradable" DRM value makes the console show a lock and refuse to start
     // the title, so the package carries "standard". The user's file is untouched: the
     // rewritten bytes are served in its place, and the file list's size for it is adjusted
@@ -457,16 +459,17 @@ fn build_mode(
     let content_version = source::content_version_word(&param_json).unwrap_or(0);
     // The container's payloads, read once: the streaming arm hands them to the writer,
     // and reading them here keeps the source free for the range reader below.
-    let icon_png = tree.read("sce_sys/icon0.png").unwrap_or_default();
-    let icon_dds = tree.read("sce_sys/icon0.dds").unwrap_or_default();
+    let mut small = |path: &str| source::read_small(tree.as_mut(), path, source::MAX_ARTWORK_BYTES);
+    let icon_png = small("sce_sys/icon0.png").unwrap_or_default();
+    let icon_dds = small("sce_sys/icon0.dds").unwrap_or_default();
     // Only files still in the package: an excluded one must not reappear in the container.
     let mut extras = cnt_write::presentation_extras(&mut |path| {
-        sizes_of(&files, path).and_then(|_| tree.read(path).ok())
+        sizes_of(&files, path).and_then(|_| small(path).ok())
     });
     // The dump's own title and NP binding files, as protected entries (see `PROTECTED`). They
     // stay in the image too; the container copy is what the console's launch checks read.
     extras.extend(cnt_write::protected_extras(&mut |path| {
-        sizes_of(&files, path).and_then(|_| tree.read(path).ok())
+        sizes_of(&files, path).and_then(|_| small(path).ok())
     }));
     // The debug license the console's launch checks need (see `license`), generated for this
     // content id. A dump's own license files are never used: they belong to another console.
@@ -506,7 +509,12 @@ fn build_mode(
             .find(|f| f.path.eq_ignore_ascii_case(AMPR_INDEX))
             .map(|f| f.path.clone());
         let readable = match at {
-            Some(path) => crate::ampr_index::parse(&tree.read(&path)?).is_some(),
+            Some(path) => crate::ampr_index::parse(&source::read_small(
+                tree.as_mut(),
+                &path,
+                source::MAX_INDEX_BYTES,
+            )?)
+            .is_some(),
             None => false,
         };
         if !readable {
@@ -1544,7 +1552,7 @@ pub fn inspect_with_update(
     let has = |name: &str| files.iter().any(|f| f.path.eq_ignore_ascii_case(name));
     let ps4_game = has("sce_sys/param.sfo") && !has("sce_sys/param.json");
     let sfo = if ps4_game {
-        tree.read("sce_sys/param.sfo")
+        source::read_small(tree.as_mut(), "sce_sys/param.sfo", source::MAX_PARAM_BYTES)
             .ok()
             .and_then(|b| ps5upload_pkg::sfo_params(&b).ok())
             .unwrap_or_default()
@@ -1580,7 +1588,8 @@ pub fn inspect_with_update(
         ];
         checks.retain(|c| !PS5_ONLY.contains(&c.name.as_str()));
     }
-    let param = tree.read("sce_sys/param.json").unwrap_or_default();
+    let param = source::read_small(tree.as_mut(), "sce_sys/param.json", source::MAX_PARAM_BYTES)
+        .unwrap_or_default();
     let json: Option<serde_json::Value> = serde_json::from_slice(
         std::str::from_utf8(&param)
             .unwrap_or_default()

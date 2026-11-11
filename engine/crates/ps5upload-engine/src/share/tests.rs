@@ -826,3 +826,171 @@ fn only_an_installed_apps_own_folder_reads_the_consoles_appmeta_copy() {
     assert_eq!(appmeta_title_id("/user/app/../x"), None);
     assert_eq!(appmeta_title_id("FAKE77031"), None);
 }
+
+// ── A receive against a sender that goes quiet, lies about sizes, or lists names alike ───────────
+
+/// A sender that offers one 10-byte file, allows it, takes the `get` and then says nothing. Holds
+/// the connection open until `hold` is dropped.
+async fn silent_sender(mut sock: wire::MemSocket, hold: tokio::sync::oneshot::Receiver<()>) {
+    use crate::join::GuestSocket;
+    use axum::extract::ws::Message;
+    async fn next(sock: &mut wire::MemSocket) -> Value {
+        loop {
+            match sock.recv().await {
+                Some(Ok(Message::Text(t))) => {
+                    break serde_json::from_str::<Value>(t.as_str()).unwrap()
+                }
+                Some(_) => continue,
+                None => panic!("the receiver left"),
+            }
+        }
+    }
+    assert!(next(&mut sock).await.get("hello").is_some());
+    let offer = json!({"offer": {"from": "S", "title": "t", "items": [
+        {"id": "i1", "kind": "file", "name": "thing", "size": 10, "files": 1}
+    ]}});
+    sock.send(wire::text(offer)).await.unwrap();
+    assert!(next(&mut sock).await.get("accept").is_some());
+    let allowed = json!({"allowed": {"token": "tok", "files": [
+        {"item": "i1", "path": "a.bin", "size": 10}
+    ]}});
+    sock.send(wire::text(allowed)).await.unwrap();
+    assert!(next(&mut sock).await.get("get").is_some());
+    let _ = hold.await;
+}
+
+/// Cancel used to be looked at only between the sender's messages: with none coming, never.
+#[tokio::test]
+async fn cancel_ends_a_receive_whose_sender_went_quiet() {
+    let (sock, link) = wire::mem_pair();
+    let (hold, held) = tokio::sync::oneshot::channel();
+    tokio::spawn(silent_sender(sock, held));
+    let sh = Arc::new(Mutex::new(RxShared::default()));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let sh2 = sh.clone();
+    let t = tokio::spawn(async move { wire::receive(link, "room", "A", sh2, &mut rx).await });
+    until_rx(&sh, "offered").await;
+    let dest = tmp("quiet");
+    tx.send(RxCmd::Accept {
+        items: vec!["i1".into()],
+        dest: dest.clone(),
+    })
+    .unwrap();
+    until_rx(&sh, "receiving").await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    tx.send(RxCmd::Cancel).unwrap();
+    let end = tokio::time::timeout(Duration::from_secs(5), t)
+        .await
+        .expect("Cancel was not heard while the sender was silent")
+        .unwrap();
+    assert_eq!(end, wire::RxEnd::Over);
+    assert_eq!(sh.lock().unwrap().state, "cancelled");
+    drop(hold);
+    let _ = std::fs::remove_dir_all(&dest);
+}
+
+/// With no Cancel either, a silent sender is a lost connection after the idle wait.
+#[tokio::test]
+async fn a_receive_gives_up_on_a_sender_silent_for_too_long() {
+    let (sock, link) = wire::mem_pair();
+    let (hold, held) = tokio::sync::oneshot::channel();
+    tokio::spawn(silent_sender(sock, held));
+    let sh = Arc::new(Mutex::new(RxShared::default()));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let sh2 = sh.clone();
+    let t = tokio::spawn(async move {
+        wire::receive_with(link, "room", "A", sh2, &mut rx, Duration::from_millis(300)).await
+    });
+    until_rx(&sh, "offered").await;
+    let dest = tmp("idle");
+    tx.send(RxCmd::Accept {
+        items: vec!["i1".into()],
+        dest: dest.clone(),
+    })
+    .unwrap();
+    let end = tokio::time::timeout(Duration::from_secs(5), t)
+        .await
+        .expect("a silent sender held the receive")
+        .unwrap();
+    assert_eq!(end, wire::RxEnd::Lost);
+    drop(hold);
+    let _ = std::fs::remove_dir_all(&dest);
+}
+
+#[test]
+fn a_listing_whose_sizes_wrap_is_more_than_the_offer() {
+    assert_eq!(wire::listed_total([4, 6], 10), Some(10));
+    // A little slack for a file that grew.
+    assert_eq!(wire::listed_total([10, 1 << 20], 10), Some(10 + (1 << 20)));
+    assert_eq!(wire::listed_total([10, (1 << 20) + 2], 10), None);
+    // 2^64 + 2 bytes: the wrapped sum was 2, and passed.
+    assert_eq!(wire::listed_total([u64::MAX, 3], 10), None);
+    assert_eq!(wire::listed_total([u64::MAX / 2 + 1; 2], u64::MAX), None);
+}
+
+#[test]
+fn a_long_name_keeps_its_extension_and_two_alike_stay_two() {
+    let long = "x".repeat(300);
+    let a = wire::safe_name(&format!("{long}-disc1.pkg"));
+    assert!(a.ends_with(".pkg") && a.len() <= wire::NAME_MAX, "{a}");
+    // Cut on a character, not in one.
+    let jp = wire::safe_name(&format!("{}.pkg", "ゲ".repeat(200)));
+    assert!(jp.ends_with(".pkg") && jp.len() <= wire::NAME_MAX);
+    assert_eq!(wire::safe_name("Game v1.02.pkg"), "Game v1.02.pkg");
+    assert_eq!(wire::safe_name("a:b?.txt"), "a_b_.txt");
+
+    // Under 200 bytes nothing is cut: names that differ after their 80th character stay apart.
+    let listed = |path: String| wire::Listed {
+        item: "i1".into(),
+        path,
+        size: 5,
+    };
+    let dir = PathBuf::from("dest").join("thing");
+    let dirs = vec![("i1".to_string(), dir.clone())];
+    let p = "p".repeat(90);
+    let plan = wire::plan_targets(
+        vec![
+            listed(format!("{p}-part1.bin")),
+            listed(format!("{p}-part2.bin")),
+            // Alike once cut to the limit.
+            listed(format!("{long}-1.bin")),
+            listed(format!("{long}-2.bin")),
+            // One file on Windows and macOS.
+            listed("Data/Save.dat".into()),
+            listed("data/save.dat".into()),
+            // Alike once made safe.
+            listed("a*b.txt".into()),
+            listed("a?b.txt".into()),
+        ],
+        &dirs,
+    )
+    .unwrap();
+    let keys: std::collections::HashSet<String> = plan
+        .iter()
+        .map(|(_, t)| t.to_string_lossy().to_lowercase())
+        .collect();
+    assert_eq!(keys.len(), plan.len(), "two files share a target: {plan:?}");
+    for (f, t) in &plan {
+        let name = t.file_name().unwrap().to_str().unwrap();
+        assert!(name.len() <= wire::NAME_MAX + 5, "{name}");
+        let ext = f.path.rsplit('.').next().unwrap();
+        assert!(name.ends_with(&format!(".{ext}")), "{name} lost .{ext}");
+    }
+    assert_eq!(plan[0].1, dir.join(format!("{p}-part1.bin")));
+    assert_eq!(plan[7].1, dir.join("a_b (2).txt"));
+    // Still refused: a path outside its item, an item not accepted.
+    assert_eq!(
+        wire::plan_targets(vec![listed("../x".into())], &dirs).unwrap_err(),
+        wire::PlanRefused::Unsafe
+    );
+    assert_eq!(
+        wire::plan_targets(vec![listed("x".into())], &[]).unwrap_err(),
+        wire::PlanRefused::NotAccepted
+    );
+}
+
+#[test]
+fn a_left_share_is_swept_only_once_no_share_can_still_be_live() {
+    assert_eq!(LEFT_SHARE_AGE, MAX_TTL + Duration::from_secs(24 * 3600));
+    assert!(LEFT_SHARE_AGE >= Duration::from_secs(8 * 24 * 3600));
+}

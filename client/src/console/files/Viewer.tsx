@@ -122,6 +122,7 @@ export function Viewer({
   onOpenImage,
   startEditing,
   onSaved,
+  onEditing,
   onClose,
 }: {
   path: string;
@@ -136,11 +137,17 @@ export function Viewer({
   startEditing?: boolean;
   /** A save went through (the folder's listing changed). */
   onSaved?: () => void;
+  /** The text editor opened or closed: while it is open, Files does not change folder under it. */
+  onEditing?: (editing: boolean) => void;
   onClose: () => void;
 }) {
   const [loaded, setLoaded] = useState<Loaded>(null);
   const [editing, setEditing] = useState(!!startEditing);
   const [saved, setSaved] = useState(false);
+  useEffect(() => {
+    onEditing?.(editing);
+    return () => onEditing?.(false);
+  }, [editing, onEditing]);
   /** Bumped after a save: the file is read again. */
   const [reload, setReload] = useState(0);
   /** A text file shown as hex instead (the head's toggle). */

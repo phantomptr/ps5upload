@@ -46,6 +46,31 @@ const PFSC_HEADER_LEN: usize = 0x30;
 const MAX_INODES: u64 = 8_000_000;
 const MAX_DIR_BYTES: u64 = 256 << 20;
 const MAX_DEPTH: u32 = 64;
+/// Directory entries a walk reads in all. A sound image names each inode once, so this is the
+/// inode bound; a crafted one whose directories point at each other's blocks stops here.
+const MAX_ENTRIES: usize = MAX_INODES as usize;
+/// Bytes of the paths a walk keeps, as the exFAT and UFS2 readers bound theirs.
+const MAX_PATH_BYTES: usize = 256 << 20;
+/// Directory bytes a walk reads in all: 8 million entries are a few hundred MiB of them.
+const MAX_WALK_BYTES: u64 = 2 << 30;
+/// The most reserved for a read ahead of its bytes; the rest grows as blocks really decode.
+const PREALLOC: u64 = 16 << 20;
+
+/// What a walk has been through, so a crafted image cannot make it go round or grow without end.
+#[derive(Default)]
+struct Budget {
+    /// Directory inodes already walked.
+    inodes: std::collections::HashSet<u32>,
+    /// Directory blocks already walked: two inodes naming one block is the same loop with a
+    /// different inode number on it.
+    blocks: std::collections::HashSet<u32>,
+    /// Entries read so far, every directory's, against [`MAX_ENTRIES`].
+    listed: usize,
+    /// Bytes of the paths kept so far, against [`MAX_PATH_BYTES`].
+    path_bytes: usize,
+    /// Directory bytes read so far, against [`MAX_WALK_BYTES`].
+    dir_bytes: u64,
+}
 
 #[derive(Clone)]
 struct Inode {
@@ -209,8 +234,7 @@ impl PfsSource {
             .ok_or_else(|| me.bad("the PFS image has no root directory"))?;
 
         let mut found: Vec<(SourceFile, Entry)> = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        me.walk(&inodes, uroot, "", 0, &mut seen, &mut found)?;
+        me.walk(&inodes, uroot, "", 0, &mut Budget::default(), &mut found)?;
         if found.is_empty() {
             return Err(me.bad("holds no files"));
         }
@@ -244,7 +268,7 @@ impl PfsSource {
         dir: u32,
         prefix: &str,
         depth: u32,
-        seen: &mut std::collections::HashSet<u32>,
+        budget: &mut Budget,
         out: &mut Vec<(SourceFile, Entry)>,
     ) -> Result<()> {
         if depth > MAX_DEPTH {
@@ -254,15 +278,28 @@ impl PfsSource {
             return Err(self.bad("a directory points outside the inode table"));
         };
         // A directory reached twice is a loop or a hard link; either way it is read once.
-        if inode.mode & INODE_DIR == 0 || !seen.insert(dir) {
+        if inode.mode & INODE_DIR == 0 || !budget.inodes.insert(dir) {
             return Ok(());
         }
         if inode.size > MAX_DIR_BYTES {
             return Err(self.bad("a directory in the PFS image is impossibly large"));
         }
+        if inode.size > 0 && !budget.blocks.insert(inode.first_block) {
+            return Err(self.bad("two directories in the PFS image share one block"));
+        }
+        budget.dir_bytes += inode.size;
+        if budget.dir_bytes > MAX_WALK_BYTES {
+            return Err(self.bad("the PFS image's directories are impossibly large"));
+        }
         let payload = self.bytes(u64::from(inode.first_block) * self.block_size, inode.size)?;
+        let entries = dirents(&payload);
+        drop(payload);
+        budget.listed += entries.len();
+        if budget.listed > MAX_ENTRIES {
+            return Err(self.bad("the PFS image's directories hold more than 8 million entries"));
+        }
         let mut children = 0usize;
-        for d in dirents(&payload) {
+        for d in entries {
             if d.name == "." || d.name == ".." || d.name.is_empty() || d.name.contains('/') {
                 continue;
             }
@@ -273,9 +310,13 @@ impl PfsSource {
                 continue;
             };
             let path = format!("{prefix}{}", d.name);
+            budget.path_bytes += path.len();
+            if budget.path_bytes > MAX_PATH_BYTES {
+                return Err(self.bad("the PFS image's paths are over 256 MiB"));
+            }
             if d.kind == DIRENT_DIR && child.mode & INODE_DIR != 0 {
                 children += 1;
-                self.walk(inodes, d.inode, &format!("{path}/"), depth + 1, seen, out)?;
+                self.walk(inodes, d.inode, &format!("{path}/"), depth + 1, budget, out)?;
             } else if d.kind == DIRENT_FILE && child.mode & INODE_FILE != 0 {
                 children += 1;
                 // Checked now, so a truncated image is refused before a build starts and
@@ -364,7 +405,8 @@ impl PfsSource {
             return self.bytes(base + start, end - start);
         }
         self.offsets(i)?;
-        let mut out = Vec::with_capacity((end - start) as usize);
+        // The file's size is its own claim; what is reserved for a read of it is not.
+        let mut out = Vec::with_capacity((end - start).min(PREALLOC) as usize);
         for n in start / PFSC_BLOCK..=(end - 1) / PFSC_BLOCK {
             let (from, to) = {
                 let o = self.entries[i].offsets.as_ref().expect("just read");
@@ -607,5 +649,167 @@ mod tests {
             1,
             "zeros from a block's start end the folder"
         );
+    }
+
+    const BS: usize = 0x1000;
+
+    /// A small PFS image: `inodes` are `(mode, size, first_block)`, `blocks` are placed whole.
+    fn image(inodes: &[(u16, u64, u32)], blocks: &[(usize, Vec<u8>)], total: usize) -> Vec<u8> {
+        let mut img = vec![0u8; total * BS];
+        img[0..8].copy_from_slice(&1u64.to_le_bytes());
+        img[8..16].copy_from_slice(&PFS_MAGIC.to_le_bytes());
+        img[0x20..0x24].copy_from_slice(&(BS as u32).to_le_bytes());
+        img[0x30..0x38].copy_from_slice(&(inodes.len() as u64).to_le_bytes());
+        img[0x40..0x48].copy_from_slice(&1u64.to_le_bytes());
+        for (i, (mode, size, first)) in inodes.iter().enumerate() {
+            let o = BS + i * INODE_LEN;
+            img[o..o + 2].copy_from_slice(&mode.to_le_bytes());
+            img[o + 8..o + 16].copy_from_slice(&size.to_le_bytes());
+            img[o + 0x10..o + 0x18].copy_from_slice(&size.to_le_bytes());
+            img[o + 0x64..o + 0x68].copy_from_slice(&first.to_le_bytes());
+        }
+        for (at, bytes) in blocks {
+            img[at * BS..at * BS + bytes.len()].copy_from_slice(bytes);
+        }
+        img
+    }
+
+    fn dir_block(entries: &[(u32, i32, &str)]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (inode, kind, name) in entries {
+            let at = out.len();
+            entry(&mut out, *inode, name);
+            out[at + 4..at + 8].copy_from_slice(&kind.to_le_bytes());
+        }
+        out
+    }
+
+    fn open_image(img: Vec<u8>) -> Result<PfsSource> {
+        PfsSource::from_reader(Box::new(std::io::Cursor::new(img)), "test".into())
+    }
+
+    fn refusal(img: Vec<u8>) -> String {
+        match open_image(img) {
+            Ok(_) => panic!("must not open"),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_small_image_walks_and_reads() {
+        let root = dir_block(&[(2, DIRENT_DIR, "data"), (3, DIRENT_FILE, "eboot.bin")]);
+        let data = dir_block(&[(4, DIRENT_FILE, "a.bin")]);
+        let img = image(
+            &[
+                (0, 0, 0),
+                (INODE_DIR, root.len() as u64, 3),
+                (INODE_DIR, data.len() as u64, 4),
+                (INODE_FILE, 5, 5),
+                (INODE_FILE, 3, 6),
+            ],
+            &[
+                (2, dir_block(&[(1, DIRENT_DIR, "uroot")])),
+                (3, root),
+                (4, data),
+                (5, b"eboot".to_vec()),
+                (6, b"abc".to_vec()),
+            ],
+            7,
+        );
+        let mut src = open_image(img).unwrap();
+        let paths: Vec<&str> = src.files().iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["data/a.bin", "eboot.bin"]);
+        assert_eq!(src.read("data/a.bin").unwrap(), b"abc");
+    }
+
+    /// Two directory inodes naming one block: every inode is new to the walk, the block is not.
+    #[test]
+    fn two_directories_sharing_a_block_are_refused() {
+        let root = dir_block(&[(2, DIRENT_DIR, "a"), (3, DIRENT_DIR, "b")]);
+        let shared = dir_block(&[(4, DIRENT_FILE, "f")]);
+        let img = image(
+            &[
+                (0, 0, 0),
+                (INODE_DIR, root.len() as u64, 3),
+                (INODE_DIR, shared.len() as u64, 4),
+                (INODE_DIR, shared.len() as u64, 4),
+                (INODE_FILE, 1, 5),
+            ],
+            &[
+                (2, dir_block(&[(1, DIRENT_DIR, "uroot")])),
+                (3, root),
+                (4, shared),
+            ],
+            6,
+        );
+        assert!(refusal(img).contains("share one block"));
+    }
+
+    #[test]
+    fn the_walk_budgets_end_a_walk() {
+        let root = dir_block(&[(2, DIRENT_FILE, "f")]);
+        let img = image(
+            &[
+                (0, 0, 0),
+                (INODE_DIR, root.len() as u64, 3),
+                (INODE_FILE, 1, 4),
+            ],
+            &[(2, dir_block(&[(1, DIRENT_DIR, "uroot")])), (3, root)],
+            5,
+        );
+        let mut src = open_image(img).unwrap();
+        let inodes = vec![
+            Inode {
+                mode: 0,
+                flags: 0,
+                size: 0,
+                size_compressed: 0,
+                first_block: 0,
+            },
+            Inode {
+                mode: INODE_DIR,
+                flags: 0,
+                size: 24,
+                size_compressed: 24,
+                first_block: 3,
+            },
+            Inode {
+                mode: INODE_FILE,
+                flags: 0,
+                size: 1,
+                size_compressed: 1,
+                first_block: 4,
+            },
+        ];
+        for (budget, what) in [
+            (
+                Budget {
+                    listed: MAX_ENTRIES,
+                    ..Budget::default()
+                },
+                "entries",
+            ),
+            (
+                Budget {
+                    path_bytes: MAX_PATH_BYTES,
+                    ..Budget::default()
+                },
+                "paths",
+            ),
+            (
+                Budget {
+                    dir_bytes: MAX_WALK_BYTES,
+                    ..Budget::default()
+                },
+                "impossibly large",
+            ),
+        ] {
+            let mut budget = budget;
+            let e = src
+                .walk(&inodes, 1, "", 0, &mut budget, &mut Vec::new())
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains(what), "{e}");
+        }
     }
 }

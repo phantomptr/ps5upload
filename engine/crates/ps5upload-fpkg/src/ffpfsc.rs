@@ -753,6 +753,12 @@ fn check_controlled(
         compressed,
         base,
     } = layout(&mut f)?;
+    // The sizes are the image's own claims: held to its length before they size anything.
+    let image_len = f.metadata()?.len();
+    let fits = |end: Option<u64>| end.is_some_and(|e| e <= image_len);
+    if !fits(base.checked_add(stored)) {
+        return format_err("the image is shorter than the file it holds");
+    }
     let le64 = |b: &[u8], at: usize| u64::from_le_bytes(b[at..at + 8].try_into().unwrap());
     let le32 = |b: &[u8], at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap());
     if let Expect::Crcs(c) = &expect {
@@ -813,8 +819,17 @@ fn check_controlled(
     if blocks != raw_size.div_ceil(BLOCK) {
         return format_err("the container's length disagrees with the file size");
     }
-    let mut table = vec![0u8; ((blocks + 1) * 8) as usize];
-    f.seek(SeekFrom::Start(base + le64(&ph, 0x18)))?;
+    // The table must lie inside the image before it is allocated.
+    let table_len = blocks.checked_add(1).and_then(|n| n.checked_mul(8));
+    let table_at = base.checked_add(le64(&ph, 0x18));
+    let (Some(table_len), Some(table_at)) = (table_len, table_at) else {
+        return format_err("the container's block table is out of range");
+    };
+    if !fits(table_at.checked_add(table_len)) {
+        return format_err("the container's block table runs past the image");
+    }
+    let mut table = vec![0u8; table_len as usize];
+    f.seek(SeekFrom::Start(table_at))?;
     f.read_exact(&mut table)?;
     let offsets: Vec<u64> = table.chunks(8).map(|c| le64(c, 0)).collect();
     if *offsets.last().unwrap() != stored {
@@ -837,7 +852,10 @@ fn check_controlled(
                 stored_block
             } else {
                 let mut d = Vec::with_capacity(BLOCK as usize);
-                ZlibDecoder::new(&stored_block[..]).read_to_end(&mut d)?;
+                // Bounded: a hostile stream cannot inflate past one block.
+                ZlibDecoder::new(&stored_block[..])
+                    .take(BLOCK + 1)
+                    .read_to_end(&mut d)?;
                 if d.len() != BLOCK as usize {
                     return format_err("a compressed block does not decode to 64 KiB");
                 }
@@ -885,7 +903,10 @@ fn check_controlled(
                 stored_block
             } else {
                 let mut d = Vec::with_capacity(BLOCK as usize);
-                ZlibDecoder::new(&stored_block[..]).read_to_end(&mut d)?;
+                // Bounded: a hostile stream cannot inflate past one block.
+                ZlibDecoder::new(&stored_block[..])
+                    .take(BLOCK + 1)
+                    .read_to_end(&mut d)?;
                 if d.len() != BLOCK as usize {
                     return format_err("a compressed block does not decode to 64 KiB");
                 }
@@ -907,11 +928,78 @@ fn check_controlled(
 mod tests {
     use super::*;
 
-    fn temp(name: &str) -> PathBuf {
+    /// A test's folder, removed when the test ends, whichever way it ends: these hold images of
+    /// tens of MiB.
+    struct TempDir(PathBuf);
+
+    impl std::ops::Deref for TempDir {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp(name: &str) -> TempDir {
         let d = std::env::temp_dir().join(format!("ffpfsc-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
-        d
+        TempDir(d)
+    }
+
+    #[test]
+    fn a_test_folder_goes_with_its_test() {
+        let d = temp("gone");
+        let path = d.to_path_buf();
+        std::fs::write(d.join("x"), b"x").unwrap();
+        drop(d);
+        assert!(!path.exists());
+    }
+
+    /// An image whose inode and container agree on a size no image could hold: the block table
+    /// that size implies is refused by the image's length, not allocated.
+    #[test]
+    fn a_container_that_claims_an_impossible_size_is_refused() {
+        let d = temp("claims");
+        let src = d.join("PPSA00001.exfat");
+        std::fs::write(&src, vec![7u8; 300_000]).unwrap();
+        let out = d.join("PPSA00001.ffpfsc");
+        let r = wrap(&src, &out, &WrapOptions::default(), &mut Control::default()).unwrap();
+        assert!(r.compressed);
+        verify(&out, None).unwrap();
+        let base = layout(&mut File::open(&out).unwrap()).unwrap().base as usize;
+
+        let good = std::fs::read(&out).unwrap();
+        let node = BLOCK as usize + 3 * INODE_LEN;
+        let claim = 1u64 << 60;
+        let mut bad = good.clone();
+        bad[node + 16..node + 24].copy_from_slice(&claim.to_le_bytes());
+        bad[base + 0x28..base + 0x30].copy_from_slice(&claim.to_le_bytes());
+        std::fs::write(&out, &bad).unwrap();
+        let e = verify(&out, None).unwrap_err().to_string();
+        assert!(e.contains("block table"), "{e}");
+        assert!(crate::pfsc_reader::PfscReader::open(&out).is_err());
+
+        // A stored size past the end of the image, and a table offset that overflows.
+        let mut bad = good.clone();
+        bad[node + 8..node + 16].copy_from_slice(&u64::MAX.to_le_bytes());
+        std::fs::write(&out, &bad).unwrap();
+        assert!(verify(&out, None)
+            .unwrap_err()
+            .to_string()
+            .contains("shorter"));
+        let mut bad = good;
+        bad[base + 0x18..base + 0x20].copy_from_slice(&u64::MAX.to_le_bytes());
+        std::fs::write(&out, &bad).unwrap();
+        assert!(verify(&out, None)
+            .unwrap_err()
+            .to_string()
+            .contains("block table"));
     }
 
     #[test]

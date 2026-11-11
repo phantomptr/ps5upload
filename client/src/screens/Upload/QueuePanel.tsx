@@ -1129,7 +1129,7 @@ export function QueueRow({
           }`}
         />
       )}
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         {dragHandle && (
           // Mouse, pen and touch; keyboard users have the up/down buttons on the right.
           <span
@@ -1185,7 +1185,7 @@ export function QueueRow({
             />
           </div>
         )}
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 basis-[12rem]">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
             {/* Two lines at most, broken anywhere: a raw content id has no
                 spaces, and a one-line ellipsis left "H…" on a phone. */}

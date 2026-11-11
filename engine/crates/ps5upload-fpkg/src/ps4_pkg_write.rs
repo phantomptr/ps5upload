@@ -1599,7 +1599,7 @@ fn game_sfo(tree: &mut dyn SourceTree) -> Result<(String, Sfo)> {
              game has sce_sys/param.json instead)",
         );
     };
-    let bytes = tree.read(&path)?;
+    let bytes = crate::source::read_small(tree, &path, crate::source::MAX_PARAM_BYTES)?;
     let sfo = Sfo::read(&bytes)?;
     let category = sfo.display("CATEGORY");
     match category.as_str() {

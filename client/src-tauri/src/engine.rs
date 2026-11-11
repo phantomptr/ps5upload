@@ -1006,7 +1006,10 @@ pub async fn start(app: &AppHandle) -> Result<String> {
                         None
                     };
                     mark_sidecar_stopped();
-                    eprintln!("[engine-watch] engine process exited (code {code:?})");
+                    // Not `eprintln!`: with stderr gone it panics, and the restart below never ran.
+                    log_line(format_args!(
+                        "[engine-watch] engine process exited (code {code:?})"
+                    ));
                     let _ = app_exit.emit("ps5upload-engine-exit", code);
                     if unexpected && !crate::exit_guard::exiting() {
                         restart_after_crash(app_exit);

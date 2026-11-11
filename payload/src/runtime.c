@@ -2425,9 +2425,38 @@ static void fs_mount_derive_name(const char *image_path, char *out, size_t cap) 
  * error-cleanup path of FS_MOUNT. Returns 0 on success, -1 on
  * failure (errno preserved). */
 #define FS_MOUNT_UNMOUNT_PASSES 4
+
+/* What is mounted exactly ON `path` right now: 1 with the entry in `*out`
+ * (when given), 0 when `path` is not a mount point or cannot be looked at.
+ * statfs answers for the filesystem HOLDING the path, so the path is a mount
+ * point only when that filesystem's own mount point is the path itself. */
+static int fs_mounted_on(const char *path, struct statfs *out) {
+    struct statfs sb;
+    if (!path || !path[0] || statfs(path, &sb) != 0) return 0;
+    if (strcmp(sb.f_mntonname, path) != 0) return 0;
+    if (out) *out = sb;
+    return 1;
+}
+
 static int fs_mount_try_unmount(const char *mount_point) {
     int last_errno = 0;
     for (int pass = 0; pass < FS_MOUNT_UNMOUNT_PASSES; pass++) {
+        /* The FIRST pass takes off the mount the caller vouched for. Every
+         * later pass is about whatever that exposed, and it must be looked at
+         * before it is touched: this used to go straight on and unmount the
+         * next thing at the path too, escalating to MNT_FORCE — the drive or
+         * system folder an image had been mounted over, or the sandbox mount
+         * under a library overlay. Only another image unit (an image stacked
+         * on an image at one path) is ours to continue with. Nothing mounted
+         * there any more, or something that is not ours: done. */
+        if (pass > 0) {
+            struct statfs under;
+            if (!fs_mounted_on(mount_point, &under) ||
+                !image_mount_from_is_unit(under.f_mntfromname)) {
+                errno = 0;
+                return 0;
+            }
+        }
         /* Plain unmount first. EINVAL / ENOENT ⇒ "already gone" —
          * treat as success on the first pass; on later passes it
          * means a previous pass cleared the last layer. */
@@ -3005,7 +3034,27 @@ static int fs_mount_validate_post_mount(const char *mp,
  *  10. Reply with ACK carrying {mount_point, dev_node, fstype,
  *      source_image, read_only}.
  */
-static int handle_fs_mount(runtime_state_t *state, const char *request_body,
+/* One fs.mount or fs.unmount at a time.
+ *
+ * Both handlers are check-then-act over the mount table (is this image
+ * mounted already? is this path a mount point? which unit backs it?) and
+ * every management call runs on its own thread, so two fs.mount calls for one
+ * image both found "not mounted", both attached a unit and both mounted — the
+ * second on top of the first, with one unit left attached for good; an
+ * unmount could likewise run between another call's look and its nmount.
+ *
+ * LOCK ORDER: this is the OUTERMOST lock of the two handlers and of nothing
+ * else. It is taken with no other lock held (the dispatcher calls MGMT_SONY
+ * handlers without one; both functions are static and have no other caller),
+ * and under it the handlers take, one at a time and never nested in each
+ * other: mntinfo_snapshot's own mutex, sony_api_lock (pop_notification) and
+ * state->state_mtx. None of those paths ever takes this lock, and
+ * kernel_rw_lock is not involved, so no cycle can form (sony_api_lock.h,
+ * kernel_rw_lock.h). A slow mount (an LVD node that is late to appear) makes
+ * the next mount wait, which is the point. */
+static pthread_mutex_t g_fs_mount_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+static int fs_mount_request(runtime_state_t *state, const char *request_body,
                             uint64_t body_len) {
     char image_path[512] = {0};
     char mount_name[128] = {0};
@@ -3175,6 +3224,26 @@ static int handle_fs_mount(runtime_state_t *state, const char *request_body,
                      FS_MOUNT_BASE, mount_name);
         if (n < 0 || (size_t)n >= sizeof(mount_point)) {
             return mgmt_reply(MGMT_FRAME_ERROR, "fs_mount_name_too_long", 22);
+        }
+    }
+
+    /* Never mount ON TOP of a mount. Something is already mounted at this
+     * exact path — another image (the same image was answered by the reuse
+     * check above), or a drive or folder that is not ours at all (a
+     * caller-chosen mount_point may be /mnt/usb0). Mounting over it hides it,
+     * and FS_UNMOUNT of this path then works its way down the stack. Refuse
+     * before anything is attached. */
+    {
+        struct statfs there;
+        if (fs_mounted_on(mount_point, &there)) {
+            char errbuf[512];
+            int el = snprintf(errbuf, sizeof(errbuf),
+                              "fs_mount_point_in_use: %s is already mounted at %s; "
+                              "unmount it or choose another mount point",
+                              there.f_mntfromname, mount_point);
+            if (el < 0) el = 0;
+            if ((size_t)el >= sizeof(errbuf)) el = (int)sizeof(errbuf) - 1;
+            return mgmt_reply(MGMT_FRAME_ERROR, errbuf, (uint64_t)el);
         }
     }
 
@@ -3436,6 +3505,14 @@ static int handle_fs_mount(runtime_state_t *state, const char *request_body,
     return mgmt_reply(MGMT_FRAME_FS_MOUNT_ACK, resp, (uint64_t)n);
 }
 
+static int handle_fs_mount(runtime_state_t *state, const char *request_body,
+                            uint64_t body_len) {
+    pthread_mutex_lock(&g_fs_mount_mtx);
+    int rc = fs_mount_request(state, request_body, body_len);
+    pthread_mutex_unlock(&g_fs_mount_mtx);
+    return rc;
+}
+
 /* ── FS_UNMOUNT handler ─────────────────────────────────────────────────
  *
  * Only lets callers unmount things under /mnt/ps5upload/ so a malicious
@@ -3444,7 +3521,7 @@ static int handle_fs_mount(runtime_state_t *state, const char *request_body,
  * via getmntinfo
  * and dispatches to the matching detach helper — skipping that would
  * leak the attachment per mount/unmount cycle. */
-static int handle_fs_unmount(runtime_state_t *state, const char *request_body,
+static int fs_unmount_request(runtime_state_t *state, const char *request_body,
                               uint64_t body_len) {
     char mount_point[256] = {0};
     (void)body_len;
@@ -3567,6 +3644,15 @@ static int handle_fs_unmount(runtime_state_t *state, const char *request_body,
     }
 
     return mgmt_reply(MGMT_FRAME_FS_UNMOUNT_ACK, NULL, 0);
+}
+
+/* Under the same lock as fs.mount (g_fs_mount_mtx, where the order is set out). */
+static int handle_fs_unmount(runtime_state_t *state, const char *request_body,
+                              uint64_t body_len) {
+    pthread_mutex_lock(&g_fs_mount_mtx);
+    int rc = fs_unmount_request(state, request_body, body_len);
+    pthread_mutex_unlock(&g_fs_mount_mtx);
+    return rc;
 }
 
 /* ── APP_* handlers (thin wrappers over register.c) ─────────────────────
@@ -5106,7 +5192,12 @@ static int handle_user_create(runtime_state_t *state, const char *body) {
 static int handle_user_delete(runtime_state_t *state, const char *body) {
     if (!state) return -1;
     int uid = (int)extract_json_uint64_field(body, "uid");
-    int wipe_saves = (int)extract_json_uint64_field(body, "wipe_saves");
+    /* The engine sends a JSON bool (users.rs: json!({"uid", "wipe_saves": bool})). Read as a
+     * number it was always 0 ("true" is not a digit), so the option was never honoured. A bool
+     * first; a number (an older caller's 0/1) still counts. */
+    int wipe_saves = 0;
+    if (extract_json_bool_field(body, "wipe_saves", &wipe_saves) != 0)
+        wipe_saves = extract_json_uint64_field(body, "wipe_saves") != 0;
     int rc = -1;
     const char *err_msg = "";
     if (uid > 0) {
@@ -5646,7 +5737,12 @@ static int handle_sdk_scan(runtime_state_t *state) {
         return mgmt_reply(MGMT_FRAME_SDK_SCAN_ACK, e, strlen(e));
     }
     size_t written = 0;
-    sdk_changer_scan(buf, SDK_JSON_BUF_SZ, &written);
+    if (sdk_changer_scan(buf, SDK_JSON_BUF_SZ, &written) != 0) {
+        /* Never an empty body: the engine parses this reply as JSON. */
+        const char *e = "{\"titles\":[],\"error\":\"sdk_scan_failed\"}";
+        free(buf);
+        return mgmt_reply(MGMT_FRAME_SDK_SCAN_ACK, e, strlen(e));
+    }
     cheat_inc_cmd_count(state);
     int rc = mgmt_reply(MGMT_FRAME_SDK_SCAN_ACK, buf, (uint64_t)written);
     free(buf);
@@ -7611,8 +7707,12 @@ static int save_do_unmount(int *written_back, char *kept, size_t kept_sz) {
          * copy's mtime (FW 9.60, #770: "Nothing changed" and the edit was lost). When neither the
          * copy nor the real image looks touched, compare the bytes: the copy started as the
          * image, so any difference is an edit. (Not when the image moved: the game saved, and
-         * that is handled below.) */
-        if (!changed && !image_moved && file_contents_differ(g_save_copy, g_save_image) == 1)
+         * that is handled below.)
+         * ANY non-zero answer counts as changed: -1 means one of the two could not be read, and
+         * "could not compare" must never be taken for "nothing changed" — that branch deletes the
+         * copy, which may hold the only edits. Changed goes on to the write-back, which keeps the
+         * copy when it fails. */
+        if (!changed && !image_moved && file_contents_differ(g_save_copy, g_save_image) != 0)
             changed = 1;
         if (!changed) {
             unlink(g_save_copy);
@@ -7650,6 +7750,63 @@ static int save_do_unmount(int *written_back, char *kept, size_t kept_sz) {
     return 0;
 }
 
+/* Is something mounted on the save mount point? Told two ways, either is enough: the mount
+ * table names this path, or the folder is on another device than the folder holding it. */
+static int save_mount_point_busy(void) {
+    struct stat mp_st, par_st;
+    if (fs_mounted_on(SAVE_MOUNT_POINT, NULL)) return 1;
+    return stat(SAVE_MOUNT_POINT, &mp_st) == 0 && stat("/data/ps5upload", &par_st) == 0 &&
+           mp_st.st_dev != par_st.st_dev;
+}
+
+/* A save this helper did not open is mounted: the helper that opened it was replaced (a resend,
+ * an app update) or died, and which image it was is gone with it. Close it here, so the person
+ * is not told to restart the console: unmount it, and keep every copy it left in SAVE_COPY_DIR
+ * as `<name>.unsaved` (the same name a failed write-back keeps its edits under), since any of
+ * them may hold edits and the next open of that save would truncate it. Nothing is written back:
+ * the image it belongs to is not known. A sealed key left beside the copies is removed.
+ * 0: the mount point is free; -1: still mounted, nothing was touched. */
+static int save_release_orphan(void) {
+    SceFsUmountSaveDataOpt uopt;
+    memset(&uopt, 0, sizeof uopt);
+    sceFsInitUmountSaveDataOpt(&uopt);
+    errno = 0;
+    int rc = sceFsUmountSaveData(&uopt, SAVE_MOUNT_POINT, 0, 0);
+    int ue = errno; /* read before sync() can overwrite it */
+    sync();
+    if ((rc < 0 && ue != EINVAL && ue != ENOENT) || save_mount_point_busy()) {
+        fprintf(stderr, "[payload2] save: a save left open by an earlier helper could not be closed "
+                        "(rc=%d errno=%d)\n", rc, ue);
+        return -1;
+    }
+    int kept = 0;
+    DIR *d = opendir(SAVE_COPY_DIR);
+    if (d) {
+        struct dirent *de;
+        while ((de = readdir(d)) != NULL) {
+            const char *n = de->d_name;
+            size_t nl = strlen(n);
+            if (strcmp(n, ".") == 0 || strcmp(n, "..") == 0) continue;
+            if (nl > 8 && strcmp(n + nl - 8, ".unsaved") == 0) continue;
+            char path[1024], to[1024 + 16];
+            struct stat st;
+            if (snprintf(path, sizeof path, SAVE_COPY_DIR "/%s", n) >= (int)sizeof path) continue;
+            if (lstat(path, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+            if (nl > 4 && strcmp(n + nl - 4, ".bin") == 0 && st.st_size <= 4096) {
+                unlink(path); /* the sealed key of the save that was open */
+                continue;
+            }
+            snprintf(to, sizeof to, "%s.unsaved", path);
+            if (rename(path, to) == 0) kept++; /* same folder: one device */
+        }
+        closedir(d);
+    }
+    sync();
+    fprintf(stderr, "[payload2] save: closed a save left open by an earlier helper; %d copy(ies) kept "
+                    "as .unsaved in " SAVE_COPY_DIR "\n", kept);
+    return 0;
+}
+
 static int save_do_mount(const char *image, char *err, size_t err_sz, int *is_ps4_out) {
     const char *bname = strrchr(image, '/');
     bname = bname ? bname + 1 : image;
@@ -7677,6 +7834,21 @@ static int save_do_mount(const char *image, char *err, size_t err_sz, int *is_ps
         return -1;
     }
     *is_ps4_out = is_ps4;
+    /* A save can still be mounted here that THIS helper knows nothing about:
+     * what is open lives only in the g_save_* variables, and a helper that was
+     * replaced (a resend, an update) leaves its save mounted with its copy in
+     * SAVE_COPY_DIR as the backing file. Opening the same save again would
+     * copy the image over that file with O_TRUNC while the kernel has it
+     * mounted. So nothing is copied and nothing is mounted while the mount
+     * point is in use. Told two ways, either is enough: the mount table names
+     * this path, or the folder is on another device than the folder holding it. */
+    if (save_mount_point_busy() && save_release_orphan() != 0) {
+        snprintf(err, err_sz,
+                 "save_mount_point_busy: a save opened before the helper was last restarted is "
+                 "still mounted and could not be closed, so another cannot be opened; restart the "
+                 "console to close it (its edits are in " SAVE_COPY_DIR ")");
+        return -1;
+    }
     mkdir("/data/ps5upload", 0777);
     mkdir(SAVE_COPY_DIR, 0777);
     mkdir(SAVE_MOUNT_POINT, 0777);
@@ -9442,7 +9614,10 @@ static void profile_sync_online_json_firstname(uint32_t uid, const char *name) {
         return;
     }
     char *vstart = p + strlen(key);
-    char *vend = strchr(vstart, '"');
+    /* The value's CLOSING quote, past any escaped one: the first `"` is not it when the name
+     * already there holds a quote (written as \", by this very function the last time), and
+     * cutting at that one left the rest of the old name in the file as broken JSON. */
+    const char *vend = json_string_end(vstart, NULL);
     if (!vend) {
         free(buf);
         return;

@@ -11,6 +11,36 @@ pub struct SourceFile {
     pub size: u64,
 }
 
+/// The most a `param.json` or `param.sfo` may be to be read whole. Real ones are a few KiB.
+pub const MAX_PARAM_BYTES: u64 = 4 << 20;
+/// The most one piece of artwork or sound the container carries (`icon0.png`, `pic0.png`,
+/// `snd0.at9`, …) or a runtime module may be to be read whole. Real ones are a few MiB.
+pub const MAX_ARTWORK_BYTES: u64 = 256 << 20;
+/// The most an asset index or pack manifest may be to be read whole. A quarter of a million
+/// files make one of a few tens of MiB.
+pub const MAX_INDEX_BYTES: u64 = 512 << 20;
+
+/// The whole of a file that is known to be small, refused when the tree lists it as larger than
+/// `cap`. A tree's sizes are the image's own claims: a crafted image that lists a terabyte
+/// `param.json` is an error here, not an allocation of that size.
+pub fn read_small(tree: &mut dyn SourceTree, path: &str, cap: u64) -> Result<Vec<u8>> {
+    let too_large = |size: u64| {
+        Error::Format(format!(
+            "{path} is {size} bytes, more than the {cap} this kind of file may be"
+        ))
+    };
+    if let Some(size) = tree.files().iter().find(|f| f.path == path).map(|f| f.size) {
+        if size > cap {
+            return Err(too_large(size));
+        }
+    }
+    let bytes = tree.read(path)?;
+    if bytes.len() as u64 > cap {
+        return Err(too_large(bytes.len() as u64));
+    }
+    Ok(bytes)
+}
+
 /// The game files to convert, whatever they live in. Sizes are known up front, so the
 /// plan fixes every offset before the first byte is read. Images seek, so reading takes
 /// `&mut self`.
@@ -907,8 +937,7 @@ fn ampr_index_check(tree: &mut dyn SourceTree) -> (bool, String) {
     };
     let regenerated = "a package or a game image carries one generated from its files \
                        instead";
-    let Some(listed) = tree
-        .read(&at)
+    let Some(listed) = read_small(tree, &at, MAX_INDEX_BYTES)
         .ok()
         .and_then(|d| crate::ampr_index::parse(&d))
     else {
@@ -1000,7 +1029,7 @@ pub fn readiness(tree: &mut dyn SourceTree) -> Readiness {
         !has("sce_sys/param.sfo"),
         "a param.sfo makes the launch path treat the title as PS4",
     );
-    let param = tree.read("sce_sys/param.json").unwrap_or_default();
+    let param = read_small(tree, "sce_sys/param.json", MAX_PARAM_BYTES).unwrap_or_default();
     match content_id(&param) {
         Some(id) => r.push(
             "content id",
@@ -1625,5 +1654,55 @@ mod tests {
             .unwrap();
         assert_eq!(read, b"moved");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A tree that lists sizes it never has to back: reading a file it lists as huge panics.
+    struct Liar(Vec<SourceFile>);
+    impl SourceTree for Liar {
+        fn files(&self) -> &[SourceFile] {
+            &self.0
+        }
+        fn read(&mut self, path: &str) -> Result<Vec<u8>> {
+            let Some(f) = self.0.iter().find(|f| f.path == path) else {
+                return Err(Error::Format(format!("no {path}")));
+            };
+            assert!(
+                f.size <= 1 << 20,
+                "{path} must be refused by its size, not read"
+            );
+            Ok(vec![b'{'; f.size as usize])
+        }
+        fn describe(&self) -> String {
+            "liar".into()
+        }
+    }
+
+    #[test]
+    fn a_small_file_listed_as_huge_is_refused_unread() {
+        let mut tree = Liar(vec![
+            SourceFile {
+                path: "sce_sys/param.json".into(),
+                size: 1 << 45,
+            },
+            SourceFile {
+                path: "sce_sys/icon0.png".into(),
+                size: 100,
+            },
+        ]);
+        let e = read_small(&mut tree, "sce_sys/param.json", MAX_PARAM_BYTES)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("more than"), "{e}");
+        assert_eq!(
+            read_small(&mut tree, "sce_sys/icon0.png", MAX_ARTWORK_BYTES)
+                .unwrap()
+                .len(),
+            100
+        );
+        // Under the cap by its listing, over it by what came back.
+        assert!(read_small(&mut tree, "sce_sys/icon0.png", 99).is_err());
+        // The readiness check reads param.json through the cap: no panic, a failed check.
+        let r = readiness(&mut tree);
+        assert!(r.checks.iter().any(|c| c.name == "content id" && !c.ok));
     }
 }

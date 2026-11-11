@@ -29,9 +29,9 @@ export function ServersCardView(props: {
   const tr = useTr();
   return (
     <Card className="xl:col-span-12">
-      <div className="mb-3 flex items-center gap-2">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
         <Network size={16} className="text-[var(--color-accent-bright)]" />
-        <h2 className="flex-1 text-[0.9375rem] font-semibold">{tr("network_shares", undefined, "Network shares")}</h2>
+        <h2 className="flex-1 basis-[8rem] text-[0.9375rem] font-semibold">{tr("network_shares", undefined, "Network shares")}</h2>
         {props.connections.length > 0 && (
           <Button variant="ghost" size="sm" onClick={props.onAdd}>
             <Plus size={14} />

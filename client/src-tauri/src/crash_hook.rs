@@ -228,7 +228,9 @@ pub fn optional<R>(what: &str, step: impl FnOnce() -> R) -> Option<R> {
     }
 }
 
-fn stderr_line(text: &str) -> std::io::Result<()> {
+/// One line to stderr, without the panic `eprintln!` has when stderr is a closed pipe (the
+/// terminal or launcher that started the app is gone). The result may be ignored.
+pub(crate) fn stderr_line(text: &str) -> std::io::Result<()> {
     use std::io::Write;
     writeln!(std::io::stderr(), "{text}")
 }

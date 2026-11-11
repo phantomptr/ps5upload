@@ -494,16 +494,23 @@ fn pkg_upload_path(id: &str) -> Option<std::path::PathBuf> {
 }
 
 /// Basename only, with traversal and separators stripped — the client controls
-/// this string, and it becomes a path segment.
+/// this string, and it becomes a path segment. Also gone: what makes a name something else on
+/// Windows. `C:x.pkg` joined to the upload's folder is a path on drive C, `x.pkg:s` a stream of
+/// `x.pkg`, and `* ? " < > |` are not name characters there; a device name (`CON.pkg`) gets a
+/// `_` in front.
 fn sanitize_pkg_filename(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
     let cleaned: String = base
         .chars()
-        .filter(|c| !c.is_control() && *c != '/' && *c != '\\')
+        .filter(|c| {
+            !c.is_control() && !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+        })
         .collect();
-    let trimmed = cleaned.trim_matches('.');
+    let trimmed = cleaned.trim_matches(['.', ' ']);
     if trimmed.is_empty() {
         "package.pkg".to_string()
+    } else if ps5upload_core::transfer::host_unsafe_component(trimmed).is_some() {
+        format!("_{trimmed}")
     } else {
         trimmed.to_string()
     }
@@ -3146,9 +3153,17 @@ fn range_body(
                 ServeSource::EmbeddedCrc { offset, .. } => {
                     read_split_range(&session, offset + cursor, offset + stop)
                 }
-                ServeSource::SiblingCrc(bytes) => {
-                    Ok(bytes[cursor as usize..=stop as usize].to_vec())
-                }
+                // A range past the file (an empty one has no byte 0) is an error for this
+                // response, not a panic of the task that fills it.
+                ServeSource::SiblingCrc(bytes) => bytes
+                    .get(cursor as usize..=stop as usize)
+                    .map(<[u8]>::to_vec)
+                    .ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "range past the end of the .crc file",
+                        )
+                    }),
             };
             match read {
                 Ok(b) => {
@@ -3736,9 +3751,10 @@ fn resolve_crc(session: &InstallSession, filename: &str) -> std::io::Result<Opti
     if let Some((offset, len)) = located {
         return Ok(Some(ServeSource::EmbeddedCrc { offset, len }));
     }
+    // `:` too: on Windows `C:x.crc` is a file on another drive and `x.crc:s` a stream.
     let plain_name = !filename.is_empty()
         && filename != ".crc"
-        && !filename.contains(['/', '\\'])
+        && !filename.contains(['/', '\\', ':', '\0'])
         && !filename.contains("..");
     if !plain_name {
         return Ok(None);
@@ -3748,9 +3764,11 @@ fn resolve_crc(session: &InstallSession, filename: &str) -> std::io::Result<Opti
     };
     let candidate = dir.join(filename);
     match std::fs::metadata(&candidate) {
-        Ok(m) if m.is_file() && m.len() <= SIBLING_CRC_MAX_BYTES => Ok(Some(
-            ServeSource::SiblingCrc(Arc::new(std::fs::read(&candidate)?)),
-        )),
+        // An empty file is no `.crc` (and has no byte range to serve): the same 404 as none.
+        Ok(m) if m.is_file() && m.len() > 0 && m.len() <= SIBLING_CRC_MAX_BYTES => {
+            let bytes = std::fs::read(&candidate)?;
+            Ok((!bytes.is_empty()).then(|| ServeSource::SiblingCrc(Arc::new(bytes))))
+        }
         Ok(_) => Ok(None),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e),
@@ -4576,6 +4594,26 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
         );
         assert_eq!(sanitize_pkg_filename("..."), "package.pkg");
         assert_eq!(sanitize_pkg_filename("bad\0name.pkg"), "badname.pkg");
+        // On Windows: a path on drive C, a stream of Game.pkg, characters no name has, a device.
+        assert_eq!(sanitize_pkg_filename("C:Game.pkg"), "CGame.pkg");
+        assert_eq!(sanitize_pkg_filename("Game.pkg:hidden"), "Game.pkghidden");
+        assert_eq!(sanitize_pkg_filename("a*b?\"c<d>e|.pkg"), "abcde.pkg");
+        assert_eq!(sanitize_pkg_filename("Game.pkg. "), "Game.pkg");
+        assert_eq!(sanitize_pkg_filename("CON.pkg"), "_CON.pkg");
+        assert_eq!(sanitize_pkg_filename(":"), "package.pkg");
+        for name in [
+            "C:Game.pkg",
+            "x:y:z",
+            "\\\\host\\share\\a.pkg",
+            "D:\\a.pkg",
+            "nul",
+        ] {
+            let safe = sanitize_pkg_filename(name);
+            assert!(
+                crate::remote::fetch::unsafe_leaf(&safe).is_none(),
+                "{name} -> {safe}"
+            );
+        }
     }
 
     #[test]
@@ -5092,6 +5130,53 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
         for name in ["../evil.crc", "..\\evil.crc", "sub/evil.crc", ".crc"] {
             assert!(resolve_crc(&s, name).unwrap().is_none(), "{name}");
         }
+        let _ = std::fs::remove_file(dir.parent().unwrap().join("evil.crc"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A drive or a stream on Windows; refused as text, so on every OS (on the others `a:b.crc`
+    /// is a plain name, and the file is there to be found).
+    #[test]
+    fn crc_request_with_a_colon_or_for_an_empty_file_is_none() {
+        let dir = scratch_dir("colon");
+        let pkg = dir.join("game.pkg");
+        std::fs::write(&pkg, vec![0u8; 0x20000]).unwrap();
+        let s = dummy_session(vec![(pkg, 0x20000)]);
+        for name in ["C:evil.crc", "a.crc:stream", "a:b.crc"] {
+            if !cfg!(windows) {
+                std::fs::write(dir.join(name), b"x").unwrap();
+            }
+            assert!(resolve_crc(&s, name).unwrap().is_none(), "{name}");
+        }
+        std::fs::write(dir.join("empty.crc"), b"").unwrap();
+        assert!(resolve_crc(&s, "empty.crc").unwrap().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The body task used to index the bytes directly: `bytes[0..=0]` of an empty file panicked.
+    #[tokio::test]
+    async fn an_empty_sibling_crc_ends_the_body_with_an_error_not_a_panic() {
+        let dir = scratch_dir("emptybody");
+        let pkg = dir.join("game.pkg");
+        std::fs::write(&pkg, vec![0u8; 16]).unwrap();
+        let s = dummy_session(vec![(pkg, 16)]);
+        let body = range_body(
+            s,
+            ServeSource::SiblingCrc(Arc::new(Vec::new())),
+            0,
+            0,
+            |_, _| {},
+        );
+        assert!(axum::body::to_bytes(body, 1024).await.is_err());
+        let full = range_body(
+            dummy_session(vec![(dir.join("game.pkg"), 16)]),
+            ServeSource::SiblingCrc(Arc::new(b"sidecar".to_vec())),
+            2,
+            4,
+            |_, _| {},
+        );
+        assert_eq!(&axum::body::to_bytes(full, 1024).await.unwrap()[..], b"dec");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -39,14 +39,15 @@
  *   src/sdk_changer.c     3  dir    backup copy, patched file, restore (suffix stripped from the same name)
  *   src/vinput_relay.c    1  dir    the companion's token: <path>.tmp -> <path>
  *   src/takeover_flag.c   1  dir    takeover flag: tmp -> final
- *   src/runtime.c         5  dir    mount tracker, ownership record, online.json, save write-back (all tmp -> final),
- *                                 an unsaved save copy kept as <copy>.unsaved (same folder)
+ *   src/runtime.c         6  dir    mount tracker, ownership record, online.json, save write-back (all tmp -> final),
+ *                                 an unsaved save copy kept as <copy>.unsaved (same folder), and the same
+ *                                 for the copies of a save an earlier helper left open
  *   src/fs_jobs.c         1  dir    chmod/copy tmp inside the destination folder
  *   src/icon_keeper.c     1  dir    hidden_icons.txt: tmp -> final
  *   src/smp_meta.c        1  dir    restored tile art / param.json: <file>.tmp-<pid> -> file, same appmeta folder
  *   src/register.c        1  dir    param.json: tmp -> final
  *   src/ffpfsc_unpack.c   1  dir    decompressed image: <name>.part -> <name>, beside the .ffpfsc
- *   src/shell_builtin.c   1  guard  `mv` (mv_same_dev, lstat of the source)
+ *   src/shell_builtin.c   1  guard  `mv` (xdev_rename_crosses_l, lstat of the source; anything but SAME copies)
  *   src/webui_settings.c  1  dir    webui.json: tmp -> final
  *   src/webui_inputlog.c  1  dir    webui-input.log ring rewrite: tmp -> final
  *   src/webui_tile.c      3  dir    tile folder files: tmp -> final; mount.lnk <-> ps5upload.lnk in
@@ -146,14 +147,24 @@ static inline void xdev_parent_dir(const char *path, char *buf,
  * stat() here would judge the link by its TARGET: a link on device A pointing
  * at a file on device B, renamed into a directory on B, would read as B == B
  * and rename() would move the link across devices — the kernel panic. The
- * destination directory is followed (`dir_dev`, stat), as rename() resolves it. */
+ * destination directory is followed (`dir_dev`, stat), as rename() resolves it.
+ *
+ * The destination ITSELF is judged too when it exists: a rename that replaces
+ * `to` involves three vnodes (source, destination directory, the entry being
+ * replaced), and `to` can be a MOUNT POINT whose parent shares the source's
+ * device — `/data/a` over `/data/mnt` with a drive mounted on it. Source and
+ * parent agree, the entry in the way belongs to another filesystem, and this
+ * kernel takes that like any other cross-device rename. So an existing `to`
+ * must be on its parent's device as well (`from_dev`, the lstat lookup: what
+ * is replaced is the entry, never a link's target). A `to` that cannot be
+ * looked up is taken as absent, which is the ordinary case of a rename. */
 static inline xdev_result_t xdev_rename_crosses_l(const char *from,
                                                   const char *to,
                                                   xdev_dev_fn from_dev,
                                                   xdev_dev_fn dir_dev) {
     if (!from || !to || !from_dev || !dir_dev) return XDEV_UNKNOWN;
 
-    unsigned long long dev_from = 0, dev_to = 0;
+    unsigned long long dev_from = 0, dev_to = 0, dev_entry = 0;
     if (from_dev(from, &dev_from) != 0) return XDEV_UNKNOWN;
 
     /* The parent is judged WHOLE: a path too long for the buffer would be clamped by xdev_parent_dir and
@@ -165,7 +176,9 @@ static inline xdev_result_t xdev_rename_crosses_l(const char *from,
     xdev_parent_dir(to, to_dir, sizeof(to_dir));
     if (dir_dev(to_dir, &dev_to) != 0) return XDEV_UNKNOWN;
 
-    return dev_from == dev_to ? XDEV_SAME : XDEV_CROSSES;
+    if (dev_from != dev_to) return XDEV_CROSSES;
+    if (from_dev(to, &dev_entry) == 0 && dev_entry != dev_to) return XDEV_CROSSES;
+    return XDEV_SAME;
 }
 
 /* The only answer that lets a rename go ahead. */

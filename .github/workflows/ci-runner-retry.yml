@@ -1,15 +1,19 @@
-# Re-runs CI and release-build jobs that never ran because GitHub had no runner for them.
+# Re-runs CI jobs that never ran because GitHub had no runner for them.
 #
 # GitHub's hosted macOS (arm64) pool runs short at times; a job it cannot place is cancelled with
 # no steps and the annotation "The job was not acquired by Runner of type hosted even after
 # multiple attempts", and the PR gate then fails over a job that never started. This workflow
-# looks at a finished `ci` or `publish` run, and only when a failed or cancelled job carries that annotation,
+# looks at a finished `ci` run, and only when a failed or cancelled job carries that annotation,
 # re-runs the run's failed jobs (at most twice per run). Real failures are left alone.
+#
+# Not `publish`: a publish run retries itself (its `retry-failed` job and rerun-failed.yml), for
+# any failure, a starved runner included. Two workflows re-running the same run raced each other
+# ("cannot be rerun; This workflow is already running").
 name: ci-runner-retry
 
 on:
   workflow_run:
-    workflows: [ci, publish]
+    workflows: [ci]
     types: [completed]
 
 permissions:

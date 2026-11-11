@@ -440,8 +440,16 @@ pub fn fs_read_with_timeout(
 /// One read through the helper. It caps a single read (2 MiB), so a whole file takes a loop.
 const FS_READ_WHOLE_CHUNK: u64 = 1 << 20;
 
+/// The most [`fs_read_whole`] reads: it holds the file in memory, and what it is used for (a
+/// library, a payload, a small record) is a few tens of MiB at most. `size` is whatever the
+/// console's listing said, so it is checked rather than believed.
+pub const FS_READ_WHOLE_MAX: u64 = 1 << 30;
+
+/// The most reserved ahead of the bytes arriving; the rest grows as they do.
+const FS_READ_WHOLE_PREALLOC: u64 = 16 << 20;
+
 /// A whole `size`-byte file from the console. An error when it ends early: nothing that wants the
-/// whole file can use part of one.
+/// whole file can use part of one. An error too when `size` is over [`FS_READ_WHOLE_MAX`].
 pub fn fs_read_whole(addr: &str, path: &str, size: u64) -> Result<Vec<u8>> {
     read_whole_with(path, size, |at, want| fs_read(addr, path, at, want))
 }
@@ -451,14 +459,21 @@ fn read_whole_with(
     size: u64,
     mut read: impl FnMut(u64, u64) -> Result<Vec<u8>>,
 ) -> Result<Vec<u8>> {
-    let mut out = Vec::with_capacity(usize::try_from(size).unwrap_or(0));
+    if size > FS_READ_WHOLE_MAX {
+        anyhow::bail!(
+            "{path} is {size} bytes, more than the {FS_READ_WHOLE_MAX} that can be read whole"
+        );
+    }
+    let mut out = Vec::with_capacity(size.min(FS_READ_WHOLE_PREALLOC) as usize);
     while (out.len() as u64) < size {
         let at = out.len() as u64;
         let piece = read(at, FS_READ_WHOLE_CHUNK.min(size - at))?;
         if piece.is_empty() {
             anyhow::bail!("{path} ended at {at} of {size} bytes");
         }
-        out.extend_from_slice(&piece);
+        // A reply longer than what was asked for is not kept past the file's size.
+        let room = (size - at) as usize;
+        out.extend_from_slice(&piece[..piece.len().min(room)]);
     }
     Ok(out)
 }
@@ -1636,6 +1651,22 @@ mod tests {
         let e = super::read_whole_with("/f", 3000, |at, want| read_capped(&file, at, want))
             .unwrap_err();
         assert_eq!(e.to_string(), "/f ended at 1000 of 3000 bytes");
+    }
+
+    /// A listing that claims an impossible size is refused before anything is reserved or read.
+    #[test]
+    fn a_file_listed_as_huge_is_refused_unread() {
+        let e =
+            super::read_whole_with("/f", 1 << 45, |_, _| panic!("no read expected")).unwrap_err();
+        assert!(e.to_string().contains("more than"), "{e}");
+        let e = super::read_whole_with("/f", u64::MAX, |_, _| panic!("no read expected"));
+        assert!(e.is_err());
+    }
+
+    #[test]
+    fn a_reply_longer_than_asked_is_cut_to_the_size() {
+        let got = super::read_whole_with("/f", 3, |_, _| Ok(vec![1u8; 10])).unwrap();
+        assert_eq!(got, [1, 1, 1]);
     }
 
     #[test]

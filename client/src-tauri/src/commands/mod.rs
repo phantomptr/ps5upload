@@ -46,6 +46,7 @@ pub mod persistence;
 pub mod probes;
 pub mod process_mgr;
 pub mod ps5_engine;
+mod redact_json;
 pub mod reveal;
 pub mod save_archive;
 pub mod save_dest;

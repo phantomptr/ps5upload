@@ -477,8 +477,14 @@ export function RunCard(props: RunCardProps) {
       <div className="flex flex-col gap-3">
         {title}
         {stageList}
-        <div className="text-sm font-medium text-[var(--color-good)]">
-          {installed
+        <div
+          className={`text-sm font-medium ${
+            p.unverifiedNote ? "text-[var(--color-warn)]" : "text-[var(--color-good)]"
+          }`}
+        >
+          {p.unverifiedNote
+            ? p.unverifiedNote
+            : installed
             ? props.title
               ? tr("fpkg.installedTitle", { title: props.title }, "Installed on PS5 — {title}")
               : tr("fpkg.installedOn", { host: p.host ?? "" }, "Installed on the PS5 ({host})")

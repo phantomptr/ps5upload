@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -122,17 +123,45 @@ int takeover_nonce_new(uint64_t *nonce) {
 /* Fail closed: only a refused connect proves nobody listens. A socket we could not open (fd
  * pressure), an interrupted or failed connect, or anything else counts as "still answering", so
  * a new instance never starts its AVA1 side while the old one may hold the port (seen as a flaky
- * host test under load, ctest lifecycle.rs). */
+ * host test under load, ctest lifecycle.rs).
+ *
+ * BOUNDED: the connect is non-blocking and waited on for TAKEOVER_PROBE_MS. A blocking connect to
+ * a listener that has stopped accepting (a wedged predecessor whose backlog is full: the kernel
+ * drops the SYN and retries for over a minute) parked the caller for that minute PER PROBE, and
+ * the callers count probes, not time. No answer in time is "still answering": something holds the
+ * port. */
+#define TAKEOVER_PROBE_MS 500
 int takeover_port_responding(int port) {
     struct sockaddr_in a;
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return 1;
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl < 0 || fcntl(fd, F_SETFL, fl | O_NONBLOCK) != 0) {
+        close(fd);
+        return 1; /* cannot bound the probe: do not make it, and do not call the port free */
+    }
     memset(&a, 0, sizeof a);
     a.sin_family = AF_INET;
     a.sin_port = htons((uint16_t)port);
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     int rc = connect(fd, (struct sockaddr *)&a, sizeof a);
     int err = rc == 0 ? 0 : errno;
+    if (rc != 0 && err == EINPROGRESS) {
+        struct pollfd pfd;
+        pfd.fd = fd;
+        pfd.events = POLLOUT;
+        pfd.revents = 0;
+        int pr = poll(&pfd, 1, TAKEOVER_PROBE_MS);
+        if (pr > 0) {
+            int soerr = 0;
+            socklen_t sl = sizeof soerr;
+            if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &sl) != 0) soerr = errno ? errno : EIO;
+            err = soerr;
+            rc = soerr == 0 ? 0 : -1;
+        } else {
+            err = pr == 0 ? ETIMEDOUT : (errno ? errno : EIO); /* neither is ECONNREFUSED: busy */
+        }
+    }
     close(fd);
     if (rc != 0 && err != ECONNREFUSED)
         fprintf(stderr, "[takeover] port %d probe: connect failed errno=%d, treating as busy\n", port, err);

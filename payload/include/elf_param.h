@@ -143,6 +143,13 @@ static inline int elf_is_signed_self(const unsigned char *buf, size_t len) {
  *
  * Returns the file offset, or -1 when the range cannot be mapped or
  * would fall outside the file. */
+/* Does [off, off + need) lie inside a file of `len` bytes? Written as
+ * subtractions: these values come straight from the file, and `off + need`
+ * wraps for a corrupt one, which let a range far outside the file through. */
+static inline int elf_range_in(uint64_t off, uint64_t need, uint64_t len) {
+    return off <= len && need <= len - off;
+}
+
 static inline int64_t elf_self_map_offset(const unsigned char *buf, size_t len,
                                           uint64_t base, const unsigned char *elf,
                                           uint64_t phoff, uint16_t phentsize,
@@ -150,7 +157,7 @@ static inline int64_t elf_self_map_offset(const unsigned char *buf, size_t len,
                                           uint64_t elf_off, uint64_t need) {
     if (base == 0) {
         /* Not wrapped: the ELF's offsets are the file's offsets. */
-        if (elf_off + need > (uint64_t)len) return -1;
+        if (!elf_range_in(elf_off, need, (uint64_t)len)) return -1;
         return (int64_t)elf_off;
     }
     uint16_t num_entries = elf_rd16(buf + SELF_NUM_ENTRIES_OFFSET);
@@ -163,7 +170,7 @@ static inline int64_t elf_self_map_offset(const unsigned char *buf, size_t len,
         if (SELF_ENTRY_ID(elf_rd64(ent)) != want_idx) continue;
         if (elf_rd64(ent + SELF_ENTRY_FILESZ_FIELD) != want_filesz) continue;
         uint64_t at = elf_rd64(ent + SELF_ENTRY_OFFSET_FIELD);
-        if (at + need > (uint64_t)len) return -1;
+        if (!elf_range_in(at, need, (uint64_t)len)) return -1;
         return (int64_t)at;
     }
 
@@ -173,14 +180,18 @@ static inline int64_t elf_self_map_offset(const unsigned char *buf, size_t len,
         if (elf_rd32(lp + 0x00) != 0x00000001u /* PT_LOAD */) continue;
         uint64_t l_off = elf_rd64(lp + 0x08);
         uint64_t l_filesz = elf_rd64(lp + 0x20);
-        if (elf_off < l_off || elf_off + need > l_off + l_filesz) continue;
+        /* [elf_off, elf_off + need) inside [l_off, l_off + l_filesz), without the sums. */
+        if (elf_off < l_off || !elf_range_in(elf_off - l_off, need, l_filesz)) continue;
         for (uint16_t e = 0; e < num_entries; e++) {
             const unsigned char *ent =
                 buf + SELF_HEADER_SIZE + (uint64_t)e * SELF_ENTRY_SIZE;
             if (SELF_ENTRY_ID(elf_rd64(ent)) != i) continue;
             if (elf_rd64(ent + SELF_ENTRY_FILESZ_FIELD) != l_filesz) continue;
-            uint64_t at = elf_rd64(ent + SELF_ENTRY_OFFSET_FIELD) + (elf_off - l_off);
-            if (at + need > (uint64_t)len) return -1;
+            uint64_t ent_off = elf_rd64(ent + SELF_ENTRY_OFFSET_FIELD);
+            uint64_t delta = elf_off - l_off;
+            if (!elf_range_in(ent_off, delta, (uint64_t)len)) return -1;
+            uint64_t at = ent_off + delta;
+            if (!elf_range_in(at, need, (uint64_t)len)) return -1;
             return (int64_t)at;
         }
     }
@@ -216,8 +227,9 @@ static inline int elf_find_param_sites(const unsigned char *buf, size_t len,
     uint64_t phoff = elf_rd64(elf + 0x20);
     uint16_t phentsize = elf_rd16(elf + 0x36);
     uint16_t phnum = elf_rd16(elf + 0x38);
+    /* phentsize * phnum is at most 0xFFFF * 0xFFFF and cannot wrap; phoff + it can. */
     if (phentsize < 0x28 || phoff == 0 ||
-        phoff + (uint64_t)phentsize * phnum > (uint64_t)elen) {
+        !elf_range_in(phoff, (uint64_t)phentsize * phnum, (uint64_t)elen)) {
         if (status) *status = ELF_PARAM_MALFORMED;
         return -1;
     }

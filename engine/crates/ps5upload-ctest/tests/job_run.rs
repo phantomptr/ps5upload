@@ -443,6 +443,43 @@ async fn chmod_recursive_applies_to_every_entry_and_reports_progress() {
     drop(r.srv);
 }
 
+/// chmod(2) follows a symbolic link, and the walk runs as root on the console: a link inside the tree
+/// pointing OUT of it (to a system file, to another title) had its target's mode rewritten. A link met
+/// in the walk is counted and left alone; so is what it points at.
+#[tokio::test(flavor = "multi_thread")]
+async fn chmod_recursive_never_follows_a_link_found_in_the_tree() {
+    let r = rig("jr-chmod-link").await;
+    let tree = r.d.join("g");
+    write_tree(&tree, 4, |_| 8);
+    let outside = r.d.join("outside.bin");
+    let outside_dir = r.d.join("outside-dir");
+    std::fs::write(&outside, b"not in the tree").unwrap();
+    std::fs::create_dir_all(&outside_dir).unwrap();
+    std::fs::write(outside_dir.join("inner"), b"x").unwrap();
+    for p in [&outside, &outside_dir, &outside_dir.join("inner")] {
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    std::os::unix::fs::symlink(&outside, tree.join("link-to-file")).unwrap();
+    std::os::unix::fs::symlink(&outside_dir, tree.join("link-to-dir")).unwrap();
+    std::os::unix::fs::symlink(r.d.join("nowhere"), tree.join("dangling")).unwrap();
+    let a = serde_json::json!({ "path": tree.to_str().unwrap(), "mode": "0700" }).to_string();
+    run(&r.me, id(25), gen::JOB_OP_CHMOD_R, &a).await;
+    let st = finished(&r.me, id(25)).await;
+    assert_eq!(
+        st.state,
+        Some(1),
+        "a link is not a failure: {:?}",
+        st.current
+    );
+    assert_eq!(st.files_total, st.files_done, "links are counted, once");
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o7777;
+    assert_eq!(mode(&outside), 0o755, "the link's target was chmod'ed");
+    assert_eq!(mode(&outside_dir), 0o755, "the linked folder was chmod'ed");
+    assert_eq!(mode(&outside_dir.join("inner")), 0o755);
+    assert_eq!(mode(&tree.join("d00/f00000")), 0o700, "the tree itself was");
+    drop(r.srv);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn hash_result_rides_in_status_ext() {
     let r = rig("jr-hash").await;

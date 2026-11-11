@@ -133,6 +133,18 @@ struct PeerSt {
     sent_at: Option<(u64, Instant)>,
     /// The video track (rtc.rs), when the guest's offer had one the engine can send on.
     track: Option<TrackSt>,
+    /// The connection's datagrams at the engine's UDP socket.
+    udp: UdpSt,
+}
+
+/// A guest's datagrams at the engine's UDP socket (rtc.rs `Held`): handed to it, the ones it
+/// had no room for at once (its buffer or the interface's queue was full: each kept and sent a
+/// moment later), and the ones that never went out (the send failed, or too many were waiting).
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct UdpSt {
+    pub sent: u64,
+    pub waited: u64,
+    pub lost: u64,
 }
 
 /// An internet guest's video track: what the offer allows, whether the session uses it, and its
@@ -150,6 +162,12 @@ pub(crate) struct TrackSt {
     /// next keyframe: rtc.rs `Catchup`).
     pub dropped: u64,
     pub jumps: u64,
+    /// The longest a picture waited for str0m's queue before it was written or dropped (ms), and
+    /// the most that queue held (bytes).
+    pub wait_max_ms: u32,
+    pub queue_peak: usize,
+    /// The rate the catch-up last reckoned that queue drains at (kbit/s; a rough reading).
+    pub drain_kbps: Option<u32>,
     /// From str0m's egress stats: RTP packets sent (retransmissions included), NACKs, PLIs and
     /// FIRs received, the loss the guest reported, the RTCP round trip.
     pub packets: u64,
@@ -286,6 +304,11 @@ impl PeerInfo {
             .map(|(local, remote)| rtc::path_of(local, remote))
     }
 
+    /// The connection's datagrams at the engine's socket so far (rtc.rs).
+    pub(crate) fn udp(&self) -> UdpSt {
+        self.with(|s| s.udp)
+    }
+
     /// The driver's view of the video track (rtc.rs).
     pub(crate) fn track_with<R>(&self, f: impl FnOnce(&mut TrackSt) -> R) -> Option<R> {
         self.with(|s| s.track.as_mut().map(f))
@@ -349,7 +372,8 @@ impl PeerInfo {
     pub(crate) fn link_json(&self) -> serde_json::Value {
         let f = self.flow.get();
         let now = Instant::now();
-        let (rtt_ms, sent_kbps, track) = self.with(|s| (s.rtt_ms, s.sent_kbps, s.track.clone()));
+        let (rtt_ms, sent_kbps, track, udp) =
+            self.with(|s| (s.rtt_ms, s.sent_kbps, s.track.clone(), s.udp));
         let on = track.as_ref().is_some_and(|t| t.on);
         let path = self.net_path();
         serde_json::json!({
@@ -367,11 +391,17 @@ impl PeerInfo {
             // `stream_kbps`, and `slow`: the estimate stayed under the stream's rate (lower the
             // stream's quality: the console cannot change it mid-session). `behind_jumps` /
             // `behind_dropped`: the times the link fell behind and the guest was skipped to the
-            // next keyframe, and the pictures that cost.
+            // next keyframe, and the pictures that cost. `wait_max_ms`: the longest a picture
+            // waited for the track's send queue (past 400 a picture is dropped; a keyframe still
+            // goes), `queue_peak_bytes` the most that queue held, `drain_kbps` the rate the
+            // catch-up last reckoned it drains at (a rough reading; null: none yet).
             "track": track.filter(|t| t.on).map(|t| serde_json::json!({
                 "frames_sent": t.frames,
                 "behind_jumps": t.jumps,
                 "behind_dropped": t.dropped,
+                "wait_max_ms": t.wait_max_ms,
+                "queue_peak_bytes": t.queue_peak,
+                "drain_kbps": t.drain_kbps,
                 "rtp_packets": t.packets,
                 "nacks": t.nacks,
                 "plis": t.plis,
@@ -391,6 +421,12 @@ impl PeerInfo {
             })),
             "rtt_ms": rtt_ms,
             "sent_kbps": sent_kbps,
+            // The connection's datagrams at the engine's UDP socket: handed to it, the ones it
+            // had no room for at once (kept and sent a moment later), and the ones that never
+            // went out.
+            "udp_sent": udp.sent,
+            "udp_waited": udp.waited,
+            "udp_lost": udp.lost,
             // The driver's queue (messages the channel did not take yet) and the data channel's
             // own buffer (SCTP: sent but not acknowledged, or not sent yet).
             "queued_bytes": f.map(|f| f.driver.load(Ordering::Relaxed)),

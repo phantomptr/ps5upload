@@ -1389,6 +1389,11 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/ptrace_recovery_selftest.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-ptrace-recovery-selftest
 	@echo "✓ ptrace timeout recovery never resumes injected registers"
+	@echo "Running ShellUI launch result self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o $(SELFTEST_DIR)/ps5upload-shellui-launch-selftest \
+		$(PAYLOAD_DIR)/tests/shellui_launch_selftest.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-shellui-launch-selftest
+	@echo "✓ a Sony launch error reaches the caller as an error with its code, not as 'never ran'"
 	@echo "Running app.db raw-scan self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o $(SELFTEST_DIR)/ps5upload-appdb-scan-selftest \
 		$(PAYLOAD_DIR)/tests/appdb_scan_selftest.c

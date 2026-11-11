@@ -15,10 +15,13 @@
 #     use that keystore — a STABLE signature, so users get seamless
 #     in-place updates across releases. This is what you want for a real
 #     distribution channel.
-#   * Otherwise generate an EPHEMERAL keystore so the artifact is at
-#     least installable for sideloading. Caveat: each build's signature
-#     differs, so a user must uninstall the previous ephemeral-signed
-#     build before installing a newer one. A ::warning:: is emitted.
+#   * Otherwise the script FAILS: an APK signed with any other key cannot
+#     update an installed app, so a release must never get one quietly.
+#   * Only with ANDROID_ALLOW_THROWAWAY_KEY=1 (local and test builds, never
+#     the publish workflow) does it generate an EPHEMERAL keystore so the
+#     artifact is installable for sideloading. Each build's signature
+#     differs, so the previous build must be uninstalled first. A
+#     ::warning:: is emitted.
 #
 # Output: ./PS5Upload-android.apk (arm64) and ./PS5Upload-android-armv7.apk
 # (signed, zipaligned, verified) in CWD.
@@ -52,8 +55,14 @@ if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
   store_pass="${ANDROID_KEYSTORE_PASSWORD:?ANDROID_KEYSTORE_PASSWORD is required when ANDROID_KEYSTORE_BASE64 is set}"
   key_alias="${ANDROID_KEY_ALIAS:?ANDROID_KEY_ALIAS is required when ANDROID_KEYSTORE_BASE64 is set}"
   key_pass="${ANDROID_KEY_PASSWORD:-$store_pass}"
+elif [ "${ANDROID_ALLOW_THROWAWAY_KEY:-}" != 1 ]; then
+  # A release APK signed with any other key cannot update the app people already have: Android
+  # refuses it ("App not installed") until they uninstall, which deletes their settings. Shipping
+  # no APK (build-android is not a gate) is the smaller harm, so this stops instead of warning.
+  echo "::error::ANDROID_KEYSTORE_BASE64 is not set: refusing to sign a release APK with a throwaway key (it could not update installed apps). Restore the ANDROID_KEYSTORE_* repo secrets. For a local or test build only, set ANDROID_ALLOW_THROWAWAY_KEY=1."
+  exit 1
 else
-  echo "::warning::No ANDROID_KEYSTORE_BASE64 secret set — generating an EPHEMERAL keystore. The APK is installable for sideloading, but its signature changes every build, so users must uninstall a previous build before installing a newer one. Configure the keystore secrets for stable, updatable releases."
+  echo "::warning::ANDROID_ALLOW_THROWAWAY_KEY=1 and no ANDROID_KEYSTORE_BASE64 — generating an EPHEMERAL keystore. The APK is installable for sideloading, but its signature changes every build, so a previous build must be uninstalled before installing this one. Not for a release."
   store_pass="ps5upload"
   key_pass="ps5upload"
   key_alias="ps5upload"

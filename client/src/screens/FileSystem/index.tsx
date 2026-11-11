@@ -33,6 +33,7 @@ import { queueLinkFor } from "../../lib/gamePage";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -90,6 +91,12 @@ import {
   type SortKey,
   type SortState,
 } from "./fsBrowse";
+import {
+  archiveFullyExtracted,
+  listingIsCurrent,
+  planPaste,
+  type FsPlace,
+} from "./fsGuards";
 import { pickSaveDest as saveDialog } from "../../lib/pickSaveDest";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { isWindows } from "../../lib/platform";
@@ -461,6 +468,11 @@ export default function FileSystemScreen() {
   // Path of the most recent listing request — used to drop a stale (slower)
   // response from a folder the user already navigated away from. See refresh.
   const latestListReqRef = useRef<string>("");
+  // The console and folder on screen as of the last commit, and that render's `refresh`.
+  // An operation that ends after the user moved on still holds the `refresh` of the render
+  // it started in; these let it see that and list the folder on screen instead.
+  const placeRef = useRef<FsPlace>({ host, path });
+  const refreshRef = useRef<(() => Promise<void>) | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -614,22 +626,31 @@ export default function FileSystemScreen() {
     // 2.12.0: canonical useStaleHostGuard for the host check;
     // probedPath is path-specific and stays inline (no general
     // "stale path" helper since path semantics are screen-local).
-    const probe = guard.capture();
+    // The host is this tree's own (the closure's). The live store's host is the
+    // SELECTED console, so an operation finishing in a hidden console's tree used to list
+    // the selected console's folder into it.
+    const probed: FsPlace = { host, path };
     const probedPath = path;
-    // Mark this as the latest in-flight listing request. The previous
-    // `path !== probedPath` check was dead code — both sides were the same
-    // closure constant — so a fast A→B navigation let A's slower response
-    // resolve last and paint A's contents under path B (and per-row Delete
-    // then targets B/<name>). Comparing the closure's path against this ref
-    // after the await actually drops the superseded request.
+    // A `refresh` from an older render (an operation that began in another folder and has
+    // just ended). Listing its folder would mark that request as the latest and paint the
+    // old folder's rows under the path on screen, where Delete/Rename/Cut join the new path
+    // with an old row's name. List what is on screen instead, through the current render.
+    if (!listingIsCurrent(probed, placeRef.current)) {
+      const latest = refreshRef.current;
+      // (That one's place is the one on screen: both are set in the same layout effect.)
+      if (latest) await latest();
+      return;
+    }
+    const superseded = () =>
+      latestListReqRef.current !== probedPath ||
+      !listingIsCurrent(probed, placeRef.current);
     latestListReqRef.current = probedPath;
     setLoading(true);
     setError(null);
     try {
-      const listing = await fsListDir(probe.host, probedPath);
-      // Drop result if a newer listing (different path) superseded this one.
-      if (latestListReqRef.current !== probedPath) return;
-      if (probe.isStale()) return;
+      const listing = await fsListDir(probed.host ?? "", probedPath);
+      // Drop the result if a newer listing superseded this one, or the screen moved on.
+      if (superseded()) return;
       const raw: DirEntry[] = listing;
       // A Mesh Drive's own sync files are hidden; the folder says it is a drive instead.
       setMeshHome(raw.some((e) => e.name === MESH_MARKER));
@@ -647,8 +668,7 @@ export default function FileSystemScreen() {
       // Same stale-guard on the error path: a failure for an
       // abandoned listing shouldn't replace a valid one the user is
       // currently looking at.
-      if (latestListReqRef.current !== probedPath) return;
-      if (probe.isStale()) return;
+      if (superseded()) return;
       // Route through humanizePs5Error so payload-side errors like
       // `fs_unmount_busy`, `path_not_allowed`, etc. surface as
       // actionable copy instead of opaque snake_case codes.
@@ -710,7 +730,13 @@ export default function FileSystemScreen() {
       // "loading-spinner-stuck-forever" UX bug.
       setLoading(false);
     }
-  }, [host, path, guard, tr]);
+  }, [host, path, tr]);
+  // Layout effects run before the passive ones below, so the listing effect of the same
+  // commit already sees the new place.
+  useLayoutEffect(() => {
+    placeRef.current = { host, path };
+    refreshRef.current = refresh;
+  }, [host, path, refresh]);
 
   useEffect(() => {
     if (payloadStatus === "up") refresh();
@@ -876,9 +902,13 @@ export default function FileSystemScreen() {
 
   // Changing directories clears the selection — carrying selections
   // across directories would be confusing (what does "delete" act on?).
+  // The rows go too: until the new folder's listing lands, the old folder's rows would sit
+  // under the new path, and their actions join that path with their names.
   useEffect(() => {
     setSelected(new Set());
-  }, [path]);
+    setEntries(null);
+    setMeshHome(false);
+  }, [host, path]);
 
   const toggleSelected = (name: string) => {
     setSelected((s) => {
@@ -2142,7 +2172,7 @@ export default function FileSystemScreen() {
       const into = out.path || dest;
       // Delete the archive only when everything came out of it.
       let deleted = false;
-      if (after.deleteArchive && out.unsafe === 0 && out.links === 0) {
+      if (after.deleteArchive && archiveFullyExtracted(out)) {
         try {
           await fsDelete(addr, src);
           deleted = true;
@@ -2317,9 +2347,30 @@ export default function FileSystemScreen() {
     // Single-flight guard PER CONSOLE: same rationale as runBulkDelete.
     if (fsBulk.op !== null) return;
     const op = staged ? staged.op : clipboard.op;
-    const items = staged ? staged.items : clipboard.items;
+    const pasted = staged ? staged.items : clipboard.items;
     const sourceLabel = staged ? staged.sourceLabel : clipboard.sourceLabel;
-    if (items.length === 0 || !op) return;
+    if (pasted.length === 0 || !op) return;
+    // An item pasted where it already is would be offered "Replace" against itself, and a
+    // folder cannot go into itself: those are left out and named, the rest go on.
+    const plan = planPaste(pasted, into);
+    const items = plan.ok;
+    const refused = [
+      ...plan.intoItself.map(
+        (i) =>
+          `${i.name}: ${tr("fs_move_into_itself", undefined, "A folder can't be moved into itself.")}`,
+      ),
+      ...plan.same.map((i) =>
+        tr(
+          "fs_move_exists",
+          { name: i.name },
+          `"${i.name}" is already there, so nothing was replaced. Pick another name or delete it first.`,
+        ),
+      ),
+    ];
+    if (items.length === 0) {
+      setError(refused.join(" · "));
+      return;
+    }
 
     // Name conflicts: the payload refuses to touch an existing destination
     // unless we explicitly ask it to merge, so find the collisions up front
@@ -2371,7 +2422,7 @@ export default function FileSystemScreen() {
       toPath: into,
     });
     const addr = consoleAddr(host);
-    const errors: string[] = [];
+    const errors: string[] = [...refused];
     const duplicated: string[] = [];
     try {
       for (let i = 0; i < items.length; i++) {
@@ -2549,7 +2600,10 @@ export default function FileSystemScreen() {
     // partial failure means the user might want to retry the leftover
     // items. Copies always keep the clipboard (same-items-many-places
     // is the usual copy workflow).
-    if (!staged && op === "cut" && problemMsgs.length === 0) clipboard.clear();
+    // This console's clipboard, and only if it still holds what was pasted. The store's
+    // live half belongs to the SELECTED console, which this one may no longer be.
+    if (!staged && op === "cut" && problemMsgs.length === 0)
+      useFsClipboardStore.getState().clearFor(host, pasted);
     await refresh();
   };
 
@@ -3955,13 +4009,15 @@ export default function FileSystemScreen() {
               <strong>{tr("queue_title", undefined, "Queue")} · {uploadQueue.items.length}</strong>
               {uploadQueue.error && <p role="alert">{uploadQueue.error}</p>}
               {uploadQueue.items.map((item) => (
-                <div key={item.id} className="mt-2 flex items-center gap-2">
-                  <span className="min-w-0 flex-1 break-all">
-                    {item.paused && <span className="me-1 rounded bg-[var(--color-warn)]/15 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-[var(--color-warn)]" data-testid="fs-upload-paused">{tr("queue_paused", undefined, "Paused")}</span>}
+                // Wraps: on a phone the buttons go below the name, which used to be squeezed to a few letters a line beside them (#794).
+                <div key={item.id} className="mt-2 flex flex-wrap items-center gap-2">
+                  <span className="min-w-0 flex-1 basis-[12rem] break-all" data-testid="fs-upload-queue-text">
+                    {item.paused && <span className="me-1 inline-block whitespace-nowrap break-normal rounded bg-[var(--color-warn)]/15 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-[var(--color-warn)]" data-testid="fs-upload-paused">{tr("queue_paused", undefined, "Paused")}</span>}
                     {item.request.steps?.flatMap((s) => s.kind === "list" ? s.files.map((f) => f.name) : [s.name]).join(", ")} → {item.request.destDir}
                     {item.paused === "sendNow" && <span className="block text-[var(--color-muted)]">{tr("queue_paused_for_send_now", undefined, "Paused for a Send now. It carries on by itself after.")}</span>}
                     {item.error && <span className="block text-[var(--color-bad)]">{humanizePs5Error(item.error) || item.error}</span>}
                   </span>
+                  <span className="ms-auto flex max-w-full flex-wrap items-center gap-2">
                   {item.paused ? (
                     <Button size="sm" variant="secondary" data-testid="fs-upload-resume-item" onClick={() => resumeFsUploadItem(host, item.id, fsUploadDeps)}>
                       {tr("queue_resume", undefined, "Resume")}
@@ -3974,6 +4030,7 @@ export default function FileSystemScreen() {
                   <Button size="sm" variant="ghost" disabled={uploadQueue.running && uploadQueue.currentId === item.id} onClick={() => removeFsUploadQueued(host, item.id, fsUploadDeps)}>
                     {tr("queue_remove", undefined, "Remove from queue")}
                   </Button>
+                  </span>
                 </div>
               ))}
               {uploadQueue.paused && !uploadStopped && (

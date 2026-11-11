@@ -22,6 +22,10 @@ export type InstallRequest =
 
 export interface InstallResult {
   ok: boolean;
+  /** The PS5 took the request but the install could not be confirmed. `ok` stays true (it is
+   *  not a failure), but nothing may be deleted or recorded as installed on it: callers act
+   *  on `ok && !unverified`. `message` says what to check. */
+  unverified?: true;
   message?: string;
   mayNotLaunch?: boolean;
   /** A stream install the PS5 never fetched from: uploading it may work. */

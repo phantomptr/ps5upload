@@ -300,7 +300,9 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 match engine::start(&handle).await {
                     Ok(url) => {
-                        eprintln!("[tauri] engine ready at {url}");
+                        // Not `eprintln!`: with stderr gone it panics, and the renderer was never
+                        // told where the engine is.
+                        let _ = crash_hook::stderr_line(&format!("[tauri] engine ready at {url}"));
                         // Tell the renderer where the engine actually
                         // landed, so its DIRECT fetches (job polling,
                         // cover-art img-src, streaming) target the right

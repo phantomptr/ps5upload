@@ -304,6 +304,33 @@ describe("fpkg pipeline", () => {
     expect(deletePackage).not.toHaveBeenCalled();
   });
 
+  it("keeps the package, and says what to check, when the install could not be confirmed", async () => {
+    jobStatus.mockResolvedValue({ status: "done", dest: "/out/a.pkg", bytes_sent: 1 });
+    installStream.mockResolvedValue({
+      ok: true,
+      unverified: true,
+      message: "It may still be installing, so check Downloads on the PS5. The package was kept.",
+    });
+    await useFpkgConversion.getState().start(req, { install: true, host: "10.0.0.2", deleteAfter: true });
+    await tick();
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      phase: "done",
+      deleted: false,
+      packagePath: "/out/a.pkg",
+      unverifiedNote: "It may still be installing, so check Downloads on the PS5. The package was kept.",
+    });
+    await tick();
+    expect(deletePackage).not.toHaveBeenCalled();
+    // The delete that was asked for does not carry over to the next run.
+    installStream.mockResolvedValue({ ok: true });
+    await useFpkgConversion.getState().start(req, { install: true, host: "10.0.0.2" });
+    await tick();
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "done", deleted: false });
+    expect(deletePackage).not.toHaveBeenCalled();
+  });
+
   it("installs again from a finished result, but not after the package is deleted", async () => {
     jobStatus.mockResolvedValue({ status: "done", dest: "/out/a.pkg", bytes_sent: 1 });
     installStream.mockResolvedValue({ ok: true });

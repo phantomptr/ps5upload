@@ -25,6 +25,7 @@
 #include <sys/uio.h>
 #include <sys/utsname.h>
 
+#include "cross_device.h"
 #include "proc_list.h"
 #include "runtime.h"
 
@@ -344,6 +345,53 @@ int shell_ls_path(const char *path, char **out_text, int *out_exit) {
     return 0;
 }
 
+/* Open PATH for a builtin that reads a file's CONTENTS (cat, head, tail, wc,
+ * grep, xxd, file, sfoinfo, cp): regular files only.
+ *
+ * Every builtin runs under g_shell_cwd_mtx, one lock for all sessions. A device
+ * node or a FIFO has no end to read to: `wc /dev/zero` never returned, a FIFO
+ * with no writer never even opened, and from then on every shell command on
+ * every session waited behind it until the helper was restarted. So the type
+ * is checked BEFORE anything is opened (a device is never touched at all), and
+ * again on the descriptor in case the name was swapped in between; O_NONBLOCK
+ * makes that second open unable to park on a FIFO. It changes nothing for a
+ * regular file. `klog` keeps its own non-blocking read of /dev/klog.
+ *
+ * shell_check_regular is the first half alone, for the builtins that read
+ * through stdio (head, grep): 0, or -1 with *why. shell_open_regular returns
+ * the descriptor, or -1 with *why set to what to tell the user. */
+static const char shell_not_regular[] =
+    "not a regular file (device, pipe or socket)";
+
+static int shell_check_regular(const char *path, const char **why) {
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        *why = strerror(errno);
+        return -1;
+    }
+    if (!S_ISREG(st.st_mode)) {
+        *why = S_ISDIR(st.st_mode) ? strerror(EISDIR) : shell_not_regular;
+        return -1;
+    }
+    return 0;
+}
+
+static int shell_open_regular(const char *path, const char **why) {
+    struct stat st;
+    if (shell_check_regular(path, why) != 0) return -1;
+    int fd = open(path, O_RDONLY | O_NONBLOCK);
+    if (fd < 0) {
+        *why = strerror(errno);
+        return -1;
+    }
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        close(fd);
+        *why = shell_not_regular;
+        return -1;
+    }
+    return fd;
+}
+
 int handle_shell_builtin(const char *cmd_in, char **out_text,
                                  int *out_exit) {
     if (!cmd_in || !out_text || !out_exit) return -1;
@@ -541,10 +589,11 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
             return 0;
         }
         const char *path = argv[1];
-        int fd = open(path, O_RDONLY);
+        const char *why = "";
+        int fd = shell_open_regular(path, &why);
         if (fd < 0) {
             len = shell_appendf(&out, &cap, len, "cat: %s: %s\n",
-                                 path, strerror(errno));
+                                 path, why);
             *out_text = out;
             *out_exit = 1;
             return 0;
@@ -937,10 +986,15 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
             *out_exit = 1;
             return 0;
         }
-        FILE *fp = fopen(argv[first], "r");
+        const char *why = "";
+        FILE *fp = NULL;
+        if (shell_check_regular(argv[first], &why) == 0) {
+            fp = fopen(argv[first], "r");
+            if (!fp) why = strerror(errno);
+        }
         if (!fp) {
             len = shell_appendf(&out, &cap, len,
-                                 "head: %s: %s\n", argv[first], strerror(errno));
+                                 "head: %s: %s\n", argv[first], why);
             *out_text = out;
             *out_exit = 1;
             return 0;
@@ -973,10 +1027,11 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
             *out_exit = 1;
             return 0;
         }
-        int fd = open(argv[first], O_RDONLY);
+        const char *why = "";
+        int fd = shell_open_regular(argv[first], &why);
         if (fd < 0) {
             len = shell_appendf(&out, &cap, len,
-                                 "tail: %s: %s\n", argv[first], strerror(errno));
+                                 "tail: %s: %s\n", argv[first], why);
             *out_text = out;
             *out_exit = 1;
             return 0;
@@ -1047,10 +1102,11 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
             *out_exit = 1;
             return 0;
         }
-        int fd = open(argv[first], O_RDONLY);
+        const char *why = "";
+        int fd = shell_open_regular(argv[first], &why);
         if (fd < 0) {
             len = shell_appendf(&out, &cap, len,
-                                 "wc: %s: %s\n", argv[first], strerror(errno));
+                                 "wc: %s: %s\n", argv[first], why);
             *out_text = out;
             *out_exit = 1;
             return 0;
@@ -1330,24 +1386,18 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
              * EXDEV (see handle_fs_move). Only attempt the rename when source
              * and dest are on the SAME device; otherwise skip straight to the
              * copy-then-unlink path below. Never call rename() across mounts. */
-            int mv_same_dev = 0;
-            {
-                struct stat mv_sf, mv_dd;
-                char mv_dpar[1024];
-                const char *mv_ds = strrchr(target, '/');
-                if (mv_ds && mv_ds != target) {
-                    size_t dl = (size_t)(mv_ds - target);
-                    if (dl >= sizeof(mv_dpar)) dl = sizeof(mv_dpar) - 1;
-                    memcpy(mv_dpar, target, dl);
-                    mv_dpar[dl] = '\0';
-                } else {
-                    mv_dpar[0] = '/';
-                    mv_dpar[1] = '\0';
-                }
-                mv_same_dev = (lstat(argv[i], &mv_sf) == 0 && /* the link itself, not its target */
-                               stat(mv_dpar, &mv_dd) == 0 &&
-                               mv_sf.st_dev == mv_dd.st_dev);
-            }
+            /* The shared guard (cross_device.h), not a parent worked out by
+             * hand: the hand-rolled one took "/" as the parent of a bare name
+             * like `newname`, when the shell has chdir'd into the session
+             * folder and the name lands THERE. `cd /mnt/usb0; mv /file-on-the-
+             * internal-drive newname` compared "/" with "/", called it the
+             * same device, and renamed across the mount; `cd /data/x; mv a b`
+             * compared /data with "/", and copied instead of renaming (and
+             * refused folders). xdev_parent_dir gives "." for a bare name.
+             * Source by lstat (the link itself, not its target); only a
+             * definite SAME renames, anything unknown takes the copy path. */
+            int mv_same_dev = xdev_rename_is_safe(
+                xdev_rename_crosses_l(argv[i], target, xdev_lstat_dev, xdev_stat_dev));
             if (mv_same_dev) {
                 if (rename(argv[i], target) == 0) continue;
                 if (errno != EXDEV) {
@@ -1362,6 +1412,13 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
              * directory mv is too complex for shell tab (use cp -r +
              * rm -r explicitly). */
             struct stat sst;
+            if (lstat(argv[i], &sst) != 0) {
+                /* A source that is not there is that, not a cross-FS limit. */
+                len = shell_appendf(&out, &cap, len,
+                                     "mv: %s: %s\n", argv[i], strerror(errno));
+                any_err = 1;
+                continue;
+            }
             if (stat(argv[i], &sst) != 0 || !S_ISREG(sst.st_mode)) {
                 len = shell_appendf(&out, &cap, len,
                                      "mv: %s -> %s: cross-FS, only files supported\n",
@@ -1528,10 +1585,14 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
                     any_err = 1;
                     continue;
                 }
-                int sfd = open(src, O_RDONLY);
+                /* Regular files only: the 256 MiB cap above reads st_size, which
+                 * is 0 for /dev/zero, and that copy would run until the drive
+                 * was full. */
+                const char *why = "";
+                int sfd = shell_open_regular(src, &why);
                 if (sfd < 0) {
                     len = shell_appendf(&out, &cap, len,
-                                         "cp: %s: %s\n", src, strerror(errno));
+                                         "cp: %s: %s\n", src, why);
                     any_err = 1;
                     continue;
                 }
@@ -1925,10 +1986,15 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
                     if (next_path) break;
                     next_path = p;
                 }
-                FILE *fp = fopen(next_path, "r");
+                const char *why = "";
+                FILE *fp = NULL;
+                if (shell_check_regular(next_path, &why) == 0) {
+                    fp = fopen(next_path, "r");
+                    if (!fp) why = strerror(errno);
+                }
                 if (!fp) {
                     len = shell_appendf(&out, &cap, len,
-                                         "grep: %s: %s\n", next_path, strerror(errno));
+                                         "grep: %s: %s\n", next_path, why);
                     if (!fts_h) break;
                     continue;
                 }
@@ -2047,10 +2113,11 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
             *out_exit = 1;
             return 0;
         }
-        int fd = open(argv[first], O_RDONLY);
+        const char *why = "";
+        int fd = shell_open_regular(argv[first], &why);
         if (fd < 0) {
             len = shell_appendf(&out, &cap, len,
-                                 "xxd: %s: %s\n", argv[first], strerror(errno));
+                                 "xxd: %s: %s\n", argv[first], why);
             *out_text = out;
             *out_exit = 1;
             return 0;
@@ -2098,10 +2165,24 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
         }
         int any_err = 0;
         for (int i = 1; i < argc; i++) {
-            int fd = open(argv[i], O_RDONLY);
+            /* What is not a regular file is named from its type alone: a
+             * device or a pipe is never opened to look for magic bytes. */
+            struct stat fst;
+            if (stat(argv[i], &fst) == 0 && !S_ISREG(fst.st_mode)) {
+                const char *what = S_ISDIR(fst.st_mode)    ? "directory"
+                                   : S_ISCHR(fst.st_mode)  ? "character device"
+                                   : S_ISBLK(fst.st_mode)  ? "block device"
+                                   : S_ISFIFO(fst.st_mode) ? "fifo (named pipe)"
+                                   : S_ISSOCK(fst.st_mode) ? "socket"
+                                                           : "special file";
+                len = shell_appendf(&out, &cap, len, "%s: %s\n", argv[i], what);
+                continue;
+            }
+            const char *why = "";
+            int fd = shell_open_regular(argv[i], &why);
             if (fd < 0) {
                 len = shell_appendf(&out, &cap, len,
-                                     "%s: %s\n", argv[i], strerror(errno));
+                                     "%s: %s\n", argv[i], why);
                 any_err = 1;
                 continue;
             }
@@ -2243,10 +2324,11 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
             *out_exit = 1;
             return 0;
         }
-        int fd = open(argv[1], O_RDONLY);
+        const char *why = "";
+        int fd = shell_open_regular(argv[1], &why);
         if (fd < 0) {
             len = shell_appendf(&out, &cap, len,
-                                 "sfoinfo: %s: %s\n", argv[1], strerror(errno));
+                                 "sfoinfo: %s: %s\n", argv[1], why);
             *out_text = out;
             *out_exit = 1;
             return 0;

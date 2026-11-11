@@ -520,6 +520,38 @@ async fn a_long_destination_path_is_judged_whole_not_truncated() {
     assert!(r.path("src").exists() && !r.path(&to).exists(), "moved");
 }
 
+/// DISCRIMINATING: the destination EXISTS and is itself a mount point ("mnt2" is the other device) whose
+/// parent shares the source's device. Source and parent agree, so the old guard let the rename through
+/// and the kernel met a destination on another filesystem. A folder over an empty folder renames fine on
+/// the host, so a guard that misses it is visible as the folder having moved.
+#[tokio::test(flavor = "multi_thread")]
+async fn fs_rename_onto_a_mount_point_is_refused() {
+    let r = rig("xdev-mountpoint").await;
+    std::fs::create_dir_all(r.path("mnt2")).unwrap();
+    std::fs::create_dir_all(r.path("srcdir")).unwrap();
+    mgmt_fs::set(true, 0, 0); // a path containing "/mnt2" is another device
+    let (st, b) = r
+        .rpc(gen::METHOD_FS_RENAME, &rename(&r, "srcdir", "mnt2", 1))
+        .await;
+    assert_eq!(
+        (st, cause(&b).as_str()),
+        // By its own name, not as a crossing: the app answers a crossing with a copy INTO the
+        // destination, which would pour the folder into the drive's root.
+        (gen::ERR_PATH, "fs_move_dest_is_mount_point")
+    );
+    assert!(
+        r.path("srcdir").exists() && r.path("mnt2").exists(),
+        "moved"
+    );
+    // An ordinary existing destination on the same device is still replaced.
+    std::fs::create_dir_all(r.path("plain")).unwrap();
+    let (st, b) = r
+        .rpc(gen::METHOD_FS_RENAME, &rename(&r, "srcdir", "plain", 1))
+        .await;
+    assert_eq!((st, b.len()), (OK, 0));
+    assert!(!r.path("srcdir").exists() && r.path("plain").exists());
+}
+
 /// DISCRIMINATING (review 007 #4): the devices cannot be read, yet the source exists and a host
 /// rename would succeed. Fail open would move the file; fail closed leaves it.
 #[tokio::test(flavor = "multi_thread")]
@@ -1292,7 +1324,17 @@ fn lint_the_guard_header_judges_a_source_link_by_lstat() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../payload/src/shell_builtin.c"),
     )
     .unwrap();
-    assert!(sh.contains("mv_same_dev = (lstat(argv[i]"));
+    // The shell's `mv` goes through the same guard (it used to work the parent out by hand, and got "/"
+    // for a bare name): the lstat lookup for the source, and only a definite SAME renames.
+    assert!(
+        sh.contains("xdev_rename_crosses_l(argv[i], target, xdev_lstat_dev, xdev_stat_dev)"),
+        "mv uses the two-lookup guard with lstat for the source"
+    );
+    assert!(sh.contains("int mv_same_dev = xdev_rename_is_safe("));
+    assert!(
+        !sh.contains("mv_dpar"),
+        "mv no longer derives the parent itself"
+    );
     // Fail closed (review 007 #4): the guard caller refuses anything but a definite SAME.
     assert!(
         fs.contains("xdev_rename_is_safe("),

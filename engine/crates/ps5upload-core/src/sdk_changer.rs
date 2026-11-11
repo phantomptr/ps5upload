@@ -54,6 +54,12 @@ pub struct SdkScanResponse {
     pub overlay: Option<SdkOverlayStatus>,
     #[serde(default)]
     pub error: Option<String>,
+    /// The console has more titles than fit its reply and stopped listing at a
+    /// whole entry. Declared for the same reason as `overlay`: a field missing
+    /// here is dropped on the way to the client, and the list would look
+    /// complete. Absent (false) from helpers that predate it.
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 #[cfg(test)]
@@ -208,6 +214,18 @@ mod tests {
         let json = r#"{}"#;
         let resp: SdkScanResponse = serde_json::from_str(json).unwrap();
         assert!(resp.titles.is_empty());
+        assert!(!resp.truncated, "older helpers send no flag");
+    }
+
+    /// The console's "there were more titles than fit" flag reaches the client.
+    #[test]
+    fn truncated_survives_the_round_trip() {
+        let ack =
+            r#"{"titles":[],"truncated":true,"overlay":{"state":"idle","title_id":"","error":""}}"#;
+        let resp: SdkScanResponse = serde_json::from_str(ack).unwrap();
+        assert!(resp.truncated);
+        let out = serde_json::to_string(&resp).unwrap();
+        assert!(out.contains("\"truncated\":true"), "{out}");
     }
 
     #[test]

@@ -37,9 +37,16 @@ int profile_slot_get_name(int slot, char out[PROFILE_NAME_MAX],
                                 out_err_code);
 }
 
+/* sceRegMgrSetStr is told the FIELD's size and reads that many bytes from the buffer it is given,
+ * whatever the string's length. So the value goes in a zero-filled buffer of exactly that size:
+ * passing the caller's string made it read 17 bytes from the 3-byte literal "np" (and 32 from any
+ * shorter name) — past the end of the string, into whatever lies after it. Same size to Sony as
+ * before; only what is behind the pointer changed. */
 int profile_slot_set_name(int slot, const char *name, uint32_t *out_err_code) {
+    char field[PROFILE_NAME_MAX] = {0};
     if (!name) return -1;
-    return sys_registry_set_str(KEY_NAME(slot), name, PROFILE_NAME_MAX,
+    snprintf(field, sizeof(field), "%s", name);
+    return sys_registry_set_str(KEY_NAME(slot), field, PROFILE_NAME_MAX,
                                 out_err_code);
 }
 
@@ -62,8 +69,10 @@ int profile_slot_get_type(int slot, char out[PROFILE_TYPE_MAX],
 }
 
 int profile_slot_set_type(int slot, const char *type, uint32_t *out_err_code) {
+    char field[PROFILE_TYPE_MAX] = {0}; /* see profile_slot_set_name */
     if (!type) return -1;
-    return sys_registry_set_str(KEY_TYPE(slot), type, PROFILE_TYPE_MAX,
+    snprintf(field, sizeof(field), "%s", type);
+    return sys_registry_set_str(KEY_TYPE(slot), field, PROFILE_TYPE_MAX,
                                 out_err_code);
 }
 

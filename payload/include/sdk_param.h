@@ -31,17 +31,19 @@ static inline int sdk_param_format_version(uint32_t target_sdk, char *out,
     return n;
 }
 
-/* Replace the string value of `field` in `in`, appending to `out`.
- * Returns 1 if the field was found and rewritten, 0 if absent. */
-static inline int sdk_param_replace_field(const char *in, size_t in_len,
-                                          const char *field, const char *value,
-                                          char *out, size_t out_cap,
-                                          size_t *out_len) {
+/* Replace the string value of `field` IN PLACE in `buf`, a NUL-terminated
+ * buffer of `cap` bytes holding `*len` bytes of text. Returns 1 if the field
+ * was rewritten, 0 if it is absent (or its value is not a string), -1 if the
+ * result does not fit. No second buffer: a fixed scratch here is what used to
+ * cap the whole document at 8 KiB. */
+static inline int sdk_param_replace_in_place(char *buf, size_t *len, size_t cap,
+                                             const char *field,
+                                             const char *value) {
     char needle[64];
     int nn = snprintf(needle, sizeof(needle), "\"%s\"", field);
     if (nn < 0 || (size_t)nn >= sizeof(needle)) return 0;
 
-    const char *key = strstr(in, needle);
+    const char *key = strstr(buf, needle);
     if (!key) return 0;
     const char *colon = strchr(key, ':');
     if (!colon) return 0;
@@ -52,22 +54,29 @@ static inline int sdk_param_replace_field(const char *in, size_t in_len,
     const char *close = strchr(p, '"');
     if (!close) return 0;
 
-    size_t head = (size_t)(p - in);
-    size_t tail_off = (size_t)(close - in);
+    size_t head = (size_t)(p - buf);
+    size_t tail_off = (size_t)(close - buf);
+    if (tail_off > *len) return 0; /* past the text the caller described */
+    size_t tail_len = *len - tail_off;
     size_t vlen = strlen(value);
-    size_t total = head + vlen + (in_len - tail_off);
-    if (total >= out_cap) return 0;
+    if (vlen >= cap || head >= cap - vlen || tail_len >= cap - vlen - head) return -1;
 
-    memcpy(out, in, head);
-    memcpy(out + head, value, vlen);
-    memcpy(out + head + vlen, in + tail_off, in_len - tail_off);
-    if (out_len) *out_len = total;
+    memmove(buf + head + vlen, buf + tail_off, tail_len);
+    memcpy(buf + head, value, vlen);
+    *len = head + vlen + tail_len;
+    buf[*len] = '\0';
     return 1;
 }
 
 /* Rewrite both version fields. Returns how many were actually changed —
  * 0 means the document did not contain them, which the caller must
- * report rather than claim success. */
+ * report rather than claim success — or -1 when the document or its
+ * rewritten form does not fit `out_cap` (`out` is then not to be used).
+ *
+ * -1, never 0, for "does not fit": this used to copy through an 8 KiB stack
+ * buffer and return 0 for anything larger, so a real param.json (they reach
+ * ~30 KiB with every language's title in them) read as "no version fields"
+ * and was silently left alone. */
 static inline int sdk_param_rewrite_json(const char *in, size_t in_len,
                                          uint32_t target_sdk, char *out,
                                          size_t out_cap, size_t *out_len) {
@@ -78,26 +87,17 @@ static inline int sdk_param_rewrite_json(const char *in, size_t in_len,
 
     static const char *const fields[] = {"sdkVersion",
                                          "requiredSystemSoftwareVersion"};
-    /* Ping-pong between two buffers so each field rewrite sees the
-     * previous one's output. */
     if (in_len >= out_cap) return -1;
     memcpy(out, in, in_len);
     out[in_len] = '\0';
     size_t cur_len = in_len;
 
-    char scratch[8192];
     int changed = 0;
     for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
-        if (cur_len >= sizeof(scratch)) return changed;
-        size_t next_len = 0;
-        if (sdk_param_replace_field(out, cur_len, fields[i], value, scratch,
-                                    sizeof(scratch), &next_len)) {
-            if (next_len >= out_cap) return changed;
-            memcpy(out, scratch, next_len);
-            out[next_len] = '\0';
-            cur_len = next_len;
-            changed++;
-        }
+        int r = sdk_param_replace_in_place(out, &cur_len, out_cap, fields[i],
+                                           value);
+        if (r < 0) return -1;
+        changed += r;
     }
 
     if (out_len) *out_len = cur_len;

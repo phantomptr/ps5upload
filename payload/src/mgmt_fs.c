@@ -366,7 +366,20 @@ int mgmt_run_fs_rename(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
     /* NEVER rename(2) across devices: on this kernel it does not fail with EXDEV, it panics the
      * console. Compare the source's OWN device (lstat: a link is judged by where it lives, not by
      * its target) with the destination's parent before any rename. A device that cannot be read
-     * (missing source or directory) is refused too: only a definite SAME reaches rename(). */
+     * (missing source or directory) is refused too: only a definite SAME reaches rename(). A
+     * destination that exists and is a MOUNT POINT (its own device differs from its parent's) is a
+     * crossing as well, though source and parent agree: the guard looks at `to` itself. */
+    /* A destination that IS a drive's mount point is refused by its own name, before the device
+     * check would call it a crossing: the app answers a crossing by copying the source INTO the
+     * destination and deleting the source, which would pour a folder into the root of a drive when
+     * the caller meant a folder on it. */
+    {
+        char to_dir[FS_PATH_MAX];
+        unsigned long long dev_entry = 0, dev_dir = 0;
+        xdev_parent_dir(to, to_dir, sizeof to_dir);
+        if (src_dev(to, &dev_entry) == 0 && dev(to_dir, &dev_dir) == 0 && dev_entry != dev_dir)
+            return mgmt_reply_error(cx, AVA1_ERR_PATH, "fs_move_dest_is_mount_point");
+    }
     xdev_result_t xr = xdev_rename_crosses_l(from, to, src_dev, dev);
     if (xr == XDEV_CROSSES) return mgmt_reply_error(cx, AVA1_ERR_CROSS_DEVICE, "fs_move_cross_mount");
     if (!xdev_rename_is_safe(xr)) return mgmt_reply_error(cx, AVA1_ERR_IO, "fs_move_device_unknown"); /* fail closed (review 007 #4) */

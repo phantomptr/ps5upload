@@ -97,9 +97,9 @@ export default function FfpkgInspectorPanel({ path }: { path: string }) {
 
   return (
     <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mt-3">
-      <div className="flex items-center gap-2 px-3 py-2">
+      <div className="flex flex-wrap items-center gap-2 px-3 py-2">
         <FileSearch size={14} className="text-[var(--color-muted)]" />
-        <div className="flex-1 text-xs font-medium">
+        <div className="flex-1 basis-[8rem] text-xs font-medium">
           {tr(
             "ffpkg_inspect_title",
             undefined,

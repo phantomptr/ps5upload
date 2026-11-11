@@ -45,6 +45,16 @@ static int fake_dev(const char *path, unsigned long long *out) {
     return -1; /* no such path */
 }
 
+/* The same table seen from a shell whose current directory is /mnt/usb0: a
+ * relative path ("." included) resolves there. "b", a name that does not exist
+ * yet, has no device; "a" does. */
+static int fake_dev_cwd_usb(const char *path, unsigned long long *out) {
+    if (path[0] == '/') return fake_dev(path, out);
+    if (strcmp(path, "b") == 0 || strcmp(path, "newname") == 0) return -1;
+    *out = 10;
+    return 0;
+}
+
 int main(void) {
     char buf[64];
 
@@ -140,6 +150,40 @@ int main(void) {
         /* but a long parent that fits is still judged whole */
         longp[900] = '\0';
         CHECK(xdev_rename_crosses("/data/a.pkg", longp, fake_dev) == XDEV_SAME);
+    }
+
+    /* A destination that EXISTS and is itself a mount point. Its parent shares
+     * the source's device, so source-vs-parent says SAME, but the entry the
+     * rename would replace belongs to another filesystem. /mnt/usb0 lives in
+     * /mnt (the internal drive) and has a USB drive mounted on it. */
+    CHECK(xdev_rename_crosses("/data/a", "/mnt/usb0", fake_dev) == XDEV_CROSSES);
+    CHECK(xdev_rename_crosses("/data/a", "/mnt/usb0/", fake_dev) == XDEV_CROSSES);
+    CHECK(xdev_rename_crosses_l("/data/a", "/mnt/ext0", fake_dev, fake_dev) == XDEV_CROSSES);
+    /* An ordinary existing destination on its parent's device is replaced as before. */
+    CHECK(xdev_rename_crosses("/data/a", "/data/existing", fake_dev) == XDEV_SAME);
+    /* One that cannot be looked up is simply not there yet. */
+    CHECK(xdev_rename_crosses_l("/data/a", "/data/new", fake_dev, fake_dev) == XDEV_SAME);
+
+    /* The shell's `mv` with a BARE destination name: the shell has chdir'd
+     * into the session folder, so the name lands in the current directory,
+     * whose device is what counts — not the root's. Its old hand-rolled
+     * parent was "/" for these, which made `cd /mnt/usb0; mv /file new`
+     * compare the internal drive with itself and rename across the mount. */
+    {
+        char par[16];
+        xdev_parent_dir("newname", par, sizeof(par));
+        CHECK_STR(par, ".");
+        /* cwd = /mnt/usb0, source on the internal drive: must NOT be renamed. */
+        CHECK(xdev_rename_crosses_l("/file", "newname", fake_dev, fake_dev_cwd_usb)
+              == XDEV_CROSSES);
+        CHECK(!xdev_rename_is_safe(
+            xdev_rename_crosses_l("/file", "newname", fake_dev, fake_dev_cwd_usb)));
+        /* cwd = /mnt/usb0, both names relative: one device, a plain rename. */
+        CHECK(xdev_rename_crosses_l("a", "b", fake_dev_cwd_usb, fake_dev_cwd_usb)
+              == XDEV_SAME);
+        /* A relative path with a folder in it keeps that folder as the parent. */
+        xdev_parent_dir("sub/newname", par, sizeof(par));
+        CHECK_STR(par, "sub");
     }
 
     /* Fail closed (review 007 #4): only SAME is safe to rename; UNKNOWN is refused. */

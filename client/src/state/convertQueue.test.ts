@@ -22,7 +22,7 @@ const flush = async () => {
 
 describe("the Convert queue", () => {
   let builds: { source: string; resolve: (r: { ok: boolean; packagePath?: string; message?: string }) => void }[];
-  let handoffs: { pkg: string; resolve: (r: { ok: boolean; message?: string }) => void }[];
+  let handoffs: { pkg: string; resolve: (r: { ok: boolean; unverified?: true; message?: string }) => void }[];
   // The hand-started build the runner waits for (ready); null: this computer is free.
   let manual: { done: () => void } | null;
   beforeEach(() => {
@@ -121,6 +121,20 @@ describe("the Convert queue", () => {
     handoffs[0].resolve({ ok: true });
     await flush();
     expect(useConvertQueue.getState().items[0].status).toBe("done");
+  });
+
+  it("an install the PS5 took but nobody confirmed ends done with what to check", async () => {
+    add("/g/A");
+    void useConvertQueue.getState().start();
+    await flush();
+    builds[0].resolve({ ok: true, packagePath: "/out/A.pkg" });
+    await flush();
+    handoffs[0].resolve({ ok: true, unverified: true, message: "Check Downloads on the PS5. The package was kept." });
+    await flush();
+    expect(useConvertQueue.getState().items[0]).toMatchObject({
+      status: "done",
+      error: "Check Downloads on the PS5. The package was kept.",
+    });
   });
 
   it("keeps a package only when asked, and records a failed build without stopping the queue", async () => {

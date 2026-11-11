@@ -344,7 +344,21 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 fn base_path(drive: &str, member: &str) -> Option<PathBuf> {
-    Some(state_dir()?.join(format!("{drive}-{member}.json")))
+    Some(state_dir()?.join(base_file_name(drive, member)?))
+}
+
+/// The file a drive's base for a member is kept in, or None for ids that are not ids. Both come
+/// from the console's document, which any device on the network can write: `../../x` as a drive
+/// id made this a file anywhere on the computer. An id is letters, digits, `-` and `_` (ours are
+/// 16 hex digits); a member's key may carry the `@console` of a linked console.
+fn base_file_name(drive: &str, member: &str) -> Option<String> {
+    let id = |s: &str, also: &[u8]| {
+        !s.is_empty()
+            && s.len() <= 128
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || also.contains(&b))
+    };
+    (id(drive, b"") && id(member, b"@")).then(|| format!("{drive}-{member}.json"))
 }
 
 fn load_base(drive: &str, member: &str) -> Base {
@@ -355,7 +369,8 @@ fn load_base(drive: &str, member: &str) -> Base {
 }
 
 fn save_base(drive: &str, member: &str, base: &Base) -> Result<()> {
-    let p = base_path(drive, member).ok_or_else(|| anyhow!("no data directory"))?;
+    let p = base_path(drive, member)
+        .ok_or_else(|| anyhow!("no data directory, or the drive's id is not one"))?;
     if let Some(d) = p.parent() {
         std::fs::create_dir_all(d)?;
     }
@@ -5041,6 +5056,27 @@ pub async fn confirm(Json(req): Json<MemberReq>) -> Response {
 
 #[cfg(test)]
 mod tests {
+    /// Checked as text: no id from a console's document reaches a path with a separator, a
+    /// drive or `..` in it.
+    #[test]
+    fn a_drive_id_that_is_a_path_names_no_base_file() {
+        assert_eq!(
+            super::base_file_name("0123456789abcdef", "fedcba9876543210").as_deref(),
+            Some("0123456789abcdef-fedcba9876543210.json")
+        );
+        let linked = super::via_base_key("fedcba9876543210", "192.168.1.20:9120");
+        assert!(super::base_file_name("0123456789abcdef", &linked).is_some());
+        for bad in [
+            "../../x", "..", "a/b", "a\\b", "\\x", "C:x", "a\0b", "a.b", "", "a b", "a@b",
+        ] {
+            assert!(super::base_file_name(bad, "m").is_none(), "{bad:?}");
+            if bad != "a@b" {
+                assert!(super::base_file_name("d", bad).is_none(), "{bad:?}");
+            }
+        }
+        assert!(super::base_file_name(&"a".repeat(129), "m").is_none());
+    }
+
     #[test]
     fn a_held_mass_delete_names_what_it_would_delete() {
         let mut ops: Vec<Op> = (0..250).map(|i| Op::DeleteHub(format!("a/{i}"))).collect();

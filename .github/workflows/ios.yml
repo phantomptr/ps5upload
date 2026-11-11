@@ -22,7 +22,7 @@ jobs:
   payload:
     name: payload (ELF for the app bundle)
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -38,24 +38,11 @@ jobs:
         working-directory: client
         run: npm ci --no-audit --no-fund
       - name: Install payload toolchain
-        timeout-minutes: 12
+        timeout-minutes: 20
         run: |
           set -euo pipefail
-          apt_retry() {
-            for attempt in 1 2 3; do
-              if sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 \
-                   -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 "$@"; then
-                return 0
-              fi
-              echo "apt attempt $attempt failed; retrying in 15s" >&2
-              sleep 15
-            done
-            return 1
-          }
-          apt_retry update
           sudo bash scripts/install-llvm-apt.sh 22
-          apt_retry update
-          apt_retry install -y clang-22 llvm-22-dev lld-22 unzip python3
+          bash scripts/ci-apt.sh clang-22 llvm-22-dev lld-22 unzip python3
       - name: Install pinned PS5 Payload SDK
         run: sudo env PS5_SDK_INSTALL_DIR=/opt/ps5-payload-sdk bash scripts/install-ps5-sdk.sh
       - name: Build payload

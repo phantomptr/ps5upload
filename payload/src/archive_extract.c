@@ -37,6 +37,8 @@ extern unsigned int ps5upload_extractor_elf_len;
 #define EXTRACT_RECORD EXTRACT_DIR "/job.rec"
 
 #define EXTRACT_LOADER_PORT 9021
+/* The extractor's XJ_PASSWORD (its own build; the two must agree): room for 255 bytes and the NUL. */
+#define EXTRACT_PASSWORD_MAX 256
 /* elfldr is closed for about a second while ps5upload swaps it for its patched build, and for 3 s
  * after a failed accept: a refused connect is retried this long. */
 #define EXTRACT_CONNECT_RETRY_MS 8000
@@ -412,6 +414,16 @@ int archive_extract_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
     if (!fsj_json_str(json, "password", password, 1024)) {
         free(password);
         password = NULL;
+    }
+    /* The extractor keeps a password in EXTRACT_PASSWORD_MAX bytes (XJ_PASSWORD,
+     * payload/extractor/src/xjob.h) and cannot take a longer one: this accepted up to 1023, wrote
+     * it to the request, and the extractor was started only to refuse the request it could not
+     * read. A password that long is not one it can open anything with, so say so before anything
+     * is written to disk or loaded. */
+    if (password && strlen(password) >= EXTRACT_PASSWORD_MAX) {
+        ava1_op_message(c, "fs_extract_wrong_password");
+        status = AVA1_ERR_IO;
+        goto unlock;
     }
     (void)mkdir(EXTRACT_DIR, 0700);
     archive_extract_sweep();

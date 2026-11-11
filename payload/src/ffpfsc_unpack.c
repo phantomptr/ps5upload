@@ -139,12 +139,19 @@ static const char *read_layout(int fd, unp_layout_t *L) {
     }
     if (!L->name[0] || strchr(L->name, '/') || strcmp(L->name, ".") == 0 || strcmp(L->name, "..") == 0)
         bad = "fs_unpack_bad_name";
-    else if (first < UNP_HEAD_BLOCKS || L->raw == 0)
+    else if (first < UNP_HEAD_BLOCKS || L->raw == 0 || L->raw > UINT64_MAX - UNP_MARGIN)
+        /* The last: a size no file has. Every later `L.raw + UNP_MARGIN` (the free-space check)
+         * and `L.raw + UNP_BLOCK` would wrap to a small number and pass. */
         bad = "fs_unpack_bad_inode";
 out:
     free(head);
     return bad;
 }
+
+/* Whether the image's file, `stored` bytes at `base`, lies inside a source of `size` bytes. As
+ * subtractions: both numbers come from the image, and `base + stored` wraps for a corrupt one,
+ * which read as "fits". */
+static int unp_inside(uint64_t base, uint64_t stored, uint64_t size) { return base <= size && stored <= size - base; }
 
 /* The container's header and block table, read without decoding a block: every offset inside the
  * container and each block no larger than 64 KiB. A malformed one never reaches the kernel's
@@ -212,7 +219,7 @@ const char *fsj_ffpfsc_probe(const char *path, fsj_unpack_probe_t *p) {
     bad = read_layout(in, &L);
     close(in);
     if (bad) return bad;
-    if (L.base + L.stored > (uint64_t)st.st_size) return "fs_unpack_truncated";
+    if (!unp_inside(L.base, L.stored, (uint64_t)st.st_size)) return "fs_unpack_truncated";
     snprintf(dir, sizeof dir, "%s", src);
     char *slash = strrchr(dir, '/');
     if (!slash) return "fs_unpack_path_not_allowed";
@@ -270,7 +277,7 @@ int fsj_op_ffpfsc_unpack(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_
         status = AVA1_ERR_IO;
         goto done;
     }
-    if (L.base + L.stored > (uint64_t)st.st_size) {
+    if (!unp_inside(L.base, L.stored, (uint64_t)st.st_size)) {
         ava1_op_message(c, "fs_unpack_truncated");
         goto done;
     }

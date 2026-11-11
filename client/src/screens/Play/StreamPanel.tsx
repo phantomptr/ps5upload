@@ -88,7 +88,7 @@ import { GoLiveBarIcon, GoLiveChip, GoLivePanel, goLiveAvailable, inAppPhoneEngi
 import { GamePanel } from "./game/GamePanel";
 import { LaunchStatus } from "./game/LaunchStatus";
 import { DropChoice, DropZone, useStreamDropZone } from "./game/DropToInstall";
-import { useStreamLaunchRunner } from "./game/streamLaunch";
+import { useStreamLaunch, useStreamLaunchRunner } from "./game/streamLaunch";
 import { rpControls, useGameControlsStore } from "../../state/gameControls";
 import { mouseMoved } from "../../lib/gameControls";
 import { captureDelta, engage, isCaptured, releaseCapture, requestCapture, subscribeCapture } from "../../lib/pointerCapture";
@@ -917,6 +917,14 @@ export function StreamPanel({
     }
     if (!useRemotePlayStore.getState().stream) await start();
   }, [start, stopStream, okToStop]);
+
+  // Home's Play card asks for the stream here, so it starts behind the same guards as Start.
+  const streamAsked = useStreamLaunch((s) => s.streamOnly);
+  useEffect(() => {
+    if (!streamAsked) return;
+    const host = useStreamLaunch.getState().takeStream();
+    if (host && !useRemotePlayStore.getState().stream) void start(false, host);
+  }, [streamAsked, start]);
 
   useStreamLaunchRunner({
     playingHost: sessionPlaying && profile ? hostOf(profile.host) : null,

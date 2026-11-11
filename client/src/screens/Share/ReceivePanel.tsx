@@ -168,17 +168,22 @@ function refusedLine(tr: Tr, why: string): string {
   return why;
 }
 
-export function ReceiveFlow({
-  view,
-  host,
-  onDone,
-  onView,
-}: {
+interface ReceiveFlowProps {
   view: ReceiveView;
   host: string;
   onDone: () => void;
   onView: (v: ReceiveView) => void;
-}) {
+}
+
+/** While connecting there are no items yet. The flow below starts its selection from the
+ *  items it first sees, so it only mounts once they are here: mounted earlier, nothing was
+ *  ever pre-selected. */
+export function ReceiveFlow(props: ReceiveFlowProps) {
+  if (props.view.state === "connecting") return <Connecting />;
+  return <ReceiveFlowOpen {...props} />;
+}
+
+function ReceiveFlowOpen({ view, host, onDone, onView }: ReceiveFlowProps) {
   const tr = useTr();
   const [picked, setPicked] = useState<string[]>(() => view.items.filter((i) => !i.refused).map((i) => i.id));
   const [then, setThen] = useState<"keep" | "install">("keep");
@@ -207,7 +212,6 @@ export function ReceiveFlow({
     }
   };
 
-  if (view.state === "connecting") return <Connecting />;
   if (view.state === "offered") {
     const size = view.items.filter((i) => picked.includes(i.id)).reduce((n, i) => n + i.size, 0);
     return (

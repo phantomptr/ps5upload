@@ -41,6 +41,12 @@ pub(crate) const HEADER: usize = 12;
 const HELLO_WAIT: Duration = Duration::from_secs(15);
 /// A receiver that stopped asking for files for this long has gone.
 const IDLE_WAIT: Duration = Duration::from_secs(120);
+/// A sender that said nothing for this long while a file was coming, or before its offer, has
+/// gone: the receive ends as a lost connection (and connects again with its token, if it has one).
+pub(crate) const RX_IDLE_WAIT: Duration = Duration::from_secs(90);
+/// The longest file or folder name written, in bytes: under the 255 every file system takes,
+/// with room for `.part` and a ` (2)`.
+pub(crate) const NAME_MAX: usize = 200;
 /// The receiver's longest text message (a `get` with a long path).
 pub(crate) const TEXT_MAX: usize = 4096;
 
@@ -517,7 +523,9 @@ fn set(sh: &Mutex<RxShared>, f: impl FnOnce(&mut RxShared)) {
     f(&mut sh.lock().unwrap_or_else(|e| e.into_inner()));
 }
 
-/// Characters no file system takes, and control characters, as `_`; trimmed, at most 80.
+/// Characters no file system takes, and control characters, as `_`; trimmed, and no longer than
+/// [`NAME_MAX`] bytes. A longer name loses the end of its stem, never its extension: `.pkg` cut
+/// off made the file something else, and two names alike in their first 80 characters became one.
 pub(crate) fn safe_name(s: &str) -> String {
     let t: String = s
         .chars()
@@ -528,14 +536,92 @@ pub(crate) fn safe_name(s: &str) -> String {
                 c
             }
         })
-        .take(80)
         .collect();
-    let t = t.trim().trim_matches('.').trim().to_string();
+    let t = t.trim().trim_matches('.').trim();
+    let t = if t.len() > NAME_MAX {
+        // The extension: after the last dot, when short enough to be one.
+        let (stem, ext) = match t.rfind('.') {
+            Some(i) if i > 0 && t.len() - i <= 16 => t.split_at(i),
+            _ => (t, ""),
+        };
+        let mut cut = NAME_MAX - ext.len();
+        while !stem.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        format!("{}{ext}", stem[..cut].trim_end_matches(['.', ' ']))
+    } else {
+        t.to_string()
+    };
     if t.is_empty() {
         "item".into()
     } else {
         t
     }
+}
+
+/// `name` with ` (k)` before its extension, still within [`NAME_MAX`].
+fn numbered(name: &str, k: usize) -> String {
+    let tag = format!(" ({k})");
+    let (stem, ext) = match name.rfind('.') {
+        Some(i) if i > 0 && name.len() - i <= 16 => name.split_at(i),
+        _ => (name, ""),
+    };
+    let mut cut = stem
+        .len()
+        .min(NAME_MAX.saturating_sub(ext.len() + tag.len()));
+    while !stem.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}{tag}{ext}", &stem[..cut])
+}
+
+/// What two targets that are one file on this computer have in common: Windows and macOS do
+/// not tell `A.bin` from `a.bin`.
+fn target_key(p: &Path) -> String {
+    p.to_string_lossy().to_lowercase()
+}
+
+/// Where each listed file goes, in the listing's order (so a resumed transfer plans the same).
+/// Two files that would be one here (names alike once made safe, or but for their case) each get
+/// their own: the later one a ` (2)`. Before, the second was taken for the first already
+/// received, or written over it. `Err` is the path that cannot be written under its item.
+pub(crate) fn plan_targets(
+    files: Vec<Listed>,
+    dirs: &[(String, PathBuf)],
+) -> Result<Vec<(Listed, PathBuf)>, PlanRefused> {
+    let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut plan = Vec::with_capacity(files.len());
+    for f in files {
+        let Some(dir) = dirs.iter().find(|(id, _)| *id == f.item).map(|d| &d.1) else {
+            return Err(PlanRefused::NotAccepted);
+        };
+        let Some(first) = target(dir, &f.path) else {
+            return Err(PlanRefused::Unsafe);
+        };
+        let mut t = first.clone();
+        let mut k = 2;
+        while !taken.insert(target_key(&t)) {
+            let name = first.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+            t = first.with_file_name(numbered(name, k));
+            k += 1;
+        }
+        plan.push((f, t));
+    }
+    Ok(plan)
+}
+
+/// Why a listing cannot be written.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum PlanRefused {
+    NotAccepted,
+    Unsafe,
+}
+
+/// The listing's size, when it adds up and is no more than the offer said (a little slack for a
+/// file that grew). The sizes are the sender's: a sum that wraps would pass as a small one.
+pub(crate) fn listed_total(sizes: impl IntoIterator<Item = u64>, offered: u64) -> Option<u64> {
+    let total = sizes.into_iter().try_fold(0u64, u64::checked_add)?;
+    (total <= offered.saturating_add(offered / 10 + (1 << 20))).then_some(total)
 }
 
 /// Where item `id` goes under `dest`: its own folder, named after it.
@@ -580,11 +666,23 @@ pub(crate) fn target(dir: &Path, rel: &str) -> Option<PathBuf> {
 /// One receiving session over `link`, from the hello to the end. On a reconnect, `resume` is the
 /// token and the accepted items and folder are already in `sh`.
 pub(crate) async fn receive<L: Link>(
+    link: L,
+    room: &str,
+    name: &str,
+    sh: Arc<Mutex<RxShared>>,
+    cmds: &mut tokio::sync::mpsc::UnboundedReceiver<RxCmd>,
+) -> RxEnd {
+    receive_with(link, room, name, sh, cmds, RX_IDLE_WAIT).await
+}
+
+/// [`receive`], giving up on a sender silent for `idle`.
+pub(crate) async fn receive_with<L: Link>(
     mut link: L,
     room: &str,
     name: &str,
     sh: Arc<Mutex<RxShared>>,
     cmds: &mut tokio::sync::mpsc::UnboundedReceiver<RxCmd>,
+    idle: Duration,
 ) -> RxEnd {
     let token = sh.lock().unwrap_or_else(|e| e.into_inner()).token.clone();
     let hello = json!({"hello": {"v": 1, "room": room, "name": name, "resume": token}});
@@ -603,7 +701,17 @@ pub(crate) async fn receive<L: Link>(
     // The offer (a first connection), then the person's choice.
     let mut dest: Option<PathBuf> = sh.lock().unwrap_or_else(|e| e.into_inner()).dest.clone();
     if !resuming {
-        let v = match link.recv().await {
+        // The offer comes at once; Cancel is heard while it does not.
+        let first = loop {
+            tokio::select! {
+                c = cmds.recv() => if matches!(c, Some(RxCmd::Cancel) | None) {
+                    let _ = link.send_text(json!({"cancel": {}}).to_string()).await;
+                    return fail(&sh, "cancelled", None);
+                },
+                m = tokio::time::timeout(idle, link.recv()) => break m.ok().flatten(),
+            }
+        };
+        let v = match first {
             Some(In::Text(t)) => serde_json::from_str::<Value>(&t).unwrap_or_default(),
             _ => {
                 return fail(
@@ -733,11 +841,15 @@ pub(crate) async fn receive<L: Link>(
             return fail(&sh, "refused", r["why"].as_str().map(str::to_string));
         }
         if let Some(a) = v.get("allowed") {
+            // No more files than the accepted items can have.
+            let accepted = sh.lock().unwrap_or_else(|e| e.into_inner()).accepted.len();
+            let max_listed = manifest::MAX_FILES.saturating_mul(accepted.max(1));
             let token = a["token"].as_str().map(str::to_string);
             let list: Vec<Listed> = a["files"]
                 .as_array()
                 .map(|a| {
                     a.iter()
+                        .take(max_listed + 1)
                         .map(|f| Listed {
                             item: f["item"].as_str().unwrap_or("").to_string(),
                             path: f["path"].as_str().unwrap_or("").to_string(),
@@ -746,6 +858,14 @@ pub(crate) async fn receive<L: Link>(
                         .collect()
                 })
                 .unwrap_or_default();
+            if list.len() > max_listed {
+                let _ = link.send_text(json!({"cancel": {}}).to_string()).await;
+                return fail(
+                    &sh,
+                    "failed",
+                    Some("The sender listed more files than it offered.".into()),
+                );
+            }
             set(&sh, |s| s.token = token);
             break list;
         }
@@ -757,44 +877,35 @@ pub(crate) async fn receive<L: Link>(
         (g.accepted.clone(), g.items.clone())
     };
     let dirs = item_dirs(&offered_items, &accepted, &dest);
-    let offered_size: u64 = offered_items
+    let offered_size = offered_items
         .iter()
         .filter(|i| accepted.contains(&i.id))
-        .map(|i| i.size)
-        .sum();
-    let total: u64 = files.iter().map(|f| f.size).sum();
-    if total > offered_size.saturating_add(offered_size / 10 + (1 << 20)) {
+        .fold(0u64, |sum, i| sum.saturating_add(i.size));
+    let Some(total) = listed_total(files.iter().map(|f| f.size), offered_size) else {
         let _ = link.send_text(json!({"cancel": {}}).to_string()).await;
         return fail(
             &sh,
             "failed",
             Some("The sender sent more than it offered.".into()),
         );
-    }
-    let mut plan: Vec<(Listed, PathBuf)> = Vec::new();
-    for f in files {
-        let Some(dir) = dirs
-            .iter()
-            .find(|(id, _)| *id == f.item)
-            .map(|d| d.1.clone())
-        else {
+    };
+    let plan = match plan_targets(files, &dirs) {
+        Ok(plan) => plan,
+        Err(why) => {
             let _ = link.send_text(json!({"cancel": {}}).to_string()).await;
             return fail(
                 &sh,
                 "failed",
-                Some("The sender listed something not accepted.".into()),
+                Some(
+                    match why {
+                        PlanRefused::NotAccepted => "The sender listed something not accepted.",
+                        PlanRefused::Unsafe => "The sender listed a path that isn't safe.",
+                    }
+                    .into(),
+                ),
             );
-        };
-        let Some(t) = target(&dir, &f.path) else {
-            let _ = link.send_text(json!({"cancel": {}}).to_string()).await;
-            return fail(
-                &sh,
-                "failed",
-                Some("The sender listed a path that isn't safe.".into()),
-            );
-        };
-        plan.push((f, t));
-    }
+        }
+    };
     set(&sh, |s| {
         s.state = "receiving";
         s.bytes_total = total;
@@ -845,13 +956,24 @@ pub(crate) async fn receive<L: Link>(
         let mut at = have;
         set(&sh, |s| s.bytes_done = done_bytes + at);
         loop {
-            if let Some(c) = cmds.recv().now_or_never() {
-                if matches!(c, Some(RxCmd::Cancel) | None) {
-                    let _ = link.send_text(json!({"cancel": {}}).to_string()).await;
-                    return fail(&sh, "cancelled", None);
+            // Cancel is heard while the sender is silent, and a sender silent for too long is
+            // a lost connection: before, either left the receive (and its slot) waiting for
+            // a message that never came.
+            let m = tokio::select! {
+                biased;
+                c = cmds.recv() => {
+                    if matches!(c, Some(RxCmd::Cancel) | None) {
+                        let _ = link.send_text(json!({"cancel": {}}).to_string()).await;
+                        return fail(&sh, "cancelled", None);
+                    }
+                    continue;
                 }
-            }
-            match link.recv().await {
+                m = tokio::time::timeout(idle, link.recv()) => match m {
+                    Ok(m) => m,
+                    Err(_) => return RxEnd::Lost,
+                },
+            };
+            match m {
                 Some(In::Binary(b)) => {
                     let Some((bn, off, data)) = parse_data(&b) else {
                         continue;

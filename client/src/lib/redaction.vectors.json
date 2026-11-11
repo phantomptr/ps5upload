@@ -106,5 +106,59 @@
     "redact": false,
     "in": "{\"morning\":\"0a1b2c3d\",\"passcode\":\"1234\"} morning=0a1b2c3d",
     "out": "{\"morning\":\"<removed>\",\"passcode\":\"<removed>\"} morning=<removed>"
+  },
+  {
+    "name": "a quote escaped earlier in the line does not hide a secret",
+    "redact": false,
+    "in": "{\"message\":\"a 5\\\" drive\",\"detail\":{\"token\":\"SECRET2\"}}",
+    "out": "{\"message\":\"a 5\\\" drive\",\"detail\":{\"token\":\"<removed>\"}}"
+  },
+  {
+    "name": "an odd number of quotes before the key",
+    "redact": false,
+    "in": "it said \"no, \"token\": \"abc\" end",
+    "out": "it said \"no, \"token\": \"<removed>\" end"
+  },
+  {
+    "name": "a secret with an escaped quote goes whole",
+    "redact": false,
+    "in": "{\"password\":\"ab\\\"cd\",\"x\":\"y\"}",
+    "out": "{\"password\":\"<removed>\",\"x\":\"y\"}"
+  },
+  {
+    "name": "a secret ending in an escaped backslash stops at its own quote",
+    "redact": false,
+    "in": "{\"password\":\"ab\\\\\",\"x\":\"y\"}",
+    "out": "{\"password\":\"<removed>\",\"x\":\"y\"}"
+  },
+  {
+    "name": "a secret cut short goes to the end of its line",
+    "redact": false,
+    "in": "{\"token\":\"abc\nnext line \"x\":\"y\"",
+    "out": "{\"token\":\"<removed>\nnext line \"x\":\"y\""
+  },
+  {
+    "name": "escaped JSON: a quote inside an earlier value does not hide a secret",
+    "redact": false,
+    "in": "\"store\": \"{\\\"note\\\":\\\"a 5\\\\\\\" drive\\\",\\\"token\\\":\\\"SECRET\\\",\\\"n\\\":\\\"v\\\"}\"",
+    "out": "\"store\": \"{\\\"note\\\":\\\"a 5\\\\\\\" drive\\\",\\\"token\\\":\\\"<removed>\\\",\\\"n\\\":\\\"v\\\"}\""
+  },
+  {
+    "name": "escaped JSON: a secret with an escaped quote or backslash goes whole",
+    "redact": false,
+    "in": "\"store\": \"{\\\"token\\\":\\\"ab\\\\\\\"cd\\\",\\\"psk\\\":\\\"ef\\\\\\\\\\\",\\\"n\\\":\\\"v\\\"}\"",
+    "out": "\"store\": \"{\\\"token\\\":\\\"<removed>\\\",\\\"psk\\\":\\\"<removed>\\\",\\\"n\\\":\\\"v\\\"}\""
+  },
+  {
+    "name": "escaped JSON: a secret cut short stops where the outer string does",
+    "redact": false,
+    "in": "\"store\": \"{\\\"token\\\":\\\"abc\", \"next\": \"kept\"",
+    "out": "\"store\": \"{\\\"token\\\":\\\"<removed>\", \"next\": \"kept\""
+  },
+  {
+    "name": "a serial after an escaped quote",
+    "redact": true,
+    "in": "{\"name\":\"my \\\"Pro\\\"\",\"serial\":\"AJ123456789012\"}",
+    "out": "{\"name\":\"my \\\"Pro\\\"\",\"serial\":\"<serial>\"}"
   }
 ]

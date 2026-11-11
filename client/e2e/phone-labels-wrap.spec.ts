@@ -77,3 +77,59 @@ test("Shared Folders: the Servers description and the PS5 shares title are not s
   expect((addBox?.x ?? 0) + (addBox?.width ?? 0)).toBeLessThanOrEqual(412);
   await noSidewaysScroll(page);
 });
+
+// #794 again: the Files queue row's name was a column a few letters wide ("PAU/SE/D B/eat./Sab…")
+// while "Resume" and "Remove from queue" kept the rest of the line.
+test("Files: a paused queue row's name has the row, its buttons go below", async ({ page }) => {
+  const NAME = "Beat.Saber_CUSA12878_v1.00_[5.50]_OPOISSO893.pkg";
+  await setUp(page);
+  await page.addInitScript(
+    ({ host, name }) => {
+      window.localStorage.setItem(
+        "ps5upload.fsUploadQueue.v1",
+        JSON.stringify({
+          [host]: {
+            items: [
+              {
+                id: "q1",
+                request: {
+                  queueId: "q1",
+                  host,
+                  addr: `${host}:9120`,
+                  destDir: "/data",
+                  srcPaths: [],
+                  steps: [{ kind: "one", src: `/home/me/${name}`, name, txId: "tx1" }],
+                },
+                allowedExisting: [],
+                paused: "user",
+              },
+            ],
+            paused: true,
+            running: false,
+            error: null,
+            currentId: null,
+          },
+        }),
+      );
+    },
+    { host: HOST, name: NAME },
+  );
+  await page.goto("/files", { waitUntil: "domcontentloaded" });
+
+  const queue = page.getByTestId("fs-upload-queue");
+  const text = queue.getByTestId("fs-upload-queue-text");
+  expect(await width(text)).toBeGreaterThan(200);
+
+  // "Paused" stays one word on one line.
+  const chipBox = await queue.getByTestId("fs-upload-paused").boundingBox();
+  expect(chipBox?.height ?? 999).toBeLessThan(24);
+
+  // The buttons are below the name, inside the screen.
+  const textBox = await text.boundingBox();
+  for (const name of ["Resume", "Remove from queue"]) {
+    const b = await queue.getByRole("button", { name }).first().boundingBox();
+    expect(b?.y ?? 0).toBeGreaterThanOrEqual((textBox?.y ?? 0) + (textBox?.height ?? 0) - 1);
+    expect((b?.x ?? 0) + (b?.width ?? 0)).toBeLessThanOrEqual(412);
+  }
+  await noSidewaysScroll(page);
+});

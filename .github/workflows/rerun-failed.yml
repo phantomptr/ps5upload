@@ -1,0 +1,91 @@
+# Re-runs the failed jobs of a finished `publish` run. Started by that run's own `retry-failed`
+# job (publish.yml), never by an event.
+#
+# Why a second workflow: a run cannot re-run itself while it is still running, and the
+# `workflow_run` event the old publish-retry.yml waited for never comes for a publish run that
+# release-tag.yml dispatched with GITHUB_TOKEN (it had no runs at all). A `workflow_dispatch`
+# is the one thing GITHUB_TOKEN may start, so the failed run dispatches this, and this waits for
+# the run to finish before it asks for the re-run.
+#
+# publish.yml's job is the only thing that retries a publish run, so nothing races this
+# (ci-runner-retry.yml looks at `ci` runs only). At most two re-runs per run: that job stops
+# dispatching at attempt 3, and this refuses one too.
+#
+# By hand:  gh workflow run rerun-failed.yml -f run_id=<publish run id>
+name: rerun-failed
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Id of the publish run whose failed jobs to run again"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rerun-failed-${{ github.event.inputs.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  rerun:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: write
+    steps:
+      - name: Wait for the run to finish, then run its failed jobs again
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.inputs.run_id }}
+        run: |
+          set -euo pipefail
+          case "$RUN_ID" in
+            ""|*[!0-9]*) echo "::error::run_id must be a number"; exit 1 ;;
+          esac
+          run_api="repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID"
+
+          path="$(gh api "$run_api" --jq .path)"
+          if [ "$path" != ".github/workflows/publish.yml" ]; then
+            echo "::error::run $RUN_ID belongs to '$path'; this only re-runs publish runs"
+            exit 1
+          fi
+
+          # The run that asked is still finishing its last job. 20 minutes covers a job that was
+          # still going when it asked; a failed lookup is asked again on the next turn.
+          status=""
+          for _ in $(seq 1 120); do
+            status="$(gh api "$run_api" --jq .status || true)"
+            if [ "$status" = completed ]; then
+              break
+            fi
+            sleep 10
+          done
+          if [ "$status" != completed ]; then
+            echo "::error::run $RUN_ID did not finish within 20 minutes (status: ${status:-unknown}); re-run it by hand: gh run rerun $RUN_ID --failed"
+            exit 1
+          fi
+
+          conclusion="$(gh api "$run_api" --jq .conclusion)"
+          attempt="$(gh api "$run_api" --jq .run_attempt)"
+          echo "run $RUN_ID: attempt $attempt ended as $conclusion"
+          if [ "$conclusion" = success ]; then
+            echo "Nothing failed; nothing to do."
+            exit 0
+          fi
+          if [ "$attempt" -ge 3 ]; then
+            echo "Attempt $attempt: not retrying again. This one is for a person to read."
+            exit 0
+          fi
+
+          # GitHub can take a moment to let a just-finished run be re-run.
+          for try in 1 2 3; do
+            if gh run rerun "$RUN_ID" --failed --repo "$GITHUB_REPOSITORY"; then
+              echo "- re-ran the failed jobs of publish run $RUN_ID (attempt $attempt ended as $conclusion)" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep $((try * 15))
+          done
+          echo "::error::could not re-run run $RUN_ID; by hand: gh run rerun $RUN_ID --failed"
+          exit 1

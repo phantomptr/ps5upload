@@ -319,7 +319,9 @@ static int remote_get_foreground_user(int *out_user) {
     return 0;
 }
 
-int shellui_rpc_launch_app(const char *title_id, int user_id_hint) {
+int shellui_rpc_launch_app(const char *title_id, int user_id_hint,
+                           uint32_t *sony_code_out) {
+    if (sony_code_out) *sony_code_out = 0;
     if (!title_id || !shellui_rpc_ready()) return -1;
 
     /* Foreground user resolution. The caller may pass a known-good
@@ -424,10 +426,12 @@ int shellui_rpc_launch_app(const char *title_id, int user_id_hint) {
     (void)scratch;
     (void)pt_detach_tracked(g_shellui_pid, 0);
     pthread_mutex_unlock(&g_rpc_mtx);
-    /* Three return shapes:
-     *   rc == 0           — Sony's launcher accepted the call. Game launched.
-     *   rc > 0            — Sony returned an error code (title not found, no
-     *                       foreground user, etc.). Surface the code.
+    /* Three return shapes (shellui_launch_result, shellui_rpc.h):
+     *   low 32 bits == 0  — Sony's launcher accepted the call. Game launched.
+     *   anything else     — Sony returned an error code (title not found, no
+     *                       foreground user, etc.): 1, the code in
+     *                       *sony_code_out. NOT returned as an int: 0x8094....
+     *                       is negative there and reads as the -1 below.
      *   rc == -1          — pt_call hit a failure. Two sub-cases:
      *     dispatched == 0 — pre-call failure (couldn't attach / mmap / setregs).
      *                       Function never ran; caller may retry or fall back.
@@ -439,8 +443,6 @@ int shellui_rpc_launch_app(const char *title_id, int user_id_hint) {
      *                       falling through to in-process strategies which
      *                       would race the running launch and produce a
      *                       misleading "all strategies failed" error. */
-    if (rc == -1 && dispatched && !timed_out && !tracee_lost) {
-        return -2;
-    }
-    return (int)rc;
+    return shellui_launch_result(rc, dispatched, timed_out, tracee_lost,
+                                 sony_code_out);
 }

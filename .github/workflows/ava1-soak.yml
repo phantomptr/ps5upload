@@ -37,7 +37,8 @@ jobs:
           toolchain: stable
 
       - name: Install clang + sanitizer runtimes
-        run: sudo apt-get update && sudo apt-get install -y clang libclang-rt-18-dev
+        timeout-minutes: 20
+        run: bash scripts/ci-apt.sh clang libclang-rt-18-dev
 
       - name: Soak
         working-directory: engine

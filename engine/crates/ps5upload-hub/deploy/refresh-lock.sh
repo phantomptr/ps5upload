@@ -12,6 +12,11 @@ cp -R "$crate/src" "$crate/tests" "$tmp/ps5upload-hub/"
 cp "$crate/deploy/workspace.toml" "$tmp/Cargo.toml"
 cp "$engine/Cargo.lock" "$tmp/Cargo.lock"
 # Resolving drops the packages the hub does not use and keeps every version it does.
-(cd "$tmp" && cargo metadata --format-version 1 --offline >/dev/null)
+# Offline by default: the lock is only pruned, never updated, and nothing is fetched. A clean
+# machine (CI) has not downloaded every crate the lock names for other targets, so it sets
+# HUB_LOCK_ONLINE=1; the versions still come from the engine's lock.
+offline=--offline
+[ "${HUB_LOCK_ONLINE:-}" = 1 ] && offline=
+(cd "$tmp" && cargo metadata --format-version 1 $offline >/dev/null)
 cp "$tmp/Cargo.lock" "$crate/deploy/Cargo.lock"
 echo "wrote $crate/deploy/Cargo.lock (scratch copy left in $tmp)"

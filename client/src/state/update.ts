@@ -64,6 +64,9 @@ function mobileLinkFailedMessage(): string {
 }
 
 const CHECK_TTL_MS = 24 * 60 * 60 * 1000; // 1 day
+/** A check that failed (offline at launch, GitHub down) is tried again after this long, not
+ *  after a whole day. */
+export const CHECK_RETRY_MS = 15 * 60 * 1000;
 const CACHE_KEY = "ps5upload.update-check-v2";
 // Auto-check preference + notify-dedup live in localStorage (NOT the
 // sessionStorage check cache): the toggle must survive an app restart, and
@@ -466,8 +469,12 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
     // Don't stomp an active download with a check result.
     if (prior.kind === "downloading") return;
     set({ phase: { kind: "checking" } });
+    // The channel this check answers for: changed meanwhile, its answer is dropped (the
+    // channel change started its own check).
+    const channel = get().channel;
     try {
-      const result = await updateCheck(get().channel);
+      const result = await updateCheck(channel);
+      if (get().channel !== channel) return;
       saveCache(result);
       set({
         phase: phaseFromResult(result),
@@ -486,6 +493,9 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
         notifyUpdate(result, false);
       }
     } catch (e) {
+      if (get().channel !== channel) return;
+      // Stamped, so the automatic check waits before trying again; `ensureChecked` makes that
+      // wait CHECK_RETRY_MS for a failure, not the day a real answer is good for.
       set({
         phase: {
           kind: "error",
@@ -739,7 +749,10 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
       } catch {
         /* private mode / storage disabled — the TTL check just re-fetches */
       }
-      set({ channel, phase: { kind: "idle" }, lastCheckedMs: 0 });
+      // A download of the old channel's build is stopped; whatever it still reports is dropped
+      // by `download` (it checks the channel it started under).
+      if (get().phase.kind === "downloading") void updateDownloadCancel().catch(() => {});
+      set({ channel, phase: { kind: "idle" }, lastCheckedMs: 0, downloadProgress: null });
       void get().checkNow();
     },
 
@@ -757,7 +770,9 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
       // the TTL path.
       const cur = get();
       const age = Date.now() - cur.lastCheckedMs;
-      if (cur.phase.kind !== "idle" && age < CHECK_TTL_MS) return;
+      // A failed check is not an answer for the day: it is tried again after a short wait.
+      const ttl = cur.phase.kind === "error" ? CHECK_RETRY_MS : CHECK_TTL_MS;
+      if (cur.phase.kind !== "idle" && age < ttl) return;
       // An app left running comes back here later: a download in progress or in hand stands.
       if (cur.phase.kind === "downloading" || cur.phase.kind === "downloaded") return;
       // Skip if another check is already running in this tick. Synchronous
@@ -782,6 +797,10 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
       // field per the discriminated union, so the narrowing here is
       // exhaustive — no conditional needed.
       const result = phase.result;
+      // The channel this download belongs to. Changed while it runs (Stable ⇄ Pre-release), its
+      // outcome is dropped: the old channel's build must not come back as "downloaded".
+      const channel = get().channel;
+      const stale = () => get().channel !== channel;
       // Mobile (Android): the desktop "stream to ~/Downloads + reveal in
       // file manager" flow can't work — Downloads is sandboxed and there
       // is no file manager to reveal into. Hand the APK URL (or the
@@ -795,6 +814,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
         if (apkUpdaterAvailable() && result.download_url) {
           set({ phase: { kind: "downloading", result } });
           const error = await downloadAndInstallApk(result);
+          if (stale()) return;
           set({
             phase: error
               ? { kind: "download-failed", result, message: error }
@@ -846,8 +866,10 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
           result.download_filename,
           result.sha256,
         );
+        if (stale()) return;
         set({ phase: { kind: "downloaded", result, download } });
       } catch (e) {
+        if (stale()) return;
         const raw = e instanceof Error ? e.message : String(e);
         set({
           // Cancelled by the person: nothing failed, the update is on offer as before.
@@ -858,7 +880,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
         });
       } finally {
         unlisten?.();
-        set({ downloadProgress: null });
+        if (!stale()) set({ downloadProgress: null });
       }
     },
 

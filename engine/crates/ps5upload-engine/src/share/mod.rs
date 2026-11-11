@@ -323,6 +323,30 @@ fn remove_staging(dir: &Path) {
     }
 }
 
+/// How old a folder in `shares` is before the start sweep takes it: no share lives past
+/// [`MAX_TTL`], so one a day older belongs to no engine.
+const LEFT_SHARE_AGE: Duration = Duration::from_secs(MAX_TTL.as_secs() + 24 * 3600);
+
+/// Removes what an earlier run left in the engine's `shares` folder: a share is kept in memory
+/// only, so after a restart nothing knows the files made for it (a save's zip), and nothing
+/// would remove them. By age, not "from before this start": another engine may be running on
+/// the same data folder (the app's and one started by hand), and its shares are live.
+pub fn sweep_left_shares() {
+    let Some(cutoff) = std::time::SystemTime::now().checked_sub(LEFT_SHARE_AGE) else {
+        return;
+    };
+    if let Some(base) = shares_dir() {
+        let n = crate::sweep_older_than(&base, cutoff);
+        if n > 0 {
+            crate::log_at!(
+                Info,
+                "together",
+                "share: removed {n} folder(s) an earlier run left"
+            );
+        }
+    }
+}
+
 fn shares_dir() -> Option<PathBuf> {
     if cfg!(test) {
         return Some(std::env::temp_dir().join(format!("ps5u-shares-{}", std::process::id())));

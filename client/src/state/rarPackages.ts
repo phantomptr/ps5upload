@@ -308,7 +308,9 @@ export function orderForInstall<T extends Pick<RarPackageInfo, "category" | "tit
   );
 }
 
-export type RarInstallStatus = "installed" | "failed" | "skipped";
+/** `unverified`: the PS5 took the package but the install could not be confirmed. It is not
+ *  counted as installed, so the unpacked folder stays. */
+export type RarInstallStatus = "installed" | "unverified" | "failed" | "skipped";
 
 export interface RarInstallOutcome {
   entry: string;
@@ -570,7 +572,18 @@ export async function installRarPackages(
     const r = await pkgLibraryStore(host).getState().installFromConsolePath(pkg.consolePath, host, {
       sizeBytes: pkg.size ?? null,
     });
-    if (r.ok) {
+    if (r.ok && r.unverified) {
+      // Not confirmed: the package may still be installing from this very file, so it is not
+      // counted as installed and the folder is not removed.
+      outcomes.push({
+        entry: pkg.entry,
+        consolePath: pkg.consolePath,
+        status: "unverified",
+        message:
+          r.message ??
+          trStatic("queue_install_unverified", "install accepted; verify on PS5 (package kept)"),
+      });
+    } else if (r.ok) {
       outcomes.push({ entry: pkg.entry, consolePath: pkg.consolePath, status: "installed" });
     } else {
       if (tier === 0 && pkg.titleId) failedBases.add(pkg.titleId);

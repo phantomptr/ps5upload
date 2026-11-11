@@ -756,6 +756,12 @@ pub(crate) fn live_host() -> Option<String> {
     live().map(|l| l.host.clone())
 }
 
+/// The console being played as the session was started for it, and whether that session is on
+/// its way out: what a refusal says it found instead of what was asked for (join.rs `open`).
+pub(crate) fn live_brief() -> Option<(String, bool)> {
+    live().map(|l| (l.host.clone(), l.stop.load(Ordering::Relaxed)))
+}
+
 /// What a phone is told about the session: null when none runs.
 pub(crate) fn live_state() -> serde_json::Value {
     live()

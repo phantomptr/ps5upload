@@ -629,11 +629,7 @@ impl RemoteSource {
         // The HOST only — never the path or query, which carry signed tokens
         // on most download links. `Server`/`Via`/`CF-Ray` say whether a CDN is
         // in front, which is what decides who is doing the limiting.
-        let host = url
-            .split("://")
-            .nth(1)
-            .and_then(|rest| rest.split('/').next())
-            .unwrap_or("(unparsed)");
+        let host = log_host(url);
         let hdr = |name: &str| {
             resp.headers()
                 .get(name)
@@ -1464,9 +1460,45 @@ impl RemoteSource {
     }
 }
 
+/// The host of `url` for a log line, and nothing else of it: not the `user:password@` before
+/// it, nor a path or query (a link with no path kept its `?token=…` when the host was cut out
+/// of the text by hand).
+fn log_host(url: &str) -> String {
+    url.parse::<axum::http::Uri>()
+        .ok()
+        .and_then(|u| u.host().map(str::to_string))
+        .unwrap_or_else(|| "(unparsed)".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_logged_host_never_carries_a_password_or_a_token() {
+        for (url, host) in [
+            (
+                "https://user:hunter2@cdn.example.com/a/game.pkg?sig=SECRET",
+                "cdn.example.com",
+            ),
+            (
+                "https://user:hunter2@cdn.example.com?sig=SECRET",
+                "cdn.example.com",
+            ),
+            (
+                "http://cdn.example.com:8080?token=SECRET",
+                "cdn.example.com",
+            ),
+            ("http://hunter2@192.168.1.5:8080/x.pkg", "192.168.1.5"),
+            ("https://cdn.example.com#SECRET", "cdn.example.com"),
+        ] {
+            let got = log_host(url);
+            assert_eq!(got, host, "{url}");
+            assert!(!got.contains("hunter2") && !got.contains("SECRET"), "{got}");
+        }
+        assert_eq!(log_host("not a url"), "(unparsed)");
+        assert_eq!(log_host("https://user:hunter2@/x"), "(unparsed)");
+    }
 
     /// Certificate verification is only skipped when a caller explicitly asks.
     ///
@@ -2340,12 +2372,8 @@ pub(crate) mod origin_tests {
 
         // Derive the host the same way the log does, and check the secret is
         // not part of it.
-        let host = url
-            .split("://")
-            .nth(1)
-            .and_then(|rest| rest.split('/').next())
-            .unwrap_or("(unparsed)");
-        assert_eq!(host, addr.to_string());
+        let host = log_host(&url);
+        assert_eq!(host, addr.ip().to_string());
         assert!(!host.contains("SECRET123"), "token leaked into the host");
         assert!(!host.contains("game.pkg"), "path leaked into the host");
     }

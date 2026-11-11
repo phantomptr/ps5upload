@@ -1180,7 +1180,7 @@ interface PkgLibraryState {
     localPath: string,
     host: string,
     opts?: { onDest?: (destPath: string) => void },
-  ) => Promise<{ ok: boolean; message?: string }>;
+  ) => Promise<{ ok: boolean; unverified?: true; message?: string }>;
   /** Stream & install (#81) a local PC-side `.pkg` WITHOUT uploading it
    *  to PS5 staging first. The engine serves the file over HTTP at
    *  `/pkg-host/{session}/` and the DPI daemon pulls it directly. Saves the
@@ -1206,6 +1206,8 @@ interface PkgLibraryState {
     ok: boolean;
     message?: string;
     mayNotLaunch?: boolean;
+    /** Taken by the PS5 but not confirmed: never delete or record as installed on it. */
+    unverified?: true;
     /** True when the same package should be retried through staged/file mode,
      * which bypasses Sony's HTTP/proxy path. */
     stagedFallbackRecommended?: boolean;
@@ -1273,6 +1275,8 @@ interface PkgLibraryState {
     ok: boolean;
     message?: string;
     mayNotLaunch?: boolean;
+    /** Taken by the PS5 but not confirmed: never delete or record as installed on it. */
+    unverified?: true;
   }>;
   /** Install a `.pkg` the user found while browsing the File System, at an
    *  arbitrary on-console path. Removable mounts (`/mnt/usb*`, `/mnt/ext*`)
@@ -1289,6 +1293,8 @@ interface PkgLibraryState {
     ok: boolean;
     message?: string;
     mayNotLaunch?: boolean;
+    /** Taken by the PS5 but not confirmed: never delete or record as installed on it. */
+    unverified?: true;
   }>;
   /** Delete (from the PS5) every staged package that has already been
    *  installed successfully — clears the spent-package clutter without
@@ -3027,7 +3033,8 @@ const makePkgLibraryStore = () =>
       // The install's own result — the row may be gone (auto-remove) or still
       // hold an earlier attempt's result.
       const result = await get().install(dest, host);
-      if (result.ok) return { ok: true };
+      // An unconfirmed install stays unconfirmed for the caller: it must not delete on it.
+      if (result.ok) return result.unverified ? { ok: true, unverified: true as const, message: result.message } : { ok: true };
       return {
         ok: false,
         message: result.message ?? get().error ?? "The install did not finish.",
@@ -3188,7 +3195,7 @@ const makePkgLibraryStore = () =>
             trStatic("pkg.check_the_ps5", "{label}: check the PS5").replace("{label}", label),
             { jobOutcome: true, body: mainErr },
           );
-          outcome = { ok: true, message: mainErr };
+          outcome = { ok: true, unverified: true as const, message: mainErr };
         } else {
           outcome = { ok: false, message: mainErr || installRejectedText() };
           // Failed verdict → the pkg was KEPT on the PS5 (never deleted on a
@@ -3318,6 +3325,7 @@ const makePkgLibraryStore = () =>
       set({ installingAll: true });
       let ok = 0;
       let failed = 0;
+      let unconfirmed = 0;
       // One row in the activity bar for the batch; each install still shows its own.
       const n = targets.length;
       const batchTaskId = useTaskStore.getState().registerTask({
@@ -3340,7 +3348,9 @@ const makePkgLibraryStore = () =>
               category: target.category ?? null,
               sizeBytes: target.size ?? null,
             }).done.then((r) => {
-              if (r.ok) ok++;
+              // Taken by the PS5 but not confirmed: neither installed nor failed.
+              if (r.ok && r.unverified) unconfirmed++;
+              else if (r.ok) ok++;
               else failed++;
               finished++;
               useTaskStore.getState().updateTask(batchTaskId, {
@@ -3369,7 +3379,7 @@ const makePkgLibraryStore = () =>
       // One summary bell for the whole batch (each item's own success/failure
       // bell still fires inside install(), matching the single-install UX).
       pushNotification(
-        failed === 0 && conflicts.length === 0 ? "success" : "warning",
+        failed === 0 && conflicts.length === 0 && unconfirmed === 0 ? "success" : "warning",
         failed === 0 && conflicts.length === 0
           ? tx("pkg.all_done", { n: ok }, "Installed: {n}")
           : conflicts.length > 0 && failed === 0
@@ -3377,7 +3387,13 @@ const makePkgLibraryStore = () =>
             : tx("pkg.all_done_failed", { n: ok, total: ok + failed, failed }, "Installed {n} of {total}. Failed: {failed}"),
         {
           body:
-            failed === 0 && conflicts.length === 0
+            failed === 0 && conflicts.length === 0 && unconfirmed > 0
+              ? tx(
+                  "pkg.all_unconfirmed_body",
+                  { n: unconfirmed },
+                  "Not confirmed: {n}. Check Downloads on the PS5. Those packages were kept.",
+                )
+              : failed === 0 && conflicts.length === 0
               ? trStatic("pkg.all_done_body", "All staged packages installed.")
               : conflicts.length > 0 && failed === 0
                 ? trStatic(
@@ -3980,7 +3996,7 @@ const makePkgLibraryStore = () =>
           });
         }
         if (outcome.unverified) {
-          return finishStreamTask({ ok: true, message: outcome.errMessage });
+          return finishStreamTask({ ok: true, unverified: true as const, message: outcome.errMessage });
         }
         if (outcome.stopped) {
           return finishStreamTask({ ok: false, message: outcome.errMessage }, true);
@@ -4200,7 +4216,7 @@ const makePkgLibraryStore = () =>
           await fsDelete(mgmtAddr(host), internalPath).catch(() => {});
         }
 
-        if (viaCopy.unverified) return { ok: true, message: viaCopy.errMessage };
+        if (viaCopy.unverified) return { ok: true, unverified: true as const, message: viaCopy.errMessage };
         return viaCopy.installed
           ? { ok: true, mayNotLaunch: viaCopy.mayNotLaunch }
           : {
@@ -4281,7 +4297,7 @@ const makePkgLibraryStore = () =>
             installSampleFeed(hooks),
             (msg) => hooks?.onStatus(msg),
           );
-        if (unverified) return { ok: true, message: errMessage };
+        if (unverified) return { ok: true, unverified: true as const, message: errMessage };
         return installed
           ? { ok: true, mayNotLaunch }
           : {
@@ -4502,7 +4518,7 @@ registerInstallJobResolver(async (job) => {
     return {
       state: "finished",
       result: o.unverified
-        ? { ok: true, message: o.errMessage }
+        ? { ok: true, unverified: true as const, message: o.errMessage }
         : o.installed
           ? { ok: true, mayNotLaunch: o.mayNotLaunch }
           : { ok: false, message: o.errMessage || "The install didn't complete." },

@@ -142,6 +142,33 @@ describe("the web UI re-attaches to running jobs after a reload", () => {
     expect(fsDelete).toHaveBeenCalledWith(expect.anything(), "/data/big.bin");
   });
 
+  it("an install found unconfirmed keeps its staged copy and is not recorded as installed", async () => {
+    vi.mocked(uploadQueueLoad).mockResolvedValueOnce({
+      items: [
+        {
+          ...base,
+          id: "p",
+          sourceKind: "pkg",
+          status: "running",
+          uploadDone: true,
+          installPhase: "installing",
+          installJobId: "install-job",
+        },
+      ],
+      continueOnFailure: false,
+    } as never);
+    resolveJob.mockResolvedValue({
+      state: "finished",
+      result: { ok: true, unverified: true, message: "Check Downloads on the PS5. The package was kept." },
+    });
+    await useUploadQueueStore.getState().hydrate();
+    await until(() => row("p")?.status === "done");
+    expect(fsDelete).not.toHaveBeenCalled();
+    expect(recordInstalled).not.toHaveBeenCalled();
+    expect(row("p")?.installPhase).toBe("unverified");
+    expect(row("p")?.installNote).toBe("Check Downloads on the PS5. The package was kept.");
+  });
+
   it("marks a package row interrupted when its install left no job to follow", async () => {
     vi.mocked(uploadQueueLoad).mockResolvedValueOnce({
       items: [

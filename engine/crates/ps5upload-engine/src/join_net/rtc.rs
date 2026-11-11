@@ -74,6 +74,18 @@ const TRACK_FLOOR_KBPS: u32 = 500;
 /// str0m's pacer sends at its estimate times this (pacer/control.rs PACING_FACTOR).
 const PACING_FACTOR: f64 = 1.1;
 
+/// A peer hands its socket at most this many datagrams in a row (two of the pacer's 63 kB
+/// bursts) before the other peers get their turn…
+const TURN_DATAGRAMS: usize = 128;
+/// …and has its due timeouts taken at once at most this many times in a row with no datagram to
+/// show for it: after that the runtime's timer has it (a peer that says "now" over and over
+/// must not spin the driver).
+const TURN_IDLE: usize = 16;
+/// Packets in and commands the driver takes in a turn it does not wait in.
+const TURN_TAKES: usize = 16;
+/// The driver lets the runtime's other tasks run after this many turns without a wait.
+const YIELD_EVERY: u32 = 32;
+
 /// The estimate is raised back to the stream's rate when it fell under this share of it on a
 /// clean link ([`KeepUp`]).
 const KEEP_UP_UNDER: f64 = 0.9;
@@ -213,6 +225,10 @@ pub(crate) struct Catchup {
     /// times pictures were dropped.
     pub dropped: u64,
     pub jumps: u64,
+    /// The longest a picture waited here before it went to str0m or was dropped, and the most
+    /// str0m's queue held (bytes): for the numbers and a bug report.
+    pub waited_max: Duration,
+    pub queue_peak: usize,
 }
 
 impl Catchup {
@@ -235,6 +251,11 @@ impl Catchup {
     #[cfg(test)]
     pub(crate) fn behind(&self) -> bool {
         self.need_key
+    }
+
+    /// The rate str0m's queue was last seen to drain at (kbit/s); None: not seen yet.
+    pub(crate) fn drain_kbps(&self) -> Option<u32> {
+        self.drained.map(|d| (d / 125.0).round() as u32)
     }
 
     /// Pictures waiting, and how long the oldest has.
@@ -275,6 +296,7 @@ impl Catchup {
 
     /// The pictures waiting from `i` on are dropped: the guest waits for a keyframe.
     fn drop_from(&mut self, i: usize) {
+        self.waited_max = self.waited_max.max(TRACK_LAG_MAX);
         self.dropped += (self.waiting.len() - i) as u64;
         self.waiting.truncate(i);
         self.need_key = true;
@@ -295,6 +317,13 @@ impl Catchup {
     /// str0m's view of its queue ([`track_queue`]): its bytes, its oldest packet's wait, and when
     /// it looked. A new look tells the rate the queue drains at (while it never ran dry); the
     /// bytes written since the look are added to it.
+    ///
+    /// The rate it reads is a rough one (track_bench.rs, #720): str0m looks with every packet
+    /// and its pacer sends a burst and then waits out its debt, so two looks 2 ms apart or more
+    /// are often the ones either side of a wait. On a 15 Mbit/s home-network track it read
+    /// 22-47 Mbit/s where the pacer sent 24-39; on a link capped at 12 Mbit/s, 0.9-2.9 while
+    /// the estimate was 0.3-0.4. Neither cost a picture there, and links that carry less than
+    /// the stream were tuned with it as it is (link_sim.rs): it is left alone.
     fn queue(&mut self, q: (usize, Duration, Option<Instant>)) -> (usize, Duration) {
         let (bytes, oldest, at) = q;
         if let Some(at) = at {
@@ -329,6 +358,7 @@ impl Catchup {
             self.drop_from(0);
             return None;
         }
+        self.waited_max = self.waited_max.max(now.saturating_duration_since(pic.at));
         self.waiting.pop_front()
     }
 
@@ -339,6 +369,7 @@ impl Catchup {
         let mut c = Caught::default();
         loop {
             let (queued, oldest) = self.queue(track_queue(rtc, mid, now));
+            self.queue_peak = self.queue_peak.max(queued);
             let Some(pic) = self.next(queued, oldest, now) else {
                 break;
             };
@@ -533,6 +564,51 @@ struct Video {
     /// and the times it was put back there ([`hold_estimate`]).
     pin_kbps: u32,
     pinned: u64,
+    /// …while the link has shown it carries that ([`Hold`]).
+    hold: Hold,
+}
+
+/// Whether a home-network guest's estimate may still be held over the stream's rate
+/// ([`hold_estimate`]). A hold let go within [`KEEP_UP_WATCH`] of being taken (loss, NACKs or a
+/// rising round trip came with it) failed: the link does not carry the stream, and after
+/// [`KEEP_UP_TRIES`] of those the estimate is left to the link for good.
+///
+/// Held for ever, a link that carries less than the stream is flooded at the held rate until it
+/// loses, let go until the estimate has fallen to a few hundred kbit/s and nothing is sent, found
+/// clean for that and flooded again. Measured on a home link capped at 12 Mbit/s under a
+/// 15 Mbit/s stream (track_bench.rs, 90 s runs): 6-7 pictures a second reach the guest, one in a
+/// hundred over 2.1-2.4 s late; given up after three, 13-30 a second (27 in the middle run of
+/// five) and 0.6-1.6 s. 12.4.7 never showed it there, its driver sent 10 Mbit/s at most whatever
+/// the estimate: 22-24 a second and 0.43 s, which this link still does not always match.
+#[derive(Default, Debug)]
+struct Hold {
+    since: Option<Instant>,
+    failed: u32,
+}
+
+impl Hold {
+    /// The estimate may be held.
+    fn open(&self) -> bool {
+        self.failed < KEEP_UP_TRIES
+    }
+
+    fn taken(&mut self, now: Instant) {
+        self.since = Some(now);
+    }
+
+    /// The hold was let go (the link is not clean). True when that was one too many: no more
+    /// holds for this guest.
+    fn let_go(&mut self, now: Instant) -> bool {
+        let soon = self
+            .since
+            .take()
+            .is_some_and(|t| now.saturating_duration_since(t) < KEEP_UP_WATCH);
+        if soon && self.open() {
+            self.failed += 1;
+            return !self.open();
+        }
+        false
+    }
 }
 
 /// The log says a guest fell behind at most this often (the counts carry the rest).
@@ -596,6 +672,108 @@ pub(crate) fn cert() -> Option<&'static (DtlsCert, String)> {
 /// The running driver.
 pub(crate) struct Net {
     pub(crate) cmd: mpsc::UnboundedSender<Cmd>,
+}
+
+/// Datagrams a socket keeps for its next try, at most: a quarter second of a 15 Mbit/s track.
+/// Past it the oldest is dropped (a resend is asked for, or it was a resend).
+const HELD_MAX: usize = 512;
+/// A socket that had no room is tried again this soon, and what it holds is dropped after this
+/// long (a picture's packet that late is no use, and a socket that stays shut must not be tried
+/// for ever).
+const HELD_RETRY: Duration = Duration::from_millis(1);
+const HELD_FOR: Duration = Duration::from_millis(500);
+
+/// "No buffer space" as this system numbers it: the interface's queue is full. Where a UDP
+/// socket has no send buffer of its own to fill (macOS and the BSDs), this is what a burst too
+/// many gets, not "would block".
+const ENOBUFS: i32 = if cfg!(windows) {
+    10055
+} else if cfg!(any(target_os = "linux", target_os = "android")) {
+    105
+} else {
+    55
+};
+
+/// The socket has no room for a datagram now (its buffer or the interface's queue is full, or
+/// the runtime has not seen a new socket writable yet), as against a send that failed.
+fn no_room(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::WouldBlock || e.raw_os_error() == Some(ENOBUFS)
+}
+
+/// What became of a datagram handed to a socket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sent {
+    Out,
+    /// No room: kept for the next try.
+    Held,
+    /// The send failed.
+    Lost,
+}
+
+/// The datagrams a socket had no room for, in order: since when, whose, where to. (They were
+/// dropped before, `try_send_to` with its result ignored, and nothing counted them.)
+#[derive(Default)]
+struct Held(VecDeque<(Instant, Arc<PeerInfo>, SocketAddr, Vec<u8>)>);
+
+impl Held {
+    /// A datagram of `who`'s for `to`, through `send` (the socket's non-blocking send): behind
+    /// the ones still held, if any. One past [`HELD_MAX`] pushes the oldest out.
+    fn send(
+        &mut self,
+        who: &Arc<PeerInfo>,
+        to: SocketAddr,
+        data: &[u8],
+        now: Instant,
+        send: impl FnOnce(&[u8], SocketAddr) -> std::io::Result<usize>,
+    ) -> Sent {
+        if self.0.is_empty() {
+            match send(data, to) {
+                Ok(_) => return Sent::Out,
+                Err(e) if no_room(&e) => {}
+                Err(_) => {
+                    who.with(|s| s.udp.lost += 1);
+                    return Sent::Lost;
+                }
+            }
+        }
+        who.with(|s| s.udp.waited += 1);
+        if self.0.len() >= HELD_MAX {
+            if let Some((_, old, ..)) = self.0.pop_front() {
+                old.with(|s| s.udp.lost += 1);
+            }
+        }
+        self.0.push_back((now, who.clone(), to, data.to_vec()));
+        Sent::Held
+    }
+
+    /// The held ones again, oldest first, until the socket has no room; one held past
+    /// [`HELD_FOR`] is dropped untried. True: none is left.
+    fn flush(
+        &mut self,
+        now: Instant,
+        mut send: impl FnMut(&[u8], SocketAddr) -> std::io::Result<usize>,
+    ) -> bool {
+        while let Some((since, who, to, data)) = self.0.front() {
+            if now.saturating_duration_since(*since) > HELD_FOR {
+                who.with(|s| s.udp.lost += 1);
+            } else {
+                match send(data, *to) {
+                    Ok(_) => {}
+                    Err(e) if no_room(&e) => return false,
+                    Err(_) => who.with(|s| s.udp.lost += 1),
+                }
+            }
+            self.0.pop_front();
+        }
+        true
+    }
+}
+
+/// One of the driver's sockets: its address, and what it could not take yet.
+struct Sock {
+    s: Arc<UdpSocket>,
+    addr: SocketAddr,
+    held: Held,
 }
 
 /// The router mapping now: outside address and how it was made.
@@ -762,7 +940,15 @@ async fn start() -> Option<Arc<Net>> {
     }
     let net = Arc::new(Net { cmd: cmd.clone() });
     let d = Driver {
-        socks: socks.into_iter().zip(local).collect(),
+        socks: socks
+            .into_iter()
+            .zip(local)
+            .map(|(s, addr)| Sock {
+                s,
+                addr,
+                held: Held::default(),
+            })
+            .collect(),
         extra: Vec::new(),
         peers: Vec::new(),
         rooms: HashMap::new(),
@@ -807,7 +993,7 @@ struct Peer {
 static NEXT_PEER: AtomicU64 = AtomicU64::new(1);
 
 struct Driver {
-    socks: Vec<(Arc<UdpSocket>, SocketAddr)>,
+    socks: Vec<Sock>,
     /// Outside candidates (STUN's, the router's), added to every new peer.
     extra: Vec<Candidate>,
     peers: Vec<Peer>,
@@ -855,23 +1041,58 @@ impl Driver {
         mut cmd_rx: mpsc::UnboundedReceiver<Cmd>,
         mut pkt_rx: mpsc::Receiver<(usize, SocketAddr, Vec<u8>)>,
     ) {
+        // Turns in a row without a wait.
+        let mut busy = 0u32;
         loop {
             let now = Instant::now();
             let mut next = now + Duration::from_millis(250);
+            // What a socket had no room for goes first, ahead of anything new.
+            for s in &mut self.socks {
+                let sock = &s.s;
+                s.held.flush(now, |d, to| sock.try_send_to(d, to));
+            }
             for p in &mut self.peers {
-                next = next.min(poll(p, &self.socks, &self.cmd, now));
+                next = next.min(poll(p, &mut self.socks, &self.cmd, now));
+            }
+            if self.socks.iter().any(|s| !s.held.0.is_empty()) {
+                next = next.min(now + HELD_RETRY);
             }
             self.housekeep(now);
-            tokio::select! {
-                pkt = pkt_rx.recv() => match pkt {
-                    Some((i, from, data)) => self.on_packet(i, from, &data),
-                    None => return,
-                },
-                cmd = cmd_rx.recv() => match cmd {
-                    Some(c) => self.on_cmd(c).await,
-                    None => return,
-                },
-                _ = tokio::time::sleep_until(next.into()) => {}
+            if next <= Instant::now() {
+                // A peer has more for its socket now (its share of this turn is out): what came
+                // meanwhile is taken without a wait. The runtime's timer is no way to wait for
+                // "now": it wakes at the next millisecond, a packet at a time (see `drive`).
+                busy += 1;
+                if busy.is_multiple_of(YIELD_EVERY) {
+                    tokio::task::yield_now().await;
+                }
+                for _ in 0..TURN_TAKES {
+                    match pkt_rx.try_recv() {
+                        Ok((i, from, data)) => self.on_packet(i, from, &data),
+                        Err(mpsc::error::TryRecvError::Empty) => break,
+                        Err(mpsc::error::TryRecvError::Disconnected) => return,
+                    }
+                }
+                for _ in 0..TURN_TAKES {
+                    match cmd_rx.try_recv() {
+                        Ok(c) => self.on_cmd(c).await,
+                        Err(mpsc::error::TryRecvError::Empty) => break,
+                        Err(mpsc::error::TryRecvError::Disconnected) => return,
+                    }
+                }
+            } else {
+                busy = 0;
+                tokio::select! {
+                    pkt = pkt_rx.recv() => match pkt {
+                        Some((i, from, data)) => self.on_packet(i, from, &data),
+                        None => return,
+                    },
+                    cmd = cmd_rx.recv() => match cmd {
+                        Some(c) => self.on_cmd(c).await,
+                        None => return,
+                    },
+                    _ = tokio::time::sleep_until(next.into()) => {}
+                }
             }
             let now = Instant::now();
             for p in &mut self.peers {
@@ -891,7 +1112,7 @@ impl Driver {
                 return;
             }
         }
-        let Some(&(_, dest)) = self.socks.get(i) else {
+        let Some(dest) = self.socks.get(i).map(|s| s.addr) else {
             return;
         };
         let Ok(contents) = data.try_into() else {
@@ -919,7 +1140,8 @@ impl Driver {
     }
 
     fn on_stun(&mut self, i: usize, data: &[u8]) {
-        let (Some(addr), Some(&(_, base))) = (stun::mapped(data), self.socks.get(i)) else {
+        let (Some(addr), Some(base)) = (stun::mapped(data), self.socks.get(i).map(|s| s.addr))
+        else {
             return;
         };
         if addr == base || !addr.is_ipv4() {
@@ -965,7 +1187,7 @@ impl Driver {
             }
         }
         self.stun_tx.clear();
-        for (i, (sock, _)) in self.socks.iter().enumerate() {
+        for (i, sock) in self.socks.iter().map(|s| &s.s).enumerate() {
             for a in &addrs {
                 let mut tx = [0u8; 12];
                 if getrandom::fill(&mut tx).is_err() {
@@ -989,7 +1211,7 @@ impl Driver {
             }
             (None, true) => {
                 // The address the router sees: the first socket's (the one toward the LAN).
-                let Some(&(_, local)) = self.socks.first() else {
+                let Some(local) = self.socks.first().map(|s| s.addr) else {
                     return;
                 };
                 let (tx, rx) = tokio::sync::watch::channel(true);
@@ -1158,7 +1380,7 @@ impl Driver {
             b = with_track(b);
         }
         let mut rtc = b.build(now);
-        add_host_candidates(&mut rtc, self.socks.iter().map(|(_, a)| *a));
+        add_host_candidates(&mut rtc, self.socks.iter().map(|s| s.addr));
         for c in &self.extra {
             rtc.add_local_candidate(c.clone());
         }
@@ -1320,40 +1542,95 @@ fn flush(p: &mut Peer) {
 }
 
 /// Drives one peer until it has nothing more to do now: its packets out, its events handled.
+/// Returns when it is to be driven next (now or before: it has more to send, and the other peers
+/// get their turn first).
 fn poll(
     p: &mut Peer,
-    socks: &[(Arc<UdpSocket>, SocketAddr)],
+    socks: &mut [Sock],
     cmd: &mpsc::UnboundedSender<Cmd>,
     now: Instant,
 ) -> Instant {
-    // Pictures waiting for the track go as str0m's queue drains.
-    if p.rtc.is_alive()
-        && p.video
-            .as_ref()
-            .is_some_and(|v| v.catchup.waiting(now).0 > 0)
-    {
-        pump_track(p, now);
+    let mut sent = 0;
+    let next = drive(p, socks, cmd, now, &mut sent);
+    if sent > 0 {
+        p.info.with(|s| s.udp.sent += sent as u64);
     }
+    next
+}
+
+fn drive(
+    p: &mut Peer,
+    socks: &mut [Sock],
+    cmd: &mpsc::UnboundedSender<Cmd>,
+    mut now: Instant,
+    sent: &mut usize,
+) -> Instant {
+    let mut idle = 0;
     loop {
-        if !p.rtc.is_alive() {
-            return now + Duration::from_millis(50);
+        // Pictures waiting for the track go as str0m's queue drains.
+        if p.rtc.is_alive()
+            && p.video
+                .as_ref()
+                .is_some_and(|v| v.catchup.waiting(now).0 > 0)
+        {
+            pump_track(p, now);
         }
-        let out = match p.rtc.poll_output() {
-            Ok(o) => o,
-            Err(e) => {
-                fail(p, "error", &format!("{e}"));
-                return now;
+        let (before, mut held) = (*sent, false);
+        let t = loop {
+            if !p.rtc.is_alive() {
+                return now + Duration::from_millis(50);
+            }
+            let out = match p.rtc.poll_output() {
+                Ok(o) => o,
+                Err(e) => {
+                    fail(p, "error", &format!("{e}"));
+                    return now;
+                }
+            };
+            match out {
+                Output::Timeout(t) => break t,
+                Output::Transmit(t) => {
+                    *sent += 1;
+                    if let Some(s) = socks.iter_mut().find(|s| s.addr == t.source) {
+                        let sock = &s.s;
+                        let did = s
+                            .held
+                            .send(&p.info, t.destination, &t.contents, now, |d, to| {
+                                sock.try_send_to(d, to)
+                            });
+                        held |= did == Sent::Held;
+                    }
+                }
+                Output::Event(e) => on_event(p, e, cmd),
             }
         };
-        match out {
-            Output::Timeout(t) => return t,
-            Output::Transmit(t) => {
-                if let Some((s, _)) = socks.iter().find(|(_, a)| *a == t.source) {
-                    let _ = s.try_send_to(&t.contents, t.destination);
-                }
-            }
-            Output::Event(e) => on_event(p, e, cmd),
+        let at = Instant::now();
+        // Its socket has no room: no more for it until the next try.
+        if held {
+            return t.max(at + HELD_RETRY);
         }
+        if t > at {
+            return t;
+        }
+        // A timeout already due is taken here and now (as str0m's own run loop does). Its pacer
+        // hands over one packet per timeout and asks for the next at once (pacer/leaky.rs
+        // `request_immediate_timeout`); waited for in the runtime's timer, each "at once" lasts
+        // to the next whole millisecond (Tokio's timers), so the driver sent about 1,000
+        // datagrams a second whatever the estimate: a 15 Mbit/s track needs 1,800, and half its
+        // pictures waited over 400 ms and were dropped on a link with nothing wrong (#720,
+        // track_bench.rs).
+        idle = if *sent > before { 0 } else { idle + 1 };
+        if idle >= TURN_IDLE {
+            return at + Duration::from_millis(1);
+        }
+        if *sent >= TURN_DATAGRAMS {
+            return t;
+        }
+        if let Err(e) = p.rtc.handle_input(Input::Timeout(at)) {
+            fail(p, "error", &format!("{e}"));
+            return at;
+        }
+        now = at;
     }
 }
 
@@ -1416,6 +1693,10 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
                 "join: internet guest {}: data channel open",
                 p.info.gid
             );
+            #[cfg(test)]
+            let Some(socket) = track_bench::take_session(socket) else {
+                return;
+            };
             match p.kind {
                 Kind::Join => {
                     tokio::spawn(crate::join::guest_session(socket, ip));
@@ -1530,6 +1811,7 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
                 floor_kbps: 0,
                 pin_kbps: 0,
                 pinned: 0,
+                hold: Hold::default(),
             });
         }
         // The guest's browser asks for a keyframe (its decoder lost the picture): the session's
@@ -1544,6 +1826,13 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
             }
         }
         Event::MediaEgressStats(s) => {
+            // The video track's only. The audio track's come the same way, and whichever came
+            // last stood in the video's place (the bench read 3,000 packets, the sound's, after
+            // 30 s of a 15 Mbit/s picture): its packet and NACK counts, its loss and round trip,
+            // on the host's panel and in what `KeepUp` takes for a clean link.
+            if p.video.as_ref().is_none_or(|v| v.mid != s.mid) {
+                return;
+            }
             p.info.track_with(|t| {
                 t.packets = s.packets;
                 t.nacks = s.nacks;
@@ -1645,11 +1934,26 @@ fn keep_up(p: &mut Peer) {
     // too (hold_estimate): str0m paces at its estimate, which a home network's clean link was
     // seen to cap at 6-9 Mbit/s for a 15 Mbit/s stream even padded (#720, 12.4.6), dropping
     // pictures whenever the game moved.
+    // Not on a link that has shown it does not carry the stream ([`Hold`]).
     let pin = match stream {
-        Some(k) if lan && v.keep_up.clean_now() => (k as f64 * BWE_HEADROOM) as u32,
+        Some(k) if lan && v.hold.open() && v.keep_up.clean_now() => {
+            (k as f64 * BWE_HEADROOM) as u32
+        }
         _ => 0,
     };
     if pin != v.pin_kbps {
+        if pin > 0 {
+            v.hold.taken(now);
+        } else if v.hold.let_go(now) {
+            crate::log_at!(
+                Info,
+                "together",
+                "join: guest {} estimate left to the link from here: {} holds each ended in loss or delay within {} s (the home network does not carry the stream to this guest)",
+                p.info.gid,
+                KEEP_UP_TRIES,
+                KEEP_UP_WATCH.as_secs(),
+            );
+        }
         let was = v.pin_kbps;
         crate::log_at!(
             Info,
@@ -1720,7 +2024,10 @@ fn track_on(p: &mut Peer, hevc: bool, kbps: u32) {
         // A home-network guest starts with the estimate held (keep_up lets go if the first
         // seconds are not clean): the first pictures are not held to an estimate still settling.
         if lan {
-            v.pin_kbps = (kbps as f64 * BWE_HEADROOM) as u32;
+            if v.hold.open() {
+                v.pin_kbps = (kbps as f64 * BWE_HEADROOM) as u32;
+                v.hold.taken(Instant::now());
+            }
             set_rates(&mut p.rtc, kbps, kbps);
             v.floor_kbps = kbps;
         }
@@ -1768,9 +2075,14 @@ fn pump_track(p: &mut Peer, now: Instant) {
     let counts = (v.catchup.dropped, v.catchup.jumps);
     if c.written > 0 || counts != v.counted {
         v.counted = counts;
+        let (waited, peak) = (v.catchup.waited_max, v.catchup.queue_peak);
+        let drain = v.catchup.drain_kbps();
         p.info.track_with(|t| {
             t.frames += c.written;
             (t.dropped, t.jumps) = counts;
+            t.wait_max_ms = waited.as_millis() as u32;
+            t.queue_peak = peak;
+            t.drain_kbps = drain;
         });
     }
     if c.fell
@@ -1912,6 +2224,10 @@ fn nat_search() -> Option<nat::Search> {
 pub(crate) static TEST_NAT: Mutex<Option<nat::Search>> = Mutex::new(None);
 
 #[cfg(test)]
+#[path = "track_bench.rs"]
+mod track_bench;
+
+#[cfg(test)]
 mod track_tests {
     use super::*;
 
@@ -2018,6 +2334,76 @@ mod track_tests {
         // A queue that ran dry tells nothing of the rate.
         c.queue((0, Duration::ZERO, Some(ms(500))));
         assert_eq!(c.drain(100_000), Duration::from_millis(10));
+    }
+
+    #[test]
+    fn a_hold_that_keeps_ending_in_loss_is_given_up() {
+        let t0 = Instant::now();
+        let s = |n| t0 + Duration::from_secs(n);
+        let mut h = Hold::default();
+        assert!(h.open());
+        // Held for a minute, then a blip: the link carried the stream, nothing is counted.
+        h.taken(s(0));
+        assert!(!h.let_go(s(60)));
+        // Let go within the watch, three times: this link does not carry it.
+        h.taken(s(70));
+        assert!(!h.let_go(s(72)));
+        h.taken(s(80));
+        assert!(!h.let_go(s(83)));
+        assert!(h.open());
+        h.taken(s(90));
+        assert!(h.let_go(s(91)), "the third: given up, and said once");
+        assert!(!h.open());
+        assert!(!h.let_go(s(92)));
+    }
+
+    #[test]
+    fn a_datagram_the_socket_has_no_room_for_is_kept_and_goes_in_order() {
+        use super::super::UdpSt;
+        let who = PeerInfo::new("held-test", "g");
+        let t0 = Instant::now();
+        let to: SocketAddr = "127.0.0.1:9".parse().unwrap();
+        let full = || -> std::io::Result<usize> { Err(std::io::ErrorKind::WouldBlock.into()) };
+        let mut h = Held::default();
+        let mut out: Vec<Vec<u8>> = Vec::new();
+        // Room: straight out.
+        let did = h.send(&who, to, b"a", t0, |d, _| {
+            out.push(d.to_vec());
+            Ok(d.len())
+        });
+        assert_eq!(did, Sent::Out);
+        // No room: kept, and the next one goes behind it without a try of its own.
+        assert_eq!(h.send(&who, to, b"b", t0, |_, _| full()), Sent::Held);
+        let did = h.send(&who, to, b"c", t0, |_, _| panic!("tried ahead of one held"));
+        assert_eq!(did, Sent::Held);
+        // Still none (the interface's queue is full, as macOS says it): they stay.
+        assert!(!h.flush(t0, |_, _| Err(std::io::Error::from_raw_os_error(ENOBUFS))));
+        // Room again: out in the order they came.
+        let ms = Duration::from_millis(1);
+        assert!(h.flush(t0 + ms, |d, _| {
+            out.push(d.to_vec());
+            Ok(d.len())
+        }));
+        assert_eq!(out, [b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
+        let waited = UdpSt {
+            waited: 2,
+            ..UdpSt::default()
+        };
+        assert_eq!(who.udp(), waited, "two waited, none lost");
+        // A send that fails is lost, and counted.
+        let did = h.send(&who, to, b"d", t0, |_, _| {
+            Err(std::io::ErrorKind::PermissionDenied.into())
+        });
+        assert_eq!(did, Sent::Lost);
+        assert_eq!(who.udp().lost, 1);
+        // More than it keeps: the oldest go. Held too long: dropped without a try.
+        for i in 0..HELD_MAX + 3 {
+            h.send(&who, to, &[i as u8], t0, |_, _| full());
+        }
+        assert_eq!(h.0.len(), HELD_MAX);
+        assert_eq!(who.udp().lost, 4);
+        assert!(h.flush(t0 + HELD_FOR + ms, |_, _| panic!("tried one held too long")));
+        assert_eq!(who.udp().lost, 4 + HELD_MAX as u64);
     }
 
     #[test]

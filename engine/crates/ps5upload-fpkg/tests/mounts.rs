@@ -11,6 +11,68 @@ use ps5upload_fpkg::inner::MetaCodec;
 use ps5upload_fpkg::source;
 use ps5upload_fpkg::{cnt, cnt_write, fih, inner, naps, outer, plan, PkgFile};
 
+/// A folder of a test's own under the temp directory, and a path in it (the folder itself, or a
+/// file there). The folder goes when the value does, however the test ends: these hold built
+/// packages and unpacked images, and left behind on every run they add up.
+struct Scratch {
+    root: PathBuf,
+    path: PathBuf,
+}
+
+impl Scratch {
+    fn dir(tag: &str) -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "fpkg-mounts-{tag}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        Self {
+            path: root.clone(),
+            root,
+        }
+    }
+
+    /// The same folder, standing for the file `name` in it.
+    fn file(tag: &str, name: &str) -> Self {
+        let mut me = Self::dir(tag);
+        me.path = me.root.join(name);
+        me
+    }
+}
+
+impl std::ops::Deref for Scratch {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl AsRef<Path> for Scratch {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+#[test]
+fn a_scratch_folder_goes_with_its_test() {
+    let file = Scratch::file("self", "x.bin");
+    std::fs::write(&file, b"x").unwrap();
+    let root = file.root.clone();
+    assert!(root.is_dir());
+    drop(file);
+    assert!(!root.exists());
+}
+
 const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 
 fn mount_dir() -> Option<PathBuf> {
@@ -361,12 +423,9 @@ fn a_build_from_an_exfat_mount_verifies_and_round_trips() {
 }
 
 /// A `.ffpfsc` of an image.
-fn wrapped(image: &Path, name: &str) -> PathBuf {
+fn wrapped(image: &Path, name: &str) -> Scratch {
     use ps5upload_fpkg::ffpfsc::{wrap, Control, WrapOptions};
-    let dir = std::env::temp_dir().join(format!("fpkg-ffpfsc-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let out = dir.join(format!("{name}.ffpfsc"));
+    let out = Scratch::file("ffpfsc", &format!("{name}.ffpfsc"));
     wrap(
         image,
         &out,
@@ -383,7 +442,7 @@ fn wrapped(image: &Path, name: &str) -> PathBuf {
 fn the_pfsc_reader_reads_the_inner_image_at_any_offset() {
     use std::io::{Read, Seek, SeekFrom};
     // The fixture compresses; noise is stored as it is (no block shrinks enough).
-    let noise = std::env::temp_dir().join(format!("fpkg-noise-{}.bin", std::process::id()));
+    let noise = Scratch::file("noise", "noise.bin");
     let mut x = 0x2545_f491_4f6c_dd1du64;
     let bytes: Vec<u8> = (0..0x10000 * 3 + 777)
         .map(|_| {
@@ -394,7 +453,7 @@ fn the_pfsc_reader_reads_the_inner_image_at_any_offset() {
         })
         .collect();
     std::fs::write(&noise, &bytes).unwrap();
-    for (source, compress) in [(fixture(), true), (noise.clone(), false)] {
+    for (source, compress) in [(fixture(), true), (noise.to_path_buf(), false)] {
         let raw = std::fs::read(&source).unwrap();
         let img = wrapped(&source, &format!("reader-{compress}"));
         let r0 = ps5upload_fpkg::ffpfsc::verify(&img, None).unwrap();
@@ -456,12 +515,10 @@ fn an_ffpfsc_opens_as_the_tree_of_its_image() {
 /// (a container holding a PFS image that holds an exFAT image: what a tester's console held),
 /// `compressed.ffpfs` (a PFS image holding a compressed exFAT image) and `raw.ffpfs` (a PFS
 /// image holding the game's files themselves).
-fn pfs_fixture(name: &str) -> PathBuf {
+fn pfs_fixture(name: &str) -> Scratch {
     use std::io::Read;
     let gz = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/pfs/{name}.gz"));
-    let dir = std::env::temp_dir().join(format!("fpkg-pfs-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let out = dir.join(name);
+    let out = Scratch::file("pfs", name);
     let mut bytes = Vec::new();
     flate2::read::GzDecoder::new(std::fs::File::open(gz).unwrap())
         .read_to_end(&mut bytes)
@@ -497,7 +554,8 @@ fn a_pfs_image_opens_as_the_game_inside_it() {
         ("compressed.ffpfs", "exfat"),
         ("raw.ffpfs", "PFS"),
     ] {
-        let mut tree = source::open(&pfs_fixture(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let image = pfs_fixture(name);
+        let mut tree = source::open(&image).unwrap_or_else(|e| panic!("{name}: {e}"));
         let listed: Vec<(&str, u64)> = tree
             .files()
             .iter()
@@ -534,8 +592,7 @@ fn a_pfs_image_opens_as_the_game_inside_it() {
 #[test]
 fn a_damaged_or_unsupported_pfs_image_is_refused() {
     let good = std::fs::read(pfs_fixture("raw.ffpfs")).unwrap();
-    let dir = std::env::temp_dir().join(format!("fpkg-pfs-bad-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::dir("pfs-bad");
     let refused = |name: &str, bytes: &[u8]| -> String {
         let p = dir.join(name);
         std::fs::write(&p, bytes).unwrap();
@@ -562,8 +619,7 @@ fn a_damaged_or_unsupported_pfs_image_is_refused() {
 /// A file that only claims to be `.ffpfsc` is refused with a reason.
 #[test]
 fn a_bogus_ffpfsc_is_refused() {
-    let dir = std::env::temp_dir().join(format!("fpkg-ffpfsc-bogus-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::dir("ffpfsc-bogus");
     let p = dir.join("x.ffpfsc");
     std::fs::write(&p, vec![0u8; 8 * 0x10000]).unwrap();
     let err = source::open(&p).err().expect("refused").to_string();
@@ -575,15 +631,12 @@ fn a_bogus_ffpfsc_is_refused() {
 fn a_build_from_an_ffpfsc_equals_the_build_from_its_image() {
     let packed = wrapped(&fixture(), "build");
     let build_of = |src: &Path, tag: &str| {
-        let out =
-            std::env::temp_dir().join(format!("fpkg-ffpfsc-build-{}-{tag}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&out);
-        std::fs::create_dir_all(&out).unwrap();
+        let out = Scratch::dir(&format!("build-{tag}"));
         let request = BuildRequest {
             time: Some((1_700_000_000, 0)),
             seed: Some([0x5A; 16]),
             kraken: false,
-            ..BuildRequest::new(src, &out)
+            ..BuildRequest::new(src, &*out)
         };
         let report = build::build(&request, &mut |_| {}).unwrap();
         assert!(report.verify.ok(), "{}", report.verify);
@@ -643,8 +696,7 @@ fn server() -> std::sync::Arc<DiskAsServer> {
 /// and bytes, with junk skipped.
 #[test]
 fn a_server_folder_is_the_same_tree_as_a_local_one() {
-    let dir = std::env::temp_dir().join(format!("fpkg-remote-folder-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::dir("remote-folder");
     std::fs::create_dir_all(dir.join("g/sce_sys")).unwrap();
     std::fs::create_dir_all(dir.join("g/data/shaders")).unwrap();
     std::fs::write(
@@ -681,7 +733,7 @@ fn a_server_folder_is_the_same_tree_as_a_local_one() {
 #[test]
 fn server_images_are_the_same_trees_as_local_ones() {
     let packed = wrapped(&fixture(), "remote");
-    for image in [fixture(), packed] {
+    for image in [fixture(), packed.to_path_buf()] {
         let mut local = source::open(&image).unwrap();
         let mut remote =
             ps5upload_fpkg::remote_source::open_remote(server(), image.to_str().unwrap()).unwrap();

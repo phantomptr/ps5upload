@@ -23,10 +23,12 @@ vi.mock("../state/fpkgConversion", () => ({
     subscribe: () => () => {},
   },
 }));
-vi.mock("../state/pkgLibrary", () => ({ pkgLibraryStore: () => ({ getState: () => ({}) }) }));
+const lib = vi.hoisted(() => ({ installStream: vi.fn(), uploadInstall: vi.fn() }));
+vi.mock("../state/pkgLibrary", () => ({ pkgLibraryStore: () => ({ getState: () => lib }) }));
 
-import { installConvertRunner } from "./convertQueueRunner";
-import { useConvertQueue } from "../state/convertQueue";
+import { fpkg } from "../api/fpkg";
+import { handOff, installConvertRunner } from "./convertQueueRunner";
+import { useConvertQueue, type ConvertItem } from "../state/convertQueue";
 
 const flush = async () => {
   for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
@@ -175,5 +177,43 @@ describe("the Convert queue's runner (bug: a queued image came out as a .pkg)", 
     const plan = calls[0].args[4] as { host: string; subpath: string } | undefined;
     expect(plan?.host).toBe("10.0.0.2");
     expect(plan?.subpath).toBeTruthy();
+  });
+});
+
+describe("handing a built package to the console (delete after install)", () => {
+  const item = { host: "10.0.0.2", then: "install", deleteAfterInstall: true } as unknown as ConvertItem;
+  const del = vi.spyOn(fpkg, "deletePackage");
+  const deletes = () => del.mock.calls;
+  beforeEach(() => {
+    del.mockReset();
+    del.mockResolvedValue({ ok: true });
+    lib.installStream.mockReset();
+    lib.uploadInstall.mockReset();
+  });
+
+  it("deletes the package once its install is confirmed", async () => {
+    lib.installStream.mockResolvedValue({ ok: true });
+    expect(await handOff(item, "/out/G.pkg")).toEqual({ ok: true, message: undefined });
+    expect(deletes()).toEqual([["/out/G.pkg"]]);
+  });
+
+  it("keeps the package when the PS5 took the install but it could not be confirmed", async () => {
+    lib.installStream.mockResolvedValue({ ok: true, unverified: true, message: "Check the PS5. The package was kept." });
+    expect(await handOff(item, "/out/G.pkg")).toEqual({
+      ok: true,
+      unverified: true,
+      message: "Check the PS5. The package was kept.",
+    });
+    expect(deletes()).toEqual([]);
+    // The upload route reports the same way.
+    lib.uploadInstall.mockResolvedValue({ ok: true, unverified: true, message: "kept" });
+    await handOff({ ...item, then: "upload" } as ConvertItem, "/out/G.pkg");
+    expect(deletes()).toEqual([]);
+  });
+
+  it("keeps the package when the install failed", async () => {
+    lib.installStream.mockResolvedValue({ ok: false, message: "refused" });
+    expect(await handOff(item, "/out/G.pkg")).toEqual({ ok: false, message: "refused" });
+    expect(deletes()).toEqual([]);
   });
 });

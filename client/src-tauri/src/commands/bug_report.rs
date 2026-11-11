@@ -149,96 +149,10 @@ const SECRET_KEYS: &[&str] = &[
     "pad_token",
 ];
 
+use super::redact_json::{replace_escaped_json_values, replace_json_values};
+
 fn is_word(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
-}
-
-/// `"key": "value"` with `key` in `keys` (case-insensitive): the value becomes `with`.
-fn replace_json_values(s: &str, keys: &[&str], with: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = String::with_capacity(s.len());
-    let mut cursor = 0;
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] != b'"' {
-            i += 1;
-            continue;
-        }
-        let Some(close) = b[i + 1..]
-            .iter()
-            .position(|c| *c == b'"')
-            .map(|p| i + 1 + p)
-        else {
-            break;
-        };
-        let key = &s[i + 1..close];
-        let mut j = close + 1;
-        if keys.iter().any(|k| k.eq_ignore_ascii_case(key)) {
-            while j < b.len() && b[j].is_ascii_whitespace() {
-                j += 1;
-            }
-            if j < b.len() && b[j] == b':' {
-                j += 1;
-                while j < b.len() && b[j].is_ascii_whitespace() {
-                    j += 1;
-                }
-                if j < b.len() && b[j] == b'"' {
-                    if let Some(vend) = b[j + 1..].iter().position(|c| *c == b'"') {
-                        out.push_str(&s[cursor..j + 1]);
-                        out.push_str(with);
-                        cursor = j + 1 + vend;
-                        i = cursor + 1;
-                        continue;
-                    }
-                }
-            }
-        }
-        i = close + 1;
-    }
-    out.push_str(&s[cursor..]);
-    out
-}
-
-/// The same as [`replace_json_values`] for JSON stored inside a JSON string (localStorage
-/// values): `\"key\": \"value\"`.
-fn replace_escaped_json_values(s: &str, keys: &[&str], with: &str) -> String {
-    let lower = s.to_ascii_lowercase();
-    let mut out = String::with_capacity(s.len());
-    let mut cursor = 0;
-    let mut from = 0;
-    while let Some(rel) = lower[from..].find("\\\"") {
-        let at = from + rel;
-        let key_start = at + 2;
-        let Some(key_len) = lower[key_start..].find("\\\"") else {
-            break;
-        };
-        let key = &lower[key_start..key_start + key_len];
-        let mut j = key_start + key_len + 2;
-        if keys.contains(&key) {
-            while j < s.len() && s.as_bytes()[j].is_ascii_whitespace() {
-                j += 1;
-            }
-            if s[j..].starts_with(':') {
-                j += 1;
-                while j < s.len() && s.as_bytes()[j].is_ascii_whitespace() {
-                    j += 1;
-                }
-                if s[j..].starts_with("\\\"") {
-                    let vstart = j + 2;
-                    if let Some(vlen) = s[vstart..].find("\\\"") {
-                        out.push_str(&s[cursor..vstart]);
-                        out.push_str(with);
-                        cursor = vstart + vlen;
-                        from = cursor + 2;
-                        continue;
-                    }
-                }
-            }
-        }
-        from = key_start + key_len + 2;
-    }
-    out.push_str(&s[cursor..]);
-    out
 }
 
 /// `key=value` (key not inside a longer word): the value, up to whitespace, `&` or `"`, goes.
@@ -731,7 +645,7 @@ fn assemble_zip_at(
                 files.len()
             ));
         }
-        for p in files.into_iter().take(CRASH_REPORTS_MAX) {
+        for p in newest(files, CRASH_REPORTS_MAX) {
             let leaf = p
                 .file_name()
                 .and_then(|s| s.to_str())
@@ -895,6 +809,13 @@ const APP_LOG_MAX_BYTES: usize = 8 * 1024 * 1024;
 const CONSOLE_LOG_MAX_BYTES: usize = 4 * 1024 * 1024;
 /// Crash reports: how many, and how much of each.
 const CRASH_REPORTS_MAX: usize = 30;
+
+/// The last `max` of a list sorted oldest-first: the newest reports are the ones about the
+/// problem being reported. (The first `max` used to go in: the 30 oldest of up to 60.)
+fn newest<T>(mut oldest_first: Vec<T>, max: usize) -> Vec<T> {
+    let skip = oldest_first.len().saturating_sub(max);
+    oldest_first.split_off(skip)
+}
 const CRASH_REPORT_MAX_BYTES: u64 = 1024 * 1024;
 /// Each file the report builder assembled (the timeline is the big one).
 const EXTRA_TEXT_MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -1399,6 +1320,35 @@ mod tests {
         #[serde(rename = "in")]
         input: String,
         out: String,
+    }
+
+    #[test]
+    fn the_newest_crash_reports_are_the_ones_kept() {
+        let names = |n: usize| {
+            (0..n)
+                .map(|i| format!("crash-{i:03}.json"))
+                .collect::<Vec<_>>()
+        };
+        let kept = newest(names(45), CRASH_REPORTS_MAX);
+        assert_eq!(kept.len(), CRASH_REPORTS_MAX);
+        assert_eq!(kept.first().unwrap(), "crash-015.json");
+        assert_eq!(kept.last().unwrap(), "crash-044.json");
+        // Fewer than the limit: all of them, in order.
+        assert_eq!(newest(names(3), CRASH_REPORTS_MAX), names(3));
+        assert!(newest(Vec::<String>::new(), CRASH_REPORTS_MAX).is_empty());
+    }
+
+    /// A quote escaped earlier in a line shifted the old quote pairing, and the secret after it
+    /// stayed in the report.
+    #[test]
+    fn a_secret_after_an_escaped_quote_is_removed() {
+        let line = r#"{"message":"a 5\" drive","detail":{"token":"SECRET2"}}"#;
+        let out = Redactor::new(false).text(line);
+        assert!(!out.contains("SECRET2"), "{out}");
+        assert_eq!(
+            out,
+            r#"{"message":"a 5\" drive","detail":{"token":"<removed>"}}"#
+        );
     }
 
     /// The same vectors as client/src/lib/redaction.test.ts: web and desktop redact alike.

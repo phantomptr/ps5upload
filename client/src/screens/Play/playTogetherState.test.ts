@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { friendsIn, inviteOn, joinApi, openWhenPlaying, playerSlots, presenceJoin, readJoinState, slowFriend, streamSeatFriend } from "./playTogetherState";
+import { friendsIn, inviteOn, foundOf, joinApi, openUntilPlaying, openWhenPlaying, playerSlots, presenceJoin, readJoinState, slowFriend, streamSeatFriend } from "./playTogetherState";
 import { nearbyJoins } from "../../state/mesh";
 import type { MeshDevice } from "../../api/mesh";
 import { guestStatusText } from "./PlayTogether";
@@ -272,5 +272,43 @@ describe("opening while the stream restarts (#720)", () => {
     });
     expect(r).toBeNull();
     expect(g).toHaveBeenCalledTimes(1);
+  });
+
+  // A phone showed "could not start (not_playing)" over a running picture, for good.
+  it("after its time the refusal is told with what the engine found, and it keeps asking until the session is up", async () => {
+    const no = { status: 409, body: { error: "not_playing", asked: "192.0.2.9", streaming: null, stopping: false } };
+    // 4 asks fill the 6 s; the refusal is told; the next round's first ask has the party.
+    const f = answers([no, no, no, no, { status: 200, body: engine }]);
+    const told: Array<{ error: string; found?: string }> = [];
+    const s = await openUntilPlaying("192.0.2.9", () => true, (r) => told.push(r), 2000, 6000, noWait);
+    expect(s?.open).toBe(true);
+    expect(told).toEqual([{ error: "not_playing", found: "asked 192.0.2.9, streaming none" }]);
+    expect(f).toHaveBeenCalledTimes(5);
+  });
+
+  it("another refusal is told once and ends it; a panel that went away is told nothing", async () => {
+    const f = answers([{ status: 409, body: { error: "old_helper" } }]);
+    const told: string[] = [];
+    expect(await openUntilPlaying("192.0.2.9", () => true, (r) => told.push(r.error), 2000, 6000, noWait)).toBeNull();
+    expect(told).toEqual(["old_helper"]);
+    expect(f).toHaveBeenCalledTimes(1);
+
+    answers([{ status: 409, body: { error: "not_playing" } }]);
+    let alive = true;
+    const quiet: string[] = [];
+    const r = await openUntilPlaying("192.0.2.9", () => alive, (x) => quiet.push(x.error), 2000, 6000, async () => {
+      alive = false;
+    });
+    expect(r).toBeNull();
+    expect(quiet).toEqual([]);
+  });
+
+  it("says what a not_playing refusal found: the console asked for and the one streaming", () => {
+    expect(foundOf({ error: "not_playing", asked: "10.0.0.2", streaming: "ps5.lan", stopping: true })).toBe(
+      "asked 10.0.0.2, streaming ps5.lan (stopping)",
+    );
+    expect(foundOf({ error: "not_playing", asked: "10.0.0.2", streaming: null })).toBe("asked 10.0.0.2, streaming none");
+    // An engine from before it.
+    expect(foundOf({ error: "not_playing" })).toBeUndefined();
   });
 });

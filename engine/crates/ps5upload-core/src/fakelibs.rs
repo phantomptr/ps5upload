@@ -766,23 +766,123 @@ pub struct IncomingLibrary {
 pub struct Corpus {
     root: PathBuf,
     manifest: Manifest,
+    /// Why the manifest on disk could not be read, when it is there and is ours but does not
+    /// parse. Such a corpus reads as empty and is never written: see [`Corpus::open`].
+    damaged: Option<String>,
+}
+
+/// What a manifest file's bytes are.
+enum OnDisk {
+    Ours(Manifest),
+    /// Another schema's: an older layout this build starts over from, as it always has.
+    OtherSchema,
+    Damaged(String),
+}
+
+fn classify_manifest(bytes: &[u8]) -> OnDisk {
+    match serde_json::from_slice::<Manifest>(bytes) {
+        Ok(m) if m.schema == SCHEMA => OnDisk::Ours(m),
+        Ok(_) => OnDisk::OtherSchema,
+        Err(e) => {
+            // A whole JSON object that names another schema is that schema's manifest, whose
+            // fields this build need not know. Anything else is ours and broken, or cut short.
+            let other = serde_json::from_slice::<serde_json::Value>(bytes)
+                .ok()
+                .and_then(|v| v.get("schema").and_then(serde_json::Value::as_u64))
+                .is_some_and(|schema| schema != u64::from(SCHEMA));
+            if other {
+                OnDisk::OtherSchema
+            } else {
+                OnDisk::Damaged(e.to_string())
+            }
+        }
+    }
+}
+
+/// A temporary name beside `path` that no other writer uses at the same time.
+fn temp_beside(path: &Path) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    PathBuf::from(format!(
+        "{}.{}.{}.tmp",
+        path.display(),
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
+/// Write `bytes` to `path` so that a crash or a full disk leaves the old file or the new one,
+/// never part of one: a temporary file in the same folder, flushed to disk, then renamed over.
+fn write_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let tmp = temp_beside(path);
+    let written = (|| {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        drop(f);
+        crate::payload_library::replace_file(&tmp, path)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
 }
 
 impl Corpus {
     /// Read the corpus at `root`, or an empty one when it is absent or its
-    /// schema is not ours. Never fails on a bad manifest: an unreadable corpus
-    /// must surface as "no libraries yet", which the UI can act on, rather than
-    /// an error the user cannot fix.
+    /// schema is not ours.
+    ///
+    /// A manifest that is there and ours but does not parse (cut short by a crash or a full
+    /// disk, or damaged since) also reads as empty, so the UI still opens — but it is not
+    /// "no libraries yet": the libraries are on disk and the manifest is the only record of
+    /// which set shipped which. So that corpus is never written: a copy of the manifest is kept
+    /// as `manifest.json.bad`, [`Corpus::damaged`] says why, and every change is refused with
+    /// that reason instead of replacing the file with an empty one.
     pub fn open(root: impl AsRef<Path>) -> Self {
         let root = root.as_ref().to_path_buf();
-        let manifest = std::fs::read(root.join("manifest.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Manifest>(&b).ok())
-            .filter(|m| m.schema == SCHEMA)
-            .unwrap_or_default();
-        let mut corpus = Corpus { root, manifest };
+        let path = root.join("manifest.json");
+        let (manifest, damaged) = match std::fs::read(&path) {
+            Ok(bytes) => match classify_manifest(&bytes) {
+                OnDisk::Ours(m) => (m, None),
+                OnDisk::OtherSchema => (Manifest::default(), None),
+                OnDisk::Damaged(why) => {
+                    let bad = root.join("manifest.json.bad");
+                    let kept = match write_whole(&bad, &bytes) {
+                        Ok(()) => format!("a copy was kept as {}", bad.display()),
+                        Err(e) => format!("a copy could not be kept ({e})"),
+                    };
+                    (
+                        Manifest::default(),
+                        Some(format!(
+                            "the backport library's list ({}) is damaged and was left as it is                              ({why}); {kept}. Restore it from a backup, or move it out of that                              folder to start a new library, then scan again",
+                            path.display()
+                        )),
+                    )
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Manifest::default(), None),
+            Err(e) => (
+                Manifest::default(),
+                Some(format!(
+                    "the backport library's list ({}) could not be read ({e}), so it was left                      as it is",
+                    path.display()
+                )),
+            ),
+        };
+        let mut corpus = Corpus {
+            root,
+            manifest,
+            damaged,
+        };
         corpus.drop_cut_sets();
         corpus
+    }
+
+    /// Why this corpus reads as empty although a manifest is on disk, when that is so. Every
+    /// change to such a corpus is refused with the same words.
+    pub fn damaged(&self) -> Option<&str> {
+        self.damaged.as_deref()
     }
 
     /// The scan used to read each library in one call, which stops at 2 MiB, and stored that as
@@ -984,6 +1084,9 @@ impl Corpus {
     }
 
     fn write(&mut self) -> Result<()> {
+        if let Some(why) = &self.damaged {
+            anyhow::bail!("{why}");
+        }
         // Most-shipped build first: the UI shows them in this order, and the
         // best-travelled build is the sane default to look at.
         for entry in &mut self.manifest.libraries {
@@ -997,7 +1100,9 @@ impl Corpus {
         self.manifest.libraries.sort_by(|a, b| a.name.cmp(&b.name));
         std::fs::create_dir_all(&self.root)?;
         let json = serde_json::to_vec_pretty(&self.manifest)?;
-        std::fs::write(self.root.join("manifest.json"), json)?;
+        // Never in place: a crash or a full disk part-way through would leave half a manifest,
+        // which is the whole record of what the library holds.
+        write_whole(&self.root.join("manifest.json"), &json)?;
         Ok(())
     }
 }
@@ -1518,7 +1623,29 @@ mod tests {
     /// wall-clock nanos, which two tests running in parallel can share — the
     /// foreign-corpus test then wrote `{"schema":1}` into another test's
     /// directory and that test read an empty corpus. A counter cannot collide.
-    fn tempdir() -> PathBuf {
+    /// A test's folder, removed when the test ends, whichever way it ends.
+    struct TempDir(PathBuf);
+
+    impl std::ops::Deref for TempDir {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl AsRef<Path> for TempDir {
+        fn as_ref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn tempdir() -> TempDir {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let p = std::env::temp_dir().join(format!(
@@ -1527,7 +1654,94 @@ mod tests {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = std::fs::remove_dir_all(&p);
-        p
+        TempDir(p)
+    }
+
+    fn one_set(c: &mut Corpus, name: &str) -> Result<Option<String>> {
+        c.add_set(
+            "set",
+            scan_origin(),
+            vec![incoming(name, self_with((1, 2), 1, 2))],
+        )
+    }
+
+    /// A manifest cut short (a crash or a full disk part-way through a write in place) is not
+    /// "no libraries yet": the next change must not replace it with an empty one.
+    #[test]
+    fn a_damaged_manifest_is_kept_and_never_overwritten() {
+        let dir = tempdir();
+        let mut c = Corpus::open(&dir);
+        assert!(c.damaged().is_none());
+        one_set(&mut c, "libA.sprx").unwrap().unwrap();
+        let path = dir.join("manifest.json");
+        let whole = std::fs::read(&path).unwrap();
+        let cut = &whole[..whole.len() / 2];
+        std::fs::write(&path, cut).unwrap();
+
+        let mut c = Corpus::open(&dir);
+        assert!(c.manifest().sets.is_empty(), "it reads as empty");
+        let why = c.damaged().expect("and says why").to_string();
+        assert!(
+            why.contains("damaged") && why.contains("manifest.json.bad"),
+            "{why}"
+        );
+        assert_eq!(std::fs::read(dir.join("manifest.json.bad")).unwrap(), cut);
+
+        let e = one_set(&mut c, "libB.sprx").unwrap_err().to_string();
+        assert_eq!(e, why, "the change is refused with the reason");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            cut,
+            "and the file is untouched"
+        );
+
+        // Put back, it is the library it was.
+        std::fs::write(&path, &whole).unwrap();
+        let c = Corpus::open(&dir);
+        assert!(c.damaged().is_none());
+        assert_eq!(c.manifest().sets.len(), 1);
+    }
+
+    /// Another schema's manifest is still started over from, as before: only ours-and-broken
+    /// is refused.
+    #[test]
+    fn another_schemas_manifest_is_started_over_from() {
+        for old in [
+            r#"{"schema":1,"libs":{"a":1}}"#.to_string(),
+            format!(r#"{{"schema":{},"libraries":[],"sets":[]}}"#, SCHEMA + 1),
+        ] {
+            let dir = tempdir();
+            std::fs::create_dir_all(&*dir).unwrap();
+            std::fs::write(dir.join("manifest.json"), old).unwrap();
+            let mut c = Corpus::open(&dir);
+            assert!(c.damaged().is_none());
+            one_set(&mut c, "libA.sprx").unwrap().unwrap();
+            assert_eq!(Corpus::open(&dir).manifest().sets.len(), 1);
+            assert!(!dir.join("manifest.json.bad").exists());
+        }
+    }
+
+    /// The manifest is replaced whole: no temporary file is left beside it, and what is there
+    /// always parses.
+    #[test]
+    fn the_manifest_is_written_through_a_temporary_file() {
+        let dir = tempdir();
+        let mut c = Corpus::open(&dir);
+        one_set(&mut c, "libA.sprx").unwrap().unwrap();
+        one_set(&mut c, "libB.sprx").unwrap().unwrap();
+        let names: Vec<String> = std::fs::read_dir(&*dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".tmp"))
+            .collect();
+        assert!(names.is_empty(), "{names:?}");
+        assert!(matches!(
+            classify_manifest(&std::fs::read(dir.join("manifest.json")).unwrap()),
+            OnDisk::Ours(_)
+        ));
+        // A write that cannot land leaves no temporary file either.
+        let gone = dir.join("no-such-folder").join("manifest.json");
+        assert!(write_whole(&gone, b"x").is_err());
     }
 }
 

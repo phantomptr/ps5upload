@@ -201,6 +201,69 @@ describe("desktop updates", () => {
     expect(useUpdateStore.getState().phase.kind).toBe("available");
   });
 
+  it("a failed automatic check is tried again after a short wait, not a day later", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-11-10T10:00:00Z"));
+      const api = await import("../api/ps5");
+      vi.mocked(api.updateCheck).mockRejectedValueOnce(new Error("offline"));
+      vi.mocked(api.updateCheck).mockResolvedValue({ ...result("10.1.0"), available: false });
+      const { useUpdateStore, CHECK_RETRY_MS } = await import("./update");
+      await useUpdateStore.getState().ensureChecked();
+      expect(useUpdateStore.getState().phase.kind).toBe("error");
+      // Straight after: not hammered.
+      await useUpdateStore.getState().ensureChecked();
+      expect(api.updateCheck).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(Date.now() + CHECK_RETRY_MS + 1000);
+      await useUpdateStore.getState().ensureChecked();
+      expect(api.updateCheck).toHaveBeenCalledTimes(2);
+      expect(useUpdateStore.getState().phase.kind).toBe("up-to-date");
+      // A real answer still stands for the day.
+      vi.setSystemTime(Date.now() + CHECK_RETRY_MS + 1000);
+      await useUpdateStore.getState().ensureChecked();
+      expect(api.updateCheck).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a channel change during a download stops it and never shows that build as downloaded", async () => {
+    const api = await import("../api/ps5");
+    let finish: (d: UpdateDownload) => void = () => {};
+    vi.mocked(api.updateDownload).mockReturnValue(new Promise<UpdateDownload>((r) => (finish = r)));
+    vi.mocked(api.updateCheck).mockResolvedValue({ ...result("10.1.0"), available: false });
+    const { useUpdateStore } = await import("./update");
+    useUpdateStore.setState({ phase: { kind: "available", result: result("10.2.0") } });
+    const downloading = useUpdateStore.getState().download();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(useUpdateStore.getState().phase.kind).toBe("downloading");
+
+    useUpdateStore.getState().setChannel("prerelease");
+    expect(api.updateDownloadCancel).toHaveBeenCalled();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(api.updateCheck).toHaveBeenCalledWith("prerelease");
+    expect(useUpdateStore.getState().phase.kind).toBe("up-to-date");
+
+    // The old channel's download comes back anyway (the cancel lost the race).
+    finish(download());
+    await downloading;
+    expect(useUpdateStore.getState().phase.kind).toBe("up-to-date");
+  });
+
+  it("a check answered after the channel changed is dropped", async () => {
+    const api = await import("../api/ps5");
+    let answer: (r: UpdateCheck) => void = () => {};
+    vi.mocked(api.updateCheck).mockReturnValueOnce(new Promise<UpdateCheck>((r) => (answer = r)));
+    vi.mocked(api.updateCheck).mockResolvedValue({ ...result("10.1.0"), available: false });
+    const { useUpdateStore } = await import("./update");
+    const stable = useUpdateStore.getState().checkNow();
+    useUpdateStore.getState().setChannel("prerelease");
+    await new Promise((r) => setTimeout(r, 0));
+    answer(result("10.2.0"));
+    await stable;
+    expect(useUpdateStore.getState().phase.kind).toBe("up-to-date");
+  });
+
   it("removing old downloads asks the app and counts again", async () => {
     const api = await import("../api/ps5");
     vi.mocked(api.updateRemoveOldDownloads).mockResolvedValue(2);

@@ -131,7 +131,7 @@ impl<'a> Ps4Params<'a> {
         else {
             return Ok(None);
         };
-        let bytes = inner.read(&sfo)?;
+        let bytes = crate::source::read_small(inner, &sfo, crate::source::MAX_PARAM_BYTES)?;
         let Ok(params) = sfo_params(&bytes) else {
             return Ok(None);
         };

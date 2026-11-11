@@ -149,9 +149,13 @@ static int send_frame(int fd, const uint8_t *b, size_t n, long long until) {
 }
 
 /* One request on fd and its answer (the same seq), within timeout_ms. The answer's rc with its
- * payload after the rc in out (*out_len bytes); -3 on timeout, IO_ERR when the connection broke. */
+ * payload after the rc in out (*out_len bytes, at most out_cap); -3 on timeout, IO_ERR when the
+ * connection broke or the answer was longer than out_cap. The callers' buffers are sized for the
+ * answer their request has (8 or 16 bytes, on the stack) while a frame carries up to
+ * VWIRE_MAX_PAYLOAD: the answer's own length was copied whatever the buffer held. An answer that
+ * long is not one this build's companion sends, so it is treated like a broken connection. */
 static int exchange(int fd, uint8_t *rbuf, size_t *rhave, uint8_t type, uint8_t seq, const uint8_t *payload,
-                    size_t len, int timeout_ms, uint8_t *out, size_t *out_len) {
+                    size_t len, int timeout_ms, uint8_t *out, size_t out_cap, size_t *out_len) {
     uint8_t frame[VWIRE_MAX_FRAME];
     long long until = now_ms() + timeout_ms;
     int k = vwire_encode(frame, sizeof frame, type, seq, payload, len), s;
@@ -167,8 +171,10 @@ static int exchange(int fd, uint8_t *rbuf, size_t *rhave, uint8_t type, uint8_t 
             *rhave -= (size_t)used;
             if (f.seq != seq || f.type != (uint8_t)(type | VWIRE_REPLY) || f.len < 4) continue; /* a late one */
             if (out_len) {
-                *out_len = f.len - 4u;
-                if (out) memcpy(out, f.payload + 4, f.len - 4u);
+                size_t extra = f.len - 4u;
+                if (out && extra > out_cap) return IO_ERR;
+                *out_len = extra;
+                if (out) memcpy(out, f.payload + 4, extra);
             }
             return (int)(int32_t)vwire_get32(f.payload);
         }
@@ -220,12 +226,12 @@ static void lost_locked(int kill_it, const char *why) {
 
 /* A request to the running companion, answered within timeout_ms. Lock held. The rc, or IO_ERR
  * (then it is gone). */
-static int call_within_locked(uint8_t type, const uint8_t *payload, size_t len, uint8_t *out, size_t *out_len,
+static int call_within_locked(uint8_t type, const uint8_t *payload, size_t len, uint8_t *out, size_t out_cap, size_t *out_len,
                               int timeout_ms) {
     int rc;
     if (g_st != ST_RUNNING || g_fd < 0) return IO_ERR;
     g_seq++;
-    rc = exchange(g_fd, g_rbuf, &g_rhave, type, g_seq, payload, len, timeout_ms, out, out_len);
+    rc = exchange(g_fd, g_rbuf, &g_rhave, type, g_seq, payload, len, timeout_ms, out, out_cap, out_len);
     if (rc == -3) {
         if (now_ms() - g_last_reply >= CFG(silent_ms, 1000)) lost_locked(1, "is silent: killed");
         return IO_ERR;
@@ -238,8 +244,8 @@ static int call_within_locked(uint8_t type, const uint8_t *payload, size_t len, 
     return rc;
 }
 
-static int call_locked(uint8_t type, const uint8_t *payload, size_t len, uint8_t *out, size_t *out_len) {
-    return call_within_locked(type, payload, len, out, out_len, CFG(call_timeout_ms, 200));
+static int call_locked(uint8_t type, const uint8_t *payload, size_t len, uint8_t *out, size_t out_cap, size_t *out_len) {
+    return call_within_locked(type, payload, len, out, out_cap, out_len, CFG(call_timeout_ms, 200));
 }
 
 /* Tells the companion whether Play Together holds it, when that changed. Lock held. */
@@ -247,7 +253,7 @@ static void hold_sync_locked(long long now) {
     uint8_t on = now < g_hold_until, out[8];
     size_t n = 0;
     if (g_st != ST_RUNNING || on == g_hold_sent) return;
-    if (call_locked(VWIRE_HOLD, &on, 1, out, &n) == VWIRE_RC_OK) {
+    if (call_locked(VWIRE_HOLD, &on, 1, out, sizeof out, &n) == VWIRE_RC_OK) {
         g_hold_sent = on;
         if (n >= 1) g_mbus = out[0];
     }
@@ -257,7 +263,7 @@ static void hold_sync_locked(long long now) {
 static int open_locked(int m, int k) {
     uint8_t p[2] = {(uint8_t)!!m, (uint8_t)!!k}, out[8];
     size_t n = 0;
-    int rc = call_locked(VWIRE_OPEN, p, 2, out, &n);
+    int rc = call_locked(VWIRE_OPEN, p, 2, out, sizeof out, &n);
     if (rc == IO_ERR) return VINPUT_E_STARTING;
     if (n >= 2) {
         g_m_open = out[0];
@@ -339,7 +345,7 @@ static int start_companion(started_t *s) {
             continue;
         }
         s->rhave = 0;
-        rc = exchange(fd, s->rbuf, &s->rhave, VWIRE_HELLO, 0, hello, sizeof hello, 1000, out, &n);
+        rc = exchange(fd, s->rbuf, &s->rhave, VWIRE_HELLO, 0, hello, sizeof hello, 1000, out, sizeof out, &n);
         if (rc == VWIRE_RC_OK && n >= 8) {
             s->fd = fd;
             s->pid = (int)vwire_get32(out + 2);
@@ -449,7 +455,7 @@ static void *relay_main(void *arg) {
             hold_sync_locked(now);
             if (g_st == ST_RUNNING && now - g_last_hb >= CFG(hb_ms, 300)) {
                 g_last_hb = now;
-                (void)call_locked(VWIRE_HB, NULL, 0, NULL, NULL);
+                (void)call_locked(VWIRE_HB, NULL, 0, NULL, 0, NULL);
             }
             if (g_st == ST_RUNNING && g_fails && now - g_running_since >= CFG(healthy_ms, 30000)) g_fails = 0;
             /* It ended on its own (idle, or killed from outside)? */
@@ -617,7 +623,7 @@ static int report_locked(uint8_t buttons, int dx, int dy, int wheel, int hwheel,
     r[6] = (uint8_t)(int8_t)wheel;
     r[7] = (uint8_t)(int8_t)hwheel;
     memcpy(r + 8, keys, VINPUT_KEYS);
-    rc = call_locked(VWIRE_REPORT, r, sizeof r, NULL, NULL);
+    rc = call_locked(VWIRE_REPORT, r, sizeof r, NULL, 0, NULL);
     if (rc == IO_ERR) return VINPUT_E_STARTING;
     return rc == VWIRE_RC_OK ? VINPUT_OK : VINPUT_E_FAILED;
 }
@@ -699,7 +705,7 @@ int vinput_relay_bind(uint32_t device, uint32_t user, uint32_t age_ms, vrelay_bi
         return VWIRE_RC_UNSUPPORTED;
     }
     /* 30 tries a millisecond apart and the owner read back: well under this. */
-    rc = call_within_locked(VWIRE_BIND, p, sizeof p, x, &n, 500);
+    rc = call_within_locked(VWIRE_BIND, p, sizeof p, x, sizeof x, &n, 500);
     pthread_mutex_unlock(&g_mu);
     if (rc == IO_ERR) return VRELAY_BIND_LOST;
     if (n >= 13) {
@@ -715,7 +721,7 @@ void vinput_relay_forget(uint32_t device) {
     uint8_t p[4];
     vwire_put32(p, device);
     pthread_mutex_lock(&g_mu);
-    if (g_st == ST_RUNNING) (void)call_locked(VWIRE_FORGET, p, sizeof p, NULL, NULL);
+    if (g_st == ST_RUNNING) (void)call_locked(VWIRE_FORGET, p, sizeof p, NULL, 0, NULL);
     pthread_mutex_unlock(&g_mu);
 }
 

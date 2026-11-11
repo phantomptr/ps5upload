@@ -225,7 +225,11 @@ pub fn rebuild(tree: &mut dyn crate::source::SourceTree, mtime: i64) -> Result<R
         .find(|f| f.path.eq_ignore_ascii_case(NAME))
         .map(|f| f.path.clone());
     let old = match old_path {
-        Some(p) => Some((p.clone(), tree.read(&p).map_err(|e| format!("{p}: {e}"))?)),
+        Some(p) => Some((
+            p.clone(),
+            crate::source::read_small(tree, &p, crate::source::MAX_INDEX_BYTES)
+                .map_err(|e| format!("{p}: {e}"))?,
+        )),
         None => None,
     };
     let has_backup = tree

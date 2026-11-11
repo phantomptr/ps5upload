@@ -91,7 +91,10 @@ static int open_checked(const char *path, char *norm, size_t cap, struct stat *s
         *cause = "path_not_allowed";
         return -1;
     }
-    fd = open(norm, O_RDONLY);
+    /* O_NONBLOCK for the open only: the name may be a FIFO, and a plain open of one waits for a
+     * writer that never comes, with a web worker. It is refused just below (not a regular file);
+     * for a regular file the flag means nothing and is taken off again. */
+    fd = open(norm, O_RDONLY | O_NONBLOCK);
     if (fd < 0) {
         *http = errno == ENOENT ? 404 : 403;
         *cause = errno == ENOENT ? "not_found" : "read_failed";
@@ -102,6 +105,10 @@ static int open_checked(const char *path, char *norm, size_t cap, struct stat *s
         *http = 400;
         *cause = "not_a_file";
         return -1;
+    }
+    {
+        int fl = fcntl(fd, F_GETFL, 0);
+        if (fl >= 0) (void)fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
     }
     return fd;
 }
@@ -753,7 +760,15 @@ int webui_payload_load(const char *path, uint64_t *sent, const char **cause) {
         *cause = "pkg_install_busy";
         return 409;
     }
-    pthread_mutex_lock(&g_loader_mu);
+    /* trylock: this runs on a web worker, and a send in progress can hold the loader for a long
+     * while (a loader that is not up yet is retried for LOADER_RETRY_MS, then the image goes out).
+     * Waiting here parked one worker per request until none was left for the page. A second load
+     * meanwhile is told so at once. */
+    if (pthread_mutex_trylock(&g_loader_mu) != 0) {
+        close(fd);
+        *cause = "loader_busy";
+        return 503;
+    }
     if (loader_send(NULL, fd, (uint64_t)st.st_size, cause) != 0) {
         pthread_mutex_unlock(&g_loader_mu);
         close(fd);

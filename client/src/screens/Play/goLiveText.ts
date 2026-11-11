@@ -2,6 +2,7 @@
 // a run failed without loading it.
 
 import type { LiveRun, PresetId } from "../../lib/goLive";
+import type { ConfirmOptions } from "../../components/ConfirmDialog";
 import type { useTr } from "../../state/lang";
 
 type Tr = ReturnType<typeof useTr>;
@@ -100,4 +101,30 @@ export function justFailed(wasLive: boolean, run: LiveRun | null): NonNullable<L
 /** The site to name in a run's message: the one site it streams to, else none. */
 export function runSite(tr: Tr, run: LiveRun): string | undefined {
   return run.destinations.length === 1 ? presetName(tr, run.destinations[0].preset) : undefined;
+}
+
+/** The question asked before a saved site is removed. Its stream key goes with it and can't be
+ *  read back (only its last characters are ever shown), so one click must not be enough. */
+export function removeConfirmOptions(tr: Tr, label: string): ConfirmOptions {
+  return {
+    title: tr("golive_remove", { name: label }, `Remove ${label}`),
+    message: tr(
+      "golive_remove_confirm",
+      undefined,
+      "Its saved stream key is removed too. To stream there again, add the site and paste its key again.",
+    ),
+    confirmLabel: tr("remove", undefined, "Remove"),
+    destructive: true,
+  };
+}
+
+/** Remove a saved site only once the user said yes. Returns whether it was removed. */
+export async function removeAfterConfirm(
+  confirm: (o: ConfirmOptions) => Promise<boolean>,
+  opts: ConfirmOptions,
+  remove: () => unknown,
+): Promise<boolean> {
+  if (!(await confirm(opts))) return false;
+  await remove();
+  return true;
 }

@@ -791,13 +791,56 @@ mod tests {
             .collect()
     }
 
-    fn out_path(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("ps5upload-exfatw-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        dir.join(name)
+    /// An image path in a folder of its own, removed with the folder when the test ends.
+    struct Out {
+        dir: std::path::PathBuf,
+        path: std::path::PathBuf,
     }
 
-    fn build(src: &mut Mem, name: &str, cluster: Option<u32>) -> (std::path::PathBuf, ExfatBuilt) {
+    impl std::ops::Deref for Out {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl AsRef<Path> for Out {
+        fn as_ref(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for Out {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn out_path(name: &str) -> Out {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "ps5upload-exfatw-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        Out {
+            path: dir.join(name),
+            dir,
+        }
+    }
+
+    #[test]
+    fn an_image_folder_goes_with_its_test() {
+        let out = out_path("gone.exfat");
+        let dir = out.dir.clone();
+        assert!(dir.is_dir());
+        drop(out);
+        assert!(!dir.exists());
+    }
+
+    fn build(src: &mut Mem, name: &str, cluster: Option<u32>) -> (Out, ExfatBuilt) {
         let out = out_path(name);
         let built = build_exfat(src, &out, cluster, &mut |_, _| {}, &|| false).expect("build");
         (out, built)

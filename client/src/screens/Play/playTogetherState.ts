@@ -498,8 +498,22 @@ export function inviteOn(url: string, address: string): string {
   }
 }
 
-/** A call's answer: the state, or the engine's reason it said no (`old_helper`, `not_playing`…). */
-export type JoinReply = { state: JoinHostState; error?: undefined } | { state?: undefined; error: string };
+/** A call's answer: the state, or the engine's reason it said no (`old_helper`, `not_playing`…).
+ *  `found`: what the engine found instead, for a bug report (`not_playing`: the console asked for
+ *  and the one it is streaming). */
+export type JoinReply =
+  | { state: JoinHostState; error?: undefined }
+  | { state?: undefined; error: string; found?: string };
+
+/** What a `not_playing` refusal found (join.rs not_playing_json), as one line for the panel's
+ *  failure text and a bug report; undefined from an engine that doesn't say. Not translated: it is
+ *  read by whoever looks into the report. */
+export function foundOf(json: unknown): string | undefined {
+  const j = json as { asked?: unknown; streaming?: unknown; stopping?: unknown } | null;
+  if (typeof j?.asked !== "string") return undefined;
+  const streaming = typeof j.streaming === "string" && j.streaming ? j.streaming : "none";
+  return `asked ${j.asked}, streaming ${streaming}${j.stopping === true ? " (stopping)" : ""}`;
+}
 
 async function request(path: string, body?: object): Promise<{ ok: boolean; json: unknown }> {
   const r = await fetch(`${getEngineUrl()}${path}`, {
@@ -536,7 +550,9 @@ async function read(addr: string): Promise<JoinHostState | null> {
 async function whole(path: string, addr: string): Promise<JoinReply> {
   try {
     const r = await request(path, { addr });
-    return r.ok ? { state: readJoinState(r.json) } : { error: errorOf(r.json) };
+    if (r.ok) return { state: readJoinState(r.json) };
+    const found = foundOf(r.json);
+    return found ? { error: errorOf(r.json), found } : { error: errorOf(r.json) };
   } catch {
     return { error: "engine" };
   }
@@ -704,6 +720,31 @@ export async function openWhenPlaying(
     const reply = await joinApi.open(addr);
     if (!alive()) return null;
     if (reply.error !== "not_playing" || waited + everyMs > forMs) return reply;
+    await wait(everyMs);
+    if (!alive()) return null;
+  }
+}
+
+/** `openWhenPlaying` for as long as the panel shows: `not_playing` is never the last word. The
+ *  panel is only up while this device shows a stream, so once that time is over the refusal is
+ *  told (`onRefused`, with what the engine found) and asking goes on: when the session does come
+ *  up the panel opens by itself. It used to stay on "Play Together could not start (not_playing)"
+ *  over a running picture until it was closed and opened again. Any other refusal is told and ends
+ *  it. The opened state, or null (refused, or the panel went away). */
+export async function openUntilPlaying(
+  addr: string,
+  alive: () => boolean,
+  onRefused: (reply: { error: string; found?: string }) => void,
+  everyMs = OPEN_RETRY_MS,
+  forMs = OPEN_RETRY_FOR_MS,
+  wait: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+): Promise<JoinHostState | null> {
+  for (;;) {
+    const reply = await openWhenPlaying(addr, alive, everyMs, forMs, wait);
+    if (!reply) return null;
+    if (reply.state) return reply.state;
+    onRefused(reply);
+    if (reply.error !== "not_playing") return null;
     await wait(everyMs);
     if (!alive()) return null;
   }
