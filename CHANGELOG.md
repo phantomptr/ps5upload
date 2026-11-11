@@ -6,6 +6,16 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+Files:
+
+- Extracting a RAR archive on the PS5 no longer fails with "Declared dictionary size is not supported". Archives packed with a large dictionary (up to 4 GB, common for big games) now extract on the console. Tested on a PS5 Pro with a 4 GB-dictionary multi-part archive.
+
+Upload:
+
+- "Send it as one game image" now builds the image in Workshop's Output folder, and shows it with a Change button. Before, it always built it in your Downloads folder, with no way to pick another drive.
+
+## 12.4.7
+
 Play Together:
 
 - Fixed the picture stuttering for friends on your home network, mostly at higher quality (like the default 15 Mbit/s). 12.4.5 only got part of the way: the app still held the picture to about 8 Mbit/s on a fast network and dropped pictures whenever the game got busy. Friends on your home network now always get the full rate while the connection stays clean. Tested on a PS5 Pro at 15 Mbit/s: no dropped pictures.
