@@ -651,7 +651,9 @@ function UserRow({
     setDeleting(true);
     setError(null);
     try {
-      await userDelete(uid, true, addr);
+      // Saves are kept, as they always were in practice: the helper used to misread this flag
+      // and never wiped them. Now that it reads it, wiping needs its own clear choice here first.
+      await userDelete(uid, false, addr);
       onChanged();
     } catch (e) {
       const refusal = userDeleteRefusal(e);
