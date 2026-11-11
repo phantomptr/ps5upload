@@ -6825,8 +6825,8 @@ fn speed_test_dir() -> std::path::PathBuf {
 }
 
 /// Removes every file and folder in `dir` last changed before `cutoff`; how many went. For the
-/// engine's own scratch folders at its start, where `cutoff` is the start: what this run makes
-/// meanwhile is newer and stays.
+/// engine's own scratch folders at its start, by age: what this engine or another on the same
+/// data folder made lately stays.
 pub(crate) fn sweep_older_than(dir: &std::path::Path, cutoff: std::time::SystemTime) -> usize {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return 0;
@@ -12368,11 +12368,13 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // Server copies an earlier run left behind (an extract that failed, then the app closed)
     // are removed here: nothing else knows them after a restart.
     tokio::task::spawn_blocking(remote::fetch::sweep_stale_copies);
-    // The same for a share's made files and a speed test's: only what was there before now.
-    let started = std::time::SystemTime::now();
-    tokio::task::spawn_blocking(move || {
-        share::sweep_left_shares(started);
-        sweep_older_than(&speed_test_dir(), started);
+    // The same for a share's made files and a speed test's, by age: another engine may be
+    // running on this data folder, and what it made lately is in use.
+    tokio::task::spawn_blocking(|| {
+        share::sweep_left_shares();
+        if let Some(cutoff) = std::time::SystemTime::now().checked_sub(SPEED_TEST_KEEP) {
+            sweep_older_than(&speed_test_dir(), cutoff);
+        }
     });
     tokio::task::spawn_blocking(settings_backup::seal_old_backups);
     // Graceful shutdown: when the parent-watcher fires (stdin EOF), the
@@ -15749,8 +15751,8 @@ mod archive_packages_tests {
 mod speed_test_file_tests {
     use super::{expire_speed_test, speed_test_size_mib, sweep_older_than, write_speed_test_file};
 
-    /// What an earlier run left goes at the start (a share's zip, a speed test's 2 GiB); what
-    /// this run made since stays.
+    /// What an earlier run left goes at the start once it is old enough (a share's zip, a speed
+    /// test's 2 GiB); anything younger may be another engine's and stays.
     #[test]
     fn the_start_sweep_takes_what_was_there_before_and_nothing_newer() {
         let dir = std::env::temp_dir().join(format!("ps5upload-sweep-{}", uuid::Uuid::new_v4()));
@@ -15758,7 +15760,7 @@ mod speed_test_file_tests {
         std::fs::write(dir.join("old-share").join("save.zip"), b"x").unwrap();
         std::fs::write(dir.join("ps5upload-speedtest.bin"), b"x").unwrap();
         let now = std::time::SystemTime::now();
-        // Made before the engine started: nothing is that old.
+        // Younger than the age asked for: nothing goes.
         let before = now - std::time::Duration::from_secs(3600);
         assert_eq!(sweep_older_than(&dir, before), 0);
         assert!(dir.join("old-share").join("save.zip").exists());

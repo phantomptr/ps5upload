@@ -988,3 +988,9 @@ fn a_long_name_keeps_its_extension_and_two_alike_stay_two() {
         wire::PlanRefused::NotAccepted
     );
 }
+
+#[test]
+fn a_left_share_is_swept_only_once_no_share_can_still_be_live() {
+    assert_eq!(LEFT_SHARE_AGE, MAX_TTL + Duration::from_secs(24 * 3600));
+    assert!(LEFT_SHARE_AGE >= Duration::from_secs(8 * 24 * 3600));
+}

@@ -472,7 +472,7 @@ async fn run_copy(run: RunCopy) {
     .await;
     let completed_at_ms = crate::now_ms();
     match result {
-        Ok(file_count) => {
+        Ok((file_count, copied)) => {
             fetched()
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -486,7 +486,7 @@ async fn run_copy(run: RunCopy) {
                     completed_at_ms,
                     elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
                     tx_id_hex: String::new(),
-                    bytes_sent: total,
+                    bytes_sent: copied,
                     dest: dest.display().to_string(),
                     files_sent: file_count,
                     skipped_files: 0,
@@ -563,19 +563,6 @@ pub(crate) fn unsafe_leaf(name: &str) -> Option<&'static str> {
     ps5upload_core::transfer::host_unsafe_component(name)
 }
 
-/// The size to copy of a file the listing gave as `listed` bytes and that opened as `opened`
-/// bytes. The opened file's own size is the one that counts: a listing can give a link's own
-/// length (SFTP), or be out of date. A listing that disagrees is refused, not copied short (or
-/// past what the disk was checked for); one that gave no size is taken at the file's.
-fn copy_size(name: &str, listed: u64, opened: u64) -> Result<u64, String> {
-    if listed != 0 && listed != opened {
-        return Err(format!(
-            "{name} is {opened} bytes on the server, but its folder listed {listed} (a link, or it changed); it was not copied."
-        ));
-    }
-    Ok(opened)
-}
-
 /// `dest` + a relative path from a server listing, refusing anything that would land outside
 /// `dest`: `..`, an absolute path, a drive prefix, or a backslash (a separator on Windows).
 fn safe_join(dest: &Path, rel: &str) -> Result<PathBuf, String> {
@@ -600,8 +587,9 @@ fn safe_join(dest: &Path, rel: &str) -> Result<PathBuf, String> {
     Ok(out)
 }
 
-/// Copy every file, each to `<name>.partial` then renamed. Returns the file count.
-async fn copy_all(job: CopyJob<'_>) -> Result<u64, String> {
+/// Copy every file, each to `<name>.partial` then renamed. Returns the file count and the bytes
+/// copied (the listing's total was an estimate).
+async fn copy_all(job: CopyJob<'_>) -> Result<(u64, u64), String> {
     let mut done = 0u64;
     let mut work: Vec<(String, PathBuf, &Entry)> = Vec::new();
     for (rel, entry) in &job.files {
@@ -648,18 +636,10 @@ async fn copy_all(job: CopyJob<'_>) -> Result<u64, String> {
             })
             .await?
         };
-        let size = match copy_size(&entry.name, entry.size, file.size()) {
-            Ok(size) => size,
-            Err(e) => {
-                let _ = blocking(move || {
-                    drop(out);
-                    let _ = std::fs::remove_file(&partial);
-                    Ok(())
-                })
-                .await;
-                return Err(e);
-            }
-        };
+        // The opened file's own size is the one copied. The listing's is only an estimate for
+        // the progress: for a link it is the link's own length (SFTP), and a copy bounded by it
+        // was cut short and reported Done.
+        let size = file.size();
         let mut off = 0u64;
         while off < size {
             if job.cancel.load(std::sync::atomic::Ordering::Relaxed) {
@@ -697,7 +677,7 @@ async fn copy_all(job: CopyJob<'_>) -> Result<u64, String> {
         })
         .await?;
     }
-    Ok((job.files.len() + job.siblings.len()) as u64)
+    Ok(((job.files.len() + job.siblings.len()) as u64, done))
 }
 
 /// Runs `f` on the blocking pool; a panic there is an error, not a crash of the job's task.
@@ -1344,60 +1324,45 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dest_dir);
     }
 
-    #[test]
-    fn the_opened_files_size_is_the_one_copied() {
-        assert_eq!(copy_size("a", 100, 100), Ok(100));
-        // No size in the listing: the file's own.
-        assert_eq!(copy_size("a", 0, 100), Ok(100));
-        // A link's own length, or a file that changed: refused, not cut short.
-        assert!(copy_size("a", 12, 100).is_err());
-        assert!(copy_size("a", 100, 12).is_err());
-    }
-
     /// A listing that gives a link's own length (SFTP) used to end the copy after that many
-    /// bytes, as Done.
+    /// bytes, as Done. The opened file's size is the one copied, whatever the listing said.
     #[tokio::test]
-    async fn a_listing_with_the_wrong_size_fails_the_copy_and_leaves_nothing() {
-        let (r, id) = setup(&[("/g/big.bin", &[7u8; 1000])]);
+    async fn a_link_listed_at_a_few_bytes_copies_the_whole_file() {
+        let real: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
+        let (r, id) = setup(&[("/g/big.bin", &real)]);
         let dest_dir = crate::remote::store::test_dir();
         std::fs::create_dir_all(&dest_dir).unwrap();
-        let run = |listed: u64, dest: PathBuf| {
-            let (r, id) = (Arc::clone(&r), id.clone());
-            async move {
-                let fs = r.pool.fs(&r.store, &id).await.unwrap();
-                copy_all(CopyJob {
-                    _fs: fs,
-                    pool: Arc::clone(&r.pool),
-                    store: Arc::clone(&r.store),
-                    id,
-                    base: "/g".into(),
-                    is_dir: true,
-                    files: vec![(
-                        "big.bin".into(),
-                        Entry {
-                            name: "big.bin".into(),
-                            is_dir: false,
-                            size: listed,
-                            mtime: None,
-                        },
-                    )],
-                    siblings: Vec::new(),
-                    dest,
-                    cancel: Arc::default(),
-                    backoff: crate::remote::pool::Backoff::instant(),
-                    report: &|_| {},
-                })
-                .await
-            }
-        };
-        let short = dest_dir.join("short");
-        let e = run(12, short.clone()).await.unwrap_err();
-        assert!(e.contains("listed 12"), "{e}");
-        assert!(!short.join("big.bin").exists());
-        assert!(!short.join("big.bin.partial").exists());
-        let whole = dest_dir.join("whole");
-        assert_eq!(run(0, whole.clone()).await, Ok(1));
-        assert_eq!(std::fs::read(whole.join("big.bin")).unwrap(), [7u8; 1000]);
+        // 12: a link's own length. 0: no size given. 500000: a listing out of date.
+        for listed in [12u64, 0, 500_000, real.len() as u64] {
+            let dest = dest_dir.join(format!("listed-{listed}"));
+            let fs = r.pool.fs(&r.store, &id).await.unwrap();
+            let got = copy_all(CopyJob {
+                _fs: fs,
+                pool: Arc::clone(&r.pool),
+                store: Arc::clone(&r.store),
+                id: id.clone(),
+                base: "/g".into(),
+                is_dir: true,
+                files: vec![(
+                    "big.bin".into(),
+                    Entry {
+                        name: "big.bin".into(),
+                        is_dir: false,
+                        size: listed,
+                        mtime: None,
+                    },
+                )],
+                siblings: Vec::new(),
+                dest: dest.clone(),
+                cancel: Arc::default(),
+                backoff: crate::remote::pool::Backoff::instant(),
+                report: &|_| {},
+            })
+            .await;
+            assert_eq!(got, Ok((1, real.len() as u64)), "listed {listed}");
+            assert!(std::fs::read(dest.join("big.bin")).unwrap() == real);
+            assert!(!dest.join("big.bin.partial").exists());
+        }
         let _ = std::fs::remove_dir_all(&dest_dir);
     }
 
