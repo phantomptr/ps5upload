@@ -347,6 +347,8 @@ export interface FilesViewProps {
   onEntry: (e: Entry) => void;
   onLoadMore: () => void;
   onRetry?: () => void;
+  /** The viewer's text editor opened or closed. */
+  onEditing?: (editing: boolean) => void;
   onToggleSelecting: () => void;
   onToggleItem: (name: string) => void;
   onAsk: (ask: FilesAsk) => void;
@@ -933,6 +935,7 @@ function askView(p: FilesViewProps) {
           images={a.type === "image" ? (p.shown ?? p.dir.entries).filter((e) => e.kind !== "dir" && viewKind(e.name) === "image").map((e) => e.name) : undefined}
           onOpenImage={(name) => p.onAsk({ kind: "view", name, type: "image" })}
           startEditing={a.edit}
+          onEditing={p.onEditing}
           onSaved={() => p.onRetry?.()}
           onClose={p.onDismiss}
         />
@@ -1379,6 +1382,11 @@ export function Files({ ctx }: { ctx: SectionContext }) {
   const root = useRef<HTMLDivElement>(null);
   /** False once Files unmounts: a batch that ends later reports to no one (it ran to the end anyway). */
   const mounted = useRef(true);
+  /** The viewer's text editor is open (a folder change from the PC waits for it). */
+  const editingRef = useRef(false);
+  const onEditing = useCallback((editing: boolean) => {
+    editingRef.current = editing;
+  }, []);
   /** The folder shown now (a batch that ends later checks it is still the same). */
   const pathRef = useRef(path);
   useEffect(() => {
@@ -1440,7 +1448,14 @@ export function Files({ ctx }: { ctx: SectionContext }) {
   // already opened at must open it again after the user browsed elsewhere.
   const params = ctx.params;
   useEffect(() => {
-    if (params?.path != null) go(params.path, params.focus ?? "");
+    if (params?.path == null) return;
+    // The text editor is open: the PC's "Show on TV" does not take the folder (and the edits)
+    // away under it.
+    if (editingRef.current && params.path !== pathRef.current) {
+      setMessage({ tone: "info", text: t("cw_files_edit_unsaved") });
+      return;
+    }
+    go(params.path, params.focus ?? "");
   }, [params, go]);
   // Opened by the PC ("Show on TV"): say so, or that the folder is gone.
   useHandoffNotice(ctx.params, setMessage);
@@ -2317,6 +2332,7 @@ export function Files({ ctx }: { ctx: SectionContext }) {
         onEntry={onEntry}
         onLoadMore={onLoadMore}
         onRetry={refresh}
+        onEditing={onEditing}
         onRetryVolumes={() => setVolumesTick((n) => n + 1)}
         onToggleSelecting={onToggleSelecting}
         onToggleItem={onToggleItem}
