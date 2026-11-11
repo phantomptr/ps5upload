@@ -54,7 +54,7 @@ gh run watch <id>
 ```
 
 `publish` takes about 25 minutes. Windows ARM64 is usually the last job to finish.
-`publish-retry` re-runs failed jobs up to twice.
+A failed `publish` run re-runs its failed jobs up to twice (its `retry-failed` job, through `rerun-failed`).
 
 ## 4. Verify
 

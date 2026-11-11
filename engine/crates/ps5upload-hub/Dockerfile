@@ -5,7 +5,7 @@
 #
 #   docker build --platform linux/amd64 -t ps5upload-hub .
 
-FROM rust:1.91-alpine AS build
+FROM rust:1.99.1-alpine3.24 AS build
 RUN apk add --no-cache musl-dev
 WORKDIR /src
 COPY deploy/workspace.toml Cargo.toml

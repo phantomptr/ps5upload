@@ -177,6 +177,17 @@ jobs:
         working-directory: engine
         run: cargo clippy --locked --workspace -- -D warnings
 
+      # The hub's container builds from its own lock, pruned from engine/Cargo.lock. A change to
+      # the engine's lock that leaves it behind fails the hub's `cargo build --locked` only at
+      # deploy time. Checked here too because the hub's own job is skipped when this lane runs.
+      - name: The hub's deploy lock matches the engine's
+        run: |
+          sh engine/crates/ps5upload-hub/deploy/refresh-lock.sh
+          if ! git diff --exit-code -- engine/crates/ps5upload-hub/deploy/Cargo.lock; then
+            echo "::error::engine/crates/ps5upload-hub/deploy/Cargo.lock is stale. Run: sh engine/crates/ps5upload-hub/deploy/refresh-lock.sh"
+            exit 1
+          fi
+
       # UnRAR is GPL-incompatible and the engine carries third-party GPL/AGPL code, so only
       # the separate ps5upload-unrar program may link it (LICENSES/UnRAR-exception.md).
       - name: UnRAR stays out of the engine
@@ -280,25 +291,9 @@ jobs:
           PS5UPLOAD_SAMBA_USER: runner
           PS5UPLOAD_SAMBA_PASS: ci-smb-fixture-only
         run: |
-          # apt has no default network timeout (see "Install Tauri Linux deps"): a stalled mirror
-          # would hold this step until the job dies.
-          apt_retry() {
-            for attempt in 1 2 3; do
-              if sudo DEBIAN_FRONTEND=noninteractive apt-get \
-                   -o Acquire::Retries=3 \
-                   -o Acquire::http::Timeout=20 \
-                   -o Acquire::https::Timeout=20 \
-                   "$@"; then
-                return 0
-              fi
-              echo "apt attempt $attempt failed; retrying in 15s" >&2
-              sleep 15
-            done
-            echo "apt failed after 3 attempts: apt-get $*" >&2
-            return 1
-          }
-          apt_retry update -qq
-          apt_retry install -y --no-install-recommends samba samba-vfs-modules attr
+          # Bounded and retried (scripts/ci-apt.sh): a stalled mirror would otherwise hold this
+          # step until the job dies.
+          bash "$GITHUB_WORKSPACE/scripts/ci-apt.sh" --no-install-recommends samba samba-vfs-modules attr
           printf 'ci-smb-fixture-only\nci-smb-fixture-only\n' | sudo smbpasswd -a -s runner
           share=$(mktemp -d /tmp/ps5upload-smb-XXXXXX)
           chmod 777 "$share"
@@ -330,7 +325,7 @@ jobs:
           EOF
           sudo smbd -D -s "$share/smb.conf"
           trap 'sudo pkill -F "$share/run/smbd.pid" || true; sudo rm -rf "$share"' EXIT
-          for attempt in $(seq 1 20); do
+          for _ in $(seq 1 20); do
             if (echo > /dev/tcp/127.0.0.1/1445) 2>/dev/null; then break; fi
             sleep 1
           done
@@ -445,7 +440,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.hub_only == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -495,7 +490,20 @@ jobs:
         timeout-minutes: 5
         run: cargo test --doc -p ps5upload-hub
 
-  # The C interop suite. The C server and the data layer are process-wide singletons, so the
+      # After the cargo steps: the refresh resolves offline, from the crates they fetched.
+      - name: The hub's deploy lock matches the engine's
+        run: |
+          sh engine/crates/ps5upload-hub/deploy/refresh-lock.sh
+          if ! git diff --exit-code -- engine/crates/ps5upload-hub/deploy/Cargo.lock; then
+            echo "::error::engine/crates/ps5upload-hub/deploy/Cargo.lock is stale. Run: sh engine/crates/ps5upload-hub/deploy/refresh-lock.sh"
+            exit 1
+          fi
+
+      # The image Fly.io builds from this crate: nothing else builds the Dockerfile, so a broken
+      # one would show only at deploy. Built, never pushed.
+      - name: Build the hub image
+        timeout-minutes: 15
+        run: docker build -t ps5upload-hub:ci engine/crates/ps5upload-hub The C server and the data layer are process-wide singletons, so the
   # suite runs one test at a time: a test that holds the server cannot starve the others. That
   # rule holds inside one machine, so the test files are dealt across four machines, each still
   # running its share one at a time.
@@ -615,7 +623,8 @@ jobs:
           toolchain: stable
 
       - name: Install clang + sanitizer runtimes
-        run: sudo apt-get update && sudo apt-get install -y clang libclang-rt-18-dev
+        timeout-minutes: 20
+        run: bash scripts/ci-apt.sh clang libclang-rt-18-dev
 
       # Restored on every run; saved (under a new key per run, so it stays current) only from
       # main, where later runs can restore it. A PR's own cache would be visible to that PR only.
@@ -805,36 +814,15 @@ jobs:
 
       # Bounded + retried for the same reason as publish.yml's copy: a
       # stalled apt mirror once burned a whole 45-minute job budget there.
+      # scripts/ci-apt.sh downloads on a 4-minute clock, three times at most, and
+      # leaves the Azure mirror after a failed try; the step's own timeout sits
+      # above all three.
       - name: Install Tauri Linux deps
         if: runner.os == 'Linux'
-        timeout-minutes: 12
+        timeout-minutes: 20
         run: |
           set -euo pipefail
-          # apt has NO default network timeout: if a mirror stalls mid-fetch it
-          # waits forever. That is exactly what sank the v5.3.3 publish — the
-          # Azure mirror went quiet after "Ign: .../noble-updates/main amd64
-          # Packages" and the step sat there for 45 minutes until the job
-          # timeout killed it, skipping create-release. Acquire::*::Timeout is
-          # the part that actually fixes it; the retry loop is only useful
-          # because of it, since without a timeout every attempt would hang
-          # the same way.
-          apt_retry() {
-            for attempt in 1 2 3; do
-              if sudo DEBIAN_FRONTEND=noninteractive apt-get \
-                   -o Acquire::Retries=3 \
-                   -o Acquire::http::Timeout=20 \
-                   -o Acquire::https::Timeout=20 \
-                   "$@"; then
-                return 0
-              fi
-              echo "apt attempt $attempt failed; retrying in 15s" >&2
-              sleep 15
-            done
-            echo "apt failed after 3 attempts: apt-get $*" >&2
-            return 1
-          }
-          apt_retry update
-          apt_retry install -y \
+          bash scripts/ci-apt.sh \
             libgtk-3-dev \
             libwebkit2gtk-4.1-dev \
             libasound2-dev \
@@ -1180,7 +1168,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.payload == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -1201,37 +1189,13 @@ jobs:
         run: npm ci --no-audit --no-fund
 
       - name: Install payload toolchain
-        timeout-minutes: 12
+        timeout-minutes: 20
         run: |
           set -euo pipefail
-          # apt has NO default network timeout: if a mirror stalls mid-fetch it
-          # waits forever. That is exactly what sank the v5.3.3 publish — the
-          # Azure mirror went quiet after "Ign: .../noble-updates/main amd64
-          # Packages" and the step sat there for 45 minutes until the job
-          # timeout killed it, skipping create-release. Acquire::*::Timeout is
-          # the part that actually fixes it; the retry loop is only useful
-          # because of it, since without a timeout every attempt would hang
-          # the same way.
-          apt_retry() {
-            for attempt in 1 2 3; do
-              if sudo DEBIAN_FRONTEND=noninteractive apt-get \
-                   -o Acquire::Retries=3 \
-                   -o Acquire::http::Timeout=20 \
-                   -o Acquire::https::Timeout=20 \
-                   "$@"; then
-                return 0
-              fi
-              echo "apt attempt $attempt failed; retrying in 15s" >&2
-              sleep 15
-            done
-            echo "apt failed after 3 attempts: apt-get $*" >&2
-            return 1
-          }
-          apt_retry update
           # Add LLVM apt repo for llvm-22 (not in Ubuntu 24.04 default repos)
           sudo bash scripts/install-llvm-apt.sh 22
-          apt_retry update
-          apt_retry install -y clang-22 llvm-22-dev lld-22 unzip python3
+          # Bounded and retried: a stalled apt mirror must not hold the job (scripts/ci-apt.sh).
+          bash scripts/ci-apt.sh clang-22 llvm-22-dev lld-22 unzip python3
 
       # The shared installer reads scripts/ps5-sdk.env, verifies the official
       # release checksum, and is also used by developer bootstrap scripts and

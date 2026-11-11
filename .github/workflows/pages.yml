@@ -18,7 +18,9 @@ name: pages
 #
 # When it deploys:
 # - a change to site/ (or this file) on main;
-# - after the publish workflow finishes;
+# - after the publish workflow finishes: its `refresh-site` job dispatches this once the release
+#   is out (the `workflow_run` trigger below only fires for a publish run a person's tag push
+#   started, never for one release-tag.yml dispatched with GITHUB_TOKEN);
 # - once a day, so the snapshot never drifts far (this is what picks up a pre-release promoted
 #   by hand; the page itself reads the releases API live, so visitors see it at once);
 # - by hand (Actions → pages → Run workflow).

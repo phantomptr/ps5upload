@@ -77,13 +77,10 @@ jobs:
             ${{ runner.os }}-desktop-ubuntu-24.04-
 
       - name: Install Tauri Linux deps (agent_mcp)
-        timeout-minutes: 6
+        timeout-minutes: 20
         run: |
           set -euo pipefail
-          sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 \
-            -o Acquire::https::Timeout=20 update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 \
-            -o Acquire::https::Timeout=20 install -y --no-install-recommends \
+          bash scripts/ci-apt.sh --no-install-recommends \
             libgtk-3-dev libwebkit2gtk-4.1-dev libasound2-dev libappindicator3-dev librsvg2-dev \
             libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
 

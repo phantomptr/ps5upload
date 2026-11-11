@@ -205,7 +205,7 @@ jobs:
     needs: resolve
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -227,31 +227,13 @@ jobs:
         run: npm ci --no-audit --no-fund
 
       - name: Install payload toolchain
-        timeout-minutes: 12
+        timeout-minutes: 20
         run: |
           set -euo pipefail
-          # apt has no default network timeout, so a stalled mirror hangs
-          # until the job dies. Retry with explicit timeouts.
-          apt_retry() {
-            for attempt in 1 2 3; do
-              if sudo DEBIAN_FRONTEND=noninteractive apt-get \
-                   -o Acquire::Retries=3 \
-                   -o Acquire::http::Timeout=20 \
-                   -o Acquire::https::Timeout=20 \
-                   "$@"; then
-                return 0
-              fi
-              echo "apt attempt $attempt failed; retrying in 15s" >&2
-              sleep 15
-            done
-            echo "apt failed after 3 attempts: apt-get $*" >&2
-            return 1
-          }
-          apt_retry update
           # llvm-22 is not in Ubuntu 24.04's default repos.
           sudo bash scripts/install-llvm-apt.sh 22
-          apt_retry update
-          apt_retry install -y clang-22 llvm-22-dev lld-22 unzip python3
+          # Bounded and retried: a stalled apt mirror must not hold the job (scripts/ci-apt.sh).
+          bash scripts/ci-apt.sh clang-22 llvm-22-dev lld-22 unzip python3
 
       - name: Install pinned PS5 Payload SDK
         run: sudo env PS5_SDK_INSTALL_DIR=/opt/ps5-payload-sdk bash scripts/install-ps5-sdk.sh
@@ -646,14 +628,70 @@ jobs:
        (github.event_name == 'workflow_dispatch' && github.event.inputs.promote == 'true' &&
         needs.merge.result == 'success' && needs.merge-webui.result == 'success'))
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # The wait below (45 min at most) plus the retag.
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write
     env:
+      TAG: ${{ needs.resolve.outputs.tag }}
       VERSION: ${{ needs.resolve.outputs.version }}
       MAJOR_MINOR: ${{ needs.resolve.outputs.major_minor }}
     steps:
+      # `:latest` follows the release page, not this workflow's inputs. On a `promote=true`
+      # dispatch the images are ready before publish.yml has made the release (publish ends
+      # 5 to 25 minutes after this run's builds), and if publish fails there is no release at
+      # all: `:latest` then stays where it is. On a `release` event this passes at once.
+      - name: Wait until the release is published and not a pre-release
+        id: release
+        timeout-minutes: 50
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          state=""
+          for _ in $(seq 1 90); do
+            state="$(gh release view "$TAG" --json isPrerelease,isDraft \
+              --jq '"prerelease=\(.isPrerelease) draft=\(.isDraft)"' 2>/dev/null || true)"
+            if [ "$state" = "prerelease=false draft=false" ]; then
+              break
+            fi
+            echo "release $TAG: ${state:-not there yet}; waiting"
+            sleep 30
+          done
+          if [ "$state" != "prerelease=false draft=false" ]; then
+            echo "::error::$TAG is not a published full release after 45 minutes (${state:-no release}); :latest was not moved. Once the release is out and promoted, re-run this job."
+            exit 1
+          fi
+          echo "$TAG is a published release."
+
+          # Never backwards: promoting an older version (a fix for an old line, or a late
+          # re-run) must not take :latest off a newer release, nor :<major.minor> off a newer
+          # patch of the same line. Equal is fine (this release is the latest).
+          lower() {
+            [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n 1)" = "$1" ]
+          }
+          latest_tag="$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)"
+          latest="${latest_tag#v}"
+          move_latest=true
+          if lower "$VERSION" "$latest"; then
+            move_latest=false
+            echo "::notice::$VERSION is older than the latest release ($latest): :latest stays where it is"
+          fi
+          line_top="$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" \
+            --jq '.[] | select((.draft | not) and (.prerelease | not)) | .tag_name' \
+            | sed 's/^v//' | awk -v p="$MAJOR_MINOR." 'index($0, p) == 1' | sort -V | tail -n 1)"
+          move_line=true
+          if [ -n "$line_top" ] && lower "$VERSION" "$line_top"; then
+            move_line=false
+            echo "::notice::$VERSION is older than $line_top: :$MAJOR_MINOR stays where it is"
+          fi
+          {
+            echo "move_latest=$move_latest"
+            echo "move_line=$move_line"
+          } >> "$GITHUB_OUTPUT"
+
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
@@ -665,6 +703,8 @@ jobs:
       - name: Retag both images as latest and major.minor
         env:
           IMAGES: ${{ needs.resolve.outputs.image }} ${{ needs.resolve.outputs.image_webui }}
+          MOVE_LATEST: ${{ steps.release.outputs.move_latest }}
+          MOVE_LINE: ${{ steps.release.outputs.move_line }}
         run: |
           set -euo pipefail
           for image in $IMAGES; do
@@ -672,8 +712,13 @@ jobs:
               echo "::error::${image}:${VERSION} was never published — did the tag's docker-engine run finish?"
               exit 1
             fi
-            docker buildx imagetools create \
-              -t "${image}:latest" -t "${image}:${MAJOR_MINOR}" \
-              "${image}:${VERSION}"
-            docker buildx imagetools inspect "${image}:latest"
+            tags=()
+            if [ "$MOVE_LATEST" = true ]; then tags+=(-t "${image}:latest"); fi
+            if [ "$MOVE_LINE" = true ]; then tags+=(-t "${image}:${MAJOR_MINOR}"); fi
+            if [ "${#tags[@]}" -eq 0 ]; then
+              echo "${image}: nothing to move for ${VERSION}"
+              continue
+            fi
+            docker buildx imagetools create "${tags[@]}" "${image}:${VERSION}"
+            docker buildx imagetools inspect "${image}:${tags[1]##*:}"
           done

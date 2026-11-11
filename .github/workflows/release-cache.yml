@@ -141,34 +141,12 @@ jobs:
 
       - name: Install Linux Tauri prerequisites
         if: matrix.platform == 'linux'
-        timeout-minutes: 12
+        timeout-minutes: 20
         run: |
           set -euo pipefail
-          # apt has NO default network timeout: if a mirror stalls mid-fetch it
-          # waits forever. That is exactly what sank the v5.3.3 publish — the
-          # Azure mirror went quiet after "Ign: .../noble-updates/main amd64
-          # Packages" and the step sat there for 45 minutes until the job
-          # timeout killed it, skipping create-release. Acquire::*::Timeout is
-          # the part that actually fixes it; the retry loop is only useful
-          # because of it, since without a timeout every attempt would hang
-          # the same way.
-          apt_retry() {
-            for attempt in 1 2 3; do
-              if sudo DEBIAN_FRONTEND=noninteractive apt-get \
-                   -o Acquire::Retries=3 \
-                   -o Acquire::http::Timeout=20 \
-                   -o Acquire::https::Timeout=20 \
-                   "$@"; then
-                return 0
-              fi
-              echo "apt attempt $attempt failed; retrying in 15s" >&2
-              sleep 15
-            done
-            echo "apt failed after 3 attempts: apt-get $*" >&2
-            return 1
-          }
-          apt_retry update
-          apt_retry install -y \
+          # Bounded and retried, as in publish.yml: scripts/ci-apt.sh puts each download attempt
+          # on a 4-minute clock, leaves the Azure mirror after a failed one, and installs offline.
+          bash scripts/ci-apt.sh \
             libgtk-3-dev \
             libwebkit2gtk-4.1-dev \
             libasound2-dev \
