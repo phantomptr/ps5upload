@@ -32,6 +32,25 @@ export function BottleneckLine({ cause }: { cause: BottleneckCause | null }) {
  *  already holds. Without this line the wait looks like a stall. */
 export function SkippingLine({ live }: { live: JobLive }) {
   const tr = useTr();
+  if (live.listingDoneBytes !== undefined) {
+    const done = formatBytes(live.listingDoneBytes);
+    const total = formatBytes(live.listingTotalBytes ?? 0);
+    return (
+      <div
+        className="flex items-center gap-1.5 text-xs text-[var(--color-muted)]"
+        data-testid="listing-line"
+      >
+        <Loader2 size={12} className="animate-spin" aria-hidden />
+        <span>
+          {tr(
+            "upload_phase_listing",
+            { done, total },
+            `A compressed tar has no list of its files, so it is read once to make one before anything is sent: ${done} of ${total}.`,
+          )}
+        </span>
+      </div>
+    );
+  }
   if (live.measuringBytes !== undefined) {
     const done = formatBytes(live.measuringBytes);
     return (

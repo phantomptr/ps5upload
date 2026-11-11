@@ -1,4 +1,5 @@
-//! Unpack a game archive (`.zip`, `.7z`, `.rar`) into a folder, and find the game in it.
+//! Unpack a game archive (`.zip`, `.7z`, `.rar`, a tar or a `.zst`) into a folder, and find the
+//! game in it.
 //!
 //! Convert builds from a folder or an image on this computer, so an archive is unpacked
 //! first. Entry names get the same zip-slip checks the archive uploads use; nothing is
@@ -7,7 +8,8 @@
 //! desktop-only, as it is for uploads.
 //!
 //! Passwords: only RAR's are supported. The zip and 7z decoders are built without their
-//! encryption features, so a protected `.zip` / `.7z` is refused with that reason.
+//! encryption features, so a protected `.zip` / `.7z` is refused with that reason. Tars and
+//! `.zst` files are read by `tar_archive` (a compressed tar is listed by decoding it once).
 
 use std::fs::File;
 use std::io::{Read, Write};
@@ -26,10 +28,15 @@ pub enum ArchiveKind {
     Zip,
     SevenZ,
     Rar,
+    /// A tar (plain or compressed) or a lone `.zst`.
+    Tar,
 }
 
 /// The archive kind a file name says, if any.
 pub fn archive_kind(path: &Path) -> Option<ArchiveKind> {
+    if crate::tar_archive::stream_kind(path).is_some() {
+        return Some(ArchiveKind::Tar);
+    }
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     match ext.as_str() {
         "zip" => Some(ArchiveKind::Zip),
@@ -131,6 +138,7 @@ pub fn unpacked_size(archive: &Path, password: Option<&str>) -> Result<u64> {
                 .fold(0u64, u64::saturating_add))
         }
         ArchiveKind::Rar => rar_size(archive, password),
+        ArchiveKind::Tar => Ok(crate::tar_archive::tar_layout(archive)?.unpacked_total()),
     }
 }
 
@@ -159,6 +167,7 @@ pub fn extract(
         ArchiveKind::Zip => extract_zip(archive, &mut sink),
         ArchiveKind::SevenZ => extract_7z(archive, &mut sink),
         ArchiveKind::Rar => extract_rar(archive, password, &mut sink),
+        ArchiveKind::Tar => extract_tar(archive, &mut sink),
     }
 }
 
@@ -186,12 +195,17 @@ pub fn test(
         ArchiveKind::Zip => extract_zip(archive, &mut sink),
         ArchiveKind::SevenZ => extract_7z(archive, &mut sink),
         ArchiveKind::Rar => extract_rar(archive, password, &mut sink),
+        ArchiveKind::Tar => extract_tar(archive, &mut sink),
     }
 }
 
 fn kind_of(archive: &Path) -> Result<ArchiveKind> {
-    archive_kind(archive)
-        .ok_or_else(|| anyhow!("{} is not a .zip, .7z or .rar archive", archive.display()))
+    archive_kind(archive).ok_or_else(|| {
+        anyhow!(
+            "{} is not a .zip, .7z, .rar, tar or .zst archive",
+            archive.display()
+        )
+    })
 }
 
 /// Where unpacked bytes go, counted and cancellable.
@@ -220,6 +234,33 @@ impl Sink<'_> {
             return Ok(());
         }
         std::fs::create_dir_all(&p).with_context(|| format!("create {}", p.display()))
+    }
+
+    /// Opens `rel` for writing (None when testing): the start of [`Sink::file`] for a caller
+    /// that pushes the bytes itself.
+    fn begin_file(&mut self, rel: &str) -> Result<Option<(File, PathBuf)>> {
+        self.check_cancel()?;
+        let p = host_path(self.dest, rel)?;
+        if self.discard {
+            return Ok(None);
+        }
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create {}", parent.display()))?;
+        }
+        let f = File::create(&p).with_context(|| format!("create {}", p.display()))?;
+        Ok(Some((f, p)))
+    }
+
+    fn write_chunk(&mut self, out: Option<&mut (File, PathBuf)>, bytes: &[u8]) -> Result<()> {
+        self.check_cancel()?;
+        if let Some((f, p)) = out {
+            f.write_all(bytes)
+                .with_context(|| format!("write {}", p.display()))?;
+        }
+        self.done += bytes.len() as u64;
+        (self.on_bytes)(self.done, self.total.max(self.done));
+        Ok(())
     }
 
     fn file(&mut self, rel: &str, from: &mut dyn Read) -> Result<()> {
@@ -287,6 +328,32 @@ fn open_zip(archive: &Path) -> Result<zip::ZipArchive<std::io::BufReader<File>>>
 fn extract_zip(archive: &Path, sink: &mut Sink) -> Result<()> {
     let mut z = open_zip(archive)?;
     for i in 0..z.len() {
+        // zstd entries (method 93): the zip crate is built without its C zstd, so their raw
+        // bytes are decoded here.
+        let zstd = {
+            let raw = z.by_index_raw(i)?;
+            (raw.compression() == zip::CompressionMethod::ZSTD && !raw.is_dir())
+                .then(|| (raw.crc32(), raw.size()))
+        };
+        if let Some((crc, size)) = zstd {
+            let raw = z.by_index_raw(i)?;
+            if raw.encrypted() {
+                bail!("this .zip is password-protected, which Convert can't open; re-pack it without a password, or as .rar");
+            }
+            let decoded = raw
+                .name()
+                .map(|n| n.into_owned())
+                .unwrap_or_else(|_| String::from_utf8_lossy(raw.name_raw()).into_owned());
+            let name = crate::transfer::zip_entry_name(raw.name_raw(), &decoded);
+            let Some(rel) = sanitize_zip_entry(&name) else {
+                bail!("the archive has an unsafe entry path: {name:?}");
+            };
+            sink.file(
+                &rel,
+                &mut crate::tar_archive::ZipZstdEntry::new(raw, crc, size),
+            )?;
+            continue;
+        }
         let mut e = match z.by_index(i) {
             Ok(e) => e,
             Err(zip::result::ZipError::UnsupportedArchive(why)) if why.contains("assword") => {
@@ -383,6 +450,65 @@ fn extract_7z(archive: &Path, sink: &mut Sink) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// A tar or `.zst`, every file in stream order (a path the tar holds twice: its last copy).
+fn extract_tar(archive: &Path, sink: &mut Sink) -> Result<()> {
+    use crate::tar_archive::{tar_layout, tar_walk, TarFile, TarVisit};
+    struct V<'a, 'b> {
+        sink: &'a mut Sink<'b>,
+        out: Option<(File, PathBuf)>,
+        failed: Option<anyhow::Error>,
+    }
+    impl V<'_, '_> {
+        /// Our error, kept whole beside the walk's io::Error.
+        fn keep<T>(&mut self, r: Result<T>) -> std::io::Result<T> {
+            r.map_err(|e| {
+                let msg = e.to_string();
+                self.failed = Some(e);
+                std::io::Error::other(msg)
+            })
+        }
+    }
+    impl TarVisit for V<'_, '_> {
+        fn want(&mut self, _: usize, f: &TarFile) -> bool {
+            f.kept
+        }
+        fn begin(&mut self, f: &TarFile) -> std::io::Result<()> {
+            let r = self.sink.begin_file(&f.path);
+            self.out = self.keep(r)?;
+            Ok(())
+        }
+        fn data(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+            let r = self.sink.write_chunk(self.out.as_mut(), bytes);
+            self.keep(r)
+        }
+        fn end(&mut self) -> std::io::Result<()> {
+            self.out = None;
+            Ok(())
+        }
+    }
+    let layout = tar_layout(archive).map_err(|e| anyhow!("read {}: {e}", archive.display()))?;
+    for d in &layout.dirs {
+        sink.dir(d)?;
+    }
+    let cancel = sink.cancel;
+    let mut v = V {
+        sink,
+        out: None,
+        failed: None,
+    };
+    let walked = tar_walk(archive, &layout, 0, &mut v, cancel);
+    if let Some(e) = v.failed.take() {
+        return Err(e);
+    }
+    walked.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::Interrupted {
+            anyhow!("cancelled")
+        } else {
+            anyhow!("unpack {}: {e}", archive.display())
+        }
+    })
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

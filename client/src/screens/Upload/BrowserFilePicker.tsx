@@ -3,6 +3,7 @@ import { Button, ErrorCard } from "../../components";
 import { stageBrowserFile } from "../../api/pkgUpload";
 import { isStagingCancelled, noteStaged, stageWithTask } from "../../lib/browserStaging";
 import { useTr } from "../../state/lang";
+import { isTarArchiveName } from "../../lib/tarNames";
 
 /** Browser files become engine paths before entering the existing review/queue. */
 export default function BrowserFilePicker({ onFiles }: { onFiles: (paths: string[]) => void }) {
@@ -21,7 +22,7 @@ export default function BrowserFilePicker({ onFiles }: { onFiles: (paths: string
     const paths: string[] = [];
     try {
       for (const file of files) {
-        if (/\.(zip|7z|rar|[r-y]\d{2})$/i.test(file.name)) throw new Error(tr("browserFile.archive", "Archive uploads require the native app. Choose a plain file or disk image."));
+        if (/\.(zip|7z|rar|[r-y]\d{2})$/i.test(file.name) || isTarArchiveName(file.name)) throw new Error(tr("browserFile.archive", "Archive uploads require the native app. Choose a plain file or disk image."));
         const staged = await stageWithTask(
           file,
           stageBrowserFile,

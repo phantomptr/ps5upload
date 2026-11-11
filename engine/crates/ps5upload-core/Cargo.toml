@@ -49,6 +49,21 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 # overwhelming majority of real-world 7z game dumps; an archive using an
 # unsupported codec fails with a clear "re-pack with LZMA2" message.
 sevenz-rust2 = { version = "0.23", default-features = false }
+# Tar archives and single .zst files, the same host-decompress-and-stream way (tar_archive.rs),
+# and zip entries compressed with zstd (method 93). `tar` without its xattr feature (reading
+# only); zstd is C zstd through the `zstd` crate with the exact pin and features
+# ps5-dump-forge-zstd uses, so the engine's binaries hold the one zstd-sys build they already
+# had (no new C code; Android builds it with the NDK clang it already needs for ring) and it
+# decodes about three times faster than ruzstd. Its window is capped, see
+# `tar_archive::zstd_max_window`. The rest is pure Rust: flate2 for gzip, lzma-rust2 (already
+# here through sevenz-rust2) for xz, and bzip2 on its default libbz2-rs-sys backend.
+tar = { version = "0.4.46", default-features = false }
+zstd = { version = "0.13.3", default-features = false }
+flate2 = "1"
+lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "xz"] }
+bzip2 = "0.6"
+crc32fast = "1"
+thiserror.workspace = true
 # Community cheat search/download over HTTPS (cheats.rs). rustls + ring, which
 # the engine already builds for Android, so this needs no C toolchain there.
 ureq = { version = "3.5", features = ["rustls"] }  # 3.5: timeout_per_read (payload_library)
@@ -69,3 +84,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # `unrar` crate (or any crate that links UnRAR) to this crate or anything the
 # engine/desktop binaries link: see LICENSES/UnRAR-exception.md. RAR stays
 # desktop-only: the code is `#[cfg(not(any(target_os = "android", target_os = "ios")))]`.
+
+[dev-dependencies]
+# The tar tests compress their own fixtures with xz (the decode side needs no encoder).
+lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "xz", "encoder"] }

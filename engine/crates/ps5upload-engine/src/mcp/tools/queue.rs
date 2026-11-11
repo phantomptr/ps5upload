@@ -43,7 +43,7 @@ pub(super) fn tools() -> Vec<ToolDef> {
                           its turn, one at a time, after anything else using that console ends. \
                           `kind` picks the route and `request` is that route's body without the \
                           console: upload_file {src, dest}, upload_dir {src_dir, dest_root}, \
-                          upload_zip {zip_path, dest_root}, upload_7z and upload_rar \
+                          upload_zip {zip_path, dest_root}, upload_7z, upload_rar and upload_tar \
                           {archive_path, dest_root}, upload_file_list {files, dest_root}, \
                           link_download {url, dest_dir}, download {src_path, dest_dir, kind}, \
                           install {source: {console_path | host_file | url | remote}}. An upload \
@@ -57,7 +57,7 @@ pub(super) fn tools() -> Vec<ToolDef> {
                         "type": "string",
                         "enum": [
                             "upload_file", "upload_dir", "upload_zip", "upload_7z", "upload_rar",
-                            "upload_file_list", "link_download", "download", "install",
+                            "upload_tar", "upload_file_list", "link_download", "download", "install",
                             "image_build", "package_build", "folder_build",
                         ],
                         "description": "What to run.",

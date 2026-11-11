@@ -176,6 +176,43 @@ async fn transfer_7z_with_no_ava1_listener_is_helper_not_ava1() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn transfer_tar_with_no_ava1_listener_is_helper_not_ava1() {
+    let dir = std::env::temp_dir().join(format!("p5-ava1only-tar-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // A lone .zst by hand: one single-segment frame, content size 5, one raw block "hello".
+    let ap = dir.join("a.txt.zst");
+    std::fs::write(
+        &ap,
+        [
+            0x28, 0xB5, 0x2F, 0xFD, 0x20, 5, 0x29, 0, 0, b'h', b'e', b'l', b'l', b'o',
+        ],
+    )
+    .unwrap();
+    let req = |path: &std::path::Path| TransferTarReq {
+        addr: Some("127.0.0.1:9113".to_string()),
+        tx_id: None,
+        dest_root: "/data/x".to_string(),
+        archive_path: path.to_string_lossy().into_owned(),
+        excludes: vec![],
+        bandwidth_cap_mbps: None,
+    };
+    let jobs: Arc<Mutex<HashMap<Uuid, JobState>>> = Arc::new(Mutex::new(HashMap::new()));
+    let resp = transfer_tar_handler(State(state_for(&jobs)), Json(req(&ap)))
+        .await
+        .into_response();
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    assert_helper_not_ava1(&jobs).await;
+    // Not a tar or .zst by name, or not there at all: refused before a job exists.
+    for bad in [dir.join("a.zip"), dir.join("missing.tar")] {
+        let resp = transfer_tar_handler(State(state_for(&jobs)), Json(req(&bad)))
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{}", bad.display());
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn transfer_rar_with_no_ava1_listener_is_helper_not_ava1() {
     let rar = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../ps5upload-core/testdata/rar/crypted.rar");

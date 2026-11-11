@@ -1138,6 +1138,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 
 [[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2561,7 +2571,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-pfs"
-version = "12.4.7"
+version = "12.4.8"
 dependencies = [
  "flate2",
  "ps5-dump-forge-ufs2",
@@ -2570,7 +2580,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-ufs2"
-version = "12.4.7"
+version = "12.4.8"
 dependencies = [
  "ps5upload-fpkg",
  "ps5upload-pkg",
@@ -2579,7 +2589,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-zstd"
-version = "12.4.7"
+version = "12.4.8"
 dependencies = [
  "crc32fast",
  "getrandom 0.4.3",
@@ -2590,7 +2600,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-apidoc"
-version = "12.4.7"
+version = "12.4.8"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2600,7 +2610,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-ava1"
-version = "12.4.7"
+version = "12.4.8"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2614,40 +2624,49 @@ dependencies = [
  "serde",
  "serde_json",
  "sevenz-rust2",
+ "tar",
  "thiserror",
  "tokio",
  "zip",
+ "zstd",
 ]
 
 [[package]]
 name = "ps5upload-core"
-version = "12.4.7"
+version = "12.4.8"
 dependencies = [
  "aes 0.9.4",
  "aes-gcm 0.11.1",
  "anyhow",
  "base64 0.23.1",
  "blake3",
+ "bzip2",
  "cfb-mode",
+ "crc32fast",
+ "flate2",
  "getrandom 0.4.3",
  "hmac",
  "if-addrs",
  "image",
  "k256",
  "libc",
+ "lzma-rust2 0.25.0",
  "mdns-sd",
  "serde",
  "serde_json",
  "sevenz-rust2",
  "sha2 0.11.1",
  "socket2",
+ "tar",
+ "thiserror",
  "ureq",
  "zip",
+ "zstd",
 ]
 
 [[package]]
 name = "ps5upload-ctest"
-version = "12.4.7"
+version = "12.4.8"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2663,7 +2682,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-engine"
-version = "12.4.7"
+version = "12.4.8"
 dependencies = [
  "aes 0.9.4",
  "aes-gcm 0.11.1",
@@ -2727,7 +2746,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-fpkg"
-version = "12.4.7"
+version = "12.4.8"
 dependencies = [
  "aes 0.9.4",
  "blake3",
@@ -2751,7 +2770,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-hub"
-version = "12.4.7"
+version = "12.4.8"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -2766,7 +2785,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-lab"
-version = "12.4.7"
+version = "12.4.8"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2784,7 +2803,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-pkg"
-version = "12.4.7"
+version = "12.4.8"
 dependencies = [
  "aes 0.9.4",
  "blake3",
@@ -2796,14 +2815,14 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-tailnet"
-version = "12.4.7"
+version = "12.4.8"
 dependencies = [
  "cc",
 ]
 
 [[package]]
 name = "ps5upload-tests"
-version = "12.4.7"
+version = "12.4.8"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2821,7 +2840,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-unrar"
-version = "12.4.7"
+version = "12.4.8"
 dependencies = [
  "serde",
  "serde_json",
@@ -3795,6 +3814,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
 ]
 
 [[package]]

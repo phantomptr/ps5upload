@@ -107,6 +107,17 @@ describe("isAutoRecoverable", () => {
     expect(isAutoRecoverable(r, "")).toBe(false);
   });
 
+  it.each(["ava1_tar_corrupt", "ava1_tar_unsafe_path", "ava1_tar_unsupported", "ava1_tar_memory"])(
+    "does NOT recover the tar failure %s (the same archive fails the same way)",
+    (r) => {
+      expect(isAutoRecoverable(r, "")).toBe(false);
+    },
+  );
+
+  it("recovers tar_read_error: the archive's drive may come back", () => {
+    expect(isAutoRecoverable("tar_read_error", "")).toBe(true);
+  });
+
   it.each([
     "ava1_refused_7", // internal
     "ava1_refused_8", // busy

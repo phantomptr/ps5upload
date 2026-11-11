@@ -11,6 +11,8 @@ use ava1::source::{ReadAt, Source, SourceMeta};
 #[derive(Clone, Copy)]
 struct Located {
     stored: bool,
+    /// Compressed with zstd (method 93) rather than deflate; decoded by `tar_archive::ZstdReader`.
+    zstd: bool,
     data_start: u64,
     compressed: u64,
     /// The central directory's CRC-32 of the decompressed bytes.
@@ -97,9 +99,11 @@ impl ZipSource {
             if entry.is_dir() {
                 dirs.insert(name.to_owned());
             } else {
-                let stored = match entry.compression() {
-                    zip::CompressionMethod::Stored => true,
-                    zip::CompressionMethod::Deflated => false,
+                let (stored, zstd) = match entry.compression() {
+                    zip::CompressionMethod::Stored => (true, false),
+                    zip::CompressionMethod::Deflated => (false, false),
+                    // The zip crate is built without its zstd feature: tar_archive decodes the raw stream.
+                    m if m == zip::CompressionMethod::ZSTD => (false, true),
                     other => {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
@@ -133,6 +137,7 @@ impl ZipSource {
                     (
                         Located {
                             stored,
+                            zstd,
                             data_start,
                             compressed: entry.compressed_size(),
                             crc: entry.crc32(),
@@ -199,8 +204,14 @@ impl ZipSource {
     }
 }
 
-/// A damaged deflate stream is corruption; any other read failure is an ordinary I/O error.
+/// A damaged deflate or zstd stream is corruption; any other read failure is an ordinary I/O
+/// error. A zstd window over this computer's cap is terminal like corruption (retrying cannot
+/// help) and keeps its own words.
 fn inflate_error(e: io::Error) -> io::Error {
+    use ps5upload_core::tar_archive::{tar_fault_of, TarFault};
+    if let Some(TarFault::TooMuchMemory(m)) = tar_fault_of(&e) {
+        return corrupt(m.clone());
+    }
     if e.kind() == io::ErrorKind::InvalidData {
         corrupt(format!("zip entry is damaged: {e}"))
     } else {
@@ -229,7 +240,8 @@ pub struct ZipEntryReader {
     file: BufReader<std::fs::File>,
     at: Located,
     size: u64,
-    inflater: Option<flate2::read::DeflateDecoder<io::Take<BufReader<std::fs::File>>>>,
+    /// Deflate or zstd, over the entry's compressed bytes.
+    inflater: Option<Box<dyn Read + Send>>,
     /// Uncompressed offset the inflater is at.
     pos: u64,
     restarts: u32,
@@ -252,9 +264,14 @@ impl ZipEntryReader {
     fn start(&mut self) -> io::Result<()> {
         let mut f = BufReader::with_capacity(256 << 10, self.file.get_ref().try_clone()?);
         f.seek(SeekFrom::Start(self.at.data_start))?;
-        self.inflater = Some(flate2::read::DeflateDecoder::new(
-            f.take(self.at.compressed),
-        ));
+        let raw = f.take(self.at.compressed);
+        self.inflater = Some(if self.at.zstd {
+            Box::new(ps5upload_core::tar_archive::ZstdReader::new(
+                BufReader::new(raw),
+            ))
+        } else {
+            Box::new(flate2::read::DeflateDecoder::new(raw))
+        });
         self.pos = 0;
         self.crc = flate2::Crc::new();
         self.tracking = true;

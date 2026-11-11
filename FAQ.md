@@ -32,7 +32,7 @@ jailbroken PS5 and managing the console. A small payload on the PS5, the **helpe
 the app over **AVA1**, one encrypted connection on port 9120.
 
 **Q: What does it actually do?**
-- **Upload** files, folders, disk images and `.zip` / `.7z` / `.rar` archives, verified end to
+- **Upload** files, folders, disk images and `.zip` / `.7z` / `.rar` / tar / `.zst` archives, verified end to
   end. Uploads resume after a dropped connection or a helper restart, and can be paused, resumed
   or overtaken with **Send now**. RAR handles multi-part and password-protected archives
   (not on phones).
@@ -759,7 +759,7 @@ phone or another computer?" below walks through it from start to finish.
 - **Payloads → Send payload** accepts an ELF from your browser machine and forwards it through
   the engine to the selected console's loader (9021 by default). Sending bytes does not confirm
   execution. Catalog downloads and the other payload formats still use the native app.
-- Archives: a `.zip`, `.7z` or `.rar` on the engine's disk uploads like on desktop. An archive on
+- Archives: a `.zip`, `.7z`, `.rar`, tar or `.zst` on the engine's disk uploads like on desktop. An archive on
   the device your browser runs on can't be read as an archive; unpack it first.
 - Hidden in the browser: saving a save backup or downloading files to your computer, and attaching
   files to a bug report. Right-click **Copy to the server…** in **Files** saves to the engine's disk,
@@ -1717,9 +1717,9 @@ Unmount button.
 Yes, and the files arrive **already extracted**. Drop the `.zip` on **Upload & Install**; ps5upload
 decompresses it on your computer while sending, with no manual unzip. The screen previews
 `zipped → extracted`, the file count and any embedded game. The destination folder is named after
-the archive. Resume, excludes and the bandwidth cap work as for a folder. Only standard "Deflate"
-zips are supported (Windows "Send to → Compressed folder" is fine); Deflate64, LZMA, BZip2, Zstd
-and encrypted zips are rejected with a clear message.
+the archive. Resume, excludes and the bandwidth cap work as for a folder. "Deflate" zips (Windows
+"Send to → Compressed folder" is fine) and Zstandard zips (7-Zip ZS, WinZip) are supported;
+Deflate64, LZMA, BZip2 and encrypted zips are rejected with a clear message.
 
 **Q: What about `.rar` and `.7z`?**
 Both work and also resume after a drop. A resumed archive is read again from the start to reach
@@ -1730,9 +1730,28 @@ the part not sent yet; meanwhile the progress reads "Skipping data the console a
   (`name.part1.rar`, or the plain `.rar` for `.r00` sets) and keep every part in one folder. A RAR
   holding several packages is unpacked straight to the console and each package installed in turn
   (base, then patch, then DLC).
-- **`.rar` doesn't open on a phone.** The Android and iPhone apps say so; `.zip` and `.7z` work
-  there. In the web UI every format works for files on the engine's disk (the Docker image has the
+- **`.rar` doesn't open on a phone.** The Android and iPhone apps say so; `.zip`, `.7z` and tar
+  work there. In the web UI every format works for files on the engine's disk (the Docker image has the
   RAR helper). None does for a file on the device your browser runs on.
+
+**Q: What about tar archives and `.zst` files?**
+They unpack on the way too: `.tar`, `.tar.zst` / `.tzst`, `.tar.gz` / `.tgz`, `.tar.xz` / `.txz`
+and `.tar.bz2` / `.tbz2`. A lone `.zst` is one file and lands named without the `.zst`
+(`game.exfat.zst` → `game.exfat`), as `zstd -d` does. Links and device files inside a tar are left
+out.
+
+- **A plain `.tar`** uploads like a folder: nothing is decoded, and a resume picks up exactly
+  where it stopped.
+- **A compressed tar has no list of its files**, so it is read once to make one. Upload does that
+  when you add the archive (the preview counts the files as it goes); an upload started without a
+  preview (queue, phone, API) shows "A compressed tar has no list of its files…" first. A resume
+  reads the archive again from the start, like a `.7z`.
+- **Speed**: decoding runs on your computer. zstd and gzip keep up with a wired PS5; `.tar.xz` and
+  `.tar.bz2` decode more slowly than gigabit Ethernet, so those uploads run at decode speed.
+- **`zstd --long` archives** need as much memory as the window they were made with (2 GiB for
+  `--long=31`). Up to an eighth of your computer's memory is allowed (at least 128 MiB, at most
+  2 GiB; 512 MiB on a phone). A bigger window is refused with the size it needs; the environment
+  variable `PS5UPLOAD_ZSTD_MAX_WINDOW_MB` raises the limit.
 
 **Q: I want the `.zip` itself on the PS5, not unpacked (a jailbreak or payload update).**
 Upload asks what to do with each archive: **unpack it** (into a new folder, or straight into the

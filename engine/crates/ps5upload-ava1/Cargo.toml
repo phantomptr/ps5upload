@@ -25,3 +25,7 @@ sevenz-rust2 = { version = "0.23", default-features = false, features = ["compre
 ava1-chaos.workspace = true
 libc = "0.2"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "test-util"] }
+# The tar tests write their archives (tar) and zstd frames (zstd's encoder); same versions as
+# ps5upload-core's readers.
+tar = { version = "0.4.46", default-features = false }
+zstd = { version = "0.13.3", default-features = false }

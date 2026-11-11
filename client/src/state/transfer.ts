@@ -7,6 +7,7 @@ import {
   startTransferZip,
   startTransfer7z,
   startTransferRar,
+  startTransferTar,
   fsMount,
   fsUnmount,
   jobStatus,
@@ -465,7 +466,7 @@ export const useTransferStore = create<TransferState>((set) => {
             );
           } else {
             const start =
-              fmt === "7z" ? startTransfer7z : startTransferZip;
+              fmt === "7z" ? startTransfer7z : fmt === "tar" ? startTransferTar : startTransferZip;
             jobId = await start(srcPath, dest, addr, txId, excludes, bandwidthCap);
           }
         } else {

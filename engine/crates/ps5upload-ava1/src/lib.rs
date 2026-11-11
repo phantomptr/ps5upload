@@ -33,6 +33,7 @@ pub mod relay;
 pub mod seq;
 pub mod source;
 pub mod space;
+pub mod tar_source;
 pub mod telemetry;
 pub mod timings;
 pub mod upload;

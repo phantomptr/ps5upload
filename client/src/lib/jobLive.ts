@@ -5,6 +5,8 @@
 //                                 already has (skip_done_bytes of skip_total_bytes)
 //   phase = "measuring"           RAR with entries of unknown size: they are decoded first to learn
 //                                 it (measure_done_bytes so far), which can take a long time
+//   phase = "listing"             a compressed tar nobody inspected is decoded once to list its
+//                                 files (listing_done_bytes of listing_total_bytes of the archive)
 //   bottleneck                    what limited the transfer: AVA1's own words, "network",
 //                                 "source", "console drive", "console workers", "console memory"
 //                                 (Running when the engine reports it live, and always in the
@@ -32,6 +34,10 @@ export interface JobLive {
   skipTotalBytes: number;
   /** A RAR is being decoded to learn sizes its headers do not give: bytes decoded so far. */
   measuringBytes?: number;
+  /** A compressed tar is being decoded to list its files (a tar has no index): bytes of the
+   *  archive file read so far, of its size. */
+  listingDoneBytes?: number;
+  listingTotalBytes?: number;
   bottleneck: BottleneckCause | null;
   settling: boolean;
   /** Every byte is on the console and it is reading the last large files back to check them. */
@@ -53,6 +59,8 @@ export interface JobLiveFields {
   skip_done_bytes?: number | null;
   skip_total_bytes?: number | null;
   measure_done_bytes?: number | null;
+  listing_done_bytes?: number | null;
+  listing_total_bytes?: number | null;
   bottleneck?: string | null;
   settling?: boolean | null;
   verifying?: boolean | null;
@@ -100,6 +108,7 @@ export function jobLiveFromSnapshot(
   if (!snap) return undefined;
   const skipping = snap.phase === "skipping";
   const measuring = snap.phase === "measuring";
+  const listing = snap.phase === "listing";
   const skipDoneBytes = Math.max(0, Number(snap.skip_done_bytes) || 0);
   const skipTotalBytes = Math.max(0, Number(snap.skip_total_bytes) || 0);
   const bottleneck = bottleneckCause(snap.bottleneck ?? snap.commit_ack?.bottleneck);
@@ -111,7 +120,7 @@ export function jobLiveFromSnapshot(
   const route = routeWord === "direct" || routeWord === "relay" ? routeWord : undefined;
   const reasonWord = (snap.route_reason ?? snap.commit_ack?.route_reason ?? "").trim();
   const routeReason = route === "relay" && reasonWord ? reasonWord : undefined;
-  if (!skipping && !measuring && !bottleneck && !settling && !verifying && !unsettled && !route) return undefined;
+  if (!skipping && !measuring && !listing && !bottleneck && !settling && !verifying && !unsettled && !route) return undefined;
   const counted =
     settling && typeof snap.settle_files_left === "number" && Number.isFinite(snap.settle_files_left);
   const settleLeft = counted ? Math.max(0, snap.settle_files_left as number) : 0;
@@ -123,6 +132,12 @@ export function jobLiveFromSnapshot(
     skipDoneBytes,
     skipTotalBytes,
     ...(measuring ? { measuringBytes: Math.max(0, Number(snap.measure_done_bytes) || 0) } : {}),
+    ...(listing
+      ? {
+          listingDoneBytes: Math.max(0, Number(snap.listing_done_bytes) || 0),
+          listingTotalBytes: Math.max(0, Number(snap.listing_total_bytes) || 0),
+        }
+      : {}),
     bottleneck,
     settling,
     ...(verifying ? { verifying } : {}),

@@ -28,7 +28,7 @@ test("Upload & Install opens with the FPKG note and one drop zone", async ({ pag
   await expect(page.getByTestId("send-intro")).toHaveCount(0);
   await expect(drop).toContainText("packages, games, disk images, archives or any file");
   const kinds = page.getByTestId("send-drop-kinds");
-  for (const text of ["Packages (.pkg, .fpkg)", "game dumps", ".ffpfsc", "Archives (.zip, .7z, .rar)", "Any other file"]) {
+  for (const text of ["Packages (.pkg, .fpkg)", "game dumps", ".ffpfsc", "Archives (.zip, .7z, .rar, .tar, .tar.zst", "Any other file"]) {
     await expect(kinds).toContainText(text);
   }
   await expect(drop.getByRole("button", { name: "Choose folder" })).toBeVisible();

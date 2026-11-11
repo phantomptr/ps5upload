@@ -1601,6 +1601,13 @@ export async function browserInvoke<T>(
         args["onProgress"] as ProgressChannel | undefined,
       );
 
+    case "tar_inspect_stream":
+      return postSseInspect<T>(
+        "/api/tar/inspect/stream",
+        { archive_path: args["req"]?.archive_path },
+        args["onProgress"] as ProgressChannel | undefined,
+      );
+
     // ── Profile avatar ───────────────────────────────────────────────────────
 
     case "profile_avatar_preview":
@@ -1646,6 +1653,20 @@ export async function browserInvoke<T>(
     case "transfer_7z":
       return postJson<T>(
         "/api/transfer/7z",
+        {
+          archive_path: args["req"]?.archive_path,
+          dest_root: args["req"]?.dest_root,
+          addr: args["req"]?.addr,
+          tx_id: args["req"]?.tx_id,
+          excludes: args["req"]?.excludes,
+          bandwidth_cap_mbps: args["req"]?.bandwidth_cap_mbps,
+        },
+        /*long=*/ true,
+      );
+
+    case "transfer_tar":
+      return postJson<T>(
+        "/api/transfer/tar",
         {
           archive_path: args["req"]?.archive_path,
           dest_root: args["req"]?.dest_root,

@@ -205,7 +205,8 @@ pub struct LiveNotes {
     /// AVA1's bottleneck code (`ava1::gen::BN_*`; 0 = none).
     pub bottleneck: std::sync::atomic::AtomicU8,
     /// 0 = sending, `LIVE_PHASE_SKIPPING` = the decoder is discarding data the console has,
-    /// `LIVE_PHASE_MEASURING` = it is learning the size of entries whose headers do not say.
+    /// `LIVE_PHASE_MEASURING` = it is learning the size of entries whose headers do not say,
+    /// `LIVE_PHASE_LISTING` = it is reading a compressed tar to list its files.
     pub phase: std::sync::atomic::AtomicU8,
     pub skip_done_bytes: std::sync::atomic::AtomicU64,
     pub skip_total_bytes: std::sync::atomic::AtomicU64,
@@ -236,6 +237,9 @@ pub struct LiveNotes {
 pub const LIVE_PHASE_SKIPPING: u8 = 1;
 /// A RAR with entries of unknown size is being decoded to learn them (`skip_done_bytes` so far).
 pub const LIVE_PHASE_MEASURING: u8 = 2;
+/// A compressed tar is being decoded to list its files (a tar has no index): `skip_done_bytes`
+/// of the archive's `skip_total_bytes` read so far.
+pub const LIVE_PHASE_LISTING: u8 = 3;
 pub const LIVE_ROUTE_DIRECT: u8 = 1;
 pub const LIVE_ROUTE_RELAY: u8 = 2;
 
@@ -481,9 +485,28 @@ pub fn inspect_zip_with_progress(
             // parse just falls through to the size/count-only preview —
             // the transfer path surfaces any real compression error.
             const MAX_PARAM_JSON: u64 = 4 * 1024 * 1024;
-            if let Ok(zf) = archive.by_name(&original_name) {
-                let mut bytes = Vec::new();
-                if zf.take(MAX_PARAM_JSON).read_to_end(&mut bytes).is_ok() {
+            let mut bytes = Vec::new();
+            let zstd = archive
+                .by_name_raw(original_name.as_bytes())
+                .ok()
+                .filter(|raw| raw.compression() == zip::CompressionMethod::ZSTD)
+                .map(|raw| (raw.crc32(), raw.size()));
+            let read = match zstd {
+                // zstd (method 93): the zip crate has no zstd feature here; tar_archive decodes the raw bytes.
+                Some((crc, size)) => match archive.by_name_raw(original_name.as_bytes()) {
+                    Ok(raw) => crate::tar_archive::ZipZstdEntry::new(raw, crc, size)
+                        .take(MAX_PARAM_JSON)
+                        .read_to_end(&mut bytes)
+                        .is_ok(),
+                    Err(_) => false,
+                },
+                None => match archive.by_name(&original_name) {
+                    Ok(zf) => zf.take(MAX_PARAM_JSON).read_to_end(&mut bytes).is_ok(),
+                    Err(_) => false,
+                },
+            };
+            {
+                if read {
                     if let Ok(meta) = crate::game_meta::parse_param_json_bytes(&bytes) {
                         inspect.title = meta.title;
                         inspect.title_id = meta.title_id;

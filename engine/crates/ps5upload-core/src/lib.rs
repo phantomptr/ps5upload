@@ -66,6 +66,7 @@ pub mod source_fs;
 pub mod sys_time;
 pub mod system_control;
 pub mod tailnet;
+pub mod tar_archive;
 pub mod transfer;
 pub mod units;
 pub mod users;

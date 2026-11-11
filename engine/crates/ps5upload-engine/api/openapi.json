@@ -13211,6 +13211,18 @@
         ],
         "type": "object"
       },
+      "TarInspectReq": {
+        "description": "`/api/tar/inspect[/stream]` request.",
+        "properties": {
+          "archive_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "archive_path"
+        ],
+        "type": "object"
+      },
       "TestReq": {
         "properties": {
           "deep": {
@@ -13787,6 +13799,50 @@
               "string",
               "null"
             ]
+          },
+          "tx_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "dest_root",
+          "archive_path"
+        ],
+        "type": "object"
+      },
+      "TransferTarReq": {
+        "description": "`/api/transfer/tar` request: a tar (`.tar`, `.tar.zst`/`.tzst`, `.tar.gz`/`.tgz`,\n`.tar.xz`/`.txz`, `.tar.bz2`/`.tbz2`/`.tbz`) or a lone `.zst`. The same fields as 7z.",
+        "properties": {
+          "addr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "archive_path": {
+            "type": "string"
+          },
+          "bandwidth_cap_mbps": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "dest_root": {
+            "type": "string"
+          },
+          "excludes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "tx_id": {
             "type": [
@@ -46669,6 +46725,93 @@
         }
       }
     },
+    "/api/tar/inspect": {
+      "post": {
+        "description": "POST /api/tar/inspect — counts, sizes, entry names and the game of a tar or `.zst`. A\ncompressed tar is decoded to answer, so this can take as long as reading the archive; the\n`/stream` variant beats while it runs.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TarInspectReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ZipInspect"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Read a tar or .zst archive on this computer",
+        "tags": [
+          "transfer"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "struct"
+        }
+      }
+    },
+    "/api/tar/inspect/stream": {
+      "post": {
+        "description": "POST /api/tar/inspect/stream — SSE variant; the zip/7z stream's event shapes (progress with\n`entries_seen` / done / error, plus the heartbeat that keeps a long decode alive).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TarInspectReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Read a tar or .zst archive, with progress lines",
+        "tags": [
+          "transfer"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      }
+    },
     "/api/transfer/7z": {
       "post": {
         "requestBody": {
@@ -47444,6 +47587,67 @@
           }
         },
         "summary": "Upload a RAR archive to the console, unpacked",
+        "tags": [
+          "transfer"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "long_running": {
+            "cancel": "/api/jobs/{id}/cancel",
+            "id_field": "job_id",
+            "status": "/api/jobs/{id}"
+          },
+          "response_schema": "struct"
+        }
+      }
+    },
+    "/api/transfer/tar": {
+      "post": {
+        "description": "POST /api/transfer/tar — upload a tar or `.zst`, unpacked. The plan comes from the cached\nlisting when there is one; otherwise the job lists the archive first and fills in its total.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransferTarReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobCreated"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Upload a tar or .zst archive to the console, unpacked",
         "tags": [
           "transfer"
         ],

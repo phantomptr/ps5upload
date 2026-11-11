@@ -615,6 +615,37 @@ pub async fn sevenz_inspect_stream(
     post_sse_inspect_with_watchdog(&url, &body, on_progress).await
 }
 
+// ── tar / .zst proxies ── the 7z commands' shape. A compressed tar's inspect decodes the
+//    whole archive to list it; the engine's heartbeat keeps the idle watchdog quiet meanwhile.
+
+/// Upload a tar (plain or compressed) or a lone `.zst`, unpacked. Proxies `/api/transfer/tar`.
+#[tauri::command]
+pub async fn transfer_tar(req: Transfer7zReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/transfer/tar");
+    let body = serde_json::json!({
+        "archive_path": req.archive_path,
+        "dest_root": req.dest_root,
+        "addr": req.addr,
+        "tx_id": req.tx_id,
+        "excludes": req.excludes,
+        "bandwidth_cap_mbps": req.bandwidth_cap_mbps,
+    });
+    post_json_long(&url, &body).await
+}
+
+/// Preview a tar or `.zst` over `/api/tar/inspect/stream` (the zip/7z progress shape).
+#[tauri::command]
+pub async fn tar_inspect_stream(
+    req: SevenzInspectReq,
+    on_progress: tauri::ipc::Channel<ZipInspectProgress>,
+) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/tar/inspect/stream");
+    let body = serde_json::json!({ "archive_path": req.archive_path });
+    post_sse_inspect_with_watchdog(&url, &body, on_progress).await
+}
+
 // ─── Profile (avatar + offline-account username) ────────────────────────────
 
 #[derive(Debug, Deserialize)]

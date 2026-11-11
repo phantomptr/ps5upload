@@ -1328,7 +1328,7 @@ export default function WorkshopScreen() {
                 {tr(
                   "fpkg.aboutArchives",
                   undefined,
-                  "Also accepted: a .ffpfsc image, read through the image inside it, and a .zip, .7z or .rar archive, unpacked into the output folder first. Only .rar archives can have a password.",
+                  "Also accepted: a .ffpfsc image, read through the image inside it, and a .zip, .7z, .rar or tar archive (.tar, .tar.zst, .tar.gz, .tar.xz, .tar.bz2) or a .zst file, unpacked into the output folder first. Only .rar archives can have a password.",
                 )}
               </p>
               <p>

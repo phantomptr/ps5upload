@@ -28,6 +28,16 @@ describe("job live notes", () => {
     expect(jobLiveFromSnapshot({ settling: true })?.measuringBytes).toBeUndefined();
   });
 
+  it("reads the listing phase of a compressed tar with how much of the archive is read", () => {
+    const live = jobLiveFromSnapshot({
+      phase: "listing",
+      listing_done_bytes: 300,
+      listing_total_bytes: 1000,
+    });
+    expect([live?.listingDoneBytes, live?.listingTotalBytes]).toEqual([300, 1000]);
+    expect(jobLiveFromSnapshot({ settling: true })?.listingDoneBytes).toBeUndefined();
+  });
+
   it("reads the skipping phase with its byte counts", () => {
     expect(
       jobLiveFromSnapshot({
