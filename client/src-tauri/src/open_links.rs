@@ -135,8 +135,16 @@ mod tests {
         tauri::Url::parse(s).unwrap()
     }
 
+    /// Both tests use the process-wide held links and status: one at a time (they ran at once
+    /// on Windows CI, and the other test's join link landed between note_received and the read).
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn keeps_our_links_once_and_hands_them_over_once() {
+        let _serial = serial();
         let _ = take();
         let a =
             url("ps5upload://join?link=http%3A%2F%2F192.168.1.20%3A19113%2Fjoin%23i%3Dabcdefgh");
@@ -158,6 +166,7 @@ mod tests {
     /// The status says what kind of link came, never the link.
     #[test]
     fn the_status_names_the_kind_never_the_link() {
+        let _serial = serial();
         // Not through push(): the held links are another test's.
         let pad =
             url("ps5upload://pad?link=http%3A%2F%2F10.0.0.2%3A19113%2Fpad%23t%3Dsecretkey0123");
