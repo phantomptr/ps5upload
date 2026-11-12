@@ -4329,6 +4329,57 @@ async fn ps5_save_open(Json(req): Json<SaveOpenReq>) -> impl IntoResponse {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct SaveOwnerReq {
+    #[serde(alias = "console", alias = "host")]
+    addr: Option<String>,
+    /// "info", "set" or "forget".
+    #[serde(default)]
+    op: String,
+    /// A PS5 save image in a user's savedata_prospero folder.
+    #[serde(default)]
+    image: String,
+    /// With "info": also open the save for the param.sfo inside it and its usage.
+    #[serde(default)]
+    deep: bool,
+    /// With "set": another account (16 hex digits) than the folder's user's own.
+    #[serde(default)]
+    account: Option<String>,
+}
+
+/// POST /api/ps5/saves/owner `{addr, op, image, deep?, account?}` — whose save it is (#809).
+/// `info` says what the image, the folder's user and that user's save database hold; `set` makes
+/// the save belong to the user whose folder it is in (the account and user in the save, and its
+/// row in their save database); `forget` removes that row. A save's game must not be running.
+async fn ps5_save_owner(Json(req): Json<SaveOwnerReq>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
+    let (op, image, deep, account) = (req.op, req.image, req.deep, req.account);
+    if !matches!(op.as_str(), "info" | "set" | "forget") {
+        return json_err(StatusCode::BAD_REQUEST, "op is info, set or forget").into_response();
+    }
+    crate::log_info!("save_owner: addr={addr} op={op} image={image}");
+    let r = tokio::task::spawn_blocking(move || {
+        let _busy = helper_stop::enter(&addr);
+        if op != "info" || deep {
+            if let Some(title) = save_backup::title_of_save_image(&image) {
+                if save_backup::title_running(&addr, title).map_err(anyhow::Error::msg)? {
+                    anyhow::bail!("{title} is running on the PS5. Close the game first.");
+                }
+            }
+        }
+        ps5upload_core::saves::save_owner(&addr, &op, &image, deep, account.as_deref())
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r);
+    match r {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
 /// POST /api/ps5/saves/close `{addr}` — unmounts the open save and writes it back.
 async fn ps5_save_close(Json(req): Json<SaveOpenReq>) -> impl IntoResponse {
     let Some(addr) = required_console_addr(req.addr) else {
@@ -12820,6 +12871,7 @@ fn build_app_and_mcp(
         )
         .route("/api/ps5/saves/open", post(ps5_save_open))
         .route("/api/ps5/saves/close", post(ps5_save_close))
+        .route("/api/ps5/saves/owner", post(ps5_save_owner))
         .route("/api/ps5/app/launch", post(ps5_app_launch))
         .route("/api/ps5/app/register", post(ps5_app_register))
         .route("/api/ps5/app/unregister", post(ps5_app_unregister))
@@ -14874,6 +14926,7 @@ mod helpers_tests {
             StatusCode::BAD_REQUEST
         );
         refused!(ps5_save_close, {});
+        refused!(ps5_save_owner, {"op": "info"});
         refused!(ps5_smp_checkout_finish, {});
         refused!(ps5_smp_image_rw_finish, {});
         refused!(user_create_handler, { "name": "x" });

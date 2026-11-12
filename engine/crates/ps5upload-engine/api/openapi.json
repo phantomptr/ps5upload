@@ -6069,6 +6069,24 @@
         ],
         "type": "string"
       },
+      "ImagePackedRequest": {
+        "properties": {
+          "addr": {
+            "type": "string",
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
       "ImageRwSession": {
         "properties": {
           "image_path": {
@@ -11250,6 +11268,40 @@
           },
           "image": {
             "description": "The save image under /user/home; empty or absent only reports what is open.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SaveOwnerReq": {
+        "properties": {
+          "account": {
+            "description": "With \"set\": another account (16 hex digits) than the folder's user's own.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "addr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "deep": {
+            "description": "With \"info\": also open the save for the param.sfo inside it and its usage.",
+            "type": "boolean"
+          },
+          "image": {
+            "description": "A PS5 save image in a user's savedata_prospero folder.",
+            "type": "string"
+          },
+          "op": {
+            "description": "\"info\", \"set\" or \"forget\".",
             "type": "string"
           }
         },
@@ -34353,6 +34405,128 @@
         }
       }
     },
+    "/api/ps5/image/packed": {
+      "post": {
+        "description": "POST /api/ps5/image/packed {addr, path}: whether a game image on the console keeps its files\nin LZ4 or zstd packs. Reply `{path, packed}` with `packed` `\"lz4\"`, `\"zstd\"` or null. A packed\ngame only starts from a ShadowMount+ mount, so the app asks before it mounts one itself. The\nimage is read in place (its file list and eight bytes of the pack index), not copied.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImagePackedRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "packed": {
+                      "type": "string"
+                    },
+                    "path": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {}
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Engine error"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Whether a game image on the console keeps its files in LZ4 or zstd packs",
+        "tags": [
+          "console-tools"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
     "/api/ps5/klog": {
       "get": {
         "description": "GET /api/ps5/klog — read buffered kernel log.\n\nNeeded by the browser build's bug report: without it a web-generated\nreport carries no kernel log at all, and the collector treats the missing\ncommand as \"nothing to collect\" rather than an error.",
@@ -39201,6 +39375,64 @@
             "required": true
           },
           "response_schema": "struct"
+        }
+      }
+    },
+    "/api/ps5/saves/owner": {
+      "post": {
+        "description": "POST /api/ps5/saves/owner `{addr, op, image, deep?, account?}` — whose save it is (#809).\n`info` says what the image, the folder's user and that user's save database hold; `set` makes\nthe save belong to the user whose folder it is in (the account and user in the save, and its\nrow in their save database); `forget` removes that row. A save's game must not be running.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveOwnerReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Whose save it is (#809)",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "json-unknown"
         }
       }
     },

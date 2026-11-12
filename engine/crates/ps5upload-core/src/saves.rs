@@ -79,6 +79,40 @@ pub fn save_close(addr: &str) -> Result<OpenSave> {
     open_save_reply(&mgmt::call(addr, m::SAVE_UNMOUNT, b"{}")?)
 }
 
+/// Whose save it is (the helper's `save.owner`, #809). `op` is "info" (what the image, the
+/// folder's user and that user's save database say; `deep` also opens the save for the
+/// param.sfo inside it and its usage) or "set" (makes the save belong to the user whose folder
+/// it is in; `account`, 16 hex digits, names another account than that user's own) or "forget"
+/// (removes the save's row from that user's save database). The helper's answer as it is; a
+/// refusal is an error carrying its text.
+pub fn save_owner(
+    addr: &str,
+    op: &str,
+    image: &str,
+    deep: bool,
+    account: Option<&str>,
+) -> Result<serde_json::Value> {
+    let mut body = serde_json::json!({
+        "op": op,
+        "image": image,
+        "deep": if deep { "1" } else { "0" },
+    });
+    if let Some(a) = account {
+        body["account"] = a.into();
+    }
+    let body = serde_json::to_vec(&body)?;
+    let v: serde_json::Value = serde_json::from_slice(&mgmt::call(addr, m::SAVE_OWNER, &body)?)?;
+    if v.get("ok").and_then(|o| o.as_bool()) != Some(true) {
+        anyhow::bail!(
+            "{}",
+            v.get("err")
+                .and_then(|e| e.as_str())
+                .unwrap_or("save_owner_failed")
+        );
+    }
+    Ok(v)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScreenshotEntry {
     pub path: String,

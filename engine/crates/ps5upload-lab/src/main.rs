@@ -1124,6 +1124,20 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&r)?);
             Ok(())
         }
+        // save-owner info|info-deep|set|forget <image> [account hex16]: whose save it is (#809)
+        "save-owner" => {
+            let op = rest.get(1).map(String::as_str).unwrap_or("info");
+            let image = rest.get(2).map(String::as_str).unwrap_or("");
+            let (op, deep) = if op == "info-deep" {
+                ("info", true)
+            } else {
+                (op, false)
+            };
+            let account = rest.get(3).map(String::as_str);
+            let r = ps5upload_core::saves::save_owner(addr, op, image, deep, account)?;
+            println!("{}", serde_json::to_string_pretty(&r)?);
+            Ok(())
+        }
         "save-close" => {
             let r = ps5upload_core::saves::save_close(addr)?;
             println!("{}", serde_json::to_string_pretty(&r)?);

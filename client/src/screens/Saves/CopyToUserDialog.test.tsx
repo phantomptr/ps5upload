@@ -50,6 +50,19 @@ describe("Copy to another user dialog", () => {
     expect(html.match(/disabled=""/g)?.length).toBe(1);
   });
 
+  it("lets a backup go to a user with no save of the game, as theirs (#809)", () => {
+    const backup: CopySource = { kind: "backup", when: "1 Nov" };
+    const pick: CopyState = { step: "pick" };
+    expect(copyStep(pick, { type: "pick", target: cy }, true)).toEqual({ step: "confirm", target: cy });
+    const html = view(pick, backup);
+    expect(html).toContain("No save of this game yet. The backup becomes this user&#x27;s save.");
+    expect(html).not.toContain('disabled=""');
+    const confirm = view({ step: "confirm", target: cy }, backup);
+    expect(confirm).toContain("Give Cy the backup of Astro Bot from 1 Nov?");
+    expect(confirm).toContain("nothing is replaced");
+    expect(confirm).not.toContain("Replace save");
+  });
+
   it("asks before replacing and says what to do when done", () => {
     expect(view({ step: "confirm", target: ben })).toContain(
       "Replace Ben&#x27;s save of Astro Bot with Ann&#x27;s? Ben&#x27;s current save is backed up first.",

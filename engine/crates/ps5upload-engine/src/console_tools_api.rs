@@ -31,6 +31,7 @@ pub fn router<S: Clone + Send + Sync + 'static>() -> Router<S> {
         .route("/api/ps5/appdb", get(appdb))
         .route("/api/ps5/process/{pid}/modules", get(process_modules))
         .route("/api/ps5/fs/hash", post(fs_hash))
+        .route("/api/ps5/image/packed", post(image_packed))
         .route("/api/ps5/appmeta/heal", post(appmeta_heal))
         .route("/api/ps5/companions", get(companions))
 }
@@ -172,6 +173,33 @@ async fn fs_hash(Json(req): Json<FsHashRequest>) -> Response {
 }
 
 #[derive(Deserialize)]
+struct ImagePackedRequest {
+    #[serde(default, alias = "console", alias = "host")]
+    addr: String,
+    path: String,
+}
+
+/// POST /api/ps5/image/packed {addr, path}: whether a game image on the console keeps its files
+/// in LZ4 or zstd packs. Reply `{path, packed}` with `packed` `"lz4"`, `"zstd"` or null. A packed
+/// game only starts from a ShadowMount+ mount, so the app asks before it mounts one itself. The
+/// image is read in place (its file list and eight bytes of the pack index), not copied.
+async fn image_packed(Json(req): Json<ImagePackedRequest>) -> Response {
+    let Some(addr) = required_addr(&req.addr) else {
+        return no_addr();
+    };
+    if !req.path.starts_with('/') {
+        return bad_request("path must be absolute");
+    }
+    console_call(move || {
+        let url = format!("ps5://{addr}{}", req.path);
+        let mut tree = ps5upload_fpkg::source::open(std::path::Path::new(&url))?;
+        let packed = ps5upload_fpkg::source::packed_kind(tree.as_mut())?;
+        Ok::<_, ps5upload_fpkg::Error>(json!({ "path": req.path, "packed": packed }))
+    })
+    .await
+}
+
+#[derive(Deserialize)]
 struct HealRequest {
     #[serde(default, alias = "console", alias = "host")]
     addr: String,
@@ -307,6 +335,18 @@ mod tests {
         assert_eq!(r.status(), StatusCode::BAD_REQUEST);
         let r = appdb(Query(AddrOnly { addr: "".into() })).await;
         assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+        let r = image_packed(Json(ImagePackedRequest {
+            addr: "".into(),
+            path: "/data/homebrew/G.exfat".into(),
+        }))
+        .await;
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+        let r = image_packed(Json(ImagePackedRequest {
+            addr: "192.0.2.9".into(),
+            path: "homebrew/G.exfat".into(),
+        }))
+        .await;
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST, "a relative path");
         let r = process_modules(Path(1), Query(AddrOnly { addr: "".into() })).await;
         assert_eq!(r.status(), StatusCode::BAD_REQUEST);
         let r = companions(Query(AddrOnly { addr: "".into() })).await;

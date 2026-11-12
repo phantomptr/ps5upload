@@ -433,16 +433,17 @@ pub(crate) fn back_up_one(
 
 // ── which PS5 a backup was made on ──────────────────────────────────────
 //
-// A PS5 save image is encrypted with a key sealed for the console that made it (the console
-// unseals it, no account involved); the account it belongs to is data inside it (param.sfo, the
-// console's save database), which is why a save moves between users of one console. So an
-// encrypted backup made on another PS5 does not open here. From 10.6.0 a backup notes the PS5 it
-// was made on (its Remote Play host-id, the console's MAC) in the zip's comment, and a restore of
-// one made on another is refused before anything changes. Older backups, and consoles that don't
-// say (Remote Play off), are unknown and never refused.
+// A PS5 save image opens on any console (a save made on one PS5 mounted on another, FW 13.60,
+// #809); whose it is is data inside it (the account and user in its param.sfo) and the console's
+// save database. A user on another console is another user, so a backup made elsewhere would not
+// load as this user's if it were put in place as it is. From 10.6.0 a backup notes the PS5 it was
+// made on (its Remote Play host-id, the console's MAC) in the zip's comment; a plain restore of
+// one made on another is not put in place as it is but goes the way Restore to another user does
+// (`restore_zip_any_user`). Older backups, and consoles that don't say (Remote Play off), are
+// unknown and never refused.
 
 /// The message for a backup made on another PS5.
-pub(crate) const OTHER_CONSOLE_ERROR: &str = "This backup was made on another PS5; encrypted backups only open on the PS5 that made them. Use Save as a file on that PS5 instead.";
+pub(crate) const OTHER_CONSOLE_ERROR: &str = "This backup was made on another PS5, so it would not load as this user's. Use Restore to another user in the game's backups instead.";
 
 /// The PS5 at `host` (its host-id): None when it does not say. Kept for a while per address.
 pub(crate) fn console_identity(host: &str) -> Option<String> {
@@ -1175,8 +1176,8 @@ pub(crate) fn restore_zip(
     save_path: &str,
     user_id: u32,
 ) -> Result<(), String> {
-    // An encrypted save made on another PS5 does not open here, and one of another user's does
-    // not load as this one's (an emulator's is plain files).
+    // A save made on another PS5, or another user's here, does not load as this user's when it is
+    // put in place as it is (an emulator's is plain files).
     if save_writer(save_path, title_id, user_id)?
         .emulator
         .is_none()
@@ -1204,7 +1205,7 @@ pub(crate) fn restore_zip_any_user(
     beside: Option<PathBuf>,
 ) -> Result<(), String> {
     match restore_zip(host, title_id, zip, save_path, user_id) {
-        Err(e) if e == OTHER_USER_ERROR => {
+        Err(e) if e == OTHER_USER_ERROR || e == OTHER_CONSOLE_ERROR => {
             let file = backup_file_name(zip, title_id);
             let live = match beside {
                 Some(dir) => crate::save_copy::Live::keeping_in(host, dir),
