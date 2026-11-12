@@ -31,7 +31,6 @@ import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
 import { useRemotePlayStore } from "../../state/remotePlay";
 import { SendToPs5 } from "../GameHub/SendToPs5";
-import { ShareHistory } from "./ShareHistory";
 import { ItemRow, KIND_ICON, NameField } from "./ShareParts";
 import { percent, saveShareName, savedShareName } from "./shareModel";
 
@@ -40,7 +39,7 @@ const ENDED = ["done", "declined", "cancelled", "failed", "refused"];
 
 type Tr = ReturnType<typeof useTr>;
 
-export function ReceivePanel({ pending }: { pending?: string | null }) {
+export function ReceivePanel({ pending, onEnded }: { pending?: string | null; onEnded?: () => void }) {
   const tr = useTr();
   const host = useConnectionStore((s) => (s.payloadStatus === "up" ? (s.host?.trim() ?? "") : ""));
   const [link, setLink] = useState(pending ?? "");
@@ -52,6 +51,10 @@ export function ReceivePanel({ pending }: { pending?: string | null }) {
 
   // While a receive runs, its state (read on demand; stops once it ended).
   const ended = !!view && ENDED.includes(view.state);
+  // `onEnded` must be stable (the screen passes a useCallback), or this runs every render.
+  useEffect(() => {
+    if (ended) onEnded?.();
+  }, [ended, onEnded]);
   useEffect(() => {
     if (!id || ended) return;
     let on = true;
@@ -87,7 +90,7 @@ export function ReceivePanel({ pending }: { pending?: string | null }) {
   };
 
   return (
-    <div className="mx-auto w-full max-w-xl space-y-4" data-testid="receive-panel">
+    <div className="min-w-0 space-y-4" data-testid="receive-panel">
       {!id && (
         <form
           className={CARD}
@@ -96,16 +99,15 @@ export function ReceivePanel({ pending }: { pending?: string | null }) {
             void open();
           }}
         >
-          <div className="flex items-center gap-3">
-            <span aria-hidden className="grid h-10 w-10 shrink-0 place-items-center rounded-[10px] bg-[var(--color-surface-3)]">
-              <Inbox size={18} />
-            </span>
-            <div className="min-w-0">
-              <h3 className="text-base font-semibold">{tr("receive_title", undefined, "Receive what a friend shared")}</h3>
-              <p className="text-sm text-[var(--color-muted)]">
-                {tr("receive_intro_v2", undefined, "Paste their link. You see what they offer before anything arrives.")}
-              </p>
-            </div>
+          {/* Titled like a Card: the page header already carries the big icon. */}
+          <div>
+            <h2 className="flex items-start gap-2 text-[0.9375rem] font-semibold tracking-[-0.01em]">
+              <Inbox size={16} aria-hidden className="mt-[3px] shrink-0 text-[var(--color-accent-bright)]" />
+              {tr("receive_title", undefined, "Receive what a friend shared")}
+            </h2>
+            <p className="mt-1 text-sm text-[var(--color-muted)]">
+              {tr("receive_intro_v2", undefined, "Paste their link. You see what they offer before anything arrives.")}
+            </p>
           </div>
           <Input
             label={tr("receive_link", undefined, "Share link")}
@@ -120,7 +122,7 @@ export function ReceivePanel({ pending }: { pending?: string | null }) {
               {error}
             </p>
           )}
-          <div className="flex justify-end">
+          <div className="flex justify-end border-t border-[var(--color-border)] pt-4">
             <Button type="submit" variant="primary" size="md" disabled={!link.trim() || busy} loading={busy} data-testid="receive-open">
               {tr("receive_open", undefined, "Open")}
             </Button>
@@ -129,12 +131,12 @@ export function ReceivePanel({ pending }: { pending?: string | null }) {
       )}
       {id && !view && <Connecting />}
       {id && view && <ReceiveFlow view={view} host={host} onDone={reset} onView={setView} />}
-      <ShareHistory key={ended ? "ended" : "running"} />
     </div>
   );
 }
 
-const CARD = "space-y-4 rounded-[var(--radius-panel)] border border-[var(--color-border)] bg-[var(--color-surface-raised)] p-4 sm:p-5";
+// The shared Card's look (components/Card.tsx): glass edge, raised fill, elevation.
+const CARD = "elev-1 space-y-4 rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-4 sm:p-5";
 
 function Connecting() {
   const tr = useTr();
