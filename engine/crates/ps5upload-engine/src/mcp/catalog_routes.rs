@@ -599,6 +599,7 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/ps5/hw/power"),
     ("GET", "/api/ps5/hw/storage"),
     ("GET", "/api/ps5/hw/temps"),
+    ("POST", "/api/ps5/image/packed"),
     ("GET", "/api/ps5/klog"),
     ("GET", "/api/ps5/list-dir"),
     ("POST", "/api/ps5/minion/tile"),

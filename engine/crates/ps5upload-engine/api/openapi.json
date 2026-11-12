@@ -6069,6 +6069,24 @@
         ],
         "type": "string"
       },
+      "ImagePackedRequest": {
+        "properties": {
+          "addr": {
+            "type": "string",
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
       "ImageRwSession": {
         "properties": {
           "image_path": {
@@ -34350,6 +34368,128 @@
             "required": false
           },
           "response_schema": "struct"
+        }
+      }
+    },
+    "/api/ps5/image/packed": {
+      "post": {
+        "description": "POST /api/ps5/image/packed {addr, path}: whether a game image on the console keeps its files\nin LZ4 or zstd packs. Reply `{path, packed}` with `packed` `\"lz4\"`, `\"zstd\"` or null. A packed\ngame only starts from a ShadowMount+ mount, so the app asks before it mounts one itself. The\nimage is read in place (its file list and eight bytes of the pack index), not copied.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImagePackedRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "packed": {
+                      "type": "string"
+                    },
+                    "path": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {}
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Engine error"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Whether a game image on the console keeps its files in LZ4 or zstd packs",
+        "tags": [
+          "console-tools"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "literal"
         }
       }
     },

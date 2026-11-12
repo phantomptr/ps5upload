@@ -2765,6 +2765,13 @@ async function engineJson<T>(path: string, body: unknown): Promise<T> {
   return out;
 }
 
+/** Whether a game image on the console keeps its files in LZ4 or zstd packs (null: plain).
+ *  Such a game only starts from a ShadowMount+ mount. Reads the image in place. */
+export async function imagePacked(addr: string, path: string): Promise<"lz4" | "zstd" | null> {
+  const r = await engineJson<{ packed?: string | null }>("/api/ps5/image/packed", { addr: toMgmtAddr(addr), path });
+  return r.packed === "lz4" || r.packed === "zstd" ? r.packed : null;
+}
+
 /** Mount a save image decrypted on the PS5 (the helper copies it under /data first); an
  *  empty `image` reports what is open. Its files then show under `mount_point` in Files. */
 export function savesOpen(addr: string, image: string): Promise<OpenSave> {

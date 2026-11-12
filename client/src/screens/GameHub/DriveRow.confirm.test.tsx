@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { confirmClosesFor, confirmRunAllowed, ConfirmRow } from "./DriveRow";
+import { confirmClosesFor, confirmRunAllowed, ConfirmRow, packedWithin } from "./DriveRow";
 
 type Confirm = Parameters<typeof ConfirmRow>[0]["confirm"];
 const confirm = { kind: "delete", entry: { name: "Dead Space", path: "/data/games/ds" } } as unknown as Confirm;
@@ -41,5 +41,17 @@ describe("game row: Yes, delete", () => {
     expect(confirmClosesFor("delete")).toBe(false);
     expect(confirmClosesFor("chmod")).toBe(false);
     expect(confirmClosesFor(null)).toBe(false);
+  });
+});
+
+describe("Mount: the packed-image check", () => {
+  it("passes on what the engine said", async () => {
+    expect(await packedWithin(Promise.resolve("lz4"), 1000)).toBe("lz4");
+    expect(await packedWithin(Promise.resolve(null), 1000)).toBeNull();
+  });
+
+  it("never holds the mount: a failed or slow check counts as not packed", async () => {
+    expect(await packedWithin(Promise.reject(new Error("older engine: no such route")), 1000)).toBeNull();
+    expect(await packedWithin(new Promise<string>(() => undefined), 10)).toBeNull();
   });
 });

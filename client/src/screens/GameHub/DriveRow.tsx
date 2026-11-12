@@ -71,6 +71,7 @@ import {
   fsChmod,
   fsPathPresent,
   fsMount,
+  imagePacked,
   fsUnmount,
   appLaunch,
   appRegister,
@@ -159,6 +160,18 @@ import { formatDuration } from "../../lib/formatDate";
 const metaLimit = createLimiter(4);
 
 // formatBytes moved to lib/format.ts — kept consistent across screens.
+
+/** The longest the Mount button waits to learn whether an image is packed before it mounts. */
+const PACKED_CHECK_MS = 20_000;
+
+/** What the packed check said, or null when it failed or took longer than `ms`: the mount then
+ *  goes ahead as it did before the check existed. */
+export function packedWithin<T>(check: Promise<T | null>, ms: number): Promise<T | null> {
+  return Promise.race([
+    check.catch(() => null),
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), ms)),
+  ]);
+}
 
 /** Whether ShadowMount+ is running on `host` right now. Gates a row's "Edit files" (checking
  *  an image out only means anything when SMP is the one holding it) and how Mount behaves.
@@ -806,6 +819,28 @@ function LibraryRowImpl({
     setError(null);
     setMountNote(null);
     const addr = consoleAddr(host);
+    // Our own mount is about to run (ShadowMount+ isn't there to take the image). A game packed
+    // with LZ4 or zstd mounts fine and then doesn't start, with nothing to say why: ask first.
+    // Best effort: an engine that can't tell (an older one, a read that fails or takes too long)
+    // mounts as before.
+    if (!smpRunning) {
+      const packed = await packedWithin(imagePacked(addr, entry.path), PACKED_CHECK_MS);
+      if (packed) {
+        const go = await confirmDialog({
+          title: tr("library_mount_packed_title", { name: entry.name }, 'Mount "{name}" without ShadowMount+?'),
+          message: tr(
+            "library_mount_packed_body",
+            undefined,
+            "This image holds a packed game. A packed game only plays when ShadowMount+ mounts it, and ShadowMount+ isn't running on this PS5. PS5Upload can still mount the image so you can reach its files, but the game won't start from it. Start ShadowMount+ (Payloads) and press Mount again to play it.",
+          ),
+          confirmLabel: tr("library_mount_packed_confirm", undefined, "Mount anyway"),
+        });
+        if (!go) {
+          setBusy(null);
+          return;
+        }
+      }
+    }
     // Mount is usually fast (~1-2s for the lvd attach + nmount) but
     // a misbehaving image can hang for the FS_MOUNT timeout (30 s).
     // Tracking it gives the user a global "still running" signal

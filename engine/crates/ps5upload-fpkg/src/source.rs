@@ -806,6 +806,23 @@ pub fn lz4_packed(tree: &mut dyn SourceTree) -> Result<bool> {
     Ok(listed && tree.read_range("ampr_assets.index", 0, 8)? == b"AMPRPAK4")
 }
 
+/// Which packs `tree` holds its game files in, if any: `"lz4"` (a root `ampr_assets.index` that
+/// starts with `AMPRPAK4`) or `"zstd"` (a root `ampr_zstd.index` that starts with `AMPRZPK1`).
+/// Such a game's files are only there for a console that runs the packs' emulator from a
+/// ShadowMount+ mount; a plain mount shows the packs and the game does not start.
+pub fn packed_kind(tree: &mut dyn SourceTree) -> Result<Option<&'static str>> {
+    for (name, magic, kind) in [
+        ("ampr_assets.index", b"AMPRPAK4", "lz4"),
+        ("ampr_zstd.index", b"AMPRZPK1", "zstd"),
+    ] {
+        let listed = tree.files().iter().any(|f| f.path == name && f.size >= 8);
+        if listed && tree.read_range(name, 0, 8)? == magic {
+            return Ok(Some(kind));
+        }
+    }
+    Ok(None)
+}
+
 /// Does `rel` import `libSceAmpr`?
 ///
 /// A title built against AMPR installs normally and then fails to start unless `ampr_emu` is
@@ -1100,6 +1117,35 @@ pub fn readiness(tree: &mut dyn SourceTree) -> Readiness {
 #[cfg(test)]
 mod tests {
     use super::SourceTree;
+
+    #[test]
+    fn packed_kind_reads_the_pack_index_magic() {
+        let base = std::env::temp_dir().join(format!("fpkg-packed-kind-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let kind = |name: &str, files: &[(&str, &[u8])]| {
+            let dir = base.join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("eboot.bin"), b"x").unwrap();
+            for (f, body) in files {
+                std::fs::write(dir.join(f), body).unwrap();
+            }
+            let mut tree = super::FolderSource::open(&dir).unwrap();
+            super::packed_kind(&mut tree).unwrap()
+        };
+        assert_eq!(kind("plain", &[]), None);
+        assert_eq!(
+            kind("lz4", &[("ampr_assets.index", b"AMPRPAK4\x01\x00")]),
+            Some("lz4")
+        );
+        assert_eq!(
+            kind("zstd", &[("ampr_zstd.index", b"AMPRZPK1\x01\x00")]),
+            Some("zstd")
+        );
+        // The name alone is not a pack: a short file, or other bytes.
+        assert_eq!(kind("short", &[("ampr_assets.index", b"AMPR")]), None);
+        assert_eq!(kind("other", &[("ampr_zstd.index", b"notapack!")]), None);
+        std::fs::remove_dir_all(&base).ok();
+    }
 
     /// A folder's headers come back in the order asked, the same as one file at a time, and
     /// the progress callback sees the count climb to the total.
