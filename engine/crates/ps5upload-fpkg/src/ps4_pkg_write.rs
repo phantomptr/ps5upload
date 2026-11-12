@@ -1315,8 +1315,8 @@ impl Pfs {
             put64(&mut h, 0x68 + 8 * t, self.p.time as u64);
         }
         put32(&mut h, 0xB0, self.ibs_blocks);
-        for i in 0..12 {
-            put64(&mut h, 0xB8 + 40 * i + 32, self.ibs_db[i] as u64);
+        for (i, &db) in self.ibs_db.iter().enumerate() {
+            put64(&mut h, 0xB8 + 40 * i + 32, db as u64);
         }
         if self.p.sign || self.p.encrypt {
             put32(&mut h, 0x36C, 1);
@@ -1340,13 +1340,13 @@ impl Pfs {
                 put64(&mut e, 0x18 + 8 * t, self.p.time as u64);
             }
             put32(&mut e, 0x60, i.blocks);
-            for k in 0..12 {
+            for (k, &db) in i.db.iter().enumerate() {
                 let slot = if self.p.sign {
                     0x64 + 36 * k + 32
                 } else {
                     0x64 + 4 * k
                 };
-                put32(&mut e, slot, i.db[k] as u32);
+                put32(&mut e, slot, db as u32);
             }
             put(&mut blocks, at, &e);
             at += size;

@@ -4248,12 +4248,12 @@ pub(crate) mod link {
             b &= !(self.up & latest & sent); // released and pressed again: send the release
             let mut later: Option<Instant> = None;
             let diff = b ^ sent;
-            for bit in 0..32 {
+            for (bit, at) in self.changed_at.iter().enumerate() {
                 let m = 1u32 << bit;
                 if diff & m == 0 {
                     continue;
                 }
-                if let Some(t) = self.changed_at[bit] {
+                if let Some(t) = *at {
                     let until = t + HOLD;
                     if until > now {
                         b ^= m; // keep what the console has until the hold runs out
@@ -4274,9 +4274,9 @@ pub(crate) mod link {
         /// `s` reached the console.
         pub(crate) fn commit(&mut self, s: PadState, now: Instant) {
             let diff = s.buttons ^ self.sent.buttons;
-            for bit in 0..32 {
+            for (bit, at) in self.changed_at.iter_mut().enumerate() {
                 if diff & (1 << bit) != 0 {
-                    self.changed_at[bit] = Some(now);
+                    *at = Some(now);
                 }
             }
             self.sent = s;

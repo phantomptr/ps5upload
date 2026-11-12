@@ -305,8 +305,13 @@ jobs:
 
       - name: Start sccache
         shell: bash
+        # Not on Windows: since Rust 1.100's build-dir layout rustc gets one -L per dependency,
+        # and sccache 0.18 starts rustc with the whole line, past Windows' limit (os error 206).
+        # Cargo alone passes it in a response file. Turn back on once sccache does the same.
         run: |
-          if sccache --start-server; then
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            echo "::notice::sccache is off on Windows (Rust 1.100 command lines are too long for it)"
+          elif sccache --start-server; then
             echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
           else
             echo "::warning::sccache did not start; building without the compile cache"
