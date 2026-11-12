@@ -15,7 +15,7 @@
 //!
 //! Locating the program: `PS5UPLOAD_UNRAR_BIN` when set (the desktop app sets it to
 //! the copy it extracts next to the engine), else `ps5upload-unrar[.exe]` next to the
-//! running executable, else (tests: `target/<profile>/deps/…`) the directory above.
+//! running executable, else (a test binary) `target/<profile>`.
 
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -43,13 +43,49 @@ pub fn helper_path() -> PathBuf {
     if beside.is_file() {
         return beside;
     }
-    // A test binary runs from target/<profile>/deps; the helper is built one level up.
-    if dir.file_name().is_some_and(|n| n == "deps") {
-        if let Some(up) = dir.parent().map(|d| d.join(&name)).filter(|p| p.is_file()) {
-            return up;
-        }
+    // A test binary: the helper is built in target/<profile>.
+    if let Some(up) = test_profile_dir(&dir)
+        .map(|d| d.join(&name))
+        .filter(|p| p.is_file())
+    {
+        return up;
     }
     beside
+}
+
+/// target/<profile> for a test binary's own directory: target/<profile>/deps up to Rust
+/// 1.99, target/<profile>/build/<package>/<hash>/out since Cargo 1.100's build-dir layout.
+fn test_profile_dir(dir: &Path) -> Option<&Path> {
+    if dir.file_name()? == "deps" {
+        return dir.parent();
+    }
+    if dir.file_name()? == "out" {
+        let profile = dir.ancestors().nth(4)?;
+        if dir.ancestors().nth(3)?.file_name()? == "build" {
+            return Some(profile);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod test_profile_dir_tests {
+    use super::test_profile_dir;
+    use std::path::Path;
+
+    #[test]
+    fn finds_the_profile_in_both_cargo_layouts() {
+        let old = Path::new("/t/target/debug/deps");
+        assert_eq!(test_profile_dir(old), Some(Path::new("/t/target/debug")));
+        let new = Path::new("/t/target/debug/build/ps5upload-ava1/25e5c988/out");
+        assert_eq!(test_profile_dir(new), Some(Path::new("/t/target/debug")));
+        // An installed engine is neither: only the copy beside it counts.
+        assert_eq!(
+            test_profile_dir(Path::new("/Applications/PS5Upload.app/Contents/MacOS")),
+            None
+        );
+        assert_eq!(test_profile_dir(Path::new("/opt/x/out")), None);
+    }
 }
 
 /// UnRAR's error codes, as far as the engine tells them apart.

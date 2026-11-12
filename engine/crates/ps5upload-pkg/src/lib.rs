@@ -178,13 +178,10 @@ fn is_safe_child_name(name: &str) -> bool {
     // RootDir, CurDir, or ParentDir component on every host, not just
     // the specific cases enumerated above.
     let mut comps = Path::new(name).components();
-    if !matches!(
+    matches!(
         (comps.next(), comps.next()),
         (Some(std::path::Component::Normal(_)), None)
-    ) {
-        return false;
-    }
-    true
+    )
 }
 
 fn extract_dir_recursive(
