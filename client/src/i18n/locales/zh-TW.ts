@@ -3117,6 +3117,7 @@ helper_mismatch_body_v3: "PS5 本身無需操作：按「傳送助手」，此�
 "pkg.reverify_impossible": "PS5 接受了此次安裝，但 ps5upload 沒有任何資訊可以識別已安裝的套件，因此無法確認。請在 PS5 的通知中查看結果。準備好的套件已保留。",
 "pkg.reverify_gave_up": "30 分鐘後仍未確認。非常大的遊戲可能需要更久——請查看 PS5 的通知，或使用「重新檢查」。",
 "backport_action": "降版移植",
+"sdk_scan_truncated_note": "這台 PS5 上的遊戲數量超過了應用程式一次能檢查的數量，因此無法判斷這個遊戲是否需要 backport。",
 "backport_auto": "自動嘗試各組函式庫",
 "backport_auto_hint": "安裝一組函式庫並啟動遊戲；若無法啟動，就復原並換下一組——直到某組可用或全部試完。",
 "backport_auto_running": "正在嘗試 {label}——第 {index}/{total} 組…",

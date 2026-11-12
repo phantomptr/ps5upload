@@ -6078,6 +6078,8 @@ export interface SdkTitle {
 
 export interface SdkScanResponse {
   titles: SdkTitle[];
+  /** The console has more games than fit its reply; the list stops early. */
+  truncated?: boolean;
   overlay?: {
     state: "idle" | "watching" | "mounted" | "blocked" | "error";
     title_id?: string;

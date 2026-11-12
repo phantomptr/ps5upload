@@ -3047,8 +3047,10 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
     };
     // …and its sound beside them on an Opus audio track, when the page offered one too (#720).
     let audio = track && socket.audio_track();
+    // Info: which way a guest's picture and sound go decides how a bad link shows (a track drops
+    // pictures, the channel stalls behind every lost packet), and reports need it (#720).
     crate::log_at!(
-        Debug,
+        Info,
         "together",
         "join: Player {player} on {console} connected (socket {gen}): picture {}, hevc {hevc}",
         match (&feed, track) {

@@ -3309,6 +3309,7 @@ helper_mismatch_body_v3: "A PS5-ön magán nincs teendő: nyomd meg a „Segédp
 "sdk_patch_libc": "A libc.prx patchelése is",
 "sdk_patch_libc_hint": "Egy kompatibilitási módosítás, amelyre néhány backportolt játéknak szüksége van — és amely másoknál megakadályozza az indulást. Hagyd kikapcsolva, kivéve ha a játék nélküle nem indul el.",
 backport_action: "Backport",
+sdk_scan_truncated_note: "Ezen a PS5-ön több játék van, mint amennyit az app egyszerre ellenőrizni tud, ezért nem tudta megállapítani, kell-e ehhez a játékhoz backport.",
 backport_auto: "Készletek automatikus kipróbálása",
 backport_auto_hint: "Telepít egy készletet, elindítja a játékot, és ha nem indul el, visszavonja, és a következőre lép — amíg egy nem működik, vagy elfogynak a készletek.",
 backport_auto_running: "{label} kipróbálása — {index}. készlet a(z) {total}-ból…",

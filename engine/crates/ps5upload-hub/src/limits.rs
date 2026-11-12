@@ -22,6 +22,16 @@ impl IpKey {
     }
 }
 
+/// The IPv6 /48 an address sits in, when it is IPv6. A provider hands a business or a hosting
+/// customer a whole /48: 65,536 of the /64s that [`IpKey`] counts as separate clients. Open
+/// connections are counted per /48 as well, so such a block cannot fill the hub by itself.
+pub fn v6_site(ip: IpAddr) -> Option<u64> {
+    match canonical_ip(ip) {
+        IpAddr::V4(_) => None,
+        IpAddr::V6(v6) => Some((u128::from(v6) >> 80) as u64),
+    }
+}
+
 /// IPv4-mapped IPv6 (`::ffff:a.b.c.d`, what a dual-stack socket reports) as plain IPv4.
 pub fn canonical_ip(ip: IpAddr) -> IpAddr {
     match ip {
@@ -131,6 +141,18 @@ mod tests {
         let m: IpAddr = "::ffff:192.0.2.7".parse().unwrap();
         let v4: IpAddr = "192.0.2.7".parse().unwrap();
         assert_eq!(IpKey::of(m), IpKey::of(v4));
+    }
+
+    #[test]
+    fn v6_site_is_the_48_and_v4_has_none() {
+        let a: IpAddr = "2001:db8:1:2::1".parse().unwrap();
+        let b: IpAddr = "2001:db8:1:ffff::9".parse().unwrap();
+        let c: IpAddr = "2001:db8:2:2::1".parse().unwrap();
+        assert_eq!(v6_site(a), v6_site(b));
+        assert_ne!(v6_site(a), v6_site(c));
+        assert!(v6_site(a).is_some());
+        assert_eq!(v6_site("192.0.2.7".parse().unwrap()), None);
+        assert_eq!(v6_site("::ffff:192.0.2.7".parse().unwrap()), None);
     }
 
     #[test]

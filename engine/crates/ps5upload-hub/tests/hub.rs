@@ -863,6 +863,43 @@ async fn limit_connections_per_ip_and_total() {
 }
 
 #[tokio::test]
+async fn limit_connections_per_v6_site() {
+    let t = start(Config {
+        trusted_proxies: vec!["127.0.0.1".parse::<Cidr>().unwrap()],
+        max_connections_per_ip: 1,
+        max_connections_per_v6_site: 2,
+        ..cfg()
+    })
+    .await;
+    let status = |e: tokio_tungstenite::tungstenite::Error| match e {
+        tokio_tungstenite::tungstenite::Error::Http(resp) => resp.status().as_u16(),
+        other => panic!("expected an HTTP refusal, got {other:?}"),
+    };
+    // Three /64s of one /48: each is its own client, and the third is over the /48's limit.
+    let a = connect_with(&t, None, Some("2001:db8:1:1::1")).await;
+    let _b = connect_with(&t, None, Some("2001:db8:1:2::1")).await;
+    let e = try_connect(&t, None, Some("2001:db8:1:3::1"))
+        .await
+        .expect_err("per /48");
+    assert_eq!(status(e), 429);
+    // Another /48 and IPv4 are not counted with it.
+    let _c = connect_with(&t, None, Some("2001:db8:2:1::1")).await;
+    let _d = connect_with(&t, None, Some("203.0.113.9")).await;
+    // A closed connection gives its place in the /48 back, and the refusal took none.
+    drop(a);
+    let end = tokio::time::Instant::now() + WAIT;
+    loop {
+        match try_connect(&t, None, Some("2001:db8:1:3::1")).await {
+            Ok(_) => break,
+            Err(_) if tokio::time::Instant::now() < end => {
+                tokio::time::sleep(Duration::from_millis(20)).await
+            }
+            Err(e) => panic!("place not given back: {e:?}"),
+        }
+    }
+}
+
+#[tokio::test]
 async fn a_socket_without_a_role_is_closed() {
     let t = start(Config {
         hello_timeout: Duration::from_millis(200),

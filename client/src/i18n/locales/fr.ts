@@ -3180,6 +3180,7 @@ helper_mismatch_body_v3: "Rien à faire sur la PS5 elle-même : appuyez sur Envo
 "pkg.reverify_impossible": "La PS5 a accepté cette installation, mais ps5upload n’a rien pour identifier le paquet installé et ne peut donc pas la confirmer. Consulte les notifications de la PS5 pour le résultat. Le paquet préparé a été conservé.",
 "pkg.reverify_gave_up": "Toujours pas confirmé après 30 minutes. Un très gros titre peut prendre plus longtemps — consulte les notifications de la PS5, ou utilise Revérifier pour regarder à nouveau.",
 "backport_action": "Rétroporter",
+"sdk_scan_truncated_note": "Cette PS5 contient plus de jeux que l'app ne peut en vérifier en une fois ; elle n'a donc pas pu savoir si ce jeu a besoin d'un backport.",
 "backport_auto": "Essayer les ensembles automatiquement",
 "backport_auto_hint": "Installe un ensemble, lance le jeu et, s’il ne démarre pas, annule et passe au suivant — jusqu’à ce qu’un ensemble fonctionne ou qu’il n’y en ait plus.",
 "backport_auto_running": "Essai de {label} — ensemble {index} sur {total}…",

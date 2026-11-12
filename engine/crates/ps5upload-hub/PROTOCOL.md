@@ -143,6 +143,7 @@ Forwarded as `{"t":"signal","from":"host"|"<gid>","data":<data unchanged>}`.
 | rooms on the hub | 5,000 |
 | rooms per client | 8 (a room counts toward its creator until removed) |
 | open connections per client | 32 (HTTP 429 past it) |
+| open connections per IPv6 /48 | 256 (HTTP 429 past it) |
 | open connections on the hub | 2,000 (HTTP 503 past it) |
 | time to send `host` or `join` | 10 s |
 | room without host | removed after 2 minutes |
