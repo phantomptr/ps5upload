@@ -44,7 +44,7 @@ const READBACK: usize = 1 << 20;
 
 /// The DOS date and time of a unix mtime (UTC), clamped to what DOS can express; 0 is
 /// 1980-01-01, the same "unknown" the zip crate writes.
-fn dos_datetime(unix: u64) -> (u16, u16) {
+pub(crate) fn dos_datetime(unix: u64) -> (u16, u16) {
     if unix == 0 {
         return (0, 33);
     }

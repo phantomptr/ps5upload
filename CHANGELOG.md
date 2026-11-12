@@ -6,6 +6,16 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+Cheats:
+
+- Cheats that write to many places, like a game's "Master Code", now apply. A cheat could hold 32 places and about 8 KB of text, and anything bigger was refused with "cheat has more locations than the engine can hold". It can now hold up to 4096. The Master Code for The Blood of Dawnwalker has 37, and the game's other cheats need it switched on first. For #811.
+
+Files:
+
+- Files downloaded from the PS5, such as video clips and screenshots, now keep their date and time from the PS5. Before, they showed the time of the download. Zip downloads keep the dates too. For #812.
+
+## 12.4.12
+
 Save Data:
 
 - Restore to another user now works for a user who has no save of the game yet, or is missing one of its save slots. The backup becomes that user's save: the app rewrites who owns it (the account and user inside the save) and adds it to that user's saved data on the PS5. Before, you had to start the game as that user and save first. For PS5 saves; the user needs at least one PS5 save of any game on the console. In our test on firmware 13.60, a save made on one PS5 loaded in the game on another PS5 for a user who had never played it. For #809.

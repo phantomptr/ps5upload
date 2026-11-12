@@ -119,7 +119,9 @@ static const char *const XML_DIRS[] = {
 #define MAX_TITLE_ID        16
 #define MAX_CHEAT_NAME      256
 #define MAX_MODS_PER_FILE   64
-#define MAX_MEM_ENTRIES     32
+/* Locations one cheat can hold. The list grows as the file is read: a "master code" writes to
+ * hundreds of places, and a fixed 32 refused it (#811). */
+#define MAX_MEM_ENTRIES     4096
 #define MAX_JSON_BUF        (256 * 1024)
 #define CHEAT_FILE_MAX      (4 * 1024 * 1024)
 
@@ -589,8 +591,9 @@ typedef struct {
     char        xml_path[MAX_CHEAT_FILEPATH];
     int         xml_entry;
     char        xml_ver[32];    /* the entry's AppVer */
-    mem_entry_t mem[MAX_MEM_ENTRIES];
+    mem_entry_t *mem;           /* heap, mem_cap long (cheat_mod_clear frees it) */
     int         mem_count;
+    int         mem_cap;
 } cheat_mod_t;
 
 typedef struct {
@@ -602,6 +605,65 @@ typedef struct {
     cheat_mod_t mods[MAX_MODS_PER_FILE];
     int         mod_count;
 } cheat_file_t;
+
+/* The next location of `m`, zeroed, past the counted ones (the caller counts it once its offset
+ * is read). NULL when the cheat already holds MAX_MEM_ENTRIES or memory runs out. */
+static mem_entry_t *mem_next(cheat_mod_t *m) {
+    if (m->mem_count >= MAX_MEM_ENTRIES) return NULL;
+    if (m->mem_count >= m->mem_cap) {
+        int cap = m->mem_cap ? m->mem_cap * 2 : 16;
+        if (cap > MAX_MEM_ENTRIES) cap = MAX_MEM_ENTRIES;
+        mem_entry_t *p = (mem_entry_t *)realloc(m->mem, (size_t)cap * sizeof(mem_entry_t));
+        if (!p) return NULL;
+        m->mem = p;
+        m->mem_cap = cap;
+    }
+    mem_entry_t *e = &m->mem[m->mem_count];
+    memset(e, 0, sizeof(*e));
+    return e;
+}
+
+static void cheat_mod_clear(cheat_mod_t *m) {
+    free(m->mem);
+    m->mem = NULL;
+    m->mem_count = m->mem_cap = 0;
+}
+
+/* A copy of `m` that owns its own locations. 0, or -1 out of memory. */
+static int cheat_mod_copy(cheat_mod_t *dst, const cheat_mod_t *m) {
+    memcpy(dst, m, sizeof(*dst));
+    dst->mem = NULL;
+    dst->mem_cap = 0;
+    if (m->mem_count > 0) {
+        dst->mem = (mem_entry_t *)malloc((size_t)m->mem_count * sizeof(mem_entry_t));
+        if (!dst->mem) {
+            dst->mem_count = 0;
+            return -1;
+        }
+        memcpy(dst->mem, m->mem, (size_t)m->mem_count * sizeof(mem_entry_t));
+        dst->mem_cap = m->mem_count;
+    }
+    return 0;
+}
+
+/* Frees what the file's mods hold and empties it. */
+static void cheat_file_clear(cheat_file_t *cf) {
+    for (int i = 0; i < cf->mod_count && i < MAX_MODS_PER_FILE; i++) cheat_mod_clear(&cf->mods[i]);
+    memset(cf, 0, sizeof(*cf));
+}
+
+static cheat_file_t *cheat_file_new(void) { return (cheat_file_t *)calloc(1, sizeof(cheat_file_t)); }
+
+static void cheat_file_free(cheat_file_t *cf) {
+    if (!cf) return;
+    cheat_file_clear(cf);
+    free(cf);
+}
+
+/* Room for the resolved locations of `mod` (at least one). Caller frees. */
+static cheat_loc_t *locs_for(const cheat_mod_t *mod) {
+    return (cheat_loc_t *)calloc(mod->mem_count > 0 ? (size_t)mod->mem_count : 1, sizeof(cheat_loc_t));
+}
 
 /* ── JSON parser (parses one cheat file from disk) ───────────────── */
 
@@ -642,18 +704,16 @@ static int parse_json_file(const char *json, size_t json_len,
         if (!*p) break;
         const char *mod_end = p + 1;
 
-        /* Extract this mod's substring */
+        /* Extract this mod's substring (a master code's runs to tens of KiB: #811) */
         size_t mod_len = (size_t)(mod_end - mod_start);
-        char mod_buf[8192];
-        int mod_cut = 0;
-        if (mod_len >= sizeof(mod_buf)) { mod_len = sizeof(mod_buf) - 1; mod_cut = 1; }
+        char *mod_buf = (char *)malloc(mod_len + 1);
+        if (!mod_buf) break;
         memcpy(mod_buf, mod_start, mod_len);
         mod_buf[mod_len] = '\0';
 
         cheat_mod_t *m = &cf->mods[mod_idx];
         memset(m, 0, sizeof(*m));
         strcpy(m->type, "checkbox");
-        m->incomplete = mod_cut;
 
         cj_str(mod_buf, "name", m->name, sizeof(m->name));
         cj_str(mod_buf, "hint", m->hint, sizeof(m->hint));
@@ -672,8 +732,7 @@ static int parse_json_file(const char *json, size_t json_len,
             mp = strchr(mp, '[');
             if (mp) {
                 mp++;
-                int mi = 0;
-                while (*mp && mi < MAX_MEM_ENTRIES) {
+                while (*mp) {
                     while (*mp && *mp != '{') mp++;
                     if (!*mp || *mp == ']') break;
 
@@ -699,8 +758,11 @@ static int parse_json_file(const char *json, size_t json_len,
                     memcpy(me_buf, me_start, me_len);
                     me_buf[me_len] = '\0';
 
-                    mem_entry_t *e = &m->mem[mi];
-                    memset(e, 0, sizeof(*e));
+                    mem_entry_t *e = mem_next(m);
+                    if (!e) { /* more than it can hold: never apply part of a cheat */
+                        m->incomplete = 1;
+                        break;
+                    }
                     cj_str(me_buf, "offset", e->offset_str,
                              sizeof(e->offset_str));
                     cj_str(me_buf, "on", e->on_str,
@@ -714,14 +776,12 @@ static int parse_json_file(const char *json, size_t json_len,
                     if (json_bool(me_buf, "absolute", &bv) == 0)
                         e->absolute = bv;
 
-                    if (e->offset_str[0]) mi++;
+                    if (e->offset_str[0]) m->mem_count++;
                     mp = me_end;
                 }
-                /* Stopped at the cap with another entry still to come. */
-                if (mi >= MAX_MEM_ENTRIES && strchr(mp, '{')) m->incomplete = 1;
-                m->mem_count = mi;
             }
         }
+        free(mod_buf);
 
         mod_idx++;
         p = mod_end;
@@ -859,16 +919,14 @@ static int parse_shn_file(const char *xml, size_t xml_len,
         if (!close_cheat) break;
 
         size_t cheat_len = (size_t)(close_cheat - cheat_end);
-        char cheat_buf[8192];
-        int cheat_cut = 0;
-        if (cheat_len >= sizeof(cheat_buf)) { cheat_len = sizeof(cheat_buf) - 1; cheat_cut = 1; }
+        char *cheat_buf = (char *)malloc(cheat_len + 1); /* a master code's runs long (#811) */
+        if (!cheat_buf) break;
         memcpy(cheat_buf, cheat_end, cheat_len);
         cheat_buf[cheat_len] = '\0';
 
         cheat_mod_t *m = &cf->mods[mod_idx];
         memset(m, 0, sizeof(*m));
         strcpy(m->type, "checkbox");
-        m->incomplete = cheat_cut;
 
         /* Attributes come from this cheat's opening tag only (xml_open_tag_copy). */
         xml_open_tag_copy(cheat_start, cheat_end, open_tag, sizeof(open_tag));
@@ -884,9 +942,8 @@ static int parse_shn_file(const char *xml, size_t xml_len,
         }
 
         /* Iterate over <Cheatline> tags within this Cheat */
-        int mi = 0;
         const char *cl_cursor = cheat_buf;
-        while (mi < MAX_MEM_ENTRIES) {
+        for (;;) {
             const char *cl_start, *cl_end;
             if (!xml_find_tag(cl_cursor, "Cheatline", &cl_start, &cl_end))
                 break;
@@ -913,8 +970,11 @@ static int parse_shn_file(const char *xml, size_t xml_len,
             memcpy(cl_buf, cl_end, cl_len);
             cl_buf[cl_len] = '\0';
 
-            mem_entry_t *e = &m->mem[mi];
-            memset(e, 0, sizeof(*e));
+            mem_entry_t *e = mem_next(m);
+            if (!e) { /* more than it can hold: never apply part of a cheat */
+                m->incomplete = 1;
+                break;
+            }
 
             /* For self-closing tags, extract attributes directly */
             char cl_full[2048];
@@ -957,17 +1017,13 @@ static int parse_shn_file(const char *xml, size_t xml_len,
                 if (tmp[0]) e->section = atoi(tmp);
             }
 
-            if (e->offset_str[0]) mi++;
+            if (e->offset_str[0]) m->mem_count++;
             cl_cursor = cl_real_end;
         }
-        {
-            const char *dummy_s, *dummy_e;
-            if (mi >= MAX_MEM_ENTRIES && xml_find_tag(cl_cursor, "Cheatline", &dummy_s, &dummy_e))
-                m->incomplete = 1;
-        }
-        m->mem_count = mi;
+        free(cheat_buf);
 
-        if (m->name[0] || mi > 0) mod_idx++;
+        if (m->name[0] || m->mem_count > 0) mod_idx++;
+        else cheat_mod_clear(m); /* not kept: the next cheat reuses its place */
         cursor = close_cheat + strlen("</Cheat>");
     }
 
@@ -1198,7 +1254,7 @@ static int load_cheat_file(const char *path, int format, cheat_file_t *cf) {
     if (rd < 0) { free(buf); return -1; }
     buf[rd] = '\0';
 
-    memset(cf, 0, sizeof(*cf));
+    cheat_file_clear(cf); /* frees the file loaded into it before (cf from cheat_file_new) */
     snprintf(cf->filepath, sizeof(cf->filepath), "%s", path);
     cf->format = format;
 
@@ -1227,6 +1283,7 @@ static int load_cheat_file(const char *path, int format, cheat_file_t *cf) {
     }
 
     free(buf);
+    if (rc < 0) cheat_file_clear(cf);
     return (rc >= 0) ? 0 : -1;
 }
 
@@ -2056,7 +2113,7 @@ static int apply_mod_locked(pid_t pid, intptr_t base, cheat_mod_t *mod, int turn
     /* "button" type always writes "on" regardless of turn_on */
     int write_on = (strcmp(mod->type, "button") == 0) ? 1 : turn_on;
 
-    cheat_loc_t *locs = (cheat_loc_t *)calloc(MAX_MEM_ENTRIES, sizeof(cheat_loc_t));
+    cheat_loc_t *locs = locs_for(mod);
     if (!locs) {
         if (err) snprintf(err, err_cap, "out of memory");
         return -1;
@@ -2265,6 +2322,7 @@ static uint64_t files_sig(const char *title) {
 
 static void slots_free(void) {
     for (int i = 0; i < g_nslots; i++) {
+        if (g_slots[i].mod) cheat_mod_clear(g_slots[i].mod);
         free(g_slots[i].mod);
         xml_prep_free(g_slots[i].prep);
         free(g_slots[i].prep);
@@ -2277,7 +2335,7 @@ static void slots_free(void) {
 static int slots_load(const char *title) {
     slots_free();
     g_slots_game[0] = '\0';
-    cheat_file_t *cf = (cheat_file_t *)malloc(sizeof(cheat_file_t));
+    cheat_file_t *cf = cheat_file_new();
     if (!cf) return -1;
     for (int pt = 1; pt >= 0; pt--) {
         found_file_t files[16];
@@ -2297,12 +2355,13 @@ static int slots_load(const char *title) {
                 if (!pt && (!m->enabled || strcmp(m->type, "button") == 0)) continue;
                 sess_slot_t *sl = &g_slots[g_nslots];
                 sl->mod = (cheat_mod_t *)malloc(sizeof(cheat_mod_t));
-                if (!sl->mod) {
-                    free(cf);
+                if (!sl->mod || cheat_mod_copy(sl->mod, m) != 0) {
+                    free(sl->mod);
+                    sl->mod = NULL;
+                    cheat_file_free(cf);
                     slots_free();
                     return -1;
                 }
-                memcpy(sl->mod, m, sizeof(cheat_mod_t));
                 sl->key = mod_key(files[fi].path, mi, pt);
                 sl->flat = pt ? -1 : flat + mi;
                 sl->from_file = pt ? 1 : from_file[mi];
@@ -2313,7 +2372,7 @@ static int slots_load(const char *title) {
             if (!pt) flat += cf->mod_count;
         }
     }
-    free(cf);
+    cheat_file_free(cf);
     return 0;
 }
 
@@ -2454,7 +2513,7 @@ static int sess_verify(void *vctx, const cheats_item_t *it) {
         }
     } else {
         intptr_t mb = mod->module_name[0] ? resolve_module_base(c->pid, mod->module_name) : c->base;
-        cheat_loc_t *locs = (cheat_loc_t *)calloc(MAX_MEM_ENTRIES, sizeof(cheat_loc_t));
+        cheat_loc_t *locs = locs_for(mod);
         int n = (locs && mb > 0) ? resolve_mod_locs(c->pid, mb, mod, locs, NULL, 0) : -1;
         int ok = n > 0;
         for (int i = 0; i < n && ok; i++)
@@ -3023,14 +3082,14 @@ void cheats_engine_set_enabled(int on) {
  * cheats_list.c call this only when a file's mtime or size changed. */
 static int list_load_file(const char *path, int format, char *name, size_t name_cap,
                           int *mod_count) {
-    cheat_file_t *cf = (cheat_file_t *)malloc(sizeof(cheat_file_t));
+    cheat_file_t *cf = cheat_file_new();
     if (!cf) return -1;
     int rc = load_cheat_file(path, format, cf);
     if (rc == 0) {
         snprintf(name, name_cap, "%s", cf->game_name);
         *mod_count = cf->mod_count;
     }
-    free(cf);
+    cheat_file_free(cf);
     return rc;
 }
 
@@ -3100,10 +3159,10 @@ int cheats_list_mods(const char *title_id, char *buf, size_t cap,
     }
 
     for (int fi = 0; fi < n; fi++) {
-        cheat_file_t *cf = (cheat_file_t *)malloc(sizeof(cheat_file_t));
+        cheat_file_t *cf = cheat_file_new();
         if (!cf) continue;
         if (load_cheat_file(files[fi].path, files[fi].format, cf) != 0) {
-            free(cf);
+            cheat_file_free(cf);
             continue;
         }
         cheats_load_state(title_id, cf, flat);
@@ -3153,7 +3212,7 @@ int cheats_list_mods(const char *title_id, char *buf, size_t cap,
             jb_raw(&jb, "}");
             flat++;
         }
-        free(cf);
+        cheat_file_free(cf);
     }
 
     jb_raw(&jb, "]}");
@@ -3175,10 +3234,9 @@ static int collect_enabled_ranges(pid_t pid, intptr_t base, const char *title_id
     found_file_t files[16];
     int n = find_cheat_files(title_id, files, 16, 0);
     char *state = state_read(title_id);
-    cheat_file_t *cf = (cheat_file_t *)malloc(sizeof(cheat_file_t));
-    cheat_loc_t *locs = (cheat_loc_t *)calloc(MAX_MEM_ENTRIES, sizeof(cheat_loc_t));
+    cheat_file_t *cf = cheat_file_new();
     int count = -1;
-    if (state && cf && locs) {
+    if (state && cf) {
         count = 0;
         int flat = 0;
         for (int fi = 0; fi < n && count >= 0; fi++) {
@@ -3203,18 +3261,23 @@ static int collect_enabled_ranges(pid_t pid, intptr_t base, const char *title_id
                 intptr_t mb = base;
                 if (cf->mods[mi].module_name[0])
                     mb = resolve_module_base(pid, cf->mods[mi].module_name);
-                int nl = resolve_mod_locs(pid, mb, &cf->mods[mi], locs, NULL, 0);
-                if (nl <= 0 || count + nl > max) { count = -1; break; }
+                cheat_loc_t *locs = locs_for(&cf->mods[mi]);
+                int nl = locs ? resolve_mod_locs(pid, mb, &cf->mods[mi], locs, NULL, 0) : -1;
+                if (nl <= 0 || count + nl > max) {
+                    free(locs);
+                    count = -1;
+                    break;
+                }
                 for (int k = 0; k < nl; k++) {
                     out[count].addr = locs[k].addr;
                     out[count].len = locs[k].len;
                     count++;
                 }
+                free(locs);
             }
         }
     }
-    free(locs);
-    free(cf);
+    cheat_file_free(cf);
     free(state);
     return count;
 }
@@ -3260,7 +3323,7 @@ int cheats_toggle(const char *title_id, int mod_index, int turn_on,
     /* Resolve flat index to file + mod */
     int flat = 0;
     int target_fi = -1, target_mi = -1;
-    cheat_file_t *target_cf = (cheat_file_t *)malloc(sizeof(cheat_file_t));
+    cheat_file_t *target_cf = cheat_file_new();
     if (!target_cf) {
         if (err) snprintf(err, err_cap, "out of memory");
         return -1;
@@ -3268,10 +3331,10 @@ int cheats_toggle(const char *title_id, int mod_index, int turn_on,
     memset(target_cf, 0, sizeof(*target_cf));
 
     for (int fi = 0; fi < n && target_fi < 0; fi++) {
-        cheat_file_t *cf = (cheat_file_t *)malloc(sizeof(cheat_file_t));
+        cheat_file_t *cf = cheat_file_new();
         if (!cf) continue;
         if (load_cheat_file(files[fi].path, files[fi].format, cf) != 0) {
-            free(cf);
+            cheat_file_free(cf);
             continue;
         }
         for (int mi = 0; mi < cf->mod_count; mi++) {
@@ -3283,7 +3346,7 @@ int cheats_toggle(const char *title_id, int mod_index, int turn_on,
             }
             flat++;
         }
-        free(cf);
+        cheat_file_free(cf);
     }
 
     if (target_fi < 0) {

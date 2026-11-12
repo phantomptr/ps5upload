@@ -222,6 +222,38 @@ struct CheckedSink {
     single: bool,
     /// Names this computer can't hold are written under their reversible form.
     escape_names: bool,
+    /// The manifest as landed (kept names), for the files' times at `finish`.
+    landed: Mutex<Option<Manifest>>,
+}
+
+/// The PS5's modification times on the files just landed (#812): without them every
+/// download is dated when it arrived. Best effort: a time that cannot be set leaves the
+/// file as it is (the bytes are what matters).
+fn stamp_mtimes(root: &Path, single: bool, m: &Manifest) {
+    for e in m
+        .entries
+        .iter()
+        .filter(|e| e.kind == gen::ENTRY_FILE && e.mtime > 0)
+    {
+        let p = if single {
+            root.to_path_buf()
+        } else {
+            root.join(&e.path)
+        };
+        let Some(t) = std::time::UNIX_EPOCH.checked_add(Duration::from_secs(e.mtime)) else {
+            continue;
+        };
+        let _ = set_mtime(&p, t);
+    }
+}
+
+fn set_mtime(p: &Path, t: std::time::SystemTime) -> io::Result<()> {
+    // Only a regular file the download landed, never the target of a link.
+    if !std::fs::symlink_metadata(p)?.is_file() {
+        return Ok(());
+    }
+    let f = std::fs::OpenOptions::new().write(true).open(p)?;
+    f.set_times(std::fs::FileTimes::new().set_modified(t).set_accessed(t))
 }
 
 /// `m` with every path in the form it is kept under on this computer
@@ -245,6 +277,7 @@ impl Sink for CheckedSink {
         } else {
             m
         };
+        *self.landed.lock().unwrap() = Some(m.clone());
         if self.single && self.root.is_dir() {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
@@ -305,7 +338,11 @@ impl Sink for CheckedSink {
         self.inner.commit(id)
     }
     fn finish(&self) -> io::Result<()> {
-        self.inner.finish()
+        self.inner.finish()?;
+        if let Some(m) = self.landed.lock().unwrap().as_ref() {
+            stamp_mtimes(&self.root, self.single, m);
+        }
+        Ok(())
     }
     fn resume_key(&self) -> Option<(String, bool)> {
         self.inner.resume_key()
@@ -427,11 +464,17 @@ impl ZipSink {
         }
     }
 
-    fn opts() -> SimpleFileOptions {
+    /// `mtime`: the file's time on the PS5 (unix seconds, 0 unknown), kept in the entry (#812).
+    fn opts(mtime: u64) -> SimpleFileOptions {
         // zip64 so a single >4 GiB game file is encoded correctly (the zip format's rule).
-        SimpleFileOptions::default()
+        let o = SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
-            .large_file(true)
+            .large_file(true);
+        let (time, date) = crate::zip_stored::dos_datetime(mtime);
+        match zip::DateTime::try_from_msdos(date, time) {
+            Ok(t) if mtime > 0 => o.last_modified_time(t),
+            _ => o,
+        }
     }
 
     fn append(&self, id: u32, off: u64, data: &[u8]) -> io::Result<()> {
@@ -476,7 +519,7 @@ impl ZipSink {
             }
             let name = zip_entry_name(self.single, &self.base, &e.path);
             let zip = st.zip.as_mut().ok_or_else(|| invalid("archive not open"))?;
-            zip.start_file(name, Self::opts()).map_err(zip_err)?;
+            zip.start_file(name, Self::opts(e.mtime)).map_err(zip_err)?;
             st.current = Some(id);
             st.last = Some(id);
             st.written = 0;
@@ -588,7 +631,7 @@ impl Sink for ZipSink {
         {
             zip.start_file(
                 zip_entry_name(self.single, &self.base, &e.path),
-                Self::opts(),
+                Self::opts(e.mtime),
             )
             .map_err(zip_err)?;
         }
@@ -905,6 +948,7 @@ pub fn to_local_with_in(
         root: target,
         single,
         escape_names,
+        landed: Mutex::new(None),
     });
     let r = run(
         pool,
@@ -1251,6 +1295,58 @@ mod tests {
             assert_eq!(f.reason, "ava1_bad_manifest", "{src}");
         }
         assert_eq!(basename("/data/game.exfat").unwrap(), "game.exfat");
+    }
+
+    #[test]
+    fn landed_files_keep_the_ps5_times() {
+        // #812: a clip downloaded from the PS5 was dated when it arrived.
+        let d = std::env::temp_dir().join(format!("p5a-mtime-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("Clips/sub")).unwrap();
+        std::fs::write(d.join("Clips/a.mp4"), b"a").unwrap();
+        std::fs::write(d.join("Clips/sub/b.mp4"), b"b").unwrap();
+        std::fs::write(d.join("one.png"), b"c").unwrap();
+        let at = |kind, path: &str, mtime| manifest::Entry {
+            mtime,
+            ..entry(kind, path)
+        };
+        let folder = Manifest {
+            entries: vec![
+                at(gen::ENTRY_DIR, "sub", 1_600_000_000),
+                at(gen::ENTRY_FILE, "a.mp4", 1_700_000_000),
+                at(gen::ENTRY_FILE, "sub/b.mp4", 0), // unknown: left alone
+            ],
+        };
+        let before = std::fs::metadata(d.join("Clips/sub/b.mp4"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        stamp_mtimes(&d.join("Clips"), false, &folder);
+        let secs = |p: &str| {
+            std::fs::metadata(d.join(p))
+                .unwrap()
+                .modified()
+                .unwrap()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+        };
+        assert_eq!(secs("Clips/a.mp4"), 1_700_000_000);
+        assert_eq!(
+            std::fs::metadata(d.join("Clips/sub/b.mp4"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            before
+        );
+        let single = Manifest {
+            entries: vec![at(gen::ENTRY_FILE, "one.png", 1_650_000_000)],
+        };
+        stamp_mtimes(&d.join("one.png"), true, &single);
+        assert_eq!(secs("one.png"), 1_650_000_000);
+        // A file that is not there is skipped, never an error.
+        stamp_mtimes(&d.join("gone"), true, &single);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
