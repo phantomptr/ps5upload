@@ -110,6 +110,9 @@ pub struct Config {
     pub max_connections: usize,
     /// WebSocket connections open at once from one client (refused with HTTP 429 past it).
     pub max_connections_per_ip: usize,
+    /// WebSocket connections open at once from one IPv6 /48 (refused with HTTP 429 past it).
+    /// A /48 holds 65,536 of the /64s the per-client limit counts one by one.
+    pub max_connections_per_v6_site: usize,
     /// A connection must say `host` or `join` this soon after it opens, or it is closed.
     pub hello_timeout: Duration,
     /// The window the per-minute limits count over.
@@ -159,6 +162,9 @@ impl Default for Config {
             // Fly's hard_limit is 2000 too; the hub enforces it itself anywhere else.
             max_connections: 2_000,
             max_connections_per_ip: 32,
+            // Eight full clients' worth: room for a campus or a shared provider block, and
+            // an eighth of the hub at most for one block.
+            max_connections_per_v6_site: 256,
             hello_timeout: Duration::from_secs(10),
             rate_window: Duration::from_secs(60),
             room_idle_ttl: Duration::from_secs(120),
@@ -257,6 +263,11 @@ impl Config {
             get,
             "HUB_MAX_CONNECTIONS_PER_IP",
             &mut c.max_connections_per_ip,
+        )?;
+        num(
+            get,
+            "HUB_MAX_CONNECTIONS_PER_V6_SITE",
+            &mut c.max_connections_per_v6_site,
         )?;
         secs(get, "HUB_HELLO_SECS", &mut c.hello_timeout)?;
         secs(get, "HUB_RATE_WINDOW_SECS", &mut c.rate_window)?;

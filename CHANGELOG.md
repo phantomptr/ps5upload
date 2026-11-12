@@ -4,6 +4,20 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+Remote Play:
+
+- Fixed the picture hitching every few seconds when Settings › Video decoding is set to the system's media player. The player asks the PS5 for a fresh full picture about every 12 seconds to tidy its buffer, and the app held back all pictures until it arrived, about a second each time. Pictures now keep coming. Thanks to SailorJill for the reports that showed it.
+
+Games:
+
+- On a PS5 with more games than the app can check at once, a game's page now says it couldn't tell whether the game needs backporting, instead of quietly showing no Backport button.
+
+Play Together:
+
+- The log now always says whether a friend's picture and sound travel on the fast path or the slower fallback, so a bug report shows it.
+
 ## 12.4.10
 
 This release is the result of a full review of the app, the engine and the PS5 helper. Most of it is small fixes for rare cases.

@@ -3171,6 +3171,7 @@ helper_mismatch_body_v3: "PS5'in kendisinde yapılacak bir şey yok: Yardımcıy
 "pkg.reverify_impossible": "PS5 bu kurulumu kabul etti, ancak ps5upload'un kurulan paketi tanımlayacak hiçbir şeyi yok, bu yüzden doğrulayamıyor. Sonucu PS5'in Bildirimler'inde kontrol et. Hazırlanan paket saklandı.",
 "pkg.reverify_gave_up": "30 dakika sonra hâlâ doğrulanmadı. Çok büyük bir oyun daha uzun sürebilir — PS5'in Bildirimler'ine bak ya da Yeniden kontrol et'i kullan.",
 "backport_action": "Geri taşı",
+"sdk_scan_truncated_note": "Bu PS5'te uygulamanın tek seferde denetleyebileceğinden fazla oyun var, bu yüzden bu oyunun backport gerektirip gerektirmediği anlaşılamadı.",
 "backport_auto": "Setleri otomatik dene",
 "backport_auto_hint": "Bir set kurar, oyunu başlatır ve açılmazsa geri alıp sonrakine geçer — biri çalışana ya da setler bitene kadar.",
 "backport_auto_running": "{label} deneniyor — set {index}/{total}…",

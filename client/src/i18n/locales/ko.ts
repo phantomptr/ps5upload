@@ -3181,6 +3181,7 @@ helper_mismatch_body_v3: "PS5 자체에서 할 일은 없습니다. 헬퍼 보�
 "pkg.reverify_impossible": "PS5가 이 설치를 받아들였지만, ps5upload에는 설치된 패키지를 식별할 정보가 없어 확인할 수 없습니다. 결과는 PS5 알림에서 확인하세요. 준비한 패키지는 보관했습니다.",
 "pkg.reverify_gave_up": "30분이 지나도 확인되지 않았습니다. 매우 큰 타이틀은 더 오래 걸릴 수 있습니다. PS5 알림을 확인하거나 다시 확인을 누르세요.",
 "backport_action": "백포트",
+"sdk_scan_truncated_note": "이 PS5에는 앱이 한 번에 확인할 수 있는 것보다 많은 게임이 있어서, 이 게임에 백포트가 필요한지 알 수 없었습니다.",
 "backport_auto": "세트 자동으로 시도",
 "backport_auto_hint": "세트를 설치하고 게임을 실행한 뒤, 시작되지 않으면 되돌리고 다음 세트로 넘어갑니다. 하나가 동작하거나 세트가 떨어질 때까지 계속합니다.",
 "backport_auto_running": "{label} 시도 중 — 세트 {index}/{total}…",

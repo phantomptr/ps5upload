@@ -3166,6 +3166,7 @@ helper_mismatch_body_v3: "Không cần làm gì trên chính PS5: nhấn «Gửi
 "pkg.reverify_impossible": "PS5 đã nhận lần cài này, nhưng ps5upload không có gì để nhận diện gói đã cài nên không thể xác nhận. Hãy xem kết quả trong Thông báo của PS5. Gói đã chuẩn bị vẫn được giữ lại.",
 "pkg.reverify_gave_up": "Vẫn chưa xác nhận sau 30 phút. Trò chơi rất lớn có thể mất lâu hơn — hãy xem Thông báo của PS5, hoặc dùng Kiểm tra lại.",
 "backport_action": "Backport",
+"sdk_scan_truncated_note": "PS5 này có nhiều game hơn số ứng dụng kiểm tra được trong một lần, nên không biết được game này có cần backport hay không.",
 "backport_auto": "Tự động thử các bộ",
 "backport_auto_hint": "Cài một bộ, khởi chạy trò chơi, và nếu không chạy được thì hoàn tác rồi chuyển sang bộ tiếp theo — cho tới khi một bộ chạy được hoặc hết bộ.",
 "backport_auto_running": "Đang thử {label} — bộ {index}/{total}…",

@@ -493,6 +493,15 @@ export function OnThisPs5Card({
           {tr("installed_uninstall", undefined, "Uninstall")}
         </Button>
       </div>
+      {sdk.truncated && !sdkRow && title.source && (
+        <p className="mt-2 text-xs text-[var(--color-muted)]">
+          {tr(
+            "sdk_scan_truncated_note",
+            undefined,
+            "This PS5 has more games than the app can check at once, so it couldn't tell whether this game needs backporting.",
+          )}
+        </p>
+      )}
       {dumpable && (
         <DumpThisGame
           host={host}

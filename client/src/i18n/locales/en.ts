@@ -3764,6 +3764,7 @@ helper_mismatch_body_v3: "Nothing to do on the PS5 itself: press Send helper and
 "sdk_patch_libc": "Also patch libc.prx",
 "sdk_patch_libc_hint": "A compatibility edit some backported games need — and that stops others from starting. Leave it off unless the game fails to launch without it.",
 backport_action: "Backport",
+sdk_scan_truncated_note: "This PS5 has more games than the app can check at once, so it couldn't tell whether this game needs backporting.",
 backport_auto: "Try sets automatically",
 backport_auto_hint: "Installs a set, launches the game, and if it does not start, undoes it and moves to the next one \u2014 until one works or the sets run out.",
 backport_auto_running: "Trying {label} \u2014 set {index} of {total}\u2026",

@@ -3179,6 +3179,7 @@ helper_mismatch_body_v3: "Não há nada a fazer no próprio PS5: toque em Enviar
 "pkg.reverify_impossible": "O PS5 aceitou esta instalação, mas o ps5upload não tem como identificar o pacote instalado, então não consegue confirmá-la. Veja o resultado nas Notificações do PS5. O pacote preparado foi mantido.",
 "pkg.reverify_gave_up": "Ainda não confirmado após 30 minutos. Um título muito grande pode demorar mais — veja as Notificações do PS5 ou use Verificar de novo.",
 "backport_action": "Backport",
+"sdk_scan_truncated_note": "Este PS5 tem mais jogos do que o app consegue verificar de uma vez, então não foi possível saber se este jogo precisa de backport.",
 "backport_auto": "Testar conjuntos automaticamente",
 "backport_auto_hint": "Instala um conjunto, inicia o jogo e, se ele não abrir, desfaz e passa para o próximo — até um funcionar ou os conjuntos acabarem.",
 "backport_auto_running": "Testando {label} — conjunto {index} de {total}…",

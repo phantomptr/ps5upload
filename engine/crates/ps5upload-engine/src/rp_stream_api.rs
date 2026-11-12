@@ -930,6 +930,17 @@ impl Live {
         }
     }
 
+    /// The attached page asks for a keyframe. Its frames keep coming meanwhile: a page that
+    /// cannot use them skips them itself, and the media player (MSE) asks only to have a
+    /// keyframe to cut its buffer at, while its picture plays on. Holding frames back until the
+    /// keyframe froze that picture for about a second at every cut, several times a minute
+    /// (#720).
+    fn page_key_ask(&self) {
+        if !self.picture_off() {
+            self.want_key.store(true, Ordering::Relaxed);
+        }
+    }
+
     /// Watcher or player `id` itself asks for a keyframe.
     fn guest_key_ask(&self, id: u64, now: Instant) {
         if let Ok(mut g) = self.spectators.lock() {
@@ -2216,10 +2227,7 @@ async fn session(mut socket: WebSocket) {
                         }
                         if m.keyframe {
                             crate::log_detail!("rp_stream: {}: page {id} asks for a keyframe", live.host);
-                            if !live.picture_off() {
-                                live.need_key.store(true, Ordering::Relaxed);
-                                live.want_key.store(true, Ordering::Relaxed);
-                            }
+                            live.page_key_ask();
                         }
                         if m.stop {
                             crate::log_at!(Info, "rp", "rp_stream: {}: page {id} stops the session", live.host);
@@ -3542,6 +3550,33 @@ mod tests {
         assert!(sink.wants_keyframe());
         sink.video(DELTA, false);
         assert!(kinds(&mut vr).is_empty(), "deltas wait for the keyframe");
+        sink.video(KEY, false);
+        assert_eq!(kinds(&mut vr).len(), 1);
+    }
+
+    #[test]
+    fn a_page_that_asks_for_a_keyframe_keeps_its_picture() {
+        let live = Arc::new(Live::new("h".into(), false, DEFAULT_KEEP_ALIVE));
+        let mut sink = Sink {
+            live: live.clone(),
+            t0: Instant::now(),
+        };
+        let (vt, mut vr, ct, _cr) = page();
+        live.attach(vt, ct, false);
+        sink.wants_keyframe();
+        sink.video(KEY, false);
+        sink.video(DELTA, false);
+        assert_eq!(kinds(&mut vr).len(), 2);
+        // The media player asks so it has a keyframe to cut its buffer at.
+        live.page_key_ask();
+        assert!(sink.wants_keyframe(), "the console is asked");
+        sink.video(DELTA, false);
+        sink.video(DELTA, false);
+        assert_eq!(
+            kinds(&mut vr).len(),
+            2,
+            "pictures keep coming until it arrives"
+        );
         sink.video(KEY, false);
         assert_eq!(kinds(&mut vr).len(), 1);
     }

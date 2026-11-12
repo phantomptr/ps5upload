@@ -3117,6 +3117,7 @@ helper_mismatch_body_v3: "Non c'è nulla da fare sulla PS5: premi Invia helper e
 "pkg.reverify_impossible": "La PS5 ha accettato questa installazione, ma ps5upload non ha nulla con cui identificare il pacchetto installato, quindi non può confermarla. Controlla il risultato nelle Notifiche della PS5. Il pacchetto preparato è stato conservato.",
 "pkg.reverify_gave_up": "Ancora non confermato dopo 30 minuti. Un titolo molto grande può richiedere di più: controlla le Notifiche della PS5 o usa Ricontrolla.",
 "backport_action": "Backport",
+"sdk_scan_truncated_note": "Questa PS5 ha più giochi di quanti l'app possa controllare in una volta, quindi non è stato possibile capire se questo gioco ha bisogno del backport.",
 "backport_auto": "Prova i set automaticamente",
 "backport_auto_hint": "Installa un set, avvia il gioco e, se non parte, annulla e passa al successivo, finché uno funziona o i set finiscono.",
 "backport_auto_running": "Provo {label}: set {index} di {total}…",

@@ -23,7 +23,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, Notify};
 
 use crate::config::Config;
-use crate::limits::{canonical_ip, IpKey, RateTable, Window};
+use crate::limits::{canonical_ip, v6_site, IpKey, RateTable, Window};
 use crate::metrics::{ErrorKind, Gauges, Metrics};
 use crate::{Field, Shared};
 
@@ -54,6 +54,8 @@ pub(crate) struct State {
     rooms: HashMap<String, Room>,
     rooms_per_ip: HashMap<IpKey, usize>,
     conns_per_ip: HashMap<IpKey, usize>,
+    /// Open connections per IPv6 /48 (see [`v6_site`]).
+    conns_per_v6_site: HashMap<u64, usize>,
     joins: RateTable,
 }
 
@@ -63,6 +65,7 @@ impl State {
             rooms: HashMap::new(),
             rooms_per_ip: HashMap::new(),
             conns_per_ip: HashMap::new(),
+            conns_per_v6_site: HashMap::new(),
             joins: RateTable::new(c.max_tracked_ips),
         }
     }
@@ -198,8 +201,8 @@ async fn ws_handler(
             return (StatusCode::FORBIDDEN, "origin not allowed\n").into_response();
         }
     }
-    let ip = IpKey::of(client_ip(&shared.config, peer.ip(), &headers));
-    let slot = match ConnSlot::take(&shared, ip) {
+    let client = client_ip(&shared.config, peer.ip(), &headers);
+    let slot = match ConnSlot::take(&shared, IpKey::of(client), v6_site(client)) {
         Ok(s) => s,
         Err(kind) => {
             shared.metrics.error(kind);
@@ -224,24 +227,33 @@ async fn ws_handler(
 struct ConnSlot {
     shared: Arc<Shared>,
     ip: IpKey,
+    site: Option<u64>,
 }
 
 impl ConnSlot {
-    fn take(shared: &Arc<Shared>, ip: IpKey) -> Result<ConnSlot, ErrorKind> {
+    fn take(shared: &Arc<Shared>, ip: IpKey, site: Option<u64>) -> Result<ConnSlot, ErrorKind> {
         let cfg = &shared.config;
         let mut st = shared.state.lock().unwrap_or_else(|e| e.into_inner());
         if shared.connections.load(Ordering::Relaxed) >= cfg.max_connections {
             return Err(ErrorKind::ServerFull);
         }
-        let n = st.conns_per_ip.entry(ip).or_insert(0);
-        if *n >= cfg.max_connections_per_ip {
+        // Both limits are checked before either count moves, so a refusal leaves no entry.
+        if st.conns_per_ip.get(&ip).copied().unwrap_or(0) >= cfg.max_connections_per_ip {
             return Err(ErrorKind::TooManyConnections);
         }
-        *n += 1;
+        if let Some(site) = site {
+            let open = st.conns_per_v6_site.get(&site).copied().unwrap_or(0);
+            if open >= cfg.max_connections_per_v6_site {
+                return Err(ErrorKind::TooManyConnections);
+            }
+            *st.conns_per_v6_site.entry(site).or_insert(0) += 1;
+        }
+        *st.conns_per_ip.entry(ip).or_insert(0) += 1;
         shared.connections.fetch_add(1, Ordering::Relaxed);
         Ok(ConnSlot {
             shared: shared.clone(),
             ip,
+            site,
         })
     }
 }
@@ -253,6 +265,14 @@ impl Drop for ConnSlot {
             *n -= 1;
             if *n == 0 {
                 st.conns_per_ip.remove(&self.ip);
+            }
+        }
+        if let Some(site) = self.site {
+            if let Some(n) = st.conns_per_v6_site.get_mut(&site) {
+                *n -= 1;
+                if *n == 0 {
+                    st.conns_per_v6_site.remove(&site);
+                }
             }
         }
         self.shared.connections.fetch_sub(1, Ordering::Relaxed);

@@ -3168,6 +3168,7 @@ helper_mismatch_body_v3: "Auf der PS5 selbst ist nichts zu tun: Drücke „Helfe
 "pkg.reverify_impossible": "Die PS5 hat diese Installation angenommen, aber ps5upload hat nichts, woran es das installierte Paket erkennen kann, und kann sie daher nicht bestätigen. Das Ergebnis siehst du in den Benachrichtigungen der PS5. Das bereitgestellte Paket wurde behalten.",
 "pkg.reverify_gave_up": "Nach 30 Minuten immer noch nicht bestätigt. Ein sehr großer Titel kann länger dauern – sieh in den Benachrichtigungen der PS5 nach oder nutze „Erneut prüfen“.",
 "backport_action": "Backport",
+"sdk_scan_truncated_note": "Auf dieser PS5 sind mehr Spiele, als die App auf einmal prüfen kann. Deshalb konnte sie nicht feststellen, ob dieses Spiel einen Backport braucht.",
 "backport_auto": "Sets automatisch probieren",
 "backport_auto_hint": "Installiert ein Set, startet das Spiel und macht es, falls es nicht startet, rückgängig und geht zum nächsten – bis eines funktioniert oder die Sets ausgehen.",
 "backport_auto_running": "Probiere {label} – Set {index} von {total}…",
