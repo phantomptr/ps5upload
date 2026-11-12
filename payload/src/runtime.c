@@ -8837,6 +8837,15 @@ static int handle_save_owner(runtime_state_t *state, const char *body, uint64_t 
     }
     const char *fail = NULL; /* a refusal: "code: text" */
     char failbuf[700] = {0};
+    /* The folder's user's account: registry reads, under the Sony lock and before the save lock
+     * (never one inside the other). */
+    uint64_t account = 0;
+    int arc = -1;
+    if (uid != 0) {
+        pthread_mutex_lock(&sony_api_lock);
+        arc = save_owner_account(uid, &account);
+        pthread_mutex_unlock(&sony_api_lock);
+    }
     pthread_mutex_lock(&g_save_mtx);
     do {
         struct stat st;
@@ -8864,8 +8873,6 @@ static int handle_save_owner(runtime_state_t *state, const char *body, uint64_t 
             fail = "save_image_missing: there is no such save image";
             break;
         }
-        uint64_t account = 0;
-        int arc = save_owner_account(uid, &account);
         if (account_hex[0]) {
             char *end = NULL;
             errno = 0;
