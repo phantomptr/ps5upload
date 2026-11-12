@@ -7561,6 +7561,8 @@ helper_mismatch_boot_copy: "PS5 が起動用に保持している古いヘルパ
   "saves_copy_cancel": "キャンセル",
   "saves_copy_confirm": "{target} の {game} のセーブを {source} のものに置き換えますか? {target} の現在のセーブは先にバックアップされます。",
   "save_backup_restore_to_user_confirm": "{target} の {game} のセーブを {when} のバックアップに置き換えますか? {target} の現在のセーブは先にバックアップされます。",
+  "save_backup_restore_new_hint": "このゲームのセーブはまだありません。バックアップがこのユーザーのセーブになります。",
+  "save_backup_restore_new_confirm": "{when} の {game} のバックアップを {target} に渡しますか？ {target} にはこのゲームのセーブがまだないため、何も置き換えられません。",
   "saves_copy_back": "戻る",
   "saves_copy_replace": "セーブを置き換える",
   "save_backup_restore_to_user_busy": "バックアップを復元中です。アプリを開いたままにしてください。",

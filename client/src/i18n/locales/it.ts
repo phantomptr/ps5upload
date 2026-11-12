@@ -7495,6 +7495,8 @@ helper_mismatch_boot_copy: "La PS5 ha avviato una copia più vecchia dell'helper
   "saves_copy_cancel": "Annulla",
   "saves_copy_confirm": "Sostituire il salvataggio di {game} di {target} con quello di {source}? Del salvataggio attuale di {target} viene fatto prima un backup.",
   "save_backup_restore_to_user_confirm": "Sostituire il salvataggio di {game} di {target} con il backup del {when}? Del salvataggio attuale di {target} viene fatto prima un backup.",
+  "save_backup_restore_new_hint": "Nessun salvataggio di questo gioco per ora. Il backup diventa il salvataggio di questo utente.",
+  "save_backup_restore_new_confirm": "Dare a {target} il backup di {game} del {when}? {target} non ha ancora un salvataggio di questo gioco, quindi non viene sostituito nulla.",
   "saves_copy_back": "Indietro",
   "saves_copy_replace": "Sostituisci salvataggio",
   "save_backup_restore_to_user_busy": "Ripristino del backup. Tieni aperta l'app.",

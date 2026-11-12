@@ -7551,6 +7551,8 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
   "saves_copy_cancel": "Batal",
   "saves_copy_confirm": "Ganti save {game} milik {target} dengan milik {source}? Save {target} saat ini dicadangkan dulu.",
   "save_backup_restore_to_user_confirm": "Ganti save {game} milik {target} dengan cadangan dari {when}? Save {target} saat ini dicadangkan dulu.",
+  "save_backup_restore_new_hint": "Belum ada simpanan game ini. Cadangan menjadi simpanan pengguna ini.",
+  "save_backup_restore_new_confirm": "Berikan cadangan {game} dari {when} kepada {target}? {target} belum punya simpanan game ini, jadi tidak ada yang diganti.",
   "saves_copy_back": "Kembali",
   "saves_copy_replace": "Ganti save",
   "save_backup_restore_to_user_busy": "Memulihkan cadangan. Biarkan aplikasi tetap terbuka.",

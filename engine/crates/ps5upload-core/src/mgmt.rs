@@ -204,6 +204,7 @@ methods! {
     (CONSOLE_TASK_CANCEL, 196, "CONSOLE_TASK_CANCEL"),
     (LOG_LEVEL, 197, "LOG_LEVEL"),
     (TAILNET, 198, "TAILNET"),
+    (SAVE_OWNER, 199, "SAVE_OWNER"),
 }
 
 /// A management call the payload refused.

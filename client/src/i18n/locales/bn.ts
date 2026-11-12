@@ -7542,6 +7542,8 @@ helper_mismatch_boot_copy: "আপনার PS5 বুটের জন্য র
   "saves_copy_cancel": "বাতিল",
   "saves_copy_confirm": "{game}-এর {target}-এর সেভ {source}-এর সেভ দিয়ে বদলাবেন? {target}-এর বর্তমান সেভের আগে ব্যাকআপ নেওয়া হয়।",
   "save_backup_restore_to_user_confirm": "{game}-এর {target}-এর সেভ {when}-এর ব্যাকআপ দিয়ে বদলাবেন? {target}-এর বর্তমান সেভের আগে ব্যাকআপ নেওয়া হয়।",
+  "save_backup_restore_new_hint": "এই গেমের কোনো সেভ এখনও নেই। ব্যাকআপটি এই ব্যবহারকারীর সেভ হয়ে যাবে।",
+  "save_backup_restore_new_confirm": "{when}-এর {game} ব্যাকআপটি {target}-কে দেবেন? {target}-এর এই গেমের কোনো সেভ এখনও নেই, তাই কিছুই প্রতিস্থাপিত হবে না।",
   "saves_copy_back": "ফিরে যান",
   "saves_copy_replace": "সেভ বদলান",
   "save_backup_restore_to_user_busy": "ব্যাকআপ পুনরুদ্ধার হচ্ছে। অ্যাপ খোলা রাখুন।",

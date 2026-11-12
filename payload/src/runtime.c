@@ -92,6 +92,7 @@
 #include "storage_cleanup.h"
 #include "mesh.h"
 #include "tailnet_node.h"
+#include "save_owner.h"
 #include "game_fps.h"
 #include "ava1_server.h"
 
@@ -370,6 +371,8 @@
 #define MGMT_FRAME_LOG_LEVEL_ACK 365u
 #define MGMT_FRAME_TAILNET 366u
 #define MGMT_FRAME_TAILNET_ACK 367u
+#define MGMT_FRAME_SAVE_OWNER 368u
+#define MGMT_FRAME_SAVE_OWNER_ACK 369u
 /* the running game's frame count, for the sampled frame rate (game_fps.c, #774) */
 #define MGMT_FRAME_HW_FPS 368u
 #define MGMT_FRAME_HW_FPS_ACK 369u
@@ -8708,6 +8711,313 @@ static int handle_log_level(runtime_state_t *state, const char *body, uint64_t b
     if (n < 0) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
     return mgmt_reply(MGMT_FRAME_LOG_LEVEL_ACK, out, (uint64_t)n);
 }
+
+/* ── save.owner: whose save it is (#809; save_owner.h) ───────────────────
+ * {op:"info", image, deep?}: what the image says (the protected block, and with deep:"1" the
+ * param.sfo inside it and its usage, which opens and closes the save), the folder's user and
+ * account, and the rows the user's savedata.db has for the title.
+ * {op:"set", image}: makes the save belong to the user whose folder it is in: the account and
+ * user id in the param.sfo (the file inside the save when it is a real one, and the protected
+ * block when the image has one), then the row in that user's savedata.db. `account` (16 hex)
+ * names another account than the user's own: for tests, and for a user this PS5 has no account for.
+ * {op:"forget", image}: removes the save's row from that user's savedata.db (the image is named
+ * sdimg_<folder name>); what undoes a row "set" added for a save that is then taken away. */
+#define SAVE_OWNER_OUT_MAX (20u * 1024u)
+#define SAVE_SFO_IN_MOUNT SAVE_MOUNT_POINT "/sce_sys/param.sfo"
+
+/* /user/home/<8 hex>/savedata_prospero/<TITLE>/sdimg_<name>: the user id, or 0. */
+static uint32_t save_owner_folder_user(const char *image) {
+    if (strncmp(image, "/user/home/", 11) != 0 || strstr(image, "/../") != NULL) return 0;
+    const char *p = image + 11;
+    uint32_t uid = 0;
+    for (int i = 0; i < 8; i++) {
+        char c = p[i];
+        uint32_t d;
+        if (c >= '0' && c <= '9') d = (uint32_t)(c - '0');
+        else if (c >= 'a' && c <= 'f') d = (uint32_t)(c - 'a') + 10u;
+        else return 0;
+        uid = (uid << 4) | d;
+    }
+    if (strncmp(p + 8, "/savedata_prospero/", 19) != 0) return 0;
+    const char *title = p + 27;
+    const char *slash = strchr(title, '/');
+    if (!slash || slash == title || strncmp(slash + 1, "sdimg_", 6) != 0 || strchr(slash + 1, '/')) return 0;
+    return uid;
+}
+
+/* The whole param.sfo file of the open save. Its size; 0 when it is the all-zero placeholder a
+ * save with a protected block keeps there; -1 when it is missing or not a param.sfo. */
+static int save_owner_read_file_sfo(uint8_t *buf, size_t cap) {
+    int fd = open(SAVE_SFO_IN_MOUNT, O_RDONLY);
+    if (fd < 0) return -1;
+    ssize_t n = read(fd, buf, cap);
+    close(fd);
+    if (n <= 0) return -1;
+    if (save_sfo_valid(buf, (size_t)n)) return (int)n;
+    for (ssize_t i = 0; i < n; i++)
+        if (buf[i]) return -1;
+    return 0;
+}
+
+static int save_owner_write_file_sfo(const uint8_t *buf, size_t n) {
+    int fd = open(SAVE_SFO_IN_MOUNT, O_WRONLY);
+    if (fd < 0) return -1;
+    ssize_t w = pwrite(fd, buf, n, 0);
+    int ok = w == (ssize_t)n && fsync(fd) == 0;
+    if (close(fd) != 0) ok = 0;
+    return ok ? 0 : -1;
+}
+
+/* What the console keeps in a save's database row, as seen on FW 13.60: `blocks` is the save's
+ * capacity and `free_blocks` what is unused, both in the save filesystem's own blocks (64 KiB),
+ * and `size_kib` is the size of the image file. */
+static void save_owner_usage(const save_sfo_info_t *info, uint64_t image_bytes, save_usage_t *u) {
+    struct statfs sf;
+    memset(u, 0, sizeof *u);
+    u->blocks = info->blocks;
+    u->size_kib = (image_bytes + 1023u) / 1024u;
+    if (statfs(SAVE_MOUNT_POINT, &sf) == 0 && sf.f_bsize > 0 && sf.f_blocks > 0) {
+        if (!u->blocks) u->blocks = (uint64_t)sf.f_blocks;
+        u->free_blocks = (uint64_t)sf.f_bfree <= u->blocks ? (uint64_t)sf.f_bfree : 0;
+    }
+}
+
+static int save_owner_info_json_raw(char *out, size_t cap, const char *what, const uint8_t *sfo, int n) {
+    save_sfo_info_t in;
+    if (n <= 0 || save_sfo_info(sfo, (size_t)n, &in) != 0)
+        return snprintf(out, cap, ",\"%s\":%s", what, n == 0 ? "\"none\"" : "null");
+    char keys[1200], kesc[1300], tesc[300], desc[100];
+    save_sfo_keys(sfo, (size_t)n, keys, sizeof keys);
+    json_escape_into(keys, kesc, sizeof kesc);
+    json_escape_into(in.main_title, tesc, sizeof tesc);
+    json_escape_into(in.dir_name, desc, sizeof desc);
+    return snprintf(out, cap,
+                    ",\"%s\":{\"size\":%d,\"title_id\":\"%.15s\",\"dir_name\":\"%s\",\"main_title\":\"%s\","
+                    "\"account_id\":\"%016llx\",\"user_id\":%u,\"has_account\":%s,\"has_user\":%s,"
+                    "\"blocks\":%llu,\"system_blocks\":%llu,\"list_param\":%u,\"fields\":\"%s\"}",
+                    what, n, in.title_id, desc, tesc, (unsigned long long)in.account_id, in.user_id,
+                    in.has_account ? "true" : "false", in.has_user ? "true" : "false",
+                    (unsigned long long)in.blocks, (unsigned long long)in.system_blocks, in.list_param, kesc);
+}
+
+/* As above, but 0 (and nothing written) when it does not fit. */
+static int save_owner_info_json(char *out, size_t cap, const char *what, const uint8_t *sfo, int n) {
+    int w = save_owner_info_json_raw(out, cap, what, sfo, n);
+    if (w < 0 || (size_t)w >= cap) {
+        if (cap) out[0] = 0;
+        return 0;
+    }
+    return w;
+}
+
+#define SO_ADD(...)                                                              \
+    do {                                                                         \
+        int so_n = snprintf(out + at, SAVE_OWNER_OUT_MAX - at, __VA_ARGS__);     \
+        if (so_n > 0 && (size_t)so_n < SAVE_OWNER_OUT_MAX - at) at += (size_t)so_n; \
+    } while (0)
+
+static int handle_save_owner(runtime_state_t *state, const char *body, uint64_t body_len) {
+    if (!state || body_len > 4096u) return mgmt_reply(MGMT_FRAME_ERROR, "bad_request", 11);
+    char op[16] = {0}, image[1024] = {0}, deep[8] = {0}, account_hex[24] = {0};
+    (void)parse_json_string_field_local(body, body_len, "account", account_hex, sizeof account_hex);
+    (void)parse_json_string_field_local(body, body_len, "op", op, sizeof op);
+    (void)parse_json_string_field_local(body, body_len, "image", image, sizeof image);
+    (void)parse_json_string_field_local(body, body_len, "deep", deep, sizeof deep);
+    int set = strcmp(op, "set") == 0;
+    uint32_t uid = save_owner_folder_user(image);
+    char *out = malloc(SAVE_OWNER_OUT_MAX);
+    uint8_t *blob_sfo = malloc(SAVE_SFO_MAX);
+    uint8_t *file_sfo = malloc(SAVE_SFO_MAX);
+    size_t at = 0;
+    if (!out || !blob_sfo || !file_sfo) {
+        free(out);
+        free(blob_sfo);
+        free(file_sfo);
+        return mgmt_reply(MGMT_FRAME_ERROR, "out_of_memory", 13);
+    }
+    const char *fail = NULL; /* a refusal: "code: text" */
+    char failbuf[700] = {0};
+    pthread_mutex_lock(&g_save_mtx);
+    do {
+        struct stat st;
+        int forget = strcmp(op, "forget") == 0;
+        if ((!set && !forget && strcmp(op, "info") != 0) || uid == 0) {
+            fail = "save_owner_bad_request: op is info, set or forget, and image is a PS5 save image "
+                   "in a user's savedata_prospero folder";
+            break;
+        }
+        if (forget) {
+            char title[16] = {0};
+            const char *t = image + 11 + 8 + 19;
+            const char *sl = strchr(t, '/');
+            size_t tl = (size_t)(sl - t);
+            if (tl < sizeof title) memcpy(title, t, tl);
+            int n = save_db_forget(uid, title, sl + 1 + 6);
+            if (n < 0) {
+                fail = "save_owner_database: the user's save database could not be changed";
+                break;
+            }
+            SO_ADD("{\"ok\":true,\"err\":null,\"rows_removed\":%d}", n);
+            break;
+        }
+        if (stat(image, &st) != 0 || !S_ISREG(st.st_mode)) {
+            fail = "save_image_missing: there is no such save image";
+            break;
+        }
+        uint64_t account = 0;
+        int arc = save_owner_account(uid, &account);
+        if (account_hex[0]) {
+            char *end = NULL;
+            errno = 0;
+            unsigned long long given = strtoull(account_hex, &end, 16);
+            if (errno != 0 || strlen(account_hex) != 16 || !end || *end != 0) {
+                fail = "save_owner_bad_request: account is 16 hex digits";
+                break;
+            }
+            account = (uint64_t)given;
+            arc = 0;
+        }
+        if (set && arc != 0) {
+            snprintf(failbuf, sizeof failbuf,
+                     "save_owner_no_account: user %08x has no account on this PS5 to own the save (%d)",
+                     (unsigned)uid, arc);
+            fail = failbuf;
+            break;
+        }
+        int want_mount = set || deep[0] == '1';
+        if (want_mount && g_save_mounted) {
+            fail = "save_open: a save is open; close it first";
+            break;
+        }
+        char how[400] = {0};
+        int blob_n = save_param_read(image, blob_sfo, SAVE_SFO_MAX, how, sizeof how);
+        char hesc[500];
+        json_escape_into(how, hesc, sizeof hesc);
+        SO_ADD("{\"ok\":true,\"err\":null,\"user_id\":%u,\"account_id\":\"%016llx\",\"account\":%s,"
+               "\"block_call\":\"%s\",\"block_result\":%d",
+               uid, (unsigned long long)account, arc == 0 ? "true" : "false", hesc, blob_n);
+        at += (size_t)save_owner_info_json(out + at, SAVE_OWNER_OUT_MAX - at, "block", blob_sfo, blob_n);
+        int file_n = -1;
+        save_usage_t usage;
+        memset(&usage, 0, sizeof usage);
+        save_sfo_info_t real;
+        memset(&real, 0, sizeof real);
+        if (want_mount) {
+            char err[512] = {0};
+            int is_ps4 = 0;
+            if (save_do_mount(image, err, sizeof err, &is_ps4) != 0) {
+                snprintf(failbuf, sizeof failbuf, "%s", err);
+                fail = failbuf;
+                break;
+            }
+            file_n = is_ps4 ? -1 : save_owner_read_file_sfo(file_sfo, SAVE_SFO_MAX);
+            at += (size_t)save_owner_info_json(out + at, SAVE_OWNER_OUT_MAX - at, "file", file_sfo, file_n);
+            /* The save's real param.sfo: the protected block when the image has one. */
+            const uint8_t *real_sfo = blob_n > 0 ? blob_sfo : file_sfo;
+            int real_n = blob_n > 0 ? blob_n : file_n;
+            int have_real = !is_ps4 && real_n > 0 && save_sfo_info(real_sfo, (size_t)real_n, &real) == 0;
+            if (have_real) save_owner_usage(&real, (uint64_t)st.st_size, &usage);
+            SO_ADD(",\"usage\":{\"blocks\":%llu,\"free_blocks\":%llu,\"size_kib\":%llu}",
+                   (unsigned long long)usage.blocks, (unsigned long long)usage.free_blocks,
+                   (unsigned long long)usage.size_kib);
+            const char *why = NULL;
+            if (set) {
+                if (is_ps4) why = "save_owner_ps4: a PS4 save's owner can't be changed this way";
+                else if (!have_real || !real.has_account || !real.has_user)
+                    why = "save_owner_no_fields: the save's param.sfo has no account and user fields";
+                else if (file_n > 0) {
+                    int prc = save_sfo_set_owner(file_sfo, (size_t)file_n, account, uid);
+                    if (prc == 0 && save_owner_write_file_sfo(file_sfo, (size_t)file_n) != 0)
+                        why = "save_owner_write_failed: the param.sfo inside the save could not be written";
+                    /* prc != 0: this copy lacks the fields; the block carries them (checked above). */
+                }
+            }
+            int wb = 0;
+            char kept[1100];
+            int urc = save_do_unmount(&wb, kept, sizeof kept);
+            if (urc != 0) {
+                snprintf(failbuf, sizeof failbuf,
+                         "save_unmount_failed: the save could not be closed and written back (%d); close "
+                         "it again before anything else", urc);
+                fail = failbuf;
+                break;
+            }
+            if (why) {
+                fail = why;
+                break;
+            }
+            if (set) {
+                if (blob_n > 0) {
+                    char whow[400] = {0};
+                    int wrc = save_sfo_set_owner(blob_sfo, (size_t)blob_n, account, uid) == 0
+                                  ? save_param_write(image, blob_sfo, (uint32_t)blob_n, whow, sizeof whow)
+                                  : -EINVAL;
+                    if (wrc != 0) {
+                        snprintf(failbuf, sizeof failbuf,
+                                 "save_owner_block_failed: the save's protected param.sfo could not be "
+                                 "written (%d: %.300s)", wrc, whow);
+                        fail = failbuf;
+                        break;
+                    }
+                }
+                real.account_id = account;
+                real.user_id = uid;
+                char derr[300] = {0};
+                int drc = save_db_upsert(uid, &real, &usage, derr, sizeof derr);
+                fprintf(stderr, "[payload2] save: %s now belongs to user %08x (account %016llx); database %s\n",
+                        image, (unsigned)uid, (unsigned long long)account,
+                        drc == 1 ? "row added" : drc == 2 ? "row updated" : derr);
+                if (drc < 0) {
+                    /* Theirs inside, but the console does not list it: not a save they can load. */
+                    snprintf(failbuf, sizeof failbuf,
+                             "save_owner_database: the save was made this user's but could not be added "
+                             "to their saved data (%.300s)", derr);
+                    fail = failbuf;
+                    break;
+                }
+                SO_ADD(",\"owner_set\":true,\"written_back\":%s,\"database\":\"%s\"",
+                       wb ? "true" : "false", drc == 1 ? "added" : "updated");
+            }
+        }
+        /* The rows the user's database has for the title (the title is the image's folder). */
+        {
+            char title[16] = {0};
+            const char *t = image + 11 + 8 + 19;
+            size_t tl = (size_t)(strchr(t, '/') - t);
+            if (tl < sizeof title) memcpy(title, t, tl);
+            size_t room = SAVE_OWNER_OUT_MAX - at;
+            if (room > 64) {
+                int n = snprintf(out + at, room, ",\"rows\":");
+                int rn = save_db_rows_json(uid, title, out + at + n, room - (size_t)n - 2);
+                if (rn >= 0) at += (size_t)n + (size_t)rn;
+                else out[at] = 0;
+            }
+        }
+        {
+            char schema[1500], sesc[1700];
+            if (save_db_schema(uid, schema, sizeof schema) > 0) {
+                json_escape_into(schema, sesc, sizeof sesc);
+                SO_ADD(",\"table\":\"%s\"", sesc);
+            }
+        }
+        SO_ADD("}");
+    } while (0);
+    pthread_mutex_unlock(&g_save_mtx);
+    if (fail) {
+        char fesc[900];
+        json_escape_into(fail, fesc, sizeof fesc);
+        at = (size_t)snprintf(out, SAVE_OWNER_OUT_MAX, "{\"ok\":false,\"err\":\"%s\"}", fesc);
+    }
+    int rc = mgmt_reply(MGMT_FRAME_SAVE_OWNER_ACK, out, (uint64_t)at);
+    free(out);
+    free(blob_sfo);
+    free(file_sfo);
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    return rc;
+}
+#undef SO_ADD
 
 /* tailnet: "Put this PS5 on Tailscale" (tailnet_node.c). An empty body reads the status. */
 #define TAILNET_OUT_MAX (24u * 1024u)

@@ -7559,6 +7559,8 @@ helper_mismatch_boot_copy: "PS5가 부팅용으로 보관한 이전 헬퍼 사�
   "saves_copy_cancel": "취소",
   "saves_copy_confirm": "{target}의 {game} 세이브를 {source}의 세이브로 교체할까요? {target}의 현재 세이브는 먼저 백업됩니다.",
   "save_backup_restore_to_user_confirm": "{target}의 {game} 세이브를 {when} 백업으로 교체할까요? {target}의 현재 세이브는 먼저 백업됩니다.",
+  "save_backup_restore_new_hint": "이 게임의 저장 데이터가 아직 없습니다. 백업이 이 사용자의 저장 데이터가 됩니다.",
+  "save_backup_restore_new_confirm": "{when}의 {game} 백업을 {target}에게 줄까요? {target}에게는 이 게임의 저장 데이터가 아직 없으므로 아무것도 교체되지 않습니다.",
   "saves_copy_back": "뒤로",
   "saves_copy_replace": "세이브 교체",
   "save_backup_restore_to_user_busy": "백업을 복원하는 중입니다. 앱을 열어 두세요.",

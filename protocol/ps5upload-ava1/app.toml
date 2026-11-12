@@ -578,6 +578,11 @@ value = 197
 name = "METHOD_TAILNET"
 ty = "u16"
 value = 198
+# Whose save it is (payload/src/save_owner.c; MGMT_METHODS.md)
+[[const]]
+name = "METHOD_SAVE_OWNER"
+ty = "u16"
+value = 199
 [[const]]
 name = "JOB_OP_DELETE"
 ty = "u8"

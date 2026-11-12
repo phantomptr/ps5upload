@@ -7823,6 +7823,8 @@ helper_mismatch_boot_copy: "PS5 نسخه‌ی قدیمی‌تری از کمک‌
   "saves_copy_cancel": "لغو",
   "saves_copy_confirm": "ذخیره‌ی {target} از {game} با ذخیره‌ی {source} جایگزین شود؟ ابتدا از ذخیره‌ی فعلی {target} پشتیبان گرفته می‌شود.",
   "save_backup_restore_to_user_confirm": "ذخیره‌ی {target} از {game} با پشتیبان {when} جایگزین شود؟ ابتدا از ذخیره‌ی فعلی {target} پشتیبان گرفته می‌شود.",
+  "save_backup_restore_new_hint": "هنوز ذخیره‌ای از این بازی وجود ندارد. نسخهٔ پشتیبان به ذخیرهٔ این کاربر تبدیل می‌شود.",
+  "save_backup_restore_new_confirm": "نسخهٔ پشتیبان {game} از {when} به {target} داده شود؟ {target} هنوز ذخیره‌ای از این بازی ندارد، پس چیزی جایگزین نمی‌شود.",
   "saves_copy_back": "بازگشت",
   "saves_copy_replace": "جایگزینی ذخیره",
   "save_backup_restore_to_user_busy": "در حال بازگردانی پشتیبان. برنامه را باز نگه دارید.",

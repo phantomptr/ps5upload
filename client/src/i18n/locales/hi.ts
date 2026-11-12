@@ -7556,6 +7556,8 @@ helper_mismatch_boot_copy: "आपके PS5 ने बूट के लिए �
   "saves_copy_cancel": "रद्द करें",
   "saves_copy_confirm": "{game} का {target} वाला सेव {source} के सेव से बदलें? {target} के मौजूदा सेव का पहले बैकअप लिया जाता है।",
   "save_backup_restore_to_user_confirm": "{game} का {target} वाला सेव {when} के बैकअप से बदलें? {target} के मौजूदा सेव का पहले बैकअप लिया जाता है।",
+  "save_backup_restore_new_hint": "इस गेम का अभी कोई सेव नहीं है। बैकअप इस उपयोगकर्ता का सेव बन जाएगा।",
+  "save_backup_restore_new_confirm": "{when} का {game} बैकअप {target} को दें? {target} के पास इस गेम का अभी कोई सेव नहीं है, इसलिए कुछ भी बदला नहीं जाएगा।",
   "saves_copy_back": "वापस",
   "saves_copy_replace": "सेव बदलें",
   "save_backup_restore_to_user_busy": "बैकअप पुनर्स्थापित हो रहा है। ऐप खुला रखें।",

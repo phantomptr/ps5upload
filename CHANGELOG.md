@@ -6,6 +6,18 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+Save Data:
+
+- Restore to another user now works for a user who has no save of the game yet, or is missing one of its save slots. The backup becomes that user's save: the app rewrites who owns it (the account and user inside the save) and adds it to that user's saved data on the PS5. Before, you had to start the game as that user and save first. For PS5 saves; the user needs at least one PS5 save of any game on the console. In our test on firmware 13.60, a save made on one PS5 loaded in the game on another PS5 for a user who had never played it. For #809.
+- A backup made on another PS5 is no longer refused. A PS5 save opens on any console; what stops it loading is who owns it, and Restore to another user takes care of that.
+- When a backup can't be opened, the message no longer guesses it was made on another console.
+
+Games:
+
+- With ShadowMount+ not running, Mount on a disk image now asks first when the image holds a packed game (LZ4 or zstd), since such a game needs ShadowMount+ to run.
+
+## 12.4.11
+
 Remote Play:
 
 - Fixed the picture hitching every few seconds when Settings › Video decoding is set to the system's media player. The player asks the PS5 for a fresh full picture about every 12 seconds to tidy its buffer, and the app held back all pictures until it arrived, about a second each time. Pictures now keep coming. Thanks to SailorJill for the reports that showed it.

@@ -7837,6 +7837,8 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
   "saves_copy_cancel": "Mégse",
   "saves_copy_confirm": "Lecseréled {target} {game} mentését {source} mentésére? {target} jelenlegi mentéséről előbb biztonsági mentés készül.",
   "save_backup_restore_to_user_confirm": "Lecseréled {target} {game} mentését a(z) {when} biztonsági mentésre? {target} jelenlegi mentéséről előbb biztonsági mentés készül.",
+  "save_backup_restore_new_hint": "Ehhez a játékhoz még nincs mentés. A biztonsági másolat ennek a felhasználónak a mentése lesz.",
+  "save_backup_restore_new_confirm": "{target} megkapja a(z) {game} {when} időpontú biztonsági másolatát? {target} még nem rendelkezik mentéssel ehhez a játékhoz, így semmi sem lesz felülírva.",
   "saves_copy_back": "Vissza",
   "saves_copy_replace": "Mentés cseréje",
   "save_backup_restore_to_user_busy": "A biztonsági mentés visszaállítása folyamatban. Hagyd nyitva az alkalmazást.",

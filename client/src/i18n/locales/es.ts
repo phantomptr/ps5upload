@@ -7495,6 +7495,8 @@ helper_mismatch_boot_copy: "Tu PS5 inició una copia antigua del ayudante que gu
   "saves_copy_cancel": "Cancelar",
   "saves_copy_confirm": "¿Reemplazar la partida de {target} de {game} por la de {source}? Antes se hace una copia de la partida actual de {target}.",
   "save_backup_restore_to_user_confirm": "¿Reemplazar la partida de {target} de {game} por la copia de {when}? Antes se hace una copia de la partida actual de {target}.",
+  "save_backup_restore_new_hint": "Aún no hay partida guardada de este juego. La copia pasa a ser la partida de este usuario.",
+  "save_backup_restore_new_confirm": "¿Dar a {target} la copia de {game} del {when}? {target} aún no tiene partida guardada de este juego, así que no se reemplaza nada.",
   "saves_copy_back": "Atrás",
   "saves_copy_replace": "Reemplazar partida",
   "save_backup_restore_to_user_busy": "Restaurando la copia. Mantén la app abierta.",

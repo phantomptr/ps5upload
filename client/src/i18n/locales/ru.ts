@@ -7495,6 +7495,8 @@ helper_mismatch_boot_copy: "PS5 запустила старую копию по�
   "saves_copy_cancel": "Отмена",
   "saves_copy_confirm": "Заменить сохранение {game} у {target} сохранением {source}? Сначала создаётся резервная копия текущего сохранения {target}.",
   "save_backup_restore_to_user_confirm": "Заменить сохранение {game} у {target} копией от {when}? Сначала создаётся резервная копия текущего сохранения {target}.",
+  "save_backup_restore_new_hint": "Сохранения этой игры пока нет. Резервная копия станет сохранением этого пользователя.",
+  "save_backup_restore_new_confirm": "Передать {target} резервную копию {game} от {when}? У {target} пока нет сохранения этой игры, поэтому ничего не будет заменено.",
   "saves_copy_back": "Назад",
   "saves_copy_replace": "Заменить сохранение",
   "save_backup_restore_to_user_busy": "Восстанавливаем копию. Не закрывайте приложение.",

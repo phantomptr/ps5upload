@@ -7782,6 +7782,8 @@ helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą t
   "saves_copy_cancel": "Anuluj",
   "saves_copy_confirm": "Zastąpić zapis {game} użytkownika {target} zapisem {source}? Z obecnego zapisu {target} najpierw powstaje kopia.",
   "save_backup_restore_to_user_confirm": "Zastąpić zapis {game} użytkownika {target} kopią z {when}? Z obecnego zapisu {target} najpierw powstaje kopia.",
+  "save_backup_restore_new_hint": "Brak zapisu tej gry. Kopia stanie się zapisem tego użytkownika.",
+  "save_backup_restore_new_confirm": "Przekazać użytkownikowi {target} kopię {game} z {when}? {target} nie ma jeszcze zapisu tej gry, więc nic nie zostanie zastąpione.",
   "saves_copy_back": "Wstecz",
   "saves_copy_replace": "Zastąp zapis",
   "save_backup_restore_to_user_busy": "Przywracanie kopii. Nie zamykaj aplikacji.",

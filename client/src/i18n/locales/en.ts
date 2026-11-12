@@ -7846,6 +7846,8 @@ helper_mismatch_boot_copy: "Your PS5 started an older copy of the helper that it
   "saves_copy_cancel": "Cancel",
   "saves_copy_confirm": "Replace {target}'s save of {game} with {source}'s? {target}'s current save is backed up first.",
   "save_backup_restore_to_user_confirm": "Replace {target}'s save of {game} with the backup from {when}? {target}'s current save is backed up first.",
+  "save_backup_restore_new_hint": "No save of this game yet. The backup becomes this user's save.",
+  "save_backup_restore_new_confirm": "Give {target} the backup of {game} from {when}? {target} has no save of this game yet, so nothing is replaced.",
   "saves_copy_back": "Back",
   "saves_copy_replace": "Replace save",
   "save_backup_restore_to_user_busy": "Restoring the backup. Keep the app open.",

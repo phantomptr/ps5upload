@@ -7501,6 +7501,8 @@ helper_mismatch_boot_copy: "你的 PS5 启动了为开机保留的旧版助手�
   "saves_copy_cancel": "取消",
   "saves_copy_confirm": "用 {source} 的存档替换 {target} 的 {game} 存档？{target} 当前的存档会先备份。",
   "save_backup_restore_to_user_confirm": "用 {when} 的备份替换 {target} 的 {game} 存档？{target} 当前的存档会先备份。",
+  "save_backup_restore_new_hint": "还没有这个游戏的存档。备份将成为该用户的存档。",
+  "save_backup_restore_new_confirm": "要把 {when} 的 {game} 备份交给 {target} 吗？{target} 还没有这个游戏的存档，因此不会替换任何内容。",
   "saves_copy_back": "返回",
   "saves_copy_replace": "替换存档",
   "save_backup_restore_to_user_busy": "正在恢复备份。请保持应用打开。",

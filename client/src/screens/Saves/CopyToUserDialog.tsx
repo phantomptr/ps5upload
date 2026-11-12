@@ -23,11 +23,12 @@ export type CopyEvent =
   | { type: "done" }
   | { type: "failed"; error: string };
 
-/** The dialog's next step. A user without a save of the game can't be picked. */
-export function copyStep(s: CopyState, e: CopyEvent): CopyState {
+/** The dialog's next step. A user without a save of the game can only be picked for a backup
+ *  (`anyTarget`): its images become theirs (#809); a copy needs a save of theirs to go into. */
+export function copyStep(s: CopyState, e: CopyEvent, anyTarget = false): CopyState {
   switch (e.type) {
     case "pick":
-      return s.step === "pick" && e.target.save ? { step: "confirm", target: e.target } : s;
+      return s.step === "pick" && (e.target.save || anyTarget) ? { step: "confirm", target: e.target } : s;
     case "back":
       return s.step === "confirm" || s.step === "failed" ? { step: "pick" } : s;
     case "start":
@@ -76,7 +77,7 @@ export function CopyToUserView({ game, source, targets, state, onPick, onConfirm
               <li key={t.uid}>
                 <button
                   type="button"
-                  disabled={!t.save}
+                  disabled={!t.save && !restore}
                   data-testid="copy-user-target"
                   data-has-save={t.save ? "true" : "false"}
                   onClick={() => onPick(t)}
@@ -88,7 +89,9 @@ export function CopyToUserView({ game, source, targets, state, onPick, onConfirm
                     <span className="block text-xs text-[var(--color-muted)]">
                       {t.save
                         ? tr("saves_copy_has_save", undefined, "Has a save of this game")
-                        : tr("saves_copy_no_save", { game, name }, "Start {game} once as {name} and save, then come back.")}
+                        : restore
+                          ? tr("save_backup_restore_new_hint", undefined, "No save of this game yet. The backup becomes this user's save.")
+                          : tr("saves_copy_no_save", { game, name }, "Start {game} once as {name} and save, then come back.")}
                     </span>
                   </span>
                 </button>
@@ -115,18 +118,31 @@ export function CopyToUserView({ game, source, targets, state, onPick, onConfirm
                 { target, game, source: source.owner },
                 "Replace {target}'s save of {game} with {source}'s? {target}'s current save is backed up first.",
               )
-            : tr(
-                "save_backup_restore_to_user_confirm",
-                { target, game, when: source.when },
-                "Replace {target}'s save of {game} with the backup from {when}? {target}'s current save is backed up first.",
-              )}
+            : state.target.save
+              ? tr(
+                  "save_backup_restore_to_user_confirm",
+                  { target, game, when: source.when },
+                  "Replace {target}'s save of {game} with the backup from {when}? {target}'s current save is backed up first.",
+                )
+              : tr(
+                  "save_backup_restore_new_confirm",
+                  { target, game, when: source.when },
+                  "Give {target} the backup of {game} from {when}? {target} has no save of this game yet, so nothing is replaced.",
+                )}
         </p>
         <div className="flex flex-wrap justify-end gap-2">
           <Button variant="ghost" size="sm" onClick={onBack}>
             {tr("saves_copy_back", undefined, "Back")}
           </Button>
-          <Button variant="danger" size="sm" onClick={onConfirm} data-testid="copy-user-replace">
-            {tr("saves_copy_replace", undefined, "Replace save")}
+          <Button
+            variant={state.target.save ? "danger" : "primary"}
+            size="sm"
+            onClick={onConfirm}
+            data-testid="copy-user-replace"
+          >
+            {state.target.save
+              ? tr("saves_copy_replace", undefined, "Replace save")
+              : tr("save_backup_restore", undefined, "Restore")}
           </Button>
         </div>
       </div>
@@ -208,7 +224,7 @@ export default function CopyToUserDialog({
 }) {
   const tr = useTr();
   const [state, setState] = useState<CopyState>({ step: "pick" });
-  const go = (e: CopyEvent) => setState((s) => copyStep(s, e));
+  const go = (e: CopyEvent) => setState((s) => copyStep(s, e, source.kind === "backup"));
   const confirm = async () => {
     if (state.step !== "confirm") return;
     const target = state.target;

@@ -11273,6 +11273,40 @@
         },
         "type": "object"
       },
+      "SaveOwnerReq": {
+        "properties": {
+          "account": {
+            "description": "With \"set\": another account (16 hex digits) than the folder's user's own.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "addr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "deep": {
+            "description": "With \"info\": also open the save for the param.sfo inside it and its usage.",
+            "type": "boolean"
+          },
+          "image": {
+            "description": "A PS5 save image in a user's savedata_prospero folder.",
+            "type": "string"
+          },
+          "op": {
+            "description": "\"info\", \"set\" or \"forget\".",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "SaveReq": {
         "properties": {
           "bundle": {},
@@ -39341,6 +39375,64 @@
             "required": true
           },
           "response_schema": "struct"
+        }
+      }
+    },
+    "/api/ps5/saves/owner": {
+      "post": {
+        "description": "POST /api/ps5/saves/owner `{addr, op, image, deep?, account?}` — whose save it is (#809).\n`info` says what the image, the folder's user and that user's save database hold; `set` makes\nthe save belong to the user whose folder it is in (the account and user in the save, and its\nrow in their save database); `forget` removes that row. A save's game must not be running.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveOwnerReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Whose save it is (#809)",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "json-unknown"
         }
       }
     },

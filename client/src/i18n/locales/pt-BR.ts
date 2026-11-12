@@ -7557,6 +7557,8 @@ helper_mismatch_boot_copy: "Seu PS5 iniciou uma cópia antiga do auxiliar que gu
   "saves_copy_cancel": "Cancelar",
   "saves_copy_confirm": "Substituir o save de {game} de {target} pelo de {source}? É feito antes um backup do save atual de {target}.",
   "save_backup_restore_to_user_confirm": "Substituir o save de {game} de {target} pelo backup de {when}? É feito antes um backup do save atual de {target}.",
+  "save_backup_restore_new_hint": "Ainda não há save deste jogo. O backup passa a ser o save deste usuário.",
+  "save_backup_restore_new_confirm": "Dar a {target} o backup de {game} de {when}? {target} ainda não tem save deste jogo, então nada é substituído.",
   "saves_copy_back": "Voltar",
   "saves_copy_replace": "Substituir save",
   "save_backup_restore_to_user_busy": "Restaurando o backup. Mantenha o app aberto.",

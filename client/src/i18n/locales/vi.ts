@@ -7544,6 +7544,8 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
   "saves_copy_cancel": "Hủy",
   "saves_copy_confirm": "Thay bản lưu {game} của {target} bằng của {source}? Bản lưu hiện tại của {target} được sao lưu trước.",
   "save_backup_restore_to_user_confirm": "Thay bản lưu {game} của {target} bằng bản sao lưu lúc {when}? Bản lưu hiện tại của {target} được sao lưu trước.",
+  "save_backup_restore_new_hint": "Chưa có bản lưu của trò chơi này. Bản sao lưu sẽ trở thành bản lưu của người dùng này.",
+  "save_backup_restore_new_confirm": "Trao cho {target} bản sao lưu {game} từ {when}? {target} chưa có bản lưu của trò chơi này nên không có gì bị thay thế.",
   "saves_copy_back": "Quay lại",
   "saves_copy_replace": "Thay bản lưu",
   "save_backup_restore_to_user_busy": "Đang khôi phục bản sao lưu. Hãy giữ ứng dụng mở.",

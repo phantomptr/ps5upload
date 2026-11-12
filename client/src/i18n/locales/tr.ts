@@ -7549,6 +7549,8 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
   "saves_copy_cancel": "İptal",
   "saves_copy_confirm": "{target} kullanıcısının {game} kaydı {source} kaydıyla değiştirilsin mi? {target} kullanıcısının mevcut kaydı önce yedeklenir.",
   "save_backup_restore_to_user_confirm": "{target} kullanıcısının {game} kaydı {when} tarihli yedekle değiştirilsin mi? {target} kullanıcısının mevcut kaydı önce yedeklenir.",
+  "save_backup_restore_new_hint": "Bu oyunun henüz kaydı yok. Yedek, bu kullanıcının kaydı olur.",
+  "save_backup_restore_new_confirm": "{game} oyununun {when} tarihli yedeği {target} kullanıcısına verilsin mi? {target} kullanıcısının bu oyun için henüz kaydı yok, bu yüzden hiçbir şey değiştirilmez.",
   "saves_copy_back": "Geri",
   "saves_copy_replace": "Kaydı değiştir",
   "save_backup_restore_to_user_busy": "Yedek geri yükleniyor. Uygulamayı açık tut.",

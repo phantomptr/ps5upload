@@ -7549,6 +7549,8 @@ helper_mismatch_boot_copy: "PS5 เปิดสำเนาตัวช่วย
   "saves_copy_cancel": "ยกเลิก",
   "saves_copy_confirm": "แทนที่เซฟ {game} ของ {target} ด้วยของ {source} ไหม? เซฟปัจจุบันของ {target} จะถูกสำรองก่อน",
   "save_backup_restore_to_user_confirm": "แทนที่เซฟ {game} ของ {target} ด้วยข้อมูลสำรองจาก {when} ไหม? เซฟปัจจุบันของ {target} จะถูกสำรองก่อน",
+  "save_backup_restore_new_hint": "ยังไม่มีเซฟของเกมนี้ ข้อมูลสำรองจะกลายเป็นเซฟของผู้ใช้นี้",
+  "save_backup_restore_new_confirm": "มอบข้อมูลสำรองของ {game} จาก {when} ให้ {target} หรือไม่ {target} ยังไม่มีเซฟของเกมนี้ จึงไม่มีอะไรถูกแทนที่",
   "saves_copy_back": "ย้อนกลับ",
   "saves_copy_replace": "แทนที่เซฟ",
   "save_backup_restore_to_user_busy": "กำลังกู้คืนข้อมูลสำรอง เปิดแอปไว้",

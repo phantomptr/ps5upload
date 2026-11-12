@@ -1372,6 +1372,12 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/power_phase_live_selftest.c $(PAYLOAD_DIR)/src/power_phase.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-power-phase-live-selftest
 	@echo "✓ going to rest and the minute after a wake: no fan or kernel work, tailnet without sockets until the network is back"
+	@echo "Running save param.sfo self-test (host build, ASan + UBSan)..."
+	@cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wall -Wextra -Werror \
+		-I$(PAYLOAD_DIR)/include -o $(SELFTEST_DIR)/ps5upload-save-sfo-selftest \
+		$(PAYLOAD_DIR)/tests/save_sfo_selftest.c $(PAYLOAD_DIR)/src/save_sfo.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-save-sfo-selftest
+	@echo "✓ a save's param.sfo: fields read, the owner written in place, damaged files refused"
 	@echo "Running process-identity self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-proc-identity-selftest \

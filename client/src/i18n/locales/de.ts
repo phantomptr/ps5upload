@@ -7550,6 +7550,8 @@ helper_mismatch_boot_copy: "Deine PS5 hat eine ältere Kopie des Helfers gestart
   "saves_copy_cancel": "Abbrechen",
   "saves_copy_confirm": "Spielstand von {target} für {game} durch den von {source} ersetzen? Der aktuelle Spielstand von {target} wird zuerst gesichert.",
   "save_backup_restore_to_user_confirm": "Spielstand von {target} für {game} durch die Sicherung vom {when} ersetzen? Der aktuelle Spielstand von {target} wird zuerst gesichert.",
+  "save_backup_restore_new_hint": "Noch kein Spielstand für dieses Spiel. Die Sicherung wird zum Spielstand dieses Benutzers.",
+  "save_backup_restore_new_confirm": "{target} die Sicherung von {game} vom {when} geben? {target} hat noch keinen Spielstand für dieses Spiel, es wird also nichts ersetzt.",
   "saves_copy_back": "Zurück",
   "saves_copy_replace": "Spielstand ersetzen",
   "save_backup_restore_to_user_busy": "Sicherung wird wiederhergestellt. Lass die App geöffnet.",

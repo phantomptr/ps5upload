@@ -1,15 +1,17 @@
 //! Sharing a PS5 save with another account, and moving one to another account on the same
 //! console (#612).
 //!
-//! A PS5 save image is encrypted with a key sealed for the console that made it: the console
-//! unseals it itself, no account involved. The account it belongs to is data: its param.sfo
-//! (ACCOUNT_ID), the image's own parameters (user id, HMAC) and the console's save database. So a
-//! save copied into another user's folder as it is (even with the account ID changed) does not
-//! load as theirs, and an encrypted backup from another PS5 does not open at all. What does carry
-//! over is what is inside it: the game's own files. So a save is shared as those files, opened decrypted on the console
-//! with its sce_sys left out (that is the owner's account information), and used by opening the
-//! other account's own save of the same game, putting those files in it and closing it, which the
-//! console encrypts again as theirs.
+//! A PS5 save image is encrypted with a key the console unseals itself, no account involved,
+//! and an image made on one PS5 opens on another (measured on FW 13.60, #809). The account it
+//! belongs to is data: its param.sfo (ACCOUNT_ID and the user id) and the console's save
+//! database. So a save copied into another user's folder as it is does not load as theirs: the
+//! game is told it is corrupted. Two ways make it theirs. What is inside it carries over, the
+//! game's own files: a save is shared as those files, opened decrypted on the console with its
+//! sce_sys left out (that is the owner's account information), and used by opening the other
+//! account's own save of the same game, putting those files in it and closing it, which the
+//! console encrypts again as theirs. And for a user who has no such save to put them in, the
+//! whole image is made theirs: the helper writes their account and user id into its param.sfo
+//! and adds its row to their save database (`restore_owned`, the helper's `save.owner`).
 //!
 //! A game's save is often several images in its folder (`sdimg_STARBOARD`, `sdimg_sce_sdmemory`,
 //! …), and the console keeps its own backup copy of each (`sdimg_sce_bu_<name>`). They go
@@ -24,9 +26,10 @@
 //! - **Copy** (`POST /api/save-backup/copy`): share and use in one go, between two users of the
 //!   same console, with no file through the computer's Downloads.
 //! - **Restore to another user** (`POST /api/save-backup/restore-to-user`): a backup holds the
-//!   encrypted images, which only the console can open. The target's save is backed up, the
+//!   encrypted images, which only a console can open. The target's save is backed up, the
 //!   backup put into the target's folder as it is, shared from there, the target's own save put
-//!   back, and the shared files used in it.
+//!   back, and the shared files used in it. A target with no save of the game, or without one
+//!   of its images, gets the backup's images whole, each made theirs.
 //!
 //! The target's whole save folder is backed up first and put back, every image of it, if any
 //! step fails; the game must not be running. Files shared before 10.6.0 (one image, the files at
@@ -105,8 +108,6 @@ pub trait Console {
     fn save_open(&self) -> bool;
     /// The save image names in a PS5 save folder, without the console's backup copies.
     fn images(&self, folder: &str) -> Result<Vec<String>, String>;
-    /// The PS5's own identity (see `save_backup::console_identity`); None when it does not say.
-    fn identity(&self) -> Option<String>;
     /// The size of the save image `image` (a file in a save folder): the most its files can
     /// ever hold, as the image never grows. None when it is not listed.
     fn image_size(&self, image: &str) -> Result<Option<u64>, String>;
@@ -139,7 +140,34 @@ pub trait Console {
         folder: &str,
         user_id: u32,
     ) -> Result<(), String>;
+    /// Whether this console can change a save's owner at all (`make_owner`).
+    fn can_make_owner(&self) -> bool {
+        false
+    }
+    /// Whether the console keeps a save database for `user`: it does once they have any PS5
+    /// save, and a save can only be made theirs with one.
+    fn user_has_saves(&self, _user: u32) -> Result<bool, String> {
+        Ok(false)
+    }
+    /// Adds the files of `src` to the save folder `folder` (made if missing), over any of the
+    /// same name and leaving the rest; the console's own backup copy of each image put is removed.
+    fn add_raw(&self, _src: &Path, _folder: &str) -> Result<(), String> {
+        Err(OWNER_UNSUPPORTED.into())
+    }
+    /// Makes the PS5 save image `image` belong to the user whose folder it is in: the account
+    /// and user in the save, and its row in that user's save database (the helper's save.owner).
+    fn make_owner(&self, _image: &str) -> Result<(), String> {
+        Err(OWNER_UNSUPPORTED.into())
+    }
+    /// Takes away what `add_raw` and `make_owner` added: the console's record of each of
+    /// `images`, and the files (the whole `folder` when `whole`).
+    fn take_away(&self, _folder: &str, _images: &[String], _whole: bool) -> Result<(), String> {
+        Ok(())
+    }
 }
+
+/// What a console that can't change a save's owner answers (an older helper).
+pub const OWNER_UNSUPPORTED: &str = "this helper can't change a save's owner";
 
 /// What a close of the open save said.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -951,11 +979,18 @@ pub fn restore_to_user(
     if from_user == to_user {
         return Err("This backup is already this user's: use Restore.".into());
     }
-    // Encrypted for the PS5 that made it: one from another can't be opened here.
-    local::same_console(zip, c.identity().as_deref())?;
-    c.can_back_up()?;
+    // A backup made on another PS5 opens here too (a save image is not tied to the console that
+    // made it: measured on FW 13.60, #809), so where it was made is not asked.
     let saves = c.saves()?;
-    let to = target_save(&saves, &title_id, to_user)?.clone();
+    let to = match target_save(&saves, &title_id, to_user) {
+        Ok(to) => Some(to.clone()),
+        // No save of the game there: the backup's own images become theirs (`restore_owned`).
+        Err(e) if e == no_target_save(&title_id) => None,
+        Err(e) => return Err(e.into()),
+    };
+    if to.is_some() {
+        c.can_back_up()?;
+    }
     checks(c, &title_id)?;
     let tmp = make_temp_dir(&title_id)?;
     let tmp_s = tmp.to_string_lossy().into_owned();
@@ -977,10 +1012,37 @@ pub fn restore_to_user(
         if in_backup.is_empty() {
             return Err("the backup has no save image".into());
         }
-        let missing = lacking(&in_backup, &c.images(&to.path)?);
-        if !missing.is_empty() {
-            return Err(missing_error(&title_id, "the other user", missing));
+        let missing = match &to {
+            Some(to) => lacking(&in_backup, &c.images(&to.path)?),
+            None => in_backup.clone(),
+        };
+        if !missing.is_empty() && !c.can_make_owner() {
+            return Err(match &to {
+                Some(_) => missing_error(&title_id, "the other user", missing),
+                None => no_target_save(&title_id).into(),
+            });
         }
+        if !missing.is_empty() {
+            // The files of a save can only go into an image the user has. With one missing, the
+            // backup's images go in whole and are made theirs.
+            return restore_owned(
+                c,
+                &title_id,
+                &src,
+                to.as_ref(),
+                to_user,
+                &in_backup,
+                &missing,
+            )
+            .map_err(|e| match (&to, e.msg == OWNER_UNSUPPORTED) {
+                (Some(_), true) => missing_error(&title_id, "the other user", missing),
+                (None, true) => no_target_save(&title_id).into(),
+                _ => e,
+            });
+        }
+        let Some(to) = to.clone() else {
+            return Err(no_target_save(&title_id).into());
+        };
         let theirs = c
             .back_up(&to, BEFORE_COPY_TAG)
             .map_err(|e| format!("could not back up the save there first: {e}"))?;
@@ -988,10 +1050,10 @@ pub fn restore_to_user(
         let shared = (|| {
             c.put_raw(&title_id, &src, &to.path, to_user)?;
             share(c, &to.path).map(|(_, z)| z).map_err(|e| {
-                // Only a save that would not open hints at another PS5: one that opened and
-                // could not be copied (#729) was made here.
+                // Where it was made is not the reason (another PS5's save opens here, #809), so
+                // the message does not guess one.
                 if e.starts_with(IMAGE_OPEN_FAILED) {
-                    format!("the backup could not be opened on this PS5 (was it made on another console?): {e}")
+                    format!("the PS5 would not open the backup's save: {e}")
                 } else {
                     format!("the backup could not be read: {e}")
                 }
@@ -1019,9 +1081,91 @@ pub fn restore_to_user(
     let _ = cleanup_temp_dir(&tmp_s);
     result.map(|parts| Done {
         from: file.to_string(),
-        to: to.path.clone(),
+        to: to
+            .map(|t| t.path)
+            .unwrap_or_else(|| save_folder_of(to_user, &title_id)),
         parts,
     })
+}
+
+/// Where user `user` keeps the PS5 saves of `title_id`.
+fn save_folder_of(user: u32, title_id: &str) -> String {
+    format!("/user/home/{user:08x}/savedata_prospero/{title_id}")
+}
+
+/// Whether the save image file `image` is a PS4 one (its first byte says so; a PS4 save's owner
+/// is more than the account and user in its param.sfo, and is not changed here).
+fn ps4_image(image: &Path) -> bool {
+    use std::io::Read;
+    let mut first = [0u8; 1];
+    std::fs::File::open(image)
+        .and_then(|mut f| f.read_exact(&mut first))
+        .is_ok()
+        && first[0] == 0x01
+}
+
+/// Puts the unpacked backup `src` into `to_user`'s save folder of the game as whole images and
+/// makes each of them that user's (#809): for a user with no save of the game, or without some
+/// of its images, whose own images the backup's files could not go into. `to`: their save folder
+/// when they have one; it is backed up first and put back if a step fails, and a folder made
+/// here is taken away again. `added`: the images of `images` they did not have. The console's own backup copies in the backup (`sdimg_sce_bu_*`,
+/// still the first owner's) do not go across: the console makes its own on the next save.
+fn restore_owned(
+    c: &dyn Console,
+    title_id: &str,
+    src: &Path,
+    to: Option<&SaveEntry>,
+    to_user: u32,
+    images: &[String],
+    added: &[String],
+) -> Result<Vec<String>, Failed> {
+    if images.iter().any(|i| ps4_image(&src.join(i))) {
+        return Err(
+            "This backup is a PS4 save: only a PS5 save can be made another user's.".into(),
+        );
+    }
+    if !c.user_has_saves(to_user)? {
+        return Err("That user has no saved data on this PS5 yet, so a save can't be added for them. Start any PS5 game once as that user and save, then try again.".into());
+    }
+    let folder = to
+        .map(|t| t.path.clone())
+        .unwrap_or_else(|| save_folder_of(to_user, title_id));
+    let theirs = match to {
+        Some(to) => Some(
+            c.back_up(to, BEFORE_COPY_TAG)
+                .map_err(|e| format!("could not back up the save there first: {e}"))?,
+        ),
+        None => None,
+    };
+    for e in std::fs::read_dir(src)
+        .map_err(|e| format!("the backup: {e}"))?
+        .flatten()
+    {
+        if is_console_backup_image(&e.file_name().to_string_lossy()) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+    let put = c.add_raw(src, &folder).and_then(|()| {
+        images
+            .iter()
+            .try_for_each(|i| c.make_owner(&format!("{folder}/{i}")))
+    });
+    let Err(why) = put else {
+        return Ok(images.to_vec());
+    };
+    // Back to how it was: what they had before (and no record of the images added), or nothing.
+    let back = match &theirs {
+        Some(zip) => c
+            .take_away(&folder, added, false)
+            .and_then(|()| undo(c, title_id, zip, &folder, to_user)),
+        None => c.take_away(&folder, images, true),
+    };
+    Err(match (back, theirs.is_some()) {
+        (Ok(()), true) => format!("{why}. The save there before was put back."),
+        (Ok(()), false) => format!("{why}. Nothing was left in that user's saves."),
+        (Err(then), _) => format!("{why}. {then}"),
+    }
+    .into())
 }
 
 // ── on a real console ───────────────────────────────────────────────────
@@ -1079,9 +1223,6 @@ impl Console for Live<'_> {
     }
     fn images(&self, folder: &str) -> Result<Vec<String>, String> {
         Ok(image_names(&local::folder_entries(self.host, folder)?))
-    }
-    fn identity(&self) -> Option<String> {
-        local::console_identity(self.host)
     }
     fn image_size(&self, image: &str) -> Result<Option<u64>, String> {
         let name = image.rsplit('/').next().unwrap_or_default();
@@ -1205,6 +1346,89 @@ impl Console for Live<'_> {
     ) -> Result<(), String> {
         local::restore_zip_with(self.host, title_id, zip, folder, user_id, false)
     }
+    fn can_make_owner(&self) -> bool {
+        true
+    }
+    fn user_has_saves(&self, user: u32) -> Result<bool, String> {
+        // The folder is missing for a user with no PS5 save yet: a failed listing is "no".
+        let dir = format!("/system_data/savedata_prospero/{user:08x}/db/user");
+        Ok(local::folder_entries(self.host, &dir).is_ok_and(|entries| {
+            entries
+                .iter()
+                .any(|e| e.get("name").and_then(Value::as_str) == Some("savedata.db"))
+        }))
+    }
+    fn add_raw(&self, src: &Path, folder: &str) -> Result<(), String> {
+        if local::folder_entries(self.host, folder).is_err() {
+            local::post(
+                "/api/ps5/fs/mkdir",
+                json!({ "addr": self.host, "path": folder }),
+            )?;
+        }
+        local::upload_kept(self.host, src, folder)?;
+        // The console's backup copy of an image that was replaced is of the save before.
+        let put: Vec<String> = std::fs::read_dir(src)
+            .map_err(|e| format!("the backup: {e}"))?
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        for e in local::folder_entries(self.host, folder)? {
+            let Some(name) = e.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            let of = name
+                .strip_prefix("sdimg_sce_bu_")
+                .map(|n| format!("sdimg_{n}"));
+            if of.is_some_and(|of| put.contains(&of)) {
+                let _ = local::post(
+                    "/api/ps5/fs/delete",
+                    json!({ "addr": self.host, "path": format!("{folder}/{name}") }),
+                );
+            }
+        }
+        Ok(())
+    }
+    fn make_owner(&self, image: &str) -> Result<(), String> {
+        owner_call(self.host, "set", image).map(|_| ())
+    }
+    fn take_away(&self, folder: &str, images: &[String], whole: bool) -> Result<(), String> {
+        for i in images {
+            let image = format!("{folder}/{i}");
+            owner_call(self.host, "forget", &image)
+                .map_err(|e| format!("The PS5 still lists {i} for that user ({e})"))?;
+            if !whole {
+                let _ = local::post(
+                    "/api/ps5/fs/delete",
+                    json!({ "addr": self.host, "path": image }),
+                );
+            }
+        }
+        if whole {
+            local::post(
+                "/api/ps5/fs/delete",
+                json!({ "addr": self.host, "path": folder }),
+            )
+            .map_err(|e| format!("The save folder put there could not be removed ({e})"))?;
+        }
+        Ok(())
+    }
+}
+
+/// One `save.owner` call through the engine's own route; an older helper's "unknown method" is
+/// [`OWNER_UNSUPPORTED`].
+fn owner_call(host: &str, op: &str, image: &str) -> Result<Value, String> {
+    local::post(
+        "/api/ps5/saves/owner",
+        json!({ "addr": host, "op": op, "image": image }),
+    )
+    .map_err(|e| {
+        let low = e.to_ascii_lowercase();
+        if low.contains("unknown method") || low.contains("unknown_method") {
+            OWNER_UNSUPPORTED.to_string()
+        } else {
+            e
+        }
+    })
 }
 
 /// The save images among a PS5 save folder's entries: its files, without the `.bin` keys,
@@ -1796,8 +2020,12 @@ mod tests {
         probe_fails: bool,
         /// Tries at closing.
         closes: Cell<usize>,
-        /// The PS5's identity.
-        identity: Option<String>,
+        /// The console can change a save's owner (a helper with save.owner).
+        owner: bool,
+        /// The user a save goes to has no save database yet.
+        no_database: bool,
+        /// Making this image theirs fails.
+        fail_owner: Option<String>,
         /// Image (name) → its size; not listed: unknown.
         sizes: BTreeMap<String, u64>,
         /// What every save's sce_sys holds.
@@ -1824,7 +2052,9 @@ mod tests {
                 close_stuck: false,
                 probe_fails: false,
                 closes: Cell::default(),
-                identity: None,
+                owner: false,
+                no_database: false,
+                fail_owner: None,
                 sizes: BTreeMap::new(),
                 sys: 0,
                 calls: RefCell::default(),
@@ -1860,9 +2090,6 @@ mod tests {
         }
         fn images(&self, folder: &str) -> Result<Vec<String>, String> {
             Ok(self.images.get(folder).cloned().unwrap_or_default())
-        }
-        fn identity(&self) -> Option<String> {
-            self.identity.clone()
         }
         fn image_size(&self, image: &str) -> Result<Option<u64>, String> {
             Ok(self.sizes.get(image.rsplit('/').next().unwrap()).copied())
@@ -1956,6 +2183,30 @@ mod tests {
         fn put_raw(&self, _: &str, src: &Path, folder: &str, _: u32) -> Result<(), String> {
             assert!(src.join(STAR).is_file());
             self.log(format!("put_raw {folder}"));
+            Ok(())
+        }
+        fn can_make_owner(&self) -> bool {
+            self.owner
+        }
+        fn user_has_saves(&self, _: u32) -> Result<bool, String> {
+            Ok(!self.no_database)
+        }
+        fn add_raw(&self, src: &Path, folder: &str) -> Result<(), String> {
+            // The first owner's console backup copies never go across.
+            assert!(!src.join("sdimg_sce_bu_STARBOARD").exists());
+            self.log(format!("put_added {folder}"));
+            Ok(())
+        }
+        fn make_owner(&self, image: &str) -> Result<(), String> {
+            self.log(format!("owner {image}"));
+            if self.fail_owner.as_deref() == image.rsplit('/').next() {
+                Err("save_mount_failed".into())
+            } else {
+                Ok(())
+            }
+        }
+        fn take_away(&self, folder: &str, images: &[String], whole: bool) -> Result<(), String> {
+            self.log(format!("take_away {folder} {} {whole}", images.join(",")));
             Ok(())
         }
         fn put_back(&self, _: &str, zip: &Path, folder: &str, _: u32) -> Result<(), String> {
@@ -2521,9 +2772,9 @@ mod tests {
         let tmp = make_temp_dir("restoretest").unwrap();
         let zip = backup_zip(&tmp, &[MAIN, STAR]);
         let file = zip.file_name().unwrap().to_string_lossy().into_owned();
-        // A save that won't open may be another PS5's; one that opened and could not be
-        // copied (#729) is not, and the message doesn't guess so.
-        for (fail_open, guess) in [(true, true), (false, false)] {
+        // Neither a save that won't open nor one that opened and could not be copied (#729)
+        // is blamed on another PS5: a save made elsewhere opens here.
+        for (fail_open, guess) in [(true, false), (false, false)] {
             let c = Fake {
                 fail_open,
                 fail_read: !fail_open,
@@ -2544,33 +2795,141 @@ mod tests {
         let _ = cleanup_temp_dir(&tmp.to_string_lossy());
     }
 
-    /// A backup made on another PS5 is refused before anything changes; one made here, or one
-    /// that does not say (older, or a console with Remote Play off), goes ahead.
+    /// A backup made on another PS5 goes ahead like one made here: a save image opens on any
+    /// console (#809).
     #[test]
-    fn a_backup_from_another_ps5_is_refused() {
+    fn a_backup_from_another_ps5_goes_ahead() {
         let tmp = make_temp_dir("restoretest").unwrap();
         let zip = backup_zip_from(&tmp, &[MAIN, STAR], Some("D4F7D5D36123"));
         let file = zip.file_name().unwrap().to_string_lossy().into_owned();
+        let c = Fake::both(&[MAIN, STAR]);
+        assert!(restore_to_user(&c, T, &file, &zip, B).is_ok());
+        let _ = cleanup_temp_dir(&tmp.to_string_lossy());
+    }
+
+    /// A user with no save of the game gets the backup's images whole, each made theirs; nothing
+    /// of theirs is there to back up, and the first owner's console backup copies stay behind.
+    #[test]
+    fn a_user_with_no_save_of_the_game_gets_the_backup_as_theirs() {
+        let tmp = make_temp_dir("restoretest").unwrap();
+        let zip = backup_zip(&tmp, &[MAIN, STAR]);
+        let file = zip.file_name().unwrap().to_string_lossy().into_owned();
         let c = Fake {
-            identity: Some("5C843CA8AE72".into()),
+            saves: vec![entry(A, "ps5")],
+            owner: true,
+            ..Fake::both(&[MAIN, STAR])
+        };
+        let done = restore_to_user(&c, T, &file, &zip, B).unwrap();
+        assert_eq!(done.to, folder(B));
+        assert_eq!(done.parts, vec![STAR.to_string(), MAIN.to_string()]);
+        assert_eq!(
+            c.calls(),
+            vec![
+                format!("put_added {}", folder(B)),
+                format!("owner {}/{STAR}", folder(B)),
+                format!("owner {}/{MAIN}", folder(B)),
+            ]
+        );
+        let _ = cleanup_temp_dir(&tmp.to_string_lossy());
+    }
+
+    /// A user who lacks one of the images: their save is backed up, the backup's images go in
+    /// and are made theirs.
+    #[test]
+    fn a_user_missing_an_image_gets_the_backup_as_theirs() {
+        let tmp = make_temp_dir("restoretest").unwrap();
+        let zip = backup_zip(&tmp, &[MAIN, STAR]);
+        let file = zip.file_name().unwrap().to_string_lossy().into_owned();
+        let c = Fake {
+            owner: true,
+            ..Fake::two_users(&[MAIN, STAR], &[MAIN])
+        };
+        let done = restore_to_user(&c, T, &file, &zip, B).unwrap();
+        assert_eq!(done.to, folder(B));
+        let calls = c.calls();
+        assert!(
+            calls[0].starts_with(&format!("back_up {}", folder(B))),
+            "{calls:?}"
+        );
+        assert_eq!(calls[1], format!("put_added {}", folder(B)));
+        assert_eq!(calls.iter().filter(|c| c.starts_with("owner ")).count(), 2);
+        let _ = cleanup_temp_dir(&tmp.to_string_lossy());
+    }
+
+    /// When an image can't be made theirs, a user who had no save is left with none (the folder
+    /// and the console's record of it taken away), and one who had a save gets it back.
+    #[test]
+    fn a_failed_change_of_owner_leaves_things_as_they_were() {
+        let tmp = make_temp_dir("restoretest").unwrap();
+        let zip = backup_zip(&tmp, &[MAIN, STAR]);
+        let file = zip.file_name().unwrap().to_string_lossy().into_owned();
+        let c = Fake {
+            saves: vec![entry(A, "ps5")],
+            owner: true,
+            fail_owner: Some(MAIN.into()),
             ..Fake::both(&[MAIN, STAR])
         };
         let e = restore_to_user(&c, T, &file, &zip, B).unwrap_err().msg;
-        assert_eq!(e, local::OTHER_CONSOLE_ERROR);
-        assert!(c.calls().is_empty());
-        for here in [Some("d4f7d5d36123"), None] {
-            let c = Fake {
-                identity: here.map(String::from),
-                ..Fake::both(&[MAIN, STAR])
-            };
-            assert!(restore_to_user(&c, T, &file, &zip, B).is_ok());
-        }
-        let old = backup_zip(&tmp.join("old"), &[MAIN, STAR]);
+        assert!(e.starts_with("save_mount_failed. Nothing was left"), "{e}");
+        assert_eq!(
+            c.calls().last().unwrap(),
+            &format!("take_away {} {STAR},{MAIN} true", folder(B))
+        );
         let c = Fake {
-            identity: Some("5C843CA8AE72".into()),
+            owner: true,
+            fail_owner: Some(STAR.into()),
+            ..Fake::two_users(&[MAIN, STAR], &[MAIN])
+        };
+        let e = restore_to_user(&c, T, &file, &zip, B).unwrap_err().msg;
+        assert!(e.ends_with("The save there before was put back."), "{e}");
+        let calls = c.calls();
+        let n = calls.len();
+        assert_eq!(
+            calls[n - 2],
+            format!("take_away {} {STAR} false", folder(B))
+        );
+        assert!(calls[n - 1].starts_with("put_back"), "{calls:?}");
+        let _ = cleanup_temp_dir(&tmp.to_string_lossy());
+    }
+
+    /// Refusals of the whole-image way change nothing: a user with no save database yet, a PS4
+    /// save, and a console that can't change an owner (the answers from before it could).
+    #[test]
+    fn making_a_backup_theirs_is_refused_before_anything_changes() {
+        let tmp = make_temp_dir("restoretest").unwrap();
+        let zip = backup_zip(&tmp, &[MAIN, STAR]);
+        let file = zip.file_name().unwrap().to_string_lossy().into_owned();
+        let c = Fake {
+            saves: vec![entry(A, "ps5")],
+            owner: true,
+            no_database: true,
             ..Fake::both(&[MAIN, STAR])
         };
-        assert!(restore_to_user(&c, T, &file, &old, B).is_ok());
+        let e = restore_to_user(&c, T, &file, &zip, B).unwrap_err().msg;
+        assert!(e.contains("no saved data on this PS5 yet"), "{e}");
+        assert!(c.calls().is_empty());
+        let c = Fake {
+            saves: vec![entry(A, "ps5")],
+            ..Fake::both(&[MAIN, STAR])
+        };
+        let e = restore_to_user(&c, T, &file, &zip, B).unwrap_err().msg;
+        assert_eq!(e, no_target_save(T));
+        assert!(c.calls().is_empty());
+        // A PS4 image starts with 0x01.
+        let ps4 = tmp.join("ps4");
+        std::fs::create_dir_all(ps4.join(T)).unwrap();
+        std::fs::write(ps4.join(T).join(MAIN), [1u8, 0, 0, 0]).unwrap();
+        std::fs::write(ps4.join(T).join(STAR), b"sealed").unwrap();
+        let zip4 = ps4.join(format!("{T}_user{A:08x}_2026-11-01_101500.zip"));
+        ps5upload_core::save_archive::zip_folder(&ps4, T, &zip4).unwrap();
+        let c = Fake {
+            saves: vec![entry(A, "ps5")],
+            owner: true,
+            ..Fake::both(&[MAIN, STAR])
+        };
+        let e = restore_to_user(&c, T, &file, &zip4, B).unwrap_err().msg;
+        assert!(e.contains("PS4 save"), "{e}");
+        assert!(c.calls().is_empty());
         let _ = cleanup_temp_dir(&tmp.to_string_lossy());
     }
 

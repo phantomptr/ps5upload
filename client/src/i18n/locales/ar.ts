@@ -7542,6 +7542,8 @@ helper_mismatch_boot_copy: "شغّل PS5 نسخة أقدم من المساعد �
   "saves_copy_cancel": "إلغاء",
   "saves_copy_confirm": "استبدال حفظ {target} للعبة {game} بحفظ {source}؟ يُنسخ حفظ {target} الحالي احتياطيًا أولًا.",
   "save_backup_restore_to_user_confirm": "استبدال حفظ {target} للعبة {game} بالنسخة الاحتياطية من {when}؟ يُنسخ حفظ {target} الحالي احتياطيًا أولًا.",
+  "save_backup_restore_new_hint": "لا يوجد حفظ لهذه اللعبة بعد. تصبح النسخة الاحتياطية حفظ هذا المستخدم.",
+  "save_backup_restore_new_confirm": "هل تريد إعطاء {target} النسخة الاحتياطية للعبة {game} بتاريخ {when}؟ ليس لدى {target} حفظ لهذه اللعبة بعد، لذا لن يُستبدل شيء.",
   "saves_copy_back": "رجوع",
   "saves_copy_replace": "استبدال الحفظ",
   "save_backup_restore_to_user_busy": "جارٍ استعادة النسخة الاحتياطية. أبقِ التطبيق مفتوحًا.",

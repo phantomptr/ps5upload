@@ -7558,6 +7558,8 @@ helper_mismatch_boot_copy: "Votre PS5 a lancé une ancienne copie de l'assistant
   "saves_copy_cancel": "Annuler",
   "saves_copy_confirm": "Remplacer la sauvegarde de {target} pour {game} par celle de {source} ? La sauvegarde actuelle de {target} est d'abord copiée.",
   "save_backup_restore_to_user_confirm": "Remplacer la sauvegarde de {target} pour {game} par la copie du {when} ? La sauvegarde actuelle de {target} est d'abord copiée.",
+  "save_backup_restore_new_hint": "Pas encore de sauvegarde de ce jeu. La copie devient la sauvegarde de cet utilisateur.",
+  "save_backup_restore_new_confirm": "Donner à {target} la copie de {game} du {when} ? {target} n'a pas encore de sauvegarde de ce jeu, donc rien n'est remplacé.",
   "saves_copy_back": "Retour",
   "saves_copy_replace": "Remplacer la sauvegarde",
   "save_backup_restore_to_user_busy": "Restauration de la copie. Garde l'app ouverte.",
