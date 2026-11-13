@@ -279,6 +279,60 @@ async fn an_internet_guest_joins_over_webrtc_plays_and_gets_the_picture() {
     set_live(console, 0);
 }
 
+/// A guest whose only address is IPv6 (a home behind its provider's shared IPv4, CGNAT, where no
+/// port can be forwarded) joins an internet invite directly: the engine offers its IPv6 addresses,
+/// takes the guest's IPv6 candidates, and the panel says the connection is IPv6. Before, both were
+/// IPv4 only and this guest never connected.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_internet_guest_with_only_ipv6_joins_directly() {
+    let _turn = PARTY_TESTS.lock().await;
+    let hub = FakeHub::start().await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings {
+        hub_url: hub.url.clone(),
+        stun: Vec::new(),
+        upnp: false,
+        ..Settings::default()
+    });
+    let console = "10.77.0.46";
+    set_helper(console, Arc::new(FakeHelper::default()));
+    set_live(console, 1);
+    let s = open_party(console).await;
+    let key = s["invite"]["key"].as_str().unwrap().to_string();
+    let inv = internet_invite(console).await;
+    let room = inv["internet"]["room"].as_str().unwrap().to_string();
+    until("hosted", || hub.has_host(&room)).await;
+
+    let Some(mut g) = crate::join_net::tests::connect_guest_v6(&hub.url, &room).await else {
+        eprintln!("no IPv6 loopback here: skipped");
+        close_party(console).await;
+        *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        set_live(console, 0);
+        return;
+    };
+    assert!(
+        g.answer.contains("::1 "),
+        "the answer offers the engine's IPv6 address: {}",
+        g.answer
+    );
+    g.text(serde_json::json!({"hello": {"invite": key, "name": "Six"}}));
+    assert_eq!(g.next_with("stage").await["stage"], "asking");
+    allow_next(console, true).await;
+    assert_eq!(g.next_with("stage").await["stage"], "joined");
+
+    let st = until_state(console, "the selected pair", |s| {
+        s["guests"][0]["link"]["path"].is_string()
+    })
+    .await;
+    assert_eq!(st["guests"][0]["link"]["ipv6"], true, "{st}");
+
+    g.text(serde_json::json!({"leave": 1}));
+    until_state(console, "left", |s| s["guests"][0]["state"] == "left").await;
+    close_party(console).await;
+    until("the room closed", || !hub.has_host(&room)).await;
+    *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    set_live(console, 0);
+}
+
 /// An app guest that reaches this engine (the same Wi-Fi, Tailscale) signals the internet invite
 /// to it directly (`/api/join/signal`): the same peer connection and certificate, the key only on
 /// the channel, and nothing through the hub. A room this engine does not have is refused.

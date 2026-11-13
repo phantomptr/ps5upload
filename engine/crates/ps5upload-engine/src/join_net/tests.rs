@@ -293,7 +293,16 @@ pub(crate) async fn connect_guest_with(
     video: bool,
 ) -> TestGuest {
     let join = serde_json::json!({"v": 1, "t": "join", "room": room});
-    connect_guest_join(hub_url, join, label, video, false).await
+    connect_guest_join(hub_url, join, label, video, false, "127.0.0.1:0").await
+}
+
+/// [`connect_guest`] from an IPv6 address only (`[::1]`): the guest's one candidate is IPv6, as a
+/// home behind its provider's shared IPv4 (CGNAT) reaches the host. None when this machine has no
+/// IPv6 loopback (some CI containers).
+pub(crate) async fn connect_guest_v6(hub_url: &str, room: &str) -> Option<TestGuest> {
+    tokio::net::UdpSocket::bind("[::1]:0").await.ok()?;
+    let join = serde_json::json!({"v": 1, "t": "join", "room": room});
+    Some(connect_guest_join(hub_url, join, "join", false, false, "[::1]:0").await)
 }
 
 /// A home-network join signalled on the engine's own socket (`{"t":"join","lan":true}`,
@@ -301,7 +310,7 @@ pub(crate) async fn connect_guest_with(
 /// `video` (as the pages offer them).
 pub(crate) async fn connect_guest_lan(signal_url: &str, video: bool) -> TestGuest {
     let join = serde_json::json!({"v": 1, "t": "join", "lan": true});
-    connect_guest_join(signal_url, join, "join", video, video).await
+    connect_guest_join(signal_url, join, "join", video, video, "127.0.0.1:0").await
 }
 
 async fn connect_guest_join(
@@ -310,13 +319,14 @@ async fn connect_guest_join(
     label: &str,
     video: bool,
     audio: bool,
+    bind: &str,
 ) -> TestGuest {
     let (mut hub, _) = tokio_tungstenite::connect_async(hub_url).await.unwrap();
     hub.send(TMsg::Text(join.to_string().into())).await.unwrap();
     let joined = next_hub(&mut hub).await;
     assert_eq!(joined["t"], "joined", "{joined}");
 
-    let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let sock = tokio::net::UdpSocket::bind(bind).await.unwrap();
     let local = sock.local_addr().unwrap();
     let mut rtc = Rtc::builder()
         .set_crypto_provider(super::crypto::provider())

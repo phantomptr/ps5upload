@@ -21,7 +21,7 @@ import {
 import { SELECTION_ACTION, SelectionBar } from "./SelectionBar";
 import { FilesViewFrame } from "./FilesViewFrame";
 import { parseFilesView, type FilesView } from "./filesViews";
-import { SearchPanel, type SearchRequest } from "../Search/SearchPanel";
+import { folderScopeOf, SearchPanel, type SearchRequest } from "../Search/SearchPanel";
 import { fileSystemTargetFor } from "../Search/searchLink";
 import { isMeshInternal, MESH_MARKER } from "../../lib/meshFiles";
 import { DiskUsagePanel } from "../DiskUsage";
@@ -830,8 +830,12 @@ export default function FileSystemScreen() {
   useEffect(() => {
     if (view === "search") setSearchKept(true);
   }, [view]);
-  const askSearch = (pattern: string, titleId?: string) =>
-    setSearchReq((r) => ({ n: (r?.n ?? 0) + 1, pattern, titleId }));
+  // The search's scope is the open folder (the panel's "This folder", #819): the toolbar
+  // box searches there too, and says so.
+  const [searchInFolder, setSearchInFolder] = useState(false);
+  const searchFolder = folderScopeOf(path);
+  const askSearch = (pattern: string, titleId?: string, inFolder = searchInFolder) =>
+    setSearchReq((r) => ({ n: (r?.n ?? 0) + 1, pattern, titleId, inFolder: inFolder && !!searchFolder }));
   // `?q=` / `?title=` (a game's "search this game's files"): run it, then drop the params.
   useEffect(() => {
     const q = searchParams.get("q");
@@ -3321,8 +3325,23 @@ export default function FileSystemScreen() {
             {
               icon: SearchIcon,
               label: tr("fs_search_all_drives", undefined, "Search all drives"),
-              run: () => openView("search"),
+              run: () => {
+                askSearch(searchDraft.trim(), undefined, false);
+                openView("search");
+              },
             },
+            ...(searchFolder
+              ? [
+                  {
+                    icon: SearchIcon,
+                    label: tr("fs_search_this_folder", undefined, "Search this folder"),
+                    run: () => {
+                      askSearch(searchDraft.trim(), undefined, true);
+                      openView("search");
+                    },
+                  },
+                ]
+              : []),
           ]}
         />
       )}
@@ -3379,8 +3398,16 @@ export default function FileSystemScreen() {
                 value={searchDraft}
                 onChange={(ev) => setSearchDraft(ev.target.value)}
                 disabled={!host?.trim()}
-                placeholder={tr("fs_search_placeholder", undefined, "Search all drives (*.pkg)")}
-                aria-label={tr("fs_search_all_drives", undefined, "Search all drives")}
+                placeholder={
+                  searchInFolder && searchFolder
+                    ? tr("fs_search_folder_placeholder", undefined, "Search this folder (*.pkg)")
+                    : tr("fs_search_placeholder", undefined, "Search all drives (*.pkg)")
+                }
+                aria-label={
+                  searchInFolder && searchFolder
+                    ? tr("fs_search_this_folder", undefined, "Search this folder")
+                    : tr("fs_search_all_drives", undefined, "Search all drives")
+                }
                 title={tr(
                   "search_description",
                   undefined,
@@ -3534,7 +3561,12 @@ export default function FileSystemScreen() {
               backLabel={tr("fs_view_back", undefined, "Back to files")}
               onBack={closeView}
             >
-              <SearchPanel request={searchReq} onOpenHit={openHit} />
+              <SearchPanel
+                request={searchReq}
+                onOpenHit={openHit}
+                folder={searchFolder}
+                onScope={setSearchInFolder}
+              />
             </FilesViewFrame>
           </div>
         )}

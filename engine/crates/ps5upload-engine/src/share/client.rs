@@ -8,7 +8,7 @@
 //! The answer must carry the fingerprint the link names: a hub that tried to stand in the middle
 //! would have to answer with its own certificate, and is refused.
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -255,7 +255,7 @@ async fn next_hub(ws: &mut crate::join_net::hub::Ws) -> Result<serde_json::Value
 
 /// What STUN servers see of each socket: server-reflexive candidates.
 async fn stun_candidates(socks: &[(Arc<UdpSocket>, SocketAddr)]) -> Vec<Candidate> {
-    let mut servers = Vec::new();
+    let mut servers: Vec<SocketAddr> = Vec::new();
     for s in crate::join::settings().stun.iter().take(2) {
         if cfg!(test) && s.parse::<SocketAddr>().is_err() {
             continue;
@@ -263,13 +263,16 @@ async fn stun_candidates(socks: &[(Arc<UdpSocket>, SocketAddr)]) -> Vec<Candidat
         if let Ok(Ok(found)) =
             tokio::time::timeout(Duration::from_secs(2), tokio::net::lookup_host(s.as_str())).await
         {
-            servers.extend(found.filter(|a| a.is_ipv4()).take(1));
+            // One of each family: each socket asks over its own.
+            let found: Vec<SocketAddr> = found.collect();
+            servers.extend(found.iter().find(|a| a.is_ipv4()));
+            servers.extend(found.iter().find(|a| a.is_ipv6()));
         }
     }
     let mut out: Vec<Candidate> = Vec::new();
     for (sock, base) in socks {
         let mut txs = Vec::new();
-        for srv in &servers {
+        for srv in servers.iter().filter(|a| a.is_ipv6() == base.is_ipv6()) {
             let mut tx = [0u8; 12];
             if getrandom::fill(&mut tx).is_err() {
                 continue;
@@ -291,7 +294,10 @@ async fn stun_candidates(socks: &[(Arc<UdpSocket>, SocketAddr)]) -> Vec<Candidat
                 continue;
             }
             if let Some(addr) = crate::join_net::stun::mapped(b) {
-                if addr != *base && addr.is_ipv4() && !out.iter().any(|c| c.addr() == addr) {
+                if addr != *base
+                    && addr.is_ipv6() == base.is_ipv6()
+                    && !out.iter().any(|c| c.addr() == addr)
+                {
                     if let Ok(c) = Candidate::server_reflexive(addr, *base, "udp") {
                         out.push(c);
                     }
@@ -404,7 +410,7 @@ pub(crate) async fn connect_rtc(link: &super::client::ShareLink) -> Result<RtcLi
         .map_err(|e| format!("answer: {e}"))?;
     for c in early {
         if let Ok(c) = Candidate::from_sdp_string(c.trim().trim_start_matches("a=")) {
-            if c.addr().is_ipv4() {
+            if !c.addr().ip().is_unspecified() {
                 rtc.add_remote_candidate(c);
             }
         }
@@ -595,7 +601,8 @@ async fn drive(mut d: Driver) {
             c = d.cand_rx.recv() => {
                 if let Some(c) = c {
                     if let Ok(c) = Candidate::from_sdp_string(c.trim().trim_start_matches("a=")) {
-                        if c.addr().is_ipv4() && !matches!(c.addr().ip(), IpAddr::V4(a) if a.is_unspecified()) {
+                        // Both families (IPv6 reaches a sender behind a shared IPv4, CGNAT).
+                        if !c.addr().ip().is_unspecified() {
                             d.rtc.add_remote_candidate(c);
                         }
                     }

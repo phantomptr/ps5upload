@@ -19,7 +19,8 @@
 //!   "why": "full" | "offer"}` when the engine will not take the offer.
 //!
 //! **The connection** ([`rtc`]): the guest makes the offer with one reliable, ordered data channel
-//! labelled `"join"`. ICE has this computer's addresses, what the STUN servers in the settings see
+//! labelled `"join"`. ICE has this computer's addresses (IPv4, and public IPv6 ones: how a home
+//! behind its provider's shared IPv4, CGNAT, is still reached directly), what the STUN servers in the settings see
 //! (`stun.cloudflare.com:3478`, `stun.l.google.com:19302` unless the host changed them), and the
 //! router mapping UPnP or NAT-PMP made ([`nat`]). No TURN: a pair of NATs that cannot meet shows
 //! as `"failed"` on the host's panel.
@@ -376,10 +377,14 @@ impl PeerInfo {
             self.with(|s| (s.rtt_ms, s.sent_kbps, s.track.clone(), s.udp));
         let on = track.as_ref().is_some_and(|t| t.on);
         let path = self.net_path();
+        let ipv6 = self.with(|s| s.pair).map(|(_, remote)| remote.is_ipv6());
         serde_json::json!({
             // How the guest is connected: "lan" (the home network), "tailscale", "internet"
             // (direct through both routers); null while ICE has no pair yet.
             "path": path,
+            // The pair is IPv6 (how a home behind a shared IPv4, CGNAT, is reached); null while
+            // ICE has no pair yet.
+            "ipv6": ipv6,
             // Where the picture goes: "track" (RTP) or "channel" (the data channel).
             "video": if on { "track" } else { "channel" },
             // Where the sound goes: "track" (Opus RTP, beside the picture) or "channel".

@@ -102,6 +102,30 @@ export interface SearchRequest {
   pattern: string;
   /** Scope to this game's files; with no pattern, the scope is only set. */
   titleId?: string;
+  /** Scope to the folder Files has open (the panel's `folder`) instead (#819). */
+  inFolder?: boolean;
+}
+
+/** Where a search with `scope` walks: the folder Files has open ("This folder", #819), one
+ *  game's folder (its registered source, else /user/app/<id> for a pkg install), or every
+ *  drive (undefined). */
+export function scopeRootsFor(
+  scope: string,
+  folder: string | null | undefined,
+  games: Pick<InstalledTitle, "titleId" | "source">[],
+): string[] | undefined {
+  if (scope === FOLDER_SCOPE) return folder ? [folder] : undefined;
+  const g = scope ? games.find((x) => x.titleId === scope) : undefined;
+  return g ? [g.source?.trim() || `/user/app/${g.titleId}`] : undefined;
+}
+
+/** The scope selector's value for "the folder Files has open". */
+export const FOLDER_SCOPE = "__folder__";
+
+/** The folder a search can be limited to: Files' open folder, none at the top (the drives). */
+export function folderScopeOf(path: string | null | undefined): string | null {
+  const p = (path ?? "").trim().replace(/\/+$/, "");
+  return p && p !== "/" ? p : null;
 }
 
 /**
@@ -111,9 +135,15 @@ export interface SearchRequest {
 export function SearchPanel({
   request,
   onOpenHit,
+  folder,
+  onScope,
 }: {
   request?: SearchRequest | null;
   onOpenHit: (hit: SearchHit) => void;
+  /** The folder Files has open: "This folder" in the scope selector (#819). */
+  folder?: string | null;
+  /** The scope changed: whether it is that folder (the toolbar box says so). */
+  onScope?: (inFolder: boolean) => void;
 }) {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
@@ -123,7 +153,13 @@ export function SearchPanel({
   // to one game's directory instead of every volume. "" = all content.
   const [games, setGames] = useState<InstalledTitle[]>([]);
   // A game's page can open Search on that game's files.
-  const [scopeTitleId, setScopeTitleId] = useState(() => request?.titleId?.toUpperCase() ?? "");
+  const [scopeTitleId, setScopeTitleId] = useState(() =>
+    request?.inFolder ? FOLDER_SCOPE : (request?.titleId?.toUpperCase() ?? ""),
+  );
+  const inFolder = scopeTitleId === FOLDER_SCOPE && !!folder;
+  useEffect(() => {
+    onScope?.(inFolder);
+  }, [inFolder, onScope]);
   const [saved, setSaved] = useState<SavedSearch[]>(() => loadSavedSearches());
   const { prompt: promptDialog, dialog: promptDialogNode } = usePrompt();
   const [loading, setLoading] = useState(false);
@@ -163,7 +199,7 @@ export function SearchPanel({
     // Switching console invalidates the selected game (it may not exist on the
     // new one) — reset so the scan doesn't silently widen to "all content"
     // while the UI still implies a game is picked.
-    if (gamesHostRef.current !== host) setScopeTitleId("");
+    if (gamesHostRef.current !== host) setScopeTitleId((s) => (s === FOLDER_SCOPE ? s : ""));
     gamesHostRef.current = host;
     setGames([]);
     if (!host?.trim()) {
@@ -226,10 +262,7 @@ export function SearchPanel({
     // When a game is selected, restrict the scan to its directory. Prefer the
     // registered source path; fall back to /user/app/<id> for pkg-installed
     // titles (whose `source` is empty). Empty scope = search every volume.
-    const scopeGame = scope ? games.find((g) => g.titleId === scope) : undefined;
-    const scopeRoots = scopeGame
-      ? [scopeGame.source?.trim() || `/user/app/${scopeGame.titleId}`]
-      : undefined;
+    const scopeRoots = scopeRootsFor(scope, folder, games);
     try {
       const res = await searchPS5(
         // trim() to match the gate above and every other screen — a stored
@@ -265,8 +298,8 @@ export function SearchPanel({
       abortRef.current?.abort();
       return;
     }
-    const titleId = request.titleId?.toUpperCase() ?? "";
-    if (titleId && games.length === 0) {
+    const titleId = request.inFolder ? FOLDER_SCOPE : (request.titleId?.toUpperCase() ?? "");
+    if (titleId && titleId !== FOLDER_SCOPE && games.length === 0) {
       setPattern(request.pattern);
       setScopeTitleId(titleId);
       return;
@@ -347,7 +380,7 @@ export function SearchPanel({
           {/* Scope to a single game (or all content). Restricts the scan to
               that title's directory — far faster than sweeping every volume,
               and the practical way to "find a file inside game X". */}
-          {games.length > 0 && (
+          {(games.length > 0 || folder) && (
             <select
               value={scopeTitleId}
               onChange={(e) => setScopeTitleId(e.target.value)}
@@ -361,6 +394,11 @@ export function SearchPanel({
               <option value="">
                 {tr("search_scope_all", undefined, "All content")}
               </option>
+              {folder && (
+                <option value={FOLDER_SCOPE}>
+                  {tr("search_scope_folder", { folder }, `This folder: ${folder}`)}
+                </option>
+              )}
               {games.map((g) => (
                 <option key={g.titleId} value={g.titleId}>
                   {g.titleName} ({g.titleId})

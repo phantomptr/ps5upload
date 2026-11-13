@@ -372,6 +372,8 @@ describe("the panel", () => {
     expect(out).toContain("Connecting…");
     expect(out.match(/data-testid="pt-net-peer-failed"/g)).toHaveLength(1);
     expect(out).toContain("Couldn&#x27;t connect from their network");
+    expect(out).toContain('data-testid="pt-net-peer-failed-hint"');
+    expect(out).toContain("Tailscale always gets through");
     expect(out).toContain('data-testid="pt-net-peer-failed-dismiss"');
   });
 
@@ -381,6 +383,15 @@ describe("the panel", () => {
     expect(guestWayText(tr, { ...g, netPath: null })).toBe("Internet · Direct");
     expect(guestWayText(tr, { ...g, netPath: null, path: "connecting" })).toBe("Connecting…");
     expect(guestWayText(tr, { ...g, via: "lan", path: null, netPath: null })).toBeNull();
+  });
+
+  it("an internet friend over IPv6 says so (a home behind a shared IPv4 still connects directly)", () => {
+    const g = readJoinState(engine).guests[0];
+    expect(guestWayText(tr, { ...g, netPath: "internet", ipv6: false })).toBe("Internet direct");
+    expect(guestWayText(tr, { ...g, netPath: "internet", ipv6: true })).toBe("Internet direct · IPv6");
+    const raw = JSON.parse(JSON.stringify(engine));
+    raw.guests[0].link = { ...(raw.guests[0].link ?? {}), path: "internet", ipv6: true };
+    expect(readJoinState(raw).guests[0].ipv6).toBe(true);
   });
 
   it("an older engine offers no Internet", () => {
