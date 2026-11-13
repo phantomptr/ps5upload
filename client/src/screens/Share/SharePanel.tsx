@@ -460,7 +460,9 @@ function mediaLine(tr: Tr, shots: number, clips: number): string {
   return shots && clips ? `${s}, ${c}` : clips ? c : s;
 }
 
-/** "Expires in 23 h 59 min", kept current while shown. */
+/** "Expires in 23 h 59 min", kept current while shown. `seconds` is the time left when it was
+ *  read (each poll reads it again): the caller keys this on it, so the count runs from when the
+ *  latest value came. Counting from when it first showed took the elapsed time off twice. */
 function Countdown({ seconds }: { seconds: number }) {
   const tr = useTr();
   const [at] = useState(() => Date.now());
@@ -586,7 +588,7 @@ export function ShareMade({
               )}
             </div>
             <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--color-muted)]">
-              <Countdown seconds={share.expires_in_s} />
+              <Countdown key={share.expires_in_s} seconds={share.expires_in_s} />
               <span>
                 {share.works === "anywhere"
                   ? tr("share_works_anywhere_v2", undefined, "Works on your Wi-Fi and over the internet")

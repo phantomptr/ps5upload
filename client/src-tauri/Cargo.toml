@@ -1,6 +1,6 @@
 [package]
 name = "ps5upload-desktop"
-version = "12.4.14"
+version = "12.4.15"
 description = "The all-in-one PS5 companion app."
 license = "GPL-3.0-or-later"
 edition = "2021"
@@ -17,7 +17,7 @@ blake3 = "1"
 
 [dependencies]
 # Same version as engine/Cargo.toml (the third_party/ava1 submodule's tag).
-ava1 = "=1.0.9"
+ava1 = "=1.0.10"
 # Tauri core + the native file dialogs. File reads/writes go through our
 # own commands (see commands/save_text_file.rs), and links open through
 # tauri-plugin-opener below.

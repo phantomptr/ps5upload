@@ -1107,6 +1107,13 @@ test-payload: payload
 		$(PAYLOAD_DIR)/src/path_policy.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-path-policy-selftest
 	@echo "✓ the trust store and the saved shares' key are refused under /data and /user/data alike"
+	@echo "Running shell protected-path self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-include $(PAYLOAD_DIR)/tests/hostshim/nmount_shim.h \
+		-o $(SELFTEST_DIR)/ps5upload-shell-protected-selftest $(PAYLOAD_DIR)/tests/shell_protected_selftest.c \
+		$(PAYLOAD_DIR)/src/shell_builtin.c $(PAYLOAD_DIR)/src/path_policy.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-shell-protected-selftest
+	@echo "✓ the shell cannot read, delete, move or lock the trust store either"
 	@echo "Running file index name-match self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-index-glob-selftest $(PAYLOAD_DIR)/tests/index_glob_selftest.c

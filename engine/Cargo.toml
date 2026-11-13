@@ -21,7 +21,7 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "GPL-3.0-or-later"
-version = "12.4.14"
+version = "12.4.15"
 
 [workspace.dependencies]
 # AVA1 (github.com/phantomptr/ava1): the Rust crate from crates.io; the payload builds the C side
@@ -29,7 +29,7 @@ version = "12.4.14"
 # (`make ava1-version-check` fails when they differ). ava1-chaos (a fault-injecting TCP proxy for
 # the lab and tests) is not published and does not depend on ava1, so the path dep adds no
 # second ava1 to the graph.
-ava1 = "=1.0.9"
+ava1 = "=1.0.10"
 ava1-chaos = { path = "../third_party/ava1/crates/ava1-chaos" }
 anyhow = "1.0"
 # "multipart" is for the backport library import (fakelibs_api.rs): users pick

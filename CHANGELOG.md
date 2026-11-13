@@ -6,6 +6,25 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+Uploads:
+
+- The check that reads large files back on the PS5 now also checks a part of a file that had to be sent twice, once its second copy reaches the drive, so a fault in that second write is caught (AVA1 1.0.10).
+
+Security:
+
+- The console shell (the Shell page) can no longer read, change, move or delete the folders where the helper keeps this console's identity key and your saved network-share passwords. Every other file tool already refused them.
+
+Share:
+
+- The "Expires in" time on a share link counted down twice as fast as it should, so a link with hours left could look as if it was about to expire.
+- On Windows, a shared file or folder named like a Windows device (such as `NUL.pkg` or `CON`) is now saved under a safe name instead of failing to arrive.
+
+Games:
+
+- When the grid reuses a tile for another game while its cover is still loading, the old game's cover no longer appears on the new one.
+
+## 12.4.15
+
 Play Together:
 
 - "Block PS & Create for friends" now does what it says: a friend gets one press of PS to pick a user on the TV, and once they pick one (PS, then ✕), PS and Create are off for them. Before, both kept working for the first minute after joining, and again for a minute whenever their controller was set up again, such as after the stream restarted. A friend who closes the user picker without choosing is also no longer locked out, and Create is off while they pick. (#720)

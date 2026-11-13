@@ -26,6 +26,7 @@
 #include <sys/utsname.h>
 
 #include "cross_device.h"
+#include "path_policy.h"
 #include "proc_list.h"
 #include "runtime.h"
 
@@ -392,6 +393,49 @@ static int shell_open_regular(const char *path, const char **why) {
     return fd;
 }
 
+/* Commands whose arguments are never paths: nothing to check. */
+static int shell_args_not_paths(const char *prog) {
+    static const char *const names[] = {"echo", "notify", "sysctl", "date", "kill", "pid", "which",
+                                        "basename", "dirname", "beep", "led", "sleep", "help",
+                                        "true", "false", "uname", "hostname", "id", "env", "ps",
+                                        "mount", "df", "sync", "klog", "pwd", NULL};
+    for (int i = 0; names[i]; i++)
+        if (strcmp(prog, names[i]) == 0) return 1;
+    return 0;
+}
+
+/* Commands that change, move or read through a whole tree: refused on an ANCESTOR of the protected
+ * folders too (`rm -r /data/ps5upload` takes the trust store with it; `grep -r x /data` reads it). */
+static int shell_walks_or_changes(const char *prog) {
+    return strcmp(prog, "rm") == 0 || strcmp(prog, "mv") == 0 || strcmp(prog, "cp") == 0 ||
+           strcmp(prog, "chmod") == 0 || strcmp(prog, "grep") == 0;
+}
+
+/* The protected folders (the AVA1 trust store, the saved shares' secrets: path_policy.h) are
+ * refused to the shell as to every other file operation: a connected peer must not read the
+ * console's identity key or the share passwords, nor delete, move or lock them. Every argument that
+ * is not an option is judged as a path (relative ones against the working directory, symlinks
+ * resolved). Returns the refused argument, or NULL. */
+static const char *shell_protected_arg(const char *prog, int argc, char **argv) {
+    if (shell_args_not_paths(prog)) return NULL;
+    int tree = shell_walks_or_changes(prog);
+    for (int i = 1; i < argc; i++) {
+        const char *a = argv[i];
+        if (!a || !a[0] || a[0] == '-') continue;
+        /* The policy judges absolute paths: a relative one is taken from the working directory. */
+        char abs[2048];
+        const char *p = a;
+        if (a[0] != '/') {
+            char cwd[1024];
+            if (!getcwd(cwd, sizeof cwd)) return a; /* nowhere to judge it from: refused */
+            if ((size_t)snprintf(abs, sizeof abs, "%s/%s", cwd, a) >= sizeof abs) return a;
+            p = abs;
+        }
+        if (path_in_protected(p) || (tree && path_tree_op_refused(p))) return a;
+    }
+    return NULL;
+}
+
 int handle_shell_builtin(const char *cmd_in, char **out_text,
                                  int *out_exit) {
     if (!cmd_in || !out_text || !out_exit) return -1;
@@ -409,6 +453,18 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
 
     /* beep / led: the console's beeper and front LED (indicator.c). */
     if (indicator_shell(argc, argv, out_text, out_exit)) return 0;
+
+    {
+        const char *bad = shell_protected_arg(prog, argc, argv);
+        if (bad) {
+            len = shell_appendf(&out, &cap, len,
+                                "%s: %s: refused (the helper's keys and saved passwords are kept there)\n",
+                                prog, bad);
+            *out_text = out;
+            *out_exit = 1;
+            return 0;
+        }
+    }
 
     if (strcmp(prog, "help") == 0) {
         len = shell_appendf(&out, &cap, len,

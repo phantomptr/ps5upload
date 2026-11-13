@@ -13,7 +13,8 @@
 # continue-on-error) and only warn here.
 #
 # --promote runs `gh release edit vX.Y.Z --prerelease=false --latest` once every check
-# passes. That also fires docker-engine.yml's `promote` job (:latest and :<major.minor>).
+# passes. That also fires docker-engine.yml's `promote` job (:latest and :<major.minor>), and it
+# redeploys the website (its release snapshot and iPhone source list promoted releases only).
 # Promote only after the release has been tried on real hardware.
 
 set -euo pipefail
@@ -103,4 +104,9 @@ fi
 if (( promote )); then
   gh release edit "$tag" --prerelease=false --latest
   echo "promoted $tag to the latest release"
+  # The website's release snapshot and the iPhone (AltStore) source list promoted releases only:
+  # the deploy that publish started ran while this was still a pre-release.
+  gh workflow run pages.yml --ref main \
+    && echo "started the website deploy (pages.yml) for the promoted release" \
+    || echo "warn  could not start pages.yml; run: gh workflow run pages.yml --ref main"
 fi
