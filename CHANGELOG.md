@@ -11,6 +11,10 @@ Play Together:
 - Internet invites now connect over IPv6 too. If your internet provider shares one IPv4 address between many homes (CGNAT), so ports can't be forwarded, a friend can still join directly when both of you have IPv6, as most mobile networks and many home providers do. The friend's row shows "Internet direct · IPv6" when it is used. Share links between two computers use IPv6 the same way. Tested on this computer only so far, not across two real homes.
 - When a friend can't connect from their network, the panel now says Tailscale always gets through.
 
+Files:
+
+- Search can stay in the folder you have open instead of every drive: pick "This folder" next to the search, or "Search this folder" in the ⋯ menu. The search box then says "Search this folder" (#819).
+
 ## 12.4.16
 
 Uploads:
