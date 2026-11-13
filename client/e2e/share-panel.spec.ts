@@ -296,3 +296,21 @@ test("a second link opened on the Share screen fills the form", async ({ page })
   await expect(page.getByTestId("receive-link")).toHaveValue(second);
   await expect(page).toHaveURL(/\/share$/);
 });
+
+// The time left comes again with every poll; the countdown runs from the latest value. It ran from
+// when the panel first showed instead, so it took the elapsed time off twice ("23 h" read as
+// "under a minute" half-way through a day).
+test("the link's countdown runs at the clock's pace", async ({ page }) => {
+  await page.clock.install();
+  const state = await setup(page, 1280, "light");
+  await page.goto(`/games/${ID}`, { waitUntil: "domcontentloaded" });
+  await page.getByRole("button", { name: "Share", exact: true }).first().click({ timeout: 60_000 });
+  await expect(page.getByTestId("share-app")).toHaveAttribute("data-state", "on");
+  await page.getByTestId("share-go").click();
+  await expect(page.getByTestId("share-expires")).toContainText("Expires in 23 h");
+  // Two hours on: the engine says two hours less.
+  state.share = { ...state.share, expires_in_s: 86_340 - 7200 };
+  await page.clock.fastForward("02:00:00");
+  await page.clock.runFor(35_000);
+  await expect(page.getByTestId("share-expires")).toContainText("Expires in 21 h");
+});

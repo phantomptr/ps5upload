@@ -938,6 +938,11 @@ fn a_long_name_keeps_its_extension_and_two_alike_stay_two() {
     assert!(jp.ends_with(".pkg") && jp.len() <= wire::NAME_MAX);
     assert_eq!(wire::safe_name("Game v1.02.pkg"), "Game v1.02.pkg");
     assert_eq!(wire::safe_name("a:b?.txt"), "a_b_.txt");
+    // A Windows device name, whatever its extension or case, is never a name to write to.
+    assert_eq!(wire::safe_name("NUL.pkg"), "_NUL.pkg");
+    assert_eq!(wire::safe_name("con"), "_con");
+    assert_eq!(wire::safe_name("COM1.bin"), "_COM1.bin");
+    assert_eq!(wire::safe_name("console.pkg"), "console.pkg");
 
     // Under 200 bytes nothing is cut: names that differ after their 80th character stay apart.
     let listed = |path: String| wire::Listed {

@@ -554,6 +554,10 @@ pub(crate) fn safe_name(s: &str) -> String {
     };
     if t.is_empty() {
         "item".into()
+    } else if ps5upload_core::transfer::host_unsafe_component(&t).is_some() {
+        // `NUL.pkg` or `CON` is a device on Windows, whatever follows the dot: the bytes went
+        // nowhere and the rename failed.
+        format!("_{t}")
     } else {
         t
     }

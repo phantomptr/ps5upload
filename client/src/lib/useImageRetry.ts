@@ -158,7 +158,11 @@ export function useImageRetry(
   // transport is blocked skips straight to the fallback. Waiting for
   // `onError` to discover it again would cost this image the full retry
   // budget plus its stagger, for a verdict the session reached long ago.
+  // Which image a fallback fetch started in `onError` was for: one that resolves after the row
+  // shows another image is dropped (its cover belongs to the old one).
+  const gen = useRef(0);
   useEffect(() => {
+    gen.current += 1;
     clear();
     attempts.current = 0;
     fallbackTried.current = false;
@@ -202,8 +206,10 @@ export function useImageRetry(
       const loader = loaderRef.current;
       if (loader && !fallbackTried.current) {
         fallbackTried.current = true;
+        const mine = gen.current;
         void loader()
           .then((url) => {
+            if (mine !== gen.current) return;
             if (url) {
               // The bytes exist and only the IPC could fetch them: that is
               // evidence about the transport, not about this image, so the
@@ -214,7 +220,9 @@ export function useImageRetry(
               setFallbackSrc(url);
             } else setFailed(true);
           })
-          .catch(() => setFailed(true));
+          .catch(() => {
+            if (mine === gen.current) setFailed(true);
+          });
         return;
       }
       setFailed(true);
