@@ -6,6 +6,10 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+Uploads:
+
+- The check that reads large files back on the PS5 now also checks a part of a file that had to be sent twice, once its second copy reaches the drive, so a fault in that second write is caught (AVA1 1.0.10).
+
 Security:
 
 - The console shell (the Shell page) can no longer read, change, move or delete the folders where the helper keeps this console's identity key and your saved network-share passwords. Every other file tool already refused them.
