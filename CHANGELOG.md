@@ -8,7 +8,7 @@ What's new in ps5upload, written for humans.
 
 Security:
 
-- The helper's built-in shell (Files → Terminal, and AI agents) can no longer read, change, move or delete the folders where the helper keeps this console's identity key and your saved network-share passwords. Every other file tool already refused them.
+- The console shell (the Shell page) can no longer read, change, move or delete the folders where the helper keeps this console's identity key and your saved network-share passwords. Every other file tool already refused them.
 
 Share:
 
