@@ -6,6 +6,17 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+Play Together:
+
+- "Block PS & Create for friends" now does what it says: a friend gets one press of PS to pick a user on the TV, and once they pick one (PS, then ✕), PS and Create are off for them. Before, both kept working for the first minute after joining, and again for a minute whenever their controller was set up again, such as after the stream restarted. A friend who closes the user picker without choosing is also no longer locked out, and Create is off while they pick. (#720)
+
+Share:
+
+- The Share page now uses the whole window, like the other pages.
+- Opening a second share link while the Share page is already showing now puts that link in the box. Before, it was dropped and the box kept the first one.
+
+## 12.4.14
+
 Share:
 
 - The Share page now lines up with the rest of the app. The box for opening a friend's link sits on the left like the other pages, and beside it are three short steps on how sharing works, with a button to choose a game to share from, and your past shares (now always shown, even when there are none yet).

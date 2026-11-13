@@ -48,6 +48,12 @@ export function ReceivePanel({ pending, onEnded }: { pending?: string | null; on
   const [view, setView] = useState<ReceiveView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // A new link handed over while this panel shows goes into the form (not over a running receive).
+  const [shown, setShown] = useState(pending);
+  if (pending !== shown) {
+    setShown(pending);
+    if (pending && !id) setLink(pending);
+  }
 
   // While a receive runs, its state (read on demand; stops once it ended).
   const ended = !!view && ENDED.includes(view.state);

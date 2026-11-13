@@ -280,3 +280,19 @@ test("an old Play › Receive link opens the Share screen", async ({ page }) => 
   await expect(page.getByRole("radio", { name: "Play Together" })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole("radio", { name: "Receive" })).toHaveCount(0);
 });
+
+// A second link handed over while the Share screen already shows (an app link opened again) goes
+// into the form; it used to be taken off the address and lost.
+test("a second link opened on the Share screen fills the form", async ({ page }) => {
+  await setup(page, 1280, "light");
+  await page.goto(`/share?receive=${encodeURIComponent(LINK)}`, { waitUntil: "domcontentloaded" });
+  await expect(page.getByTestId("receive-link")).toHaveValue(LINK, { timeout: 60_000 });
+  await expect(page).toHaveURL(/\/share$/);
+  const second = `${LINK}-2`;
+  await page.evaluate((url) => {
+    history.pushState(null, "", url);
+    dispatchEvent(new PopStateEvent("popstate"));
+  }, `/share?receive=${encodeURIComponent(second)}`);
+  await expect(page.getByTestId("receive-link")).toHaveValue(second);
+  await expect(page).toHaveURL(/\/share$/);
+});
