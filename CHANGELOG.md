@@ -4,6 +4,12 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+Share:
+
+- Opening a second share link while the Share page is already showing now puts that link in the box. Before, it was dropped and the box kept the first one.
+
 ## 12.4.14
 
 Share:

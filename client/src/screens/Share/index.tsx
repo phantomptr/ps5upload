@@ -17,10 +17,14 @@ import { ShareHistory } from "./ShareHistory";
 export default function ShareScreen() {
   const tr = useTr();
   const [params, setParams] = useSearchParams();
-  // A link handed over (an app link, the website's share page): filled in once, then off the address.
-  const [pending] = useState<string | null>(() => params.get("receive")?.trim() || null);
+  // A link handed over (an app link, the website's share page): taken into the form, then off the
+  // address. Read on every change, so a second link opened while this screen shows is not lost.
+  const [pending, setPending] = useState<string | null>(() => params.get("receive")?.trim() || null);
   useEffect(() => {
-    if (params.has("receive")) setParams({}, { replace: true });
+    if (!params.has("receive")) return;
+    const next = params.get("receive")?.trim();
+    if (next) setPending(next);
+    setParams({}, { replace: true });
   }, [params, setParams]);
   // Read the past shares again each time a receive ends, so it shows up there.
   const [ends, setEnds] = useState(0);
