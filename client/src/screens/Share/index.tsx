@@ -40,7 +40,7 @@ export default function ShareScreen() {
           "Open a link a friend shared with you. To share your own saves, captures or a homebrew app, press Share on its game's page.",
         )}
       />
-      <div className="grid max-w-6xl items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]">
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]">
         <ReceivePanel pending={pending} onEnded={onEnded} />
         <div className="space-y-4">
           <HowItWorks />
