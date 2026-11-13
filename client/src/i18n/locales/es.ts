@@ -8040,6 +8040,7 @@ rp_users_add_hint: "Para jugar también como otro usuario, inicia sesión con es
 "pt_net_connecting": "Conectando…",
 "pt_net_friend": "Un amigo por internet",
 "pt_net_peer_failed": "No se pudo conectar desde su red",
+"pt_net_peer_failed_hint": "Sus redes no pudieron conectarse directamente. Tailscale siempre funciona: únanse los dos a la misma red de Tailscale y vuelvan a enviar el enlace.",
 "pt_set_old_engine": "Las invitaciones por internet necesitan un motor de PS5Upload más reciente.",
 "pt_set_upnp": "Abrir un puerto en mi router automáticamente (UPnP)",
 "pt_set_upnp_hint": "Mientras haya una invitación por internet abierta, se pide un puerto a tu router para que puedan conectarse más redes de tus amigos. Se cierra cuando termina la invitación.",

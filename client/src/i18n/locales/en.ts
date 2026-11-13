@@ -8391,6 +8391,7 @@ rp_users_add_hint: "To play as another user too, sign in to that user on the PS5
 "pt_net_connecting": "Connecting…",
 "pt_net_friend": "A friend on the internet",
 "pt_net_peer_failed": "Couldn't connect from their network",
+"pt_net_peer_failed_hint": "Your networks couldn't reach each other directly. Tailscale always gets through: both of you join one Tailscale network, then send the link again.",
 "pt_set_old_engine": "Internet invites need a newer PS5Upload engine.",
 "pt_set_upnp": "Open a port on my router automatically (UPnP)",
 "pt_set_upnp_hint": "While an internet invite is open, your router is asked for a port so more friends' networks can connect. It closes when the invite ends.",

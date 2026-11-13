@@ -8089,6 +8089,7 @@ rp_users_add_hint: "Để chơi bằng cả người dùng khác, hãy đăng nh
 "pt_net_connecting": "Đang kết nối…",
 "pt_net_friend": "Một người bạn qua internet",
 "pt_net_peer_failed": "Không kết nối được từ mạng của họ",
+"pt_net_peer_failed_hint": "Mạng của hai bạn không thể kết nối trực tiếp với nhau. Tailscale luôn kết nối được: cả hai cùng tham gia một mạng Tailscale, rồi gửi lại liên kết.",
 "pt_set_old_engine": "Lời mời qua internet cần engine PS5Upload mới hơn.",
 "pt_set_upnp": "Tự động mở cổng trên router của tôi (UPnP)",
 "pt_set_upnp_hint": "Khi lời mời qua internet đang mở, router được yêu cầu mở một cổng để nhiều mạng của bạn bè kết nối được hơn. Cổng đóng lại khi lời mời kết thúc.",

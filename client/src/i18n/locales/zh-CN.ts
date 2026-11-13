@@ -8046,6 +8046,7 @@ rp_users_add_hint: "若也想以其他用户游玩，请在 PS5 上登录该用�
 "pt_net_connecting": "正在连接…",
 "pt_net_friend": "互联网上的朋友",
 "pt_net_peer_failed": "无法从对方的网络连接",
+"pt_net_peer_failed_hint": "你们的网络无法直接互通。Tailscale 总能连通：你们两人加入同一个 Tailscale 网络，然后重新发送链接。",
 "pt_set_old_engine": "互联网邀请需要更新的 PS5Upload 引擎。",
 "pt_set_upnp": "自动在我的路由器上打开端口（UPnP）",
 "pt_set_upnp_hint": "互联网邀请开着时，会向路由器申请一个端口，让更多朋友的网络能连上。邀请结束时关闭。",

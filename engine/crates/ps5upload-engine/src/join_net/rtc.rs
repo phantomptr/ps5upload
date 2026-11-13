@@ -4,7 +4,7 @@
 //! [`Cmd`].
 
 use std::collections::{HashMap, VecDeque};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -803,24 +803,81 @@ pub(crate) async fn net() -> Option<Arc<Net>> {
 pub(crate) static TEST_REAL_IPS: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-/// The addresses the sockets go on: every IPv4 interface but loopback and link-local (the tests:
-/// loopback only), the home network's first ([`by_reach`]).
-pub(crate) fn local_ips() -> Vec<Ipv4Addr> {
+/// The addresses the sockets go on: every IPv4 interface but loopback and link-local, and the
+/// public IPv6 ones ([`pick_v6`]); the tests: loopback, both families. The home network's first
+/// ([`reach_rank`]).
+///
+/// IPv6 is how a computer behind the provider's shared IPv4 (CGNAT, where no port can be
+/// forwarded) is still reached directly: a public IPv6 address has no NAT in front of it, only the
+/// router's firewall, which lets the guest in because both ends send to each other at once (ICE).
+pub(crate) fn local_ips() -> Vec<IpAddr> {
     #[cfg(test)]
     if !TEST_REAL_IPS.load(Ordering::Relaxed) {
-        return vec![Ipv4Addr::LOCALHOST];
+        return vec![
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            IpAddr::V6(Ipv6Addr::LOCALHOST),
+        ];
     }
-    let mut v: Vec<Ipv4Addr> = if_addrs::get_if_addrs()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|i| match i.addr {
-            if_addrs::IfAddr::V4(a) if !a.ip.is_loopback() && !a.ip.is_link_local() => Some(a.ip),
+    let all = if_addrs::get_if_addrs().unwrap_or_default();
+    let mut v: Vec<IpAddr> = all
+        .iter()
+        .filter_map(|i| match &i.addr {
+            if_addrs::IfAddr::V4(a) if !a.ip.is_loopback() && !a.ip.is_link_local() => {
+                Some(IpAddr::V4(a.ip))
+            }
             _ => None,
         })
         .collect();
-    v.sort_by_key(|ip| (reach_rank(IpAddr::V4(*ip)), *ip));
+    v.extend(
+        pick_v6(all.iter().filter_map(|i| match &i.addr {
+            if_addrs::IfAddr::V6(a) => Some((i.name.as_str(), a.ip)),
+            _ => None,
+        }))
+        .into_iter()
+        .map(IpAddr::V6),
+    );
+    v.sort_by_key(|ip| (reach_rank(*ip), ip.is_ipv6(), *ip));
     v.dedup();
     v
+}
+
+/// The most IPv6 addresses taken from one interface (a computer keeps several temporary ones while
+/// old ones expire), and in all.
+const V6_PER_IFACE: usize = 2;
+const V6_MAX: usize = 4;
+
+/// The IPv6 addresses a guest on the internet can reach: global unicast (2000::/3) only, not the
+/// tailnet's (its IPv4 address is there already), and on an interface that also has a temporary
+/// (random) address, not the one made from the network card's MAC (EUI-64, `…ff:fe…`), which
+/// would follow the computer from network to network.
+pub(crate) fn pick_v6<'a>(addrs: impl IntoIterator<Item = (&'a str, Ipv6Addr)>) -> Vec<Ipv6Addr> {
+    let mut by_iface: Vec<(&str, Vec<Ipv6Addr>)> = Vec::new();
+    for (name, ip) in addrs {
+        if (ip.segments()[0] & 0xe000) != 0x2000 || reach_rank(IpAddr::V6(ip)) != 2 {
+            continue;
+        }
+        match by_iface.iter_mut().find(|(n, _)| *n == name) {
+            Some((_, v)) => v.push(ip),
+            None => by_iface.push((name, vec![ip])),
+        }
+    }
+    let mut out = Vec::new();
+    for (_, mut v) in by_iface {
+        if v.iter().any(|ip| !is_eui64(*ip)) {
+            v.retain(|ip| !is_eui64(*ip));
+        }
+        v.sort();
+        v.dedup();
+        out.extend(v.into_iter().take(V6_PER_IFACE));
+    }
+    out.truncate(V6_MAX);
+    out
+}
+
+/// An address made from a MAC (modified EUI-64: `ff:fe` in the middle of the interface id).
+fn is_eui64(ip: Ipv6Addr) -> bool {
+    let o = ip.octets();
+    o[11] == 0xff && o[12] == 0xfe
 }
 
 /// Which network an address is on, best first for a guest: 0 the home network (RFC 1918,
@@ -860,11 +917,21 @@ pub(crate) fn reach_rank(ip: IpAddr) -> u8 {
 /// The way a connection goes, from its selected candidate pair (this engine's socket, the guest's
 /// address as packets come from it): `"tailscale"` when either end is on the tailnet, `"lan"` when
 /// the guest's address is on the home network, else `"internet"` (straight through both routers).
+/// A public IPv6 address in this engine's own /64 is a guest on the same home network too.
 pub(crate) fn path_of(local: SocketAddr, remote: SocketAddr) -> &'static str {
     match (reach_rank(local.ip()), reach_rank(remote.ip())) {
         (1, _) | (_, 1) => "tailscale",
         (_, 0) => "lan",
+        _ if same_v6_net(local.ip(), remote.ip()) => "lan",
         _ => "internet",
+    }
+}
+
+/// Both IPv6 and in one /64 (one home network: providers hand out a /64 or more per home).
+pub(crate) fn same_v6_net(a: IpAddr, b: IpAddr) -> bool {
+    match (a, b) {
+        (IpAddr::V6(a), IpAddr::V6(b)) => a.segments()[..4] == b.segments()[..4],
+        _ => false,
     }
 }
 
@@ -901,16 +968,22 @@ async fn start() -> Option<Arc<Net>> {
         crate::log_at!(
             Info,
             "together",
-            "join: no address for internet guests (no IPv4 network)"
+            "join: no address for internet guests (no network)"
         );
         return None;
     }
     let local: Vec<SocketAddr> = socks.iter().filter_map(|s| s.local_addr().ok()).collect();
+    // Info, not Debug: whether this computer has IPv6 is the first question when a friend behind
+    // a shared IPv4 (CGNAT) cannot connect.
     crate::log_at!(
-        Debug,
+        Info,
         "together",
-        "join: internet guests' UDP port {port} on {} address(es)",
-        local.len()
+        "join: internet guests' UDP port {port} on {} address(es), {} of them IPv6",
+        local.len(),
+        local
+            .iter()
+            .filter(|a| a.is_ipv6() && !a.ip().is_loopback())
+            .count()
     );
     let (cmd, cmd_rx) = mpsc::unbounded_channel();
     let (pkt_tx, pkt_rx) = mpsc::channel(1024);
@@ -1144,7 +1217,7 @@ impl Driver {
         else {
             return;
         };
-        if addr == base || !addr.is_ipv4() {
+        if addr == base || addr.is_ipv4() != base.is_ipv4() {
             return; // no NAT in between: the host candidate says it already
         }
         self.add_extra(Candidate::server_reflexive(addr, base, "udp").ok(), "stun");
@@ -1175,7 +1248,7 @@ impl Driver {
     /// Asks the STUN servers in the settings, from every socket.
     async fn gather(&mut self) {
         let servers = crate::join::settings().stun;
-        let mut addrs = Vec::new();
+        let mut addrs: Vec<SocketAddr> = Vec::new();
         for s in servers.iter().take(4) {
             if cfg!(test) && s.parse::<SocketAddr>().is_err() {
                 continue; // the tests never look a name up (nor reach a real server)
@@ -1183,12 +1256,17 @@ impl Driver {
             if let Ok(Ok(found)) =
                 tokio::time::timeout(STUN_WAIT, tokio::net::lookup_host(s.as_str())).await
             {
-                addrs.extend(found.filter(|a| a.is_ipv4()).take(1));
+                // One of each family: an IPv6 socket asks over IPv6 (its answer is rarely news, but
+                // a router that translates IPv6 prefixes, NPTv6, shows there).
+                let found: Vec<SocketAddr> = found.collect();
+                addrs.extend(found.iter().find(|a| a.is_ipv4()));
+                addrs.extend(found.iter().find(|a| a.is_ipv6()));
             }
         }
         self.stun_tx.clear();
         for (i, sock) in self.socks.iter().map(|s| &s.s).enumerate() {
-            for a in &addrs {
+            let v6 = self.socks[i].addr.is_ipv6();
+            for a in addrs.iter().filter(|a| a.is_ipv6() == v6) {
                 let mut tx = [0u8; 12];
                 if getrandom::fill(&mut tx).is_err() {
                     continue;
@@ -1210,8 +1288,9 @@ impl Driver {
                 self.nat_want = None;
             }
             (None, true) => {
-                // The address the router sees: the first socket's (the one toward the LAN).
-                let Some(local) = self.socks.first().map(|s| s.addr) else {
+                // The address the router sees: the first IPv4 socket's (the one toward the LAN).
+                // UPnP and NAT-PMP map IPv4 ports only; IPv6 needs no mapping.
+                let Some(local) = self.socks.iter().map(|s| s.addr).find(|a| a.is_ipv4()) else {
                     return;
                 };
                 let (tx, rx) = tokio::sync::watch::channel(true);
@@ -1262,9 +1341,9 @@ impl Driver {
                     }),
                     Candidate::from_sdp_string(c),
                 ) {
-                    if cand.addr().is_ipv4() {
-                        p.rtc.add_remote_candidate(cand);
-                    }
+                    // Both families: a guest's public IPv6 address is how two homes behind
+                    // their providers' shared IPv4 (CGNAT) still meet directly.
+                    p.rtc.add_remote_candidate(cand);
                 }
             }
             Cmd::Left { room, gid } => {

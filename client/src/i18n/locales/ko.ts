@@ -8104,6 +8104,7 @@ rp_users_add_hint: "다른 사용자로도 플레이하려면 PS5에서 그 사�
 "pt_net_connecting": "연결 중…",
 "pt_net_friend": "인터넷의 친구",
 "pt_net_peer_failed": "상대의 네트워크에서 연결할 수 없었어요",
+"pt_net_peer_failed_hint": "두 네트워크가 서로 직접 연결되지 못했어요. Tailscale은 항상 연결돼요: 두 분 모두 같은 Tailscale 네트워크에 참여한 뒤 링크를 다시 보내세요.",
 "pt_set_old_engine": "인터넷 초대에는 더 새로운 PS5Upload 엔진이 필요해요.",
 "pt_set_upnp": "라우터에서 포트를 자동으로 열기 (UPnP)",
 "pt_set_upnp_hint": "인터넷 초대가 열려 있는 동안 더 많은 친구 네트워크가 연결될 수 있도록 라우터에 포트를 요청해요. 초대가 끝나면 닫혀요.",

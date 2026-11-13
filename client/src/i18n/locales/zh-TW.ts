@@ -8040,6 +8040,7 @@ rp_users_add_hint: "若也想以其他使用者遊玩，請在 PS5 上登入該�
 "pt_net_connecting": "正在連線…",
 "pt_net_friend": "網際網路上的朋友",
 "pt_net_peer_failed": "無法從對方的網路連線",
+"pt_net_peer_failed_hint": "你們的網路無法直接互通。Tailscale 一定能連上：你們兩人加入同一個 Tailscale 網路，然後重新傳送連結。",
 "pt_set_old_engine": "網際網路邀請需要較新的 PS5Upload 引擎。",
 "pt_set_upnp": "自動在我的路由器上開啟連接埠（UPnP）",
 "pt_set_upnp_hint": "網際網路邀請開著時，會向路由器要求一個連接埠，讓更多朋友的網路能連上。邀請結束時關閉。",

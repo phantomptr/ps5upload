@@ -389,3 +389,85 @@ fn addresses_rank_home_network_then_tailscale_then_public() {
     // Hairpinned through the home router: the guest's address is the router's outside one.
     assert_eq!(path_of(a(ENGINE_LAN), a("203.0.113.1:8000")), "internet");
 }
+
+#[test]
+fn ipv6_public_addresses_are_offered_private_ones_kept_back() {
+    use super::rtc::{path_of, pick_v6};
+    let v = |s: &str| s.parse::<std::net::Ipv6Addr>().unwrap();
+    let got = pick_v6([
+        ("en0", v("fe80::1")),                         // link-local
+        ("en0", v("fd00::5")),                         // home ULA (the IPv4 home address covers it)
+        ("en0", v("2001:db8:1:2:211:22ff:fe33:4455")), // from the MAC: kept back
+        ("en0", v("2001:db8:1:2:a1b2:c3d4:e5f6:1")),   // temporary
+        ("en0", v("2001:db8:1:2:a1b2:c3d4:e5f6:2")),   // an older temporary
+        ("en0", v("2001:db8:1:2:a1b2:c3d4:e5f6:3")),   // past the per-interface cap
+        ("utun3", v("fd7a:115c:a1e0::9")),             // Tailscale (its IPv4 is offered)
+        ("en1", v("2001:db8:9::211:22ff:fe33:4456")),  // only a MAC one on this interface: used
+    ]);
+    assert_eq!(
+        got,
+        vec![
+            v("2001:db8:1:2:a1b2:c3d4:e5f6:1"),
+            v("2001:db8:1:2:a1b2:c3d4:e5f6:2"),
+            v("2001:db8:9::211:22ff:fe33:4456"),
+        ]
+    );
+    let many: Vec<_> = (1..=9u16)
+        .map(|i| {
+            (
+                "en0",
+                std::net::Ipv6Addr::new(0x2001, 0xdb8, i, 0, 0, 0, 0, 1),
+            )
+        })
+        .chain((1..=9u16).map(|i| {
+            (
+                "en1",
+                std::net::Ipv6Addr::new(0x2001, 0xdb8, i, 1, 0, 0, 0, 1),
+            )
+        }))
+        .chain((1..=9u16).map(|i| {
+            (
+                "en2",
+                std::net::Ipv6Addr::new(0x2001, 0xdb8, i, 2, 0, 0, 0, 1),
+            )
+        }))
+        .collect();
+    assert_eq!(pick_v6(many).len(), 4, "a few in all");
+
+    // A friend on the same home network by its public IPv6 (one /64) is the home network.
+    assert_eq!(
+        path_of(a("[2001:db8:1:2::10]:9000"), a("[2001:db8:1:2::20]:9000")),
+        "lan"
+    );
+    assert_eq!(
+        path_of(a("[2001:db8:1:2::10]:9000"), a("[2001:db8:7:8::20]:9000")),
+        "internet"
+    );
+    assert_eq!(
+        path_of(a(ENGINE_LAN), a("[2001:db8:1:2::20]:9000")),
+        "internet"
+    );
+}
+
+#[test]
+fn an_ipv6_home_counts_once_for_the_connect_limit() {
+    use crate::join::limit_key;
+    let k = |s: &str| limit_key(s.parse().unwrap());
+    // Any address in one /64 is one sender (a home or phone may pick any of them).
+    assert_eq!(k("2001:db8:1:2::1"), k("2001:db8:1:2:ffff:1:2:3"));
+    assert_ne!(k("2001:db8:1:2::1"), k("2001:db8:1:3::1"));
+    // IPv4, and IPv4 arriving on a dual-stack socket, are the same address.
+    assert_eq!(k("::ffff:203.0.113.9"), k("203.0.113.9"));
+    assert_eq!(k("::1"), k("::1"));
+    let limit = crate::join::ConnectLimit::new();
+    let now = std::time::Instant::now();
+    for i in 0..3u16 {
+        let ip = std::net::IpAddr::V6(std::net::Ipv6Addr::new(0x2001, 0xdb8, 1, 2, 0, 0, 0, i + 1));
+        assert!(limit.allow(ip, 3, now), "{ip}");
+    }
+    let next = "2001:db8:1:2::99".parse().unwrap();
+    assert!(
+        !limit.allow(next, 3, now),
+        "a new address in the same /64 is not a new sender"
+    );
+}

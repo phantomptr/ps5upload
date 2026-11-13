@@ -8382,6 +8382,7 @@ rp_users_add_hint: "Ha másik felhasználóként is játszanál, jelentkezz be a
 "pt_net_connecting": "Kapcsolódás…",
 "pt_net_friend": "Egy barát az interneten",
 "pt_net_peer_failed": "Az ő hálózatáról nem sikerült kapcsolódni",
+"pt_net_peer_failed_hint": "A hálózataitok nem érték el egymást közvetlenül. A Tailscale mindig átjut: lépjetek be mindketten ugyanabba a Tailscale-hálózatba, majd küldjétek el újra a linket.",
 "pt_set_old_engine": "Az internetes meghívókhoz újabb PS5Upload motor kell.",
 "pt_set_upnp": "Port automatikus megnyitása a routeren (UPnP)",
 "pt_set_upnp_hint": "Amíg egy internetes meghívó nyitva van, a router kap egy portkérést, hogy több barát hálózata tudjon kapcsolódni. A meghívó végén bezárul.",

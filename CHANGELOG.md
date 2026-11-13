@@ -6,6 +6,13 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+Play Together:
+
+- Internet invites now connect over IPv6 too. If your internet provider shares one IPv4 address between many homes (CGNAT), so ports can't be forwarded, a friend can still join directly when both of you have IPv6, as most mobile networks and many home providers do. The friend's row shows "Internet direct · IPv6" when it is used. Share links between two computers use IPv6 the same way. Tested on this computer only so far, not across two real homes.
+- When a friend can't connect from their network, the panel now says Tailscale always gets through.
+
+## 12.4.16
+
 Uploads:
 
 - The check that reads large files back on the PS5 now also checks a part of a file that had to be sent twice, once its second copy reaches the drive, so a fault in that second write is caught (AVA1 1.0.10).

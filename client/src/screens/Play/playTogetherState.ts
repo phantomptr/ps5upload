@@ -29,6 +29,9 @@ export interface JoinGuest {
    *  "tailscale", "internet" (direct through both routers); null when the engine doesn't say
    *  (an older one, or ICE has no pair yet). */
   netPath: "lan" | "tailscale" | "internet" | null;
+  /** The connection goes over IPv6 (`link.ipv6`): how a home behind its provider's shared IPv4
+   *  (CGNAT) is reached directly. False when the engine doesn't say. */
+  ipv6: boolean;
   /** Seated in the PS5 profile the host chose for their player ("Guests play as"): its name. */
   playsAs: string | null;
   /** A profile was chosen for their player but couldn't be used, so the TV asks who they are:
@@ -326,6 +329,7 @@ export function readJoinState(v: unknown): JoinHostState {
       via: g.via === "internet" ? ("internet" as const) : ("lan" as const),
       path: str(g.path),
       netPath: readNetPath(g.link),
+      ipv6: (g.link as { ipv6?: unknown } | null | undefined)?.ipv6 === true,
       // An older engine says nothing: the TV asks every guest.
       playsAs: str((g.plays_as as Record<string, unknown> | null | undefined)?.name),
       seatNote: str(g.seat_note),

@@ -8106,6 +8106,7 @@ rp_users_add_hint: "別のユーザーでもプレイするには、PS5 でそ�
 "pt_net_connecting": "接続中…",
 "pt_net_friend": "インターネットの友だち",
 "pt_net_peer_failed": "相手のネットワークから接続できませんでした",
+"pt_net_peer_failed_hint": "お互いのネットワークが直接つながりませんでした。Tailscale なら必ずつながります。2 人とも同じ Tailscale ネットワークに参加してから、リンクをもう一度送ってください。",
 "pt_set_old_engine": "インターネット招待には新しい PS5Upload エンジンが必要です。",
 "pt_set_upnp": "ルーターのポートを自動で開く（UPnP）",
 "pt_set_upnp_hint": "インターネット招待が開いている間、より多くの友だちのネットワークからつながるようにルーターにポートを要求します。招待が終わると閉じます。",

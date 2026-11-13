@@ -82,7 +82,7 @@ describe("Play Together host state", () => {
     const s = readJoinState({ guests: [null, { id: 1 }], asks: "x", invite: { code: 1 } });
     expect(s.invite).toBeNull();
     expect(s.guests).toEqual([
-      { id: 1, name: "", player: 0, status: "playing", reconnectingLeftS: null, rttMs: null, connected: true, behind: false, streamSeat: false, via: "lan", path: null, netPath: null, playsAs: null, seatNote: null, quality: null, carries: null, link: null },
+      { id: 1, name: "", player: 0, status: "playing", reconnectingLeftS: null, rttMs: null, connected: true, behind: false, streamSeat: false, via: "lan", path: null, netPath: null, ipv6: false, playsAs: null, seatNote: null, quality: null, carries: null, link: null },
     ]);
     expect(s.settings.blockSystemButtons).toBe(false);
     expect(readJoinState(null).helperOk).toBe(true);

@@ -8327,6 +8327,7 @@ rp_users_add_hint: "Aby grać także jako inny użytkownik, zaloguj się na nim 
 "pt_net_connecting": "Łączenie…",
 "pt_net_friend": "Znajomy przez internet",
 "pt_net_peer_failed": "Nie udało się połączyć z jego sieci",
+"pt_net_peer_failed_hint": "Wasze sieci nie mogły połączyć się bezpośrednio. Tailscale zawsze przechodzi: dołączcie oboje do tej samej sieci Tailscale i wyślijcie link jeszcze raz.",
 "pt_set_old_engine": "Zaproszenia przez internet wymagają nowszego silnika PS5Upload.",
 "pt_set_upnp": "Automatycznie otwieraj port na routerze (UPnP)",
 "pt_set_upnp_hint": "Gdy zaproszenie przez internet jest otwarte, router jest proszony o port, aby więcej sieci znajomych mogło się połączyć. Zamyka się, gdy zaproszenie się kończy.",

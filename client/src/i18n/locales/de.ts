@@ -8095,6 +8095,7 @@ rp_users_add_hint: "Um auch als anderer Benutzer zu spielen, melde dich auf der 
 "pt_net_connecting": "Verbinde…",
 "pt_net_friend": "Ein Freund über das Internet",
 "pt_net_peer_failed": "Aus seinem Netzwerk war keine Verbindung möglich",
+"pt_net_peer_failed_hint": "Eure Netzwerke konnten sich nicht direkt erreichen. Tailscale kommt immer durch: Tretet beide demselben Tailscale-Netzwerk bei und schickt den Link dann noch einmal.",
 "pt_set_old_engine": "Interneteinladungen brauchen eine neuere PS5Upload-Engine.",
 "pt_set_upnp": "Automatisch einen Port am Router öffnen (UPnP)",
 "pt_set_upnp_hint": "Solange eine Interneteinladung offen ist, wird dein Router um einen Port gebeten, damit sich mehr Netzwerke deiner Freunde verbinden können. Er schließt sich, wenn die Einladung endet.",

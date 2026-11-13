@@ -8094,6 +8094,7 @@ rp_users_add_hint: "Başka bir kullanıcıyla da oynamak için PS5'te o kullanı
 "pt_net_connecting": "Bağlanıyor…",
 "pt_net_friend": "İnternetten bir arkadaş",
 "pt_net_peer_failed": "Onun ağından bağlanılamadı",
+"pt_net_peer_failed_hint": "Ağlarınız birbirine doğrudan ulaşamadı. Tailscale her zaman geçer: ikiniz de aynı Tailscale ağına katılın, sonra bağlantıyı yeniden gönderin.",
 "pt_set_old_engine": "İnternet davetleri için daha yeni bir PS5Upload motoru gerekir.",
 "pt_set_upnp": "Yönlendiricimde otomatik port aç (UPnP)",
 "pt_set_upnp_hint": "Bir internet daveti açıkken yönlendiriciden port istenir, böylece daha fazla arkadaşın ağı bağlanabilir. Davet bitince kapanır.",

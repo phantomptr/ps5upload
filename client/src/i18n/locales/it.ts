@@ -8040,6 +8040,7 @@ rp_users_add_hint: "Per giocare anche come un altro utente, accedi con quell’u
 "pt_net_connecting": "Connessione…",
 "pt_net_friend": "Un amico via Internet",
 "pt_net_peer_failed": "Impossibile collegarsi dalla sua rete",
+"pt_net_peer_failed_hint": "Le vostre reti non sono riuscite a raggiungersi direttamente. Tailscale passa sempre: entrate entrambi nella stessa rete Tailscale e inviate di nuovo il link.",
 "pt_set_old_engine": "Gli inviti via Internet richiedono un motore PS5Upload più recente.",
 "pt_set_upnp": "Apri automaticamente una porta sul router (UPnP)",
 "pt_set_upnp_hint": "Mentre un invito via Internet è aperto, al router viene chiesta una porta così più reti degli amici possono collegarsi. Si chiude quando l'invito finisce.",

@@ -8096,6 +8096,7 @@ rp_users_add_hint: "Untuk bermain juga sebagai pengguna lain, masuk ke pengguna 
 "pt_net_connecting": "Menyambung…",
 "pt_net_friend": "Teman lewat internet",
 "pt_net_peer_failed": "Tidak bisa tersambung dari jaringannya",
+"pt_net_peer_failed_hint": "Jaringan kalian tidak bisa saling terhubung langsung. Tailscale selalu tembus: kalian berdua bergabung ke satu jaringan Tailscale, lalu kirim tautannya lagi.",
 "pt_set_old_engine": "Undangan internet butuh mesin PS5Upload yang lebih baru.",
 "pt_set_upnp": "Buka port di router saya secara otomatis (UPnP)",
 "pt_set_upnp_hint": "Selama undangan internet terbuka, router diminta membuka port agar lebih banyak jaringan teman bisa tersambung. Port ditutup saat undangan berakhir.",

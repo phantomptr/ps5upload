@@ -51,8 +51,10 @@ export function guestWayText(tr: Tr, g: JoinGuest): string | null {
       return tr("pt_way_lan", undefined, "Home network");
     case "tailscale":
       return tr("net_tailscale", undefined, "Tailscale");
-    case "internet":
-      return tr("pt_way_internet", undefined, "Internet direct");
+    case "internet": {
+      const way = tr("pt_way_internet", undefined, "Internet direct");
+      return g.ipv6 ? `${way} · IPv6` : way;
+    }
   }
   // An older engine names only an internet friend's connection.
   if (g.via === "internet")
@@ -730,7 +732,16 @@ export function PlayTogetherPanel({
           className="flex items-start gap-2 rounded-lg bg-[var(--color-warn-soft)] px-3 py-2 text-xs text-[var(--color-warn)]"
           data-testid="pt-net-peer-failed"
         >
-          <span className="flex-1">{tr("pt_net_peer_failed", undefined, "Couldn't connect from their network")}</span>
+          <span className="flex-1">
+            {tr("pt_net_peer_failed", undefined, "Couldn't connect from their network")}
+            <span className="mt-0.5 block text-[var(--color-muted)]" data-testid="pt-net-peer-failed-hint">
+              {tr(
+                "pt_net_peer_failed_hint",
+                undefined,
+                "Your networks couldn't reach each other directly. Tailscale always gets through: both of you join one Tailscale network, then send the link again.",
+              )}
+            </span>
+          </span>
           <button
             type="button"
             onClick={() => setDismissed((d) => new Set([...d, ...peers.failed.map((p) => p.gid)]))}

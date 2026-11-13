@@ -2048,12 +2048,29 @@ impl ConnectLimit {
             }
             !q.is_empty()
         });
-        let q = m.entry(ip).or_default();
+        let q = m.entry(limit_key(ip)).or_default();
         if q.len() >= limit {
             return false;
         }
         q.push_back(now);
         true
+    }
+}
+
+/// What one sender is for the limit: an IPv4 address, or an IPv6 /64 (one home or phone gets a
+/// whole /64 and may pick any address in it, so counting addresses would count nothing). An
+/// IPv4-mapped IPv6 address is its IPv4 one.
+pub(crate) fn limit_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(a) if a.is_loopback() => ip,
+        IpAddr::V6(a) => match a.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => {
+                let s = a.segments();
+                IpAddr::V6(std::net::Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0))
+            }
+        },
+        IpAddr::V4(_) => ip,
     }
 }
 
@@ -2072,8 +2089,11 @@ static CONNECTS: ConnectLimit = ConnectLimit::new();
 /// would lock them out of the place the engine is keeping for them.
 fn holds_a_place(ip: IpAddr) -> bool {
     with_parties(|m| {
-        m.values()
-            .any(|p| p.guests.iter().any(|g| g.active() && g.ip == Some(ip)))
+        m.values().any(|p| {
+            p.guests
+                .iter()
+                .any(|g| g.active() && g.ip.map(limit_key) == Some(limit_key(ip)))
+        })
     })
 }
 
