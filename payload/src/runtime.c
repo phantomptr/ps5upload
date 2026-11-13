@@ -7274,6 +7274,12 @@ static int handle_shell_exec(runtime_state_t *state, const char *body,
                 snprintf(out, sizeof(out), "ls: %s: %s\n", target, err);
                 return shell_send_json_result(state, 1, out, cwd, session_id, 0);
             }
+            if (path_in_protected(abs_path)) { /* as every other shell command (shell_builtin.c) */
+                char out[1400];
+                snprintf(out, sizeof(out),
+                         "ls: %s: refused (the helper's keys and saved passwords are kept there)\n", target);
+                return shell_send_json_result(state, 1, out, cwd, session_id, 0);
+            }
             char *builtin_out = NULL;
             int builtin_exit = -1;
             int builtin_rc = shell_ls_path(abs_path, &builtin_out, &builtin_exit);
