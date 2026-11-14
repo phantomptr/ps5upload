@@ -15,6 +15,7 @@
   "cw_cheats_err_changed": "Tệp cheat đã thay đổi. Danh sách đã được đọc lại.",
   "cw_cheats_err_load": "Không đọc được cheat ({code}). Nhấn Làm mới để thử lại.",
   "cw_cheats_err_module": "Cheat này cần một phần của trò chơi chưa được tải. Hãy thử lại sau trong trò chơi.",
+  "cw_cheats_err_not_saved": "Mã gian lận đã được chuyển trong game, nhưng không lưu được thay đổi. Sau này nó có thể trở lại như cũ.",
   "cw_cheats_err_toggle": "Không chuyển được cheat ({code}).",
   "cw_cheats_err_version": "Bản vá này không dành cho phiên bản game của bạn. Hãy chọn bản dành cho phiên bản của bạn.",
   "cw_cheats_exited": "Trò chơi đã đóng.",

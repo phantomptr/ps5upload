@@ -5774,6 +5774,7 @@ c2c_test_deep_bad: "4 KiB 테스트 전송이 도착하지 않았습니다: {det
 "cw_cheats_find_how": "✕ 버튼으로 선택한 파일을 콘솔에 다운로드합니다.",
 "cw_cheats_err_load": "치트를 읽지 못했습니다 ({code}). 새로 고침을 눌러 다시 시도하세요.",
 "cw_cheats_err_module": "이 치트에는 아직 로드되지 않은 게임 부분이 필요합니다. 게임을 더 진행한 뒤 다시 시도하세요.",
+"cw_cheats_err_not_saved": "게임에서 치트가 전환되었지만 변경 사항을 저장하지 못했습니다. 나중에 원래대로 돌아갈 수 있습니다.",
 "cw_cheats_err_changed": "치트 파일이 바뀌었습니다. 목록을 다시 읽었습니다.",
 "cw_cheats_err_toggle": "치트를 전환하지 못했습니다 ({code}).",
 "cw_help_title": "이 화면의 버튼",

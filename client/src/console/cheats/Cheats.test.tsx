@@ -386,6 +386,7 @@ describe("cheats section", () => {
     expect(toggleErrorText(new ApiError(409, "module_missing"))).toBe(t("cw_cheats_err_module"));
     expect(toggleErrorText(new ApiError(400, "bad_index"))).toBe(t("cw_cheats_err_changed"));
     expect(toggleErrorText(new ApiError(500, "toggle_failed"))).toContain("toggle_failed");
+    expect(toggleErrorText(new ApiError(500, "not_saved"))).toBe(t("cw_cheats_err_not_saved"));
   });
 
   it("toggle_failure_keeps_the_list_and_says_why", async () => {

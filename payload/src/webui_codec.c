@@ -975,6 +975,8 @@ const char *webui_cheats_toggle_error(const char *cause, size_t n) {
     if (strstr(msg, "index out of range")) return "bad_index";
     if (strstr(msg, "is not loaded in the target process")) return "module_missing";
     if (strstr(msg, "is attached to the game")) return "game_busy";
+    /* switched in the game, but the saved switches could not be written */
+    if (strstr(msg, "the change could not be saved")) return "not_saved";
     /* XML game patches (#527): made for another version or executable of the game */
     if (strstr(msg, "this patch is for") || strstr(msg, "the game's version cannot be read") ||
         strstr(msg, "pattern is not in the game"))

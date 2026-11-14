@@ -55,6 +55,13 @@ static void test_clean_path(void) {
     CHECK(files_prefs_clean_path("/", out) == 0 && strcmp(out, "/") == 0);
     CHECK(files_prefs_clean_path("//", out) == 0 && strcmp(out, "/") == 0);
     CHECK(files_prefs_clean_path("/a/.../b", out) == 0); /* "..." is a name */
+    /* UTF-8 names are kept; bytes that are not UTF-8 would not read back as themselves */
+    CHECK(files_prefs_clean_path("/data/\xE3\x82\xB2\xE3\x83\xBC\xE3\x83\xA0 \xF0\x9F\x8E\xAE", out) == 0);
+    CHECK(files_prefs_clean_path("/data/Caf\xE9", out) == FILES_PREFS_E_BAD_PATH);
+    CHECK(files_prefs_clean_path("/data/\xFF\xFF", out) == FILES_PREFS_E_BAD_PATH);
+    CHECK(files_prefs_clean_path("/data/\xE3\x82", out) == FILES_PREFS_E_BAD_PATH); /* cut short */
+    CHECK(files_prefs_clean_path("/data/\xED\xA0\x80", out) == FILES_PREFS_E_BAD_PATH); /* surrogate */
+    CHECK(files_prefs_clean_path("/data/\xC0\xAF", out) == FILES_PREFS_E_BAD_PATH); /* overlong '/' */
     CHECK(files_prefs_clean_path("/data/My..Game", out) == 0);
     CHECK(files_prefs_clean_path("data/games", out) == FILES_PREFS_E_BAD_PATH);
     CHECK(files_prefs_clean_path("", out) == FILES_PREFS_E_BAD_PATH);

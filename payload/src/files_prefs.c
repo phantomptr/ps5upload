@@ -26,9 +26,35 @@ int files_prefs_op_from_name(const char *name) {
     return 0;
 }
 
+/* Bytes of the well-formed UTF-8 character at `s` (1-4), 0 when it is not one: a path that is not
+ * UTF-8 is written as U+FFFD in the JSON (6 bytes a byte, past PIN_RESERVE) and never reads back
+ * as itself. */
+static size_t utf8_len(const unsigned char *s) {
+    unsigned char c = s[0];
+    size_t n, k;
+    unsigned cp;
+    if (c < 0x80) return 1;
+    if (c >= 0xC2 && c <= 0xDF) n = 2, cp = c & 0x1F;
+    else if (c >= 0xE0 && c <= 0xEF) n = 3, cp = c & 0x0F;
+    else if (c >= 0xF0 && c <= 0xF4) n = 4, cp = c & 0x07;
+    else return 0;
+    for (k = 1; k < n; k++) {
+        if ((s[k] & 0xC0) != 0x80) return 0;
+        cp = (cp << 6) | (s[k] & 0x3F);
+    }
+    if ((n == 3 && cp < 0x800) || (n == 4 && (cp < 0x10000 || cp > 0x10FFFF)) || (cp >= 0xD800 && cp <= 0xDFFF))
+        return 0;
+    return n;
+}
+
 int files_prefs_clean_path(const char *in, char *out) {
     size_t i, o = 0, seg;
     if (!in || in[0] != '/') return FILES_PREFS_E_BAD_PATH;
+    for (i = 0; in[i];) {
+        size_t n = utf8_len((const unsigned char *)in + i);
+        if (!n) return FILES_PREFS_E_BAD_PATH;
+        i += n;
+    }
     for (i = 0; in[i]; i++) {
         unsigned char c = (unsigned char)in[i];
         if (c < 0x20 || c == 0x7f) return FILES_PREFS_E_BAD_PATH;

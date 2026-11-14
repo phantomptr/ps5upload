@@ -15,6 +15,7 @@
   "cw_cheats_err_changed": "Los archivos de trucos han cambiado. Se ha vuelto a leer la lista.",
   "cw_cheats_err_load": "No se pudieron leer los trucos ({code}). Pulsa Actualizar para intentarlo de nuevo.",
   "cw_cheats_err_module": "Este truco necesita una parte del juego que aún no se ha cargado. Inténtalo más adelante en el juego.",
+  "cw_cheats_err_not_saved": "El truco se cambió en el juego, pero no se pudo guardar el cambio. Puede que vuelva a su estado anterior más tarde.",
   "cw_cheats_err_toggle": "No se pudo cambiar el truco ({code}).",
   "cw_cheats_err_version": "Este parche no es para la versión del juego que tienes. Elige uno hecho para tu versión.",
   "cw_cheats_exited": "El juego se ha cerrado.",

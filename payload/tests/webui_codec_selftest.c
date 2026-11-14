@@ -923,6 +923,10 @@ static void cheats_toggle_errors(void) {
     c = "{\"ok\":false,\"err\":\"line 3: its pattern is not in the game (another game version?); nothing was written\"}";
     CHECK(strcmp(webui_cheats_toggle_error(c, strlen(c)), "wrong_version") == 0);
     CHECK(strcmp(webui_cheats_toggle_error("busy", 4), "toggle_failed") == 0);
+    c = "{\"ok\":false,\"err\":\"turned on, but the change could not be saved; switch it again if it shows as off\"}";
+    CHECK(strcmp(webui_cheats_toggle_error(c, strlen(c)), "not_saved") == 0);
+    c = "{\"ok\":false,\"err\":\"turned off, but the change could not be saved; it will be applied again the next time the game starts\"}";
+    CHECK(strcmp(webui_cheats_toggle_error(c, strlen(c)), "not_saved") == 0);
 }
 
 static int hide_secret(const char *path, void *ctx) {

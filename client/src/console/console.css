@@ -2389,7 +2389,6 @@ button {
 .cw-usb-new {
   display: flex;
   flex-direction: column;
-  gap: 0.4em;
 }
 .cw-usb-new-title {
   font-weight: 600;
@@ -2397,4 +2396,9 @@ button {
 }
 .cw-usb-new .cw-dim {
   margin: 0;
+}
+/* rows spaced with margins, after the resets above: flex gap needs Safari 14.1 (top of this file) */
+.cw-usb-new > * + *,
+.cw-usb-new > * + .cw-dim {
+  margin-top: 0.4em;
 }

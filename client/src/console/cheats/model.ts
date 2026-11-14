@@ -138,6 +138,7 @@ export function toggleErrorText(err: unknown): string | null {
     if (err.code === "module_missing") return t("cw_cheats_err_module");
     if (err.code === "game_busy") return t("cw_cheats_err_busy");
     if (err.code === "wrong_version") return t("cw_cheats_err_version");
+    if (err.code === "not_saved") return t("cw_cheats_err_not_saved");
     if (err.code === "bad_index" || err.code === "no_cheats") return t("cw_cheats_err_changed");
     return t("cw_cheats_err_toggle", { code: err.code });
   }
