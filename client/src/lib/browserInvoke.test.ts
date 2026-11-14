@@ -439,6 +439,25 @@ describe("Payload Library and console tools in the web UI", () => {
     expect(asked()).toMatchObject({ url: "/api/payloads/repos/custom-0a", method: "DELETE" });
   });
 
+  it("maps payload sources (#829) onto the engine's routes", async () => {
+    answer({ sources: [{ id: "src-0a" }] });
+    expect(await browserInvoke("payloads_sources", {})).toEqual([{ id: "src-0a" }]);
+    expect(asked()).toMatchObject({ url: "/api/payloads/sources" });
+    fetchMock.mockReset();
+    answer({ id: "src-0a" });
+    await browserInvoke("payloads_add_source", { url: "https://x.example/p.json" });
+    expect(asked()).toMatchObject({ url: "/api/payloads/sources", method: "POST" });
+    expect(asked().body).toEqual({ url: "https://x.example/p.json" });
+    fetchMock.mockReset();
+    answer({ sources: [] });
+    expect(await browserInvoke("payloads_refresh_sources", { force: true })).toEqual([]);
+    expect(asked()).toMatchObject({ url: "/api/payloads/sources/refresh?force=1", method: "POST" });
+    fetchMock.mockReset();
+    answer({ removed: true });
+    expect(await browserInvoke("payloads_remove_source", { id: "src-0a" })).toBe(true);
+    expect(asked()).toMatchObject({ url: "/api/payloads/sources/src-0a", method: "DELETE" });
+  });
+
   it("keeps a worded code in front of the engine's error, and only that", async () => {
     answer({ error: "1.2.3.4 is an IP", code: "repo_host_is_ip" }, 400);
     await expect(

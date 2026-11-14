@@ -24,6 +24,9 @@ One file is changed, `archive_read_support_format_rar5.c` (#801), each change ma
   as UnRAR does: it never refers back further than its own start.
 - `init_unpack` no longer allocates a window-sized `filtered_buf`: `run_filter` frees it and
   allocates the filter's own size before every use, so it only doubled the memory.
+- `copy_string` copies a match in blocks (memmove, or doubling memcpy runs for a repeat shorter
+  than the match) when neither run wraps around the window, instead of byte by byte (#826).
+  Checked against the byte loop on 3 million random cases.
 
 Keep these when updating.
 

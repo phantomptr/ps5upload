@@ -188,6 +188,29 @@ fn release_to_info(
     }
 }
 
+/// The one release of a source's payload, from its list.
+fn list_release(entry: &ResolvedEntry, refresh_error: Option<String>) -> ReleaseInfo {
+    let p = entry
+        .list_payload
+        .as_deref()
+        .expect("list_release takes a list payload");
+    let file = p.url.rsplit('/').next().unwrap_or_default().to_string();
+    let release = GithubRelease {
+        tag_name: p.version.clone(),
+        name: format!("{} {}", p.name, p.version).trim().to_string(),
+        body: p.description.clone(),
+        published_at: p.last_update.clone(),
+        assets: vec![GithubAsset {
+            name: file,
+            browser_download_url: p.url.clone(),
+            size: 0,
+        }],
+        html_url: p.homepage.clone(),
+        prerelease: false,
+    };
+    release_to_info(entry, &release, 0, refresh_error)
+}
+
 /// A cached file, parsed, with its age. `respect_ttl` is the fresh fast path; without it, stale
 /// is better than nothing.
 fn read_cached<T: serde::de::DeserializeOwned>(path: &Path, respect_ttl: bool) -> Option<(T, u64)> {
@@ -328,7 +351,16 @@ impl Library {
     /// The latest release of a payload. On a failed fetch with any cache, the cached release with
     /// `refresh_error` set, so the UI says the data may be old instead of showing nothing.
     pub fn release(&self, id: &str, force_refresh: bool) -> Result<ReleaseInfo, LibraryError> {
-        let entry = self.resolve_entry(id)?;
+        let mut entry = self.resolve_entry(id)?;
+        if entry.list_payload.is_some() {
+            // A source's payload has one release: what its list names now.
+            let mut why = None;
+            if force_refresh {
+                why = self.refresh_sources(true).into_iter().find_map(|s| s.error);
+                entry = self.resolve_entry(id)?;
+            }
+            return Ok(list_release(&entry, why));
+        }
         let cache_path = self.cache_path(&entry.id, "release.json");
         if !force_refresh {
             if let Some((release, age)) = read_cached::<GithubRelease>(&cache_path, true) {
@@ -372,6 +404,9 @@ impl Library {
     /// update check shows once the host's rate limit has answered. `None` with no cache.
     pub(crate) fn cached_release(&self, id: &str, why: &str) -> Option<ReleaseInfo> {
         let entry = self.resolve_entry(id).ok()?;
+        if entry.list_payload.is_some() {
+            return Some(list_release(&entry, Some(why.to_string())));
+        }
         let (release, age) =
             read_cached::<GithubRelease>(&self.cache_path(&entry.id, "release.json"), false)?;
         Some(release_to_info(
@@ -390,6 +425,9 @@ impl Library {
         force_refresh: bool,
     ) -> Result<Vec<ReleaseInfo>, LibraryError> {
         let entry = self.resolve_entry(id)?;
+        if entry.list_payload.is_some() {
+            return Ok(vec![self.release(id, force_refresh)?]);
+        }
         let cache_path = self.cache_path(&entry.id, "releases.json");
         let infos = |list: &[GithubRelease], age: u64, why: Option<&str>| -> Vec<ReleaseInfo> {
             list.iter()

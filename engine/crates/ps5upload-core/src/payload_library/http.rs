@@ -129,7 +129,7 @@ fn scheme_and_host(url: &str) -> Option<(String, String, Option<u16>)> {
 }
 
 /// Names that only mean something on a local network.
-fn is_local_name(host: &str) -> bool {
+pub(crate) fn is_local_name(host: &str) -> bool {
     let bare = host.trim_start_matches('[').trim_end_matches(']');
     bare.parse::<IpAddr>().is_ok()
         || !bare.contains('.')
@@ -245,6 +245,7 @@ mod tests {
             asset_name_hint: String::new(),
             checksum_file: String::new(),
             is_custom,
+            list_payload: None,
         }
     }
 

@@ -23,6 +23,7 @@ mod http;
 mod pm_sync;
 mod releases;
 mod repos;
+mod sources;
 mod updates;
 
 use std::fmt;
@@ -38,6 +39,8 @@ pub use pm_sync::{HttpPm, PmChange, PmConsole, PmStoredRecord, PmSyncChoice, PmS
 pub use releases::ReleaseInfo;
 pub use repos::AddRepo;
 use repos::CustomRepo;
+use sources::ListPayload;
+pub use sources::SourceInfo;
 pub use updates::{
     is_newer, AppliedUpdate, UpdateOutcome, UpdateRow, UpdateSettings, UpdateState, PREVIOUS_DIR,
 };
@@ -62,6 +65,10 @@ const WORDED_BY_THE_APP: &[&str] = &[
     "download_cancelled",
     "redirect_refused",
     "invalid_checksum_file",
+    "source_url_invalid",
+    "source_not_a_list",
+    "source_empty",
+    "source_fetch_failed",
 ];
 
 impl LibraryError {
@@ -112,6 +119,11 @@ pub struct PayloadInfo {
     /// (`shadowmountplus.elf`), so a copy stored there by hand can be told apart. Empty for a
     /// custom repo, whose name comes from each release.
     pub file_name: String,
+    /// The payload source (#829) this came from: its id and name. Empty otherwise.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub source_id: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub source_name: String,
 }
 
 impl From<&CatalogueEntry> for PayloadInfo {
@@ -131,6 +143,8 @@ impl From<&CatalogueEntry> for PayloadInfo {
             homepage: e.homepage.to_string(),
             is_custom: false,
             file_name: download::cached_elf_name(e.id, e.asset_name_hint, ""),
+            source_id: String::new(),
+            source_name: String::new(),
         }
     }
 }
@@ -170,6 +184,8 @@ pub(crate) struct ResolvedEntry {
     /// A user-added repo: its host was approved at add time, so the catalogue's fixed host list
     /// does not apply to it.
     pub(crate) is_custom: bool,
+    /// A payload from a source list (#829): its one listed file and SHA-256.
+    pub(crate) list_payload: Option<Box<ListPayload>>,
 }
 
 impl From<&CatalogueEntry> for ResolvedEntry {
@@ -184,6 +200,7 @@ impl From<&CatalogueEntry> for ResolvedEntry {
                 .unwrap_or_default()
                 .to_string(),
             is_custom: false,
+            list_payload: None,
         }
     }
 }
@@ -198,6 +215,7 @@ impl From<&CustomRepo> for ResolvedEntry {
             asset_name_hint: r.asset_name_hint.clone(),
             checksum_file: r.checksum_file.clone(),
             is_custom: true,
+            list_payload: None,
         }
     }
 }
@@ -242,10 +260,11 @@ impl Library {
         &self.dir
     }
 
-    /// Curated entries first, then the user's own repos.
+    /// Curated entries first, then the user's own repos, then the payloads of their sources.
     pub fn catalog(&self) -> Vec<PayloadInfo> {
         let mut out: Vec<PayloadInfo> = CATALOGUE.iter().map(PayloadInfo::from).collect();
         out.extend(self.load_custom_repos().iter().map(PayloadInfo::from));
+        out.extend(self.list_payloads().iter().map(PayloadInfo::from));
         out
     }
 
@@ -259,6 +278,9 @@ impl Library {
     pub(crate) fn resolve_entry(&self, id: &str) -> Result<ResolvedEntry, LibraryError> {
         if let Some(c) = self.load_custom_repos().iter().find(|r| r.id == id) {
             return Ok(c.into());
+        }
+        if let Some(p) = self.list_payload(id) {
+            return Ok(p.resolved());
         }
         find_entry(id).map(ResolvedEntry::from).ok_or_else(|| {
             LibraryError::new("unknown_payload", format!("unknown payload id: {id}"))
@@ -275,14 +297,13 @@ impl Library {
                 delay_ms: e.autoload_delay_ms,
             });
         }
-        self.load_custom_repos()
-            .iter()
-            .find(|r| r.id == id)
-            .map(|r| AutoloadMeta {
-                id: r.id.clone(),
-                priority: repos::CUSTOM_AUTOLOAD_PRIORITY,
-                delay_ms: repos::CUSTOM_AUTOLOAD_DELAY_MS,
-            })
+        let known =
+            self.load_custom_repos().iter().any(|r| r.id == id) || self.list_payload(id).is_some();
+        known.then(|| AutoloadMeta {
+            id: id.to_string(),
+            priority: repos::CUSTOM_AUTOLOAD_PRIORITY,
+            delay_ms: repos::CUSTOM_AUTOLOAD_DELAY_MS,
+        })
     }
 
     /// The folder of a payload's cache, if the id is safe as a path component and the folder is
@@ -327,6 +348,9 @@ impl Library {
         for repo in self.load_custom_repos() {
             out.extend(self.local_entry(&repo.id));
         }
+        for p in self.list_payloads() {
+            out.extend(self.local_entry(&p.id));
+        }
         out
     }
 }
@@ -339,7 +363,9 @@ fn find_entry(id: &str) -> Option<&'static CatalogueEntry> {
 /// A catalogue id or a well-formed custom id: the only names ever used as a cache folder, so
 /// an id from a request can never leave the library's folder.
 fn is_safe_payload_id(id: &str) -> bool {
-    find_entry(id).is_some() || repos::is_valid_custom_id(id)
+    find_entry(id).is_some()
+        || repos::is_valid_custom_id(id)
+        || sources::is_valid_list_payload_id(id)
 }
 
 /// The `.elf` in a payload's cache folder (there is one per payload; see `remove_other_elfs`).

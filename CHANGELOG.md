@@ -6,6 +6,11 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+- **Payloads:** add a whole list of payloads at once with **Payload sources**: paste the address of a list in Payload Manager's format and its payloads show up in the catalogue. A payload is only shown when the list gives its checksum, and a download that doesn't match is refused (#829).
+- **Extract on the PS5:** extracting archives, RAR sets most of all, is much faster: the extractor now writes to the drive in large pieces instead of many small ones, and the RAR decoder works faster. Not yet timed on a console (#826).
+
+## 12.4.19
+
 - **Cheats:** switching a cheat on or off could fail with "location 1: bad offset" and garbled text, even with a correct cheat file. Fixed (#824).
 - **Cheats:** the cheat list counts switched-on cheats correctly for games with more than one cheat file.
 - **Cheats:** a cheat file with an extra section after its cheat list no longer shows a phantom cheat, and a `}` in a cheat's name no longer cuts it short.

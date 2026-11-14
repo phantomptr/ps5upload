@@ -63,6 +63,8 @@ impl From<&CustomRepo> for PayloadInfo {
             homepage,
             is_custom: true,
             file_name: String::new(),
+            source_id: String::new(),
+            source_name: String::new(),
         }
     }
 }

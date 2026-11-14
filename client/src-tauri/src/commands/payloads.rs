@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 
 use ps5upload_core::payload_library::{
-    AddRepo, Library, LibraryError, LocalInventoryEntry, PayloadInfo, ReleaseInfo,
+    AddRepo, Library, LibraryError, LocalInventoryEntry, PayloadInfo, ReleaseInfo, SourceInfo,
 };
 use tauri::{AppHandle, Manager};
 
@@ -132,4 +132,32 @@ pub async fn payloads_local_path(app: AppHandle, id: String) -> Result<Option<St
             .map(|p| p.to_string_lossy().into_owned()))
     })
     .await
+}
+
+/// The payload lists the user added (#829), from the copies on disk.
+#[tauri::command]
+pub async fn payloads_sources(app: AppHandle) -> Result<Vec<SourceInfo>, String> {
+    on_library(&app, |lib| Ok(lib.sources())).await
+}
+
+/// Fetch a payload list and keep it; refused when the address doesn't give one.
+#[tauri::command]
+pub async fn payloads_add_source(app: AppHandle, url: String) -> Result<SourceInfo, String> {
+    on_library(&app, move |lib| lib.add_source(&url)).await
+}
+
+/// Fetch the lists again: those older than an hour, or all with `force`.
+#[tauri::command]
+pub async fn payloads_refresh_sources(
+    app: AppHandle,
+    force: Option<bool>,
+) -> Result<Vec<SourceInfo>, String> {
+    let force = force.unwrap_or(false);
+    on_library(&app, move |lib| Ok(lib.refresh_sources(force))).await
+}
+
+/// Remove a payload list and what was downloaded from it.
+#[tauri::command]
+pub async fn payloads_remove_source(app: AppHandle, id: String) -> Result<bool, String> {
+    on_library(&app, move |lib| lib.remove_source(&id)).await
 }

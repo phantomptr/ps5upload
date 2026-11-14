@@ -224,6 +224,17 @@
         ],
         "type": "object"
       },
+      "AddSource": {
+        "properties": {
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      },
       "AddrQuery": {
         "properties": {
           "addr": {
@@ -25522,6 +25533,144 @@
           }
         },
         "summary": "{removed}",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      }
+    },
+    "/api/payloads/sources": {
+      "get": {
+        "description": "GET /api/payloads/sources → {sources}: the payload lists added (#829), from the copies on disk.",
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "{sources}: the payload lists added (#829), from the copies on disk",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      },
+      "post": {
+        "description": "POST /api/payloads/sources {url}: fetch the list and keep it. Refused when it is not one.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddSource"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Fetch the list and keep it",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      }
+    },
+    "/api/payloads/sources/refresh": {
+      "post": {
+        "description": "POST /api/payloads/sources/refresh?force=1 → {sources}: lists older than an hour (all with\nforce) are fetched again; a failure keeps the last copy and sets that source's `error`.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "force_refresh"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "{sources}: lists older than an hour (all with force) are fetched again; a failure keeps the last copy and sets that source's `error`",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      }
+    },
+    "/api/payloads/sources/{id}": {
+      "delete": {
+        "description": "DELETE /api/payloads/sources/{id} → {removed}: the list, and what was downloaded from it.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "{removed}: the list, and what was downloaded from it",
         "tags": [
           "payloads"
         ],

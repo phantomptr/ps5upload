@@ -356,11 +356,15 @@ impl Library {
         }
         // The first URL is on the repo's own host, https (a request can name any URL); every
         // redirect after it is checked by `fetch`.
-        let pinned = asset_url.parse::<ureq::http::Uri>().ok().is_some_and(|u| {
-            u.scheme_str() == Some("https")
-                && u.host()
-                    .is_some_and(|h| h.eq_ignore_ascii_case(&entry.repo_host))
-        });
+        // A source's payload: exactly the file its list names (its SHA-256 is for that file).
+        let pinned = match entry.list_payload.as_deref() {
+            Some(p) => asset_url == p.url,
+            None => asset_url.parse::<ureq::http::Uri>().ok().is_some_and(|u| {
+                u.scheme_str() == Some("https")
+                    && u.host()
+                        .is_some_and(|h| h.eq_ignore_ascii_case(&entry.repo_host))
+            }),
+        };
         if !pinned {
             return Err(LibraryError::new(
                 "asset_url_refused",
@@ -397,7 +401,9 @@ impl Library {
     ) -> Result<LocalInventoryEntry, LibraryError> {
         // A release with a checksum list: read the expected value first, so a missing or
         // malformed list fails before the download.
-        let expected = if entry.checksum_file.is_empty() {
+        let expected = if let Some(p) = entry.list_payload.as_deref() {
+            Some(p.sha256.clone())
+        } else if entry.checksum_file.is_empty() {
             None
         } else {
             Some(self.expected_sha256(entry, asset_url, &entry.checksum_file)?)
