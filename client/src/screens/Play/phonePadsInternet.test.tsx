@@ -56,7 +56,7 @@ describe("reading the phone link's internet half", () => {
   it("reads the link, the switch, and each phone's way in", () => {
     const s = readPadLink(engine);
     expect(s.internetInvites).toBe(true);
-    expect(s.internet).toEqual({ url: NET_URL, hubState: "hosted", hubError: null, offline: false });
+    expect(s.internet).toEqual({ url: NET_URL, hubState: "hosted", hubError: null, offline: false, router: null });
     expect(s.pads.map((p) => p.via ?? "lan")).toEqual(["internet", "internet", "lan"]);
   });
 

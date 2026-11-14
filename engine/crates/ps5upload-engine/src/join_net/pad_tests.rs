@@ -439,6 +439,7 @@ async fn new_link_revokes_the_old_one_and_internet_invites_off_closes_it() {
             hub_url: None,
             stun: None,
             upnp: None,
+            port: None,
             video_track: None,
         }),
     )

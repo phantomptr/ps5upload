@@ -15,6 +15,7 @@ import {
   joinApi,
   MAX_STUN,
   parseStun,
+  portOk,
   type NetSettings,
   type NetSettingsBody,
 } from "../Play/playTogetherState";
@@ -32,6 +33,8 @@ export function PlayTogetherSettings() {
   const [unread, setUnread] = useState(false);
   const [hub, setHub] = useState("");
   const [stun, setStun] = useState("");
+  const [port, setPort] = useState("");
+  const [portSaved, setPortSaved] = useState(false);
   const [saveWhy, setSaveWhy] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
@@ -46,6 +49,7 @@ export function PlayTogetherSettings() {
       setNet(s.settings);
       setHub(s.settings.hubUrl);
       setStun(s.settings.stun.join("\n"));
+      setPort(s.settings.port ? String(s.settings.port) : "");
     });
     return () => {
       alive = false;
@@ -60,6 +64,7 @@ export function PlayTogetherSettings() {
       setNet(r.state.settings);
       if (body.hub_url != null || body.stun != null) setSaved(true);
     }
+    return r.error ?? null;
   };
 
   if (unread) {
@@ -96,6 +101,9 @@ export function PlayTogetherSettings() {
     net.invites ?? (net.internetInvites ? "anywhere" : "wifi");
   const hubBad = hub.trim() !== "" && !hubUrlOk(hub);
   const stunList = parseStun(stun);
+  const portNum = Number(port.trim());
+  const portBad = port.trim() !== "" && !portOk(portNum);
+  const portChanged = port.trim() !== "" && portNum !== (net.port ?? 0);
   const advancedChanged =
     hub.trim() !== net.hubUrl ||
     (stunList ?? []).join("\n") !== net.stun.join("\n");
@@ -170,6 +178,52 @@ export function PlayTogetherSettings() {
           )}
         />
       </div>
+      {net.port !== null && (
+        <div className="space-y-1.5" data-testid="pt-set-port">
+          <div className="flex items-end gap-2">
+            <Input
+              label={tr("pt_set_port", undefined, "Port for friends on other networks (UDP)")}
+              value={port}
+              inputMode="numeric"
+              onChange={(e) => {
+                setPort(e.target.value.replace(/[^0-9]/g, "").slice(0, 5));
+                setPortSaved(false);
+              }}
+              error={
+                portBad || saveWhy === "port"
+                  ? tr("pt_set_port_bad", undefined, "Use a number from 1024 to 65535.")
+                  : undefined
+              }
+              className="w-28 font-mono"
+              data-testid="pt-set-port-input"
+            />
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={!portChanged || portBad}
+              onClick={() =>
+                void save({ port: portNum }).then((err) => setPortSaved(!err))
+              }
+              data-testid="pt-set-port-save"
+            >
+              {tr("save", undefined, "Save")}
+            </Button>
+          </div>
+          <p className="text-xs text-[var(--color-muted)]" data-testid="pt-set-port-hint">
+            {portSaved
+              ? tr(
+                  "pt_set_port_saved",
+                  undefined,
+                  "Saved. It takes effect the next time PS5Upload starts.",
+                )
+              : tr(
+                  "pt_set_port_hint",
+                  undefined,
+                  "Stays the same every time. If your router can't open a port by itself, forward this UDP port to this computer in your router's settings.",
+                )}
+          </p>
+        </div>
+      )}
       <div data-testid="pt-set-video-track">
         <Toggle
           checked={net.videoTrack}
@@ -265,7 +319,7 @@ export function PlayTogetherSettings() {
           </div>
         </div>
       </details>
-      {saveWhy && saveWhy !== "hub_url" && saveWhy !== "stun" && (
+      {saveWhy && saveWhy !== "hub_url" && saveWhy !== "stun" && saveWhy !== "port" && (
         <p
           className="text-xs text-[var(--color-warn)]"
           data-testid="pt-set-failed"

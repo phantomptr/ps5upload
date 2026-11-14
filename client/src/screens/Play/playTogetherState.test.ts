@@ -40,7 +40,7 @@ describe("Play Together host state", () => {
     expect(s.guests.map((g) => g.name)).toEqual(["Ann", "Ben", "Cy"]);
     expect(s.guests[1]).toMatchObject({ status: "reconnecting", reconnectingLeftS: 42, connected: false });
     expect(s.asks).toEqual([{ id: 11, name: "Dee" }]);
-    expect(s.settings).toEqual({ blockSystemButtons: false, maxPlayers: 3, streamSeat: false, internetInvites: null, invites: null, hubUrl: "", stun: [], upnp: true, videoTrack: true });
+    expect(s.settings).toEqual({ blockSystemButtons: false, maxPlayers: 3, streamSeat: false, internetInvites: null, invites: null, hubUrl: "", stun: [], upnp: true, port: null, videoTrack: true });
     expect(s.seatNext).toBe(false);
   });
 

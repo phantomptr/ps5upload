@@ -779,6 +779,55 @@ struct Sock {
 /// The router mapping now: outside address and how it was made.
 pub(crate) static NET_MAPPED: Mutex<Option<(SocketAddr, &'static str)>> = Mutex::new(None);
 
+/// The UDP port internet friends connect to (0 before the driver starts).
+pub(crate) static NET_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
+/// The router has answered (or not) since the mapping was last asked for: until then the host's
+/// page says nothing about it.
+pub(crate) static NET_ASKED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// What the host's page says about the router (#822): "off" (asking is off in the settings),
+/// "asking", "open" (a port is open to the internet), "shared" (a port is open, but on an address
+/// that is not the internet's: another router or the provider's shared address sits in front),
+/// "none" (the router did not open one: UPnP off or absent).
+pub(crate) fn router_state(upnp: bool) -> &'static str {
+    let mapped = *NET_MAPPED.lock().unwrap_or_else(|e| e.into_inner());
+    router_word(
+        upnp,
+        NET_ASKED.load(std::sync::atomic::Ordering::Relaxed),
+        mapped.map(|(a, _)| a.ip()),
+    )
+}
+
+pub(crate) fn router_word(upnp: bool, asked: bool, outside: Option<IpAddr>) -> &'static str {
+    match outside {
+        Some(ip) if outside_shared(ip) => "shared",
+        Some(_) => "open",
+        None if !upnp => "off",
+        None if !asked => "asking",
+        None => "none",
+    }
+}
+
+/// An outside address the internet can't reach: private, the providers' shared range
+/// (100.64.0.0/10, CGNAT), loopback, link-local or none.
+pub(crate) fn outside_shared(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v) => {
+            let o = v.octets();
+            v.is_private()
+                || v.is_loopback()
+                || v.is_link_local()
+                || v.is_unspecified()
+                || (o[0] == 100 && (o[1] & 0xc0) == 64)
+        }
+        IpAddr::V6(v) => {
+            v.is_loopback() || v.is_unspecified() || (v.segments()[0] & 0xe000) != 0x2000
+        }
+    }
+}
+
 static NET: Mutex<Option<Arc<Net>>> = Mutex::new(None);
 
 /// The driver, started on first use (in a Tokio runtime). None when no socket could be opened.
@@ -949,7 +998,13 @@ pub(crate) fn add_host_candidates(rtc: &mut Rtc, addrs: impl IntoIterator<Item =
 
 async fn start() -> Option<Arc<Net>> {
     let mut socks: Vec<Arc<UdpSocket>> = Vec::new();
-    let mut port = 0u16;
+    // The host's port (Settings::port), else the one picked now, kept for the next runs (#822).
+    let wanted = if cfg!(test) {
+        0
+    } else {
+        crate::join::settings().port
+    };
+    let mut port = wanted;
     for ip in local_ips() {
         // One port number for every address when it is free (one mapping fits them all).
         let s = match UdpSocket::bind((ip, port)).await {
@@ -963,6 +1018,26 @@ async fn start() -> Option<Arc<Net>> {
             port = s.local_addr().map(|a| a.port()).unwrap_or(0);
         }
         socks.push(Arc::new(s));
+    }
+    if wanted != 0
+        && !socks
+            .iter()
+            .any(|s| s.local_addr().is_ok_and(|a| a.port() == wanted))
+    {
+        crate::log_at!(
+            Warn,
+            "together",
+            "join: UDP port {wanted} for internet guests is taken by another program; using {port} this run"
+        );
+    }
+    let first = socks
+        .first()
+        .and_then(|s| s.local_addr().ok())
+        .map(|a| a.port())
+        .unwrap_or(0);
+    NET_PORT.store(first, std::sync::atomic::Ordering::Relaxed);
+    if wanted == 0 {
+        crate::join::keep_picked_port(first);
     }
     if socks.is_empty() {
         crate::log_at!(
@@ -1295,6 +1370,7 @@ impl Driver {
                 };
                 let (tx, rx) = tokio::sync::watch::channel(true);
                 self.nat_want = Some(tx);
+                NET_ASKED.store(false, std::sync::atomic::Ordering::Relaxed);
                 tokio::spawn(keep_mapping(local, rx, self.cmd.clone()));
             }
             _ => {}
@@ -2252,6 +2328,7 @@ async fn keep_mapping(
     let search = nat_search();
     let Some(search) = search else { return };
     let mut m = nat::map(local, &search).await;
+    NET_ASKED.store(true, std::sync::atomic::Ordering::Relaxed);
     if let Some(mm) = &m {
         let _ = cmd.send(Cmd::Mapped(Some((mm.external, mm.local, mm.how()))));
     }

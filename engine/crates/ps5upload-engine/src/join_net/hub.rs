@@ -135,10 +135,18 @@ impl Room {
         let hub = super::hub_host(&self.shared.url).unwrap_or_default();
         let fp = super::fingerprint();
         let st = self.shared.st.lock().unwrap_or_else(|e| e.into_inner());
-        let router = super::rtc::NET_MAPPED
+        // What the router did for this invite (#822): `state` (rtc::router_state), `via` and
+        // `port` (outside) once a port is open, `local_port` the UDP port to forward by hand.
+        let mapped = *super::rtc::NET_MAPPED
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .map(|(a, how)| serde_json::json!({"via": how, "port": a.port()}));
+            .unwrap_or_else(|e| e.into_inner());
+        let local_port = super::rtc::NET_PORT.load(std::sync::atomic::Ordering::Relaxed);
+        let router = serde_json::json!({
+            "state": super::rtc::router_state(crate::join::settings().upnp),
+            "via": mapped.map(|(_, how)| how),
+            "port": mapped.map(|(a, _)| a.port()),
+            "local_port": (local_port != 0).then_some(local_port),
+        });
         serde_json::json!({
             "url": fp.as_ref().map(|fp| super::link_for(self.shared.kind, &id, key, fp, &hub, lan, ts)),
             "room": id,
