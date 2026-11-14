@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.4.19
 
 - **Cheats:** switching a cheat on or off could fail with "location 1: bad offset" and garbled text, even with a correct cheat file. Fixed (#824).
 - **Cheats:** the cheat list counts switched-on cheats correctly for games with more than one cheat file.
