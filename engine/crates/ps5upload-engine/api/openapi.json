@@ -12045,6 +12045,13 @@
               "null"
             ]
           },
+          "port": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "stream_seat": {
             "type": [
               "boolean",
