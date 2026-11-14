@@ -3328,6 +3328,35 @@ static int copy_string(struct archive_read* a, int len, int dist) {
 	 * than buffers that do not overlap. This is why a simple memcpy(3)
 	 * call will not be enough. */
 
+	/* PS5Upload (#826): when neither run wraps around the window, copy
+	 * in blocks. With dist >= len each source byte is read before any
+	 * write can reach it (the loop below never reads what it wrote), so
+	 * memmove gives the same bytes. With dist < len the source is the
+	 * dist bytes just before the write position, repeated: copy them,
+	 * then copy the doubled run, and so on, each block from the start
+	 * of the source so no block overlaps its own destination. */
+	{
+		const ssize_t w0 = (ssize_t)(write_ptr & cmask);
+		const ssize_t r0 = (ssize_t)((write_ptr - dist) & cmask);
+		uint8_t *wb = rar5->cstate.window_buf;
+		if (dist > 0 && w0 + len <= cmask + 1 && r0 + len <= cmask + 1) {
+			if (dist >= len) {
+				memmove(wb + w0, wb + r0, (size_t)len);
+			} else {
+				ssize_t done = 0;
+				while (done < len) {
+					ssize_t n = w0 + done - r0;
+					if (n > len - done)
+						n = len - done;
+					memcpy(wb + w0 + done, wb + r0, (size_t)n);
+					done += n;
+				}
+			}
+			rar5->cstate.write_ptr += len;
+			return ARCHIVE_OK;
+		}
+	}
+
 	for(i = 0; i < len; i++) {
 		const ssize_t write_idx = (write_ptr + i) & cmask;
 		const ssize_t read_idx = (write_ptr + i - dist) & cmask;

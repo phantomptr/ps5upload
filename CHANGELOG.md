@@ -4,6 +4,10 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+- **Extract on the PS5:** extracting archives, RAR sets most of all, is much faster: the extractor now writes to the drive in large pieces instead of many small ones, and the RAR decoder works faster. Not yet timed on a console (#826).
+
 ## 12.4.19
 
 - **Cheats:** switching a cheat on or off could fail with "location 1: bad offset" and garbled text, even with a correct cheat file. Fixed (#824).

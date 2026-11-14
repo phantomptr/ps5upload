@@ -197,11 +197,17 @@ int xs_begin(xjob_t *j, xentry_t *e, const char *name, int kind, uint64_t size, 
     return XS_WRITE;
 }
 
-int xs_write(xjob_t *j, xentry_t *e, const void *buf, size_t n) {
-    const uint8_t *p = buf;
-    if (e->fd < 0) return xj_failed(j) ? -1 : 0;
-    if (xj_cancelled(j)) return -1;
-    if (j->test_write_delay_us) usleep(j->test_write_delay_us);
+/* Decoders hand over small pieces (libarchive's RAR readers about 28 KiB on average, many under
+ * 64 KiB), and on the PS5 each write to the drive costs far more than the copy: #826 measured about
+ * 10 MB/s for a RAR set that decodes at well over 100 MiB/s. So a file's bytes are gathered here and
+ * written in runs of up to 4 MiB, like ffpfsc_unpack.c. One file is open at a time, so one buffer;
+ * without the memory for it the bytes are written as they come. */
+#define XS_WBUF (4u << 20)
+static uint8_t *wbuf;
+static size_t wfill;
+static int wbuf_tried;
+
+static int write_out(xjob_t *j, xentry_t *e, const uint8_t *p, size_t n) {
     while (n) {
         size_t take = n;
         ssize_t w;
@@ -227,8 +233,38 @@ int xs_write(xjob_t *j, xentry_t *e, const void *buf, size_t n) {
         }
         p += w;
         n -= (size_t)w;
-        e->written += (uint64_t)w;
         j->written_total += (uint64_t)w;
+    }
+    return 0;
+}
+
+static int flush_out(xjob_t *j, xentry_t *e) {
+    size_t n = wfill;
+    wfill = 0;
+    return n ? write_out(j, e, wbuf, n) : 0;
+}
+
+int xs_write(xjob_t *j, xentry_t *e, const void *buf, size_t n) {
+    const uint8_t *p = buf;
+    if (e->fd < 0) return xj_failed(j) ? -1 : 0;
+    if (xj_cancelled(j)) return -1;
+    if (j->test_write_delay_us) usleep(j->test_write_delay_us);
+    if (!wbuf && !wbuf_tried) {
+        wbuf_tried = 1;
+        wbuf = malloc(XS_WBUF);
+    }
+    if (!wbuf) {
+        if (write_out(j, e, p, n) != 0) return -1;
+        e->written += n;
+    }
+    while (wbuf && n) {
+        size_t take = XS_WBUF - wfill < n ? XS_WBUF - wfill : n;
+        memcpy(wbuf + wfill, p, take);
+        wfill += take;
+        p += take;
+        n -= take;
+        e->written += take;
+        if (wfill == XS_WBUF && flush_out(j, e) != 0) return -1;
     }
     if (j->progress) j->progress(j, 0);
     return 0;
@@ -237,6 +273,12 @@ int xs_write(xjob_t *j, xentry_t *e, const void *buf, size_t n) {
 int xs_end(xjob_t *j, xentry_t *e, int ok) {
     int rc = 0;
     if (e->fd >= 0) {
+        /* What is still gathered goes out first; a dropped entry's bytes are thrown away. */
+        if (ok && flush_out(j, e) != 0) {
+            ok = 0;
+            rc = -1;
+        }
+        wfill = 0;
         if (close(e->fd) != 0 && ok) {
             ok = 0;
             rc = xj_fail(j, "fs_extract_write_failed: %s: %s", j->current, strerror(errno));

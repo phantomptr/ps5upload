@@ -123,7 +123,10 @@ $(PS5_OBJ)/7zc/%.o: $(SEVENZ)/C/%.c Makefile
 	$(CC) $(PS5_TP_FLAGS) $(PS5_SEVENZ_DEFS) -c -o $@ $<
 $(PS5_OBJ)/la/%.o: $(LIBARCHIVE)/%.c $(LIBARCHIVE)/config.h Makefile
 	@mkdir -p $(dir $@)
-	$(CC) $(PS5_TP_FLAGS) $(LIBARCHIVE_DEFS) $(LIBARCHIVE_INC) -c -o $@ $<
+	$(CC) $(PS5_TP_FLAGS) $(LA_SPEED) $(LIBARCHIVE_DEFS) $(LIBARCHIVE_INC) -c -o $@ $<
+# The RAR decoders are plain C with no hand-tuned paths, so -Os costs them about a sixth of their
+# speed (#826: 142 vs 171 MiB/s on a Mac); -O2 for just these two files.
+$(PS5_OBJ)/la/archive_read_support_format_rar.o $(PS5_OBJ)/la/archive_read_support_format_rar5.o: LA_SPEED := -O2
 $(PS5_OBJ)/src/%.o: src/%.c $(wildcard src/*.h) ../include/archive_name.h Makefile
 	@mkdir -p $(dir $@)
 	$(CC) $(PS5_OWN_FLAGS) $(OWN_INC) -c -o $@ $<
