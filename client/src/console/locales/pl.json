@@ -15,6 +15,7 @@
   "cw_cheats_err_changed": "Pliki kodów się zmieniły. Lista została wczytana ponownie.",
   "cw_cheats_err_load": "Nie udało się odczytać kodów ({code}). Naciśnij Odśwież, aby spróbować ponownie.",
   "cw_cheats_err_module": "Ten kod wymaga części gry, która nie jest jeszcze wczytana. Spróbuj później w grze.",
+  "cw_cheats_err_not_saved": "Kod został przełączony w grze, ale nie udało się zapisać zmiany. Później może wrócić do poprzedniego stanu.",
   "cw_cheats_err_toggle": "Nie udało się przełączyć kodu ({code}).",
   "cw_cheats_err_version": "Ta łatka nie jest do twojej wersji gry. Wybierz łatkę do swojej wersji.",
   "cw_cheats_exited": "Gra została zamknięta.",

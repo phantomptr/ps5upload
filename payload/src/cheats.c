@@ -122,6 +122,8 @@ static const char *const XML_DIRS[] = {
 /* Locations one cheat can hold. The list grows as the file is read: a "master code" writes to
  * hundreds of places, and a fixed 32 refused it (#811). */
 #define MAX_MEM_ENTRIES     4096
+/* Locations one file can hold in all: 64 cheats of 4096 each would be ~145 MB in the helper. */
+#define MAX_FILE_MEM_ENTRIES 32768
 #define MAX_JSON_BUF        (256 * 1024)
 #define CHEAT_FILE_MAX      (4 * 1024 * 1024)
 
@@ -604,12 +606,16 @@ typedef struct {
     int         format;         /* 1=json, 2=shn, 3=mc4, 4=xml game patch */
     cheat_mod_t mods[MAX_MODS_PER_FILE];
     int         mod_count;
+    int         mem_total;      /* locations taken by all its cheats (MAX_FILE_MEM_ENTRIES) */
 } cheat_file_t;
 
-/* The next location of `m`, zeroed, past the counted ones (the caller counts it once its offset
- * is read). NULL when the cheat already holds MAX_MEM_ENTRIES or memory runs out. */
-static mem_entry_t *mem_next(cheat_mod_t *m) {
+/* The next location of `m` (a cheat of `cf`), zeroed, past the counted ones (the caller counts it
+ * once its offset is read). NULL when the cheat already holds MAX_MEM_ENTRIES, the file
+ * MAX_FILE_MEM_ENTRIES, or memory runs out. */
+static mem_entry_t *mem_next(cheat_file_t *cf, cheat_mod_t *m) {
     if (m->mem_count >= MAX_MEM_ENTRIES) return NULL;
+    if (cf->mem_total >= MAX_FILE_MEM_ENTRIES) return NULL;
+    cf->mem_total++;
     if (m->mem_count >= m->mem_cap) {
         int cap = m->mem_cap ? m->mem_cap * 2 : 16;
         if (cap > MAX_MEM_ENTRIES) cap = MAX_MEM_ENTRIES;
@@ -672,6 +678,25 @@ static cheat_loc_t *locs_for(const cheat_mod_t *mod) {
  *   {"name":"...","id":"PPSA...","mods":[{"name":"...","type":"checkbox",
  *    "memory":[{"offset":"...","on":"...","off":"..."}], ...}], ...}
  * We parse it with string scanning, same approach as runtime.c. */
+/* The '}' closing the object that opens at `p` ('{'), braces inside strings not counted (a
+ * cheat named "Smiley :}" is one cheat); NULL when it never closes. */
+static const char *json_obj_close(const char *p) {
+    int depth = 0, in_str = 0;
+    for (; *p; p++) {
+        if (in_str) {
+            if (*p == '\\' && p[1]) p++;
+            else if (*p == '"') in_str = 0;
+        } else if (*p == '"') {
+            in_str = 1;
+        } else if (*p == '{') {
+            depth++;
+        } else if (*p == '}' && --depth == 0) {
+            return p;
+        }
+    }
+    return NULL;
+}
+
 static int parse_json_file(const char *json, size_t json_len,
                            cheat_file_t *cf) {
     (void)json_len;
@@ -689,19 +714,13 @@ static int parse_json_file(const char *json, size_t json_len,
 
     int mod_idx = 0;
     while (*p && mod_idx < MAX_MODS_PER_FILE) {
-        /* Skip to next '{' */
-        while (*p && *p != '{') p++;
+        /* The next cheat, until the array ends: an object after it ("meta":{...}) is not one. */
+        while (*p && *p != '{' && *p != ']') p++;
         if (!*p || *p == ']') break;
 
-        /* Find the matching close brace by depth counting */
-        int depth = 0;
         const char *mod_start = p;
-        while (*p) {
-            if (*p == '{') depth++;
-            else if (*p == '}') { depth--; if (depth == 0) break; }
-            p++;
-        }
-        if (!*p) break;
+        p = json_obj_close(p);
+        if (!p) break;
         const char *mod_end = p + 1;
 
         /* Extract this mod's substring (a master code's runs to tens of KiB: #811) */
@@ -733,20 +752,12 @@ static int parse_json_file(const char *json, size_t json_len,
             if (mp) {
                 mp++;
                 while (*mp) {
-                    while (*mp && *mp != '{') mp++;
+                    while (*mp && *mp != '{' && *mp != ']') mp++;
                     if (!*mp || *mp == ']') break;
 
-                    depth = 0;
                     const char *me_start = mp;
-                    while (*mp) {
-                        if (*mp == '{') depth++;
-                        else if (*mp == '}') {
-                            depth--;
-                            if (depth == 0) break;
-                        }
-                        mp++;
-                    }
-                    if (!*mp) break;
+                    mp = json_obj_close(mp);
+                    if (!mp) break;
                     const char *me_end = mp + 1;
 
                     size_t me_len = (size_t)(me_end - me_start);
@@ -758,7 +769,7 @@ static int parse_json_file(const char *json, size_t json_len,
                     memcpy(me_buf, me_start, me_len);
                     me_buf[me_len] = '\0';
 
-                    mem_entry_t *e = mem_next(m);
+                    mem_entry_t *e = mem_next(cf, m);
                     if (!e) { /* more than it can hold: never apply part of a cheat */
                         m->incomplete = 1;
                         break;
@@ -970,7 +981,7 @@ static int parse_shn_file(const char *xml, size_t xml_len,
             memcpy(cl_buf, cl_end, cl_len);
             cl_buf[cl_len] = '\0';
 
-            mem_entry_t *e = mem_next(m);
+            mem_entry_t *e = mem_next(cf, m);
             if (!e) { /* more than it can hold: never apply part of a cheat */
                 m->incomplete = 1;
                 break;
@@ -3450,6 +3461,14 @@ int cheats_toggle(const char *title_id, int mod_index, int turn_on,
         if (err) snprintf(err, err_cap,
                           "turned off, but the change could not be saved; it will be applied "
                           "again the next time the game starts");
+        rc = -1;
+    }
+    /* On in the game, but not saved: the next pass reads the saved switches and would drop it from
+     * what it keeps on, so the list would show off a cheat that is still applied. */
+    if (rc == 0 && save_failed && turn_on) {
+        if (err) snprintf(err, err_cap,
+                          "turned on, but the change could not be saved; switch it again if it "
+                          "shows as off");
         rc = -1;
     }
 

@@ -4,6 +4,20 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+- **Cheats:** switching a cheat on or off could fail with "location 1: bad offset" and garbled text, even with a correct cheat file. Fixed (#824).
+- **Cheats:** the cheat list counts switched-on cheats correctly for games with more than one cheat file.
+- **Cheats:** a cheat file with an extra section after its cheat list no longer shows a phantom cheat, and a `}` in a cheat's name no longer cuts it short.
+- **Cheats:** a cheat that was switched but couldn't be saved now says so, instead of "could not switch".
+- **Cheats:** a very large cheat file can no longer use up the helper's memory.
+- **Minion › Saves:** switching user while saves are still loading no longer shows the other user's backups, and an old error goes away once saves load.
+- **Minion › Files:** big reads and downloads are no longer cut off on a slow drive or weak Wi-Fi. Running out of memory now says so instead of "not allowed".
+- **Minion › Home:** the "USB drive plugged in" card is spaced properly in the PS5 browser.
+- Writing a file onto a folder's name is refused cleanly, and a full drive is reported as full.
+
+None of these were tried on a console yet.
+
 ## 12.4.18
 
 Play Together:

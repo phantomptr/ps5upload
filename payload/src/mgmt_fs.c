@@ -478,6 +478,8 @@ int mgmt_run_fs_read(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
 
 /* ---- fs.write ---- */
 
+static int no_space(int e) { return e == ENOSPC || e == EDQUOT; }
+
 static int write_all(int fd, const uint8_t *p, size_t n, uint64_t at, int use_offset) {
     size_t done = 0;
     while (done < n) {
@@ -510,6 +512,9 @@ int mgmt_run_fs_write(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
     if (q.data_len > AVA1_FSW_CHUNK_MAX) return mgmt_reply_error(cx, AVA1_ERR_PROTOCOL, "too_large");
     commit = whole || (f & AVA1_FSW_COMMIT) != 0;
     if (!write_ok(path)) return mgmt_reply_error(cx, AVA1_ERR_PATH, "path_unsafe");
+    /* A file is written, never a folder: "dir/" would put the tmp file inside the folder (maybe on
+     * another drive, its mount root) and rename it over the folder itself. */
+    if (path[strlen(path) - 1] == '/') return mgmt_reply_error(cx, AVA1_ERR_PATH, "path_unsafe");
     if (snprintf(tmp, sizeof tmp, "%s%s", path, MGMT_FS_TMP_SUFFIX) >= (int)sizeof tmp) return mgmt_reply_error(cx, AVA1_ERR_PATH, "path_unsafe");
     /* FSW_CREATE: the target must not exist. Checked up front for the single-call write (nothing is
      * written for a refusal) and again at commit (it may have appeared while chunks were sent). */
@@ -543,23 +548,25 @@ int mgmt_run_fs_write(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
             return mgmt_reply_error(cx, AVA1_ERR_IO, "write_failed");
         }
         if (write_all(fd, q.data, q.data_len, 0, 0) != 0) {
+            int e = errno;
             close(fd);
-            return mgmt_reply_error(cx, AVA1_ERR_IO, "write_failed");
+            return mgmt_reply_error(cx, no_space(e) ? AVA1_ERR_NO_SPACE : AVA1_ERR_IO, "write_failed");
         }
     } else if (write_all(fd, q.data, q.data_len, q.offset, 1) != 0) {
         int e = errno;
         close(fd);
         if (whole) unlink(tmp);
-        return mgmt_reply_error(cx, e == ENOSPC ? AVA1_ERR_NO_SPACE : AVA1_ERR_IO, "write_failed");
+        return mgmt_reply_error(cx, no_space(e) ? AVA1_ERR_NO_SPACE : AVA1_ERR_IO, "write_failed");
     }
     if (!commit) {
         close(fd);
         return reply_empty(cx);
     }
     if (fsync(fd) != 0 && errno != EINVAL && errno != ENOTSUP) { /* a filesystem with no fsync is not an error */
+        int e = errno;
         close(fd);
         unlink(tmp);
-        return mgmt_reply_error(cx, AVA1_ERR_IO, "write_failed");
+        return mgmt_reply_error(cx, no_space(e) ? AVA1_ERR_NO_SPACE : AVA1_ERR_IO, "write_failed");
     }
     (void)fchmod(fd, mode);
     close(fd);
@@ -567,7 +574,12 @@ int mgmt_run_fs_write(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
         unlink(tmp);
         return mgmt_reply_error(cx, AVA1_ERR_EXISTS, "exists");
     }
-    /* Same directory as the target by construction, so this rename never crosses a device. */
+    /* Same directory as the target by construction, so this rename never crosses a device; a folder
+     * (or a drive's mount root) at the target is refused rather than renamed over. */
+    if (lstat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
+        unlink(tmp);
+        return mgmt_reply_error(cx, AVA1_ERR_PATH, "is_dir");
+    }
     if (rename(tmp, path) != 0) {
         unlink(tmp);
         return mgmt_reply_error(cx, AVA1_ERR_IO, "rename_failed");

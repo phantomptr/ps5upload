@@ -452,6 +452,10 @@ static void serve(srv_t *s, int idx, conn_t c) {
         (void)s->stream(&req, (const uint8_t *)buf + req.header_len, pre, c.fd);
         return;
     }
+    /* A route's reply is written after it has done its work (a slow drive read, many Sony calls),
+     * so it gets its own window rather than what is left of the read deadline: a short one cut
+     * big replies off after a header that promised all of them. */
+    set_timeo(c.fd, SO_SNDTIMEO, WEBUI_CONN_MS);
     if (s->route)
         (void)s->route(&req, (const uint8_t *)buf + req.header_len, (size_t)req.content_length, c.fd);
     else

@@ -15,6 +15,7 @@
   "cw_cheats_err_changed": "金手指文件已更改，已重新读取列表。",
   "cw_cheats_err_load": "无法读取金手指({code})。请按刷新重试。",
   "cw_cheats_err_module": "此金手指需要游戏中尚未加载的部分。请在游戏中稍后再试。",
+  "cw_cheats_err_not_saved": "作弊已在游戏中切换，但无法保存此更改。之后可能会恢复原状。",
   "cw_cheats_err_toggle": "无法切换金手指({code})。",
   "cw_cheats_err_version": "此补丁不适用于你的游戏版本。请选择适用于你的版本的补丁。",
   "cw_cheats_exited": "游戏已关闭。",

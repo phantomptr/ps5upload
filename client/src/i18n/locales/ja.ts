@@ -5776,6 +5776,7 @@ c2c_test_deep_bad: "4 KiB のテスト送信が届きませんでした: {detail
 "cw_cheats_find_how": "✕ で選択中のファイルを本体にダウンロードします。",
 "cw_cheats_err_load": "チートを読み込めませんでした ({code})。更新を押してもう一度お試しください。",
 "cw_cheats_err_module": "このチートには、まだ読み込まれていないゲームの部分が必要です。ゲームを進めてから再度お試しください。",
+"cw_cheats_err_not_saved": "ゲーム内でチートは切り替わりましたが、変更を保存できませんでした。後で元に戻る可能性があります。",
 "cw_cheats_err_changed": "チートファイルが変更されました。一覧を読み込み直しました。",
 "cw_cheats_err_toggle": "チートを切り替えられませんでした ({code})。",
 "cw_help_title": "この画面のボタン",

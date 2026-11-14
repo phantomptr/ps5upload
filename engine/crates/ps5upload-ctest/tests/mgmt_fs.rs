@@ -879,11 +879,16 @@ async fn fs_write_validates_flags_and_paths() {
         (st, cause(&b).as_str()),
         (gen::ERR_PROTOCOL, "path_required")
     );
-    // a directory in the way: the rename fails and leaves no tmp
+    // a directory in the way (a drive's mount root among them): refused before any rename, no tmp left
     std::fs::create_dir_all(r.path("dir/inner")).unwrap();
     let (st, b) = r.write("dir", 0, 0, b"x", None).await;
-    assert_eq!((st, cause(&b).as_str()), (gen::ERR_IO, "rename_failed"));
+    assert_eq!((st, cause(&b).as_str()), (gen::ERR_PATH, "is_dir"));
     assert!(!r.path("dir.ps5upload.tmp").exists());
+    assert!(r.path("dir/inner").is_dir());
+    // "dir/" would put the tmp file inside the folder: refused, nothing written there
+    let (st, b) = r.write("dir/", 0, 0, b"x", None).await;
+    assert_eq!((st, cause(&b).as_str()), (gen::ERR_PATH, "path_unsafe"));
+    assert!(!r.path("dir/.ps5upload.tmp").exists());
 }
 
 // ---- node, log, net ----

@@ -382,9 +382,13 @@ int cheats_list_build(const cheats_list_cfg_t *cfg, char *buf, size_t cap, size_
         int want_state = 0;
         for (int k = 0; k < nfiles; k++)
             if (mods[k] > 0) want_state = 1;
+        /* The saved switches are numbered across all of the title's files (the second file's first
+         * cheat follows the first file's last), so count over the total, not each file from 0. */
+        int total = 0;
+        for (int k = 0; k < nfiles; k++)
+            if (mods[k] > 0) total += mods[k];
         if (state && want_state && read_state(cfg->state_dir, title, state, CHEATS_STATE_FILE_MAX + 1))
-            for (int k = 0; k < nfiles; k++)
-                if (mods[k] > 0) enabled += count_enabled(state, mods[k]);
+            enabled = count_enabled(state, total);
 
         char version[32];
         file_version(v[i].file, version, sizeof version);

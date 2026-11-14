@@ -405,11 +405,16 @@ export function Saves({ ctx }: { ctx: SectionContext }) {
     }
   }, []);
 
-  const loadBackupsOf = useCallback(async (u: string, ids: string[], where: string) => {
+  // Which load is current: a user or place switched to while an earlier one is still reading
+  // must not have that one's saves or backups land on its cards.
+  const loadGen = useRef(0);
+
+  const loadBackupsOf = useCallback(async (u: string, ids: string[], where: string, gen: number) => {
     for (const id of ids) {
+      if (gen !== loadGen.current) return;
       try {
         const b = await loadBackups(u, id, call, where);
-        if (!live.current) return;
+        if (!live.current || gen !== loadGen.current) return;
         setBackups((m) => new Map(m).set(id, b));
       } catch {
         // unknown: the card says nothing
@@ -419,19 +424,22 @@ export function Saves({ ctx }: { ctx: SectionContext }) {
 
   const loadUserSaves = useCallback(
     async (u: string, where: string) => {
+      const gen = ++loadGen.current;
       setSaves(null);
       setBackups(new Map());
+      setLoadError(null);
       try {
         const s = await loadSaves(u);
-        if (!live.current) return;
+        if (!live.current || gen !== loadGen.current) return;
         setSaves(s);
         void loadBackupsOf(
           u,
           s.map((x) => x.titleId),
           where,
+          gen,
         );
       } catch (e) {
-        if (live.current) setLoadError(saveErrorText(e));
+        if (live.current && gen === loadGen.current) setLoadError(saveErrorText(e));
       }
     },
     [loadBackupsOf],

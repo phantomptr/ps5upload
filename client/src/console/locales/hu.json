@@ -15,6 +15,7 @@
   "cw_cheats_err_changed": "A csalásfájlok megváltoztak. A lista újra beolvasva.",
   "cw_cheats_err_load": "Nem sikerült beolvasni a csalásokat ({code}). Nyomd meg a Frissítést az újrapróbáláshoz.",
   "cw_cheats_err_module": "Ehhez a csaláshoz a játék egy még be nem töltött része kell. Próbáld újra később a játékban.",
+  "cw_cheats_err_not_saved": "A csalás átváltott a játékban, de a változást nem sikerült menteni. Később visszaválthat.",
   "cw_cheats_err_toggle": "Nem sikerült átváltani a csalást ({code}).",
   "cw_cheats_err_version": "Ez a javítás nem a te játékverziódhoz készült. Válassz egyet, ami a te verziódhoz való.",
   "cw_cheats_exited": "A játék bezárult.",

@@ -15,6 +15,7 @@
   "cw_cheats_err_changed": "The cheat files changed. The list was read again.",
   "cw_cheats_err_load": "Could not read the cheats ({code}). Press Refresh to try again.",
   "cw_cheats_err_module": "This cheat needs a part of the game that has not loaded yet. Try again later in the game.",
+  "cw_cheats_err_not_saved": "The cheat was switched in the game, but the change could not be saved. It may switch back later.",
   "cw_cheats_err_toggle": "Could not switch the cheat ({code}).",
   "cw_cheats_err_version": "This patch is not for the game version you have. Pick one made for your version.",
   "cw_cheats_exited": "The game was closed.",

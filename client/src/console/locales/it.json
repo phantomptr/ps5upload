@@ -15,6 +15,7 @@
   "cw_cheats_err_changed": "I file dei cheat sono cambiati. L'elenco è stato riletto.",
   "cw_cheats_err_load": "Impossibile leggere i cheat ({code}). Premi Aggiorna per riprovare.",
   "cw_cheats_err_module": "Questo cheat richiede una parte del gioco non ancora caricata. Riprova più avanti nel gioco.",
+  "cw_cheats_err_not_saved": "Il trucco è stato cambiato nel gioco, ma la modifica non è stata salvata. Potrebbe tornare com'era più tardi.",
   "cw_cheats_err_toggle": "Impossibile cambiare il cheat ({code}).",
   "cw_cheats_err_version": "Questa patch non è per la versione del gioco che hai. Scegline una fatta per la tua versione.",
   "cw_cheats_exited": "Il gioco è stato chiuso.",

@@ -265,6 +265,17 @@ int main(void) {
     }
     g_mods = 3;
 
+    /* two files of 3 cheats: the second file's cheats are saved as 3..5, and count */
+    clear_files();
+    put(dirs[0], "CUSA20002_01.00.json", "x");
+    put(dirs[1], "CUSA20002_01.00.shn", "x");
+    put(state_dir, "CUSA20002.json", "{\"3\":true,\"5\":true,\"6\":true}");
+    CHECK(cheats_list_build(&c, buf, sizeof buf, &w) == 0);
+    CHECK(strstr(buf, "\"enabled\":2") != NULL);
+    put(state_dir, "CUSA20002.json", "{\"0\":true}");
+    CHECK(cheats_list_build(&c, buf, sizeof buf, &w) == 0);
+    CHECK(strstr(buf, "\"enabled\":1") != NULL);
+
     /* invalid UTF-8 names are replaced, so the document parses */
     clear_files();
     put(dirs[0], "CUSA10001_01.00.json", "name=Caf\xE9 \x82\xA0 \xF0\x9F");

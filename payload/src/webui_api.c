@@ -2964,9 +2964,9 @@ static void serve_download(const webui_req_t *r, int fd) {
     }
     pthread_mutex_lock(&g_xfer_mu);
     if (g_dl.state != DL_READY || memcmp(id, g_dl.id, 16) != 0 || g_dl.expires <= now) {
+        int busy = g_dl.state == DL_SENDING && memcmp(id, g_dl.id, 16) == 0;
         pthread_mutex_unlock(&g_xfer_mu);
-        webui_send_json(fd, g_dl.state == DL_SENDING && memcmp(id, g_dl.id, 16) == 0 ? 409 : 404,
-                        "{\"error\":\"link_expired\"}");
+        webui_send_json(fd, busy ? 409 : 404, "{\"error\":\"link_expired\"}");
         return;
     }
     g_dl.state = DL_SENDING;
@@ -2977,16 +2977,21 @@ static void serve_download(const webui_req_t *r, int fd) {
     base = strrchr(path, '/');
     base = base && base[1] ? base + 1 : "ps5";
     snprintf(name, sizeof name, "%s%s", base, is_dir ? ".tar" : "");
-    buf = policy_read(path) ? malloc(WF_IO_BUF) : NULL;
-    if (!buf) {
+    int allowed = policy_read(path);
+    buf = allowed ? malloc(WF_IO_BUF) : NULL;
+    if (!allowed) {
         webui_send_json(fd, 403, "{\"error\":\"path_not_allowed\"}");
+    } else if (!buf) {
+        send_error(fd, 500, "out_of_memory", 13);
     } else if (is_dir) {
         uint64_t sent = 0;
         protected_forms_t *pf = malloc(sizeof *pf);
         char *canon = malloc(PATH_MAX);
         /* The walk starts from the canonical root (it follows no link below it), so the trust store's
          * forms are resolved once here instead of a realpath per entry. */
-        if (!pf || !canon || !realpath(path, canon) || stat(canon, &st) != 0 || !S_ISDIR(st.st_mode) ||
+        if (!pf || !canon) {
+            send_error(fd, 500, "out_of_memory", 13);
+        } else if (!realpath(path, canon) || stat(canon, &st) != 0 || !S_ISDIR(st.st_mode) ||
             path_tree_op_refused(canon)) {
             webui_send_json(fd, 404, "{\"error\":\"gone\"}");
         } else {

@@ -15,6 +15,7 @@
   "cw_cheats_err_changed": "Hile dosyaları değişti. Liste yeniden okundu.",
   "cw_cheats_err_load": "Hileler okunamadı ({code}). Yeniden denemek için Yenile'ye basın.",
   "cw_cheats_err_module": "Bu hile, oyunun henüz yüklenmemiş bir bölümüne ihtiyaç duyuyor. Oyunda daha sonra tekrar deneyin.",
+  "cw_cheats_err_not_saved": "Hile oyunda değiştirildi ancak değişiklik kaydedilemedi. Daha sonra eski haline dönebilir.",
   "cw_cheats_err_toggle": "Hile değiştirilemedi ({code}).",
   "cw_cheats_err_version": "Bu yama sendeki oyun sürümü için değil. Kendi sürümün için yapılmış birini seç.",
   "cw_cheats_exited": "Oyun kapatıldı.",

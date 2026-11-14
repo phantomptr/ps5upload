@@ -15,6 +15,7 @@
   "cw_cheats_err_changed": "치트 파일이 바뀌었습니다. 목록을 다시 읽었습니다.",
   "cw_cheats_err_load": "치트를 읽지 못했습니다 ({code}). 새로 고침을 눌러 다시 시도하세요.",
   "cw_cheats_err_module": "이 치트에는 아직 로드되지 않은 게임 부분이 필요합니다. 게임을 더 진행한 뒤 다시 시도하세요.",
+  "cw_cheats_err_not_saved": "게임에서 치트가 전환되었지만 변경 사항을 저장하지 못했습니다. 나중에 원래대로 돌아갈 수 있습니다.",
   "cw_cheats_err_toggle": "치트를 전환하지 못했습니다 ({code}).",
   "cw_cheats_err_version": "이 패치는 가지고 있는 게임 버전용이 아닙니다. 사용 중인 버전용 패치를 고르세요.",
   "cw_cheats_exited": "게임이 종료되었습니다.",

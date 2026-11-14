@@ -15,6 +15,7 @@
   "cw_cheats_err_changed": "Os arquivos de cheats mudaram. A lista foi lida de novo.",
   "cw_cheats_err_load": "Não foi possível ler os cheats ({code}). Pressione Atualizar para tentar de novo.",
   "cw_cheats_err_module": "Este cheat precisa de uma parte do jogo que ainda não foi carregada. Tente de novo mais tarde no jogo.",
+  "cw_cheats_err_not_saved": "A trapaça foi alterada no jogo, mas a mudança não pôde ser salva. Ela pode voltar ao estado anterior depois.",
   "cw_cheats_err_toggle": "Não foi possível alternar o cheat ({code}).",
   "cw_cheats_err_version": "Este patch não é para a versão do jogo que você tem. Escolha um feito para a sua versão.",
   "cw_cheats_exited": "O jogo foi fechado.",
