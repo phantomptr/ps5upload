@@ -4,6 +4,17 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+Play Together:
+
+- The invite panel now says what your router did for friends on other networks: it opened a port, it opened one but another router or your provider sits in front of it, or it opened none. When it didn't, the panel says which UDP port to forward to this computer (#822).
+- The port friends connect to now stays the same every time, so a port you forward on your router keeps working. You can pick your own in Settings › App › Play Together.
+
+Tailscale:
+
+- Pausing Tailscale on a PS5 that is off or not answering is no longer lost: the app keeps the pause and applies it as soon as the PS5 answers again. Switching it back on cancels it. A pause already stays through restarting the app, sending the helper again and restarting the PS5.
+
 ## 12.4.17
 
 Play Together:

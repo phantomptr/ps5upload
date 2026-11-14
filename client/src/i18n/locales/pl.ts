@@ -8501,6 +8501,7 @@ rp_users_add_hint: "Aby grać także jako inny użytkownik, zaloguj się na nim 
 "tn_no_wake": "PS5 w trybie spoczynku nie jest w Tailscale, więc da się ją wybudzić tylko w domu.",
 "tn_open_admin": "Otwórz stronę administracyjną",
 "tn_paused_ps5": "Wstrzymano: ta PS5 jest poza Tailscale, ale zachowuje logowanie. Włącz ją, aby znów z niej korzystać.",
+"tn_paused_ps5_pending": "Wstrzymano. Ta PS5 teraz nie odpowiada, więc pauza zostanie zastosowana, gdy tylko wróci. Włącz, aby anulować.",
 "tn_rename": "Zmień nazwę",
 "tn_renamed_by_tailscale": "Inne urządzenie miało już tę nazwę, więc Tailscale nazwał to urządzenie tak: {name}.",
 "tn_renew": "Odnów",

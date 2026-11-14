@@ -8277,6 +8277,7 @@ rp_users_add_hint: "Pour jouer aussi avec un autre utilisateur, connectez-vous �
 "tn_no_wake": "Une PS5 en mode repos est hors de Tailscale, elle ne peut donc être réveillée qu'à la maison.",
 "tn_open_admin": "Ouvrir la page d'administration",
 "tn_paused_ps5": "En pause : cette PS5 est hors de Tailscale et garde sa connexion. Activez-la pour l'utiliser à nouveau.",
+"tn_paused_ps5_pending": "En pause. Cette PS5 ne répond pas pour l'instant, la pause sera appliquée dès qu'elle sera de retour. Active-la pour annuler.",
 "tn_rename": "Renommer",
 "tn_renamed_by_tailscale": "Un autre appareil avait déjà ce nom, donc Tailscale a nommé celui-ci {name}.",
 "tn_renew": "Renouveler",

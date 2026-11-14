@@ -8556,6 +8556,7 @@ rp_users_add_hint: "Ha másik felhasználóként is játszanál, jelentkezz be a
 "tn_no_wake": "A pihenő módban lévő PS5 nincs a Tailscale-en, ezért csak otthonról ébreszthető fel.",
 "tn_open_admin": "Adminoldal megnyitása",
 "tn_paused_ps5": "Szüneteltetve: ez a PS5 nincs a Tailscale-en, de a bejelentkezés megmarad. Kapcsold be, hogy újra használd.",
+"tn_paused_ps5_pending": "Szüneteltetve. Ez a PS5 most nem válaszol, ezért a szüneteltetés akkor lép életbe, amint újra elérhető. Kapcsold be a visszavonáshoz.",
 "tn_rename": "Átnevezés",
 "tn_renamed_by_tailscale": "Egy másik eszköznek már ez volt a neve, ezért a Tailscale így nevezte el ezt: {name}.",
 "tn_renew": "Megújítás",

@@ -8278,6 +8278,7 @@ rp_users_add_hint: "다른 사용자로도 플레이하려면 PS5에서 그 사�
 "tn_no_wake": "휴식 모드인 PS5는 Tailscale에서 빠지므로 집에서만 깨울 수 있습니다.",
 "tn_open_admin": "관리 페이지 열기",
 "tn_paused_ps5": "일시정지됨: 이 PS5는 Tailscale에서 빠져 있지만 로그인은 유지됩니다. 다시 쓰려면 켜세요.",
+"tn_paused_ps5_pending": "일시 중지됨. 이 PS5가 지금 응답하지 않아 돌아오는 즉시 일시 중지가 적용됩니다. 취소하려면 켜세요.",
 "tn_rename": "이름 변경",
 "tn_renamed_by_tailscale": "다른 기기가 이미 그 이름을 쓰고 있어서 Tailscale이 이 기기의 이름을 {name}(으)로 정했습니다.",
 "tn_renew": "갱신",

@@ -8269,6 +8269,7 @@ rp_users_add_hint: "Um auch als anderer Benutzer zu spielen, melde dich auf der 
 "tn_no_wake": "Eine PS5 im Ruhemodus ist nicht in Tailscale, sie lässt sich also nur zu Hause wecken.",
 "tn_open_admin": "Admin-Seite öffnen",
 "tn_paused_ps5": "Pausiert: Diese PS5 ist nicht in Tailscale, bleibt aber angemeldet. Schalte sie ein, um sie wieder zu nutzen.",
+"tn_paused_ps5_pending": "Pausiert. Diese PS5 antwortet gerade nicht, daher wird die Pause angewendet, sobald sie wieder da ist. Schalte sie ein, um das abzubrechen.",
 "tn_rename": "Umbenennen",
 "tn_renamed_by_tailscale": "Ein anderes Gerät hatte diesen Namen schon, daher hat Tailscale dieses {name} genannt.",
 "tn_renew": "Erneuern",

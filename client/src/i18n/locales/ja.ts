@@ -8280,6 +8280,7 @@ rp_users_add_hint: "別のユーザーでもプレイするには、PS5 でそ�
 "tn_no_wake": "レストモード中の PS5 は Tailscale から外れるため、自宅でしか起動できません。",
 "tn_open_admin": "管理ページを開く",
 "tn_paused_ps5": "一時停止中：この PS5 は Tailscale から外れていますが、サインインは保持されています。また使うにはオンにしてください。",
+"tn_paused_ps5_pending": "一時停止中。この PS5 は今応答していないため、戻りしだい一時停止が適用されます。取り消すにはオンにしてください。",
 "tn_rename": "名前を変更",
 "tn_renamed_by_tailscale": "その名前はほかのデバイスがすでに使っていたため、Tailscale がこのデバイスに {name} という名前を付けました。",
 "tn_renew": "更新",

@@ -8220,6 +8220,7 @@ rp_users_add_hint: "若也想以其他用户游玩，请在 PS5 上登录该用�
 "tn_no_wake": "处于待机模式的 PS5 会离开 Tailscale，所以只能在家中唤醒。",
 "tn_open_admin": "打开管理页面",
 "tn_paused_ps5": "已暂停：这台 PS5 已离开 Tailscale，但会保留登录。打开即可再次使用。",
+"tn_paused_ps5_pending": "已暂停。这台 PS5 目前没有响应，等它回来后会立即暂停。打开即可取消。",
 "tn_rename": "重命名",
 "tn_renamed_by_tailscale": "已有其他设备使用该名称，所以 Tailscale 将这台命名为 {name}。",
 "tn_renew": "续期",

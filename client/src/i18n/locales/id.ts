@@ -8270,6 +8270,7 @@ rp_users_add_hint: "Untuk bermain juga sebagai pengguna lain, masuk ke pengguna 
 "tn_no_wake": "PS5 dalam mode istirahat tidak ada di Tailscale, jadi hanya bisa dibangunkan di rumah.",
 "tn_open_admin": "Buka halaman admin",
 "tn_paused_ps5": "Dijeda: PS5 ini keluar dari Tailscale tetapi tetap menyimpan info masuknya. Nyalakan untuk memakainya lagi.",
+"tn_paused_ps5_pending": "Dijeda. PS5 ini sedang tidak menjawab, jadi jeda diterapkan begitu PS5 kembali. Nyalakan untuk membatalkan.",
 "tn_rename": "Ganti nama",
 "tn_renamed_by_tailscale": "Perangkat lain sudah memakai nama itu, jadi Tailscale menamai perangkat ini {name}.",
 "tn_renew": "Perbarui",

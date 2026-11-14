@@ -8263,6 +8263,7 @@ rp_users_add_hint: "Để chơi bằng cả người dùng khác, hãy đăng nh
 "tn_no_wake": "PS5 ở chế độ nghỉ sẽ rời Tailscale, nên chỉ có thể bật nó khi ở nhà.",
 "tn_open_admin": "Mở trang quản trị",
 "tn_paused_ps5": "Đã tạm dừng: PS5 này rời Tailscale nhưng vẫn giữ đăng nhập. Bật lên để dùng lại.",
+"tn_paused_ps5_pending": "Đã tạm dừng. PS5 này hiện không phản hồi, nên việc tạm dừng sẽ áp dụng ngay khi máy trở lại. Bật lên để hủy.",
 "tn_rename": "Đổi tên",
 "tn_renamed_by_tailscale": "Một thiết bị khác đã dùng tên đó, nên Tailscale đặt tên cho thiết bị này là {name}.",
 "tn_renew": "Gia hạn",

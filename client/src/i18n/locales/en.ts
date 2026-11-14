@@ -8565,6 +8565,7 @@ rp_users_add_hint: "To play as another user too, sign in to that user on the PS5
 "tn_no_wake": "A PS5 in rest mode is off Tailscale, so it can only be woken at home.",
 "tn_open_admin": "Open the admin page",
 "tn_paused_ps5": "Paused: this PS5 is off Tailscale and keeps its sign-in. Switch it on to use it again.",
+"tn_paused_ps5_pending": "Paused. This PS5 isn't answering right now, so the pause is applied as soon as it's back. Switch it on to cancel.",
 "tn_rename": "Rename",
 "tn_renamed_by_tailscale": "Another device already had that name, so Tailscale named this one {name}.",
 "tn_renew": "Renew",

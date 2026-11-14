@@ -8268,6 +8268,7 @@ rp_users_add_hint: "Başka bir kullanıcıyla da oynamak için PS5'te o kullanı
 "tn_no_wake": "Dinlenme modundaki bir PS5 Tailscale'de olmaz, bu yüzden yalnızca evde uyandırılabilir.",
 "tn_open_admin": "Yönetim sayfasını aç",
 "tn_paused_ps5": "Duraklatıldı: bu PS5 Tailscale dışında ama oturumu korunuyor. Yeniden kullanmak için açın.",
+"tn_paused_ps5_pending": "Duraklatıldı. Bu PS5 şu anda yanıt vermiyor, duraklatma geri geldiği anda uygulanacak. İptal etmek için aç.",
 "tn_rename": "Yeniden adlandır",
 "tn_renamed_by_tailscale": "Bu ad başka bir cihazda zaten vardı, bu yüzden Tailscale bu cihaza şu adı verdi: {name}.",
 "tn_renew": "Yenile",
