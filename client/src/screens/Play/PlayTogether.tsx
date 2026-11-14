@@ -24,7 +24,7 @@ import {
   type JoinHostState,
   type NetPeer,
 } from "./playTogetherState";
-import { InternetHint, netInviteNote, NetworkChoice, saveNetwork, savedNetwork, splitByNetwork, urlHost, type NetworkKind } from "./NetworkChoice";
+import { InternetHint, netInviteNote, NetworkChoice, routerNote, saveNetwork, savedNetwork, splitByNetwork, urlHost, type NetworkKind } from "./NetworkChoice";
 import { clock } from "../../lib/clockText";
 
 type Tr = ReturnType<typeof useTr>;
@@ -430,6 +430,8 @@ export function PlayTogetherPanel({
   const link = onNet ? (one?.url ?? null) : lanLink;
   // While the invite service answers: "Connecting to the invite service…" (muted).
   const netNote = onNet ? netInviteNote(tr, null, netInvite) : null;
+  // What the router did for friends on other networks (#822).
+  const router = onNet ? routerNote(tr, netInvite) : null;
   // The Wi-Fi's link although invites work anywhere: no internet here right now (or the invite
   // service is down); or the settings keep invites on the Wi-Fi.
   const wifiWhy = !onNet && netOffered && invite ? (anywhere ? (one?.why === "offline" ? "offline" : null) : "setting") : null;
@@ -619,6 +621,14 @@ export function PlayTogetherPanel({
             {link && onNet && (
               <p className="text-xs text-[var(--color-muted)]" data-testid="pt-works-anywhere">
                 {tr("pt_works_anywhere", undefined, "Works anywhere: on your Wi-Fi and over the internet.")}
+              </p>
+            )}
+            {link && router && (
+              <p
+                className={`text-xs ${router.tone === "warn" ? "text-[var(--color-warn)]" : "text-[var(--color-muted)]"}`}
+                data-testid={router.id}
+              >
+                {router.text}
               </p>
             )}
             {/* #720: Play Together never sets up Tailscale; it only uses the Tailscale app's

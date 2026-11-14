@@ -98,6 +98,7 @@ fn settings_body() -> SettingsBody {
         hub_url: None,
         stun: None,
         upnp: None,
+        port: None,
         video_track: None,
     }
 }
@@ -166,6 +167,9 @@ async fn an_internet_guest_joins_over_webrtc_plays_and_gets_the_picture() {
     })
     .await;
     let port = st["invite"]["internet"]["router"]["port"].as_u64().unwrap();
+    // The host's page says the port is open, and which one to forward by hand (#822).
+    assert_eq!(st["invite"]["internet"]["router"]["state"], "open", "{st}");
+    assert!(st["invite"]["internet"]["router"]["local_port"].as_u64().is_some(), "{st}");
     assert!(igd
         .calls()
         .iter()
@@ -1041,16 +1045,21 @@ async fn invites_work_only_on_the_wifi_keeps_to_the_home_networks_link() {
 fn invites_work_is_saved_and_an_old_off_reads_as_wifi() {
     let dir = std::env::temp_dir().join(format!("ps5u-invites-{}", std::process::id()));
     let p = dir.join(INVITES_FILE);
-    assert_eq!(read_invites(&p), None);
-    write_invites(&p, false).unwrap();
-    assert_eq!(read_invites(&p), Some(false));
+    assert_eq!(read_invites(&p), (None, None));
+    write_invites(&p, false, 0).unwrap();
+    assert_eq!(read_invites(&p), (Some(false), None));
     assert!(std::fs::read_to_string(&p).unwrap().contains("\"wifi\""));
-    write_invites(&p, true).unwrap();
-    assert_eq!(read_invites(&p), Some(true));
+    write_invites(&p, true, 0).unwrap();
+    assert_eq!(read_invites(&p), (Some(true), None));
     std::fs::write(&p, r#"{"internet_invites": false}"#).unwrap();
-    assert_eq!(read_invites(&p), Some(false));
+    assert_eq!(read_invites(&p), (Some(false), None));
     std::fs::write(&p, "not json").unwrap();
-    assert_eq!(read_invites(&p), None);
+    assert_eq!(read_invites(&p), (None, None));
+    // The internet friends' port is kept with it (#822); a privileged one reads as none.
+    write_invites(&p, true, 41234).unwrap();
+    assert_eq!(read_invites(&p), (Some(true), Some(41234)));
+    std::fs::write(&p, r#"{"invites": "anywhere", "port": 80}"#).unwrap();
+    assert_eq!(read_invites(&p), (Some(true), None));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

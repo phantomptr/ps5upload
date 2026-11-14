@@ -85,13 +85,19 @@ pub(crate) async fn map(local: SocketAddr, search: &Search) -> Option<Mapping> {
         crate::log_at!(
             Info,
             "together",
-            "join: internet port mapped on the router by {} (port {})",
+            "join: internet port mapped on the router by {} (port {}){}",
             m.how(),
-            m.external.port()
+            m.external.port(),
+            if super::rtc::outside_shared(m.external.ip()) {
+                ", but its outside address is not the internet's: another router or the provider's shared address is in front"
+            } else {
+                ""
+            }
         );
     } else {
+        // Info: the first question when a friend can't connect (#822).
         crate::log_at!(
-            Debug,
+            Info,
             "together",
             "join: no router mapping for the internet port (no UPnP or NAT-PMP answered)"
         );

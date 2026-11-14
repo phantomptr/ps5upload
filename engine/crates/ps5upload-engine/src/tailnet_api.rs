@@ -154,9 +154,121 @@ fn remember(addr: &str, r: &mut anyhow::Result<Option<Value>>) {
     }
 }
 
+// ── A pause the console could not take ──────────────────────────────────────────────────────────
+//
+// The console keeps a pause itself (its settings.json: through a helper send, a reboot, an app
+// restart). One sent while it can't be reached (off, no helper, away) never got there: the engine
+// keeps it (`tailnet-app/pending-pause.json`) and delivers it the next time the console answers.
+// Switching it on (or Sign out) drops it.
+
+const PENDING_FILE: &str = "pending-pause.json";
+
+static PENDING: std::sync::Mutex<Option<std::collections::BTreeSet<String>>> =
+    std::sync::Mutex::new(None);
+
+fn pending_path() -> Option<std::path::PathBuf> {
+    if cfg!(test) {
+        return None; // the tests never write the user's data folder
+    }
+    crate::remote::store::data_dir().map(|d| d.join("tailnet-app").join(PENDING_FILE))
+}
+
+fn with_pending<R>(f: impl FnOnce(&mut std::collections::BTreeSet<String>) -> R) -> R {
+    let mut g = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    let set = g.get_or_insert_with(|| {
+        pending_path()
+            .and_then(|p| std::fs::read(p).ok())
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    });
+    let before = set.clone();
+    let r = f(set);
+    if *set != before {
+        if let Some(p) = pending_path() {
+            let _ = p.parent().map(std::fs::create_dir_all);
+            let tmp = p.with_extension("json.tmp");
+            let ok = serde_json::to_vec(&*set)
+                .ok()
+                .is_some_and(|b| std::fs::write(&tmp, b).is_ok())
+                && std::fs::rename(&tmp, &p).is_ok();
+            if !ok {
+                crate::log_at!(
+                    Warn,
+                    "tailnet",
+                    "tailnet: the paused consoles list was not saved"
+                );
+            }
+        }
+    }
+    r
+}
+
+pub(crate) fn pause_pending(addr: &str) -> bool {
+    with_pending(|s| s.contains(addr))
+}
+
+fn set_pause_pending(addr: &str, on: bool) {
+    with_pending(|s| {
+        if on {
+            s.insert(addr.to_string());
+        } else {
+            s.remove(addr);
+        }
+    });
+}
+
+/// After an op on `addr`: a pause it could not take is kept; switching on or signing out drops
+/// any kept pause. Answers what the app should show for a kept pause (paused, until it lands).
+fn after_op(
+    addr: &str,
+    op: &tn::Op,
+    r: anyhow::Result<Option<Value>>,
+) -> anyhow::Result<Option<Value>> {
+    match op {
+        tn::Op::Disable => {
+            if let Err(e) = &r {
+                set_pause_pending(addr, true);
+                crate::log_at!(
+                    Info,
+                    "tailnet",
+                    "tailnet {addr}: pause kept until the PS5 answers ({e:#})"
+                );
+                return Ok(Some(json!({
+                    "ok": true,
+                    "enabled": false,
+                    "state": "off",
+                    // Only a set-up node is paused: the panel shows Paused, not Set up.
+                    "signed_in": true,
+                    "pause_pending": true,
+                })));
+            }
+            set_pause_pending(addr, false);
+        }
+        tn::Op::Enable { .. } | tn::Op::Logout => set_pause_pending(addr, false),
+        _ => {}
+    }
+    r
+}
+
+/// Before reading a console's status: a kept pause goes first.
+fn deliver_pause(addr: &str, call: &dyn Fn(&tn::Op) -> anyhow::Result<Option<Value>>) {
+    if !pause_pending(addr) {
+        return;
+    }
+    if let Ok(Some(_)) = call(&tn::Op::Disable) {
+        set_pause_pending(addr, false);
+        crate::log_at!(
+            Info,
+            "tailnet",
+            "tailnet {addr}: the pause made while it was away is in place"
+        );
+    }
+}
+
 pub(crate) async fn status(State(state): State<AppState>, Query(q): Query<AddrQuery>) -> Response {
     let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
     let r = tokio::task::spawn_blocking(move || {
+        deliver_pause(&addr, &|op| tn::console(&addr, op));
         let mut r = tn::console(&addr, &tn::Op::Status);
         remember(&addr, &mut r);
         r
@@ -440,7 +552,8 @@ pub(crate) async fn op(Json(req): Json<OpBody>) -> Response {
                 }
             }
         }
-        let mut r = tn::console(&addr, &op);
+        let r = tn::console(&addr, &op);
+        let mut r = after_op(&addr, &op, r);
         remember(&addr, &mut r);
         r
     })
@@ -451,6 +564,38 @@ pub(crate) async fn op(Json(req): Json<OpBody>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A pause sent while the PS5 can't be reached is kept and shown as paused, lands the next time
+    /// it answers, and is dropped by switching it on.
+    #[test]
+    fn a_pause_the_console_missed_lands_when_it_answers() {
+        let addr = "192.0.2.77";
+        let down = || Err(anyhow::anyhow!("connect: timed out"));
+        let shown = after_op(addr, &tn::Op::Disable, down()).unwrap().unwrap();
+        assert_eq!(shown["enabled"], false);
+        assert_eq!(shown["pause_pending"], true);
+        assert!(pause_pending(addr));
+        // Still away: kept.
+        deliver_pause(addr, &|_| down());
+        assert!(pause_pending(addr));
+        // Back: the pause is sent, once.
+        let sent = std::sync::Mutex::new(Vec::new());
+        deliver_pause(addr, &|op| {
+            sent.lock()
+                .unwrap()
+                .push(format!("{:?}", tn::request_body(op)));
+            Ok(Some(json!({"ok": true, "enabled": false})))
+        });
+        assert!(!pause_pending(addr));
+        assert_eq!(sent.lock().unwrap().len(), 1);
+        assert!(sent.lock().unwrap()[0].contains("disable"));
+        deliver_pause(addr, &|_| panic!("nothing left to send"));
+        // Switched on while away: the kept pause is dropped.
+        let _ = after_op(addr, &tn::Op::Disable, down());
+        let on = tn::Op::parse_fields("enable", &tn::OpFields::default()).unwrap();
+        let _ = after_op(addr, &on, down());
+        assert!(!pause_pending(addr));
+    }
 
     #[test]
     fn this_device_is_added_only_to_a_listing_console_that_lacks_it() {

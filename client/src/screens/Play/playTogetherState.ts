@@ -108,6 +108,28 @@ export interface NetInvite {
   hubError: string | null;
   /** The engine can't reach the hub (hub.rs Room::offline): the invite is the Wi-Fi's for now. */
   offline: boolean;
+  /** What the router did for internet friends (#822), null from an engine before it. */
+  router: NetRouter | null;
+}
+
+/** The router's answer (`invite.internet.router`): "open" (a port open to the internet), "shared"
+ *  (open, but another router or the provider's shared address is in front), "none" (no port:
+ *  UPnP off or absent on the router), "off" (asking is off in Settings), "asking". */
+export interface NetRouter {
+  state: "open" | "shared" | "none" | "off" | "asking";
+  /** The UDP port to forward to this computer by hand. */
+  localPort: number | null;
+}
+
+const ROUTER_STATES = ["open", "shared", "none", "off", "asking"] as const;
+
+function readRouter(v: unknown): NetRouter | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  const state = ROUTER_STATES.find((x) => x === o.state);
+  if (!state) return null;
+  const p = o.local_port;
+  return { state, localPort: typeof p === "number" && p > 0 ? p : null };
 }
 
 /** The one link to share (POST /api/join/invite `share`): where it works, and why it is the
@@ -130,6 +152,8 @@ export interface NetSettings {
   hubUrl: string;
   stun: string[];
   upnp: boolean;
+  /** The UDP port internet friends connect to (0: not chosen yet; null: an engine before it). */
+  port: number | null;
   /** Internet friends' picture as a video track (the data channel when off, or for a page or
    *  engine without it). */
   videoTrack: boolean;
@@ -169,7 +193,7 @@ export const EMPTY_JOIN: JoinHostState = {
   invite: null,
   guests: [],
   asks: [],
-  settings: { blockSystemButtons: true, maxPlayers: 3, streamSeat: false, internetInvites: null, invites: null, hubUrl: "", stun: [], upnp: true, videoTrack: true },
+  settings: { blockSystemButtons: true, maxPlayers: 3, streamSeat: false, internetInvites: null, invites: null, hubUrl: "", stun: [], upnp: true, port: null, videoTrack: true },
   netPeers: [],
   seatNext: false,
   nextProfile: null,
@@ -188,7 +212,7 @@ const str = (v: unknown): string | null => (typeof v === "string" && v ? v : nul
 export function readNetInvite(v: unknown): NetInvite | null {
   if (!v || typeof v !== "object") return null;
   const o = v as Record<string, unknown>;
-  return { url: str(o.url), hubState: str(o.state), hubError: str(o.error), offline: o.offline === true };
+  return { url: str(o.url), hubState: str(o.state), hubError: str(o.error), offline: o.offline === true, router: readRouter(o.router) };
 }
 
 /** The invite's one link (`invite.share`), or null. */
@@ -364,6 +388,7 @@ export function readJoinState(v: unknown): JoinHostState {
       hubUrl: typeof s.hub_url === "string" ? s.hub_url : "",
       stun: Array.isArray(s.stun) ? s.stun.filter((x): x is string => typeof x === "string") : [],
       upnp: s.upnp !== false,
+      port: typeof s.port === "number" ? s.port : null,
       videoTrack: s.video_track !== false,
     },
     netPeers: readPeers((o.internet as Record<string, unknown> | null | undefined)?.peers ?? (inv?.internet as Record<string, unknown> | null | undefined)?.peers),
@@ -605,7 +630,13 @@ export interface NetSettingsBody {
   hub_url?: string;
   stun?: string[];
   upnp?: boolean;
+  port?: number;
   video_track?: boolean;
+}
+
+/** A port Settings › Play Together takes: 1024-65535 (the engine also takes 0, "pick one"). */
+export function portOk(p: number): boolean {
+  return Number.isInteger(p) && p >= 1024 && p <= 65535;
 }
 
 /** Invites work, as POST /api/join/settings takes it: the word, and the older on/off an engine

@@ -471,3 +471,23 @@ fn an_ipv6_home_counts_once_for_the_connect_limit() {
         "a new address in the same /64 is not a new sender"
     );
 }
+
+/// What the host's page says about the router (#822): open on an internet address; "shared" when
+/// the router's own outside address is private or the providers' 100.64/10 (another router, or
+/// CGNAT, in front); nothing opened: "asking" until the router has had its chance, then "none";
+/// "off" when the host turned asking off.
+#[test]
+fn the_router_state_tells_open_from_shared_and_none() {
+    use super::rtc::{outside_shared, router_word};
+    let ip = |s: &str| s.parse::<std::net::IpAddr>().unwrap();
+    assert_eq!(router_word(true, true, Some(ip("198.51.100.7"))), "open");
+    assert_eq!(router_word(true, true, Some(ip("100.72.1.2"))), "shared");
+    assert_eq!(router_word(true, true, Some(ip("192.168.0.20"))), "shared");
+    assert_eq!(router_word(true, true, Some(ip("10.1.2.3"))), "shared");
+    assert_eq!(router_word(true, false, None), "asking");
+    assert_eq!(router_word(true, true, None), "none");
+    assert_eq!(router_word(false, true, None), "off");
+    assert!(!outside_shared(ip("100.128.0.1")), "just past 100.64/10");
+    assert!(!outside_shared(ip("2001:db8::1")));
+    assert!(outside_shared(ip("fd00::1")));
+}

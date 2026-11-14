@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const renderToStaticMarkup = (el: ReactElement) => ssr(<MemoryRouter>{el}</MemoryRouter>);
 
 import { installWindowStub } from "../../test-utils/storage";
-import { NetworkChoice, savedNetwork, saveNetwork } from "./NetworkChoice";
+import { NetworkChoice, routerNote, savedNetwork, saveNetwork } from "./NetworkChoice";
 import { guestWayText, netInviteNote, netPeersView, PlayTogetherPanel } from "./PlayTogether";
 import { hubUrlOk, invitesBody, joinApi, parseStun, readJoinState, shareOf } from "./playTogetherState";
 
@@ -62,7 +62,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe("reading the engine's internet invites", () => {
   it("reads the link, the hub, each guest's way in and the peers", () => {
     const s = readJoinState(engine);
-    expect(s.invite?.internet).toEqual({ url: NET_URL, hubState: "hosted", hubError: null, offline: false });
+    expect(s.invite?.internet).toEqual({ url: NET_URL, hubState: "hosted", hubError: null, offline: false, router: null });
     expect(s.invite?.share).toEqual({ url: NET_URL, works: "anywhere", why: null });
     expect(s.guests.map((g) => [g.name, g.via, g.path, g.netPath, g.rttMs])).toEqual([
       ["Ann", "internet", "direct", "lan", 48],
@@ -211,11 +211,25 @@ describe("what the host is told", () => {
   });
 
   it("the hub unreachable, from the engine's state", () => {
-    const down = netInviteNote(tr, null, { url: NET_URL, hubState: "reconnecting", hubError: "connect: refused", offline: true });
+    const down = netInviteNote(tr, null, { url: NET_URL, hubState: "reconnecting", hubError: "connect: refused", offline: true, router: null });
     expect(down?.id).toBe("pt-net-hub-down");
     expect(down?.text).toContain("(connect: refused)");
-    expect(netInviteNote(tr, null, { url: NET_URL, hubState: "connecting", hubError: null, offline: false })?.tone).toBe("muted");
-    expect(netInviteNote(tr, null, { url: NET_URL, hubState: "hosted", hubError: null, offline: false })).toBeNull();
+    expect(netInviteNote(tr, null, { url: NET_URL, hubState: "connecting", hubError: null, offline: false, router: null })?.tone).toBe("muted");
+    expect(netInviteNote(tr, null, { url: NET_URL, hubState: "hosted", hubError: null, offline: false, router: null })).toBeNull();
+  });
+
+  it("what the router did for friends on other networks (#822)", () => {
+    const at = (router: unknown) =>
+      readJoinState({ ...engine, invite: { ...engine.invite, internet: { ...engine.invite.internet, router } } }).invite?.internet ?? null;
+    expect(routerNote(tr, at(null))).toBeNull();
+    expect(routerNote(tr, at({ state: "asking", via: null, port: null, local_port: 41234 }))).toBeNull();
+    expect(routerNote(tr, at({ state: "open", via: "upnp", port: 41234, local_port: 41234 }))?.tone).toBe("muted");
+    const shared = routerNote(tr, at({ state: "shared", via: "upnp", port: 41234, local_port: 41234 }));
+    expect(shared?.tone).toBe("warn");
+    expect(shared?.text).toContain("41234");
+    expect(routerNote(tr, at({ state: "none", via: null, port: null, local_port: 41234 }))?.text).toContain("UPnP");
+    expect(routerNote(tr, at({ state: "off", via: null, port: null, local_port: 41234 }))?.id).toBe("pt-router-off");
+    expect(routerNote(tr, at({ state: "weird" }))).toBeNull();
   });
 
   it("peers: those connecting, one failure notice until dismissed", () => {

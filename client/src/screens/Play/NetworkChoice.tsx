@@ -52,6 +52,57 @@ export function netInviteNote(
   return null;
 }
 
+/** What the router did for friends on other networks, in the invite panel (#822): null while it
+ *  is being asked, or from an engine before it. */
+export function routerNote(
+  tr: Tr,
+  net: NetInvite | null,
+): { text: string; tone: "warn" | "muted"; id: string } | null {
+  const r = net?.router;
+  if (!r) return null;
+  const port = r.localPort ?? "";
+  switch (r.state) {
+    case "open":
+      return {
+        id: "pt-router-open",
+        tone: "muted",
+        text: tr("pt_router_open", undefined, "Your router opened a port for friends on other networks."),
+      };
+    case "shared":
+      return {
+        id: "pt-router-shared",
+        tone: "warn",
+        text: tr(
+          "pt_router_shared",
+          { port },
+          `Your router opened a port, but another router or your internet provider sits in front of it, so friends on mobile data may not get in. If a friend can't connect, forward UDP port ${port} to this computer on the outer router, or use Tailscale.`,
+        ),
+      };
+    case "none":
+      return {
+        id: "pt-router-none",
+        tone: "muted",
+        text: tr(
+          "pt_router_none",
+          { port },
+          `Your router didn't open a port. If a friend can't connect, turn on UPnP in your router's settings, or forward UDP port ${port} to this computer.`,
+        ),
+      };
+    case "off":
+      return {
+        id: "pt-router-off",
+        tone: "muted",
+        text: tr(
+          "pt_router_off",
+          { port },
+          `Opening a router port is off in Settings. If a friend can't connect, forward UDP port ${port} to this computer.`,
+        ),
+      };
+    default:
+      return null;
+  }
+}
+
 /** Which network an invite was last made for, on this device: Play Together opens on it again. */
 export type NetworkKind = "home" | "tailscale" | "internet";
 const NETWORK_KEY = "ps5upload.pt_network";

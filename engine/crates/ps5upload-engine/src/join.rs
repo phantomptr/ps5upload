@@ -238,6 +238,11 @@ pub(crate) struct Settings {
     /// Ask the router for a port (UPnP-IGD, NAT-PMP / PCP) while an internet invite is open.
     #[serde(default = "yes")]
     pub upnp: bool,
+    /// The UDP port internet friends connect to (every address of this computer). 0: the engine
+    /// picks one on its first run and keeps it, so a port forwarded on the router stays right
+    /// (#822). Kept across restarts; a change takes effect the next time the engine starts.
+    #[serde(default)]
+    pub port: u16,
     /// Internet guests whose page offers it get the picture as an RTP video track (the browser's
     /// own jitter buffer, retransmission and decoder: crate::join_net::rtc), not on the data
     /// channel. On unless the host turns it off; off, or a page that offers no track, keeps the
@@ -271,6 +276,7 @@ impl Default for Settings {
             hub_url: default_hub(),
             stun: default_stun(),
             upnp: true,
+            port: 0,
             video_track: true,
         }
     }
@@ -300,8 +306,8 @@ pub(crate) fn settings() -> Settings {
 
 // ── "Invites work" (kept across restarts) ───────────────────────────────────────────────────────
 
-/// Where the engine keeps "Invites work" (in its data folder). The other Play Together choices
-/// last one engine run, as before.
+/// Where the engine keeps "Invites work" and the internet friends' port (in its data folder). The
+/// other Play Together choices last one engine run, as before.
 const INVITES_FILE: &str = "play_together.json";
 
 /// "Invites work" as the API says it: "anywhere" (the one link: the internet invite, which also
@@ -330,19 +336,33 @@ struct StoredInvites {
     /// The older name of the same choice (internet invites on or off), read too.
     #[serde(default, skip_serializing)]
     internet_invites: Option<bool>,
+    /// Settings::port (absent: none chosen yet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    port: Option<u16>,
 }
 
-/// The saved choice (true: anywhere), None when the file says none.
-fn read_invites(path: &std::path::Path) -> Option<bool> {
-    let s: StoredInvites = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-    match s.invites.as_deref() {
+/// The saved choice (true: anywhere; None when the file says none) and port.
+fn read_invites(path: &std::path::Path) -> (Option<bool>, Option<u16>) {
+    let Some(s) = std::fs::read(path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<StoredInvites>(&b).ok())
+    else {
+        return (None, None);
+    };
+    let anywhere = match s.invites.as_deref() {
         Some("anywhere") => Some(true),
         Some("wifi") => Some(false),
         _ => s.internet_invites,
-    }
+    };
+    (anywhere, s.port.filter(|p| port_ok(*p) && *p != 0))
 }
 
-fn write_invites(path: &std::path::Path, anywhere: bool) -> Result<(), String> {
+/// A port the settings take: 0 (the engine picks) or 1024-65535 (no privileged port).
+pub(crate) fn port_ok(p: u16) -> bool {
+    p == 0 || p >= 1024
+}
+
+fn write_invites(path: &std::path::Path, anywhere: bool, port: u16) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)
             .map_err(|e| crate::state_io::describe("the Play Together setting", dir, &e))?;
@@ -350,6 +370,7 @@ fn write_invites(path: &std::path::Path, anywhere: bool) -> Result<(), String> {
     let body = serde_json::to_vec_pretty(&StoredInvites {
         invites: Some(invites_word(anywhere).to_string()),
         internet_invites: None,
+        port: (port != 0).then_some(port),
     })
     .map_err(|e| e.to_string())?;
     // Written aside and renamed over: a crash mid-write never leaves half a file.
@@ -366,22 +387,46 @@ fn invites_path() -> Option<std::path::PathBuf> {
 /// "Invites work" as it was last set; called once as the engine starts. Nothing saved (every
 /// engine before 12.1 kept Allow internet invites for one run only, on at each start): anywhere.
 pub(crate) fn load_invites() {
-    let Some(anywhere) = invites_path().and_then(|p| read_invites(&p)) else {
+    let Some((anywhere, port)) = invites_path().map(|p| read_invites(&p)) else {
         return;
     };
     let mut g = SETTINGS.lock().unwrap_or_else(|e| e.into_inner());
     let mut s = g.clone().unwrap_or_default();
-    s.internet_invites = anywhere;
+    if let Some(a) = anywhere {
+        s.internet_invites = a;
+    }
+    if let Some(p) = port {
+        s.port = p;
+    }
     *g = Some(s);
 }
 
-/// Saves "Invites work" (never from the tests: they would write the user's own data folder).
-fn save_invites(anywhere: bool) {
+/// The port the engine picked for internet friends (Settings::port 0): kept for the next runs.
+pub(crate) fn keep_picked_port(port: u16) {
+    if cfg!(test) || port == 0 {
+        return;
+    }
+    let s = {
+        let mut g = SETTINGS.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = g.clone().unwrap_or_default();
+        if s.port != 0 {
+            return;
+        }
+        s.port = port;
+        *g = Some(s.clone());
+        s
+    };
+    save_invites(s.internet_invites, s.port);
+}
+
+/// Saves "Invites work" and the port (never from the tests: they would write the user's own data
+/// folder).
+fn save_invites(anywhere: bool, port: u16) {
     if cfg!(test) {
         return;
     }
     if let Some(p) = invites_path() {
-        if let Err(e) = write_invites(&p, anywhere) {
+        if let Err(e) = write_invites(&p, anywhere, port) {
             crate::log_at!(Warn, "together", "join: {e}");
         }
     }
@@ -3846,6 +3891,8 @@ pub struct SettingsBody {
     #[serde(default)]
     upnp: Option<bool>,
     #[serde(default)]
+    port: Option<u16>,
+    #[serde(default)]
     video_track: Option<bool>,
 }
 
@@ -3951,6 +3998,12 @@ pub async fn set_settings(
     if let Some(v) = b.upnp {
         s.upnp = v;
     }
+    if let Some(v) = b.port {
+        if !port_ok(v) {
+            return bad(StatusCode::BAD_REQUEST, "port");
+        }
+        s.port = v;
+    }
     if let Some(v) = b.video_track {
         s.video_track = v;
     }
@@ -3965,8 +4018,10 @@ pub async fn set_settings(
         );
     }
     *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(s.clone());
-    if (b.internet_invites.is_some() || b.invites.is_some()) && s.internet_invites != was_anywhere {
-        save_invites(s.internet_invites);
+    if ((b.internet_invites.is_some() || b.invites.is_some()) && s.internet_invites != was_anywhere)
+        || b.port.is_some()
+    {
+        save_invites(s.internet_invites, s.port);
     }
     let fx = with_parties(|m| {
         m.values_mut()
@@ -7898,6 +7953,7 @@ mod tests {
                     hub_url: None,
                     stun: None,
                     upnp: None,
+                    port: None,
                     video_track: None,
                 }),
             )

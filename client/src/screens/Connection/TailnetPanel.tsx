@@ -260,7 +260,13 @@ export default function TailnetPanel({
         <div className="flex flex-col gap-2">
           {!st?.enabled ? (
             <p className="text-xs text-[var(--color-muted)]" data-testid="tailnet-paused">
-              {tr("tn_paused_ps5", undefined, "Paused: this PS5 is off Tailscale and keeps its sign-in. Switch it on to use it again.")}
+              {st?.pause_pending
+                ? tr(
+                    "tn_paused_ps5_pending",
+                    undefined,
+                    "Paused. This PS5 isn't answering right now, so the pause is applied as soon as it's back. Switch it on to cancel.",
+                  )
+                : tr("tn_paused_ps5", undefined, "Paused: this PS5 is off Tailscale and keeps its sign-in. Switch it on to use it again.")}
             </p>
           ) : state === "needs-login" && st.login_url ? (
             <div className="flex flex-col gap-2">

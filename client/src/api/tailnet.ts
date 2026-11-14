@@ -33,6 +33,9 @@ export interface TailnetPeer {
 export interface TailnetStatus {
   ok: boolean;
   enabled: boolean;
+  /** A pause the PS5 couldn't take yet (off or not answering): the engine keeps it and sends it
+   *  the next time the PS5 answers. Only in the answer to that pause. */
+  pause_pending?: boolean;
   state: TailnetState;
   login_url: string;
   control_url: string;
