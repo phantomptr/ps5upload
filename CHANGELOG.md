@@ -6,6 +6,7 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+- **Payloads:** add a whole list of payloads at once with **Payload sources**: paste the address of a list in Payload Manager's format and its payloads show up in the catalogue. A payload is only shown when the list gives its checksum, and a download that doesn't match is refused (#829).
 - **Extract on the PS5:** extracting archives, RAR sets most of all, is much faster: the extractor now writes to the drive in large pieces instead of many small ones, and the RAR decoder works faster. Not yet timed on a console (#826).
 
 ## 12.4.19

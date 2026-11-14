@@ -24,8 +24,8 @@ describe("which route a catalogue send took", () => {
     expect(sentViaPayloadManager(undefined)).toBe(false);
   });
 
-  it("says so in the notification, and doesn't count custom repos as curated", () => {
+  it("says so in the notification, and doesn't count custom repos or source payloads as curated", () => {
     expect(catalog).toContain('"payloads_sent_body_pm"');
-    expect(catalog).toContain("catalog.filter((p) => !p.is_custom).length");
+    expect(catalog).toContain("catalog.filter((p) => !p.is_custom && !p.source_id).length");
   });
 });

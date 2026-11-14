@@ -44,7 +44,9 @@ fn status_of(code: &str) -> StatusCode {
         | "invalid_checksum_file"
         | "asset_url_refused"
         | "no_asset"
+        | "source_url_invalid"
         | "bad_host" => StatusCode::BAD_REQUEST,
+        "source_not_a_list" | "source_empty" => StatusCode::UNPROCESSABLE_ENTITY,
         "custom_repos_unreadable" | "download_cancelled" => StatusCode::CONFLICT,
         "io_failed" => StatusCode::INTERNAL_SERVER_ERROR,
         _ => StatusCode::BAD_GATEWAY,
@@ -93,6 +95,9 @@ fn router_with<S: Clone + Send + Sync + 'static>(library: Option<Library>) -> Ro
         .route("/api/payloads", get(list))
         .route("/api/payloads/repos", post(add_repo))
         .route("/api/payloads/repos/{id}", delete(remove_repo))
+        .route("/api/payloads/sources", get(list_sources).post(add_source))
+        .route("/api/payloads/sources/refresh", post(refresh_sources))
+        .route("/api/payloads/sources/{id}", delete(remove_source))
         .route("/api/payloads/{id}/releases", get(releases))
         .route("/api/payloads/{id}/releases/latest", get(latest))
         .route("/api/payloads/{id}/download", post(download))
@@ -207,6 +212,35 @@ async fn remove_repo(State(api): State<Api>, Path(id): Path<String>) -> Response
         .await
 }
 
+/// GET /api/payloads/sources → {sources}: the payload lists added (#829), from the copies on disk.
+async fn list_sources(State(api): State<Api>) -> Response {
+    api.run(|lib| Ok(json!({ "sources": lib.sources() }))).await
+}
+
+#[derive(Deserialize)]
+struct AddSource {
+    url: String,
+}
+
+/// POST /api/payloads/sources {url}: fetch the list and keep it. Refused when it is not one.
+async fn add_source(State(api): State<Api>, Json(req): Json<AddSource>) -> Response {
+    api.run(move |lib| lib.add_source(&req.url)).await
+}
+
+/// POST /api/payloads/sources/refresh?force=1 → {sources}: lists older than an hour (all with
+/// force) are fetched again; a failure keeps the last copy and sets that source's `error`.
+async fn refresh_sources(State(api): State<Api>, Query(q): Query<ReleaseQuery>) -> Response {
+    let force = q.force();
+    api.run(move |lib| Ok(json!({ "sources": lib.refresh_sources(force) })))
+        .await
+}
+
+/// DELETE /api/payloads/sources/{id} → {removed}: the list, and what was downloaded from it.
+async fn remove_source(State(api): State<Api>, Path(id): Path<String>) -> Response {
+    api.run(move |lib| Ok(json!({ "removed": lib.remove_source(&id)? })))
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,6 +349,29 @@ mod tests {
         assert_eq!(gone["removed"], true);
         let (_, gone) = h.delete(&format!("/api/payloads/repos/{id}")).await;
         assert_eq!(gone["removed"], false);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn payload_sources_start_empty_and_refuse_a_bad_address() {
+        let h = serve("sources").await;
+        let (status, v) = h.get("/api/payloads/sources").await;
+        assert_eq!((status, v["sources"].clone()), (200, json!([])));
+        let (status, v) = h
+            .post(
+                "/api/payloads/sources",
+                json!({"url": "http://lists.example.org/p.json"}),
+            )
+            .await;
+        assert_eq!(
+            (status, v["code"].as_str()),
+            (400, Some("source_url_invalid"))
+        );
+        let (status, v) = h
+            .post("/api/payloads/sources/refresh?force=1", json!({}))
+            .await;
+        assert_eq!((status, v["sources"].clone()), (200, json!([])));
+        let (status, v) = h.delete("/api/payloads/sources/src-000000000000").await;
+        assert_eq!((status, v["removed"].clone()), (200, json!(false)));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

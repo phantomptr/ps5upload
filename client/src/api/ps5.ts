@@ -2037,6 +2037,9 @@ export interface PayloadInfo {
   /** The file name a download is cached and stored in Payload Manager under
    *  (`shadowmountplus.elf`); empty for a custom repo. Older engines omit it. */
   file_name?: string;
+  /** The payload source (#829) it came from. Absent otherwise. */
+  source_id?: string;
+  source_name?: string;
 }
 
 export interface PayloadReleaseInfo {
@@ -2132,6 +2135,38 @@ export async function payloadsAddCustomRepo(args: {
  *  Returns true if something was removed. */
 export async function payloadsRemoveCustomRepo(id: string): Promise<boolean> {
   return invoke<boolean>("payloads_remove_custom_repo", { id });
+}
+
+/** A payload list added by its address (#829), Payload Manager's "Payload Sources" format. */
+export interface PayloadSourceInfo {
+  id: string;
+  url: string;
+  name: string;
+  /** Payloads shown from it. */
+  payloads: number;
+  /** Left out: no SHA-256, a file off github.com and the list's site, or malformed. */
+  skipped: number;
+  /** Left out because the catalogue already has them. */
+  already_listed: number;
+  cached_age_secs?: number;
+  /** The last refresh failed: why. The previous copy is still used. */
+  error?: string;
+}
+
+export async function payloadsSources(): Promise<PayloadSourceInfo[]> {
+  return invoke<PayloadSourceInfo[]>("payloads_sources");
+}
+
+export async function payloadsAddSource(url: string): Promise<PayloadSourceInfo> {
+  return invoke<PayloadSourceInfo>("payloads_add_source", { url });
+}
+
+export async function payloadsRefreshSources(force = false): Promise<PayloadSourceInfo[]> {
+  return invoke<PayloadSourceInfo[]>("payloads_refresh_sources", { force });
+}
+
+export async function payloadsRemoveSource(id: string): Promise<boolean> {
+  return invoke<boolean>("payloads_remove_source", { id });
 }
 
 export async function payloadsLocalPath(id: string): Promise<string | null> {

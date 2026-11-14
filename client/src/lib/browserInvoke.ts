@@ -1798,6 +1798,30 @@ export async function browserInvoke<T>(
       return ((await r.json()) as { removed: T }).removed;
     }
 
+    case "payloads_sources":
+      return (await getJson<{ sources: T }>("/api/payloads/sources")).sources;
+
+    case "payloads_add_source":
+      return postJson<T>("/api/payloads/sources", { url: args["url"] }, /*long=*/ true);
+
+    case "payloads_refresh_sources":
+      return (
+        await postJson<{ sources: T }>(
+          qs("/api/payloads/sources/refresh", { force: args["force"] ? 1 : undefined }),
+          {},
+          /*long=*/ true,
+        )
+      ).sources;
+
+    case "payloads_remove_source": {
+      const r = await fetch(
+        `${getEngineUrl()}/api/payloads/sources/${uenc(args["id"] as string)}`,
+        { method: "DELETE", signal: AbortSignal.timeout(TIMEOUT_STANDARD) },
+      );
+      if (!r.ok) throw new Error(await extractEngineError(r));
+      return ((await r.json()) as { removed: T }).removed;
+    }
+
     case "payload_send":
       return postJson<T>(
         "/api/payload/send",

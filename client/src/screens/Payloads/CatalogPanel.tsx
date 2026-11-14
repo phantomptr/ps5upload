@@ -13,6 +13,7 @@ import {
   Trash2,
   X,
   PackagePlus,
+  ListPlus,
 } from "lucide-react";
 import { openExternalUrl as openExternal } from "../../lib/openExternalUrl";
 import { PPR_PATCH_REPO } from "../../lib/fpkgPrereqs";
@@ -27,7 +28,12 @@ import {
   payloadsDownloadCancel,
   payloadsAddCustomRepo,
   payloadsRemoveCustomRepo,
+  payloadsSources,
+  payloadsAddSource,
+  payloadsRefreshSources,
+  payloadsRemoveSource,
   sendPayloadChecked,
+  type PayloadSourceInfo,
   type PayloadInfo,
   type PayloadReleaseInfo,
   type PayloadLocalEntry,
@@ -153,6 +159,85 @@ export default function CatalogPanel() {
       setErrors((prev) => ({ ...prev, _global: String(e) }));
     }
   }, []);
+
+  // ── Payload sources (#829): lists of payloads added by their address ──
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [sources, setSources] = useState<PayloadSourceInfo[]>([]);
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [sourceBusy, setSourceBusy] = useState(false);
+  const [sourceError, setSourceError] = useState<string | null>(null);
+
+  // The lists on disk at once, then the ones older than an hour fetched again.
+  useEffect(() => {
+    let cancelled = false;
+    payloadsSources()
+      .then(async (list) => {
+        if (cancelled) return;
+        setSources(list);
+        if (list.length === 0) return;
+        const fresh = await payloadsRefreshSources(false);
+        if (cancelled) return;
+        setSources(fresh);
+        setCatalog(await payloadsCatalog());
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handleAddSource() {
+    setSourceBusy(true);
+    setSourceError(null);
+    try {
+      const info = await payloadsAddSource(sourceUrl.trim());
+      setSources(await payloadsSources());
+      await reloadCatalog();
+      await refreshInventory();
+      setSourceUrl("");
+      pushNotification(
+        "success",
+        tr("payloads_sources_added", { name: info.name }, `Added ${info.name}`),
+        {
+          body: tr(
+            "payloads_sources_added_body",
+            { count: info.payloads },
+            `${info.payloads} payloads from it are now in the list.`,
+          ),
+        },
+      );
+    } catch (e) {
+      setSourceError(payloadErrorText(tr, e));
+    } finally {
+      setSourceBusy(false);
+    }
+  }
+
+  async function handleRefreshSources() {
+    setSourceBusy(true);
+    setSourceError(null);
+    try {
+      setSources(await payloadsRefreshSources(true));
+      await reloadCatalog();
+    } catch (e) {
+      setSourceError(payloadErrorText(tr, e));
+    } finally {
+      setSourceBusy(false);
+    }
+  }
+
+  async function handleRemoveSource(s: PayloadSourceInfo) {
+    setSourceError(null);
+    try {
+      await payloadsRemoveSource(s.id);
+      setSources(await payloadsSources());
+      await reloadCatalog();
+      await refreshInventory();
+      pushNotification("info", tr("payloads_custom_removed", { name: s.name }, `Removed ${s.name}`));
+    } catch (e) {
+      setSourceError(payloadErrorText(tr, e));
+    }
+  }
 
   // ── Add-a-custom-repo form (#93) ────────────────────────────────────
   const [addOpen, setAddOpen] = useState(false);
@@ -524,8 +609,8 @@ export default function CatalogPanel() {
           <div className="text-xs text-[var(--color-muted)]">
             {tr(
               "payloads_curated_blurb",
-              { count: catalog.filter((p) => !p.is_custom).length },
-              `${catalog.filter((p) => !p.is_custom).length} curated payloads. Releases are fetched from GitHub on demand and cached for 1 hour.`,
+              { count: catalog.filter((p) => !p.is_custom && !p.source_id).length },
+              `${catalog.filter((p) => !p.is_custom && !p.source_id).length} curated payloads. Releases are fetched from GitHub on demand and cached for 1 hour.`,
             )}
           </div>
           {/* Wraps on a phone: the search box takes its own full-width row
@@ -555,6 +640,17 @@ export default function CatalogPanel() {
               }}
             >
               {tr("payloads_add_repo", undefined, "Add repo")}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={<ListPlus size={12} />}
+              onClick={() => {
+                setSourcesOpen((v) => !v);
+                setSourceError(null);
+              }}
+            >
+              {tr("payloads_sources_button", undefined, "Payload sources")}
             </Button>
             {/* It writes to a stick plugged into this computer: not something a browser can do. */}
             {isTauriEnv() && (
@@ -656,6 +752,104 @@ export default function CatalogPanel() {
             </div>
             {addError && (
               <div className="mt-2 text-xs text-[var(--color-bad)]">{addError}</div>
+            )}
+          </div>
+        )}
+        {sourcesOpen && (
+          <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-medium text-[var(--color-text)]">
+                {tr("payloads_sources_button", undefined, "Payload sources")}
+              </span>
+              <button
+                type="button"
+                onClick={() => setSourcesOpen(false)}
+                className="text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                aria-label={tr("close", undefined, "Close")}
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <p className="mb-2 text-xs text-[var(--color-muted)]">
+              {tr(
+                "payloads_sources_hint",
+                undefined,
+                "Add a list of payloads by its address, in the format Payload Manager uses for its Payload Sources. Its payloads show up below. A payload is only shown when the list gives its SHA-256, and a download that doesn't match is refused. Only add lists you trust.",
+              )}
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                type="url"
+                value={sourceUrl}
+                onChange={(e) => setSourceUrl(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !sourceBusy && sourceUrl.trim()) void handleAddSource();
+                }}
+                placeholder="https://…/payloads.json"
+                spellCheck={false}
+                block={false}
+                className="min-w-[260px] flex-1 text-xs"
+              />
+              <Button
+                variant="primary"
+                size="sm"
+                loading={sourceBusy}
+                disabled={sourceBusy || !sourceUrl.trim()}
+                onClick={() => void handleAddSource()}
+              >
+                {tr("payloads_add_repo_submit", undefined, "Add")}
+              </Button>
+              {sources.length > 0 && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  leftIcon={<RefreshCw size={12} />}
+                  disabled={sourceBusy}
+                  onClick={() => void handleRefreshSources()}
+                >
+                  {tr("payloads_sources_refresh", undefined, "Refresh")}
+                </Button>
+              )}
+            </div>
+            {sourceError && (
+              <div className="mt-2 text-xs text-[var(--color-bad)]">{sourceError}</div>
+            )}
+            {sources.length > 0 && (
+              <ul className="mt-3 space-y-2">
+                {sources.map((s) => (
+                  <li
+                    key={s.id}
+                    className="flex flex-wrap items-start justify-between gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] p-2"
+                  >
+                    <div className="min-w-0 flex-1 text-xs">
+                      <div className="font-medium text-[var(--color-text)]">{s.name}</div>
+                      <div className="break-all text-[var(--color-muted)]">{s.url}</div>
+                      <div className="text-[var(--color-muted)]">
+                        {tr("payloads_sources_count", { count: s.payloads }, `${s.payloads} payloads`)}
+                        {s.skipped > 0 &&
+                          ` · ${tr(
+                            "payloads_sources_skipped",
+                            { count: s.skipped },
+                            `${s.skipped} left out (no SHA-256, or not on GitHub)`,
+                          )}`}
+                      </div>
+                      {s.error && (
+                        <div className="text-[var(--color-bad)]">
+                          {tr("payloads_sources_error", { detail: s.error }, `Couldn't refresh: ${s.error}`)}
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void handleRemoveSource(s)}
+                      className="inline-flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-bad)]"
+                    >
+                      <Trash2 size={11} />
+                      {tr("payloads_custom_remove_short", undefined, "Remove")}
+                    </button>
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
         )}
@@ -800,6 +994,11 @@ function PayloadCard({
                 {tr("payloads_custom_badge", undefined, "Custom")}
               </Badge>
             )}
+            {info.source_name && (
+              <Badge tone="neutral" variant="outline">
+                {tr("payloads_source_badge", { name: info.source_name }, `From ${info.source_name}`)}
+              </Badge>
+            )}
             <button
               type="button"
               onClick={onOpenHomepage}
@@ -807,7 +1006,9 @@ function PayloadCard({
               title={info.homepage}
             >
               <ExternalLink size={11} />
-              {info.repo_owner}/{info.repo_name}
+              {info.repo_owner
+                ? `${info.repo_owner}/${info.repo_name}`
+                : info.homepage.replace(/^https:\/\/(www\.)?/, "").replace(/\/releases\/?$/, "")}
             </button>
             {onRemove && (
               <button

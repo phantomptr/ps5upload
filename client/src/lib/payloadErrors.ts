@@ -33,6 +33,24 @@ const WORDED: Record<string, { key: string; fallback: string; detail?: boolean }
     key: "payloads_err_invalid_checksum_file",
     fallback: "The checksum list must be a file name, like SHA256SUMS.",
   },
+  source_url_invalid: {
+    key: "payloads_err_source_url_invalid",
+    fallback: "A source must be an https:// address on a public site.",
+  },
+  source_not_a_list: {
+    key: "payloads_err_source_not_a_list",
+    fallback: "That address didn't answer with a payload list. ({detail})",
+    detail: true,
+  },
+  source_empty: {
+    key: "payloads_err_source_empty",
+    fallback: "The list has no payload ps5upload can use: each needs its SHA-256 and a file on github.com or the list's own site.",
+  },
+  source_fetch_failed: {
+    key: "payloads_err_source_fetch_failed",
+    fallback: "Couldn't load the list. ({detail})",
+    detail: true,
+  },
   usb_not_enough_space: {
     key: "usb_err_not_enough_space",
     fallback: "These payloads don't fit on this drive. Nothing on it was changed.",
