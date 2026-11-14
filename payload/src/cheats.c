@@ -3323,13 +3323,9 @@ int cheats_toggle(const char *title_id, int mod_index, int turn_on,
     /* Resolve flat index to file + mod */
     int flat = 0;
     int target_fi = -1, target_mi = -1;
-    cheat_file_t *target_cf = cheat_file_new();
-    if (!target_cf) {
-        if (err) snprintf(err, err_cap, "out of memory");
-        return -1;
-    }
-    memset(target_cf, 0, sizeof(*target_cf));
-
+    /* The file holding the cheat is kept as loaded, not copied: its mods own their locations
+     * (heap, since #811), so a copy would point at what freeing the original releases (#824). */
+    cheat_file_t *target_cf = NULL;
     for (int fi = 0; fi < n && target_fi < 0; fi++) {
         cheat_file_t *cf = cheat_file_new();
         if (!cf) continue;
@@ -3341,16 +3337,17 @@ int cheats_toggle(const char *title_id, int mod_index, int turn_on,
             if (flat == mod_index) {
                 target_fi = fi;
                 target_mi = mi;
-                memcpy(target_cf, cf, sizeof(*target_cf));
                 break;
             }
             flat++;
         }
-        cheat_file_free(cf);
+        if (target_fi == fi)
+            target_cf = cf;
+        else
+            cheat_file_free(cf);
     }
 
-    if (target_fi < 0) {
-        free(target_cf);
+    if (!target_cf) {
         if (err) snprintf(err, err_cap, "cheat index out of range");
         return -1;
     }
@@ -3362,10 +3359,10 @@ int cheats_toggle(const char *title_id, int mod_index, int turn_on,
     if (mod->module_name[0]) {
         mod_base = resolve_module_base(pid, mod->module_name);
         if (!mod_base) {
-            free(target_cf);
             if (err) snprintf(err, err_cap,
                               "module \"%s\" is not loaded in the target process",
                               mod->module_name);
+            cheat_file_free(target_cf);
             return -1;
         }
     }
@@ -3374,7 +3371,7 @@ int cheats_toggle(const char *title_id, int mod_index, int turn_on,
      * so with the same text as no game at all (webui_codec.c webui_cheats_toggle_error matches
      * it), and drop the cache so the next status read sees it gone. */
     if (kill(pid, 0) != 0 && errno == ESRCH) {
-        free(target_cf);
+        cheat_file_free(target_cf);
         invalidate_rg_cache();
         if (err) snprintf(err, err_cap, "no game is currently running");
         return -1;
@@ -3456,7 +3453,7 @@ int cheats_toggle(const char *title_id, int mod_index, int turn_on,
         rc = -1;
     }
 
-    free(target_cf);
+    cheat_file_free(target_cf);
     invalidate_rg_cache();
     return rc;
 }
