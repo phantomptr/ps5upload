@@ -342,6 +342,12 @@ pub(crate) async fn fpkg_build_handler(
         .to_string_lossy()
         .into_owned();
     let source_path = PathBuf::from(&source);
+    // Registered as reading its source from before the inspection reads it to the job's end:
+    // an in-place edit of it can't start meanwhile, nor this while one runs.
+    let reading = match crate::image_edit_in_place::Reading::take(&source_path) {
+        Ok(r) => r,
+        Err(why) => return json_err(StatusCode::CONFLICT, why).into_response(),
+    };
 
     // Look first: a source that cannot convert should fail now, with the reason, rather
     // than as a job the user has to poll to see fail.
@@ -382,7 +388,7 @@ pub(crate) async fn fpkg_build_handler(
     // A PS4 game (or one with its update merged in) becomes a PS4 package; without param.json
     // there is no PS5 title to package (#596).
     if inspection.ps4_game || inspection.ps4_kind.is_some() || update.is_some() {
-        return ps4_package_build(state, req, out, source_path, update, inspection).await;
+        return ps4_package_build(state, req, out, source_path, update, inspection, reading).await;
     }
     if inspection
         .checks
@@ -498,6 +504,8 @@ pub(crate) async fn fpkg_build_handler(
     let request_source = source_path.clone();
     let ticker = JobTicker(ticker.abort_handle());
     spawn_workshop_job(move || {
+        // Released last: an in-place edit may claim the source once this job is over.
+        let _reading = reading;
         // First in, last out: gone only after everything reading it has been dropped.
         let _scaffold = scaffold;
         // A panic in the work below must not leave the job "running" forever with its
@@ -626,6 +634,7 @@ async fn ps4_package_build(
     source_path: PathBuf,
     update: Option<PathBuf>,
     inspection: build::Inspection,
+    reading: crate::image_edit_in_place::Reading,
 ) -> axum::response::Response {
     use ps5upload_fpkg::ps4_pkg::Ps4Kind;
     use ps5upload_fpkg::ps4_pkg_write as ps4w;
@@ -785,6 +794,8 @@ async fn ps4_package_build(
     let ticker = JobTicker(ticker.abort_handle());
     let mut tree = tree;
     spawn_workshop_job(move || {
+        // Released last: an in-place edit may claim the source once this job is over.
+        let _reading = reading;
         let _scaffold = scaffold;
         let mut fail = JobFailOnDropGuard::new(
             state_for_job.jobs.clone(),
@@ -1742,9 +1753,17 @@ pub(crate) async fn exfat_build_handler(
         )
         .into_response();
     }
-    if let Some(why) = crate::image_edit_in_place::busy(&source) {
-        return json_err(StatusCode::CONFLICT, why).into_response();
-    }
+    // The build reads its source from here (an edited copy's open below included) to its end:
+    // registered first, so an in-place edit of it can't start meanwhile, nor this while one
+    // runs. An in-place edit claims the image itself instead (`image_edit_in_place::start`).
+    let reading = if req.in_place {
+        None
+    } else {
+        match crate::image_edit_in_place::Reading::take(&source) {
+            Ok(r) => Some(r),
+            Err(why) => return json_err(StatusCode::CONFLICT, why).into_response(),
+        }
+    };
     // A game folder on this computer, on a saved server (`remote://`) or on a console
     // (`ps5://`, read through the helper as a package build reads it): the opener below
     // knows them all. A local path has to be a folder, an image, or a `.zip`/`.7z`/`.rar`
@@ -2289,6 +2308,8 @@ pub(crate) async fn exfat_build_handler(
     let state_for_job = state.clone();
     let ticker = JobTicker(ticker.abort_handle());
     spawn_workshop_job(move || {
+        // Released last: an in-place edit may claim the source once this job is over.
+        let _reading = reading;
         // First in, last out: gone only after everything reading it has been dropped.
         let _scaffold = scaffold;
         // A panic in the work below must not leave the job "running" forever with its
@@ -2903,9 +2924,12 @@ pub(crate) async fn folder_build_handler(
 ) -> impl IntoResponse {
     use crate::folder_build;
     let source = resolve_engine_path(&req.source);
-    if let Some(why) = crate::image_edit_in_place::busy(&source) {
-        return json_err(StatusCode::CONFLICT, why).into_response();
-    }
+    // Registered as reading its source from before its first read to the job's end: an
+    // in-place edit of it can't start meanwhile, nor this while one runs.
+    let reading = match crate::image_edit_in_place::Reading::take(&source) {
+        Ok(r) => r,
+        Err(why) => return json_err(StatusCode::CONFLICT, why).into_response(),
+    };
     // Straight to a server: the folder there.
     let to_server = match req.destination.take() {
         None | Some(ImageDestinationReq::Local) => None,
@@ -3424,6 +3448,8 @@ pub(crate) async fn folder_build_handler(
     let state_for_job = state.clone();
     let ticker = JobTicker(ticker.abort_handle());
     spawn_workshop_job(move || {
+        // Released last: an in-place edit may claim the source once this job is over.
+        let _reading = reading;
         let mut fail = JobFailOnDropGuard::new(
             state_for_job.jobs.clone(),
             state_for_job.events_tx.clone(),
@@ -4716,6 +4742,55 @@ mod source_option_tests {
             assert!(std::time::Instant::now() < deadline, "the job did not end");
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+    }
+
+    /// An image being edited in place refuses every build of it before the build reads it; an
+    /// image a build reads refuses an in-place edit. The build's registration and the edit's
+    /// claim are one decision (`image_edit_in_place::Reading` and `Claim`).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_edit_and_a_build_of_one_image_never_run_together() {
+        let (root, _, img) = game("edit-vs-build");
+        let (img_s, out_s) = (
+            img.display().to_string(),
+            root.join("out").display().to_string(),
+        );
+        let claim = crate::image_edit_in_place::Claim::take(&img).unwrap();
+        let body = serde_json::json!({ "source": img_s, "output_dir": out_s });
+        for (status, body, started) in [image(body.clone()).await, folder(body.clone()).await] {
+            assert_eq!(status, StatusCode::CONFLICT, "{body}");
+            assert!(body.contains("edited in place"), "{body}");
+            assert_eq!(started, 0);
+        }
+        let (st, jobs) = state();
+        let req: BuildReq = serde_json::from_value(body).unwrap();
+        let resp = fpkg_build_handler(State(st), Json(req))
+            .await
+            .into_response();
+        let (status, text, started) = answer(resp, &jobs).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{text}");
+        assert_eq!(started, 0);
+        drop(claim);
+
+        // A build reading it: the edit is refused, the image untouched.
+        let before = std::fs::read(&img).unwrap();
+        let reading = crate::image_edit_in_place::Reading::take(&img).unwrap();
+        let (st, jobs) = state();
+        let resp = crate::image_edit_in_place::start(
+            st,
+            img.clone(),
+            vec![ps5upload_fpkg::browse::Edit::Mkdir {
+                path: "mods".into(),
+            }],
+            false,
+        )
+        .await;
+        let (status, text, started) = answer(resp, &jobs).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{text}");
+        assert!(text.contains("reading"), "{text}");
+        assert_eq!(started, 0);
+        assert!(std::fs::read(&img).unwrap() == before);
+        drop(reading);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A game image whose in-place edit was cut off before its undo journal went (the image
