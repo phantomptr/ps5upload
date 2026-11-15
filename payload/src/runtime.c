@@ -374,8 +374,9 @@
 #define MGMT_FRAME_LOG_LEVEL_ACK 365u
 #define MGMT_FRAME_TAILNET 366u
 #define MGMT_FRAME_TAILNET_ACK 367u
-#define MGMT_FRAME_SAVE_OWNER 368u
-#define MGMT_FRAME_SAVE_OWNER_ACK 369u
+/* 372/373: 368/369 are HW_FPS below (a crash breadcrumb names the frame by this number) */
+#define MGMT_FRAME_SAVE_OWNER 372u
+#define MGMT_FRAME_SAVE_OWNER_ACK 373u
 /* the running game's frame count, for the sampled frame rate (game_fps.c, #774) */
 #define MGMT_FRAME_HW_FPS 368u
 #define MGMT_FRAME_HW_FPS_ACK 369u
@@ -1555,6 +1556,10 @@ static void *runtime_shutdown_watchdog(void *arg) {
     /* A dump decrypting right now may have the kernel's vnode pager swapped: put it back, or every
      * file mmap on the console keeps going through the self pager after we are gone. */
     app_dump_pager_emergency_restore();
+    /* "Remove PS5Upload from this PS5": the PC was already told yes. Main removes the folders as
+     * its last step; if it is in the middle of that this waits for it, and if the stop never got
+     * that far the folders are removed here. */
+    if (hu_requested()) hu_wipe();
     _exit(g_watchdog_exit_code);
     return NULL;
 }
@@ -8798,16 +8803,19 @@ static int save_owner_info_json_raw(char *out, size_t cap, const char *what, con
     save_sfo_info_t in;
     if (n <= 0 || save_sfo_info(sfo, (size_t)n, &in) != 0)
         return snprintf(out, cap, ",\"%s\":%s", what, n == 0 ? "\"none\"" : "null");
-    char keys[1200], kesc[1300], tesc[300], desc[100];
+    char keys[1200], kesc[1300], tesc[300], desc[100], idesc[40], id[16];
     save_sfo_keys(sfo, (size_t)n, keys, sizeof keys);
-    json_escape_into(keys, kesc, sizeof kesc);
-    json_escape_into(in.main_title, tesc, sizeof tesc);
-    json_escape_into(in.dir_name, desc, sizeof desc);
+    /* Every field is the file's own bytes: none goes into the reply unescaped. */
+    snprintf(id, sizeof id, "%.15s", in.title_id);
+    json_escape_utf8_into(id, idesc, sizeof idesc);
+    json_escape_utf8_into(keys, kesc, sizeof kesc);
+    json_escape_utf8_into(in.main_title, tesc, sizeof tesc);
+    json_escape_utf8_into(in.dir_name, desc, sizeof desc);
     return snprintf(out, cap,
-                    ",\"%s\":{\"size\":%d,\"title_id\":\"%.15s\",\"dir_name\":\"%s\",\"main_title\":\"%s\","
+                    ",\"%s\":{\"size\":%d,\"title_id\":\"%s\",\"dir_name\":\"%s\",\"main_title\":\"%s\","
                     "\"account_id\":\"%016llx\",\"user_id\":%u,\"has_account\":%s,\"has_user\":%s,"
                     "\"blocks\":%llu,\"system_blocks\":%llu,\"list_param\":%u,\"fields\":\"%s\"}",
-                    what, n, in.title_id, desc, tesc, (unsigned long long)in.account_id, in.user_id,
+                    what, n, idesc, desc, tesc, (unsigned long long)in.account_id, in.user_id,
                     in.has_account ? "true" : "false", in.has_user ? "true" : "false",
                     (unsigned long long)in.blocks, (unsigned long long)in.system_blocks, in.list_param, kesc);
 }

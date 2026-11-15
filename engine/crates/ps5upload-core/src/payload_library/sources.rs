@@ -446,11 +446,30 @@ impl Library {
     /// Refresh the lists older than an hour (every list with `force`). A failure keeps the last
     /// copy and is reported on that source.
     pub fn refresh_sources(&self, force: bool) -> Vec<SourceInfo> {
+        self.refresh_lists(None, if force { 0 } else { LIST_TTL.as_secs() });
+        self.sources()
+    }
+
+    /// Fetch one list again unless its copy is younger than `younger_than` seconds, and give that
+    /// list's own fetch error. A check for updates asks once per payload: the lists it shares
+    /// with others are fetched once, and one list's failure is not shown on another's payloads.
+    pub(super) fn refresh_source(&self, id: &str, younger_than: u64) -> Option<String> {
+        self.refresh_lists(Some(id), younger_than);
+        self.sources()
+            .into_iter()
+            .find(|s| s.id == id)
+            .and_then(|s| s.error)
+    }
+
+    fn refresh_lists(&self, only: Option<&str>, younger_than: u64) {
         for src in self.read_sources() {
+            if only.is_some_and(|id| id != src.id) {
+                continue;
+            }
             let fresh = self
                 .cached_list(&src)
-                .is_some_and(|(_, age)| age < LIST_TTL.as_secs());
-            if fresh && !force {
+                .is_some_and(|(_, age)| age < younger_than);
+            if fresh {
                 continue;
             }
             if let Err(e) = self.fetch_list(&src) {
@@ -458,7 +477,6 @@ impl Library {
                 let _ = atomic_write(&self.list_error_path(&src.id), e.message.as_bytes());
             }
         }
-        self.sources()
     }
 
     /// Add a list by its address. It is fetched first: an address that does not answer with a

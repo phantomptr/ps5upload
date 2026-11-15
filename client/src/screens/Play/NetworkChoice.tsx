@@ -60,6 +60,8 @@ export function routerNote(
 ): { text: string; tone: "warn" | "muted"; id: string } | null {
   const r = net?.router;
   if (!r) return null;
+  // The texts below name the port to forward: without one (sockets not bound yet) say nothing.
+  if (r.state !== "open" && r.localPort == null) return null;
   const port = r.localPort ?? "";
   switch (r.state) {
     case "open":

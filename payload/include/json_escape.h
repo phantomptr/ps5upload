@@ -25,4 +25,23 @@ static inline size_t json_escape_into(const char *src, char *dst, size_t dst_cap
     return ei;
 }
 
+/* As json_escape_into for text that may not be clean UTF-8 (a database column, a file's field):
+ * a byte that is not part of a whole UTF-8 character reads '?', so a cut in the middle of one or
+ * a stray byte never reaches the engine. */
+static inline size_t json_escape_utf8_into(const char *src, char *dst, size_t dst_cap) {
+    size_t n = json_escape_into(src, dst, dst_cap), i = 0;
+    while (i < n) {
+        unsigned char c = (unsigned char)dst[i];
+        size_t need = c < 0x80 ? 1 : (c >= 0xC2 && c <= 0xDF) ? 2 : (c >= 0xE0 && c <= 0xEF) ? 3 : (c >= 0xF0 && c <= 0xF4) ? 4 : 0;
+        size_t k = 1;
+        while (need && k < need && i + k < n && ((unsigned char)dst[i + k] & 0xC0) == 0x80) k++;
+        if (need == 0 || k < need) {
+            dst[i++] = '?';
+            continue;
+        }
+        i += need;
+    }
+    return n;
+}
+
 #endif /* PS5UPLOAD_JSON_ESCAPE_H */

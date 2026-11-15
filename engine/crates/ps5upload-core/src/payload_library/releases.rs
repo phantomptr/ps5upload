@@ -356,8 +356,14 @@ impl Library {
             // A source's payload has one release: what its list names now.
             let mut why = None;
             if force_refresh {
-                why = self.refresh_sources(true).into_iter().find_map(|s| s.error);
-                entry = self.resolve_entry(id)?;
+                let source = entry
+                    .list_payload
+                    .as_ref()
+                    .map(|p| p.source_id.clone())
+                    .unwrap_or_default();
+                why = self.refresh_source(&source, 30);
+                // Gone from its list now: the release already in hand is the answer.
+                entry = self.resolve_entry(id).unwrap_or(entry);
             }
             return Ok(list_release(&entry, why));
         }

@@ -353,8 +353,11 @@ fn zstd_writes(
 
 /// A file on the console, `None` when there is none (an emulator is well under 64 MiB).
 fn console_file(addr: &str, path: &str) -> Result<Option<Vec<u8>>, String> {
-    let Ok(st) = ps5upload_core::fs_ops::fs_stat(addr, path) else {
-        return Ok(None);
+    // Only "not there" is None: a console that didn't answer is an error, not a missing file.
+    let st = match ps5upload_core::fs_ops::fs_stat(addr, path) {
+        Ok(st) => st,
+        Err(e) if ps5upload_core::fs_ops::is_not_found(&format!("{e:#}")) => return Ok(None),
+        Err(e) => return Err(format!("{path}: {e:#}")),
     };
     if st.kind != "file" || st.size > 64 << 20 {
         return Ok(None);

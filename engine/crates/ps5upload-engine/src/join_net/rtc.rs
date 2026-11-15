@@ -1024,6 +1024,10 @@ async fn start() -> Option<Arc<Net>> {
             .iter()
             .any(|s| s.local_addr().is_ok_and(|a| a.port() == wanted))
     {
+        let port = socks
+            .first()
+            .and_then(|s| s.local_addr().ok())
+            .map_or(0, |a| a.port());
         crate::log_at!(
             Warn,
             "together",

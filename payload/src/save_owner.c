@@ -17,6 +17,7 @@
 
 #include "authid.h"
 #include "json_escape.h"
+#include "kernel_rw_lock.h"
 #include "profile.h"
 #include "sqlite3.h"
 
@@ -112,11 +113,19 @@ static int param_call(const char *image, uint8_t *blob, int wr, int *empty, char
     if (how && how_sz) how[0] = 0;
     int r = param_pass(image, blob, wr, empty, how, how_sz);
     if (r == 0 || (r != -EPERM && r != -EACCES)) return r;
+    /* The authid is the whole process's: the swap, the call and the restore stay inside
+     * kernel_rw_lock like every other swap (kernel_rw_lock.h), or two of them interleave and one
+     * restores the other's identity for good. Innermost: nothing below takes another lock. */
+    pthread_mutex_lock(&kernel_rw_lock);
     uint64_t saved = ps5_authid_acquire("save-owner", SAVE_TOOL_AUTHID);
-    if (saved == 0) return r;
+    if (saved == 0) {
+        pthread_mutex_unlock(&kernel_rw_lock);
+        return r;
+    }
     how_add(how, how_sz, "again as the save tool");
     r = param_pass(image, blob, wr, empty, how, how_sz);
     ps5_authid_release(saved, "save-owner");
+    pthread_mutex_unlock(&kernel_rw_lock);
     return r;
 }
 
@@ -317,7 +326,7 @@ int save_db_rows_json(uint32_t uid, const char *title_id, char *out, size_t cap)
             } else if (type != SQLITE_NULL && type != SQLITE_BLOB) {
                 const char *text = (const char *)sqlite3_column_text(st, c);
                 char esc[560];
-                json_escape_into(text ? text : "", esc, sizeof esc);
+                json_escape_utf8_into(text ? text : "", esc, sizeof esc);
                 snprintf(val, sizeof val, "\"%s\"", esc);
             }
             int n = snprintf(out + at, cap - at, "%s\"%s\":%s", c ? "," : "", sqlite3_column_name(st, c), val);

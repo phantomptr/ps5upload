@@ -3,7 +3,7 @@
 // image on the PS5, .ffpfsc included, gets a ShadowMount+ backport folder. An image on this
 // computer gets it from Convert, which writes a new one.
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { PackagePlus } from "lucide-react";
 
 import { fpkg, type AmprEmuOutcome, type FpkgInspection } from "../../api/fpkg";
@@ -37,9 +37,11 @@ export function AmprEmuTool({
 }) {
   const tr = useTr();
   const [busy, setBusy] = useState(false);
+  const shown = useRef(source);
   const [done, setDone] = useState<AmprEmuOutcome | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   useEffect(() => {
+    shown.current = source;
     setDone(null);
     setFailed(null);
   }, [source]);
@@ -57,15 +59,20 @@ export function AmprEmuTool({
           "This game reads its files through AMPR and has no emulator. Some such games won't start from an image without one, and others run fine. Adds drakmor's ampr_emu 0.4.2.1, fetched once and checked against a known digest. An image isn't changed: the emulator goes in a ShadowMount+ backport folder.",
         )}
         onClick={() => {
+          const started = source;
           setBusy(true);
           setFailed(null);
           fpkg
-            .addAmprEmu(source.trim())
+            .addAmprEmu(started.trim())
             .then((outcome) => {
+              // Another game was picked meanwhile: this answer is not about what is shown now.
+              if (shown.current !== started) return;
               setDone(outcome);
               onAdded();
             })
-            .catch((e: unknown) => setFailed(e instanceof Error ? e.message : String(e)))
+            .catch((e: unknown) => {
+              if (shown.current === started) setFailed(e instanceof Error ? e.message : String(e));
+            })
             .finally(() => setBusy(false));
         }}
       >

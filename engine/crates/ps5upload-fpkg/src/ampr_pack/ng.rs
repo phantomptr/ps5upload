@@ -108,11 +108,12 @@ pub fn is_zstd_packed(tree: &dyn SourceTree) -> bool {
 /// on its own).
 pub fn module_path(tree: &dyn SourceTree) -> Option<String> {
     for dir in ["fakelib2/", "fakelib/"] {
-        if let Some(f) = tree.files().iter().find(|f| {
-            f.path.len() == dir.len() + "libSceAmpr.sprx".len()
-                && f.path[..dir.len()].eq_ignore_ascii_case(dir)
-                && f.path[dir.len()..].eq_ignore_ascii_case("libSceAmpr.sprx")
-        }) {
+        let want = format!("{dir}libSceAmpr.sprx");
+        if let Some(f) = tree
+            .files()
+            .iter()
+            .find(|f| f.path.eq_ignore_ascii_case(&want))
+        {
             return Some(f.path.clone());
         }
     }
@@ -177,6 +178,37 @@ mod tests {
             (kind, version.as_deref(), outdated),
             ("ampr_emu", Some("0.4.2.1"), true)
         );
+    }
+
+    struct Names(Vec<crate::source::SourceFile>);
+    impl SourceTree for Names {
+        fn files(&self) -> &[crate::source::SourceFile] {
+            &self.0
+        }
+        fn read(&mut self, path: &str) -> crate::Result<Vec<u8>> {
+            Err(crate::Error::Format(format!("no {path}")))
+        }
+        fn describe(&self) -> String {
+            "names".into()
+        }
+    }
+
+    /// A name as long as the module's path with a character across the folder's length: found
+    /// by comparing names, never by cutting one.
+    #[test]
+    fn a_non_ascii_name_of_the_same_length_is_not_the_module() {
+        let file = |path: &str| crate::source::SourceFile {
+            path: path.into(),
+            size: 1,
+        };
+        let odd = "データ/abcdefghijklm";
+        assert_eq!(odd.len(), "fakelib/libSceAmpr.sprx".len());
+        let tree = Names(vec![file(odd), file("FakeLib/libsceampr.SPRX")]);
+        assert_eq!(
+            module_path(&tree).as_deref(),
+            Some("FakeLib/libsceampr.SPRX")
+        );
+        assert_eq!(module_path(&Names(vec![file(odd)])), None);
     }
 
     #[test]

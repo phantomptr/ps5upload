@@ -815,9 +815,16 @@ pub fn packed_kind(tree: &mut dyn SourceTree) -> Result<Option<&'static str>> {
         ("ampr_assets.index", b"AMPRPAK4", "lz4"),
         ("ampr_zstd.index", b"AMPRZPK1", "zstd"),
     ] {
-        let listed = tree.files().iter().any(|f| f.path == name && f.size >= 8);
-        if listed && tree.read_range(name, 0, 8)? == magic {
-            return Ok(Some(kind));
+        // Any spelling of the name, as the zstd runtime check reads it (ng::is_zstd_packed).
+        let listed = tree
+            .files()
+            .iter()
+            .find(|f| f.path.eq_ignore_ascii_case(name) && f.size >= 8)
+            .map(|f| f.path.clone());
+        if let Some(path) = listed {
+            if tree.read_range(&path, 0, 8)? == magic {
+                return Ok(Some(kind));
+            }
         }
     }
     Ok(None)

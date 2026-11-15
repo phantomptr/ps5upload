@@ -227,6 +227,8 @@ export default function CatalogPanel() {
   }
 
   async function handleRemoveSource(s: PayloadSourceInfo) {
+    if (sourceBusy) return;
+    setSourceBusy(true);
     setSourceError(null);
     try {
       await payloadsRemoveSource(s.id);
@@ -236,6 +238,8 @@ export default function CatalogPanel() {
       pushNotification("info", tr("payloads_custom_removed", { name: s.name }, `Removed ${s.name}`));
     } catch (e) {
       setSourceError(payloadErrorText(tr, e));
+    } finally {
+      setSourceBusy(false);
     }
   }
 
@@ -842,7 +846,8 @@ export default function CatalogPanel() {
                     <button
                       type="button"
                       onClick={() => void handleRemoveSource(s)}
-                      className="inline-flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-bad)]"
+                      disabled={sourceBusy}
+                      className="inline-flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-bad)] disabled:opacity-50"
                     >
                       <Trash2 size={11} />
                       {tr("payloads_custom_remove_short", undefined, "Remove")}
