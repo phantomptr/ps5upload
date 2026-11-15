@@ -45,11 +45,12 @@ export interface ReplaceDeps extends CopyDeps {
 }
 
 /** A file name the helper is stored under: `ps5upload.elf`, `PS5Upload-8.5.1.elf`,
- *  `ps5upload_v9.elf`… never the installer daemon (`ps5upload-installer.elf`). Same rule as
- *  the engine's `is_helper_file_name`. */
+ *  `ps5upload_v9.elf`… never the installer daemon (`ps5upload-installer.elf`) nor the patched
+ *  loader parked in Payload Manager (`ps5upload-elfldr.elf`): replacing or deleting that would
+ *  take the console's loader away. Same rule as the engine's `is_helper_file_name`. */
 export function isHelperFileName(name: string): boolean {
   const l = name.trim().toLowerCase();
-  return l.startsWith("ps5upload") && l.endsWith(".elf") && !l.includes("installer");
+  return l.startsWith("ps5upload") && l.endsWith(".elf") && !l.includes("installer") && !l.includes("elfldr");
 }
 
 /** The file names an autoload.txt starts, in order: no comments (`#`), no pauses

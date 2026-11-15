@@ -44,10 +44,16 @@ pub(crate) fn previous_path(path: &str) -> String {
 }
 
 /// A file name the ps5upload helper is stored under: `ps5upload.elf`, `PS5Upload-8.5.1.elf`,
-/// `ps5upload_v9.elf`… but never the installer daemon (`ps5upload-installer.elf`).
+/// `ps5upload_v9.elf`… but never the installer daemon (`ps5upload-installer.elf`) nor the
+/// patched elfldr (`ps5upload-elfldr.elf`).
 pub(crate) fn is_helper_file_name(name: &str) -> bool {
     let l = name.to_ascii_lowercase();
-    l.starts_with("ps5upload") && l.ends_with(".elf") && !l.contains("installer")
+    // Never the installer daemon, nor the patched elfldr parked in Payload Manager
+    // (`ps5upload-elfldr.elf`): replacing or deleting that takes the console's loader away.
+    l.starts_with("ps5upload")
+        && l.ends_with(".elf")
+        && !l.contains("installer")
+        && !l.contains("elfldr")
 }
 
 /// The folders a boot loader reads payloads from: internal storage and USB / extended drives.
@@ -524,6 +530,7 @@ mod tests {
         }
         for no in [
             "ps5upload-installer.elf",
+            "ps5upload-elfldr.elf",
             "kstuff.elf",
             "elfldr-ps5upload.elf",
             "ps5upload.bin",
