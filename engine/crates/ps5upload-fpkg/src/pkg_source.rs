@@ -321,6 +321,9 @@ enum Location {
     Image { logical: u64, on_disk: u64 },
     /// A container entry, by id — the artwork the image leaves to the container.
     Container(u32),
+    /// A protected container entry (`nptitle.dat`, the `npbind.dat` files), decrypted at open:
+    /// `held[n]`.
+    Held(usize),
 }
 
 /// A debug package's game files.
@@ -335,6 +338,10 @@ pub struct PkgSource {
     content_id: String,
     /// Set for a patch package: what it holds and what it leaves to the base game.
     patch: Option<PatchInfo>,
+    /// The decrypted protected container entries [`Location::Held`] points into (a few KiB).
+    held: Vec<Vec<u8>>,
+    /// Protected container entries left out, each with why.
+    left_out: Vec<String>,
 }
 
 /// What a patch package holds of the package it patches.
@@ -576,10 +583,12 @@ impl PkgSource {
             empty_dirs: Vec::new(),
             content_id,
             patch: None,
+            held: Vec::new(),
+            left_out: Vec::new(),
         };
         let (meta_base, meta, fidx) = me.read_layout(&naps, carried.is_some())?;
         me.walk_metadata(meta_base, &meta, &fidx, carried.as_ref())?;
-        me.restore_container_files();
+        me.restore_container_files(passcode);
         Ok(me)
     }
 
@@ -783,7 +792,7 @@ impl PkgSource {
                 size == 0 || image_has(*on_disk, on_disk.saturating_add(size))
             }
             // The container is carried whole.
-            (Location::Container(_), _) => true,
+            (Location::Container(_) | Location::Held(_), _) => true,
         }
     }
 
@@ -995,8 +1004,12 @@ impl PkgSource {
     }
 
     /// The artwork a build moves from the image into the container, put back where the game
-    /// folder had it. Only what the image lacks: a package that kept its own copy wins.
-    fn restore_container_files(&mut self) {
+    /// folder had it, and the title and NP binding files a package can keep only in its
+    /// container (`nptitle.dat`, the `npbind.dat` files: protected, so decrypted here, as PS5
+    /// Dump Forge does in its `lib.rs` `place_entry`). Only what the image lacks: a package
+    /// that kept its own copy wins. A protected entry that can't be decrypted is left out and
+    /// [`SourceTree::notes`] says why.
+    fn restore_container_files(&mut self, passcode: &str) {
         let mut wanted: Vec<(u32, &str)> = vec![
             (cnt::ids::ICON0_PNG, "sce_sys/icon0.png"),
             (cnt::ids::ICON0_DDS, "sce_sys/icon0.dds"),
@@ -1006,19 +1019,45 @@ impl PkgSource {
                 wanted.push((id, path));
             }
         }
+        for (id, path, _, _) in crate::cnt_write::PROTECTED {
+            wanted.push((id, path));
+        }
         let mut added = false;
         for (id, path) in wanted {
-            let Some(e) = self.outer.cnt.entry(id) else {
+            let Some(e) = self.outer.cnt.entry(id).copied() else {
                 continue;
             };
             if e.size == 0 || self.files.iter().any(|f| f.path == path) {
                 continue;
             }
+            // A file of the image where the entry needs a folder (`sce_sys` itself a file).
+            if path
+                .match_indices('/')
+                .any(|(at, _)| self.files.iter().any(|f| f.path == path[..at]))
+            {
+                continue;
+            }
+            let location = if crate::protected::is_protected(&e) {
+                match crate::protected::plaintext(&self.outer.cnt, &e, passcode) {
+                    Ok(bytes) => {
+                        self.held.push(bytes);
+                        Location::Held(self.held.len() - 1)
+                    }
+                    Err(why) => {
+                        self.left_out.push(format!(
+                            "{path} was left out: the package keeps it encrypted, and {why}"
+                        ));
+                        continue;
+                    }
+                }
+            } else {
+                Location::Container(id)
+            };
             self.files.push(SourceFile {
                 path: path.to_string(),
                 size: u64::from(e.size),
             });
-            self.locations.push(Location::Container(id));
+            self.locations.push(location);
             added = true;
         }
         if added {
@@ -1083,6 +1122,13 @@ impl PkgSource {
                     .ok_or_else(|| bad("a container entry went missing"))?;
                 Ok(self.outer.cnt.payload(e)[start as usize..end as usize].to_vec())
             }
+            // `size` is the plaintext's length, so the range is inside it.
+            Location::Held(h) => self
+                .held
+                .get(h)
+                .and_then(|b| b.get(start as usize..end as usize))
+                .map(<[u8]>::to_vec)
+                .ok_or_else(|| bad("a decrypted container entry went missing")),
             Location::Image { logical, on_disk } => match self.layout {
                 Layout::Blocks { .. } => self.mount_range(logical + start, end - start),
                 Layout::Flat { .. } => {
@@ -1390,10 +1436,11 @@ impl SourceTree for PkgSource {
     }
 
     fn notes(&self) -> Vec<String> {
+        let mut notes = self.left_out.clone();
         let Some(p) = &self.patch else {
-            return Vec::new();
+            return notes;
         };
-        vec![format!(
+        notes.push(format!(
             "this is a patch package: it holds {} of the {} blocks of the package it patches, \
              so only the {} files it carries whole are here. Left to the base game: {} files \
              the patch holds only part of{}, and {} folders or files only the base game \
@@ -1405,7 +1452,8 @@ impl SourceTree for PkgSource {
             first_ten(&p.partial),
             p.in_base.len(),
             first_ten(&p.in_base)
-        )]
+        ));
+        notes
     }
 }
 
@@ -1749,5 +1797,90 @@ mod tests {
             &mut Vec::new(),
         );
         assert!(e.is_err());
+    }
+
+    /// A package that keeps `nptitle.dat` and the `npbind.dat` files only in its container
+    /// (a third-party builder's: ours keeps them in the image too) reads them back decrypted,
+    /// byte for byte. Another passcode fails the container's key check: the files are left out
+    /// and a note says why, never garbage passed off as the file.
+    #[test]
+    fn protected_container_entries_read_back_decrypted() {
+        use crate::crypto::DEFAULT_PASSCODE;
+        let dir = std::env::temp_dir().join(format!("fpkg-protected-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (src, out) = (dir.join("src"), dir.join("out"));
+        let put = |path: &str, data: &[u8]| {
+            let full = src.join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, data).unwrap();
+        };
+        put("eboot.bin", &[7u8; 3000]);
+        put(
+            "sce_sys/param.json",
+            br#"{"contentId":"UP0000-PPSA04690_00-PROTECTEDTEST000","contentVersion":"01.000.000","titleId":"PPSA04690","applicationCategoryType":0}"#,
+        );
+        put("sce_sys/icon0.png", &[9u8; 500]);
+        let protected: Vec<(&str, Vec<u8>)> = crate::cnt_write::PROTECTED
+            .iter()
+            .enumerate()
+            .map(|(i, (_, path, _, _))| {
+                (
+                    *path,
+                    (0..100 + 37 * i).map(|k| (k * 13 + i) as u8).collect(),
+                )
+            })
+            .collect();
+        for (path, data) in &protected {
+            put(path, data);
+        }
+        std::fs::create_dir_all(&out).unwrap();
+        let built =
+            crate::build::build(&crate::build::BuildRequest::new(&src, &out), &mut |_| {}).unwrap();
+
+        // The image's copies: what the folder had, served from the image.
+        let mut pkg = open(&built.path, DEFAULT_PASSCODE).unwrap();
+        for (path, data) in &protected {
+            let i = pkg.at(path).unwrap();
+            assert!(matches!(pkg.locations[i], Location::Image { .. }), "{path}");
+            assert_eq!(&pkg.read(path).unwrap(), data, "{path}");
+        }
+
+        // The same package without them in the image: the container's encrypted copies.
+        let drop_image_copies = |pkg: &mut PkgSource| {
+            let keep: Vec<bool> = pkg
+                .files
+                .iter()
+                .map(|f| !protected.iter().any(|(p, _)| f.path == *p))
+                .collect();
+            let mut k = keep.iter();
+            pkg.files.retain(|_| *k.next().unwrap());
+            let mut k = keep.iter();
+            pkg.locations.retain(|_| *k.next().unwrap());
+        };
+        drop_image_copies(&mut pkg);
+        pkg.restore_container_files(DEFAULT_PASSCODE);
+        assert!(pkg.notes().is_empty(), "{:?}", pkg.notes());
+        for (path, data) in &protected {
+            let i = pkg.at(path).unwrap();
+            assert!(matches!(pkg.locations[i], Location::Held(_)), "{path}");
+            assert_eq!(pkg.files[i].size, data.len() as u64, "{path}");
+            assert_eq!(&pkg.read(path).unwrap(), data, "{path}");
+            assert_eq!(pkg.read_range(path, 5, 10).unwrap(), data[5..15], "{path}");
+        }
+
+        drop_image_copies(&mut pkg);
+        pkg.restore_container_files("11111111111111111111111111111111");
+        for (path, _) in &protected {
+            assert!(pkg.at(path).is_err(), "{path}");
+        }
+        let notes = pkg.notes();
+        assert_eq!(notes.len(), protected.len(), "{notes:?}");
+        assert!(
+            notes
+                .iter()
+                .all(|n| n.contains("left out") && n.contains("passcode")),
+            "{notes:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

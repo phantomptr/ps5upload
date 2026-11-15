@@ -53,6 +53,7 @@ pub mod pfsimage;
 pub mod pkg_source;
 pub mod plan;
 pub mod playgo;
+pub mod protected;
 pub mod ps4_merge;
 pub mod ps4_param;
 pub mod ps4_pkg;
