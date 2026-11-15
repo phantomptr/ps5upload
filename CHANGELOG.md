@@ -24,7 +24,7 @@ Convert gets most of what PS5 Dump Forge can do, and a first version of converti
 
 **Images**
 - **Rename and New folder** when you look inside an image and write an edited copy.
-- IN_PLACE_PLACEHOLDER
+- **Apply in place:** when you look inside an image, your changes can now be written into the `.exfat` or `.ffpkg` itself instead of a copy, when they fit its free space (the image never grows). `.ffpfs` takes deletes, renames and replacements that fit. An undo journal is kept beside the image while the change goes in: if it's interrupted, the image is put back as it was the next time it's opened. Every changed file is read back and the image is restored if anything doesn't match. The edited copy stays the default. Tested on test images only, not yet on your own games, so keep a backup of an image you can't replace.
 
 **Convert on the PS5 (Minion)**
 - CONSOLE_PLACEHOLDER
