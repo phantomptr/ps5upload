@@ -120,6 +120,16 @@ fn title_of(param: &serde_json::Value) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The sum of `files`' sizes. They are the source's own claims (an image's directory says
+/// them), and the console build has no overflow checks: a sum past `u64` is refused, never
+/// wrapped to something small.
+pub fn data_bytes(files: &[source::SourceFile]) -> Result<u64, String> {
+    files
+        .iter()
+        .try_fold(0u64, |sum, f| sum.checked_add(f.size))
+        .ok_or_else(|| "its files' sizes add up to more than any drive holds".to_string())
+}
+
 /// Inspects the game folder or image at `path`. Reads the file list and `sce_sys/param.json`;
 /// never the game's data.
 pub fn inspect(path: &Path) -> Result<Inspection, Refusal> {
@@ -130,7 +140,10 @@ pub fn inspect(path: &Path) -> Result<Inspection, Refusal> {
     };
     let mut tree = source::open(path).map_err(unreadable)?;
     let files = tree.files().len() as u64;
-    let data_bytes: u64 = tree.files().iter().map(|f| f.size).sum();
+    let data_bytes = data_bytes(tree.files()).map_err(|detail| Refusal {
+        cause: "convert_source_unreadable",
+        detail: format!("{}: {detail}", path.display()),
+    })?;
     let has = |tree: &dyn SourceTree, p: &str| tree.files().iter().any(|f| f.path == p);
 
     let mut out = Inspection {
@@ -253,6 +266,18 @@ mod tests {
         assert_eq!(i.packed, None);
         assert!(i.has_eboot);
         assert!(i.warnings.is_empty(), "{:?}", i.warnings);
+    }
+
+    #[test]
+    fn sizes_that_add_up_past_u64_are_refused_not_wrapped() {
+        let file = |size| source::SourceFile {
+            path: "a".into(),
+            size,
+        };
+        assert_eq!(data_bytes(&[file(1), file(2)]), Ok(3));
+        assert_eq!(data_bytes(&[]), Ok(0));
+        assert!(data_bytes(&[file(u64::MAX), file(1)]).is_err());
+        assert!(data_bytes(&[file(1 << 63), file(1 << 63)]).is_err());
     }
 
     /// A folder, and the same game read back out of an exFAT image built from it: the image

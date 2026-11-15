@@ -368,7 +368,7 @@ fn build(
     if tree.files().is_empty() {
         return Err(unreadable("no files in it".into()));
     }
-    let data: u64 = tree.files().iter().map(|f| f.size).sum();
+    let data = crate::data_bytes(tree.files()).map_err(unreadable)?;
     // U1: the destination measured once, before the first byte.
     let dir = plan.dest.parent().unwrap_or(Path::new("/"));
     let probe = safe_write::probe(dir).map_err(|e| Refusal {
