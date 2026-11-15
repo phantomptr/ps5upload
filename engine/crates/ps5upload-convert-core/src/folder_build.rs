@@ -679,7 +679,7 @@ fn write_checked_here(
                 target.display()
             ));
         }
-        crate::safe_write::rename(&partial, target).map_err(|e| e.to_string())?;
+        crate::safe_write::rename_new(&partial, target).map_err(|e| e.to_string())?;
         Ok(FolderBuilt {
             files: listed.len() as u64,
             bytes: total,
@@ -841,7 +841,7 @@ pub fn extract_file(
                 target.display()
             ));
         }
-        crate::safe_write::rename(&partial, target).map_err(|e| e.to_string())?;
+        crate::safe_write::rename_new(&partial, target).map_err(|e| e.to_string())?;
         Ok(FolderBuilt {
             files: 1,
             bytes: size,

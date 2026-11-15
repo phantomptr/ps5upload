@@ -1350,7 +1350,8 @@ fn build_once(
             &mut |d, t| stage("verify", d, t),
         )?;
         drop(image);
-        crate::safe_write::rename(&partial, output).map_err(|e| e.to_string())?;
+        // Never over something that took the name while this was written.
+        crate::safe_write::rename_new(&partial, output).map_err(|e| e.to_string())?;
         remove_checkpoint(&partial);
         crate::log::record("info", format!("verify: {}", log_line(&summary)));
         crate::log::record("info", format!(
@@ -1700,6 +1701,38 @@ mod tests {
                 let _ = std::fs::remove_file(&out);
             }
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Something that takes the output's name while the image is written is never replaced:
+    /// the build fails and leaves it, and its own partial file, alone and gone.
+    #[test]
+    fn an_output_that_appears_while_written_is_not_replaced() {
+        let root = std::env::temp_dir().join(format!("ps5upload-imgb-race-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let src = game(&root);
+        let out = root.join("g.exfat");
+        let mut tree = FolderSource::open(&src).unwrap();
+        let cancel = AtomicBool::new(false);
+        let e = build(
+            ImageFormat::Exfat,
+            None,
+            &mut tree,
+            &out,
+            VerifyMode::Full,
+            DEFAULT_VERIFY_CHUNK,
+            &cancel,
+            &mut |s, _, _| {
+                if s == "verify" && !out.exists() {
+                    std::fs::write(&out, b"theirs").unwrap();
+                }
+            },
+        )
+        .err()
+        .expect("the build fails");
+        assert!(e.contains("appeared"), "{e}");
+        assert_eq!(std::fs::read(&out).unwrap(), b"theirs");
+        assert!(!root.join("g.exfat.partial").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 

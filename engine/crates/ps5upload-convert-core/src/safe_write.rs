@@ -270,6 +270,83 @@ pub fn rename(from: &Path, to: &Path) -> io::Result<()> {
     std::fs::rename(from, to)
 }
 
+/// [`rename`] that never replaces what is at `to`: a finished output only ever gets a free
+/// name. Where the system has a rename that refuses an existing target (Linux `renameat2` with
+/// `RENAME_NOREPLACE`, macOS `renamex_np` with `RENAME_EXCL`) it is used; elsewhere (FreeBSD and
+/// the PS5, Windows, a filesystem that has no such rename) `to` is checked just before a plain
+/// rename, which leaves the moment between the two for something to appear there. A taken name
+/// is `AlreadyExists`. Never across drives: on the console [`same_device`] says yes first, and a
+/// computer's rename refuses another filesystem itself.
+pub fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
+    if ON_CONSOLE {
+        let dir = match to.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p,
+            _ => Path::new("."),
+        };
+        same_device(from, dir).map_err(io::Error::other)?;
+    }
+    match rename_excl(from, to) {
+        Some(r) => r,
+        None => {
+            if to.symlink_metadata().is_ok() {
+                return Err(taken(to));
+            }
+            std::fs::rename(from, to)
+        }
+    }
+}
+
+fn taken(to: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!("{} appeared while it was written", to.display()),
+    )
+}
+
+/// The system's own no-replace rename, or `None` where there is none (or the filesystem
+/// doesn't take it) and the caller checks and renames.
+#[cfg(any(
+    all(target_os = "linux", any(target_env = "gnu", target_env = "musl")),
+    target_os = "macos"
+))]
+fn rename_excl(from: &Path, to: &Path) -> Option<io::Result<()>> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = |p: &Path| std::ffi::CString::new(p.as_os_str().as_bytes()).ok();
+    let (a, b) = (c(from)?, c(to)?);
+    // SAFETY: two NUL-terminated paths that outlive the call.
+    #[cfg(target_os = "linux")]
+    let rc = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            a.as_ptr(),
+            libc::AT_FDCWD,
+            b.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    // SAFETY: as above.
+    #[cfg(target_os = "macos")]
+    let rc = unsafe { libc::renamex_np(a.as_ptr(), b.as_ptr(), libc::RENAME_EXCL) };
+    if rc == 0 {
+        return Some(Ok(()));
+    }
+    let e = io::Error::last_os_error();
+    match e.raw_os_error() {
+        Some(libc::EEXIST) => Some(Err(taken(to))),
+        // No such rename here, or this filesystem doesn't take it: check and rename.
+        Some(libc::EINVAL) | Some(libc::ENOSYS) | Some(libc::ENOTSUP) => None,
+        _ => Some(Err(e)),
+    }
+}
+
+#[cfg(not(any(
+    all(target_os = "linux", any(target_env = "gnu", target_env = "musl")),
+    target_os = "macos"
+)))]
+fn rename_excl(_from: &Path, _to: &Path) -> Option<io::Result<()>> {
+    None
+}
+
 /// What a destination folder is, measured once before a job writes there.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Probe {
@@ -583,6 +660,31 @@ mod tests {
         let e = same_device(&tmp, &link);
         let _ = std::fs::remove_file(&link);
         assert!(e.unwrap_err().contains("different drives"));
+    }
+
+    #[test]
+    fn a_new_name_never_replaces_what_is_there() {
+        let dir = std::env::temp_dir().join(format!("ps5upload-safe-new-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (from, to) = (dir.join("a.partial"), dir.join("a"));
+        std::fs::write(&from, b"new").unwrap();
+        std::fs::write(&to, b"theirs").unwrap();
+        let e = rename_new(&from, &to).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::AlreadyExists, "{e}");
+        assert_eq!(std::fs::read(&to).unwrap(), b"theirs");
+        assert!(from.is_file());
+        // An empty folder there is not replaced either (a plain rename would, on Unix).
+        std::fs::remove_file(&to).unwrap();
+        std::fs::create_dir(dir.join("d")).unwrap();
+        std::fs::create_dir(dir.join("d.partial")).unwrap();
+        assert!(rename_new(&dir.join("d.partial"), &dir.join("d")).is_err());
+        assert!(dir.join("d.partial").is_dir());
+        // A free name: renamed.
+        rename_new(&from, &to).unwrap();
+        assert_eq!(std::fs::read(&to).unwrap(), b"new");
+        assert!(!from.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
