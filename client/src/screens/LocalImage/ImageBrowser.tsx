@@ -105,6 +105,7 @@ export function ImageBrowser({
   // change); null while unknown or not offered.
   const [inPlace, setInPlace] = useState<InPlaceCheck | null>(null);
   const alive = useRef(true);
+  const applying = useRef(false);
   useEffect(
     () => () => {
       alive.current = false;
@@ -112,14 +113,17 @@ export function ImageBrowser({
     [],
   );
 
+  // The image shown now: a listing that comes back for another one (a reload after a job on the
+  // image picked before) is dropped, or its rows would be edited under the new image's name.
+  const current = useRef<string | null>(null);
   const load = useCallback(async (path: string, dir: string) => {
     setLoading(true);
     setError(null);
     try {
       const l = await imageBrowse(path, dir);
-      if (alive.current) setListing(l);
+      if (alive.current && current.current === path) setListing(l);
     } catch (e) {
-      if (alive.current) setError(String(e));
+      if (alive.current && current.current === path) setError(String(e));
     } finally {
       if (alive.current) setLoading(false);
     }
@@ -144,6 +148,7 @@ export function ImageBrowser({
         onChoose(picked);
         return;
       }
+      current.current = picked;
       setImage(picked);
       setListing(null);
       setEdits([]);
@@ -250,8 +255,10 @@ export function ImageBrowser({
   }, [image, edits, offersInPlace, jobRunning]);
 
   const applyInPlace = useCallback(async () => {
-    if (!image || edits.length === 0) return;
+    if (!image || edits.length === 0 || applying.current) return;
     const name = baseName(image);
+    // One at a time: a second click while the first is asking or starting does nothing.
+    applying.current = true;
     const ok = await confirm({
       title: tr("imgbrowse_inplace_confirm_title", { name }, `Change ${name} itself?`),
       message: tr(
@@ -261,7 +268,10 @@ export function ImageBrowser({
       ),
       confirmLabel: tr("imgbrowse_inplace_apply", undefined, "Apply in place"),
     });
-    if (!ok) return;
+    if (!ok) {
+      applying.current = false;
+      return;
+    }
     setError(null);
     try {
       const { job_id } = await fpkg.editImageInPlace(image, edits);
@@ -269,7 +279,9 @@ export function ImageBrowser({
       if (alive.current) await load(image, listing?.dir ?? "");
     } catch (e) {
       // Refused (it didn't fit, the image is in use): the edited copy is still there to use.
-      setError(String(e));
+      if (current.current === image) setError(String(e));
+    } finally {
+      applying.current = false;
     }
   }, [confirm, edits, follow, image, listing?.dir, load, tr]);
 

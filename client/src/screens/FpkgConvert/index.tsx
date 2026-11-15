@@ -594,6 +594,8 @@ export default function WorkshopScreen() {
         ...(removesBackport ? { removeBackport: true } : {}),
         ...(deletesSource ? { deleteSource: true } : {}),
         ...(unpackOn ? { unpackPacks: true } : {}),
+        // A .rar read in place needs its password as an image build does.
+        ...(password ? { password } : {}),
       });
       // Asked for this one conversion: off again for whatever comes next.
       setDeleteSourceFor(null);
@@ -791,13 +793,14 @@ export default function WorkshopScreen() {
     ((build.kind === "folder" || build.kind === "image") && lz4Active(lz4Choice) && lz4Choice?.kind === "zstd");
   const removesBackport =
     backport !== null && removeBackportFor === src && !backportRefusal(backport, backportUnpacks);
-  // A game folder with an update merged in is a new folder too, and so is a packed one unpacked
-  // (offered for any packed game folder: the checkbox is under "A game folder").
+  // A game folder with an update merged in is a new folder too, and so is a packed one once
+  // "Unpack the asset packs" is ticked (that checkbox is under "A game folder"; until it is, the
+  // folder would be the same one and the engine refuses it).
   // A .zip, .7z or .rar becomes a folder too: its game read straight out of it.
   const canFolder =
     unpackable ||
     (src !== "" && isInPlaceArchive(src)) ||
-    (isLocalFolder && (packsFolder || mergeReady || !!inspection?.packs));
+    (isLocalFolder && (packsFolder || mergeReady || unpackOn));
   const isFolderSource =
     src !== "" && !unpackable && !isArchiveSource(src) && !packsFolder && !mergeReady && !unpackOn;
 
@@ -1054,9 +1057,9 @@ export default function WorkshopScreen() {
           compact
           title={tr("workshop_title", undefined, "Workshop")}
           description={tr(
-            "workshop_inside_description",
+            "workshop_inside_description_v2",
             undefined,
-            "Look inside a game image or package: save files to this computer, or change files and write an edited copy. The image you opened is never changed.",
+            "Look inside a game image or package: save files to this computer, or change files and write an edited copy. The image you opened changes only if you choose Apply in place.",
           )}
         />
         {gameCard}
