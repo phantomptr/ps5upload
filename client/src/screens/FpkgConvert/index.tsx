@@ -52,7 +52,8 @@ import { MakeCard } from "./MakeCard";
 import { mergeRole, Ps4MergePicker } from "./Ps4Merge";
 import { OptionsCard } from "./OptionsCard";
 import { folderPackOptions, folderPacks, packOptions } from "./ImageOptions";
-import { RemoveBackportOption, backportRefusal } from "./SourceOptions";
+import { DeleteSourceOption, RemoveBackportOption, backportRefusal, deleteSourceRefusal } from "./SourceOptions";
+import { useConfirm } from "../../components/ConfirmDialog";
 import {
   OutputChoice,
   RunCard,
@@ -346,6 +347,10 @@ export default function WorkshopScreen() {
   // "Remove backport libraries": ticked for this source only (the one it names), so another
   // game starts with it off.
   const [removeBackportFor, setRemoveBackportFor] = useState<string | null>(null);
+  // "Move the source to the Trash once the output is verified": the one source it was
+  // confirmed for, in this window's memory only, and cleared when that conversion starts.
+  const [deleteSourceFor, setDeleteSourceFor] = useState<string | null>(null);
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [error, setError] = useState<string | null>(null);
   const [deleteArmed, setDeleteArmed] = useState(false);
   const disarm = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -477,7 +482,9 @@ export default function WorkshopScreen() {
 
   // The inspection of a restored result's source, so its title id is there for Launch.
   useEffect(() => {
-    if (!inspection && source && !checking && pipeline.phase !== "idle") void check(source);
+    // Not a source the run moved to the Trash: there is nothing left to inspect.
+    const gone = pipeline.phase === "done" && pipeline.sourceNote?.removed;
+    if (!inspection && source && !checking && pipeline.phase !== "idle" && !gone) void check(source);
     // Only on mount: later checks come from explicit source changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -568,7 +575,10 @@ export default function WorkshopScreen() {
         update,
         ...(toServer ? { toServer } : {}),
         ...(removesBackport ? { removeBackport: true } : {}),
+        ...(deletesSource ? { deleteSource: true } : {}),
       });
+      // Asked for this one conversion: off again for whatever comes next.
+      setDeleteSourceFor(null);
       return;
     }
     if (build.kind === "image") {
@@ -592,15 +602,17 @@ export default function WorkshopScreen() {
         packOptions(build.format, lz4Choice, lz4Profile?.text),
         password || undefined,
         out.keepBoth,
-        direct || toServer || update || removesBackport
+        direct || toServer || update || removesBackport || deletesSource
           ? {
               ...(direct ? { toConsole: plan } : {}),
               ...(toServer ? { toServer } : {}),
               ...(update ? { update } : {}),
               ...(removesBackport ? { removeBackport: true } : {}),
+              ...(deletesSource ? { deleteSource: true } : {}),
             }
           : undefined,
       );
+      setDeleteSourceFor(null);
       return;
     }
     const install = then !== "keep";
@@ -1068,6 +1080,35 @@ export default function WorkshopScreen() {
     onServerFolder: setServerFolder,
     serverRefusal,
   };
+  // "Move the source to the Trash" is for an image or folder made of the game checked; a
+  // package is left alone (it has its own steps after the build).
+  const deleteSourceOffered = inspection !== null && src !== "" && (build.kind === "image" || build.kind === "folder");
+  const deleteSourceBlocked = deleteSourceRefusal({
+    engineReason: inspection?.delete_source_refusal,
+    archive: isArchiveSource(src),
+    merge: mergePair !== null,
+    elsewhere: (build.kind === "image" && savesToPs5(runChoice)) || savesToServer(runChoice),
+  });
+  const deletesSource = deleteSourceOffered && deleteSourceFor === src && !deleteSourceBlocked;
+  /** Ticking it asks first, naming what would go; unticking needs no question. */
+  const askDeleteSource = async (on: boolean) => {
+    if (!on) {
+      setDeleteSourceFor(null);
+      return;
+    }
+    const ok = await confirm({
+      title: tr("fpkg.delete_source.confirm_title", undefined, "Move the source to the Trash afterwards?"),
+      message: tr(
+        "fpkg.delete_source.confirm_body",
+        { path: src },
+        "Once the output is written and every byte of it has been read back and checked, this is moved to the Trash or Recycle Bin: {path}. It stays where it is if the conversion fails or is stopped, or if it changed meanwhile.",
+      ),
+      details: [src],
+      confirmLabel: tr("fpkg.delete_source.confirm_yes", undefined, "Move it to the Trash afterwards"),
+      destructive: true,
+    });
+    if (ok) setDeleteSourceFor(src);
+  };
   const barRun = idleRun(
     {
       choice: runChoice,
@@ -1166,7 +1207,16 @@ export default function WorkshopScreen() {
                 onChange={(on) => setRemoveBackportFor(on ? src : null)}
               />
             )}
+            {!locked && deleteSourceOffered && (
+              <DeleteSourceOption
+                path={src}
+                refusal={deleteSourceBlocked}
+                checked={deleteSourceFor === src}
+                onChange={(on) => void askDeleteSource(on)}
+              />
+            )}
           </OptionsCard>
+          {confirmDialog}
 
           <SwapJournals
             deps={swapDeps}

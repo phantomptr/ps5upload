@@ -2495,6 +2495,8 @@ pub async fn exfat_build(
     update: Option<String>,
     // Leave the backport libraries in the game's fakelib out of the image.
     remove_backport: Option<bool>,
+    // Move `source` to the Trash once the image is read back in full and in place.
+    delete_source: Option<bool>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/exfat/build");
@@ -2519,6 +2521,7 @@ pub async fn exfat_build(
             "destination": destination,
             "update": update,
             "remove_backport": remove_backport.unwrap_or(false),
+            "delete_source": delete_source.unwrap_or(false),
         }),
     )
     .await
@@ -2544,6 +2547,8 @@ pub async fn folder_build(
     destination: Option<JsonValue>,
     // Leave the backport libraries in the game's fakelib out of the folder.
     remove_backport: Option<bool>,
+    // Move `source` to the Trash once the folder is read back in full and in place.
+    delete_source: Option<bool>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/folder/build");
@@ -2560,6 +2565,7 @@ pub async fn folder_build(
             "update": update,
             "destination": destination,
             "remove_backport": remove_backport.unwrap_or(false),
+            "delete_source": delete_source.unwrap_or(false),
         }),
     )
     .await

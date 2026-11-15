@@ -356,12 +356,12 @@ pub struct TrashResult {
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn move_to_trash(path: &FsPath) -> Result<(), String> {
+pub(crate) fn move_to_trash(path: &FsPath) -> Result<(), String> {
     trash::delete(path).map_err(|e| e.to_string())
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
-fn move_to_trash(_path: &FsPath) -> Result<(), String> {
+pub(crate) fn move_to_trash(_path: &FsPath) -> Result<(), String> {
     Err("this device has no trash".into())
 }
 

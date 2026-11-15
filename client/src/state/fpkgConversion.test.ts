@@ -90,7 +90,7 @@ vi.mock("./roster", async (orig) => ({
   useRosterStore: { getState: () => roster },
 }));
 
-import { POLL_MS, archiveStem, pausedSoFar, stagePausedSoFar, useFpkgConversion } from "./fpkgConversion";
+import { POLL_MS, archiveStem, pausedSoFar, sourceNoteOf, stagePausedSoFar, useFpkgConversion } from "./fpkgConversion";
 import { commandTask, taskCapabilities } from "./taskControls";
 import { useTaskStore } from "./tasks";
 
@@ -419,7 +419,10 @@ describe("fpkg pipeline", () => {
       .mockResolvedValueOnce({ status: "done", dest: "/out/My Game.ffpfsc", bytes_sent: 4 });
     await useFpkgConversion
       .getState()
-      .buildImage("/dl/My Game.part1.rar", "/out", true, "ffpkg", undefined, undefined, "pw");
+      // Asked to remove the source too: never for an archive, whose build reads a scratch copy.
+      .buildImage("/dl/My Game.part1.rar", "/out", true, "ffpkg", undefined, undefined, "pw", undefined, {
+        deleteSource: true,
+      });
     expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "running", stage: "extract" });
     expect(extract).toHaveBeenCalledWith("/dl/My Game.part1.rar", "/out", "pw");
     await tick();
@@ -505,6 +508,58 @@ describe("fpkg pipeline", () => {
     const call = buildImage.mock.calls[0] ?? [];
     expect(call[call.length - 1]).toBe("/games/U.pkg");
     await tick();
+    jobStatus.mockReset();
+  });
+
+  it("asks for the source to go only when ticked, never for an archive, and says what became of it", async () => {
+    const buildFolder = vi.fn().mockResolvedValue({ job_id: "d1" });
+    const buildImage = vi.fn().mockResolvedValue({ job_id: "d2" });
+    const { fpkg } = await import("../api/fpkg");
+    (fpkg as unknown as { buildFolder: unknown }).buildFolder = buildFolder;
+    (fpkg as unknown as { buildImage: unknown }).buildImage = buildImage;
+    jobStatus.mockResolvedValue({
+      status: "done",
+      dest: "/out/G",
+      bytes_sent: 9,
+      commit_ack: { source_removed: true, source_note: "source moved to the Trash: /games/G.exfat" },
+    });
+    await useFpkgConversion.getState().buildFolder("/games/G.exfat", "/out", false, { deleteSource: true });
+    const folderCall = buildFolder.mock.calls[0] ?? [];
+    expect(folderCall[folderCall.length - 1]).toEqual({ deleteSource: true });
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      phase: "done",
+      sourceNote: { removed: true, note: "source moved to the Trash: /games/G.exfat" },
+    });
+    useFpkgConversion.getState().reset();
+
+    // A source that was kept says why; a run that never asked says nothing.
+    jobStatus.mockResolvedValue({
+      status: "done",
+      dest: "/out/G.ffpkg",
+      bytes_sent: 9,
+      commit_ack: { source_removed: false, source_note: "source kept: another job is reading it" },
+    });
+    await useFpkgConversion
+      .getState()
+      .buildImage("/games/G-app", "/out", false, "ffpkg", undefined, undefined, undefined, false, {
+        deleteSource: true,
+        removeBackport: true,
+      });
+    const imageCall = buildImage.mock.calls[0] ?? [];
+    expect(imageCall[imageCall.length - 1]).toEqual({ removeBackport: true, deleteSource: true });
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      sourceNote: { removed: false, note: "source kept: another job is reading it" },
+    });
+    useFpkgConversion.getState().reset();
+    jobStatus.mockResolvedValue({ status: "done", dest: "/out/G.ffpkg", bytes_sent: 9, commit_ack: { ampr_runtime: {} } });
+    await useFpkgConversion.getState().buildImage("/games/G-app", "/out", false, "ffpkg");
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).not.toHaveProperty("sourceNote");
+    expect(sourceNoteOf(undefined)).toBeUndefined();
+    expect(sourceNoteOf({ source_removed: "yes" })).toBeUndefined();
+    useFpkgConversion.getState().reset();
     jobStatus.mockReset();
   });
 

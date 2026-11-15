@@ -925,6 +925,7 @@ export async function browserInvoke<T>(
         destination: args["destination"],
         update: args["update"],
         remove_backport: args["removeBackport"] ?? false,
+        delete_source: args["deleteSource"] ?? false,
       });
     }
     case "folder_build": {
@@ -939,6 +940,7 @@ export async function browserInvoke<T>(
         update: args["update"],
         destination: args["destination"],
         remove_backport: args["removeBackport"] ?? false,
+        delete_source: args["deleteSource"] ?? false,
       });
     }
     case "image_browse": {

@@ -279,6 +279,35 @@ describe("RunCard", () => {
       expect(button(out, "Show in folder")).toBeNull();
     });
 
+    it("says what became of a source the run was asked to move to the Trash", () => {
+      const image = {
+        phase: "done" as const,
+        mode: "image" as const,
+        source: "/games/PPSA1-app",
+        host: null,
+        packagePath: "/out/PPSA1-app.ffpkg",
+        packageBytes: 9,
+        convertMs: 1,
+        installMs: 0,
+        stageMs: {},
+        deleted: false,
+        titleId: null,
+      };
+      // Not asked: nothing is said.
+      expect(html(image)).not.toContain("source-note");
+      const gone = html({
+        ...image,
+        sourceNote: { removed: true, note: "source moved to the Trash: /games/PPSA1-app" },
+      });
+      expect(gone).toContain("The source was moved to the Trash: /games/PPSA1-app");
+      const kept = html({
+        ...image,
+        sourceNote: { removed: false, note: "source kept: /games/PPSA1-app changed while it was being converted" },
+      });
+      expect(kept).toContain("The source was not moved to the Trash");
+      expect(kept).toContain("changed while it was being converted");
+    });
+
     it("says a finished image is on the PS5, with nothing to upload", () => {
       const out = html(
         {

@@ -3674,6 +3674,10 @@
             "description": "Write the image straight into a `.ffpfsc` container (no uncompressed copy on disk).",
             "type": "boolean"
           },
+          "delete_source": {
+            "description": "Once the image is written, read back in full and given its name, move `source` to this\ncomputer's Trash or Recycle Bin (never deleted for good). Only for a file or folder on\nthis computer made into an image on this computer; refused, with the reason, for a\nsource on a PS5 or a server, an output inside the source (or the source inside the\noutput), an engine with no Trash (Docker, a headless Linux), `edits`, `update` and a\n`destination` elsewhere. The whole image is read back whatever `full_verify` says.\nThe source stays when it changed during the run or another job reads it; the finished\njob's `commit_ack` says which: `source_removed` and `source_note`.",
+            "type": "boolean"
+          },
           "destination": {
             "anyOf": [
               {
@@ -4240,6 +4244,10 @@
               }
             ],
             "description": "Write the game with its files in zstd asset packs for ampr-emu-ng, as an image build's\n`ampr_zstd` does, as a plain folder: the packs, the files that stay loose, and the\nemulator in `fakelib/libSceAmpr.sprx`. The source may then also be a game folder (on\nthis computer, a saved server or a console). Not with `entry`."
+          },
+          "delete_source": {
+            "description": "Once the folder is written, read back in full and given its name, move `source` to this\ncomputer's Trash, as an image build's `delete_source` does and with the same refusals.\nNot with `entry`, `update` or a `destination` elsewhere.",
+            "type": "boolean"
           },
           "destination": {
             "anyOf": [
@@ -6423,6 +6431,13 @@
                   }
                 ],
                 "description": "Present when the game's `fakelib`/`fakelib2` holds backport libraries: what an image or\nfolder build's `remove_backport` would leave out, and why it can't when it can't."
+              },
+              "delete_source_refusal": {
+                "description": "Why an image or folder build could not move this source to the Trash afterwards\n(`delete_source`), whatever it makes: it is on a PS5 or a server, or this engine has no\nTrash. Absent when it could.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "min_firmware": {
                 "type": [

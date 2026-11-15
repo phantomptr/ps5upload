@@ -11,7 +11,12 @@ vi.mock("../../state/lang", () => ({
 }));
 
 import type { BackportInfo } from "../../api/fpkg";
-import { RemoveBackportOption, backportRefusal } from "./SourceOptions";
+import {
+  DeleteSourceOption,
+  RemoveBackportOption,
+  backportRefusal,
+  deleteSourceRefusal,
+} from "./SourceOptions";
 
 const backport: BackportInfo = {
   libraries: ["fakelib/libSceAgc.sprx", "fakelib2/libSceGnm.sprx"],
@@ -62,5 +67,57 @@ describe("Remove backport libraries", () => {
     );
     expect(on).not.toContain("Turn on zstd asset packs");
     expect(on).toContain('aria-checked="true"');
+  });
+});
+
+describe("Move the source to the Trash once the output is verified", () => {
+  const free = { archive: false, merge: false, elsewhere: false };
+
+  it("is refused for a source or an output that is not on this computer, an archive and a merge", () => {
+    expect(deleteSourceRefusal(free)).toBe(null);
+    expect(deleteSourceRefusal({ ...free, engineReason: "the source is on a PS5 or a server" })).toEqual({
+      kind: "engine",
+      reason: "the source is on a PS5 or a server",
+    });
+    expect(deleteSourceRefusal({ ...free, archive: true })).toEqual({ kind: "archive" });
+    expect(deleteSourceRefusal({ ...free, merge: true })).toEqual({ kind: "merge" });
+    expect(deleteSourceRefusal({ ...free, elsewhere: true })).toEqual({ kind: "elsewhere" });
+    // The engine's reason comes first: it holds whatever is made.
+    expect(deleteSourceRefusal({ engineReason: "no Trash", archive: true, merge: true, elsewhere: true })).toEqual({
+      kind: "engine",
+      reason: "no Trash",
+    });
+  });
+
+  it("is off until ticked, and names the path once it is on", () => {
+    const off = renderToStaticMarkup(
+      <DeleteSourceOption path="/games/PPSA1-app" refusal={null} checked={false} onChange={() => {}} />,
+    );
+    expect(off).toContain("Move the source to the Trash once the output is verified");
+    expect(off).toContain("games in the queue are never removed");
+    expect(off).toContain('aria-checked="false"');
+    expect(off).not.toContain("delete-source-path");
+    const on = renderToStaticMarkup(
+      <DeleteSourceOption path="/games/PPSA1-app" refusal={null} checked onChange={() => {}} />,
+    );
+    expect(on).toContain('aria-checked="true"');
+    expect(on).toContain("Will be moved to the Trash: /games/PPSA1-app");
+  });
+
+  it("cannot be on while something is in the way, and says what", () => {
+    const refused = (refusal: Parameters<typeof DeleteSourceOption>[0]["refusal"]) =>
+      renderToStaticMarkup(<DeleteSourceOption path="/g" refusal={refusal} checked onChange={() => {}} />);
+    for (const [refusal, text] of [
+      [{ kind: "engine", reason: "this engine has no Trash" }, "Not available: this engine has no Trash"],
+      [{ kind: "archive" }, "Not available for an archive"],
+      [{ kind: "merge" }, "there are two sources"],
+      [{ kind: "elsewhere" }, "saved straight to the PS5 or a server"],
+    ] as const) {
+      const html = refused(refusal);
+      expect(html).toContain(text);
+      // Ticked before, it is still not on, and no path is promised.
+      expect(html).toContain('aria-checked="false"');
+      expect(html).not.toContain("delete-source-path");
+    }
   });
 });

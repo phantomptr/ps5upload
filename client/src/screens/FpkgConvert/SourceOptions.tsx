@@ -72,3 +72,91 @@ export function RemoveBackportOption({
     </div>
   );
 }
+
+/** Why the source cannot be moved to the Trash after this conversion, or null when it can. */
+export type DeleteSourceRefusal =
+  | { kind: "engine"; reason: string }
+  | { kind: "archive" | "merge" | "elsewhere" };
+
+/** The first thing in the way of "move the source to the Trash": the engine's own reason (the
+ *  source is on a PS5 or a server, or there is no Trash), an archive (what is converted is its
+ *  scratch copy), an update merged in (two sources), or an output that is not kept on this
+ *  computer (saved straight to the PS5 or a server). The engine checks all of this again, and
+ *  that the output is not inside the source, before anything is written. */
+export function deleteSourceRefusal(o: {
+  engineReason?: string | null;
+  archive: boolean;
+  merge: boolean;
+  elsewhere: boolean;
+}): DeleteSourceRefusal | null {
+  if (o.engineReason) return { kind: "engine", reason: o.engineReason };
+  if (o.archive) return { kind: "archive" };
+  if (o.merge) return { kind: "merge" };
+  return o.elsewhere ? { kind: "elsewhere" } : null;
+}
+
+/** "Move the source to the Trash once the output is verified": for an image or folder made of
+ *  a file or folder on this computer. Off unless ticked for this one conversion, and ticking
+ *  it asks first, naming the path (the screen does that). */
+export function DeleteSourceOption({
+  path,
+  refusal,
+  checked,
+  onChange,
+}: {
+  /** What would go. */
+  path: string;
+  refusal: DeleteSourceRefusal | null;
+  checked: boolean;
+  onChange: (on: boolean) => void;
+}) {
+  const tr = useTr();
+  const why =
+    refusal?.kind === "engine"
+      ? tr("fpkg.delete_source.no_engine", { reason: refusal.reason }, "Not available: {reason}")
+      : refusal?.kind === "archive"
+        ? tr(
+            "fpkg.delete_source.no_archive",
+            undefined,
+            "Not available for an archive: it is unpacked to a scratch copy first, and the archive itself is kept.",
+          )
+        : refusal?.kind === "merge"
+          ? tr(
+              "fpkg.delete_source.no_merge",
+              undefined,
+              "Not available with an update merged in: there are two sources.",
+            )
+          : refusal?.kind === "elsewhere"
+            ? tr(
+                "fpkg.delete_source.no_elsewhere",
+                undefined,
+                "Not available when the output is saved straight to the PS5 or a server: only for an output kept on this computer.",
+              )
+            : null;
+  const on = checked && !refusal;
+  return (
+    <div className="space-y-1" data-testid="delete-source-option">
+      <Toggle
+        checked={on}
+        onChange={onChange}
+        disabled={!!refusal}
+        label={tr("fpkg.delete_source", undefined, "Move the source to the Trash once the output is verified")}
+        hint={tr(
+          "fpkg.delete_source_body",
+          undefined,
+          "After the output is written, every byte of it is read back and checked, and only then is the game you chose moved to the Trash or Recycle Bin. It stays if the conversion fails or is stopped, or if it changed meanwhile. For this conversion only: it is off again afterwards, and games in the queue are never removed.",
+        )}
+      />
+      {on && (
+        <div className="text-xs text-[var(--color-warn)]" data-testid="delete-source-path">
+          {tr("fpkg.delete_source.path", { path }, "Will be moved to the Trash: {path}")}
+        </div>
+      )}
+      {why && (
+        <div className="text-xs text-[var(--color-warn)]" data-testid="delete-source-refused">
+          {why}
+        </div>
+      )}
+    </div>
+  );
+}

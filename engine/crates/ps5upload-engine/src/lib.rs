@@ -113,6 +113,7 @@ mod settings_api;
 mod settings_backup;
 mod share;
 mod shared_state;
+mod source_removal;
 mod state_io;
 mod tailnet_api;
 mod tailnet_discover;

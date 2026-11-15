@@ -518,6 +518,21 @@ export function RunCard(props: RunCardProps) {
                   ? tr("fpkg.folder.done", undefined, "Game folder written and read back.")
                   : tr("fpkg.done", undefined, "Package written")}
         </div>
+        {/* The run was asked to move its source to the Trash: it went, or it stayed and why. */}
+        {p.sourceNote && (
+          <div
+            className={`text-xs ${p.sourceNote.removed ? "text-[var(--color-muted)]" : "text-[var(--color-warn)]"}`}
+            data-testid="source-note"
+          >
+            {p.sourceNote.removed
+              ? tr("fpkg.delete_source.done", { path: p.source }, "The source was moved to the Trash: {path}")
+              : tr(
+                  "fpkg.delete_source.kept",
+                  { reason: p.sourceNote.note },
+                  "The source was not moved to the Trash, and is still where it was ({reason}).",
+                )}
+          </div>
+        )}
         <div className="text-sm text-[var(--color-muted)]">
           {p.packageBytes > 0 && <span>{prettyBytes(p.packageBytes)}</span>}
           {p.packageBytes > 0 && props.sourceBytes && !folder ? (

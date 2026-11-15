@@ -79,6 +79,10 @@ export interface FpkgInspection {
   /** Present when the game's fakelib holds backport libraries: what "Remove backport
    *  libraries" would leave out of an image or folder, and why it can't when it can't. */
   backport?: BackportInfo | null;
+  /** Why this source could not be moved to the Trash after an image or folder is made of it,
+   *  whatever is made (it is on a PS5 or a server, or the engine has no Trash); absent when
+   *  it could. */
+  delete_source_refusal?: string | null;
 }
 
 /** A game's backport, as the check found it (the engine's `remove_backport::BackportReport`). */
@@ -97,6 +101,9 @@ export interface BackportInfo {
 export interface BuildExtras {
   /** Leave the backport libraries in the game's fakelib out of what is made. */
   removeBackport?: boolean;
+  /** Once the output is read back in full and in place, move the source to the Trash. The
+   *  finished job's `commit_ack` says whether it went (`source_removed`, `source_note`). */
+  deleteSource?: boolean;
 }
 
 export type Ps4Kind = "game" | "patch" | "addon";
@@ -256,6 +263,7 @@ export const fpkg = {
     invoke<{ job_id: string }>("exfat_build", {
       update,
       removeBackport: extra?.removeBackport || undefined,
+      deleteSource: extra?.deleteSource || undefined,
       source,
       outputDir,
       format,
@@ -300,6 +308,7 @@ export const fpkg = {
     invoke<{ job_id: string }>("folder_build", {
       update,
       removeBackport: extra?.removeBackport || undefined,
+      deleteSource: extra?.deleteSource || undefined,
       destination,
       source,
       outputDir,

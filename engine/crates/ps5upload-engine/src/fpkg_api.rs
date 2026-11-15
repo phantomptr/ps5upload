@@ -157,7 +157,7 @@ pub(crate) fn default_output_dir() -> PathBuf {
 /// The user's home folder: `HOME` on Unix, `USERPROFILE` (or `HOMEDRIVE`+`HOMEPATH`) on Windows,
 /// where `HOME` is normally unset. Only when none of them resolves does it fall back to the
 /// temp folder (#364: on Windows that fallback was the *usual* case).
-fn user_home() -> PathBuf {
+pub(crate) fn user_home() -> PathBuf {
     home_from(|k| std::env::var_os(k))
 }
 
@@ -217,6 +217,11 @@ struct InspectResponse {
     /// folder build's `remove_backport` would leave out, and why it can't when it can't.
     #[serde(skip_serializing_if = "Option::is_none")]
     backport: Option<crate::remove_backport::BackportReport>,
+    /// Why an image or folder build could not move this source to the Trash afterwards
+    /// (`delete_source`), whatever it makes: it is on a PS5 or a server, or this engine has no
+    /// Trash. Absent when it could.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delete_source_refusal: Option<String>,
 }
 
 fn min_firmware_of(source: &Path, declared: Option<&str>) -> Option<String> {
@@ -290,6 +295,7 @@ pub(crate) async fn fpkg_inspect_handler(
             inspection,
             min_firmware,
             backport,
+            delete_source_refusal: crate::source_removal::source_refusal(Path::new(&source)),
         })
     })
     .await;
@@ -1106,6 +1112,16 @@ pub(crate) struct ExfatBuildReq {
     /// library is converted as it is. Not with `edits`.
     #[serde(default)]
     remove_backport: bool,
+    /// Once the image is written, read back in full and given its name, move `source` to this
+    /// computer's Trash or Recycle Bin (never deleted for good). Only for a file or folder on
+    /// this computer made into an image on this computer; refused, with the reason, for a
+    /// source on a PS5 or a server, an output inside the source (or the source inside the
+    /// output), an engine with no Trash (Docker, a headless Linux), `edits`, `update` and a
+    /// `destination` elsewhere. The whole image is read back whatever `full_verify` says.
+    /// The source stays when it changed during the run or another job reads it; the finished
+    /// job's `commit_ack` says which: `source_removed` and `source_note`.
+    #[serde(default)]
+    delete_source: bool,
 }
 
 /// Where an image build puts the image.
@@ -1567,6 +1583,52 @@ impl AmprLz4Req {
     }
 }
 
+/// A build's `delete_source`, checked before the job exists: the plan, or the status and reason
+/// to refuse the request with. The check walks a source folder, so it runs off the request's
+/// thread.
+async fn plan_source_removal(
+    source: &Path,
+    output: &Path,
+) -> Result<crate::source_removal::Plan, (StatusCode, String)> {
+    let (source, output) = (source.to_path_buf(), output.to_path_buf());
+    match tokio::task::spawn_blocking(move || crate::source_removal::plan(&source, &output)).await {
+        Ok(Ok(plan)) => Ok(plan),
+        Ok(Err(why)) => Err((StatusCode::BAD_REQUEST, why)),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}"))),
+    }
+}
+
+/// Whether another Workshop job that is still running reads `source`, something in it, or a
+/// folder it is in. This job (`job_id`) is not counted.
+fn source_in_use(state: &AppState, job_id: Uuid, source: &Path) -> bool {
+    let me = job_id.to_string();
+    let jobs = state.jobs.lock().unwrap_or_else(|e| e.into_inner());
+    crate::workshop_api::live_runs(|id| matches!(jobs.get(&id), Some(JobState::Running { .. })))
+        .iter()
+        .any(|run| {
+            let other = Path::new(&run.source);
+            run.job_id != me && (other.starts_with(source) || source.starts_with(other))
+        })
+}
+
+/// A finished, verified build's planned source removal, done and written to the engine log
+/// (`what` names the build there).
+fn remove_source(
+    plan: &crate::source_removal::Plan,
+    output: &Path,
+    state: &AppState,
+    job_id: Uuid,
+    what: &str,
+) -> crate::source_removal::Outcome {
+    let busy = source_in_use(state, job_id, plan.source());
+    let outcome = crate::source_removal::finish(plan, output, &[], busy);
+    crate::engine_log::record(
+        if outcome.removed { "info" } else { "warn" },
+        format!("{what}: {}", outcome.note),
+    );
+    outcome
+}
+
 /// POST /api/exfat/build — write a game folder as one `.exfat` or `.ffpkg` image ShadowMountPlus
 /// mounts (`format`).
 /// Runs as a job like a package build: the ticker publishes bytes written, and the job's
@@ -1669,8 +1731,9 @@ pub(crate) async fn exfat_build_handler(
         Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
     };
     // A fast read-back also covers UFS2's indirect-block seam.
+    // A source that goes afterwards is replaced by this image: every byte of it is read back.
     let mode = ps5upload_fpkg::sample::VerifyMode::from_full(
-        req.full_verify,
+        req.full_verify || req.delete_source,
         format == crate::image_build::ImageFormat::Ffpkg,
     );
     let packs = match &req.ampr_lz4 {
@@ -1812,6 +1875,36 @@ pub(crate) async fn exfat_build_handler(
         )
         .into_response();
     }
+    // "Move the source to the Trash once the output is verified": refused here, with the
+    // reason, when it could not be honoured, and what the source is now is noted before
+    // anything reads it.
+    let removal = if req.delete_source {
+        let why = if edited.is_some() {
+            Some("an edited copy never removes the image it was made from")
+        } else if straight {
+            Some(
+                "the image goes straight to a PS5 or a server, and a source is only removed \
+                 for an image this computer keeps",
+            )
+        } else if update.is_some() {
+            Some("with an update merged in there are two sources: remove them yourself")
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                format!("the source can't be moved to the Trash: {why}"),
+            )
+            .into_response();
+        }
+        match plan_source_removal(&source, &output).await {
+            Ok(plan) => Some(plan),
+            Err((status, why)) => return json_err(status, why).into_response(),
+        }
+    } else {
+        None
+    };
     let scan_source = source.clone();
     let check_packs = packs.is_some();
     let install_runtime = req.ampr_lz4.as_ref().is_some_and(|r| r.install_runtime);
@@ -2310,6 +2403,21 @@ pub(crate) async fn exfat_build_handler(
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .insert(output.clone());
+                let removal = match &removal {
+                    Some(plan) => {
+                        // The source's own files are closed before it is moved away. (The
+                        // PS4 wrapper above only borrowed the tree, and is done with it.)
+                        drop(tree);
+                        Some(remove_source(
+                            plan,
+                            &output,
+                            &state_for_job,
+                            job_id,
+                            "image",
+                        ))
+                    }
+                    None => None,
+                };
                 crate::engine_log::record(
                     "info",
                     format!(
@@ -2339,7 +2447,10 @@ pub(crate) async fn exfat_build_handler(
                         files_sent: built.files,
                         skipped_files: 0,
                         skipped_bytes: 0,
-                        commit_ack: runtime.as_ref().map(runtime_ack),
+                        commit_ack: crate::source_removal::ack(
+                            runtime.as_ref().map(runtime_ack),
+                            removal.as_ref(),
+                        ),
                     },
                 );
             }
@@ -2417,6 +2528,11 @@ pub(crate) struct FolderBuildReq {
     /// `remove_backport` does, with the same refusals. Not with `entry`.
     #[serde(default)]
     remove_backport: bool,
+    /// Once the folder is written, read back in full and given its name, move `source` to this
+    /// computer's Trash, as an image build's `delete_source` does and with the same refusals.
+    /// Not with `entry`, `update` or a `destination` elsewhere.
+    #[serde(default)]
+    delete_source: bool,
 }
 
 /// What a folder build reads: the whole image, one folder of it, or one file.
@@ -2687,6 +2803,34 @@ pub(crate) async fn folder_build_handler(
         )
         .into_response();
     }
+    // As for an image: refused here when the source could not go afterwards.
+    let removal = if req.delete_source {
+        let why = if entry.is_some() {
+            Some("saving one file or folder of an image does not remove the image")
+        } else if to_server.is_some() {
+            Some(
+                "the folder goes straight to a server, and a source is only removed for a \
+                 folder this computer keeps",
+            )
+        } else if update.is_some() {
+            Some("with an update merged in there are two sources: remove them yourself")
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                format!("the source can't be moved to the Trash: {why}"),
+            )
+            .into_response();
+        }
+        match plan_source_removal(&source, &target).await {
+            Ok(plan) => Some(plan),
+            Err((status, why)) => return json_err(status, why).into_response(),
+        }
+    } else {
+        None
+    };
     let scan_source = source.clone();
     let scan_entry = entry.clone();
     let scan_update = update.clone();
@@ -2787,7 +2931,9 @@ pub(crate) async fn folder_build_handler(
     let Some(writing) = Writing::claim_off_thread(claimed.clone()).await else {
         return already_building(&claimed);
     };
-    let mode = ps5upload_fpkg::sample::VerifyMode::from_full(req.full_verify, false);
+    // A source that goes afterwards is replaced by this folder: every file is compared in full.
+    let mode =
+        ps5upload_fpkg::sample::VerifyMode::from_full(req.full_verify || req.delete_source, false);
 
     let job_id = Uuid::new_v4();
     crate::workshop_api::note_run(job_id, "folder", &source);
@@ -2961,6 +3107,10 @@ pub(crate) async fn folder_build_handler(
         drop(ticker);
         match outcome {
             Ok(built) => {
+                // The trees that read the source are gone by now (the build took them).
+                let removal = removal
+                    .as_ref()
+                    .map(|plan| remove_source(plan, &target, &state_for_job, job_id, "folder"));
                 crate::engine_log::record(
                     "info",
                     format!(
@@ -2987,7 +3137,10 @@ pub(crate) async fn folder_build_handler(
                         files_sent: built.files,
                         skipped_files: 0,
                         skipped_bytes: 0,
-                        commit_ack: runtime.as_ref().map(runtime_ack),
+                        commit_ack: crate::source_removal::ack(
+                            runtime.as_ref().map(runtime_ack),
+                            removal.as_ref(),
+                        ),
                     },
                 );
             }
@@ -3263,7 +3416,7 @@ pub(crate) fn sweep_output_leftovers(out: &Path) {
 }
 
 /// Prefix of the folders archives are unpacked into, inside the output folder.
-const EXTRACT_PREFIX: &str = ".ps5upload-extract-";
+pub(crate) const EXTRACT_PREFIX: &str = ".ps5upload-extract-";
 
 /// Unpack folders this engine is still using (a build reads from one until it is cleaned).
 fn active_extracts() -> &'static std::sync::Mutex<std::collections::HashSet<PathBuf>> {
@@ -3287,7 +3440,7 @@ fn extract_shortfall(free: u64, unpacked: u64) -> Option<String> {
 
 /// The unpack folder `path` is in (it or an ancestor named `.ps5upload-extract-*`), or None:
 /// cleanup never deletes anything else.
-fn extract_root_of(path: &Path) -> Option<PathBuf> {
+pub(crate) fn extract_root_of(path: &Path) -> Option<PathBuf> {
     path.ancestors()
         .find(|a| {
             a.file_name()
@@ -3993,5 +4146,201 @@ mod title_param_tests {
         let msg = missing_param_message(Path::new("/games/Foo"), true);
         assert!(msg.contains("sce_sys/param.json") && msg.contains("eboot.bin"));
         assert!(missing_param_message(Path::new("/x"), false).contains("param.sfo"));
+    }
+}
+
+#[cfg(test)]
+mod source_option_tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    type Jobs = Arc<Mutex<HashMap<Uuid, JobState>>>;
+
+    fn state() -> (AppState, Jobs) {
+        let jobs: Jobs = Arc::default();
+        let (events_tx, _rx) = tokio::sync::broadcast::channel(16);
+        let state = AppState {
+            jobs: jobs.clone(),
+            default_ps5_addr: "127.0.0.1".to_string(),
+            events_tx,
+        };
+        (state, jobs)
+    }
+
+    /// A game folder `<root>/PPSA01234` and a small exFAT image of it beside it.
+    fn game(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("fpkg-srcopt-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join("PPSA01234");
+        std::fs::create_dir_all(dir.join("sce_sys")).unwrap();
+        std::fs::write(dir.join("eboot.bin"), b"eboot").unwrap();
+        std::fs::write(
+            dir.join("sce_sys/param.json"),
+            br#"{"titleId":"PPSA01234"}"#,
+        )
+        .unwrap();
+        let image = root.join("PPSA01234.exfat");
+        let mut tree = ps5upload_fpkg::source::open(&dir).unwrap();
+        crate::image_build::build(
+            crate::image_build::ImageFormat::Exfat,
+            None,
+            &mut *tree,
+            &image,
+            ps5upload_fpkg::sample::VerifyMode::Full,
+            8 << 20,
+            &std::sync::atomic::AtomicBool::new(false),
+            &mut |_, _, _| {},
+        )
+        .unwrap();
+        (root, dir, image)
+    }
+
+    async fn image(body: serde_json::Value) -> (StatusCode, String, usize) {
+        let (state, jobs) = state();
+        let req: ExfatBuildReq = serde_json::from_value(body).unwrap();
+        let resp = exfat_build_handler(State(state), Json(req))
+            .await
+            .into_response();
+        answer(resp, &jobs).await
+    }
+
+    async fn folder(body: serde_json::Value) -> (StatusCode, String, usize) {
+        let (state, jobs) = state();
+        let req: FolderBuildReq = serde_json::from_value(body).unwrap();
+        let resp = folder_build_handler(State(state), Json(req))
+            .await
+            .into_response();
+        answer(resp, &jobs).await
+    }
+
+    /// The status, the body, and how many jobs the request started.
+    async fn answer(resp: axum::response::Response, jobs: &Jobs) -> (StatusCode, String, usize) {
+        let status = resp.status();
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let started = jobs.lock().unwrap().len();
+        (status, String::from_utf8_lossy(&body).into_owned(), started)
+    }
+
+    /// Every request that asks for the source to go where it never does is refused before a
+    /// job exists, and says why. Nothing here reaches a Trash: a request that could be
+    /// honoured is not sent.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn delete_source_is_refused_where_the_source_never_goes() {
+        let (root, dir, img) = game("delete");
+        let out = root.join("out");
+        let (dir_s, img_s, out_s) = (
+            dir.display().to_string(),
+            img.display().to_string(),
+            out.display().to_string(),
+        );
+        let refused = |(status, body, started): (StatusCode, String, usize), want: &str| {
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert!(
+                body.contains("the source can't be moved to the Trash"),
+                "{body}"
+            );
+            assert!(body.contains(want), "{want}: {body}");
+            assert_eq!(started, 0, "no job may exist: {body}");
+        };
+
+        // An image that goes straight to a PS5 (the address is never dialled: refused first).
+        refused(
+            image(serde_json::json!({
+                "source": dir_s, "output_dir": out_s, "delete_source": true,
+                "destination": { "kind": "console", "addr": "192.0.2.9", "dir": "/data/homebrew" },
+            }))
+            .await,
+            "straight to a PS5 or a server",
+        );
+        // An edited copy.
+        refused(
+            image(serde_json::json!({
+                "source": img_s, "delete_source": true,
+                "edits": [{ "op": "mkdir", "path": "mods" }],
+            }))
+            .await,
+            "an edited copy never removes",
+        );
+        // An update merged in: two sources.
+        refused(
+            image(serde_json::json!({
+                "source": dir_s, "output_dir": out_s, "delete_source": true,
+                "update": root.join("update.pkg").display().to_string(),
+            }))
+            .await,
+            "two sources",
+        );
+        // A source on a server or a PS5, for an image and for a folder.
+        for source in [
+            "remote://nas1/games/PPSA01234.exfat",
+            "ps5://192.0.2.9/data/G.exfat",
+        ] {
+            let body = serde_json::json!({
+                "source": source, "output_dir": out_s, "delete_source": true,
+            });
+            refused(image(body.clone()).await, "on a PS5 or a server");
+            refused(folder(body).await, "on a PS5 or a server");
+        }
+        // The output inside the source folder. (On a machine with no Trash that is the reason
+        // given instead; refused either way.)
+        refused(
+            image(serde_json::json!({
+                "source": dir_s, "delete_source": true,
+                "output_dir": dir.join("made").display().to_string(),
+            }))
+            .await,
+            "",
+        );
+        // One file or folder of an image.
+        refused(
+            folder(serde_json::json!({
+                "source": img_s, "output_dir": out_s, "delete_source": true, "entry": "sce_sys",
+            }))
+            .await,
+            "one file or folder of an image",
+        );
+        // With an update merged in, a folder too.
+        refused(
+            folder(serde_json::json!({
+                "source": img_s, "output_dir": out_s, "delete_source": true,
+                "update": root.join("update.pkg").display().to_string(),
+            }))
+            .await,
+            "two sources",
+        );
+
+        // Nothing was written and both sources are where they were.
+        assert!(dir.join("eboot.bin").is_file() && img.is_file());
+        assert!(!out.join("PPSA01234.exfat").exists() && !out.join("PPSA01234").exists());
+        assert!(!dir.join("made/PPSA01234.exfat").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The backport is left out of a whole conversion only: an edited copy and a part of an
+    /// image refuse the flag.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn remove_backport_is_refused_for_an_edited_copy_and_a_part_of_an_image() {
+        let (root, _, img) = game("backport");
+        let img_s = img.display().to_string();
+        let (status, body, started) = image(serde_json::json!({
+            "source": img_s, "remove_backport": true,
+            "edits": [{ "op": "mkdir", "path": "mods" }],
+        }))
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body.contains("does not remove the backport"), "{body}");
+        assert_eq!(started, 0);
+        let (status, body, started) = folder(serde_json::json!({
+            "source": img_s, "remove_backport": true, "entry": "sce_sys",
+            "output_dir": root.join("out").display().to_string(),
+        }))
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body.contains("from a whole game"), "{body}");
+        assert_eq!(started, 0);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

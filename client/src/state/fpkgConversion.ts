@@ -139,6 +139,9 @@ export type Pipeline =
       /** The PS5 took the install but it could not be confirmed: what to check. The package
        *  was kept. */
       unverifiedNote?: string;
+      /** The run was asked to move its source to the Trash: whether it went, and the engine's
+       *  line saying so (or why it was kept). */
+      sourceNote?: SourceNote;
     }
   | {
       phase: "failed";
@@ -201,6 +204,9 @@ export interface ConversionState {
       update?: string;
       /** Leave the backport libraries in the game's fakelib out of the image. */
       removeBackport?: boolean;
+      /** Move `source` to the Trash once the image is verified and in place. Never for an
+       *  archive (what the build reads is its scratch copy). */
+      deleteSource?: boolean;
     },
   ) => Promise<void>;
   /** Unpack a game image or a debug-key package into a plain folder in `outputDir`; with
@@ -220,6 +226,8 @@ export interface ConversionState {
       toServer?: string;
       /** Leave the backport libraries in the game's fakelib out of the folder. */
       removeBackport?: boolean;
+      /** Move `source` to the Trash once the folder is verified and in place. */
+      deleteSource?: boolean;
     },
   ) => Promise<void>;
   /** Put the finished image in the Upload queue. */
@@ -421,8 +429,20 @@ function queueImage(imagePath: string, bytes: number, plan: ImageUploadPlan) {
   });
 }
 
+/** What became of a source the run was asked to move to the Trash. */
+export interface SourceNote {
+  removed: boolean;
+  note: string;
+}
+
+/** A finished job's word on its source, when it was asked to remove it. */
+export function sourceNoteOf(ack: Record<string, unknown> | null | undefined): SourceNote | undefined {
+  if (typeof ack?.source_removed !== "boolean") return undefined;
+  return { removed: ack.source_removed, note: typeof ack.source_note === "string" ? ack.source_note : "" };
+}
+
 /** A build that ends the run (Convert only, or a .ffpfsc image). */
-function finish(packagePath: string, packageBytes: number, convertMs: number) {
+function finish(packagePath: string, packageBytes: number, convertMs: number, sourceNote?: SourceNote) {
   const p = running();
   if (!p) return;
   const plan = makesImage(p.mode) ? pendingImageUpload : null;
@@ -449,6 +469,7 @@ function finish(packagePath: string, packageBytes: number, convertMs: number) {
       uploadQueued: !!plan,
       onConsole,
       attached: p.attached,
+      ...(sourceNote ? { sourceNote } : {}),
     },
   });
 }
@@ -684,7 +705,12 @@ function poll(jobId: string, install: InstallMethod | null, failures = 0) {
         update({ host: target.host });
         await runInstall(path, target.host, install);
       } else {
-        finish(path, bytes, Date.now() - cur.startedMs - pausedSoFar(cur, Date.now()));
+        finish(
+          path,
+          bytes,
+          Date.now() - cur.startedMs - pausedSoFar(cur, Date.now()),
+          sourceNoteOf(snapshot.commit_ack),
+        );
         pushNotification(
           "success",
           cur.mode === "image"
@@ -963,9 +989,16 @@ function buildTail(
   return destination ? [destination] : [];
 }
 
-/** The choices of a build that are off unless asked for, or nothing when none is on. */
-function extrasOf(own: { removeBackport?: boolean } | undefined): BuildExtras | undefined {
-  return own?.removeBackport ? { removeBackport: true } : undefined;
+/** The choices of a build that are off unless asked for, or nothing when none is on. An
+ *  archive's build (`scratch`) never removes its source: what it reads is the unpacked copy. */
+function extrasOf(
+  own: { removeBackport?: boolean; deleteSource?: boolean } | undefined,
+  scratch = false,
+): BuildExtras | undefined {
+  const removeBackport = !!own?.removeBackport;
+  const deleteSource = !!own?.deleteSource && !scratch;
+  if (!removeBackport && !deleteSource) return undefined;
+  return { ...(removeBackport ? { removeBackport } : {}), ...(deleteSource ? { deleteSource } : {}) };
 }
 
 /** A folder build's trailing `update` and `destination` arguments, without the empty ones at
@@ -1055,7 +1088,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
             imageLevel,
             keepBoth,
             amprEmu,
-            ...buildTail(toConsole ? await consoleDestination(toConsole) : toServer, own?.update, extrasOf(own)),
+            ...buildTail(toConsole ? await consoleDestination(toConsole) : toServer, own?.update, extrasOf(own, true)),
           ),
         null,
         password,
