@@ -1,0 +1,34 @@
+Every file in this folder, plus ../x86_64-ps5-freebsd.json and ../prepare-rust-std.py, is copied
+unchanged from PS5 Dump Forge (GPL-3.0-or-later):
+
+  https://github.com/quer3q/ps5-dump-forge  commit 8295556 (2026-11)
+  ps5/shim/*, ps5/x86_64-ps5-freebsd.json, ps5/prepare-rust-std.py
+
+which copied them unchanged from ps5-ai-cli (GPL-3.0-or-later):
+
+  https://github.com/saawant12/ps5-ai-cli  commit eb1d494 (2026-10-04)
+  platform/{freebsd11.c, its #included .c files, compat.h, syscalls.S, syscalls.link}
+  targets/x86_64-ps5-freebsd.json, tools/prepare-rust-std.py
+
+ps5-ai-cli verified this set on a PS5 at firmware 13.60 (Rust std: threads, files, Tokio), and
+Forge ships it. Keep it byte-identical (payload/convert/build.sh checks the hashes below); carry
+our own changes in ../entry.c, ../compat.c and ../linker.sh.
+
+../compat.c is Forge's ps5/compat.c, unchanged (statfs symbol versions, the CPU-count answer).
+../linker.sh, ../Dockerfile and ../build.sh are adapted from Forge's ps5/ files of the same names.
+
+SHA-256:
+c0a0133243790d5a2f07a69995cd0a2c74fbf58f873c82c2e905b3dadfdd7a11  shim/backtrace-unavailable.c
+b2bd9010f98a407448daa6e414051712abe691f0eebfb5ca2cfe94d3e2d9a591  shim/clock-sleep.c
+de429c58ac83c7797c0115cfa98c48e45b1354999d08c0b46ade77d35a42f24e  shim/compat.h
+318771e620ff60a97c277212151ea305c01d0bb616f5422e47d4a63aafcf27ec  shim/executable-path.c
+76543ba499b7eca7b5ecd32313fc5cbddf1a21d186b8fee072fc90826c16a5be  shim/fd-compat.c
+dbfebfa91ee6f54e78b6605c4c5692dcd4da11758d9c4e69e173b6ac3918ef58  shim/freebsd11.c
+c8ac0f20bae2fc7704ad738173f5cd1ce84779a25dd34efa24897a14d7607850  shim/getpeereid.c
+e57d5c43c8985efe6aa5c70bc4c1b04d87029a9b8d47dd6987768350e9761feb  shim/lockf.c
+b7014c136d3e1eb9fe2c5671d6330cf219774825873b9a8fb9d1734d2a7eab48  shim/string-compat.c
+91691eef315b562ba233cbf8a49637c1f3db76bb65d6b750477bd0185ebd61b8  shim/syscalls.link
+80233141571c3c406a247797b79dc9f6bd6550fba854ef4bb569f19aaa169d4f  shim/syscalls.S
+8b3761c968c27e42ffda72e4ecdf1c25cf3dec3362f1c447a842563f9f5cecf3  shim/terminal.c
+d43d8c78351f9f735766636317516b02201da49b5cae71d24ef3f8a305101a85  x86_64-ps5-freebsd.json
+24f2b4be8ff0332e9a970d0c22b751884fe156b98c1bedef9f962c88f89657b2  prepare-rust-std.py

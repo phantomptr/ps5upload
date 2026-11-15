@@ -10,6 +10,9 @@ members = [
   "crates/ps5upload-tailnet",
   "crates/ps5upload-pkg",
   "crates/ps5upload-fpkg",
+  # The converter as a program for the PS5 itself. A plain std program on every other target;
+  # payload/convert/build.sh builds it as a PS5 ELF (profile "console" below).
+  "crates/ps5upload-convert",
   "crates/ps5upload-tests",
   "crates/ps5upload-unrar",
   "crates/ps5-dump-forge-ufs2",
@@ -72,6 +75,15 @@ opt-level = 2
 # and LTO would add minutes to every release build for the sake of a binary kept on disk once.
 [profile.release]
 debug = false
+
+# The PS5 build of ps5upload-convert (payload/convert/build.sh), with PS5 Dump Forge's release
+# settings: the helper carries the ELF, so it is stripped and built as one unit. No other build
+# uses this profile.
+[profile.console]
+inherits = "release"
+lto = true
+codegen-units = 1
+strip = true
 
 # Vendored `unrar` with a one-line bounds fix in the volume-change callback.
 # Only the separate `ps5upload-unrar` program links it (crates/ps5upload-unrar);

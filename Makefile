@@ -458,6 +458,16 @@ installer: setup-payload
 	@$(MAKE) -C $(INSTALLER_DIR) -j$(JOBS)
 	@echo "✓ Built $(INSTALLER_ELF)"
 
+# The converter as a program for the PS5 itself (engine/crates/ps5upload-convert), built as a PS5
+# ELF in Docker: Rust's std is compiled for the console there (payload/convert/Dockerfile), so no
+# local PS5 SDK or Rust nightly is needed, only Docker. The script also checks the ELF's shape
+# and that the console exports everything it imports. CONVERT_CHECK=1 only checks a built ELF.
+.PHONY: console-convert
+console-convert:
+	@echo "Building ps5upload-convert for the PS5 (Docker)..."
+	@bash payload/convert/build.sh $(if $(CONVERT_CHECK),--check)
+	@echo "✓ Built payload/convert/ps5upload-convert.elf"
+
 # The patched elfldr the engine sends to replace a console's stock one (see
 # third_party/elfldr/README.md). Its ELF is checked in, so a build without the
 # SDK still embeds it; rebuild after changing the vendored sources.
