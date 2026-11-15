@@ -111,7 +111,7 @@ unsigned int ps5upload_convert_elf_len = 1;
 
 /* ---- the stand-in converter ---- */
 
-typedef enum { FAKE_INSPECT, FAKE_BUILD_UNTIL_CANCEL, FAKE_HANG, FAKE_NEVER, FAKE_DIED, FAKE_FAILS } fake_t;
+typedef enum { FAKE_INSPECT, FAKE_BUILD_UNTIL_CANCEL, FAKE_HANG, FAKE_NEVER, FAKE_DIED, FAKE_FAILS, FAKE_STAGES } fake_t;
 static fake_t g_fake;
 static char g_dir[300], g_request[4096];
 static ava1_op_ctx_t *g_ctx;
@@ -205,6 +205,21 @@ static void *fake_main(void *arg) {
             if (done >= 3000) g_ctx->cancelled = 1; /* the user presses Stop */
         }
         put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"build\",\"state\":\"failed\",\"cause\":\"convert_cancelled\"}\n", id,
+                   (long)getpid());
+        break;
+    }
+    case FAKE_STAGES: {
+        /* Each stage counts from 0 against its own total, as the converter reports them. */
+        static const struct { const char *stage; unsigned done, total; } steps[] = {
+            {"pack", 100, 100}, {"write", 50, 200}, {"write", 200, 200}, {"verify", 30, 30},
+        };
+        for (size_t i = 0; i < sizeof steps / sizeof steps[0]; i++) {
+            put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"build\",\"state\":\"running\",\"stage\":\"%s\","
+                       "\"bytes_done\":%u,\"bytes_total\":%u}\n",
+                       id, (long)getpid(), steps[i].stage, steps[i].done, steps[i].total);
+            usleep(700 * 1000); /* slower than the helper reads, so it sees every step */
+        }
+        put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"build\",\"state\":\"done\",\"result\":{\"path\":\"x\"}}\n", id,
                    (long)getpid());
         break;
     }
@@ -558,6 +573,11 @@ static void test_op(void) {
         path_in(p, sizeof p, "cancel");
         CHECK(!exists(p)); /* removed with the rest of the job's files */
     }
+
+    /* Stages count on top of each other: done never passes total, and both end at the sum. */
+    st = run_op(FAKE_STAGES, args, c);
+    CHECK(st == 0);
+    CHECK(c->total == 330 && c->done == 330);
 
     /* A converter that ignores Stop is killed, and what it was writing is removed. */
     put_file(partial, "half an image");

@@ -280,6 +280,11 @@ static void power_tick(void) {
  * read. */
 static int follow(ava1_op_ctx_t *c, const char *id, const char *dest, int build, char *buf, size_t cap, cc_status_t *s) {
     uint64_t started = now_ms(), cancel_at = 0, bytes_seen = 0, total = 0, rec_pid = 0, tick_at = 0;
+    /* The converter counts each stage (pack, write, verify) from 0 against that stage's own total,
+     * while a job's counters only go up: a stage's bytes go on top of what the stages before it
+     * counted (`base`), so done never passes total and the bar moves through every stage. */
+    uint64_t base = 0;
+    char stage_now[sizeof(((cc_status_t *)0)->stage)] = "";
     int have = 0, cancel_sent = 0;
     char *cur_buf = malloc(cap);
     if (!cur_buf) {
@@ -298,9 +303,15 @@ static int follow(ava1_op_ctx_t *c, const char *id, const char *dest, int build,
             memcpy(buf, cur_buf, cap);
             *s = cur;
             if (cur.result) s->result = buf + (cur.result - cur_buf);
+            if (cur.stage[0] && strcmp(cur.stage, stage_now) != 0) {
+                /* A new stage: what the last one counted stays counted. */
+                snprintf(stage_now, sizeof stage_now, "%s", cur.stage);
+                base += bytes_seen;
+                bytes_seen = 0;
+            }
             /* A final status may carry no counts: the last total stands. */
-            if (cur.bytes_total && cur.bytes_total != total) {
-                total = cur.bytes_total;
+            if (cur.bytes_total && base + cur.bytes_total != total) {
+                total = base + cur.bytes_total;
                 ava1_op_set_total(c, 0, total);
             }
             if (cur.bytes_done > bytes_seen) {
