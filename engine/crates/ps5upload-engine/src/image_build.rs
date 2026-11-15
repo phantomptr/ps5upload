@@ -616,8 +616,13 @@ impl<'a> AmprIndexed<'a> {
         mtime: i64,
     ) -> Result<Option<Self>, String> {
         let name = ps5upload_fpkg::ampr_index::NAME;
-        // An LZ4-packed game's index also lists the files inside its packs: it stays as it is.
-        if ps5upload_fpkg::source::lz4_packed(inner).map_err(|e| e.to_string())? {
+        // A packed game's index also lists the files inside its packs: it stays as it is. One
+        // made here from the files on disk would leave them out, and ampr-emu-ng finds a packed
+        // file through its record in this index, as ampr_emu does for LZ4 packs.
+        if ps5upload_fpkg::source::packed_kind(inner)
+            .map_err(|e| e.to_string())?
+            .is_some()
+        {
             return Ok(None);
         }
         let had = inner
@@ -1826,6 +1831,68 @@ mod tests {
             Lz4Unpacked::open(plain).unwrap(),
             Unpacking::NotPacked(_)
         ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// "Unpack the asset packs" on an LZ4-packed image: the plain game again, the packs and
+    /// their index left out, a new `ampr_emu.index`, and the game's ampr_emu (as new as the one
+    /// this app installs) kept.
+    #[test]
+    fn an_lz4_packed_image_unpacks_into_the_plain_game() {
+        let root = std::env::temp_dir().join(format!("ps5upload-imgunlz4-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let src = ampr_game(&root);
+        let out = root.join("PPSA99999-app.exfat");
+        let mut tree = FolderSource::open(&src).unwrap();
+        build_packed(
+            ImageFormat::Exfat,
+            &mut tree,
+            &out,
+            &Lz4Packs {
+                profile: Some(ps5upload_fpkg::ampr_pack::default_profile(9, 16)),
+                level: 9,
+                block_shift: 16,
+            },
+            VerifyMode::Fast {
+                seed: 1,
+                seam: false,
+            },
+            DEFAULT_VERIFY_CHUNK,
+            &AtomicBool::new(false),
+            &mut |_, _, _| {},
+        )
+        .unwrap();
+        let image: Box<dyn SourceTree> =
+            Box::new(ps5upload_fpkg::exfat::ExFatSource::open(&out).unwrap());
+        let fetch = || -> Result<Vec<u8>, String> { panic!("the game's ampr_emu is kept") };
+        let emulator = crate::unpack_packs::Emulator {
+            ng: false,
+            fetch: &fetch,
+        };
+        let mut plain = crate::unpack_packs::open(image, Some(&emulator), 7).unwrap();
+        let names: Vec<String> = plain.files().iter().map(|f| f.path.clone()).collect();
+        assert!(
+            !names.iter().any(|n| n.starts_with("ampr_assets")),
+            "{names:?}"
+        );
+        let mut source = FolderSource::open(&src).unwrap();
+        for f in source.files().to_vec() {
+            if f.path == ps5upload_fpkg::ampr_index::NAME {
+                continue;
+            }
+            assert_eq!(
+                plain.read(&f.path).unwrap(),
+                source.read(&f.path).unwrap(),
+                "{}",
+                f.path
+            );
+        }
+        let index = plain.read(ps5upload_fpkg::ampr_index::NAME).unwrap();
+        let listed = ps5upload_fpkg::ampr_index::parse(&index).unwrap();
+        assert_eq!(listed.len(), names.len() - 1, "every file but the index");
+        assert!(listed
+            .iter()
+            .any(|e| e.path == "data/only_packed/table.bin"));
         let _ = std::fs::remove_dir_all(&root);
     }
 

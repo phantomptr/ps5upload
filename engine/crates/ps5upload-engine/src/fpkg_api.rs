@@ -1122,6 +1122,14 @@ pub(crate) struct ExfatBuildReq {
     /// job's `commit_ack` says which: `source_removed` and `source_note`.
     #[serde(default)]
     delete_source: bool,
+    /// For a game in LZ4 or zstd asset packs: write it as plain files again. Every packed file
+    /// goes in under its own name, the pack volumes and their indexes are left out, a fresh
+    /// `ampr_emu.index` lists the files, and a libSceAmpr game whose emulator is ampr-emu-ng,
+    /// an old ampr_emu or unknown gets the one `ampr_emu_build` names (`add_ampr_emu` off
+    /// leaves it). Refused for a game that is not packed, and with `ampr_lz4`, `ampr_zstd` or
+    /// `edits`. Without it a packed game is written as it is, packs and all.
+    #[serde(default)]
+    unpack_packs: bool,
 }
 
 /// Where an image build puts the image.
@@ -1241,6 +1249,7 @@ fn to_server_job(
     name: &str,
     format: crate::image_build::ImageFormat,
     zstd_level: Option<(u8, crate::zstd_runtime::RuntimeChoice)>,
+    zstd_rules: Option<&crate::zstd_packs::Rules>,
     runtime: &mut Option<crate::zstd_runtime::PackRuntime>,
     tree: &mut dyn ps5upload_fpkg::source::SourceTree,
     mode: ps5upload_fpkg::sample::VerifyMode,
@@ -1270,6 +1279,7 @@ fn to_server_job(
             crate::zstd_packs::stream_to_server(
                 format,
                 level,
+                zstd_rules,
                 runtime.insert(r),
                 tree,
                 stamp,
@@ -1318,6 +1328,7 @@ fn to_console_job(
     path: &str,
     format: crate::image_build::ImageFormat,
     zstd_level: Option<(u8, crate::zstd_runtime::RuntimeChoice)>,
+    zstd_rules: Option<&crate::zstd_packs::Rules>,
     runtime: &mut Option<crate::zstd_runtime::PackRuntime>,
     tree: &mut dyn ps5upload_fpkg::source::SourceTree,
     mode: ps5upload_fpkg::sample::VerifyMode,
@@ -1390,6 +1401,7 @@ fn to_console_job(
             crate::zstd_packs::stream_to_console(
                 format,
                 level,
+                zstd_rules,
                 runtime.insert(r),
                 tree,
                 stamp,
@@ -1451,6 +1463,14 @@ pub(crate) struct AmprZstdReq {
     /// `pinned` (the tested release). The job's `commit_ack.ampr_runtime` says which went in.
     #[serde(default)]
     runtime: crate::zstd_runtime::RuntimeChoice,
+    /// A profile in drakmor's `ampr_pack` TOML format (what `ampr_lz4.profile_toml` takes)
+    /// deciding which files stay loose: a file is packed unless its last matching `[[rule]]`,
+    /// or `[pack] default_action` when none matches (`loose` unless set), says `loose`. System
+    /// files and empty files stay loose whatever it says. Its block sizes, `hot`, `layout`,
+    /// groups and LZ4 settings mean nothing to zstd packs and are ignored. Absent or blank:
+    /// every file but the system files is packed.
+    #[serde(default)]
+    profile_toml: Option<String>,
 }
 
 impl AmprZstdReq {
@@ -1463,6 +1483,18 @@ impl AmprZstdReq {
             Err(format!("zstd level {level} is not 1 to 22"))
         }
     }
+
+    /// The profile's rules, `None` without one, or why it is unusable.
+    fn rules(&self) -> Result<Option<Arc<crate::zstd_packs::Rules>>, String> {
+        match self.profile_toml.as_deref() {
+            Some(text) if !text.trim().is_empty() => {
+                ps5upload_fpkg::ampr_pack::Config::from_toml(text, None)
+                    .map(|c| Some(Arc::new(c)))
+                    .map_err(|e| format!("the pack profile: {e}"))
+            }
+            _ => Ok(None),
+        }
+    }
 }
 
 /// What a zstd pack job ends with in its `commit_ack`: the emulator that went into the game.
@@ -1472,6 +1504,35 @@ fn runtime_ack(runtime: &crate::zstd_runtime::PackRuntime) -> serde_json::Value 
 
 fn default_add_ampr_emu() -> bool {
     true
+}
+
+/// Opens a game with its asset packs decoded (`unpack_packs`), for a build and for the
+/// read-back that opens the source again: both get the same emulator and the same index.
+type OpenUnpacked = Arc<
+    dyn Fn(
+            Box<dyn ps5upload_fpkg::source::SourceTree>,
+        ) -> Result<Box<dyn ps5upload_fpkg::source::SourceTree>, String>
+        + Send
+        + Sync,
+>;
+
+/// [`OpenUnpacked`] for a request: the emulator `build` names (`add` off: the game's own
+/// stays), fetched at most once, and one time on every record of the new index.
+fn open_unpacked(add: bool, build: Option<String>) -> OpenUnpacked {
+    let mtime = now_ms() as i64 / 1000;
+    let fetched: std::sync::OnceLock<Result<Vec<u8>, String>> = std::sync::OnceLock::new();
+    Arc::new(move |tree| {
+        let fetch = || {
+            fetched
+                .get_or_init(|| crate::ampr_trace::emulator(build.as_deref()))
+                .clone()
+        };
+        let emulator = add.then_some(crate::unpack_packs::Emulator {
+            ng: build.as_deref() == Some("ampr-emu-ng"),
+            fetch: &fetch,
+        });
+        crate::unpack_packs::open(tree, emulator.as_ref(), mtime)
+    })
 }
 
 /// One change for an edited copy of an image: `{"op":"delete","path":…}` removes a file or
@@ -1764,6 +1825,23 @@ pub(crate) async fn exfat_build_handler(
                 Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
             },
         };
+    if req.unpack_packs && (packs.is_some() || zstd_level.is_some() || edited.is_some()) {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "unpacking the asset packs writes plain files: not with LZ4 or zstd packs, and not \
+             for an edited copy",
+        )
+        .into_response();
+    }
+    let unpack = req
+        .unpack_packs
+        .then(|| open_unpacked(req.add_ampr_emu, req.ampr_emu_build.clone()));
+    // A zstd pack profile: which files stay loose. Refused here when it does not parse.
+    let zstd_rules = match req.ampr_zstd.as_ref().map(AmprZstdReq::rules) {
+        Some(Ok(r)) => r,
+        Some(Err(e)) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
+        None => None,
+    };
     // Straight to a console: (its address, the folder there). Straight to a server: the folder
     // there.
     let mut to_server: Option<crate::server_out::ServerDest> = None;
@@ -1941,6 +2019,10 @@ pub(crate) async fn exfat_build_handler(
         }
         if let Some(line) = signing.describe() {
             crate::log_at!(Info, "convert", "image build: {line}");
+        }
+        if let Some(open) = &unpack {
+            // The packs decoded: the image holds the plain game.
+            tree = open(tree)?;
         }
         if zstd_level.is_some() {
             // A packed game goes straight into the new packs.
@@ -2179,6 +2261,7 @@ pub(crate) async fn exfat_build_handler(
                     &out_name,
                     format,
                     zstd_level,
+                    zstd_rules.as_deref(),
                     &mut runtime,
                     tree,
                     mode,
@@ -2194,6 +2277,7 @@ pub(crate) async fn exfat_build_handler(
                 path,
                 format,
                 zstd_level,
+                zstd_rules.as_deref(),
                 &mut runtime,
                 tree,
                 mode,
@@ -2218,6 +2302,7 @@ pub(crate) async fn exfat_build_handler(
                         crate::zstd_packs::build(
                             format,
                             level,
+                            zstd_rules.as_deref(),
                             runtime.insert(r),
                             tree,
                             &output,
@@ -2533,6 +2618,18 @@ pub(crate) struct FolderBuildReq {
     /// Not with `entry`, `update` or a `destination` elsewhere.
     #[serde(default)]
     delete_source: bool,
+    /// For a game in LZ4 or zstd asset packs: write it as plain files again, as an image
+    /// build's `unpack_packs` does. The source may then also be a game folder. Not with
+    /// `ampr_zstd` or `entry`.
+    #[serde(default)]
+    unpack_packs: bool,
+    /// With `unpack_packs`: replace or add the game's AMPR emulator as an image build does.
+    /// On unless turned off.
+    #[serde(default = "default_add_ampr_emu")]
+    add_ampr_emu: bool,
+    /// With `unpack_packs`: which emulator, `ampr_emu` (the default) or `ampr-emu-ng`.
+    #[serde(default)]
+    ampr_emu_build: Option<String>,
 }
 
 /// What a folder build reads: the whole image, one folder of it, or one file.
@@ -2660,6 +2757,26 @@ pub(crate) async fn folder_build_handler(
             Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
         },
     };
+    let zstd_rules = match req.ampr_zstd.as_ref().map(AmprZstdReq::rules) {
+        Some(Ok(r)) => r,
+        Some(Err(e)) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
+        None => None,
+    };
+    let has_entry = req
+        .entry
+        .as_deref()
+        .is_some_and(|e| !e.trim().trim_matches('/').is_empty());
+    if req.unpack_packs && (zstd.is_some() || has_entry) {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "unpacking the asset packs writes the whole game as plain files: not with zstd \
+             packs, and not for one file or folder of it",
+        )
+        .into_response();
+    }
+    let unpack = req
+        .unpack_packs
+        .then(|| open_unpacked(req.add_ampr_emu, req.ampr_emu_build.clone()));
     let update = update_path(req.update.as_deref());
     if update.is_some()
         && req
@@ -2687,8 +2804,8 @@ pub(crate) async fn folder_build_handler(
     }
     let remove_backport = req.remove_backport;
     let local_dir = !remote && tokio::fs::metadata(&source).await.is_ok_and(|m| m.is_dir());
-    // A game folder with an update merged in is a new folder.
-    if local_dir && zstd.is_none() && update.is_none() {
+    // A game folder with an update merged in is a new folder, and so is one unpacked.
+    if local_dir && zstd.is_none() && update.is_none() && unpack.is_none() {
         return json_err(
             StatusCode::BAD_REQUEST,
             format!("{} is already a folder", source.display()),
@@ -2709,8 +2826,11 @@ pub(crate) async fn folder_build_handler(
     } else {
         crate::image_build::is_image_file(&source)
     };
-    // Packs are made of a game folder anywhere too, and so is a game with an update merged in.
-    if !named_as_image && !((zstd.is_some() || update.is_some()) && (local_dir || remote)) {
+    // Packs are made of a game folder anywhere too, and so is a game with an update merged in
+    // or its packs unpacked.
+    if !named_as_image
+        && !((zstd.is_some() || update.is_some() || unpack.is_some()) && (local_dir || remote))
+    {
         return json_err(
             StatusCode::BAD_REQUEST,
             format!("{} is not a game image or package", source.display()),
@@ -2838,6 +2958,7 @@ pub(crate) async fn folder_build_handler(
     // The backport libraries left out, found once: the read-back leaves the same ones out.
     let left_out: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
     let scan_left_out = left_out.clone();
+    let scan_unpack = unpack.clone();
     let scanned = tokio::task::spawn_blocking(move || {
         if let Some(entry) = scan_entry {
             // A part of the image is saved as the image spells it, as the browser listed it.
@@ -2887,6 +3008,10 @@ pub(crate) async fn folder_build_handler(
         }
         if let Some(line) = signing.describe() {
             crate::log_at!(Info, "convert", "folder build: {line}");
+        }
+        if let Some(open) = &scan_unpack {
+            // The packs decoded: the folder holds the plain game.
+            tree = open(tree)?;
         }
         Ok::<_, String>(Unpacked::Tree(strip(tree)?))
     })
@@ -3044,8 +3169,15 @@ pub(crate) async fn folder_build_handler(
                 &reopen_source,
                 reopen_update.as_deref(),
             )
-            .map(|(t, _, _)| crate::remove_backport::without(t, &left_out))
-            .map_err(|e| e.to_string()),
+            .map(|(t, _, _)| t)
+            .map_err(|e| e.to_string())
+            // Unpacked the same way: the same emulator, the same index.
+            .and_then(|t| match &unpack {
+                Some(open) => open(t),
+                None => Ok(t),
+            })
+            // Then the same backport libraries left out.
+            .map(|t| crate::remove_backport::without(t, &left_out)),
         };
         // zstd packs: the emulator that goes in, fetched here (off the request) and recorded.
         let mut runtime = None;
@@ -3072,6 +3204,7 @@ pub(crate) async fn folder_build_handler(
                     );
                     crate::zstd_packs::build_folder_to(
                         level,
+                        zstd_rules.as_deref(),
                         runtime.insert(r),
                         &mut *tree,
                         &reopen,

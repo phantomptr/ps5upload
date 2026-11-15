@@ -2497,6 +2497,8 @@ pub async fn exfat_build(
     remove_backport: Option<bool>,
     // Move `source` to the Trash once the image is read back in full and in place.
     delete_source: Option<bool>,
+    // A game in asset packs is written as plain files again.
+    unpack_packs: Option<bool>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/exfat/build");
@@ -2522,6 +2524,7 @@ pub async fn exfat_build(
             "update": update,
             "remove_backport": remove_backport.unwrap_or(false),
             "delete_source": delete_source.unwrap_or(false),
+            "unpack_packs": unpack_packs.unwrap_or(false),
         }),
     )
     .await
@@ -2549,6 +2552,11 @@ pub async fn folder_build(
     remove_backport: Option<bool>,
     // Move `source` to the Trash once the folder is read back in full and in place.
     delete_source: Option<bool>,
+    // A game in asset packs is written as plain files again; the source may then be a folder.
+    unpack_packs: Option<bool>,
+    // With unpack_packs: the AMPR emulator choice, as an image build takes it.
+    add_ampr_emu: Option<bool>,
+    ampr_emu_build: Option<String>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/folder/build");
@@ -2566,6 +2574,9 @@ pub async fn folder_build(
             "destination": destination,
             "remove_backport": remove_backport.unwrap_or(false),
             "delete_source": delete_source.unwrap_or(false),
+            "unpack_packs": unpack_packs.unwrap_or(false),
+            "add_ampr_emu": add_ampr_emu.unwrap_or(true),
+            "ampr_emu_build": ampr_emu_build,
         }),
     )
     .await

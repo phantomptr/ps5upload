@@ -207,6 +207,8 @@ export interface ConversionState {
       /** Move `source` to the Trash once the image is verified and in place. Never for an
        *  archive (what the build reads is its scratch copy). */
       deleteSource?: boolean;
+      /** A game in asset packs is written as plain files again. */
+      unpackPacks?: boolean;
     },
   ) => Promise<void>;
   /** Unpack a game image or a debug-key package into a plain folder in `outputDir`; with
@@ -228,6 +230,11 @@ export interface ConversionState {
       removeBackport?: boolean;
       /** Move `source` to the Trash once the folder is verified and in place. */
       deleteSource?: boolean;
+      /** A game in asset packs is written as plain files again, with this emulator choice
+       *  (the settings when absent). */
+      unpackPacks?: boolean;
+      addAmprEmu?: boolean;
+      amprEmuBuild?: AmprEmuBuild;
     },
   ) => Promise<void>;
   /** Put the finished image in the Upload queue. */
@@ -977,8 +984,8 @@ async function followLostUnpack(jobId: string) {
   }
 }
 
-/** An image build's trailing `destination` and `update` arguments, without the empty ones at
- *  the end, so a plain local build's call stays as it was. */
+/** An image build's trailing `destination`, `update` and extras arguments, without the empty
+ *  ones at the end, so a plain local build's call stays as it was. */
 function buildTail(
   destination: ImageDestination | undefined,
   update: string | undefined,
@@ -990,19 +997,26 @@ function buildTail(
 }
 
 /** The choices of a build that are off unless asked for, or nothing when none is on. An
- *  archive's build (`scratch`) never removes its source: what it reads is the unpacked copy. */
+ *  archive's build (`scratch`) never removes its source: what it reads is the unpacked copy.
+ *  `amprEmu` (a folder build's emulator choice) goes along only when the packs are unpacked. */
 function extrasOf(
-  own: { removeBackport?: boolean; deleteSource?: boolean } | undefined,
+  own: { removeBackport?: boolean; deleteSource?: boolean; unpackPacks?: boolean } | undefined,
   scratch = false,
+  amprEmu?: { add: boolean; build: AmprEmuBuild },
 ): BuildExtras | undefined {
   const removeBackport = !!own?.removeBackport;
   const deleteSource = !!own?.deleteSource && !scratch;
-  if (!removeBackport && !deleteSource) return undefined;
-  return { ...(removeBackport ? { removeBackport } : {}), ...(deleteSource ? { deleteSource } : {}) };
+  const unpackPacks = !!own?.unpackPacks;
+  if (!removeBackport && !deleteSource && !unpackPacks) return undefined;
+  return {
+    ...(removeBackport ? { removeBackport } : {}),
+    ...(deleteSource ? { deleteSource } : {}),
+    ...(unpackPacks ? { unpackPacks, ...(amprEmu ? { amprEmu } : {}) } : {}),
+  };
 }
 
-/** A folder build's trailing `update` and `destination` arguments, without the empty ones at
- *  the end, so a plain local build's call stays as it was. */
+/** A folder build's trailing `update`, `destination` and extras arguments, without the empty
+ *  ones at the end, so a plain local build's call stays as it was. */
 function folderTail(
   update: string | undefined,
   destination: ImageDestination | undefined,
@@ -1134,7 +1148,20 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         undefined,
         keepBoth,
         own?.zstd,
-        ...folderTail(own?.update, own?.toServer ? serverDestination(own.toServer) : undefined, extrasOf(own)),
+        ...folderTail(
+          own?.update,
+          own?.toServer ? serverDestination(own.toServer) : undefined,
+          extrasOf(
+            own,
+            false,
+            own?.unpackPacks
+              ? {
+                  add: own.addAmprEmu ?? useConvertPrefs.getState().addAmprEmu,
+                  build: own.amprEmuBuild ?? useConvertPrefs.getState().amprEmuBuild,
+                }
+              : undefined,
+          ),
+        ),
       );
       update({ jobId: job_id });
       poll(job_id, null);

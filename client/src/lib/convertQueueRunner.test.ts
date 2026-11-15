@@ -104,6 +104,19 @@ describe("the Convert queue's runner (bug: a queued image came out as a .pkg)", 
     expect(calls[1].args[8]).not.toHaveProperty("removeBackport");
   });
 
+  it("keeps a queued game's choice to unpack its asset packs", async () => {
+    useConvertQueue.getState().add({
+      source: "/games/Packed-app",
+      compression: "balanced",
+      build: { kind: "image", format: "exfat", compress: false, unpackPacks: true },
+      then: "keep",
+      host: null,
+    });
+    await useConvertQueue.getState().start();
+    await flush();
+    expect(calls[0].args[8]).toMatchObject({ unpackPacks: true });
+  });
+
   it("sends a queued image on to the PS5 when asked", async () => {
     useConvertQueue.getState().add({
       source: "/games/Game-app",

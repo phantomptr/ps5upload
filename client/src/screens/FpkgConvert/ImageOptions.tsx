@@ -24,6 +24,9 @@ export interface Lz4Choice {
   onToggle: (on: boolean) => void;
   /** A profile read from a .toml file (its name); null packs with the built-in one. */
   profileName: string | null;
+  /** The profile came from this title's measured play, not from a file: an LZ4 default that
+   *  zstd packs don't take. */
+  profileMeasured?: boolean;
   onProfile: (profile: { name: string; text: string } | null) => void;
   /** Install ampr_emu 0.4.2.1 into the image (offered when `readiness.kind` is `runtime`). */
   installRuntime: boolean;
@@ -34,6 +37,14 @@ export interface Lz4Choice {
   onKind: (kind: "lz4" | "zstd") => void;
   zstdLevel: number;
   onZstdLevel: (level: number) => void;
+  /** A PS4 game: no asset packs at all (ampr-emu-ng is a PS5 library). */
+  ps4?: boolean;
+}
+
+/** Whether zstd packs are offered: for any PS5 game. One that doesn't read through AMPR gets
+ *  ampr-emu-ng injected all the same, as ps5-dump-forge does it, marked as untested. */
+export function zstdOffered(lz4: Lz4Choice | undefined): lz4 is Lz4Choice {
+  return !!lz4 && !lz4.ps4;
 }
 
 /** The zstd levels offered, as ps5-dump-forge offers them. */
@@ -42,8 +53,9 @@ const ZSTD_LEVELS = [1, 5, 19];
 /** Packs are refused for this game unless the engine installs the runtime, which is on. */
 export function lz4Refused(lz4: Lz4Choice): string | null {
   if (!lz4.readiness.refusal) return null;
-  // zstd packs bring their own emulator: only a game that doesn't read through AMPR is out.
-  if (lz4.kind === "zstd" && lz4.readiness.kind !== "no_ampr") return null;
+  // zstd packs bring their own emulator, so the game's own doesn't matter: only a PS4 game is
+  // out.
+  if (lz4.kind === "zstd" && zstdOffered(lz4)) return null;
   if (lz4.readiness.kind === "runtime" && lz4.installRuntime) return null;
   return lz4.readiness.refusal;
 }
@@ -57,7 +69,7 @@ export function packOptions(
 ): AmprLz4Options | undefined {
   if (!lz4 || !lz4Active(format, lz4)) return undefined;
   return lz4.kind === "zstd"
-    ? { zstdLevel: lz4.zstdLevel, zstdRuntime: useConvertPrefs.getState().zstdRuntime }
+    ? { zstdLevel: lz4.zstdLevel, zstdRuntime: useConvertPrefs.getState().zstdRuntime, profileToml }
     : { profileToml, installRuntime: lz4.installRuntime };
 }
 
@@ -72,14 +84,62 @@ export function folderPacks(lz4: Lz4Choice | undefined): boolean {
 }
 
 /** What a folder build is told when zstd packs are on, or nothing. */
-export function folderPackOptions(lz4: Lz4Choice | undefined): ZstdPacks | undefined {
+export function folderPackOptions(
+  lz4: Lz4Choice | undefined,
+  profileToml?: string,
+): ZstdPacks | undefined {
   return lz4 && folderPacks(lz4)
-    ? { level: lz4.zstdLevel, runtime: useConvertPrefs.getState().zstdRuntime }
+    ? { level: lz4.zstdLevel, runtime: useConvertPrefs.getState().zstdRuntime, profileToml }
     : undefined;
 }
 
+/** A pack profile (.toml) picked from this device, or the built-in rules: the one picker LZ4
+ *  and zstd packs share. */
+function ProfilePicker({ lz4, zstd }: { lz4: Lz4Choice; zstd?: boolean }) {
+  const tr = useTr();
+  // zstd packs take a profile picked by hand only; a measured one is LZ4's.
+  const named = zstd && lz4.profileMeasured ? null : lz4.profileName;
+  return (
+    <div className={`flex flex-wrap items-center gap-2 text-xs${zstd ? " ms-6" : ""}`} data-testid="pack-profile">
+      {named ? (
+        <>
+          <span className="text-[var(--color-muted)]">
+            {tr("fpkg.image.lz4_profile_named", { name: named }, "Profile: {name}")}
+          </span>
+          <Button variant="ghost" onClick={() => lz4.onProfile(null)}>
+            {tr("fpkg.image.lz4_profile_clear", undefined, "Use the built-in profile")}
+          </Button>
+        </>
+      ) : (
+        <label className="cursor-pointer text-[var(--color-accent)] underline">
+          {tr("fpkg.image.lz4_profile", undefined, "Use a profile (.toml)…")}
+          <input
+            type="file"
+            accept=".toml"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) void file.text().then((text) => lz4.onProfile({ name: file.name, text }));
+            }}
+          />
+        </label>
+      )}
+      {zstd && named && (
+        <span className="basis-full leading-relaxed text-[var(--color-muted)]" data-testid="zstd-profile-note">
+          {tr(
+            "fpkg.image.zstd_profile_note",
+            undefined,
+            "For zstd packs the profile only decides which files stay loose: a file is packed unless its rule (or default_action, which is loose unless the profile sets it) says loose. Block sizes, hot, layout and LZ4 settings are ignored. System files always stay loose.",
+          )}
+        </span>
+      )}
+    </div>
+  );
+}
+
 /** The tested ampr-emu-ng release, as the engine pins it (zstd_packs.rs). */
-const NG_TESTED = "0.4.0";
+const NG_TESTED = "0.4.1";
 
 /** Which ampr-emu-ng goes in with zstd packs: the newest release or the tested one. */
 function ZstdRuntimeChoice() {
@@ -151,8 +211,21 @@ export function ZstdOption({ lz4, folder }: { lz4: Lz4Choice; folder?: boolean }
           </span>
         </span>
       </label>
+      {lz4.readiness.kind === "no_ampr" && (
+        <div className="ms-6 flex items-start gap-1.5 text-xs text-[var(--color-warn)]" data-testid="zstd-no-ampr">
+          <AlertTriangle size={13} className="mt-px shrink-0" aria-hidden />
+          <span>
+            {tr(
+              "fpkg.image.zstd_no_ampr",
+              undefined,
+              "This game doesn't read its files through AMPR. zstd packs for such games are new and not tested on every game; keep the original until you have started the packed one.",
+            )}
+          </span>
+        </div>
+      )}
       {on && <PacksWarning />}
       {on && <ZstdRuntimeChoice />}
+      {on && <ProfilePicker lz4={lz4} zstd />}
       {on && (
         <label className="ms-6 flex items-center gap-2 text-xs">
           <span>{tr("fpkg.image.zstd_level", undefined, "Compression level")}</span>
@@ -260,35 +333,43 @@ function Lz4Option({ lz4 }: { lz4: Lz4Choice }) {
           )}
         </div>
       )}
-      {lz4.on && lz4.kind === "lz4" && !refusal && (
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          {lz4.profileName ? (
-            <>
-              <span className="text-[var(--color-muted)]">
-                {tr("fpkg.image.lz4_profile_named", { name: lz4.profileName }, "Profile: {name}")}
-              </span>
-              <Button variant="ghost" onClick={() => lz4.onProfile(null)}>
-                {tr("fpkg.image.lz4_profile_clear", undefined, "Use the built-in profile")}
-              </Button>
-            </>
-          ) : (
-            <label className="cursor-pointer text-[var(--color-accent)] underline">
-              {tr("fpkg.image.lz4_profile", undefined, "Use a profile (.toml)…")}
-              <input
-                type="file"
-                accept=".toml"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  e.target.value = "";
-                  if (file) void file.text().then((text) => lz4.onProfile({ name: file.name, text }));
-                }}
-              />
-            </label>
-          )}
-        </div>
-      )}
+      {lz4.on && lz4.kind === "lz4" && !refusal && <ProfilePicker lz4={lz4} />}
     </div>
+  );
+}
+
+/** For a game that is in asset packs, when no pack option is on: write it as plain files
+ *  again. Without it the game goes through as it is, packs and all. */
+export interface UnpackChoice {
+  /** The packs the game is in. */
+  kind: "lz4" | "zstd";
+  on: boolean;
+  onToggle: (on: boolean) => void;
+}
+
+export function UnpackOption({ unpack }: { unpack: UnpackChoice }) {
+  const tr = useTr();
+  return (
+    <label className="flex cursor-pointer items-start gap-2.5 text-xs" data-testid="unpack-option">
+      <input
+        type="checkbox"
+        checked={unpack.on}
+        onChange={(e) => unpack.onToggle(e.target.checked)}
+        className="checkbox mt-px h-4 w-4 shrink-0"
+      />
+      <span className="min-w-0">
+        <span className="block font-medium text-[var(--color-text)]">
+          {tr("fpkg.unpack_packs", undefined, "Unpack the asset packs (plain files again)")}
+        </span>
+        <span className="mt-0.5 block leading-relaxed text-[var(--color-muted)]">
+          {tr(
+            "fpkg.unpack_packs_body",
+            { kind: unpack.kind === "zstd" ? "zstd" : "LZ4" },
+            "This game is in {kind} asset packs. Ticked, every packed file is written as a plain file again and the packs are left out, so the game is as large as it was before packing and no longer needs ShadowMount+ to read packs. It gets a fresh ampr_emu.index, and a game that reads its files through AMPR whose emulator only suits packs gets the emulator chosen in the options. Unticked, the game is written as it is, packs and all.",
+          )}
+        </span>
+      </span>
+    </label>
   );
 }
 
@@ -325,21 +406,30 @@ export function PacksNote({
   const text = !lz4
     ? folder
       ? tr(
-          "fpkg.folder.packs_pending",
+          "fpkg.folder.packs_pending_v2",
           undefined,
-          "zstd asset packs appear here for games that read their files through AMPR.",
+          "zstd asset packs appear here once a PS5 game is checked.",
         )
       : tr(
-          "fpkg.image.packs_pending",
+          "fpkg.image.packs_pending_v2",
           undefined,
-          "Asset packs (LZ4, zstd) appear here for games that read their files through AMPR.",
+          "Asset packs (LZ4, zstd) appear here once a PS5 game is checked.",
         )
-    : lz4.readiness.kind === "no_ampr"
+    : lz4.readiness.kind === "no_ampr" && lz4.ps4
       ? tr(
           "fpkg.image.packs_no_ampr",
           undefined,
           "Asset packs: not offered, this game doesn't read its files through AMPR.",
         )
+      : lz4.readiness.kind === "no_ampr"
+        ? // zstd packs are offered above; a folder never gets LZ4 packs, so nothing to say there.
+          folder
+          ? null
+          : tr(
+              "fpkg.image.lz4_no_ampr",
+              undefined,
+              "LZ4 asset packs: not offered, this game doesn't read its files through AMPR.",
+            )
       : !folder && format !== "exfat"
         ? tr(
             "fpkg.image.packs_lz4_needs_exfat",
@@ -380,7 +470,7 @@ function WhichImageHelp() {
       ),
     ],
     [
-      tr("fpkg.image.which_packs_label", undefined, "Asset packs (AMPR games only)"),
+      tr("fpkg.image.which_packs_label_v2", undefined, "Asset packs (LZ4: AMPR games only)"),
       tr(
         "fpkg.image.which_packs",
         undefined,
@@ -558,7 +648,7 @@ export function ImageChoice({
       {compress && !packing && <FfpfscLevelOption own={level} />}
       {lz4?.readiness.emulator_missing && !packing && <AmprEmuOption />}
       {lz4 && lz4.readiness.kind !== "no_ampr" && format === "exfat" && <Lz4Option lz4={lz4} />}
-      {lz4 && lz4.readiness.kind !== "no_ampr" && <ZstdOption lz4={lz4} />}
+      {zstdOffered(lz4) && <ZstdOption lz4={lz4} />}
       {(lz4 || packsNote) && <PacksNote lz4={lz4} format={format} />}
       <VerifyChunkOption />
       <p className="text-xs leading-relaxed text-[var(--color-muted)]">

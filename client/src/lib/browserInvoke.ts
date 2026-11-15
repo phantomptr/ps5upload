@@ -926,6 +926,7 @@ export async function browserInvoke<T>(
         update: args["update"],
         remove_backport: args["removeBackport"] ?? false,
         delete_source: args["deleteSource"] ?? false,
+        unpack_packs: args["unpackPacks"] ?? false,
       });
     }
     case "folder_build": {
@@ -941,6 +942,9 @@ export async function browserInvoke<T>(
         destination: args["destination"],
         remove_backport: args["removeBackport"] ?? false,
         delete_source: args["deleteSource"] ?? false,
+        unpack_packs: args["unpackPacks"] ?? false,
+        add_ampr_emu: args["addAmprEmu"] ?? true,
+        ampr_emu_build: args["amprEmuBuild"],
       });
     }
     case "image_browse": {

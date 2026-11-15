@@ -18,11 +18,12 @@ export type ConvertStatus = "pending" | "running" | "installing" | "handed" | "d
  *  .ffpfsc when `compress`), or a plain folder (#469: from a game image or a debug-key
  *  package). `lz4`: pack the game's data into AMPR LZ4 asset packs (an .exfat of a game that
  *  reads through libSceAmpr). A folder's `zstd`: its files in zstd packs (then a game folder
- *  can be the source too). */
+ *  can be the source too). `unpackPacks`: a game in asset packs written as plain files again
+ *  (a game folder can then be a folder's source too). */
 export type ConvertBuild =
   | { kind: "pkg" }
-  | { kind: "image"; format: ImageFormat; compress: boolean; lz4?: AmprLz4Options }
-  | { kind: "folder"; zstd?: ZstdPacks };
+  | { kind: "image"; format: ImageFormat; compress: boolean; lz4?: AmprLz4Options; unpackPacks?: boolean }
+  | { kind: "folder"; zstd?: ZstdPacks; unpackPacks?: boolean };
 
 /** The file a build makes, by its extension: what the queue row and the add button say. A
  *  folder has none; its row says "folder". */

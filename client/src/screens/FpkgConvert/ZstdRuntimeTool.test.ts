@@ -30,8 +30,16 @@ const OLD = packed({
 const NEW = packed({
   module: "fakelib/libSceAmpr.sprx",
   kind: "ampr-emu-ng",
+  version: "0.4.1",
+  outdated: false,
+  capped: false,
+});
+const CAPPED = packed({
+  module: "fakelib/libSceAmpr.sprx",
+  kind: "ampr-emu-ng",
   version: "0.4.0",
   outdated: false,
+  capped: true,
 });
 
 describe("Update the zstd runtime", () => {
@@ -44,6 +52,9 @@ describe("Update the zstd runtime", () => {
     expect(zstdRuntimeOffered("/games/PPSA21567.exfat", OLD)).toBe(false);
     expect(zstdRuntimeOffered("/games/PPSA21567", NEW)).toBe(false);
     expect(zstdRuntimeOffered("/games/PPSA21567", null)).toBe(false);
+    // 0.4.0 starts most games and refuses very large ones: offered too.
+    expect(zstdRuntimeOffered("/games/PPSA21567", CAPPED)).toBe(true);
+    expect(zstdRuntimeOffered("/games/PPSA21567.exfat", CAPPED)).toBe(false);
   });
 
   it("says why the game may not start", () => {
@@ -55,6 +66,8 @@ describe("Update the zstd runtime", () => {
         tr,
       ),
     ).toContain("reads LZ4 packs only");
+    expect(runtimeNow(CAPPED, tr)).toContain("ampr-emu-ng 0.4.0");
+    expect(runtimeNow(CAPPED, tr)).toContain("over the 48 MiB");
     expect(runtimeNow(NEW, tr)).toBeNull();
   });
 
