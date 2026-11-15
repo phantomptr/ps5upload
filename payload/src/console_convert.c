@@ -352,7 +352,7 @@ out:
     free(dest);
 }
 
-int console_convert_building(void) { return __atomic_load_n(&g_building, __ATOMIC_ACQUIRE); }
+int console_convert_building(void) { return __atomic_load_n(&g_building, __ATOMIC_SEQ_CST); }
 
 static void power_tick(void) {
     pthread_mutex_lock(&sony_api_lock); /* a Sony call: one at a time with the others */
@@ -565,13 +565,17 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
         return AVA1_ERR_BUSY;
     }
     /* A build beside an install or an extraction: all three write a drive hard and hold memory.
-     * An inspection reads a few KiB and may run beside either. */
-    if (b && (webui_pkg_installing() || archive_extract_running())) {
-        ava1_op_message(c, "convert_busy");
-        status = AVA1_ERR_BUSY;
-        goto unlock;
+     * An inspection reads a few KiB and may run beside either. Our flag first, then theirs (all
+     * seq_cst; the install and the extraction do the same the other way round): of two that
+     * start at once at least one sees the other and backs out, never neither. */
+    if (b) {
+        __atomic_store_n(&g_building, 1, __ATOMIC_SEQ_CST);
+        if (webui_pkg_installing() || archive_extract_running()) {
+            ava1_op_message(c, "convert_busy");
+            status = AVA1_ERR_BUSY;
+            goto unlock; /* clears the flag */
+        }
     }
-    if (b) __atomic_store_n(&g_building, 1, __ATOMIC_RELEASE);
     buf = malloc(CONVERT_STATUS_MAX);
     if (!buf) {
         ava1_op_message(c, "convert_no_memory");
@@ -687,7 +691,7 @@ cleanup:
 unlock:
     free(buf);
     free(rt);
-    __atomic_store_n(&g_building, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_building, 0, __ATOMIC_SEQ_CST);
     pthread_mutex_unlock(&g_busy);
     return status;
 }

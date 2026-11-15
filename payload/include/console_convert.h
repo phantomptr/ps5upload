@@ -58,8 +58,9 @@ void console_convert_register(void);
  * start it is removed (unless the old helper or its converter still runs). */
 void console_convert_sweep(void);
 
-/* 1 while a build runs in this helper (archive_extract.c refuses to start beside one; an
- * inspection does not count). */
+/* 1 while a build runs in this helper (archive_extract.c and the package install refuse to start
+ * beside one; an inspection does not count). Each side sets its own flag first and then reads the
+ * other's, all seq_cst, so two that start at once never both go on. */
 int console_convert_building(void);
 
 /* A request no converter read is left only by a helper that died between writing it and the

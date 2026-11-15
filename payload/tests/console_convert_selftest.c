@@ -99,8 +99,17 @@ int is_path_allowed(const char *p) { return strncmp(p, g_root, strlen(g_root)) =
 int path_tree_op_refused(const char *p) { return strstr(p, "/refused") != NULL; }
 
 static int g_installing, g_extracting, g_ticks;
-int webui_pkg_installing(void) { return g_installing; }
-int archive_extract_running(void) { return g_extracting; }
+/* What console_convert_building() said each time the build's busy check read the others' flags:
+ * the build's own must already be up (set first, then theirs read). -1: not asked yet. */
+static int g_building_when_installing_read = -1, g_building_when_extracting_read = -1;
+int webui_pkg_installing(void) {
+    g_building_when_installing_read = console_convert_building();
+    return g_installing;
+}
+int archive_extract_running(void) {
+    g_building_when_extracting_read = console_convert_building();
+    return g_extracting;
+}
 pthread_mutex_t sony_api_lock = PTHREAD_MUTEX_INITIALIZER;
 int sceSystemServicePowerTick(void) {
     g_ticks++;
@@ -598,10 +607,17 @@ static void test_op(void) {
     snprintf(args, sizeof args,
              "{\"path\":\"%s\",\"action\":\"build\",\"dest\":\"%s\",\"format\":\"ffpkg\",\"zstd\":true,\"zstd_level\":19,\"verify\":\"full\"}",
              game, dest);
+    g_building_when_installing_read = -1;
     CHECK(run_op(FAKE_NEVER, args, c) == AVA1_ERR_BUSY && strcmp(c->message, "convert_busy") == 0 && !g_request[0]);
+    /* The build's own flag was up before the install's was read (no window where neither sees
+     * the other), and is down again once it backed out. */
+    CHECK(g_building_when_installing_read == 1);
+    CHECK(!console_convert_building());
     g_installing = 0;
     g_extracting = 1;
+    g_building_when_extracting_read = -1;
     CHECK(run_op(FAKE_NEVER, args, c) == AVA1_ERR_BUSY && !g_request[0]);
+    CHECK(g_building_when_extracting_read == 1);
     g_extracting = 0;
     CHECK(!console_convert_building());
 

@@ -22,6 +22,7 @@
 #include "ava1_app_gen.h"
 #include "ava1_op.h"
 #include "ava1_wire.h"
+#include "console_convert.h"
 #include "fs_jobs.h"
 #include "path_policy.h"
 #include "pkg_info.h"
@@ -50,7 +51,7 @@ static int g_installing;
 /* The loader takes one ELF per connection: the daemon send and a payload load never interleave. */
 static pthread_mutex_t g_loader_mu = PTHREAD_MUTEX_INITIALIZER;
 
-int webui_pkg_installing(void) { return __atomic_load_n(&g_installing, __ATOMIC_ACQUIRE); }
+int webui_pkg_installing(void) { return __atomic_load_n(&g_installing, __ATOMIC_SEQ_CST); }
 
 static long long now_ms(void) {
     struct timespec ts;
@@ -291,7 +292,7 @@ int webui_pkg_install_check(const char *path, int replace, const char **cause) {
     uint64_t size = 0;
     int st = read_pkg(path, norm, sizeof norm, &info, &size, NULL, cause);
     if (st != 200) return st;
-    if (webui_pkg_installing()) {
+    if (webui_pkg_installing() || console_convert_building()) {
         *cause = "pkg_install_busy";
         return 409;
     }
@@ -627,12 +628,20 @@ static int op_pkg_install(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size
     }
     {
         int expect = 0;
-        if (!__atomic_compare_exchange_n(&g_installing, &expect, 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        if (!__atomic_compare_exchange_n(&g_installing, &expect, 1, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
             ava1_op_message(c, "pkg_install_busy");
             status = AVA1_ERR_BUSY;
             goto out;
         }
         took = 1;
+    }
+    /* Not beside a game being converted on the console: both write a drive hard and hold memory.
+     * Our flag is set first (seq_cst), then the converter's is read; console_convert.c does the
+     * same the other way round, so of two that start at once at least one backs out. */
+    if (console_convert_building()) {
+        ava1_op_message(c, "pkg_install_busy");
+        status = AVA1_ERR_BUSY;
+        goto out;
     }
     if (install_guard(&info, replace != 0, &cause) != 200) {
         ava1_op_message(c, "%s", cause);
@@ -694,7 +703,7 @@ out:
      * it stays for a retry (the PC app's stale sweep of pkg_temp removes it later). A failure before
      * that (no daemon, a refusal) leaves nothing Sony is reading: remove it. */
     if (staged && staged[0] && (delivered || !job || !job[0])) (void)unlink(staged);
-    if (took) __atomic_store_n(&g_installing, 0, __ATOMIC_RELEASE);
+    if (took) __atomic_store_n(&g_installing, 0, __ATOMIC_SEQ_CST);
     free(src);
     free(norm);
     free(staged);
