@@ -5300,6 +5300,25 @@
         },
         "type": "object"
       },
+      "HelperUninstallReq": {
+        "properties": {
+          "addr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "keep_backups": {
+            "description": "Keep the save backups made on the console (/data/ps5upload/backups). Default: kept.",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
       "HiddenIcons": {
         "description": "The helper's answer to `app.icon_set` / `app.hidden_list` (#407).",
         "properties": {
@@ -33782,6 +33801,76 @@
             "required": true
           },
           "response_schema": "literal"
+        }
+      }
+    },
+    "/api/ps5/helper/uninstall": {
+      "post": {
+        "description": "POST /api/ps5/helper/uninstall — Body: `{ addr, keep_backups }`. \"Remove PS5Upload from this\nPS5\": the helper turns Minion off and removes its tile, shows the icons it hid, exits and\ndeletes its own folders on the console (`node.uninstall`). Refused (409) while this engine\nhas a job running against the console (`reason: busy`) or while something is mounted in\nthose folders (`reason: in_use`, `paths`); an older helper answers `reason: old_helper` (501).\nCopies of the helper stored in loaders are not touched here: the app removes them first.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HelperUninstallReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "501": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not implemented"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Body: `{ addr, keep_backups }`",
+        "tags": [
+          "payloads"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "json-unknown"
         }
       }
     },

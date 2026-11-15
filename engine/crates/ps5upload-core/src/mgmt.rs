@@ -205,6 +205,7 @@ methods! {
     (LOG_LEVEL, 197, "LOG_LEVEL"),
     (TAILNET, 198, "TAILNET"),
     (SAVE_OWNER, 199, "SAVE_OWNER"),
+    (NODE_UNINSTALL, 200, "NODE_UNINSTALL"),
 }
 
 /// A management call the payload refused.

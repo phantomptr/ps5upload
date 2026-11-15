@@ -75,6 +75,26 @@ void icon_keeper_note(const char *title_id, int hidden) {
     pthread_mutex_unlock(&g_keeper_mu);
 }
 
+int icon_keeper_show_all(const char *except) {
+    static char ids[KEEPER_MAX][16];
+    static char left[KEEPER_MAX][16];
+    int shown = 0, kept = 0;
+    pthread_mutex_lock(&g_keeper_mu);
+    int n = keeper_load(ids, KEEPER_MAX);
+    for (int i = 0; i < n; i++) {
+        char err[160] = {0};
+        if (except && strcmp(ids[i], except) == 0) {
+            snprintf(left[kept++], 16, "%s", ids[i]);
+            continue;
+        }
+        if (content_db_icon_set_visible(ids[i], 1, err, sizeof err) == 0) shown++;
+        else fprintf(stderr, "[icons] could not show %s again: %s\n", ids[i], err);
+    }
+    keeper_save(left, kept);
+    pthread_mutex_unlock(&g_keeper_mu);
+    return shown;
+}
+
 /* app.db and its write-ahead log: the shell may write either. */
 static time_t appdb_mtime(void) {
     struct stat st;

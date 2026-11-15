@@ -1328,6 +1328,12 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/mp1_clock_selftest.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-mp1-clock-selftest
 	@echo "✓ clock reads are bounded, cached for 2 s, stop for good after one refusal (not a busy moment), and never change a clock"
+	@echo "Running \"Remove PS5Upload from this PS5\" folder delete self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o $(SELFTEST_DIR)/ps5upload-helper-uninstall-selftest \
+		$(PAYLOAD_DIR)/tests/helper_uninstall_selftest.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-helper-uninstall-selftest
+	@echo "✓ everything goes but a kept folder; links are removed, never followed; another filesystem is never entered"
 	@echo "Running game frame count (/dev/dce) self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-game-fps-selftest \
