@@ -4,6 +4,36 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 12.5.0
+
+Convert gets most of what PS5 Dump Forge can do, and a first version of converting on the PS5 itself, from Minion. Checked with the automated tests; what was tried on a PS5 is said below.
+
+**zstd packs**
+- **Runtime 0.4.1:** new zstd packs get ampr-emu-ng 0.4.1, which starts very large games that 0.4.0 refused with "index tables need … MiB, over the 48 MiB" (Final Fantasy XVI, Demon's Souls, Returnal, God of War Ragnarök and others). A game already packed with 0.4.0 is offered **Update the zstd runtime** in Convert.
+- **Any PS5 game:** zstd packs now work for games that don't read their files through AMPR too; the runtime goes in with them. This is new and not tested on every game, so keep the original until the packed one has started.
+- **Pack rules:** a pack profile can now choose which files stay unpacked for zstd packs, as it already could for LZ4.
+- **`.ini` files stay unpacked,** so `dlc_emu.ini` and other settings files can still be edited.
+- **Unpack:** Convert can turn a game in LZ4 or zstd packs back into plain files.
+
+**Convert**
+- **Remove backport libraries:** a new option for images and folders leaves a game's backport libraries out and keeps its emulators. It says why when it can't, which is the case for most backports that lowered the game's SDK version.
+- **Move the source to the Trash once verified:** a new option, off unless you tick it for that one conversion. The source goes to the Trash or Recycle Bin only after every byte of the output has been read back; nothing is ever deleted for good.
+- **Patch packages:** a PS5 update `.pkg` can now be inspected, browsed and unpacked to a folder. Only the files the patch fully contains are shown, and the app says which ones need the base game. A patch can't be made into an image or a package on its own.
+- **Trophy files:** unpacking a package now keeps `nptitle.dat` and `npbind.dat` when the package stores them only in encrypted form.
+- **Command line:** `ps5upload-engine convert <game> --to exfat|ffpkg|ffpfs|ffpfsc|folder|pkg --out <folder>` and `ps5upload-engine inspect <game>`, with `--json` for scripts. On Windows the output shows only when redirected to a file or another program.
+
+**Images**
+- **Rename and New folder** when you look inside an image and write an edited copy.
+- IN_PLACE_PLACEHOLDER
+
+**Convert on the PS5 (Minion)**
+- CONSOLE_PLACEHOLDER
+
+**Fixes**
+- A game folder with unusual characters in its `param.json`, or a damaged `eboot.bin`, could crash the engine during conversion. Found by new automated fuzz tests; it now reports the problem instead.
+
+Thanks to quer3q's PS5 Dump Forge, whose code most of this release adapts (credited in the README).
+
 ## 12.4.23
 
 Fixes from a review of everything changed since 12.4.10. Checked with the automated tests; not tried on a PS5.
