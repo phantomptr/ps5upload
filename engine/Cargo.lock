@@ -2641,6 +2641,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ps5upload-convert-core"
+version = "12.4.23"
+dependencies = [
+ "blake3",
+ "flate2",
+ "ps5-dump-forge-pfs",
+ "ps5-dump-forge-ufs2",
+ "ps5-dump-forge-zstd",
+ "ps5upload-fpkg",
+ "ps5upload-pkg",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+]
+
+[[package]]
 name = "ps5upload-core"
 version = "12.4.23"
 dependencies = [
@@ -2721,6 +2737,7 @@ dependencies = [
  "ps5-dump-forge-ufs2",
  "ps5-dump-forge-zstd",
  "ps5upload-ava1",
+ "ps5upload-convert-core",
  "ps5upload-core",
  "ps5upload-fpkg",
  "ps5upload-pkg",

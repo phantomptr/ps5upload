@@ -40,6 +40,8 @@ ps5upload-core = { path = "../ps5upload-core" }
 ps5upload-tailnet = { path = "../ps5upload-tailnet" }
 ps5upload-pkg = { path = "../ps5upload-pkg" }
 ps5upload-fpkg = { path = "../ps5upload-fpkg" }
+# The converter's build code, shared with the program that runs on the PS5 (ps5upload-convert).
+ps5upload-convert-core = { path = "../ps5upload-convert-core" }
 ps5-dump-forge-ufs2 = { path = "../ps5-dump-forge-ufs2" }
 ps5-dump-forge-pfs = { path = "../ps5-dump-forge-pfs" }
 ps5-dump-forge-zstd = { path = "../ps5-dump-forge-zstd" }

@@ -301,6 +301,18 @@ pub(crate) fn core_sink(lv: ps5upload_core::log::Lv, cat: &'static str, msg: &st
     record_cat(lv.name(), cat, msg.to_string())
 }
 
+/// Sends `ps5upload_convert_core`'s lines (the converter's build code) into the ring, at the
+/// level settings `log_at!` follows here.
+pub(crate) fn install_convert_sink() {
+    ps5upload_convert_core::log::set_sink(ps5upload_convert_core::log::Sink {
+        enabled: |level, cat| {
+            ps5upload_core::log::Lv::parse(level)
+                .is_some_and(|lv| ps5upload_core::log::enabled(lv, cat))
+        },
+        record: record_cat,
+    });
+}
+
 /// Return every entry whose `seq` is strictly greater than `since`.
 /// Callers poll with `since = last-seen-seq` to receive only new lines.
 pub(crate) fn tail_since(since: u64) -> Vec<LogEntry> {

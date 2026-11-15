@@ -46,67 +46,7 @@ pub(crate) struct InspectReq {
     update: Option<String>,
 }
 
-/// Why a PS4 source can't become what was asked, or `None`: an update alone holds only the
-/// files it changed, so it goes into its game ("Merge into the game"); an add-on becomes a
-/// folder, not an image. A licence-only add-on never opens (`ps4_pkg::LICENCE_ONLY`).
-pub(crate) fn ps4_refusal(
-    source: &Path,
-    tree: &mut dyn ps5upload_fpkg::source::SourceTree,
-    image: bool,
-) -> Option<String> {
-    use ps5upload_fpkg::ps4_pkg::{self, Ps4Kind};
-    let (kind, title, version) = match ps4_pkg::peek_path(source).ok().flatten() {
-        Some(info) => (
-            Some(info.kind),
-            info.title_id(),
-            info.text("APP_VER").unwrap_or_default(),
-        ),
-        None => {
-            let path = tree
-                .files()
-                .iter()
-                .find(|f| f.path.eq_ignore_ascii_case("sce_sys/param.sfo"))
-                .map(|f| f.path.clone())?;
-            let params = ps5upload_pkg::sfo_params(&tree.read(&path).ok()?).ok()?;
-            let text = |k: &str| ps4_pkg::sfo_text(&params, k).unwrap_or_default();
-            (
-                Ps4Kind::of_category(&text("CATEGORY")),
-                text("TITLE_ID"),
-                text("APP_VER"),
-            )
-        }
-    };
-    match kind? {
-        Ps4Kind::Patch => Some(format!(
-            "{} is a PS4 update ({version}) for {title}. It holds only the files the update \
-             changed, so on its own it isn't a game: merge it into the game instead (Convert's \
-             \"Merge into the game\": the game as the source, this as its update)",
-            source.display()
-        )),
-        Ps4Kind::Addon if image => Some(format!(
-            "{} is a PS4 add-on: its files become a folder, not a game image",
-            source.display()
-        )),
-        _ => None,
-    }
-}
-
-/// Why a PS5 patch package can't become a game image or a package, or `None` for anything
-/// else. As PS5 Dump Forge refuses one (`PATCH_SOURCE` in its `preflight.rs`): it holds only what
-/// its update changed. Told by the file's first four bytes, before the open that reads all of it.
-pub(crate) fn patch_refusal(source: &Path) -> Option<String> {
-    let is_pkg = source
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("pkg"));
-    (is_pkg && ps5upload_fpkg::lih::is_patch(source)).then(|| {
-        format!(
-            "{} is a patch package: it holds only the files its update changed, so on its own \
-             it isn't a game and can't become an image or a package. Its files can still be \
-             saved: unpack it to a folder, or open it in the image browser",
-            source.display()
-        )
-    })
-}
+pub(crate) use ps5upload_convert_core::refusal::{patch_refusal, ps4_refusal};
 
 #[derive(Deserialize)]
 pub(crate) struct BuildReq {
@@ -473,7 +413,7 @@ pub(crate) async fn fpkg_build_handler(
     };
     let chosen_name = stem.clone().filter(|_| req.keep_both);
     let partial = match stem.map(|stem| out.join(format!("{stem}.pkg.partial"))) {
-        Some(path) => match Writing::claim_off_thread(path.clone()).await {
+        Some(path) => match claim_off_thread(path.clone()).await {
             Some(w) => Some(w),
             None => return already_building(&path),
         },
@@ -769,7 +709,7 @@ async fn ps4_package_build(
         .into_response();
     }
     let partial_path = out.join(format!("{stem}.pkg.partial"));
-    let partial = match Writing::claim_off_thread(partial_path.clone()).await {
+    let partial = match claim_off_thread(partial_path.clone()).await {
         Some(w) => w,
         None => return already_building(&partial_path),
     };
@@ -982,24 +922,6 @@ async fn ps4_package_build(
 #[cfg(test)]
 mod path_tests {
     use super::*;
-
-    #[test]
-    fn only_our_own_leftovers_at_a_plain_absolute_path_are_cleared() {
-        let root = std::env::temp_dir();
-        let ok = root.join("out").join("Game.exfat.partial");
-        assert_eq!(clearable_leftover(&ok), Some(ok.clone()));
-        assert!(clearable_leftover(&root.join("Game.lz4spool")).is_some());
-        // Not ours, not absolute, or climbing out: never touched.
-        assert!(clearable_leftover(&root.join("Game.exfat")).is_none());
-        assert!(clearable_leftover(Path::new("out/Game.exfat.partial")).is_none());
-        assert!(clearable_leftover(&root.join("..").join("Game.exfat.partial")).is_none());
-        // A `.` inside a path is dropped by `components()` itself, so it names the same file.
-        let dotted = root.join(".").join("Game.exfat.partial");
-        assert_eq!(
-            clearable_leftover(&dotted),
-            Some(root.join("Game.exfat.partial"))
-        );
-    }
 
     #[test]
     fn a_build_takes_the_language_it_was_asked_for() {
@@ -2152,14 +2074,14 @@ pub(crate) async fn exfat_build_handler(
         (None, Some(d)) => PathBuf::from(d.url(&d.path_of(&out_name))),
         (None, None) => partial_out.clone(),
     };
-    let Some(writing) = Writing::claim_off_thread(claimed.clone()).await else {
+    let Some(writing) = claim_off_thread(claimed.clone()).await else {
         return already_building(&claimed);
     };
     let spooling = match straight {
         true => None,
         false => {
             let spool = crate::image_build::lz4_spool(&output);
-            let Some(s) = Writing::claim_off_thread(spool.clone()).await else {
+            let Some(s) = claim_off_thread(spool.clone()).await else {
                 return already_building(&spool);
             };
             Some(s)
@@ -3084,7 +3006,7 @@ pub(crate) async fn folder_build_handler(
         Some(d) => PathBuf::from(d.url(&d.path_of(&name))),
         None => partial.clone(),
     };
-    let Some(writing) = Writing::claim_off_thread(claimed.clone()).await else {
+    let Some(writing) = claim_off_thread(claimed.clone()).await else {
         return already_building(&claimed);
     };
     // A source that goes afterwards is replaced by this folder: every file is compared in full.
@@ -3388,76 +3310,18 @@ impl Drop for Scaffold {
     }
 }
 
-/// Package files being written by a build in this engine (`<stem>.pkg.partial`).
-fn active_partials() -> &'static std::sync::Mutex<std::collections::HashSet<PathBuf>> {
-    static SET: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
-        std::sync::OnceLock::new();
-    SET.get_or_init(Default::default)
-}
+pub(crate) use ps5upload_convert_core::writing::Writing;
+use ps5upload_convert_core::writing::{
+    active_partials, has_download_sidecar, has_fresh_checkpoint, is_our_partial,
+};
 
-/// Marks a file as being written by a running build, for as long as it lives: the sweep below
-/// leaves it alone, and a second build of the same output is refused.
-pub(crate) struct Writing(PathBuf);
-
-/// A path this engine writes and may clear: a `.partial` output or an `.lz4spool` beside one.
-fn is_own_leftover(path: &std::path::Path) -> bool {
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .map(|n| n.to_ascii_lowercase())
-        .is_some_and(|n| n.ends_with(".partial") || n.ends_with(".lz4spool"))
-}
-
-/// `path` as a leftover `claim` may look at and clear: absolute, with no `..` (or other
-/// non-normal part) after its root, and named like one of our own leftovers. `None` for
-/// anything else, which `claim` then never touches on disk.
-fn clearable_leftover(path: &std::path::Path) -> Option<PathBuf> {
-    use std::path::Component;
-    if !path.is_absolute() || !is_own_leftover(path) {
-        return None;
-    }
-    let mut clean = PathBuf::new();
-    for part in path.components() {
-        match part {
-            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => clean.push(part),
-            Component::CurDir | Component::ParentDir => return None,
-        }
-    }
-    Some(clean)
-}
-
-impl Writing {
-    /// Claims `path` for one build. `None` when another running build already writes it: two
-    /// builds of one output would wreck each other's file. A leftover at `path` from a build
-    /// that is not running any more (the app closed, the engine died) is removed, so the
-    /// rebuild the queue starts is not refused as "output already exists".
-    pub(crate) fn claim(path: PathBuf) -> Option<Writing> {
-        let mut active = active_partials().lock().unwrap_or_else(|e| e.into_inner());
-        if active.contains(&path) {
-            return None;
-        }
-        // Only ever our own leftovers (a `.partial` output or an `.lz4spool`) at an absolute
-        // path with no `..`, whatever path a caller hands in; anything else is never touched.
-        if let Some(leftover) = clearable_leftover(&path) {
-            // A leftover with a checkpoint is what the build goes on from (`image_build`).
-            let checkpointed = crate::image_build::checkpoint_path(&leftover).is_file();
-            if leftover.is_dir() {
-                let _ = std::fs::remove_dir_all(&leftover);
-            } else if leftover.is_file() && !checkpointed {
-                let _ = std::fs::remove_file(&leftover);
-            }
-        }
-        active.insert(path.clone());
-        Some(Writing(path))
-    }
-
-    /// [`Writing::claim`] on a blocking thread: clearing a leftover can mean removing a
-    /// whole pack spool.
-    pub(crate) async fn claim_off_thread(path: PathBuf) -> Option<Writing> {
-        tokio::task::spawn_blocking(move || Writing::claim(path))
-            .await
-            .ok()
-            .flatten()
-    }
+/// [`Writing::claim`] on a blocking thread: clearing a leftover can mean removing a whole pack
+/// spool.
+pub(crate) async fn claim_off_thread(path: PathBuf) -> Option<Writing> {
+    tokio::task::spawn_blocking(move || Writing::claim(path))
+        .await
+        .ok()
+        .flatten()
 }
 
 /// The 409 for a build whose output another running build is writing.
@@ -3467,53 +3331,6 @@ fn already_building(path: &Path) -> axum::response::Response {
         format!("{} is already being built", path.display()),
     )
     .into_response()
-}
-
-impl Drop for Writing {
-    fn drop(&mut self) {
-        active_partials()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&self.0);
-    }
-}
-
-/// The in-progress files our builds write: `<name>.<kind>.partial`. Nothing else is touched,
-/// since a compression writes next to the user's own image (a browser's `.partial` stays).
-fn is_our_partial(name: &str) -> bool {
-    [
-        ".pkg.partial",
-        ".ffpfsc.partial",
-        ".ffpfs.partial",
-        ".exfat.partial",
-        ".ffpkg.partial",
-    ]
-    .iter()
-    .any(|ext| name.to_ascii_lowercase().ends_with(ext))
-}
-
-/// A `<name>.partial` with `<name>.partial.json` next to it is a link download in progress
-/// (see `remote_download`), kept so it can resume.
-fn has_download_sidecar(partial: &Path) -> bool {
-    let mut name = partial.file_name().unwrap_or_default().to_os_string();
-    name.push(".json");
-    partial.with_file_name(name).is_file()
-}
-
-/// A crashed image build's partial file, kept for a while for the same build to go on from. An old
-/// one goes, with its checkpoint, or a game never built again would hold its space for good.
-fn has_fresh_checkpoint(partial: &Path) -> bool {
-    let checkpoint = crate::image_build::checkpoint_path(partial);
-    let Ok(modified) = std::fs::metadata(&checkpoint).and_then(|m| m.modified()) else {
-        return false;
-    };
-    let fresh = modified
-        .elapsed()
-        .is_ok_and(|age| age < crate::image_build::RESUME_KEPT);
-    if !fresh {
-        crate::image_build::remove_checkpoint(partial);
-    }
-    fresh
 }
 
 /// Removes a file, trying again for a few seconds while something holds it: on Windows an

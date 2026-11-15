@@ -12408,6 +12408,8 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // clog!/core_debug! lines, with their level and category. The level setting comes off disk
     // first, so a raise made before a restart is still in force (until it runs out).
     ps5upload_core::log::set_leveled_sink(engine_log::core_sink);
+    // The converter's build code (shared with the console program) logs through the same ring.
+    engine_log::install_convert_sink();
     log_levels::load_saved();
     diag_api::mark_started();
     // The bug-report journal: every crate's events (ps5upload_core::events) land on disk here.

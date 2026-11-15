@@ -10,6 +10,8 @@ members = [
   "crates/ps5upload-tailnet",
   "crates/ps5upload-pkg",
   "crates/ps5upload-fpkg",
+  # The converter's build code, shared by the engine and the console program below.
+  "crates/ps5upload-convert-core",
   # The converter as a program for the PS5 itself. A plain std program on every other target;
   # payload/convert/build.sh builds it as a PS5 ELF (profile "console" below).
   "crates/ps5upload-convert",
