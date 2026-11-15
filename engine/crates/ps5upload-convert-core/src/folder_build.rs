@@ -381,7 +381,7 @@ fn verify(
         }
     }
     let summary = sample::summary(listed, mode);
-    let pieces: Vec<(usize, u64, u64)> = match mode {
+    let mut pieces: Vec<(usize, u64, u64)> = match mode {
         VerifyMode::Full => listed
             .iter()
             .enumerate()
@@ -396,6 +396,9 @@ fn verify(
             })
             .collect(),
     };
+    // In the source's own order (`listed` is it), front to back in each file: an archive read
+    // in place then decodes once, not once per file read out of its order.
+    pieces.sort_unstable_by_key(|&(i, at, _)| (i, at));
     let total = summary.checked_bytes;
     let mut done = 0u64;
     progress(0, total);
@@ -746,10 +749,25 @@ pub fn verify_trees(
             })
             .collect(),
     };
+    // In the source's own order, front to back in each file: an archive read in place then
+    // decodes once, not once per file read out of its order.
+    let mut pieces: Vec<(usize, usize, u64, u64)> = {
+        let order: std::collections::HashMap<&str, usize> = (want.files().iter().enumerate())
+            .map(|(n, f)| (f.path.as_str(), n))
+            .collect();
+        pieces
+            .into_iter()
+            .map(|(i, at, len)| {
+                let n = order.get(listed[i].0.as_str()).copied().unwrap_or(i);
+                (n, i, at, len)
+            })
+            .collect()
+    };
+    pieces.sort_unstable_by_key(|&(n, _, at, _)| (n, at));
     let total = summary.checked_bytes;
     let mut done = 0u64;
     progress(0, total);
-    for (i, at, len) in pieces {
+    for (_, i, at, len) in pieces {
         let path = &listed[i].0;
         let (a, b) = {
             let mut sides = BothSides::new(done, total, &mut *progress);

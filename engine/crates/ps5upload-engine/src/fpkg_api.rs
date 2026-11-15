@@ -979,7 +979,12 @@ mod path_tests {
 
 #[derive(Deserialize)]
 pub(crate) struct ExfatBuildReq {
-    /// A game folder on this computer (one with `sce_sys` in it).
+    /// A game folder (one with `sce_sys` in it) or image, on this computer, a saved server
+    /// (`remote://`) or a console (`ps5://`); or a `.zip`, `.7z` or `.rar` on this computer (a
+    /// multi-part RAR set by its first part) holding one game folder, read straight out of it
+    /// with nothing unpacked. An archive that has to be unpacked first (a game image inside it,
+    /// or an `update` to merge) is refused (400) with `archive_needs_unpack` at the start of
+    /// the reason: `POST /api/fpkg/extract` then unpacks it.
     source: String,
     /// Where the image goes; the converter's output folder by default.
     #[serde(default)]
@@ -1081,6 +1086,9 @@ pub(crate) struct ExfatBuildReq {
     /// `edits`. Without it a packed game is written as it is, packs and all.
     #[serde(default)]
     unpack_packs: bool,
+    /// The password of a `.rar` `source` (an archive read in place); never logged or kept.
+    #[serde(default)]
+    archive_password: Option<String>,
 }
 
 /// Where an image build puts the image.
@@ -1665,11 +1673,20 @@ pub(crate) async fn exfat_build_handler(
     }
     // A game folder on this computer, on a saved server (`remote://`) or on a console
     // (`ps5://`, read through the helper as a package build reads it): the opener below
-    // knows them all. A local path has to be a folder; an image or archive is not written
-    // as another image from here.
+    // knows them all. A local path has to be a folder, an image, or a `.zip`/`.7z`/`.rar`
+    // whose game folder is read in place (`archive_tree`).
     let remote = ps5upload_fpkg::remote_source::is_remote(&source);
     let image_file = crate::image_build::is_image_file(&source);
-    if !remote && !image_file && !tokio::fs::metadata(&source).await.is_ok_and(|m| m.is_dir()) {
+    let archive =
+        crate::archive_tree::reads_in_place(&source).then(|| crate::archive_tree::ArchiveSource {
+            password: req.archive_password.take().filter(|p| !p.is_empty()),
+            cancel: Default::default(),
+        });
+    if !remote
+        && !image_file
+        && archive.is_none()
+        && !tokio::fs::metadata(&source).await.is_ok_and(|m| m.is_dir())
+    {
         return json_err(
             StatusCode::BAD_REQUEST,
             format!("{} is not a game folder or image", source.display()),
@@ -1678,7 +1695,7 @@ pub(crate) async fn exfat_build_handler(
     }
     // A folder on this computer has to be a game: param.json (PS5) or param.sfo (PS4) in its
     // sce_sys (#596). Otherwise any folder became an image that mounts but never launches.
-    if !remote && !image_file && !has_title_param(&source).await {
+    if !remote && !image_file && archive.is_none() && !has_title_param(&source).await {
         return json_err(
             StatusCode::BAD_REQUEST,
             missing_param_message(&source, false),
@@ -1686,6 +1703,17 @@ pub(crate) async fn exfat_build_handler(
         .into_response();
     }
     let update = update_path(req.update.as_deref());
+    // An update is merged into a game read by path: an archive's game is unpacked for it.
+    if archive.is_some() && update.is_some() {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "{}: an update is merged into a game unpacked from its archive first",
+                crate::archive_tree::NEEDS_UNPACK
+            ),
+        )
+        .into_response();
+    }
     // An edited copy (#479): the image on this computer, opened with the changes applied, is
     // written out again as the same kind of image.
     let edited = if req.edits.is_empty() && !req.rebuild_ampr_index {
@@ -1874,6 +1902,8 @@ pub(crate) async fn exfat_build_handler(
         None if edited.is_some() => {
             PathBuf::from(format!("{}-edited", crate::image_build::stem_of(&source)))
         }
+        // An archive's image is named after the archive, without `.zip` or `.partN.rar`.
+        None if archive.is_some() => PathBuf::from(crate::archive_tree::stem(&source)),
         None => source.clone(),
     };
     // An edited copy goes next to its source unless told otherwise.
@@ -1942,6 +1972,8 @@ pub(crate) async fn exfat_build_handler(
             )
         } else if update.is_some() {
             Some("with an update merged in there are two sources: remove them yourself")
+        } else if archive.is_some() && crate::archive_tree::multi_part(&source) {
+            Some("the archive is one part of a multi-part set: remove its parts yourself")
         } else {
             None
         };
@@ -1967,6 +1999,7 @@ pub(crate) async fn exfat_build_handler(
     let edited_tree = edited.map(|e| e.tree);
     let scan_update = update.clone();
     let remove_backport = req.remove_backport;
+    let scan_archive = archive.clone();
     let scanned = tokio::task::spawn_blocking(move || {
         // An edited copy keeps the image's own names: only the user's changes are made.
         if let Some(tree) = edited_tree {
@@ -1982,8 +2015,10 @@ pub(crate) async fn exfat_build_handler(
         // A UFS2 image (.ffpkg) is case-sensitive like /data: give modules the eboot's spelling.
         // A PS4 update goes into its game here (the merge checks they go together).
         let (mut tree, renamed, signing) =
-            ps5upload_fpkg::module_case::open_with_update(&scan_source, scan_update.as_deref())
-                .map_err(|e| e.to_string())?;
+            open_game(&scan_source, scan_update.as_deref(), scan_archive.as_ref())?;
+        if scan_archive.is_some() {
+            crate::log_at!(Info, "convert", "image build: {}", tree.describe());
+        }
         match &scan_update {
             Some(_) => crate::log_at!(Info, "convert", "image build: {}", tree.describe()),
             None => {
@@ -2136,6 +2171,10 @@ pub(crate) async fn exfat_build_handler(
     } else {
         register_workshop_job(job_id)
     };
+    // A read waiting on the archive (a long skip through solid data) stops with the job.
+    if let Some(a) = &archive {
+        a.cancel.set(cancel.clone());
+    }
     let bytes = Arc::new(AtomicU64::new(0));
     let started_at_ms = now_ms();
     set_job(
@@ -2556,7 +2595,9 @@ pub(crate) async fn exfat_build_handler(
 #[derive(Deserialize)]
 pub(crate) struct FolderBuildReq {
     /// A game image (`.exfat`, `.ffpkg`/`.ufs2`, `.ffpfs`, `.ffpfsc`) or a debug-key `.pkg`,
-    /// on this computer, a saved server (`remote://`) or a console (`ps5://`).
+    /// on this computer, a saved server (`remote://`) or a console (`ps5://`); or a `.zip`,
+    /// `.7z` or `.rar` on this computer holding one game folder, read in place as an image
+    /// build reads it (and refused with `archive_needs_unpack` the same way).
     source: String,
     #[serde(default)]
     output_dir: Option<String>,
@@ -2613,6 +2654,9 @@ pub(crate) struct FolderBuildReq {
     /// With `unpack_packs`: which emulator, `ampr_emu` (the default) or `ampr-emu-ng`.
     #[serde(default)]
     ampr_emu_build: Option<String>,
+    /// The password of a `.rar` `source` (an archive read in place); never logged or kept.
+    #[serde(default)]
+    archive_password: Option<String>,
 }
 
 /// What a folder build reads: the whole image, one folder of it, or one file.
@@ -2657,16 +2701,42 @@ async fn resolved(path: &Path) -> Option<PathBuf> {
     }
 }
 
-/// The game at `source` (a folder, image or package anywhere) read for zstd packs: modules in
-/// the eboot's spelling, as an image or folder build reads it, then
-/// [`crate::zstd_packs::readable_for_packing`]. A packed folder build's read-back opens it the
-/// same way.
+/// The game at `source` with modules in the eboot's spelling and unsigned executables signed
+/// (`module_case::open_with_update`), as every image or folder build and its read-back open it;
+/// for an archive read in place (`archive`), the game folder inside it (an update is never
+/// merged into one: that is refused before).
+type OpenedGame = (
+    Box<dyn ps5upload_fpkg::source::SourceTree>,
+    Vec<ps5upload_fpkg::module_case::CaseFix>,
+    ps5upload_fpkg::fself::Signing,
+);
+
+fn open_game(
+    source: &Path,
+    update: Option<&Path>,
+    archive: Option<&crate::archive_tree::ArchiveSource>,
+) -> Result<OpenedGame, String> {
+    match archive {
+        Some(a) => {
+            let tree = crate::archive_tree::open(source, a.password.as_deref(), &a.cancel)?;
+            Ok(ps5upload_fpkg::module_case::wrap(tree))
+        }
+        None => {
+            ps5upload_fpkg::module_case::open_with_update(source, update).map_err(|e| e.to_string())
+        }
+    }
+}
+
+/// The game at `source` (a folder, image or package anywhere, or an archive read in place)
+/// read for zstd packs: modules in the eboot's spelling, as an image or folder build reads it,
+/// then [`crate::zstd_packs::readable_for_packing`]. A packed folder build's read-back opens it
+/// the same way.
 fn open_for_packing(
     source: &Path,
     update: Option<&Path>,
+    archive: Option<&crate::archive_tree::ArchiveSource>,
 ) -> Result<Box<dyn ps5upload_fpkg::source::SourceTree>, String> {
-    let (tree, renamed, signing) =
-        ps5upload_fpkg::module_case::open_with_update(source, update).map_err(|e| e.to_string())?;
+    let (tree, renamed, signing) = open_game(source, update, archive)?;
     if !renamed.is_empty() {
         crate::log_at!(
             Info,
@@ -2724,6 +2794,24 @@ pub(crate) async fn folder_build_handler(
         }
     };
     let remote = ps5upload_fpkg::remote_source::is_remote(&source);
+    // A `.zip`, `.7z` or `.rar` on this computer: its game folder read in place.
+    let archive =
+        crate::archive_tree::reads_in_place(&source).then(|| crate::archive_tree::ArchiveSource {
+            password: req.archive_password.take().filter(|p| !p.is_empty()),
+            cancel: Default::default(),
+        });
+    if archive.is_some()
+        && req
+            .entry
+            .as_deref()
+            .is_some_and(|e| !e.trim().trim_matches('/').is_empty())
+    {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "one file or folder is saved from an image, not from an archive",
+        )
+        .into_response();
+    }
     let zstd = match &req.ampr_zstd {
         None => None,
         Some(_)
@@ -2764,6 +2852,17 @@ pub(crate) async fn folder_build_handler(
         .unpack_packs
         .then(|| open_unpacked(req.add_ampr_emu, req.ampr_emu_build.clone()));
     let update = update_path(req.update.as_deref());
+    // An update is merged into a game read by path: an archive's game is unpacked for it.
+    if archive.is_some() && update.is_some() {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "{}: an update is merged into a game unpacked from its archive first",
+                crate::archive_tree::NEEDS_UNPACK
+            ),
+        )
+        .into_response();
+    }
     if update.is_some()
         && req
             .entry
@@ -2815,6 +2914,7 @@ pub(crate) async fn folder_build_handler(
     // Packs are made of a game folder anywhere too, and so is a game with an update merged in
     // or its packs unpacked.
     if !named_as_image
+        && archive.is_none()
         && !((zstd.is_some() || update.is_some() || unpack.is_some()) && (local_dir || remote))
     {
         return json_err(
@@ -2843,6 +2943,8 @@ pub(crate) async fn folder_build_handler(
         Some(n) => (n.to_string(), true),
         None => match &entry {
             Some(e) => (e.rsplit('/').next().unwrap_or(e).to_string(), true),
+            // An archive's folder is named after the archive, without `.zip` or `.partN.rar`.
+            None if archive.is_some() => (crate::archive_tree::stem(&source), false),
             None => (crate::image_build::stem_of(&source), false),
         },
     };
@@ -2913,6 +3015,8 @@ pub(crate) async fn folder_build_handler(
     let removal = if req.delete_source {
         let why = if entry.is_some() {
             Some("saving one file or folder of an image does not remove the image")
+        } else if archive.is_some() && crate::archive_tree::multi_part(&source) {
+            Some("the archive is one part of a multi-part set: remove its parts yourself")
         } else if to_server.is_some() {
             Some(
                 "the folder goes straight to a server, and a source is only removed for a \
@@ -2945,6 +3049,7 @@ pub(crate) async fn folder_build_handler(
     let left_out: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
     let scan_left_out = left_out.clone();
     let scan_unpack = unpack.clone();
+    let scan_archive = archive.clone();
     let scanned = tokio::task::spawn_blocking(move || {
         if let Some(entry) = scan_entry {
             // A part of the image is saved as the image spells it, as the browser listed it.
@@ -2965,7 +3070,8 @@ pub(crate) async fn folder_build_handler(
             if let Some(why) = patch_refusal(&scan_source) {
                 return Err(why);
             }
-            let mut tree = open_for_packing(&scan_source, scan_update.as_deref())?;
+            let mut tree =
+                open_for_packing(&scan_source, scan_update.as_deref(), scan_archive.as_ref())?;
             if scan_update.is_none() {
                 if let Some(why) = ps4_refusal(&scan_source, &mut *tree, false) {
                     return Err(why);
@@ -2978,8 +3084,10 @@ pub(crate) async fn folder_build_handler(
         // image and crashes a second in from the folder. The folder takes the eboot's spelling.
         // A PS4 update goes into its game here (the merge checks they go together).
         let (mut tree, renamed, signing) =
-            ps5upload_fpkg::module_case::open_with_update(&scan_source, scan_update.as_deref())
-                .map_err(|e| e.to_string())?;
+            open_game(&scan_source, scan_update.as_deref(), scan_archive.as_ref())?;
+        if scan_archive.is_some() {
+            crate::log_at!(Info, "convert", "folder build: {}", tree.describe());
+        }
         match &scan_update {
             Some(_) => crate::log_at!(Info, "convert", "folder build: {}", tree.describe()),
             None => {
@@ -3063,6 +3171,11 @@ pub(crate) async fn folder_build_handler(
     } else {
         register_workshop_job(job_id)
     };
+    // A read waiting on the archive (a long skip through solid data) stops with the job; the
+    // read-back's own opening of it shares the link.
+    if let Some(a) = &archive {
+        a.cancel.set(cancel.clone());
+    }
     let bytes = Arc::new(AtomicU64::new(0));
     let started_at_ms = now_ms();
     set_job(
@@ -3149,6 +3262,8 @@ pub(crate) async fn folder_build_handler(
         let reopen_source = source.clone();
         let reopen_entry = entry.clone();
         let reopen_update = update.clone();
+        // An archive is opened again the same way (its password kept in memory for that).
+        let reopen_archive = archive.clone();
         // Verification reads the source afresh by the folder's names, so with the same renames
         // (or, for a part of the image, the same part; for packs, decoded the same way; with an
         // update, merged the same way).
@@ -3157,14 +3272,18 @@ pub(crate) async fn folder_build_handler(
             Some(e) => open_entry(&reopen_source, e).map(|u| match u {
                 Unpacked::Tree(t) | Unpacked::File { tree: t, .. } => t,
             }),
-            None if packing => open_for_packing(&reopen_source, reopen_update.as_deref())
-                .map(|t| crate::remove_backport::without(t, &left_out)),
-            None => ps5upload_fpkg::module_case::open_with_update(
+            None if packing => open_for_packing(
                 &reopen_source,
                 reopen_update.as_deref(),
+                reopen_archive.as_ref(),
+            )
+            .map(|t| crate::remove_backport::without(t, &left_out)),
+            None => open_game(
+                &reopen_source,
+                reopen_update.as_deref(),
+                reopen_archive.as_ref(),
             )
             .map(|(t, _, _)| t)
-            .map_err(|e| e.to_string())
             // Unpacked the same way: the same emulator, the same index.
             .and_then(|t| match &unpack {
                 Some(open) => open(t),

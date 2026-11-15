@@ -2,6 +2,7 @@ pub mod activity;
 pub mod app_lifecycle;
 pub mod appmeta_heal;
 pub mod archive_extract;
+pub mod archive_stream;
 pub mod backport_pack;
 pub mod backup;
 pub mod cheats;
