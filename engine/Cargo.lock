@@ -2635,7 +2635,9 @@ name = "ps5upload-convert"
 version = "12.4.23"
 dependencies = [
  "libc",
+ "ps5upload-convert-core",
  "ps5upload-fpkg",
+ "rayon",
  "serde",
  "serde_json",
 ]

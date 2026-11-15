@@ -1,6 +1,6 @@
 # ps5upload-convert: the first runs on a console
 
-Nothing of the converter has run on a PS5 yet. These runs prove it, smallest first. One change
+Nothing of the converter has run on a PS5 yet; since Phase B its `build` writes real output. These runs prove it, smallest first. One change
 per run; stop at the first run that fails and find out why before the next (`root-cause-first`).
 Do them on one console first (FW 13.60), then repeat run 1 and run 3 on the other.
 
@@ -28,6 +28,11 @@ converter's imports the helper does not have, and the run that exercises each:
 | `readv`, `writev` | std's vectored I/O | run 1 (the log, `status.json`) |
 | `pthread_equal` | `entry.c`'s wrap of `pthread_set_name_np` (a thread naming itself) | run 3 (worker threads); the process list shows `ps5u-convert` throughout |
 | `_ioctl`, `_write`, `getsid`, `pause`, `bcmp` | std / the shims | run 1-3 |
+| `cpuset_getaffinity` | std's CPU count (`available_parallelism`), answered by `compat.c`'s wrap from the thread's mask | run 3 (the build's threads); `convert.log` shows no "16 CPUs" sized pool |
+| `fdatasync` | `safe_write`: the image writer's sync every 32 MiB and the final sync | run 3 |
+| `fdopendir` | std's `remove_dir_all` (a stopped folder build's `.partial/`) | run 4 (Stop a folder output) |
+| `sched_yield` | rayon's idle workers (the read-back's BLAKE3) and std's `yield_now` | run 3 |
+| `log2` | the image writers' layout maths (UFS2/PFS) | run 3 with `ffpkg` |
 
 The exact current list is what `import-diff.sh` prints; if it names a symbol not in this table,
 add it here before the run.
@@ -65,30 +70,61 @@ Proven when: the job ends `ok` with the same result as run 1, `/data/ps5upload/c
 `convert.log` afterwards (no `status.json`, `job.rec`, `request.json`, `cancel`), the PC app's
 Activity lists the job as "convert".
 
-## Run 3: through the helper, `build` (read-through, no output yet)
+## Run 3: through the helper, `build` of a small image
 
-The converter's `build` still writes nothing: it reads every byte of the source the way a build
-will, reports progress, and ends with `convert_not_built_yet`. That exercises the threads, the
-reads at size, progress, Stop and the idle timer before any write code runs.
+The converter now builds (Phase B): the same build code as the engine
+(`ps5upload-convert-core`), writing `<dest>.partial` beside `dest`, reading it back, then
+renaming it in its own folder. First a small game (a few hundred MiB) to `.exfat` on `/data`:
 
 `fetch('/api/convert/start',{method:'POST',body:JSON.stringify({path:'/data/homebrew/<id>',dest:'/data/out.exfat',format:'exfat'})})`
 
-Proven when: progress moves in the job status, it ends with the message `convert_not_built_yet`,
-`convert.log` has a line `read N files, B bytes in S s (X MiB/s)` (write the speed down: the
-console's read rate for a game), `/data/out.exfat` and `/data/out.exfat.partial` do not exist, the
-helper is up.
+Proven when:
 
-Then the same with a large game (50+ GB, takes long enough to see the power tick hold off rest
-mode: leave the controller alone past the console's auto-rest time) and press Stop at about 10 %:
-the job ends `cancelled` within a second or two, never through the 10 s kill (the helper's log
-would say "did not stop; killing it").
+- the job's stage moves `plan` → `write` → `verify` with progress (the helper's messages
+  `convert_stage_plan`, `convert_stage_write`, `convert_stage_verify`), and it ends `ok`;
+- `/data/out.exfat` exists and no `/data/out.exfat.partial`, `.partial.resume` or `.partial.stamp`
+  is left;
+- `convert.log` has `destination /data: <fs type> free=... read_only=false` (the probe: write the
+  filesystem's name down), `stage write`, `stage verify` and `built /data/out.exfat in S s: ...`
+  (write the time down: the console's build rate for that size), and no panic;
+- the image mounts (ShadowMount+) and the game starts from it;
+- the helper is up, and the process list showed `ps5u-convert` throughout (the worker threads
+  name themselves; the wrap keeps the one name).
 
-## Run 4: a helper that dies mid-job
+Then once each with `format` `ffpkg` (`dest` `/data/out.ffpkg`), `ffpfs` and `folder`
+(`dest` `/data/out`), and a `.exfat` image as the source.
 
-Start run 3 on a large game, then replace the helper (send `ps5upload.elf` again) while it reads.
+Then the same with a large game (50+ GB, long enough to see the power tick hold off rest mode:
+leave the controller alone past the console's auto-rest time): the speed, and the converter's
+memory in the process list (the hash queue holds 4 reads of up to 8 MiB on the console).
+
+## Run 4: Stop, and a full drive
+
+Start run 3 on a large game and press Stop at about 10 %, then at about 50 %, then during
+`verify`: each job ends `cancelled` within a second or two, never through the 10 s kill (the
+helper's log would say "did not stop; killing it"), and nothing of the output is left (no
+`.partial` file or folder). Then a folder output stopped mid-`write` (`fdopendir`: its
+`.partial/` is removed).
+
+A USB drive with less room than the game as `dest`'s folder: refused before the first byte with
+`convert_no_space`. A FAT32 (`msdosfs`) USB drive with a game over 4 GiB to an image: refused with
+`convert_too_big_for_drive`.
+
+## Run 5: zstd packs
+
+The helper does not pass the emulator yet, so `zstd: true` from Minion ends with
+`convert_no_zstd_runtime` (the converter never downloads anything). To try packs by hand, put
+ampr-emu-ng's `libSceAmpr.sprx` on the console (Files upload) and write the request yourself as in
+run 1: `{"id":"hw5","op":"build","path":"/data/homebrew/<id>","dest":"/data/z.exfat",
+"format":"exfat","zstd":true,"zstd_runtime":"/data/ps5upload/bin/libSceAmpr.sprx"}`. Proven when
+the stages start with `pack`, the image is built, and the game starts from it.
+
+## Run 6: a helper that dies mid-job
+
+Start run 3 on a large game, then replace the helper (send `ps5upload.elf` again) while it writes.
 Proven when: the new helper starts normally, and once the old converter has finished,
-`job.rec` is removed at the next helper start (with a `.partial` beside the destination, if a
-test put one there by hand, removed too).
+`job.rec` is removed at the next helper start, with the `.partial` (and `.partial.resume`,
+`.partial.stamp`) beside the destination removed too.
 
 ## If it dies
 

@@ -70,9 +70,12 @@ if [[ "${2:-}" != --check ]]; then
   # only the intrinsics of the instruction sets the target CPU has, so libdeflate's AVX-VNNI,
   # AVX-512 and VPCLMULQDQ code paths, which it picks at run time elsewhere, do not compile. The
   # PS5's Zen 2 has none of those sets; its SSE2/AVX2/PCLMULQDQ paths stay.
+  #
+  # ZSTD_TRACE=0: zstd otherwise leaves weak imports of its tracing hooks (ZSTD_trace_*) for a
+  # tracer to provide; no module of the console exports them, and the import check refuses them.
   export CFLAGS_x86_64_ps5_freebsd='--target=x86_64-sie-ps5 -mno-red-zone -femulated-tls
     -DLIBDEFLATE_ASSEMBLER_DOES_NOT_SUPPORT_AVX_VNNI -DLIBDEFLATE_ASSEMBLER_DOES_NOT_SUPPORT_AVX512VNNI
-    -DLIBDEFLATE_ASSEMBLER_DOES_NOT_SUPPORT_VPCLMULQDQ'
+    -DLIBDEFLATE_ASSEMBLER_DOES_NOT_SUPPORT_VPCLMULQDQ -DZSTD_TRACE=0'
   # Cargo sees neither the C objects nor linker.sh: dropping the linked output makes it relink, so
   # a change to a shim or to entry.c always lands in the ELF.
   rm -f "$out"/x86_64-ps5-freebsd/console/deps/ps5upload_convert-*

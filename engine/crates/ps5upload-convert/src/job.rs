@@ -5,25 +5,35 @@
 //!
 //! - `request.json`: written by the helper, read and deleted here at start.
 //!   `{"id": "<the helper's job id>", "op": "inspect"|"build", "path": "<source>"}`, and for a
-//!   build `"dest"`, `"format"` (`exfat`, `ffpkg`, `ffpfs`, `folder`), `"zstd"`, `"verify"`.
+//!   build `"dest"` (the output's full path), `"format"` (`exfat`, `ffpkg`, `ffpfs`, `folder`),
+//!   `"zstd"` (bool), `"verify"` (`fast`, the default, or `full`), and optionally
+//!   `"zstd_runtime"` (the path of ampr-emu-ng's `libSceAmpr.sprx` on the console, which zstd
+//!   packs need) and `"zstd_level"` (1 to 22, 5 when absent).
 //! - `status.json`: rewritten here through a temporary file and a rename in the same folder, so
 //!   the helper never reads half of one; at most every [`STATUS_EVERY`] while a job runs.
 //!   `{"id", "pid", "op", "state": "running"|"done"|"failed", "stage"?, "bytes_done"?,
 //!   "bytes_total"?, "cause"?, "detail"?, "result"?}`
-//!   `cause` is a token the apps translate (`convert_bad_request`, `convert_unsupported_source`,
-//!   `convert_source_unreadable`, `convert_cancelled`, `convert_not_built_yet`); `detail` is for
-//!   the log; `result` is the op's answer.
-//! - `cancel`: created by the helper to stop a job; looked for at most every [`CANCEL_EVERY`].
+//!   `stage` is the build's (`plan`, `pack`, `write`, `verify`); `cause` is a token the apps
+//!   translate; `detail` is for the log; `result` is the op's answer.
+//! - `cancel`: created by the helper to stop a job. A thread looks for it every
+//!   [`CANCEL_EVERY`] and raises the job's cancel flag, which the build code checks at every
+//!   checkpoint of its loops.
 //!
-//! `build` does not build yet: the build code is still inside the engine. Until it moves here,
-//! a build reads the whole source the way a real one will (through the same readers, reporting
-//! progress, stopping when asked), writes nothing, and ends with `convert_not_built_yet`. That is
-//! enough to try the whole chain on a console: start, progress, Stop, and how fast the console
-//! reads a game.
+//! A build writes `<dest>.partial` (a file, or a folder for a folder output) beside `dest`, and,
+//! for an image, may leave `<dest>.partial.resume` and `<dest>.partial.stamp` beside it: the
+//! three names the helper removes after a crash. Only a build that read back gets renamed to
+//! `dest`, in its own folder. No resume yet: a stopped build starts over.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use ps5upload_convert_core::folder_build::{self, FolderOut};
+use ps5upload_convert_core::image_build::{self, ImageFormat};
+use ps5upload_convert_core::{safe_write, zstd_packs};
+use ps5upload_fpkg::sample::VerifyMode;
+use ps5upload_fpkg::source::SourceTree;
 use serde_json::json;
 
 use crate::Refusal;
@@ -37,8 +47,13 @@ const CANCEL_EVERY: Duration = Duration::from_millis(150);
 /// The most of a failure's words kept in the status: the helper reads `detail` into 400 bytes
 /// and drops a longer one.
 const MAX_DETAIL_BYTES: usize = 300;
-/// One read of the source. The image writers read 1 to 8 MiB at a time.
-const READ_CHUNK: usize = 8 << 20;
+/// The largest emulator file read for zstd packs (ampr-emu-ng is well under 1 MiB).
+const MAX_RUNTIME_BYTES: u64 = 16 << 20;
+/// zstd's level when the request names none: the engine's default.
+const DEFAULT_ZSTD_LEVEL: u8 = 5;
+/// Compression threads: on the PS5 three of the payload's five CPUs, the other two left to the
+/// console's own UI and a suspended game; elsewhere every core (0).
+pub const THREADS: usize = if cfg!(target_env = "ps5") { 3 } else { 0 };
 
 #[derive(Debug, serde::Deserialize)]
 struct Request {
@@ -50,6 +65,14 @@ struct Request {
     dest: String,
     #[serde(default)]
     format: String,
+    #[serde(default)]
+    zstd: bool,
+    #[serde(default)]
+    verify: String,
+    #[serde(default)]
+    zstd_runtime: String,
+    #[serde(default)]
+    zstd_level: Option<u8>,
 }
 
 /// Writes `status` as `dir/status.json`. The temporary file is in `dir` too: a rename never
@@ -57,7 +80,7 @@ struct Request {
 fn write_status(dir: &Path, status: &serde_json::Value) -> std::io::Result<()> {
     let tmp = dir.join(format!("status.json.{}.tmp", std::process::id()));
     std::fs::write(&tmp, format!("{status}\n"))?;
-    std::fs::rename(&tmp, dir.join("status.json"))
+    safe_write::rename(&tmp, &dir.join("status.json"))
 }
 
 fn read_request(dir: &Path) -> Result<Request, String> {
@@ -81,32 +104,28 @@ fn short(detail: &str) -> &str {
     &detail[..end]
 }
 
-/// A running job's view of its folder: where it reports and where it is told to stop.
+/// A running job's reports: rewrites the status at most every [`STATUS_EVERY`], and at once
+/// when the stage changes.
 struct Running<'a> {
     dir: &'a Path,
     base: serde_json::Value,
-    last_status: Instant,
-    last_cancel: Instant,
-    cancelled: bool,
+    last_status: Option<Instant>,
+    stage: String,
 }
 
 impl Running<'_> {
-    /// Has the helper asked to stop? The file is looked for now and then, and once seen stays seen.
-    fn cancelled(&mut self) -> bool {
-        if !self.cancelled && self.last_cancel.elapsed() >= CANCEL_EVERY {
-            self.last_cancel = Instant::now();
-            self.cancelled = self.dir.join("cancel").exists();
-        }
-        self.cancelled
-    }
-
-    /// Reports progress, at most every [`STATUS_EVERY`]. A status that cannot be written is not
-    /// worth ending the job for: the next one may go through, and the final one is checked.
+    /// A status that cannot be written is not worth ending the job for: the next one may go
+    /// through, and the final one is checked.
     fn progress(&mut self, stage: &str, done: u64, total: u64) {
-        if self.last_status.elapsed() < STATUS_EVERY {
+        let new_stage = stage != self.stage;
+        if !new_stage && self.last_status.is_some_and(|t| t.elapsed() < STATUS_EVERY) {
             return;
         }
-        self.last_status = Instant::now();
+        if new_stage {
+            crate::log(format_args!("stage {stage}"));
+            self.stage = stage.to_string();
+        }
+        self.last_status = Some(Instant::now());
         let mut s = self.base.clone();
         s["state"] = json!("running");
         s["stage"] = json!(stage);
@@ -116,74 +135,383 @@ impl Running<'_> {
     }
 }
 
-/// The stand-in for a build (see the module docs): reads every byte of the source.
-fn read_through(request: &Request, run: &mut Running<'_>) -> Result<(), Refusal> {
-    let bad = |detail: String| Refusal {
+/// Raises `flag` once `dir/cancel` appears, looking every [`CANCEL_EVERY`] until `done`.
+fn watch_cancel(
+    dir: &Path,
+    flag: Arc<AtomicBool>,
+    done: Arc<AtomicBool>,
+) -> std::thread::JoinHandle<()> {
+    let file = dir.join("cancel");
+    std::thread::Builder::new()
+        .name("ps5u-convert".into())
+        .spawn(move || {
+            while !done.load(Ordering::Relaxed) {
+                if file.exists() {
+                    flag.store(true, Ordering::Relaxed);
+                    return;
+                }
+                std::thread::sleep(CANCEL_EVERY);
+            }
+        })
+        .expect("a thread to watch for the cancel file")
+}
+
+/// What a build is asked for, checked.
+struct Plan {
+    source: PathBuf,
+    dest: PathBuf,
+    /// `None`: a folder.
+    image: Option<ImageFormat>,
+    mode: VerifyMode,
+    /// The emulator's bytes and the level, for zstd packs.
+    zstd: Option<(Vec<u8>, u8)>,
+}
+
+fn bad(detail: String) -> Refusal {
+    Refusal {
         cause: "convert_bad_request",
         detail,
-    };
+    }
+}
+
+/// The request checked against the console: the source readable, the destination new and in a
+/// folder that exists, the emulator there when zstd packs are asked for.
+fn plan(request: &Request) -> Result<Plan, Refusal> {
     if request.dest.is_empty() {
-        return Err(bad("a build needs a dest".to_string()));
+        return Err(bad("a build needs a dest".into()));
     }
-    if !matches!(
-        request.format.as_str(),
-        "exfat" | "ffpkg" | "ffpfs" | "folder"
-    ) {
-        return Err(bad(format!("unknown format {:?}", request.format)));
-    }
-    let path = Path::new(&request.path);
-    // The same checks an inspection makes: what this program reads, and that it opens.
-    crate::inspect(path)?;
-    let unreadable = |e: ps5upload_fpkg::Error| Refusal {
-        cause: "convert_source_unreadable",
-        detail: format!("{}: {e}", request.path),
+    let image = match request.format.as_str() {
+        "folder" => None,
+        "exfat" => Some(ImageFormat::Exfat),
+        "ffpkg" => Some(ImageFormat::Ffpkg),
+        "ffpfs" => Some(ImageFormat::Ffpfs),
+        other => return Err(bad(format!("unknown format {other:?}"))),
     };
-    let mut tree = ps5upload_fpkg::source::open(path).map_err(unreadable)?;
-    let files = tree.files().to_vec();
-    let total: u64 = files.iter().map(|f| f.size).sum();
-    let started = Instant::now();
-    let mut done = 0u64;
-    for file in &files {
-        let mut at = 0u64;
-        while at < file.size {
-            if run.cancelled() {
-                return Err(Refusal {
-                    cause: "convert_cancelled",
-                    detail: format!("stopped after {done} of {total} bytes"),
-                });
-            }
-            let bytes = tree
-                .read_range(&file.path, at, READ_CHUNK)
-                .map_err(unreadable)?;
-            if bytes.is_empty() {
-                return Err(Refusal {
-                    cause: "convert_source_unreadable",
-                    detail: format!("{} ends at {at} of {} bytes", file.path, file.size),
-                });
-            }
-            at += bytes.len() as u64;
-            done += bytes.len() as u64;
-            run.progress("read", done, total);
+    let mode = match request.verify.as_str() {
+        "" | "fast" => VerifyMode::from_full(false, image == Some(ImageFormat::Ffpkg)),
+        "full" => VerifyMode::Full,
+        other => return Err(bad(format!("unknown verify {other:?}"))),
+    };
+    let dest = PathBuf::from(&request.dest);
+    let name = dest
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    let bad_dest = |detail: String| Refusal {
+        cause: "convert_bad_dest",
+        detail,
+    };
+    if !dest.is_absolute() || name.is_empty() || name.to_ascii_lowercase().ends_with(".partial") {
+        return Err(bad_dest(format!("{} is not an output path", request.dest)));
+    }
+    if let Some(f) = image {
+        let ext = dest
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default();
+        if !ext.eq_ignore_ascii_case(f.extension()) {
+            return Err(bad_dest(format!(
+                "{} does not end in .{}",
+                request.dest,
+                f.extension()
+            )));
         }
     }
-    let secs = started.elapsed().as_secs_f64().max(0.001);
-    crate::log(format_args!(
-        "read {} files, {done} bytes in {secs:.1} s ({:.0} MiB/s)",
-        files.len(),
-        done as f64 / secs / (1 << 20) as f64
-    ));
-    Err(Refusal {
-        cause: "convert_not_built_yet",
-        detail: format!(
-            "read all {done} bytes of the source; writing {} is not in this build",
-            request.dest
-        ),
+    if dest.symlink_metadata().is_ok() {
+        return Err(Refusal {
+            cause: "convert_destination_exists",
+            detail: format!("{} exists", request.dest),
+        });
+    }
+    let source = PathBuf::from(&request.path);
+    // What this program reads, and that it opens: the checks an inspection makes.
+    crate::inspect(&source)?;
+    if source == dest || dest.starts_with(&source) {
+        return Err(bad_dest(format!(
+            "{} is inside the source {}",
+            request.dest, request.path
+        )));
+    }
+    let zstd = if request.zstd {
+        let level = request.zstd_level.unwrap_or(DEFAULT_ZSTD_LEVEL);
+        if !(1..=22).contains(&level) {
+            return Err(bad(format!("zstd level {level} is not 1 to 22")));
+        }
+        Some((read_runtime(&request.zstd_runtime)?, level))
+    } else {
+        None
+    };
+    Ok(Plan {
+        source,
+        dest,
+        image,
+        mode,
+        zstd,
     })
+}
+
+/// The emulator zstd packs carry, from the file the app put on the console. Never fetched here:
+/// the converter does not go online.
+fn read_runtime(path: &str) -> Result<Vec<u8>, Refusal> {
+    let missing = |detail: String| Refusal {
+        cause: "convert_no_zstd_runtime",
+        detail,
+    };
+    if path.is_empty() {
+        return Err(missing(
+            "zstd packs need ampr-emu-ng on the console; the request names none".into(),
+        ));
+    }
+    let size = std::fs::metadata(path)
+        .map_err(|e| missing(format!("{path}: {e}")))?
+        .len();
+    if size == 0 || size > MAX_RUNTIME_BYTES {
+        return Err(missing(format!("{path} is {size} bytes: not an emulator")));
+    }
+    std::fs::read(path).map_err(|e| missing(format!("{path}: {e}")))
+}
+
+/// The source opened as the engine opens it: module names in the eboot's spelling, an unsigned
+/// eboot fake-signed; for packing, any packs it has decoded.
+fn open_source(path: &Path, packing: bool) -> Result<Box<dyn SourceTree>, String> {
+    let (tree, renamed, signing) =
+        ps5upload_fpkg::module_case::open_with_update(path, None).map_err(|e| e.to_string())?;
+    if !renamed.is_empty() {
+        crate::log(format_args!(
+            "renamed to the eboot's spelling: {}",
+            ps5upload_fpkg::module_case::describe(&renamed)
+        ));
+    }
+    if let Some(line) = signing.describe() {
+        crate::log(format_args!("{line}"));
+    }
+    if packing {
+        zstd_packs::readable_for_packing(tree)
+    } else {
+        Ok(tree)
+    }
+}
+
+/// Removes what a stopped or failed build of `dest` left: the names the helper also cleans up.
+/// A `.partial` folder only when it carries the build's marker.
+fn remove_leftovers(dest: &Path) {
+    let partial = folder_build::partial_of(dest);
+    if partial.is_dir() {
+        if folder_build::is_our_partial_dir(&partial) {
+            let _ = std::fs::remove_dir_all(&partial);
+        }
+    } else if partial.is_file() {
+        let _ = safe_write::remove_file(&partial);
+    }
+    image_build::remove_checkpoint(&partial);
+}
+
+/// Why a build failed, as a cause token: stopped, a drive gone, no room, else a plain failure.
+fn failure(detail: String, cancelled: bool, plan: &Plan) -> Refusal {
+    let lower = detail.to_ascii_lowercase();
+    let cause = if cancelled || detail == "cancelled" {
+        "convert_cancelled"
+    } else if !plan.source.exists() || plan.dest.parent().is_some_and(|d| !d.is_dir()) {
+        // U7: a pulled drive is named before the raw error.
+        "convert_drive_gone"
+    } else if lower.contains("no space")
+        || lower.contains("storage full")
+        || lower.contains("disk full")
+    {
+        "convert_no_space"
+    } else {
+        "convert_build_failed"
+    };
+    Refusal { cause, detail }
+}
+
+/// Builds the request's output (see the module docs). `stage(id, done, total)` hears the build's
+/// progress; `cancel` stops it.
+fn build(
+    request: &Request,
+    cancel: &AtomicBool,
+    stage: &mut dyn FnMut(&str, u64, u64),
+) -> Result<serde_json::Value, Refusal> {
+    let plan = plan(request)?;
+    let unreadable = |e: String| Refusal {
+        cause: "convert_source_unreadable",
+        detail: format!("{}: {e}", plan.source.display()),
+    };
+    let mut tree = open_source(&plan.source, false).map_err(unreadable)?;
+    if let Some(why) =
+        ps5upload_convert_core::refusal::ps4_refusal(&plan.source, &mut *tree, plan.image.is_some())
+    {
+        return Err(Refusal {
+            cause: "convert_unsupported_source",
+            detail: why,
+        });
+    }
+    if plan.zstd.is_some() {
+        // A game zstd packs can't be made of (a PS4 game, no eboot.bin), or packs that don't
+        // decode.
+        tree = zstd_packs::readable_for_packing(tree).map_err(|detail| Refusal {
+            cause: "convert_not_packable",
+            detail,
+        })?;
+    }
+    if tree.files().is_empty() {
+        return Err(unreadable("no files in it".into()));
+    }
+    let data: u64 = tree.files().iter().map(|f| f.size).sum();
+    // U1: the destination measured once, before the first byte.
+    let dir = plan.dest.parent().unwrap_or(Path::new("/"));
+    let probe = safe_write::probe(dir).map_err(|e| Refusal {
+        cause: "convert_bad_dest",
+        detail: format!("{}: {e}", dir.display()),
+    })?;
+    crate::log(format_args!(
+        "destination {}: {} free={:?} read_only={}",
+        dir.display(),
+        probe.fs_type,
+        probe.free,
+        probe.read_only
+    ));
+    // An image is at least as large as the game in it; packs may well be smaller, so only the
+    // drive's own limits are checked for them.
+    let need = if plan.zstd.is_some() { 0 } else { data };
+    if let Some(why) = probe.refusal(need, plan.image.is_some(), folder_build::SPARE) {
+        let cause = if probe.read_only {
+            "convert_dest_read_only"
+        } else if why.contains("at most") {
+            "convert_too_big_for_drive"
+        } else {
+            "convert_no_space"
+        };
+        return Err(Refusal {
+            cause,
+            detail: format!("{}: {why}", dir.display()),
+        });
+    }
+    // Ours alone from here: a leftover of an earlier run under this name is cleared.
+    let partial = folder_build::partial_of(&plan.dest);
+    let Some(_writing) = ps5upload_convert_core::writing::Writing::claim(partial) else {
+        return Err(bad("this output is already being built".into()));
+    };
+    remove_leftovers(&plan.dest);
+    crate::log(format_args!(
+        "building {} files, {data} bytes -> {} ({:?}, zstd {:?})",
+        tree.files().len(),
+        plan.dest.display(),
+        plan.mode,
+        plan.zstd.as_ref().map(|z| z.1)
+    ));
+    let started = Instant::now();
+    let chunk = image_build::DEFAULT_VERIFY_CHUNK;
+    let source = plan.source.clone();
+    let packing = plan.zstd.is_some();
+    let reopen = move || open_source(&source, packing);
+    let built = match (plan.image, &plan.zstd) {
+        (Some(format), zstd) => {
+            // A PS4 game's image needs the param.json ShadowMount+ reads.
+            let mut ps4 = ps5upload_fpkg::ps4_param::Ps4Params::wrap(&mut *tree)
+                .map_err(|e| unreadable(format!("param.sfo: {e}")))?;
+            let tree: &mut dyn SourceTree = match ps4.as_mut() {
+                Some(p) => p,
+                None => &mut *tree,
+            };
+            match zstd {
+                Some((runtime, level)) => zstd_packs::build(
+                    format, *level, None, runtime, tree, &plan.dest, plan.mode, chunk, cancel,
+                    stage, THREADS,
+                ),
+                None => {
+                    // A libSceAmpr game gets a fresh ampr_emu.index, as on a computer (#449).
+                    let now = zstd_packs::now_secs();
+                    match image_build::AmprIndexed::wrap_at(&mut *tree, now) {
+                        Ok(Some(mut indexed)) => image_build::build(
+                            format,
+                            None,
+                            &mut indexed,
+                            &plan.dest,
+                            plan.mode,
+                            chunk,
+                            cancel,
+                            stage,
+                        ),
+                        Ok(None) => image_build::build(
+                            format, None, tree, &plan.dest, plan.mode, chunk, cancel, stage,
+                        ),
+                        Err(e) => Err(format!("ampr_emu.index: {e}")),
+                    }
+                }
+            }
+            .map(|b| (b.files, b.image_bytes, b.detail))
+        }
+        (None, Some((runtime, level))) => zstd_packs::build_folder(
+            *level, None, runtime, &mut *tree, &reopen, &plan.dest, plan.mode, cancel, stage,
+            THREADS,
+        )
+        .map(|b| (b.files, b.bytes, b.detail)),
+        (None, None) => folder_build::build_to(
+            &mut *tree,
+            &reopen,
+            &FolderOut::Local(&plan.dest),
+            plan.mode,
+            cancel,
+            stage,
+        )
+        .map(|b| (b.files, b.bytes, b.detail)),
+    };
+    match built {
+        Ok((files, bytes, detail)) => {
+            crate::log(format_args!(
+                "built {} in {:.1} s: {detail}",
+                plan.dest.display(),
+                started.elapsed().as_secs_f64()
+            ));
+            Ok(json!({
+                "dest": plan.dest,
+                "format": request.format,
+                "files": files,
+                "bytes": bytes,
+                "detail": detail,
+            }))
+        }
+        Err(detail) => {
+            remove_leftovers(&plan.dest);
+            Err(failure(detail, cancel.load(Ordering::Relaxed), &plan))
+        }
+    }
+}
+
+/// Runs a build with its cancel watcher and status reports. `hook` (tests) hears each stage
+/// report after the status does.
+fn run_build(
+    request: &Request,
+    dir: &Path,
+    base: &serde_json::Value,
+    hook: &mut dyn FnMut(&str),
+) -> Result<serde_json::Value, Refusal> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let done = Arc::new(AtomicBool::new(false));
+    let watcher = watch_cancel(dir, Arc::clone(&cancel), Arc::clone(&done));
+    let mut running = Running {
+        dir,
+        base: base.clone(),
+        last_status: None,
+        stage: String::new(),
+    };
+    let result = build(request, &cancel, &mut |stage, d, t| {
+        running.progress(stage, d, t);
+        hook(stage);
+    });
+    done.store(true, Ordering::Relaxed);
+    let _ = watcher.join();
+    result
 }
 
 /// Runs the request in `dir` and leaves its outcome in `dir/status.json`. Returns the process's
 /// exit code: 0 done, 1 failed. A failure to write the status itself is the only error.
 pub fn run(dir: &Path) -> std::io::Result<i32> {
+    run_with(dir, &mut |_| {})
+}
+
+fn run_with(dir: &Path, hook: &mut dyn FnMut(&str)) -> std::io::Result<i32> {
     let pid = std::process::id();
     let request = read_request(dir);
     // Read once: a request left behind would run again at the next start.
@@ -211,38 +539,28 @@ pub fn run(dir: &Path) -> std::io::Result<i32> {
         s["detail"] = json!(short(&refusal.detail));
         write_status(dir, &s).map(|()| 1)
     };
+    let done = |result: serde_json::Value| {
+        let mut s = status("done");
+        s["result"] = result;
+        write_status(dir, &s).map(|()| 0)
+    };
     // The helper waits for the first status to know the program started and learn its pid.
     write_status(dir, &status("running"))?;
     match request.op.as_str() {
         "inspect" => {
             crate::log(format_args!("inspect {}", request.path));
             match crate::inspect(Path::new(&request.path)) {
-                Ok(inspection) => {
-                    let mut s = status("done");
-                    s["result"] = json!(inspection);
-                    write_status(dir, &s)?;
-                    Ok(0)
-                }
+                Ok(inspection) => done(json!(inspection)),
                 Err(refusal) => fail(refusal),
             }
         }
         "build" => {
             crate::log(format_args!(
-                "build {} -> {} ({})",
-                request.path, request.dest, request.format
+                "build {} -> {} ({}, zstd {}, verify {:?})",
+                request.path, request.dest, request.format, request.zstd, request.verify
             ));
-            let mut running = Running {
-                dir,
-                base: base.clone(),
-                last_status: Instant::now(),
-                last_cancel: Instant::now(),
-                cancelled: false,
-            };
-            match read_through(&request, &mut running) {
-                Ok(()) => {
-                    write_status(dir, &status("done"))?;
-                    Ok(0)
-                }
+            match run_build(&request, dir, &base, hook) {
+                Ok(result) => done(result),
                 Err(refusal) => fail(refusal),
             }
         }
@@ -262,14 +580,33 @@ mod tests {
         serde_json::from_slice(&std::fs::read(dir.join("status.json")).unwrap()).unwrap()
     }
 
-    #[test]
-    fn an_inspect_request_ends_in_a_done_status_with_the_result() {
-        let tmp = TempDir::new("job");
+    /// The names in `dir`, sorted.
+    fn names(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// A job folder and a game beside it.
+    fn setup(tag: &str) -> (TempDir, PathBuf, PathBuf) {
+        let tmp = TempDir::new(tag);
         let game = game_folder(&tmp.0);
         let dir = tmp.0.join("convert");
         std::fs::create_dir_all(&dir).unwrap();
-        let request = json!({"id": "j1", "op": "inspect", "path": game});
+        (tmp, game, dir)
+    }
+
+    fn ask(dir: &Path, request: serde_json::Value) {
         std::fs::write(dir.join("request.json"), request.to_string()).unwrap();
+    }
+
+    #[test]
+    fn an_inspect_request_ends_in_a_done_status_with_the_result() {
+        let (_tmp, game, dir) = setup("job");
+        ask(&dir, json!({"id": "j1", "op": "inspect", "path": game}));
 
         assert_eq!(run(&dir).unwrap(), 0);
         let s = status(&dir);
@@ -281,16 +618,13 @@ mod tests {
         let result: crate::Inspection = serde_json::from_value(s["result"].clone()).unwrap();
         assert_eq!(result, crate::inspect(&game).unwrap());
         // The request is gone and no temporary status is left behind.
-        let left: Vec<_> = std::fs::read_dir(&dir)
-            .unwrap()
-            .map(|e| e.unwrap().file_name().into_string().unwrap())
-            .collect();
-        assert_eq!(left, ["status.json"]);
+        assert_eq!(names(&dir), ["status.json"]);
     }
 
     #[test]
     fn failures_carry_a_cause() {
         let tmp = TempDir::new("jobfail");
+        let game = game_folder(&tmp.0);
         let run_with = |request: Option<&str>| {
             if let Some(r) = request {
                 std::fs::write(tmp.0.join("request.json"), r).unwrap();
@@ -301,6 +635,10 @@ mod tests {
         };
         assert_eq!(run_with(None)["cause"], "convert_bad_request");
         assert_eq!(run_with(Some("{not json"))["cause"], "convert_bad_request");
+        assert_eq!(
+            run_with(Some(&"x".repeat(MAX_REQUEST_BYTES as usize + 1)))["cause"],
+            "convert_bad_request"
+        );
         assert_eq!(
             run_with(Some(r#"{"id":"a","op":"build"}"#))["cause"],
             "convert_bad_request"
@@ -316,42 +654,160 @@ mod tests {
             (s["id"].as_str(), s["cause"].as_str()),
             (Some("b"), Some("convert_source_unreadable"))
         );
+        let build = |extra: serde_json::Value| {
+            let mut r = json!({"id": "c", "op": "build", "path": game,
+                "dest": tmp.0.join("out.exfat"), "format": "exfat"});
+            for (k, v) in extra.as_object().unwrap() {
+                r[k] = v.clone();
+            }
+            run_with(Some(&r.to_string()))["cause"].clone()
+        };
+        assert_eq!(build(json!({"format": "iso"})), "convert_bad_request");
+        assert_eq!(build(json!({"verify": "some"})), "convert_bad_request");
+        assert_eq!(build(json!({"dest": "relative.exfat"})), "convert_bad_dest");
+        assert_eq!(
+            build(json!({"dest": tmp.0.join("out.ffpkg")})),
+            "convert_bad_dest"
+        );
+        assert_eq!(
+            build(json!({"dest": game.join("inside.exfat")})),
+            "convert_bad_dest"
+        );
+        assert_eq!(
+            build(json!({"dest": tmp.0.join("no-such-dir/out.exfat")})),
+            "convert_bad_dest"
+        );
+        std::fs::write(tmp.0.join("taken.exfat"), b"mine").unwrap();
+        assert_eq!(
+            build(json!({"dest": tmp.0.join("taken.exfat")})),
+            "convert_destination_exists"
+        );
+        assert_eq!(std::fs::read(tmp.0.join("taken.exfat")).unwrap(), b"mine");
+        // zstd packs without ampr-emu-ng on the console: refused, nothing downloaded.
+        assert_eq!(build(json!({"zstd": true})), "convert_no_zstd_runtime");
+        assert_eq!(
+            build(json!({"zstd": true, "zstd_runtime": tmp.0.join("missing.sprx")})),
+            "convert_no_zstd_runtime"
+        );
+        std::fs::write(tmp.0.join("emu.sprx"), b"EMULATOR").unwrap();
+        assert_eq!(
+            build(json!({"zstd": true, "zstd_runtime": tmp.0.join("emu.sprx"), "zstd_level": 30})),
+            "convert_bad_request"
+        );
+        assert!(!tmp.0.join("out.exfat").exists());
+        assert!(!tmp.0.join("out.exfat.partial").exists());
     }
 
-    /// The stand-in build reads the source and says it is not built yet; with a cancel file
-    /// there it stops instead. Neither writes the destination.
+    /// Every output format, built through the job folder as the helper asks for it: done, the
+    /// output in place and inspecting as the game, nothing else left beside it.
     #[test]
-    fn a_build_reads_the_source_and_stops_when_asked() {
-        let tmp = TempDir::new("jobbuild");
-        let game = game_folder(&tmp.0);
-        let dir = tmp.0.join("convert");
-        std::fs::create_dir_all(&dir).unwrap();
-        let dest = tmp.0.join("out.exfat");
-        let request =
-            json!({"id": "b1", "op": "build", "path": game, "dest": dest, "format": "exfat"});
+    fn a_build_writes_every_format_and_reads_back() {
+        let (tmp, game, dir) = setup("jobbuild");
+        let out = tmp.0.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        for (format, name, verify) in [
+            ("exfat", "g.exfat", "fast"),
+            ("ffpkg", "g.ffpkg", "full"),
+            ("ffpfs", "g.ffpfs", ""),
+            ("folder", "g", "full"),
+        ] {
+            let dest = out.join(name);
+            ask(
+                &dir,
+                json!({"id": format, "op": "build", "path": game, "dest": dest,
+                    "format": format, "zstd": false, "verify": verify}),
+            );
+            let mut stages: Vec<String> = Vec::new();
+            let code = run_with(&dir, &mut |s| {
+                if stages.last().map(String::as_str) != Some(s) {
+                    stages.push(s.to_string());
+                }
+            })
+            .unwrap();
+            let s = status(&dir);
+            assert_eq!(code, 0, "{format}: {s}");
+            assert_eq!(s["state"], "done");
+            assert_eq!(s["result"]["format"], format);
+            assert_eq!(s["result"]["files"], 3);
+            assert!(stages.contains(&"write".to_string()), "{stages:?}");
+            assert_eq!(stages.last().map(String::as_str), Some("verify"));
+            let i = crate::inspect(&dest).unwrap();
+            assert_eq!(i.title.as_deref(), Some("Test Game"), "{format}");
+            assert_eq!(i.data_bytes, crate::inspect(&game).unwrap().data_bytes);
+            assert_eq!(names(&dir), ["status.json"], "{format}");
+        }
+        assert_eq!(names(&out), ["g", "g.exfat", "g.ffpfs", "g.ffpkg"]);
+    }
 
-        std::fs::write(dir.join("request.json"), request.to_string()).unwrap();
-        assert_eq!(run(&dir).unwrap(), 1);
-        let s = status(&dir);
-        assert_eq!(s["cause"], "convert_not_built_yet");
-        assert!(s["detail"].as_str().unwrap().starts_with("read all 100"));
+    /// zstd packs with the emulator the request names: an image and a folder, each reading
+    /// back through its packs.
+    #[test]
+    fn a_build_with_zstd_packs_uses_the_given_emulator() {
+        let (tmp, game, dir) = setup("jobzstd");
+        // Enough data to pack.
+        std::fs::write(game.join("data/table.bin"), "asset 7 ".repeat(40_000)).unwrap();
+        let emu = tmp.0.join("libSceAmpr.sprx");
+        std::fs::write(&emu, b"EMULATOR").unwrap();
+        for (format, name) in [("exfat", "z.exfat"), ("folder", "z")] {
+            let dest = tmp.0.join(name);
+            ask(
+                &dir,
+                json!({"id": "z", "op": "build", "path": game, "dest": dest, "format": format,
+                    "zstd": true, "zstd_runtime": emu, "zstd_level": 3}),
+            );
+            let mut stages: Vec<String> = Vec::new();
+            let code = run_with(&dir, &mut |s| {
+                if stages.last().map(String::as_str) != Some(s) {
+                    stages.push(s.to_string());
+                }
+            })
+            .unwrap();
+            assert_eq!(code, 0, "{format}: {}", status(&dir));
+            assert_eq!(
+                stages.first().map(String::as_str),
+                Some("pack"),
+                "{stages:?}"
+            );
+            assert_eq!(
+                crate::inspect(&dest).unwrap().packed.as_deref(),
+                Some("zstd")
+            );
+        }
+    }
 
-        std::fs::write(dir.join("request.json"), request.to_string()).unwrap();
-        std::fs::write(dir.join("cancel"), b"").unwrap();
-        // The cancel file is looked for after CANCEL_EVERY: a slow source gives it that long.
-        let mut running = Running {
-            dir: &dir,
-            base: json!({}),
-            last_status: Instant::now(),
-            last_cancel: Instant::now() - CANCEL_EVERY,
-            cancelled: false,
-        };
-        let request: Request = serde_json::from_value(request).unwrap();
-        assert_eq!(
-            read_through(&request, &mut running).unwrap_err().cause,
-            "convert_cancelled"
-        );
-        assert!(!dest.exists());
+    /// The helper's Stop mid-build: the cancel file is seen, the build stops, and neither the
+    /// output nor any `.partial` is left.
+    #[test]
+    fn a_cancel_mid_build_leaves_nothing() {
+        let (tmp, game, dir) = setup("jobcancel");
+        // Large enough that the write stage reports more than once.
+        std::fs::write(game.join("data/big.bin"), vec![3u8; 24 << 20]).unwrap();
+        for (format, name) in [("exfat", "c.exfat"), ("folder", "c")] {
+            let dest = tmp.0.join(name);
+            let _ = std::fs::remove_file(dir.join("cancel"));
+            ask(
+                &dir,
+                json!({"id": "c", "op": "build", "path": game, "dest": dest, "format": format}),
+            );
+            let cancel = dir.join("cancel");
+            let code = run_with(&dir, &mut |s| {
+                if s == "write" && !cancel.exists() {
+                    std::fs::write(&cancel, b"").unwrap();
+                    // Long enough for the watcher to see it.
+                    std::thread::sleep(CANCEL_EVERY * 3);
+                }
+            })
+            .unwrap();
+            let s = status(&dir);
+            assert_eq!(code, 1, "{format}: {s}");
+            assert_eq!(s["cause"], "convert_cancelled", "{format}");
+            assert!(!dest.exists(), "{format}");
+            let left: Vec<String> = names(&tmp.0)
+                .into_iter()
+                .filter(|n| n.contains(".partial"))
+                .collect();
+            assert!(left.is_empty(), "{format}: {left:?}");
+        }
     }
 
     #[test]

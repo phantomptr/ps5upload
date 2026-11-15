@@ -5,9 +5,10 @@
 //! helper down. The two talk through files in one folder, [`job`]: the helper writes
 //! `request.json`, this program rewrites `status.json`, and a `cancel` file asks it to stop.
 //!
-//! This first version only inspects a source ([`inspect`]): it proves that the format code
-//! (`ps5upload-fpkg`) builds for and links on the console. Building images comes with the shared
-//! build crate; until then the engine on a computer does every conversion.
+//! It inspects a source ([`inspect`]) and builds one ([`job`]): a game folder, `.exfat`,
+//! `.ffpkg` or `.ffpfs` on the console into a `.exfat`, `.ffpkg`, `.ffpfs` or a folder, zstd
+//! packs optional, read back before it gets its name. The build code is
+//! `ps5upload-convert-core`, the same the engine runs on a computer.
 
 #[cfg(any(target_env = "ps5", test))]
 pub mod alloc;

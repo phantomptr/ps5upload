@@ -177,7 +177,7 @@ static void *fake_main(void *arg) {
                    id, (long)getpid());
         break;
     case FAKE_FAILS:
-        put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"build\",\"state\":\"failed\",\"cause\":\"convert_not_built_yet\","
+        put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"build\",\"state\":\"failed\",\"cause\":\"convert_build_failed\","
                    "\"detail\":\"read all 5 bytes\"}\n",
                    id, (long)getpid());
         break;
@@ -408,7 +408,7 @@ static void test_op(void) {
 
     /* A build that fails: the converter's cause is the job's message. */
     st = run_op(FAKE_FAILS, args, c);
-    CHECK(st == AVA1_ERR_IO && strcmp(c->message, "convert_not_built_yet") == 0);
+    CHECK(st == AVA1_ERR_IO && strcmp(c->message, "convert_build_failed") == 0);
     {
         char got[400];
         int z = 0;
