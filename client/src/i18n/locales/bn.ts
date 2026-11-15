@@ -6646,6 +6646,8 @@ library_compressed_hint: "সংকুচিত ইমেজ চালাতে 
 "play_setup_state_done": "সম্পন্ন",
 "play_setup_state_todo": "করতে হবে",
 "play_setup_state_wait": "অপেক্ষায়",
+"play_setup_state_optional": "ঐচ্ছিক",
+"play_setup_rest_optional": "ঐচ্ছিক: শুধু PS5 রেস্ট মোডে থাকার সময় Play শুরু করতে লাগে। আপনি নিজে কনসোল চালু করলে এই ধাপটি বাদ দিন।",
 "play_setup_title": "খেলুন সেট আপ করুন",
 "play_setup_wait": "আগে উপরের ধাপগুলো করুন; সেগুলো শেষ হলে এটা খুলবে।",
 "play_setup_read_failed": "PS5-এর সেটিংস পড়া যায়নি। আবার চেষ্টা হচ্ছে…",

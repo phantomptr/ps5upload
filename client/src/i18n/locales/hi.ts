@@ -6660,6 +6660,8 @@ library_compressed_hint: "संपीड़ित इमेज चलाने 
 "play_setup_state_done": "पूरा",
 "play_setup_state_todo": "करना है",
 "play_setup_state_wait": "प्रतीक्षा में",
+"play_setup_state_optional": "वैकल्पिक",
+"play_setup_rest_optional": "वैकल्पिक: केवल तब ज़रूरी है जब PS5 रेस्ट मोड में हो और आप Play शुरू करना चाहें। अगर आप कंसोल खुद चालू करते हैं, तो यह चरण छोड़ दें।",
 "play_setup_title": "खेलें सेट अप करें",
 "play_setup_wait": "पहले ऊपर के कदम पूरे करें; उनके बाद यह खुलेगा।",
 "play_setup_read_failed": "PS5 की सेटिंग्स नहीं पढ़ी जा सकीं। फिर कोशिश हो रही है…",

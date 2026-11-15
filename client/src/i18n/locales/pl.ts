@@ -6886,6 +6886,8 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "play_setup_state_done": "Gotowe",
 "play_setup_state_todo": "Do zrobienia",
 "play_setup_state_wait": "Czeka",
+"play_setup_state_optional": "Opcjonalne",
+"play_setup_rest_optional": "Opcjonalne: potrzebne tylko do uruchomienia Play, gdy PS5 jest w trybie spoczynku. Jeśli sam włączasz konsolę, pomiń ten krok.",
 "play_setup_title": "Skonfiguruj Graj",
 "play_setup_wait": "Najpierw wykonaj kroki powyżej; ten otworzy się, gdy będą gotowe.",
 "play_setup_read_failed": "Nie udało się odczytać ustawień PS5. Ponawianie…",

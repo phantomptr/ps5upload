@@ -134,7 +134,13 @@ export default function PlaySetupScreen() {
         "rpg_rest_body",
         undefined,
         "Settings › System › Power Saving › Features Available in Rest Mode: turn on Stay Connected to the Internet and Enable Turning On PS5 from Network. Without them, a console in rest mode cannot be woken and its network sleeps after a few seconds. Only the console can show these.",
-      ),
+      ) +
+        " " +
+        tr(
+          "play_setup_rest_optional",
+          undefined,
+          "Optional: only needed to start Play while the PS5 is in rest mode. If you turn the console on yourself, skip this step.",
+        ),
       act:
         s.states.rest === "ok" ? (
           <Button size="sm" variant="ghost" onClick={() => s.setRestDone(false)}>
@@ -371,7 +377,9 @@ function StateText({ state, tr }: { state: SetupState; tr: ReturnType<typeof use
         ? tr("play_setup_state_todo", undefined, "To do")
         : state === "manual"
           ? tr("rpg_on_console", undefined, "check on the console")
-          : tr("play_setup_state_wait", undefined, "Waiting");
+          : state === "optional"
+            ? tr("play_setup_state_optional", undefined, "Optional")
+            : tr("play_setup_state_wait", undefined, "Waiting");
   return (
     <span className="flex shrink-0 items-center gap-1 text-xs text-[var(--color-muted)]">
       {state === "manual" && <CircleDot size={10} aria-hidden />}

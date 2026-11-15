@@ -16,8 +16,9 @@ export type SetupKey =
   | "play";
 
 /** ok: done. todo: the next thing to do here. wait: can't be checked or done until an earlier
- *  step is. manual: only the console can show it; the user ticks it. */
-export type SetupState = "ok" | "todo" | "wait" | "manual";
+ *  step is. manual: only the console can show it; the user ticks it. optional: not needed to
+ *  play (only the console can show it; the user may tick it). */
+export type SetupState = "ok" | "todo" | "wait" | "manual" | "optional";
 
 export const SETUP_ORDER: readonly SetupKey[] = [
   "connect",
@@ -65,7 +66,9 @@ export function setupStates(i: SetupInput): Record<SetupKey, SetupState> {
   const signin = after(account, r ? npSigned || r.service_enabled !== 0 : undefined);
   const userOn = r && r.has_per_user !== 0 ? r.user_enabled !== 0 : true;
   const service = after(signin, r ? r.service_enabled !== 0 && userOn : undefined);
-  const rest: SetupState = i.restOk ? "ok" : "manual";
+  // Only for starting Play while the PS5 is in rest mode: someone who turns the console on
+  // themselves never needs it, so it is never the step in the way.
+  const rest: SetupState = i.restOk ? "ok" : "optional";
   // Pairing needs the service on; keys kept from before still count when the console is away.
   const pair: SetupState = i.paired ? "ok" : service === "ok" ? "todo" : "wait";
   // No payload in the way (Hush off or not loaded): read on its own, whatever the steps above.
@@ -74,13 +77,16 @@ export function setupStates(i: SetupInput): Record<SetupKey, SetupState> {
   return { connect, user, account, signin, service, rest, pair, blockers, play };
 }
 
-/** The step to open: the first one that is not done (a manual one counts as not done). */
+/** The step to open: the first one that is not done (a manual one counts as not done, an
+ *  optional one is skipped). */
 export function nextStep(s: Record<SetupKey, SetupState>): SetupKey | null {
-  return SETUP_ORDER.find((k) => s[k] !== "ok") ?? null;
+  return SETUP_ORDER.find((k) => s[k] !== "ok" && s[k] !== "optional") ?? null;
 }
 
+/** Done out of the steps that count: an optional step not taken is left out. */
 export function setupProgress(s: Record<SetupKey, SetupState>): { done: number; total: number } {
-  return { done: SETUP_ORDER.filter((k) => s[k] === "ok").length, total: SETUP_ORDER.length };
+  const counted = SETUP_ORDER.filter((k) => s[k] !== "optional");
+  return { done: counted.filter((k) => s[k] === "ok").length, total: counted.length };
 }
 
 /** Ready to play: paired (the rest of the list is how you get there, and keys kept from before

@@ -6662,6 +6662,8 @@ library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour
 "play_setup_state_done": "Fait",
 "play_setup_state_todo": "À faire",
 "play_setup_state_wait": "En attente",
+"play_setup_state_optional": "Facultatif",
+"play_setup_rest_optional": "Facultatif : seulement utile pour lancer Play pendant que la PS5 est en mode repos. Si vous allumez la console vous-même, passez cette étape.",
 "play_setup_title": "Configurer Jouer",
 "play_setup_wait": "Fais d'abord les étapes au-dessus ; celle-ci s'ouvre quand elles sont faites.",
 "play_setup_read_failed": "Impossible de lire les paramètres de la PS5. Nouvel essai…",

@@ -204,16 +204,15 @@ test("the checklist ticks steps by itself and does the ones it can", async ({ pa
   await expect(step("service")).toHaveAttribute("data-state", "ok");
   expect(c.enabled).toEqual(["service", "user"]);
 
-  // Rest mode: only the console shows it, so the user ticks it.
-  await page.getByTestId("play-setup-rest-done").click();
-  await expect(step("rest")).toHaveAttribute("data-state", "ok");
+  // Rest mode is optional (only for starting Play while the PS5 sleeps): never the step in the way.
+  await expect(step("rest")).toHaveAttribute("data-state", "optional");
 
   // Pair, right here.
   await page.getByTestId("play-setup-pair").click();
   await expect(step("pair")).toHaveAttribute("data-state", "ok");
   expect(c.paired).toBe(1);
   await expect(step("play")).toHaveAttribute("data-state", "todo");
-  await expect(page.getByTestId("play-setup")).toContainText("8 of 9 done");
+  await expect(page.getByTestId("play-setup")).toContainText("7 of 8 done");
 
   // Home now offers Play itself (in-app navigation: a reload would rerun this test's setup).
   await page.getByRole("navigation").first().locator('a[href="/home"]').first().click();
@@ -265,7 +264,6 @@ test("pairing that fails on the console says why and offers the PIN shown on the
   c.failAuto = "the PS5 could not make a pairing PIN: sceRemoteplayGeneratePinCode failed: 0x80C60011";
   await page.goto("/play/setup", { waitUntil: "domcontentloaded" });
   const step = page.locator('[data-step="pair"]');
-  await page.getByTestId("play-setup-rest-done").click();
   await expect(step).toHaveAttribute("data-state", "todo", { timeout: 30_000 });
   await page.getByTestId("play-setup-pair").click();
   // The console's own reason, and the way round it, opened.
