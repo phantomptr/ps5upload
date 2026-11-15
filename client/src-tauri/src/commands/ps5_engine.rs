@@ -2493,6 +2493,8 @@ pub async fn exfat_build(
     destination: Option<JsonValue>,
     // A PS4 update merged into the PS4 game `source`.
     update: Option<String>,
+    // A game in asset packs is written as plain files again.
+    unpack_packs: Option<bool>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/exfat/build");
@@ -2516,6 +2518,7 @@ pub async fn exfat_build(
             "ampr_emu_build": ampr_emu_build,
             "destination": destination,
             "update": update,
+            "unpack_packs": unpack_packs.unwrap_or(false),
         }),
     )
     .await
@@ -2539,6 +2542,11 @@ pub async fn folder_build(
     update: Option<String>,
     // Where the folder goes: {"kind":"local"} (the default) or {"kind":"server",...}.
     destination: Option<JsonValue>,
+    // A game in asset packs is written as plain files again; the source may then be a folder.
+    unpack_packs: Option<bool>,
+    // With unpack_packs: the AMPR emulator choice, as an image build takes it.
+    add_ampr_emu: Option<bool>,
+    ampr_emu_build: Option<String>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/folder/build");
@@ -2554,6 +2562,9 @@ pub async fn folder_build(
             "ampr_zstd": ampr_zstd,
             "update": update,
             "destination": destination,
+            "unpack_packs": unpack_packs.unwrap_or(false),
+            "add_ampr_emu": add_ampr_emu.unwrap_or(true),
+            "ampr_emu_build": ampr_emu_build,
         }),
     )
     .await

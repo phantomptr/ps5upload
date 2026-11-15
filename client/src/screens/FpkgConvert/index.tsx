@@ -51,7 +51,7 @@ import { useConnectionsStore } from "../../state/connections";
 import { MakeCard } from "./MakeCard";
 import { mergeRole, Ps4MergePicker } from "./Ps4Merge";
 import { OptionsCard } from "./OptionsCard";
-import { folderPackOptions, folderPacks, packOptions } from "./ImageOptions";
+import { folderPackOptions, folderPacks, packOptions, type UnpackChoice } from "./ImageOptions";
 import {
   OutputChoice,
   RunCard,
@@ -197,6 +197,8 @@ export default function WorkshopScreen() {
   // the queue.
   const [lz4On, setLz4On] = useState(false);
   const [lz4Profile, setLz4Profile] = useState<{ name: string; text: string; measured?: boolean } | null>(null);
+  // A game in asset packs written as plain files again; the game's own, off for the next one.
+  const [unpackPacks, setUnpackPacks] = useState(false);
   const [lz4InstallRuntime, setLz4InstallRuntime] = useState(false);
   const [packKind, setPackKind] = useState<"lz4" | "zstd">("lz4");
   const [emuAddedTo, setEmuAddedTo] = useState<string | null>(null);
@@ -217,12 +219,14 @@ export default function WorkshopScreen() {
     isFolder: boolean,
     lz4?: AmprLz4Options,
     zstd?: ZstdPacks,
+    /** Write this game's asset packs out as plain files (the game under ①, when ticked). */
+    unpack?: boolean,
   ): boolean | QueueSkip => {
     // A later part of a multi-part archive is read through its first part.
     if (isRarLaterVolume(src)) return "later-part";
     if (build.kind === "image" && !isFolder && !isFolderableSource(src) && !isArchiveSource(src))
       return "not-image";
-    if (build.kind === "folder" && !isFolderableSource(src) && !(isFolder && zstd)) return "not-folder";
+    if (build.kind === "folder" && !isFolderableSource(src) && !(isFolder && (zstd || unpack))) return "not-folder";
     const u = useUploadStore.getState();
     const out = outFor(src);
     const prefs = useConvertPrefs.getState();
@@ -238,10 +242,12 @@ export default function WorkshopScreen() {
       compression,
       build:
         build.kind === "image"
-          ? imageBuildWith(build, lz4)
+          ? { ...imageBuildWith(build, lz4), ...(unpack && !lz4 ? { unpackPacks: true } : {}) }
           : build.kind === "folder" && zstd
             ? { ...build, zstd }
-            : build,
+            : build.kind === "folder" && unpack
+              ? { ...build, unpackPacks: true }
+              : build,
       imageDest:
         build.kind === "image"
           ? { volume: u.destinationVolume, subpath: u.destinationSubpath || DEFAULT_IMAGE_SUBPATH }
@@ -409,6 +415,7 @@ export default function WorkshopScreen() {
       setLz4On(false);
       setLz4Profile(null);
       setLz4InstallRuntime(false);
+      setUnpackPacks(false);
       void check(path);
     },
     [check, reset, setSource, setPassword],
@@ -561,6 +568,7 @@ export default function WorkshopScreen() {
         zstd: folderPackOptions(lz4Choice, packProfile),
         update,
         ...(toServer ? { toServer } : {}),
+        ...(unpackOn ? { unpackPacks: true } : {}),
       });
       return;
     }
@@ -585,11 +593,12 @@ export default function WorkshopScreen() {
         packOptions(build.format, lz4Choice, packProfile),
         password || undefined,
         out.keepBoth,
-        direct || toServer || update
+        direct || toServer || update || unpackOn
           ? {
               ...(direct ? { toConsole: plan } : {}),
               ...(toServer ? { toServer } : {}),
               ...(update ? { update } : {}),
+              ...(unpackOn ? { unpackPacks: true } : {}),
             }
           : undefined,
       );
@@ -651,6 +660,7 @@ export default function WorkshopScreen() {
     setLz4On(false);
     setLz4Profile(null);
     setLz4InstallRuntime(false);
+    setUnpackPacks(false);
     setInspection(null);
     setEstimates(null);
     setChecking(false);
@@ -731,9 +741,19 @@ export default function WorkshopScreen() {
   const packProfile = packKind === "zstd" && lz4Profile?.measured ? undefined : lz4Profile?.text;
   // A folder in zstd packs can be made of a game folder too.
   const packsFolder = folderPacks(lz4Choice);
-  // A game folder with an update merged in is a new folder too.
-  const canFolder = unpackable || (isLocalFolder && (packsFolder || mergeReady));
-  const isFolderSource = src !== "" && !unpackable && !isArchiveSource(src) && !packsFolder && !mergeReady;
+  // A game in asset packs can be written as plain files again, as an image or a folder, while
+  // no pack option is on (packing it again decodes the old packs anyway).
+  const packsOn = build.kind === "image" ? lz4Active(build.format, lz4Choice) : packsFolder;
+  const unpackChoice: UnpackChoice | undefined =
+    inspection?.packs && (build.kind === "image" || build.kind === "folder") && !packsOn
+      ? { kind: inspection.packs, on: unpackPacks, onToggle: setUnpackPacks }
+      : undefined;
+  const unpackOn = !!unpackChoice?.on;
+  // A game folder with an update merged in is a new folder too, and so is a packed one unpacked
+  // (offered for any packed game folder: the checkbox is under "A game folder").
+  const canFolder = unpackable || (isLocalFolder && (packsFolder || mergeReady || !!inspection?.packs));
+  const isFolderSource =
+    src !== "" && !unpackable && !isArchiveSource(src) && !packsFolder && !mergeReady && !unpackOn;
 
   /** Check the picked pair: the merged game, or why the two don't go together. */
   const checkMerge = async (pair = mergePair) => {
@@ -1127,6 +1147,7 @@ export default function WorkshopScreen() {
               // A game's own: nothing to offer until the next game is checked.
               lz4: locked ? undefined : lz4Choice,
             }}
+            unpack={locked ? undefined : unpackChoice}
             language={locked ? nextLanguage : language}
             onLanguage={locked ? setNextLanguage : setLanguage}
             onCompression={setCompression}
@@ -1206,6 +1227,7 @@ export default function WorkshopScreen() {
                 isLocalFolder,
                 build.kind === "image" ? packOptions(build.format, lz4Choice, packProfile) : undefined,
                 build.kind === "folder" ? folderPackOptions(lz4Choice, packProfile) : undefined,
+                unpackOn,
               );
               if (r === "not-image" || r === "not-folder" || r === "later-part") setError(skippedText(r, 1));
               else if (!r) setError(tr("cq_already", undefined, "This game is already in the queue."));

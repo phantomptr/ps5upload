@@ -62,6 +62,9 @@ export interface FpkgInspection {
   ampr_packs?: AmprPacksReadiness | null;
   /** A game in zstd packs: the runtime it carries. */
   zstd_runtime?: ZstdRuntimeInfo | null;
+  /** Which asset packs the game's files are in; absent/null for a plain game. A packed game
+   *  can be written out as plain files again (`unpackPacks`). */
+  packs?: "lz4" | "zstd" | null;
   /** How many of its executables are plain ELF files, which a build fake-signs. */
   unsigned_executables?: number;
   /** A PS4 game, update or add-on: it becomes an image or a folder, not a PS5 package. */
@@ -237,8 +240,11 @@ export const fpkg = {
     destination?: ImageDestination,
     /** A PS4 update merged into the PS4 game `source`: the image is the game at its version. */
     update?: string,
+    /** A game in asset packs is written as plain files again (not with `lz4`). */
+    unpackPacks?: boolean,
   ) =>
     invoke<{ job_id: string }>("exfat_build", {
+      unpackPacks,
       update,
       source,
       outputDir,
@@ -279,8 +285,20 @@ export const fpkg = {
     /** Straight to a folder on a saved server, never stored on this computer; `outputDir`
      *  when absent. */
     destination?: ImageDestination,
+    /** A game in asset packs is written as plain files again (not with `zstd`); the source
+     *  may then also be a game folder. The AMPR emulator choice goes with it (`amprEmu`, a
+     *  queued game's own; the settings when absent). */
+    unpackPacks?: boolean,
+    amprEmu?: { add: boolean; build: AmprEmuBuild },
   ) =>
     invoke<{ job_id: string }>("folder_build", {
+      ...(unpackPacks
+        ? {
+            unpackPacks,
+            addAmprEmu: amprEmu?.add ?? useConvertPrefs.getState().addAmprEmu,
+            amprEmuBuild: amprEmu?.build ?? useConvertPrefs.getState().amprEmuBuild,
+          }
+        : {}),
       update,
       destination,
       source,

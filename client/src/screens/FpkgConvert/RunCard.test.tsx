@@ -11,7 +11,15 @@ vi.mock("../../state/lang", () => ({
 }));
 
 import type { Pipeline } from "../../state/fpkgConversion";
-import { ImageChoice, PacksNote, ZstdOption, folderPackOptions, folderPacks, packOptions } from "./ImageOptions";
+import {
+  ImageChoice,
+  PacksNote,
+  UnpackOption,
+  ZstdOption,
+  folderPackOptions,
+  folderPacks,
+  packOptions,
+} from "./ImageOptions";
 import {
   RunCard,
   deleteLabel,
@@ -670,6 +678,16 @@ describe("RunCard", () => {
       const html = renderToStaticMarkup(<ZstdOption lz4={zstd} folder />);
       expect(html).toContain("LZ4 packs are not offered here");
       expect(html).toContain('data-testid="zstd-runtime"');
+    });
+
+    it("offers to write a packed game as plain files again", () => {
+      const html = renderToStaticMarkup(<UnpackOption unpack={{ kind: "zstd", on: true, onToggle: () => {} }} />);
+      expect(html).toContain("Unpack the asset packs (plain files again)");
+      expect(html).toContain("This game is in zstd asset packs");
+      expect(checkbox(html, "Unpack the asset packs")?.checked).toBe(true);
+      expect(
+        renderToStaticMarkup(<UnpackOption unpack={{ kind: "lz4", on: false, onToggle: () => {} }} />),
+      ).toContain("This game is in LZ4 asset packs");
     });
 
     it("says why packs aren't offered instead of hiding them", () => {

@@ -1087,6 +1087,14 @@ pub(crate) struct ExfatBuildReq {
     /// is the game at the update's version (`ps5upload_fpkg::ps4_merge`). Not with `edits`.
     #[serde(default)]
     update: Option<String>,
+    /// For a game in LZ4 or zstd asset packs: write it as plain files again. Every packed file
+    /// goes in under its own name, the pack volumes and their indexes are left out, a fresh
+    /// `ampr_emu.index` lists the files, and a libSceAmpr game whose emulator is ampr-emu-ng,
+    /// an old ampr_emu or unknown gets the one `ampr_emu_build` names (`add_ampr_emu` off
+    /// leaves it). Refused for a game that is not packed, and with `ampr_lz4`, `ampr_zstd` or
+    /// `edits`. Without it a packed game is written as it is, packs and all.
+    #[serde(default)]
+    unpack_packs: bool,
 }
 
 /// Where an image build puts the image.
@@ -1463,6 +1471,35 @@ fn default_add_ampr_emu() -> bool {
     true
 }
 
+/// Opens a game with its asset packs decoded (`unpack_packs`), for a build and for the
+/// read-back that opens the source again: both get the same emulator and the same index.
+type OpenUnpacked = Arc<
+    dyn Fn(
+            Box<dyn ps5upload_fpkg::source::SourceTree>,
+        ) -> Result<Box<dyn ps5upload_fpkg::source::SourceTree>, String>
+        + Send
+        + Sync,
+>;
+
+/// [`OpenUnpacked`] for a request: the emulator `build` names (`add` off: the game's own
+/// stays), fetched at most once, and one time on every record of the new index.
+fn open_unpacked(add: bool, build: Option<String>) -> OpenUnpacked {
+    let mtime = now_ms() as i64 / 1000;
+    let fetched: std::sync::OnceLock<Result<Vec<u8>, String>> = std::sync::OnceLock::new();
+    Arc::new(move |tree| {
+        let fetch = || {
+            fetched
+                .get_or_init(|| crate::ampr_trace::emulator(build.as_deref()))
+                .clone()
+        };
+        let emulator = add.then_some(crate::unpack_packs::Emulator {
+            ng: build.as_deref() == Some("ampr-emu-ng"),
+            fetch: &fetch,
+        });
+        crate::unpack_packs::open(tree, emulator.as_ref(), mtime)
+    })
+}
+
 /// One change for an edited copy of an image: `{"op":"delete","path":…}` removes a file or
 /// folder; `{"op":"put","path":…,"from":…}` puts a file (or a folder's contents) from this
 /// computer at `path`, replacing what is there.
@@ -1688,6 +1725,17 @@ pub(crate) async fn exfat_build_handler(
                 Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
             },
         };
+    if req.unpack_packs && (packs.is_some() || zstd_level.is_some() || edited.is_some()) {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "unpacking the asset packs writes plain files: not with LZ4 or zstd packs, and not \
+             for an edited copy",
+        )
+        .into_response();
+    }
+    let unpack = req
+        .unpack_packs
+        .then(|| open_unpacked(req.add_ampr_emu, req.ampr_emu_build.clone()));
     // A zstd pack profile: which files stay loose. Refused here when it does not parse.
     let zstd_rules = match req.ampr_zstd.as_ref().map(AmprZstdReq::rules) {
         Some(Ok(r)) => r,
@@ -1840,6 +1888,10 @@ pub(crate) async fn exfat_build_handler(
         }
         if let Some(line) = signing.describe() {
             crate::log_at!(Info, "convert", "image build: {line}");
+        }
+        if let Some(open) = &unpack {
+            // The packs decoded: the image holds the plain game.
+            tree = open(tree)?;
         }
         if zstd_level.is_some() {
             // A packed game goes straight into the new packs.
@@ -2402,6 +2454,18 @@ pub(crate) struct FolderBuildReq {
     /// a console is not a destination here.
     #[serde(default)]
     destination: Option<ImageDestinationReq>,
+    /// For a game in LZ4 or zstd asset packs: write it as plain files again, as an image
+    /// build's `unpack_packs` does. The source may then also be a game folder. Not with
+    /// `ampr_zstd` or `entry`.
+    #[serde(default)]
+    unpack_packs: bool,
+    /// With `unpack_packs`: replace or add the game's AMPR emulator as an image build does.
+    /// On unless turned off.
+    #[serde(default = "default_add_ampr_emu")]
+    add_ampr_emu: bool,
+    /// With `unpack_packs`: which emulator, `ampr_emu` (the default) or `ampr-emu-ng`.
+    #[serde(default)]
+    ampr_emu_build: Option<String>,
 }
 
 /// What a folder build reads: the whole image, one folder of it, or one file.
@@ -2534,6 +2598,21 @@ pub(crate) async fn folder_build_handler(
         Some(Err(e)) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
         None => None,
     };
+    let has_entry = req
+        .entry
+        .as_deref()
+        .is_some_and(|e| !e.trim().trim_matches('/').is_empty());
+    if req.unpack_packs && (zstd.is_some() || has_entry) {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "unpacking the asset packs writes the whole game as plain files: not with zstd \
+             packs, and not for one file or folder of it",
+        )
+        .into_response();
+    }
+    let unpack = req
+        .unpack_packs
+        .then(|| open_unpacked(req.add_ampr_emu, req.ampr_emu_build.clone()));
     let update = update_path(req.update.as_deref());
     if update.is_some()
         && req
@@ -2548,8 +2627,8 @@ pub(crate) async fn folder_build_handler(
         .into_response();
     }
     let local_dir = !remote && tokio::fs::metadata(&source).await.is_ok_and(|m| m.is_dir());
-    // A game folder with an update merged in is a new folder.
-    if local_dir && zstd.is_none() && update.is_none() {
+    // A game folder with an update merged in is a new folder, and so is one unpacked.
+    if local_dir && zstd.is_none() && update.is_none() && unpack.is_none() {
         return json_err(
             StatusCode::BAD_REQUEST,
             format!("{} is already a folder", source.display()),
@@ -2570,8 +2649,11 @@ pub(crate) async fn folder_build_handler(
     } else {
         crate::image_build::is_image_file(&source)
     };
-    // Packs are made of a game folder anywhere too, and so is a game with an update merged in.
-    if !named_as_image && !((zstd.is_some() || update.is_some()) && (local_dir || remote)) {
+    // Packs are made of a game folder anywhere too, and so is a game with an update merged in
+    // or its packs unpacked.
+    if !named_as_image
+        && !((zstd.is_some() || update.is_some() || unpack.is_some()) && (local_dir || remote))
+    {
         return json_err(
             StatusCode::BAD_REQUEST,
             format!("{} is not a game image or package", source.display()),
@@ -2668,6 +2750,7 @@ pub(crate) async fn folder_build_handler(
     let scan_entry = entry.clone();
     let scan_update = update.clone();
     let packing = zstd.is_some();
+    let scan_unpack = unpack.clone();
     let scanned = tokio::task::spawn_blocking(move || {
         if let Some(entry) = scan_entry {
             // A part of the image is saved as the image spells it, as the browser listed it.
@@ -2707,6 +2790,10 @@ pub(crate) async fn folder_build_handler(
         }
         if let Some(line) = signing.describe() {
             crate::log_at!(Info, "convert", "folder build: {line}");
+        }
+        if let Some(open) = &scan_unpack {
+            // The packs decoded: the folder holds the plain game.
+            tree = open(tree)?;
         }
         Ok::<_, String>(Unpacked::Tree(tree))
     })
@@ -2861,7 +2948,12 @@ pub(crate) async fn folder_build_handler(
                 reopen_update.as_deref(),
             )
             .map(|(t, _, _)| t)
-            .map_err(|e| e.to_string()),
+            .map_err(|e| e.to_string())
+            // Unpacked the same way: the same emulator, the same index.
+            .and_then(|t| match &unpack {
+                Some(open) => open(t),
+                None => Ok(t),
+            }),
         };
         // zstd packs: the emulator that goes in, fetched here (off the request) and recorded.
         let mut runtime = None;

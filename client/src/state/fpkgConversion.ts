@@ -199,6 +199,8 @@ export interface ConversionState {
       toServer?: string;
       /** A PS4 update merged into the PS4 game `source`. */
       update?: string;
+      /** A game in asset packs is written as plain files again. */
+      unpackPacks?: boolean;
     },
   ) => Promise<void>;
   /** Unpack a game image or a debug-key package into a plain folder in `outputDir`; with
@@ -216,6 +218,11 @@ export interface ConversionState {
       update?: string;
       /** Save to a server: the folder goes straight to this `remote://` folder. */
       toServer?: string;
+      /** A game in asset packs is written as plain files again, with this emulator choice
+       *  (the settings when absent). */
+      unpackPacks?: boolean;
+      addAmprEmu?: boolean;
+      amprEmuBuild?: AmprEmuBuild;
     },
   ) => Promise<void>;
   /** Put the finished image in the Upload queue. */
@@ -947,22 +954,26 @@ async function followLostUnpack(jobId: string) {
   }
 }
 
-/** An image build's trailing `destination` and `update` arguments, without the empty ones at
- *  the end, so a plain local build's call stays as it was. */
+/** An image build's trailing `destination`, `update` and `unpackPacks` arguments, without the
+ *  empty ones at the end, so a plain local build's call stays as it was. */
 function buildTail(
   destination: ImageDestination | undefined,
   update: string | undefined,
-): [destination?: ImageDestination, update?: string] {
+  unpackPacks?: boolean,
+): [destination?: ImageDestination, update?: string, unpackPacks?: boolean] {
+  if (unpackPacks) return [destination, update, true];
   if (update) return [destination, update];
   return destination ? [destination] : [];
 }
 
-/** A folder build's trailing `update` and `destination` arguments, without the empty ones at
- *  the end, so a plain local build's call stays as it was. */
+/** A folder build's trailing `update`, `destination` and unpack arguments, without the empty
+ *  ones at the end, so a plain local build's call stays as it was. */
 function folderTail(
   update: string | undefined,
   destination: ImageDestination | undefined,
-): [update?: string, destination?: ImageDestination] {
+  unpack?: { add: boolean; build: AmprEmuBuild },
+): [update?: string, destination?: ImageDestination, unpackPacks?: boolean, amprEmu?: { add: boolean; build: AmprEmuBuild }] {
+  if (unpack) return [update, destination, true, unpack];
   if (destination) return [update, destination];
   return update ? [update] : [];
 }
@@ -1042,7 +1053,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
             imageLevel,
             keepBoth,
             amprEmu,
-            ...buildTail(toConsole ? await consoleDestination(toConsole) : toServer, own?.update),
+            ...buildTail(toConsole ? await consoleDestination(toConsole) : toServer, own?.update, own?.unpackPacks),
           ),
         null,
         password,
@@ -1064,7 +1075,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         keepBoth,
         amprEmu,
         // Only when it goes to the PS5: a local build's call stays as it was.
-        ...buildTail(toConsole ? await consoleDestination(toConsole) : toServer, own?.update),
+        ...buildTail(toConsole ? await consoleDestination(toConsole) : toServer, own?.update, own?.unpackPacks),
       );
       update({ jobId: job_id });
       poll(job_id, null);
@@ -1088,7 +1099,16 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         undefined,
         keepBoth,
         own?.zstd,
-        ...folderTail(own?.update, own?.toServer ? serverDestination(own.toServer) : undefined),
+        ...folderTail(
+          own?.update,
+          own?.toServer ? serverDestination(own.toServer) : undefined,
+          own?.unpackPacks
+            ? {
+                add: own.addAmprEmu ?? useConvertPrefs.getState().addAmprEmu,
+                build: own.amprEmuBuild ?? useConvertPrefs.getState().amprEmuBuild,
+              }
+            : undefined,
+        ),
       );
       update({ jobId: job_id });
       poll(job_id, null);

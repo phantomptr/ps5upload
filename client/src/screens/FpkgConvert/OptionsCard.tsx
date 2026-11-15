@@ -10,7 +10,15 @@ import type { MakeKind } from "../../state/convertPrefs";
 import type { OutputPlace } from "../../lib/outputPlace";
 import { useTr } from "../../state/lang";
 import { CompressionTiles } from "./CompressionTiles";
-import { FullVerifyOption, ImageChoice, PacksNote, ZstdOption, type Lz4Choice } from "./ImageOptions";
+import {
+  FullVerifyOption,
+  ImageChoice,
+  PacksNote,
+  UnpackOption,
+  ZstdOption,
+  type Lz4Choice,
+  type UnpackChoice,
+} from "./ImageOptions";
 import { NextGameNote } from "./MakeCard";
 import { prettyBytes } from "./RunCard";
 
@@ -50,6 +58,9 @@ export interface OptionsCardProps {
     onChoice: (format: ImageFormat, compress: boolean) => void;
     lz4?: Lz4Choice;
   };
+  /** The game is in asset packs and no pack option is on: offer to write plain files again
+   *  (an image or a folder). */
+  unpack?: UnpackChoice;
   onLanguage?: (code: string) => void;
   /** A game is being made: this card sets what the next game added uses (#669). */
   forNext?: boolean;
@@ -163,6 +174,7 @@ export function OptionsCard(props: OptionsCardProps) {
                 packsNote
               />
             )}
+            {props.unpack && <UnpackOption unpack={props.unpack} />}
           </div>
         ) : props.make === "folder" ? (
           <div className="flex flex-col gap-2" data-testid="options-folder">
@@ -180,6 +192,7 @@ export function OptionsCard(props: OptionsCardProps) {
             ) : (
               <PacksNote lz4={props.image?.lz4} folder />
             )}
+            {props.unpack && <UnpackOption unpack={props.unpack} />}
           </div>
         ) : ps4Package ? (
           <div className="text-xs text-[var(--color-muted)]" data-testid="options-ps4-pkg">

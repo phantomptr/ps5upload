@@ -118,6 +118,7 @@ mod tailnet_discover;
 pub(crate) mod tailnet_engine;
 pub(crate) mod tailnet_system;
 mod telemetry;
+mod unpack_packs;
 mod vinput_api;
 mod wake_login_api;
 mod web_pages;

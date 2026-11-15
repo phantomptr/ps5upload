@@ -527,6 +527,32 @@ describe("fpkg pipeline", () => {
     jobStatus.mockReset();
   });
 
+  it("unpacks a packed game's asset packs into a folder, with the emulator choice", async () => {
+    const buildFolder = vi.fn().mockResolvedValue({ job_id: "u1" });
+    const { fpkg } = await import("../api/fpkg");
+    (fpkg as unknown as { buildFolder: unknown }).buildFolder = buildFolder;
+    jobStatus.mockResolvedValue({ status: "done", dest: "/out/PPSA1-app", bytes_sent: 9 });
+    await useFpkgConversion
+      .getState()
+      .buildFolder("/games/PPSA1-app", "/out", false, { unpackPacks: true, addAmprEmu: false, amprEmuBuild: "ampr-emu-ng" });
+    // Written straight away (no pack stage), the game's own emulator choice after the unpack flag.
+    expect(buildFolder).toHaveBeenCalledWith(
+      "/games/PPSA1-app",
+      "/out",
+      undefined,
+      false,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      true,
+      { add: false, build: "ampr-emu-ng" },
+    );
+    await tick();
+    jobStatus.mockReset();
+  });
+
   it("packs a game folder into a folder in zstd packs: pack first, the packs sent with the build", async () => {
     const buildFolder = vi.fn().mockResolvedValue({ job_id: "f2" });
     const { fpkg } = await import("../api/fpkg");

@@ -317,6 +317,41 @@ function Lz4Option({ lz4 }: { lz4: Lz4Choice }) {
   );
 }
 
+/** For a game that is in asset packs, when no pack option is on: write it as plain files
+ *  again. Without it the game goes through as it is, packs and all. */
+export interface UnpackChoice {
+  /** The packs the game is in. */
+  kind: "lz4" | "zstd";
+  on: boolean;
+  onToggle: (on: boolean) => void;
+}
+
+export function UnpackOption({ unpack }: { unpack: UnpackChoice }) {
+  const tr = useTr();
+  return (
+    <label className="flex cursor-pointer items-start gap-2.5 text-xs" data-testid="unpack-option">
+      <input
+        type="checkbox"
+        checked={unpack.on}
+        onChange={(e) => unpack.onToggle(e.target.checked)}
+        className="checkbox mt-px h-4 w-4 shrink-0"
+      />
+      <span className="min-w-0">
+        <span className="block font-medium text-[var(--color-text)]">
+          {tr("fpkg.unpack_packs", undefined, "Unpack the asset packs (plain files again)")}
+        </span>
+        <span className="mt-0.5 block leading-relaxed text-[var(--color-muted)]">
+          {tr(
+            "fpkg.unpack_packs_body",
+            { kind: unpack.kind === "zstd" ? "zstd" : "LZ4" },
+            "This game is in {kind} asset packs. Ticked, every packed file is written as a plain file again and the packs are left out, so the game is as large as it was before packing and no longer needs ShadowMount+ to read packs. A game that reads its files through AMPR gets a fresh ampr_emu.index and, where its emulator only suits packs, the emulator chosen in the options. Unticked, the game is written as it is, packs and all.",
+          )}
+        </span>
+      </span>
+    </label>
+  );
+}
+
 /** Under a pack option that is on: a packed game needs ShadowMount+ to mount it. */
 function PacksWarning() {
   const tr = useTr();
