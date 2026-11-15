@@ -39,6 +39,7 @@ mod console_snapshot;
 mod console_tasks_api;
 mod console_tools_api;
 mod consoles_api;
+mod convert_cli;
 mod convert_source;
 mod diag_api;
 mod disk_usage;
@@ -13771,6 +13772,10 @@ pub fn healthcheck() -> i32 {
 }
 
 pub use mcp::stdio::run_cli as run_mcp_bridge;
+
+/// `ps5upload-engine inspect` and `convert` (convert_cli.rs), and the usage `--help` prints.
+pub use convert_cli::run_cli as run_convert_cli;
+pub const CLI_USAGE: &str = convert_cli::USAGE;
 
 pub async fn run_cli() {
     install_panic_logger();

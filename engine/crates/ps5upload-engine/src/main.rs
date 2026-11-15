@@ -28,5 +28,20 @@ async fn main() {
         let args = std::env::args().skip(2).collect();
         std::process::exit(ps5upload_engine::run_mcp_bridge(args));
     }
+    // `inspect` and `convert` are the Convert screen for scripts: they run the conversion in this
+    // process and exit, with no engine started and none needed.
+    if let Some(command @ ("inspect" | "convert")) = std::env::args().nth(1).as_deref() {
+        let args = std::env::args().skip(2).collect();
+        std::process::exit(ps5upload_engine::run_convert_cli(command, args).await);
+    }
+    if matches!(
+        std::env::args().nth(1).as_deref(),
+        Some("--help" | "-h" | "help")
+    ) {
+        // Not `println!`: it panics when stdout is closed (`| head`).
+        use std::io::Write;
+        let _ = writeln!(std::io::stdout(), "{}", ps5upload_engine::CLI_USAGE);
+        return;
+    }
     ps5upload_engine::run_cli().await;
 }
