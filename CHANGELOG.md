@@ -6,6 +6,9 @@ What's new in ps5upload, written for humans.
 
 ## 12.4.22
 
+- **Games in zstd packs that hang at startup (ASTRO BOT and others):** the zstd runtime (ampr-emu-ng) that went into packed games could be 0.3.2, and versions before 0.3.4 hang some games at startup. New packs now get 0.4.0 or newer, and so does **Add the AMPR emulator** when you pick ampr-emu-ng.
+- **Update the zstd runtime:** open a game that's already in zstd packs in **Convert**. If its runtime is old, missing or the LZ4-only ampr_emu, a new button puts the newest ampr-emu-ng in. A folder is changed in place. An image on the PS5 isn't changed: the runtime goes in a ShadowMount+ backport folder. Not yet tried on a console.
+- **ShadowMount+ emulator check:** with emulator updates on, ShadowMount+ puts its own `libSceAmpr.sprx` into every game in place of the game's. If that file can't run zstd packs, Convert now says so for a game on the PS5, and how to turn it off.
 - **Security update:** updated the SSH library used for SFTP connections to fix two low-severity security issues. Nothing changes in how the app works.
 
 ## 12.4.21
