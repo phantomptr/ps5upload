@@ -1816,8 +1816,8 @@ mod tests {
                 }
             },
         )
-        .err()
-        .expect("the build fails");
+        .map(|_| ())
+        .unwrap_err();
         assert!(e.contains("appeared"), "{e}");
         assert_eq!(std::fs::read(&out).unwrap(), b"theirs");
         assert!(!root.join("g.exfat.partial").exists());

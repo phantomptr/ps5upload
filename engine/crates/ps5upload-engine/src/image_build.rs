@@ -367,8 +367,7 @@ mod tests {
             },
             "the PS5",
         )
-        .err()
-        .expect("a cancelled read-back fails");
+        .unwrap_err();
         assert!(removed.load(Ordering::Relaxed), "{e:#}");
         assert!(e.to_string().contains("removed"), "{e:#}");
         assert!(!spool.exists());
