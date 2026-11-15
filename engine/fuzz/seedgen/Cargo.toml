@@ -1,0 +1,16 @@
+# Writes one small valid input per fuzz target (see src/main.rs). Its own package so it never
+# links libFuzzer and builds on stable.
+[package]
+name = "ps5upload-fuzz-seedgen"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+ps5upload-fpkg = { path = "../../crates/ps5upload-fpkg" }
+ps5-dump-forge-ufs2 = { path = "../../crates/ps5-dump-forge-ufs2" }
+ps5-dump-forge-pfs = { path = "../../crates/ps5-dump-forge-pfs" }
+ps5-dump-forge-zstd = { path = "../../crates/ps5-dump-forge-zstd" }
+# Unpacks the gzipped test fixtures (already in the engine's tree).
+flate2 = "1"

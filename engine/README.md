@@ -57,6 +57,13 @@ curl "http://127.0.0.1:19113/api/ps5/status?addr=<ip>"
 **unauthenticated and can read, write and delete files on the console** —
 keep it on a trusted LAN.
 
+## Fuzzing the readers
+
+`engine/fuzz/` holds cargo-fuzz targets for every reader of a file a user can hand the engine
+(packages, images, pack indexes, `param.json`/`param.sfo`, cheat files). It is its own
+workspace, so nothing here builds it: see [`fuzz/README.md`](fuzz/README.md), or run
+`make fuzz-smoke` from the repo root.
+
 ## Environment variables
 
 For a self-hosted engine (Docker, a NAS, or a standalone program). None is needed on a desktop.
