@@ -211,7 +211,13 @@ static int read_status(const char *id, char *buf, size_t cap, cc_status_t *s) {
     return n > 0 && cc_status_parse(buf, (size_t)n, id, s);
 }
 
-static int pid_alive(uint64_t pid) { return pid > 1 && (kill((pid_t)pid, 0) == 0 || errno == EPERM); }
+/* A pid read from a file: one that is not cc_pid_ok, or is this helper's own, is never signalled
+ * and counts as not running. */
+static int pid_signallable(uint64_t pid) { return cc_pid_ok(pid) && (pid_t)pid != getpid(); }
+
+static int pid_alive(uint64_t pid) {
+    return pid_signallable(pid) && (kill((pid_t)pid, 0) == 0 || errno == EPERM);
+}
 
 /* What an unfinished build of `dest` leaves beside it: `<dest>.partial` (a file, or a folder for
  * a folder output) and the builder's two small files next to it. Only these names are removed,
@@ -352,7 +358,7 @@ static int follow(ava1_op_ctx_t *c, const char *id, const char *dest, int build,
             break;
         } else if (cancel_sent && now_ms() - cancel_at > CONVERT_KILL_AFTER_MS) {
             fprintf(stderr, "convert: the converter (pid %llu) did not stop; killing it\n", (unsigned long long)s->pid);
-            (void)kill((pid_t)s->pid, SIGKILL);
+            if (pid_signallable(s->pid)) (void)kill((pid_t)s->pid, SIGKILL);
             sleep_ms(500);
             ava1_op_message(c, "convert_cancelled");
             free(cur_buf);

@@ -143,7 +143,9 @@ int cc_status_parse(const char *buf, size_t n, const char *id, cc_status_t *s) {
     if (webui_json_str(buf, n, "cause", s->cause, sizeof s->cause) != 1) s->cause[0] = 0;
     if (webui_json_str(buf, n, "detail", s->detail, sizeof s->detail) != 1) s->detail[0] = 0;
     if (webui_json_str(buf, n, "stage", s->stage, sizeof s->stage) != 1) s->stage[0] = 0;
-    if (webui_json_u64(buf, n, "pid", &s->pid) != 1) s->pid = 0;
+    /* A pid that cannot be the converter's (0, init, past a pid_t) reads as none: cast to pid_t,
+     * 0xFFFFFFFF would be -1 (every process) and 0x100000001 would be 1 (init). */
+    if (webui_json_u64(buf, n, "pid", &s->pid) != 1 || !cc_pid_ok(s->pid)) s->pid = 0;
     if (webui_json_u64(buf, n, "bytes_done", &s->bytes_done) != 1) s->bytes_done = 0;
     if (webui_json_u64(buf, n, "bytes_total", &s->bytes_total) != 1) s->bytes_total = 0;
     if (!object_member(buf, n, "result", &s->result, &s->result_len)) {

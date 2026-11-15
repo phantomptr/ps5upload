@@ -111,8 +111,21 @@ unsigned int ps5upload_convert_elf_len = 1;
 
 /* ---- the stand-in converter ---- */
 
-typedef enum { FAKE_INSPECT, FAKE_BUILD_UNTIL_CANCEL, FAKE_HANG, FAKE_NEVER, FAKE_DIED, FAKE_FAILS, FAKE_STAGES } fake_t;
+typedef enum {
+    FAKE_INSPECT,
+    FAKE_BUILD_UNTIL_CANCEL,
+    FAKE_HANG,
+    FAKE_NEVER,
+    FAKE_DIED,
+    FAKE_FAILS,
+    FAKE_STAGES,
+    FAKE_PID /* reports pid g_fake_pid, then Stop, and never ends */
+} fake_t;
 static fake_t g_fake;
+static long long g_fake_pid;
+/* The pid the in-thread stand-ins report: a sleeping child of this test, since the helper never
+ * takes its own pid for the converter's. */
+static pid_t g_alive;
 static char g_dir[300], g_request[4096];
 static ava1_op_ctx_t *g_ctx;
 static pid_t g_child;
@@ -177,7 +190,7 @@ static void *fake_main(void *arg) {
     switch (g_fake) {
     case FAKE_NEVER: break;
     case FAKE_INSPECT:
-        put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"inspect\",\"state\":\"running\"}\n", id, (long)getpid());
+        put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"inspect\",\"state\":\"running\"}\n", id, (long)g_alive);
         usleep(300 * 1000);
         /* What a reader could catch if the file were written in place: half a status. The helper
          * must read it as "nothing new", not as a failure. */
@@ -187,12 +200,12 @@ static void *fake_main(void *arg) {
         usleep(300 * 1000);
         put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"inspect\",\"state\":\"done\","
                    "\"result\":{\"path\":\"/x/a \\\"b\\\" }\",\"files\":3,\"warnings\":[\"no {eboot}\"]}}\n",
-                   id, (long)getpid());
+                   id, (long)g_alive);
         break;
     case FAKE_FAILS:
         put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"build\",\"state\":\"failed\",\"cause\":\"convert_build_failed\","
                    "\"detail\":\"read all 5 bytes\"}\n",
-                   id, (long)getpid());
+                   id, (long)g_alive);
         break;
     case FAKE_BUILD_UNTIL_CANCEL: {
         unsigned done = 0;
@@ -200,12 +213,12 @@ static void *fake_main(void *arg) {
             done += 1000;
             put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"build\",\"state\":\"running\",\"stage\":\"read\","
                        "\"bytes_done\":%u,\"bytes_total\":1000000}\n",
-                       id, (long)getpid(), done);
+                       id, (long)g_alive, done);
             usleep(100 * 1000);
             if (done >= 3000) g_ctx->cancelled = 1; /* the user presses Stop */
         }
         put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"build\",\"state\":\"failed\",\"cause\":\"convert_cancelled\"}\n", id,
-                   (long)getpid());
+                   (long)g_alive);
         break;
     }
     case FAKE_STAGES: {
@@ -216,13 +229,18 @@ static void *fake_main(void *arg) {
         for (size_t i = 0; i < sizeof steps / sizeof steps[0]; i++) {
             put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"build\",\"state\":\"running\",\"stage\":\"%s\","
                        "\"bytes_done\":%u,\"bytes_total\":%u}\n",
-                       id, (long)getpid(), steps[i].stage, steps[i].done, steps[i].total);
+                       id, (long)g_alive, steps[i].stage, steps[i].done, steps[i].total);
             usleep(700 * 1000); /* slower than the helper reads, so it sees every step */
         }
         put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"build\",\"state\":\"done\",\"result\":{\"path\":\"x\"}}\n", id,
-                   (long)getpid());
+                   (long)g_alive);
         break;
     }
+    case FAKE_PID:
+        put_status("{\"id\":\"%s\",\"pid\":%lld,\"op\":\"build\",\"state\":\"running\",\"stage\":\"write\"}\n", id,
+                   g_fake_pid);
+        g_ctx->cancelled = 1;
+        break;
     case FAKE_HANG:
     case FAKE_DIED:
         /* A process of its own, so the helper has a pid it may kill. */
@@ -350,6 +368,15 @@ static void test_wire(void) {
     CHECK(s.bytes_done == 5 && s.bytes_total == 9);
     CHECK(s.result && s.result_len == strlen("{\"a\":\"}\",\"b\":[1,{\"c\":2}]}") &&
           strncmp(s.result, "{\"a\":\"}\"", 8) == 0);
+    /* A pid that cannot be the converter's reads as none: cast to pid_t these would be -1 (every
+     * process), 1 (init) or 0 (the helper's own process group). */
+    CHECK(PARSE("{\"id\":\"ab\",\"state\":\"running\",\"pid\":4294967295}") == 1 && s.pid == 0);
+    CHECK(PARSE("{\"id\":\"ab\",\"state\":\"running\",\"pid\":4294967297}") == 1 && s.pid == 0);
+    CHECK(PARSE("{\"id\":\"ab\",\"state\":\"running\",\"pid\":2147483648}") == 1 && s.pid == 0);
+    CHECK(PARSE("{\"id\":\"ab\",\"state\":\"running\",\"pid\":1}") == 1 && s.pid == 0);
+    CHECK(PARSE("{\"id\":\"ab\",\"state\":\"running\",\"pid\":0}") == 1 && s.pid == 0);
+    CHECK(PARSE("{\"id\":\"ab\",\"state\":\"running\",\"pid\":2147483647}") == 1 && s.pid == 2147483647u);
+    CHECK(!cc_pid_ok(0) && !cc_pid_ok(1) && cc_pid_ok(2) && !cc_pid_ok(0xFFFFFFFFu) && !cc_pid_ok(0x100000001ull));
     /* Another job's, an unknown state, no state. */
     CHECK(cc_status_parse(full, n, "zz", &s) == 0);
     CHECK(cc_status_parse("{\"id\":\"ab\",\"state\":\"paused\"}", 28, "ab", &s) == 0);
@@ -615,6 +642,22 @@ static void test_op(void) {
     CHECK(st == AVA1_ERR_IO && strcmp(c->message, "convert_died") == 0);
     CHECK(!exists(partial));
 
+    /* A status naming this process (the helper's own pid) or init: never signalled, read as a
+     * converter that is not running. Were either taken for the converter, Stop would SIGKILL it
+     * (this test). Huge values never get here: cc_status_parse reads them as none (test_wire). */
+    {
+        static const long long bad[] = {0, 1, 2147483648LL};
+        size_t k;
+        g_fake_pid = (long long)getpid();
+        st = run_op(FAKE_PID, args, c);
+        CHECK(st == AVA1_ERR_CANCELLED && strcmp(c->message, "convert_cancelled") == 0);
+        for (k = 0; k < sizeof bad / sizeof *bad; k++) {
+            g_fake_pid = bad[k];
+            st = run_op(FAKE_PID, args, c);
+            CHECK(st == AVA1_ERR_CANCELLED);
+        }
+    }
+
     /* One that never reports. */
     st = run_op(FAKE_NEVER, args, c);
     CHECK(st == AVA1_ERR_IO && strcmp(c->message, "convert_not_started") == 0);
@@ -695,9 +738,21 @@ int main(void) {
     snprintf(g_rtdir, sizeof g_rtdir, "%s/runtime", g_root);
     console_convert_test_runtime_dir = g_rtdir; /* made by test_op, once it has tested without one */
 
+    g_alive = fork();
+    if (g_alive == 0) {
+        for (;;) pause();
+    }
+    if (g_alive < 0) {
+        perror("fork");
+        return 1;
+    }
+
     test_wire();
     test_op();
     test_sweep();
+
+    kill(g_alive, SIGKILL);
+    waitpid(g_alive, NULL, 0);
 
     snprintf(cmd, sizeof cmd, "rm -r '%s'", g_root);
     if (system(cmd) != 0) fprintf(stderr, "console_convert_selftest: could not remove %s\n", g_root);

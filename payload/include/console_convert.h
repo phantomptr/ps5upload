@@ -98,9 +98,15 @@ typedef struct {
     size_t result_len;
 } cc_status_t;
 
+/* 1 when `pid` (read from a file the converter or an older helper wrote) can name a process the
+ * helper may signal: neither 0 nor 1 (init), and a positive pid_t (a larger number would wrap,
+ * 0xFFFFFFFF to -1: every process). The helper also never signals its own pid. */
+static inline int cc_pid_ok(uint64_t pid) { return pid > 1 && pid <= 0x7FFFFFFFu; }
+
 /* Parses the `n` bytes read from status.json. 1 when it is one complete JSON object that carries
  * job `id` and a state; 0 otherwise: another job's, empty, cut short (the helper may read it while
- * it is being replaced, or get a short read), or not JSON at all. A 0 means "nothing new yet". */
+ * it is being replaced, or get a short read), or not JSON at all. A 0 means "nothing new yet".
+ * A "pid" that is not cc_pid_ok reads as 0 (none). */
 int cc_status_parse(const char *buf, size_t n, const char *id, cc_status_t *s);
 
 /* job.rec: "<converter pid> <helper pid>\n<dest>\n" (`dest` "" for an inspection). */
