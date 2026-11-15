@@ -94,6 +94,12 @@ pub trait SourceTree: Send {
 
     /// One line for logs: what the source is and where it came from.
     fn describe(&self) -> String;
+
+    /// What a user should know about this source before using it as a game: a patch package
+    /// says which files it leaves to the base game. Nothing for most sources.
+    fn notes(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// How often [`SourceTree::read_heads`] reports progress (and can be stopped).

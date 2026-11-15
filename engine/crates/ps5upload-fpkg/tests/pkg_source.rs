@@ -263,6 +263,179 @@ fn a_damaged_block_is_an_error_not_bad_bytes() {
     assert!(err.contains("damaged"), "{err}");
 }
 
+fn le64(b: &[u8], at: usize) -> u64 {
+    u64::from_le_bytes(b[at..at + 8].try_into().unwrap())
+}
+
+/// `pkg` as a patch package (`\x7FLIH`) that carries every outer block but `omit`: a 64 KiB
+/// header, the FIH block, the carried blocks in order, the container. From PS5 Dump Forge's
+/// `crates/ps5-dump-forge-fpkg/tests/patch.rs`.
+fn patch_of(pkg: &[u8], omit: &[usize]) -> Vec<u8> {
+    const B: usize = 0x10000;
+    let (pfs_offset, pfs_size, cnt_offset) = (
+        le64(pkg, 0x10) as usize,
+        le64(pkg, 0x18) as usize,
+        le64(pkg, 0x58) as usize,
+    );
+    // The container runs to the image or to the package's end, whichever comes first after it.
+    let cnt_end = if cnt_offset < pfs_offset {
+        pfs_offset
+    } else {
+        pkg.len()
+    };
+    let mut out = vec![0u8; B];
+    out.extend_from_slice(&pkg[..B]);
+    for i in (0..pfs_size / B).filter(|i| !omit.contains(i)) {
+        out.extend_from_slice(&pkg[pfs_offset + i * B..pfs_offset + (i + 1) * B]);
+    }
+    let cnt_at = out.len();
+    out.extend_from_slice(&pkg[cnt_offset..cnt_end]);
+    let len = out.len() as u64;
+    out[..4].copy_from_slice(b"\x7FLIH");
+    for (at, v) in [
+        (0x18, len),
+        (0x20, B as u64),
+        (0x28, B as u64),
+        (0x30, cnt_at as u64),
+        (0x38, (cnt_end - cnt_offset) as u64),
+    ] {
+        out[at..at + 8].copy_from_slice(&v.to_le_bytes());
+    }
+    out
+}
+
+/// A package re-wrapped as a patch package that lacks one outer block, for every block in
+/// turn and every layout the builder writes. Whichever block is missing, the patch either opens
+/// as the files it carries whole, each reading back byte for byte, with every other file
+/// accounted for as left to the base game, or is refused as not holding its own file table.
+/// It never opens with bad bytes and never fails any other way.
+#[test]
+fn a_patch_package_reads_as_the_files_it_carries_whole() {
+    const BIG: &str = "data/big.bin";
+    for (name, kraken, level) in [
+        ("patch-kraken", true, Level::Fast),
+        ("patch-stored", true, Level::Stored),
+        ("patch-flat", false, Level::Fast),
+    ] {
+        let src = TempDir::new(&format!("{name}-src"));
+        let out = TempDir::new(&format!("{name}-out"));
+        write_game(src.path(), 700 * 1024);
+        let mut req = request(src.path(), out.path());
+        req.kraken = kraken;
+        req.level = level;
+        let pkg_path = build(&req);
+        let pkg = std::fs::read(&pkg_path).unwrap();
+        let mut whole = pkg_source::open(&pkg_path, DEFAULT_PASSCODE).unwrap();
+        assert!(whole.patch().is_none() && whole.notes().is_empty());
+        let outer_blocks = le64(&pkg, 0x18) as usize / 0x10000;
+        let path = out.path().join("update.pkg");
+
+        // Every block carried: the patch is the package.
+        std::fs::write(&path, patch_of(&pkg, &[])).unwrap();
+        let all = pkg_source::open(&path, DEFAULT_PASSCODE).unwrap();
+        assert_eq!(all.files(), whole.files(), "{name}");
+        assert_eq!(all.empty_dirs(), whole.empty_dirs(), "{name}");
+        let info = all.patch().unwrap();
+        assert!(info.partial.is_empty() && info.in_base.is_empty(), "{name}");
+        assert_eq!(info.outer_blocks, outer_blocks as u64, "{name}");
+
+        let (mut opened, mut refused, mut without_big) = (0, 0, 0);
+        for omit in 0..outer_blocks {
+            std::fs::write(&path, patch_of(&pkg, &[omit])).unwrap();
+            let mut patch = match pkg_source::open(&path, DEFAULT_PASSCODE) {
+                Ok(p) => p,
+                Err(e) => {
+                    let e = e.to_string();
+                    assert!(
+                        e.contains("does not hold the blocks that list its files"),
+                        "{name}, block {omit}: {e}"
+                    );
+                    refused += 1;
+                    continue;
+                }
+            };
+            opened += 1;
+            let info = patch.patch().unwrap().clone();
+            assert_eq!(info.outer_blocks, outer_blocks as u64);
+            // Not always one fewer: a block left out that is byte for byte another one the
+            // patch stores (padding) is served by that one.
+            assert!(info.carried_blocks <= info.outer_blocks);
+            let listed: Vec<String> = patch.files().iter().map(|f| f.path.clone()).collect();
+            assert!(
+                listed.iter().any(|p| p == "sce_sys/icon0.png"),
+                "{name}, block {omit}: the container's files are always carried: {listed:?}"
+            );
+            for p in &listed {
+                assert!(
+                    patch.read(p).unwrap() == whole.read(p).unwrap(),
+                    "{name}, block {omit}: {p}"
+                );
+            }
+            // Every file of the package that is not listed is named as left out: by itself, or
+            // by a folder above it that only the base game lists.
+            for f in whole.files() {
+                let accounted = listed.contains(&f.path)
+                    || info.partial.contains(&f.path)
+                    || info.in_base.iter().any(|b| {
+                        *b == f.path
+                            || b == "the top folder"
+                            || f.path.starts_with(&format!("{b}/"))
+                    });
+                assert!(accounted, "{name}, block {omit}: {} vanished", f.path);
+            }
+            let left = info.partial.len() + info.in_base.len();
+            if left > 0 {
+                let notes = patch.notes().join("\n");
+                assert!(notes.contains("patch package"), "{notes}");
+                assert!(
+                    notes.contains(&format!(
+                        "{} files the patch holds only part of",
+                        info.partial.len()
+                    )),
+                    "{notes}"
+                );
+                assert!(
+                    patch.describe().contains("patch package"),
+                    "{}",
+                    patch.describe()
+                );
+            }
+            if info.partial.iter().any(|p| p == BIG) {
+                without_big += 1;
+                assert!(!listed.iter().any(|p| p == BIG));
+            }
+        }
+        // The big file spans several blocks, and some block is one an open cannot do without.
+        assert!(
+            without_big > 1,
+            "{name}: {without_big} patches lacked part of {BIG}"
+        );
+        assert!(
+            opened > 0 && refused > 0,
+            "{name}: {opened} opened, {refused} refused"
+        );
+    }
+}
+
+/// The patch's blocks are placed by the digests the package records for them, which are of
+/// the blocks as the game reads them. A native (encrypted) package's stored blocks match
+/// none, and that is said rather than guessed around.
+#[test]
+fn a_patch_of_an_encrypted_package_is_refused() {
+    let src = TempDir::new("patch-native-src");
+    let out = TempDir::new("patch-native-out");
+    write_game(src.path(), 300 * 1024);
+    let mut req = request(src.path(), out.path());
+    req.image_mode = ImageMode::Native;
+    let pkg = std::fs::read(build(&req)).unwrap();
+    let path = out.path().join("update.pkg");
+    std::fs::write(&path, patch_of(&pkg, &[3])).unwrap();
+    let Err(e) = source::open(&path) else {
+        panic!("a patch of an encrypted package must not open");
+    };
+    assert!(e.to_string().contains("match no block"), "{e}");
+}
+
 /// The extension is matched in any case, and Convert's check step accepts a package.
 #[test]
 fn a_package_is_a_source_convert_can_check() {

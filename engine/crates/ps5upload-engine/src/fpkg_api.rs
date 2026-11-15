@@ -91,6 +91,23 @@ pub(crate) fn ps4_refusal(
     }
 }
 
+/// Why a PS5 patch package can't become a game image or a package, or `None` for anything
+/// else. As PS5 Dump Forge refuses one (`PATCH_SOURCE` in its `preflight.rs`): it holds only what
+/// its update changed. Told by the file's first four bytes, before the open that reads all of it.
+pub(crate) fn patch_refusal(source: &Path) -> Option<String> {
+    let is_pkg = source
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("pkg"));
+    (is_pkg && ps5upload_fpkg::lih::is_patch(source)).then(|| {
+        format!(
+            "{} is a patch package: it holds only the files its update changed, so on its own \
+             it isn't a game and can't become an image or a package. Its files can still be \
+             saved: unpack it to a folder, or open it in the image browser",
+            source.display()
+        )
+    })
+}
+
 #[derive(Deserialize)]
 pub(crate) struct BuildReq {
     source: String,
@@ -380,6 +397,9 @@ pub(crate) async fn fpkg_build_handler(
         let source_path = source_path.clone();
         let update = update.clone();
         match tokio::task::spawn_blocking(move || {
+            if let Some(why) = patch_refusal(&source_path) {
+                return Err(ps5upload_fpkg::Error::Format(why));
+            }
             build::inspect_with_update(&source_path, update.as_deref(), &out)
         })
         .await
@@ -1787,6 +1807,9 @@ pub(crate) async fn exfat_build_handler(
         if let Some(tree) = edited_tree {
             return Ok(tree);
         }
+        if let Some(why) = patch_refusal(&scan_source) {
+            return Err(why);
+        }
         // A UFS2 image (.ffpkg) is case-sensitive like /data: give modules the eboot's spelling.
         // A PS4 update goes into its game here (the merge checks they go together).
         let (mut tree, renamed, signing) =
@@ -2636,6 +2659,10 @@ pub(crate) async fn folder_build_handler(
             return open_entry(&scan_source, &entry);
         }
         if packing {
+            // Packs are made of a whole game.
+            if let Some(why) = patch_refusal(&scan_source) {
+                return Err(why);
+            }
             let mut tree = open_for_packing(&scan_source, scan_update.as_deref())?;
             if scan_update.is_none() {
                 if let Some(why) = ps4_refusal(&scan_source, &mut *tree, false) {
@@ -2669,6 +2696,10 @@ pub(crate) async fn folder_build_handler(
         }
         if let Some(line) = signing.describe() {
             crate::log_at!(Info, "convert", "folder build: {line}");
+        }
+        // A patch package unpacks to the files it carries whole; the log says what it left.
+        for note in tree.notes() {
+            crate::log_at!(Info, "convert", "folder build: {note}");
         }
         Ok::<_, String>(Unpacked::Tree(tree))
     })

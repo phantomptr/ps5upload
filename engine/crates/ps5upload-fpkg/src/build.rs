@@ -1552,6 +1552,12 @@ pub fn inspect_with_update(
     };
     let files: Vec<SourceFile> = tree.files().to_vec();
     let mut checks = source::readiness(tree.as_mut()).checks;
+    // A source that leaves files out says so (a patch package: see `pkg_source`).
+    checks.extend(tree.notes().into_iter().map(|detail| source::Check {
+        name: "nothing left out".into(),
+        ok: false,
+        detail,
+    }));
     // A PS4 game: param.sfo, no param.json. What a PS5 package needs is no warning for it.
     let has = |name: &str| files.iter().any(|f| f.path.eq_ignore_ascii_case(name));
     let ps4_game = has("sce_sys/param.sfo") && !has("sce_sys/param.json");

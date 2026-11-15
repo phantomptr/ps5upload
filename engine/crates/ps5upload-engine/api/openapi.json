@@ -12940,7 +12940,7 @@
       "SourceInfo": {
         "properties": {
           "format": {
-            "description": "`pkg`, `split-pkg`, `exfat`, `ffpkg`, `ffpfsc` or `folder`.",
+            "description": "`pkg`, `split-pkg`, `patch-pkg` (a PS5 patch package, read as the files it carries\nwhole), `exfat`, `ffpkg`, `ffpfsc` or `folder`.",
             "type": "string"
           },
           "location": {
