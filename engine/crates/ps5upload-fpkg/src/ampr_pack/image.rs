@@ -415,6 +415,13 @@ fn generated(path: &str, config: &Config, pack_glob: &str) -> bool {
         || glob::matches_any(path, &[pack_glob])
 }
 
+/// Whether packing by `config` leaves `path` out of the packed game, to be replaced by what it
+/// writes (a fresh `ampr_emu.index`, a new pack set) or dropped (what a run of the game wrote).
+/// Every other file of the source is in the packed game, loose or in the packs.
+pub fn replaced_by_packing(path: &str, config: &Config) -> bool {
+    pack_output_glob(&config.pack_pattern).is_ok_and(|g| generated(path, config, &g))
+}
+
 /// What the image holds instead of the folder.
 pub struct Overlay<'a> {
     source: &'a mut dyn SourceTree,

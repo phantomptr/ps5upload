@@ -1188,6 +1188,128 @@ async fn a_folder_build_with_zstd_packs_takes_a_game_folder_and_refuses_what_can
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A backported AMPR game whose `data/` an LZ4 profile packs: its eboot imports libSceAmpr and
+/// its fakelib carries a pack-capable ampr_emu.
+fn lz4_game(root: &std::path::Path) -> std::path::PathBuf {
+    let game = root.join("PPSA99994-app");
+    std::fs::create_dir_all(game.join("sce_sys")).unwrap();
+    std::fs::create_dir_all(game.join("fakelib")).unwrap();
+    std::fs::create_dir_all(game.join("data/sub")).unwrap();
+    std::fs::write(
+        game.join("sce_sys/param.json"),
+        b"{\"titleId\":\"PPSA99994\"}",
+    )
+    .unwrap();
+    let mut eboot = vec![3u8; 200_000];
+    eboot[1000..1014].copy_from_slice(b"libSceAmpr.prx");
+    std::fs::write(game.join("eboot.bin"), eboot).unwrap();
+    let mut module = vec![0u8; 4096];
+    module[100..108].copy_from_slice(b"AMPRPAK4");
+    module[200..217].copy_from_slice(b"ampr_assets.index");
+    module[300..321].copy_from_slice(b"\x000.4.2.1 (c) Drakmor\0");
+    std::fs::write(game.join("fakelib/libSceAmpr.sprx"), module).unwrap();
+    let text: Vec<u8> = (0..500_000u32)
+        .flat_map(|i| format!("asset {} ", i % 613).into_bytes())
+        .take(500_000)
+        .collect();
+    std::fs::write(game.join("data/sub/table.bin"), &text).unwrap();
+    std::fs::write(game.join("data/more.bin"), &text[..200_000]).unwrap();
+    game
+}
+
+/// The profile the LZ4 HTTP tests pack with: everything under `data/`.
+const LZ4_DATA_PROFILE: &str = "[[rule]]\naction = \"compress\"\ninclude = [\"data/**\"]\n";
+
+/// The job a 202 started, once it has ended.
+async fn job_end(st: &AppState, resp: HttpResponse<Body>) -> JobState {
+    let status = resp.status();
+    let body = json_of(resp).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let job: Uuid = body["job_id"].as_str().unwrap().parse().unwrap();
+    for _ in 0..1200 {
+        let s = st.jobs.lock().unwrap().get(&job).cloned();
+        if let Some(s @ (JobState::Done { .. } | JobState::Failed { .. })) = s {
+            return s;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the job never ended");
+}
+
+/// LZ4 packs through the HTTP surface: a game folder becomes a folder with LZ4 packs and a
+/// `.ffpkg` with LZ4 packs, each read back through its packs, no spool left behind; what can't
+/// work is refused before a job.
+#[tokio::test(flavor = "multi_thread")]
+async fn lz4_packs_go_into_a_folder_and_any_image() {
+    let st = state();
+    let app = app_with(st.clone(), Default::default(), "");
+    let root = std::env::temp_dir().join(format!("ps5upload-api-lz4-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let game = lz4_game(&root);
+    let out = root.join("out");
+    let lz4 = json!({ "profile_toml": LZ4_DATA_PROFILE });
+
+    // Refused before a job: a part of a game, LZ4 with zstd.
+    for extra in [
+        json!({ "ampr_lz4": lz4, "entry": "sce_sys" }),
+        json!({ "ampr_lz4": lz4, "ampr_zstd": {} }),
+    ] {
+        let mut body = json!({ "source": game, "output_dir": out });
+        body.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let r = post_json(&app, "/api/folder/build", &body.to_string()).await;
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{extra}");
+    }
+
+    let r = post_json(
+        &app,
+        "/api/folder/build",
+        &json!({ "source": game, "output_dir": out, "full_verify": true, "ampr_lz4": lz4 })
+            .to_string(),
+    )
+    .await;
+    match job_end(&st, r).await {
+        JobState::Done { dest, .. } => assert!(dest.ends_with("PPSA99994-app"), "{dest}"),
+        other => panic!("{}", json!(other)),
+    }
+    let folder = out.join("PPSA99994-app");
+    assert!(folder.join("ampr_assets.index").is_file());
+    assert!(
+        !folder.join("data/sub/table.bin").exists(),
+        "packed, not loose"
+    );
+    assert!(folder.join("eboot.bin").is_file());
+    assert!(!out.join("PPSA99994-app.lz4spool").exists());
+
+    let r = post_json(
+        &app,
+        "/api/exfat/build",
+        &json!({ "source": game, "output_dir": out, "format": "ffpkg", "ampr_lz4": lz4 })
+            .to_string(),
+    )
+    .await;
+    match job_end(&st, r).await {
+        JobState::Done { dest, .. } => assert!(dest.ends_with(".ffpkg"), "{dest}"),
+        other => panic!("{}", json!(other)),
+    }
+    let image = out.join("PPSA99994-app.ffpkg");
+    let tree: Box<dyn ps5upload_fpkg::source::SourceTree> =
+        Box::new(ps5upload_fpkg::ufs2_source::Ufs2Source::open(&image).unwrap());
+    let ps5upload_fpkg::ampr_pack::image::Unpacking::Decoded(mut decoded) =
+        ps5upload_fpkg::ampr_pack::image::Lz4Unpacked::open(tree).unwrap()
+    else {
+        panic!("the image has no packs");
+    };
+    use ps5upload_fpkg::source::SourceTree as _;
+    assert_eq!(
+        decoded.read("data/sub/table.bin").unwrap(),
+        std::fs::read(game.join("data/sub/table.bin")).unwrap()
+    );
+    assert!(!out.join("PPSA99994-app.ffpkg.lz4spool").exists());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// Convert straight to a saved server through the HTTP surface: an image and then a folder made
 /// from it land on the server under their names, the job's `dest` names them there, and nothing
 /// is written on this computer.

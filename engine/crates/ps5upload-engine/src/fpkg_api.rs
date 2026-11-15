@@ -994,7 +994,8 @@ pub(crate) struct ExfatBuildReq {
     /// How hard a `.ffpfsc` is compressed: `fast`, `balanced` (the default) or `smallest`.
     #[serde(default)]
     ffpfsc_level: Option<String>,
-    /// Pack the game's files into AMPR LZ4 asset packs first (exFAT only, not with `compress`).
+    /// Pack the game's files into AMPR LZ4 asset packs first, in any plain image (not with
+    /// `compress`).
     #[serde(default)]
     ampr_lz4: Option<AmprLz4Req>,
     /// How much of a file the read-back check reads per call, in KiB (1024 to 65536); 8192
@@ -1775,11 +1776,10 @@ pub(crate) async fn exfat_build_handler(
     );
     let packs = match &req.ampr_lz4 {
         None => None,
-        Some(_) if format != crate::image_build::ImageFormat::Exfat || compress => {
+        Some(_) if compress => {
             return json_err(
                 StatusCode::BAD_REQUEST,
-                "LZ4 asset packs go into a plain exFAT image: choose exFAT and turn off .ffpfsc \
-                 compression",
+                "LZ4 asset packs go into a plain image: turn off .ffpfsc compression",
             )
             .into_response()
         }
@@ -2581,6 +2581,13 @@ pub(crate) struct FolderBuildReq {
     /// this computer, a saved server or a console). Not with `entry`.
     #[serde(default)]
     ampr_zstd: Option<AmprZstdReq>,
+    /// Write the game with its files in AMPR LZ4 asset packs, as an image build's `ampr_lz4`
+    /// does, as a plain folder: the pack volumes, their manifest, the files that stay loose and
+    /// a fresh `ampr_emu.index`. The volumes are packed into `<folder>.lz4spool/` beside it
+    /// first, so packing needs that room too until the folder is written. The source may then
+    /// also be a game folder. Not with `ampr_zstd`, `unpack_packs` or `entry`.
+    #[serde(default)]
+    ampr_lz4: Option<AmprLz4Req>,
     /// A PS4 update merged into the PS4 game `source`, as an image build's `update`; the game
     /// may then also be a folder. Not with `entry`.
     #[serde(default)]
@@ -2681,6 +2688,65 @@ fn open_for_packing(
     crate::zstd_packs::readable_for_packing(tree)
 }
 
+/// The game at `source` read for LZ4 packs, as an image build reads it: modules in the eboot's
+/// spelling, and a game in zstd packs decoded so the LZ4 packs are made of its files. A packed
+/// folder build's read-back opens it the same way.
+fn open_for_lz4(
+    source: &Path,
+    update: Option<&Path>,
+) -> Result<Box<dyn ps5upload_fpkg::source::SourceTree>, String> {
+    let (tree, renamed, signing) =
+        ps5upload_fpkg::module_case::open_with_update(source, update).map_err(|e| e.to_string())?;
+    if !renamed.is_empty() {
+        crate::log_at!(
+            Info,
+            "convert",
+            "lz4 folder build: renamed to the eboot's spelling: {}",
+            ps5upload_fpkg::module_case::describe(&renamed)
+        );
+    }
+    if let Some(line) = signing.describe() {
+        crate::log_at!(Info, "convert", "lz4 folder build: {line}");
+    }
+    if ps5_dump_forge_zstd::reader::detect(&*tree) {
+        return Ok(Box::new(
+            ps5_dump_forge_zstd::reader::unpack(tree)
+                .map_err(|e| format!("reading the game's zstd packs: {e}"))?,
+        ));
+    }
+    Ok(tree)
+}
+
+/// `tree` ready for LZ4 packs, or why it can't have them: the release ampr_emu put in when the
+/// game's own is missing or too old and `install_runtime` asks for it (its own kept beside it),
+/// then the game's emulator checked for pack support.
+fn lz4_ready(
+    mut tree: Box<dyn ps5upload_fpkg::source::SourceTree>,
+    install_runtime: bool,
+) -> Result<Box<dyn ps5upload_fpkg::source::SourceTree>, String> {
+    use ps5upload_fpkg::ampr_pack::image as img;
+    if install_runtime {
+        let ready = img::readiness(&mut *tree);
+        match ready.as_ref().map(|r| r.kind) {
+            Some("runtime") => {
+                let bytes = crate::ampr_trace::release_runtime()?;
+                tree =
+                    Box::new(img::RuntimeInstalled::new(tree, bytes).map_err(|e| e.to_string())?);
+            }
+            Some("ok") => {}
+            _ => {
+                return Err(ready
+                    .and_then(|r| r.refusal)
+                    .unwrap_or_else(|| "the game cannot use asset packs".into()))
+            }
+        }
+    }
+    match img::refusal(&mut *tree) {
+        Some(why) => Err(why),
+        None => Ok(tree),
+    }
+}
+
 /// POST /api/folder/build — unpack a game image or a debug-key package into a plain folder
 /// (#469). Runs as a job like an image build: stages `write` and `verify`, the folder written
 /// as `<name>.partial/` and renamed only once it reads back. Done's `dest` is the folder. With
@@ -2752,6 +2818,36 @@ pub(crate) async fn folder_build_handler(
         .entry
         .as_deref()
         .is_some_and(|e| !e.trim().trim_matches('/').is_empty());
+    let lz4 = match &req.ampr_lz4 {
+        None => None,
+        Some(_) if has_entry => {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                "LZ4 packs are made of a whole game, not one file or folder of it",
+            )
+            .into_response()
+        }
+        Some(_) if zstd.is_some() || req.unpack_packs => {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                "LZ4 packs are one choice: not with zstd packs or unpacking the asset packs",
+            )
+            .into_response()
+        }
+        Some(r) => match r.options() {
+            Ok(p) => Some(p),
+            Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
+        },
+    };
+    if lz4.is_some() && to_server.is_some() {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "a folder with LZ4 asset packs can't be written straight to a server yet: save it \
+             to this computer, or choose zstd packs",
+        )
+        .into_response();
+    }
+    let install_runtime = req.ampr_lz4.as_ref().is_some_and(|r| r.install_runtime);
     if req.unpack_packs && (zstd.is_some() || has_entry) {
         return json_err(
             StatusCode::BAD_REQUEST,
@@ -2791,7 +2887,7 @@ pub(crate) async fn folder_build_handler(
     let remove_backport = req.remove_backport;
     let local_dir = !remote && tokio::fs::metadata(&source).await.is_ok_and(|m| m.is_dir());
     // A game folder with an update merged in is a new folder, and so is one unpacked.
-    if local_dir && zstd.is_none() && update.is_none() && unpack.is_none() {
+    if local_dir && zstd.is_none() && lz4.is_none() && update.is_none() && unpack.is_none() {
         return json_err(
             StatusCode::BAD_REQUEST,
             format!("{} is already a folder", source.display()),
@@ -2815,7 +2911,8 @@ pub(crate) async fn folder_build_handler(
     // Packs are made of a game folder anywhere too, and so is a game with an update merged in
     // or its packs unpacked.
     if !named_as_image
-        && !((zstd.is_some() || update.is_some() || unpack.is_some()) && (local_dir || remote))
+        && !((zstd.is_some() || lz4.is_some() || update.is_some() || unpack.is_some())
+            && (local_dir || remote))
     {
         return json_err(
             StatusCode::BAD_REQUEST,
@@ -2941,6 +3038,7 @@ pub(crate) async fn folder_build_handler(
     let scan_entry = entry.clone();
     let scan_update = update.clone();
     let packing = zstd.is_some();
+    let lz4_packing = lz4.is_some();
     // The backport libraries left out, found once: the read-back leaves the same ones out.
     let left_out: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
     let scan_left_out = left_out.clone();
@@ -2972,6 +3070,19 @@ pub(crate) async fn folder_build_handler(
                 }
             }
             return Ok(Unpacked::Tree(strip(tree)?));
+        }
+        if lz4_packing {
+            // LZ4 packs too are made of a whole game, with its own ampr_emu (or the release one).
+            if let Some(why) = patch_refusal(&scan_source) {
+                return Err(why);
+            }
+            let mut tree = open_for_lz4(&scan_source, scan_update.as_deref())?;
+            if scan_update.is_none() {
+                if let Some(why) = ps4_refusal(&scan_source, &mut *tree, false) {
+                    return Err(why);
+                }
+            }
+            return Ok(Unpacked::Tree(lz4_ready(strip(tree)?, install_runtime)?));
         }
         // An image ignores letter case and /data does not: a Unity dump whose
         // Il2cppUserAssemblies.prx the eboot loads as Il2CppUserAssemblies.prx plays from the
@@ -3038,7 +3149,7 @@ pub(crate) async fn folder_build_handler(
     // server, the server's own room is asked once the job starts.
     if let Some(why) = build::free_bytes(&out_dir)
         .and_then(|free| crate::folder_build::shortfall(free, total, &out_dir))
-        .filter(|_| zstd.is_none() && to_server.is_none())
+        .filter(|_| zstd.is_none() && lz4.is_none() && to_server.is_none())
     {
         return json_err(StatusCode::BAD_REQUEST, why).into_response();
     }
@@ -3049,6 +3160,17 @@ pub(crate) async fn folder_build_handler(
     };
     let Some(writing) = claim_off_thread(claimed.clone()).await else {
         return already_building(&claimed);
+    };
+    // LZ4 packs are spooled beside the folder first.
+    let spool = crate::image_build::lz4_spool(&target);
+    let spooling = match lz4.is_some() {
+        false => None,
+        true => {
+            let Some(s) = claim_off_thread(spool.clone()).await else {
+                return already_building(&spool);
+            };
+            Some(s)
+        }
     };
     // A source that goes afterwards is replaced by this folder: every file is compared in full.
     let mode =
@@ -3128,7 +3250,7 @@ pub(crate) async fn folder_build_handler(
             sweep_output_leftovers(&out_dir);
         }
         // Packs are made first: the stage list says so.
-        let stages: &[&str] = if zstd.is_some() {
+        let stages: &[&str] = if zstd.is_some() || lz4.is_some() {
             &["pack", "write", "verify"]
         } else {
             &["write", "verify"]
@@ -3159,6 +3281,10 @@ pub(crate) async fn folder_build_handler(
             }),
             None if packing => open_for_packing(&reopen_source, reopen_update.as_deref())
                 .map(|t| crate::remove_backport::without(t, &left_out)),
+            // The same zstd packs decoded, backport left out and ampr_emu put in.
+            None if lz4_packing => open_for_lz4(&reopen_source, reopen_update.as_deref())
+                .map(|t| crate::remove_backport::without(t, &left_out))
+                .and_then(|t| lz4_ready(t, install_runtime)),
             None => ps5upload_fpkg::module_case::open_with_update(
                 &reopen_source,
                 reopen_update.as_deref(),
@@ -3189,6 +3315,19 @@ pub(crate) async fn folder_build_handler(
         let shown = out.describe();
         let outcome = match unpacked {
             Unpacked::Tree(mut tree) => match zstd {
+                None if lz4.is_some() => match &lz4 {
+                    Some(packs) => crate::lz4_packs::build_folder_to(
+                        packs,
+                        &mut *tree,
+                        &reopen,
+                        &out,
+                        &spool,
+                        mode,
+                        &cancel,
+                        &mut report,
+                    ),
+                    None => Err("no LZ4 packs".into()),
+                },
                 Some((level, choice)) => crate::zstd_runtime::pack_runtime(choice).and_then(|r| {
                     crate::log_at!(
                         Info,
@@ -3227,6 +3366,7 @@ pub(crate) async fn folder_build_handler(
             ),
         };
         drop(writing);
+        drop(spooling);
         if outcome.is_err() && sweep {
             sweep_output_leftovers(&out_dir);
         }
@@ -3416,10 +3556,10 @@ pub(crate) fn sweep_output_leftovers(out: &Path) {
                             && !has_download_sidecar(&e.path())
                             && !has_fresh_checkpoint(&e.path())
                     }
-                    // An LZ4 image build's pack volumes, `<name>.exfat.lz4spool/`, and a
-                    // folder build's unfinished folder (marked, so a user's own is kept).
+                    // An LZ4 build's pack volumes, `<name>.lz4spool/`, and a folder build's
+                    // unfinished folder (marked, so a user's own is kept).
                     Ok(t) if t.is_dir() => {
-                        name.ends_with(".exfat.lz4spool")
+                        is_our_lz4_spool(&e.path())
                             || crate::folder_build::is_our_partial_dir(&e.path())
                     }
                     _ => false,
@@ -3435,6 +3575,25 @@ pub(crate) fn sweep_output_leftovers(out: &Path) {
     for p in spools {
         let _ = std::fs::remove_dir_all(&p);
     }
+}
+
+/// An LZ4 build's spool, `<image or folder>.lz4spool/`: named so, and holding nothing but pack
+/// volumes (`*.pak`), so a user's own folder that happens to be named like one is kept.
+fn is_our_lz4_spool(dir: &Path) -> bool {
+    let named = dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.to_ascii_lowercase().ends_with(".lz4spool"));
+    named
+        && std::fs::read_dir(dir).is_ok_and(|entries| {
+            entries.flatten().all(|e| {
+                e.file_type().is_ok_and(|t| t.is_file())
+                    && e.file_name()
+                        .to_string_lossy()
+                        .to_ascii_lowercase()
+                        .ends_with(".pak")
+            })
+        })
 }
 
 /// Prefix of the folders archives are unpacked into, inside the output folder.

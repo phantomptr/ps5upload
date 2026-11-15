@@ -939,6 +939,7 @@ export async function browserInvoke<T>(
         entry: args["entry"],
         keep_both: args["keepBoth"] ?? false,
         ampr_zstd: args["amprZstd"],
+        ampr_lz4: args["amprLz4"],
         update: args["update"],
         destination: args["destination"],
         remove_backport: args["removeBackport"] ?? false,
