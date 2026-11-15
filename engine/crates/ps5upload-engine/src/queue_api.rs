@@ -252,12 +252,34 @@ pub(crate) struct Item {
 #[derive(Clone, Debug, Default)]
 struct Secrets {
     password: Option<String>,
+    /// An image or folder build's `.rar` password.
+    archive_password: Option<String>,
     url: Option<String>,
 }
 
 impl Secrets {
     fn is_empty(&self) -> bool {
-        self.password.is_none() && self.url.is_none()
+        self.password.is_none() && self.archive_password.is_none() && self.url.is_none()
+    }
+}
+
+/// The fields of a request that hold a password: an upload's `password`, a build's
+/// `archive_password` (a `.rar` read in place).
+const PASSWORD_FIELDS: [&str; 2] = ["password", "archive_password"];
+
+impl Secrets {
+    fn password_mut(&mut self, field: &str) -> &mut Option<String> {
+        match field {
+            "archive_password" => &mut self.archive_password,
+            _ => &mut self.password,
+        }
+    }
+
+    fn password_of(&self, field: &str) -> Option<&String> {
+        match field {
+            "archive_password" => self.archive_password.as_ref(),
+            _ => self.password.as_ref(),
+        }
     }
 }
 
@@ -303,12 +325,14 @@ fn take_secrets(kind: ItemKind, body: &mut Value) -> Secrets {
         }
     }
     if let Some(map) = body.as_object_mut() {
-        match map.remove("password") {
-            Some(Value::String(password)) => secrets.password = Some(password),
-            Some(Value::Null) | None => {}
-            // Not a password the route could read: the route's own check refuses it.
-            Some(other) => {
-                map.insert("password".to_string(), other);
+        for field in PASSWORD_FIELDS {
+            match map.remove(field) {
+                Some(Value::String(password)) => *secrets.password_mut(field) = Some(password),
+                Some(Value::Null) | None => {}
+                // Not a password the route could read: the route's own check refuses it.
+                Some(other) => {
+                    map.insert(field.to_string(), other);
+                }
             }
         }
     }
@@ -323,8 +347,12 @@ fn with_secrets(item: &Item) -> Value {
             *slot = json!(url);
         }
     }
-    if let (Some(password), Some(map)) = (&item.secrets.password, body.as_object_mut()) {
-        map.insert("password".to_string(), json!(password));
+    if let Some(map) = body.as_object_mut() {
+        for field in PASSWORD_FIELDS {
+            if let Some(password) = item.secrets.password_of(field) {
+                map.insert(field.to_string(), json!(password));
+            }
+        }
     }
     body
 }
@@ -1841,6 +1869,20 @@ mod tests {
         assert_eq!(with_secrets(&item)["password"], "hunter2");
         let stored = serde_json::to_string(&item).unwrap();
         assert!(!stored.contains("hunter2"), "{stored}");
+
+        // An image or folder build of a `.rar` read in place: its `archive_password`.
+        for kind in [ItemKind::ImageBuild, ItemKind::FolderBuild] {
+            let mut body = json!({ "source": "/g/Game.rar", "archive_password": "s3cret" });
+            let secrets = take_secrets(kind, &mut body);
+            assert!(body.get("archive_password").is_none(), "{body}");
+            let item = test_item(kind, body, secrets);
+            assert!(item.secret_in_memory);
+            let back = with_secrets(&item);
+            assert_eq!(back["archive_password"], "s3cret");
+            assert!(back.get("password").is_none(), "{back}");
+            let stored = serde_json::to_string(&item).unwrap();
+            assert!(!stored.contains("s3cret"), "{stored}");
+        }
     }
 
     #[test]
