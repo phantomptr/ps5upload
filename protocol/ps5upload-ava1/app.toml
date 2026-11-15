@@ -640,6 +640,10 @@ value = 12
 name = "JOB_OP_APP_DUMP"        # an installed, running title's files copied to a drive, optionally decrypted
 ty = "u8"
 value = 13
+[[const]]
+name = "JOB_OP_CONSOLE_CONVERT" # a game folder or image on the console inspected or converted there (the converter payload)
+ty = "u8"
+value = 14
 # fs.* entry kinds (FsEntry.kind, FsStat.kind): ENTRY_FILE (0) and ENTRY_DIR (1) above, plus:
 [[const]]
 name = "ENTRY_LINK"       # a symbolic link (not followed)

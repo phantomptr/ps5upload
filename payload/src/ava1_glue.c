@@ -5,6 +5,7 @@
 #include "proc_identity.h"
 #include "app_dump.h"
 #include "archive_extract.h"
+#include "console_convert.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -270,6 +271,7 @@ int ava1_payload_start(void) {
                 fsj_register_ops(); /* job.run: delete, chmod -R, hash, crc32 (the table adds the rest) */
                 webui_pkg_register_ops(); /* job.run: the console page's package install */
                 archive_extract_register(); /* job.run: an archive extracted on the console */
+                console_convert_register(); /* job.run: a game inspected or converted on the console */
                 app_dump_register(); /* job.run: a running title dumped to a drive */
             }
         }

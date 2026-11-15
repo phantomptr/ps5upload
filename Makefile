@@ -460,6 +460,16 @@ installer: setup-payload
 	@$(MAKE) -C $(INSTALLER_DIR) -j$(JOBS)
 	@echo "✓ Built $(INSTALLER_ELF)"
 
+# The converter as a program for the PS5 itself (engine/crates/ps5upload-convert), built as a PS5
+# ELF in Docker: Rust's std is compiled for the console there (payload/convert/Dockerfile), so no
+# local PS5 SDK or Rust nightly is needed, only Docker. The script also checks the ELF's shape
+# and that the console exports everything it imports. CONVERT_CHECK=1 only checks a built ELF.
+.PHONY: console-convert
+console-convert:
+	@echo "Building ps5upload-convert for the PS5 (Docker)..."
+	@bash payload/convert/build.sh $(if $(CONVERT_CHECK),--check)
+	@echo "✓ Built payload/convert/ps5upload-convert.elf"
+
 # The patched elfldr the engine sends to replace a console's stock one (see
 # third_party/elfldr/README.md). Its ELF is checked in, so a build without the
 # SDK still embeds it; rebuild after changing the vendored sources.
@@ -1253,6 +1263,16 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/archive_request_selftest.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-archive-request-selftest
 	@echo "✓ a request an extractor never read (it can hold a password) is deleted, one it may still read is kept"
+	@echo "Running console convert self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -DCONSOLE_CONVERT_SELFTEST -DCONVERT_START_MS=1500 \
+		-DCONVERT_KILL_AFTER_MS=1000 -DCONVERT_POWER_TICK_MS=100 \
+		-I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
+		-o $(SELFTEST_DIR)/ps5upload-console-convert-selftest \
+		$(PAYLOAD_DIR)/tests/console_convert_selftest.c $(PAYLOAD_DIR)/src/console_convert.c \
+		$(PAYLOAD_DIR)/src/console_convert_wire.c $(PAYLOAD_DIR)/src/webui_codec.c \
+		$(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-console-convert-selftest
+	@echo "✓ the converter's request, status (also cut short or garbage), Stop, kill and leftover sweep"
 	@echo "Running AVA1 in-flight RPC gate self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -pthread -I$(AVA1_C) \
 		-o $(SELFTEST_DIR)/ps5upload-ava1-rpc-gate-selftest \

@@ -70,6 +70,9 @@ payload/build/
 # The extractor is embedded in the helper from a build, never checked in.
 payload/extractor/build/
 payload/extractor/ps5upload-extractor.elf
+# The on-console converter: built in Docker (make console-convert), never checked in.
+payload/convert/ps5upload-convert.elf
+payload/convert/ps5upload-convert.elf.txt
 *.o
 *.a
 *.so

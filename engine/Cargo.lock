@@ -2631,6 +2631,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ps5upload-convert"
+version = "12.4.23"
+dependencies = [
+ "libc",
+ "ps5upload-fpkg",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ps5upload-core"
 version = "12.4.23"
 dependencies = [
