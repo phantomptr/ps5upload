@@ -1050,8 +1050,9 @@ pub(crate) struct ExfatBuildReq {
     /// `{"kind":"console","addr":…,"dir":…}`: straight into that PS5's folder `dir` over AVA1,
     /// sent as it is written, so the image is never stored on this computer. The job's `dest` is
     /// then the image's path on the PS5, and the read-back runs there. For `.exfat`, `.ffpkg`
-    /// and `.ffpfs` images, and `.exfat` with `ampr_zstd` packs; a `.ffpfsc` (`compress`), LZ4
-    /// packs and edited copies are refused for it.
+    /// and `.ffpfs` images, with or without `ampr_lz4` or `ampr_zstd` packs (LZ4 packs are made
+    /// into the engine's data folder first, and removed once the image is there); a `.ffpfsc`
+    /// (`compress`) and edited copies are refused for it.
     #[serde(default)]
     destination: Option<ImageDestinationReq>,
     /// A PS4 update (a package, image or folder) merged into the PS4 game `source`: the image
@@ -1103,14 +1104,9 @@ pub(crate) enum ImageDestinationReq {
 }
 
 /// Why an image build cannot go straight to a server, in a sentence for the user; `None` when
-/// it can. The same images as straight to the console.
-pub(crate) fn server_refusal(
-    format: crate::image_build::ImageFormat,
-    compress: bool,
-    lz4_packs: bool,
-    zstd_packs: bool,
-    edited: bool,
-) -> Option<&'static str> {
+/// it can. The same images as straight to the console: plain `.exfat`, `.ffpkg` and `.ffpfs`,
+/// with or without LZ4 or zstd asset packs.
+pub(crate) fn server_refusal(compress: bool, edited: bool) -> Option<&'static str> {
     if edited {
         return Some(
             "an edited copy of an image is written next to it on this computer, not straight to \
@@ -1121,18 +1117,6 @@ pub(crate) fn server_refusal(
         return Some(
             "a .ffpfsc can't be written straight to a server yet: save it to this computer, or \
              choose a plain .exfat, .ffpkg or .ffpfs image",
-        );
-    }
-    if lz4_packs {
-        return Some(
-            "an image with LZ4 asset packs can't be written straight to a server yet: save it \
-             to this computer, or choose zstd packs",
-        );
-    }
-    if zstd_packs && format != crate::image_build::ImageFormat::Exfat {
-        return Some(
-            "zstd asset packs go straight to a server in an .exfat image only: choose exFAT, or \
-             save it to this computer",
         );
     }
     None
@@ -1149,15 +1133,10 @@ fn server_dest(source_id: &str, dir: &str) -> Result<crate::server_out::ServerDe
 }
 
 /// Why an image build cannot go straight to the console, in a sentence for the user; `None`
-/// when it can. First version: plain `.exfat`, `.ffpkg` and `.ffpfs`, and `.exfat` with zstd
-/// packs.
-pub(crate) fn console_refusal(
-    format: crate::image_build::ImageFormat,
-    compress: bool,
-    lz4_packs: bool,
-    zstd_packs: bool,
-    edited: bool,
-) -> Option<&'static str> {
+/// when it can: plain `.exfat`, `.ffpkg` and `.ffpfs`, with or without LZ4 or zstd asset packs
+/// (as ps5-dump-forge writes packs into an image on another device). A `.ffpfsc` is not
+/// streamed yet, packed or not.
+pub(crate) fn console_refusal(compress: bool, edited: bool) -> Option<&'static str> {
     if edited {
         return Some(
             "an edited copy of an image is written next to it on this computer, not straight to \
@@ -1168,18 +1147,6 @@ pub(crate) fn console_refusal(
         return Some(
             "a .ffpfsc can't be written straight to the PS5 yet: save it to this computer, or \
              choose a plain .exfat, .ffpkg or .ffpfs image",
-        );
-    }
-    if lz4_packs {
-        return Some(
-            "an image with LZ4 asset packs can't be written straight to the PS5 yet: save it to \
-             this computer, or choose zstd packs",
-        );
-    }
-    if zstd_packs && format != crate::image_build::ImageFormat::Exfat {
-        return Some(
-            "zstd asset packs go straight to the PS5 in an .exfat image only: choose exFAT, or \
-             save it to this computer",
         );
     }
     None
@@ -1204,6 +1171,7 @@ fn to_server_job(
     zstd_level: Option<(u8, crate::zstd_runtime::RuntimeChoice)>,
     zstd_rules: Option<&crate::zstd_packs::Rules>,
     runtime: &mut Option<crate::zstd_runtime::PackRuntime>,
+    lz4: Option<(&crate::image_build::Lz4Packs, &Path)>,
     tree: &mut dyn ps5upload_fpkg::source::SourceTree,
     mode: ps5upload_fpkg::sample::VerifyMode,
     verify_chunk: u64,
@@ -1242,6 +1210,54 @@ fn to_server_job(
                 cancel,
                 stage,
             )
+        }
+        // LZ4 packs: made here, streamed, read back there through the packs.
+        None if lz4.is_some() => {
+            let Some((packs, spool)) = lz4 else {
+                return Err("no LZ4 packs".into());
+            };
+            crate::image_build::stream_lz4(
+                packs,
+                tree,
+                stamp,
+                spool,
+                &path,
+                mode,
+                cancel,
+                stage,
+                &mut |t, salt, stage| {
+                    crate::image_build::stream_to_server(
+                        format,
+                        stamp,
+                        salt,
+                        t,
+                        &target,
+                        mode,
+                        verify_chunk,
+                        cancel,
+                        stage,
+                    )
+                    .map_err(anyhow::Error::msg)
+                },
+                &|| {
+                    let files = dest.files().map_err(|e| crate::server_out::said(&e))?;
+                    ps5upload_fpkg::remote_source::open_remote(files, &path)
+                        .map_err(|e| e.to_string())
+                },
+                &|| match dest.fs() {
+                    Ok(fs) => dest.remove(&*fs, &path),
+                    Err(e) => format!(
+                        "removing it from {} failed too ({e}): delete {path} by hand",
+                        dest.label
+                    ),
+                },
+                &dest.label,
+            )
+            .map(|(mut s, line)| {
+                s.built.detail.push_str(&line);
+                s
+            })
+            .map_err(|e| format!("{e:#}"))
         }
         // A libSceAmpr game gets a fresh ampr_emu.index (#449), as a local build does.
         None => match crate::image_build::AmprIndexed::wrap_at(&mut *tree, stamp) {
@@ -1283,6 +1299,7 @@ fn to_console_job(
     zstd_level: Option<(u8, crate::zstd_runtime::RuntimeChoice)>,
     zstd_rules: Option<&crate::zstd_packs::Rules>,
     runtime: &mut Option<crate::zstd_runtime::PackRuntime>,
+    lz4: Option<(&crate::image_build::Lz4Packs, &Path)>,
     tree: &mut dyn ps5upload_fpkg::source::SourceTree,
     mode: ps5upload_fpkg::sample::VerifyMode,
     verify_chunk: u64,
@@ -1365,6 +1382,48 @@ fn to_console_job(
                 stage,
             )
         }
+        // LZ4 packs: made here, streamed, read back on the PS5 through the packs.
+        None if lz4.is_some() => match lz4 {
+            Some((packs, spool)) => crate::image_build::stream_lz4(
+                packs,
+                tree,
+                stamp,
+                spool,
+                path,
+                mode,
+                cancel,
+                stage,
+                &mut |t, salt, stage| {
+                    crate::image_build::stream_to_console(
+                        format,
+                        Some(stamp),
+                        salt,
+                        t,
+                        &target,
+                        mode,
+                        verify_chunk,
+                        cancel,
+                        stage,
+                    )
+                },
+                &|| {
+                    ps5upload_fpkg::remote_source::open_remote(target.files.clone(), &target.path)
+                        .map_err(|e| e.to_string())
+                },
+                &|| match (target.remove)(&target.path) {
+                    Ok(()) => "it was removed from the PS5".to_string(),
+                    Err(r) => {
+                        format!("removing it from the PS5 failed too ({r:#}): delete it by hand")
+                    }
+                },
+                "the PS5",
+            )
+            .map(|(mut s, line)| {
+                s.built.detail.push_str(&line);
+                s
+            }),
+            None => Err(anyhow::anyhow!("no LZ4 packs")),
+        },
         // A libSceAmpr game gets a fresh ampr_emu.index (#449), as a local build does.
         None => match crate::image_build::AmprIndexed::wrap_at(&mut *tree, stamp) {
             Ok(Some(mut indexed)) => crate::image_build::stream_to_console(
@@ -1818,13 +1877,7 @@ pub(crate) async fn exfat_build_handler(
     let to_console = match req.destination.take() {
         None | Some(ImageDestinationReq::Local) => None,
         Some(ImageDestinationReq::Server { source_id, dir }) => {
-            if let Some(why) = server_refusal(
-                format,
-                compress,
-                packs.is_some(),
-                zstd_level.is_some(),
-                edited.is_some(),
-            ) {
+            if let Some(why) = server_refusal(compress, edited.is_some()) {
                 return json_err(StatusCode::BAD_REQUEST, why).into_response();
             }
             match server_dest(&source_id, &dir) {
@@ -1834,13 +1887,7 @@ pub(crate) async fn exfat_build_handler(
             None
         }
         Some(ImageDestinationReq::Console { addr, dir }) => {
-            if let Some(why) = console_refusal(
-                format,
-                compress,
-                packs.is_some(),
-                zstd_level.is_some(),
-                edited.is_some(),
-            ) {
+            if let Some(why) = console_refusal(compress, edited.is_some()) {
                 return json_err(StatusCode::BAD_REQUEST, why).into_response();
             }
             let dir = match crate::link::valid_console_dir(&dir) {
@@ -2109,10 +2156,16 @@ pub(crate) async fn exfat_build_handler(
     let Some(writing) = claim_off_thread(claimed.clone()).await else {
         return already_building(&claimed);
     };
-    let spooling = match straight {
+    // LZ4 packs are spooled beside the image, or, straight to a console or a server, in the
+    // engine's data folder (one spool per destination).
+    let spool = if straight {
+        crate::image_build::stream_spool(&claimed)
+    } else {
+        crate::image_build::lz4_spool(&output)
+    };
+    let spooling = match straight && packs.is_none() {
         true => None,
         false => {
-            let spool = crate::image_build::lz4_spool(&output);
             let Some(s) = claim_off_thread(spool.clone()).await else {
                 return already_building(&spool);
             };
@@ -2196,6 +2249,11 @@ pub(crate) async fn exfat_build_handler(
         );
         if !straight {
             sweep_output_leftovers(&out_dir);
+        } else if packs.is_some() {
+            // What killed builds left in the data folder's spools, none of them running.
+            if let Some(dir) = spool.parent() {
+                sweep_output_leftovers(dir);
+            }
         }
         let mut tree = tree;
         // With LZ4 packs the build packs first; the stage list says so.
@@ -2240,6 +2298,7 @@ pub(crate) async fn exfat_build_handler(
                     zstd_level,
                     zstd_rules.as_deref(),
                     &mut runtime,
+                    packs.as_ref().map(|p| (p, spool.as_path())),
                     tree,
                     mode,
                     verify_chunk,
@@ -2256,6 +2315,7 @@ pub(crate) async fn exfat_build_handler(
                 zstd_level,
                 zstd_rules.as_deref(),
                 &mut runtime,
+                packs.as_ref().map(|p| (p, spool.as_path())),
                 tree,
                 mode,
                 verify_chunk,
@@ -2584,8 +2644,9 @@ pub(crate) struct FolderBuildReq {
     /// Write the game with its files in AMPR LZ4 asset packs, as an image build's `ampr_lz4`
     /// does, as a plain folder: the pack volumes, their manifest, the files that stay loose and
     /// a fresh `ampr_emu.index`. The volumes are packed into `<folder>.lz4spool/` beside it
-    /// first, so packing needs that room too until the folder is written. The source may then
-    /// also be a game folder. Not with `ampr_zstd`, `unpack_packs` or `entry`.
+    /// first (for a folder on a server, into the engine's data folder), so packing needs that
+    /// room too until the folder is written. The source may then also be a game folder. Not
+    /// with `ampr_zstd`, `unpack_packs` or `entry`.
     #[serde(default)]
     ampr_lz4: Option<AmprLz4Req>,
     /// A PS4 update merged into the PS4 game `source`, as an image build's `update`; the game
@@ -2839,14 +2900,6 @@ pub(crate) async fn folder_build_handler(
             Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
         },
     };
-    if lz4.is_some() && to_server.is_some() {
-        return json_err(
-            StatusCode::BAD_REQUEST,
-            "a folder with LZ4 asset packs can't be written straight to a server yet: save it \
-             to this computer, or choose zstd packs",
-        )
-        .into_response();
-    }
     let install_runtime = req.ampr_lz4.as_ref().is_some_and(|r| r.install_runtime);
     if req.unpack_packs && (zstd.is_some() || has_entry) {
         return json_err(
@@ -3161,8 +3214,12 @@ pub(crate) async fn folder_build_handler(
     let Some(writing) = claim_off_thread(claimed.clone()).await else {
         return already_building(&claimed);
     };
-    // LZ4 packs are spooled beside the folder first.
-    let spool = crate::image_build::lz4_spool(&target);
+    // LZ4 packs are spooled beside the folder first, or, for a folder on a server, in the
+    // engine's data folder.
+    let spool = match &to_server {
+        Some(_) => crate::image_build::stream_spool(&claimed),
+        None => crate::image_build::lz4_spool(&target),
+    };
     let spooling = match lz4.is_some() {
         false => None,
         true => {
@@ -3248,6 +3305,11 @@ pub(crate) async fn folder_build_handler(
         let sweep = entry.is_none() && to_server.is_none();
         if sweep {
             sweep_output_leftovers(&out_dir);
+        } else if lz4.is_some() {
+            // What killed builds left in the data folder's spools, none of them running.
+            if let Some(dir) = spool.parent() {
+                sweep_output_leftovers(dir);
+            }
         }
         // Packs are made first: the stage list says so.
         let stages: &[&str] = if zstd.is_some() || lz4.is_some() {
@@ -4055,29 +4117,13 @@ mod extract_tests {
         let _ = std::fs::remove_dir_all(&out);
     }
 
-    /// Straight to the console: plain .exfat, .ffpkg and .ffpfs, and .exfat with zstd packs.
-    /// Everything else is refused with the reason, before a job exists.
+    /// Straight to the console: plain .exfat, .ffpkg and .ffpfs, packed (LZ4 or zstd) or not.
+    /// A .ffpfsc and an edited copy are refused with the reason, before a job exists.
     #[test]
     fn only_the_formats_that_stream_go_straight_to_the_console() {
-        use crate::image_build::ImageFormat::{Exfat, Ffpfs, Ffpkg};
-        for f in [Exfat, Ffpkg, Ffpfs] {
-            assert_eq!(
-                console_refusal(f, false, false, false, false),
-                None,
-                "{f:?}"
-            );
-            assert!(console_refusal(f, true, false, false, false)
-                .unwrap()
-                .contains(".ffpfsc"));
-            assert!(console_refusal(f, false, false, false, true).is_some());
-        }
-        assert_eq!(console_refusal(Exfat, false, false, true, false), None);
-        assert!(console_refusal(Ffpkg, false, false, true, false)
-            .unwrap()
-            .contains("zstd"));
-        assert!(console_refusal(Exfat, false, true, false, false)
-            .unwrap()
-            .contains("LZ4"));
+        assert_eq!(console_refusal(false, false), None);
+        assert!(console_refusal(true, false).unwrap().contains(".ffpfsc"));
+        assert!(console_refusal(false, true).is_some());
     }
 
     /// The request's `destination`, as the client and the API send it.
@@ -4116,23 +4162,14 @@ mod extract_tests {
     /// The same images go straight to a server as to the console, each refusal in its words.
     #[test]
     fn only_the_formats_that_stream_go_straight_to_a_server() {
-        use crate::image_build::ImageFormat::{Exfat, Ffpfs, Ffpkg};
-        for f in [Exfat, Ffpkg, Ffpfs] {
-            for (compress, lz4, zstd, edited) in [
-                (false, false, false, false),
-                (true, false, false, false),
-                (false, true, false, false),
-                (false, false, true, false),
-                (false, false, false, true),
-            ] {
-                assert_eq!(
-                    server_refusal(f, compress, lz4, zstd, edited).is_some(),
-                    console_refusal(f, compress, lz4, zstd, edited).is_some(),
-                    "{f:?} {compress} {lz4} {zstd} {edited}"
-                );
-                if let Some(why) = server_refusal(f, compress, lz4, zstd, edited) {
-                    assert!(why.contains("a server"), "{why}");
-                }
+        for (compress, edited) in [(false, false), (true, false), (false, true)] {
+            assert_eq!(
+                server_refusal(compress, edited).is_some(),
+                console_refusal(compress, edited).is_some(),
+                "{compress} {edited}"
+            );
+            if let Some(why) = server_refusal(compress, edited) {
+                assert!(why.contains("a server"), "{why}");
             }
         }
     }

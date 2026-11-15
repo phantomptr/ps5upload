@@ -1331,6 +1331,91 @@ async fn lz4_packs_go_into_a_folder_and_any_image() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// LZ4 packs straight to a saved server through the HTTP surface: a `.ffpfs` with LZ4 packs and
+/// a folder with LZ4 packs land there under their names, each read back there through its packs;
+/// nothing is left on this computer, the spools in the data folder included. A `.ffpfsc` is
+/// still refused straight to a server, packed or not.
+#[tokio::test(flavor = "multi_thread")]
+async fn lz4_packs_go_straight_to_a_server() {
+    let r = crate::remote::pool::testing::install_global(&[]);
+    crate::convert_source::register();
+    let id = r
+        .store
+        .add(
+            crate::remote::store::conn("NAS-lz4", crate::remote::store::Protocol::Smb),
+            crate::remote::store::Secret::None,
+        )
+        .unwrap()
+        .conn
+        .id;
+    let st = state();
+    let app = app_with(st.clone(), Default::default(), "");
+    let root = std::env::temp_dir().join(format!("ps5upload-api-lz4srv-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let game = lz4_game(&root);
+    let out = root.join("never");
+    let dir = format!("/api-lz4srv-{}", std::process::id());
+    let lz4 = json!({ "profile_toml": LZ4_DATA_PROFILE });
+    let to = json!({ "kind": "server", "source_id": id, "dir": dir });
+
+    let r1 = post_json(
+        &app,
+        "/api/exfat/build",
+        &json!({
+            "source": game, "output_dir": out, "format": "ffpfs", "name": "Game",
+            "ampr_lz4": lz4, "destination": to,
+        })
+        .to_string(),
+    )
+    .await;
+    match job_end(&st, r1).await {
+        JobState::Done { dest, .. } => assert_eq!(dest, format!("remote://{id}{dir}/Game.ffpfs")),
+        other => panic!("{}", json!(other)),
+    }
+    let r2 = post_json(
+        &app,
+        "/api/folder/build",
+        &json!({
+            "source": game, "output_dir": out, "name": "GameFolder", "full_verify": true,
+            "ampr_lz4": lz4, "destination": to,
+        })
+        .to_string(),
+    )
+    .await;
+    match job_end(&st, r2).await {
+        JobState::Done { dest, .. } => assert_eq!(dest, format!("remote://{id}{dir}/GameFolder")),
+        other => panic!("{}", json!(other)),
+    }
+    let fs = r.pool.fs(&r.store, &id).await.unwrap();
+    assert!(fs.stat(&format!("{dir}/Game.ffpfs")).await.is_ok());
+    assert!(fs
+        .stat(&format!("{dir}/GameFolder/ampr_assets.index"))
+        .await
+        .is_ok());
+    assert!(fs
+        .stat(&format!("{dir}/GameFolder/data/sub/table.bin"))
+        .await
+        .is_err());
+    assert!(!out.exists(), "nothing on this computer");
+    for claimed in [
+        format!("remote://{id}{dir}/Game.ffpfs"),
+        format!("remote://{id}{dir}/GameFolder"),
+    ] {
+        let spool = crate::image_build::stream_spool(std::path::Path::new(&claimed));
+        assert!(!spool.exists(), "{}", spool.display());
+    }
+    // Compressed, packed or not: still kept on this computer.
+    let r3 = post_json(
+        &app,
+        "/api/exfat/build",
+        &json!({ "source": game, "compress": true, "ampr_lz4": lz4, "destination": to })
+            .to_string(),
+    )
+    .await;
+    assert_eq!(r3.status(), StatusCode::BAD_REQUEST);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// Convert straight to a saved server through the HTTP surface: an image and then a folder made
 /// from it land on the server under their names, the job's `dest` names them there, and nothing
 /// is written on this computer.

@@ -342,6 +342,94 @@ mod tests {
         }
     }
 
+    /// zstd packs go straight to the console and to a server in a `.ffpkg` and a `.ffpfs` too,
+    /// as ps5-dump-forge writes them into any image on another device: each read back there,
+    /// and the game read through its packs as it was.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn packed_ufs2_and_pfs_images_stream_to_the_console_and_a_server() {
+        use crate::image_build::to_console_tests::{cfg, Loopback};
+        let lb = Loopback::start("zstdany", None).await;
+        let src = game(&lb.dir);
+        let want = std::fs::read(src.join("data/sub/table.bin")).unwrap();
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let c = cfg();
+        let mem = std::sync::Arc::new(crate::remote::MemFs::new(&[]));
+        let remote =
+            crate::remote::pool::testing::remote_with_shared(std::sync::Arc::clone(&mem), None);
+        let id = remote
+            .store
+            .add(
+                crate::remote::store::conn("NAS", crate::remote::store::Protocol::Smb),
+                crate::remote::store::Secret::None,
+            )
+            .unwrap()
+            .conn
+            .id;
+        let dest = crate::server_out::ServerDest::with(
+            remote,
+            &id,
+            "/games/ps5",
+            tokio::runtime::Handle::current(),
+        )
+        .unwrap();
+        for format in [ImageFormat::Ffpkg, ImageFormat::Ffpfs] {
+            let name = format!("G.{}", format.extension());
+            let on_console = format!("dst/{name}");
+            tokio::task::block_in_place(|| {
+                let mut tree = FolderSource::open(&src).unwrap();
+                lb.with_target(&c, &on_console, |t| {
+                    stream_to_console(
+                        format,
+                        5,
+                        None,
+                        &runtime(),
+                        &mut tree,
+                        7,
+                        t,
+                        VerifyMode::Full,
+                        crate::image_build::DEFAULT_VERIFY_CHUNK,
+                        &cancel,
+                        &mut |_, _, _| {},
+                    )
+                })
+            })
+            .unwrap_or_else(|e| panic!("{format:?}: {e:#}"));
+            let image =
+                crate::image_build::open_image(&lb.share().join(&on_console), format, false)
+                    .unwrap();
+            let mut game = ps5_dump_forge_zstd::reader::unpack(image).unwrap();
+            assert_eq!(game.read("data/sub/table.bin").unwrap(), want, "{format:?}");
+
+            let target = crate::image_build::ServerImage {
+                dest: &dest,
+                name: name.clone(),
+                data: None,
+            };
+            tokio::task::block_in_place(|| {
+                let mut tree = FolderSource::open(&src).unwrap();
+                stream_to_server(
+                    format,
+                    5,
+                    None,
+                    &runtime(),
+                    &mut tree,
+                    7,
+                    &target,
+                    VerifyMode::Full,
+                    crate::image_build::DEFAULT_VERIFY_CHUNK,
+                    &cancel,
+                    &mut |_, _, _| {},
+                )
+            })
+            .unwrap_or_else(|e| panic!("{format:?}: {e}"));
+            let got = mem.bytes(&format!("/games/ps5/{name}")).unwrap();
+            assert!(
+                got == std::fs::read(lb.share().join(&on_console)).unwrap(),
+                "{format:?}: the server's image differs from the console's"
+            );
+        }
+    }
+
     /// An .exfat with zstd packs streamed to the console is the image a local build writes, and
     /// its packs read back there.
     #[tokio::test(flavor = "multi_thread")]

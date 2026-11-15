@@ -17,6 +17,88 @@ pub(crate) use to_console::{
 };
 pub(crate) use to_server::{server_stamp, stream_to_server, ServerImage, ToServer};
 
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use ps5upload_fpkg::sample::VerifyMode;
+use ps5upload_fpkg::source::SourceTree;
+
+/// Where an LZ4 build that goes straight to a console or a server packs its volumes: in the
+/// engine's data folder (the temp folder without one), one spool per destination, `claimed`
+/// (what the job claimed for it).
+pub(crate) fn stream_spool(claimed: &Path) -> PathBuf {
+    let base = crate::remote::store::data_dir().unwrap_or_else(std::env::temp_dir);
+    let h = blake3::hash(claimed.to_string_lossy().as_bytes()).to_hex();
+    base.join("lz4spool").join(format!("{}.lz4spool", &h[..32]))
+}
+
+/// Streams the packed game (with what else its bytes depend on) wherever it goes.
+pub(crate) type SendPacked<'a, T> =
+    dyn FnMut(&mut dyn SourceTree, &str, &mut dyn FnMut(&str, u64, u64)) -> anyhow::Result<T> + 'a;
+
+/// An image with LZ4 packs straight to a console or a server, as ps5-dump-forge writes packs
+/// into an image on another device: the packs made into `spool` on this computer with `mtime`
+/// pinned on the new index, so making them again gives the same bytes (the pack set's build ID
+/// goes into the job's id through the salt `send` gets); `send` streams the packed game and reads
+/// the image back there against it; then the game is read back through the packs of the copy
+/// there (`reopen`) against `source`. An image that fails that is removed (`remove` says how
+/// that went) from `place`. The spool is removed whatever happens. Returns what `send` did and
+/// the line the job's detail gets.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn stream_lz4<T>(
+    packs: &Lz4Packs,
+    source: &mut dyn SourceTree,
+    mtime: i64,
+    spool: &Path,
+    to: &str,
+    mode: VerifyMode,
+    cancel: &AtomicBool,
+    stage: &mut dyn FnMut(&str, u64, u64),
+    send: &mut SendPacked<T>,
+    reopen: &dyn Fn() -> Result<Box<dyn SourceTree>, String>,
+    remove: &dyn Fn() -> String,
+    place: &str,
+) -> anyhow::Result<(T, String)> {
+    // Ours (the job claimed it): what a killed engine left there goes first.
+    let _ = std::fs::remove_dir_all(spool);
+    if let Some(parent) = spool.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| anyhow::anyhow!("{}: {e}", parent.display()))?;
+    }
+    let result = (|| {
+        let crate::lz4_packs::Spooled {
+            mut tree,
+            report,
+            config,
+        } = crate::lz4_packs::spool(source, packs, spool, mtime, to, cancel, stage)
+            .map_err(anyhow::Error::msg)?;
+        let salt = crate::lz4_packs::salt(&report);
+        let streamed = send(&mut tree, &salt, stage)?;
+        drop(tree);
+        let checked = reopen().and_then(|image| {
+            crate::lz4_packs::read_back(image, source, &config, mode, cancel, &mut |d, t| {
+                stage("verify", d, t)
+            })
+        });
+        match checked {
+            Ok(line) => Ok((
+                streamed,
+                format!(", {line}{}", crate::lz4_packs::detail(&report)),
+            )),
+            Err(e) if cancel.load(Ordering::Relaxed) => anyhow::bail!(
+                "cancelled while reading the LZ4 packs back on {place} ({e}); the image is there \
+                 but was not checked through its packs"
+            ),
+            Err(e) => {
+                let removed = remove();
+                anyhow::bail!("{e}, on {place}; {removed}")
+            }
+        }
+    })();
+    let _ = std::fs::remove_dir_all(spool);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -73,6 +155,175 @@ mod tests {
         std::fs::write(src.join("data/text.bin"), &text[..150_000]).unwrap();
         std::fs::write(src.join("data/settings.json"), b"{\"a\":1}").unwrap();
         src
+    }
+
+    /// The game read through the LZ4 packs of `image` is the source at `src`.
+    fn reads_as_the_source(image: Box<dyn SourceTree>, src: &Path, what: &str) {
+        use ps5upload_fpkg::ampr_pack::image::{Lz4Unpacked, Unpacking};
+        let Unpacking::Decoded(mut game) = Lz4Unpacked::open(image).unwrap() else {
+            panic!("{what}: no LZ4 packs");
+        };
+        let mut source = FolderSource::open(src).unwrap();
+        for f in source.files().to_vec() {
+            if f.path == ps5upload_fpkg::ampr_index::NAME {
+                continue;
+            }
+            assert_eq!(
+                game.read(&f.path).unwrap(),
+                source.read(&f.path).unwrap(),
+                "{what}: {}",
+                f.path
+            );
+        }
+    }
+
+    /// An image with LZ4 packs, in every format, streamed straight to the console and to a
+    /// server: written there, read back there through its filesystem and then through its
+    /// packs; the spool is gone; and packing again with the same time gives the same bytes, so
+    /// a stream that starts over goes on from what is there.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn lz4_packed_images_stream_to_the_console_and_a_server() {
+        use crate::image_build::to_console_tests::{cfg, Loopback};
+        let lb = Loopback::start("lz4", None).await;
+        let src = ampr_game(&lb.dir);
+        let packs = Lz4Packs {
+            profile: Some(ps5upload_fpkg::ampr_pack::default_profile(9, 16)),
+            level: 9,
+            block_shift: 16,
+        };
+        let cancel = AtomicBool::new(false);
+        let c = cfg();
+        let mut first = None;
+        for format in [ImageFormat::Exfat, ImageFormat::Ffpkg, ImageFormat::Ffpfs] {
+            let name = format!("dst/G.{}", format.extension());
+            let spool = lb
+                .dir
+                .join(format!("spool-{}.lz4spool", format.extension()));
+            let mut stages: Vec<String> = Vec::new();
+            let (streamed, line) = tokio::task::block_in_place(|| {
+                let mut tree = FolderSource::open(&src).unwrap();
+                lb.with_target(&c, &name, |t| {
+                    stream_lz4(
+                        &packs,
+                        &mut tree,
+                        7,
+                        &spool,
+                        &t.path,
+                        VerifyMode::Full,
+                        &cancel,
+                        &mut |s, _, _| {
+                            if stages.last().map(String::as_str) != Some(s) {
+                                stages.push(s.to_string());
+                            }
+                        },
+                        &mut |tree, salt, stage| {
+                            stream_to_console(
+                                format,
+                                Some(7),
+                                salt,
+                                tree,
+                                t,
+                                VerifyMode::Full,
+                                DEFAULT_VERIFY_CHUNK,
+                                &cancel,
+                                stage,
+                            )
+                        },
+                        &|| {
+                            ps5upload_fpkg::remote_source::open_remote(t.files.clone(), &t.path)
+                                .map_err(|e| e.to_string())
+                        },
+                        &|| "removed".into(),
+                        "the PS5",
+                    )
+                })
+            })
+            .unwrap_or_else(|e| panic!("{format:?}: {e:#}"));
+            assert_eq!(stages, ["pack", "plan", "write", "verify"], "{format:?}");
+            assert!(line.contains("read back through the LZ4 packs"), "{line}");
+            assert!(!spool.exists(), "the spool is removed");
+            let on_console = lb.share().join(&name);
+            assert_eq!(
+                std::fs::metadata(&on_console).unwrap().len(),
+                streamed.built.image_bytes
+            );
+            let image = open_image(&on_console, format, false).unwrap();
+            reads_as_the_source(image, &src, &format!("{format:?} on the console"));
+            if format == ImageFormat::Exfat {
+                first = Some(std::fs::read(&on_console).unwrap());
+            }
+        }
+
+        // To a server: the same .exfat byte for byte (the same time, the same packs), read back
+        // there, no partial file left.
+        let mem = std::sync::Arc::new(crate::remote::MemFs::new(&[]));
+        let remote =
+            crate::remote::pool::testing::remote_with_shared(std::sync::Arc::clone(&mem), None);
+        let id = remote
+            .store
+            .add(
+                crate::remote::store::conn("NAS", crate::remote::store::Protocol::Smb),
+                crate::remote::store::Secret::None,
+            )
+            .unwrap()
+            .conn
+            .id;
+        let dest = crate::server_out::ServerDest::with(
+            remote,
+            &id,
+            "/games/ps5",
+            tokio::runtime::Handle::current(),
+        )
+        .unwrap();
+        let target = ServerImage {
+            dest: &dest,
+            name: "G.exfat".into(),
+            data: None,
+        };
+        let path = target.path();
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let spool = lb.dir.join("server.lz4spool");
+        tokio::task::block_in_place(|| {
+            let mut tree = FolderSource::open(&src).unwrap();
+            stream_lz4(
+                &packs,
+                &mut tree,
+                7,
+                &spool,
+                &path,
+                VerifyMode::Full,
+                &cancel,
+                &mut |_, _, _| {},
+                &mut |tree, salt, stage| {
+                    stream_to_server(
+                        ImageFormat::Exfat,
+                        7,
+                        salt,
+                        tree,
+                        &target,
+                        VerifyMode::Full,
+                        DEFAULT_VERIFY_CHUNK,
+                        &cancel,
+                        stage,
+                    )
+                    .map_err(anyhow::Error::msg)
+                },
+                &|| {
+                    let files = dest.files().map_err(|e| crate::server_out::said(&e))?;
+                    ps5upload_fpkg::remote_source::open_remote(files, &path)
+                        .map_err(|e| e.to_string())
+                },
+                &|| "removed".into(),
+                "NAS",
+            )
+        })
+        .unwrap_or_else(|e| panic!("{e:#}"));
+        assert!(
+            mem.bytes("/games/ps5/G.exfat").unwrap() == first.unwrap(),
+            "the server's packed image differs from the console's"
+        );
+        assert!(mem.bytes("/games/ps5/G.exfat.partial").is_none());
+        assert!(!spool.exists());
     }
 
     /// "Unpack the asset packs" on an LZ4-packed image: the plain game again, the packs and
