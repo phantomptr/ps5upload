@@ -368,14 +368,8 @@ impl Probe {
             return Some("the drive is read-only".into());
         }
         if one_file {
-            if let Some(max) = self.max_file.filter(|m| bytes > *m) {
-                return Some(format!(
-                    "the drive ({}) holds files of at most {:.1} GiB, and this image is at \
-                     least {:.1} GiB",
-                    self.fs_type,
-                    max as f64 / (1u64 << 30) as f64,
-                    bytes as f64 / (1u64 << 30) as f64
-                ));
+            if let Some(why) = self.file_refusal(bytes, "image") {
+                return Some(why);
             }
         }
         match self.free {
@@ -387,6 +381,30 @@ impl Probe {
             _ => None,
         }
     }
+
+    /// Why one file of `bytes` (a `what`: an image, a pack volume) can't go here, for a drive
+    /// with a file size limit (FAT32: 4 GiB), or `None`.
+    pub fn file_refusal(&self, bytes: u64, what: &str) -> Option<String> {
+        let max = self.max_file.filter(|m| bytes > *m)?;
+        Some(format!(
+            "the drive ({}) holds files of at most {:.1} GiB, and this {what} is at least {:.1} GiB",
+            self.fs_type,
+            max as f64 / (1u64 << 30) as f64,
+            bytes as f64 / (1u64 << 30) as f64
+        ))
+    }
+}
+
+/// On the console, why one file of `bytes` (a `what`) can't be written at `output` (its folder
+/// is measured: FAT32 holds 4 GiB at most), or `None`: for a size known only once a build has
+/// planned or packed, checked before the first byte is written. A computer finds out as it
+/// writes, as it always has.
+pub fn too_big_for(output: &Path, bytes: u64, what: &str) -> Option<String> {
+    if !ON_CONSOLE {
+        return None;
+    }
+    let dir = output.parent().filter(|p| !p.as_os_str().is_empty())?;
+    probe(dir).ok()?.file_refusal(bytes, what)
 }
 
 /// The largest file a filesystem of this name holds, where that is less than a game.
@@ -600,6 +618,22 @@ mod tests {
             .contains("at most 4.0 GiB"));
         // A folder of 5 GiB is many files, each under the limit.
         assert_eq!(fat.refusal(5 << 30, false, 0), None);
+        // One file checked on its own (a pack volume, an image's planned size).
+        assert!(fat
+            .file_refusal(5 << 30, "pack volume")
+            .unwrap()
+            .contains("at most 4.0 GiB, and this pack volume"));
+        assert_eq!(fat.file_refusal((4 << 30) - 1, "image"), None);
+        assert_eq!(
+            Probe {
+                max_file: None,
+                ..fat.clone()
+            }
+            .file_refusal(u64::MAX, "image"),
+            None
+        );
+        // Off the console nothing is measured for it.
+        assert_eq!(too_big_for(&dir.join("x.exfat"), u64::MAX, "image"), None);
         let full = Probe {
             free: Some(1 << 30),
             ..fat.clone()

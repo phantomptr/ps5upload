@@ -304,6 +304,12 @@ pub fn measure(
         index.volume_sizes.len(),
         to.display()
     );
+    // Only now is what the packs come to known: a volume the drive can't hold as one file
+    // (FAT32 on the console) is refused before anything is written.
+    let largest = index.volume_sizes.iter().copied().max().unwrap_or(0);
+    if let Some(why) = crate::safe_write::too_big_for(to, largest, "pack volume") {
+        return Err(why);
+    }
     Ok(index)
 }
 

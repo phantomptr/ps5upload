@@ -325,6 +325,10 @@ fn failure(detail: String, cancelled: bool, plan: &Plan) -> Refusal {
     } else if !plan.source.exists() || plan.dest.parent().is_some_and(|d| !d.is_dir()) {
         // U7: a pulled drive is named before the raw error.
         "convert_drive_gone"
+    } else if lower.contains("holds files of at most") {
+        // The build's own check once the image or pack volume sizes are known
+        // (`safe_write::too_big_for`): with zstd packs the size isn't known before.
+        "convert_too_big_for_drive"
     } else if lower.contains("no space")
         || lower.contains("storage full")
         || lower.contains("disk full")
@@ -383,7 +387,9 @@ fn build(
         probe.read_only
     ));
     // An image is at least as large as the game in it; packs may well be smaller, so only the
-    // drive's own limits are checked for them.
+    // drive's own limits are checked for them here. Their size is known once they are measured:
+    // the build checks the image and each pack volume against the drive's file size limit then,
+    // before writing (`safe_write::too_big_for`, `convert_too_big_for_drive` in `failure`).
     let need = if plan.zstd.is_some() { 0 } else { data };
     if let Some(why) = probe.refusal(need, plan.image.is_some(), folder_build::SPARE) {
         let cause = if probe.read_only {
@@ -838,6 +844,33 @@ mod tests {
                 .collect();
             assert!(left.is_empty(), "{format}: {left:?}");
         }
+    }
+
+    /// The build's own file size check (made once zstd packs are measured) has its cause.
+    #[test]
+    fn a_file_too_big_for_the_drive_has_its_cause() {
+        let plan = Plan {
+            source: std::env::temp_dir(),
+            dest: std::env::temp_dir().join("g.exfat"),
+            image: Some(ImageFormat::Exfat),
+            mode: VerifyMode::Full,
+            zstd: None,
+        };
+        let fat = safe_write::Probe {
+            fs_type: "msdosfs".into(),
+            free: None,
+            read_only: false,
+            max_file: Some((4u64 << 30) - 1),
+        };
+        let why = fat.file_refusal(5 << 30, "pack volume").unwrap();
+        assert_eq!(
+            failure(why, false, &plan).cause,
+            "convert_too_big_for_drive"
+        );
+        assert_eq!(
+            failure("short read".into(), false, &plan).cause,
+            "convert_build_failed"
+        );
     }
 
     #[test]

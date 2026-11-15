@@ -1251,6 +1251,13 @@ fn build_once(
         Ok(p) => p,
         Err(e) => return (settle(Err(e), cancel.load(Ordering::Relaxed)), false),
     };
+    // The image's size is known now (for zstd packs, only now): one the drive can't hold as a
+    // file (FAT32 on the console) is refused before its first byte. A `.ffpfsc` is smaller.
+    if inner_name.is_none() {
+        if let Some(why) = crate::safe_write::too_big_for(output, planned.image_size(), "image") {
+            return (Err(why), false);
+        }
+    }
     let want_sizes: HashMap<String, u64> = source
         .files()
         .iter()
