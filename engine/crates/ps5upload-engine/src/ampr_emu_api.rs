@@ -417,6 +417,19 @@ fn update_zstd_runtime(source: &str) -> Result<ZstdRuntimeOutcome, String> {
             let at = format!("{target}/{MODULE}");
             let full = format!("{folder}/{at}");
             let have = console_file(&addr, &full)?;
+            // No backport runtime yet and the image's own is already this one: nothing to do (a
+            // backport would only copy the game's modules for the same runtime).
+            if have.is_none() && tree.read(&module).ok().as_deref() == Some(r.bytes.as_slice()) {
+                return Ok(ZstdRuntimeOutcome {
+                    kind: "backport",
+                    folder,
+                    written: Vec::new(),
+                    from,
+                    to,
+                    already: true,
+                    rescanned: false,
+                });
+            }
             let copy = existing_dir
                 .is_none()
                 .then_some((own_dir.as_str(), target.as_str()));
