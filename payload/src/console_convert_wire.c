@@ -4,7 +4,9 @@
 #include "console_convert.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "webui_codec.h"
 
@@ -197,6 +199,28 @@ int cc_format_ok(const char *format) {
 int cc_path_within(const char *outer, const char *inner) {
     size_t n = strlen(outer);
     return strncmp(outer, inner, n) == 0 && (inner[n] == 0 || inner[n] == '/');
+}
+
+/* cc_path_within without case: on an exFAT drive "g.partial" and "G.partial" are one folder. */
+static int path_within_nocase(const char *outer, const char *inner) {
+    size_t n = strlen(outer);
+    return strncasecmp(outer, inner, n) == 0 && (inner[n] == 0 || inner[n] == '/');
+}
+
+int cc_build_reads_own_leftovers(const char *src, const char *dest) {
+    static const char *const tails[] = {".partial", ".partial.resume", ".partial.stamp"};
+    size_t i, dlen = strlen(dest);
+    for (i = 0; i < sizeof tails / sizeof *tails; i++) {
+        size_t len = dlen + strlen(tails[i]) + 1;
+        char *own = malloc(len); /* on the heap: a job thread's stack is small */
+        int hit;
+        if (!own) return 1; /* cannot tell: refused */
+        snprintf(own, len, "%s%s", dest, tails[i]);
+        hit = path_within_nocase(own, src) || path_within_nocase(src, own);
+        free(own);
+        if (hit) return 1;
+    }
+    return 0;
 }
 
 int cc_runtime_folder_version(const char *name, char *out, size_t cap) {

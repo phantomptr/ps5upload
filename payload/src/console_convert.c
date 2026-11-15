@@ -386,6 +386,9 @@ static const char *check_build(const char *json, const char *src, int src_is_dir
         return "convert_bad_dest";
     /* Never over the source, and never a folder written inside the folder being read. */
     if (strcmp(dest, src) == 0 || (src_is_dir && cc_path_within(src, dest))) return "convert_bad_dest";
+    /* Nor a source the build's own leftovers are named for: `<dest>.partial` is cleared before the
+     * build writes, and removed after one that died. */
+    if (cc_build_reads_own_leftovers(src, dest)) return "convert_bad_dest";
     if (lstat(dest, &st) == 0) return "convert_destination_exists";
     verify[0] = 0;
     if (fsj_json_str(json, "verify", verify, sizeof verify) && strcmp(verify, "fast") != 0 && strcmp(verify, "full") != 0)

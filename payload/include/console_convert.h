@@ -116,6 +116,10 @@ static inline int cc_zstd_level_ok(unsigned long long level) { return level >= 1
 int cc_format_ok(const char *format);
 /* 1 when `inner` is `outer` itself or below it (both normalised). */
 int cc_path_within(const char *outer, const char *inner);
+/* 1 when a build of `dest` would clear `src`: `src` is one of the names the build writes and an
+ * unfinished one's clean-up removes (`<dest>.partial`, `.partial.resume`, `.partial.stamp`) or is
+ * inside one, or one of those names is inside `src`. Compared without case (exFAT). */
+int cc_build_reads_own_leftovers(const char *src, const char *dest);
 
 /* ---- the zstd runtime (CONVERT_RUNTIME_DIR/ampr-emu-ng-<version>/libSceAmpr.sprx) ---- */
 

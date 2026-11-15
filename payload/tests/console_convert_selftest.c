@@ -397,6 +397,16 @@ static void test_wire(void) {
     CHECK(!cc_image_format("/data/g.") && !cc_image_format("/data/exfat"));
     CHECK(cc_format_ok("folder") && cc_format_ok("ffpfs") && !cc_format_ok("pkg") && !cc_format_ok(""));
     CHECK(cc_path_within("/data/g", "/data/g") && cc_path_within("/data/g", "/data/g/out") && !cc_path_within("/data/g", "/data/g2"));
+    /* A source a build of dest would clear. */
+    CHECK(cc_build_reads_own_leftovers("/data/games/G.partial", "/data/games/G"));
+    CHECK(cc_build_reads_own_leftovers("/data/games/g.PARTIAL", "/data/games/G")); /* exFAT: one name */
+    CHECK(cc_build_reads_own_leftovers("/data/games/G.partial/PPSA01234", "/data/games/G"));
+    CHECK(cc_build_reads_own_leftovers("/data/games/G.exfat.partial.resume", "/data/games/G.exfat"));
+    CHECK(cc_build_reads_own_leftovers("/data/games/G.exfat.partial.stamp", "/data/games/G.exfat"));
+    CHECK(cc_build_reads_own_leftovers("/data/games", "/data/games/G"));
+    CHECK(!cc_build_reads_own_leftovers("/data/games/G.partial2", "/data/games/G"));
+    CHECK(!cc_build_reads_own_leftovers("/data/games/G", "/data/out/G.exfat"));
+    CHECK(!cc_build_reads_own_leftovers("/data/games/G.partia", "/data/games/G"));
 
     /* A left-behind request: the extractor's rule. */
     CHECK(!console_convert_request_stale(1000, 1000 + CONVERT_REQUEST_STALE_S - 1));
@@ -452,6 +462,19 @@ static void test_op(void) {
         BUILD_REFUSED(inside, "folder", AVA1_ERR_PATH, "convert_bad_dest");
         BUILD_REFUSED(nodir, "ffpkg", AVA1_ERR_PATH, "convert_bad_dest");
         BUILD_REFUSED(folder_named_image, "folder", AVA1_ERR_PATH, "convert_bad_dest");
+    }
+    {
+        /* A source named as the build's unfinished output: refused, and never removed. */
+        char src_partial[320], src_eboot[340], pdest[320];
+        snprintf(src_partial, sizeof src_partial, "%s/P.partial", g_root);
+        snprintf(src_eboot, sizeof src_eboot, "%s/eboot.bin", src_partial);
+        snprintf(pdest, sizeof pdest, "%s/P", g_root);
+        mkdir(src_partial, 0700);
+        put_file(src_eboot, "x");
+        snprintf(args, sizeof args, "{\"path\":\"%s\",\"action\":\"build\",\"dest\":\"%s\",\"format\":\"folder\"}",
+                 src_partial, pdest);
+        CHECK(run_op(FAKE_NEVER, args, c) == AVA1_ERR_PATH && strcmp(c->message, "convert_bad_dest") == 0 && !g_request[0]);
+        CHECK(exists(src_eboot));
     }
     /* A zstd level outside zstd's range. */
     snprintf(args, sizeof args,
