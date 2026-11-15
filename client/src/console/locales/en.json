@@ -217,6 +217,7 @@
   "cw_convert_verify_full": "Check every byte",
   "cw_convert_zstd": "zstd asset packs",
   "cw_convert_zstd_level": "Compression level",
+  "cw_convert_zstd_no_runtime": "zstd packs need the runtime: open PS5Upload on your computer once while this PS5 is connected.",
   "cw_convert_zstd_note": "Packs the game's files into zstd packs that it reads through AMPR: smaller, and the game needs ampr-emu-ng to start.",
   "cw_ctl_gamepad": "Controller seen as a gamepad: {id}",
   "cw_ctl_last": "Last pressed:",

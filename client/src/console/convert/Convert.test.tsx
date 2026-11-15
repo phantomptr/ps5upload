@@ -18,6 +18,7 @@ const INFO: Inspection = {
   packed: "zstd",
   hasEboot: true,
   warnings: [],
+  zstdRuntime: "0.4.1",
 };
 
 function props(over: Partial<ConvertViewProps> = {}): ConvertViewProps {
@@ -77,6 +78,19 @@ describe("Convert", () => {
     expect(off).not.toContain("convert-level-19");
     const on = html(props({ zstd: true, level: 19 }));
     expect(on).toMatch(/aria-pressed="true"[^>]*data-action="convert-level-19"/);
+  });
+
+  it("without the zstd runtime on the console, zstd is off and says how to get it", () => {
+    const none = { phase: "done" as const, info: { ...INFO, zstdRuntime: null } };
+    const h = html(props({ inspected: none, zstd: true, level: 19 }));
+    expect(h).toMatch(/aria-checked="false"[^>]*data-action="convert-zstd"[^>]*disabled/);
+    expect(h).toContain('data-convert-zstd-runtime="missing"');
+    expect(h).toContain(esc(t("cw_convert_zstd_no_runtime")));
+    expect(h).not.toContain("convert-level-19");
+    // With it: no sentence, the switch works.
+    const has = html(props({ zstd: true }));
+    expect(has).not.toContain("data-convert-zstd-runtime");
+    expect(has).toMatch(/aria-checked="true"[^>]*data-action="convert-zstd"(?![^>]*disabled)/);
   });
 
   it("a name already there blocks Convert and offers Keep both", () => {

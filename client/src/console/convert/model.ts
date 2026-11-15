@@ -69,6 +69,9 @@ export interface Inspection {
   packed: string | null;
   hasEboot: boolean;
   warnings: string[];
+  /** The zstd runtime on the console (the helper adds it), or null: a zstd build needs one, and
+   *  only the desktop app puts it there. */
+  zstdRuntime: string | null;
 }
 
 const str = (v: unknown) => (typeof v === "string" && v ? v : null);
@@ -93,6 +96,7 @@ export function parseInspection(raw: unknown): Inspection | null {
     packed: str(r.packed),
     hasEboot: r.has_eboot === true,
     warnings: Array.isArray(r.warnings) ? r.warnings.filter((w): w is string => typeof w === "string") : [],
+    zstdRuntime: str(r.zstd_runtime),
   };
 }
 
@@ -125,6 +129,7 @@ export const CONVERT_CAUSES: Record<string, string> = {
   convert_died: "cw_convert_err_died",
   convert_no_memory: "cw_convert_err_no_memory",
   convert_no_space: "cw_convert_err_no_space",
+  convert_no_zstd_runtime: "cw_convert_zstd_no_runtime",
   convert_source_unreadable: "cw_convert_err_unreadable",
   convert_unsupported_source: "cw_convert_err_unsupported",
   convert_open_failed: "cw_files_err_read",

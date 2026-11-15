@@ -7,6 +7,7 @@ import {
   CONVERT_CAUSES,
   convertCauseText,
   convertErrorText,
+  convertFailureText,
   currentConvert,
   dismissConvert,
   endOf,
@@ -116,6 +117,14 @@ describe("names and requests", () => {
     expect(i).toMatchObject({ title: "Game", titleId: "PPSA00001", packed: "zstd", hasEboot: true, warnings: ["x"], dataBytes: 9, contentId: null });
     expect(parseInspection({ format: "folder" })).toBeNull();
     expect(parseInspection(null)).toBeNull();
+    // The zstd runtime the helper found, or none (also from a helper that does not say).
+    expect(i?.zstdRuntime).toBeNull();
+    expect(parseInspection({ path: "/g", format: "folder", zstd_runtime: "0.4.1" })?.zstdRuntime).toBe("0.4.1");
+    expect(parseInspection({ path: "/g", format: "folder", zstd_runtime: null })?.zstdRuntime).toBeNull();
+  });
+
+  it("a zstd build refused for want of the runtime says how to get it", () => {
+    expect(convertFailureText("convert_no_zstd_runtime")).toBe(t("cw_convert_zstd_no_runtime"));
   });
 
   it("stage lines", () => {

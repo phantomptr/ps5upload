@@ -1402,6 +1402,7 @@ home_low_space_body: "Clean up finds updates, leftover packages and games you ne
 "cw_convert_zstd": "zstd asset packs",
 "cw_convert_zstd_level": "Compression level",
 "cw_convert_zstd_note": "Packs the game's files into zstd packs that it reads through AMPR: smaller, and the game needs ampr-emu-ng to start.",
+"cw_convert_zstd_no_runtime": "zstd packs need the runtime: open PS5Upload on your computer once while this PS5 is connected.",
 "cw_cleanup_removing": "Removing… {done} of {total}, {size} freed",
 "cw_cleanup_result_removed": "Removed {count} items ({size})",
 "cw_cleanup_result_free": "Free on internal storage: {before} → {after}. It can take a minute to show.",

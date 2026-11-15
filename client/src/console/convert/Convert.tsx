@@ -82,6 +82,8 @@ export function ConvertView(p: ConvertViewProps) {
   const running = converting(p.run);
   const info = p.inspected?.phase === "done" ? p.inspected.info : null;
   const canStart = !running && info != null && p.dest != null && p.exists === false && !p.naming;
+  // zstd needs the runtime on the console (only the desktop app puts it there).
+  const zstdOn = p.zstd && info?.zstdRuntime != null;
   const choice = (on: boolean, label: string, action: string, onClick: () => void) => (
     <button
       key={action}
@@ -237,17 +239,22 @@ export function ConvertView(p: ConvertViewProps) {
           <button
             type="button"
             role="switch"
-            aria-checked={p.zstd}
+            aria-checked={zstdOn}
             className="cw-focusable cw-button"
             data-action="convert-zstd"
-            disabled={running}
+            disabled={running || !info.zstdRuntime}
             onClick={p.onZstd}
           >
             <span>{t("cw_convert_zstd")}</span>
-            <span className={`cw-tag${p.zstd ? " is-on" : ""}`}>{t(p.zstd ? "cw_settings_on" : "cw_settings_off")}</span>
+            <span className={`cw-tag${zstdOn ? " is-on" : ""}`}>{t(zstdOn ? "cw_settings_on" : "cw_settings_off")}</span>
           </button>
           <p className="cw-dim">{t("cw_convert_zstd_note")}</p>
-          {p.zstd ? (
+          {!info.zstdRuntime ? (
+            <p className="cw-dim" data-convert-zstd-runtime="missing">
+              {t("cw_convert_zstd_no_runtime")}
+            </p>
+          ) : null}
+          {zstdOn ? (
             <div className="cw-toolbar" role="group" aria-label={t("cw_convert_zstd_level")}>
               {ZSTD_LEVELS.map((l) => choice(p.level === l, t(LEVEL_KEYS[l]), `convert-level-${l}`, () => p.onLevel(l)))}
             </div>
@@ -366,9 +373,11 @@ export function Convert({ ctx }: { ctx: SectionContext }) {
       () => setNaming(false),
     );
   };
+  // zstd only when the console has the runtime (the switch is off and disabled without it).
+  const zstdOk = inspected?.phase === "done" && inspected.info.zstdRuntime != null;
   const start = () => {
     if (!source || !dest) return;
-    void startConvert(startBody({ source, dest, format, zstd, level, verify }));
+    void startConvert(startBody({ source, dest, format, zstd: zstd && zstdOk, level, verify }));
   };
 
   const vol = outParent ? volumeOf(outParent, volumes) : null;
