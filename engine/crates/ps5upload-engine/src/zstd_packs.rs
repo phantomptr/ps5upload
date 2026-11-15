@@ -60,13 +60,14 @@ fn is_pack_name(path: &str) -> bool {
                 && p.ends_with(ps5_dump_forge_zstd::VOLUME_SUFFIX)))
 }
 
-/// Never packed: loaded by the console or the emulator before or outside the pack layer. Names
-/// compare ASCII case-insensitively, because exFAT and PFS images fold case.
+/// Never packed: loaded by the console or the emulator before or outside the pack layer, and
+/// `*.ini` (`dlc_emu.ini` and other settings a person edits by hand, as ps5-dump-forge keeps
+/// them). Names compare ASCII case-insensitively, because exFAT and PFS images fold case.
 pub(crate) fn always_loose(path: &str) -> bool {
     let file = path.rsplit('/').next().unwrap_or(path);
     let first = path.split('/').next().unwrap_or("").to_ascii_lowercase();
     file.eq_ignore_ascii_case("eboot.bin")
-        || has_suffix(path, &[".elf", ".self", ".prx", ".sprx"])
+        || has_suffix(path, &[".elf", ".self", ".prx", ".sprx", ".ini"])
         || (path.contains('/')
             && (first == "sce_sys" || first == "sce_module" || first.starts_with("fakelib")))
         || ARTIFACTS.iter().any(|a| a.eq_ignore_ascii_case(path))
@@ -597,6 +598,9 @@ mod tests {
             "ampr_emu.index",
             "ampr_zstd.index",
             "ampr_zstd-000.pak",
+            // Settings a person edits by hand stay files.
+            "dlc_emu.ini",
+            "Config/Game.INI",
         ] {
             assert!(always_loose(p), "{p}");
         }
