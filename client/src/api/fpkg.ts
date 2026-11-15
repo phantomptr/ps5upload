@@ -100,7 +100,8 @@ export interface AmprPacksReadiness {
   /** Why packs cannot be used for this game; null when they can. */
   refusal?: string | null;
   /** `ok`; `runtime` (installing ampr_emu 0.4.2.1 into the image makes packs possible);
-   *  `no_ampr` (the game does not read through AMPR: .ffpfsc is its compression). */
+   *  `no_ampr` (the game does not read through AMPR: no LZ4 packs; .ffpfsc is its compression,
+   *  or zstd packs, which bring ampr-emu-ng whatever the game imports). */
   kind?: "ok" | "runtime" | "no_ampr";
   /** The game reads through AMPR and ships no emulator: it won't start from an image without one. */
   emulator_missing?: boolean;

@@ -403,6 +403,13 @@
               "null"
             ]
           },
+          "profile_toml": {
+            "description": "A profile in drakmor's `ampr_pack` TOML format (what `ampr_lz4.profile_toml` takes)\ndeciding which files stay loose: a file is packed unless its last matching `[[rule]]`,\nor `[pack] default_action` when none matches (`loose` unless set), says `loose`. System\nfiles and empty files stay loose whatever it says. Its block sizes, `hot`, `layout`,\ngroups and LZ4 settings mean nothing to zstd packs and are ignored. Absent or blank:\nevery file but the system files is packed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "runtime": {
             "$ref": "#/components/schemas/RuntimeChoice",
             "description": "Which ampr-emu-ng goes in: `latest` (the default: the newest GitHub release, used only\nwhen its download matches the SHA-256 GitHub publishes for it, else the tested one) or\n`pinned` (the tested release). The job's `commit_ack.ampr_runtime` says which went in."
@@ -3679,6 +3686,10 @@
             "description": "A game folder on this computer (one with `sce_sys` in it).",
             "type": "string"
           },
+          "unpack_packs": {
+            "description": "For a game in LZ4 or zstd asset packs: write it as plain files again. Every packed file\ngoes in under its own name, the pack volumes and their indexes are left out, a fresh\n`ampr_emu.index` lists the files, and a libSceAmpr game whose emulator is ampr-emu-ng,\nan old ampr_emu or unknown gets the one `ampr_emu_build` names (`add_ampr_emu` off\nleaves it). Refused for a game that is not packed, and with `ampr_lz4`, `ampr_zstd` or\n`edits`. Without it a packed game is written as it is, packs and all.",
+            "type": "boolean"
+          },
           "update": {
             "description": "A PS4 update (a package, image or folder) merged into the PS4 game `source`: the image\nis the game at the update's version (`ps5upload_fpkg::ps4_merge`). Not with `edits`.",
             "type": [
@@ -4169,6 +4180,17 @@
       },
       "FolderBuildReq": {
         "properties": {
+          "add_ampr_emu": {
+            "description": "With `unpack_packs`: replace or add the game's AMPR emulator as an image build does.\nOn unless turned off.",
+            "type": "boolean"
+          },
+          "ampr_emu_build": {
+            "description": "With `unpack_packs`: which emulator, `ampr_emu` (the default) or `ampr-emu-ng`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "ampr_zstd": {
             "anyOf": [
               {
@@ -4222,6 +4244,10 @@
           "source": {
             "description": "A game image (`.exfat`, `.ffpkg`/`.ufs2`, `.ffpfs`, `.ffpfsc`) or a debug-key `.pkg`,\non this computer, a saved server (`remote://`) or a console (`ps5://`).",
             "type": "string"
+          },
+          "unpack_packs": {
+            "description": "For a game in LZ4 or zstd asset packs: write it as plain files again, as an image\nbuild's `unpack_packs` does. The source may then also be a game folder. Not with\n`ampr_zstd` or `entry`.",
+            "type": "boolean"
           },
           "update": {
             "description": "A PS4 update merged into the PS4 game `source`, as an image build's `update`; the game\nmay then also be a folder. Not with `entry`.",
@@ -6360,6 +6386,13 @@
               "null"
             ]
           },
+          "packs": {
+            "description": "Which asset packs the game's files are in: `lz4` or `zstd` ([`source::packed_kind`]);\n`None` for a plain game. A packed game can be written out as plain files again.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "planned_size": {
             "description": "The package's estimated size (what the free-space check uses).",
             "minimum": 0,
@@ -6449,6 +6482,7 @@
           "checks",
           "ampr_packs",
           "zstd_runtime",
+          "packs",
           "unsigned_executables",
           "ps4_game",
           "content_version",
@@ -10603,7 +10637,7 @@
             "type": "boolean"
           },
           "kind": {
-            "description": "`ok`; `runtime` (the game's ampr_emu is missing or too old: installing\n[`RUNTIME_VERSION`] into the image makes packs possible); `no_ampr` (the game does not\nread through AMPR, so nothing could serve packs: .ffpfsc is its compression).",
+            "description": "`ok`; `runtime` (the game's ampr_emu is missing or too old: installing\n[`RUNTIME_VERSION`] into the image makes packs possible); `no_ampr` (the game does not\nread through AMPR, so ampr_emu could not serve LZ4 packs: .ffpfsc is its compression,\nor zstd packs, whose ampr-emu-ng is injected whatever the game imports).",
             "type": "string"
           },
           "refusal": {
@@ -14476,6 +14510,10 @@
       "ZstdRuntime": {
         "description": "What runs a zstd-packed game.",
         "properties": {
+          "capped": {
+            "description": "It is ampr-emu-ng [`NG_CAPPED`], which starts most games and refuses very large ones:\na newer one is worth offering, though the game may well run as it is.",
+            "type": "boolean"
+          },
           "kind": {
             "description": "`ampr-emu-ng`; `ampr_emu` (drakmor's, which doesn't read zstd packs); `unknown` (a\nbuild this app doesn't know, a test build or one newer than it); `missing`.",
             "type": "string"
@@ -14503,7 +14541,8 @@
           "module",
           "kind",
           "version",
-          "outdated"
+          "outdated",
+          "capped"
         ],
         "type": "object"
       },

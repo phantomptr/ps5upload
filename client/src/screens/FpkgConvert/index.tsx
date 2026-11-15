@@ -734,6 +734,7 @@ export default function WorkshopScreen() {
         onKind: setPackKind,
         zstdLevel,
         onZstdLevel: setZstdLevel,
+        ps4: !!inspection?.ps4_game,
       }
     : undefined;
   // The profile the packs are made with. A profile measured from play is written for LZ4 packs

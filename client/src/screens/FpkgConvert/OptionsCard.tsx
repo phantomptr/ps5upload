@@ -16,6 +16,7 @@ import {
   PacksNote,
   UnpackOption,
   ZstdOption,
+  zstdOffered,
   type Lz4Choice,
   type UnpackChoice,
 } from "./ImageOptions";
@@ -185,9 +186,9 @@ export function OptionsCard(props: OptionsCardProps) {
                 "The folder is named after the image or package, in the output folder. Nothing is compressed, and nothing reaches the PS5.",
               )}
             </div>
-            {/* A game that reads through AMPR can have its folder in zstd packs (LZ4 packs are
-                for .exfat images only). */}
-            {props.image?.lz4 && props.image.lz4.readiness.kind !== "no_ampr" ? (
+            {/* A PS5 game can have its folder in zstd packs (LZ4 packs are for .exfat images
+                only). */}
+            {zstdOffered(props.image?.lz4) ? (
               <ZstdOption lz4={props.image.lz4} folder />
             ) : (
               <PacksNote lz4={props.image?.lz4} folder />

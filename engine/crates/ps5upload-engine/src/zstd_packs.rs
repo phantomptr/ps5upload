@@ -6,7 +6,10 @@
 //! Which files are packed and what the game gets follow quer3q/ps5-dump-forge v0.5.4
 //! (`ps5-dump-forge-core/src/zstd_pack.rs`, GPL-3.0-or-later): every non-empty file but system
 //! files, because ampr-emu-ng serves a fully packed game; ampr-emu-ng as the game's emulator; a
-//! fresh `ampr_emu.index` listing every file, loose and packed.
+//! fresh `ampr_emu.index` listing every file, loose and packed. A game whose eboot does not
+//! import libSceAmpr is packed the same way, as Forge packs it (`zstd_pack.rs` `prepare`: "A
+//! title without AMPR is packed too ... ShadowMount+ loads the injected ampr-emu-ng"): nothing
+//! else is written for it, and it is new enough to be marked untested in the app.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -211,18 +214,45 @@ fn prepare<'a>(
     ))
 }
 
-/// A game read for packing: refused unless its eboot reads through AMPR (nothing else could
-/// serve packs), a game in LZ4 or zstd packs decoded, so the new packs are made from its files.
-/// The image and folder builds open their source through this, and a folder build's read-back
-/// opens it again the same way.
+/// Why `tree` can't be put in zstd packs at all, or `None`: the packs are read by ampr-emu-ng,
+/// a PS5 library ShadowMount+ loads into a PS5 game. A PS4 game (a `param.sfo` and no
+/// `param.json`; the one a PS4 image gets is added after this) has no use for it, and without
+/// an `eboot.bin` at its root there is no game to load it into.
+fn not_packable(tree: &dyn SourceTree) -> Option<&'static str> {
+    let has = |name: &str| {
+        tree.files()
+            .iter()
+            .any(|f| f.path.eq_ignore_ascii_case(name))
+    };
+    if has("sce_sys/param.sfo") && !has("sce_sys/param.json") {
+        return Some(
+            "this is a PS4 game: zstd asset packs are read by ampr-emu-ng, a PS5 library, so \
+             they are for PS5 games only",
+        );
+    }
+    if !has("eboot.bin") {
+        return Some("this has no eboot.bin at its root: zstd asset packs are made of a PS5 game");
+    }
+    None
+}
+
+/// A game read for packing: a game in LZ4 or zstd packs decoded, so the new packs are made from
+/// its files. A game whose eboot does not import libSceAmpr is packed too, as ps5-dump-forge
+/// packs it (`zstd_pack.rs` `prepare`): ampr-emu-ng goes in all the same and ShadowMount+ loads
+/// it, so the log says so. The image and folder builds open their source through this, and a
+/// folder build's read-back opens it again the same way.
 pub(crate) fn readable_for_packing(
     mut tree: Box<dyn SourceTree>,
 ) -> Result<Box<dyn SourceTree>, String> {
+    if let Some(why) = not_packable(&*tree) {
+        return Err(why.to_string());
+    }
     if !ps5upload_fpkg::source::imports_ampr(&mut *tree, "eboot.bin") {
-        return Err(
-            "this game does not read its files through AMPR, so nothing could serve asset \
-             packs; compress it into a .ffpfsc instead"
-                .to_string(),
+        crate::log_at!(
+            Info,
+            "convert",
+            "zstd packs: eboot.bin does not import libSceAmpr; ampr-emu-ng is injected all the \
+             same (not tested on every game: keep the original until the packed one has started)"
         );
     }
     tree = match ps5upload_fpkg::ampr_pack::image::Lz4Unpacked::open(tree)
@@ -925,6 +955,88 @@ mod tests {
         for want in ["movies/intro.bik", "data/sub/cut.bik", "data/sub/table.bin"] {
             assert!(listed.iter().any(|e| e.path == want), "{want}");
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A game whose eboot doesn't import libSceAmpr is packed like any other: the packs, the
+    /// emulator and an index listing every file, and it reads back as it was. A PS4 game and
+    /// a folder with no eboot are refused.
+    #[test]
+    fn a_game_that_does_not_import_ampr_is_packed_too() {
+        let root =
+            std::env::temp_dir().join(format!("ps5upload-zstd-noampr-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let src = game(&root);
+        std::fs::write(src.join("eboot.bin"), vec![0u8; 200_000]).unwrap();
+        {
+            let mut plain = FolderSource::open(&src).unwrap();
+            assert!(!ps5upload_fpkg::source::imports_ampr(
+                &mut plain,
+                "eboot.bin"
+            ));
+        }
+        let target = root.join("packed");
+        let mut tree = open_game(&src).unwrap();
+        build_folder(
+            5,
+            None,
+            &runtime(),
+            &mut *tree,
+            &|| open_game(&src),
+            &target,
+            VerifyMode::Full,
+            &AtomicBool::new(false),
+            &mut |_, _, _| {},
+        )
+        .unwrap();
+        assert!(target.join("ampr_zstd-000.pak").is_file());
+        assert!(!target.join("data/sub/table.bin").exists());
+        assert_eq!(
+            std::fs::read(target.join("fakelib/libSceAmpr.sprx")).unwrap(),
+            b"EMULATOR"
+        );
+        // Nothing else is written for it: the folder holds the loose files, the emulator, the
+        // two indexes and the volume.
+        let mut names: Vec<String> = FolderSource::open(&target)
+            .unwrap()
+            .files()
+            .iter()
+            .map(|f| f.path.clone())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "ampr_emu.index",
+                "ampr_zstd-000.pak",
+                "ampr_zstd.index",
+                "data/empty.bin",
+                "eboot.bin",
+                "fakelib/libSceAmpr.sprx",
+                "sce_sys/param.json",
+            ]
+        );
+        let listed =
+            ampr_index::parse(&std::fs::read(target.join(ampr_index::NAME)).unwrap()).unwrap();
+        assert!(listed.iter().any(|e| e.path == "data/sub/table.bin"));
+        let folder = FolderSource::open(&target).unwrap();
+        let mut game = ps5_dump_forge_zstd::reader::unpack(Box::new(folder)).unwrap();
+        assert_eq!(
+            game.read("data/sub/table.bin").unwrap(),
+            std::fs::read(src.join("data/sub/table.bin")).unwrap()
+        );
+
+        // A PS4 game (param.sfo, no param.json) and a folder with no eboot are not packed.
+        let ps4 = root.join("CUSA00001-app");
+        std::fs::create_dir_all(ps4.join("sce_sys")).unwrap();
+        std::fs::write(ps4.join("eboot.bin"), b"x").unwrap();
+        std::fs::write(ps4.join("sce_sys/param.sfo"), b"x").unwrap();
+        let err = open_game(&ps4).err().unwrap();
+        assert!(err.contains("PS4 game"), "{err}");
+        std::fs::remove_file(src.join("eboot.bin")).unwrap();
+        let err = open_game(&src).err().unwrap();
+        assert!(err.contains("no eboot.bin"), "{err}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
