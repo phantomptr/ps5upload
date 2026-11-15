@@ -29,8 +29,21 @@ use crate::zstd_runtime::{PackRuntime, RuntimeChoice, PINNED};
 /// Where the runtimes go on the console (payload/include/console_convert.h names the same).
 pub(crate) const CONSOLE_DIR: &str = "/data/ps5upload/convert/runtime";
 const FILE: &str = "libSceAmpr.sprx";
-/// The temporary name in the same folder while it is written and checked.
-const PART: &str = "libSceAmpr.sprx.part";
+/// The temporary name in the same folder while it is written and checked: `<FILE>.<tag>.part`,
+/// a tag of its own for each put, so two puts (this engine's two callers, or two engines) never
+/// write one temporary file and rename the other's unchecked bytes into place.
+fn part_name() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    format!(
+        "{FILE}.{}-{}-{nanos}.part",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
+}
 /// The first helper that carries the converter.
 const FIRST_HELPER: &str = "12.5.0";
 /// A failed automatic attempt is tried again on a status answer this long after it.
@@ -127,7 +140,7 @@ pub(crate) fn put(fs: &dyn ConsoleFiles, version: &str, bytes: &[u8]) -> Result<
     }
     let dir = version_dir(version);
     let path = format!("{dir}/{FILE}");
-    let part = format!("{dir}/{PART}");
+    let part = format!("{dir}/{}", part_name());
     let sha = sha256_hex(bytes);
     let len = bytes.len() as u64;
     if holds(fs, &path, len, &sha)? {
@@ -156,6 +169,17 @@ pub(crate) fn put(fs: &dyn ConsoleFiles, version: &str, bytes: &[u8]) -> Result<
         }
         return Err(e);
     }
+    // What is in place now is checked too: another put (another engine) may have renamed its
+    // own file over it in between. A file there that is not this one is not left for the
+    // helper to hand to a converter.
+    if !holds(fs, &path, len, &sha)? {
+        if let Err(why) = fs.remove(&path) {
+            crate::log_warn!("zstd runtime: {path} does not match and could not be removed: {why}");
+        }
+        return Err(format!(
+            "{path} on the console does not match what was put there"
+        ));
+    }
     Ok(Outcome {
         version: version.to_string(),
         path,
@@ -168,8 +192,29 @@ fn pinned_runtime() -> Result<PackRuntime, String> {
     crate::zstd_runtime::pack_runtime(RuntimeChoice::Pinned)
 }
 
-/// Puts the pinned runtime on the console at `host` (blocking).
+/// Runs `f` while holding `host`'s put lock: the Settings button (`put_handler`) and the
+/// automatic put (`after_status`) of one console never write it at once. Blocking: only ever
+/// called on a blocking thread (`spawn_blocking`), never held across an `.await`.
+fn with_host_lock<T>(host: &str, f: impl FnOnce() -> T) -> T {
+    static LOCKS: std::sync::OnceLock<Mutex<HashMap<String, std::sync::Arc<Mutex<()>>>>> =
+        std::sync::OnceLock::new();
+    let lock = LOCKS
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(host.to_string())
+        .or_default()
+        .clone();
+    let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+    f()
+}
+
+/// Puts the pinned runtime on the console at `host` (blocking; one put per console at a time).
 pub(crate) fn ensure(host: &str) -> Result<Outcome, String> {
+    with_host_lock(host, || ensure_unlocked(host))
+}
+
+fn ensure_unlocked(host: &str) -> Result<Outcome, String> {
     let rt = pinned_runtime()?;
     debug_assert_eq!(rt.version, PINNED.version);
     let out = put(&Helper(host), &rt.version, &rt.bytes)?;
@@ -296,6 +341,10 @@ mod tests {
         /// What a write actually stores (a flaky drive), when set.
         corrupt: bool,
         fail_rename: bool,
+        /// What lands at the rename's target instead (another put renamed its file there).
+        rename_lands: Option<Vec<u8>>,
+        /// Every temporary name written.
+        parts: RefCell<Vec<String>>,
     }
 
     impl ConsoleFiles for Fake {
@@ -315,6 +364,7 @@ mod tests {
             let dir = &path[..path.rfind('/').unwrap()];
             assert!(self.dirs.borrow().iter().any(|d| d == dir), "{dir} made");
             *self.writes.borrow_mut() += 1;
+            self.parts.borrow_mut().push(path.to_string());
             let mut b = bytes.to_vec();
             if self.corrupt {
                 b[0] ^= 1;
@@ -332,6 +382,7 @@ mod tests {
                 return Err("EIO".into());
             }
             let b = self.files.borrow_mut().remove(from).ok_or("ENOENT")?;
+            let b = self.rename_lands.clone().unwrap_or(b);
             self.files.borrow_mut().insert(to.to_string(), b);
             Ok(())
         }
@@ -406,6 +457,65 @@ mod tests {
         };
         assert!(put(&fs, "0.4.1", b"EMULATOR").is_err());
         assert!(fs.files.borrow().is_empty());
+    }
+
+    #[test]
+    fn each_put_writes_a_temporary_name_of_its_own_in_the_folder() {
+        let fs = Fake::default();
+        put(&fs, "0.4.1", b"EMULATOS").unwrap();
+        put(&fs, "0.4.1", b"EMULATOR").unwrap();
+        let parts = fs.parts.borrow();
+        assert_eq!(parts.len(), 2);
+        assert_ne!(parts[0], parts[1]);
+        for p in parts.iter() {
+            let (dir, name) = p.rsplit_once('/').unwrap();
+            assert_eq!(dir, version_dir("0.4.1"));
+            // Never the name the helper looks for.
+            assert!(
+                name.starts_with("libSceAmpr.sprx.") && name.ends_with(".part"),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_final_file_that_is_not_this_one_after_the_rename_is_removed() {
+        let fs = Fake {
+            rename_lands: Some(b"EMULATOS".to_vec()),
+            ..Default::default()
+        };
+        let e = put(&fs, "0.4.1", b"EMULATOR").unwrap_err();
+        assert!(e.contains("does not match"), "{e}");
+        assert!(fs.files.borrow().is_empty(), "{:?}", fs.files.borrow());
+    }
+
+    #[test]
+    fn puts_to_one_console_take_turns() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let inside = Arc::new(AtomicBool::new(false));
+        let overlaps = Arc::new(AtomicUsize::new(0));
+        let threads: Vec<_> = (0..4)
+            .map(|_| {
+                let (inside, overlaps) = (Arc::clone(&inside), Arc::clone(&overlaps));
+                std::thread::spawn(move || {
+                    with_host_lock("192.0.2.7", || {
+                        if inside.swap(true, Ordering::SeqCst) {
+                            overlaps.fetch_add(1, Ordering::SeqCst);
+                        }
+                        std::thread::sleep(Duration::from_millis(30));
+                        inside.store(false, Ordering::SeqCst);
+                    })
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert_eq!(overlaps.load(Ordering::SeqCst), 0);
+        // Another console is not held up by this one's lock.
+        let held = with_host_lock("192.0.2.7", || with_host_lock("192.0.2.8", || 1));
+        assert_eq!(held, 1);
     }
 
     #[test]
