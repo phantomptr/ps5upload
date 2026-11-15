@@ -40,6 +40,7 @@ mod console_tasks_api;
 mod console_tools_api;
 mod consoles_api;
 mod convert_cli;
+mod convert_runtime;
 mod convert_source;
 mod diag_api;
 mod disk_usage;
@@ -6691,6 +6692,8 @@ async fn ps5_status(
                 "status ok",
             );
             helper_mirror::note_console(&console);
+            // A helper with the converter gets the zstd runtime it needs (background, once).
+            convert_runtime::after_status(console_addr(&console), &json);
             spawn_console_upgrade_cleanup(console);
             (StatusCode::OK, Json(json)).into_response()
         }
@@ -13110,6 +13113,10 @@ fn build_app_and_mcp(
             post(pldmgr_api::upload).layer(axum::extract::DefaultBodyLimit::max(128 * 1024 * 1024)),
         )
         .route("/api/ps5/elfldr/ensure", post(ps5_elfldr_ensure))
+        .route(
+            "/api/ps5/convert-runtime",
+            post(convert_runtime::put_handler),
+        )
         .route("/api/ps5/process/kill", post(ps5_process_kill))
         .route("/api/ps5/power/control", post(ps5_power_control))
         .route(

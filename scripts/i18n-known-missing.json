@@ -1,6 +1,10 @@
 {
   "ar": {
-    "missing": [],
+    "missing": [
+      "minion_zstd_runtime_done",
+      "minion_zstd_runtime_note",
+      "minion_zstd_runtime_put"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -16,7 +20,11 @@
     ]
   },
   "bn": {
-    "missing": [],
+    "missing": [
+      "minion_zstd_runtime_done",
+      "minion_zstd_runtime_note",
+      "minion_zstd_runtime_put"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -36,7 +44,11 @@
     ]
   },
   "de": {
-    "missing": [],
+    "missing": [
+      "minion_zstd_runtime_done",
+      "minion_zstd_runtime_note",
+      "minion_zstd_runtime_put"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -63,7 +75,11 @@
     ]
   },
   "es": {
-    "missing": [],
+    "missing": [
+      "minion_zstd_runtime_done",
+      "minion_zstd_runtime_note",
+      "minion_zstd_runtime_put"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -85,7 +101,11 @@
     ]
   },
   "fa": {
-    "missing": [],
+    "missing": [
+      "minion_zstd_runtime_done",
+      "minion_zstd_runtime_note",
+      "minion_zstd_runtime_put"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -103,7 +123,11 @@
     ]
   },
   "fr": {
-    "missing": [],
+    "missing": [
+      "minion_zstd_runtime_done",
+      "minion_zstd_runtime_note",
+      "minion_zstd_runtime_put"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -124,7 +148,11 @@
     ]
   },
   "hi": {
-    "missing": [],
+    "missing": [
+      "minion_zstd_runtime_done",
+      "minion_zstd_runtime_note",
+      "minion_zstd_runtime_put"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -144,7 +172,11 @@
     ]
   },
   "hu": {
-    "missing": [],
+    "missing": [
+      "minion_zstd_runtime_done",
+      "minion_zstd_runtime_note",
+      "minion_zstd_runtime_put"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -169,7 +201,11 @@
     ]
   },
   "id": {
-    "missing": [],
+    "missing": [
+      "minion_zstd_runtime_done",
+      "minion_zstd_runtime_note",
+      "minion_zstd_runtime_put"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -196,7 +232,11 @@
     ]
   },
   "it": {
-    "missing": [],
+    "missing": [
+      "minion_zstd_runtime_done",
+      "minion_zstd_runtime_note",
+      "minion_zstd_runtime_put"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -223,7 +263,11 @@
     ]
   },
   "ja": {
-    "missing": [],
+    "missing": [
+      "minion_zstd_runtime_done",
+      "minion_zstd_runtime_note",
+      "minion_zstd_runtime_put"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -240,7 +284,11 @@
     ]
   },
   "ko": {
-    "missing": [],
+    "missing": [
+      "minion_zstd_runtime_done",
+      "minion_zstd_runtime_note",
+      "minion_zstd_runtime_put"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -259,7 +307,11 @@
     ]
   },
   "pl": {
-    "missing": [],
+    "missing": [
+      "minion_zstd_runtime_done",
+      "minion_zstd_runtime_note",
+      "minion_zstd_runtime_put"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -281,7 +333,11 @@
     ]
   },
   "pt-BR": {
-    "missing": [],
+    "missing": [
+      "minion_zstd_runtime_done",
+      "minion_zstd_runtime_note",
+      "minion_zstd_runtime_put"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -303,7 +359,11 @@
     ]
   },
   "ru": {
-    "missing": [],
+    "missing": [
+      "minion_zstd_runtime_done",
+      "minion_zstd_runtime_note",
+      "minion_zstd_runtime_put"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -324,7 +384,11 @@
     ]
   },
   "th": {
-    "missing": [],
+    "missing": [
+      "minion_zstd_runtime_done",
+      "minion_zstd_runtime_note",
+      "minion_zstd_runtime_put"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -345,7 +409,11 @@
     ]
   },
   "tr": {
-    "missing": [],
+    "missing": [
+      "minion_zstd_runtime_done",
+      "minion_zstd_runtime_note",
+      "minion_zstd_runtime_put"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -369,7 +437,11 @@
     ]
   },
   "vi": {
-    "missing": [],
+    "missing": [
+      "minion_zstd_runtime_done",
+      "minion_zstd_runtime_note",
+      "minion_zstd_runtime_put"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -392,7 +464,11 @@
     ]
   },
   "zh-CN": {
-    "missing": [],
+    "missing": [
+      "minion_zstd_runtime_done",
+      "minion_zstd_runtime_note",
+      "minion_zstd_runtime_put"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -409,7 +485,11 @@
     ]
   },
   "zh-TW": {
-    "missing": [],
+    "missing": [
+      "minion_zstd_runtime_done",
+      "minion_zstd_runtime_note",
+      "minion_zstd_runtime_put"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",

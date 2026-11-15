@@ -4,6 +4,7 @@ import { Button, Toggle } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import {
   minionSet,
+  putZstdRuntime,
   type MinionChange,
   type MinionTileState,
 } from "../../api/consoleFiles";
@@ -397,6 +398,7 @@ function MinionTileControl({ host, up }: { host: string; up: boolean }) {
         }
       />
       {dialog}
+      {up && state?.supported && <ZstdRuntimePut host={host} />}
       {error && (
         <div>
           <p role="alert" className="text-[var(--color-bad)]">
@@ -413,6 +415,56 @@ function MinionTileControl({ host, up }: { host: string; up: boolean }) {
             {tr("retry", undefined, "Retry")}
           </Button>
         </div>
+      )}
+    </div>
+  );
+}
+
+/** Convert on the PS5 needs the zstd runtime on the console for zstd packs, and the console
+ *  downloads nothing: the app puts it there on its own when the console connects; this button
+ *  does it now. */
+function ZstdRuntimePut({ host }: { host: string }) {
+  const tr = useTr();
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const put = async () => {
+    setBusy(true);
+    setError(null);
+    setDone(null);
+    try {
+      setDone((await putZstdRuntime(host)).version);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="space-y-2 border-t border-[var(--glass-edge)] pt-3">
+      <p className="text-[var(--color-muted)]">
+        {tr(
+          "minion_zstd_runtime_note",
+          undefined,
+          "Convert on the PS5 needs the zstd runtime (ampr-emu-ng) on the console to write zstd packs. The app puts it there on its own when this PS5 connects.",
+        )}
+      </p>
+      <Button size="sm" variant="secondary" disabled={busy} onClick={() => void put()}>
+        {tr("minion_zstd_runtime_put", undefined, "Put the zstd runtime on this PS5")}
+      </Button>
+      {done && (
+        <p role="status" className="text-[var(--color-good)]">
+          {tr(
+            "minion_zstd_runtime_done",
+            { version: done },
+            "ampr-emu-ng {version} is on this PS5.",
+          )}
+        </p>
+      )}
+      {error && (
+        <p role="alert" className="text-[var(--color-bad)]">
+          {error}
+        </p>
       )}
     </div>
   );

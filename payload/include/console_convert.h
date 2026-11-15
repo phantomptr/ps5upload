@@ -31,6 +31,10 @@
 
 /* payload/convert/entry.c names the same folder for the converter. */
 #define CONVERT_DIR "/data/ps5upload/convert"
+/* The zstd runtime (ampr-emu-ng's libSceAmpr.sprx) the desktop app puts on the console, one
+ * folder per release: <this>/ampr-emu-ng-<version>/libSceAmpr.sprx (the engine's
+ * convert_runtime.rs writes it; nothing is downloaded on the console). */
+#define CONVERT_RUNTIME_DIR "/data/ps5upload/convert/runtime"
 
 /* The most of status.json the helper reads. The converter keeps its status far below this (an
  * inspection is about 1 KiB); one this large is not a status. */

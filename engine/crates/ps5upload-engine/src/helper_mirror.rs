@@ -415,10 +415,19 @@ fn push_levels(mgmt: &str, host: &str, push: &mut LevelPush) {
 /// Whether the engine is using a console's management port for real work right now.
 pub type BusyCheck = Arc<dyn Fn() -> bool + Send + Sync>;
 
+static BUSY: OnceLock<BusyCheck> = OnceLock::new();
+
+/// The check [`spawn`] was given: whether a transfer or an install runs now (false before the
+/// mirror starts). Other background work on a console stays out of the way the same way.
+pub(crate) fn engine_busy() -> bool {
+    BUSY.get().is_some_and(|b| b())
+}
+
 /// Starts the mirror loop. Called once from `run()`. Every tick reads all known consoles at
 /// once (a slow or dead one cannot hold up the others), unless `busy` says a transfer or an
 /// install is running.
 pub fn spawn(busy: BusyCheck) {
+    let _ = BUSY.set(busy.clone());
     tokio::spawn(async move {
         // Positions live in memory only: after an engine restart every console starts at the end
         // of its log again, so lines written while the engine was closed are not stamped "now".

@@ -2777,6 +2777,21 @@
         ],
         "type": "object"
       },
+      "ConvertRuntimeRequest": {
+        "properties": {
+          "host": {
+            "type": "string",
+            "x-aliases": [
+              "console",
+              "addr"
+            ]
+          }
+        },
+        "required": [
+          "host"
+        ],
+        "type": "object"
+      },
       "CopyBody": {
         "properties": {
           "addr": {
@@ -15151,6 +15166,27 @@
         "required": [
           "console",
           "settings"
+        ],
+        "type": "object"
+      },
+      "engine.convert_runtime.Outcome": {
+        "description": "What the console holds after a put.",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "written": {
+            "description": "False: the same version was already there with the right digest; nothing was written.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "version",
+          "path",
+          "written"
         ],
         "type": "object"
       },
@@ -31600,6 +31636,70 @@
             "required": true
           },
           "response_schema": "literal"
+        }
+      }
+    },
+    "/api/ps5/convert-runtime": {
+      "post": {
+        "description": "POST /api/ps5/convert-runtime {host} — put the zstd runtime Convert on the PS5 needs (the\nampr-emu-ng release this app pins, digest checked) on the console, under\n/data/ps5upload/convert/runtime/. Answers {version, path, written}; written is false when the\nsame version was already there. Needs the helper up.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConvertRuntimeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/engine.convert_runtime.Outcome"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Put the zstd runtime Convert on the PS5 needs (the ampr-emu-ng release this app pins, digest checked) on the console, under /data/ps5upload/convert/runtime/",
+        "tags": [
+          "console-tools"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "addr"
+            ],
+            "in": "body",
+            "name": "host",
+            "required": true
+          },
+          "response_schema": "struct"
         }
       }
     },
