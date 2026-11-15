@@ -90,6 +90,25 @@ int hu_mount_under(const char *mp, const char *root) {
     return mp[n] == 0 || mp[n] == '/';
 }
 
+size_t hu_source_keeps(const char *const *froms, size_t n, char (*out)[HU_KEEP_PATH], size_t cap) {
+    static const char *const roots[] = {HU_ROOT, HU_USER_ROOT};
+    size_t w = 0;
+    for (size_t i = 0; i < n; i++) {
+        const char *f = froms[i];
+        for (size_t r = 0; f && r < 2; r++) {
+            size_t len = strlen(roots[r]);
+            if (!hu_mount_under(f, roots[r])) continue;
+            /* The same folder under both names: the delete walks both roots. */
+            for (size_t k = 0; k < 2 && w < cap; k++) {
+                int m = snprintf(out[w], HU_KEEP_PATH, "%s%s", roots[k], f + len);
+                if (m > 0 && m < HU_KEEP_PATH) w++;
+            }
+            break;
+        }
+    }
+    return w;
+}
+
 static int g_requested;
 static int g_keep_backups;
 
@@ -100,11 +119,46 @@ void hu_request(int keep_backups) {
 
 int hu_requested(void) { return __atomic_load_n(&g_requested, __ATOMIC_SEQ_CST); }
 
+#ifndef HU_HOST_TEST
+/* Sources of the live mounts (f_mntfromname), into `froms` (pointers into `*m`, freed by the
+ * caller). */
+static size_t live_mount_sources(struct statfs **m, const char **froms, size_t cap) {
+    int n = mntinfo_snapshot(m);
+    size_t w = 0;
+    for (int i = 0; i < n && *m && w < cap; i++) froms[w++] = (*m)[i].f_mntfromname;
+    return w;
+}
+#endif
+
+#define HU_MAX_KEEP 32
+
 void hu_wipe(void) {
     hu_counts_t c = {0, 0, 0};
-    const char *keep[2] = {HU_NP_BACKUP, HU_BACKUPS};
-    hu_remove_tree(HU_ROOT, keep, g_keep_backups ? 2 : 1, &c);
-    hu_remove_tree(HU_USER_ROOT, NULL, 0, &c);
+    static char sources[HU_MAX_KEEP][HU_KEEP_PATH];
+    const char *keep[HU_MAX_KEEP + 2];
+    size_t nkeep = 0, nsrc = 0;
+#ifndef HU_HOST_TEST
+    struct statfs *m = NULL;
+    static const char *froms[512];
+    nsrc = hu_source_keeps(froms, live_mount_sources(&m, froms, 512), sources, HU_MAX_KEEP);
+    free(m);
+#endif
+    keep[nkeep++] = HU_NP_BACKUP;
+    if (g_keep_backups) keep[nkeep++] = HU_BACKUPS;
+    for (size_t i = 0; i < nsrc; i++) keep[nkeep++] = sources[i];
+    /* The user-path keeps match the second walk (/user/data/ps5upload is the same folder). */
+    hu_remove_tree(HU_ROOT, keep, nkeep, &c);
+    {
+        char unp[2][HU_KEEP_PATH];
+        const char *ukeep[HU_MAX_KEEP + 2];
+        size_t un = 0;
+        snprintf(unp[0], sizeof unp[0], "%s/np-backup", HU_USER_ROOT);
+        snprintf(unp[1], sizeof unp[1], "%s/backups", HU_USER_ROOT);
+        ukeep[un++] = unp[0];
+        if (g_keep_backups) ukeep[un++] = unp[1];
+        for (size_t i = 0; i < nsrc; i++) ukeep[un++] = sources[i];
+        hu_remove_tree(HU_USER_ROOT, ukeep, un, &c);
+    }
     if (unlink(HU_STARTUP_LOG) != 0 && errno != ENOENT) c.failed++;
 }
 

@@ -128,6 +128,20 @@ int main(void) {
         }
     }
 
+    {
+        /* A live mount's source under our folders is kept under both of its names; others are
+         * not ours. */
+        const char *froms[] = {"/data/ps5upload/tile", "/dev/ssd0.user", "/user/data/ps5upload/mounts/x",
+                               "/data/ps5upload2/y", NULL};
+        char out[8][HU_KEEP_PATH];
+        size_t n = hu_source_keeps(froms, 5, out, 8);
+        CHECK(n == 4);
+        CHECK(strcmp(out[0], "/data/ps5upload/tile") == 0);
+        CHECK(strcmp(out[1], "/user/data/ps5upload/tile") == 0);
+        CHECK(strcmp(out[2], "/data/ps5upload/mounts/x") == 0);
+        CHECK(strcmp(out[3], "/user/data/ps5upload/mounts/x") == 0);
+        CHECK(hu_source_keeps(froms, 5, out, 1) == 1);
+    }
     CHECK(hu_mount_under("/data/ps5upload", "/data/ps5upload"));
     CHECK(hu_mount_under("/data/ps5upload/mounts/x", "/data/ps5upload"));
     CHECK(!hu_mount_under("/data/ps5upload2/x", "/data/ps5upload"));
