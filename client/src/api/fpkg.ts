@@ -113,6 +113,8 @@ export interface BuildExtras {
   /** The AMPR emulator choice that goes with unpacking into a folder (a queued game's own;
    *  the settings when absent). An image build takes its own `amprEmu` argument. */
   amprEmu?: { add: boolean; build: AmprEmuBuild };
+  /** The password of a `.rar` source read in place; never stored or logged. */
+  archivePassword?: string;
 }
 
 export type Ps4Kind = "game" | "patch" | "addon";
@@ -282,6 +284,7 @@ export const fpkg = {
       update,
       removeBackport: extra?.removeBackport || undefined,
       deleteSource: extra?.deleteSource || undefined,
+      archivePassword: extra?.archivePassword || undefined,
       source,
       outputDir,
       format,
@@ -334,6 +337,7 @@ export const fpkg = {
       update,
       removeBackport: extra?.removeBackport || undefined,
       deleteSource: extra?.deleteSource || undefined,
+      archivePassword: extra?.archivePassword || undefined,
       destination,
       source,
       outputDir,
