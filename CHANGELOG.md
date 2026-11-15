@@ -20,6 +20,8 @@ Convert gets most of what PS5 Dump Forge can do, and a first version of converti
 - **Move the source to the Trash once verified:** a new option, off unless you tick it for that one conversion. The source goes to the Trash or Recycle Bin only after every byte of the output has been read back; nothing is ever deleted for good.
 - **Patch packages:** a PS5 update `.pkg` can now be inspected, browsed and unpacked to a folder. Only the files the patch fully contains are shown, and the app says which ones need the base game. A patch can't be made into an image or a package on its own.
 - **Trophy files:** unpacking a package now keeps `nptitle.dat` and `npbind.dat` when the package stores them only in encrypted form.
+- **Straight from an archive:** a game image or folder is made straight from a `.zip`, `.7z` or `.rar` (multi-part too), with nothing unpacked first, so no extra disk space is needed. An archive holding a game image, or a build with an update merged in, still unpacks first.
+- **Packs everywhere:** LZ4 packs now go into `.ffpkg`, `.ffpfs` and game folders, not only `.exfat`; LZ4 and zstd packs work inside a compressed `.ffpfsc`; and a packed `.exfat`, `.ffpkg` or `.ffpfs` can be saved straight to the PS5 or a server. Packed images are now also checked by reading every file back through their packs, and they get their final name only after that check.
 - **Command line:** `ps5upload-engine convert <game> --to exfat|ffpkg|ffpfs|ffpfsc|folder|pkg --out <folder>` and `ps5upload-engine inspect <game>`, with `--json` for scripts. On Windows the output shows only when redirected to a file or another program.
 
 **Images**
@@ -27,9 +29,12 @@ Convert gets most of what PS5 Dump Forge can do, and a first version of converti
 - **Apply in place:** when you look inside an image, your changes can now be written into the `.exfat` or `.ffpkg` itself instead of a copy, when they fit its free space (the image never grows). `.ffpfs` takes deletes, renames and replacements that fit. An undo journal is kept beside the image while the change goes in: if it's interrupted, the image is put back as it was the next time it's opened. Every changed file is read back and the image is restored if anything doesn't match. The edited copy stays the default. Tested on test images only, not yet on your own games, so keep a backup of an image you can't replace.
 
 **Convert on the PS5 (Minion)**
-- CONSOLE_PLACEHOLDER
+- **Convert in Minion:** a new Convert section on the PS5's own Minion page turns a game folder or image already on the console into an `.exfat`, `.ffpkg`, `.ffpfs` or a folder, with zstd packs if you want, without a computer. Progress, Stop and a read-back check work as on the computer, and nothing is left behind when a conversion is stopped.
+- **zstd on the console:** PS5Upload on your computer puts the zstd runtime on the PS5 when it connects (or with **Put the zstd runtime on this PS5** in Settings › This PS5 › Minion); nothing is downloaded on the PS5.
+- **Tried on both our PS5s (FW 13.60):** every output format from a small game, a 30 GB game made into an `.ffpkg` with every byte checked (about 6½ minutes), a 21 GB game into zstd packs (about 4½ minutes), Stop at 10 %, 50 % and during the check, and the helper being replaced in the middle of a conversion. Not tried yet: starting a game from an image made on the console, a USB drive that is full or FAT32.
 
 **Fixes**
+- From a review of everything in this release: a stopped or interrupted conversion no longer leaves a finished-looking but unchecked image behind; a folder you named `X.partial` is never removed by a conversion to `X`; an image left half-edited by a crash is put back before anything reads it; an archive's password is no longer kept in the queue file; and Convert's folder button, the image browser and a `.rar`'s password for folder builds work as they should.
 - A game folder with unusual characters in its `param.json`, or a damaged `eboot.bin`, could crash the engine during conversion. Found by new automated fuzz tests; it now reports the problem instead.
 
 Thanks to quer3q's PS5 Dump Forge, whose code most of this release adapts (credited in the README).
