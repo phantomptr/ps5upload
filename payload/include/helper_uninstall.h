@@ -19,6 +19,10 @@
 #define HU_ROOT "/data/ps5upload"
 #define HU_USER_ROOT "/user/data/ps5upload"
 #define HU_STARTUP_LOG "/data/ps5upload_startup.log"
+/* The final delete's own record, outside the folders it deletes: each top-level entry before it
+ * goes (synced), then the counts, so a delete that stalls or a console that goes down shows where.
+ * Left in place; the next helper start leaves it alone. */
+#define HU_WIPE_LOG "/data/ps5upload_uninstall.log"
 #define HU_BACKUPS "/data/ps5upload/backups"
 /* The account's state from before the offline PSN sign-in (profile.c): the only way to undo that
  * sign-in, so it always stays (the user's data, not PS5Upload's). Same path as
@@ -39,6 +43,13 @@ void hu_remove_tree(const char *path, const char *const *keep, size_t nkeep, hu_
 /* 1 when mount point `mp` is `root` or inside it. */
 int hu_mount_under(const char *mp, const char *root);
 
+#define HU_KEEP_PATH 256
+/* The folders of ours that something is mounted FROM (the Minion tile's nullfs at
+ * /system_ex/app/PSUP00001 is /data/ps5upload/tile): never deleted, nor gone into, while that
+ * mount lives: deleting the folder under a live bind is never safe. For each source in `froms` under HU_ROOT or HU_USER_ROOT (the same folder under
+ * two names), both names go into `out` (at most `cap`). Returns how many were written. */
+size_t hu_source_keeps(const char *const *froms, size_t n, char (*out)[HU_KEEP_PATH], size_t cap);
+
 /* Mount points at or under HU_ROOT / HU_USER_ROOT, as a JSON array of strings written into
  * `out` (at most `cap` bytes, always terminated). Returns how many there are, -1 when the
  * mount table cannot be read. Console only. */
@@ -52,8 +63,8 @@ int hu_show_hidden_icons(void);
 void hu_request(int keep_backups);
 int hu_requested(void);
 
-/* The final delete (main.c, last). HU_NP_BACKUP always stays. Writes nothing anywhere: stderr
- * itself lives in HU_ROOT. */
+/* The final delete (main.c, last), recorded in HU_WIPE_LOG. HU_NP_BACKUP always stays, and so does any folder of ours
+ * a live mount comes from (hu_source_keeps). */
 void hu_wipe(void);
 
 #endif

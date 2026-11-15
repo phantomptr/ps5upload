@@ -51,8 +51,8 @@ describe("isHelperFileName", () => {
       expect(isHelperFileName(n), n).toBe(true);
     }
   });
-  it("never the installer daemon or another payload", () => {
-    for (const n of ["ps5upload-installer.elf", "kstuff.elf", "elfldr-ps5upload.elf", "ps5upload.bin", "my-ps5upload.elf"]) {
+  it("never the installer daemon, the patched loader or another payload", () => {
+    for (const n of ["ps5upload-installer.elf", "ps5upload-elfldr.elf", "kstuff.elf", "elfldr-ps5upload.elf", "ps5upload.bin", "my-ps5upload.elf"]) {
       expect(isHelperFileName(n), n).toBe(false);
     }
   });
