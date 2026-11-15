@@ -136,8 +136,8 @@ Capture before anything else, and before resending anything:
   (it is a ring buffer). A missing import shows as the loader's or rtld's symbol-resolution line
   naming the symbol; a crash shows the signal and `ps5u-convert`;
 - the process list (`/api/ps5/process/list`): is `ps5u-convert` still there, hung?
-- the helper's own log (its `convert:` lines: "did not stop; killing it", "a helper died
-  mid-conversion").
+- the helper's own log (its `convert:` lines: "did not stop; killing it", "removing what an
+  unfinished conversion left").
 
 A program that never writes `status.json` and leaves `request.json` in place never reached `main`:
 the startup code or an import resolved at load time. One that leaves `request.json` gone but no

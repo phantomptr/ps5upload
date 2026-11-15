@@ -222,7 +222,7 @@ static void remove_partial(const char *dest) {
     struct stat st;
     size_t i;
     if (dest[0] != '/' || !may_write_here(dest)) return;
-    fprintf(stderr, "convert: a helper died mid-conversion; removing what it left beside %s\n", dest);
+    fprintf(stderr, "convert: removing what an unfinished conversion left beside %s\n", dest);
     for (i = 0; i < sizeof tails / sizeof *tails; i++) {
         if ((size_t)snprintf(path, sizeof path, "%s%s", dest, tails[i]) >= sizeof path) continue;
         if (lstat(path, &st) != 0) continue;
