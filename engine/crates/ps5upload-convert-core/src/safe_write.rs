@@ -338,6 +338,13 @@ pub fn probe(dir: &Path) -> io::Result<Probe> {
     Ok(p)
 }
 
+/// A statfs count as bytes or blocks: a negative one (FreeBSD's signed `f_bavail` inside the
+/// root reserve) is none, never a huge number.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn unsigned<T: TryInto<u64>>(n: T) -> u64 {
+    n.try_into().unwrap_or(0)
+}
+
 #[cfg(any(target_os = "freebsd", target_os = "macos"))]
 fn statfs_into(dir: &Path, p: &mut Probe) -> io::Result<()> {
     use std::os::unix::ffi::OsStrExt;
@@ -355,7 +362,8 @@ fn statfs_into(dir: &Path, p: &mut Probe) -> io::Result<()> {
         .map(|&b| b as u8)
         .collect();
     p.fs_type = String::from_utf8_lossy(&name).into_owned();
-    p.free = Some((st.f_bavail as u64).saturating_mul(st.f_bsize as u64));
+    // `f_bavail` is signed on FreeBSD (the PS5): negative inside the root reserve, not huge.
+    p.free = Some(unsigned(st.f_bavail).saturating_mul(unsigned(st.f_bsize)));
     p.read_only |= (st.f_flags as u64) & (libc::MNT_RDONLY as u64) != 0;
     Ok(())
 }
@@ -370,7 +378,7 @@ fn statfs_into(dir: &Path, p: &mut Probe) -> io::Result<()> {
     if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
         return Err(io::Error::last_os_error());
     }
-    p.free = Some((st.f_bavail as u64).saturating_mul(st.f_frsize as u64));
+    p.free = Some(unsigned(st.f_bavail).saturating_mul(unsigned(st.f_frsize)));
     p.read_only |= (st.f_flag as u64) & (libc::ST_RDONLY as u64) != 0;
     Ok(())
 }
@@ -526,6 +534,15 @@ mod tests {
             ro.refusal(1, false, 0).as_deref(),
             Some("the drive is read-only")
         );
+    }
+
+    #[test]
+    fn a_negative_free_count_is_none_not_huge() {
+        assert_eq!(unsigned(-3i64), 0);
+        assert_eq!(unsigned(i64::MIN), 0);
+        assert_eq!(unsigned(7i64), 7);
+        assert_eq!(unsigned(u64::MAX), u64::MAX);
+        assert_eq!(unsigned(4096u32), 4096);
     }
 
     #[cfg(unix)]
