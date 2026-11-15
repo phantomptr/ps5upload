@@ -71,13 +71,19 @@ fn emulator(tree: &mut dyn SourceTree, path: &str, size: u64) -> Option<&'static
         .or_else(|| has(b"/app0/").then_some("Other"))
 }
 
+/// A module the system loads: `.sprx` or `.prx`, any case.
+fn is_library(path: &str) -> bool {
+    path.rsplit_once('.')
+        .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("sprx") || ext.eq_ignore_ascii_case("prx"))
+}
+
 /// What `tree`'s fakelib folders hold. A file that is not a library (a `.orig` kept by an
-/// emulator install, a note) is neither: it stays where it is.
+/// emulator install, a config, a note) is neither: it stays where it is.
 pub(crate) fn classify(tree: &mut dyn SourceTree) -> Fakelib {
     let files: Vec<SourceFile> = tree
         .files()
         .iter()
-        .filter(|f| is_fakelib(&f.path))
+        .filter(|f| is_fakelib(&f.path) && is_library(&f.path))
         .cloned()
         .collect();
     let mut found = Fakelib::default();
@@ -435,12 +441,38 @@ mod tests {
             ("fakelib/libScePlayGo.sprx", b"PlayGo PRX stub".to_vec()),
             ("fakelib/libMystery.sprx", b"opens /app0/own.cfg".to_vec()),
             ("fakelib/libNg.sprx", b"ampr-emu-ng 0.4.0".to_vec()),
+            (
+                "fakelib/libSceOld.PRX",
+                b"\x7fELF system, older suffix".to_vec(),
+            ),
+            // Not a library: a config, a note, an emulator install's `.orig`; kept, unlisted.
+            ("fakelib/ampr_emu.ini", b"\x7fELF-free config".to_vec()),
+            ("fakelib/README.txt", b"how to install".to_vec()),
+            (
+                "fakelib/libSceAmpr.sprx.orig",
+                b"\x7fELF the game's own".to_vec(),
+            ),
+            ("fakelib2/notes", b"plain".to_vec()),
             // Not in a top-level fakelib: none of this module's business.
             ("data/fakelib/libSceAgc.sprx", b"\x7fELF".to_vec()),
             ("fakelibs/libSceAgc.sprx", b"\x7fELF".to_vec()),
         ]);
         let found = classify(&mut t);
-        assert_eq!(found.libs, ["fakelib/libSceAgc.sprx"]);
+        assert_eq!(
+            found.libs,
+            ["fakelib/libSceAgc.sprx", "fakelib/libSceOld.PRX"]
+        );
+        // Left out, the rest of the fakelib stays.
+        let libs = found.libs.clone();
+        let out = without(Box::new(t), &libs);
+        for stays in [
+            "fakelib/ampr_emu.ini",
+            "fakelib/README.txt",
+            "fakelib/libSceAmpr.sprx.orig",
+            "fakelib2/notes",
+        ] {
+            assert!(paths(&*out).contains(&stays), "{stays}");
+        }
         let names: Vec<(&str, &str)> = found
             .emulators
             .iter()
