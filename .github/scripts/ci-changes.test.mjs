@@ -48,6 +48,9 @@ test("the console converter and the crates it links also run the payload job, wh
     "engine/crates/ps5upload-convert/src/job.rs",
     "engine/crates/ps5upload-fpkg/src/lib.rs",
     "engine/crates/ps5upload-pkg/src/lib.rs",
+    "engine/crates/ps5upload-convert-core/src/writing.rs",
+    "engine/crates/ps5-dump-forge-pfs/src/lib.rs",
+    "engine/crates/ps5-dump-forge-zstd/Cargo.toml",
   ]) {
     assert.deepEqual(on([p]), ["android", "client", "desktop", "engine", "payload"], p);
   }
