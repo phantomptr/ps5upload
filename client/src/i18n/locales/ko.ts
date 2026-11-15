@@ -6663,6 +6663,8 @@ library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가
 "play_setup_state_done": "완료",
 "play_setup_state_todo": "할 일",
 "play_setup_state_wait": "대기 중",
+"play_setup_state_optional": "선택 사항",
+"play_setup_rest_optional": "선택 사항: PS5가 휴식 모드일 때 Play를 시작하려는 경우에만 필요합니다. 본체를 직접 켜면 이 단계는 건너뛰세요.",
 "play_setup_title": "플레이 설정",
 "play_setup_wait": "먼저 위 단계를 끝내세요. 끝나면 이 단계가 열립니다.",
 "play_setup_read_failed": "PS5의 설정을 읽지 못했습니다. 다시 시도하는 중…",

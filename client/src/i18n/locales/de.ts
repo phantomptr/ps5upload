@@ -6654,6 +6654,8 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "play_setup_state_done": "Erledigt",
 "play_setup_state_todo": "Zu tun",
 "play_setup_state_wait": "Wartet",
+"play_setup_state_optional": "Optional",
+"play_setup_rest_optional": "Optional: Nur nötig, um Play zu starten, während die PS5 im Ruhemodus ist. Wenn du die Konsole selbst einschaltest, überspringe diesen Schritt.",
 "play_setup_title": "Spielen einrichten",
 "play_setup_wait": "Erledige zuerst die Schritte darüber; dieser öffnet sich, wenn sie erledigt sind.",
 "play_setup_read_failed": "Die Einstellungen der PS5 konnten nicht gelesen werden. Neuer Versuch…",

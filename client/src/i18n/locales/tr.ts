@@ -6653,6 +6653,8 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "play_setup_state_done": "Tamam",
 "play_setup_state_todo": "Yapılacak",
 "play_setup_state_wait": "Bekliyor",
+"play_setup_state_optional": "İsteğe bağlı",
+"play_setup_rest_optional": "İsteğe bağlı: yalnızca PS5 dinlenme modundayken Play'i başlatmak için gerekir. Konsolu kendin açıyorsan bu adımı atla.",
 "play_setup_title": "Oyna'yı kur",
 "play_setup_wait": "Önce yukarıdaki adımları yap; bu adım onlar bitince açılır.",
 "play_setup_read_failed": "PS5'in ayarları okunamadı. Yeniden deneniyor…",

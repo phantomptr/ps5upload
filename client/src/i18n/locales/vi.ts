@@ -6648,6 +6648,8 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "play_setup_state_done": "Xong",
 "play_setup_state_todo": "Cần làm",
 "play_setup_state_wait": "Đang chờ",
+"play_setup_state_optional": "Không bắt buộc",
+"play_setup_rest_optional": "Không bắt buộc: chỉ cần khi muốn bắt đầu Play lúc PS5 đang ở chế độ nghỉ. Nếu bạn tự bật máy, hãy bỏ qua bước này.",
 "play_setup_title": "Thiết lập Chơi",
 "play_setup_wait": "Hãy làm các bước ở trên trước; bước này mở ra khi chúng xong.",
 "play_setup_read_failed": "Không đọc được cài đặt của PS5. Đang thử lại…",

@@ -6941,6 +6941,8 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "play_setup_state_done": "Kész",
 "play_setup_state_todo": "Teendő",
 "play_setup_state_wait": "Várakozik",
+"play_setup_state_optional": "Nem kötelező",
+"play_setup_rest_optional": "Nem kötelező: csak ahhoz kell, hogy a Play pihenő módban lévő PS5-ön induljon. Ha magad kapcsolod be a konzolt, hagyd ki ezt a lépést.",
 "play_setup_title": "A Játék beállítása",
 "play_setup_wait": "Előbb végezd el a fenti lépéseket; ez akkor nyílik meg, ha készen vannak.",
 "play_setup_read_failed": "Nem sikerült beolvasni a PS5 beállításait. Újrapróbálás…",

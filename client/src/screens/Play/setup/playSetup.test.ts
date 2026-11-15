@@ -49,7 +49,7 @@ describe("Play setup", () => {
   it("starts at connecting, with everything after it waiting", () => {
     const s = setupStates({ ...base, connected: false, readiness: null, np: null });
     expect(s).toMatchObject({ connect: "todo", user: "wait", account: "wait", signin: "wait", service: "wait", pair: "wait", play: "wait" });
-    expect(s.rest).toBe("manual");
+    expect(s.rest).toBe("optional");
     expect(nextStep(s)).toBe("connect");
     expect(playReady(s)).toBe(false);
   });
@@ -68,10 +68,14 @@ describe("Play setup", () => {
     // np-fake-signin ran; the service still off.
     s = setupStates({ ...base, readiness: R({ service_enabled: 0 }), np: NP() });
     expect([s.signin, s.service, s.pair]).toEqual(["ok", "todo", "wait"]);
-    // Service on (and allowed for this user): pair is next after the manual rest step.
+    // Service on (and allowed for this user): pair is next; the rest-mode step is optional and
+    // never in the way (only needed to start Play while the PS5 sleeps).
     s = setupStates({ ...base });
-    expect([s.service, s.rest, s.pair]).toEqual(["ok", "manual", "todo"]);
-    expect(nextStep(s)).toBe("rest");
+    expect([s.service, s.rest, s.pair]).toEqual(["ok", "optional", "todo"]);
+    expect(nextStep(s)).toBe("pair");
+    s = setupStates({ ...base, paired: true, played: true });
+    expect(nextStep(s)).toBeNull();
+    expect(setupProgress(s)).toEqual({ done: 8, total: 8 });
     s = setupStates({ ...base, restOk: true });
     expect(nextStep(s)).toBe("pair");
     s = setupStates({ ...base, restOk: true, paired: true });

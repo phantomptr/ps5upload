@@ -6653,6 +6653,8 @@ library_compressed_hint: "อิมเมจที่บีบอัดต้อ
 "play_setup_state_done": "เสร็จแล้ว",
 "play_setup_state_todo": "ต้องทำ",
 "play_setup_state_wait": "รออยู่",
+"play_setup_state_optional": "ไม่บังคับ",
+"play_setup_rest_optional": "ไม่บังคับ: จำเป็นเฉพาะเมื่อต้องการเริ่ม Play ขณะที่ PS5 อยู่ในโหมดพัก หากคุณเปิดเครื่องเอง ให้ข้ามขั้นตอนนี้",
 "play_setup_title": "ตั้งค่าเล่น",
 "play_setup_wait": "ทำขั้นตอนด้านบนก่อน ขั้นนี้จะเปิดเมื่อเสร็จแล้ว",
 "play_setup_read_failed": "อ่านการตั้งค่าของ PS5 ไม่ได้ กำลังลองใหม่…",

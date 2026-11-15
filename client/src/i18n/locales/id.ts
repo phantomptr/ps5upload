@@ -6655,6 +6655,8 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "play_setup_state_done": "Selesai",
 "play_setup_state_todo": "Perlu dilakukan",
 "play_setup_state_wait": "Menunggu",
+"play_setup_state_optional": "Opsional",
+"play_setup_rest_optional": "Opsional: hanya perlu untuk memulai Play saat PS5 dalam mode istirahat. Jika kamu menyalakan konsol sendiri, lewati langkah ini.",
 "play_setup_title": "Siapkan Main",
 "play_setup_wait": "Kerjakan dulu langkah di atas; langkah ini terbuka setelah semuanya selesai.",
 "play_setup_read_failed": "Pengaturan PS5 tidak dapat dibaca. Mencoba lagi…",

@@ -6665,6 +6665,8 @@ library_compressed_hint: "圧縮イメージのプレイには ShadowMount+ が�
 "play_setup_state_done": "完了",
 "play_setup_state_todo": "未完了",
 "play_setup_state_wait": "待機中",
+"play_setup_state_optional": "任意",
+"play_setup_rest_optional": "任意：PS5がレストモードのときにPlayを開始する場合だけ必要です。本体を自分で電源オンにするなら、この手順は飛ばしてください。",
 "play_setup_title": "プレイを設定",
 "play_setup_wait": "先に上の手順を済ませてください。終わるとこの手順が開きます。",
 "play_setup_read_failed": "PS5 の設定を読み取れませんでした。再試行しています…",

@@ -6927,6 +6927,8 @@ library_compressed_hint: "برای اجرای ایمیج فشرده به ShadowM
 "play_setup_state_done": "انجام شد",
 "play_setup_state_todo": "باید انجام شود",
 "play_setup_state_wait": "در انتظار",
+"play_setup_state_optional": "اختیاری",
+"play_setup_rest_optional": "اختیاری: فقط برای شروع Play وقتی PS5 در حالت استراحت است لازم است. اگر کنسول را خودتان روشن می‌کنید، از این مرحله بگذرید.",
 "play_setup_title": "راه‌اندازی «بازی»",
 "play_setup_wait": "اول مراحل بالا را انجام دهید؛ این مرحله وقتی آن‌ها انجام شوند باز می‌شود.",
 "play_setup_read_failed": "تنظیمات PS5 خوانده نشد. در حال تلاش دوباره…",

@@ -6599,6 +6599,8 @@ library_compressed_hint: "Для запуска сжатых образов ну
 "play_setup_state_done": "Готово",
 "play_setup_state_todo": "Сделать",
 "play_setup_state_wait": "Ожидание",
+"play_setup_state_optional": "Необязательно",
+"play_setup_rest_optional": "Необязательно: нужно только для запуска Play, пока PS5 в режиме покоя. Если вы сами включаете консоль, пропустите этот шаг.",
 "play_setup_title": "Настройка «Игры»",
 "play_setup_wait": "Сначала выполните шаги выше; этот откроется, когда они будут готовы.",
 "play_setup_read_failed": "Не удалось прочитать настройки PS5. Пробуем снова…",

@@ -6646,6 +6646,8 @@ library_compressed_hint: "تحتاج الصور المضغوطة إلى ShadowMo
 "play_setup_state_done": "تم",
 "play_setup_state_todo": "للقيام به",
 "play_setup_state_wait": "بانتظار",
+"play_setup_state_optional": "اختياري",
+"play_setup_rest_optional": "اختياري: مطلوب فقط لبدء Play أثناء وجود PS5 في وضع الراحة. إذا كنت تشغّل الجهاز بنفسك، فتخطَّ هذه الخطوة.",
 "play_setup_title": "إعداد «العب»",
 "play_setup_wait": "أكمل الخطوات أعلاه أولًا؛ تُفتح هذه عند إتمامها.",
 "play_setup_read_failed": "تعذّرت قراءة إعدادات PS5. جارٍ المحاولة مجددًا…",

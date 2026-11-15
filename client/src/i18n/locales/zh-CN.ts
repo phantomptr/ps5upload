@@ -6605,6 +6605,8 @@ library_compressed_hint: "压缩镜像需要 ShadowMount+ 才能游玩。如需�
 "play_setup_state_done": "已完成",
 "play_setup_state_todo": "待完成",
 "play_setup_state_wait": "等待中",
+"play_setup_state_optional": "可选",
+"play_setup_rest_optional": "可选：仅在 PS5 处于待机模式时启动 Play 才需要。如果你自己开机，可以跳过此步骤。",
 "play_setup_title": "设置畅玩",
 "play_setup_wait": "请先完成上面的步骤；完成后这一步才会打开。",
 "play_setup_read_failed": "无法读取 PS5 的设置。正在重试…",
