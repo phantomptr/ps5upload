@@ -17,10 +17,12 @@
 //!
 //! Journal layout, little-endian: `FORGEUNDO1`, the image length (u64), the journal's own length
 //! (u64), the entry count (u32); per entry its offset (u64), length (u64) and old bytes; then the
-//! trailer: `FORGEEND` and a CRC-32 of everything before the CRC. A journal that doesn't end with
-//! the trailer and is shorter than its header declares (or than a header) was cut short before it
-//! was synced (so before any live write) and is deleted; any other that fails a check (its CRC,
-//! its declared length either way, an entry) is damage: an error, the journal kept.
+//! trailer: `FORGEEND` and a CRC-32 of everything before the CRC. A journal with no trailer
+//! marker at its end nor where its header says it ends (PS5Upload: whatever its length, and with
+//! its header zeroed too) was cut short before it was synced (so before any live write: the
+//! trailer is written and synced before the image's first write) and is deleted; any other that
+//! fails a check (its CRC, its declared length either way, an entry) is damage: an error, the
+//! journal kept.
 //!
 //! PS5Upload: beside the journal, `<journal>.id` ([`identity_path`]) says which image it was
 //! written for, so a journal is never restored into another image of the same length that
@@ -536,15 +538,24 @@ fn restore(
         .take(HEADER_LEN)
         .read_to_end(&mut head)
         .map_err(rd)?;
-    if head.iter().zip(MAGIC).any(|(a, b)| a != b) {
+    // PS5Upload: a crash before the journal was synced can leave it at any length with its
+    // unwritten bytes zero, its header included.
+    let zeroed = !head.is_empty() && head.iter().all(|&b| b == 0);
+    if !zeroed && head.iter().zip(MAGIC).any(|(a, b)| a != b) {
         return Err(bad("not an undo journal"));
     }
-    let header = Header::parse(&head);
-    // Cut short only when it neither ends with the trailer nor reaches the length its header
-    // declares (or holds no whole header): it was never synced, so nothing live was written.
-    // Anything else that fails a check is damage, and kept.
-    let short = header.as_ref().is_none_or(|h| len < h.len);
-    if short && !has_end(&mut file, len).map_err(rd)? {
+    let header = Header::parse(&head).filter(|_| !zeroed);
+    // Cut short when its trailer marker is neither at its end nor where its header says it
+    // ends: the trailer is written, then the journal synced, then its folder, all before the
+    // image's first write, so a journal without one was never synced and nothing was written
+    // (PS5Upload: whatever its length; a full-length one with a zeroed tail included). Anything
+    // else that fails a check is damage, and kept.
+    let ended = has_end(&mut file, len).map_err(rd)?
+        || match &header {
+            Some(h) if h.len < len => has_end(&mut file, h.len).map_err(rd)?,
+            _ => false,
+        };
+    if !ended {
         remove_journal(journal, sync)?;
         return Ok(Recovery::Discarded);
     }
@@ -655,7 +666,7 @@ impl Header {
     }
 }
 
-/// Whether the `FORGEEND` marker sits where the trailer starts.
+/// Whether the `FORGEEND` marker sits where the trailer of a journal of `len` bytes starts.
 fn has_end(file: &mut File, len: u64) -> io::Result<bool> {
     if len < TRAILER_LEN {
         return Ok(false);
@@ -1266,14 +1277,10 @@ mod tests {
         up[18..26].copy_from_slice(&(whole.len() as u64 + 4096).to_le_bytes());
         let mut down = whole.clone();
         down[18..26].copy_from_slice(&(whole.len() as u64 - 1).to_le_bytes());
-        // A byte appended, and the trailer zeroed at full length: no trailer at the end, but
-        // not shorter than declared.
+        // A byte appended: no trailer at the end, but one where the header says it ends.
         let mut longer = whole.clone();
         longer.push(0);
-        let mut unended = whole.clone();
-        let at = unended.len() - TRAILER_LEN as usize;
-        unended[at..].fill(0);
-        for damaged in [flipped, up, down, longer, unended] {
+        for damaged in [flipped, up, down, longer] {
             std::fs::write(&journal, &damaged).unwrap();
             let e = recover(&path, Syncs::STD).unwrap_err();
             assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
@@ -1284,6 +1291,41 @@ mod tests {
         // Shorter than declared, no trailer: cut short.
         std::fs::write(&journal, &whole[..whole.len() - 1]).unwrap();
         assert_eq!(recover(&path, Syncs::STD).unwrap(), Recovery::Discarded);
+    }
+
+    /// PS5Upload: a crash before the journal was synced can leave it at full length with its
+    /// unwritten tail zero (no trailer), or all zero. The trailer and the syncs come before the
+    /// image's first write, so such a journal predates every write: deleted, the image as it is.
+    #[test]
+    fn a_full_length_journal_without_its_trailer_is_discarded() {
+        let (_tmp, path, original) = image();
+        let journal = journal_path(&path);
+        let applied = run(&path, &writes(), Step::All).unwrap();
+        let whole = std::fs::read(&journal).unwrap();
+        applied.rollback(Syncs::STD).unwrap();
+        let restored = std::fs::read(&path).unwrap();
+        let mut unended = whole.clone();
+        let at = unended.len() - TRAILER_LEN as usize;
+        unended[at..].fill(0);
+        let mut zero_tail = whole.clone();
+        let half = zero_tail.len() / 2;
+        zero_tail[half..].fill(0);
+        let zeros = vec![0u8; whole.len()];
+        for (what, cut) in [
+            ("unended", unended),
+            ("zero tail", zero_tail),
+            ("zeros", zeros),
+        ] {
+            std::fs::write(&journal, &cut).unwrap();
+            assert_eq!(
+                recover(&path, Syncs::STD).unwrap(),
+                Recovery::Discarded,
+                "{what}"
+            );
+            assert!(!journal.exists(), "{what}");
+            assert!(std::fs::read(&path).unwrap() == restored, "{what}");
+        }
+        assert_restored(&path, &original, &writes());
     }
 
     /// PS5Upload: a journal is never restored into another image of the same length that took
