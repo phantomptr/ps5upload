@@ -592,6 +592,7 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/ps5/helper/restore-previous"),
     ("POST", "/api/ps5/helper/stop"),
     ("POST", "/api/ps5/helper/store-in-pldmgr"),
+    ("POST", "/api/ps5/helper/uninstall"),
     ("GET", "/api/ps5/hw/drive-sensors"),
     ("POST", "/api/ps5/hw/fan-threshold"),
     ("GET", "/api/ps5/hw/fps"),

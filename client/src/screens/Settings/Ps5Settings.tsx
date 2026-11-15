@@ -13,6 +13,7 @@ import { payloadCardLink } from "../Payloads/payloadTabs";
 import { AutoBringUpToggle, BringUpPlaylistSelect } from "./ConsoleBringUp";
 import { MinionConsoleSettings } from "./MinionSettings";
 import { PlayTogetherGuestProfiles } from "./PlayTogetherGuestProfiles";
+import { RemovePs5Upload } from "./RemovePs5Upload";
 import { GroupHeading, Section } from "./SettingsLayout";
 import { settingsConsoleId } from "./settingsTabs";
 import { settingsVisibility } from "./visibility";
@@ -259,6 +260,10 @@ function Ps5SettingsBody({ profile }: { profile: PS5Profile }) {
             label={tr("settings_ps5_connection_link", undefined, "Connection and wake")}
           />
         </div>
+      </Section>
+
+      <Section title={tr("remove_ps5u_title", undefined, "Remove PS5Upload from this PS5")} full>
+        <RemovePs5Upload host={host} />
       </Section>
     </>
   );

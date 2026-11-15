@@ -353,6 +353,7 @@ pub fn run() {
             commands::agent_mcp_bridge_path,
             commands::ps5_volumes,
             commands::ps5_helper_stop,
+            commands::ps5_helper_uninstall,
             commands::pkg_scan_external,
             commands::pkg_metadata_console,
             commands::ps5_list_dir,

@@ -2473,6 +2473,35 @@ export async function helperStop(addr: string): Promise<HelperStopResult> {
   return invoke<HelperStopResult>("ps5_helper_stop", { addr });
 }
 
+export type HelperUninstallResult =
+  /** `check`: the helper would go ahead; nothing changed. */
+  | { state: "ready" }
+  | {
+      state: "removed";
+      /** What happened to Minion's home-screen tile ("removed", "hidden", "failed", ""). */
+      tile: string;
+      tile_failed: boolean;
+      /** Icons the helper had hidden, shown again. */
+      icons_shown: number;
+      keep_backups: boolean;
+      /** The helper stopped answering afterwards (it deletes its folders as it exits). */
+      exited: boolean;
+    }
+  | { state: "refused"; reason: string; error: string; paths: string[] };
+
+/** "Remove PS5Upload from this PS5" (`POST /api/ps5/helper/uninstall`): the helper turns Minion
+ *  off and removes its tile, shows the icons it hid, exits and deletes its own folders on the
+ *  console (save backups there stay when `keepBackups`). Stored copies of the helper in loaders
+ *  are not touched by this call. `check` only asks whether it would go ahead ("ready"). Throws
+ *  only when the engine could not be asked at all. */
+export async function helperUninstall(
+  addr: string,
+  keepBackups: boolean,
+  check = false,
+): Promise<HelperUninstallResult> {
+  return invoke<HelperUninstallResult>("ps5_helper_uninstall", { addr, keepBackups, check });
+}
+
 /** Wake a console in standby, over Sony's Device Discovery Protocol.
  *
  *  Not Wake-on-LAN — a PS5 does not wake from a magic packet. This speaks the

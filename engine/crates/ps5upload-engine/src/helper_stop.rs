@@ -150,10 +150,276 @@ pub(crate) fn stop(addr: &str, busy: bool) -> Result<Stopped, StopError> {
     r
 }
 
+// ── "Remove PS5Upload from this PS5" (`node.uninstall`, method 200) ─────────────────────────
+//
+// The helper turns Minion off and removes its tile, shows the icons it hid, answers, exits and
+// deletes its own folders as its last step (payload/src/helper_uninstall.c). Stored copies of the
+// helper in loaders are the app's to remove first: it knows them (lib/helperStoredCopies).
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum UninstallError {
+    /// A job of this engine is using the console.
+    Busy,
+    /// Something is mounted in the helper's folders (an image, a share, a save): unmount first.
+    InUse(Vec<String>),
+    /// The running helper predates the request.
+    OldHelper,
+    /// Nothing answered: no helper is running to remove anything.
+    NotRunning,
+    /// The helper refused or the call failed.
+    Failed(String),
+}
+
+impl UninstallError {
+    pub(crate) fn reason(&self) -> &'static str {
+        match self {
+            UninstallError::Busy => "busy",
+            UninstallError::InUse(_) => "in_use",
+            UninstallError::OldHelper => "old_helper",
+            UninstallError::NotRunning => "not_running",
+            UninstallError::Failed(_) => "failed",
+        }
+    }
+
+    pub(crate) fn message(&self) -> String {
+        match self {
+            UninstallError::Busy => "the helper is in use: wait for the transfers and installs on this console to finish, then try again".into(),
+            UninstallError::InUse(p) => format!("something is still mounted in PS5Upload's folders on the console; unmount it first: {}", p.join(", ")),
+            UninstallError::OldHelper => "this helper is too old to remove itself; send this app's helper, then try again".into(),
+            UninstallError::NotRunning => "the helper is not running on this console; send it, then try again".into(),
+            UninstallError::Failed(e) => format!("the helper could not remove PS5Upload: {e}"),
+        }
+    }
+}
+
+/// What a refusal body says, when it is one of ours (`{ok:false, err, paths?}`).
+fn refusal(cause: &str) -> Option<(String, Vec<String>)> {
+    let v: serde_json::Value = serde_json::from_str(cause.trim()).ok()?;
+    let err = v.get("err")?.as_str()?.to_string();
+    let paths = v
+        .get("paths")
+        .and_then(|p| p.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    Some((err, paths))
+}
+
+/// The decision, with the console calls passed in. `call` sends `node.uninstall`; after an
+/// answer the helper's port is polled until it goes quiet (it exits right after answering) or
+/// `wait` passes. Ok carries the helper's answer plus `"exited"`. `check` only asks whether the
+/// helper would go ahead (it answers and keeps running): no wait.
+pub(crate) fn uninstall_with(
+    busy: bool,
+    check: bool,
+    call: impl FnOnce() -> anyhow::Result<Vec<u8>>,
+    mut port_open: impl FnMut() -> bool,
+    wait: Duration,
+    step: Duration,
+) -> Result<serde_json::Value, UninstallError> {
+    if busy {
+        return Err(UninstallError::Busy);
+    }
+    let body = match call() {
+        Ok(b) => b,
+        Err(e) => {
+            if ps5upload_core::console_files::is_unsupported(&e) {
+                return Err(UninstallError::OldHelper);
+            }
+            if let Some(m) = e.downcast_ref::<ps5upload_core::mgmt::MgmtError>() {
+                if let Some((err, paths)) = refusal(&m.cause) {
+                    return Err(if err == "uninstall_in_use" {
+                        UninstallError::InUse(paths)
+                    } else {
+                        UninstallError::Failed(err)
+                    });
+                }
+            }
+            return Err(if port_open() {
+                UninstallError::Failed(e.to_string())
+            } else {
+                UninstallError::NotRunning
+            });
+        }
+    };
+    let mut v: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|_| UninstallError::Failed("the helper's answer is not JSON".into()))?;
+    if v.get("ok").and_then(|o| o.as_bool()) != Some(true) {
+        let err = v.get("err").and_then(|e| e.as_str()).unwrap_or("refused");
+        return Err(UninstallError::Failed(err.to_string()));
+    }
+    if check {
+        v["exited"] = false.into();
+        return Ok(v);
+    }
+    let deadline = Instant::now() + wait;
+    let exited = loop {
+        if !port_open() {
+            break true;
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(step);
+    };
+    v["exited"] = exited.into();
+    Ok(v)
+}
+
+/// Remove PS5Upload from `addr` for real (blocking).
+pub(crate) fn uninstall(
+    addr: &str,
+    busy: bool,
+    keep_backups: bool,
+    check: bool,
+) -> Result<serde_json::Value, UninstallError> {
+    let host = crate::install::console_id(addr);
+    let port =
+        ps5upload_core::payload_lifecycle::join_host_port(&host, ps5upload_ava1::gen::DEFAULT_PORT);
+    let body = serde_json::json!({ "keep_backups": keep_backups, "check": check }).to_string();
+    let r = uninstall_with(
+        busy,
+        check,
+        || {
+            // The tile's removal waits on Sony calls that can take a while.
+            ps5upload_core::mgmt::call_with(
+                &host,
+                ps5upload_core::mgmt::m::NODE_UNINSTALL,
+                "NODE_UNINSTALL",
+                body.as_bytes(),
+                Some(Duration::from_secs(240)),
+            )
+        },
+        || ps5upload_core::payload_lifecycle::port_is_open(&port, Duration::from_millis(800)),
+        Duration::from_secs(15),
+        Duration::from_millis(500),
+    );
+    crate::log_info!(
+        "helper_uninstall: addr={host} keep_backups={keep_backups} check={check} -> {r:?}"
+    );
+    r
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    fn refused(cause: &str) -> anyhow::Error {
+        anyhow::Error::new(ps5upload_core::mgmt::MgmtError {
+            label: "NODE_UNINSTALL".into(),
+            status: 1,
+            cause: cause.into(),
+        })
+    }
+
+    #[test]
+    fn uninstall_is_refused_while_busy_without_touching_the_console() {
+        let called = Cell::new(false);
+        let r = uninstall_with(
+            true,
+            false,
+            || {
+                called.set(true);
+                Ok(Vec::new())
+            },
+            || true,
+            NO_WAIT,
+            NO_WAIT,
+        );
+        assert_eq!(r, Err(UninstallError::Busy));
+        assert!(!called.get());
+    }
+
+    #[test]
+    fn uninstall_names_what_is_still_mounted() {
+        let r = uninstall_with(
+            false,
+            false,
+            || {
+                Err(refused(
+                    r#"{"ok":false,"err":"uninstall_in_use","paths":["/data/ps5upload/mounts/a"]}"#,
+                ))
+            },
+            || true,
+            NO_WAIT,
+            NO_WAIT,
+        );
+        let e = r.unwrap_err();
+        assert_eq!(
+            e,
+            UninstallError::InUse(vec!["/data/ps5upload/mounts/a".into()])
+        );
+        assert_eq!(e.reason(), "in_use");
+        assert!(e.message().contains("/data/ps5upload/mounts/a"));
+    }
+
+    #[test]
+    fn uninstall_tells_an_older_helper_apart() {
+        let old = anyhow::Error::new(ps5upload_core::mgmt::MgmtError {
+            label: "NODE_UNINSTALL".into(),
+            status: ps5upload_core::console_files::ERR_UNKNOWN_METHOD,
+            cause: "unknown method".into(),
+        });
+        let r = uninstall_with(false, false, || Err(old), || true, NO_WAIT, NO_WAIT);
+        assert_eq!(r, Err(UninstallError::OldHelper));
+    }
+
+    #[test]
+    fn uninstall_with_nothing_answering_is_not_running() {
+        let r = uninstall_with(
+            false,
+            false,
+            || Err(anyhow::anyhow!("connection refused")),
+            || false,
+            NO_WAIT,
+            NO_WAIT,
+        );
+        assert_eq!(r, Err(UninstallError::NotRunning));
+    }
+
+    #[test]
+    fn uninstall_answers_with_the_helpers_reply_once_it_exits() {
+        let probes = Cell::new(0);
+        let r = uninstall_with(
+            false,
+            false,
+            || Ok(br#"{"ok":true,"tile":"removed","tile_failed":false,"icons_shown":2,"keep_backups":true}"#.to_vec()),
+            || {
+                probes.set(probes.get() + 1);
+                probes.get() < 2
+            },
+            Duration::from_secs(5),
+            Duration::from_millis(1),
+        )
+        .unwrap();
+        assert_eq!(r["tile"], "removed");
+        assert_eq!(r["icons_shown"], 2);
+        assert_eq!(r["exited"], true);
+    }
+
+    #[test]
+    fn a_check_answers_without_waiting_for_an_exit() {
+        let probes = Cell::new(0);
+        let r = uninstall_with(
+            false,
+            true,
+            || Ok(br#"{"ok":true,"check":true}"#.to_vec()),
+            || {
+                probes.set(probes.get() + 1);
+                true
+            },
+            Duration::from_secs(5),
+            Duration::from_millis(1),
+        )
+        .unwrap();
+        assert_eq!(r["check"], true);
+        assert_eq!(r["exited"], false);
+        assert_eq!(probes.get(), 0, "a check never waits for the helper to go");
+    }
 
     const NO_WAIT: Duration = Duration::from_millis(0);
 

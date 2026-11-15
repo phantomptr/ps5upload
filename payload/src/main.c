@@ -10,6 +10,7 @@
 #include <pthread.h>
 #include <dlfcn.h>
 #include <ps5/kernel.h>
+#include "helper_uninstall.h"
 #include "app_dump.h"
 #include "activity.h"
 #include "instance_verdict.h"
@@ -896,5 +897,8 @@ int main(void) {
     (void)runtime_clear_ownership(&state);
     /* A dump stopped mid-decrypt may have left the kernel's vnode pager swapped: put it back. */
     app_dump_pager_emergency_restore();
+    /* "Remove PS5Upload from this PS5" (node.uninstall): every service has stopped writing; the
+     * helper's folders go last. Nothing is logged from here on: stderr lives in them. */
+    if (hu_requested()) hu_wipe();
     return rc == 0 ? 0 : 1;
 }

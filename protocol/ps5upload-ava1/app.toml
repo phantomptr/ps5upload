@@ -583,6 +583,11 @@ value = 198
 name = "METHOD_SAVE_OWNER"
 ty = "u16"
 value = 199
+# "Remove PS5Upload from this PS5" (payload/src/helper_uninstall.c; MGMT_METHODS.md)
+[[const]]
+name = "METHOD_NODE_UNINSTALL"
+ty = "u16"
+value = 200
 [[const]]
 name = "JOB_OP_DELETE"
 ty = "u8"

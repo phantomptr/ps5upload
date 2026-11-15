@@ -205,6 +205,28 @@ pub async fn ps5_helper_stop(addr: String) -> Result<JsonValue, String> {
     helper_stop_answer(status.as_u16(), &text)
 }
 
+/// "Remove PS5Upload from this PS5" (`POST /api/ps5/helper/uninstall`): the helper removes
+/// Minion and its tile, shows the icons it hid, exits and deletes its folders. Decided refusals
+/// (busy, in_use with `paths`, old_helper, not_running) come back as `{state: "refused", ..}`.
+#[tauri::command]
+pub async fn ps5_helper_uninstall(
+    addr: String,
+    keep_backups: bool,
+    check: Option<bool>,
+) -> Result<JsonValue, String> {
+    let url = format!("{}/api/ps5/helper/uninstall", engine::url());
+    let request = http_client()
+        .post(&url)
+        .timeout(std::time::Duration::from_secs(300))
+        .json(&serde_json::json!({
+            "addr": addr,
+            "keep_backups": keep_backups,
+            "check": check.unwrap_or(false),
+        }));
+    let (status, text) = send(request).await?;
+    helper_stop_answer(status.as_u16(), &text)
+}
+
 /// The renderer's view of a helper-stop answer (see `ps5_helper_stop`).
 fn helper_stop_answer(status: u16, body: &str) -> Result<JsonValue, String> {
     let v = serde_json::from_str::<JsonValue>(body).unwrap_or(JsonValue::Null);
@@ -221,6 +243,7 @@ fn helper_stop_answer(status: u16, body: &str) -> Result<JsonValue, String> {
             "state": "refused",
             "reason": reason,
             "error": error,
+            "paths": v.get("paths").cloned().unwrap_or_else(|| serde_json::json!([])),
         })),
         None => Err(format!("engine HTTP {status}: {error}")),
     }

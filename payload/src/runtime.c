@@ -43,6 +43,9 @@
 
 #include "content_db.h"
 #include "icon_keeper.h"
+#include "helper_uninstall.h"
+#include "webui_codec.h"
+#include "webui_tile.h"
 #include "register.h"
 #include "indicator.h"
 #include "hw_info.h"
@@ -376,6 +379,9 @@
 /* the running game's frame count, for the sampled frame rate (game_fps.c, #774) */
 #define MGMT_FRAME_HW_FPS 368u
 #define MGMT_FRAME_HW_FPS_ACK 369u
+/* "Remove PS5Upload from this PS5" (helper_uninstall.c) */
+#define MGMT_FRAME_NODE_UNINSTALL 370u
+#define MGMT_FRAME_NODE_UNINSTALL_ACK 371u
 #define MGMT_FRAME_SDK_SCAN 214u
 #define MGMT_FRAME_SDK_SCAN_ACK 215u
 #define MGMT_FRAME_SDK_PATCH 216u
@@ -10244,6 +10250,55 @@ static int handle_node_shutdown(runtime_state_t *state) {
     int rc = mgmt_reply(MGMT_FRAME_SHUTDOWN_ACK, "{}", 2);
     if (ava1_shutdown_defer(300, node_shutdown_fire, state) != 0) node_shutdown_fire(state);
     return rc;
+}
+
+/* node.uninstall (AVA1 method 200), "Remove PS5Upload from this PS5" (helper_uninstall.h):
+ * {keep_backups, check} -> {ok, tile, icons_shown, keep_backups}, then the helper exits and deletes its
+ * folders last thing (main.c). Refused, with nothing changed, while anything is mounted in those
+ * folders: {ok:false, err:"uninstall_in_use", paths:[...]}. check:true only answers {ok, check}
+ * (or that refusal) and changes nothing. */
+static int handle_node_uninstall(runtime_state_t *state, const char *body, uint64_t body_len) {
+    char reply[1024], mounts[768], minion[512];
+    int keep = 1, check = 0, in_use, shown, n, busy = 0, failed = 0;
+    webui_tile_result_t result = WEBUI_TILE_RESULT_NONE;
+    if (!state || body_len > 256) return -1;
+    if (webui_json_bool(body ? body : "", (size_t)body_len, "keep_backups", &keep) < 0 ||
+        webui_json_bool(body ? body : "", (size_t)body_len, "check", &check) < 0) {
+        n = snprintf(reply, sizeof reply, "{\"ok\":false,\"err\":\"bad_request\"}");
+        return mgmt_reply(MGMT_FRAME_NODE_UNINSTALL_ACK, reply, (uint64_t)n);
+    }
+    in_use = hu_mounts_in_use(mounts, sizeof mounts);
+    if (in_use != 0) {
+        n = in_use < 0 ? snprintf(reply, sizeof reply, "{\"ok\":false,\"err\":\"uninstall_mounts_unreadable\"}")
+                       : snprintf(reply, sizeof reply, "{\"ok\":false,\"err\":\"uninstall_in_use\",\"paths\":%s}", mounts);
+        fprintf(stderr, "[uninstall] refused: %s\n", reply);
+        return mgmt_reply(MGMT_FRAME_NODE_UNINSTALL_ACK, reply, (uint64_t)(n > 0 ? n : 0));
+    }
+    /* check: only whether it would go ahead (the PC asks before it deletes the stored copies of
+     * the helper, which it can only do while this helper runs). Nothing changes. */
+    if (check) {
+        n = snprintf(reply, sizeof reply, "{\"ok\":true,\"check\":true}");
+        return mgmt_reply(MGMT_FRAME_NODE_UNINSTALL_ACK, reply, (uint64_t)n);
+    }
+    fprintf(stderr, "[uninstall] removing PS5Upload from this PS5 (keep_backups=%d)\n", keep);
+    pop_notification("Removing PS5Upload from this PS5...");
+    /* Minion off and its own files gone, then the tile, waited for (Sony calls take seconds). */
+    if (webui_api_tile("{\"remove\":true}", 15, minion, sizeof minion) < 0 || strstr(minion, "\"ok\":false"))
+        fprintf(stderr, "[uninstall] Minion remove: %s\n", minion);
+    if (webui_tile_remove_wait(webui_tile_request(0, WEBUI_PORT)) != 0)
+        fprintf(stderr, "[uninstall] the tile removal did not finish\n");
+    webui_tile_state(&busy, &failed, &result);
+    shown = hu_show_hidden_icons();
+    n = snprintf(reply, sizeof reply, "{\"ok\":true,\"tile\":\"%s\",\"tile_failed\":%s,\"icons_shown\":%d,\"keep_backups\":%s}",
+                 failed ? "failed" : webui_tile_result_name(result), failed ? "true" : "false", shown,
+                 keep ? "true" : "false");
+    fprintf(stderr, "[uninstall] %s; exiting, then deleting %s and %s\n", reply, HU_ROOT, HU_USER_ROOT);
+    hu_request(keep);
+    {
+        int rc = mgmt_reply(MGMT_FRAME_NODE_UNINSTALL_ACK, reply, (uint64_t)n);
+        if (ava1_shutdown_defer(300, node_shutdown_fire, state) != 0) node_shutdown_fire(state);
+        return rc;
+    }
 }
 
 #include "mgmt_install.inc"
