@@ -76,10 +76,21 @@ struct Request {
 }
 
 /// Writes `status` as `dir/status.json`. The temporary file is in `dir` too: a rename never
-/// leaves the folder (a rename across filesystems panics the PS5's kernel).
-fn write_status(dir: &Path, status: &serde_json::Value) -> std::io::Result<()> {
+/// leaves the folder (a rename across filesystems panics the PS5's kernel). `durable`: the
+/// file's bytes are synced before the rename, so a crash after it never leaves an empty or
+/// half-written status under the real name. Asked for the first and final statuses and each
+/// new stage; the progress rewrites in between (every [`STATUS_EVERY`], from the build's own
+/// thread) skip it, since a sync can take seconds on a drive busy with the build's writes.
+fn write_status(dir: &Path, status: &serde_json::Value, durable: bool) -> std::io::Result<()> {
+    use std::io::Write;
     let tmp = dir.join(format!("status.json.{}.tmp", std::process::id()));
-    std::fs::write(&tmp, format!("{status}\n"))?;
+    let mut f = std::fs::File::create(&tmp)?;
+    f.write_all(format!("{status}\n").as_bytes())?;
+    if durable {
+        // Best effort: a drive without fsync still gets the status.
+        let _ = f.sync_all();
+    }
+    drop(f);
     safe_write::rename(&tmp, &dir.join("status.json"))
 }
 
@@ -131,7 +142,7 @@ impl Running<'_> {
         s["stage"] = json!(stage);
         s["bytes_done"] = json!(done);
         s["bytes_total"] = json!(total);
-        let _ = write_status(self.dir, &s);
+        let _ = write_status(self.dir, &s, new_stage);
     }
 }
 
@@ -522,7 +533,7 @@ fn run_with(dir: &Path, hook: &mut dyn FnMut(&str)) -> std::io::Result<i32> {
             crate::log(format_args!("bad request: {detail}"));
             let status = json!({"id": "", "pid": pid, "op": "", "state": "failed",
                 "cause": "convert_bad_request", "detail": short(&detail)});
-            write_status(dir, &status)?;
+            write_status(dir, &status, true)?;
             return Ok(1);
         }
     };
@@ -537,15 +548,15 @@ fn run_with(dir: &Path, hook: &mut dyn FnMut(&str)) -> std::io::Result<i32> {
         let mut s = status("failed");
         s["cause"] = json!(refusal.cause);
         s["detail"] = json!(short(&refusal.detail));
-        write_status(dir, &s).map(|()| 1)
+        write_status(dir, &s, true).map(|()| 1)
     };
     let done = |result: serde_json::Value| {
         let mut s = status("done");
         s["result"] = result;
-        write_status(dir, &s).map(|()| 0)
+        write_status(dir, &s, true).map(|()| 0)
     };
     // The helper waits for the first status to know the program started and learn its pid.
-    write_status(dir, &status("running"))?;
+    write_status(dir, &status("running"), true)?;
     match request.op.as_str() {
         "inspect" => {
             crate::log(format_args!("inspect {}", request.path));
