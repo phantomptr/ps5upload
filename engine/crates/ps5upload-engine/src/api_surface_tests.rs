@@ -1307,6 +1307,27 @@ async fn lz4_packs_go_into_a_folder_and_any_image() {
         std::fs::read(game.join("data/sub/table.bin")).unwrap()
     );
     assert!(!out.join("PPSA99994-app.ffpkg.lz4spool").exists());
+
+    // Inside a .ffpfsc too.
+    let r = post_json(
+        &app,
+        "/api/exfat/build",
+        &json!({
+            "source": game, "output_dir": out, "format": "ffpfs", "compress": true,
+            "ffpfsc_level": "fast", "ampr_lz4": lz4,
+        })
+        .to_string(),
+    )
+    .await;
+    match job_end(&st, r).await {
+        JobState::Done { dest, .. } => assert!(dest.ends_with(".ffpfsc"), "{dest}"),
+        other => panic!("{}", json!(other)),
+    }
+    let tree = ps5upload_fpkg::source::open(&out.join("PPSA99994-app.ffpfsc")).unwrap();
+    assert!(matches!(
+        ps5upload_fpkg::ampr_pack::image::Lz4Unpacked::open(tree).unwrap(),
+        ps5upload_fpkg::ampr_pack::image::Unpacking::Decoded(_)
+    ));
     let _ = std::fs::remove_dir_all(&root);
 }
 

@@ -37,10 +37,13 @@ pub(crate) const NG_URL: &str =
 pub(crate) const NG_SHA256: &str =
     "9c7c41b3216bc4f877d67e3c2e5c9c8f9ffabdd5065f4f3fe0dd98fa7228386f";
 
-/// [`ps5upload_convert_core::zstd_packs::build`] with the emulator this engine fetched.
+/// [`ps5upload_convert_core::zstd_packs::build_at`] with the emulator this engine fetched:
+/// straight into a `.ffpfsc` when `inner_name` is given, compressed at `compression`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build(
     format: ImageFormat,
+    inner_name: Option<&str>,
+    compression: ps5upload_fpkg::ffpfsc_block::Level,
     level: u8,
     rules: Option<&Rules>,
     runtime: &PackRuntime,
@@ -51,8 +54,10 @@ pub(crate) fn build(
     cancel: &AtomicBool,
     stage: &mut dyn FnMut(&str, u64, u64),
 ) -> Result<ImageBuilt, String> {
-    ps5upload_convert_core::zstd_packs::build(
+    ps5upload_convert_core::zstd_packs::build_at(
         format,
+        inner_name,
+        compression,
         level,
         rules,
         &runtime.bytes,

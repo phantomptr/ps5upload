@@ -1453,14 +1453,17 @@ fn settle(result: Result<ImageBuilt, String>, cancelled: bool) -> Result<ImageBu
 
 pub use crate::lz4_packs::{lz4_spool, Lz4Packs};
 
-/// [`build`], with the game's files packed into LZ4 asset packs first (`crate::lz4_packs`), in
-/// any format. The volumes are spooled beside the output (`<output>.lz4spool`, claimed by the
+/// [`build_at`], with the game's files packed into LZ4 asset packs first (`crate::lz4_packs`),
+/// in any format, plain or straight into a `.ffpfsc` (`inner_name`, compressed at `level`), as
+/// ps5-dump-forge offers them (`--lz4-pack` with `--to ffpfsc`). The volumes are spooled beside the output (`<output>.lz4spool`, claimed by the
 /// caller) and removed once the image is written and read back, or has failed. After the image's
 /// own read-back, the game is read back through its packs (`lz4_packs::read_back`); an image
 /// that fails that is removed. `stage` reports `pack` before the image's own stages.
 #[allow(clippy::too_many_arguments)]
 pub fn build_packed(
     format: ImageFormat,
+    inner_name: Option<&str>,
+    level: Level,
     source: &mut dyn SourceTree,
     output: &Path,
     packs: &Lz4Packs,
@@ -1478,9 +1481,10 @@ pub fn build_packed(
             report,
             config,
         } = crate::lz4_packs::spool(source, packs, &spool, mtime, &shown, cancel, stage)?;
-        let mut built = build(
+        let mut built = build_at(
             format,
-            None,
+            inner_name,
+            level,
             &mut tree,
             output,
             mode,
@@ -1489,7 +1493,7 @@ pub fn build_packed(
             stage,
         )?;
         drop(tree);
-        let image = open_image(output, format, false)?;
+        let image = open_image(output, format, inner_name.is_some())?;
         match crate::lz4_packs::read_back(image, source, &config, mode, cancel, &mut |d, t| {
             stage("verify", d, t)
         }) {
@@ -1711,6 +1715,8 @@ mod tests {
         let mut tree = FolderSource::open(&src).unwrap();
         build_packed(
             ImageFormat::Exfat,
+            None,
+            ps5upload_fpkg::ffpfsc_block::Level::default(),
             &mut tree,
             &out,
             &Lz4Packs {
@@ -2494,6 +2500,8 @@ mod tests {
         let mut tree = FolderSource::open(&src).unwrap();
         build_packed(
             ImageFormat::Exfat,
+            None,
+            ps5upload_fpkg::ffpfsc_block::Level::default(),
             &mut tree,
             &out,
             &Lz4Packs {
@@ -2554,6 +2562,8 @@ mod tests {
         let mut stages: Vec<String> = Vec::new();
         let built = build_packed(
             ImageFormat::Exfat,
+            None,
+            ps5upload_fpkg::ffpfsc_block::Level::default(),
             &mut tree,
             &out,
             // The folder-wide profile, so the small fixture files are packed: the built-in
@@ -2681,6 +2691,8 @@ mod tests {
             let mut tree = FolderSource::open(src).unwrap();
             build_packed(
                 ImageFormat::Exfat,
+                None,
+                ps5upload_fpkg::ffpfsc_block::Level::default(),
                 &mut tree,
                 &exfat,
                 &Lz4Packs {

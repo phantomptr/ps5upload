@@ -362,21 +362,23 @@ mod tests {
         assert!(game.files().iter().any(|g| g.path == ampr_index::NAME));
     }
 
-    /// LZ4 packs go into every image: each reads back through its filesystem and then through
-    /// the packs as the game it was.
+    /// LZ4 packs go into every image, plain and inside a `.ffpfsc`: each reads back through its
+    /// filesystem (and container) and then through the packs as the game it was.
     #[test]
-    fn lz4_packs_go_into_every_image() {
+    fn lz4_packs_go_into_every_image_plain_and_compressed() {
         let root = std::env::temp_dir().join(format!("ps5upload-lz4all-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = ampr_game(&root);
         for format in [ImageFormat::Exfat, ImageFormat::Ffpkg, ImageFormat::Ffpfs] {
-            for compress in [false] {
-                let (name, _) = crate::image_build::output_names(&src, format, compress);
+            for compress in [false, true] {
+                let (name, inner) = crate::image_build::output_names(&src, format, compress);
                 let out = root.join(&name);
                 let mut tree = FolderSource::open(&src).unwrap();
                 let mut stages: Vec<String> = Vec::new();
                 let built = build_packed(
                     format,
+                    inner.as_deref(),
+                    ps5upload_fpkg::ffpfsc_block::Level::Fast,
                     &mut tree,
                     &out,
                     &packs(),

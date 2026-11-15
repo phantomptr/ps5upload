@@ -87,6 +87,8 @@ mod tests {
         let mut tree = FolderSource::open(&src).unwrap();
         build_packed(
             ImageFormat::Exfat,
+            None,
+            ps5upload_fpkg::ffpfsc_block::Level::default(),
             &mut tree,
             &out,
             &Lz4Packs {

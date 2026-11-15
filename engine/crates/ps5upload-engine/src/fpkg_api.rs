@@ -994,8 +994,8 @@ pub(crate) struct ExfatBuildReq {
     /// How hard a `.ffpfsc` is compressed: `fast`, `balanced` (the default) or `smallest`.
     #[serde(default)]
     ffpfsc_level: Option<String>,
-    /// Pack the game's files into AMPR LZ4 asset packs first, in any plain image (not with
-    /// `compress`).
+    /// Pack the game's files into AMPR LZ4 asset packs first, in any image, plain or (with
+    /// `compress`) inside a `.ffpfsc`.
     #[serde(default)]
     ampr_lz4: Option<AmprLz4Req>,
     /// How much of a file the read-back check reads per call, in KiB (1024 to 65536); 8192
@@ -1041,8 +1041,9 @@ pub(crate) struct ExfatBuildReq {
     /// Which emulator: `ampr_emu` (the default) or `ampr-emu-ng`.
     #[serde(default)]
     ampr_emu_build: Option<String>,
-    /// Pack the game's files into zstd asset packs for ampr-emu-ng, which goes in the image: a
-    /// plain image of any format, not with LZ4 packs. A game in LZ4 packs is decoded on the way.
+    /// Pack the game's files into zstd asset packs for ampr-emu-ng, which goes in the image: any
+    /// format, plain or (with `compress`) inside a `.ffpfsc`; not with LZ4 packs. A game in LZ4
+    /// packs is decoded on the way.
     #[serde(default)]
     ampr_zstd: Option<AmprZstdReq>,
     /// Where the image goes: `{"kind":"local"}` (the default: `output_dir` on this computer) or
@@ -1776,13 +1777,6 @@ pub(crate) async fn exfat_build_handler(
     );
     let packs = match &req.ampr_lz4 {
         None => None,
-        Some(_) if compress => {
-            return json_err(
-                StatusCode::BAD_REQUEST,
-                "LZ4 asset packs go into a plain image: turn off .ffpfsc compression",
-            )
-            .into_response()
-        }
         Some(r) => match r.options() {
             Ok(p) => Some(p),
             Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
@@ -1791,9 +1785,9 @@ pub(crate) async fn exfat_build_handler(
     let zstd_level =
         match &req.ampr_zstd {
             None => None,
-            Some(_) if compress || packs.is_some() || edited.is_some() => return json_err(
+            Some(_) if packs.is_some() || edited.is_some() => return json_err(
                 StatusCode::BAD_REQUEST,
-                "zstd asset packs go into a plain image, without .ffpfsc compression or LZ4 packs",
+                "zstd asset packs are one choice: not with LZ4 packs, and not for an edited copy",
             )
             .into_response(),
             Some(r) => match r.level() {
@@ -2273,6 +2267,8 @@ pub(crate) async fn exfat_build_handler(
             (source_tree, None) => Ended::Local(match (source_tree, &packs) {
                 (Err(e), _) => Err(e),
                 (Ok(tree), None) if zstd_level.is_some() => {
+                    // The .ffpfsc's own level, before the zstd level takes the name.
+                    let level_ffpfsc = level;
                     let (level, choice) = zstd_level.unwrap_or_default();
                     crate::zstd_runtime::pack_runtime(choice).and_then(|r| {
                         crate::log_at!(
@@ -2284,6 +2280,8 @@ pub(crate) async fn exfat_build_handler(
                         );
                         crate::zstd_packs::build(
                             format,
+                            inner_name.as_deref(),
+                            level_ffpfsc,
                             level,
                             zstd_rules.as_deref(),
                             runtime.insert(r),
@@ -2298,6 +2296,8 @@ pub(crate) async fn exfat_build_handler(
                 }
                 (Ok(tree), Some(packs)) => crate::image_build::build_packed(
                     format,
+                    inner_name.as_deref(),
+                    level,
                     tree,
                     &output,
                     packs,

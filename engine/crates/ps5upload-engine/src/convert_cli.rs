@@ -49,9 +49,9 @@ usage: ps5upload-engine                      run the engine (what the desktop ap
             stored (a pkg with nothing compressed) is for pkg only
   --zstd    pack the game's files into zstd asset packs at this level (1 to 22) with the
             ampr-emu-ng emulator, which is downloaded as the app downloads it; for exfat,
-            ffpkg, ffpfs and folder
+            ffpkg, ffpfs, ffpfsc and folder
   --lz4     pack the game's files into AMPR LZ4 asset packs, read by the game's own ampr_emu;
-            for exfat, ffpkg, ffpfs and folder
+            for exfat, ffpkg, ffpfs, ffpfsc and folder
   --full-verify
             read every byte of the result back. Without it the structure is checked in
             full and the data by a random sample.
