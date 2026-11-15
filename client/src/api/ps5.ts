@@ -5800,6 +5800,8 @@ export interface ImageBrowseListing {
   compressed: boolean;
   /** An edited copy can be written (every kind but a package). */
   editable: boolean;
+  /** Changes can also be applied to the image itself (uncompressed exFAT, UFS2, PFS). */
+  in_place?: boolean;
   /** The folder listed, "" at the root. */
   dir: string;
   entries: ImageBrowseEntry[];

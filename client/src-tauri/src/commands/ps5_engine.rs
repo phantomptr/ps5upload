@@ -1045,6 +1045,17 @@ pub async fn image_browse(path: String, dir: Option<String>) -> Result<JsonValue
     .await
 }
 
+/// Whether edits can go into a game image itself (in place), without writing anything.
+#[tauri::command]
+pub async fn image_edit_check(path: String, edits: Option<JsonValue>) -> Result<JsonValue, String> {
+    let base = engine::url();
+    post_json(
+        &format!("{base}/api/image/edit/check"),
+        &serde_json::json!({ "path": path, "edits": edits.unwrap_or_else(|| serde_json::json!([])) }),
+    )
+    .await
+}
+
 #[tauri::command]
 pub async fn activity_reset(addr: Option<String>) -> Result<JsonValue, String> {
     let url = addr_url("/api/ps5/activity/reset", addr.as_deref());
@@ -2499,6 +2510,8 @@ pub async fn exfat_build(
     delete_source: Option<bool>,
     // A game in asset packs is written as plain files again.
     unpack_packs: Option<bool>,
+    // With edits: change the image itself instead of writing an edited copy.
+    in_place: Option<bool>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/exfat/build");
@@ -2525,6 +2538,7 @@ pub async fn exfat_build(
             "remove_backport": remove_backport.unwrap_or(false),
             "delete_source": delete_source.unwrap_or(false),
             "unpack_packs": unpack_packs.unwrap_or(false),
+            "in_place": in_place.unwrap_or(false),
         }),
     )
     .await
