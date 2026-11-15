@@ -23,6 +23,25 @@ fn is_own_leftover(path: &std::path::Path) -> bool {
         .is_some_and(|n| n.ends_with(".partial") || n.ends_with(".lz4spool"))
 }
 
+fn is_partial(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.to_ascii_lowercase().ends_with(".partial"))
+}
+
+/// Why a build can't write its `partial`, or `None`: a folder is there that no folder build of
+/// ours left (it lacks the marker), which [`Writing::claim`] never removes. The build refuses
+/// rather than write into it or fail on it later with a bare "File exists".
+pub fn partial_in_the_way(partial: &Path) -> Option<String> {
+    (partial.is_dir() && !crate::folder_build::is_our_partial_dir(partial)).then(|| {
+        format!(
+            "{} is a folder that is not an unfinished build of PS5Upload's; it is left as it \
+             is. Move or rename it, then try again",
+            partial.display()
+        )
+    })
+}
+
 /// `path` as a leftover `claim` may look at and clear: absolute, with no `..` (or other
 /// non-normal part) after its root, and named like one of our own leftovers. `None` for
 /// anything else, which `claim` then never touches on disk.
@@ -57,7 +76,15 @@ impl Writing {
             // A leftover with a checkpoint is what the build goes on from (`image_build`).
             let checkpointed = crate::image_build::checkpoint_path(&leftover).is_file();
             if leftover.is_dir() {
-                let _ = std::fs::remove_dir_all(&leftover);
+                // A `.partial` folder only when a folder build of ours left it (it carries the
+                // marker); anything else there is someone's folder, kept, and the build refuses
+                // it ([`partial_in_the_way`]). A pack spool is always ours.
+                if !is_partial(&leftover) || crate::folder_build::is_our_partial_dir(&leftover) {
+                    let _ = std::fs::remove_dir_all(&leftover);
+                } else {
+                    // An empty one (a build that died before its marker) holds nothing to lose.
+                    let _ = std::fs::remove_dir(&leftover);
+                }
             } else if leftover.is_file() && !checkpointed {
                 let _ = std::fs::remove_file(&leftover);
             }
@@ -117,6 +144,40 @@ pub fn has_fresh_checkpoint(partial: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `.partial` folder is cleared only when it carries a folder build's marker; anyone
+    /// else's is kept and named as in the way. A pack spool is ours either way.
+    #[test]
+    fn a_partial_folder_without_our_marker_is_never_cleared() {
+        let root = std::env::temp_dir().join(format!("ps5upload-claim-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let theirs = root.join("Game.partial");
+        std::fs::create_dir_all(&theirs).unwrap();
+        std::fs::write(theirs.join("save.dat"), b"keep").unwrap();
+        let w = Writing::claim(theirs.clone()).unwrap();
+        drop(w);
+        assert_eq!(std::fs::read(theirs.join("save.dat")).unwrap(), b"keep");
+        assert!(partial_in_the_way(&theirs).is_some());
+
+        let ours = root.join("Ours.partial");
+        std::fs::create_dir_all(&ours).unwrap();
+        std::fs::write(ours.join(crate::folder_build::MARKER), b"").unwrap();
+        assert!(partial_in_the_way(&ours).is_none());
+        drop(Writing::claim(ours.clone()).unwrap());
+        assert!(!ours.exists());
+
+        let empty = root.join("Empty.partial");
+        std::fs::create_dir_all(&empty).unwrap();
+        drop(Writing::claim(empty.clone()).unwrap());
+        assert!(!empty.exists());
+
+        let spool = root.join("Game.exfat.lz4spool");
+        std::fs::create_dir_all(&spool).unwrap();
+        drop(Writing::claim(spool.clone()).unwrap());
+        assert!(!spool.exists());
+        assert!(partial_in_the_way(&root.join("missing.partial")).is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn only_our_own_leftovers_at_a_plain_absolute_path_are_cleared() {

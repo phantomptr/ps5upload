@@ -636,6 +636,10 @@ fn write_checked_here(
     // Checked before the partial folder exists; the case check needs the drive, below.
     check_paths(tree, false)?;
     let partial = partial_of(target);
+    // A folder there that no build of ours left is someone's: refused, never written into.
+    if let Some(why) = crate::writing::partial_in_the_way(&partial) {
+        return Err(why);
+    }
     // Not `create_dir_all`: a folder here now is another build's, never written into.
     std::fs::create_dir(&partial).map_err(|e| format!("{}: {e}", partial.display()))?;
     let result = (|| -> Result<FolderBuilt, String> {
@@ -672,14 +676,7 @@ fn write_checked_here(
         }
 
         let checked = check(Written::Dir(&partial), &listed, &empty_dirs, stage)?;
-        std::fs::remove_file(partial.join(MARKER)).map_err(|e| e.to_string())?;
-        if target.exists() {
-            return Err(format!(
-                "{} appeared while it was written",
-                target.display()
-            ));
-        }
-        crate::safe_write::rename(&partial, target).map_err(|e| e.to_string())?;
+        name_folder(&partial, target)?;
         Ok(FolderBuilt {
             files: listed.len() as u64,
             bytes: total,
@@ -697,6 +694,34 @@ fn write_checked_here(
         Err(_) if cancel.load(Ordering::Relaxed) => Err("cancelled".into()),
         r => r,
     }
+}
+
+/// Gives a written and checked `.partial` folder its name, then takes [`MARKER`] out of it.
+/// The marker stays until the folder has its name: a crash before that leaves a `.partial` the
+/// sweep knows as ours (an unmarked one it never removes). A finished folder never keeps it: if
+/// it can't be removed, the folder goes back to its `.partial` name (which the caller removes)
+/// and this fails.
+fn name_folder(partial: &Path, target: &Path) -> Result<(), String> {
+    if target.exists() {
+        return Err(format!(
+            "{} appeared while it was written",
+            target.display()
+        ));
+    }
+    crate::safe_write::rename_new(partial, target).map_err(|e| e.to_string())?;
+    if let Err(e) = std::fs::remove_file(target.join(MARKER)) {
+        let back = crate::safe_write::rename_new(target, partial);
+        return Err(format!(
+            "{}: the build's marker could not be removed ({e}){}",
+            target.display(),
+            match back {
+                Ok(()) => String::new(),
+                Err(b) => format!(", nor the folder renamed back ({b})"),
+            }
+        ));
+    }
+    crate::safe_write::sync_dir(target);
+    Ok(())
 }
 
 /// Compares two trees: `got` must hold exactly `want`'s files at their sizes (a file named
@@ -841,7 +866,7 @@ pub fn extract_file(
                 target.display()
             ));
         }
-        crate::safe_write::rename(&partial, target).map_err(|e| e.to_string())?;
+        crate::safe_write::rename_new(&partial, target).map_err(|e| e.to_string())?;
         Ok(FolderBuilt {
             files: 1,
             bytes: size,
@@ -1233,6 +1258,26 @@ mod tests {
                 assert!(!target.join(MARKER).exists());
             }
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The marker comes out only once the folder has its name: a name that is taken leaves the
+    /// `.partial` marked (the sweep's sign it is ours), a free one leaves no marker behind.
+    #[test]
+    fn the_marker_stays_until_the_folder_has_its_name() {
+        let root = scratch("namefolder");
+        let (target, partial) = (root.join("g"), partial_of(&root.join("g")));
+        std::fs::create_dir_all(&partial).unwrap();
+        std::fs::write(partial.join(MARKER), b"").unwrap();
+        std::fs::write(partial.join("a.bin"), b"a").unwrap();
+        std::fs::create_dir(&target).unwrap();
+        assert!(name_folder(&partial, &target).is_err());
+        assert!(is_our_partial_dir(&partial));
+        std::fs::remove_dir(&target).unwrap();
+        name_folder(&partial, &target).unwrap();
+        assert!(!partial.exists());
+        assert!(!target.join(MARKER).exists());
+        assert_eq!(std::fs::read(target.join("a.bin")).unwrap(), b"a");
         let _ = std::fs::remove_dir_all(&root);
     }
 

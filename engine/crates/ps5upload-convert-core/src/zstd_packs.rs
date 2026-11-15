@@ -304,6 +304,12 @@ pub fn measure(
         index.volume_sizes.len(),
         to.display()
     );
+    // Only now is what the packs come to known: a volume the drive can't hold as one file
+    // (FAT32 on the console) is refused before anything is written.
+    let largest = index.volume_sizes.iter().copied().max().unwrap_or(0);
+    if let Some(why) = crate::safe_write::too_big_for(to, largest, "pack volume") {
+        return Err(why);
+    }
     Ok(index)
 }
 
@@ -374,10 +380,10 @@ pub fn build_at(
         stage,
         threads,
     )?;
-    let mut built = {
+    let (mut built, unnamed) = {
         let mut tree =
             PackedTree::new(&mut prepared, &index, threads, cancel).map_err(|e| e.to_string())?;
-        crate::image_build::build_at(
+        crate::image_build::build_unnamed(
             format,
             inner_name,
             compression,
@@ -391,9 +397,11 @@ pub fn build_at(
     };
     drop(prepared);
     // What the emulator will check: the index and every volume's header, as the image holds
-    // them; then the game read through them.
+    // them; then the game read through them. Still at its `.partial`: an image that fails this
+    // (or a crash during it) never looks like a good one under its name.
     let checked = (|| {
-        let image = crate::image_build::open_image(output, format, inner_name.is_some())?;
+        let image =
+            crate::image_build::open_image(unnamed.partial(), format, inner_name.is_some())?;
         let mut game = ps5_dump_forge_zstd::reader::unpack(image)
             .map_err(|e| format!("reading the zstd packs back from the image: {e}"))?;
         let (packs, volumes) = (game.index().files.len(), game.index().volume_sizes.len());
@@ -407,14 +415,9 @@ pub fn build_at(
             ", {packs} files in {volumes} zstd volumes read back through the packs, {checked}"
         ))
     })();
-    match checked {
-        Ok(line) => built.detail.push_str(&line),
-        Err(e) => {
-            // Finished and named by now, and no use: it doesn't stay looking like a good image.
-            let _ = crate::safe_write::discard(output);
-            return Err(e);
-        }
-    }
+    // Dropped unnamed on a failure: its partial file is removed.
+    built.detail.push_str(&checked?);
+    unnamed.name()?;
     Ok(built)
 }
 
@@ -679,6 +682,8 @@ mod tests {
                 let out = root.join(&name);
                 let mut tree = FolderSource::open(&src).unwrap();
                 let mut stages: Vec<String> = Vec::new();
+                // The image gets its name only after the packs read back: never during a check.
+                let mut named_early = false;
                 let built = build_at(
                     format,
                     inner.as_deref(),
@@ -692,6 +697,7 @@ mod tests {
                     crate::image_build::DEFAULT_VERIFY_CHUNK,
                     &AtomicBool::new(false),
                     &mut |s, _, _| {
+                        named_early |= s == "verify" && out.exists();
                         if stages.last().map(String::as_str) != Some(s) {
                             stages.push(s.to_string());
                         }
@@ -701,6 +707,8 @@ mod tests {
                 .unwrap_or_else(|e| panic!("{format:?} compress={compress}: {e}"));
                 let write = if compress { "compress" } else { "write" };
                 assert_eq!(stages, ["pack", "plan", write, "verify"], "{format:?}");
+                assert!(!named_early, "{format:?} compress={compress}");
+                assert!(!root.join(format!("{name}.partial")).exists());
                 assert!(
                     built.detail.contains("read back through the packs"),
                     "{}",

@@ -85,10 +85,14 @@ pub(crate) fn stream_lz4<T>(
                 streamed,
                 format!(", {line}{}", crate::lz4_packs::detail(&report)),
             )),
-            Err(e) if cancel.load(Ordering::Relaxed) => anyhow::bail!(
-                "cancelled while reading the LZ4 packs back on {place} ({e}); the image is there \
-                 but was not checked through its packs"
-            ),
+            // A Stop leaves nothing: an image not checked through its packs doesn't stay there
+            // looking like a good one.
+            Err(e) if cancel.load(Ordering::Relaxed) => {
+                let removed = remove();
+                anyhow::bail!(
+                    "cancelled while reading the LZ4 packs back on {place} ({e}); {removed}"
+                )
+            }
             Err(e) => {
                 let removed = remove();
                 anyhow::bail!("{e}, on {place}; {removed}")
@@ -324,6 +328,50 @@ mod tests {
         );
         assert!(mem.bytes("/games/ps5/G.exfat.partial").is_none());
         assert!(!spool.exists());
+    }
+
+    /// A Stop while the image there is read back through its packs removes it, as a failed
+    /// read-back does: a cancel leaves nothing that looks like a good image.
+    #[test]
+    fn a_cancel_during_the_pack_read_back_removes_the_image() {
+        let root = std::env::temp_dir().join(format!("ps5upload-lz4cancel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let src = ampr_game(&root);
+        let packs = Lz4Packs {
+            profile: Some(ps5upload_fpkg::ampr_pack::default_profile(9, 16)),
+            level: 9,
+            block_shift: 16,
+        };
+        let cancel = AtomicBool::new(false);
+        let removed = AtomicBool::new(false);
+        let spool = root.join("c.lz4spool");
+        let mut tree = FolderSource::open(&src).unwrap();
+        let e = stream_lz4(
+            &packs,
+            &mut tree,
+            7,
+            &spool,
+            "dst/G.exfat",
+            VerifyMode::Full,
+            &cancel,
+            &mut |_, _, _| {},
+            &mut |_, _, _| Ok(()),
+            // The Stop comes as the image is opened for the read-back.
+            &|| {
+                cancel.store(true, Ordering::Relaxed);
+                Err("cancelled".into())
+            },
+            &|| {
+                removed.store(true, Ordering::Relaxed);
+                "the image there is removed".into()
+            },
+            "the PS5",
+        )
+        .unwrap_err();
+        assert!(removed.load(Ordering::Relaxed), "{e:#}");
+        assert!(e.to_string().contains("removed"), "{e:#}");
+        assert!(!spool.exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// "Unpack the asset packs" on an LZ4-packed image: the plain game again, the packs and

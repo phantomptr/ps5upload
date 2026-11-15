@@ -77,10 +77,21 @@ struct Request {
 }
 
 /// Writes `status` as `dir/status.json`. The temporary file is in `dir` too: a rename never
-/// leaves the folder (a rename across filesystems panics the PS5's kernel).
-fn write_status(dir: &Path, status: &serde_json::Value) -> std::io::Result<()> {
+/// leaves the folder (a rename across filesystems panics the PS5's kernel). `durable`: the
+/// file's bytes are synced before the rename, so a crash after it never leaves an empty or
+/// half-written status under the real name. Asked for the first and final statuses and each
+/// new stage; the progress rewrites in between (every [`STATUS_EVERY`], from the build's own
+/// thread) skip it, since a sync can take seconds on a drive busy with the build's writes.
+fn write_status(dir: &Path, status: &serde_json::Value, durable: bool) -> std::io::Result<()> {
+    use std::io::Write;
     let tmp = dir.join(format!("status.json.{}.tmp", std::process::id()));
-    std::fs::write(&tmp, format!("{status}\n"))?;
+    let mut f = std::fs::File::create(&tmp)?;
+    f.write_all(format!("{status}\n").as_bytes())?;
+    if durable {
+        // Best effort: a drive without fsync still gets the status.
+        let _ = f.sync_all();
+    }
+    drop(f);
     safe_write::rename(&tmp, &dir.join("status.json"))
 }
 
@@ -132,7 +143,7 @@ impl Running<'_> {
         s["stage"] = json!(stage);
         s["bytes_done"] = json!(done);
         s["bytes_total"] = json!(total);
-        let _ = write_status(self.dir, &s);
+        let _ = write_status(self.dir, &s, new_stage);
     }
 }
 
@@ -340,6 +351,10 @@ fn failure(detail: String, cancelled: bool, plan: &Plan) -> Refusal {
     } else if !plan.source.exists() || plan.dest.parent().is_some_and(|d| !d.is_dir()) {
         // U7: a pulled drive is named before the raw error.
         "convert_drive_gone"
+    } else if lower.contains("holds files of at most") {
+        // The build's own check once the image or pack volume sizes are known
+        // (`safe_write::too_big_for`): with zstd packs the size isn't known before.
+        "convert_too_big_for_drive"
     } else if lower.contains("no space")
         || lower.contains("storage full")
         || lower.contains("disk full")
@@ -383,7 +398,7 @@ fn build(
     if tree.files().is_empty() {
         return Err(unreadable("no files in it".into()));
     }
-    let data: u64 = tree.files().iter().map(|f| f.size).sum();
+    let data = crate::data_bytes(tree.files()).map_err(unreadable)?;
     // U1: the destination measured once, before the first byte.
     let dir = plan.dest.parent().unwrap_or(Path::new("/"));
     let probe = safe_write::probe(dir).map_err(|e| Refusal {
@@ -398,7 +413,9 @@ fn build(
         probe.read_only
     ));
     // An image is at least as large as the game in it; packs may well be smaller, so only the
-    // drive's own limits are checked for them.
+    // drive's own limits are checked for them here. Their size is known once they are measured:
+    // the build checks the image and each pack volume against the drive's file size limit then,
+    // before writing (`safe_write::too_big_for`, `convert_too_big_for_drive` in `failure`).
     let need = if plan.zstd.is_some() { 0 } else { data };
     if let Some(why) = probe.refusal(need, plan.image.is_some(), folder_build::SPARE) {
         let cause = if probe.read_only {
@@ -420,9 +437,16 @@ fn build(
     }
     // Ours alone from here: a leftover of an earlier run under this name is cleared.
     let partial = folder_build::partial_of(&plan.dest);
-    let Some(_writing) = ps5upload_convert_core::writing::Writing::claim(partial) else {
+    let Some(_writing) = ps5upload_convert_core::writing::Writing::claim(partial.clone()) else {
         return Err(bad("this output is already being built".into()));
     };
+    // A folder under that name that no build of ours left is someone's: kept, and refused.
+    if let Some(detail) = ps5upload_convert_core::writing::partial_in_the_way(&partial) {
+        return Err(Refusal {
+            cause: "convert_partial_in_the_way",
+            detail,
+        });
+    }
     remove_leftovers(&plan.dest);
     crate::log(format_args!(
         "building {} files, {data} bytes -> {} ({:?}, zstd {:?})",
@@ -555,7 +579,7 @@ fn run_with(dir: &Path, hook: &mut dyn FnMut(&str)) -> std::io::Result<i32> {
             crate::log(format_args!("bad request: {detail}"));
             let status = json!({"id": "", "pid": pid, "op": "", "state": "failed",
                 "cause": "convert_bad_request", "detail": short(&detail)});
-            write_status(dir, &status)?;
+            write_status(dir, &status, true)?;
             return Ok(1);
         }
     };
@@ -570,15 +594,15 @@ fn run_with(dir: &Path, hook: &mut dyn FnMut(&str)) -> std::io::Result<i32> {
         let mut s = status("failed");
         s["cause"] = json!(refusal.cause);
         s["detail"] = json!(short(&refusal.detail));
-        write_status(dir, &s).map(|()| 1)
+        write_status(dir, &s, true).map(|()| 1)
     };
     let done = |result: serde_json::Value| {
         let mut s = status("done");
         s["result"] = result;
-        write_status(dir, &s).map(|()| 0)
+        write_status(dir, &s, true).map(|()| 0)
     };
     // The helper waits for the first status to know the program started and learn its pid.
-    write_status(dir, &status("running"))?;
+    write_status(dir, &status("running"), true)?;
     match request.op.as_str() {
         "inspect" => {
             crate::log(format_args!("inspect {}", request.path));
@@ -716,6 +740,18 @@ mod tests {
             "convert_destination_exists"
         );
         assert_eq!(std::fs::read(tmp.0.join("taken.exfat")).unwrap(), b"mine");
+        // A folder named like the output's `.partial` that no build of ours left: kept, refused.
+        for (dest, format) in [("kept", "folder"), ("kept.exfat", "exfat")] {
+            let theirs = tmp.0.join(format!("{dest}.partial"));
+            std::fs::create_dir_all(&theirs).unwrap();
+            std::fs::write(theirs.join("save.dat"), b"keep").unwrap();
+            assert_eq!(
+                build(json!({"dest": tmp.0.join(dest), "format": format})),
+                "convert_partial_in_the_way"
+            );
+            assert_eq!(std::fs::read(theirs.join("save.dat")).unwrap(), b"keep");
+            assert!(!tmp.0.join(dest).exists());
+        }
         // zstd packs without ampr-emu-ng on the console: refused, nothing downloaded.
         assert_eq!(build(json!({"zstd": true})), "convert_no_zstd_runtime");
         assert_eq!(
@@ -920,6 +956,33 @@ mod tests {
         assert!(stages.is_empty(), "{stages:?}");
         assert!(!dest.exists());
         assert_eq!(std::fs::read(&leftover).unwrap(), b"an earlier run's");
+    }
+
+    /// The build's own file size check (made once zstd packs are measured) has its cause.
+    #[test]
+    fn a_file_too_big_for_the_drive_has_its_cause() {
+        let plan = Plan {
+            source: std::env::temp_dir(),
+            dest: std::env::temp_dir().join("g.exfat"),
+            image: Some(ImageFormat::Exfat),
+            mode: VerifyMode::Full,
+            zstd: None,
+        };
+        let fat = safe_write::Probe {
+            fs_type: "msdosfs".into(),
+            free: None,
+            read_only: false,
+            max_file: Some((4u64 << 30) - 1),
+        };
+        let why = fat.file_refusal(5 << 30, "pack volume").unwrap();
+        assert_eq!(
+            failure(why, false, &plan).cause,
+            "convert_too_big_for_drive"
+        );
+        assert_eq!(
+            failure("short read".into(), false, &plan).cause,
+            "convert_build_failed"
+        );
     }
 
     #[test]

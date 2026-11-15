@@ -232,17 +232,19 @@ pub fn sync_dir(dir: &Path) {
 
 /// Why `from` must not be renamed into the folder `to_dir`, or `Ok`: on another filesystem a
 /// rename is a copy the kernel makes (or, on the PS5, a kernel panic). The device numbers are
-/// compared; off Unix there is nothing to compare and the rename itself refuses.
+/// compared; off Unix there is nothing to compare and the rename itself refuses. `from` is
+/// what is renamed (a link itself, if it is one); `to_dir` is followed, since the new name lands
+/// where a linked folder points.
 pub fn same_device(from: &Path, to_dir: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let dev = |p: &Path| {
-            std::fs::symlink_metadata(p)
-                .map(|m| m.dev())
+        let dev = |m: std::io::Result<std::fs::Metadata>, p: &Path| {
+            m.map(|m| m.dev())
                 .map_err(|e| format!("{}: {e}", p.display()))
         };
-        let (a, b) = (dev(from)?, dev(to_dir)?);
+        let a = dev(std::fs::symlink_metadata(from), from)?;
+        let b = dev(std::fs::metadata(to_dir), to_dir)?;
         if a != b {
             return Err(format!(
                 "{} and {} are on different drives: nothing is renamed across drives",
@@ -268,6 +270,83 @@ pub fn rename(from: &Path, to: &Path) -> io::Result<()> {
     std::fs::rename(from, to)
 }
 
+/// [`rename`] that never replaces what is at `to`: a finished output only ever gets a free
+/// name. Where the system has a rename that refuses an existing target (Linux `renameat2` with
+/// `RENAME_NOREPLACE`, macOS `renamex_np` with `RENAME_EXCL`) it is used; elsewhere (FreeBSD and
+/// the PS5, Windows, a filesystem that has no such rename) `to` is checked just before a plain
+/// rename, which leaves the moment between the two for something to appear there. A taken name
+/// is `AlreadyExists`. Never across drives: on the console [`same_device`] says yes first, and a
+/// computer's rename refuses another filesystem itself.
+pub fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
+    if ON_CONSOLE {
+        let dir = match to.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p,
+            _ => Path::new("."),
+        };
+        same_device(from, dir).map_err(io::Error::other)?;
+    }
+    match rename_excl(from, to) {
+        Some(r) => r,
+        None => {
+            if to.symlink_metadata().is_ok() {
+                return Err(taken(to));
+            }
+            std::fs::rename(from, to)
+        }
+    }
+}
+
+fn taken(to: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!("{} appeared while it was written", to.display()),
+    )
+}
+
+/// The system's own no-replace rename, or `None` where there is none (or the filesystem
+/// doesn't take it) and the caller checks and renames.
+#[cfg(any(
+    all(target_os = "linux", any(target_env = "gnu", target_env = "musl")),
+    target_os = "macos"
+))]
+fn rename_excl(from: &Path, to: &Path) -> Option<io::Result<()>> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = |p: &Path| std::ffi::CString::new(p.as_os_str().as_bytes()).ok();
+    let (a, b) = (c(from)?, c(to)?);
+    // SAFETY: two NUL-terminated paths that outlive the call.
+    #[cfg(target_os = "linux")]
+    let rc = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            a.as_ptr(),
+            libc::AT_FDCWD,
+            b.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    // SAFETY: as above.
+    #[cfg(target_os = "macos")]
+    let rc = unsafe { libc::renamex_np(a.as_ptr(), b.as_ptr(), libc::RENAME_EXCL) };
+    if rc == 0 {
+        return Some(Ok(()));
+    }
+    let e = io::Error::last_os_error();
+    match e.raw_os_error() {
+        Some(libc::EEXIST) => Some(Err(taken(to))),
+        // No such rename here, or this filesystem doesn't take it: check and rename.
+        Some(libc::EINVAL) | Some(libc::ENOSYS) | Some(libc::ENOTSUP) => None,
+        _ => Some(Err(e)),
+    }
+}
+
+#[cfg(not(any(
+    all(target_os = "linux", any(target_env = "gnu", target_env = "musl")),
+    target_os = "macos"
+)))]
+fn rename_excl(_from: &Path, _to: &Path) -> Option<io::Result<()>> {
+    None
+}
+
 /// What a destination folder is, measured once before a job writes there.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Probe {
@@ -289,14 +368,8 @@ impl Probe {
             return Some("the drive is read-only".into());
         }
         if one_file {
-            if let Some(max) = self.max_file.filter(|m| bytes > *m) {
-                return Some(format!(
-                    "the drive ({}) holds files of at most {:.1} GiB, and this image is at \
-                     least {:.1} GiB",
-                    self.fs_type,
-                    max as f64 / (1u64 << 30) as f64,
-                    bytes as f64 / (1u64 << 30) as f64
-                ));
+            if let Some(why) = self.file_refusal(bytes, "image") {
+                return Some(why);
             }
         }
         match self.free {
@@ -308,6 +381,30 @@ impl Probe {
             _ => None,
         }
     }
+
+    /// Why one file of `bytes` (a `what`: an image, a pack volume) can't go here, for a drive
+    /// with a file size limit (FAT32: 4 GiB), or `None`.
+    pub fn file_refusal(&self, bytes: u64, what: &str) -> Option<String> {
+        let max = self.max_file.filter(|m| bytes > *m)?;
+        Some(format!(
+            "the drive ({}) holds files of at most {:.1} GiB, and this {what} is at least {:.1} GiB",
+            self.fs_type,
+            max as f64 / (1u64 << 30) as f64,
+            bytes as f64 / (1u64 << 30) as f64
+        ))
+    }
+}
+
+/// On the console, why one file of `bytes` (a `what`) can't be written at `output` (its folder
+/// is measured: FAT32 holds 4 GiB at most), or `None`: for a size known only once a build has
+/// planned or packed, checked before the first byte is written. A computer finds out as it
+/// writes, as it always has.
+pub fn too_big_for(output: &Path, bytes: u64, what: &str) -> Option<String> {
+    if !ON_CONSOLE {
+        return None;
+    }
+    let dir = output.parent().filter(|p| !p.as_os_str().is_empty())?;
+    probe(dir).ok()?.file_refusal(bytes, what)
 }
 
 /// The largest file a filesystem of this name holds, where that is less than a game.
@@ -338,6 +435,13 @@ pub fn probe(dir: &Path) -> io::Result<Probe> {
     Ok(p)
 }
 
+/// A statfs count as bytes or blocks: a negative one (FreeBSD's signed `f_bavail` inside the
+/// root reserve) is none, never a huge number.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn unsigned<T: TryInto<u64>>(n: T) -> u64 {
+    n.try_into().unwrap_or(0)
+}
+
 #[cfg(any(target_os = "freebsd", target_os = "macos"))]
 fn statfs_into(dir: &Path, p: &mut Probe) -> io::Result<()> {
     use std::os::unix::ffi::OsStrExt;
@@ -355,7 +459,8 @@ fn statfs_into(dir: &Path, p: &mut Probe) -> io::Result<()> {
         .map(|&b| b as u8)
         .collect();
     p.fs_type = String::from_utf8_lossy(&name).into_owned();
-    p.free = Some((st.f_bavail as u64).saturating_mul(st.f_bsize as u64));
+    // `f_bavail` is signed on FreeBSD (the PS5): negative inside the root reserve, not huge.
+    p.free = Some(unsigned(st.f_bavail).saturating_mul(unsigned(st.f_bsize)));
     p.read_only |= (st.f_flags as u64) & (libc::MNT_RDONLY as u64) != 0;
     Ok(())
 }
@@ -370,7 +475,7 @@ fn statfs_into(dir: &Path, p: &mut Probe) -> io::Result<()> {
     if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
         return Err(io::Error::last_os_error());
     }
-    p.free = Some((st.f_bavail as u64).saturating_mul(st.f_frsize as u64));
+    p.free = Some(unsigned(st.f_bavail).saturating_mul(unsigned(st.f_frsize)));
     p.read_only |= (st.f_flag as u64) & (libc::ST_RDONLY as u64) != 0;
     Ok(())
 }
@@ -513,6 +618,22 @@ mod tests {
             .contains("at most 4.0 GiB"));
         // A folder of 5 GiB is many files, each under the limit.
         assert_eq!(fat.refusal(5 << 30, false, 0), None);
+        // One file checked on its own (a pack volume, an image's planned size).
+        assert!(fat
+            .file_refusal(5 << 30, "pack volume")
+            .unwrap()
+            .contains("at most 4.0 GiB, and this pack volume"));
+        assert_eq!(fat.file_refusal((4 << 30) - 1, "image"), None);
+        assert_eq!(
+            Probe {
+                max_file: None,
+                ..fat.clone()
+            }
+            .file_refusal(u64::MAX, "image"),
+            None
+        );
+        // Off the console nothing is measured for it.
+        assert_eq!(too_big_for(&dir.join("x.exfat"), u64::MAX, "image"), None);
         let full = Probe {
             free: Some(1 << 30),
             ..fat.clone()
@@ -526,6 +647,15 @@ mod tests {
             ro.refusal(1, false, 0).as_deref(),
             Some("the drive is read-only")
         );
+    }
+
+    #[test]
+    fn a_negative_free_count_is_none_not_huge() {
+        assert_eq!(unsigned(-3i64), 0);
+        assert_eq!(unsigned(i64::MIN), 0);
+        assert_eq!(unsigned(7i64), 7);
+        assert_eq!(unsigned(u64::MAX), u64::MAX);
+        assert_eq!(unsigned(4096u32), 4096);
     }
 
     #[cfg(unix)]
@@ -543,6 +673,52 @@ mod tests {
             }
         }
         assert!(same_device(&tmp.join("missing-file"), &tmp).is_err());
+    }
+
+    /// A destination folder that is a link to another drive is that drive, not the link's.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_destination_folder_is_where_it_points() {
+        use std::os::unix::fs::MetadataExt;
+        let dev = Path::new("/dev");
+        let tmp = std::env::temp_dir();
+        let Ok(d) = std::fs::metadata(dev) else {
+            return;
+        };
+        if d.dev() == std::fs::metadata(&tmp).unwrap().dev() {
+            return;
+        }
+        let link = tmp.join(format!("ps5upload-safe-link-{}", std::process::id()));
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(dev, &link).unwrap();
+        let e = same_device(&tmp, &link);
+        let _ = std::fs::remove_file(&link);
+        assert!(e.unwrap_err().contains("different drives"));
+    }
+
+    #[test]
+    fn a_new_name_never_replaces_what_is_there() {
+        let dir = std::env::temp_dir().join(format!("ps5upload-safe-new-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (from, to) = (dir.join("a.partial"), dir.join("a"));
+        std::fs::write(&from, b"new").unwrap();
+        std::fs::write(&to, b"theirs").unwrap();
+        let e = rename_new(&from, &to).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::AlreadyExists, "{e}");
+        assert_eq!(std::fs::read(&to).unwrap(), b"theirs");
+        assert!(from.is_file());
+        // An empty folder there is not replaced either (a plain rename would, on Unix).
+        std::fs::remove_file(&to).unwrap();
+        std::fs::create_dir(dir.join("d")).unwrap();
+        std::fs::create_dir(dir.join("d.partial")).unwrap();
+        assert!(rename_new(&dir.join("d.partial"), &dir.join("d")).is_err());
+        assert!(dir.join("d.partial").is_dir());
+        // A free name: renamed.
+        rename_new(&from, &to).unwrap();
+        assert_eq!(std::fs::read(&to).unwrap(), b"new");
+        assert!(!from.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

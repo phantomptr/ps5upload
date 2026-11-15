@@ -23,7 +23,14 @@ pub fn ps4_refusal(
                 .iter()
                 .find(|f| f.path.eq_ignore_ascii_case("sce_sys/param.sfo"))
                 .map(|f| f.path.clone())?;
-            let params = ps5upload_pkg::sfo_params(&tree.read(&path).ok()?).ok()?;
+            // Capped as every param file is: a tree that claims a huge one is not read whole.
+            let bytes = ps5upload_fpkg::source::read_small(
+                tree,
+                &path,
+                ps5upload_fpkg::source::MAX_PARAM_BYTES,
+            )
+            .ok()?;
+            let params = ps5upload_pkg::sfo_params(&bytes).ok()?;
             let text = |k: &str| ps4_pkg::sfo_text(&params, k).unwrap_or_default();
             (
                 Ps4Kind::of_category(&text("CATEGORY")),
@@ -62,4 +69,38 @@ pub fn patch_refusal(source: &Path) -> Option<String> {
             source.display()
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ps5upload_fpkg::source::{SourceFile, SourceTree};
+
+    /// A tree that lists a param.sfo far larger than any real one and fails the test if it is
+    /// read whole.
+    struct HugeSfo(Vec<SourceFile>);
+
+    impl SourceTree for HugeSfo {
+        fn files(&self) -> &[SourceFile] {
+            &self.0
+        }
+        fn read(&mut self, path: &str) -> ps5upload_fpkg::Result<Vec<u8>> {
+            panic!("{path} was read whole")
+        }
+        fn describe(&self) -> String {
+            "huge".into()
+        }
+    }
+
+    #[test]
+    fn a_huge_param_sfo_is_not_read_whole() {
+        let mut tree = HugeSfo(vec![SourceFile {
+            path: "sce_sys/param.sfo".into(),
+            size: 1 << 40,
+        }]);
+        assert_eq!(
+            ps4_refusal(Path::new("/no/such/game"), &mut tree, true),
+            None
+        );
+    }
 }
