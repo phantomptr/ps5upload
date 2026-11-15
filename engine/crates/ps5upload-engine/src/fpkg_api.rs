@@ -2812,7 +2812,8 @@ fn lz4_ready(
 /// (#469). Runs as a job like an image build: stages `write` and `verify`, the folder written
 /// as `<name>.partial/` and renamed only once it reads back. Done's `dest` is the folder. With
 /// `ampr_zstd` the game's files go into zstd packs (stage `pack` first), from an image,
-/// package or game folder; `commit_ack.ampr_runtime` names the emulator that went in.
+/// package or game folder; `commit_ack.ampr_runtime` names the emulator that went in. With
+/// `ampr_lz4` they go into LZ4 packs the same way, read by the game's own ampr_emu.
 pub(crate) async fn folder_build_handler(
     State(state): State<AppState>,
     Json(mut req): Json<FolderBuildReq>,
