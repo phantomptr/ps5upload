@@ -1272,7 +1272,7 @@ test-payload: payload
 		$(PAYLOAD_DIR)/src/console_convert_wire.c $(PAYLOAD_DIR)/src/webui_codec.c \
 		$(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-console-convert-selftest
-	@echo "✓ the converter's request, status (also cut short or garbage), Stop, kill and leftover sweep"
+	@echo "✓ the converter's request, status (also cut short or garbage), Stop, kill, leftover sweep and zstd runtime"
 	@echo "Running AVA1 in-flight RPC gate self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -pthread -I$(AVA1_C) \
 		-o $(SELFTEST_DIR)/ps5upload-ava1-rpc-gate-selftest \

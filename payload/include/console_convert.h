@@ -16,10 +16,14 @@
  *   [,"action":"inspect"|"build"][,"dest":"<output>"][,"format":"exfat"|"ffpkg"|"ffpfs"|"folder"]
  *   [,"zstd":true[,"zstd_level":1..22]][,"verify":"fast"|"full"]}
  * "inspect" (the default) reads what the source is; the job's result is the converter's answer
- * ({"path","format","size","files","title_id","title",...}). "build" writes `dest` in `format`
+ * ({"path","format","size","files","title_id","title",...}) and "zstd_runtime": the version of the
+ * newest zstd runtime on the console (CONVERT_RUNTIME_DIR), or null when there is none, so the page
+ * can say a zstd build needs it. "build" writes `dest` in `format`
  * (through `<dest>.partial` beside it, renamed in place at the end). A `dest` that exists is
  * refused. Stop asks the converter to stop and, if it has not within CONVERT_KILL_AFTER_MS, kills
  * it; a failed or stopped build's `.partial` is removed. Result of a build: {"path":"<dest>"}.
+ * A zstd build is handed the newest runtime's file ("zstd_runtime" in request.json), and refused
+ * with convert_no_zstd_runtime, before the converter is started, when there is none.
  * One job at a time (convert_busy); a build is also refused while a package install or an
  * archive extraction runs (the three would share the drive and the console's memory). */
 #ifndef PS5UPLOAD_CONSOLE_CONVERT_H
@@ -75,10 +79,11 @@ typedef struct {
     int zstd;
     int full_verify;
     int zstd_level; /* 1..22 with zstd; 0: the converter's default */
+    const char *zstd_runtime; /* with zstd: the runtime's libSceAmpr.sprx on the console */
 } cc_build_t;
 
 /* request.json for job `id`: {"id","op","path"} and, with `b`, {"dest","format","zstd","verify"}
- * (and "zstd_level" when zstd is on and a level was chosen).
+ * (and, with zstd on, "zstd_level" when a level was chosen and "zstd_runtime" when one is set).
  * Returns the length, or -1 when it does not fit `cap`. */
 int cc_request_json(char *out, size_t cap, const char *id, const char *op, const char *path, const cc_build_t *b);
 
@@ -112,10 +117,36 @@ int cc_format_ok(const char *format);
 /* 1 when `inner` is `outer` itself or below it (both normalised). */
 int cc_path_within(const char *outer, const char *inner);
 
+/* ---- the zstd runtime (CONVERT_RUNTIME_DIR/ampr-emu-ng-<version>/libSceAmpr.sprx) ---- */
+
+#define CC_RUNTIME_PREFIX "ampr-emu-ng-"
+#define CC_RUNTIME_FILE "libSceAmpr.sprx"
+#define CC_RUNTIME_VERSION_MAX 64
+#define CC_RUNTIME_PATH_MAX 192
+
+typedef struct {
+    char version[CC_RUNTIME_VERSION_MAX];
+    char path[CC_RUNTIME_PATH_MAX]; /* its libSceAmpr.sprx */
+} cc_runtime_t;
+
+/* 1 when folder `name` is a runtime's (CC_RUNTIME_PREFIX and a version of letters, digits, '.',
+ * '-', '_'), its version in `out`; 0 otherwise (or when it does not fit `cap`). */
+int cc_runtime_folder_version(const char *name, char *out, size_t cap);
+/* 1 when version `a` is older than `b`, compared as dotted numbers (a part that is not a number
+ * counts as 0; "0.4" is older than "0.4.0"): the engine's rule (ampr_pack/ng.rs `older`). */
+int cc_version_older(const char *a, const char *b);
+/* The converter's inspection `result` (a JSON object of `len` bytes) with "zstd_runtime" added:
+ * `"<version>"`, or null when `version` is NULL. The length, or -1 when it does not fit `cap` or
+ * `result` is not an object. */
+int cc_result_with_runtime(char *out, size_t cap, const char *result, size_t len, const char *version);
+/* The newest runtime on the console whose file is there: 1 and `rt` filled, or 0. */
+int console_convert_find_runtime(cc_runtime_t *rt);
+
 #ifdef CONSOLE_CONVERT_SELFTEST
 /* The host test runs the op against a folder of its own and a stand-in for the loader. */
 extern const char *console_convert_test_dir;
 extern int (*console_convert_test_launch)(void);
+extern const char *console_convert_test_runtime_dir;
 #endif
 
 #endif

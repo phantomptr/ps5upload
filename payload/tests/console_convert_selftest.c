@@ -146,6 +146,19 @@ static int exists(const char *path) {
     return lstat(path, &st) == 0;
 }
 
+static char g_rtdir[320];
+
+/* A runtime folder for `version`, holding `file` (none when NULL). */
+static void put_runtime(const char *version, const char *file) {
+    char p[400];
+    mkdir(g_rtdir, 0700);
+    snprintf(p, sizeof p, "%s/ampr-emu-ng-%s", g_rtdir, version);
+    mkdir(p, 0700);
+    if (!file) return;
+    snprintf(p, sizeof p, "%s/ampr-emu-ng-%s/%s", g_rtdir, version, file);
+    put_file(p, "EMULATOR");
+}
+
 static void *fake_main(void *arg) {
     char req[400], id[64], cancel[400], status[400];
     FILE *f;
@@ -236,7 +249,7 @@ static int run_op(fake_t fake, const char *args, ava1_op_ctx_t *c) {
 
 static void test_wire(void) {
     char buf[4096], got[1024];
-    cc_build_t b = {"/data/out \"q\".exfat", "exfat", 1, 1, 0};
+    cc_build_t b = {"/data/out \"q\".exfat", "exfat", 1, 1, 0, NULL};
     cc_status_t s;
     const char *full = "{\"id\":\"ab\",\"pid\":77,\"op\":\"build\",\"state\":\"running\",\"stage\":\"write\","
                        "\"bytes_done\":5,\"bytes_total\":9,\"result\":{\"a\":\"}\",\"b\":[1,{\"c\":2}]}}\n";
@@ -267,8 +280,53 @@ static void test_wire(void) {
         CHECK(len > 0 && webui_json_u64(buf, (size_t)len, "zstd_level", &lv) == 0);
         CHECK(cc_zstd_level_ok(1) && cc_zstd_level_ok(22) && !cc_zstd_level_ok(0) && !cc_zstd_level_ok(23));
     }
+    {
+        /* The runtime's path goes with zstd only. */
+        b.zstd = 1;
+        b.zstd_runtime = "/data/ps5upload/convert/runtime/ampr-emu-ng-0.4.1/libSceAmpr.sprx";
+        len = cc_request_json(buf, sizeof buf, "ab12", "build", "/data/g", &b);
+        CHECK(len > 0 && webui_json_str(buf, (size_t)len, "zstd_runtime", got, sizeof got) == 1 &&
+              strcmp(got, b.zstd_runtime) == 0);
+        b.zstd = 0;
+        len = cc_request_json(buf, sizeof buf, "ab12", "build", "/data/g", &b);
+        CHECK(len > 0 && webui_json_str(buf, (size_t)len, "zstd_runtime", got, sizeof got) == 0);
+        b.zstd_runtime = NULL;
+    }
     len = cc_request_json(buf, sizeof buf, "ab12", "inspect", "/data/g", NULL);
     CHECK(len > 0 && webui_json_str(buf, (size_t)len, "dest", got, sizeof got) == 0);
+
+    /* Runtime folders and their versions, compared as the engine compares them. */
+    CHECK(cc_runtime_folder_version("ampr-emu-ng-0.4.1", got, sizeof got) == 1 && strcmp(got, "0.4.1") == 0);
+    CHECK(cc_runtime_folder_version("ampr-emu-ng-0.5.0-rc1", got, sizeof got) == 1 && strcmp(got, "0.5.0-rc1") == 0);
+    CHECK(!cc_runtime_folder_version("ampr-emu-ng-", got, sizeof got));
+    CHECK(!cc_runtime_folder_version("ampr_emu-0.4.1", got, sizeof got));
+    CHECK(!cc_runtime_folder_version("ampr-emu-ng-0 4", got, sizeof got));
+    CHECK(!cc_runtime_folder_version("ampr-emu-ng-0.4.1", got, 5)); /* does not fit */
+    CHECK(cc_version_older("0.4.0", "0.4.1") && !cc_version_older("0.4.1", "0.4.0"));
+    CHECK(cc_version_older("0.9.0", "0.10.0") && !cc_version_older("0.10.0", "0.9.0"));
+    CHECK(cc_version_older("0.4", "0.4.0") && !cc_version_older("0.4.0", "0.4"));
+    CHECK(!cc_version_older("0.4.1", "0.4.1"));
+    CHECK(cc_version_older("0.5.0-rc1", "0.5.1") && !cc_version_older("0.5.0-rc1", "0.5.0"));
+    CHECK(cc_version_older("99999999999999999999999.1", "0.2")); /* too large a part counts as 0 */
+
+    /* The inspection's answer, with the runtime added. */
+    {
+        const char *r = "{\"path\":\"/a\",\"files\":3} \n";
+        char out[128];
+        len = cc_result_with_runtime(out, sizeof out, r, strlen(r), "0.4.1");
+        CHECK(len > 0 && strcmp(out, "{\"path\":\"/a\",\"files\":3,\"zstd_runtime\":\"0.4.1\"}") == 0 &&
+              (size_t)len == strlen(out));
+        len = cc_result_with_runtime(out, sizeof out, r, strlen(r), NULL);
+        CHECK(len > 0 && strcmp(out, "{\"path\":\"/a\",\"files\":3,\"zstd_runtime\":null}") == 0);
+        len = cc_result_with_runtime(out, sizeof out, "{ }", 3, "1");
+        CHECK(len > 0 && strcmp(out, "{ \"zstd_runtime\":\"1\"}") == 0);
+        CHECK(cc_result_with_runtime(out, sizeof out, "{}", 2, NULL) > 0 && strcmp(out, "{\"zstd_runtime\":null}") == 0);
+        CHECK(cc_result_with_runtime(out, sizeof out, "[1]", 3, NULL) == -1);
+        CHECK(cc_result_with_runtime(out, sizeof out, "{", 1, NULL) == -1);
+        /* Too small for the member: refused, never cut. */
+        CHECK(cc_result_with_runtime(out, 30, r, strlen(r), "0.4.1") == -1);
+        CHECK(cc_result_with_runtime(out, 30, r, strlen(r), NULL) == -1);
+    }
     CHECK(cc_request_json(buf, 24, "ab12", "inspect", "/data/a/long/path", NULL) == -1);
 
     /* A whole status. */
@@ -392,7 +450,9 @@ static void test_op(void) {
     g_ticks = 0;
     st = run_op(FAKE_INSPECT, args, c);
     CHECK(st == AVA1_STATUS_OK && !c->message[0]);
-    CHECK(strcmp(c->result, "{\"path\":\"/x/a \\\"b\\\" }\",\"files\":3,\"warnings\":[\"no {eboot}\"]}") == 0);
+    /* No zstd runtime on the console yet: the answer says so. */
+    CHECK(strcmp(c->result,
+                 "{\"path\":\"/x/a \\\"b\\\" }\",\"files\":3,\"warnings\":[\"no {eboot}\"],\"zstd_runtime\":null}") == 0);
     {
         char got[400];
         CHECK(webui_json_str(g_request, strlen(g_request), "op", got, sizeof got) == 1 && strcmp(got, "inspect") == 0);
@@ -409,6 +469,43 @@ static void test_op(void) {
         CHECK(!exists(p));
         path_in(p, sizeof p, "request.json");
         CHECK(!exists(p));
+    }
+
+    /* A zstd build without the runtime is refused before a converter starts; one without zstd
+     * is not held up by it. */
+    snprintf(args, sizeof args, "{\"path\":\"%s\",\"action\":\"build\",\"dest\":\"%s\",\"format\":\"ffpkg\",\"zstd\":true}",
+             game, dest);
+    CHECK(run_op(FAKE_NEVER, args, c) == AVA1_ERR_PATH && strcmp(c->message, "convert_no_zstd_runtime") == 0 &&
+          !g_request[0]);
+    snprintf(args, sizeof args, "{\"path\":\"%s\",\"action\":\"build\",\"dest\":\"%s\",\"format\":\"ffpkg\"}", game, dest);
+    CHECK(run_op(FAKE_FAILS, args, c) == AVA1_ERR_IO && strcmp(c->message, "convert_build_failed") == 0);
+    {
+        char got[400];
+        CHECK(webui_json_str(g_request, strlen(g_request), "zstd_runtime", got, sizeof got) == 0);
+    }
+    /* Runtimes as the desktop app leaves them, and folders that do not count: one with no file
+     * (or only the temporary one it writes first), a name that is not a runtime's. */
+    put_runtime("0.3.4", "libSceAmpr.sprx");
+    put_runtime("0.4.0", "libSceAmpr.sprx");
+    put_runtime("0.4.1", "libSceAmpr.sprx");
+    put_runtime("0.10.0", NULL);
+    put_runtime("0.9.0", "libSceAmpr.sprx.part");
+    {
+        char p[400];
+        snprintf(p, sizeof p, "%s/notes", g_rtdir);
+        mkdir(p, 0700);
+    }
+    {
+        cc_runtime_t rt;
+        char want[400];
+        snprintf(want, sizeof want, "%s/ampr-emu-ng-0.4.1/libSceAmpr.sprx", g_rtdir);
+        CHECK(console_convert_find_runtime(&rt) == 1 && strcmp(rt.version, "0.4.1") == 0 && strcmp(rt.path, want) == 0);
+    }
+    snprintf(args, sizeof args, "{\"path\":\"%s\"}", image);
+    CHECK(run_op(FAKE_INSPECT, args, c) == AVA1_STATUS_OK);
+    {
+        char got[64];
+        CHECK(webui_json_str(c->result, c->result_len, "zstd_runtime", got, sizeof got) == 1 && strcmp(got, "0.4.1") == 0);
     }
 
     /* An inspection may run beside an install or an extraction; a build may not. */
@@ -438,6 +535,13 @@ static void test_op(void) {
         {
             uint64_t lv = 0;
             CHECK(webui_json_u64(g_request, strlen(g_request), "zstd_level", &lv) == 1 && lv == 19);
+        }
+        {
+            /* The newest runtime's file goes with it. */
+            char want[400];
+            snprintf(want, sizeof want, "%s/ampr-emu-ng-0.4.1/libSceAmpr.sprx", g_rtdir);
+            CHECK(webui_json_str(g_request, strlen(g_request), "zstd_runtime", got, sizeof got) == 1 &&
+                  strcmp(got, want) == 0);
         }
     }
 
@@ -545,6 +649,8 @@ int main(void) {
     mkdir(g_dir, 0700);
     console_convert_test_dir = g_dir;
     console_convert_test_launch = fake_launch;
+    snprintf(g_rtdir, sizeof g_rtdir, "%s/runtime", g_root);
+    console_convert_test_runtime_dir = g_rtdir; /* made by test_op, once it has tested without one */
 
     test_wire();
     test_op();

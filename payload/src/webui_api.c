@@ -917,7 +917,8 @@ static void r_fs_extract_info(const char *b, size_t n, uint8_t *out, int fd) {
 /* What a game folder or image on the console is (CONSOLE_CONVERT "inspect", run by the converter
  * payload): {"path"}. A job, because the converter has to be started first; its result, read with
  * /api/jobs/status: {"path","format","size","files","data_bytes","title_id","content_id","title",
- * "content_version","master_version","packed","has_eboot","warnings"}. */
+ * "content_version","master_version","packed","has_eboot","warnings","zstd_runtime"} (the newest
+ * zstd runtime on the console, or null: a zstd build is refused without one). */
 static void r_convert_inspect(const char *b, size_t n, uint8_t *out, int fd) {
     run_path_job(b, n, out, fd, AVA1_JOB_OP_CONSOLE_CONVERT, ",\"action\":\"inspect\"");
 }

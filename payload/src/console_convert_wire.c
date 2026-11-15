@@ -43,6 +43,9 @@ int cc_request_json(char *out, size_t cap, const char *id, const char *op, const
             if (w < 0 || (size_t)w >= cap - at) return -1;
             at += (size_t)w;
         }
+        if (b->zstd && b->zstd_runtime && b->zstd_runtime[0] &&
+            put_member(out, cap, &at, 1, "zstd_runtime", b->zstd_runtime) != 0)
+            return -1;
     }
     if (at + 3 > cap) return -1;
     out[at++] = '}';
@@ -194,4 +197,67 @@ int cc_format_ok(const char *format) {
 int cc_path_within(const char *outer, const char *inner) {
     size_t n = strlen(outer);
     return strncmp(outer, inner, n) == 0 && (inner[n] == 0 || inner[n] == '/');
+}
+
+int cc_runtime_folder_version(const char *name, char *out, size_t cap) {
+    size_t plen = sizeof CC_RUNTIME_PREFIX - 1, n, i;
+    if (strncmp(name, CC_RUNTIME_PREFIX, plen) != 0) return 0;
+    name += plen;
+    n = strlen(name);
+    if (!n || n >= cap) return 0;
+    for (i = 0; i < n; i++) {
+        char c = name[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '.' || c == '-' ||
+              c == '_'))
+            return 0;
+    }
+    memcpy(out, name, n + 1);
+    return 1;
+}
+
+/* One dotted part's number: 0 when it is empty, not all digits, or too large (as the engine's
+ * `parse().unwrap_or(0)`). */
+static unsigned long long version_part(const char *s, size_t n) {
+    unsigned long long v = 0;
+    size_t i;
+    for (i = 0; i < n; i++) {
+        if (s[i] < '0' || s[i] > '9' || v > (~0ULL - 9) / 10) return 0;
+        v = v * 10 + (unsigned)(s[i] - '0');
+    }
+    return v;
+}
+
+int cc_version_older(const char *a, const char *b) {
+    for (;;) {
+        size_t na = strcspn(a, "."), nb = strcspn(b, ".");
+        unsigned long long va = version_part(a, na), vb = version_part(b, nb);
+        if (va != vb) return va < vb;
+        a += na;
+        b += nb;
+        /* One has no parts left: it is the older when the other still has some. */
+        if (!*a || !*b) return !*a && *b;
+        a++;
+        b++;
+    }
+}
+
+int cc_result_with_runtime(char *out, size_t cap, const char *result, size_t len, const char *version) {
+    size_t at, i;
+    int empty = 1, w;
+    while (len && is_space(result[len - 1])) len--;
+    if (len < 2 || result[0] != '{' || result[len - 1] != '}' || cap < len) return -1;
+    for (i = 1; i + 1 < len; i++)
+        if (!is_space(result[i])) empty = 0;
+    /* Everything but the closing brace, then the member and the brace again. */
+    at = len - 1;
+    memcpy(out, result, at);
+    out[at] = 0;
+    if (version) {
+        if (put_member(out, cap, &at, !empty, "zstd_runtime", version) != 0) return -1;
+        w = snprintf(out + at, cap - at, "}");
+    } else {
+        w = snprintf(out + at, cap - at, "%s\"zstd_runtime\":null}", empty ? "" : ",");
+    }
+    if (w < 0 || (size_t)w >= cap - at) return -1;
+    return (int)(at + (size_t)w);
 }

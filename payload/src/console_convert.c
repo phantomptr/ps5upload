@@ -3,6 +3,7 @@
 #include "console_convert.h"
 
 #include <arpa/inet.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -60,6 +61,7 @@ static int g_building;
 #ifdef CONSOLE_CONVERT_SELFTEST
 const char *console_convert_test_dir;
 int (*console_convert_test_launch)(void);
+const char *console_convert_test_runtime_dir;
 #endif
 
 typedef enum { CF_REQUEST, CF_STATUS, CF_CANCEL, CF_RECORD } cfile_t;
@@ -80,6 +82,40 @@ static const char *cdir(void) {
     if (console_convert_test_dir) return console_convert_test_dir;
 #endif
     return CONVERT_DIR;
+}
+
+static const char *runtime_dir(void) {
+#ifdef CONSOLE_CONVERT_SELFTEST
+    if (console_convert_test_runtime_dir) return console_convert_test_runtime_dir;
+#endif
+    return CONVERT_RUNTIME_DIR;
+}
+
+/* The desktop app writes each runtime through a temporary name and renames it in place, so a
+ * folder whose libSceAmpr.sprx is there holds a whole one. */
+int console_convert_find_runtime(cc_runtime_t *rt) {
+    char ver[CC_RUNTIME_VERSION_MAX], file[CC_RUNTIME_PATH_MAX];
+    const char *dir = runtime_dir();
+    struct dirent *e;
+    struct stat st;
+    int found = 0;
+    DIR *d = opendir(dir);
+    rt->version[0] = 0;
+    rt->path[0] = 0;
+    if (!d) return 0;
+    while ((e = readdir(d)) != NULL) {
+        int w;
+        if (!cc_runtime_folder_version(e->d_name, ver, sizeof ver)) continue;
+        w = snprintf(file, sizeof file, "%s/%s/%s", dir, e->d_name, CC_RUNTIME_FILE);
+        if (w < 0 || (size_t)w >= sizeof file) continue;
+        if (stat(file, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0) continue;
+        if (found && !cc_version_older(rt->version, ver)) continue;
+        memcpy(rt->version, ver, sizeof rt->version);
+        memcpy(rt->path, file, sizeof rt->path);
+        found = 1;
+    }
+    closedir(d);
+    return found;
 }
 
 static uint64_t now_ms(void) {
@@ -352,6 +388,7 @@ static const char *check_build(const char *json, const char *src, int src_is_dir
     b->zstd = zstd != 0;
     b->zstd_level = b->zstd ? (int)level : 0;
     b->full_verify = strcmp(verify, "full") == 0;
+    b->zstd_runtime = NULL; /* found by the op, once the build is otherwise acceptable */
     return NULL;
 }
 
@@ -361,6 +398,7 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
     cc_build_t build, *b = NULL;
     cc_status_t s;
     struct stat st;
+    cc_runtime_t *rt = NULL; /* on the heap: a job thread's stack is small */
     char *buf = NULL;
     int status = AVA1_ERR_IO, r, is_dir;
     (void)arg;
@@ -407,7 +445,23 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
         ava1_op_message(c, "convert_not_bundled");
         return AVA1_ERR_INTERNAL;
     }
+    /* zstd packs carry the runtime, which the desktop app puts on the console (nothing is
+     * downloaded here): without one the converter is not started at all. */
+    if (b && b->zstd) {
+        rt = malloc(sizeof *rt);
+        if (!rt) {
+            ava1_op_message(c, "convert_no_memory");
+            return AVA1_ERR_INTERNAL;
+        }
+        if (!console_convert_find_runtime(rt)) {
+            free(rt);
+            ava1_op_message(c, "convert_no_zstd_runtime");
+            return AVA1_ERR_PATH;
+        }
+        b->zstd_runtime = rt->path;
+    }
     if (pthread_mutex_trylock(&g_busy) != 0) {
+        free(rt);
         ava1_op_message(c, "convert_busy");
         return AVA1_ERR_BUSY;
     }
@@ -471,7 +525,17 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
                 (void)ava1_op_set_result(c, resp, at);
             }
         } else if (s.result && s.result_len <= CONVERT_RESULT_MAX) {
-            (void)ava1_op_set_result(c, s.result, s.result_len);
+            /* The answer says whether a zstd build could run here. Into `out` (heap, as `resp`
+             * above); the converter's answer as it is when that does not fit. */
+            char *out = malloc(CONVERT_RESULT_MAX + 1);
+            int len = -1;
+            if (!rt) rt = malloc(sizeof *rt);
+            if (out && rt)
+                len = cc_result_with_runtime(out, CONVERT_RESULT_MAX + 1, s.result, s.result_len,
+                                             console_convert_find_runtime(rt) ? rt->version : NULL);
+            if (len > 0 && (size_t)len <= CONVERT_RESULT_MAX) (void)ava1_op_set_result(c, out, (size_t)len);
+            else (void)ava1_op_set_result(c, s.result, s.result_len);
+            free(out);
         } else {
             ava1_op_message(c, "convert_bad_status");
             goto cleanup;
@@ -494,6 +558,7 @@ cleanup:
     (void)unlink(cpath(CF_CANCEL, file, sizeof file));
 unlock:
     free(buf);
+    free(rt);
     __atomic_store_n(&g_building, 0, __ATOMIC_RELEASE);
     pthread_mutex_unlock(&g_busy);
     return status;
