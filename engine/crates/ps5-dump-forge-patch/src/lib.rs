@@ -17,10 +17,24 @@
 //!
 //! Journal layout, little-endian: `FORGEUNDO1`, the image length (u64), the journal's own length
 //! (u64), the entry count (u32); per entry its offset (u64), length (u64) and old bytes; then the
-//! trailer: `FORGEEND` and a CRC-32 of everything before the CRC. A journal that doesn't end with
-//! the trailer and is shorter than its header declares (or than a header) was cut short before it
-//! was synced (so before any live write) and is deleted; any other that fails a check (its CRC,
-//! its declared length either way, an entry) is damage: an error, the journal kept.
+//! trailer: `FORGEEND` and a CRC-32 of everything before the CRC. A journal with no trailer
+//! marker at its end nor where its header says it ends (PS5Upload: whatever its length, and with
+//! its header zeroed too) was cut short before it was synced (so before any live write: the
+//! trailer is written and synced before the image's first write) and is deleted; any other that
+//! fails a check (its CRC, its declared length either way, an entry) is damage: an error, the
+//! journal kept.
+//!
+//! PS5Upload: beside the journal, `<journal>.id` ([`identity_path`]) says which image it was
+//! written for, so a journal is never restored into another image of the same length that
+//! replaced the one a crash left (the journal itself, shared with Forge, is unchanged and holds
+//! no identity). Written before the journal's first byte: the image's length, a CRC of the
+//! journal's regions (binding it to this journal), and CRCs of up to 64 small samples of the
+//! image the edit never writes (outside every write, live or free), which read the same
+//! before, during and after the edit. [`recover`] compares those samples with the image before
+//! restoring and refuses on a difference, keeping both files. Without an identity file (a
+//! journal Forge wrote), or with one that belongs to another journal or is damaged, recovery
+//! is as before. Its limit: an image that differs from the original only inside the edited
+//! regions (e.g. the same game rebuilt to the same layout) is not told apart.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write as _};
@@ -127,6 +141,17 @@ pub fn journal_path(image: &Path) -> PathBuf {
     image.with_file_name(name)
 }
 
+/// PS5Upload: the identity file beside the journal: `<image file name>.forge-undo.id`.
+pub fn identity_path(image: &Path) -> PathBuf {
+    identity_of_journal(&journal_path(image))
+}
+
+fn identity_of_journal(journal: &Path) -> PathBuf {
+    let mut name = journal.file_name().unwrap_or_default().to_os_string();
+    name.push(".id");
+    journal.with_file_name(name)
+}
+
 /// What [`recover`] found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Recovery {
@@ -228,7 +253,9 @@ fn apply_until(
             ),
             _ => ctx(e, &format!("create {}", journal.display())),
         })?;
-    let journaled = write_journal(file, image, image_len, writes, cancel, sync, stop)
+    // Which image this journal is for, before its first byte (see the crate docs).
+    let journaled = write_identity(&journal, image, image_len, writes, sync)
+        .and_then(|()| write_journal(file, image, image_len, writes, cancel, sync, stop))
         .and_then(|()| sync_dir(&journal, sync));
     if let Err(e) = journaled {
         if stop != Step::JournalHalf {
@@ -279,6 +306,7 @@ impl Applied {
     pub fn commit(self, sync: Syncs) -> io::Result<()> {
         std::fs::remove_file(&self.journal)
             .map_err(|e| ctx(e, &format!("delete {}", self.journal.display())))?;
+        let _ = std::fs::remove_file(identity_of_journal(&self.journal));
         sync_dir(&self.journal, sync).map_err(|e| {
             io::Error::new(
                 e.kind(),
@@ -510,15 +538,24 @@ fn restore(
         .take(HEADER_LEN)
         .read_to_end(&mut head)
         .map_err(rd)?;
-    if head.iter().zip(MAGIC).any(|(a, b)| a != b) {
+    // PS5Upload: a crash before the journal was synced can leave it at any length with its
+    // unwritten bytes zero, its header included.
+    let zeroed = !head.is_empty() && head.iter().all(|&b| b == 0);
+    if !zeroed && head.iter().zip(MAGIC).any(|(a, b)| a != b) {
         return Err(bad("not an undo journal"));
     }
-    let header = Header::parse(&head);
-    // Cut short only when it neither ends with the trailer nor reaches the length its header
-    // declares (or holds no whole header): it was never synced, so nothing live was written.
-    // Anything else that fails a check is damage, and kept.
-    let short = header.as_ref().is_none_or(|h| len < h.len);
-    if short && !has_end(&mut file, len).map_err(rd)? {
+    let header = Header::parse(&head).filter(|_| !zeroed);
+    // Cut short when its trailer marker is neither at its end nor where its header says it
+    // ends: the trailer is written, then the journal synced, then its folder, all before the
+    // image's first write, so a journal without one was never synced and nothing was written
+    // (PS5Upload: whatever its length; a full-length one with a zeroed tail included). Anything
+    // else that fails a check is damage, and kept.
+    let ended = has_end(&mut file, len).map_err(rd)?
+        || match &header {
+            Some(h) if h.len < len => has_end(&mut file, h.len).map_err(rd)?,
+            _ => false,
+        };
+    if !ended {
         remove_journal(journal, sync)?;
         return Ok(Recovery::Discarded);
     }
@@ -568,6 +605,7 @@ fn restore(
     drop(reader);
     // A short journal was already discarded; only a complete, valid one needs the image.
     let mut opened;
+    let opened_here = image.is_none();
     let image = match image {
         Some(image) => image,
         None => {
@@ -581,6 +619,11 @@ fn restore(
         .len();
     if header.image_len != image_len {
         return Err(bad("it was written for an image of another length"));
+    }
+    // A recovery after a crash: the image at the path must be the one the journal is for (a
+    // rollback restores the very file it wrote, kept open).
+    if let Some(path) = image_path.filter(|_| opened_here) {
+        check_identity(image, path, journal, &header, &entries)?;
     }
     // Pass 2: the old bytes back.
     let mut buf = Vec::new();
@@ -623,7 +666,7 @@ impl Header {
     }
 }
 
-/// Whether the `FORGEEND` marker sits where the trailer starts.
+/// Whether the `FORGEEND` marker sits where the trailer of a journal of `len` bytes starts.
 fn has_end(file: &mut File, len: u64) -> io::Result<bool> {
     if len < TRAILER_LEN {
         return Ok(false);
@@ -662,7 +705,190 @@ fn piece(buf: &mut Vec<u8>, left: u64) -> &mut [u8] {
 
 fn remove_journal(journal: &Path, sync: Syncs) -> io::Result<()> {
     std::fs::remove_file(journal).map_err(|e| ctx(e, &format!("delete {}", journal.display())))?;
+    // Its identity goes with it (best effort: one left over belongs to no journal).
+    let _ = std::fs::remove_file(identity_of_journal(journal));
     sync_dir(journal, sync)
+}
+
+// ─── PS5Upload: which image a journal is for ─────────────────────────────────────────────────
+
+const ID_MAGIC: &[u8; 8] = b"PS5UFID1";
+/// Samples of the image an identity keeps, at most, and each one's length at most.
+const ID_SAMPLES: u64 = 64;
+const ID_SAMPLE_LEN: u64 = 4096;
+/// An identity file's size: magic, image length, regions CRC, count; per sample its offset,
+/// length and CRC; its own CRC.
+const ID_HEAD_LEN: u64 = 8 + 8 + 4 + 4;
+const ID_ENTRY_LEN: u64 = 8 + 8 + 4;
+const ID_MAX_LEN: u64 = ID_HEAD_LEN + ID_SAMPLES * ID_ENTRY_LEN + 4;
+
+/// A CRC of a journal's regions (offset, length), in order.
+fn regions_crc(regions: impl Iterator<Item = (u64, u64)>) -> u32 {
+    let mut crc = crc32fast::Hasher::new();
+    for (offset, len) in regions {
+        crc.update(&offset.to_le_bytes());
+        crc.update(&len.to_le_bytes());
+    }
+    crc.finalize()
+}
+
+/// Up to [`ID_SAMPLES`] places (offset, length) spread over the bytes no write touches.
+fn sample_places(writes: &[Write], image_len: u64) -> Vec<(u64, u64)> {
+    let mut spans: Vec<(u64, u64)> = (writes.iter())
+        .filter(|w| !w.data.is_empty())
+        .map(|w| (w.offset, w.offset.saturating_add(w.data.len())))
+        .collect();
+    spans.sort_unstable();
+    let mut gaps = Vec::new();
+    let mut at = 0u64;
+    for (start, end) in spans {
+        if start > at {
+            gaps.push((at, start.min(image_len)));
+        }
+        at = at.max(end);
+    }
+    if at < image_len {
+        gaps.push((at, image_len));
+    }
+    gaps.retain(|g| g.1 > g.0);
+    let total: u64 = gaps.iter().map(|g| g.1 - g.0).sum();
+    let mut out: Vec<(u64, u64)> = Vec::new();
+    if total == 0 {
+        return out;
+    }
+    for i in 0..ID_SAMPLES {
+        let spot = u128::from(total) * u128::from(2 * i + 1) / u128::from(2 * ID_SAMPLES);
+        let mut target = u64::try_from(spot).unwrap_or(u64::MAX);
+        for &(start, end) in &gaps {
+            let n = end - start;
+            if target < n {
+                let offset = start + target;
+                let len = ID_SAMPLE_LEN.min(end - offset);
+                if out.last().is_none_or(|l| offset >= l.0 + l.1) {
+                    out.push((offset, len));
+                }
+                break;
+            }
+            target -= n;
+        }
+    }
+    out
+}
+
+/// The CRC-32 of `len` (at most [`ID_SAMPLE_LEN`]) bytes of `image` at `offset`.
+fn crc_at(image: &mut File, offset: u64, len: u64) -> io::Result<u32> {
+    let mut buf = vec![0u8; len.min(ID_SAMPLE_LEN) as usize];
+    image.seek(SeekFrom::Start(offset))?;
+    image.read_exact(&mut buf)?;
+    Ok(crc32fast::hash(&buf))
+}
+
+/// Writes (and syncs) the identity of the image `writes` go into, beside `journal`.
+fn write_identity(
+    journal: &Path,
+    image: &mut File,
+    image_len: u64,
+    writes: &[Write],
+    sync: Syncs,
+) -> io::Result<()> {
+    let regions = journal_spans(writes).into_iter().map(|(s, e)| (s, e - s));
+    let mut b = ID_MAGIC.to_vec();
+    b.extend_from_slice(&image_len.to_le_bytes());
+    b.extend_from_slice(&regions_crc(regions).to_le_bytes());
+    let places = sample_places(writes, image_len);
+    b.extend_from_slice(&(places.len() as u32).to_le_bytes());
+    for (offset, len) in places {
+        let crc = crc_at(image, offset, len).map_err(|e| ctx(e, "read the image"))?;
+        b.extend_from_slice(&offset.to_le_bytes());
+        b.extend_from_slice(&len.to_le_bytes());
+        b.extend_from_slice(&crc.to_le_bytes());
+    }
+    let crc = crc32fast::hash(&b);
+    b.extend_from_slice(&crc.to_le_bytes());
+    let path = identity_of_journal(journal);
+    let what = |e| ctx(e, &format!("write {}", path.display()));
+    let mut file = File::create(&path).map_err(what)?;
+    file.write_all(&b).map_err(what)?;
+    (sync.file)(&file).map_err(|e| ctx(e, "sync the undo journal's identity"))
+}
+
+/// One sample of an identity: offset, length, CRC.
+type Sample = (u64, u64, u32);
+
+/// An identity file read back: (image length, regions CRC, samples). `None` when there is
+/// none, or it is damaged (then it can't tell, and recovery goes on as without one).
+fn read_identity(path: &Path) -> Option<(u64, u32, Vec<Sample>)> {
+    let mut b = Vec::new();
+    File::open(path)
+        .ok()?
+        .take(ID_MAX_LEN + 1)
+        .read_to_end(&mut b)
+        .ok()?;
+    let len = b.len() as u64;
+    if !(ID_HEAD_LEN + 4..=ID_MAX_LEN).contains(&len) || b.get(..8)? != ID_MAGIC {
+        return None;
+    }
+    let (body, tail) = b.split_at(b.len() - 4);
+    if crc32fast::hash(body) != u32::from_le_bytes(tail.try_into().ok()?) {
+        return None;
+    }
+    let u64_at = |i: usize| Some(u64::from_le_bytes(body.get(i..i + 8)?.try_into().ok()?));
+    let u32_at = |i: usize| Some(u32::from_le_bytes(body.get(i..i + 4)?.try_into().ok()?));
+    let image_len = u64_at(8)?;
+    let regions = u32_at(16)?;
+    let count = u64::from(u32_at(20)?);
+    if count > ID_SAMPLES || body.len() as u64 != ID_HEAD_LEN + count * ID_ENTRY_LEN {
+        return None;
+    }
+    let mut samples = Vec::with_capacity(count as usize);
+    for i in 0..count as usize {
+        let at = ID_HEAD_LEN as usize + i * ID_ENTRY_LEN as usize;
+        let (offset, len, crc) = (u64_at(at)?, u64_at(at + 8)?, u32_at(at + 16)?);
+        if len == 0 || len > ID_SAMPLE_LEN {
+            return None;
+        }
+        samples.push((offset, len, crc));
+    }
+    Some((image_len, regions, samples))
+}
+
+/// Refuses to restore `journal` into `image` when its identity file says it was written for
+/// another image (see the crate docs). `entries`: the journal's (offset, length, position).
+fn check_identity(
+    image: &mut File,
+    image_path: &Path,
+    journal: &Path,
+    header: &Header,
+    entries: &[(u64, u64, u64)],
+) -> io::Result<()> {
+    let id = identity_of_journal(journal);
+    let Some((image_len, regions, samples)) = read_identity(&id) else {
+        return Ok(());
+    };
+    // Another journal's (left by one whose own removal failed): it says nothing of this one.
+    let ours = regions_crc(entries.iter().map(|&(offset, n, _)| (offset, n)));
+    if image_len != header.image_len || regions != ours {
+        return Ok(());
+    }
+    let same = samples.iter().all(|&(offset, len, crc)| {
+        offset.checked_add(len).is_some_and(|end| end <= image_len)
+            && crc_at(image, offset, len).is_ok_and(|got| got == crc)
+    });
+    if same {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!(
+            "{} is not the image the undo journal {} was written for (it was replaced after an \
+             interrupted edit): nothing was restored and both are kept. If the image is right \
+             as it is, delete {} and {}",
+            image_path.display(),
+            journal.display(),
+            journal.display(),
+            id.display()
+        ),
+    ))
 }
 
 /// Best effort after a failure: a journal left behind is settled by the next [`recover`].
@@ -1051,14 +1277,10 @@ mod tests {
         up[18..26].copy_from_slice(&(whole.len() as u64 + 4096).to_le_bytes());
         let mut down = whole.clone();
         down[18..26].copy_from_slice(&(whole.len() as u64 - 1).to_le_bytes());
-        // A byte appended, and the trailer zeroed at full length: no trailer at the end, but
-        // not shorter than declared.
+        // A byte appended: no trailer at the end, but one where the header says it ends.
         let mut longer = whole.clone();
         longer.push(0);
-        let mut unended = whole.clone();
-        let at = unended.len() - TRAILER_LEN as usize;
-        unended[at..].fill(0);
-        for damaged in [flipped, up, down, longer, unended] {
+        for damaged in [flipped, up, down, longer] {
             std::fs::write(&journal, &damaged).unwrap();
             let e = recover(&path, Syncs::STD).unwrap_err();
             assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
@@ -1069,6 +1291,136 @@ mod tests {
         // Shorter than declared, no trailer: cut short.
         std::fs::write(&journal, &whole[..whole.len() - 1]).unwrap();
         assert_eq!(recover(&path, Syncs::STD).unwrap(), Recovery::Discarded);
+    }
+
+    /// PS5Upload: a crash before the journal was synced can leave it at full length with its
+    /// unwritten tail zero (no trailer), or all zero. The trailer and the syncs come before the
+    /// image's first write, so such a journal predates every write: deleted, the image as it is.
+    #[test]
+    fn a_full_length_journal_without_its_trailer_is_discarded() {
+        let (_tmp, path, original) = image();
+        let journal = journal_path(&path);
+        let applied = run(&path, &writes(), Step::All).unwrap();
+        let whole = std::fs::read(&journal).unwrap();
+        applied.rollback(Syncs::STD).unwrap();
+        let restored = std::fs::read(&path).unwrap();
+        let mut unended = whole.clone();
+        let at = unended.len() - TRAILER_LEN as usize;
+        unended[at..].fill(0);
+        let mut zero_tail = whole.clone();
+        let half = zero_tail.len() / 2;
+        zero_tail[half..].fill(0);
+        let zeros = vec![0u8; whole.len()];
+        for (what, cut) in [
+            ("unended", unended),
+            ("zero tail", zero_tail),
+            ("zeros", zeros),
+        ] {
+            std::fs::write(&journal, &cut).unwrap();
+            assert_eq!(
+                recover(&path, Syncs::STD).unwrap(),
+                Recovery::Discarded,
+                "{what}"
+            );
+            assert!(!journal.exists(), "{what}");
+            assert!(std::fs::read(&path).unwrap() == restored, "{what}");
+        }
+        assert_restored(&path, &original, &writes());
+    }
+
+    /// PS5Upload: a journal is never restored into another image of the same length that took
+    /// the crashed one's place: its identity file tells them apart, both files are kept and
+    /// the image is not touched. The crashed image itself (or a journal with no identity, as
+    /// Forge writes, or one whose identity is another journal's or damaged) restores as before.
+    #[test]
+    fn a_journal_is_never_restored_into_another_image() {
+        let (_tmp, path, original) = image();
+        let writes = writes();
+        let (journal, id) = (journal_path(&path), identity_path(&path));
+        assert!(run(&path, &writes, Step::LiveHalf).is_err());
+        assert!(journal.exists() && id.exists());
+        let crashed = std::fs::read(&path).unwrap();
+        // Another image of the same length in its place.
+        let other: Vec<u8> = (0..LEN).map(|i| (i * 13 % 241) as u8).collect();
+        std::fs::write(&path, &other).unwrap();
+        let e = recover(&path, Syncs::STD).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+        assert!(e.to_string().contains("is not the image"), "{e}");
+        assert!(journal.exists() && id.exists());
+        assert!(
+            std::fs::read(&path).unwrap() == other,
+            "the other image was touched"
+        );
+        // The crashed image back: restored, and both files go.
+        std::fs::write(&path, &crashed).unwrap();
+        assert_eq!(recover(&path, Syncs::STD).unwrap(), Recovery::Restored);
+        assert_restored(&path, &original, &writes);
+        assert!(!id.exists());
+
+        // No identity (a journal Forge wrote), a damaged one, another journal's: as before.
+        for identity in ["none", "damaged", "another"] {
+            let (_tmp, path, original) = image();
+            let (journal, id) = (journal_path(&path), identity_path(&path));
+            assert!(run(&path, &writes, Step::LiveHalf).is_err());
+            match identity {
+                "none" => std::fs::remove_file(&id).unwrap(),
+                "damaged" => {
+                    let mut b = std::fs::read(&id).unwrap();
+                    b[30] ^= 1;
+                    std::fs::write(&id, b).unwrap();
+                }
+                _ => {
+                    // An identity written for other writes (other regions).
+                    let mut f = open_rw(&path).unwrap();
+                    let few: Vec<Write> =
+                        writes.iter().filter(|w| w.live).take(1).cloned().collect();
+                    write_identity(&journal, &mut f, LEN, &few, Syncs::STD).unwrap();
+                }
+            }
+            let other: Vec<u8> = std::fs::read(&path).unwrap();
+            assert_eq!(
+                recover(&path, Syncs::STD).unwrap(),
+                Recovery::Restored,
+                "{identity}"
+            );
+            assert!(std::fs::read(&path).unwrap() != other);
+            assert_restored(&path, &original, &writes);
+            assert!(!journal.exists() && !id.exists(), "{identity}");
+        }
+    }
+
+    /// PS5Upload: the identity goes with its journal on a commit, a rollback and a discard.
+    #[test]
+    fn the_identity_goes_with_its_journal() {
+        let (_tmp, path, _) = image();
+        let writes = writes();
+        let id = identity_path(&path);
+        run(&path, &writes, Step::All)
+            .unwrap()
+            .commit(Syncs::STD)
+            .unwrap();
+        assert!(!id.exists());
+        run(&path, &writes, Step::All)
+            .unwrap()
+            .rollback(Syncs::STD)
+            .unwrap();
+        assert!(!id.exists());
+        assert!(run(&path, &writes, Step::JournalHalf).is_err());
+        assert!(id.exists());
+        assert_eq!(recover(&path, Syncs::STD).unwrap(), Recovery::Discarded);
+        assert!(!id.exists());
+        // Samples lie outside every write, inside the image.
+        let places = sample_places(&writes, LEN);
+        assert!(!places.is_empty() && places.len() as u64 <= ID_SAMPLES);
+        for (offset, len) in places {
+            assert!(offset + len <= LEN);
+            assert!(
+                writes
+                    .iter()
+                    .filter(|w| !w.data.is_empty())
+                    .all(|w| { offset + len <= w.offset || offset >= w.offset + w.data.len() })
+            );
+        }
     }
 
     /// A journal for `image_len` with `count` entries and `body` as its entry table, whose

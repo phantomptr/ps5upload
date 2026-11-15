@@ -201,6 +201,8 @@ pub(crate) struct ArchiveTree {
     sizes: HashMap<String, u64>,
     empty_dirs: Vec<String>,
     describe: String,
+    /// What the conversion leaves out of the archive (files beside the game folder).
+    notes: Vec<String>,
 }
 
 /// The game folder in the archive at `path`, read in place. Its `param.json` (or `param.sfo`)
@@ -250,6 +252,7 @@ pub(crate) fn open(
         dirs.insert(rel.to_string());
     }
     let empty_dirs = dirs.difference(&parents).cloned().collect();
+    let notes = left_out_note(&listing, &prefix).into_iter().collect();
     let sizes = files.iter().map(|f| (f.path.clone(), f.size)).collect();
     let describe = format!(
         "{} (.{} archive{}, read in place{})",
@@ -283,6 +286,7 @@ pub(crate) fn open(
         sizes,
         empty_dirs,
         describe,
+        notes,
     };
     // The password and the data checked now: the game's own small param file.
     let param = ["sce_sys/param.json", "sce_sys/param.sfo"]
@@ -301,6 +305,36 @@ pub(crate) fn open(
         .map_err(|e| e.to_string())?;
     }
     Ok(Box::new(tree))
+}
+
+/// What the archive holds beside its game folder (`prefix`), junk and the folders around the
+/// game aside: the conversion leaves it out, so the archive is not the game alone (and is not
+/// moved to the Trash afterwards). `None` when there is nothing else.
+fn left_out_note(listing: &archive_stream::Listing, prefix: &str) -> Option<String> {
+    if prefix.is_empty() {
+        return None;
+    }
+    let outside = |p: &str| !p.starts_with(prefix) && !has_junk(p);
+    let files: Vec<&str> = (listing.files.iter())
+        .map(|f| f.path.as_str())
+        .filter(|p| outside(p))
+        .collect();
+    // A folder the game folder is in is only its wrapping.
+    let dirs = (listing.dirs.iter())
+        .map(|d| d.trim_end_matches('/'))
+        .filter(|d| !d.is_empty() && outside(d) && !prefix.starts_with(&format!("{d}/")))
+        .count();
+    let first = files.first().copied().or_else(|| {
+        (listing.dirs.iter())
+            .map(|d| d.trim_end_matches('/'))
+            .find(|d| !d.is_empty() && outside(d) && !prefix.starts_with(&format!("{d}/")))
+    })?;
+    Some(format!(
+        "the archive holds more than the game folder {}: {} other file(s) and {dirs} other \
+         folder(s) (the first: {first}), which are not in what was made from it",
+        prefix.trim_end_matches('/'),
+        files.len()
+    ))
 }
 
 impl Drop for ArchiveTree {
@@ -360,6 +394,10 @@ impl SourceTree for ArchiveTree {
     fn describe(&self) -> String {
         self.describe.clone()
     }
+
+    fn notes(&self) -> Vec<String> {
+        self.notes.clone()
+    }
 }
 
 #[cfg(test)]
@@ -415,6 +453,23 @@ mod tests {
         // macOS's sidecars are no game.
         let l = listing_of(&["g/sce_sys/param.json", "__MACOSX/g/sce_sys/param.json"]);
         assert_eq!(game_root(&l).unwrap(), "g/");
+        // Junk beside the game is no note; the folder around it neither.
+        assert_eq!(left_out_note(&l, "g/"), None);
+        let l = listing_of(&["sce_sys/param.json", "eboot.bin"]);
+        assert_eq!(left_out_note(&l, ""), None);
+        // Anything else beside the game folder is left out, and said.
+        let l = listing_of(&[
+            "[SITE] X/PPSA1-app/sce_sys/param.json",
+            "[SITE] X/readme.txt",
+        ]);
+        let note = left_out_note(&l, "[SITE] X/PPSA1-app/").expect("a note");
+        assert!(
+            note.contains("1 other file(s)") && note.contains("[SITE] X/readme.txt"),
+            "{note}"
+        );
+        let l = listing_of(&["g/sce_sys/param.json", "update/sce_sys/x.bin"]);
+        let note = left_out_note(&l, "g/").expect("a note");
+        assert!(note.contains("update/sce_sys/x.bin"), "{note}");
     }
 
     #[test]

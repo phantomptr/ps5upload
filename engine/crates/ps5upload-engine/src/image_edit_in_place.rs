@@ -15,7 +15,10 @@
 //!   deleted; on any failure the journal restores it. A journal a crash left is settled the
 //!   next time the image is opened here ([`before_open`]): restored when complete, deleted when
 //!   it was cut short (nothing had been overwritten yet), kept (and the image refused) when
-//!   damaged. The same journal format as Forge's, so either app recovers the other's.
+//!   damaged. The same journal format as Forge's, so either app recovers the other's. A
+//!   `<image>.forge-undo.id` beside it says which image the journal is for: a journal is never
+//!   restored into another image of the same length put in the crashed one's place (the open
+//!   is refused, both files kept).
 //! * **Exclusive**: one in-place edit per image in this engine ([`busy`]: builds, saves and the
 //!   browser leave it alone meanwhile), no other Workshop job reading it, and an OS lock on the
 //!   file while it is written.
@@ -25,7 +28,7 @@
 //!   image's reader lists exactly the expected files and folders, and every changed file
 //!   hashes the same. `full_verify` hashes every file.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -97,9 +100,27 @@ impl Refusal {
 
 // ─── Images being edited ────────────────────────────────────────────────────────────────
 
-fn editing() -> &'static Mutex<HashSet<PathBuf>> {
-    static SET: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
-    SET.get_or_init(Default::default)
+/// Who uses an image in this engine: the in-place edits running (each image claimed once) and
+/// the builds reading a source on this computer (a count per path: two builds may read one
+/// source). One lock, so an edit's claim and a build's registration are one decision: neither
+/// starts while the other holds the image.
+///
+/// Nothing that locks this may run while its guard is held: a [`Claim`] or [`Reading`] is
+/// only built, and so only ever dropped, after the guard is released (a `Drop` under it would
+/// lock it again and hang).
+#[derive(Default)]
+struct Users {
+    claims: HashSet<PathBuf>,
+    readers: HashMap<PathBuf, usize>,
+}
+
+fn users() -> &'static Mutex<Users> {
+    static USERS: OnceLock<Mutex<Users>> = OnceLock::new();
+    USERS.get_or_init(Default::default)
+}
+
+fn lock_users() -> std::sync::MutexGuard<'static, Users> {
+    users().lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// The path an image is known by here: resolved, so two spellings are one image.
@@ -107,34 +128,97 @@ fn key(image: &Path) -> PathBuf {
     std::fs::canonicalize(image).unwrap_or_else(|_| image.to_path_buf())
 }
 
+/// One path is the other or inside it: a build of a folder reads an image in it, and an edit
+/// of that image changes what the build reads.
+fn overlaps(a: &Path, b: &Path) -> bool {
+    a.starts_with(b) || b.starts_with(a)
+}
+
+fn edited_message(image: &Path) -> String {
+    format!(
+        "{} is being edited in place; try again once that finishes",
+        image.display()
+    )
+}
+
 /// An image claimed for one in-place edit, released when dropped.
 pub(crate) struct Claim(PathBuf);
 
 impl Claim {
-    /// `None` when another in-place edit of `image` runs in this engine.
-    pub(crate) fn take(image: &Path) -> Option<Claim> {
+    /// The claim, or why not: another in-place edit of `image` runs in this engine, or a
+    /// build reads it (or a folder holding it).
+    pub(crate) fn take(image: &Path) -> Result<Claim, String> {
         let k = key(image);
-        let taken = {
-            let mut set = editing().lock().unwrap_or_else(|e| e.into_inner());
-            set.insert(k.clone())
+        let refused = {
+            let mut users = lock_users();
+            if users.claims.contains(&k) {
+                Some(format!("{} is being edited in place", k.display()))
+            } else if let Some(read) = users.readers.keys().find(|r| overlaps(&k, r)) {
+                Some(format!(
+                    "a running job is reading {}: wait for it to finish",
+                    read.display()
+                ))
+            } else {
+                users.claims.insert(k.clone());
+                None
+            }
         };
-        // Only built (and so only ever dropped) once the set's lock is released: a `Claim`
-        // dropped under it would lock it again in `Drop` and hang (`then_some` built one
-        // eagerly and dropped it right there whenever the image was already claimed).
-        if taken {
-            Some(Claim(k))
-        } else {
-            None
+        match refused {
+            Some(why) => Err(why),
+            None => Ok(Claim(k)),
         }
     }
 }
 
 impl Drop for Claim {
     fn drop(&mut self) {
-        editing()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&self.0);
+        lock_users().claims.remove(&self.0);
+    }
+}
+
+/// A job reading a source on this computer, from before its first read to its end: an
+/// in-place edit of it (or of an image in it) can't be claimed meanwhile. Released when
+/// dropped.
+pub(crate) struct Reading(Option<PathBuf>);
+
+impl Reading {
+    /// Registers a job reading `source`, or says why it can't read it now: an in-place edit of
+    /// it (or of an image inside it) runs. A source on a PS5 or a server is not registered (no
+    /// edit here changes it).
+    pub(crate) fn take(source: &Path) -> Result<Reading, String> {
+        if ps5upload_fpkg::remote_source::is_remote(source) {
+            return Ok(Reading(None));
+        }
+        let k = key(source);
+        let refused = {
+            let mut users = lock_users();
+            match users.claims.iter().find(|c| overlaps(c, &k)) {
+                Some(c) => Some(edited_message(c)),
+                None => {
+                    *users.readers.entry(k.clone()).or_insert(0) += 1;
+                    None
+                }
+            }
+        };
+        match refused {
+            Some(why) => Err(why),
+            None => Ok(Reading(Some(k))),
+        }
+    }
+}
+
+impl Drop for Reading {
+    fn drop(&mut self) {
+        let Some(k) = self.0.take() else {
+            return;
+        };
+        let mut users = lock_users();
+        if let Some(n) = users.readers.get_mut(&k) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                users.readers.remove(&k);
+            }
+        }
     }
 }
 
@@ -142,13 +226,12 @@ impl Drop for Claim {
 /// image inside it) runs. `None` when nothing edits it.
 pub(crate) fn busy(path: &Path) -> Option<String> {
     let k = key(path);
-    let set = editing().lock().unwrap_or_else(|e| e.into_inner());
-    set.iter().find(|e| e.starts_with(&k)).map(|e| {
-        format!(
-            "{} is being edited in place; try again once that finishes",
-            e.display()
-        )
-    })
+    let users = lock_users();
+    users
+        .claims
+        .iter()
+        .find(|e| e.starts_with(&k))
+        .map(|e| edited_message(e))
 }
 
 /// Before an image is opened here (browsed, edited, built from): refused while an in-place
@@ -660,6 +743,25 @@ pub(crate) struct Outcome {
     pub checked: u64,
     pub journal_bytes: u64,
     pub notes: Vec<String>,
+    /// The edit is done, but something after it did not go as it should (said in plain words).
+    pub warning: Option<String>,
+}
+
+impl Outcome {
+    /// The finished job's `commit_ack`: what was written and checked, and `warning` when there
+    /// is one.
+    pub(crate) fn ack(&self) -> serde_json::Value {
+        let mut ack = serde_json::json!({
+            "in_place": true,
+            "written_bytes": self.written,
+            "checked_bytes": self.checked,
+            "journal_bytes": self.journal_bytes,
+        });
+        if let (Some(w), Some(o)) = (&self.warning, ack.as_object_mut()) {
+            o.insert("warning".into(), w.clone().into());
+        }
+        ack
+    }
 }
 
 /// Where an apply stands, for the job's progress: (stage, done, total).
@@ -677,6 +779,9 @@ enum Stop {
     /// Applied and verified, the journal not yet deleted.
     #[cfg(test)]
     BeforeCommit,
+    /// A normal run whose sync of the journal's folder after its removal fails.
+    #[cfg(test)]
+    DirSyncFails,
 }
 
 /// Hashes every file of `paths` in `tree` (blake3), in pieces.
@@ -728,11 +833,16 @@ impl Pending {
     }
 
     /// Keeps the edit: the undo journal is deleted, then its folder synced. A journal that
-    /// can't be deleted is still complete, so the image is restored from it; a failed folder
-    /// sync after the delete can't be undone, and says the image holds the edit.
-    fn commit(mut self, image: &Path) -> Result<(), String> {
+    /// can't be deleted is still complete, so the image is restored from it (an error). A
+    /// failed folder sync after the delete can't be undone: the edit is done, with a warning
+    /// (`Ok(Some(..))`) saying so in plain words.
+    fn commit(
+        mut self,
+        image: &Path,
+        dir_sync: fn(&Path) -> io::Result<()>,
+    ) -> Result<Option<String>, String> {
         let Some(applied) = self.applied.take() else {
-            return Ok(());
+            return Ok(None);
         };
         let no_dir = Syncs {
             file: SYNCS.file,
@@ -751,14 +861,22 @@ impl Pending {
             Some(p) if !p.as_os_str().is_empty() => p,
             _ => Path::new("."),
         };
-        (SYNCS.dir)(folder).map_err(|e| {
-            format!(
-                "the edit was applied and verified, but syncing {} failed: {e}; the image holds \
-                 the edit",
-                folder.display()
-            )
-        })
+        Ok(dir_synced(folder, dir_sync(folder)))
     }
+}
+
+/// The warning a failed sync of `folder` after the journal's removal leaves: the edit is in
+/// the image and checked; only the removal of its undo journal may not have reached the disk.
+fn dir_synced(folder: &Path, synced: io::Result<()>) -> Option<String> {
+    synced.err().map(|e| {
+        format!(
+            "the changes are in the image and were checked, but the computer could not confirm \
+             that its undo journal's removal was saved to disk ({}: {e}). If the computer \
+             crashes before that happens, the next time the image is opened here it is put \
+             back as it was before this edit",
+            folder.display()
+        )
+    })
 }
 
 impl Drop for Pending {
@@ -866,7 +984,7 @@ fn apply_stopping(
     let applied = match stop {
         Stop::Never => patch::apply(&mut file, &image, &writes, &mut read_source, cancel, SYNCS),
         #[cfg(test)]
-        Stop::BeforeCommit => {
+        Stop::BeforeCommit | Stop::DirSyncFails => {
             patch::apply(&mut file, &image, &writes, &mut read_source, cancel, SYNCS)
         }
         #[cfg(test)]
@@ -898,6 +1016,13 @@ fn apply_stopping(
     let pending = Pending {
         applied: Some(applied),
     };
+    // Everything is written and synced: the OS lock goes before the checks. On Windows it is
+    // mandatory, and the checks (the format editor's plan, the image's reader) and a recovery
+    // open the image again by its path, which a held lock would refuse: every edit would roll
+    // back. The in-place claim stays until the job ends, so nothing in this engine touches the
+    // image meanwhile. Should the unlock fail, the checks fail and the edit is rolled back
+    // through the handle the apply kept.
+    let _ = file.unlock();
     progress("write", written.max(1), written.max(1));
     let checked = verify(
         kind,
@@ -938,7 +1063,15 @@ fn apply_stopping(
         drop(pending.applied.take());
         return Err("simulated crash before the commit".into());
     }
-    pending.commit(&image)?;
+    #[cfg(not(test))]
+    let dir_sync = SYNCS.dir;
+    #[cfg(test)]
+    let dir_sync: fn(&Path) -> io::Result<()> = if stop == Stop::DirSyncFails {
+        |_| Err(io::Error::other("simulated sync failure"))
+    } else {
+        SYNCS.dir
+    };
+    let warning = pending.commit(&image, dir_sync)?;
     drop(file);
     let mut notes = vec![format!(
         "edited {} in place ({}): {written} bytes written, {} files read back, a {journal_bytes} \
@@ -956,7 +1089,27 @@ fn apply_stopping(
         checked: check_total,
         journal_bytes,
         notes,
+        warning,
     })
+}
+
+/// Tests elsewhere in the engine: `edits` written into `image` and verified, then the engine
+/// "dies" before the undo journal is deleted, leaving the image edited and the journal beside it
+/// (what the next open restores).
+#[cfg(test)]
+pub(crate) fn crash_before_commit(image: &Path, edits: &[Edit]) {
+    let _claim = Claim::take(image).expect("the image is free");
+    let p = prepare(image, edits).unwrap_or_else(|r| panic!("{r:?}"));
+    let e = apply_stopping(
+        p,
+        false,
+        &AtomicBool::new(false),
+        &mut |_, _, _| {},
+        Stop::BeforeCommit,
+    )
+    .unwrap_err();
+    assert!(e.contains("simulated crash"), "{e}");
+    assert!(patch::journal_path(image).exists());
 }
 
 /// The edited image against what it must be: the format editor reopens it (its consistency
@@ -1083,11 +1236,9 @@ fn check_blocking(image: &Path, edits: &[Edit]) -> CheckResp {
         free_bytes: None,
         journal_bytes: None,
     };
-    let Some(_claim) = Claim::take(image) else {
-        return refused(Refusal::busy(format!(
-            "{} is being edited in place",
-            image.display()
-        )));
+    let _claim = match Claim::take(image) {
+        Ok(c) => c,
+        Err(why) => return refused(Refusal::busy(why)),
     };
     match prepare(image, edits) {
         Ok(p) => CheckResp {
@@ -1179,12 +1330,9 @@ pub(crate) async fn start(
         return crate::json_err(StatusCode::CONFLICT, why).into_response();
     }
     let planned = tokio::task::spawn_blocking(move || {
-        let Some(claim) = Claim::take(&image) else {
-            return Err(Refusal::busy(format!(
-                "{} is being edited in place",
-                image.display()
-            )));
-        };
+        // Refused while a build reads the image: builds register before their first read, in
+        // the same set, so a build and an edit never both start.
+        let claim = Claim::take(&image).map_err(Refusal::busy)?;
         prepare(&image, &edits).map(|p| (claim, p))
     })
     .await;
@@ -1295,6 +1443,12 @@ pub(crate) async fn start(
                 for note in &o.notes {
                     crate::engine_log::record("info", format!("in-place edit: {note}"));
                 }
+                if let Some(w) = &o.warning {
+                    crate::engine_log::record(
+                        "warn",
+                        format!("in-place edit of {}: {w}", image.display()),
+                    );
+                }
                 crate::JobState::Done {
                     started_at_ms,
                     completed_at_ms,
@@ -1305,12 +1459,7 @@ pub(crate) async fn start(
                     files_sent: o.files,
                     skipped_files: 0,
                     skipped_bytes: 0,
-                    commit_ack: Some(serde_json::json!({
-                        "in_place": true,
-                        "written_bytes": o.written,
-                        "checked_bytes": o.checked,
-                        "journal_bytes": o.journal_bytes,
-                    })),
+                    commit_ack: Some(o.ack()),
                 }
             }
             Err(error) => {
@@ -1698,6 +1847,71 @@ mod tests {
         consistent(&img, Fmt::Exfat);
     }
 
+    /// The OS lock is held while the edit is written and released before the checks, which
+    /// open the image again by its path: on Windows a held lock is mandatory and would refuse
+    /// them, and every edit would roll back. A second handle can lock the image as the checks
+    /// start (a held `flock` refuses it here as Windows refuses the read).
+    #[test]
+    fn the_os_lock_is_released_before_the_checks_read_the_image() {
+        let tmp = Scratch::new("unlock");
+        let src = game(&tmp.0, &[7u8; 70_000]);
+        let img = image(&src, &tmp.0, Fmt::Exfat);
+        let p = prepare(&img, &edits(&tmp.0)).unwrap();
+        let mut locked_at_write = None;
+        let mut locked_at_verify = None;
+        let mut probe = |stage: &str, _: u64, _: u64| {
+            let slot = match stage {
+                "write" if locked_at_write.is_none() => &mut locked_at_write,
+                "verify" if locked_at_verify.is_none() => &mut locked_at_verify,
+                _ => return,
+            };
+            let other = File::open(&img).unwrap();
+            let free = other.try_lock().is_ok();
+            let _ = other.unlock();
+            *slot = Some(!free);
+        };
+        apply(p, false, &AtomicBool::new(false), &mut probe).unwrap();
+        assert_eq!(locked_at_write, Some(true), "held while written");
+        assert_eq!(locked_at_verify, Some(false), "released before the checks");
+        assert_edited(&img);
+    }
+
+    /// The folder sync after the journal's removal failing can't undo the edit, which is in
+    /// the image and checked: the edit is done, with a warning in plain words (the job's
+    /// `commit_ack.warning`), not failed.
+    #[test]
+    fn a_failed_folder_sync_after_the_commit_is_done_with_a_warning() {
+        let tmp = Scratch::new("dirsync");
+        let src = game(&tmp.0, &[7u8; 70_000]);
+        let img = image(&src, &tmp.0, Fmt::Ufs2);
+        let p = prepare(&img, &edits(&tmp.0)).unwrap();
+        let o = apply_stopping(
+            p,
+            false,
+            &AtomicBool::new(false),
+            &mut no_progress(),
+            Stop::DirSyncFails,
+        )
+        .unwrap_or_else(|e| panic!("reported as failed: {e}"));
+        let w = o.warning.clone().expect("a warning");
+        assert!(w.contains("changes are in the image"), "{w}");
+        assert_eq!(o.ack()["warning"], w.as_str());
+        assert!(!patch::journal_path(&img).exists());
+        assert_edited(&img);
+        // A normal run has none.
+        let more = vec![Edit::Mkdir {
+            path: "more".into(),
+        }];
+        let o = apply(
+            prepare(&img, &more).unwrap(),
+            false,
+            &AtomicBool::new(false),
+            &mut no_progress(),
+        )
+        .unwrap();
+        assert!(o.warning.is_none() && o.ack().get("warning").is_none());
+    }
+
     /// A cancel before the first write leaves the image untouched.
     #[test]
     fn a_cancel_writes_nothing() {
@@ -1750,7 +1964,7 @@ mod tests {
         let src = game(&tmp.0, &[7u8; 70_000]);
         let img = image(&src, &tmp.0, Fmt::Exfat);
         let claim = Claim::take(&img).unwrap();
-        assert!(Claim::take(&img).is_none());
+        assert!(Claim::take(&img).is_err());
         assert!(busy(&img).is_some());
         // The folder holding it is busy too (a build of the folder would read it).
         assert!(busy(&tmp.0).is_some());
@@ -1795,7 +2009,7 @@ mod tests {
             std::fs::write(&img, b"x").unwrap();
             let held = Claim::take(&img).unwrap();
             for _ in 0..3 {
-                assert!(Claim::take(&img).is_none());
+                assert!(Claim::take(&img).is_err());
             }
             assert!(busy(&img).is_some());
             assert!(before_open(&img).is_err());
@@ -1803,7 +2017,65 @@ mod tests {
             drop(held);
             assert!(busy(&img).is_none());
             let again = Claim::take(&img);
-            assert!(again.is_some());
+            assert!(again.is_ok());
+        });
+    }
+
+    /// A build registered as reading an image (or the folder holding it) refuses an in-place
+    /// edit's claim, and a claimed image refuses a build's registration, whichever comes first;
+    /// released, the other goes ahead. Two builds may read one image.
+    #[test]
+    fn a_reader_and_an_edit_exclude_each_other_either_order() {
+        within(10, || {
+            let tmp = Scratch::new("readers");
+            let img = tmp.0.join("game.exfat");
+            std::fs::write(&img, b"x").unwrap();
+            // A build first.
+            let read = Reading::take(&img).unwrap();
+            let second = Reading::take(&img).unwrap();
+            let e = Claim::take(&img).err().expect("refused while read");
+            assert!(e.contains("reading"), "{e}");
+            assert!(check_blocking(&img, &[]).busy);
+            drop(read);
+            assert!(Claim::take(&img).is_err(), "one build still reads it");
+            drop(second);
+            let folder = Reading::take(&tmp.0).unwrap();
+            assert!(Claim::take(&img).is_err(), "its folder is read");
+            drop(folder);
+            // An edit first.
+            let claim = Claim::take(&img).unwrap();
+            let e = Reading::take(&img).err().expect("refused while edited");
+            assert!(e.contains("being edited in place"), "{e}");
+            assert!(Reading::take(&tmp.0).is_err(), "an image in it is edited");
+            drop(claim);
+            drop(Reading::take(&img).unwrap());
+            assert!(Claim::take(&img).is_ok());
+        });
+    }
+
+    /// A build and an edit starting at the same moment: never both, many times over.
+    #[test]
+    fn a_reader_and_an_edit_racing_never_both_start() {
+        within(30, || {
+            let tmp = Scratch::new("race");
+            let img = tmp.0.join("game.exfat");
+            std::fs::write(&img, b"x").unwrap();
+            for _ in 0..300 {
+                let gate = std::sync::Arc::new(std::sync::Barrier::new(2));
+                let (g, p) = (gate.clone(), img.clone());
+                let reader = std::thread::spawn(move || {
+                    g.wait();
+                    Reading::take(&p).ok()
+                });
+                gate.wait();
+                let claim = Claim::take(&img).ok();
+                let read = reader.join().unwrap();
+                assert!(
+                    claim.is_none() || read.is_none(),
+                    "a build and an edit both started"
+                );
+                assert!(claim.is_some() || read.is_some(), "one of them starts");
+            }
         });
     }
 
