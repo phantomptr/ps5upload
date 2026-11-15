@@ -1441,12 +1441,16 @@ fn default_add_ampr_emu() -> bool {
 
 /// One change for an edited copy of an image: `{"op":"delete","path":…}` removes a file or
 /// folder; `{"op":"put","path":…,"from":…}` puts a file (or a folder's contents) from this
-/// computer at `path`, replacing what is there.
+/// computer at `path`, replacing what is there; `{"op":"rename","from":…,"to":…}` renames or
+/// moves a file or folder to a path nothing is at yet; `{"op":"mkdir","path":…}` makes a new
+/// empty folder. They are applied in order, each seeing what the ones before it did.
 #[derive(Deserialize, Debug)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub(crate) enum ImageEditReq {
     Delete { path: String },
     Put { path: String, from: String },
+    Rename { from: String, to: String },
+    Mkdir { path: String },
 }
 
 impl ImageEditReq {
@@ -1458,6 +1462,12 @@ impl ImageEditReq {
                 path: path.clone(),
                 from: resolve_engine_path(from),
             },
+            // Both ends of a rename are paths inside the image, not on this computer.
+            Self::Rename { from, to } => Edit::Rename {
+                from: from.clone(),
+                to: to.clone(),
+            },
+            Self::Mkdir { path } => Edit::Mkdir { path: path.clone() },
         }
     }
 }
@@ -1487,7 +1497,8 @@ pub(crate) fn open_edited(source: &Path, edits: &[ImageEditReq]) -> Result<Edite
         }
     };
     let edits: Vec<_> = edits.iter().map(ImageEditReq::edit).collect();
-    let tree = Edited::new(opened.tree, &edits).map_err(|e| e.to_string())?;
+    let tree = Edited::for_filesystem(opened.tree, &edits, opened.filesystem)
+        .map_err(|e| e.to_string())?;
     Ok(EditedImage {
         tree: Box::new(tree),
         format,

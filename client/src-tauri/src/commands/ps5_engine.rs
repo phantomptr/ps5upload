@@ -2477,7 +2477,7 @@ pub async fn exfat_build(
     name: Option<String>,
     // How hard a .ffpfsc is compressed: fast, balanced or smallest; the engine's default when absent.
     ffpfsc_level: Option<String>,
-    // An edited copy of the image `source`: [{op: "delete"|"put", path, from?}], passed through.
+    // An edited copy of the image `source`: [{op: "delete"|"put"|"rename"|"mkdir", path?, from?, to?}], passed through.
     edits: Option<JsonValue>,
     // A name already taken in the output folder is numbered instead of refused.
     keep_both: Option<bool>,

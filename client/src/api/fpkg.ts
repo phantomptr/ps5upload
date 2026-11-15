@@ -362,8 +362,12 @@ export interface AmprIndexOutcome {
   backup?: string | null;
 }
 
-/** One change for an edited copy: delete a file or folder, or put a file (or a folder's
- *  contents) from this computer at `path`, replacing what is there. */
+/** One change for an edited copy: delete a file or folder, put a file (or a folder's
+ *  contents) from this computer at `path`, replacing what is there, rename or move a file or
+ *  folder (`from` and `to` are both paths inside the image; nothing may be at `to`), or make a
+ *  new empty folder. The engine applies them in order. */
 export type ImageEdit =
   | { op: "delete"; path: string }
-  | { op: "put"; path: string; from: string };
+  | { op: "put"; path: string; from: string }
+  | { op: "rename"; from: string; to: string }
+  | { op: "mkdir"; path: string };

@@ -368,8 +368,15 @@ mod tests {
                     path: "data/added".into(),
                     from: added.display().to_string(),
                 },
+                ImageEditReq::Rename {
+                    from: "data/sub/a.bin".into(),
+                    to: "data/moved/hello.bin".into(),
+                },
+                ImageEditReq::Mkdir {
+                    path: "data/made".into(),
+                },
                 ImageEditReq::Delete {
-                    path: "data/sub/a.bin".into(),
+                    path: "data/empty".into(),
                 },
             ];
             let mut edited = open_edited(&image, &edits).unwrap();
@@ -402,8 +409,15 @@ mod tests {
             );
 
             let r = browse_blocking(&copy, Some("data")).unwrap();
-            assert_eq!(names(&r), ["added/ 8", "empty/ 0", "sub/ 0"], "{name}");
+            // The renamed file took its bytes along and left its folder behind, empty; the new
+            // folder is there; the deleted one is not.
+            assert_eq!(
+                names(&r),
+                ["added/ 8", "made/ 0", "moved/ 5", "sub/ 0"],
+                "{name}"
+            );
             let mut tree = ps5upload_fpkg::source::open(&copy).unwrap();
+            assert_eq!(tree.read("data/moved/hello.bin").unwrap(), b"hello");
             assert_eq!(tree.read("eboot.bin").unwrap(), b"patched eboot");
             assert_eq!(tree.read("data/added/deep/new.txt").unwrap(), b"new file");
             assert_eq!(
@@ -418,6 +432,16 @@ mod tests {
         }];
         let err = open_edited(&image, &bad).err().unwrap();
         assert!(err.contains("not in the image"), "{err}");
+        // So is a new name the image's own filesystem cannot hold: exFAT has no ':', UFS2 does.
+        let colon = || {
+            [ImageEditReq::Rename {
+                from: "eboot.bin".into(),
+                to: "e:boot.bin".into(),
+            }]
+        };
+        let err = open_edited(&image, &colon()).err().unwrap();
+        assert!(err.contains("exFAT does not allow"), "{err}");
+        assert!(open_edited(&root.join("1-PPSA99999.ffpkg"), &colon()).is_ok());
         let _ = std::fs::remove_dir_all(&root);
     }
 }

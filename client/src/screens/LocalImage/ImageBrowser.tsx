@@ -6,8 +6,10 @@ import {
   FilePlus,
   Folder,
   FolderOpen,
+  FolderPen,
   FolderPlus,
   FolderSearch,
+  Pencil,
   Replace,
   Save,
   Trash2,
@@ -29,6 +31,7 @@ import { formatBytes } from "../../lib/format";
 import { pickPath } from "../../lib/pickPath";
 import { openLocalPath } from "../../lib/openLocalPath";
 import { useTr } from "../../state/lang";
+import { usePrompt } from "../../components/ConfirmDialog";
 import {
   imageBrowse,
   jobCancel,
@@ -41,9 +44,12 @@ import { BROWSE_IMAGE_EXTENSIONS } from "./imageTypes";
 import {
   baseName,
   crumbs,
+  editKey,
   folderOf,
   joinPath,
+  nameProblem,
   parentDir,
+  pathAfter,
   pendingState,
   queueEdit,
 } from "./browseEdits";
@@ -93,6 +99,7 @@ export function ImageBrowser({
   const [edits, setEdits] = useState<ImageEdit[]>([]);
   const [job, setJob] = useState<RunningJob | null>(null);
   const [finished, setFinished] = useState<Finished | null>(null);
+  const { prompt, dialog: promptDialog } = usePrompt();
   const alive = useRef(true);
   useEffect(
     () => () => {
@@ -225,11 +232,79 @@ export function ImageBrowser({
             : tr("imgbrowse_pick_file", undefined, "Choose a file"),
       });
       if (!from || !listing) return;
-      const path = at ?? joinPath(listing.dir, baseName(from));
-      setEdits((cur) => queueEdit(cur, { op: "put", path, from }));
+      // In a folder a queued rename moves, the new file goes where the folder will be.
+      setEdits((cur) =>
+        queueEdit(cur, {
+          op: "put",
+          path: at ?? joinPath(pathAfter(cur, listing.dir), baseName(from)),
+          from,
+        }),
+      );
     },
     [listing, tr],
   );
+
+  /** Asks for one file or folder name; `null` when cancelled or unusable (said as an error).
+   *  What the image's filesystem allows in a name is the engine's to check, when the copy is
+   *  written. */
+  const askName = useCallback(
+    async (title: string, message: string, defaultValue: string): Promise<string | null> => {
+      const typed = await prompt({ title, message, defaultValue });
+      if (typed === null) return null;
+      if (nameProblem(typed)) {
+        setError(
+          tr(
+            "imgbrowse_name_bad",
+            undefined,
+            "A name cannot be empty, and cannot contain / or \\. Nothing was changed.",
+          ),
+        );
+        return null;
+      }
+      return typed.trim();
+    },
+    [prompt, tr],
+  );
+
+  /** Queues a rename of the listed entry `name` (in the folder shown) to a typed name. */
+  const rename = useCallback(
+    async (path: string, name: string) => {
+      const to = await askName(
+        tr("imgbrowse_rename_title", { name }, `Rename ${name}`),
+        tr(
+          "imgbrowse_rename_body",
+          undefined,
+          "The new name, in the same folder. Nothing else in that folder may have it. The image you opened is not changed: the edited copy has the new name.",
+        ),
+        name,
+      );
+      if (!to || to === name) return;
+      setError(null);
+      setEdits((cur) => {
+        // The entry as the changes queued so far leave it: it may sit in a renamed folder.
+        const from = pathAfter(cur, path);
+        return queueEdit(cur, { op: "rename", from, to: joinPath(parentDir(from), to) });
+      });
+    },
+    [askName, tr],
+  );
+
+  /** Queues a new empty folder in the folder shown. */
+  const newFolder = useCallback(async () => {
+    if (!listing) return;
+    const name = await askName(
+      tr("imgbrowse_mkdir_title", undefined, "New folder"),
+      tr(
+        "imgbrowse_mkdir_body",
+        undefined,
+        "The name of a new, empty folder here. It is kept in the edited copy even when nothing is put in it.",
+      ),
+      "",
+    );
+    if (!name) return;
+    setError(null);
+    setEdits((cur) => queueEdit(cur, { op: "mkdir", path: joinPath(pathAfter(cur, listing.dir), name) }));
+  }, [askName, listing, tr]);
 
   const busy = loading || !!job;
   const dir = listing?.dir ?? "";
@@ -448,6 +523,15 @@ export function ImageBrowser({
                 >
                   {tr("imgbrowse_add_folder", undefined, "Add a folder here")}
                 </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  leftIcon={<FolderPen size={13} />}
+                  disabled={busy}
+                  onClick={() => void newFolder()}
+                >
+                  {tr("imgbrowse_new_folder", undefined, "New folder")}
+                </Button>
               </>
             )}
           </div>
@@ -498,6 +582,19 @@ export function ImageBrowser({
                   {state === "deleted" && (
                     <Badge tone="bad">{tr("imgbrowse_deleted", undefined, "will be deleted")}</Badge>
                   )}
+                  {state === "renamed" &&
+                    // Its own name changes, or only a folder above it does.
+                    (baseName(pathAfter(edits, path)) !== e.name ? (
+                      <Badge tone="warn">
+                        {tr(
+                          "imgbrowse_renamed",
+                          { name: baseName(pathAfter(edits, path)) },
+                          `will be renamed to ${baseName(pathAfter(edits, path))}`,
+                        )}
+                      </Badge>
+                    ) : (
+                      <Badge tone="warn">{tr("imgbrowse_moved", undefined, "will be moved")}</Badge>
+                    ))}
                   <span className="w-24 shrink-0 text-end font-mono text-xs text-[var(--color-muted)]">
                     {formatBytes(e.size)}
                   </span>
@@ -512,7 +609,7 @@ export function ImageBrowser({
                     >
                       <Download size={13} />
                     </Button>
-                    {editable && !e.is_dir && (
+                    {editable && !e.is_dir && state !== "renamed" && (
                       <Button
                         size="sm"
                         variant="ghost"
@@ -524,7 +621,21 @@ export function ImageBrowser({
                         <Replace size={13} />
                       </Button>
                     )}
-                    {editable && state !== "deleted" && (
+                    {/* One rename per entry; a deleted or already renamed one is undone in the
+                        list of changes first. */}
+                    {editable && state !== "deleted" && state !== "renamed" && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        aria-label={tr("imgbrowse_rename_item", { name: e.name }, `Rename ${e.name}`)}
+                        title={tr("imgbrowse_rename_item", { name: e.name }, `Rename ${e.name}`)}
+                        disabled={busy}
+                        onClick={() => void rename(path, e.name)}
+                      >
+                        <Pencil size={13} />
+                      </Button>
+                    )}
+                    {editable && state !== "deleted" && state !== "renamed" && (
                       <Button
                         size="sm"
                         variant="ghost"
@@ -551,15 +662,23 @@ export function ImageBrowser({
           </div>
           <ul className="mb-3 space-y-1 text-sm">
             {edits.map((e, i) => (
-              <li key={`${e.op}:${e.path}:${i}`} className="flex items-center gap-2">
+              <li key={editKey(e, i)} className="flex items-center gap-2">
                 <span className="min-w-0 flex-1 truncate">
                   {e.op === "delete"
                     ? tr("imgbrowse_change_delete", { path: e.path }, `Delete ${e.path}`)
-                    : tr(
-                        "imgbrowse_change_put",
-                        { path: e.path, from: baseName(e.from) },
-                        `Put ${baseName(e.from)} at ${e.path}`,
-                      )}
+                    : e.op === "rename"
+                      ? tr(
+                          "imgbrowse_change_rename",
+                          { from: e.from, to: e.to },
+                          `Rename ${e.from} to ${e.to}`,
+                        )
+                      : e.op === "mkdir"
+                        ? tr("imgbrowse_change_mkdir", { path: e.path }, `New folder ${e.path}`)
+                        : tr(
+                            "imgbrowse_change_put",
+                            { path: e.path, from: baseName(e.from) },
+                            `Put ${baseName(e.from)} at ${e.path}`,
+                          )}
                 </span>
                 <Button
                   size="sm"
@@ -597,6 +716,7 @@ export function ImageBrowser({
           </div>
         </div>
       )}
+      {promptDialog}
     </Card>
   );
 }

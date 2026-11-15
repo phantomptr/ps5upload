@@ -196,6 +196,12 @@ fn name_units(name: &str) -> Result<Vec<u16>> {
     Ok(units)
 }
 
+/// Why exFAT cannot hold `name`, for a caller that wants to refuse it before planning an image
+/// (the image browser's rename and new folder).
+pub(crate) fn check_name(name: &str) -> Result<()> {
+    name_units(name).map(|_| ())
+}
+
 #[derive(Default)]
 struct Node {
     name: String,
