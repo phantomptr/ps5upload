@@ -11,6 +11,7 @@
 //! totals, every pointer — is computed by `plan`, so `write` never goes back.
 
 mod bmap;
+pub mod edit;
 mod geom;
 mod ondisk;
 mod tree;

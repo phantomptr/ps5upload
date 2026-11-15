@@ -29,6 +29,7 @@ use std::sync::atomic::AtomicBool;
 use ps5upload_fpkg::source::SourceTree;
 use ps5upload_fpkg::{Error, Result};
 
+pub mod edit;
 mod image;
 mod read;
 mod wrap;
