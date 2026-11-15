@@ -978,6 +978,13 @@ fn apply_stopping(
     let pending = Pending {
         applied: Some(applied),
     };
+    // Everything is written and synced: the OS lock goes before the checks. On Windows it is
+    // mandatory, and the checks (the format editor's plan, the image's reader) and a recovery
+    // open the image again by its path, which a held lock would refuse: every edit would roll
+    // back. The in-place claim stays until the job ends, so nothing in this engine touches the
+    // image meanwhile. Should the unlock fail, the checks fail and the edit is rolled back
+    // through the handle the apply kept.
+    let _ = file.unlock();
     progress("write", written.max(1), written.max(1));
     let checked = verify(
         kind,
@@ -1790,6 +1797,35 @@ mod tests {
         assert!(!patch::journal_path(&img).exists());
         assert_eq!(snapshot(&img), original);
         consistent(&img, Fmt::Exfat);
+    }
+
+    /// The OS lock is held while the edit is written and released before the checks, which
+    /// open the image again by its path: on Windows a held lock is mandatory and would refuse
+    /// them, and every edit would roll back. A second handle can lock the image as the checks
+    /// start (a held `flock` refuses it here as Windows refuses the read).
+    #[test]
+    fn the_os_lock_is_released_before_the_checks_read_the_image() {
+        let tmp = Scratch::new("unlock");
+        let src = game(&tmp.0, &[7u8; 70_000]);
+        let img = image(&src, &tmp.0, Fmt::Exfat);
+        let p = prepare(&img, &edits(&tmp.0)).unwrap();
+        let mut locked_at_write = None;
+        let mut locked_at_verify = None;
+        let mut probe = |stage: &str, _: u64, _: u64| {
+            let slot = match stage {
+                "write" if locked_at_write.is_none() => &mut locked_at_write,
+                "verify" if locked_at_verify.is_none() => &mut locked_at_verify,
+                _ => return,
+            };
+            let other = File::open(&img).unwrap();
+            let free = other.try_lock().is_ok();
+            let _ = other.unlock();
+            *slot = Some(!free);
+        };
+        apply(p, false, &AtomicBool::new(false), &mut probe).unwrap();
+        assert_eq!(locked_at_write, Some(true), "held while written");
+        assert_eq!(locked_at_verify, Some(false), "released before the checks");
+        assert_edited(&img);
     }
 
     /// A cancel before the first write leaves the image untouched.
