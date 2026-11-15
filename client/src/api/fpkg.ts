@@ -318,6 +318,9 @@ export interface ZstdRuntimeInfo {
   version?: string | null;
   /** Missing, drakmor's (no zstd), or ampr-emu-ng older than 0.3.4: a newer one fixes it. */
   outdated: boolean;
+  /** ampr-emu-ng 0.4.0, which refuses very large games (its 48 MiB index cap): 0.4.1 starts
+   *  them. Absent from an engine older than this field. */
+  capped?: boolean;
 }
 
 /** What updating a zstd-packed game's runtime did. */

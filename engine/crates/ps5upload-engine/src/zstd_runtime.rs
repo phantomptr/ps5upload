@@ -303,6 +303,8 @@ mod tests {
             "{}",
             PINNED.version
         );
+        // Nor is it the release that refuses very large games.
+        assert_ne!(PINNED.version, ng::NG_CAPPED);
         assert!(PINNED.url.starts_with(DOWNLOAD_PREFIX));
         assert!(PINNED.url.contains(&format!("/v{}/", PINNED.version)));
         // The digest this app pins is the one it recognises that release by.

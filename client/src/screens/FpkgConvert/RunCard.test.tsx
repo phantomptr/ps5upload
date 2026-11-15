@@ -641,7 +641,7 @@ describe("RunCard", () => {
       expect(packOptions("ffpkg", lz4({ on: true }))).toBeUndefined();
       expect(packOptions("exfat", lz4({ on: true }), "t")).toEqual({ profileToml: "t", installRuntime: false });
       expect(idle("ffpkg", zstd)).toContain("Newest release (default)");
-      expect(idle("ffpkg", zstd)).toContain("Tested 0.4.0");
+      expect(idle("ffpkg", zstd)).toContain("Tested 0.4.1");
     });
 
     it("packs a folder in zstd only, with the runtime chosen", () => {

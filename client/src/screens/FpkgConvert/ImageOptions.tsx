@@ -79,7 +79,7 @@ export function folderPackOptions(lz4: Lz4Choice | undefined): ZstdPacks | undef
 }
 
 /** The tested ampr-emu-ng release, as the engine pins it (zstd_packs.rs). */
-const NG_TESTED = "0.4.0";
+const NG_TESTED = "0.4.1";
 
 /** Which ampr-emu-ng goes in with zstd packs: the newest release or the tested one. */
 function ZstdRuntimeChoice() {

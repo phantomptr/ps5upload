@@ -23,12 +23,13 @@ use crate::zstd_runtime::PackRuntime;
 
 /// ampr-emu-ng's tested release: fetched once, and only kept or used when its SHA-256 matches.
 /// What a pack build falls back to when the newest release can't be used (`zstd_runtime`).
-/// 0.4.0: releases before 0.3.4 hang some games at startup (ASTRO BOT, ampr-emu-ng#17).
-pub(crate) const NG_VERSION: &str = "0.4.0";
+/// 0.4.1: releases before 0.3.4 hang some games at startup (ASTRO BOT, ampr-emu-ng#17), and
+/// 0.4.0 refuses very large games (its 48 MiB index cap; FF16, Demon's Souls, Returnal).
+pub(crate) const NG_VERSION: &str = "0.4.1";
 pub(crate) const NG_URL: &str =
-    "https://github.com/quer3q/ampr-emu-ng/releases/download/v0.4.0/libSceAmpr.sprx";
+    "https://github.com/quer3q/ampr-emu-ng/releases/download/v0.4.1/libSceAmpr.sprx";
 pub(crate) const NG_SHA256: &str =
-    "8320eb65c16565f42031b9d88b15a447039f0fd7e5694faf5f1cb84cafdba218";
+    "9c7c41b3216bc4f877d67e3c2e5c9c8f9ffabdd5065f4f3fe0dd98fa7228386f";
 
 const ARTIFACTS: [&str; 8] = [
     "ampr_assets.index",
