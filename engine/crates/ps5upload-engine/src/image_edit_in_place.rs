@@ -15,7 +15,10 @@
 //!   deleted; on any failure the journal restores it. A journal a crash left is settled the
 //!   next time the image is opened here ([`before_open`]): restored when complete, deleted when
 //!   it was cut short (nothing had been overwritten yet), kept (and the image refused) when
-//!   damaged. The same journal format as Forge's, so either app recovers the other's.
+//!   damaged. The same journal format as Forge's, so either app recovers the other's. A
+//!   `<image>.forge-undo.id` beside it says which image the journal is for: a journal is never
+//!   restored into another image of the same length put in the crashed one's place (the open
+//!   is refused, both files kept).
 //! * **Exclusive**: one in-place edit per image in this engine ([`busy`]: builds, saves and the
 //!   browser leave it alone meanwhile), no other Workshop job reading it, and an OS lock on the
 //!   file while it is written.
