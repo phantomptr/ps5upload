@@ -335,7 +335,7 @@ $(CONVERT_ELF_C): FORCE
 	@mkdir -p $(dir $@)
 	@if [ -s $(CONVERT_ELF) ]; then \
 		(cd convert && xxd -i ps5upload-convert.elf) > $@.tmp; \
-	elif [ -n "$(CONVERT_REQUIRED)" ]; then \
+	elif [ "$(CONVERT_REQUIRED)" = 1 ]; then \
 		echo "ERROR: $(CONVERT_ELF) is missing. Run: make console-convert" >&2; exit 1; \
 	else \
 		echo "⚠ $(CONVERT_ELF) is missing: this helper cannot convert on the console (make console-convert builds it)" >&2; \

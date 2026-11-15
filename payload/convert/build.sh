@@ -5,6 +5,11 @@
 #
 #   payload/convert/build.sh            build the image if needed, build the ELF, check it
 #   payload/convert/build.sh --check    check the ELF that is already built
+#   payload/convert/build.sh --image    print the toolchain image's name (CI saves and loads it)
+#
+# The image is tagged with a hash of what it is built from (the Dockerfile, the std patch and the
+# SDK pin), and not built again while an image with that tag is there: CI restores it from its
+# cache with `docker load` and skips the build. Any change to those makes a new tag.
 #
 # Output: payload/convert/ps5upload-convert.elf and, beside it, ps5upload-convert.elf.txt (the
 # ELF header, program headers, dynamic section and the symbols it imports). Cargo's output and
@@ -19,15 +24,26 @@ elf=payload/convert/ps5upload-convert.elf
 want_needed="libSceLibcInternal.sprx libkernel_web.sprx"
 
 if [[ "${1:-}" != --inside ]]; then
-  [[ -f third_party/ava1/Cargo.toml ]] || {
-    echo "build.sh: third_party/ava1 is empty; run: git submodule update --init third_party/ava1" >&2
-    exit 1
-  }
   # The helper's SDK pin, so both are built against one SDK.
   sdk_tag=$(sed -n 's/^PS5_SDK_TAG=//p' scripts/ps5-sdk.env)
   sdk_sha=$(sed -n 's/^PS5_SDK_SHA256=//p' scripts/ps5-sdk.env)
   [[ -n $sdk_tag && -n $sdk_sha ]] || { echo "build.sh: no SDK pin in scripts/ps5-sdk.env" >&2; exit 1; }
-  docker build -t "$image" --build-arg SDK_TAG="$sdk_tag" --build-arg SDK_SHA256="$sdk_sha" payload/convert
+  # What the image is built from (its build context holds only these two files that it reads).
+  if command -v sha256sum > /dev/null; then sha() { sha256sum; }; else sha() { shasum -a 256; }; fi
+  image="$image:$({ cat payload/convert/Dockerfile payload/convert/prepare-rust-std.py; echo "$sdk_tag $sdk_sha"; } | sha | cut -c1-16)"
+  if [[ "${1:-}" == --image ]]; then
+    echo "$image"
+    exit 0
+  fi
+  [[ -f third_party/ava1/Cargo.toml ]] || {
+    echo "build.sh: third_party/ava1 is empty; run: git submodule update --init third_party/ava1" >&2
+    exit 1
+  }
+  if docker image inspect "$image" > /dev/null 2>&1; then
+    echo "build.sh: $image is there; not building it again"
+  else
+    DOCKER_BUILDKIT=1 docker build -t "$image" --build-arg SDK_TAG="$sdk_tag" --build-arg SDK_SHA256="$sdk_sha" payload/convert
+  fi
   # The checkout's owner inside the container, so nothing in the tree ends up root-owned.
   exec docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
     -e CARGO_HOME=/work/$out/cargo -v "$PWD:/work" "$image" \

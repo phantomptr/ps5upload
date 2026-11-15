@@ -67,7 +67,8 @@ jobs:
   build-payload:
     name: build-payload
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # 45: the converter's Docker toolchain is built here when engine-ci's cache of it is gone.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -159,12 +160,35 @@ jobs:
         working-directory: client
         run: npm ci --no-audit --no-fund
 
+      # The converter the helper carries (payload/convert), built in Docker. Its toolchain image
+      # comes from engine-ci's cache when main has saved one (same key); else build.sh builds it.
+      # Not saved from here: a tag's cache is not one later runs read.
+      - name: Restore the converter's toolchain image
+        id: convert-image
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/convert-toolchain.tar
+          key: ${{ runner.os }}-${{ runner.arch }}-convert-toolchain-${{ hashFiles('payload/convert/Dockerfile', 'payload/convert/prepare-rust-std.py', 'scripts/ps5-sdk.env') }}
+
+      - name: Load the converter's toolchain image
+        if: steps.convert-image.outputs.cache-hit == 'true'
+        run: docker load -i "$RUNNER_TEMP/convert-toolchain.tar"
+
+      - name: Build the converter (make console-convert)
+        timeout-minutes: 20
+        env:
+          DOCKER_BUILDKIT: 1
+        run: make console-convert
+
       - name: Build payload ELF
         env:
           PS5_PAYLOAD_SDK: /opt/ps5-payload-sdk
           # The SDK's prospero-llvm-config only looks for LLVM versions it knows,
           # so point it at the CI-installed LLVM 22 explicitly.
           LLVM_CONFIG: /usr/bin/llvm-config-22
+          # A release never ships a helper without the converter: payload/Makefile fails the
+          # build when payload/convert/ps5upload-convert.elf is missing.
+          CONVERT_REQUIRED: 1
         run: make payload
 
       - name: Sanity-check ELF shape
