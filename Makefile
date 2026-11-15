@@ -1261,6 +1261,16 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/archive_request_selftest.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-archive-request-selftest
 	@echo "✓ a request an extractor never read (it can hold a password) is deleted, one it may still read is kept"
+	@echo "Running console convert self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -DCONSOLE_CONVERT_SELFTEST -DCONVERT_START_MS=1500 \
+		-DCONVERT_KILL_AFTER_MS=1000 -DCONVERT_POWER_TICK_MS=100 \
+		-I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
+		-o $(SELFTEST_DIR)/ps5upload-console-convert-selftest \
+		$(PAYLOAD_DIR)/tests/console_convert_selftest.c $(PAYLOAD_DIR)/src/console_convert.c \
+		$(PAYLOAD_DIR)/src/console_convert_wire.c $(PAYLOAD_DIR)/src/webui_codec.c \
+		$(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-console-convert-selftest
+	@echo "✓ the converter's request, status (also cut short or garbage), Stop, kill and leftover sweep"
 	@echo "Running AVA1 in-flight RPC gate self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -pthread -I$(AVA1_C) \
 		-o $(SELFTEST_DIR)/ps5upload-ava1-rpc-gate-selftest \

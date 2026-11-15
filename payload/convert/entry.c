@@ -45,10 +45,10 @@ int __wrap_main(int argc, char **argv) {
      * (runtime_sweep_our_instances). */
     proc_name_set_self(CONVERT_PROC_NAME);
 
-    /* 0777 like every folder the helper makes under /data/ps5upload: the helper, started by
-     * another loader, may run as another user. */
+    /* The helper makes the job folder (0700, as it makes the extractor's) before it starts this
+     * program; these are for a start by hand, before any helper ran. */
     if (mkdir("/data/ps5upload", 0777) != 0 && errno != EEXIST) return 1;
-    if (mkdir(CONVERT_DIR, 0777) != 0 && errno != EEXIST) return 1;
+    if (mkdir(CONVERT_DIR, 0700) != 0 && errno != EEXIST) return 1;
 
     /* The loader hands us its socket as stdio; the helper has long closed it, and a write to it
      * would end the program with SIGPIPE in the middle of a job. */

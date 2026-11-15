@@ -30,6 +30,9 @@ int archive_extract_op(void *arg, struct ava1_op_ctx *c, const uint8_t *args, si
 /* Registers JOB_OP_ARCHIVE_EXTRACT with ava1_op.c (next to fs_jobs.c's ops). */
 void archive_extract_register(void);
 
+/* 1 while an extraction runs in this helper (console_convert.c refuses to build beside one). */
+int archive_extract_running(void);
+
 /* A helper that died mid-extraction leaves its extractor's work behind: at the next start, a folder
  * that run created is removed (unless the old helper or its extractor still runs). */
 void archive_extract_sweep(void);
