@@ -67,6 +67,9 @@ interface RunningJob {
 interface Finished {
   kind: "save" | "edit" | "inplace";
   dest: string;
+  /** Done, but with something to say (an in-place edit whose journal removal may not have
+   *  reached the disk: the changes are in the image and checked). */
+  warning?: string;
 }
 
 const FS_LABEL: Record<ImageBrowseListing["filesystem"], string> = {
@@ -174,7 +177,8 @@ export function ImageBrowser({
           const snap = await jobStatus(id);
           if (!alive.current) return;
           if (snap.status === "done") {
-            setFinished({ kind, dest: snap.dest ?? "" });
+            const warning = snap.commit_ack?.warning;
+            setFinished({ kind, dest: snap.dest ?? "", ...(typeof warning === "string" && warning ? { warning } : {}) });
             if (kind === "edit" || kind === "inplace") setEdits([]);
             return;
           }
@@ -440,7 +444,7 @@ export function ImageBrowser({
                 ? tr("imgbrowse_inplace_done", undefined, "Changes applied to the image and checked")
                 : tr("imgbrowse_save_done", undefined, "Saved and checked")
           }
-          detail={finished.dest}
+          detail={finished.warning ? `${finished.dest} — ${finished.warning}` : finished.dest}
           onDismiss={() => setFinished(null)}
           action={
             <div className="flex gap-2">
