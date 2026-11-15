@@ -630,6 +630,20 @@ impl Edited {
         })
     }
 
+    /// The files whose bytes or place the edits change: those put from this computer and the
+    /// image's own files that were renamed or moved. What an in-place edit reads back in full.
+    pub fn changed_files(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .local
+            .keys()
+            .chain(self.moved.keys())
+            .cloned()
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
     fn size_of(&self, path: &str) -> Result<u64> {
         self.files
             .iter()

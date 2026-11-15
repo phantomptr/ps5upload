@@ -409,6 +409,7 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/host-net/allow-firewall"),
     ("POST", "/api/host-net/open-settings"),
     ("POST", "/api/image/browse"),
+    ("POST", "/api/image/edit/check"),
     ("GET", "/api/jobs"),
     ("GET", "/api/jobs/summaries"),
     ("GET", "/api/jobs/{id}"),

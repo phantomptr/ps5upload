@@ -31,7 +31,7 @@ import { formatBytes } from "../../lib/format";
 import { pickPath } from "../../lib/pickPath";
 import { openLocalPath } from "../../lib/openLocalPath";
 import { useTr } from "../../state/lang";
-import { usePrompt } from "../../components/ConfirmDialog";
+import { useConfirm, usePrompt } from "../../components/ConfirmDialog";
 import {
   imageBrowse,
   jobCancel,
@@ -39,7 +39,7 @@ import {
   type ImageBrowseListing,
   type JobStageSnapshot,
 } from "../../api/ps5";
-import { fpkg, type ImageEdit } from "../../api/fpkg";
+import { fpkg, type ImageEdit, type InPlaceCheck } from "../../api/fpkg";
 import { BROWSE_IMAGE_EXTENSIONS } from "./imageTypes";
 import {
   baseName,
@@ -54,10 +54,10 @@ import {
   queueEdit,
 } from "./browseEdits";
 
-/** A save or an edited copy the engine is running. */
+/** A save, an edited copy or an in-place edit the engine is running. */
 interface RunningJob {
   id: string;
-  kind: "save" | "edit";
+  kind: "save" | "edit" | "inplace";
   what: string;
   done: number;
   total: number;
@@ -65,7 +65,7 @@ interface RunningJob {
 }
 
 interface Finished {
-  kind: "save" | "edit";
+  kind: "save" | "edit" | "inplace";
   dest: string;
 }
 
@@ -100,6 +100,10 @@ export function ImageBrowser({
   const [job, setJob] = useState<RunningJob | null>(null);
   const [finished, setFinished] = useState<Finished | null>(null);
   const { prompt, dialog: promptDialog } = usePrompt();
+  const { confirm, dialog: confirmDialog } = useConfirm();
+  // Whether the pending changes can go into the image itself (asked of the engine as they
+  // change); null while unknown or not offered.
+  const [inPlace, setInPlace] = useState<InPlaceCheck | null>(null);
   const alive = useRef(true);
   useEffect(
     () => () => {
@@ -166,7 +170,7 @@ export function ImageBrowser({
           if (!alive.current) return;
           if (snap.status === "done") {
             setFinished({ kind, dest: snap.dest ?? "" });
-            if (kind === "edit") setEdits([]);
+            if (kind === "edit" || kind === "inplace") setEdits([]);
             return;
           }
           if (snap.status === "failed") {
@@ -221,6 +225,53 @@ export function ImageBrowser({
       setError(String(e));
     }
   }, [edits, follow, image]);
+
+  // Ask whether the changes fit in place, a moment after they stop changing.
+  const offersInPlace = !!listing?.in_place;
+  const jobRunning = !!job;
+  useEffect(() => {
+    setInPlace(null);
+    if (!image || !offersInPlace || edits.length === 0 || jobRunning) return;
+    let stale = false;
+    const t = setTimeout(() => {
+      fpkg
+        .checkEditInPlace(image, edits)
+        .then((c) => {
+          if (!stale && alive.current) setInPlace(c);
+        })
+        .catch(() => {
+          if (!stale && alive.current) setInPlace(null);
+        });
+    }, 400);
+    return () => {
+      stale = true;
+      clearTimeout(t);
+    };
+  }, [image, edits, offersInPlace, jobRunning]);
+
+  const applyInPlace = useCallback(async () => {
+    if (!image || edits.length === 0) return;
+    const name = baseName(image);
+    const ok = await confirm({
+      title: tr("imgbrowse_inplace_confirm_title", { name }, `Change ${name} itself?`),
+      message: tr(
+        "imgbrowse_inplace_confirm",
+        { name },
+        `The changes are written into ${name} itself; no copy is made. An undo journal is kept beside it while they go in, so if this is interrupted (the app closes, the computer loses power) the image is put back as it was the next time it is opened. Every changed file is read back, and if anything does not check out the image is restored.`,
+      ),
+      confirmLabel: tr("imgbrowse_inplace_apply", undefined, "Apply in place"),
+    });
+    if (!ok) return;
+    setError(null);
+    try {
+      const { job_id } = await fpkg.editImageInPlace(image, edits);
+      await follow(job_id, "inplace", name);
+      if (alive.current) await load(image, listing?.dir ?? "");
+    } catch (e) {
+      // Refused (it didn't fit, the image is in use): the edited copy is still there to use.
+      setError(String(e));
+    }
+  }, [confirm, edits, follow, image, listing?.dir, load, tr]);
 
   const putFrom = useCallback(
     async (mode: "file" | "folder", at?: string) => {
@@ -354,9 +405,9 @@ export function ImageBrowser({
     >
       <p className="mb-3 text-sm text-[var(--color-muted)]">
         {tr(
-          "imgbrowse_explain",
+          "imgbrowse_explain_v2",
           undefined,
-          "Browse any game image or package ps5upload reads (.exfat, .ffpkg, .ffpfs, .ffpfsc, or a .pkg made with the debug key) on any computer, without mounting it. Save a file or folder to the computer, or change files and write an edited copy: the image you opened is never changed.",
+          "Browse any game image or package ps5upload reads (.exfat, .ffpkg, .ffpfs, .ffpfsc, or a .pkg made with the debug key) on any computer, without mounting it. Save a file or folder to the computer, or change files and write an edited copy. The image you opened changes only if you choose Apply in place.",
         )}
       </p>
 
@@ -373,7 +424,9 @@ export function ImageBrowser({
           title={
             finished.kind === "edit"
               ? tr("imgbrowse_copy_done", undefined, "Edited copy written and checked")
-              : tr("imgbrowse_save_done", undefined, "Saved and checked")
+              : finished.kind === "inplace"
+                ? tr("imgbrowse_inplace_done", undefined, "Changes applied to the image and checked")
+                : tr("imgbrowse_save_done", undefined, "Saved and checked")
           }
           detail={finished.dest}
           onDismiss={() => setFinished(null)}
@@ -402,7 +455,9 @@ export function ImageBrowser({
             <span className="truncate">
               {job.kind === "edit"
                 ? tr("imgbrowse_writing_copy", { name: job.what }, `Writing an edited copy of ${job.what}`)
-                : tr("imgbrowse_saving", { name: job.what }, `Saving ${job.what}`)}
+                : job.kind === "inplace"
+                  ? tr("imgbrowse_applying_inplace", { name: job.what }, `Applying the changes to ${job.what}`)
+                  : tr("imgbrowse_saving", { name: job.what }, `Saving ${job.what}`)}
               {job.stage?.id === "verify"
                 ? ` · ${tr("imgbrowse_checking", undefined, "checking")}`
                 : ""}
@@ -710,13 +765,39 @@ export function ImageBrowser({
             >
               {tr("imgbrowse_write_copy", undefined, "Write edited copy")}
             </Button>
+            {inPlace?.in_place && (
+              <Button
+                variant="secondary"
+                size="sm"
+                leftIcon={<Pencil size={13} />}
+                disabled={busy}
+                onClick={() => void applyInPlace()}
+                title={tr(
+                  "imgbrowse_inplace_hint",
+                  undefined,
+                  "Write the changes into this image instead of making a copy",
+                )}
+              >
+                {tr("imgbrowse_inplace_apply", undefined, "Apply in place")}
+              </Button>
+            )}
             <Button size="sm" variant="ghost" disabled={busy} onClick={() => setEdits([])}>
               {tr("imgbrowse_discard", undefined, "Discard changes")}
             </Button>
           </div>
+          {inPlace && !inPlace.in_place && inPlace.reason && (
+            <p className="mt-2 text-xs text-[var(--color-muted)]">
+              {tr(
+                "imgbrowse_inplace_no",
+                { reason: inPlace.reason },
+                `These changes can't be applied to the image itself (${inPlace.reason}); write an edited copy instead.`,
+              )}
+            </p>
+          )}
         </div>
       )}
       {promptDialog}
+      {confirmDialog}
     </Card>
   );
 }

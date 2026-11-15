@@ -13,9 +13,9 @@ const LINK_MAX: u64 = 65500;
 const MAXNAMLEN: usize = 255;
 /// FreeBSD's `MAXPATHLEN` (with its NUL): a longer path cannot be opened on the console
 /// anyway, and the bound keeps the per-directory path keys and the recursion below small.
-const MAXPATHLEN: usize = 1023;
+pub(crate) const MAXPATHLEN: usize = 1023;
 /// FreeBSD's `MAXDIRSIZE`: directory offsets are a signed 32-bit `doff_t`.
-const MAXDIRSIZE: u64 = 0x7fff_ffff;
+pub const MAXDIRSIZE: u64 = 0x7fff_ffff;
 
 /// One inode to write. Nodes are kept in inode order: node i is inode `ROOTINO + i`.
 #[derive(Debug, Clone)]
@@ -60,7 +60,7 @@ impl Node {
 }
 
 /// Why a single path component cannot go into the image as is.
-fn bad_component(c: &str) -> Option<&'static str> {
+pub(crate) fn bad_component(c: &str) -> Option<&'static str> {
     if c.is_empty() {
         return Some("empty path component");
     }

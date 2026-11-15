@@ -1,0 +1,15 @@
+[package]
+name = "ps5-dump-forge-patch"
+# From PS5 Dump Forge by quer3q (https://github.com/quer3q/ps5-dump-forge), GPL-3.0-or-later,
+# commit 8295556 (crates/ps5-dump-forge-patch). Edition 2024 as upstream, so the files stay as
+# they are there. The undo journal every in-place image edit goes through.
+edition = "2024"
+license = "GPL-3.0-or-later"
+version.workspace = true
+
+[dependencies]
+crc32fast = "1.5"
+
+[features]
+# `Step` and `apply_until_step`: stop an apply as if the process died (engine tests only).
+fault-injection = []

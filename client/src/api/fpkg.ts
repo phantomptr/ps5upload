@@ -349,6 +349,15 @@ export const fpkg = {
    *  itself is only read. One job, like an image build. */
   editImage: (source: string, edits: ImageEdit[], outputDir?: string, name?: string, fullVerify = false) =>
     invoke<{ job_id: string }>("exfat_build", { source, outputDir, name, fullVerify, edits }),
+  /** Apply `edits` to the image ITSELF (an uncompressed .exfat, .ffpkg or .ffpfs on this
+   *  computer), with an undo journal beside it so an interrupted change is undone; every changed
+   *  file is read back and any failure restores the image. Refused, with the reason, when the
+   *  changes don't fit the image's free space (it never grows). One job. */
+  editImageInPlace: (source: string, edits: ImageEdit[], fullVerify = false) =>
+    invoke<{ job_id: string }>("exfat_build", { source, fullVerify, edits, inPlace: true }),
+  /** Whether `edits` can go into the image itself, without writing anything. */
+  checkEditInPlace: (path: string, edits: ImageEdit[]) =>
+    invoke<InPlaceCheck>("image_edit_check", { path, edits }),
   /** Rebuild a libSceAmpr game folder's `ampr_emu.index` where it is, on this computer or the
    *  PS5 (`ps5://`), the game's own kept once as `ampr_emu.index.bak` (#621). A job: its stage
    *  is `list`, `check` or `write`; done, `dest` is the index and `commit_ack` the
@@ -428,6 +437,19 @@ export interface AmprIndexOutcome {
  *  contents) from this computer at `path`, replacing what is there, rename or move a file or
  *  folder (`from` and `to` are both paths inside the image; nothing may be at `to`), or make a
  *  new empty folder. The engine applies them in order. */
+/** What `/api/image/edit/check` says about applying edits to the image itself. */
+export interface InPlaceCheck {
+  in_place: boolean;
+  /** Why not, for the user (when `in_place` is false). */
+  reason?: string;
+  /** The image is in use right now. */
+  busy: boolean;
+  filesystem?: "exfat" | "ufs2" | "pfs";
+  needed_bytes?: number;
+  free_bytes?: number;
+  journal_bytes?: number;
+}
+
 export type ImageEdit =
   | { op: "delete"; path: string }
   | { op: "put"; path: string; from: string }

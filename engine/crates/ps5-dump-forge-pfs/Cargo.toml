@@ -1,12 +1,15 @@
 [package]
 name = "ps5-dump-forge-pfs"
 # From PS5 Dump Forge by quer3q (https://github.com/quer3q/ps5-dump-forge), GPL-3.0-or-later,
-# commit 2d65974. Edition 2024 as upstream, so the files stay as they are there.
+# commit 2d65974; the in-place editor (src/edit.rs, with src/image.rs and the reader's
+# collision-resolver check it needs) from commit 8295556. Edition 2024 as upstream, so the
+# files stay as they are there.
 edition = "2024"
 license = "GPL-3.0-or-later"
 version.workspace = true
 
 [dependencies]
+ps5-dump-forge-patch = { path = "../ps5-dump-forge-patch" }
 ps5upload-fpkg = { path = "../ps5upload-fpkg" }
 flate2 = "1"
 
