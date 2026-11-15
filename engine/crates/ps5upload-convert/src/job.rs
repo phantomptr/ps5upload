@@ -17,7 +17,8 @@
 //!   translate; `detail` is for the log; `result` is the op's answer.
 //! - `cancel`: created by the helper to stop a job. A thread looks for it every
 //!   [`CANCEL_EVERY`] and raises the job's cancel flag, which the build code checks at every
-//!   checkpoint of its loops.
+//!   checkpoint of its loops. One there when the build starts (its helper gave up waiting for
+//!   this converter) stops it before it clears or writes anything.
 //!
 //! A build writes `<dest>.partial` (a file, or a folder for a folder output) beside `dest`, and,
 //! for an image, may leave `<dest>.partial.resume` and `<dest>.partial.stamp` beside it: the
@@ -232,6 +233,14 @@ fn plan(request: &Request) -> Result<Plan, Refusal> {
             request.dest, request.path
         )));
     }
+    if reads_own_leftovers(&source, &dest) {
+        // The build clears `<dest>.partial` (and its two side files) before it writes: a source
+        // that is one of them, or inside one, would be deleted.
+        return Err(bad_dest(format!(
+            "the source {} is where a build of {} writes",
+            request.path, request.dest
+        )));
+    }
     let zstd = if request.zstd {
         let level = request.zstd_level.unwrap_or(DEFAULT_ZSTD_LEVEL);
         if !(1..=22).contains(&level) {
@@ -248,6 +257,23 @@ fn plan(request: &Request) -> Result<Plan, Refusal> {
         mode,
         zstd,
     })
+}
+
+/// Whether a build of `dest` would clear or write over `source`: `source` is one of the names a
+/// build of `dest` writes and clears (`<dest>.partial`, `.partial.resume`, `.partial.stamp`) or
+/// is inside one, or one of those names is inside `source`. Compared without case: on an exFAT
+/// drive `g.partial` and `G.partial` are one folder, and refusing one build too many is safe.
+fn reads_own_leftovers(source: &Path, dest: &Path) -> bool {
+    let lower = |p: &Path| PathBuf::from(p.to_string_lossy().to_ascii_lowercase());
+    let source = lower(source);
+    let partial = folder_build::partial_of(dest);
+    let resume = image_build::checkpoint_path(&partial);
+    let mut stamp = partial.clone().into_os_string();
+    stamp.push(".stamp");
+    [partial, resume, PathBuf::from(stamp)]
+        .iter()
+        .map(|p| lower(p))
+        .any(|own| source.starts_with(&own) || own.starts_with(&source))
 }
 
 /// The emulator zstd packs carry, from the file the app put on the console. Never fetched here:
@@ -387,6 +413,11 @@ fn build(
             detail: format!("{}: {why}", dir.display()),
         });
     }
+    // Stopped before the first write (a converter that started late, after its helper gave up on
+    // it and left the cancel file): nothing is cleared or written.
+    if cancel.load(Ordering::Relaxed) {
+        return Err(failure("cancelled".into(), true, &plan));
+    }
     // Ours alone from here: a leftover of an earlier run under this name is cleared.
     let partial = folder_build::partial_of(&plan.dest);
     let Some(_writing) = ps5upload_convert_core::writing::Writing::claim(partial) else {
@@ -487,7 +518,9 @@ fn run_build(
     base: &serde_json::Value,
     hook: &mut dyn FnMut(&str),
 ) -> Result<serde_json::Value, Refusal> {
-    let cancel = Arc::new(AtomicBool::new(false));
+    // A cancel file already there (left by a helper that stopped waiting for this converter) is
+    // seen before anything else: the watcher's first look could come after the build's first write.
+    let cancel = Arc::new(AtomicBool::new(dir.join("cancel").exists()));
     let done = Arc::new(AtomicBool::new(false));
     let watcher = watch_cancel(dir, Arc::clone(&cancel), Arc::clone(&done));
     let mut running = Running {
@@ -808,6 +841,85 @@ mod tests {
                 .collect();
             assert!(left.is_empty(), "{format}: {left:?}");
         }
+    }
+
+    /// A source named like the build's own leftovers (`<dest>.partial`, its side files, or a
+    /// folder inside one) is refused before anything is cleared: the source stays.
+    #[test]
+    fn a_source_where_the_build_writes_is_refused_and_kept() {
+        let tmp = TempDir::new("jobpartialsrc");
+        let game = game_folder(&tmp.0);
+        let as_partial = tmp.0.join("G.partial");
+        std::fs::rename(&game, &as_partial).unwrap();
+        let build = |path: &Path, dest: &Path, format: &str| {
+            std::fs::write(
+                tmp.0.join("request.json"),
+                json!({"id": "p", "op": "build", "path": path, "dest": dest, "format": format})
+                    .to_string(),
+            )
+            .unwrap();
+            assert_eq!(run(&tmp.0).unwrap(), 1);
+            status(&tmp.0)["cause"].clone()
+        };
+        assert_eq!(
+            build(&as_partial, &tmp.0.join("G"), "folder"),
+            "convert_bad_dest"
+        );
+        // Any case: one folder on an exFAT drive.
+        assert_eq!(
+            build(&as_partial, &tmp.0.join("g"), "folder"),
+            "convert_bad_dest"
+        );
+        assert!(as_partial.join("sce_sys/param.json").is_file());
+
+        // A source folder inside `<dest>.partial`.
+        let outer = tmp.0.join("H.partial");
+        std::fs::create_dir_all(&outer).unwrap();
+        let inner = outer.join("PPSA01234");
+        std::fs::rename(&as_partial, &inner).unwrap();
+        assert_eq!(
+            build(&inner, &tmp.0.join("H"), "folder"),
+            "convert_bad_dest"
+        );
+        assert!(inner.join("sce_sys/param.json").is_file());
+
+        let p = Path::new;
+        assert!(reads_own_leftovers(p("/d/G.partial"), p("/d/G")));
+        assert!(reads_own_leftovers(p("/d/G.partial/x"), p("/d/G")));
+        assert!(reads_own_leftovers(
+            p("/d/G.exfat.partial.resume"),
+            p("/d/G.exfat")
+        ));
+        assert!(reads_own_leftovers(
+            p("/d/G.exfat.partial.stamp"),
+            p("/d/G.exfat")
+        ));
+        assert!(reads_own_leftovers(p("/d"), p("/d/G")));
+        assert!(!reads_own_leftovers(p("/d/G.partial2"), p("/d/G")));
+        assert!(!reads_own_leftovers(p("/d/Game"), p("/e/G")));
+    }
+
+    /// A converter that starts after its helper gave up on it finds the cancel file the helper
+    /// left: it stops before its first write, and an earlier run's leftover is not cleared.
+    #[test]
+    fn a_cancel_there_at_start_stops_before_any_write() {
+        let (tmp, game, dir) = setup("jobcancelfirst");
+        let dest = tmp.0.join("late.exfat");
+        let leftover = tmp.0.join("late.exfat.partial");
+        std::fs::write(&leftover, b"an earlier run's").unwrap();
+        std::fs::write(dir.join("cancel"), b"").unwrap();
+        ask(
+            &dir,
+            json!({"id": "l", "op": "build", "path": game, "dest": dest, "format": "exfat"}),
+        );
+        let mut stages = Vec::new();
+        let code = run_with(&dir, &mut |s| stages.push(s.to_string())).unwrap();
+        let s = status(&dir);
+        assert_eq!(code, 1, "{s}");
+        assert_eq!(s["cause"], "convert_cancelled");
+        assert!(stages.is_empty(), "{stages:?}");
+        assert!(!dest.exists());
+        assert_eq!(std::fs::read(&leftover).unwrap(), b"an earlier run's");
     }
 
     #[test]

@@ -73,6 +73,8 @@ export const RULES = [
   // The console converter (payload/convert builds it into the helper, in the payload job) and
   // the crates it links.
   { pattern: "engine/crates/ps5upload-convert/**", lanes: [...RUST_USERS, "payload"] },
+  { pattern: "engine/crates/ps5upload-convert-core/**", lanes: [...RUST_USERS, "payload"] },
+  { pattern: "engine/crates/ps5-dump-forge-*/**", lanes: [...RUST_USERS, "payload"] },
   { pattern: "engine/crates/ps5upload-fpkg/**", lanes: [...RUST_USERS, "payload"] },
   { pattern: "engine/crates/ps5upload-pkg/**", lanes: [...RUST_USERS, "payload"] },
   // The rest of the engine workspace. The desktop and Android apps link the engine, and the
@@ -125,7 +127,10 @@ function toRegex(pattern) {
     return new RegExp(`^(?:.*/)?${rest}$`);
   }
   if (pattern.endsWith("/**")) {
-    const dir = pattern.slice(0, -3).replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+    const dir = pattern
+      .slice(0, -3)
+      .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*/g, "[^/]*");
     return new RegExp(`^${dir}/`);
   }
   const body = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*");

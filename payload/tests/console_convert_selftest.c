@@ -99,8 +99,17 @@ int is_path_allowed(const char *p) { return strncmp(p, g_root, strlen(g_root)) =
 int path_tree_op_refused(const char *p) { return strstr(p, "/refused") != NULL; }
 
 static int g_installing, g_extracting, g_ticks;
-int webui_pkg_installing(void) { return g_installing; }
-int archive_extract_running(void) { return g_extracting; }
+/* What console_convert_building() said each time the build's busy check read the others' flags:
+ * the build's own must already be up (set first, then theirs read). -1: not asked yet. */
+static int g_building_when_installing_read = -1, g_building_when_extracting_read = -1;
+int webui_pkg_installing(void) {
+    g_building_when_installing_read = console_convert_building();
+    return g_installing;
+}
+int archive_extract_running(void) {
+    g_building_when_extracting_read = console_convert_building();
+    return g_extracting;
+}
 pthread_mutex_t sony_api_lock = PTHREAD_MUTEX_INITIALIZER;
 int sceSystemServicePowerTick(void) {
     g_ticks++;
@@ -111,8 +120,22 @@ unsigned int ps5upload_convert_elf_len = 1;
 
 /* ---- the stand-in converter ---- */
 
-typedef enum { FAKE_INSPECT, FAKE_BUILD_UNTIL_CANCEL, FAKE_HANG, FAKE_NEVER, FAKE_DIED, FAKE_FAILS, FAKE_STAGES } fake_t;
+typedef enum {
+    FAKE_INSPECT,
+    FAKE_BUILD_UNTIL_CANCEL,
+    FAKE_HANG,
+    FAKE_NEVER,
+    FAKE_DIED,
+    FAKE_FAILS,
+    FAKE_STAGES,
+    FAKE_PID,   /* reports pid g_fake_pid, then Stop, and never ends */
+    FAKE_STOLEN /* another job takes the folder (its record and status), then this one fails */
+} fake_t;
 static fake_t g_fake;
+static long long g_fake_pid;
+/* The pid the in-thread stand-ins report: a sleeping child of this test, since the helper never
+ * takes its own pid for the converter's. */
+static pid_t g_alive;
 static char g_dir[300], g_request[4096];
 static ava1_op_ctx_t *g_ctx;
 static pid_t g_child;
@@ -177,7 +200,7 @@ static void *fake_main(void *arg) {
     switch (g_fake) {
     case FAKE_NEVER: break;
     case FAKE_INSPECT:
-        put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"inspect\",\"state\":\"running\"}\n", id, (long)getpid());
+        put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"inspect\",\"state\":\"running\"}\n", id, (long)g_alive);
         usleep(300 * 1000);
         /* What a reader could catch if the file were written in place: half a status. The helper
          * must read it as "nothing new", not as a failure. */
@@ -187,12 +210,12 @@ static void *fake_main(void *arg) {
         usleep(300 * 1000);
         put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"inspect\",\"state\":\"done\","
                    "\"result\":{\"path\":\"/x/a \\\"b\\\" }\",\"files\":3,\"warnings\":[\"no {eboot}\"]}}\n",
-                   id, (long)getpid());
+                   id, (long)g_alive);
         break;
     case FAKE_FAILS:
         put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"build\",\"state\":\"failed\",\"cause\":\"convert_build_failed\","
                    "\"detail\":\"read all 5 bytes\"}\n",
-                   id, (long)getpid());
+                   id, (long)g_alive);
         break;
     case FAKE_BUILD_UNTIL_CANCEL: {
         unsigned done = 0;
@@ -200,12 +223,12 @@ static void *fake_main(void *arg) {
             done += 1000;
             put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"build\",\"state\":\"running\",\"stage\":\"read\","
                        "\"bytes_done\":%u,\"bytes_total\":1000000}\n",
-                       id, (long)getpid(), done);
+                       id, (long)g_alive, done);
             usleep(100 * 1000);
             if (done >= 3000) g_ctx->cancelled = 1; /* the user presses Stop */
         }
         put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"build\",\"state\":\"failed\",\"cause\":\"convert_cancelled\"}\n", id,
-                   (long)getpid());
+                   (long)g_alive);
         break;
     }
     case FAKE_STAGES: {
@@ -216,13 +239,27 @@ static void *fake_main(void *arg) {
         for (size_t i = 0; i < sizeof steps / sizeof steps[0]; i++) {
             put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"build\",\"state\":\"running\",\"stage\":\"%s\","
                        "\"bytes_done\":%u,\"bytes_total\":%u}\n",
-                       id, (long)getpid(), steps[i].stage, steps[i].done, steps[i].total);
+                       id, (long)g_alive, steps[i].stage, steps[i].done, steps[i].total);
             usleep(700 * 1000); /* slower than the helper reads, so it sees every step */
         }
         put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"build\",\"state\":\"done\",\"result\":{\"path\":\"x\"}}\n", id,
-                   (long)getpid());
+                   (long)g_alive);
         break;
     }
+    case FAKE_STOLEN: {
+        char rec[400], text[600];
+        path_in(rec, sizeof rec, "job.rec");
+        cc_record_format(text, sizeof text, 0, (long)getppid(), "feed", "/elsewhere/other.exfat");
+        put_file(rec, text);
+        put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"build\",\"state\":\"failed\",\"cause\":\"convert_build_failed\"}\n",
+                   id, (long)g_alive);
+        break;
+    }
+    case FAKE_PID:
+        put_status("{\"id\":\"%s\",\"pid\":%lld,\"op\":\"build\",\"state\":\"running\",\"stage\":\"write\"}\n", id,
+                   g_fake_pid);
+        g_ctx->cancelled = 1;
+        break;
     case FAKE_HANG:
     case FAKE_DIED:
         /* A process of its own, so the helper has a pid it may kill. */
@@ -350,6 +387,15 @@ static void test_wire(void) {
     CHECK(s.bytes_done == 5 && s.bytes_total == 9);
     CHECK(s.result && s.result_len == strlen("{\"a\":\"}\",\"b\":[1,{\"c\":2}]}") &&
           strncmp(s.result, "{\"a\":\"}\"", 8) == 0);
+    /* A pid that cannot be the converter's reads as none: cast to pid_t these would be -1 (every
+     * process), 1 (init) or 0 (the helper's own process group). */
+    CHECK(PARSE("{\"id\":\"ab\",\"state\":\"running\",\"pid\":4294967295}") == 1 && s.pid == 0);
+    CHECK(PARSE("{\"id\":\"ab\",\"state\":\"running\",\"pid\":4294967297}") == 1 && s.pid == 0);
+    CHECK(PARSE("{\"id\":\"ab\",\"state\":\"running\",\"pid\":2147483648}") == 1 && s.pid == 0);
+    CHECK(PARSE("{\"id\":\"ab\",\"state\":\"running\",\"pid\":1}") == 1 && s.pid == 0);
+    CHECK(PARSE("{\"id\":\"ab\",\"state\":\"running\",\"pid\":0}") == 1 && s.pid == 0);
+    CHECK(PARSE("{\"id\":\"ab\",\"state\":\"running\",\"pid\":2147483647}") == 1 && s.pid == 2147483647u);
+    CHECK(!cc_pid_ok(0) && !cc_pid_ok(1) && cc_pid_ok(2) && !cc_pid_ok(0xFFFFFFFFu) && !cc_pid_ok(0x100000001ull));
     /* Another job's, an unknown state, no state. */
     CHECK(cc_status_parse(full, n, "zz", &s) == 0);
     CHECK(cc_status_parse("{\"id\":\"ab\",\"state\":\"paused\"}", 28, "ab", &s) == 0);
@@ -379,16 +425,25 @@ static void test_wire(void) {
     {
         unsigned long long xpid = 0;
         long hpid = 0;
-        char dest[64];
-        len = cc_record_format(buf, sizeof buf, 4242, 77, "/data/out.exfat");
-        CHECK(len > 0 && cc_record_parse(buf, &xpid, &hpid, dest, sizeof dest) == 1);
-        CHECK(xpid == 4242 && hpid == 77 && strcmp(dest, "/data/out.exfat") == 0);
-        len = cc_record_format(buf, sizeof buf, 1, 2, "");
-        CHECK(len > 0 && cc_record_parse(buf, &xpid, &hpid, dest, sizeof dest) == 1 && !dest[0]);
-        CHECK(cc_record_format(buf, sizeof buf, 1, 2, "/data/a\nb") == -1);
-        CHECK(cc_record_parse("garbage", &xpid, &hpid, dest, sizeof dest) == 0);
-        CHECK(cc_record_parse("12 x\n/a\n", &xpid, &hpid, dest, sizeof dest) == 0);
-        CHECK(cc_record_parse("1 2\n/a/very/long/destination\n", &xpid, &hpid, dest, 8) == 0);
+        char dest[64], rid[CC_JOB_ID_MAX];
+#define RPARSE(text, cap) cc_record_parse(text, &xpid, &hpid, rid, sizeof rid, dest, cap)
+        len = cc_record_format(buf, sizeof buf, 4242, 77, "0123abcd", "/data/out.exfat");
+        CHECK(len > 0 && RPARSE(buf, sizeof dest) == 1);
+        CHECK(xpid == 4242 && hpid == 77 && strcmp(rid, "0123abcd") == 0 && strcmp(dest, "/data/out.exfat") == 0);
+        len = cc_record_format(buf, sizeof buf, 0, 2, "ab", "");
+        CHECK(len > 0 && RPARSE(buf, sizeof dest) == 1 && xpid == 0 && !dest[0]);
+        CHECK(cc_record_format(buf, sizeof buf, 1, 2, "ab", "/data/a\nb") == -1);
+        /* An id that could split the record, or none at all, is never written. */
+        CHECK(cc_record_format(buf, sizeof buf, 1, 2, "a b", "/d") == -1);
+        CHECK(cc_record_format(buf, sizeof buf, 1, 2, "", "/d") == -1);
+        CHECK(cc_record_format(buf, sizeof buf, 1, 2, "AB", "/d") == -1);
+        /* A record from before job ids: no id, the destination never read as one. */
+        CHECK(RPARSE("5 6\nab\n", sizeof dest) == 1 && xpid == 5 && hpid == 6 && !rid[0] && strcmp(dest, "ab") == 0);
+        CHECK(RPARSE("garbage", sizeof dest) == 0);
+        CHECK(RPARSE("12 x\n/a\n", sizeof dest) == 0);
+        CHECK(RPARSE("1 2 not-hex\n/a\n", sizeof dest) == 0);
+        CHECK(RPARSE("1 2\n/a/very/long/destination\n", 8) == 0);
+#undef RPARSE
     }
 
     CHECK(strcmp(cc_image_format("/data/a.b/Game.ExFAT"), "exfat") == 0);
@@ -397,6 +452,16 @@ static void test_wire(void) {
     CHECK(!cc_image_format("/data/g.") && !cc_image_format("/data/exfat"));
     CHECK(cc_format_ok("folder") && cc_format_ok("ffpfs") && !cc_format_ok("pkg") && !cc_format_ok(""));
     CHECK(cc_path_within("/data/g", "/data/g") && cc_path_within("/data/g", "/data/g/out") && !cc_path_within("/data/g", "/data/g2"));
+    /* A source a build of dest would clear. */
+    CHECK(cc_build_reads_own_leftovers("/data/games/G.partial", "/data/games/G"));
+    CHECK(cc_build_reads_own_leftovers("/data/games/g.PARTIAL", "/data/games/G")); /* exFAT: one name */
+    CHECK(cc_build_reads_own_leftovers("/data/games/G.partial/PPSA01234", "/data/games/G"));
+    CHECK(cc_build_reads_own_leftovers("/data/games/G.exfat.partial.resume", "/data/games/G.exfat"));
+    CHECK(cc_build_reads_own_leftovers("/data/games/G.exfat.partial.stamp", "/data/games/G.exfat"));
+    CHECK(cc_build_reads_own_leftovers("/data/games", "/data/games/G"));
+    CHECK(!cc_build_reads_own_leftovers("/data/games/G.partial2", "/data/games/G"));
+    CHECK(!cc_build_reads_own_leftovers("/data/games/G", "/data/out/G.exfat"));
+    CHECK(!cc_build_reads_own_leftovers("/data/games/G.partia", "/data/games/G"));
 
     /* A left-behind request: the extractor's rule. */
     CHECK(!console_convert_request_stale(1000, 1000 + CONVERT_REQUEST_STALE_S - 1));
@@ -452,6 +517,19 @@ static void test_op(void) {
         BUILD_REFUSED(inside, "folder", AVA1_ERR_PATH, "convert_bad_dest");
         BUILD_REFUSED(nodir, "ffpkg", AVA1_ERR_PATH, "convert_bad_dest");
         BUILD_REFUSED(folder_named_image, "folder", AVA1_ERR_PATH, "convert_bad_dest");
+    }
+    {
+        /* A source named as the build's unfinished output: refused, and never removed. */
+        char src_partial[320], src_eboot[340], pdest[320];
+        snprintf(src_partial, sizeof src_partial, "%s/P.partial", g_root);
+        snprintf(src_eboot, sizeof src_eboot, "%s/eboot.bin", src_partial);
+        snprintf(pdest, sizeof pdest, "%s/P", g_root);
+        mkdir(src_partial, 0700);
+        put_file(src_eboot, "x");
+        snprintf(args, sizeof args, "{\"path\":\"%s\",\"action\":\"build\",\"dest\":\"%s\",\"format\":\"folder\"}",
+                 src_partial, pdest);
+        CHECK(run_op(FAKE_NEVER, args, c) == AVA1_ERR_PATH && strcmp(c->message, "convert_bad_dest") == 0 && !g_request[0]);
+        CHECK(exists(src_eboot));
     }
     /* A zstd level outside zstd's range. */
     snprintf(args, sizeof args,
@@ -529,10 +607,17 @@ static void test_op(void) {
     snprintf(args, sizeof args,
              "{\"path\":\"%s\",\"action\":\"build\",\"dest\":\"%s\",\"format\":\"ffpkg\",\"zstd\":true,\"zstd_level\":19,\"verify\":\"full\"}",
              game, dest);
+    g_building_when_installing_read = -1;
     CHECK(run_op(FAKE_NEVER, args, c) == AVA1_ERR_BUSY && strcmp(c->message, "convert_busy") == 0 && !g_request[0]);
+    /* The build's own flag was up before the install's was read (no window where neither sees
+     * the other), and is down again once it backed out. */
+    CHECK(g_building_when_installing_read == 1);
+    CHECK(!console_convert_building());
     g_installing = 0;
     g_extracting = 1;
+    g_building_when_extracting_read = -1;
     CHECK(run_op(FAKE_NEVER, args, c) == AVA1_ERR_BUSY && !g_request[0]);
+    CHECK(g_building_when_extracting_read == 1);
     g_extracting = 0;
     CHECK(!console_convert_building());
 
@@ -592,10 +677,93 @@ static void test_op(void) {
     CHECK(st == AVA1_ERR_IO && strcmp(c->message, "convert_died") == 0);
     CHECK(!exists(partial));
 
-    /* One that never reports. */
+    /* A status naming this process (the helper's own pid) or init: never signalled, read as a
+     * converter that is not running. Were either taken for the converter, Stop would SIGKILL it
+     * (this test). Huge values never get here: cc_status_parse reads them as none (test_wire). */
+    {
+        static const long long bad[] = {0, 1, 2147483648LL};
+        size_t k;
+        g_fake_pid = (long long)getpid();
+        st = run_op(FAKE_PID, args, c);
+        CHECK(st == AVA1_ERR_CANCELLED && strcmp(c->message, "convert_cancelled") == 0);
+        for (k = 0; k < sizeof bad / sizeof *bad; k++) {
+            g_fake_pid = bad[k];
+            st = run_op(FAKE_PID, args, c);
+            CHECK(st == AVA1_ERR_CANCELLED);
+        }
+    }
+
+    /* One job across helpers: another helper (this test's parent stands in for it) holds the
+     * record, its converter not reporting yet. Busy, its request and record left alone. */
+    {
+        char rec[400], req[400], text[600], got[600];
+        FILE *f;
+        size_t n;
+        path_in(rec, sizeof rec, "job.rec");
+        path_in(req, sizeof req, "request.json");
+        cc_record_format(text, sizeof text, 0, (long)getppid(), "feed", "/elsewhere/other.exfat");
+        put_file(rec, text);
+        put_file(req, "{\"id\":\"feed\",\"op\":\"inspect\",\"path\":\"/x\"}\n");
+        st = run_op(FAKE_NEVER, args, c);
+        CHECK(st == AVA1_ERR_BUSY && strcmp(c->message, "convert_busy") == 0 && !g_request[0]);
+        f = fopen(rec, "r");
+        n = f ? fread(got, 1, sizeof got - 1, f) : 0;
+        if (f) fclose(f);
+        got[n] = 0;
+        CHECK(strcmp(got, text) == 0);
+        CHECK(exists(req));
+        unlink(req);
+
+        /* Its helper gone (a dead pid), and no converter seen: the record is cleared, the job runs. */
+        {
+            pid_t dead = fork();
+            if (dead == 0) _exit(0);
+            waitpid(dead, NULL, 0);
+            cc_record_format(text, sizeof text, 0, (long)dead, "feed", "");
+            put_file(rec, text);
+        }
+        st = run_op(FAKE_FAILS, args, c);
+        CHECK(st == AVA1_ERR_IO && strcmp(c->message, "convert_build_failed") == 0);
+        CHECK(!exists(rec));
+
+        /* Another job took the folder while this one ran: this one's clean-up leaves the other's
+         * record (and the status it may own) in place. */
+        st = run_op(FAKE_STOLEN, args, c);
+        CHECK(st == AVA1_ERR_IO);
+        f = fopen(rec, "r");
+        n = f ? fread(got, 1, sizeof got - 1, f) : 0;
+        if (f) fclose(f);
+        got[n] = 0;
+        CHECK(strstr(got, " feed\n") != NULL);
+        path_in(text, sizeof text, "status.json");
+        CHECK(exists(text));
+        unlink(rec);
+        unlink(text);
+    }
+
+    /* One that never reports. It may still start late: the cancel file is left for it (so it
+     * stops before writing), the request is gone, and nothing beside dest is removed, since no
+     * converter was ever seen to have died. */
+    put_file(partial, "a late converter's, or an earlier run's");
     st = run_op(FAKE_NEVER, args, c);
     CHECK(st == AVA1_ERR_IO && strcmp(c->message, "convert_not_started") == 0);
     CHECK(!exists(dest)); /* the destination itself is never touched by the helper */
+    CHECK(exists(partial));
+    {
+        char p[400];
+        path_in(p, sizeof p, "cancel");
+        CHECK(exists(p));
+        path_in(p, sizeof p, "request.json");
+        CHECK(!exists(p));
+        path_in(p, sizeof p, "job.rec");
+        CHECK(!exists(p));
+        /* The next job removes it before its converter starts, and runs. */
+        st = run_op(FAKE_FAILS, args, c);
+        CHECK(st == AVA1_ERR_IO && strcmp(c->message, "convert_build_failed") == 0);
+        path_in(p, sizeof p, "cancel");
+        CHECK(!exists(p));
+    }
+    unlink(partial);
     free(c);
 }
 
@@ -614,14 +782,14 @@ static void test_sweep(void) {
     /* The helper that wrote the record still runs (this process stands in for another helper's
      * pid by using its parent): nothing is touched. */
     put_file(partial, "half");
-    cc_record_format(text, sizeof text, (unsigned long long)dead, (long)getppid(), dest);
+    cc_record_format(text, sizeof text, (unsigned long long)dead, (long)getppid(), "ab", dest);
     put_file(rec, text);
     console_convert_sweep();
     CHECK(exists(partial) && exists(rec));
 
     /* Both gone: the unfinished output and its side files go, the finished name is not made up. */
     put_file(resume, "{}");
-    cc_record_format(text, sizeof text, (unsigned long long)dead, (long)dead, dest);
+    cc_record_format(text, sizeof text, (unsigned long long)dead, (long)dead, "ab", dest);
     put_file(rec, text);
     console_convert_sweep();
     CHECK(!exists(partial) && !exists(resume) && !exists(rec) && !exists(dest));
@@ -632,20 +800,55 @@ static void test_sweep(void) {
     snprintf(inner, sizeof inner, "%s/eboot.bin", folder);
     mkdir(folder, 0700);
     put_file(inner, "x");
-    cc_record_format(text, sizeof text, (unsigned long long)dead, (long)dead, dest);
+    cc_record_format(text, sizeof text, (unsigned long long)dead, (long)dead, "ab", dest);
     put_file(rec, text);
     console_convert_sweep();
     CHECK(!exists(folder) && !exists(rec));
+
+    /* A helper that died before its converter ever reported (pid 0 in the record): that converter
+     * may still start, so it is told to stop and its request goes, but nothing beside dest is
+     * removed. Another job's request stays. */
+    {
+        char cancel[400];
+        path_in(cancel, sizeof cancel, "cancel");
+        unlink(cancel);
+        snprintf(dest, sizeof dest, "%s/late.exfat", g_root);
+        snprintf(partial, sizeof partial, "%s.partial", dest);
+        put_file(partial, "x");
+        put_file(req, "{\"id\":\"ab\",\"op\":\"build\"}");
+        cc_record_format(text, sizeof text, 0, (long)dead, "ab", dest);
+        put_file(rec, text);
+        console_convert_sweep();
+        CHECK(!exists(rec) && exists(cancel) && !exists(req) && exists(partial));
+        put_file(req, "{\"id\":\"cd\",\"op\":\"build\"}");
+        put_file(rec, text);
+        console_convert_sweep();
+        CHECK(!exists(rec) && exists(req));
+        unlink(req);
+        unlink(cancel);
+        unlink(partial);
+    }
 
     /* A destination outside the allowed roots is never acted on; an inspection has none. */
     put_file(rec, "1 1\n/etc/hosts\n");
     console_convert_sweep();
     CHECK(!exists(rec) && exists("/etc/hosts"));
-    cc_record_format(text, sizeof text, (unsigned long long)dead, (long)dead, "");
+    cc_record_format(text, sizeof text, (unsigned long long)dead, (long)dead, "ab", "");
     put_file(rec, text);
     console_convert_sweep();
     CHECK(!exists(rec));
+    /* Not a record: one may be being written this moment (created, then written), so only an
+     * old one goes. */
     put_file(rec, "not a record");
+    console_convert_sweep();
+    CHECK(exists(rec));
+    utimes(rec, old);
+    console_convert_sweep();
+    CHECK(!exists(rec));
+    put_file(rec, "");
+    console_convert_sweep();
+    CHECK(exists(rec));
+    utimes(rec, old);
     console_convert_sweep();
     CHECK(!exists(rec));
 
@@ -672,9 +875,21 @@ int main(void) {
     snprintf(g_rtdir, sizeof g_rtdir, "%s/runtime", g_root);
     console_convert_test_runtime_dir = g_rtdir; /* made by test_op, once it has tested without one */
 
+    g_alive = fork();
+    if (g_alive == 0) {
+        for (;;) pause();
+    }
+    if (g_alive < 0) {
+        perror("fork");
+        return 1;
+    }
+
     test_wire();
     test_op();
     test_sweep();
+
+    kill(g_alive, SIGKILL);
+    waitpid(g_alive, NULL, 0);
 
     snprintf(cmd, sizeof cmd, "rm -r '%s'", g_root);
     if (system(cmd) != 0) fprintf(stderr, "console_convert_selftest: could not remove %s\n", g_root);

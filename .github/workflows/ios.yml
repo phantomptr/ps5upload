@@ -22,7 +22,8 @@ jobs:
   payload:
     name: payload (ELF for the app bundle)
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    # 50: the converter's Docker toolchain is built here when engine-ci's cache of it is gone.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -45,10 +46,27 @@ jobs:
           bash scripts/ci-apt.sh clang-22 llvm-22-dev lld-22 unzip python3
       - name: Install pinned PS5 Payload SDK
         run: sudo env PS5_SDK_INSTALL_DIR=/opt/ps5-payload-sdk bash scripts/install-ps5-sdk.sh
+      # The converter the helper carries, as publish.yml's build-payload builds it, so this test
+      # build's helper is the release's. Toolchain image from engine-ci's cache when there is one.
+      - name: Restore the converter's toolchain image
+        id: convert-image
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/convert-toolchain.tar
+          key: ${{ runner.os }}-${{ runner.arch }}-convert-toolchain-${{ hashFiles('payload/convert/Dockerfile', 'payload/convert/prepare-rust-std.py', 'scripts/ps5-sdk.env') }}
+      - name: Load the converter's toolchain image
+        if: steps.convert-image.outputs.cache-hit == 'true'
+        run: docker load -i "$RUNNER_TEMP/convert-toolchain.tar"
+      - name: Build the converter (make console-convert)
+        timeout-minutes: 20
+        env:
+          DOCKER_BUILDKIT: 1
+        run: make console-convert
       - name: Build payload
         env:
           PS5_PAYLOAD_SDK: /opt/ps5-payload-sdk
           LLVM_CONFIG: /usr/bin/llvm-config-22
+          CONVERT_REQUIRED: 1
         run: |
           make payload
           gzip -t payload/ps5upload.elf.gz payload/installer/ps5upload-installer.elf.gz

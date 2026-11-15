@@ -9,7 +9,8 @@
  *   request.json  written here (0600), read and deleted by the converter at start
  *   status.json   rewritten by the converter through a temporary file and a rename in that folder
  *   cancel        created here when Stop is asked
- *   job.rec       this helper's note of a running job, for the next start's sweep
+ *   job.rec       the running job's owner (helper pid, job id, dest), written before the converter
+ *                 is started: one job across helpers, and the next start's sweep
  *   convert.log   the converter's stdout/stderr (the last run)
  *
  * JOB_OP_CONSOLE_CONVERT {"path":"<game folder or .exfat/.ffpkg/.ffpfs image>"
@@ -57,8 +58,9 @@ void console_convert_register(void);
  * start it is removed (unless the old helper or its converter still runs). */
 void console_convert_sweep(void);
 
-/* 1 while a build runs in this helper (archive_extract.c refuses to start beside one; an
- * inspection does not count). */
+/* 1 while a build runs in this helper (archive_extract.c and the package install refuse to start
+ * beside one; an inspection does not count). Each side sets its own flag first and then reads the
+ * other's, all seq_cst, so two that start at once never both go on. */
 int console_convert_building(void);
 
 /* A request no converter read is left only by a helper that died between writing it and the
@@ -98,15 +100,28 @@ typedef struct {
     size_t result_len;
 } cc_status_t;
 
+/* 1 when `pid` (read from a file the converter or an older helper wrote) can name a process the
+ * helper may signal: neither 0 nor 1 (init), and a positive pid_t (a larger number would wrap,
+ * 0xFFFFFFFF to -1: every process). The helper also never signals its own pid. */
+static inline int cc_pid_ok(uint64_t pid) { return pid > 1 && pid <= 0x7FFFFFFFu; }
+
 /* Parses the `n` bytes read from status.json. 1 when it is one complete JSON object that carries
  * job `id` and a state; 0 otherwise: another job's, empty, cut short (the helper may read it while
- * it is being replaced, or get a short read), or not JSON at all. A 0 means "nothing new yet". */
+ * it is being replaced, or get a short read), or not JSON at all. A 0 means "nothing new yet".
+ * A "pid" that is not cc_pid_ok reads as 0 (none). */
 int cc_status_parse(const char *buf, size_t n, const char *id, cc_status_t *s);
 
-/* job.rec: "<converter pid> <helper pid>\n<dest>\n" (`dest` "" for an inspection). */
-int cc_record_format(char *out, size_t cap, unsigned long long xpid, long hpid, const char *dest);
-/* 1 parsed, 0 not a record. */
-int cc_record_parse(const char *buf, unsigned long long *xpid, long *hpid, char *dest, size_t cap);
+/* A job id's room (16 hex digits and the NUL fit). */
+#define CC_JOB_ID_MAX 40
+
+/* job.rec: "<converter pid> <helper pid> <job id>\n<dest>\n" (`dest` "" for an inspection;
+ * converter pid 0 until its first status). The helper creates it (O_EXCL) before it starts the
+ * converter: the lock that keeps a second helper from starting a second converter. -1 when it
+ * does not fit, `dest` has a newline, or `id` is not lowercase hex shorter than CC_JOB_ID_MAX. */
+int cc_record_format(char *out, size_t cap, unsigned long long xpid, long hpid, const char *id, const char *dest);
+/* 1 parsed, 0 not a record. A record from before job ids reads with `id` "". */
+int cc_record_parse(const char *buf, unsigned long long *xpid, long *hpid, char *id, size_t id_cap, char *dest,
+                    size_t cap);
 
 /* The format an output path's extension stands for ("exfat", "ffpkg", "ffpfs"), or NULL. */
 const char *cc_image_format(const char *path);
@@ -116,6 +131,10 @@ static inline int cc_zstd_level_ok(unsigned long long level) { return level >= 1
 int cc_format_ok(const char *format);
 /* 1 when `inner` is `outer` itself or below it (both normalised). */
 int cc_path_within(const char *outer, const char *inner);
+/* 1 when a build of `dest` would clear `src`: `src` is one of the names the build writes and an
+ * unfinished one's clean-up removes (`<dest>.partial`, `.partial.resume`, `.partial.stamp`) or is
+ * inside one, or one of those names is inside `src`. Compared without case (exFAT). */
+int cc_build_reads_own_leftovers(const char *src, const char *dest);
 
 /* ---- the zstd runtime (CONVERT_RUNTIME_DIR/ampr-emu-ng-<version>/libSceAmpr.sprx) ---- */
 
