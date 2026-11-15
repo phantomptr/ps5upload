@@ -9,7 +9,7 @@ import { Button, Card, Input } from "../../components";
 import { AddSources, GAME_FILE_FILTERS } from "../../components/AddSources";
 import { PathLabel } from "../../components/BrowseButton";
 import { isRemotePath } from "../../lib/remotePath";
-import { isArchiveSource } from "../../state/fpkgConversion";
+import { isArchiveSource, isInPlaceArchive } from "../../state/fpkgConversion";
 import { useTr } from "../../state/lang";
 import { Ps4KindNote } from "./Ps4Merge";
 import { prettyBytes } from "./RunCard";
@@ -172,7 +172,13 @@ export function GameCard(props: GameCardProps) {
             <PathLabel path={props.source} />
             <span>
               {"— "}
-              {isArchiveSource(props.source)
+              {isInPlaceArchive(props.source)
+                ? tr(
+                    "fpkg.remoteArchiveInPlace",
+                    undefined,
+                    "an archive on a server. It is copied here when you start and read from that copy without unpacking it; the copy is removed when the run ends.",
+                  )
+                : isArchiveSource(props.source)
                 ? tr(
                     "fpkg.remoteArchive",
                     undefined,
@@ -191,11 +197,17 @@ export function GameCard(props: GameCardProps) {
             <PathLabel path={props.source} />
             <span>
               {"— "}
-              {tr(
-                "fpkg.archiveSource",
-                undefined,
-                "an archive. It is unpacked into the output folder when you start, and removed when the run ends.",
-              )}
+              {isInPlaceArchive(props.source)
+                ? tr(
+                    "fpkg.archiveSourceInPlace",
+                    undefined,
+                    "an archive. An image or folder is made straight from it, with nothing unpacked; a package, or a game image inside it, is unpacked into the output folder first and removed when the run ends.",
+                  )
+                : tr(
+                    "fpkg.archiveSource",
+                    undefined,
+                    "an archive. It is unpacked into the output folder when you start, and removed when the run ends.",
+                  )}
             </span>
           </div>
         )}

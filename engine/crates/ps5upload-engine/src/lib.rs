@@ -20,6 +20,9 @@ mod ampr_index_api;
 mod ampr_trace;
 mod api_errors;
 mod app_dump_api;
+#[cfg(test)]
+mod archive_build_tests;
+mod archive_tree;
 mod ava1_api;
 mod browser_payload;
 mod bundled_payload;

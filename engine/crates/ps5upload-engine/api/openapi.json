@@ -3751,6 +3751,13 @@
             ],
             "description": "Pack the game's files into zstd asset packs for ampr-emu-ng, which goes in the image: any\nformat, plain or (with `compress`) inside a `.ffpfsc`; not with LZ4 packs. A game in LZ4\npacks is decoded on the way."
           },
+          "archive_password": {
+            "description": "The password of a `.rar` `source` (an archive read in place); never logged or kept.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "compress": {
             "description": "Write the image straight into a `.ffpfsc` container (no uncompressed copy on disk).",
             "type": "boolean"
@@ -3826,7 +3833,7 @@
             "type": "boolean"
           },
           "source": {
-            "description": "A game folder on this computer (one with `sce_sys` in it).",
+            "description": "A game folder (one with `sce_sys` in it) or image, on this computer, a saved server\n(`remote://`) or a console (`ps5://`); or a `.zip`, `.7z` or `.rar` on this computer (a\nmulti-part RAR set by its first part) holding one game folder, read straight out of it\nwith nothing unpacked. An archive that has to be unpacked first (a game image inside it,\nor an `update` to merge) is refused (400) with `archive_needs_unpack` at the start of\nthe reason: `POST /api/fpkg/extract` then unpacks it.",
             "type": "string"
           },
           "unpack_packs": {
@@ -4356,6 +4363,13 @@
             ],
             "description": "Write the game with its files in zstd asset packs for ampr-emu-ng, as an image build's\n`ampr_zstd` does, as a plain folder: the packs, the files that stay loose, and the\nemulator in `fakelib/libSceAmpr.sprx`. The source may then also be a game folder (on\nthis computer, a saved server or a console). Not with `entry`."
           },
+          "archive_password": {
+            "description": "The password of a `.rar` `source` (an archive read in place); never logged or kept.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "delete_source": {
             "description": "Once the folder is written, read back in full and given its name, move `source` to this\ncomputer's Trash, as an image build's `delete_source` does and with the same refusals.\nNot with `entry`, `update` or a `destination` elsewhere.",
             "type": "boolean"
@@ -4404,7 +4418,7 @@
             "type": "boolean"
           },
           "source": {
-            "description": "A game image (`.exfat`, `.ffpkg`/`.ufs2`, `.ffpfs`, `.ffpfsc`) or a debug-key `.pkg`,\non this computer, a saved server (`remote://`) or a console (`ps5://`).",
+            "description": "A game image (`.exfat`, `.ffpkg`/`.ufs2`, `.ffpfs`, `.ffpfsc`) or a debug-key `.pkg`,\non this computer, a saved server (`remote://`) or a console (`ps5://`); or a `.zip`,\n`.7z` or `.rar` on this computer holding one game folder, read in place as an image\nbuild reads it (and refused with `archive_needs_unpack` the same way).",
             "type": "string"
           },
           "unpack_packs": {

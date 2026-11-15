@@ -2512,6 +2512,8 @@ pub async fn exfat_build(
     unpack_packs: Option<bool>,
     // With edits: change the image itself instead of writing an edited copy.
     in_place: Option<bool>,
+    // The password of a .rar source read in place; passed through, never logged.
+    archive_password: Option<String>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/exfat/build");
@@ -2539,6 +2541,7 @@ pub async fn exfat_build(
             "delete_source": delete_source.unwrap_or(false),
             "unpack_packs": unpack_packs.unwrap_or(false),
             "in_place": in_place.unwrap_or(false),
+            "archive_password": archive_password,
         }),
     )
     .await
@@ -2573,6 +2576,8 @@ pub async fn folder_build(
     // With unpack_packs: the AMPR emulator choice, as an image build takes it.
     add_ampr_emu: Option<bool>,
     ampr_emu_build: Option<String>,
+    // The password of a .rar source read in place; passed through, never logged.
+    archive_password: Option<String>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/folder/build");
@@ -2594,6 +2599,7 @@ pub async fn folder_build(
             "unpack_packs": unpack_packs.unwrap_or(false),
             "add_ampr_emu": add_ampr_emu.unwrap_or(true),
             "ampr_emu_build": ampr_emu_build,
+            "archive_password": archive_password,
         }),
     )
     .await

@@ -59,6 +59,7 @@ async function build(item: ConvertItem) {
       ...(item.build.unpackPacks
         ? { unpackPacks: true, addAmprEmu: item.addAmprEmu, amprEmuBuild: item.amprEmuBuild }
         : {}),
+      ...(item.password ? { password: item.password } : {}),
     });
     await whenIdle();
     return outcome(true);

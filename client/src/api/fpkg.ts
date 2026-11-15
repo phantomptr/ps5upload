@@ -116,6 +116,8 @@ export interface BuildExtras {
   /** A folder build: its files in AMPR LZ4 asset packs (not with zstd packs); the source may
    *  then also be a game folder. An image build takes its packs as its `lz4` argument. */
   lz4?: AmprLz4Options;
+  /** The password of a `.rar` source read in place; never stored or logged. */
+  archivePassword?: string;
 }
 
 export type Ps4Kind = "game" | "patch" | "addon";
@@ -286,6 +288,7 @@ export const fpkg = {
       update,
       removeBackport: extra?.removeBackport || undefined,
       deleteSource: extra?.deleteSource || undefined,
+      archivePassword: extra?.archivePassword || undefined,
       source,
       outputDir,
       format,
@@ -338,6 +341,7 @@ export const fpkg = {
       update,
       removeBackport: extra?.removeBackport || undefined,
       deleteSource: extra?.deleteSource || undefined,
+      archivePassword: extra?.archivePassword || undefined,
       destination,
       source,
       outputDir,

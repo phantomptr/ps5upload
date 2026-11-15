@@ -204,8 +204,8 @@ export interface ConversionState {
       update?: string;
       /** Leave the backport libraries in the game's fakelib out of the image. */
       removeBackport?: boolean;
-      /** Move `source` to the Trash once the image is verified and in place. Never for an
-       *  archive (what the build reads is its scratch copy). */
+      /** Move `source` to the Trash once the image is verified and in place. For an archive
+       *  only when it is read in place (one `.zip`, `.7z` or `.rar` on this computer). */
       deleteSource?: boolean;
       /** A game in asset packs is written as plain files again. */
       unpackPacks?: boolean;
@@ -236,6 +236,8 @@ export interface ConversionState {
       unpackPacks?: boolean;
       addAmprEmu?: boolean;
       amprEmuBuild?: AmprEmuBuild;
+      /** An archive's password (RAR); never stored. */
+      password?: string;
     },
   ) => Promise<void>;
   /** Put the finished image in the Upload queue. */
@@ -779,6 +781,16 @@ export function isArchiveSource(path: string): boolean {
   return /\.(zip|7z|rar)$/i.test(path.trim()) || isTarArchiveName(path.trim());
 }
 
+/** A `.zip`, `.7z` or `.rar` (a multi-part set by its first part): an image or folder build
+ *  reads its game straight out of it, nothing unpacked. A tar or `.zst` is unpacked first. */
+export function isInPlaceArchive(path: string): boolean {
+  return /\.(zip|7z|rar)$/i.test(path.trim());
+}
+
+/** The engine's refusal of an archive it can't read in place (a game image inside, an update
+ *  to merge): this run unpacks it first instead. */
+const ARCHIVE_NEEDS_UNPACK = "archive_needs_unpack";
+
 /** What an image made from an archive is called: the archive's name without its extension
  *  or `.partN` (`Game.part1.rar` → `Game`, `Game.tar.zst` → `Game`). Its unpack folder's name
  *  means nothing. */
@@ -836,18 +848,37 @@ function needsPrep(source: string): boolean {
 
 /** Get a source ready for the build, as stages of this run (each with progress and Cancel):
  *  a server archive is copied into the output folder, an archive is unpacked there. Then start
- *  the job `startJob` makes on what that left. */
+ *  the job `startJob` makes on what that left. With `inPlace`, a `.zip`, `.7z` or `.rar` is
+ *  not unpacked: that job reads it as it is, unless the engine says it has to be unpacked. */
 async function prepareThenStart(
   source: string,
   outputDir: string | undefined,
   startJob: (local: string) => Promise<{ job_id: string }>,
   install: InstallMethod | null,
   password?: string,
+  inPlace?: (local: string) => Promise<{ job_id: string }>,
 ) {
   let local = source;
   if (isRemotePath(source)) {
     if (!(await copyFromServer(source, outputDir))) return;
     local = running()?.copiedSource ?? "";
+  }
+  if (inPlace && isInPlaceArchive(local)) {
+    enterStage("check");
+    try {
+      const { job_id } = await inPlace(local);
+      update({ jobId: job_id });
+      poll(job_id, install);
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes(ARCHIVE_NEEDS_UNPACK)) {
+        fail("check", archiveErrorText(message), null);
+        return;
+      }
+      // A game image inside, or an update to merge: unpacked first, as before.
+    }
+    if (!running()) return;
   }
   if (isArchiveSource(local)) {
     enterStage("extract");
@@ -998,21 +1029,24 @@ function buildTail(
 }
 
 /** The choices of a build that are off unless asked for, or nothing when none is on. An
- *  archive's build (`scratch`) never removes its source: what it reads is the unpacked copy.
- *  `amprEmu` (a folder build's emulator choice) goes along only when the packs are unpacked. */
+ *  archive's build from a copy (`scratch`: unpacked, or copied from a server) never removes its
+ *  source: what it reads is the copy. `amprEmu` (a folder build's emulator choice) goes along
+ *  only when the packs are unpacked; `archivePassword` with an archive read in place. */
 function extrasOf(
   own: { removeBackport?: boolean; deleteSource?: boolean; unpackPacks?: boolean } | undefined,
   scratch = false,
   amprEmu?: { add: boolean; build: AmprEmuBuild },
+  archivePassword?: string,
 ): BuildExtras | undefined {
   const removeBackport = !!own?.removeBackport;
   const deleteSource = !!own?.deleteSource && !scratch;
   const unpackPacks = !!own?.unpackPacks;
-  if (!removeBackport && !deleteSource && !unpackPacks) return undefined;
+  if (!removeBackport && !deleteSource && !unpackPacks && !archivePassword) return undefined;
   return {
     ...(removeBackport ? { removeBackport } : {}),
     ...(deleteSource ? { deleteSource } : {}),
     ...(unpackPacks ? { unpackPacks, ...(amprEmu ? { amprEmu } : {}) } : {}),
+    ...(archivePassword ? { archivePassword } : {}),
   };
 }
 
@@ -1083,30 +1117,40 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
     // The console it goes to, when it is sent once built: another console's view of this
     // game is not busy with it.
     if (needsPrep(source)) {
-      // An image is written from a folder or another image, read at random: an archive is
-      // unpacked first (copied here first when it is on a server), as a package build does.
-      beginRun("image", source, thenUpload?.host ?? null, isRemotePath(source) ? "copy" : "extract");
+      // A .zip, .7z or .rar is read in place (copied here first when it is on a server); a tar,
+      // or an archive holding a game image, is unpacked first, as a package build does.
+      const inPlace = isInPlaceArchive(source);
+      beginRun(
+        "image",
+        source,
+        thenUpload?.host ?? null,
+        isRemotePath(source) ? "copy" : inPlace ? "check" : "extract",
+      );
       const name = archiveStem(source) || undefined;
+      const job = async (local: string, extra: BuildExtras | undefined) =>
+        fpkg.buildImage(
+          local,
+          outputDir,
+          format,
+          thenCompress,
+          lz4,
+          verifyChunkKib,
+          fullVerify,
+          name,
+          imageLevel,
+          keepBoth,
+          amprEmu,
+          ...buildTail(toConsole ? await consoleDestination(toConsole) : toServer, own?.update, extra),
+        );
       void prepareThenStart(
         source,
         outputDir,
-        async (local) =>
-          fpkg.buildImage(
-            local,
-            outputDir,
-            format,
-            thenCompress,
-            lz4,
-            verifyChunkKib,
-            fullVerify,
-            name,
-            imageLevel,
-            keepBoth,
-            amprEmu,
-            ...buildTail(toConsole ? await consoleDestination(toConsole) : toServer, own?.update, extrasOf(own, true)),
-          ),
+        (local) => job(local, extrasOf(own, true)),
         null,
         password,
+        inPlace
+          ? (local) => job(local, extrasOf(own, isRemotePath(source), undefined, password || undefined))
+          : undefined,
       );
       return;
     }
@@ -1139,16 +1183,35 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
     pendingImageUpload = null;
     // Packs are made before the folder is written.
     const first = own?.zstd || own?.lz4 ? "pack" : "write";
-    const extras = extrasOf(
-      own,
-      false,
-      own?.unpackPacks
-        ? {
-            add: own.addAmprEmu ?? useConvertPrefs.getState().addAmprEmu,
-            build: own.amprEmuBuild ?? useConvertPrefs.getState().amprEmuBuild,
-          }
-        : undefined,
-    );
+    const amprEmu = own?.unpackPacks
+      ? {
+          add: own.addAmprEmu ?? useConvertPrefs.getState().addAmprEmu,
+          build: own.amprEmuBuild ?? useConvertPrefs.getState().amprEmuBuild,
+        }
+      : undefined;
+    // A folder's LZ4 packs go with the build's other choices.
+    const withLz4 = (extra: BuildExtras | undefined): BuildExtras | undefined =>
+      own?.lz4 ? { ...extra, lz4: own.lz4 } : extra;
+    const extras = extrasOf(own, false, amprEmu);
+    if (isInPlaceArchive(source)) {
+      // A .zip, .7z or .rar: its game folder read straight out of it (copied here first when it
+      // is on a server); one holding a game image is unpacked first and the image made a folder.
+      beginRun("folder", source, null, isRemotePath(source) ? "copy" : "check");
+      const name = archiveStem(source) || undefined;
+      const fullVerify = own?.fullVerify ?? useConvertPrefs.getState().fullVerify;
+      const dest = own?.toServer ? serverDestination(own.toServer) : undefined;
+      const job = (local: string, extra: BuildExtras | undefined) =>
+        fpkg.buildFolder(local, outputDir, name, fullVerify, undefined, keepBoth, own?.zstd, ...folderTail(own?.update, dest, withLz4(extra)));
+      void prepareThenStart(
+        source,
+        outputDir,
+        (local) => job(local, extrasOf(own, true, amprEmu)),
+        null,
+        own?.password,
+        (local) => job(local, extrasOf(own, isRemotePath(source), amprEmu, own?.password || undefined)),
+      );
+      return;
+    }
     beginRun("folder", source, null, first);
     try {
       const { job_id } = await fpkg.buildFolder(
@@ -1162,7 +1225,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         ...folderTail(
           own?.update,
           own?.toServer ? serverDestination(own.toServer) : undefined,
-          own?.lz4 ? { ...extras, lz4: own.lz4 } : extras,
+          withLz4(extras),
         ),
       );
       update({ jobId: job_id });

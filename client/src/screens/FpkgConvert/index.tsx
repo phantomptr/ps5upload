@@ -32,6 +32,7 @@ import {
   imageFormatOf,
   isArchiveSource,
   isFolderableSource,
+  isInPlaceArchive,
   makesFolder,
   useFpkgConversion,
 } from "../../state/fpkgConversion";
@@ -214,8 +215,8 @@ export default function WorkshopScreen() {
         : { kind: "pkg" };
   const then = thenFor(build.kind, thenChoice, canInstall);
   /** A skip says which build the source cannot become: an image needs a game folder, image,
-   *  package or archive (unpacked first); a folder needs an image or package, or a game folder
-   *  when it is made in packs (`zstd`, or for a folder `lz4`: this game's own choice). */
+   *  package or archive; a folder needs an image, package or `.zip`/`.7z`/`.rar`, or a game
+   *  folder when it is made in packs (`zstd`, or for a folder `lz4`: this game's own choice). */
   const queueAdd = (
     src: string,
     isFolder: boolean,
@@ -228,7 +229,12 @@ export default function WorkshopScreen() {
     if (isRarLaterVolume(src)) return "later-part";
     if (build.kind === "image" && !isFolder && !isFolderableSource(src) && !isArchiveSource(src))
       return "not-image";
-    if (build.kind === "folder" && !isFolderableSource(src) && !(isFolder && (zstd || lz4 || unpack)))
+    if (
+      build.kind === "folder" &&
+      !isFolderableSource(src) &&
+      !(!isFolder && isInPlaceArchive(src)) &&
+      !(isFolder && (zstd || lz4 || unpack))
+    )
       return "not-folder";
     const u = useUploadStore.getState();
     const out = outFor(src);
@@ -787,7 +793,11 @@ export default function WorkshopScreen() {
     backport !== null && removeBackportFor === src && !backportRefusal(backport, backportUnpacks);
   // A game folder with an update merged in is a new folder too, and so is a packed one unpacked
   // (offered for any packed game folder: the checkbox is under "A game folder").
-  const canFolder = unpackable || (isLocalFolder && (packsFolder || mergeReady || !!inspection?.packs));
+  // A .zip, .7z or .rar becomes a folder too: its game read straight out of it.
+  const canFolder =
+    unpackable ||
+    (src !== "" && isInPlaceArchive(src)) ||
+    (isLocalFolder && (packsFolder || mergeReady || !!inspection?.packs));
   const isFolderSource =
     src !== "" && !unpackable && !isArchiveSource(src) && !packsFolder && !mergeReady && !unpackOn;
 
