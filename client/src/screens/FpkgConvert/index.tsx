@@ -196,7 +196,7 @@ export default function WorkshopScreen() {
   // (they depend on the game's own ampr_emu), so only the game checked here carries them into
   // the queue.
   const [lz4On, setLz4On] = useState(false);
-  const [lz4Profile, setLz4Profile] = useState<{ name: string; text: string } | null>(null);
+  const [lz4Profile, setLz4Profile] = useState<{ name: string; text: string; measured?: boolean } | null>(null);
   const [lz4InstallRuntime, setLz4InstallRuntime] = useState(false);
   const [packKind, setPackKind] = useState<"lz4" | "zstd">("lz4");
   const [emuAddedTo, setEmuAddedTo] = useState<string | null>(null);
@@ -558,7 +558,7 @@ export default function WorkshopScreen() {
       // Save to: a server writes it there; nothing is kept here.
       const toServer = savesToServer(runChoice) ? serverFolder : undefined;
       void buildFolder(game, out.outputDir, out.keepBoth, {
-        zstd: folderPackOptions(lz4Choice),
+        zstd: folderPackOptions(lz4Choice, packProfile),
         update,
         ...(toServer ? { toServer } : {}),
       });
@@ -582,7 +582,7 @@ export default function WorkshopScreen() {
         build.compress && !lz4Active(build.format, lz4Choice),
         build.format,
         !direct && !toServer && then === "upload" ? plan : undefined,
-        packOptions(build.format, lz4Choice, lz4Profile?.text),
+        packOptions(build.format, lz4Choice, packProfile),
         password || undefined,
         out.keepBoth,
         direct || toServer || update
@@ -699,6 +699,7 @@ export default function WorkshopScreen() {
             : {
                 name: tr("trace_profile_name", { n: p.profile.sessions }, "measured from {n} play sessions"),
                 text: p.toml,
+                measured: true,
               },
         );
       })
@@ -715,6 +716,7 @@ export default function WorkshopScreen() {
         on: lz4On,
         onToggle: setLz4On,
         profileName: lz4Profile?.name ?? null,
+        profileMeasured: !!lz4Profile?.measured,
         onProfile: setLz4Profile,
         installRuntime: lz4InstallRuntime,
         onInstallRuntime: setLz4InstallRuntime,
@@ -724,6 +726,9 @@ export default function WorkshopScreen() {
         onZstdLevel: setZstdLevel,
       }
     : undefined;
+  // The profile the packs are made with. A profile measured from play is written for LZ4 packs
+  // (what it keeps loose suits drakmor's ampr_emu), so zstd packs take only one picked by hand.
+  const packProfile = packKind === "zstd" && lz4Profile?.measured ? undefined : lz4Profile?.text;
   // A folder in zstd packs can be made of a game folder too.
   const packsFolder = folderPacks(lz4Choice);
   // A game folder with an update merged in is a new folder too.
@@ -1199,8 +1204,8 @@ export default function WorkshopScreen() {
               const r = queueAdd(
                 source.trim(),
                 isLocalFolder,
-                build.kind === "image" ? packOptions(build.format, lz4Choice, lz4Profile?.text) : undefined,
-                build.kind === "folder" ? folderPackOptions(lz4Choice) : undefined,
+                build.kind === "image" ? packOptions(build.format, lz4Choice, packProfile) : undefined,
+                build.kind === "folder" ? folderPackOptions(lz4Choice, packProfile) : undefined,
               );
               if (r === "not-image" || r === "not-folder" || r === "later-part") setError(skippedText(r, 1));
               else if (!r) setError(tr("cq_already", undefined, "This game is already in the queue."));

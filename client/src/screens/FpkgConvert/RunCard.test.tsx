@@ -638,6 +638,9 @@ describe("RunCard", () => {
       expect(checkbox(idle("ffpkg", notAmpr), "zstd asset packs")).toBeNull();
       // The runtime choice goes with it: the newest release unless the tested one is chosen.
       expect(packOptions("ffpkg", zstd)).toEqual({ zstdLevel: 5, zstdRuntime: "latest" });
+      // A profile picked for zstd packs goes with them: it decides what stays loose.
+      expect(packOptions("ffpkg", zstd, "t")).toEqual({ zstdLevel: 5, zstdRuntime: "latest", profileToml: "t" });
+      expect(idle("ffpkg", zstd)).toContain("Use a profile (.toml)");
       expect(packOptions("ffpkg", lz4({ on: true }))).toBeUndefined();
       expect(packOptions("exfat", lz4({ on: true }), "t")).toEqual({ profileToml: "t", installRuntime: false });
       expect(idle("ffpkg", zstd)).toContain("Newest release (default)");
@@ -654,6 +657,16 @@ describe("RunCard", () => {
       expect(folderPackOptions(undefined)).toBeUndefined();
       const notAmpr = lz4({ kind: "zstd", on: true, readiness: { refusal: "no", kind: "no_ampr" } });
       expect(folderPacks(notAmpr)).toBe(false);
+      expect(folderPackOptions(zstd, "t")).toEqual({ level: 5, runtime: "latest", profileToml: "t" });
+      // A picked profile is named, with what it means for zstd; a measured one is LZ4's.
+      const picked = renderToStaticMarkup(<ZstdOption lz4={{ ...zstd, profileName: "mine.toml" }} folder />);
+      expect(picked).toContain("Profile: mine.toml");
+      expect(picked).toContain("only decides which files stay loose");
+      const measured = renderToStaticMarkup(
+        <ZstdOption lz4={{ ...zstd, profileName: "measured", profileMeasured: true }} folder />,
+      );
+      expect(measured).not.toContain("Profile: measured");
+      expect(measured).toContain("Use a profile (.toml)");
       const html = renderToStaticMarkup(<ZstdOption lz4={zstd} folder />);
       expect(html).toContain("LZ4 packs are not offered here");
       expect(html).toContain('data-testid="zstd-runtime"');

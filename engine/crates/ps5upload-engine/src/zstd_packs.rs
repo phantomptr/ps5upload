@@ -75,6 +75,26 @@ pub(crate) fn always_loose(path: &str) -> bool {
         || is_pack_name(path)
 }
 
+/// A pack profile: drakmor's `ampr_pack` TOML, the one LZ4 packs take, deciding which files
+/// stay loose (ps5-dump-forge's `--pack-profile` with `--zstd-pack`, `docs/packing.md`).
+pub(crate) type Rules = ps5upload_fpkg::ampr_pack::Config;
+
+/// Whether `file` goes into the packs. Without `rules`, every non-empty file but the system
+/// files. With them the profile decides, as in ps5-dump-forge (`ps5-dump-forge-lz4/src/rules.rs`
+/// `select_everything` and `profile_spec`, from `zstd_pack.rs` `prepare`): the last rule that
+/// matches the path, else the profile's `default_action` (`loose` when it names none), and a
+/// file is packed unless that says `loose`. Empty files and [`always_loose`] stay loose
+/// whatever it says. What a profile sets that zstd packs have no use for is ignored: block
+/// size (chunks are always 256 KiB), `hot`, `layout`, groups, the LZ4 level and the auto-loose
+/// sampling; a `store` file is packed as any other (a chunk zstd can't shrink is kept raw
+/// anyway).
+fn is_packed(file: &SourceFile, rules: Option<&Rules>) -> bool {
+    use ps5upload_fpkg::ampr_pack::config::Action;
+    file.size > 0
+        && !always_loose(&file.path)
+        && rules.is_none_or(|p| p.select(&file.path).action != Action::Loose)
+}
+
 /// The game as the packs are made from it: `ampr-emu-ng` and a fresh index in, what a run of the
 /// game wrote out.
 struct Prepared<'a> {
@@ -118,11 +138,12 @@ impl SourceTree for Prepared<'_> {
     }
 }
 
-/// `source` ready for packing, with the files that go into the packs.
+/// `source` ready for packing, with the files that go into the packs (`rules`: [`is_packed`]).
 fn prepare<'a>(
     source: &'a mut dyn SourceTree,
     runtime: Vec<u8>,
     mtime: i64,
+    rules: Option<&Rules>,
 ) -> Result<(Prepared<'a>, Vec<SourceFile>), String> {
     let module = emulator_home(&*source);
     let taken: Vec<&str> = source
@@ -157,11 +178,28 @@ fn prepare<'a>(
         size: index.len() as u64,
     });
     files.sort_by(|a, b| a.path.cmp(&b.path));
-    let packed = files
+    let packed: Vec<SourceFile> = files
         .iter()
-        .filter(|f| f.size > 0 && !always_loose(&f.path))
+        .filter(|f| is_packed(f, rules))
         .cloned()
         .collect();
+    if let Some(p) = rules {
+        // What the profile kept out of the packs, beyond what always stays loose.
+        let kept: Vec<&SourceFile> = files
+            .iter()
+            .filter(|f| is_packed(f, None) && !is_packed(f, rules))
+            .collect();
+        crate::log_at!(
+            Info,
+            "convert",
+            "zstd packs: the pack profile ({} rules) keeps {} files loose ({} bytes); {} files \
+             go into the packs",
+            p.rules.len(),
+            kept.len(),
+            kept.iter().map(|f| f.size).sum::<u64>(),
+            packed.len()
+        );
+    }
     let generated = HashMap::from([(module, runtime), (ampr_index::NAME.to_string(), index)]);
     Ok((
         Prepared {
@@ -253,6 +291,7 @@ fn measure(
 pub(crate) fn build(
     format: ImageFormat,
     level: u8,
+    rules: Option<&Rules>,
     runtime: &PackRuntime,
     source: &mut dyn SourceTree,
     output: &Path,
@@ -261,7 +300,7 @@ pub(crate) fn build(
     cancel: &AtomicBool,
     stage: &mut dyn FnMut(&str, u64, u64),
 ) -> Result<ImageBuilt, String> {
-    let (mut prepared, packed) = prepare(source, runtime.bytes.clone(), now_secs())?;
+    let (mut prepared, packed) = prepare(source, runtime.bytes.clone(), now_secs(), rules)?;
     let index = measure(&mut prepared, &packed, level, output, cancel, stage)?;
     let built = {
         let mut tree =
@@ -310,6 +349,7 @@ fn pin_archive_id(index: &mut ps5_dump_forge_zstd::Index) -> Result<(), String> 
 pub(crate) fn stream_to_console(
     format: ImageFormat,
     level: u8,
+    rules: Option<&Rules>,
     runtime: &PackRuntime,
     source: &mut dyn SourceTree,
     mtime: i64,
@@ -321,6 +361,7 @@ pub(crate) fn stream_to_console(
 ) -> anyhow::Result<crate::image_build::Streamed> {
     stream_packed(
         level,
+        rules,
         runtime,
         source,
         mtime,
@@ -358,6 +399,7 @@ pub(crate) fn stream_to_console(
 pub(crate) fn stream_to_server(
     format: ImageFormat,
     level: u8,
+    rules: Option<&Rules>,
     runtime: &PackRuntime,
     source: &mut dyn SourceTree,
     mtime: i64,
@@ -371,6 +413,7 @@ pub(crate) fn stream_to_server(
     let path = target.path();
     stream_packed(
         level,
+        rules,
         runtime,
         source,
         mtime,
@@ -419,6 +462,7 @@ type SendPacked<'a, T> =
 #[allow(clippy::too_many_arguments)]
 fn stream_packed<T>(
     level: u8,
+    rules: Option<&Rules>,
     runtime: &PackRuntime,
     source: &mut dyn SourceTree,
     mtime: i64,
@@ -431,18 +475,26 @@ fn stream_packed<T>(
     place: &str,
 ) -> anyhow::Result<T> {
     let (mut prepared, packed) =
-        prepare(source, runtime.bytes.clone(), mtime).map_err(anyhow::Error::msg)?;
+        prepare(source, runtime.bytes.clone(), mtime, rules).map_err(anyhow::Error::msg)?;
     let mut index = measure(&mut prepared, &packed, level, Path::new(to), cancel, stage)
         .map_err(anyhow::Error::msg)?;
     pin_archive_id(&mut index).map_err(anyhow::Error::msg)?;
     let streamed = {
         let mut tree = PackedTree::new(&mut prepared, &index, 0, cancel)
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        // The bytes also follow the level and the emulator: a different one is a different job.
-        let salt = format!(
+        // The bytes also follow the level, the emulator and the profile: a different one is a
+        // different job. Without a profile the salt is what it was before profiles, so a
+        // stream begun by an older build of this app still goes on.
+        let mut salt = format!(
             "zstd level {level} emulator {}",
             blake3::hash(&runtime.bytes).to_hex()
         );
+        if let Some(p) = rules {
+            salt.push_str(&format!(
+                " profile {}",
+                blake3::hash(&p.canonical_json()).to_hex()
+            ));
+        }
         send(&mut tree, &salt, stage)?
     };
     let unpacked = reopen().and_then(|image| {
@@ -468,6 +520,7 @@ fn stream_packed<T>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_folder(
     level: u8,
+    rules: Option<&Rules>,
     runtime: &PackRuntime,
     source: &mut dyn SourceTree,
     reopen: &dyn Fn() -> Result<Box<dyn SourceTree>, String>,
@@ -478,6 +531,7 @@ pub(crate) fn build_folder(
 ) -> Result<crate::folder_build::FolderBuilt, String> {
     build_folder_to(
         level,
+        rules,
         runtime,
         source,
         reopen,
@@ -492,6 +546,7 @@ pub(crate) fn build_folder(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_folder_to(
     level: u8,
+    rules: Option<&Rules>,
     runtime: &PackRuntime,
     source: &mut dyn SourceTree,
     reopen: &dyn Fn() -> Result<Box<dyn SourceTree>, String>,
@@ -509,7 +564,7 @@ pub(crate) fn build_folder_to(
     };
     // The read-back makes the same index, so it keeps this time.
     let mtime = now_secs();
-    let (mut prepared, packed) = prepare(source, runtime.bytes.clone(), mtime)?;
+    let (mut prepared, packed) = prepare(source, runtime.bytes.clone(), mtime, rules)?;
     let shown = out.describe();
     let index = measure(
         &mut prepared,
@@ -544,7 +599,7 @@ pub(crate) fn build_folder_to(
                 Some(p) => p,
                 None => &mut *fresh,
             };
-            let (mut want, _) = prepare(fresh, runtime.bytes.clone(), mtime)?;
+            let (mut want, _) = prepare(fresh, runtime.bytes.clone(), mtime, rules)?;
             let checked = crate::folder_build::verify_trees(
                 &mut game,
                 &mut want,
@@ -622,7 +677,7 @@ mod tests {
             let out = root.join(crate::image_build::output_names(&src, format, false).0);
             let mut tree = FolderSource::open(&src).unwrap();
             let cancel = AtomicBool::new(false);
-            let (mut prepared, packed) = prepare(&mut tree, b"EMULATOR".to_vec(), 7).unwrap();
+            let (mut prepared, packed) = prepare(&mut tree, b"EMULATOR".to_vec(), 7, None).unwrap();
             assert!(packed.iter().any(|f| f.path == "data/sub/table.bin"));
             assert!(packed.iter().all(|f| f.path != "data/empty.bin"));
             let index = ps5_dump_forge_zstd::writer::measure(
@@ -708,6 +763,7 @@ mod tests {
         let mut tree = open_game(&src).unwrap();
         let built = build_folder(
             5,
+            None,
             &runtime(),
             &mut *tree,
             &|| open_game(&src),
@@ -776,6 +832,7 @@ mod tests {
         let mut tree = open_game(&target).unwrap();
         build_folder(
             1,
+            None,
             &runtime(),
             &mut *tree,
             &|| open_game(&target),
@@ -786,6 +843,88 @@ mod tests {
         )
         .unwrap();
         check(&again);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A profile decides what stays loose: its `**/*.bik` rule leaves the videos out of the
+    /// packs, as plain files in the folder and still listed in `ampr_emu.index`; the rest is
+    /// packed as the profile's default says, and the system files stay loose whatever it says.
+    #[test]
+    fn a_profile_rule_keeps_its_files_loose() {
+        let root =
+            std::env::temp_dir().join(format!("ps5upload-zstd-rules-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let src = game(&root);
+        std::fs::create_dir_all(src.join("movies")).unwrap();
+        std::fs::write(src.join("movies/intro.bik"), vec![7u8; 5000]).unwrap();
+        std::fs::write(src.join("data/sub/cut.bik"), vec![9u8; 3000]).unwrap();
+        // LZ4-only keys (block size, hot, layout) are taken and have no effect here; the last
+        // rule would pack the eboot and sce_sys, which never go into packs.
+        let rules = Rules::from_toml(
+            "[pack]\ndefault_action = \"compress\"\ndefault_block_size = \"128KiB\"\n\
+             [[rule]]\naction = \"loose\"\ninclude = [\"**/*.bik\"]\nhot = true\n\
+             layout = \"random\"\n\
+             [[rule]]\naction = \"compress\"\ninclude = [\"eboot.bin\", \"sce_sys/**\"]\n",
+            None,
+        )
+        .unwrap();
+        {
+            let mut tree = FolderSource::open(&src).unwrap();
+            let (_, packed) = prepare(&mut tree, b"EMULATOR".to_vec(), 7, Some(&rules)).unwrap();
+            let names: Vec<&str> = packed.iter().map(|f| f.path.as_str()).collect();
+            assert_eq!(names, ["data/settings.json", "data/sub/table.bin"]);
+        }
+        // A profile with no default keeps what no rule matches loose, as the format says.
+        {
+            let only = Rules::from_toml(
+                "[[rule]]\naction = \"compress\"\ninclude = [\"data/sub/**\"]\n",
+                None,
+            )
+            .unwrap();
+            let mut tree = FolderSource::open(&src).unwrap();
+            let (_, packed) = prepare(&mut tree, b"EMULATOR".to_vec(), 7, Some(&only)).unwrap();
+            let names: Vec<&str> = packed.iter().map(|f| f.path.as_str()).collect();
+            assert_eq!(names, ["data/sub/cut.bik", "data/sub/table.bin"]);
+        }
+        let target = root.join("packed");
+        let mut tree = open_game(&src).unwrap();
+        build_folder(
+            5,
+            Some(&rules),
+            &runtime(),
+            &mut *tree,
+            &|| open_game(&src),
+            &target,
+            VerifyMode::Full,
+            &AtomicBool::new(false),
+            &mut |_, _, _| {},
+        )
+        .unwrap();
+        // Loose on disk, byte for byte; the packed file is not.
+        assert_eq!(
+            std::fs::read(target.join("movies/intro.bik")).unwrap(),
+            vec![7u8; 5000]
+        );
+        assert_eq!(
+            std::fs::read(target.join("data/sub/cut.bik")).unwrap(),
+            vec![9u8; 3000]
+        );
+        assert!(!target.join("data/sub/table.bin").exists());
+        let folder = FolderSource::open(&target).unwrap();
+        let game = ps5_dump_forge_zstd::reader::unpack(Box::new(folder)).unwrap();
+        let in_packs: Vec<&str> = game.index().files.iter().map(|f| f.path.as_str()).collect();
+        assert!(in_packs.contains(&"data/sub/table.bin"), "{in_packs:?}");
+        assert!(
+            !in_packs.iter().any(|p| p.ends_with(".bik")),
+            "{in_packs:?}"
+        );
+        // ampr_emu.index lists them like every other file, so AMPR path ids still find them.
+        let listed =
+            ampr_index::parse(&std::fs::read(target.join(ampr_index::NAME)).unwrap()).unwrap();
+        for want in ["movies/intro.bik", "data/sub/cut.bik", "data/sub/table.bin"] {
+            assert!(listed.iter().any(|e| e.path == want), "{want}");
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -816,6 +955,7 @@ mod tests {
         let mut tree = open_game(&src).unwrap();
         let err = build_folder(
             5,
+            None,
             &runtime(),
             &mut *tree,
             &|| open_game(&changed),
@@ -842,7 +982,7 @@ mod tests {
         let local = lb.dir.join("local.exfat");
         {
             let mut tree = FolderSource::open(&src).unwrap();
-            let (mut prepared, packed) = prepare(&mut tree, runtime().bytes, 7).unwrap();
+            let (mut prepared, packed) = prepare(&mut tree, runtime().bytes, 7, None).unwrap();
             let mut index = ps5_dump_forge_zstd::writer::measure(
                 &mut prepared,
                 &packed,
@@ -881,6 +1021,7 @@ mod tests {
                 stream_to_console(
                     ImageFormat::Exfat,
                     5,
+                    None,
                     &runtime(),
                     &mut tree,
                     7,
@@ -936,6 +1077,7 @@ mod tests {
             stream_to_server(
                 ImageFormat::Exfat,
                 5,
+                None,
                 &runtime(),
                 &mut tree,
                 7,

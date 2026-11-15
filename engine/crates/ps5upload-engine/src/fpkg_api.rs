@@ -1206,6 +1206,7 @@ fn to_server_job(
     name: &str,
     format: crate::image_build::ImageFormat,
     zstd_level: Option<(u8, crate::zstd_runtime::RuntimeChoice)>,
+    zstd_rules: Option<&crate::zstd_packs::Rules>,
     runtime: &mut Option<crate::zstd_runtime::PackRuntime>,
     tree: &mut dyn ps5upload_fpkg::source::SourceTree,
     mode: ps5upload_fpkg::sample::VerifyMode,
@@ -1235,6 +1236,7 @@ fn to_server_job(
             crate::zstd_packs::stream_to_server(
                 format,
                 level,
+                zstd_rules,
                 runtime.insert(r),
                 tree,
                 stamp,
@@ -1283,6 +1285,7 @@ fn to_console_job(
     path: &str,
     format: crate::image_build::ImageFormat,
     zstd_level: Option<(u8, crate::zstd_runtime::RuntimeChoice)>,
+    zstd_rules: Option<&crate::zstd_packs::Rules>,
     runtime: &mut Option<crate::zstd_runtime::PackRuntime>,
     tree: &mut dyn ps5upload_fpkg::source::SourceTree,
     mode: ps5upload_fpkg::sample::VerifyMode,
@@ -1355,6 +1358,7 @@ fn to_console_job(
             crate::zstd_packs::stream_to_console(
                 format,
                 level,
+                zstd_rules,
                 runtime.insert(r),
                 tree,
                 stamp,
@@ -1416,6 +1420,14 @@ pub(crate) struct AmprZstdReq {
     /// `pinned` (the tested release). The job's `commit_ack.ampr_runtime` says which went in.
     #[serde(default)]
     runtime: crate::zstd_runtime::RuntimeChoice,
+    /// A profile in drakmor's `ampr_pack` TOML format (what `ampr_lz4.profile_toml` takes)
+    /// deciding which files stay loose: a file is packed unless its last matching `[[rule]]`,
+    /// or `[pack] default_action` when none matches (`loose` unless set), says `loose`. System
+    /// files and empty files stay loose whatever it says. Its block sizes, `hot`, `layout`,
+    /// groups and LZ4 settings mean nothing to zstd packs and are ignored. Absent or blank:
+    /// every file but the system files is packed.
+    #[serde(default)]
+    profile_toml: Option<String>,
 }
 
 impl AmprZstdReq {
@@ -1426,6 +1438,18 @@ impl AmprZstdReq {
             Ok(level)
         } else {
             Err(format!("zstd level {level} is not 1 to 22"))
+        }
+    }
+
+    /// The profile's rules, `None` without one, or why it is unusable.
+    fn rules(&self) -> Result<Option<Arc<crate::zstd_packs::Rules>>, String> {
+        match self.profile_toml.as_deref() {
+            Some(text) if !text.trim().is_empty() => {
+                ps5upload_fpkg::ampr_pack::Config::from_toml(text, None)
+                    .map(|c| Some(Arc::new(c)))
+                    .map_err(|e| format!("the pack profile: {e}"))
+            }
+            _ => Ok(None),
         }
     }
 }
@@ -1664,6 +1688,12 @@ pub(crate) async fn exfat_build_handler(
                 Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
             },
         };
+    // A zstd pack profile: which files stay loose. Refused here when it does not parse.
+    let zstd_rules = match req.ampr_zstd.as_ref().map(AmprZstdReq::rules) {
+        Some(Ok(r)) => r,
+        Some(Err(e)) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
+        None => None,
+    };
     // Straight to a console: (its address, the folder there). Straight to a server: the folder
     // there.
     let mut to_server: Option<crate::server_out::ServerDest> = None;
@@ -2042,6 +2072,7 @@ pub(crate) async fn exfat_build_handler(
                     &out_name,
                     format,
                     zstd_level,
+                    zstd_rules.as_deref(),
                     &mut runtime,
                     tree,
                     mode,
@@ -2057,6 +2088,7 @@ pub(crate) async fn exfat_build_handler(
                 path,
                 format,
                 zstd_level,
+                zstd_rules.as_deref(),
                 &mut runtime,
                 tree,
                 mode,
@@ -2081,6 +2113,7 @@ pub(crate) async fn exfat_build_handler(
                         crate::zstd_packs::build(
                             format,
                             level,
+                            zstd_rules.as_deref(),
                             runtime.insert(r),
                             tree,
                             &output,
@@ -2496,6 +2529,11 @@ pub(crate) async fn folder_build_handler(
             Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
         },
     };
+    let zstd_rules = match req.ampr_zstd.as_ref().map(AmprZstdReq::rules) {
+        Some(Ok(r)) => r,
+        Some(Err(e)) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
+        None => None,
+    };
     let update = update_path(req.update.as_deref());
     if update.is_some()
         && req
@@ -2850,6 +2888,7 @@ pub(crate) async fn folder_build_handler(
                     );
                     crate::zstd_packs::build_folder_to(
                         level,
+                        zstd_rules.as_deref(),
                         runtime.insert(r),
                         &mut *tree,
                         &reopen,

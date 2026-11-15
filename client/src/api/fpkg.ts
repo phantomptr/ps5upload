@@ -107,7 +107,8 @@ export interface AmprPacksReadiness {
 export interface AmprLz4Options {
   /** 1 (fastest) to 12 (smallest); the engine uses 9 when absent. */
   level?: number;
-  /** A profile in drakmor's ampr_pack TOML format, in place of the built-in one. */
+  /** A profile in drakmor's ampr_pack TOML format, in place of the built-in one. With zstd
+   *  packs (`zstdLevel`) it only decides which files stay loose. */
   profileToml?: string;
   /** Put ampr_emu 0.4.2.1 into the image when the game's own is missing or too old. */
   installRuntime?: boolean;
@@ -123,12 +124,18 @@ export interface ZstdPacks {
   level: number;
   /** The newest ampr-emu-ng release (checked against GitHub's digest) or the tested one. */
   runtime?: ZstdRuntime;
+  /** A profile in drakmor's ampr_pack TOML format deciding which files stay loose. */
+  profileToml?: string;
 }
 
-/** The engine's `ampr_zstd` body: the level and the runtime choice (Convert's setting unless
- *  given). */
-function amprZstd(level: number, runtime: ZstdRuntime | undefined) {
-  return { level, runtime: runtime ?? useConvertPrefs.getState().zstdRuntime };
+/** The engine's `ampr_zstd` body: the level, the runtime choice (Convert's setting unless
+ *  given) and a pack profile when one was picked. */
+function amprZstd(level: number, runtime: ZstdRuntime | undefined, profileToml?: string) {
+  return {
+    level,
+    runtime: runtime ?? useConvertPrefs.getState().zstdRuntime,
+    profile_toml: profileToml,
+  };
 }
 
 export interface FpkgBuildRequest {
@@ -237,7 +244,7 @@ export const fpkg = {
       outputDir,
       format,
       compress,
-      amprZstd: lz4?.zstdLevel ? amprZstd(lz4.zstdLevel, lz4.zstdRuntime) : undefined,
+      amprZstd: lz4?.zstdLevel ? amprZstd(lz4.zstdLevel, lz4.zstdRuntime, lz4.profileToml) : undefined,
       amprLz4: lz4 && !lz4.zstdLevel
         ? { level: lz4.level, profile_toml: lz4.profileToml, install_runtime: lz4.installRuntime ?? false }
         : undefined,
@@ -282,7 +289,7 @@ export const fpkg = {
       fullVerify,
       entry,
       keepBoth,
-      amprZstd: zstd ? amprZstd(zstd.level, zstd.runtime) : undefined,
+      amprZstd: zstd ? amprZstd(zstd.level, zstd.runtime, zstd.profileToml) : undefined,
     }),
   /** Write an edited COPY of a game image (#479): the image's files with `edits` applied,
    *  as the same kind of image (.exfat, .ffpkg, .ffpfs or .ffpfsc), read back and checked,

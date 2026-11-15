@@ -24,6 +24,9 @@ export interface Lz4Choice {
   onToggle: (on: boolean) => void;
   /** A profile read from a .toml file (its name); null packs with the built-in one. */
   profileName: string | null;
+  /** The profile came from this title's measured play, not from a file: an LZ4 default that
+   *  zstd packs don't take. */
+  profileMeasured?: boolean;
   onProfile: (profile: { name: string; text: string } | null) => void;
   /** Install ampr_emu 0.4.2.1 into the image (offered when `readiness.kind` is `runtime`). */
   installRuntime: boolean;
@@ -57,7 +60,7 @@ export function packOptions(
 ): AmprLz4Options | undefined {
   if (!lz4 || !lz4Active(format, lz4)) return undefined;
   return lz4.kind === "zstd"
-    ? { zstdLevel: lz4.zstdLevel, zstdRuntime: useConvertPrefs.getState().zstdRuntime }
+    ? { zstdLevel: lz4.zstdLevel, zstdRuntime: useConvertPrefs.getState().zstdRuntime, profileToml }
     : { profileToml, installRuntime: lz4.installRuntime };
 }
 
@@ -72,10 +75,58 @@ export function folderPacks(lz4: Lz4Choice | undefined): boolean {
 }
 
 /** What a folder build is told when zstd packs are on, or nothing. */
-export function folderPackOptions(lz4: Lz4Choice | undefined): ZstdPacks | undefined {
+export function folderPackOptions(
+  lz4: Lz4Choice | undefined,
+  profileToml?: string,
+): ZstdPacks | undefined {
   return lz4 && folderPacks(lz4)
-    ? { level: lz4.zstdLevel, runtime: useConvertPrefs.getState().zstdRuntime }
+    ? { level: lz4.zstdLevel, runtime: useConvertPrefs.getState().zstdRuntime, profileToml }
     : undefined;
+}
+
+/** A pack profile (.toml) picked from this device, or the built-in rules: the one picker LZ4
+ *  and zstd packs share. */
+function ProfilePicker({ lz4, zstd }: { lz4: Lz4Choice; zstd?: boolean }) {
+  const tr = useTr();
+  // zstd packs take a profile picked by hand only; a measured one is LZ4's.
+  const named = zstd && lz4.profileMeasured ? null : lz4.profileName;
+  return (
+    <div className={`flex flex-wrap items-center gap-2 text-xs${zstd ? " ms-6" : ""}`} data-testid="pack-profile">
+      {named ? (
+        <>
+          <span className="text-[var(--color-muted)]">
+            {tr("fpkg.image.lz4_profile_named", { name: named }, "Profile: {name}")}
+          </span>
+          <Button variant="ghost" onClick={() => lz4.onProfile(null)}>
+            {tr("fpkg.image.lz4_profile_clear", undefined, "Use the built-in profile")}
+          </Button>
+        </>
+      ) : (
+        <label className="cursor-pointer text-[var(--color-accent)] underline">
+          {tr("fpkg.image.lz4_profile", undefined, "Use a profile (.toml)…")}
+          <input
+            type="file"
+            accept=".toml"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) void file.text().then((text) => lz4.onProfile({ name: file.name, text }));
+            }}
+          />
+        </label>
+      )}
+      {zstd && named && (
+        <span className="basis-full leading-relaxed text-[var(--color-muted)]" data-testid="zstd-profile-note">
+          {tr(
+            "fpkg.image.zstd_profile_note",
+            undefined,
+            "For zstd packs the profile only decides which files stay loose: a file is packed unless its rule (or default_action, which is loose unless the profile sets it) says loose. Block sizes, hot, layout and LZ4 settings are ignored. System files always stay loose.",
+          )}
+        </span>
+      )}
+    </div>
+  );
 }
 
 /** The tested ampr-emu-ng release, as the engine pins it (zstd_packs.rs). */
@@ -153,6 +204,7 @@ export function ZstdOption({ lz4, folder }: { lz4: Lz4Choice; folder?: boolean }
       </label>
       {on && <PacksWarning />}
       {on && <ZstdRuntimeChoice />}
+      {on && <ProfilePicker lz4={lz4} zstd />}
       {on && (
         <label className="ms-6 flex items-center gap-2 text-xs">
           <span>{tr("fpkg.image.zstd_level", undefined, "Compression level")}</span>
@@ -260,34 +312,7 @@ function Lz4Option({ lz4 }: { lz4: Lz4Choice }) {
           )}
         </div>
       )}
-      {lz4.on && lz4.kind === "lz4" && !refusal && (
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          {lz4.profileName ? (
-            <>
-              <span className="text-[var(--color-muted)]">
-                {tr("fpkg.image.lz4_profile_named", { name: lz4.profileName }, "Profile: {name}")}
-              </span>
-              <Button variant="ghost" onClick={() => lz4.onProfile(null)}>
-                {tr("fpkg.image.lz4_profile_clear", undefined, "Use the built-in profile")}
-              </Button>
-            </>
-          ) : (
-            <label className="cursor-pointer text-[var(--color-accent)] underline">
-              {tr("fpkg.image.lz4_profile", undefined, "Use a profile (.toml)…")}
-              <input
-                type="file"
-                accept=".toml"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  e.target.value = "";
-                  if (file) void file.text().then((text) => lz4.onProfile({ name: file.name, text }));
-                }}
-              />
-            </label>
-          )}
-        </div>
-      )}
+      {lz4.on && lz4.kind === "lz4" && !refusal && <ProfilePicker lz4={lz4} />}
     </div>
   );
 }
