@@ -508,6 +508,38 @@ describe("fpkg pipeline", () => {
     jobStatus.mockReset();
   });
 
+  it("asks for the backport to be left out only when that was ticked", async () => {
+    const buildFolder = vi.fn().mockResolvedValue({ job_id: "b1" });
+    const buildImage = vi.fn().mockResolvedValue({ job_id: "b2" });
+    const { fpkg } = await import("../api/fpkg");
+    (fpkg as unknown as { buildFolder: unknown }).buildFolder = buildFolder;
+    (fpkg as unknown as { buildImage: unknown }).buildImage = buildImage;
+    jobStatus.mockResolvedValue({ status: "done", dest: "/out/G", bytes_sent: 9 });
+    await useFpkgConversion.getState().buildFolder("/games/G.exfat", "/out", false, { removeBackport: true });
+    // After the update and the destination, which this build has none of.
+    expect(buildFolder).toHaveBeenCalledWith(
+      "/games/G.exfat", "/out", undefined, false, undefined, false, undefined, undefined, undefined,
+      { removeBackport: true },
+    );
+    await tick();
+    useFpkgConversion.getState().reset();
+    await useFpkgConversion
+      .getState()
+      .buildImage("/games/G-app", "/out", false, "ffpkg", undefined, undefined, undefined, false, { removeBackport: true });
+    const call = buildImage.mock.calls[0] ?? [];
+    expect(call[call.length - 1]).toEqual({ removeBackport: true });
+    await tick();
+    useFpkgConversion.getState().reset();
+    // Not ticked: the call is the one it always was.
+    await useFpkgConversion
+      .getState()
+      .buildImage("/games/G-app", "/out", false, "ffpkg", undefined, undefined, undefined, false, { removeBackport: false });
+    const plain = buildImage.mock.calls[1] ?? [];
+    expect(plain[plain.length - 1]).toEqual({ add: true, build: "ampr_emu" });
+    await tick();
+    jobStatus.mockReset();
+  });
+
   it("sends a PS4 update to merge with the game's package build, which offers install like any package", async () => {
     build.mockResolvedValueOnce({ job_id: "p1" });
     jobStatus.mockResolvedValue({

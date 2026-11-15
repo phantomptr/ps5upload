@@ -87,6 +87,9 @@ export interface ConvertItem {
   /** Save to a server: the image or folder goes straight to this `remote://<connection>/<folder>`
    *  path, as chosen when the game was added (never kept on this computer). */
   toServer?: string;
+  /** Leave the backport libraries in this game's fakelib out of its image or folder: ticked
+   *  for this game when it was added (never set for a game that was not checked). */
+  removeBackport?: boolean;
   status: ConvertStatus;
   packagePath?: string;
   error?: string;

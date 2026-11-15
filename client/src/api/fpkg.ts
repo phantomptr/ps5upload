@@ -76,6 +76,27 @@ export interface FpkgInspection {
   ps4_addon_data?: boolean | null;
   /** Inspected with an update merged in: what the merge is. */
   ps4_merge?: Ps4Merge | null;
+  /** Present when the game's fakelib holds backport libraries: what "Remove backport
+   *  libraries" would leave out of an image or folder, and why it can't when it can't. */
+  backport?: BackportInfo | null;
+}
+
+/** A game's backport, as the check found it (the engine's `remove_backport::BackportReport`). */
+export interface BackportInfo {
+  /** The backport libraries in fakelib / fakelib2, by path. */
+  libraries: string[];
+  /** The emulators beside them, which are kept: `name` is AMPR, DLC, PlayGo or Other. */
+  emulators: { path: string; name: string }[];
+  /** Why they can't be left out whatever is made (the backport lowered eboot.bin's SDK). */
+  blocked?: string | null;
+  /** The game is in asset packs: they can be left out only when new zstd packs are made. */
+  packed?: "lz4" | "zstd" | null;
+}
+
+/** Choices of one image or folder build that are off unless asked for. */
+export interface BuildExtras {
+  /** Leave the backport libraries in the game's fakelib out of what is made. */
+  removeBackport?: boolean;
 }
 
 export type Ps4Kind = "game" | "patch" | "addon";
@@ -230,9 +251,11 @@ export const fpkg = {
     destination?: ImageDestination,
     /** A PS4 update merged into the PS4 game `source`: the image is the game at its version. */
     update?: string,
+    extra?: BuildExtras,
   ) =>
     invoke<{ job_id: string }>("exfat_build", {
       update,
+      removeBackport: extra?.removeBackport || undefined,
       source,
       outputDir,
       format,
@@ -272,9 +295,11 @@ export const fpkg = {
     /** Straight to a folder on a saved server, never stored on this computer; `outputDir`
      *  when absent. */
     destination?: ImageDestination,
+    extra?: BuildExtras,
   ) =>
     invoke<{ job_id: string }>("folder_build", {
       update,
+      removeBackport: extra?.removeBackport || undefined,
       destination,
       source,
       outputDir,

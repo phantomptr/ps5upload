@@ -213,11 +213,21 @@ struct InspectResponse {
     #[serde(flatten)]
     inspection: build::Inspection,
     min_firmware: Option<String>,
+    /// Present when the game's `fakelib`/`fakelib2` holds backport libraries: what an image or
+    /// folder build's `remove_backport` would leave out, and why it can't when it can't.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backport: Option<crate::remove_backport::BackportReport>,
 }
 
 fn min_firmware_of(source: &Path, declared: Option<&str>) -> Option<String> {
     let mut tree = ps5upload_fpkg::source::open(source).ok()?;
     crate::fpkg_firmware::min_firmware(tree.as_mut(), declared)
+}
+
+/// What the source's fakelib holds of a backport, when it holds any.
+fn backport_of(source: &Path) -> Option<crate::remove_backport::BackportReport> {
+    let mut tree = ps5upload_fpkg::source::open(source).ok()?;
+    crate::remove_backport::report(tree.as_mut())
 }
 
 /// POST /api/fpkg/inspect — what the source is, whether it looks convertible, and what it
@@ -275,9 +285,11 @@ pub(crate) async fn fpkg_inspect_handler(
         let inspection = build::inspect_with_update(Path::new(&source), update.as_deref(), &out)?;
         let min_firmware =
             min_firmware_of(Path::new(&source), inspection.required_firmware.as_deref());
+        let backport = backport_of(Path::new(&source));
         Ok::<_, ps5upload_fpkg::Error>(InspectResponse {
             inspection,
             min_firmware,
+            backport,
         })
     })
     .await;
@@ -1087,6 +1099,13 @@ pub(crate) struct ExfatBuildReq {
     /// is the game at the update's version (`ps5upload_fpkg::ps4_merge`). Not with `edits`.
     #[serde(default)]
     update: Option<String>,
+    /// Leave the backport libraries in the game's `fakelib`/`fakelib2` out of the image, the
+    /// emulators there kept (the inspection's `backport` lists both). Refused, with the reason,
+    /// when they can't go: the backport lowered `eboot.bin`'s SDK (nothing here restores it),
+    /// or the game stays in asset packs whose own list names them. A game with no backport
+    /// library is converted as it is. Not with `edits`.
+    #[serde(default)]
+    remove_backport: bool,
 }
 
 /// Where an image build puts the image.
@@ -1607,6 +1626,13 @@ pub(crate) async fn exfat_build_handler(
             )
             .into_response();
         }
+        if req.remove_backport {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                "an edited copy does not remove the backport: delete its files instead",
+            )
+            .into_response();
+        }
         let (edit_source, edits) = (source.clone(), std::mem::take(&mut req.edits));
         let index_only = req.rebuild_ampr_index && edits.is_empty();
         match tokio::task::spawn_blocking(move || {
@@ -1793,6 +1819,7 @@ pub(crate) async fn exfat_build_handler(
     let ampr_emu_build = req.ampr_emu_build.clone();
     let edited_tree = edited.map(|e| e.tree);
     let scan_update = update.clone();
+    let remove_backport = req.remove_backport;
     let scanned = tokio::task::spawn_blocking(move || {
         // An edited copy keeps the image's own names: only the user's changes are made.
         if let Some(tree) = edited_tree {
@@ -1831,6 +1858,12 @@ pub(crate) async fn exfat_build_handler(
                 ps5_dump_forge_zstd::reader::unpack(tree)
                     .map_err(|e| format!("reading the game's zstd packs: {e}"))?,
             );
+        }
+        // After any packs were decoded (their own list names the backport's files) and before
+        // an emulator or new packs are added to what is left.
+        if remove_backport {
+            let libs = crate::remove_backport::removable(&mut *tree)?;
+            tree = crate::remove_backport::without(tree, &libs);
         }
         if !check_packs && zstd_level.is_none() && add_ampr_emu {
             // Some libSceAmpr games with no emulator fail to start from an image, and
@@ -2380,6 +2413,10 @@ pub(crate) struct FolderBuildReq {
     /// a console is not a destination here.
     #[serde(default)]
     destination: Option<ImageDestinationReq>,
+    /// Leave the game's backport libraries out of the folder, as an image build's
+    /// `remove_backport` does, with the same refusals. Not with `entry`.
+    #[serde(default)]
+    remove_backport: bool,
 }
 
 /// What a folder build reads: the whole image, one folder of it, or one file.
@@ -2520,6 +2557,19 @@ pub(crate) async fn folder_build_handler(
         )
         .into_response();
     }
+    if req.remove_backport
+        && req
+            .entry
+            .as_deref()
+            .is_some_and(|e| !e.trim().trim_matches('/').is_empty())
+    {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "the backport is removed from a whole game, not one file or folder of it",
+        )
+        .into_response();
+    }
+    let remove_backport = req.remove_backport;
     let local_dir = !remote && tokio::fs::metadata(&source).await.is_ok_and(|m| m.is_dir());
     // A game folder with an update merged in is a new folder.
     if local_dir && zstd.is_none() && update.is_none() {
@@ -2641,11 +2691,24 @@ pub(crate) async fn folder_build_handler(
     let scan_entry = entry.clone();
     let scan_update = update.clone();
     let packing = zstd.is_some();
+    // The backport libraries left out, found once: the read-back leaves the same ones out.
+    let left_out: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+    let scan_left_out = left_out.clone();
     let scanned = tokio::task::spawn_blocking(move || {
         if let Some(entry) = scan_entry {
             // A part of the image is saved as the image spells it, as the browser listed it.
             return open_entry(&scan_source, &entry);
         }
+        // `tree` (packs already decoded when new ones are made) without its backport.
+        let strip = |mut tree: Box<dyn ps5upload_fpkg::source::SourceTree>| {
+            if !remove_backport {
+                return Ok(tree);
+            }
+            let libs = crate::remove_backport::removable(&mut *tree)?;
+            let tree = crate::remove_backport::without(tree, &libs);
+            *scan_left_out.lock().unwrap_or_else(|e| e.into_inner()) = libs;
+            Ok::<_, String>(tree)
+        };
         if packing {
             let mut tree = open_for_packing(&scan_source, scan_update.as_deref())?;
             if scan_update.is_none() {
@@ -2653,7 +2716,7 @@ pub(crate) async fn folder_build_handler(
                     return Err(why);
                 }
             }
-            return Ok(Unpacked::Tree(tree));
+            return Ok(Unpacked::Tree(strip(tree)?));
         }
         // An image ignores letter case and /data does not: a Unity dump whose
         // Il2cppUserAssemblies.prx the eboot loads as Il2CppUserAssemblies.prx plays from the
@@ -2681,7 +2744,7 @@ pub(crate) async fn folder_build_handler(
         if let Some(line) = signing.describe() {
             crate::log_at!(Info, "convert", "folder build: {line}");
         }
-        Ok::<_, String>(Unpacked::Tree(tree))
+        Ok::<_, String>(Unpacked::Tree(strip(tree)?))
     })
     .await;
     let unpacked = match scanned {
@@ -2824,16 +2887,18 @@ pub(crate) async fn folder_build_handler(
         // Verification reads the source afresh by the folder's names, so with the same renames
         // (or, for a part of the image, the same part; for packs, decoded the same way; with an
         // update, merged the same way).
+        let left_out = std::mem::take(&mut *left_out.lock().unwrap_or_else(|e| e.into_inner()));
         let reopen = move || match &reopen_entry {
             Some(e) => open_entry(&reopen_source, e).map(|u| match u {
                 Unpacked::Tree(t) | Unpacked::File { tree: t, .. } => t,
             }),
-            None if packing => open_for_packing(&reopen_source, reopen_update.as_deref()),
+            None if packing => open_for_packing(&reopen_source, reopen_update.as_deref())
+                .map(|t| crate::remove_backport::without(t, &left_out)),
             None => ps5upload_fpkg::module_case::open_with_update(
                 &reopen_source,
                 reopen_update.as_deref(),
             )
-            .map(|(t, _, _)| t)
+            .map(|(t, _, _)| crate::remove_backport::without(t, &left_out))
             .map_err(|e| e.to_string()),
         };
         // zstd packs: the emulator that goes in, fetched here (off the request) and recorded.

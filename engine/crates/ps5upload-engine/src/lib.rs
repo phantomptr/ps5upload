@@ -98,6 +98,7 @@ mod queue_api;
 mod remote;
 mod remote_download;
 mod remote_pkg;
+mod remove_backport;
 mod rp_diag;
 mod rp_golive;
 mod rp_keyboard;

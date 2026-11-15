@@ -924,6 +924,7 @@ export async function browserInvoke<T>(
         ampr_emu_build: args["amprEmuBuild"],
         destination: args["destination"],
         update: args["update"],
+        remove_backport: args["removeBackport"] ?? false,
       });
     }
     case "folder_build": {
@@ -937,6 +938,7 @@ export async function browserInvoke<T>(
         ampr_zstd: args["amprZstd"],
         update: args["update"],
         destination: args["destination"],
+        remove_backport: args["removeBackport"] ?? false,
       });
     }
     case "image_browse": {

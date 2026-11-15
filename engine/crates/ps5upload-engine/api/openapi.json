@@ -956,6 +956,46 @@
         ],
         "type": "object"
       },
+      "BackportReport": {
+        "description": "What the inspection says about a game's backport, for Convert's \"Remove backport libraries\".",
+        "properties": {
+          "blocked": {
+            "description": "Why they can't be left out whatever the conversion: the backport lowered eboot.bin's\nSDK (or that can't be told). Absent when they can.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "emulators": {
+            "description": "The emulators beside them, which a removal keeps.",
+            "items": {
+              "$ref": "#/components/schemas/Emulator"
+            },
+            "type": "array"
+          },
+          "libraries": {
+            "description": "The backport libraries in `fakelib`/`fakelib2`, by path: what a removal leaves out.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "packed": {
+            "description": "`lz4` or `zstd` when the game is in asset packs: its backport can be left out only by a\nconversion that unpacks it (one that writes zstd packs).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "libraries",
+          "emulators",
+          "blocked",
+          "packed"
+        ],
+        "type": "object"
+      },
       "BackupBody": {
         "properties": {
           "addr": {
@@ -3460,6 +3500,23 @@
         ],
         "type": "object"
       },
+      "Emulator": {
+        "description": "A homebrew emulator in a game's fakelib, which a removal keeps.",
+        "properties": {
+          "name": {
+            "description": "`AMPR`, `DLC`, `PlayGo`, or `Other` for one that could not be told.",
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "name"
+        ],
+        "type": "object"
+      },
       "EngineOpBody": {
         "properties": {
           "authkey": {
@@ -3673,6 +3730,10 @@
           },
           "rebuild_ampr_index": {
             "description": "An edited copy of the image `source` whose one change is a regenerated\n`ampr_emu.index` (Workshop's \"Rebuild AMPR index\", #621): written like an edited copy,\nrefused for a compressed image or a game that does not read through libSceAmpr.",
+            "type": "boolean"
+          },
+          "remove_backport": {
+            "description": "Leave the backport libraries in the game's `fakelib`/`fakelib2` out of the image, the\nemulators there kept (the inspection's `backport` lists both). Refused, with the reason,\nwhen they can't go: the backport lowered `eboot.bin`'s SDK (nothing here restores it),\nor the game stays in asset packs whose own list names them. A game with no backport\nlibrary is converted as it is. Not with `edits`.",
             "type": "boolean"
           },
           "source": {
@@ -4218,6 +4279,10 @@
               "string",
               "null"
             ]
+          },
+          "remove_backport": {
+            "description": "Leave the game's backport libraries out of the folder, as an image build's\n`remove_backport` does, with the same refusals. Not with `entry`.",
+            "type": "boolean"
           },
           "source": {
             "description": "A game image (`.exfat`, `.ffpkg`/`.ufs2`, `.ffpfs`, `.ffpfsc`) or a debug-key `.pkg`,\non this computer, a saved server (`remote://`) or a console (`ps5://`).",
@@ -6018,7 +6083,7 @@
         ]
       },
       "ImageEditReq": {
-        "description": "One change for an edited copy of an image: `{\"op\":\"delete\",\"path\":…}` removes a file or\nfolder; `{\"op\":\"put\",\"path\":…,\"from\":…}` puts a file (or a folder's contents) from this\ncomputer at `path`, replacing what is there.",
+        "description": "One change for an edited copy of an image: `{\"op\":\"delete\",\"path\":…}` removes a file or\nfolder; `{\"op\":\"put\",\"path\":…,\"from\":…}` puts a file (or a folder's contents) from this\ncomputer at `path`, replacing what is there; `{\"op\":\"rename\",\"from\":…,\"to\":…}` renames or\nmoves a file or folder to a path nothing is at yet; `{\"op\":\"mkdir\",\"path\":…}` makes a new\nempty folder. They are applied in order, each seeing what the ones before it did.",
         "oneOf": [
           {
             "allOf": [
@@ -6071,6 +6136,62 @@
                 "required": [
                   "path",
                   "from"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "op": {
+                    "const": "rename"
+                  }
+                },
+                "required": [
+                  "op"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "from": {
+                    "type": "string"
+                  },
+                  "to": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "from",
+                  "to"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "op": {
+                    "const": "mkdir"
+                  }
+                },
+                "required": [
+                  "op"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path"
                 ],
                 "type": "object"
               }
@@ -6292,6 +6413,17 @@
         "allOf": [
           {
             "properties": {
+              "backport": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/BackportReport"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Present when the game's `fakelib`/`fakelib2` holds backport libraries: what an image or\nfolder build's `remove_backport` would leave out, and why it can't when it can't."
+              },
               "min_firmware": {
                 "type": [
                   "string",

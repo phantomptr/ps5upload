@@ -19,7 +19,7 @@ import {
   type ImageUploadPlan,
 } from "../lib/imageUpload";
 import { resolveUploadDest } from "../lib/uploadDest";
-import type { ImageDestination } from "../api/fpkg";
+import type { BuildExtras, ImageDestination } from "../api/fpkg";
 import { useUploadQueueStore } from "./uploadQueue";
 
 import {
@@ -199,6 +199,8 @@ export interface ConversionState {
       toServer?: string;
       /** A PS4 update merged into the PS4 game `source`. */
       update?: string;
+      /** Leave the backport libraries in the game's fakelib out of the image. */
+      removeBackport?: boolean;
     },
   ) => Promise<void>;
   /** Unpack a game image or a debug-key package into a plain folder in `outputDir`; with
@@ -216,6 +218,8 @@ export interface ConversionState {
       update?: string;
       /** Save to a server: the folder goes straight to this `remote://` folder. */
       toServer?: string;
+      /** Leave the backport libraries in the game's fakelib out of the folder. */
+      removeBackport?: boolean;
     },
   ) => Promise<void>;
   /** Put the finished image in the Upload queue. */
@@ -952,9 +956,16 @@ async function followLostUnpack(jobId: string) {
 function buildTail(
   destination: ImageDestination | undefined,
   update: string | undefined,
-): [destination?: ImageDestination, update?: string] {
+  extra?: BuildExtras,
+): [destination?: ImageDestination, update?: string, extra?: BuildExtras] {
+  if (extra) return [destination, update, extra];
   if (update) return [destination, update];
   return destination ? [destination] : [];
+}
+
+/** The choices of a build that are off unless asked for, or nothing when none is on. */
+function extrasOf(own: { removeBackport?: boolean } | undefined): BuildExtras | undefined {
+  return own?.removeBackport ? { removeBackport: true } : undefined;
 }
 
 /** A folder build's trailing `update` and `destination` arguments, without the empty ones at
@@ -962,7 +973,9 @@ function buildTail(
 function folderTail(
   update: string | undefined,
   destination: ImageDestination | undefined,
-): [update?: string, destination?: ImageDestination] {
+  extra?: BuildExtras,
+): [update?: string, destination?: ImageDestination, extra?: BuildExtras] {
+  if (extra) return [update, destination, extra];
   if (destination) return [update, destination];
   return update ? [update] : [];
 }
@@ -1042,7 +1055,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
             imageLevel,
             keepBoth,
             amprEmu,
-            ...buildTail(toConsole ? await consoleDestination(toConsole) : toServer, own?.update),
+            ...buildTail(toConsole ? await consoleDestination(toConsole) : toServer, own?.update, extrasOf(own)),
           ),
         null,
         password,
@@ -1064,7 +1077,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         keepBoth,
         amprEmu,
         // Only when it goes to the PS5: a local build's call stays as it was.
-        ...buildTail(toConsole ? await consoleDestination(toConsole) : toServer, own?.update),
+        ...buildTail(toConsole ? await consoleDestination(toConsole) : toServer, own?.update, extrasOf(own)),
       );
       update({ jobId: job_id });
       poll(job_id, null);
@@ -1088,7 +1101,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         undefined,
         keepBoth,
         own?.zstd,
-        ...folderTail(own?.update, own?.toServer ? serverDestination(own.toServer) : undefined),
+        ...folderTail(own?.update, own?.toServer ? serverDestination(own.toServer) : undefined, extrasOf(own)),
       );
       update({ jobId: job_id });
       poll(job_id, null);

@@ -54,6 +54,7 @@ async function build(item: ConvertItem) {
       fullVerify: item.fullVerify,
       zstd: item.build.zstd,
       ...(item.toServer ? { toServer: item.toServer } : {}),
+      ...(item.removeBackport ? { removeBackport: true } : {}),
     });
     await whenIdle();
     return outcome(true);
@@ -86,6 +87,7 @@ async function build(item: ConvertItem) {
         addAmprEmu: item.addAmprEmu,
         amprEmuBuild: item.amprEmuBuild,
         ...(item.toServer ? { toServer: item.toServer } : {}),
+        ...(item.removeBackport ? { removeBackport: true } : {}),
       },
     );
     await whenIdle();

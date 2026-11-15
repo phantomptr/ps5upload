@@ -52,6 +52,7 @@ import { MakeCard } from "./MakeCard";
 import { mergeRole, Ps4MergePicker } from "./Ps4Merge";
 import { OptionsCard } from "./OptionsCard";
 import { folderPackOptions, folderPacks, packOptions } from "./ImageOptions";
+import { RemoveBackportOption, backportRefusal } from "./SourceOptions";
 import {
   OutputChoice,
   RunCard,
@@ -258,6 +259,8 @@ export default function WorkshopScreen() {
       // Save to: a server, as chosen now (an image or a game folder only).
       toServer:
         (build.kind === "image" || build.kind === "folder") && savesToServer(runChoice) ? serverFolder : undefined,
+      // Only the game it was ticked for under ③, never the others added with it.
+      removeBackport: (removesBackport && src === source.trim()) || undefined,
     });
   };
   /** Queue what was picked or found, then say what was left out. */
@@ -340,6 +343,9 @@ export default function WorkshopScreen() {
   const [checking, setChecking] = useState(false);
   // A .rar's password: held for this source only, never stored.
   const [password, setPassword] = useState("");
+  // "Remove backport libraries": ticked for this source only (the one it names), so another
+  // game starts with it off.
+  const [removeBackportFor, setRemoveBackportFor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deleteArmed, setDeleteArmed] = useState(false);
   const disarm = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -561,6 +567,7 @@ export default function WorkshopScreen() {
         zstd: folderPackOptions(lz4Choice),
         update,
         ...(toServer ? { toServer } : {}),
+        ...(removesBackport ? { removeBackport: true } : {}),
       });
       return;
     }
@@ -585,11 +592,12 @@ export default function WorkshopScreen() {
         packOptions(build.format, lz4Choice, lz4Profile?.text),
         password || undefined,
         out.keepBoth,
-        direct || toServer || update
+        direct || toServer || update || removesBackport
           ? {
               ...(direct ? { toConsole: plan } : {}),
               ...(toServer ? { toServer } : {}),
               ...(update ? { update } : {}),
+              ...(removesBackport ? { removeBackport: true } : {}),
             }
           : undefined,
       );
@@ -726,6 +734,17 @@ export default function WorkshopScreen() {
     : undefined;
   // A folder in zstd packs can be made of a game folder too.
   const packsFolder = folderPacks(lz4Choice);
+  // "Remove backport libraries" is for an image or folder of the one game checked, when its
+  // fakelib holds any; not with an update merged in (the merged game is another source).
+  const backport =
+    !mergeReady && (build.kind === "image" || build.kind === "folder") ? (inspection?.backport ?? null) : null;
+  // New zstd packs unpack a packed game on the way, which is what lets its backport go.
+  const backportUnpacks =
+    build.kind === "folder"
+      ? packsFolder
+      : build.kind === "image" && lz4Active(build.format, lz4Choice) && lz4Choice?.kind === "zstd";
+  const removesBackport =
+    backport !== null && removeBackportFor === src && !backportRefusal(backport, backportUnpacks);
   // A game folder with an update merged in is a new folder too.
   const canFolder = unpackable || (isLocalFolder && (packsFolder || mergeReady));
   const isFolderSource = src !== "" && !unpackable && !isArchiveSource(src) && !packsFolder && !mergeReady;
@@ -1139,6 +1158,14 @@ export default function WorkshopScreen() {
             }
           >
             {locked && <OutputChoice {...runChoice} />}
+            {!locked && backport && (
+              <RemoveBackportOption
+                backport={backport}
+                unpacks={backportUnpacks}
+                checked={removeBackportFor === src}
+                onChange={(on) => setRemoveBackportFor(on ? src : null)}
+              />
+            )}
           </OptionsCard>
 
           <SwapJournals

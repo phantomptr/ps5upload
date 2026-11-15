@@ -2493,6 +2493,8 @@ pub async fn exfat_build(
     destination: Option<JsonValue>,
     // A PS4 update merged into the PS4 game `source`.
     update: Option<String>,
+    // Leave the backport libraries in the game's fakelib out of the image.
+    remove_backport: Option<bool>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/exfat/build");
@@ -2516,6 +2518,7 @@ pub async fn exfat_build(
             "ampr_emu_build": ampr_emu_build,
             "destination": destination,
             "update": update,
+            "remove_backport": remove_backport.unwrap_or(false),
         }),
     )
     .await
@@ -2539,6 +2542,8 @@ pub async fn folder_build(
     update: Option<String>,
     // Where the folder goes: {"kind":"local"} (the default) or {"kind":"server",...}.
     destination: Option<JsonValue>,
+    // Leave the backport libraries in the game's fakelib out of the folder.
+    remove_backport: Option<bool>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/folder/build");
@@ -2554,6 +2559,7 @@ pub async fn folder_build(
             "ampr_zstd": ampr_zstd,
             "update": update,
             "destination": destination,
+            "remove_backport": remove_backport.unwrap_or(false),
         }),
     )
     .await

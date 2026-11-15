@@ -25,22 +25,27 @@ fn is_executable(path: &str) -> bool {
 /// module by the param block's magic. `None` when neither finds it or it is not a pair Sony
 /// ships.
 fn module_pair(tree: &mut dyn SourceTree, path: &str) -> Option<(u32, u32)> {
+    raw_module_pair(tree, path).filter(|pair| is_known_sdk_pair(*pair))
+}
+
+/// [`module_pair`] whatever the pair is: a game built for a firmware newer than the table of
+/// pairs knows still says which SDK it was built with.
+pub(crate) fn raw_module_pair(tree: &mut dyn SourceTree, path: &str) -> Option<(u32, u32)> {
     let head = tree.read_range(path, 0, HEADER).ok()?;
     let placed = param_site_from_header(&head).and_then(|site| {
         let chunk = tree.read_range(path, site as u64, 0x18).ok()?;
         sdk_pair_at(&chunk)
     });
-    let pair = match placed {
-        Some(pair) => pair,
+    match placed {
+        Some(pair) => Some(pair),
         None => {
             let size = tree.files().iter().find(|f| f.path == path)?.size;
             if size > SCAN_LIMIT {
                 return None;
             }
-            sdk_pair(&tree.read(path).ok()?)?
+            sdk_pair(&tree.read(path).ok()?)
         }
-    };
-    is_known_sdk_pair(pair).then_some(pair)
+    }
 }
 
 /// `(major, minor)` of a PS5 SDK word: the top byte is the firmware major in BCD, the next
