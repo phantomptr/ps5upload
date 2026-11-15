@@ -109,6 +109,7 @@ ADB ?= $(ANDROID_HOME)/platform-tools/adb
 .PHONY: clean clean-payload clean-engine clean-client
 .PHONY: verify info install-hooks
 .PHONY: test-ava1 test-ava1-sanitize ava1-app-gen ava1-version-check check-no-ftx2
+.PHONY: fuzz-smoke
 .PHONY: run-engine run-client dev start _check-tauri-system-deps
 .PHONY: install-engine uninstall-engine
 .PHONY: dist dist-win dist-win-arm dist-mac dist-mac-x64 dist-linux dist-linux-arm
@@ -168,6 +169,7 @@ help:
 	@echo "  make test-engine      - cargo test --workspace (C interop serial)"
 	@echo "  make test-desktop     - Tauri Rust cargo check/clippy/test"
 	@echo "  make test-ava1        - AVA1 Rust + C conformance and interop tests"
+	@echo "  make fuzz-smoke       - Fuzz every file reader for 20 s each (needs cargo-fuzz + nightly; skips without)"
 	@echo "  make test-payload     - Validate $(PAYLOAD_ELF)"
 	@echo "  make test-client      - Type-check + lint + unit tests + build client UI"
 	@echo ""
@@ -1779,6 +1781,13 @@ release-post:
 
 promo-post:
 	@node scripts/promo-posts.js $(ARGS)
+
+# Fuzz targets for the engine's file readers (engine/fuzz, its own workspace; see its README):
+# builds every target and runs each for FUZZ_SECONDS (20). Skips with a message when cargo-fuzz
+# or a nightly toolchain is missing. `make fuzz-smoke FUZZ_TARGETS="exfat ufs2"` runs only those.
+FUZZ_SECONDS ?= 20
+fuzz-smoke:
+	@FUZZ_SECONDS=$(FUZZ_SECONDS) bash scripts/fuzz-smoke.sh $(FUZZ_TARGETS)
 
 # The AVA1 protocol library (github.com/phantomptr/ava1) is the third_party/ava1 submodule; its own
 # tests, fuzzers and sanitizer runs live there (`make -C third_party/ava1 test`). Here: ps5upload's

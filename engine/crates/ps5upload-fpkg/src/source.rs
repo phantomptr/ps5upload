@@ -543,10 +543,15 @@ fn string_value_span(text: &str, key: &str) -> Option<(usize, usize)> {
 fn set_string_value(param_json: &[u8], key: &str, value: &str) -> Option<Vec<u8>> {
     let text = String::from_utf8_lossy(param_json);
     let (start, end) = string_value_span(&text, key)?;
-    let mut out = Vec::with_capacity(param_json.len() + value.len());
-    out.extend_from_slice(&param_json[..start]);
+    // The span is an offset into `text`, so `text` is what gets cut: the two are the same
+    // bytes for every real param.json, but a file with bytes that are not UTF-8 decodes
+    // longer than it is, and its offsets cut the file itself in the wrong place or past its
+    // end (a panic the fuzzer found). Such a file comes out as the text it was read as.
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len() + value.len());
+    out.extend_from_slice(&bytes[..start]);
     out.extend_from_slice(value.as_bytes());
-    out.extend_from_slice(&param_json[end..]);
+    out.extend_from_slice(&bytes[end..]);
     Some(out)
 }
 
@@ -685,9 +690,10 @@ fn remove_string_field(param_json: &[u8], key: &str) -> Option<Vec<u8>> {
         start = key_at - lead;
         // Keep the indentation of the removed line for the next key.
         let indent = &text[start..key_at];
-        let mut out = param_json[..start].to_vec();
+        // Cut from `text`, which the offsets index (see `set_string_value`).
+        let mut out = text.as_bytes()[..start].to_vec();
         out.extend_from_slice(indent.as_bytes());
-        out.extend_from_slice(&param_json[end..]);
+        out.extend_from_slice(&text.as_bytes()[end..]);
         return Some(out);
     }
     let before = &text[..key_at];
@@ -696,8 +702,8 @@ fn remove_string_field(param_json: &[u8], key: &str) -> Option<Vec<u8>> {
         return None;
     }
     start = comma;
-    let mut out = param_json[..start].to_vec();
-    out.extend_from_slice(&param_json[end..]);
+    let mut out = text.as_bytes()[..start].to_vec();
+    out.extend_from_slice(&text.as_bytes()[end..]);
     Some(out)
 }
 
@@ -708,7 +714,8 @@ fn blank_string_array(param_json: &[u8], key: &str) -> Option<Vec<u8>> {
     let at = text.find(key)? + key.len();
     let open = at + text[at..].find('[')?;
     let close = open + text[open..].find(']')?;
-    let mut out = param_json.to_vec();
+    // The bytes the offsets index (see `set_string_value`).
+    let mut out = text.as_bytes().to_vec();
     let mut changed = false;
     let mut in_str = false;
     for byte in &mut out[open + 1..close] {
@@ -868,9 +875,13 @@ fn dynamic_segment(tree: &mut dyn SourceTree, rel: &str) -> Option<(u64, u64)> {
     const PT_LOAD: u32 = 1;
     const PT_DYNAMIC: u32 = 2;
     let head = tree.read_range(rel, 0, 0x1_0000).ok()?;
-    let u16_at = |at: usize| Some(u16::from_le_bytes(head.get(at..at + 2)?.try_into().ok()?));
-    let u32_at = |at: usize| Some(u32::from_le_bytes(head.get(at..at + 4)?.try_into().ok()?));
-    let u64_at = |at: usize| Some(u64::from_le_bytes(head.get(at..at + 8)?.try_into().ok()?));
+    // Every offset below comes from the file, so none is added to without a check: a module
+    // whose program header offset is near the top of the range is not a module, and must read
+    // as one we cannot place, not overflow (a panic in a debug build, found by the fuzzer).
+    let bytes = |at: usize, n: usize| head.get(at..at.checked_add(n)?);
+    let u16_at = |at: usize| Some(u16::from_le_bytes(bytes(at, 2)?.try_into().ok()?));
+    let u32_at = |at: usize| Some(u32::from_le_bytes(bytes(at, 4)?.try_into().ok()?));
+    let u64_at = |at: usize| Some(u64::from_le_bytes(bytes(at, 8)?.try_into().ok()?));
     let magic = head.get(..4)?;
     let (elf, self_segments) = if magic == magic::SELF_PS5 || magic == magic::SELF_PS4 {
         let n = usize::from(u16_at(0x18)?);
@@ -886,15 +897,22 @@ fn dynamic_segment(tree: &mut dyn SourceTree, rel: &str) -> Option<(u64, u64)> {
     let phoff = usize::try_from(u64_at(elf + 0x20)?).ok()?;
     let phentsize = usize::from(u16_at(elf + 0x36)?);
     let phnum = usize::from(u16_at(elf + 0x38)?);
-    let ph = |i: usize| elf + phoff + i * phentsize;
-    // (type, file offset, file size) per program header.
+    let ph = |i: usize| {
+        elf.checked_add(phoff)?
+            .checked_add(i.checked_mul(phentsize)?)
+    };
+    // (type, file offset, file size) per program header. Once its type is read, the header
+    // lies inside `head`, so the two fields after it are plain additions.
     let headers: Vec<(u32, u64, u64)> = (0..phnum)
-        .map(|i| Some((u32_at(ph(i))?, u64_at(ph(i) + 8)?, u64_at(ph(i) + 0x20)?)))
+        .map(|i| {
+            let at = ph(i)?;
+            Some((u32_at(at)?, u64_at(at + 8)?, u64_at(at + 0x20)?))
+        })
         .collect::<Option<_>>()?;
     let (_, dyn_off, _) = *headers.iter().find(|h| h.0 == PT_DYNAMIC)?;
-    let load = headers
-        .iter()
-        .position(|&(t, off, size)| t == PT_LOAD && off <= dyn_off && dyn_off < off + size)?;
+    let load = headers.iter().position(|&(t, off, size)| {
+        t == PT_LOAD && off <= dyn_off && off.checked_add(size).is_some_and(|end| dyn_off < end)
+    })?;
     if self_segments == 0 {
         return Some((headers[load].1, headers[load].2));
     }
@@ -913,7 +931,8 @@ fn dynamic_segment(tree: &mut dyn SourceTree, rel: &str) -> Option<(u64, u64)> {
 /// length, so a match lying across a boundary is still found; without that, detection would
 /// depend on where in the file the string happened to land.
 fn scan_for(tree: &mut dyn SourceTree, rel: &str, start: u64, len: u64, needle: &[u8]) -> bool {
-    let end = start + len;
+    // `start` may be a module's own claim of where its segment lies.
+    let end = start.saturating_add(len);
     let mut offset = start;
     let mut carry: Vec<u8> = Vec::new();
     while offset < end {
@@ -1286,6 +1305,56 @@ mod tests {
         );
     }
 
+    /// Found by the `param` and `game_checks` fuzz targets: a `param.json` holding bytes that
+    /// are not UTF-8 ahead of the value to rewrite. The value's place was worked out in the
+    /// decoded text, where each such byte is three, and then cut from the file itself: past
+    /// its end (a panic that ended the build), or in range and through the wrong bytes.
+    #[test]
+    fn a_param_json_with_bytes_that_are_not_utf8_is_rewritten_without_panicking() {
+        let with_junk = |rest: &str| {
+            let mut v = b"{\"junk\":\"".to_vec();
+            v.extend_from_slice(&[0xFF; 40]);
+            v.extend_from_slice(rest.as_bytes());
+            v
+        };
+        let drm = drm_rewrite(&with_junk("\",\"applicationDrmType\":\"free\"}")).unwrap();
+        assert_eq!(
+            parse_param_json(&drm).unwrap()["applicationDrmType"],
+            "standard"
+        );
+
+        let fw = with_junk("\",\"requiredSystemSoftwareVersion\":\"0x1260000000000000\"}");
+        let fw = firmware_rewrite(&fw, "0x0510000000000000").unwrap();
+        assert_eq!(
+            parse_param_json(&fw).unwrap()["requiredSystemSoftwareVersion"],
+            "0x0510000000000000"
+        );
+
+        let id = "UP0000-PPSA01234_00-0000000000000000";
+        let ids =
+            with_junk("\",\"contentId\":\"UP0000-PPSA09999_00-X\",\"titleId\":\"PPSA09999\"}");
+        let v = parse_param_json(&content_id_rewrite(&ids, id).unwrap()).unwrap();
+        assert_eq!(
+            (v["contentId"].as_str(), v["titleId"].as_str()),
+            (Some(id), Some("PPSA01234"))
+        );
+
+        let launch = with_junk(
+            "\",\"originContentVersion\":\"01.000.000\",\"versionFileUri\":\"https://x/v.xml\",\
+             \"addcont\":{\"serviceIdForSharing\":[\"UP4433-CUSA00744_00\"]}}",
+        );
+        let v = parse_param_json(&launch_rewrite(&launch).unwrap()).unwrap();
+        assert_eq!(v["versionFileUri"], "");
+        assert!(v.get("originContentVersion").is_none());
+        assert_eq!(
+            v["addcont"]["serviceIdForSharing"][0]
+                .as_str()
+                .unwrap()
+                .trim(),
+            ""
+        );
+    }
+
     use super::*;
 
     /// A tree held in memory, so a readiness check can be exercised without touching disk.
@@ -1393,6 +1462,47 @@ mod tests {
         // Without the name, the same module is not flagged.
         eboot[name_at..name_at + 14].fill(0);
         let mut tree = MemTree(vec![("eboot.bin".to_string(), eboot)]);
+        assert!(!imports_ampr(&mut tree, "eboot.bin"));
+    }
+
+    /// Found by the `game_checks` fuzz target: a module whose program headers claim to lie at
+    /// the top of the address range. The offsets were added up unchecked, which panics where
+    /// overflow is checked (tests, a debug build) and wraps elsewhere.
+    #[test]
+    fn a_module_with_offsets_that_overflow_is_one_we_cannot_place() {
+        let module = |phoff: u64, load: (u64, u64), dynamic: u64| {
+            let mut m = vec![0u8; 0x200];
+            m[..4].copy_from_slice(&magic::RAW_ELF);
+            m[0x20..0x28].copy_from_slice(&phoff.to_le_bytes());
+            m[0x36..0x38].copy_from_slice(&56u16.to_le_bytes());
+            m[0x38..0x3A].copy_from_slice(&2u16.to_le_bytes());
+            // Two program headers at 0x40, read when `phoff` says so: PT_LOAD, PT_DYNAMIC.
+            for (i, (kind, off, size)) in [(1u32, load.0, load.1), (2, dynamic, 0x80)]
+                .into_iter()
+                .enumerate()
+            {
+                let at = 0x40 + i * 56;
+                m[at..at + 4].copy_from_slice(&kind.to_le_bytes());
+                m[at + 8..at + 16].copy_from_slice(&off.to_le_bytes());
+                m[at + 0x20..at + 0x28].copy_from_slice(&size.to_le_bytes());
+            }
+            MemTree(vec![("eboot.bin".to_string(), m)])
+        };
+        // The program headers' own offset overflows.
+        for phoff in [u64::MAX, u64::MAX - 3, u64::MAX / 56 + 1] {
+            let mut tree = module(phoff, (0, 0x100), 0x10);
+            assert_eq!(dynamic_segment(&mut tree, "eboot.bin"), None);
+            assert!(!imports_ampr(&mut tree, "eboot.bin"));
+        }
+        // A load segment whose end overflows holds nothing.
+        let mut tree = module(0x40, (u64::MAX - 8, 0x100), u64::MAX - 4);
+        assert_eq!(dynamic_segment(&mut tree, "eboot.bin"), None);
+        // One at the very top that does not overflow is placed, and scanning it finds nothing.
+        let mut tree = module(0x40, (u64::MAX - 0x100, 0x100), u64::MAX - 4);
+        assert_eq!(
+            dynamic_segment(&mut tree, "eboot.bin"),
+            Some((u64::MAX - 0x100, 0x100))
+        );
         assert!(!imports_ampr(&mut tree, "eboot.bin"));
     }
 

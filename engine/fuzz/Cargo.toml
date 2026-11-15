@@ -1,0 +1,164 @@
+# cargo-fuzz targets for every reader of a file a user could hand the engine (packages, disk
+# images, pack indexes, param files). Its own workspace, not a member of ../Cargo.toml: it
+# builds with sanitizer flags on a nightly toolchain, and the engine's builds, tests and CI
+# never look at it. Laid out as ps5-dump-forge's fuzz/ is. See README.md.
+#
+#   cargo run --release -p ps5upload-fuzz-seedgen -- corpus     # seed corpora (stable)
+#   cargo +nightly fuzz run exfat -- -max_total_time=60
+[package]
+name = "ps5upload-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+members = [".", "seedgen"]
+resolver = "2"
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ps5upload-fpkg = { path = "../crates/ps5upload-fpkg" }
+ps5upload-pkg = { path = "../crates/ps5upload-pkg" }
+ps5upload-core = { path = "../crates/ps5upload-core" }
+ps5-dump-forge-pfs = { path = "../crates/ps5-dump-forge-pfs" }
+ps5-dump-forge-zstd = { path = "../crates/ps5-dump-forge-zstd" }
+
+[lib]
+path = "src/lib.rs"
+
+# The same patch as ../Cargo.toml: ps5upload-core depends on the vendored sevenz-rust2.
+[patch.crates-io]
+sevenz-rust2 = { path = "../../third_party/sevenz-rust2" }
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "exfat"
+path = "fuzz_targets/exfat.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ufs2"
+path = "fuzz_targets/ufs2.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pfs"
+path = "fuzz_targets/pfs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pfsc"
+path = "fuzz_targets/pfsc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fih_cnt"
+path = "fuzz_targets/fih_cnt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pkg_source"
+path = "fuzz_targets/pkg_source.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pkg_meta"
+path = "fuzz_targets/pkg_meta.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "kraken_block"
+path = "fuzz_targets/kraken_block.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "kraken_descriptor"
+path = "fuzz_targets/kraken_descriptor.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lz4_index"
+path = "fuzz_targets/lz4_index.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lz4_manifest"
+path = "fuzz_targets/lz4_manifest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lz4_unpack"
+path = "fuzz_targets/lz4_unpack.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lz4_profile"
+path = "fuzz_targets/lz4_profile.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "zstd_index"
+path = "fuzz_targets/zstd_index.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "zstd_unpack"
+path = "fuzz_targets/zstd_unpack.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "param"
+path = "fuzz_targets/param.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "game_checks"
+path = "fuzz_targets/game_checks.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cheat"
+path = "fuzz_targets/cheat.rs"
+test = false
+doc = false
+bench = false

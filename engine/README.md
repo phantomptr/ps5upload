@@ -57,6 +57,44 @@ curl "http://127.0.0.1:19113/api/ps5/status?addr=<ip>"
 **unauthenticated and can read, write and delete files on the console** —
 keep it on a trusted LAN.
 
+## Converting from a script (`inspect`, `convert`)
+
+The engine binary also runs the Convert screen from a command line, in its own process: no
+engine has to be running, and a running one is left alone. Both commands call the same handlers
+the routes do (`/api/fpkg/inspect`, `/api/fpkg/build`, `/api/exfat/build`, `/api/folder/build`),
+so the result, its checks and its verification are the app's own.
+
+```sh
+ps5upload-engine inspect /games/PPSA01234                # the JSON the Convert screen reads
+ps5upload-engine convert /games/PPSA01234 --to ffpkg --out /images
+ps5upload-engine convert game.ffpkg --to folder --out /games --zstd 9 --json
+ps5upload-engine convert /games/PPSA01234 --to pkg --out /pkgs --level smallest
+ps5upload-engine --help                                   # every option
+```
+
+| Option | |
+|---|---|
+| `--to` | `exfat`, `ffpkg`, `ffpfs`, `ffpfsc`, `folder` or `pkg` |
+| `--out` | the folder the result goes into (made when missing) |
+| `--name` | the result's name without its extension |
+| `--level` | `fast`, `balanced` (default) or `smallest` for `pkg` and `ffpfsc`; `stored` for `pkg` |
+| `--zstd <1-22>` | pack the game into zstd asset packs (images and folders) |
+| `--lz4` | pack the game into AMPR LZ4 asset packs (`exfat` only) |
+| `--full-verify` | read every byte of the result back (otherwise structure in full, data by sample) |
+| `--json` | one JSON event per line on stdout: `start`, `progress`, `done` or `failed` |
+
+Without `--json`, progress goes to stderr and stdout gets only the result's path. Exit codes:
+`0` written and verified, `1` failed (the partial output is removed), `2` bad arguments, `130`
+interrupted with Ctrl-C. On Windows the release binary has no console of its own: redirect or
+pipe its output (`ps5upload-engine convert … > log.txt`) to see it.
+
+## Fuzzing the readers
+
+`engine/fuzz/` holds cargo-fuzz targets for every reader of a file a user can hand the engine
+(packages, images, pack indexes, `param.json`/`param.sfo`, cheat files). It is its own
+workspace, so nothing here builds it: see [`fuzz/README.md`](fuzz/README.md), or run
+`make fuzz-smoke` from the repo root.
+
 ## Environment variables
 
 For a self-hosted engine (Docker, a NAS, or a standalone program). None is needed on a desktop.

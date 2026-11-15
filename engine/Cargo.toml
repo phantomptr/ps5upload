@@ -16,6 +16,8 @@ members = [
   "crates/ps5-dump-forge-pfs",
   "crates/ps5-dump-forge-zstd",
 ]
+# The fuzz targets are their own workspace (nightly, sanitizer flags): see fuzz/README.md.
+exclude = ["fuzz"]
 resolver = "2"
 
 [workspace.package]
