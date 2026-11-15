@@ -232,17 +232,19 @@ pub fn sync_dir(dir: &Path) {
 
 /// Why `from` must not be renamed into the folder `to_dir`, or `Ok`: on another filesystem a
 /// rename is a copy the kernel makes (or, on the PS5, a kernel panic). The device numbers are
-/// compared; off Unix there is nothing to compare and the rename itself refuses.
+/// compared; off Unix there is nothing to compare and the rename itself refuses. `from` is
+/// what is renamed (a link itself, if it is one); `to_dir` is followed, since the new name lands
+/// where a linked folder points.
 pub fn same_device(from: &Path, to_dir: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let dev = |p: &Path| {
-            std::fs::symlink_metadata(p)
-                .map(|m| m.dev())
+        let dev = |m: std::io::Result<std::fs::Metadata>, p: &Path| {
+            m.map(|m| m.dev())
                 .map_err(|e| format!("{}: {e}", p.display()))
         };
-        let (a, b) = (dev(from)?, dev(to_dir)?);
+        let a = dev(std::fs::symlink_metadata(from), from)?;
+        let b = dev(std::fs::metadata(to_dir), to_dir)?;
         if a != b {
             return Err(format!(
                 "{} and {} are on different drives: nothing is renamed across drives",
@@ -560,6 +562,27 @@ mod tests {
             }
         }
         assert!(same_device(&tmp.join("missing-file"), &tmp).is_err());
+    }
+
+    /// A destination folder that is a link to another drive is that drive, not the link's.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_destination_folder_is_where_it_points() {
+        use std::os::unix::fs::MetadataExt;
+        let dev = Path::new("/dev");
+        let tmp = std::env::temp_dir();
+        let Ok(d) = std::fs::metadata(dev) else {
+            return;
+        };
+        if d.dev() == std::fs::metadata(&tmp).unwrap().dev() {
+            return;
+        }
+        let link = tmp.join(format!("ps5upload-safe-link-{}", std::process::id()));
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(dev, &link).unwrap();
+        let e = same_device(&tmp, &link);
+        let _ = std::fs::remove_file(&link);
+        assert!(e.unwrap_err().contains("different drives"));
     }
 
     #[test]
