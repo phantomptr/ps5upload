@@ -1266,6 +1266,10 @@
             "description": "`exfat`, `ufs2`, `pfs` or `pkg`: the filesystem inside (a `.ffpfsc`'s inner one).",
             "type": "string"
           },
+          "in_place": {
+            "description": "Changes can also go into the image itself (`/api/image/edit/check` says whether a given\nset fits): an uncompressed exFAT, UFS2 or PFS image.",
+            "type": "boolean"
+          },
           "label": {
             "description": "The reader's one-line description of the image.",
             "type": "string"
@@ -1283,6 +1287,7 @@
           "filesystem",
           "compressed",
           "editable",
+          "in_place",
           "dir",
           "entries",
           "total_files",
@@ -2038,6 +2043,60 @@
           "hygiene"
         ],
         "type": "string"
+      },
+      "CheckResp": {
+        "properties": {
+          "busy": {
+            "description": "The image is in use (another edit, a build reading it): try again later.",
+            "type": "boolean"
+          },
+          "filesystem": {
+            "description": "`exfat`, `ufs2` or `pfs`, when the image can be edited in place at all.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "free_bytes": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "in_place": {
+            "description": "The changes can be applied to the image itself (`in_place: true` on the build).",
+            "type": "boolean"
+          },
+          "journal_bytes": {
+            "description": "The undo journal written beside the image while the change goes in.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "needed_bytes": {
+            "description": "What the changes take inside the image and what it has free, in bytes (exFAT, UFS2).",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "Why not, in a sentence for the user (when `in_place` is false).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "in_place",
+          "busy"
+        ],
+        "type": "object"
       },
       "CheckoutState": {
         "description": "One image checked out for editing. At most one is active at a time —\na second concurrent checkout would need a second journal and buys nothing,\nsince editing is a foreground activity.",
@@ -3719,6 +3778,10 @@
           },
           "full_verify": {
             "description": "Read every byte of the image back to verify it. Off (the default): names, sizes and\nfolders are checked in full and a seeded sample of the data.",
+            "type": "boolean"
+          },
+          "in_place": {
+            "description": "With `edits`: change the image `source` itself instead of writing an edited copy. Only\nfor an uncompressed `.exfat`, `.ffpkg` or `.ffpfs` on this computer, not in asset packs,\nand only when every change fits the image's free space (it never grows): otherwise\nrefused (400) with the reason, before anything is written. An undo journal\n(`<image>.forge-undo`) is written beside it first; every changed file is read back and\nthe filesystem checked, and any failure restores the image. `POST /api/image/edit/check`\nsays beforehand whether it would be accepted.",
             "type": "boolean"
           },
           "keep_both": {
@@ -15221,6 +15284,26 @@
         },
         "type": "object"
       },
+      "engine.image_edit_in_place.CheckReq": {
+        "description": "`POST /api/image/edit/check` — whether these edits can go into the image in place, without\nwriting anything (but settling a journal an interrupted edit left).",
+        "properties": {
+          "edits": {
+            "description": "The changes, as `/api/exfat/build` takes them (`edits`).",
+            "items": {
+              "$ref": "#/components/schemas/ImageEditReq"
+            },
+            "type": "array"
+          },
+          "path": {
+            "description": "The image, on this computer.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
       "engine.inspect.InspectReq": {
         "properties": {
           "path": {
@@ -20780,7 +20863,19 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JobCreated"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobCreated"
+                    },
+                    {
+                      "properties": {
+                        "job_id": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
                 }
               }
             },
@@ -20813,12 +20908,7 @@
         ],
         "x-ps5upload": {
           "access": "loopback",
-          "long_running": {
-            "cancel": "/api/jobs/{id}/cancel",
-            "id_field": "job_id",
-            "status": "/api/jobs/{id}"
-          },
-          "response_schema": "struct"
+          "response_schema": "mixed"
         }
       }
     },
@@ -22375,6 +22465,56 @@
           }
         },
         "summary": "List a folder inside a game image",
+        "tags": [
+          "workshop"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "struct"
+        }
+      }
+    },
+    "/api/image/edit/check": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/engine.image_edit_in_place.CheckReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckResp"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Check whether changes fit into a game image in place",
         "tags": [
           "workshop"
         ],

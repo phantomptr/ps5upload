@@ -2735,6 +2735,8 @@ dependencies = [
  "lzma-rust2 0.25.0",
  "md-5",
  "mime_guess",
+ "ps5-dump-forge-exfat",
+ "ps5-dump-forge-patch",
  "ps5-dump-forge-pfs",
  "ps5-dump-forge-ufs2",
  "ps5-dump-forge-zstd",

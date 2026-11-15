@@ -576,6 +576,9 @@
   "POST /api/image/browse": {
    "summary": "List a folder inside a game image"
   },
+  "POST /api/image/edit/check": {
+   "summary": "Check whether changes fit into a game image in place"
+  },
   "POST /api/jobs/{id}/resume": {
    "summary": "Resume a paused job"
   },

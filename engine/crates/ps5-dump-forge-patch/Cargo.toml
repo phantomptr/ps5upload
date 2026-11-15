@@ -9,3 +9,7 @@ version.workspace = true
 
 [dependencies]
 crc32fast = "1.5"
+
+[features]
+# `Step` and `apply_until_step`: stop an apply as if the process died (engine tests only).
+fault-injection = []

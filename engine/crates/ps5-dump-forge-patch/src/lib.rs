@@ -139,16 +139,35 @@ pub enum Recovery {
 }
 
 /// Where a test stops `apply` as if the process died there; `All` is a normal run.
-#[cfg_attr(not(test), allow(dead_code))]
+///
+/// PS5Upload: public behind the `fault-injection` feature (with [`apply_until`] and
+/// `LiveAfter`), so the engine's tests cut a real editor's plan at every live write.
+#[cfg_attr(not(any(test, feature = "fault-injection")), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Step {
+pub enum Step {
     /// After the journal's first entry, before its trailer.
     JournalHalf,
     /// After the free-space writes and their sync.
     Free,
     /// After half the live writes.
     LiveHalf,
+    /// After this many live writes (none past the last: then like `All` without its sync).
+    LiveAfter(usize),
     All,
+}
+
+/// [`apply`], stopped at `stop` as if the process died there (nothing cleaned up). Tests only.
+#[cfg(feature = "fault-injection")]
+pub fn apply_until_step(
+    image: &mut File,
+    image_path: &Path,
+    writes: &[Write],
+    read_source: ReadSource,
+    cancel: &AtomicBool,
+    sync: Syncs,
+    stop: Step,
+) -> io::Result<Applied> {
+    apply_until(image, image_path, writes, read_source, cancel, sync, stop)
 }
 
 /// Writes `writes` into `image` (opened read-write, at `image_path`) crash-safely, as the crate
@@ -226,7 +245,11 @@ fn apply_until(
     if stop == Step::Free {
         return Err(crash());
     }
-    let half = (stop == Step::LiveHalf).then(|| live(writes).count() / 2);
+    let half = match stop {
+        Step::LiveHalf => Some(live(writes).count() / 2),
+        Step::LiveAfter(n) => Some(n),
+        _ => None,
+    };
     let wrote =
         put_all(image, writes, true, read_source, cancel, half).and_then(|()| sync_image(image));
     if let Err(e) = wrote {
@@ -867,6 +890,31 @@ mod tests {
                 assert_restored(&path, &original, &writes);
             }
             assert_eq!(recover(&path, Syncs::STD).unwrap(), Recovery::Clean);
+        }
+    }
+
+    /// PS5Upload: a crash after every count of live writes (none, each one, all of them with
+    /// the journal not yet deleted) recovers to the original outside free space.
+    #[test]
+    fn recover_after_a_crash_at_every_live_write() {
+        let live = writes()
+            .iter()
+            .filter(|w| w.live && !w.data.is_empty())
+            .count();
+        for n in 0..=live + 1 {
+            let (_tmp, path, original) = image();
+            let writes = writes();
+            match run(&path, &writes, Step::LiveAfter(n)) {
+                Err(_) => assert!(n < live, "a crash before write {n}"),
+                // Past the last live write: applied, then dropped (a crash before commit).
+                Ok(applied) => {
+                    assert!(n >= live);
+                    drop(applied);
+                }
+            }
+            assert!(journal_path(&path).exists(), "after {n}");
+            assert_eq!(recover(&path, Syncs::STD).unwrap(), Recovery::Restored);
+            assert_restored(&path, &original, &writes);
         }
     }
 
