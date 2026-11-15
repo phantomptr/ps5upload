@@ -34,7 +34,8 @@ pub struct GameInspection {
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct SourceInfo {
-    /// `pkg`, `split-pkg`, `exfat`, `ffpkg`, `ffpfsc` or `folder`.
+    /// `pkg`, `split-pkg`, `patch-pkg` (a PS5 patch package, read as the files it carries
+    /// whole), `exfat`, `ffpkg`, `ffpfsc` or `folder`.
     pub format: String,
     /// `local`, `server` (a saved server) or `ps5` (the console).
     pub location: String,
@@ -358,9 +359,15 @@ fn format_of(path: &Path) -> Result<&'static str> {
     })
 }
 
+/// [`SourceInfo::format`] for a PS5 patch package.
+const PATCH_PKG: &str = "patch-pkg";
+
 /// Inspect a package, image or game folder on this computer.
 pub fn inspect_local(path: &Path) -> Result<GameInspection> {
     match format_of(path)? {
+        // A patch package (`\x7FLIH`) has no entry table at its start: it is read through the
+        // package reader, as an image is, and its files are the ones it carries whole.
+        "pkg" if ps5upload_fpkg::lih::is_patch(path) => inspect_tree(path, PATCH_PKG),
         "pkg" => inspect_pkg(path),
         format => inspect_tree(path, format),
     }
@@ -544,6 +551,8 @@ fn inspect_tree(path: &Path, format: &str) -> Result<GameInspection> {
     for p in too_large {
         g.warnings.push(format!("{p} is too large to show"));
     }
+    // What the source leaves out: a patch package's files that need the base game.
+    g.warnings.extend(tree.notes());
     g.specs.file_count = Some(files.len() as u64);
     if has("eboot.bin") {
         g.identity.exe_platform = eboot_platform(tree.as_mut()).map(str::to_string);
@@ -1295,6 +1304,82 @@ mod tests {
         assert_eq!(g2.source.format, "folder");
         assert_eq!(g2.source.location, "server");
         assert_eq!(g2.identity.title_id, "PPSA04321");
+    }
+
+    /// A PS5 patch package (`\x7FLIH`) is inspected through the package reader: what it is
+    /// comes from the files it carries, its file list is those files, and a warning says it is
+    /// a patch. Convert refuses to make an image or a package of it.
+    #[test]
+    fn a_patch_package_is_inspected_as_the_files_it_carries() {
+        let dir = test_fixtures::scratch();
+        let game = dir.join("patch-game");
+        std::fs::create_dir_all(game.join("sce_sys")).unwrap();
+        std::fs::write(game.join("eboot.bin"), [7u8; 3000]).unwrap();
+        std::fs::write(
+            game.join("sce_sys/param.json"),
+            br#"{"contentId":"UP0000-PPSA04321_00-PATCHTEST0000000","contentVersion":"01.002.000","titleId":"PPSA04321","applicationCategoryType":0}"#,
+        )
+        .unwrap();
+        std::fs::write(game.join("sce_sys/icon0.png"), [9u8; 500]).unwrap();
+        let out = dir.join("patch-out");
+        std::fs::create_dir_all(&out).unwrap();
+        let built = ps5upload_fpkg::build::build(
+            &ps5upload_fpkg::build::BuildRequest::new(&game, &out),
+            &mut |_| {},
+        )
+        .unwrap();
+        let pkg = std::fs::read(&built.path).unwrap();
+
+        // The package as a patch that carries every block: a 64 KiB header, the FIH block, the
+        // outer image, the container (the layout `ps5upload_fpkg::lih` reads).
+        const B: usize = 0x10000;
+        let le64 = |at: usize| u64::from_le_bytes(pkg[at..at + 8].try_into().unwrap()) as usize;
+        let (pfs_offset, pfs_size, cnt_offset) = (le64(0x10), le64(0x18), le64(0x58));
+        let cnt_end = if cnt_offset < pfs_offset {
+            pfs_offset
+        } else {
+            pkg.len()
+        };
+        let mut patch = vec![0u8; B];
+        patch.extend_from_slice(&pkg[..B]);
+        patch.extend_from_slice(&pkg[pfs_offset..pfs_offset + pfs_size]);
+        let cnt_at = patch.len();
+        patch.extend_from_slice(&pkg[cnt_offset..cnt_end]);
+        patch[..4].copy_from_slice(b"\x7FLIH");
+        for (at, v) in [
+            (0x18, patch.len()),
+            (0x20, B),
+            (0x28, B),
+            (0x30, cnt_at),
+            (0x38, cnt_end - cnt_offset),
+        ] {
+            patch[at..at + 8].copy_from_slice(&(v as u64).to_le_bytes());
+        }
+        let path = dir.join("update.pkg");
+        std::fs::write(&path, &patch).unwrap();
+
+        let g = inspect_local(&path).unwrap();
+        assert_eq!(g.source.format, "patch-pkg");
+        assert_eq!(g.identity.title_id, "PPSA04321");
+        assert!(
+            g.warnings.iter().any(|w| w.contains("patch package")),
+            "{:?}",
+            g.warnings
+        );
+        let files = list_files(&path, &g.source.format).unwrap();
+        assert!(files.iter().any(|f| f.path == "eboot.bin"), "{files:?}");
+        assert_eq!(
+            read_image(&path, &g.source.format, "icon0.png").unwrap(),
+            [9u8; 500]
+        );
+
+        let why = crate::fpkg_api::patch_refusal(&path).unwrap();
+        assert!(
+            why.contains("patch package") && why.contains("folder"),
+            "{why}"
+        );
+        assert!(crate::fpkg_api::patch_refusal(&built.path).is_none());
+        assert!(crate::fpkg_api::patch_refusal(&game).is_none());
     }
 
     #[test]

@@ -324,6 +324,10 @@ impl SourceTree for Subtree {
             None => self.inner.describe(),
         }
     }
+
+    fn notes(&self) -> Vec<String> {
+        self.inner.notes()
+    }
 }
 
 /// One change to an image's tree.
