@@ -23,11 +23,12 @@ use crate::zstd_runtime::PackRuntime;
 
 /// ampr-emu-ng's tested release: fetched once, and only kept or used when its SHA-256 matches.
 /// What a pack build falls back to when the newest release can't be used (`zstd_runtime`).
-pub(crate) const NG_VERSION: &str = "0.3.2";
+/// 0.4.0: releases before 0.3.4 hang some games at startup (ASTRO BOT, ampr-emu-ng#17).
+pub(crate) const NG_VERSION: &str = "0.4.0";
 pub(crate) const NG_URL: &str =
-    "https://github.com/quer3q/ampr-emu-ng/releases/download/v0.3.2/libSceAmpr.sprx";
+    "https://github.com/quer3q/ampr-emu-ng/releases/download/v0.4.0/libSceAmpr.sprx";
 pub(crate) const NG_SHA256: &str =
-    "9a8f553a68d4e6e6be11bd9f8d5519b5faa68560761881966abff1dd65bf19f7";
+    "8320eb65c16565f42031b9d88b15a447039f0fd7e5694faf5f1cb84cafdba218";
 
 const ARTIFACTS: [&str; 8] = [
     "ampr_assets.index",

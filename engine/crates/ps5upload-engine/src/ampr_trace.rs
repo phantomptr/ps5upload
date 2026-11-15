@@ -251,15 +251,13 @@ pub(crate) fn emulator(build: Option<&str>) -> Result<Vec<u8>, String> {
     }
 }
 
-/// ampr-emu-ng's release, which reads zstd packs.
+/// ampr-emu-ng, which reads zstd packs: the newest release when GitHub's digest checks out, else
+/// the tested one, as Convert's zstd packs get it. (The tested one alone went in before 12.4.22,
+/// and 0.3.2 hangs ASTRO BOT at startup.)
 pub(crate) fn ng_runtime() -> Result<Vec<u8>, String> {
-    use crate::zstd_packs::{NG_SHA256, NG_URL, NG_VERSION};
-    fetch_pinned(
-        NG_URL,
-        NG_SHA256,
-        &format!("ampr-emu-ng-{NG_VERSION}-libSceAmpr.sprx"),
-        "ampr-emu-ng",
-    )
+    let r = crate::zstd_runtime::pack_runtime(crate::zstd_runtime::RuntimeChoice::Latest)?;
+    crate::log_info!("ampr emulator: {}", r.describe());
+    Ok(r.bytes)
 }
 
 /// A file from the data dir's cache, fetched once and only kept or used when its SHA-256

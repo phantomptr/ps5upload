@@ -6424,6 +6424,17 @@
             "description": "How many of its executables are plain ELF files, which a build fake-signs.",
             "minimum": 0,
             "type": "integer"
+          },
+          "zstd_runtime": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ZstdRuntime"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For a game in zstd asset packs, the runtime it carries and whether it needs a newer one\n([`crate::ampr_pack::ng::zstd_runtime`]); `None` for any other game."
           }
         },
         "required": [
@@ -6437,6 +6448,7 @@
           "output_free",
           "checks",
           "ampr_packs",
+          "zstd_runtime",
           "unsigned_executables",
           "ps4_game",
           "content_version",
@@ -12590,6 +12602,47 @@
         ],
         "type": "object"
       },
+      "SmpEmulatorCheck": {
+        "description": "What ShadowMount+ does to a zstd-packed game's runtime on this console.",
+        "properties": {
+          "breaks_zstd": {
+            "description": "Games in zstd packs get that file instead of their own, and it won't start them, or may\nhang them (drakmor's ampr_emu, or ampr-emu-ng older than 0.3.4).",
+            "type": "boolean"
+          },
+          "kind": {
+            "description": "What that file is (as a game's runtime: `ampr-emu-ng`, `ampr_emu`, `unknown`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "The `libSceAmpr.sprx` it puts into every game in its place, when there is one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updates_on": {
+            "description": "ShadowMount+'s emulator updates are on.",
+            "type": "boolean"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "updates_on",
+          "path",
+          "kind",
+          "version",
+          "breaks_zstd"
+        ],
+        "type": "object"
+      },
       "SmpImageRwBeginReq": {
         "properties": {
           "addr": {
@@ -14417,6 +14470,94 @@
         },
         "required": [
           "zip_path"
+        ],
+        "type": "object"
+      },
+      "ZstdRuntime": {
+        "description": "What runs a zstd-packed game.",
+        "properties": {
+          "kind": {
+            "description": "`ampr-emu-ng`; `ampr_emu` (drakmor's, which doesn't read zstd packs); `unknown` (a\nbuild this app doesn't know, a test build or one newer than it); `missing`.",
+            "type": "string"
+          },
+          "module": {
+            "description": "The emulator's path in the game (`fakelib2/…` or `fakelib/…`); `None` when it has none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outdated": {
+            "description": "The game won't start or may hang with it: missing, drakmor's, or ampr-emu-ng older than\n[`NG_FIXED`]. A newer emulator fixes it.",
+            "type": "boolean"
+          },
+          "version": {
+            "description": "The release, when known.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "module",
+          "kind",
+          "version",
+          "outdated"
+        ],
+        "type": "object"
+      },
+      "ZstdRuntimeOutcome": {
+        "description": "What updating a zstd-packed game's runtime did.",
+        "properties": {
+          "already": {
+            "description": "It already had exactly this one: nothing was written.",
+            "type": "boolean"
+          },
+          "folder": {
+            "type": "string"
+          },
+          "from": {
+            "description": "What the game had: `ampr-emu-ng 0.3.2`, `ampr_emu 0.4.2.1`, `unknown`, `none`.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "`folder`: replaced in the game's own folder. `backport`: a backport folder for an image.",
+            "type": "string"
+          },
+          "rescanned": {
+            "type": "boolean"
+          },
+          "to": {
+            "description": "What it has now: `ampr-emu-ng 0.4.0`.",
+            "type": "string"
+          },
+          "written": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "folder",
+          "written",
+          "from",
+          "to",
+          "already",
+          "rescanned"
+        ],
+        "type": "object"
+      },
+      "ZstdRuntimeReq": {
+        "properties": {
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
         ],
         "type": "object"
       },
@@ -21520,6 +21661,53 @@
           }
         },
         "summary": "Read a game folder or package before converting it",
+        "tags": [
+          "workshop"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "struct"
+        }
+      }
+    },
+    "/api/fpkg/zstd-runtime": {
+      "post": {
+        "description": "POST /api/fpkg/zstd-runtime `{source}`: a game in zstd packs gets the newest ampr-emu-ng\n(checked against GitHub's digest; the tested release when it can't be). A folder, here or on\nthe PS5, in place; an image on the PS5 through a ShadowMount+ backport.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ZstdRuntimeReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ZstdRuntimeOutcome"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "A game in zstd packs gets the newest ampr-emu-ng (checked against GitHub's digest; the tested release when it can't be)",
         "tags": [
           "workshop"
         ],
@@ -40039,6 +40227,59 @@
             "in": "body",
             "name": "addr",
             "required": false
+          },
+          "response_schema": "struct"
+        }
+      }
+    },
+    "/api/ps5/smp-emulator": {
+      "get": {
+        "description": "GET /api/ps5/smp-emulator?addr=: whether ShadowMount+ swaps zstd-packed games' runtime for\none in its emulator folder that won't run them.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmpEmulatorCheck"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Whether ShadowMount+ swaps zstd-packed games' runtime for one in its emulator folder that won't run them",
+        "tags": [
+          "console-tools"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [],
+            "in": "query",
+            "name": "addr",
+            "required": true
           },
           "response_schema": "struct"
         }

@@ -35,6 +35,7 @@ pub mod format;
 pub mod glob;
 pub mod image;
 pub mod lz4;
+pub mod ng;
 pub mod pack;
 pub mod profile_gen;
 pub mod read;

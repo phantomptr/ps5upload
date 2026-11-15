@@ -882,6 +882,10 @@ export async function browserInvoke<T>(
     case "fpkg_delete": {
       return postJson<T>("/api/fpkg/delete", { path: args["path"] });
     }
+    case "fpkg_zstd_runtime":
+      return postJson<T>("/api/fpkg/zstd-runtime", { source: args["source"] });
+    case "ps5_smp_emulator":
+      return getJson<T>(addrUrl("/api/ps5/smp-emulator", args["addr"]));
     case "fpkg_ampr_emu": {
       return postJson<T>("/api/fpkg/ampr-emu", { source: args["source"], build: args["build"] });
     }

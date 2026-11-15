@@ -12717,6 +12717,10 @@ fn build_app_and_mcp(
         .route("/api/fpkg/delete", post(fpkg_api::fpkg_delete_handler))
         .route("/api/fpkg/ampr-emu", post(ampr_emu_api::ampr_emu_handler))
         .route(
+            "/api/fpkg/zstd-runtime",
+            post(ampr_emu_api::zstd_runtime_handler),
+        )
+        .route(
             "/api/fpkg/ampr-index",
             post(ampr_index_api::ampr_index_handler),
         )
@@ -13329,6 +13333,10 @@ fn build_app_and_mcp(
         .route("/api/ps5/screenshots/list", get(ps5_screenshots_list))
         .route("/api/ps5/videos/list", get(ps5_videos_list))
         .route("/api/ps5/smp/status", get(ps5_smp_status))
+        .route(
+            "/api/ps5/smp-emulator",
+            get(ampr_emu_api::smp_emulator_handler),
+        )
         .route("/api/ps5/smp/rescan", post(ps5_smp_rescan))
         .route("/api/ps5/smp/checkout", get(ps5_smp_checkout_status))
         .route("/api/ps5/smp/checkout/begin", post(ps5_smp_checkout_begin))

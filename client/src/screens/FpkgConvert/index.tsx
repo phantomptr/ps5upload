@@ -68,6 +68,7 @@ import { SwapJournals } from "./SwapJournals";
 import { nameOf, QueueCard } from "./QueueCard";
 import { isRarLaterVolume } from "../../lib/rarVolumes";
 import { AmprEmuTool, amprEmuOffered } from "./AmprEmuTool";
+import { ZstdRuntimeTool, zstdRuntimeOffered } from "./ZstdRuntimeTool";
 import { AmprIndexTool, amprIndexPlan } from "./AmprIndexTool";
 import {
   imageBuildWith,
@@ -199,6 +200,7 @@ export default function WorkshopScreen() {
   const [lz4InstallRuntime, setLz4InstallRuntime] = useState(false);
   const [packKind, setPackKind] = useState<"lz4" | "zstd">("lz4");
   const [emuAddedTo, setEmuAddedTo] = useState<string | null>(null);
+  const [zstdUpdatedTo, setZstdUpdatedTo] = useState<string | null>(null);
   const [zstdLevel, setZstdLevel] = useState(5);
   const build: ConvertBuild =
     make === "image"
@@ -827,6 +829,8 @@ export default function WorkshopScreen() {
   const indexable = !inside && amprIndexPlan(source, inspection) !== "hidden";
   // Kept on screen after adding it, when the check no longer offers it: it says what it did.
   const emulatable = !inside && (amprEmuOffered(source, inspection) || emuAddedTo === source);
+  // A zstd-packed game with an old or missing runtime (ASTRO BOT hung on ampr-emu-ng before 0.3.4).
+  const zstdUpdatable = !inside && (zstdRuntimeOffered(source, inspection) || zstdUpdatedTo === source);
   /** A .ffpfsc's index is renewed by making a fresh .ffpfsc of it. */
   const convertAgain = () => {
     if (!src || locked) return;
@@ -838,7 +842,7 @@ export default function WorkshopScreen() {
     setTimeout(showRun, 50);
   };
   const tools =
-    lookable || mountable || folderable || indexable || emulatable ? (
+    lookable || mountable || folderable || indexable || emulatable || zstdUpdatable ? (
       <div className="flex flex-wrap gap-2 border-t border-[var(--color-border)] pt-2.5">
         {lookable && !inside && (
           <Button size="sm" variant="secondary" leftIcon={<FolderSearch size={14} />} onClick={() => setInside(true)}>
@@ -878,6 +882,17 @@ export default function WorkshopScreen() {
             locked={locked}
             onAdded={() => {
               setEmuAddedTo(source);
+              void recheckQuietly(source);
+            }}
+          />
+        )}
+        {zstdUpdatable && (
+          <ZstdRuntimeTool
+            source={source}
+            inspection={inspection}
+            locked={locked}
+            onUpdated={() => {
+              setZstdUpdatedTo(source);
               void recheckQuietly(source);
             }}
           />
