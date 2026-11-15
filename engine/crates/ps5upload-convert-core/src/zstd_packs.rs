@@ -276,6 +276,7 @@ pub fn measure(
     to: &Path,
     cancel: &AtomicBool,
     stage: &mut dyn FnMut(&str, u64, u64),
+    threads: usize,
 ) -> Result<ps5_dump_forge_zstd::Index, String> {
     let raw: u64 = packed.iter().map(|f| f.size).sum();
     // Each file counts twice in the writer's progress: one pass counted as two.
@@ -285,7 +286,7 @@ pub fn measure(
         prepared,
         packed,
         level,
-        0,
+        threads,
         &mut |done| stage("pack", done.min(total), total),
         cancel,
     )
@@ -308,6 +309,7 @@ pub fn measure(
 /// Builds `source` as a plain image at `output` with its files in zstd packs at `level`, and
 /// `runtime` as its emulator: measured (stage `pack`), then written and read back as any image,
 /// then the packs read back through the same checks the emulator makes.
+/// `threads` compress (0: every core; the console program passes its own limit).
 #[allow(clippy::too_many_arguments)]
 pub fn build(
     format: ImageFormat,
@@ -320,12 +322,21 @@ pub fn build(
     verify_chunk: u64,
     cancel: &AtomicBool,
     stage: &mut dyn FnMut(&str, u64, u64),
+    threads: usize,
 ) -> Result<ImageBuilt, String> {
     let (mut prepared, packed) = prepare(source, runtime.to_vec(), now_secs(), rules)?;
-    let index = measure(&mut prepared, &packed, level, output, cancel, stage)?;
+    let index = measure(
+        &mut prepared,
+        &packed,
+        level,
+        output,
+        cancel,
+        stage,
+        threads,
+    )?;
     let built = {
         let mut tree =
-            PackedTree::new(&mut prepared, &index, 0, cancel).map_err(|e| e.to_string())?;
+            PackedTree::new(&mut prepared, &index, threads, cancel).map_err(|e| e.to_string())?;
         crate::image_build::build(
             format,
             None,
@@ -341,7 +352,7 @@ pub fn build(
     let image = ps5upload_fpkg::source::open(output).map_err(|e| e.to_string())?;
     if let Err(e) = ps5_dump_forge_zstd::reader::unpack(image) {
         // Finished and named by now, and no use: it doesn't stay looking like a good image.
-        let _ = std::fs::remove_file(output);
+        let _ = crate::safe_write::discard(output);
         return Err(format!("reading the zstd packs back from the image: {e}"));
     }
     Ok(built)
@@ -368,7 +379,7 @@ pub fn pin_archive_id(index: &mut ps5_dump_forge_zstd::Index) -> Result<(), Stri
 /// then read back (`verify`): the index and every volume header through the emulator's checks,
 /// and every file of the game, read through the packs, against the source `reopen` opens
 /// afresh (SHA-256, of a sample or all of it as `mode` says). The caller has claimed the
-/// folder's `.partial`.
+/// folder's `.partial`. `threads` compress (0: every core; the console program passes its own limit).
 #[allow(clippy::too_many_arguments)]
 pub fn build_folder(
     level: u8,
@@ -380,6 +391,7 @@ pub fn build_folder(
     mode: VerifyMode,
     cancel: &AtomicBool,
     stage: &mut dyn FnMut(&str, u64, u64),
+    threads: usize,
 ) -> Result<crate::folder_build::FolderBuilt, String> {
     build_folder_to(
         level,
@@ -391,6 +403,7 @@ pub fn build_folder(
         mode,
         cancel,
         stage,
+        threads,
     )
 }
 
@@ -406,6 +419,7 @@ pub fn build_folder_to(
     mode: VerifyMode,
     cancel: &AtomicBool,
     stage: &mut dyn FnMut(&str, u64, u64),
+    threads: usize,
 ) -> Result<crate::folder_build::FolderBuilt, String> {
     // A PS4 game gets the param.json ShadowMount+ reads, as its folder and image do.
     let mut ps4 = ps5upload_fpkg::ps4_param::Ps4Params::wrap(&mut *source)
@@ -425,8 +439,10 @@ pub fn build_folder_to(
         Path::new(&shown),
         cancel,
         stage,
+        threads,
     )?;
-    let mut tree = PackedTree::new(&mut prepared, &index, 0, cancel).map_err(|e| e.to_string())?;
+    let mut tree =
+        PackedTree::new(&mut prepared, &index, threads, cancel).map_err(|e| e.to_string())?;
     crate::folder_build::write_checked_to(
         &mut tree,
         out,
@@ -621,6 +637,7 @@ mod tests {
                     stages.push(id.to_string());
                 }
             },
+            0,
         )
         .unwrap();
         assert_eq!(stages, ["pack", "write", "verify"]);
@@ -686,6 +703,7 @@ mod tests {
             VerifyMode::from_full(false, false),
             &cancel,
             &mut |_, _, _| {},
+            0,
         )
         .unwrap();
         check(&again);
@@ -745,6 +763,7 @@ mod tests {
             VerifyMode::Full,
             &AtomicBool::new(false),
             &mut |_, _, _| {},
+            0,
         )
         .unwrap();
         // Loose on disk, byte for byte; the packed file is not.
@@ -804,6 +823,7 @@ mod tests {
             VerifyMode::Full,
             &AtomicBool::new(false),
             &mut |_, _, _| {},
+            0,
         )
         .unwrap();
         assert!(target.join("ampr_zstd-000.pak").is_file());
@@ -891,6 +911,7 @@ mod tests {
             VerifyMode::Full,
             &AtomicBool::new(false),
             &mut |_, _, _| {},
+            0,
         )
         .unwrap_err();
         assert!(err.contains("data/sub/table.bin"), "{err}");

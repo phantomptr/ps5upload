@@ -234,11 +234,16 @@ fn copy_file(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64),
 ) -> Result<(), String> {
-    let mut out = std::fs::OpenOptions::new()
+    let file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(dest)
         .map_err(|e| format!("{path}: {e}"))?;
+    // On the PS5 the bytes are made durable as they go (`safe_write::Bounded`).
+    #[cfg(target_env = "ps5")]
+    let mut out = crate::safe_write::Bounded::new(file);
+    #[cfg(not(target_env = "ps5"))]
+    let mut out = file;
     let mut at = 0u64;
     while at < size {
         if ps5upload_fpkg::workshop::checkpoint(cancel) {
@@ -257,6 +262,8 @@ fn copy_file(
         progress(bytes.len() as u64);
     }
     out.flush().map_err(|e| format!("{path}: {e}"))?;
+    #[cfg(target_env = "ps5")]
+    out.finish().map_err(|e| format!("{path}: {e}"))?;
     Ok(())
 }
 
@@ -669,7 +676,7 @@ fn write_checked_here(
                 target.display()
             ));
         }
-        std::fs::rename(&partial, target).map_err(|e| e.to_string())?;
+        crate::safe_write::rename(&partial, target).map_err(|e| e.to_string())?;
         Ok(FolderBuilt {
             files: listed.len() as u64,
             bytes: total,
@@ -816,7 +823,7 @@ pub fn extract_file(
                 target.display()
             ));
         }
-        std::fs::rename(&partial, target).map_err(|e| e.to_string())?;
+        crate::safe_write::rename(&partial, target).map_err(|e| e.to_string())?;
         Ok(FolderBuilt {
             files: 1,
             bytes: size,
@@ -824,7 +831,7 @@ pub fn extract_file(
         })
     })();
     if result.is_err() {
-        let _ = std::fs::remove_file(&partial);
+        let _ = crate::safe_write::discard(&partial);
     }
     match result {
         Err(_) if cancel.load(Ordering::Relaxed) => Err("cancelled".into()),

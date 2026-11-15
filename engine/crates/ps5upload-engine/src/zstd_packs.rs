@@ -62,6 +62,7 @@ pub(crate) fn build(
         verify_chunk,
         cancel,
         stage,
+        0,
     )
 }
 
@@ -89,6 +90,7 @@ pub(crate) fn build_folder(
         mode,
         cancel,
         stage,
+        0,
     )
 }
 
@@ -116,6 +118,7 @@ pub(crate) fn build_folder_to(
         mode,
         cancel,
         stage,
+        0,
     )
 }
 
@@ -254,8 +257,16 @@ fn stream_packed<T>(
 ) -> anyhow::Result<T> {
     let (mut prepared, packed) =
         prepare(source, runtime.bytes.clone(), mtime, rules).map_err(anyhow::Error::msg)?;
-    let mut index = measure(&mut prepared, &packed, level, Path::new(to), cancel, stage)
-        .map_err(anyhow::Error::msg)?;
+    let mut index = measure(
+        &mut prepared,
+        &packed,
+        level,
+        Path::new(to),
+        cancel,
+        stage,
+        0,
+    )
+    .map_err(anyhow::Error::msg)?;
     pin_archive_id(&mut index).map_err(anyhow::Error::msg)?;
     let streamed = {
         let mut tree = PackedTree::new(&mut prepared, &index, 0, cancel)

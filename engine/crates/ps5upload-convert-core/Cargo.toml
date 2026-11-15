@@ -19,6 +19,10 @@ serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.11"
 
+# statfs/statvfs for the destination probe (safe_write::probe). Already in the tree.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 # Unpacks the gzip'd test package the folder tests read. Already in the tree (ps5upload-fpkg).
 flate2 = "1"

@@ -189,8 +189,10 @@ pub struct HashingTree<'a> {
     pub read_time: std::time::Duration,
 }
 
-/// Reads queued for the hashing thread before a read waits for it: 32 of the writers' 1 MiB.
-const HASH_QUEUE: usize = 32;
+/// Reads queued for the hashing thread before a read waits for it: 32 of the writers' 1 MiB
+/// (reads of up to 8 MiB hold up to 256 MiB here). On the PS5, whose converter keeps to a
+/// 512 MiB budget, 4.
+const HASH_QUEUE: usize = if crate::safe_write::ON_CONSOLE { 4 } else { 32 };
 
 /// The hashing thread's state: bytes seen so far per file, the slice being hashed, and the
 /// slices finished.
@@ -846,7 +848,7 @@ fn save_checkpoint(path: &Path, key: &str, done: u64, blocks: u64) {
     .and_then(|bytes| {
         let tmp = path.with_extension("resume.tmp");
         std::fs::write(&tmp, bytes)?;
-        std::fs::rename(&tmp, path)
+        crate::safe_write::rename(&tmp, path)
     });
     if let Err(e) = saved {
         crate::log_at!(
@@ -1276,6 +1278,12 @@ fn build_once(
                 (n, n, None)
             }
             (None, None) => {
+                // On the PS5 the bytes are made durable as they go and no hole is left
+                // (`safe_write::Bounded`); a computer writes as it always has.
+                #[cfg(target_env = "ps5")]
+                let mut out =
+                    BufWriter::with_capacity(8 << 20, crate::safe_write::Bounded::new(&mut file));
+                #[cfg(not(target_env = "ps5"))]
                 let mut out = BufWriter::with_capacity(8 << 20, &mut file);
                 let n = planned
                     .write(&mut hashing, &mut out, 0, cancel, &mut report)
@@ -1320,7 +1328,11 @@ fn build_once(
                 (n, wrapped.image_size, Some(wrapped))
             }
         };
-        file.sync_all().map_err(|e| e.to_string())?;
+        if crate::safe_write::ON_CONSOLE {
+            crate::safe_write::sync(&mut file).map_err(|e| e.to_string())?;
+        } else {
+            file.sync_all().map_err(|e| e.to_string())?;
+        }
         drop(file);
         let read_time = hashing.read_time;
         let hashes = hashing.hashes(cancel)?;
@@ -1338,7 +1350,7 @@ fn build_once(
             &mut |d, t| stage("verify", d, t),
         )?;
         drop(image);
-        std::fs::rename(&partial, output).map_err(|e| e.to_string())?;
+        crate::safe_write::rename(&partial, output).map_err(|e| e.to_string())?;
         remove_checkpoint(&partial);
         crate::log::record("info", format!("verify: {}", log_line(&summary)));
         crate::log::record("info", format!(
@@ -1386,7 +1398,7 @@ fn build_once(
     // A crash a test asked for leaves everything as a killed engine would.
     let stopped = checkpoints.is_some_and(|c| c.stopped.load(Ordering::Relaxed));
     if result.is_err() && !stopped {
-        let _ = std::fs::remove_file(&partial);
+        let _ = crate::safe_write::discard(&partial);
         remove_checkpoint(&partial);
     }
     // What was on disk from before a crash didn't check out: gone now, so the next try starts over.

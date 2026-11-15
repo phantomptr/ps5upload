@@ -14,5 +14,6 @@ pub mod log;
 pub mod folder_build;
 pub mod image_build;
 pub mod refusal;
+pub mod safe_write;
 pub mod writing;
 pub mod zstd_packs;
