@@ -179,6 +179,7 @@
   "cw_convert_err_not_bundled": "此助手建置時未包含轉換程式。請更新 PS5Upload 並重新傳送助手。",
   "cw_convert_err_not_packable": "這個遊戲無法放進 zstd 包：它是 PS4 遊戲，或者沒有 eboot.bin。請關閉 zstd 資源包。",
   "cw_convert_err_not_started": "轉換程式沒有啟動。請重試。",
+  "cw_convert_err_partial_in_the_way": "已經有一個名稱為輸出名稱加上 .partial 的資料夾，而且不是 PS5Upload 留下的。請移走或重新命名後再開始。",
   "cw_convert_err_too_big_for_drive": "映像會超過那個磁碟機上單一檔案 4 GiB 的上限。請儲存到 exFAT 磁碟機或內建儲存空間，或者改為產生資料夾。",
   "cw_convert_err_unreadable": "遊戲的一部分無法讀取。請檢查磁碟機後重試。",
   "cw_convert_err_unsupported": "這不是遊戲資料夾，也不是 .exfat、.ffpkg 或 .ffpfs 映像。",

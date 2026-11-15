@@ -791,6 +791,7 @@ home_low_space_body: "Aufräumen findet Updates, übrig gebliebene Pakete und ni
 "cw_convert_err_loader": "Der ELF-Loader (Port 9021) hat nicht geantwortet, daher konnte der Konverter nicht starten. Lade elfldr erneut.",
 "cw_convert_err_no_memory": "Der PS5 ging für den Konverter der Speicher aus. Schließe das Spiel und versuche es erneut.",
 "cw_convert_err_no_space": "Dort ist nicht genug freier Platz.",
+"cw_convert_err_partial_in_the_way": "Ein Ordner mit dem Namen der Ausgabe und .partial am Ende ist schon da, und PS5Upload hat ihn nicht hinterlassen. Verschiebe oder benenne ihn um und starte dann neu.",
 "cw_convert_err_not_built_yet": "Das Konvertieren auf der PS5 ist noch nicht fertig: Dieser Build liest das Spiel nur durch.",
 "cw_convert_err_not_bundled": "Dieser Helfer wurde ohne den Konverter gebaut. Aktualisiere PS5Upload und sende den Helfer erneut.",
 "cw_convert_err_not_packable": "Dieses Spiel kann nicht in zstd-Packs gepackt werden: Es ist ein PS4-Spiel oder hat keine eboot.bin. Schalte die zstd-Asset-Packs aus.",

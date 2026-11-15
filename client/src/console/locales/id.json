@@ -179,6 +179,7 @@
   "cw_convert_err_not_bundled": "Helper ini dibuat tanpa pengonversi. Perbarui PS5Upload dan kirim helper lagi.",
   "cw_convert_err_not_packable": "Game ini tidak bisa dimasukkan ke paket zstd: ini game PS4 atau tidak punya eboot.bin. Matikan paket aset zstd.",
   "cw_convert_err_not_started": "Pengonversi tidak mulai. Coba lagi.",
+  "cw_convert_err_partial_in_the_way": "Folder dengan nama hasil dan akhiran .partial sudah ada, dan bukan PS5Upload yang meninggalkannya. Pindahkan atau ganti namanya, lalu mulai lagi.",
   "cw_convert_err_too_big_for_drive": "Image-nya akan melebihi 4 GiB, batas satu file di drive itu. Simpan ke drive exFAT atau penyimpanan internal, atau buat folder sebagai gantinya.",
   "cw_convert_err_unreadable": "Sebagian game tidak bisa dibaca. Periksa drive lalu coba lagi.",
   "cw_convert_err_unsupported": "Ini bukan folder game atau image .exfat, .ffpkg, atau .ffpfs.",

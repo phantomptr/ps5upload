@@ -179,6 +179,7 @@
   "cw_convert_err_not_bundled": "Este auxiliar foi compilado sem o conversor. Atualize o PS5Upload e envie o auxiliar de novo.",
   "cw_convert_err_not_packable": "Este jogo não pode ser colocado em pacotes zstd: é um jogo de PS4 ou não tem eboot.bin. Desative os pacotes de recursos zstd.",
   "cw_convert_err_not_started": "O conversor não iniciou. Tente de novo.",
+  "cw_convert_err_partial_in_the_way": "Já existe uma pasta com o nome da saída e .partial no fim, e não foi o PS5Upload que a deixou. Mova ou renomeie a pasta e comece de novo.",
   "cw_convert_err_too_big_for_drive": "A imagem passaria dos 4 GiB que um único arquivo pode ter nessa unidade. Salve-a em uma unidade exFAT ou no armazenamento interno, ou crie uma pasta em vez disso.",
   "cw_convert_err_unreadable": "Parte do jogo não pôde ser lida. Verifique a unidade e tente de novo.",
   "cw_convert_err_unsupported": "Isto não é uma pasta de jogo nem uma imagem .exfat, .ffpkg ou .ffpfs.",

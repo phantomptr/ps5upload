@@ -1047,6 +1047,7 @@ home_low_space_body: "Porządki znajdują aktualizacje, pozostałe pakiety i nie
 "cw_convert_err_loader": "Loader ELF (port 9021) nie odpowiedział, więc konwerter nie mógł się uruchomić. Załaduj ponownie elfldr.",
 "cw_convert_err_no_memory": "PS5 zabrakło pamięci dla konwertera. Zamknij grę i spróbuj ponownie.",
 "cw_convert_err_no_space": "Brakuje tam wolnego miejsca.",
+"cw_convert_err_partial_in_the_way": "Folder o nazwie wyniku z końcówką .partial już istnieje i nie zostawił go PS5Upload. Przenieś go lub zmień jego nazwę, a potem zacznij od nowa.",
 "cw_convert_err_not_built_yet": "Konwersja na PS5 nie jest jeszcze gotowa: ta wersja tylko odczytuje całą grę.",
 "cw_convert_err_not_bundled": "Ten pomocnik został zbudowany bez konwertera. Zaktualizuj PS5Upload i wyślij pomocnika ponownie.",
 "cw_convert_err_not_packable": "Tej gry nie da się umieścić w paczkach zstd: to gra na PS4 albo nie ma eboot.bin. Wyłącz paczki zasobów zstd.",

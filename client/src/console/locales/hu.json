@@ -179,6 +179,7 @@
   "cw_convert_err_not_bundled": "Ez a segédprogram átalakító nélkül készült. Frissítsd a PS5Upload alkalmazást, és küldd el újra a segédprogramot.",
   "cw_convert_err_not_packable": "Ez a játék nem tehető zstd csomagokba: PS4-es játék, vagy nincs benne eboot.bin. Kapcsold ki a zstd elemcsomagokat.",
   "cw_convert_err_not_started": "Az átalakító nem indult el. Próbáld újra.",
+  "cw_convert_err_partial_in_the_way": "Már van egy mappa a kimenet nevével és .partial végződéssel, és nem a PS5Upload hagyta ott. Helyezd át vagy nevezd át, majd kezdd újra.",
   "cw_convert_err_too_big_for_drive": "A képfájl nagyobb lenne a 4 GiB-nál, amekkora egy fájl lehet azon a meghajtón. Mentsd exFAT meghajtóra vagy a belső tárhelyre, vagy készíts helyette mappát.",
   "cw_convert_err_unreadable": "A játék egy részét nem sikerült beolvasni. Ellenőrizd a meghajtót, és próbáld újra.",
   "cw_convert_err_unsupported": "Ez nem játékmappa, és nem is .exfat, .ffpkg vagy .ffpfs képfájl.",

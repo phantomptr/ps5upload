@@ -790,6 +790,7 @@ home_low_space_body: "Bersihkan menemukan pembaruan, paket sisa, dan game yang t
 "cw_convert_err_loader": "Pemuat ELF (port 9021) tidak menjawab, jadi pengonversi tidak bisa dimulai. Muat ulang elfldr.",
 "cw_convert_err_no_memory": "Memori PS5 habis untuk pengonversi. Tutup game lalu coba lagi.",
 "cw_convert_err_no_space": "Ruang kosong di sana tidak cukup.",
+"cw_convert_err_partial_in_the_way": "Folder dengan nama hasil dan akhiran .partial sudah ada, dan bukan PS5Upload yang meninggalkannya. Pindahkan atau ganti namanya, lalu mulai lagi.",
 "cw_convert_err_not_built_yet": "Konversi di PS5 belum selesai dibuat: build ini hanya membaca game sampai habis.",
 "cw_convert_err_not_bundled": "Helper ini dibuat tanpa pengonversi. Perbarui PS5Upload dan kirim helper lagi.",
 "cw_convert_err_not_packable": "Game ini tidak bisa dimasukkan ke paket zstd: ini game PS4 atau tidak punya eboot.bin. Matikan paket aset zstd.",

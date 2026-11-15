@@ -791,6 +791,7 @@ home_low_space_body: "정리에서 지워도 되는 업데이트, 남은 패키�
 "cw_convert_err_loader": "ELF 로더(포트 9021)가 응답하지 않아 변환 프로그램을 시작할 수 없었습니다. elfldr을 다시 불러오세요.",
 "cw_convert_err_no_memory": "변환 프로그램에 쓸 PS5 메모리가 부족합니다. 게임을 닫고 다시 시도하세요.",
 "cw_convert_err_no_space": "그곳에 여유 공간이 부족합니다.",
+"cw_convert_err_partial_in_the_way": "출력 이름 뒤에 .partial이 붙은 폴더가 이미 있고, PS5Upload가 남긴 것이 아닙니다. 옮기거나 이름을 바꾼 뒤 다시 시작하세요.",
 "cw_convert_err_not_built_yet": "PS5에서의 변환은 아직 완성되지 않았습니다. 이 빌드는 게임을 끝까지 읽기만 합니다.",
 "cw_convert_err_not_bundled": "이 헬퍼는 변환 프로그램 없이 빌드되었습니다. PS5Upload를 업데이트하고 헬퍼를 다시 보내세요.",
 "cw_convert_err_not_packable": "이 게임은 zstd 팩으로 만들 수 없습니다. PS4 게임이거나 eboot.bin이 없습니다. zstd 에셋 팩을 끄세요.",

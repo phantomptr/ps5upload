@@ -790,6 +790,7 @@ home_low_space_body: "يعثر التنظيف على التحديثات والح
 "cw_convert_err_loader": "لم يستجب محمّل ELF (المنفذ 9021)، لذا تعذّر تشغيل أداة التحويل. حمّل elfldr مجددًا.",
 "cw_convert_err_no_memory": "نفدت ذاكرة PS5 اللازمة لأداة التحويل. أغلق اللعبة وحاول مرة أخرى.",
 "cw_convert_err_no_space": "لا توجد مساحة حرة كافية هناك.",
+"cw_convert_err_partial_in_the_way": "يوجد مجلد باسم الناتج وفي آخره ‎.partial‎، ولم يتركه PS5Upload. انقله أو غيّر اسمه ثم ابدأ من جديد.",
 "cw_convert_err_not_built_yet": "التحويل على PS5 لم يكتمل بعد: هذا الإصدار يقرأ اللعبة فقط من أولها إلى آخرها.",
 "cw_convert_err_not_bundled": "بُني هذا المساعد دون أداة التحويل. حدّث PS5Upload وأرسل المساعد مجددًا.",
 "cw_convert_err_not_packable": "لا يمكن وضع هذه اللعبة في حزم zstd: فهي لعبة PS4 أو ليس فيها eboot.bin. أوقف حزم أصول zstd.",

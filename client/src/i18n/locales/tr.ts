@@ -790,6 +790,7 @@ home_low_space_body: "Temizlik; güncellemeleri, kalan paketleri ve hiç oynanma
 "cw_convert_err_loader": "ELF yükleyici (port 9021) yanıt vermedi, bu yüzden dönüştürücü başlayamadı. elfldr'yi yeniden yükleyin.",
 "cw_convert_err_no_memory": "PS5'in belleği dönüştürücü için yetmedi. Oyunu kapatıp yeniden deneyin.",
 "cw_convert_err_no_space": "Orada yeterli boş alan yok.",
+"cw_convert_err_partial_in_the_way": "Çıktının adını taşıyan ve sonu .partial ile biten bir klasör zaten var ve onu PS5Upload bırakmadı. Taşıyın ya da yeniden adlandırın, sonra yeniden başlayın.",
 "cw_convert_err_not_built_yet": "PS5'te dönüştürme henüz bitmedi: bu sürüm oyunu yalnızca baştan sona okur.",
 "cw_convert_err_not_bundled": "Bu yardımcı dönüştürücü olmadan derlendi. PS5Upload'ı güncelleyin ve yardımcıyı yeniden gönderin.",
 "cw_convert_err_not_packable": "Bu oyun zstd paketlerine konamaz: bir PS4 oyunu ya da eboot.bin dosyası yok. zstd varlık paketlerini kapatın.",

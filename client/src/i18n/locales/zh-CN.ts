@@ -797,6 +797,7 @@ home_low_space_body: "清理会找出可以删除的更新、残留软件包和�
 "cw_convert_err_loader": "ELF 加载器（端口 9021）没有响应，转换程序无法启动。请重新加载 elfldr。",
 "cw_convert_err_no_memory": "PS5 内存不足，转换程序无法运行。请关闭游戏后重试。",
 "cw_convert_err_no_space": "那里的可用空间不足。",
+"cw_convert_err_partial_in_the_way": "已有一个名为输出名加 .partial 的文件夹，且不是 PS5Upload 留下的。请移走或重命名它，然后重新开始。",
 "cw_convert_err_not_built_yet": "在 PS5 上转换尚未完成：此版本只会把游戏读一遍。",
 "cw_convert_err_not_bundled": "此助手构建时未包含转换程序。请更新 PS5Upload 并重新发送助手。",
 "cw_convert_err_not_packable": "这个游戏无法放进 zstd 包：它是 PS4 游戏，或者没有 eboot.bin。请关闭 zstd 资源包。",

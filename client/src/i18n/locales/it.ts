@@ -790,6 +790,7 @@ home_low_space_body: "Pulizia trova aggiornamenti, pacchetti rimasti e giochi ma
 "cw_convert_err_loader": "Il caricatore ELF (porta 9021) non ha risposto, quindi il convertitore non è partito. Ricarica elfldr.",
 "cw_convert_err_no_memory": "La PS5 ha esaurito la memoria per il convertitore. Chiudi il gioco e riprova.",
 "cw_convert_err_no_space": "Non c'è abbastanza spazio libero lì.",
+"cw_convert_err_partial_in_the_way": "Esiste già una cartella con il nome dell'output seguito da .partial, e non l'ha lasciata PS5Upload. Spostala o rinominala, poi ricomincia.",
 "cw_convert_err_not_built_yet": "La conversione sulla PS5 non è ancora pronta: questa build legge solo il gioco da cima a fondo.",
 "cw_convert_err_not_bundled": "Questo helper è stato compilato senza il convertitore. Aggiorna PS5Upload e invia di nuovo l'helper.",
 "cw_convert_err_not_packable": "Questo gioco non può essere messo in pacchetti zstd: è un gioco PS4 o non ha eboot.bin. Disattiva i pacchetti di risorse zstd.",

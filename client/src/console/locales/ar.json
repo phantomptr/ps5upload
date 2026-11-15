@@ -179,6 +179,7 @@
   "cw_convert_err_not_bundled": "بُني هذا المساعد دون أداة التحويل. حدّث PS5Upload وأرسل المساعد مجددًا.",
   "cw_convert_err_not_packable": "لا يمكن وضع هذه اللعبة في حزم zstd: فهي لعبة PS4 أو ليس فيها eboot.bin. أوقف حزم أصول zstd.",
   "cw_convert_err_not_started": "لم تبدأ أداة التحويل. حاول مرة أخرى.",
+  "cw_convert_err_partial_in_the_way": "يوجد مجلد باسم الناتج وفي آخره ‎.partial‎، ولم يتركه PS5Upload. انقله أو غيّر اسمه ثم ابدأ من جديد.",
   "cw_convert_err_too_big_for_drive": "ستكون الصورة أكبر من 4 GiB، وهو أقصى حجم لملف واحد على ذلك القرص. احفظها على قرص exFAT أو على وحدة التخزين الداخلية، أو أنشئ مجلدًا بدلًا منها.",
   "cw_convert_err_unreadable": "تعذّرت قراءة جزء من اللعبة. افحص القرص وحاول مرة أخرى.",
   "cw_convert_err_unsupported": "هذا ليس مجلد لعبة ولا صورة .exfat أو .ffpkg أو .ffpfs.",

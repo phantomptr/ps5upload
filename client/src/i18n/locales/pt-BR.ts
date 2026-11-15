@@ -790,6 +790,7 @@ home_low_space_body: "Limpar encontra atualizações, pacotes que sobraram e jog
 "cw_convert_err_loader": "O carregador ELF (porta 9021) não respondeu, então o conversor não pôde iniciar. Carregue o elfldr de novo.",
 "cw_convert_err_no_memory": "O PS5 ficou sem memória para o conversor. Feche o jogo e tente de novo.",
 "cw_convert_err_no_space": "Não há espaço livre suficiente lá.",
+"cw_convert_err_partial_in_the_way": "Já existe uma pasta com o nome da saída e .partial no fim, e não foi o PS5Upload que a deixou. Mova ou renomeie a pasta e comece de novo.",
 "cw_convert_err_not_built_yet": "A conversão no PS5 ainda não está pronta: esta versão só lê o jogo do começo ao fim.",
 "cw_convert_err_not_bundled": "Este auxiliar foi compilado sem o conversor. Atualize o PS5Upload e envie o auxiliar de novo.",
 "cw_convert_err_not_packable": "Este jogo não pode ser colocado em pacotes zstd: é um jogo de PS4 ou não tem eboot.bin. Desative os pacotes de recursos zstd.",

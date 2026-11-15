@@ -179,6 +179,7 @@
   "cw_convert_err_not_bundled": "이 헬퍼는 변환 프로그램 없이 빌드되었습니다. PS5Upload를 업데이트하고 헬퍼를 다시 보내세요.",
   "cw_convert_err_not_packable": "이 게임은 zstd 팩으로 만들 수 없습니다. PS4 게임이거나 eboot.bin이 없습니다. zstd 에셋 팩을 끄세요.",
   "cw_convert_err_not_started": "변환 프로그램이 시작되지 않았습니다. 다시 시도하세요.",
+  "cw_convert_err_partial_in_the_way": "출력 이름 뒤에 .partial이 붙은 폴더가 이미 있고, PS5Upload가 남긴 것이 아닙니다. 옮기거나 이름을 바꾼 뒤 다시 시작하세요.",
   "cw_convert_err_too_big_for_drive": "이미지가 그 드라이브에서 파일 하나에 허용되는 4 GiB보다 커집니다. exFAT 드라이브나 내장 저장소에 저장하거나, 폴더로 만드세요.",
   "cw_convert_err_unreadable": "게임의 일부를 읽을 수 없었습니다. 드라이브를 확인하고 다시 시도하세요.",
   "cw_convert_err_unsupported": "게임 폴더도, .exfat, .ffpkg, .ffpfs 이미지도 아닙니다.",

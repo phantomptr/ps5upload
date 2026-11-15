@@ -179,6 +179,7 @@
   "cw_convert_err_not_bundled": "This helper was built without the converter. Update PS5Upload and send the helper again.",
   "cw_convert_err_not_packable": "This game can't be put in zstd packs: it is a PS4 game or has no eboot.bin. Turn off zstd asset packs.",
   "cw_convert_err_not_started": "The converter didn't start. Try again.",
+  "cw_convert_err_partial_in_the_way": "A folder with the output's name and .partial at the end is already there, and it isn't one PS5Upload left. Move or rename it, then start again.",
   "cw_convert_err_too_big_for_drive": "The image would be bigger than the 4 GiB a single file can be on that drive. Save it to an exFAT drive or the internal storage, or make a folder instead.",
   "cw_convert_err_unreadable": "Part of the game couldn't be read. Check the drive and try again.",
   "cw_convert_err_unsupported": "This isn't a game folder or an .exfat, .ffpkg or .ffpfs image.",

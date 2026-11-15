@@ -791,6 +791,7 @@ home_low_space_body: "クリーンアップは、消してよいアップデー�
 "cw_convert_err_loader": "ELF ローダー（ポート 9021）が応答しないため、変換プログラムを起動できませんでした。elfldr を読み込み直してください。",
 "cw_convert_err_no_memory": "変換プログラムに使う PS5 のメモリーが足りなくなりました。ゲームを閉じてもう一度試してください。",
 "cw_convert_err_no_space": "そこには空き容量が足りません。",
+"cw_convert_err_partial_in_the_way": "出力名の末尾に .partial が付いたフォルダーがすでにあり、PS5Upload が残したものではありません。移動するか名前を変えてから、もう一度始めてください。",
 "cw_convert_err_not_built_yet": "PS5 上での変換はまだ完成していません。このビルドはゲームを読み通すだけです。",
 "cw_convert_err_not_bundled": "このヘルパーは変換プログラムなしでビルドされています。PS5Upload を更新して、ヘルパーを送り直してください。",
 "cw_convert_err_not_packable": "このゲームは zstd パックにできません。PS4 のゲームか、eboot.bin がありません。zstd アセットパックをオフにしてください。",

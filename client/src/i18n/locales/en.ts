@@ -1359,6 +1359,7 @@ home_low_space_body: "Clean up finds updates, leftover packages and games you ne
 "cw_convert_err_loader": "The ELF loader (port 9021) didn't answer, so the converter couldn't start. Load elfldr again.",
 "cw_convert_err_no_memory": "The PS5 ran out of memory for the converter. Close the game and try again.",
 "cw_convert_err_no_space": "There isn't enough free space there.",
+"cw_convert_err_partial_in_the_way": "A folder with the output's name and .partial at the end is already there, and it isn't one PS5Upload left. Move or rename it, then start again.",
 "cw_convert_err_not_built_yet": "Converting on the PS5 isn't finished yet: this build only reads the game through.",
 "cw_convert_err_not_bundled": "This helper was built without the converter. Update PS5Upload and send the helper again.",
 "cw_convert_err_not_packable": "This game can't be put in zstd packs: it is a PS4 game or has no eboot.bin. Turn off zstd asset packs.",

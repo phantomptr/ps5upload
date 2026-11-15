@@ -179,6 +179,7 @@
   "cw_convert_err_not_bundled": "Bu yardımcı dönüştürücü olmadan derlendi. PS5Upload'ı güncelleyin ve yardımcıyı yeniden gönderin.",
   "cw_convert_err_not_packable": "Bu oyun zstd paketlerine konamaz: bir PS4 oyunu ya da eboot.bin dosyası yok. zstd varlık paketlerini kapatın.",
   "cw_convert_err_not_started": "Dönüştürücü başlamadı. Yeniden deneyin.",
+  "cw_convert_err_partial_in_the_way": "Çıktının adını taşıyan ve sonu .partial ile biten bir klasör zaten var ve onu PS5Upload bırakmadı. Taşıyın ya da yeniden adlandırın, sonra yeniden başlayın.",
   "cw_convert_err_too_big_for_drive": "İmaj, o sürücüde tek bir dosyanın olabileceği 4 GiB sınırını aşar. exFAT bir sürücüye veya dahili depolamaya kaydedin ya da bunun yerine bir klasör oluşturun.",
   "cw_convert_err_unreadable": "Oyunun bir kısmı okunamadı. Sürücüyü kontrol edip yeniden deneyin.",
   "cw_convert_err_unsupported": "Bu bir oyun klasörü ya da .exfat, .ffpkg veya .ffpfs imajı değil.",

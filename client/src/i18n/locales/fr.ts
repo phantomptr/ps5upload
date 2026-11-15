@@ -790,6 +790,7 @@ home_low_space_body: "Nettoyer trouve les mises à jour, les paquets restants et
 "cw_convert_err_loader": "Le chargeur ELF (port 9021) n'a pas répondu, le convertisseur n'a donc pas pu démarrer. Rechargez elfldr.",
 "cw_convert_err_no_memory": "La PS5 n'a plus assez de mémoire pour le convertisseur. Fermez le jeu et réessayez.",
 "cw_convert_err_no_space": "Il n'y a pas assez d'espace libre à cet endroit.",
+"cw_convert_err_partial_in_the_way": "Un dossier portant le nom de la sortie suivi de .partial existe déjà, et ce n'est pas PS5Upload qui l'a laissé. Déplacez-le ou renommez-le, puis recommencez.",
 "cw_convert_err_not_built_yet": "La conversion sur la PS5 n'est pas encore terminée : cette version se contente de lire le jeu en entier.",
 "cw_convert_err_not_bundled": "Cet assistant a été compilé sans le convertisseur. Mettez PS5Upload à jour et renvoyez l'assistant.",
 "cw_convert_err_not_packable": "Ce jeu ne peut pas être mis en packs zstd : c'est un jeu PS4 ou il n'a pas d'eboot.bin. Désactivez les packs de ressources zstd.",

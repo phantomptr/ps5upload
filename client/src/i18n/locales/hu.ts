@@ -1094,6 +1094,7 @@ home_low_space_body: "A Takarítás megkeresi a frissítéseket, a maradék csom
 "cw_convert_err_loader": "Az ELF-betöltő (9021-es port) nem válaszolt, így az átalakító nem indult el. Töltsd be újra az elfldr-t.",
 "cw_convert_err_no_memory": "A PS5-nek elfogyott a memóriája az átalakítóhoz. Zárd be a játékot, és próbáld újra.",
 "cw_convert_err_no_space": "Nincs ott elég szabad hely.",
+"cw_convert_err_partial_in_the_way": "Már van egy mappa a kimenet nevével és .partial végződéssel, és nem a PS5Upload hagyta ott. Helyezd át vagy nevezd át, majd kezdd újra.",
 "cw_convert_err_not_built_yet": "A PS5-ön való átalakítás még nincs kész: ez a változat csak végigolvassa a játékot.",
 "cw_convert_err_not_bundled": "Ez a segédprogram átalakító nélkül készült. Frissítsd a PS5Upload alkalmazást, és küldd el újra a segédprogramot.",
 "cw_convert_err_not_packable": "Ez a játék nem tehető zstd csomagokba: PS4-es játék, vagy nincs benne eboot.bin. Kapcsold ki a zstd elemcsomagokat.",

@@ -792,6 +792,7 @@ home_low_space_body: "Dọn dẹp tìm các bản cập nhật, gói còn sót v
 "cw_convert_err_loader": "Trình nạp ELF (cổng 9021) không phản hồi nên trình chuyển đổi không khởi động được. Hãy nạp lại elfldr.",
 "cw_convert_err_no_memory": "PS5 hết bộ nhớ cho trình chuyển đổi. Hãy đóng game và thử lại.",
 "cw_convert_err_no_space": "Ở đó không đủ dung lượng trống.",
+"cw_convert_err_partial_in_the_way": "Đã có một thư mục mang tên đầu ra kèm đuôi .partial, và không phải do PS5Upload để lại. Hãy di chuyển hoặc đổi tên nó rồi bắt đầu lại.",
 "cw_convert_err_not_built_yet": "Chuyển đổi trên PS5 chưa hoàn thiện: bản dựng này chỉ đọc qua game.",
 "cw_convert_err_not_bundled": "Trình trợ giúp này được dựng mà không có trình chuyển đổi. Hãy cập nhật PS5Upload và gửi lại trình trợ giúp.",
 "cw_convert_err_not_packable": "Game này không thể đóng vào gói zstd: đây là game PS4 hoặc không có eboot.bin. Hãy tắt gói tài nguyên zstd.",
