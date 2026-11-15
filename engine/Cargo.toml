@@ -20,6 +20,8 @@ members = [
   "crates/ps5-dump-forge-ufs2",
   "crates/ps5-dump-forge-pfs",
   "crates/ps5-dump-forge-zstd",
+  "crates/ps5-dump-forge-patch",
+  "crates/ps5-dump-forge-exfat",
 ]
 # The fuzz targets are their own workspace (nightly, sanitizer flags): see fuzz/README.md.
 exclude = ["fuzz"]

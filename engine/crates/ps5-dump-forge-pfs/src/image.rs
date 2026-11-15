@@ -27,14 +27,14 @@ pub(crate) const MODE_ENCRYPTED: u16 = 0x4;
 /// The unsigned D32 inode.
 pub(crate) const INODE_LEN: usize = 0xA8;
 /// 390 per 64 KiB block; the 16-byte tail of each table block stays zero.
-const INODES_PER_BLOCK: u64 = BLOCK / INODE_LEN as u64;
+pub(crate) const INODES_PER_BLOCK: u64 = BLOCK / INODE_LEN as u64;
 pub(crate) const MODE_DIR: u16 = 0x4000;
 pub(crate) const MODE_FILE: u16 = 0x8000;
 /// Read and execute for owner, group and others.
-const MODE_RX: u16 = 0x001 | 0x004 | 0x008 | 0x020 | 0x040 | 0x100;
+pub(crate) const MODE_RX: u16 = 0x001 | 0x004 | 0x008 | 0x020 | 0x040 | 0x100;
 pub(crate) const FLAG_COMPRESSED: u32 = 0x1;
-const FLAG_READONLY: u32 = 0x10;
-const FLAG_INTERNAL: u32 = 0x2_0000;
+pub(crate) const FLAG_READONLY: u32 = 0x10;
+pub(crate) const FLAG_INTERNAL: u32 = 0x2_0000;
 pub(crate) const DIRENT_FILE: i32 = 2;
 pub(crate) const DIRENT_DIR: i32 = 3;
 pub(crate) const DIRENT_DOT: i32 = 4;
@@ -42,7 +42,7 @@ pub(crate) const DIRENT_DOTDOT: i32 = 5;
 /// The FPT value bits: a directory's inode, and an offset into the collision resolver.
 const FPT_DIR: u32 = 0x2000_0000;
 const FPT_COLLISION: u32 = 0x8000_0000;
-const MAX_NAME: usize = 255;
+pub(crate) const MAX_NAME: usize = 255;
 /// Larger directories are refused, here and by the reader.
 pub(crate) const MAX_DIR_BYTES: u64 = 64 << 20;
 
@@ -319,11 +319,11 @@ pub(crate) fn path_table(
 }
 
 /// A directory entry's on-disk length.
-fn dirent_len(name_len: usize) -> u64 {
+pub(crate) fn dirent_len(name_len: usize) -> u64 {
     (name_len as u64 + 17).next_multiple_of(8)
 }
 
-fn dirent(ino: u32, kind: i32, name: &str) -> Vec<u8> {
+pub(crate) fn dirent(ino: u32, kind: i32, name: &str) -> Vec<u8> {
     let len = dirent_len(name.len()) as usize;
     let mut d = Vec::with_capacity(len);
     d.extend_from_slice(&ino.to_le_bytes());
@@ -469,7 +469,7 @@ pub(crate) fn single(name: &str, raw: u64, stored: u64, time: i64) -> Result<Ima
 
 /// One D32 inode. `db[1..12]` take `fill` (-1, or 0 for the super-root); `ib` stays 0.
 #[allow(clippy::too_many_arguments)]
-fn inode(
+pub(crate) fn inode(
     mode: u16,
     nlink: u16,
     flags: u32,
@@ -538,6 +538,12 @@ fn node_inode(img: &Image, node: &Node, root: bool) -> [u8; INODE_LEN] {
 
 /// Block 0: the header, with the inode table described by a small inode of its own at 0x50.
 fn header(img: &Image) -> Vec<u8> {
+    header_block(img.inodes, img.ndblock, img.inode_blocks, img.time)
+}
+
+/// Block 0 for `inodes` in `inode_blocks` table blocks, `ndblock` blocks in all, stamped
+/// `time`: what the writer makes, so the editor can compare a header with it whole.
+pub(crate) fn header_block(inodes: u64, ndblock: u64, inode_blocks: u64, time: i64) -> Vec<u8> {
     let mut h = vec![0u8; BLOCK as usize];
     h[0x00..0x08].copy_from_slice(&PFS_VERSION.to_le_bytes());
     h[0x08..0x10].copy_from_slice(&PFS_MAGIC.to_le_bytes());
@@ -545,19 +551,19 @@ fn header(img: &Image) -> Vec<u8> {
     h[0x1C..0x1E].copy_from_slice(&MODE_CASE_INSENSITIVE.to_le_bytes());
     h[0x20..0x24].copy_from_slice(&(BLOCK as u32).to_le_bytes());
     h[0x28..0x30].copy_from_slice(&1u64.to_le_bytes()); // nblock
-    h[0x30..0x38].copy_from_slice(&img.inodes.to_le_bytes());
-    h[0x38..0x40].copy_from_slice(&img.ndblock.to_le_bytes());
-    h[0x40..0x48].copy_from_slice(&img.inode_blocks.to_le_bytes());
+    h[0x30..0x38].copy_from_slice(&inodes.to_le_bytes());
+    h[0x38..0x40].copy_from_slice(&ndblock.to_le_bytes());
+    h[0x40..0x48].copy_from_slice(&inode_blocks.to_le_bytes());
     let t = 0x50;
-    let table = img.inode_blocks * BLOCK;
+    let table = inode_blocks * BLOCK;
     h[t + 2..t + 4].copy_from_slice(&1u16.to_le_bytes());
     h[t + 4..t + 8].copy_from_slice(&FLAG_READONLY.to_le_bytes());
     h[t + 8..t + 16].copy_from_slice(&table.to_le_bytes());
     h[t + 16..t + 24].copy_from_slice(&table.to_le_bytes());
     for i in 0..4 {
-        h[t + 0x18 + i * 8..t + 0x20 + i * 8].copy_from_slice(&img.time.to_le_bytes());
+        h[t + 0x18 + i * 8..t + 0x20 + i * 8].copy_from_slice(&time.to_le_bytes());
     }
-    h[t + 0x60..t + 0x64].copy_from_slice(&(img.inode_blocks as u32).to_le_bytes());
+    h[t + 0x60..t + 0x64].copy_from_slice(&(inode_blocks as u32).to_le_bytes());
     // The S64 layout: 12 direct entries of a 32-byte signature and an 8-byte block; the
     // table starts at block 1.
     h[t + 0x68 + 32..t + 0x68 + 40].copy_from_slice(&1u64.to_le_bytes());

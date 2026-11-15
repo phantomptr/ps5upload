@@ -236,7 +236,7 @@ static int run_op(fake_t fake, const char *args, ava1_op_ctx_t *c) {
 
 static void test_wire(void) {
     char buf[4096], got[1024];
-    cc_build_t b = {"/data/out \"q\".exfat", "exfat", 1, 1};
+    cc_build_t b = {"/data/out \"q\".exfat", "exfat", 1, 1, 0};
     cc_status_t s;
     const char *full = "{\"id\":\"ab\",\"pid\":77,\"op\":\"build\",\"state\":\"running\",\"stage\":\"write\","
                        "\"bytes_done\":5,\"bytes_total\":9,\"result\":{\"a\":\"}\",\"b\":[1,{\"c\":2}]}}\n";
@@ -254,6 +254,18 @@ static void test_wire(void) {
     {
         int z = 0;
         CHECK(webui_json_bool(buf, (size_t)len, "zstd", &z) == 1 && z == 1);
+    }
+    {
+        /* The level goes in with zstd only, and only when one was chosen. */
+        uint64_t lv = 0;
+        CHECK(webui_json_u64(buf, (size_t)len, "zstd_level", &lv) == 0);
+        b.zstd_level = 19;
+        len = cc_request_json(buf, sizeof buf, "ab12", "build", "/data/g", &b);
+        CHECK(len > 0 && webui_json_u64(buf, (size_t)len, "zstd_level", &lv) == 1 && lv == 19);
+        b.zstd = 0;
+        len = cc_request_json(buf, sizeof buf, "ab12", "build", "/data/g", &b);
+        CHECK(len > 0 && webui_json_u64(buf, (size_t)len, "zstd_level", &lv) == 0);
+        CHECK(cc_zstd_level_ok(1) && cc_zstd_level_ok(22) && !cc_zstd_level_ok(0) && !cc_zstd_level_ok(23));
     }
     len = cc_request_json(buf, sizeof buf, "ab12", "inspect", "/data/g", NULL);
     CHECK(len > 0 && webui_json_str(buf, (size_t)len, "dest", got, sizeof got) == 0);
@@ -368,6 +380,11 @@ static void test_op(void) {
         BUILD_REFUSED(nodir, "ffpkg", AVA1_ERR_PATH, "convert_bad_dest");
         BUILD_REFUSED(folder_named_image, "folder", AVA1_ERR_PATH, "convert_bad_dest");
     }
+    /* A zstd level outside zstd's range. */
+    snprintf(args, sizeof args,
+             "{\"path\":\"%s\",\"action\":\"build\",\"dest\":\"%s\",\"format\":\"ffpkg\",\"zstd\":true,\"zstd_level\":23}", game,
+             dest);
+    CHECK(run_op(FAKE_NEVER, args, c) == AVA1_ERR_PROTOCOL && strcmp(c->message, "convert_bad_zstd_level") == 0 && !g_request[0]);
 
     /* An inspection: the request names it, the status is followed past a half-written and a
      * garbage file, and the converter's answer is the job's result, byte for byte. */
@@ -397,7 +414,8 @@ static void test_op(void) {
     /* An inspection may run beside an install or an extraction; a build may not. */
     g_installing = 1;
     CHECK(run_op(FAKE_INSPECT, args, c) == AVA1_STATUS_OK);
-    snprintf(args, sizeof args, "{\"path\":\"%s\",\"action\":\"build\",\"dest\":\"%s\",\"format\":\"ffpkg\",\"zstd\":true,\"verify\":\"full\"}",
+    snprintf(args, sizeof args,
+             "{\"path\":\"%s\",\"action\":\"build\",\"dest\":\"%s\",\"format\":\"ffpkg\",\"zstd\":true,\"zstd_level\":19,\"verify\":\"full\"}",
              game, dest);
     CHECK(run_op(FAKE_NEVER, args, c) == AVA1_ERR_BUSY && strcmp(c->message, "convert_busy") == 0 && !g_request[0]);
     g_installing = 0;
@@ -417,6 +435,10 @@ static void test_op(void) {
         CHECK(webui_json_str(g_request, strlen(g_request), "format", got, sizeof got) == 1 && strcmp(got, "ffpkg") == 0);
         CHECK(webui_json_str(g_request, strlen(g_request), "verify", got, sizeof got) == 1 && strcmp(got, "full") == 0);
         CHECK(webui_json_bool(g_request, strlen(g_request), "zstd", &z) == 1 && z == 1);
+        {
+            uint64_t lv = 0;
+            CHECK(webui_json_u64(g_request, strlen(g_request), "zstd_level", &lv) == 1 && lv == 19);
+        }
     }
 
     /* Progress, then Stop: the cancel file appears, the converter says it stopped. */

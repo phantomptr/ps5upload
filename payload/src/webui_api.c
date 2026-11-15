@@ -923,12 +923,14 @@ static void r_convert_inspect(const char *b, size_t n, uint8_t *out, int fd) {
 }
 
 /* Convert a game on the console (CONSOLE_CONVERT "build"): {"path","dest","format": "exfat"|"ffpkg"|
- * "ffpfs"|"folder", optional "zstd": bool, "verify": "fast"|"full"}. The job's result: {"path"}. The
+ * "ffpfs"|"folder", optional "zstd": bool, "zstd_level": 1..22 (sent on only with zstd), "verify":
+ * "fast"|"full"}. The job's result: {"path"}. The
  * helper's operation checks the paths again (console_convert.c); this route refuses what the page
  * may never name and what is not well-formed. */
 static void r_convert_start(const char *b, size_t n, uint8_t *out, int fd) {
     char path[API_PATH], dest[API_PATH], format[16], verify[16], *tail;
     size_t at = 0, cap = 6 * API_PATH + 128;
+    uint64_t level = 0;
     int zstd = 0, rc;
     if (need_path(fd, b, n, "path", path, sizeof path) != 0) return;
     if (need_path(fd, b, n, "dest", dest, sizeof dest) != 0) return;
@@ -946,6 +948,11 @@ static void r_convert_start(const char *b, size_t n, uint8_t *out, int fd) {
         send_bad(fd, "bad_zstd");
         return;
     }
+    rc = webui_json_u64(b, n, "zstd_level", &level);
+    if (rc < 0 || (rc == 1 && !cc_zstd_level_ok(level))) {
+        send_bad(fd, "bad_zstd");
+        return;
+    }
     tail = malloc(cap);
     if (!tail) {
         send_error(fd, 500, "out_of_memory", 13);
@@ -956,8 +963,11 @@ static void r_convert_start(const char *b, size_t n, uint8_t *out, int fd) {
     at = (size_t)snprintf(tail, cap, ",\"action\":\"build\",\"dest\":\"");
     at += webui_json_escape(tail + at, cap - at, dest, strlen(dest));
     if (at + 96 < cap) {
-        snprintf(tail + at, cap - at, "\",\"format\":\"%s\",\"zstd\":%s,\"verify\":\"%s\"", format,
-                 zstd ? "true" : "false", verify);
+        int w = snprintf(tail + at, cap - at, "\",\"format\":\"%s\",\"zstd\":%s,\"verify\":\"%s\"", format,
+                         zstd ? "true" : "false", verify);
+        /* The level goes with zstd only (at most ",\"zstd_level\":22": inside the 96 checked). */
+        if (zstd && level && w > 0)
+            snprintf(tail + at + (size_t)w, cap - at - (size_t)w, ",\"zstd_level\":%u", (unsigned)level);
         start_path_job(fd, out, AVA1_JOB_OP_CONSOLE_CONVERT, path, NULL, tail);
     } else {
         send_bad(fd, "bad_path");

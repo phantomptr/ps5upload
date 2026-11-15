@@ -43,6 +43,9 @@ pub(crate) struct BrowseResp {
     compressed: bool,
     /// An edited copy can be written (every image kind but a package).
     editable: bool,
+    /// Changes can also go into the image itself (`/api/image/edit/check` says whether a given
+    /// set fits): an uncompressed exFAT, UFS2 or PFS image.
+    in_place: bool,
     /// The folder listed, normalized ("" at the root).
     dir: String,
     entries: Vec<BrowseEntry>,
@@ -71,6 +74,8 @@ fn cache() -> &'static Mutex<Option<Cached>> {
 
 /// The listing of the image at `path` (absolute), from the cache when the file is unchanged.
 fn indexed(path: &Path) -> Result<(Arc<Index>, Filesystem, bool, String), String> {
+    // Not while an in-place edit writes it; a journal an interrupted one left is settled first.
+    crate::image_edit_in_place::before_open(path)?;
     let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
     if !meta.is_file() {
         return Err(format!("{} is not a file", path.display()));
@@ -99,6 +104,14 @@ fn indexed(path: &Path) -> Result<(Arc<Index>, Filesystem, bool, String), String
     Ok((index, opened.filesystem, opened.compressed, label))
 }
 
+/// Drops the cached listing of `path` (an in-place edit changed it).
+pub(crate) fn forget(path: &Path) {
+    let mut g = cache().lock().unwrap_or_else(|e| e.into_inner());
+    if g.as_ref().is_some_and(|c| c.path == path) {
+        *g = None;
+    }
+}
+
 /// Lists folder `dir` of the image at `path`.
 fn browse_blocking(path: &Path, dir: Option<&str>) -> Result<BrowseResp, (StatusCode, String)> {
     let dir = match browse::normalize(dir.unwrap_or("")) {
@@ -122,6 +135,11 @@ fn browse_blocking(path: &Path, dir: Option<&str>) -> Result<BrowseResp, (Status
         filesystem: filesystem.name(),
         compressed,
         editable: filesystem.editable(),
+        in_place: !compressed
+            && matches!(
+                filesystem,
+                Filesystem::Exfat | Filesystem::Ufs2 | Filesystem::Pfs
+            ),
         dir,
         entries: entries
             .into_iter()

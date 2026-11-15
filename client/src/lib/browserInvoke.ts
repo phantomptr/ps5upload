@@ -927,6 +927,7 @@ export async function browserInvoke<T>(
         remove_backport: args["removeBackport"] ?? false,
         delete_source: args["deleteSource"] ?? false,
         unpack_packs: args["unpackPacks"] ?? false,
+        in_place: args["inPlace"] ?? false,
       });
     }
     case "folder_build": {
@@ -945,6 +946,12 @@ export async function browserInvoke<T>(
         unpack_packs: args["unpackPacks"] ?? false,
         add_ampr_emu: args["addAmprEmu"] ?? true,
         ampr_emu_build: args["amprEmuBuild"],
+      });
+    }
+    case "image_edit_check": {
+      return postJson<T>("/api/image/edit/check", {
+        path: args["path"],
+        edits: args["edits"] ?? [],
       });
     }
     case "image_browse": {

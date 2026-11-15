@@ -97,7 +97,7 @@ fn language_of(v: Option<String>) -> Option<String> {
 /// this computer" can lower (#632) without touching the shared blocking pool.
 /// The job's thread is inside the engine's runtime, as a blocking task's is: a source on a
 /// saved server opened there (a folder build's read-back reopens it) reaches the server.
-fn spawn_workshop_job(work: impl FnOnce() + Send + 'static) {
+pub(crate) fn spawn_workshop_job(work: impl FnOnce() + Send + 'static) {
     let handle = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
         ps5upload_fpkg::workshop::on_job_thread(move || {
@@ -1015,6 +1015,15 @@ pub(crate) struct ExfatBuildReq {
     /// otherwise. The source image is only read.
     #[serde(default)]
     edits: Vec<ImageEditReq>,
+    /// With `edits`: change the image `source` itself instead of writing an edited copy. Only
+    /// for an uncompressed `.exfat`, `.ffpkg` or `.ffpfs` on this computer, not in asset packs,
+    /// and only when every change fits the image's free space (it never grows): otherwise
+    /// refused (400) with the reason, before anything is written. An undo journal
+    /// (`<image>.forge-undo`) is written beside it first; every changed file is read back and
+    /// the filesystem checked, and any failure restores the image. `POST /api/image/edit/check`
+    /// says beforehand whether it would be accepted.
+    #[serde(default)]
+    in_place: bool,
     /// When the image's name is taken in the output folder, add ` (2)` (and so on) instead of
     /// refusing (see `BuildReq::keep_both`).
     #[serde(default)]
@@ -1492,7 +1501,7 @@ pub(crate) enum ImageEditReq {
 }
 
 impl ImageEditReq {
-    fn edit(&self) -> ps5upload_fpkg::browse::Edit {
+    pub(crate) fn edit(&self) -> ps5upload_fpkg::browse::Edit {
         use ps5upload_fpkg::browse::Edit;
         match self {
             Self::Delete { path } => Edit::Delete { path: path.clone() },
@@ -1521,6 +1530,8 @@ pub(crate) struct EditedImage {
 pub(crate) fn open_edited(source: &Path, edits: &[ImageEditReq]) -> Result<EditedImage, String> {
     use crate::image_build::ImageFormat;
     use ps5upload_fpkg::browse::{self, Edited, Filesystem};
+    // An interrupted in-place edit's journal is settled first.
+    crate::image_edit_in_place::before_open(source)?;
     let opened = browse::open(source).map_err(|e| e.to_string())?;
     let format = match opened.filesystem {
         Filesystem::Exfat => ImageFormat::Exfat,
@@ -1642,6 +1653,16 @@ pub(crate) async fn exfat_build_handler(
     Json(mut req): Json<ExfatBuildReq>,
 ) -> impl IntoResponse {
     let source = resolve_engine_path(&req.source);
+    if req.in_place && req.edits.is_empty() {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "an in-place edit needs changes (edits)",
+        )
+        .into_response();
+    }
+    if let Some(why) = crate::image_edit_in_place::busy(&source) {
+        return json_err(StatusCode::CONFLICT, why).into_response();
+    }
     // A game folder on this computer, on a saved server (`remote://`) or on a console
     // (`ps5://`, read through the helper as a package build reads it): the opener below
     // knows them all. A local path has to be a folder; an image or archive is not written
@@ -1697,6 +1718,19 @@ pub(crate) async fn exfat_build_handler(
                 "an edited copy does not remove the backport: delete its files instead",
             )
             .into_response();
+        }
+        // The changes go into the image itself (image_edit_in_place.rs), or are refused there
+        // with the reason (the UI then offers the edited copy).
+        if req.in_place {
+            if req.rebuild_ampr_index || req.destination.is_some() || req.delete_source {
+                return json_err(
+                    StatusCode::BAD_REQUEST,
+                    "an in-place edit takes only the changes (and full_verify)",
+                )
+                .into_response();
+            }
+            let edits = req.edits.iter().map(ImageEditReq::edit).collect();
+            return crate::image_edit_in_place::start(state, source, edits, req.full_verify).await;
         }
         let (edit_source, edits) = (source.clone(), std::mem::take(&mut req.edits));
         let index_only = req.rebuild_ampr_index && edits.is_empty();
@@ -1940,6 +1974,10 @@ pub(crate) async fn exfat_build_handler(
         }
         if let Some(why) = patch_refusal(&scan_source) {
             return Err(why);
+        }
+        // An image an in-place edit was interrupted in is settled before it is read.
+        if image_file && !remote {
+            crate::image_edit_in_place::before_open(&scan_source)?;
         }
         // A UFS2 image (.ffpkg) is case-sensitive like /data: give modules the eboot's spelling.
         // A PS4 update goes into its game here (the merge checks they go together).
@@ -2654,6 +2692,9 @@ pub(crate) async fn folder_build_handler(
 ) -> impl IntoResponse {
     use crate::folder_build;
     let source = resolve_engine_path(&req.source);
+    if let Some(why) = crate::image_edit_in_place::busy(&source) {
+        return json_err(StatusCode::CONFLICT, why).into_response();
+    }
     // Straight to a server: the folder there.
     let to_server = match req.destination.take() {
         None | Some(ImageDestinationReq::Local) => None,

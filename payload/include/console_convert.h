@@ -14,7 +14,7 @@
  *
  * JOB_OP_CONSOLE_CONVERT {"path":"<game folder or .exfat/.ffpkg/.ffpfs image>"
  *   [,"action":"inspect"|"build"][,"dest":"<output>"][,"format":"exfat"|"ffpkg"|"ffpfs"|"folder"]
- *   [,"zstd":true][,"verify":"fast"|"full"]}
+ *   [,"zstd":true[,"zstd_level":1..22]][,"verify":"fast"|"full"]}
  * "inspect" (the default) reads what the source is; the job's result is the converter's answer
  * ({"path","format","size","files","title_id","title",...}). "build" writes `dest` in `format`
  * (through `<dest>.partial` beside it, renamed in place at the end). A `dest` that exists is
@@ -70,9 +70,11 @@ typedef struct {
     const char *format; /* "exfat" | "ffpkg" | "ffpfs" | "folder" */
     int zstd;
     int full_verify;
+    int zstd_level; /* 1..22 with zstd; 0: the converter's default */
 } cc_build_t;
 
-/* request.json for job `id`: {"id","op","path"} and, with `b`, {"dest","format","zstd","verify"}.
+/* request.json for job `id`: {"id","op","path"} and, with `b`, {"dest","format","zstd","verify"}
+ * (and "zstd_level" when zstd is on and a level was chosen).
  * Returns the length, or -1 when it does not fit `cap`. */
 int cc_request_json(char *out, size_t cap, const char *id, const char *op, const char *path, const cc_build_t *b);
 
@@ -99,6 +101,8 @@ int cc_record_parse(const char *buf, unsigned long long *xpid, long *hpid, char 
 
 /* The format an output path's extension stands for ("exfat", "ffpkg", "ffpfs"), or NULL. */
 const char *cc_image_format(const char *path);
+/* 1 when `level` is a zstd level a build may be asked for (zstd's own range; the page offers 1, 5, 19). */
+static inline int cc_zstd_level_ok(unsigned long long level) { return level >= 1 && level <= 22; }
 /* 1 when `format` is one a build writes. */
 int cc_format_ok(const char *format);
 /* 1 when `inner` is `outer` itself or below it (both normalised). */

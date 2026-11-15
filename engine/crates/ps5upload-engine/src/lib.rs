@@ -68,6 +68,7 @@ mod host_guard;
 mod icon_cache;
 mod image_browse;
 mod image_build;
+mod image_edit_in_place;
 mod inspect;
 mod install;
 mod join;
@@ -12741,6 +12742,10 @@ fn build_app_and_mcp(
         .route(
             "/api/image/browse",
             post(image_browse::image_browse_handler),
+        )
+        .route(
+            "/api/image/edit/check",
+            post(image_edit_in_place::check_handler),
         )
         .route(
             "/api/collection/settings",
