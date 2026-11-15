@@ -636,6 +636,10 @@ fn write_checked_here(
     // Checked before the partial folder exists; the case check needs the drive, below.
     check_paths(tree, false)?;
     let partial = partial_of(target);
+    // A folder there that no build of ours left is someone's: refused, never written into.
+    if let Some(why) = crate::writing::partial_in_the_way(&partial) {
+        return Err(why);
+    }
     // Not `create_dir_all`: a folder here now is another build's, never written into.
     std::fs::create_dir(&partial).map_err(|e| format!("{}: {e}", partial.display()))?;
     let result = (|| -> Result<FolderBuilt, String> {

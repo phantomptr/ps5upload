@@ -400,9 +400,16 @@ fn build(
     }
     // Ours alone from here: a leftover of an earlier run under this name is cleared.
     let partial = folder_build::partial_of(&plan.dest);
-    let Some(_writing) = ps5upload_convert_core::writing::Writing::claim(partial) else {
+    let Some(_writing) = ps5upload_convert_core::writing::Writing::claim(partial.clone()) else {
         return Err(bad("this output is already being built".into()));
     };
+    // A folder under that name that no build of ours left is someone's: kept, and refused.
+    if let Some(detail) = ps5upload_convert_core::writing::partial_in_the_way(&partial) {
+        return Err(Refusal {
+            cause: "convert_partial_in_the_way",
+            detail,
+        });
+    }
     remove_leftovers(&plan.dest);
     crate::log(format_args!(
         "building {} files, {data} bytes -> {} ({:?}, zstd {:?})",
@@ -694,6 +701,18 @@ mod tests {
             "convert_destination_exists"
         );
         assert_eq!(std::fs::read(tmp.0.join("taken.exfat")).unwrap(), b"mine");
+        // A folder named like the output's `.partial` that no build of ours left: kept, refused.
+        for (dest, format) in [("kept", "folder"), ("kept.exfat", "exfat")] {
+            let theirs = tmp.0.join(format!("{dest}.partial"));
+            std::fs::create_dir_all(&theirs).unwrap();
+            std::fs::write(theirs.join("save.dat"), b"keep").unwrap();
+            assert_eq!(
+                build(json!({"dest": tmp.0.join(dest), "format": format})),
+                "convert_partial_in_the_way"
+            );
+            assert_eq!(std::fs::read(theirs.join("save.dat")).unwrap(), b"keep");
+            assert!(!tmp.0.join(dest).exists());
+        }
         // zstd packs without ampr-emu-ng on the console: refused, nothing downloaded.
         assert_eq!(build(json!({"zstd": true})), "convert_no_zstd_runtime");
         assert_eq!(

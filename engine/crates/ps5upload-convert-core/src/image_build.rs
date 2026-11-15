@@ -1319,7 +1319,11 @@ fn build_once(
     };
     let mut file = match opened {
         Ok(f) => f,
-        Err(e) => return (Err(format!("{}: {e}", partial.display())), false),
+        Err(e) => {
+            let why = crate::writing::partial_in_the_way(&partial)
+                .unwrap_or_else(|| format!("{}: {e}", partial.display()));
+            return (Err(why), false);
+        }
     };
     let skip = resume.as_ref().map_or(0, |c| c.done);
     let skip_blocks = resume.as_ref().map_or(0, |c| c.blocks);
