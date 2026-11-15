@@ -4752,7 +4752,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-pfs"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "flate2",
  "ps5upload-fpkg",
@@ -4760,7 +4760,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-ufs2"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "ps5upload-fpkg",
  "unicode-normalization",
@@ -4768,7 +4768,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-zstd"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "crc32fast",
  "getrandom 0.4.3",
@@ -4779,7 +4779,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-ava1"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "anyhow",
  "ava1",
@@ -4798,7 +4798,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-core"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "aes 0.9.2",
  "aes-gcm 0.11.0",
@@ -4831,7 +4831,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-desktop"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "anyhow",
  "ava1",
@@ -4872,7 +4872,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-engine"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "aes 0.9.2",
  "aes-gcm 0.11.0",
@@ -4932,7 +4932,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-fpkg"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "aes 0.9.2",
  "crc32fast",
@@ -4955,7 +4955,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-pkg"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "aes 0.9.2",
  "blake3",
@@ -4967,7 +4967,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-tailnet"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "cc",
 ]
