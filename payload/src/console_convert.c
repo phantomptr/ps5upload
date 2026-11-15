@@ -237,13 +237,74 @@ static void remove_partial(const char *dest) {
     }
 }
 
-static void write_record(uint64_t xpid, const char *dest) {
-    char file[160], rec[1200];
-    int len = cc_record_format(rec, sizeof rec, (unsigned long long)xpid, (long)getpid(), dest);
+static int record_is(const char *id);
+
+/* Rewrites this job's record with the converter's pid, while it is still this job's (taken with
+ * O_EXCL; only its owner removes it, but a sweep elsewhere may have judged it stale). */
+static void write_record(uint64_t xpid, const char *id, const char *dest) {
+    char file[160], *rec = malloc(1200);
+    int len = rec ? cc_record_format(rec, 1200, (unsigned long long)xpid, (long)getpid(), id, dest) : -1;
     FILE *f;
-    if (len < 0 || !(f = fopen(cpath(CF_RECORD, file, sizeof file), "w"))) return;
-    fwrite(rec, 1, (size_t)len, f);
-    fclose(f);
+    if (len > 0 && record_is(id) && (f = fopen(cpath(CF_RECORD, file, sizeof file), "w")) != NULL) {
+        fwrite(rec, 1, (size_t)len, f);
+        fclose(f);
+    }
+    free(rec);
+}
+
+/* 1 when job.rec is job `id`'s. */
+static int record_is(const char *id) {
+    char file[160], rid[CC_JOB_ID_MAX], *buf = malloc(1400), *dest = malloc(1100);
+    unsigned long long xpid = 0;
+    long hpid = 0;
+    int mine = 0;
+    if (buf && dest && read_small(cpath(CF_RECORD, file, sizeof file), buf, 1400) > 0 &&
+        cc_record_parse(buf, &xpid, &hpid, rid, sizeof rid, dest, 1100))
+        mine = hpid == (long)getpid() && strcmp(rid, id) == 0;
+    free(buf);
+    free(dest);
+    return mine;
+}
+
+/* 1 when file `f` (request.json or status.json) carries job `id`. */
+static int file_is_job(cfile_t f, const char *id) {
+    char file[160], got[CC_JOB_ID_MAX], *buf = malloc(CONVERT_STATUS_MAX);
+    int mine = 0;
+    if (buf && read_small(cpath(f, file, sizeof file), buf, CONVERT_STATUS_MAX) > 0)
+        mine = fsj_json_str(buf, "id", got, sizeof got) && strcmp(got, id) == 0;
+    free(buf);
+    return mine;
+}
+
+/* Takes job.rec for job `id` (converter pid 0: not started yet), created only when there is none.
+ * 1 taken, 0 another job holds it (a live helper, or its converter, still runs it), -1 it could
+ * not be written. */
+static int take_record(const char *id, const char *dest) {
+    char file[160], *rec = malloc(1200);
+    int attempt, rc = -1;
+    if (!rec) return -1;
+    cpath(CF_RECORD, file, sizeof file);
+    for (attempt = 0; attempt < 2; attempt++) {
+        int fd = open(file, O_WRONLY | O_CREAT | O_EXCL, 0600), len;
+        if (fd < 0) {
+            if (errno != EEXIST) break;
+            if (attempt == 0) {
+                /* One left by a helper that has gone, and its converter with it, is cleared here
+                 * (what the sweep does at a start); one whose owner still runs stays. */
+                console_convert_sweep();
+                continue;
+            }
+            rc = 0;
+            break;
+        }
+        len = cc_record_format(rec, 1200, 0, (long)getpid(), id, dest);
+        rc = len > 0 && write(fd, rec, (size_t)len) == (ssize_t)len ? 1 : -1;
+        close(fd);
+        if (rc < 0) (void)unlink(file);
+        break;
+    }
+    free(rec);
+    return rc;
 }
 
 static void sweep_request(void) {
@@ -256,19 +317,29 @@ static void sweep_request(void) {
 }
 
 void console_convert_sweep(void) {
-    char file[160], buf[1400], dest[1100];
+    char file[160], rid[CC_JOB_ID_MAX];
+    /* On the heap: this also runs on a job thread, whose stack is small. */
+    char *buf = malloc(1400), *dest = malloc(1100);
     unsigned long long xpid = 0;
     long hpid = 0;
+    struct stat st;
     sweep_request();
-    if (read_small(cpath(CF_RECORD, file, sizeof file), buf, sizeof buf) <= 0) return;
-    if (!cc_record_parse(buf, &xpid, &hpid, dest, sizeof dest)) {
-        (void)unlink(file);
-        return;
+    if (!buf || !dest) goto out;
+    cpath(CF_RECORD, file, sizeof file);
+    if (lstat(file, &st) != 0) goto out;
+    if (read_small(file, buf, 1400) <= 0 || !cc_record_parse(buf, &xpid, &hpid, rid, sizeof rid, dest, 1100)) {
+        /* Empty or cut: one may be being written this moment (a helper creates it, then writes
+         * it). Only an old one is not. */
+        if (console_convert_request_stale(st.st_mtime, time(NULL))) (void)unlink(file);
+        goto out;
     }
     /* The helper that wrote it, or its converter, still runs (a takeover lets the old one finish). */
-    if ((hpid != (long)getpid() && pid_alive((uint64_t)hpid)) || pid_alive(xpid)) return;
+    if ((hpid != (long)getpid() && pid_alive((uint64_t)hpid)) || pid_alive(xpid)) goto out;
     if (dest[0]) remove_partial(dest); /* says so in the log only for a place it may write */
     (void)unlink(file);
+out:
+    free(buf);
+    free(dest);
 }
 
 int console_convert_building(void) { return __atomic_load_n(&g_building, __ATOMIC_ACQUIRE); }
@@ -302,7 +373,7 @@ static int follow(ava1_op_ctx_t *c, const char *id, const char *dest, int build,
             /* What a helper that dies now leaves behind, for the next start's sweep. */
             if (cur.pid != rec_pid) {
                 rec_pid = cur.pid;
-                write_record(rec_pid, dest);
+                write_record(rec_pid, id, dest);
             }
             memcpy(buf, cur_buf, cap);
             *s = cur;
@@ -411,7 +482,7 @@ static const char *check_build(const char *json, const char *src, int src_is_dir
 }
 
 int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t n) {
-    char src[1024], dest[1024], action[16], format[16], id[40], file[160];
+    char src[1024], dest[1024], action[16], format[16], id[CC_JOB_ID_MAX], file[160];
     const char *json = (const char *)args, *bad;
     cc_build_t build, *b = NULL;
     cc_status_t s;
@@ -499,6 +570,26 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
     (void)mkdir(cdir(), 0700);
     console_convert_sweep();
     {
+        uint8_t rnd[8];
+        arc4random_buf(rnd, sizeof rnd);
+        snprintf(id, sizeof id, "%02x%02x%02x%02x%02x%02x%02x%02x", rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5],
+                 rnd[6], rnd[7]);
+    }
+    /* The job's record, before anything is started: g_busy keeps one job per helper, this keeps
+     * one across helpers. A helper that took over while an old one's converter has not reported
+     * yet finds the old one's record and waits its turn, instead of taking its request and
+     * starting a second converter. */
+    r = take_record(id, dest);
+    if (r <= 0) {
+        if (r == 0) {
+            ava1_op_message(c, "convert_busy");
+            status = AVA1_ERR_BUSY;
+        } else {
+            ava1_op_message(c, "convert_write_failed: job.rec");
+        }
+        goto unlock;
+    }
+    {
         /* A previous converter still running (its helper was replaced): one at a time. */
         uint64_t old = 0;
         char state[16];
@@ -507,29 +598,25 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
             fsj_json_u64(buf, "pid", &old) && pid_alive(old)) {
             ava1_op_message(c, "convert_busy");
             status = AVA1_ERR_BUSY;
+            (void)unlink(cpath(CF_RECORD, file, sizeof file)); /* ours: taken just above */
             goto unlock;
         }
     }
     (void)unlink(cpath(CF_STATUS, file, sizeof file));
     (void)unlink(cpath(CF_CANCEL, file, sizeof file));
-    {
-        uint8_t rnd[8];
-        arc4random_buf(rnd, sizeof rnd);
-        snprintf(id, sizeof id, "%02x%02x%02x%02x%02x%02x%02x%02x", rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5],
-                 rnd[6], rnd[7]);
-    }
     if (write_request(id, action, src, b) != 0) {
         ava1_op_message(c, "convert_write_failed: request");
-        goto unlock;
+        goto cleanup;
     }
     ava1_op_message(c, "convert_starting");
     if (launch() != 0) {
-        (void)unlink(cpath(CF_REQUEST, file, sizeof file));
+        if (file_is_job(CF_REQUEST, id)) (void)unlink(cpath(CF_REQUEST, file, sizeof file));
         ava1_op_message(c, "convert_loader_unreachable");
-        goto unlock;
+        goto cleanup;
     }
     r = follow(c, id, dest, b != NULL, buf, CONVERT_STATUS_MAX, &s);
-    (void)unlink(cpath(CF_REQUEST, file, sizeof file)); /* never started: nothing left to run later */
+    /* Never started: nothing left to run later. Only ours: never another job's. */
+    if (file_is_job(CF_REQUEST, id)) (void)unlink(cpath(CF_REQUEST, file, sizeof file));
     if (r == 1) {
         if (b) {
             /* The page gets the path as the helper normalised it. In `buf` (the last status is
@@ -571,9 +658,14 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
         if (b && (r == -2 || !pid_alive(s.pid))) remove_partial(dest);
     }
 cleanup:
-    (void)unlink(cpath(CF_RECORD, file, sizeof file));
-    (void)unlink(cpath(CF_STATUS, file, sizeof file));
-    (void)unlink(cpath(CF_CANCEL, file, sizeof file));
+    /* The job's files, only while they are this job's: a record that is not ours any more means
+     * another job owns the folder now, and its status and cancel are its own. The record goes
+     * last: it is the lock. */
+    if (record_is(id)) {
+        if (file_is_job(CF_STATUS, id)) (void)unlink(cpath(CF_STATUS, file, sizeof file));
+        (void)unlink(cpath(CF_CANCEL, file, sizeof file));
+        (void)unlink(cpath(CF_RECORD, file, sizeof file));
+    }
 unlock:
     free(buf);
     free(rt);

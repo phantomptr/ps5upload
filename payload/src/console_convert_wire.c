@@ -155,18 +155,41 @@ int cc_status_parse(const char *buf, size_t n, const char *id, cc_status_t *s) {
     return 1;
 }
 
-int cc_record_format(char *out, size_t cap, unsigned long long xpid, long hpid, const char *dest) {
+/* A job id as the helper makes them: hex digits (and nothing that splits a line or a word). */
+static int id_ok(const char *id) {
+    size_t i;
+    for (i = 0; id[i]; i++)
+        if (!((id[i] >= '0' && id[i] <= '9') || (id[i] >= 'a' && id[i] <= 'f'))) return 0;
+    return i > 0 && i < CC_JOB_ID_MAX;
+}
+
+int cc_record_format(char *out, size_t cap, unsigned long long xpid, long hpid, const char *id, const char *dest) {
     int w;
-    if (strchr(dest, '\n')) return -1; /* the record is line-based */
-    w = snprintf(out, cap, "%llu %ld\n%s\n", xpid, hpid, dest);
+    if (strchr(dest, '\n') || !id_ok(id)) return -1; /* the record is line-based */
+    w = snprintf(out, cap, "%llu %ld %s\n%s\n", xpid, hpid, id, dest);
     return w < 0 || (size_t)w >= cap ? -1 : w;
 }
 
-int cc_record_parse(const char *buf, unsigned long long *xpid, long *hpid, char *dest, size_t cap) {
+int cc_record_parse(const char *buf, unsigned long long *xpid, long *hpid, char *id, size_t id_cap, char *dest,
+                    size_t cap) {
     const char *nl = strchr(buf, '\n'), *end;
+    char line[32 + CC_JOB_ID_MAX + 8], got[CC_JOB_ID_MAX + 8];
     size_t len;
+    int n;
     if (cap) dest[0] = 0;
-    if (!nl || sscanf(buf, "%llu %ld", xpid, hpid) != 2) return 0;
+    if (id_cap) id[0] = 0;
+    if (!nl || (size_t)(nl - buf) >= sizeof line) return 0;
+    /* The first line alone: a record from before job ids has none, and the id is never read
+     * from the line below it. */
+    memcpy(line, buf, (size_t)(nl - buf));
+    line[nl - buf] = 0;
+    got[0] = 0;
+    n = sscanf(line, "%llu %ld %47s", xpid, hpid, got);
+    if (n < 2) return 0;
+    if (n == 3) {
+        if (!id_ok(got) || strlen(got) >= id_cap) return 0;
+        memcpy(id, got, strlen(got) + 1);
+    }
     nl++;
     end = strchr(nl, '\n');
     len = end ? (size_t)(end - nl) : strlen(nl);

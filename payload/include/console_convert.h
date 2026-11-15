@@ -9,7 +9,8 @@
  *   request.json  written here (0600), read and deleted by the converter at start
  *   status.json   rewritten by the converter through a temporary file and a rename in that folder
  *   cancel        created here when Stop is asked
- *   job.rec       this helper's note of a running job, for the next start's sweep
+ *   job.rec       the running job's owner (helper pid, job id, dest), written before the converter
+ *                 is started: one job across helpers, and the next start's sweep
  *   convert.log   the converter's stdout/stderr (the last run)
  *
  * JOB_OP_CONSOLE_CONVERT {"path":"<game folder or .exfat/.ffpkg/.ffpfs image>"
@@ -109,10 +110,17 @@ static inline int cc_pid_ok(uint64_t pid) { return pid > 1 && pid <= 0x7FFFFFFFu
  * A "pid" that is not cc_pid_ok reads as 0 (none). */
 int cc_status_parse(const char *buf, size_t n, const char *id, cc_status_t *s);
 
-/* job.rec: "<converter pid> <helper pid>\n<dest>\n" (`dest` "" for an inspection). */
-int cc_record_format(char *out, size_t cap, unsigned long long xpid, long hpid, const char *dest);
-/* 1 parsed, 0 not a record. */
-int cc_record_parse(const char *buf, unsigned long long *xpid, long *hpid, char *dest, size_t cap);
+/* A job id's room (16 hex digits and the NUL fit). */
+#define CC_JOB_ID_MAX 40
+
+/* job.rec: "<converter pid> <helper pid> <job id>\n<dest>\n" (`dest` "" for an inspection;
+ * converter pid 0 until its first status). The helper creates it (O_EXCL) before it starts the
+ * converter: the lock that keeps a second helper from starting a second converter. -1 when it
+ * does not fit, `dest` has a newline, or `id` is not lowercase hex shorter than CC_JOB_ID_MAX. */
+int cc_record_format(char *out, size_t cap, unsigned long long xpid, long hpid, const char *id, const char *dest);
+/* 1 parsed, 0 not a record. A record from before job ids reads with `id` "". */
+int cc_record_parse(const char *buf, unsigned long long *xpid, long *hpid, char *id, size_t id_cap, char *dest,
+                    size_t cap);
 
 /* The format an output path's extension stands for ("exfat", "ffpkg", "ffpfs"), or NULL. */
 const char *cc_image_format(const char *path);

@@ -119,7 +119,8 @@ typedef enum {
     FAKE_DIED,
     FAKE_FAILS,
     FAKE_STAGES,
-    FAKE_PID /* reports pid g_fake_pid, then Stop, and never ends */
+    FAKE_PID,   /* reports pid g_fake_pid, then Stop, and never ends */
+    FAKE_STOLEN /* another job takes the folder (its record and status), then this one fails */
 } fake_t;
 static fake_t g_fake;
 static long long g_fake_pid;
@@ -234,6 +235,15 @@ static void *fake_main(void *arg) {
         }
         put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"build\",\"state\":\"done\",\"result\":{\"path\":\"x\"}}\n", id,
                    (long)g_alive);
+        break;
+    }
+    case FAKE_STOLEN: {
+        char rec[400], text[600];
+        path_in(rec, sizeof rec, "job.rec");
+        cc_record_format(text, sizeof text, 0, (long)getppid(), "feed", "/elsewhere/other.exfat");
+        put_file(rec, text);
+        put_status("{\"id\":\"%s\",\"pid\":%ld,\"op\":\"build\",\"state\":\"failed\",\"cause\":\"convert_build_failed\"}\n",
+                   id, (long)g_alive);
         break;
     }
     case FAKE_PID:
@@ -406,16 +416,25 @@ static void test_wire(void) {
     {
         unsigned long long xpid = 0;
         long hpid = 0;
-        char dest[64];
-        len = cc_record_format(buf, sizeof buf, 4242, 77, "/data/out.exfat");
-        CHECK(len > 0 && cc_record_parse(buf, &xpid, &hpid, dest, sizeof dest) == 1);
-        CHECK(xpid == 4242 && hpid == 77 && strcmp(dest, "/data/out.exfat") == 0);
-        len = cc_record_format(buf, sizeof buf, 1, 2, "");
-        CHECK(len > 0 && cc_record_parse(buf, &xpid, &hpid, dest, sizeof dest) == 1 && !dest[0]);
-        CHECK(cc_record_format(buf, sizeof buf, 1, 2, "/data/a\nb") == -1);
-        CHECK(cc_record_parse("garbage", &xpid, &hpid, dest, sizeof dest) == 0);
-        CHECK(cc_record_parse("12 x\n/a\n", &xpid, &hpid, dest, sizeof dest) == 0);
-        CHECK(cc_record_parse("1 2\n/a/very/long/destination\n", &xpid, &hpid, dest, 8) == 0);
+        char dest[64], rid[CC_JOB_ID_MAX];
+#define RPARSE(text, cap) cc_record_parse(text, &xpid, &hpid, rid, sizeof rid, dest, cap)
+        len = cc_record_format(buf, sizeof buf, 4242, 77, "0123abcd", "/data/out.exfat");
+        CHECK(len > 0 && RPARSE(buf, sizeof dest) == 1);
+        CHECK(xpid == 4242 && hpid == 77 && strcmp(rid, "0123abcd") == 0 && strcmp(dest, "/data/out.exfat") == 0);
+        len = cc_record_format(buf, sizeof buf, 0, 2, "ab", "");
+        CHECK(len > 0 && RPARSE(buf, sizeof dest) == 1 && xpid == 0 && !dest[0]);
+        CHECK(cc_record_format(buf, sizeof buf, 1, 2, "ab", "/data/a\nb") == -1);
+        /* An id that could split the record, or none at all, is never written. */
+        CHECK(cc_record_format(buf, sizeof buf, 1, 2, "a b", "/d") == -1);
+        CHECK(cc_record_format(buf, sizeof buf, 1, 2, "", "/d") == -1);
+        CHECK(cc_record_format(buf, sizeof buf, 1, 2, "AB", "/d") == -1);
+        /* A record from before job ids: no id, the destination never read as one. */
+        CHECK(RPARSE("5 6\nab\n", sizeof dest) == 1 && xpid == 5 && hpid == 6 && !rid[0] && strcmp(dest, "ab") == 0);
+        CHECK(RPARSE("garbage", sizeof dest) == 0);
+        CHECK(RPARSE("12 x\n/a\n", sizeof dest) == 0);
+        CHECK(RPARSE("1 2 not-hex\n/a\n", sizeof dest) == 0);
+        CHECK(RPARSE("1 2\n/a/very/long/destination\n", 8) == 0);
+#undef RPARSE
     }
 
     CHECK(strcmp(cc_image_format("/data/a.b/Game.ExFAT"), "exfat") == 0);
@@ -658,6 +677,54 @@ static void test_op(void) {
         }
     }
 
+    /* One job across helpers: another helper (this test's parent stands in for it) holds the
+     * record, its converter not reporting yet. Busy, its request and record left alone. */
+    {
+        char rec[400], req[400], text[600], got[600];
+        FILE *f;
+        size_t n;
+        path_in(rec, sizeof rec, "job.rec");
+        path_in(req, sizeof req, "request.json");
+        cc_record_format(text, sizeof text, 0, (long)getppid(), "feed", "/elsewhere/other.exfat");
+        put_file(rec, text);
+        put_file(req, "{\"id\":\"feed\",\"op\":\"inspect\",\"path\":\"/x\"}\n");
+        st = run_op(FAKE_NEVER, args, c);
+        CHECK(st == AVA1_ERR_BUSY && strcmp(c->message, "convert_busy") == 0 && !g_request[0]);
+        f = fopen(rec, "r");
+        n = f ? fread(got, 1, sizeof got - 1, f) : 0;
+        if (f) fclose(f);
+        got[n] = 0;
+        CHECK(strcmp(got, text) == 0);
+        CHECK(exists(req));
+        unlink(req);
+
+        /* Its helper gone (a dead pid), and no converter seen: the record is cleared, the job runs. */
+        {
+            pid_t dead = fork();
+            if (dead == 0) _exit(0);
+            waitpid(dead, NULL, 0);
+            cc_record_format(text, sizeof text, 0, (long)dead, "feed", "");
+            put_file(rec, text);
+        }
+        st = run_op(FAKE_FAILS, args, c);
+        CHECK(st == AVA1_ERR_IO && strcmp(c->message, "convert_build_failed") == 0);
+        CHECK(!exists(rec));
+
+        /* Another job took the folder while this one ran: this one's clean-up leaves the other's
+         * record (and the status it may own) in place. */
+        st = run_op(FAKE_STOLEN, args, c);
+        CHECK(st == AVA1_ERR_IO);
+        f = fopen(rec, "r");
+        n = f ? fread(got, 1, sizeof got - 1, f) : 0;
+        if (f) fclose(f);
+        got[n] = 0;
+        CHECK(strstr(got, " feed\n") != NULL);
+        path_in(text, sizeof text, "status.json");
+        CHECK(exists(text));
+        unlink(rec);
+        unlink(text);
+    }
+
     /* One that never reports. */
     st = run_op(FAKE_NEVER, args, c);
     CHECK(st == AVA1_ERR_IO && strcmp(c->message, "convert_not_started") == 0);
@@ -680,14 +747,14 @@ static void test_sweep(void) {
     /* The helper that wrote the record still runs (this process stands in for another helper's
      * pid by using its parent): nothing is touched. */
     put_file(partial, "half");
-    cc_record_format(text, sizeof text, (unsigned long long)dead, (long)getppid(), dest);
+    cc_record_format(text, sizeof text, (unsigned long long)dead, (long)getppid(), "ab", dest);
     put_file(rec, text);
     console_convert_sweep();
     CHECK(exists(partial) && exists(rec));
 
     /* Both gone: the unfinished output and its side files go, the finished name is not made up. */
     put_file(resume, "{}");
-    cc_record_format(text, sizeof text, (unsigned long long)dead, (long)dead, dest);
+    cc_record_format(text, sizeof text, (unsigned long long)dead, (long)dead, "ab", dest);
     put_file(rec, text);
     console_convert_sweep();
     CHECK(!exists(partial) && !exists(resume) && !exists(rec) && !exists(dest));
@@ -698,7 +765,7 @@ static void test_sweep(void) {
     snprintf(inner, sizeof inner, "%s/eboot.bin", folder);
     mkdir(folder, 0700);
     put_file(inner, "x");
-    cc_record_format(text, sizeof text, (unsigned long long)dead, (long)dead, dest);
+    cc_record_format(text, sizeof text, (unsigned long long)dead, (long)dead, "ab", dest);
     put_file(rec, text);
     console_convert_sweep();
     CHECK(!exists(folder) && !exists(rec));
@@ -707,11 +774,22 @@ static void test_sweep(void) {
     put_file(rec, "1 1\n/etc/hosts\n");
     console_convert_sweep();
     CHECK(!exists(rec) && exists("/etc/hosts"));
-    cc_record_format(text, sizeof text, (unsigned long long)dead, (long)dead, "");
+    cc_record_format(text, sizeof text, (unsigned long long)dead, (long)dead, "ab", "");
     put_file(rec, text);
     console_convert_sweep();
     CHECK(!exists(rec));
+    /* Not a record: one may be being written this moment (created, then written), so only an
+     * old one goes. */
     put_file(rec, "not a record");
+    console_convert_sweep();
+    CHECK(exists(rec));
+    utimes(rec, old);
+    console_convert_sweep();
+    CHECK(!exists(rec));
+    put_file(rec, "");
+    console_convert_sweep();
+    CHECK(exists(rec));
+    utimes(rec, old);
     console_convert_sweep();
     CHECK(!exists(rec));
 
