@@ -17,7 +17,8 @@
 //!   translate; `detail` is for the log; `result` is the op's answer.
 //! - `cancel`: created by the helper to stop a job. A thread looks for it every
 //!   [`CANCEL_EVERY`] and raises the job's cancel flag, which the build code checks at every
-//!   checkpoint of its loops.
+//!   checkpoint of its loops. One there when the build starts (its helper gave up waiting for
+//!   this converter) stops it before it clears or writes anything.
 //!
 //! A build writes `<dest>.partial` (a file, or a folder for a folder output) beside `dest`, and,
 //! for an image, may leave `<dest>.partial.resume` and `<dest>.partial.stamp` beside it: the
@@ -412,6 +413,11 @@ fn build(
             detail: format!("{}: {why}", dir.display()),
         });
     }
+    // Stopped before the first write (a converter that started late, after its helper gave up on
+    // it and left the cancel file): nothing is cleared or written.
+    if cancel.load(Ordering::Relaxed) {
+        return Err(failure("cancelled".into(), true, &plan));
+    }
     // Ours alone from here: a leftover of an earlier run under this name is cleared.
     let partial = folder_build::partial_of(&plan.dest);
     let Some(_writing) = ps5upload_convert_core::writing::Writing::claim(partial) else {
@@ -512,7 +518,9 @@ fn run_build(
     base: &serde_json::Value,
     hook: &mut dyn FnMut(&str),
 ) -> Result<serde_json::Value, Refusal> {
-    let cancel = Arc::new(AtomicBool::new(false));
+    // A cancel file already there (left by a helper that stopped waiting for this converter) is
+    // seen before anything else: the watcher's first look could come after the build's first write.
+    let cancel = Arc::new(AtomicBool::new(dir.join("cancel").exists()));
     let done = Arc::new(AtomicBool::new(false));
     let watcher = watch_cancel(dir, Arc::clone(&cancel), Arc::clone(&done));
     let mut running = Running {
@@ -889,6 +897,29 @@ mod tests {
         assert!(reads_own_leftovers(p("/d"), p("/d/G")));
         assert!(!reads_own_leftovers(p("/d/G.partial2"), p("/d/G")));
         assert!(!reads_own_leftovers(p("/d/Game"), p("/e/G")));
+    }
+
+    /// A converter that starts after its helper gave up on it finds the cancel file the helper
+    /// left: it stops before its first write, and an earlier run's leftover is not cleared.
+    #[test]
+    fn a_cancel_there_at_start_stops_before_any_write() {
+        let (tmp, game, dir) = setup("jobcancelfirst");
+        let dest = tmp.0.join("late.exfat");
+        let leftover = tmp.0.join("late.exfat.partial");
+        std::fs::write(&leftover, b"an earlier run's").unwrap();
+        std::fs::write(dir.join("cancel"), b"").unwrap();
+        ask(
+            &dir,
+            json!({"id": "l", "op": "build", "path": game, "dest": dest, "format": "exfat"}),
+        );
+        let mut stages = Vec::new();
+        let code = run_with(&dir, &mut |s| stages.push(s.to_string())).unwrap();
+        let s = status(&dir);
+        assert_eq!(code, 1, "{s}");
+        assert_eq!(s["cause"], "convert_cancelled");
+        assert!(stages.is_empty(), "{stages:?}");
+        assert!(!dest.exists());
+        assert_eq!(std::fs::read(&leftover).unwrap(), b"an earlier run's");
     }
 
     #[test]

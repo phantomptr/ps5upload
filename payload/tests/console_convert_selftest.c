@@ -725,10 +725,29 @@ static void test_op(void) {
         unlink(text);
     }
 
-    /* One that never reports. */
+    /* One that never reports. It may still start late: the cancel file is left for it (so it
+     * stops before writing), the request is gone, and nothing beside dest is removed, since no
+     * converter was ever seen to have died. */
+    put_file(partial, "a late converter's, or an earlier run's");
     st = run_op(FAKE_NEVER, args, c);
     CHECK(st == AVA1_ERR_IO && strcmp(c->message, "convert_not_started") == 0);
     CHECK(!exists(dest)); /* the destination itself is never touched by the helper */
+    CHECK(exists(partial));
+    {
+        char p[400];
+        path_in(p, sizeof p, "cancel");
+        CHECK(exists(p));
+        path_in(p, sizeof p, "request.json");
+        CHECK(!exists(p));
+        path_in(p, sizeof p, "job.rec");
+        CHECK(!exists(p));
+        /* The next job removes it before its converter starts, and runs. */
+        st = run_op(FAKE_FAILS, args, c);
+        CHECK(st == AVA1_ERR_IO && strcmp(c->message, "convert_build_failed") == 0);
+        path_in(p, sizeof p, "cancel");
+        CHECK(!exists(p));
+    }
+    unlink(partial);
     free(c);
 }
 
@@ -769,6 +788,30 @@ static void test_sweep(void) {
     put_file(rec, text);
     console_convert_sweep();
     CHECK(!exists(folder) && !exists(rec));
+
+    /* A helper that died before its converter ever reported (pid 0 in the record): that converter
+     * may still start, so it is told to stop and its request goes, but nothing beside dest is
+     * removed. Another job's request stays. */
+    {
+        char cancel[400];
+        path_in(cancel, sizeof cancel, "cancel");
+        unlink(cancel);
+        snprintf(dest, sizeof dest, "%s/late.exfat", g_root);
+        snprintf(partial, sizeof partial, "%s.partial", dest);
+        put_file(partial, "x");
+        put_file(req, "{\"id\":\"ab\",\"op\":\"build\"}");
+        cc_record_format(text, sizeof text, 0, (long)dead, "ab", dest);
+        put_file(rec, text);
+        console_convert_sweep();
+        CHECK(!exists(rec) && exists(cancel) && !exists(req) && exists(partial));
+        put_file(req, "{\"id\":\"cd\",\"op\":\"build\"}");
+        put_file(rec, text);
+        console_convert_sweep();
+        CHECK(!exists(rec) && exists(req));
+        unlink(req);
+        unlink(cancel);
+        unlink(partial);
+    }
 
     /* A destination outside the allowed roots is never acted on; an inspection has none. */
     put_file(rec, "1 1\n/etc/hosts\n");

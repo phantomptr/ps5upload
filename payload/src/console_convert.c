@@ -335,7 +335,17 @@ void console_convert_sweep(void) {
     }
     /* The helper that wrote it, or its converter, still runs (a takeover lets the old one finish). */
     if ((hpid != (long)getpid() && pid_alive((uint64_t)hpid)) || pid_alive(xpid)) goto out;
-    if (dest[0]) remove_partial(dest); /* says so in the log only for a place it may write */
+    if (xpid == 0) {
+        /* Its converter was never seen: it may still start late. It is told to stop before it
+         * writes anything, and its request goes; nothing of it is removed (there is nothing of
+         * a converter that never ran, and a late one's output is its own to clear). */
+        char other[160];
+        int fd = open(cpath(CF_CANCEL, other, sizeof other), O_WRONLY | O_CREAT, 0600);
+        if (fd >= 0) close(fd);
+        if (rid[0] && file_is_job(CF_REQUEST, rid)) (void)unlink(cpath(CF_REQUEST, other, sizeof other));
+    } else if (dest[0]) {
+        remove_partial(dest); /* says so in the log only for a place it may write */
+    }
     (void)unlink(file);
 out:
     free(buf);
@@ -489,7 +499,7 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
     struct stat st;
     cc_runtime_t *rt = NULL; /* on the heap: a job thread's stack is small */
     char *buf = NULL;
-    int status = AVA1_ERR_IO, r, is_dir;
+    int status = AVA1_ERR_IO, r, is_dir, never_seen = 0;
     (void)arg;
     (void)n;
     memset(&s, 0, sizeof s);
@@ -615,7 +625,15 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
         goto cleanup;
     }
     r = follow(c, id, dest, b != NULL, buf, CONVERT_STATUS_MAX, &s);
-    /* Never started: nothing left to run later. Only ours: never another job's. */
+    /* No status ever seen: the converter may still start late, and may already have read the
+     * request. The cancel file goes first and stays (the next job's start removes it), so a late
+     * one stops before it writes anything; then the request, so none starts it later. */
+    never_seen = !s.state[0];
+    if (never_seen) {
+        int fd = open(cpath(CF_CANCEL, file, sizeof file), O_WRONLY | O_CREAT, 0600);
+        if (fd >= 0) close(fd);
+    }
+    /* Only ours: never another job's. */
     if (file_is_job(CF_REQUEST, id)) (void)unlink(cpath(CF_REQUEST, file, sizeof file));
     if (r == 1) {
         if (b) {
@@ -655,7 +673,7 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
         status = cancelled ? AVA1_ERR_CANCELLED : AVA1_ERR_IO;
         /* Nothing kept from a build that did not finish. The converter removes its own output
          * when it fails or is stopped; this is for one that died or was killed. */
-        if (b && (r == -2 || !pid_alive(s.pid))) remove_partial(dest);
+        if (b && s.pid && (r == -2 || !pid_alive(s.pid))) remove_partial(dest);
     }
 cleanup:
     /* The job's files, only while they are this job's: a record that is not ours any more means
@@ -663,7 +681,7 @@ cleanup:
      * last: it is the lock. */
     if (record_is(id)) {
         if (file_is_job(CF_STATUS, id)) (void)unlink(cpath(CF_STATUS, file, sizeof file));
-        (void)unlink(cpath(CF_CANCEL, file, sizeof file));
+        if (!never_seen) (void)unlink(cpath(CF_CANCEL, file, sizeof file));
         (void)unlink(cpath(CF_RECORD, file, sizeof file));
     }
 unlock:
