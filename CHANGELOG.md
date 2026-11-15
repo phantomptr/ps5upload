@@ -4,6 +4,10 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 12.4.22
+
+- **Security update:** updated the SSH library used for SFTP connections to fix two low-severity security issues. Nothing changes in how the app works.
+
 ## 12.4.21
 
 - **Remove PS5Upload from a PS5:** a new button in Settings › This PS5 takes PS5Upload off a console you are done with. The PS5Upload Minion tile, PS5Upload's own files on the PS5 and the copies of the helper your loaders start at boot all go, and icons it hid are shown again. Games, saves and other payloads stay, and you can keep the save backups made on the PS5. The copy of your account kept from Play's offline sign-in (to undo it) always stays. Sending the helper again afterwards connects straight away. A folder of PS5Upload's that the PS5 still has in use (like the Minion tile's) is left in place rather than deleted. Before this, a deleted Minion tile came back whenever the helper started again.

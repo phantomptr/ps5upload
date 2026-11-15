@@ -1298,7 +1298,6 @@ version = "1.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "337d46834ee672ab3e48caca2cb0c78cc174fb12b3a68d0d88f99a0519a5e36e"
 dependencies = [
- "generic-array 0.14.7",
  "rustversion",
  "typenum",
 ]
@@ -2571,7 +2570,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-pfs"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "flate2",
  "ps5-dump-forge-ufs2",
@@ -2580,7 +2579,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-ufs2"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "ps5upload-fpkg",
  "ps5upload-pkg",
@@ -2589,7 +2588,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-zstd"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "crc32fast",
  "getrandom 0.4.3",
@@ -2600,7 +2599,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-apidoc"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2610,7 +2609,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-ava1"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2633,7 +2632,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-core"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "aes 0.9.4",
  "aes-gcm 0.11.1",
@@ -2666,7 +2665,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-ctest"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2682,7 +2681,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-engine"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "aes 0.9.4",
  "aes-gcm 0.11.1",
@@ -2746,7 +2745,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-fpkg"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "aes 0.9.4",
  "blake3",
@@ -2770,7 +2769,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-hub"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -2785,7 +2784,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-lab"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2803,7 +2802,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-pkg"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "aes 0.9.4",
  "blake3",
@@ -2815,14 +2814,14 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-tailnet"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "cc",
 ]
 
 [[package]]
 name = "ps5upload-tests"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2840,7 +2839,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-unrar"
-version = "12.4.21"
+version = "12.4.22"
 dependencies = [
  "serde",
  "serde_json",
@@ -3042,9 +3041,9 @@ dependencies = [
 
 [[package]]
 name = "russh"
-version = "0.65.0"
+version = "0.65.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3bb77a4b259312b2abbc541bca1c13cb4e9b61c560a7fd894068c3b92e0c9dc3"
+checksum = "94be3d86c71b9ed220a675c405e35c7a02565a009bf8da2e9cc13a700320a5c5"
 dependencies = [
  "aes 0.9.4",
  "bitflags",
