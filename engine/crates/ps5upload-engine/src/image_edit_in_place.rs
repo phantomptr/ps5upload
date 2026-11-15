@@ -959,6 +959,25 @@ fn apply_stopping(
     })
 }
 
+/// Tests elsewhere in the engine: `edits` written into `image` and verified, then the engine
+/// "dies" before the undo journal is deleted, leaving the image edited and the journal beside it
+/// (what the next open restores).
+#[cfg(test)]
+pub(crate) fn crash_before_commit(image: &Path, edits: &[Edit]) {
+    let _claim = Claim::take(image).expect("the image is free");
+    let p = prepare(image, edits).unwrap_or_else(|r| panic!("{r:?}"));
+    let e = apply_stopping(
+        p,
+        false,
+        &AtomicBool::new(false),
+        &mut |_, _, _| {},
+        Stop::BeforeCommit,
+    )
+    .unwrap_err();
+    assert!(e.contains("simulated crash"), "{e}");
+    assert!(patch::journal_path(image).exists());
+}
+
 /// The edited image against what it must be: the format editor reopens it (its consistency
 /// checks), its reader lists exactly `listing` and `empty_dirs`, and each file of `check`
 /// hashes as `want`.

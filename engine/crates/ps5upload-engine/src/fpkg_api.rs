@@ -355,6 +355,9 @@ pub(crate) async fn fpkg_build_handler(
         let source_path = source_path.clone();
         let update = update.clone();
         match tokio::task::spawn_blocking(move || {
+            // An image an in-place edit was interrupted in is settled before it is read (here
+            // and by the build after).
+            settle_local_source(&source_path).map_err(ps5upload_fpkg::Error::Format)?;
             if let Some(why) = patch_refusal(&source_path) {
                 return Err(ps5upload_fpkg::Error::Format(why));
             }
@@ -1664,6 +1667,16 @@ impl AmprLz4Req {
             block_shift,
         })
     }
+}
+
+/// Before a job reads `source`: a file on this computer an interrupted in-place edit left an
+/// undo journal beside is settled first (`image_edit_in_place::before_open`), so the job never
+/// reads a part-edited image. Nothing to do for a folder or a source elsewhere.
+fn settle_local_source(source: &Path) -> Result<(), String> {
+    if ps5upload_fpkg::remote_source::is_remote(source) || !source.is_file() {
+        return Ok(());
+    }
+    crate::image_edit_in_place::before_open(source).map(drop)
 }
 
 /// A build's `delete_source`, checked before the job exists: the plan, or the status and reason
@@ -3203,6 +3216,8 @@ pub(crate) async fn folder_build_handler(
     let scan_unpack = unpack.clone();
     let scan_archive = archive.clone();
     let scanned = tokio::task::spawn_blocking(move || {
+        // An image an in-place edit was interrupted in is settled before it is read.
+        settle_local_source(&scan_source)?;
         if let Some(entry) = scan_entry {
             // A part of the image is saved as the image spells it, as the browser listed it.
             return open_entry(&scan_source, &entry);
@@ -4683,6 +4698,119 @@ mod source_option_tests {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
         assert!(body.contains("from a whole game"), "{body}");
         assert_eq!(started, 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The job's end: `Ok(dest)` or `Err(error)`, waited for (two minutes at most).
+    async fn ended(jobs: &Jobs) -> Result<String, String> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(120);
+        loop {
+            let end = jobs.lock().unwrap().values().find_map(|j| match j {
+                JobState::Done { dest, .. } => Some(Ok(dest.clone())),
+                JobState::Failed { error, .. } => Some(Err(error.clone())),
+                _ => None,
+            });
+            if let Some(end) = end {
+                return end;
+            }
+            assert!(std::time::Instant::now() < deadline, "the job did not end");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// A game image whose in-place edit was cut off before its undo journal went (the image
+    /// holds `extra.bin`, the journal beside it): `(root, image)`.
+    fn interrupted_image(tag: &str) -> (PathBuf, PathBuf) {
+        let (root, _, img) = game(tag);
+        let host = root.join("host-extra.bin");
+        std::fs::write(&host, b"added by an edit that never finished").unwrap();
+        crate::image_edit_in_place::crash_before_commit(
+            &img,
+            &[ps5upload_fpkg::browse::Edit::Put {
+                path: "extra.bin".into(),
+                from: host,
+            }],
+        );
+        (root, img)
+    }
+
+    /// A folder build and a package build of an image an in-place edit was interrupted in
+    /// restore it from its journal first: what they write is the image as it was.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn builds_settle_an_interrupted_in_place_edit_first() {
+        let (root, img) = interrupted_image("settle-folder");
+        let out = root.join("out");
+        let (st, jobs) = state();
+        let req: FolderBuildReq = serde_json::from_value(serde_json::json!({
+            "source": img.display().to_string(),
+            "output_dir": out.display().to_string(),
+        }))
+        .unwrap();
+        let resp = folder_build_handler(State(st), Json(req))
+            .await
+            .into_response();
+        let (status, body, _) = answer(resp, &jobs).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        let folder = PathBuf::from(ended(&jobs).await.unwrap());
+        assert!(folder.join("eboot.bin").is_file());
+        assert!(
+            !folder.join("extra.bin").exists(),
+            "the folder holds the part-edited image's file"
+        );
+        assert!(!ps5_dump_forge_patch::journal_path(&img).exists());
+        let _ = std::fs::remove_dir_all(&root);
+
+        // A package: the image of a game with everything a package needs.
+        let (root, img) = interrupted_image("settle-pkg");
+        let dir = root.join("PPSA01234");
+        std::fs::write(
+            dir.join("sce_sys/param.json"),
+            br#"{"contentId":"UP0000-PPSA01234_00-SETTLETEST000000","contentVersion":"01.000.000","titleId":"PPSA01234","applicationCategoryType":0}"#,
+        )
+        .unwrap();
+        // The image again from the full param.json, then cut off mid-edit as above.
+        std::fs::remove_file(&img).unwrap();
+        std::fs::remove_file(ps5_dump_forge_patch::journal_path(&img)).unwrap();
+        let mut tree = ps5upload_fpkg::source::open(&dir).unwrap();
+        crate::image_build::build(
+            crate::image_build::ImageFormat::Exfat,
+            None,
+            &mut *tree,
+            &img,
+            ps5upload_fpkg::sample::VerifyMode::Full,
+            8 << 20,
+            &std::sync::atomic::AtomicBool::new(false),
+            &mut |_, _, _| {},
+        )
+        .unwrap();
+        drop(tree);
+        crate::image_edit_in_place::crash_before_commit(
+            &img,
+            &[ps5upload_fpkg::browse::Edit::Put {
+                path: "extra.bin".into(),
+                from: root.join("host-extra.bin"),
+            }],
+        );
+        let out = root.join("out");
+        let (st, jobs) = state();
+        let req: BuildReq = serde_json::from_value(serde_json::json!({
+            "source": img.display().to_string(),
+            "output_dir": out.display().to_string(),
+        }))
+        .unwrap();
+        let resp = fpkg_build_handler(State(st), Json(req))
+            .await
+            .into_response();
+        let (status, body, _) = answer(resp, &jobs).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        let pkg = PathBuf::from(ended(&jobs).await.unwrap());
+        let tree = ps5upload_fpkg::source::open(&pkg).unwrap();
+        assert!(tree.files().iter().any(|f| f.path == "eboot.bin"));
+        assert!(
+            !tree.files().iter().any(|f| f.path == "extra.bin"),
+            "the package holds the part-edited image's file"
+        );
+        assert!(!ps5_dump_forge_patch::journal_path(&img).exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -362,6 +362,11 @@ fn archive(job: &Job, path: &Path) -> Result<(), String> {
 /// game cannot start without looked for.
 fn files(job: &Job, path: &Path) -> Result<(), String> {
     job.update(|s| s.method = "files".into());
+    // An image on this computer an in-place edit was interrupted in is settled before it is
+    // read: a part-edited image would read as damaged.
+    if !ps5upload_fpkg::remote_source::is_remote(path) && path.is_file() {
+        crate::image_edit_in_place::before_open(path)?;
+    }
     let mut tree = ps5upload_fpkg::source::open(path).map_err(|e| format!("{e}"))?;
     let list = tree.files().to_vec();
     let total: u64 = list.iter().map(|f| f.size).sum();
