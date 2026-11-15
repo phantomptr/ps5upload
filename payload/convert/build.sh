@@ -23,7 +23,11 @@ if [[ "${1:-}" != --inside ]]; then
     echo "build.sh: third_party/ava1 is empty; run: git submodule update --init third_party/ava1" >&2
     exit 1
   }
-  docker build -t "$image" payload/convert
+  # The helper's SDK pin, so both are built against one SDK.
+  sdk_tag=$(sed -n 's/^PS5_SDK_TAG=//p' scripts/ps5-sdk.env)
+  sdk_sha=$(sed -n 's/^PS5_SDK_SHA256=//p' scripts/ps5-sdk.env)
+  [[ -n $sdk_tag && -n $sdk_sha ]] || { echo "build.sh: no SDK pin in scripts/ps5-sdk.env" >&2; exit 1; }
+  docker build -t "$image" --build-arg SDK_TAG="$sdk_tag" --build-arg SDK_SHA256="$sdk_sha" payload/convert
   # The checkout's owner inside the container, so nothing in the tree ends up root-owned.
   exec docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
     -e CARGO_HOME=/work/$out/cargo -v "$PWD:/work" "$image" \
@@ -40,6 +44,13 @@ if [[ "${2:-}" != --check ]]; then
     name=$(basename "${src%.*}")
     "$cc" -O2 -Wall -Wextra -Werror -Ipayload/include -c "payload/convert/$src" -o "$out/shim/$name.o"
   done
+
+  # The startup code is the helper's: our build of the SDK's crt, whose kernel searches are best
+  # effort (payload/sdk-crt.mk; the SDK's own stops a payload before main() on FW 5.50). Its
+  # objects go under engine/target/ps5, not beside the sources, where the host's build keeps its
+  # own (built by another clang).
+  make -s -f payload/sdk-crt.mk SDK_CRT_BUILD="/work/$out/sdk-crt" "/work/$out/sdk-crt/crt1.o"
+  export CONVERT_CRT1="/work/$out/sdk-crt/crt1.o"
 
   # build-std on a stable toolchain: the image's rust-src carries the one-line std patch.
   export RUSTC_BOOTSTRAP=1
