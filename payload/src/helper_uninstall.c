@@ -22,6 +22,15 @@
 
 #define HU_MAX_DEPTH 64
 
+static FILE *g_wipe_log;
+
+static void wipe_note(const char *what, const char *path) {
+    if (!g_wipe_log) return;
+    fprintf(g_wipe_log, "%s %s\n", what, path);
+    fflush(g_wipe_log);
+    fsync(fileno(g_wipe_log));
+}
+
 static int is_kept(const char *path, const char *const *keep, size_t nkeep) {
     for (size_t i = 0; i < nkeep; i++)
         if (keep[i] && strcmp(path, keep[i]) == 0) return 1;
@@ -70,6 +79,7 @@ static void remove_at(const char *path, dev_t dev, int depth, const char *const 
             c->failed++;
             continue;
         }
+        if (depth == 0) wipe_note("entry", child);
         remove_at(child, dev, depth + 1, keep, nkeep, c);
     }
     closedir(d);
@@ -143,6 +153,9 @@ void hu_wipe(void) {
     nsrc = hu_source_keeps(froms, live_mount_sources(&m, froms, 512), sources, HU_MAX_KEEP);
     free(m);
 #endif
+    g_wipe_log = fopen(HU_WIPE_LOG, "w");
+    for (size_t i = 0; i < nsrc; i++) wipe_note("keep (mounted from)", sources[i]);
+    wipe_note("walk", HU_ROOT);
     keep[nkeep++] = HU_NP_BACKUP;
     if (g_keep_backups) keep[nkeep++] = HU_BACKUPS;
     for (size_t i = 0; i < nsrc; i++) keep[nkeep++] = sources[i];
@@ -157,9 +170,15 @@ void hu_wipe(void) {
         ukeep[un++] = unp[0];
         if (g_keep_backups) ukeep[un++] = unp[1];
         for (size_t i = 0; i < nsrc; i++) ukeep[un++] = sources[i];
+        wipe_note("walk", HU_USER_ROOT);
         hu_remove_tree(HU_USER_ROOT, ukeep, un, &c);
     }
     if (unlink(HU_STARTUP_LOG) != 0 && errno != ENOENT) c.failed++;
+    if (g_wipe_log) {
+        fprintf(g_wipe_log, "done removed=%u kept=%u failed=%u\n", c.removed, c.kept, c.failed);
+        fclose(g_wipe_log);
+        g_wipe_log = NULL;
+    }
 }
 
 #ifndef HU_HOST_TEST

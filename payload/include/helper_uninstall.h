@@ -19,6 +19,10 @@
 #define HU_ROOT "/data/ps5upload"
 #define HU_USER_ROOT "/user/data/ps5upload"
 #define HU_STARTUP_LOG "/data/ps5upload_startup.log"
+/* The final delete's own record, outside the folders it deletes: each top-level entry before it
+ * goes (synced), then the counts, so a delete that stalls or a console that goes down shows where.
+ * Left in place; the next helper start leaves it alone. */
+#define HU_WIPE_LOG "/data/ps5upload_uninstall.log"
 #define HU_BACKUPS "/data/ps5upload/backups"
 /* The account's state from before the offline PSN sign-in (profile.c): the only way to undo that
  * sign-in, so it always stays (the user's data, not PS5Upload's). Same path as
@@ -59,9 +63,8 @@ int hu_show_hidden_icons(void);
 void hu_request(int keep_backups);
 int hu_requested(void);
 
-/* The final delete (main.c, last). HU_NP_BACKUP always stays, and so does any folder of ours
- * a live mount comes from (hu_source_keeps). Writes nothing anywhere: stderr
- * itself lives in HU_ROOT. */
+/* The final delete (main.c, last), recorded in HU_WIPE_LOG. HU_NP_BACKUP always stays, and so does any folder of ours
+ * a live mount comes from (hu_source_keeps). */
 void hu_wipe(void);
 
 #endif
