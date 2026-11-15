@@ -1451,50 +1451,19 @@ fn settle(result: Result<ImageBuilt, String>, cancelled: bool) -> Result<ImageBu
     }
 }
 
-/// AMPR LZ4 asset packs for an image (see `ps5upload_fpkg::ampr_pack`): the game's files
-/// packed into seekable LZ4 volumes that a backport's `ampr_emu` serves, the originals left out.
-pub struct Lz4Packs {
-    /// drakmor's profile format; the built-in profile (from `level` and `block_shift`) when
-    /// absent.
-    pub profile: Option<ps5upload_fpkg::ampr_pack::Config>,
-    /// 1 (fastest) to 12 (smallest).
-    pub level: u8,
-    /// log2 of the block size, 14 (16 KiB) to 20 (1 MiB).
-    pub block_shift: u8,
-}
+pub use crate::lz4_packs::{lz4_spool, Lz4Packs};
 
-/// The profile an LZ4 build packs with, and its name for the log: a measured or user-given
-/// profile always wins; otherwise the game's engine picks a built-in one.
-fn lz4_profile(
-    packs: &Lz4Packs,
-    files: &[ps5upload_fpkg::source::SourceFile],
-) -> (&'static str, ps5upload_fpkg::ampr_pack::Config) {
-    use ps5upload_fpkg::ampr_pack;
-    match &packs.profile {
-        Some(given) => ("given", given.clone()),
-        None => (
-            ampr_pack::default_profile_name(files.iter().map(|f| f.path.as_str())),
-            ampr_pack::default_profile_for(
-                files.iter().map(|f| (f.path.as_str(), f.size)),
-                packs.level,
-                packs.block_shift,
-            ),
-        ),
-    }
-}
-
-/// The spool an LZ4 build packs into, next to the image it is for.
-pub fn lz4_spool(output: &Path) -> PathBuf {
-    PathBuf::from(format!("{}.lz4spool", output.display()))
-}
-
-/// [`build`], with the game's files packed first. Only exFAT: the packs are already
-/// compressed, so the `.ffpfsc` container has nothing left to gain. The volumes are spooled
-/// beside the output and removed once the image is written and read back, or has failed.
-/// `stage` reports `pack` before the image's own stages.
+/// [`build_at`], with the game's files packed into LZ4 asset packs first (`crate::lz4_packs`),
+/// in any format, plain or straight into a `.ffpfsc` (`inner_name`, compressed at `level`), as
+/// ps5-dump-forge offers them (`--lz4-pack` with `--to ffpfsc`). The volumes are spooled beside the output (`<output>.lz4spool`, claimed by the
+/// caller) and removed once the image is written and read back, or has failed. After the image's
+/// own read-back, the game is read back through its packs (`lz4_packs::read_back`); an image
+/// that fails that is removed. `stage` reports `pack` before the image's own stages.
 #[allow(clippy::too_many_arguments)]
 pub fn build_packed(
     format: ImageFormat,
+    inner_name: Option<&str>,
+    level: Level,
     source: &mut dyn SourceTree,
     output: &Path,
     packs: &Lz4Packs,
@@ -1503,83 +1472,43 @@ pub fn build_packed(
     cancel: &AtomicBool,
     stage: &mut dyn FnMut(&str, u64, u64),
 ) -> Result<ImageBuilt, String> {
-    use ps5upload_fpkg::ampr_pack;
-    if format != ImageFormat::Exfat {
-        return Err("LZ4 asset packs are written into exFAT images only".into());
-    }
-    if let Some(why) = ampr_pack::image::refusal(source) {
-        return Err(why);
-    }
-    let (profile_name, config) = lz4_profile(packs, source.files());
-    // Claimed by the caller like the image's `.partial`, so nothing else writes here.
     let spool = lz4_spool(output);
-    let mtime = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64);
-    crate::log_at!(
-        Info,
-        "convert",
-        "lz4 packs: profile={profile_name} chosen for {} files ({} rules) -> {}",
-        source.files().len(),
-        config.rules.len(),
-        output.display()
-    );
-    stage("pack", 0, 0);
-    let prepared = {
-        let mut progress = |done: u64, total: u64| stage("pack", done, total);
-        let mut control = ampr_pack::Control {
-            progress: Some(&mut progress),
-            cancel: Some(cancel),
-        };
-        ampr_pack::image::prepare(source, &config, &spool, mtime, &mut control)
-    };
-    let result = match prepared {
-        Ok((mut overlay, report)) => build(
+    let mtime = crate::zstd_packs::now_secs();
+    let shown = output.display().to_string();
+    let result = (|| {
+        let crate::lz4_packs::Spooled {
+            mut tree,
+            report,
+            config,
+        } = crate::lz4_packs::spool(source, packs, &spool, mtime, &shown, cancel, stage)?;
+        let mut built = build_at(
             format,
-            None,
-            &mut overlay,
+            inner_name,
+            level,
+            &mut tree,
             output,
             mode,
             verify_chunk,
             cancel,
             stage,
-        )
-        .map(|b| (b, report)),
-        Err(e) => Err(e.to_string()),
-    };
+        )?;
+        drop(tree);
+        let image = open_image(output, format, inner_name.is_some())?;
+        match crate::lz4_packs::read_back(image, source, &config, mode, cancel, &mut |d, t| {
+            stage("verify", d, t)
+        }) {
+            Ok(line) => built.detail.push_str(&format!(", {line}")),
+            Err(e) => {
+                // Finished and named by now, and no use: it doesn't stay looking like a good image.
+                let _ = crate::safe_write::discard(output);
+                return Err(e);
+            }
+        }
+        built.detail.push_str(&crate::lz4_packs::detail(&report));
+        Ok(built)
+    })();
     let _ = std::fs::remove_dir_all(&spool);
-    let (mut built, report) = result?;
-    let s = &report.stats;
-    if s.files_packed == 0 {
-        crate::log_at!(
-            Warn,
-            "convert",
-            "lz4 packs: profile={profile_name} packed no files ({} loose) for {}",
-            s.files_loose,
-            output.display()
-        );
-    } else {
-        crate::log_at!(
-            Info,
-            "convert",
-            "lz4 packs: profile={profile_name} packed {} files ({} loose) for {}",
-            s.files_packed,
-            s.files_loose,
-            output.display()
-        );
-    }
-    built.detail.push_str(&format!(
-        ", LZ4 packs: {} files packed into {} volume(s) ({} -> {} bytes, {} LZ4 / {} raw \
-         chunks), {} loose",
-        s.files_packed,
-        report.volumes.len(),
-        s.logical_bytes,
-        s.stored_bytes,
-        s.chunks_lz4,
-        s.chunks_raw,
-        s.files_loose
-    ));
-    Ok(built)
+    result
 }
 
 #[cfg(test)]
@@ -1603,7 +1532,7 @@ mod tests {
             level: 9,
             block_shift: 16,
         };
-        let (name, config) = super::lz4_profile(&packs, &files);
+        let (name, config) = crate::lz4_packs::lz4_profile(&packs, &files);
         assert_eq!(name, "unity");
         assert_eq!(config, ampr_pack::unity_profile(9, 16));
         let given = Config::from_toml(
@@ -1612,7 +1541,7 @@ mod tests {
         )
         .unwrap();
         packs.profile = Some(given.clone());
-        let (name, config) = super::lz4_profile(&packs, &files);
+        let (name, config) = crate::lz4_packs::lz4_profile(&packs, &files);
         assert_eq!(name, "given");
         assert_eq!(config, given);
     }
@@ -1786,6 +1715,8 @@ mod tests {
         let mut tree = FolderSource::open(&src).unwrap();
         build_packed(
             ImageFormat::Exfat,
+            None,
+            ps5upload_fpkg::ffpfsc_block::Level::default(),
             &mut tree,
             &out,
             &Lz4Packs {
@@ -2569,6 +2500,8 @@ mod tests {
         let mut tree = FolderSource::open(&src).unwrap();
         build_packed(
             ImageFormat::Exfat,
+            None,
+            ps5upload_fpkg::ffpfsc_block::Level::default(),
             &mut tree,
             &out,
             &Lz4Packs {
@@ -2629,6 +2562,8 @@ mod tests {
         let mut stages: Vec<String> = Vec::new();
         let built = build_packed(
             ImageFormat::Exfat,
+            None,
+            ps5upload_fpkg::ffpfsc_block::Level::default(),
             &mut tree,
             &out,
             // The folder-wide profile, so the small fixture files are packed: the built-in
@@ -2745,38 +2680,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// Packing is exFAT-only and leaves nothing behind when it is refused.
+    /// Packing is refused for a game whose ampr_emu can't serve packs, and leaves nothing behind.
     #[test]
-    fn lz4_packs_are_refused_for_other_formats() {
+    fn lz4_packs_are_refused_for_a_game_that_cannot_read_them() {
         let root = std::env::temp_dir().join(format!("ps5upload-imgr-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let src = ampr_game(&root);
-        let out = root.join("x.ffpkg");
-        let mut tree = FolderSource::open(&src).unwrap();
-        let e = build_packed(
-            ImageFormat::Ffpkg,
-            &mut tree,
-            &out,
-            &Lz4Packs {
-                profile: None,
-                level: 9,
-                block_shift: 16,
-            },
-            VerifyMode::Full,
-            DEFAULT_VERIFY_CHUNK,
-            &AtomicBool::new(false),
-            &mut |_, _, _| {},
-        )
-        .err()
-        .expect("refused");
-        assert!(e.contains("exFAT"), "{e}");
-        assert!(!out.exists() && !lz4_spool(&out).exists());
-
         let exfat = root.join("x.exfat");
         let attempt = |src: &Path| {
             let mut tree = FolderSource::open(src).unwrap();
             build_packed(
                 ImageFormat::Exfat,
+                None,
+                ps5upload_fpkg::ffpfsc_block::Level::default(),
                 &mut tree,
                 &exfat,
                 &Lz4Packs {

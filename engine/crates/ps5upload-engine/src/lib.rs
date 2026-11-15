@@ -575,6 +575,7 @@ fn extract_payload_error(err: &anyhow::Error) -> (Option<String>, Option<String>
     (None, None)
 }
 
+pub(crate) use ps5upload_convert_core::lz4_packs;
 /// Sum file sizes recursively under `root`. Used by transfer_dir_handler
 /// to pre-compute `total_bytes` for progress rendering — transfer_dir
 /// itself walks too but doesn't expose the total before sending starts,

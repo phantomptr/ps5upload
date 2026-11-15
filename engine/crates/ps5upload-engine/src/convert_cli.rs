@@ -49,8 +49,9 @@ usage: ps5upload-engine                      run the engine (what the desktop ap
             stored (a pkg with nothing compressed) is for pkg only
   --zstd    pack the game's files into zstd asset packs at this level (1 to 22) with the
             ampr-emu-ng emulator, which is downloaded as the app downloads it; for exfat,
-            ffpkg, ffpfs and folder
-  --lz4     pack the game's files into AMPR LZ4 asset packs (exfat only)
+            ffpkg, ffpfs, ffpfsc and folder
+  --lz4     pack the game's files into AMPR LZ4 asset packs, read by the game's own ampr_emu;
+            for exfat, ffpkg, ffpfs, ffpfsc and folder
   --full-verify
             read every byte of the result back. Without it the structure is checked in
             full and the data by a random sample.
@@ -204,11 +205,8 @@ pub(crate) fn parse(command: &str, args: &[String]) -> Result<Command, String> {
     if zstd.is_some() && to == Target::Pkg {
         return Err("--zstd is for images and folders, not for pkg".into());
     }
-    if lz4 && matches!(to, Target::Pkg | Target::Folder) {
-        return Err(format!(
-            "--lz4 is for an exfat image, not for {}",
-            to.name()
-        ));
+    if lz4 && to == Target::Pkg {
+        return Err("--lz4 is for images and folders, not for pkg".into());
     }
     Ok(Command::Convert(ConvertArgs {
         source,
@@ -251,6 +249,9 @@ impl ConvertArgs {
         if let Some(level) = self.zstd {
             set("ampr_zstd", serde_json::json!({ "level": level }));
         }
+        if self.lz4 {
+            set("ampr_lz4", serde_json::json!({}));
+        }
         let route = match self.to {
             Target::Pkg => {
                 if let Some(level) = &self.level {
@@ -268,9 +269,6 @@ impl ConvertArgs {
                     }
                 } else {
                     set("format", self.to.name().into());
-                }
-                if self.lz4 {
-                    set("ampr_lz4", serde_json::json!({}));
                 }
                 Route::Image
             }
@@ -693,8 +691,7 @@ mod tests {
         };
         assert!(err(&["exfat", "--level", "fast"]).contains("--level is for pkg and ffpfsc"));
         assert!(err(&["pkg", "--zstd", "5"]).contains("not for pkg"));
-        assert!(err(&["pkg", "--lz4"]).contains("--lz4 is for an exfat image"));
-        assert!(err(&["folder", "--lz4"]).contains("--lz4 is for an exfat image"));
+        assert!(err(&["pkg", "--lz4"]).contains("--lz4 is for images and folders"));
         assert!(err(&["exfat", "--lz4", "--zstd", "5"]).contains("pick one"));
         assert!(err(&["ffpfsc", "--level", "stored"]).contains("--to exfat"));
         assert_eq!(
@@ -771,6 +768,16 @@ mod tests {
         serde_json::from_value::<fpkg_api::BuildReq>(body).unwrap();
         let (_, body) = request(&["g", "--to", "folder", "--out", "o", "--zstd", "3"]);
         serde_json::from_value::<fpkg_api::FolderBuildReq>(body).unwrap();
+        // LZ4 packs go into a folder and every image format too.
+        let (route, body) = request(&["g", "--to", "folder", "--out", "o", "--lz4"]);
+        assert_eq!(route, Route::Folder);
+        assert_eq!(body["ampr_lz4"], serde_json::json!({}));
+        serde_json::from_value::<fpkg_api::FolderBuildReq>(body).unwrap();
+        for to in ["exfat", "ffpkg", "ffpfs"] {
+            let (_, body) = request(&["g", "--to", to, "--out", "o", "--lz4"]);
+            assert_eq!(body["format"], to);
+            serde_json::from_value::<fpkg_api::ExfatBuildReq>(body).unwrap();
+        }
     }
 
     #[test]

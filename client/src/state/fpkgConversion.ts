@@ -218,10 +218,11 @@ export interface ConversionState {
     outputDir: string | undefined,
     keepBoth?: boolean,
     /** This game's own choice (a queued game keeps what it was added with); else the setting.
-     *  `zstd`: the folder's files in zstd packs. */
+     *  `zstd` / `lz4`: the folder's files in zstd or LZ4 packs. */
     own?: {
       fullVerify?: boolean;
       zstd?: ZstdPacks;
+      lz4?: AmprLz4Options;
       /** A PS4 update merged into the PS4 game `source`. */
       update?: string;
       /** Save to a server: the folder goes straight to this `remote://` folder. */
@@ -1137,7 +1138,17 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
     if (get().pipeline.phase === "running") return;
     pendingImageUpload = null;
     // Packs are made before the folder is written.
-    const first = own?.zstd ? "pack" : "write";
+    const first = own?.zstd || own?.lz4 ? "pack" : "write";
+    const extras = extrasOf(
+      own,
+      false,
+      own?.unpackPacks
+        ? {
+            add: own.addAmprEmu ?? useConvertPrefs.getState().addAmprEmu,
+            build: own.amprEmuBuild ?? useConvertPrefs.getState().amprEmuBuild,
+          }
+        : undefined,
+    );
     beginRun("folder", source, null, first);
     try {
       const { job_id } = await fpkg.buildFolder(
@@ -1151,16 +1162,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         ...folderTail(
           own?.update,
           own?.toServer ? serverDestination(own.toServer) : undefined,
-          extrasOf(
-            own,
-            false,
-            own?.unpackPacks
-              ? {
-                  add: own.addAmprEmu ?? useConvertPrefs.getState().addAmprEmu,
-                  build: own.amprEmuBuild ?? useConvertPrefs.getState().amprEmuBuild,
-                }
-              : undefined,
-          ),
+          own?.lz4 ? { ...extras, lz4: own.lz4 } : extras,
         ),
       );
       update({ jobId: job_id });

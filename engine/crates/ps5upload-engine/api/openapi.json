@@ -3738,7 +3738,7 @@
                 "type": "null"
               }
             ],
-            "description": "Pack the game's files into AMPR LZ4 asset packs first (exFAT only, not with `compress`)."
+            "description": "Pack the game's files into AMPR LZ4 asset packs first, in any image, plain or (with\n`compress`) inside a `.ffpfsc`."
           },
           "ampr_zstd": {
             "anyOf": [
@@ -3749,7 +3749,7 @@
                 "type": "null"
               }
             ],
-            "description": "Pack the game's files into zstd asset packs for ampr-emu-ng, which goes in the image: a\nplain image of any format, not with LZ4 packs. A game in LZ4 packs is decoded on the way."
+            "description": "Pack the game's files into zstd asset packs for ampr-emu-ng, which goes in the image: any\nformat, plain or (with `compress`) inside a `.ffpfsc`; not with LZ4 packs. A game in LZ4\npacks is decoded on the way."
           },
           "compress": {
             "description": "Write the image straight into a `.ffpfsc` container (no uncompressed copy on disk).",
@@ -3768,7 +3768,7 @@
                 "type": "null"
               }
             ],
-            "description": "Where the image goes: `{\"kind\":\"local\"}` (the default: `output_dir` on this computer) or\n`{\"kind\":\"console\",\"addr\":…,\"dir\":…}`: straight into that PS5's folder `dir` over AVA1,\nsent as it is written, so the image is never stored on this computer. The job's `dest` is\nthen the image's path on the PS5, and the read-back runs there. For `.exfat`, `.ffpkg`\nand `.ffpfs` images, and `.exfat` with `ampr_zstd` packs; a `.ffpfsc` (`compress`), LZ4\npacks and edited copies are refused for it."
+            "description": "Where the image goes: `{\"kind\":\"local\"}` (the default: `output_dir` on this computer) or\n`{\"kind\":\"console\",\"addr\":…,\"dir\":…}`: straight into that PS5's folder `dir` over AVA1,\nsent as it is written, so the image is never stored on this computer. The job's `dest` is\nthen the image's path on the PS5, and the read-back runs there. For `.exfat`, `.ffpkg`\nand `.ffpfs` images, with or without `ampr_lz4` or `ampr_zstd` packs (LZ4 packs are made\ninto the engine's data folder first, and removed once the image is there); a `.ffpfsc`\n(`compress`) and edited copies are refused for it."
           },
           "edits": {
             "description": "Write an edited COPY of the image `source` (#479): its files with these changes, as an\nimage of the same kind (format and compression are the source's; `format`/`compress`\nare ignored), named `<name>-edited` and put next to it unless `name`/`output_dir` say\notherwise. The source image is only read.",
@@ -4333,6 +4333,17 @@
               "string",
               "null"
             ]
+          },
+          "ampr_lz4": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AmprLz4Req"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Write the game with its files in AMPR LZ4 asset packs, as an image build's `ampr_lz4`\ndoes, as a plain folder: the pack volumes, their manifest, the files that stay loose and\na fresh `ampr_emu.index`. The volumes are packed into `<folder>.lz4spool/` beside it\nfirst (for a folder on a server, into the engine's data folder), so packing needs that\nroom too until the folder is written. The source may then also be a game folder. Not\nwith `ampr_zstd`, `unpack_packs` or `entry`."
           },
           "ampr_zstd": {
             "anyOf": [
@@ -21500,7 +21511,7 @@
     },
     "/api/folder/build": {
       "post": {
-        "description": "POST /api/folder/build — unpack a game image or a debug-key package into a plain folder\n(#469). Runs as a job like an image build: stages `write` and `verify`, the folder written\nas `<name>.partial/` and renamed only once it reads back. Done's `dest` is the folder. With\n`ampr_zstd` the game's files go into zstd packs (stage `pack` first), from an image,\npackage or game folder; `commit_ack.ampr_runtime` names the emulator that went in.",
+        "description": "POST /api/folder/build — unpack a game image or a debug-key package into a plain folder\n(#469). Runs as a job like an image build: stages `write` and `verify`, the folder written\nas `<name>.partial/` and renamed only once it reads back. Done's `dest` is the folder. With\n`ampr_zstd` the game's files go into zstd packs (stage `pack` first), from an image,\npackage or game folder; `commit_ack.ampr_runtime` names the emulator that went in. With\n`ampr_lz4` they go into LZ4 packs the same way, read by the game's own ampr_emu.",
         "requestBody": {
           "content": {
             "application/json": {

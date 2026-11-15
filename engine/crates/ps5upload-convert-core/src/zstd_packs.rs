@@ -22,6 +22,7 @@ use std::sync::atomic::AtomicBool;
 use ps5_dump_forge_zstd::tree::PackedTree;
 use ps5upload_fpkg::ampr_index;
 use ps5upload_fpkg::ampr_pack::image::emulator_home;
+use ps5upload_fpkg::ffpfsc_block::Level;
 use ps5upload_fpkg::sample::VerifyMode;
 use ps5upload_fpkg::source::{SourceFile, SourceTree};
 
@@ -308,7 +309,8 @@ pub fn measure(
 
 /// Builds `source` as a plain image at `output` with its files in zstd packs at `level`, and
 /// `runtime` as its emulator: measured (stage `pack`), then written and read back as any image,
-/// then the packs read back through the same checks the emulator makes.
+/// then the packs read back through the same checks the emulator makes, and every file of the
+/// game read through the packs against the source.
 /// `threads` compress (0: every core; the console program passes its own limit).
 #[allow(clippy::too_many_arguments)]
 pub fn build(
@@ -324,7 +326,45 @@ pub fn build(
     stage: &mut dyn FnMut(&str, u64, u64),
     threads: usize,
 ) -> Result<ImageBuilt, String> {
-    let (mut prepared, packed) = prepare(source, runtime.to_vec(), now_secs(), rules)?;
+    build_at(
+        format,
+        None,
+        Level::default(),
+        level,
+        rules,
+        runtime,
+        source,
+        output,
+        mode,
+        verify_chunk,
+        cancel,
+        stage,
+        threads,
+    )
+}
+
+/// [`build`], straight into a `.ffpfsc` container when `inner_name` is given (the image inside
+/// it named so, compressed at `compression`), as ps5-dump-forge writes zstd packs into any
+/// target (`convert.rs`: `--zstd-pack` with `--to ffpfsc`).
+#[allow(clippy::too_many_arguments)]
+pub fn build_at(
+    format: ImageFormat,
+    inner_name: Option<&str>,
+    compression: Level,
+    level: u8,
+    rules: Option<&Rules>,
+    runtime: &[u8],
+    source: &mut dyn SourceTree,
+    output: &Path,
+    mode: VerifyMode,
+    verify_chunk: u64,
+    cancel: &AtomicBool,
+    stage: &mut dyn FnMut(&str, u64, u64),
+    threads: usize,
+) -> Result<ImageBuilt, String> {
+    // The read-back makes the same index, so it keeps this time.
+    let mtime = now_secs();
+    let (mut prepared, packed) = prepare(source, runtime.to_vec(), mtime, rules)?;
     let index = measure(
         &mut prepared,
         &packed,
@@ -334,12 +374,13 @@ pub fn build(
         stage,
         threads,
     )?;
-    let built = {
+    let mut built = {
         let mut tree =
             PackedTree::new(&mut prepared, &index, threads, cancel).map_err(|e| e.to_string())?;
-        crate::image_build::build(
+        crate::image_build::build_at(
             format,
-            None,
+            inner_name,
+            compression,
             &mut tree,
             output,
             mode,
@@ -348,12 +389,31 @@ pub fn build(
             stage,
         )?
     };
-    // What the emulator will check: the index and every volume's header, as the image holds them.
-    let image = ps5upload_fpkg::source::open(output).map_err(|e| e.to_string())?;
-    if let Err(e) = ps5_dump_forge_zstd::reader::unpack(image) {
-        // Finished and named by now, and no use: it doesn't stay looking like a good image.
-        let _ = crate::safe_write::discard(output);
-        return Err(format!("reading the zstd packs back from the image: {e}"));
+    drop(prepared);
+    // What the emulator will check: the index and every volume's header, as the image holds
+    // them; then the game read through them.
+    let checked = (|| {
+        let image = crate::image_build::open_image(output, format, inner_name.is_some())?;
+        let mut game = ps5_dump_forge_zstd::reader::unpack(image)
+            .map_err(|e| format!("reading the zstd packs back from the image: {e}"))?;
+        let (packs, volumes) = (game.index().files.len(), game.index().volume_sizes.len());
+        let (mut want, _) = prepare(source, runtime.to_vec(), mtime, rules)?;
+        let checked =
+            crate::folder_build::verify_trees(&mut game, &mut want, mode, cancel, &mut |d, t| {
+                stage("verify", d, t)
+            })
+            .map_err(|e| format!("reading the zstd packs back from the image: {e}"))?;
+        Ok::<_, String>(format!(
+            ", {packs} files in {volumes} zstd volumes read back through the packs, {checked}"
+        ))
+    })();
+    match checked {
+        Ok(line) => built.detail.push_str(&line),
+        Err(e) => {
+            // Finished and named by now, and no use: it doesn't stay looking like a good image.
+            let _ = crate::safe_write::discard(output);
+            return Err(e);
+        }
     }
     Ok(built)
 }
@@ -602,6 +662,59 @@ mod tests {
 
     fn runtime() -> Vec<u8> {
         b"EMULATOR".to_vec()
+    }
+
+    /// zstd packs go into every image, plain and inside a `.ffpfsc`, through [`build_at`]: each
+    /// is read back through its filesystem (and container), then through the packs against the
+    /// source; the result opens as the game it was.
+    #[test]
+    fn zstd_packs_go_into_every_image_plain_and_compressed() {
+        let root = std::env::temp_dir().join(format!("ps5upload-zstdall-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let src = game(&root);
+        for format in [ImageFormat::Exfat, ImageFormat::Ffpkg, ImageFormat::Ffpfs] {
+            for compress in [false, true] {
+                let (name, inner) = crate::image_build::output_names(&src, format, compress);
+                let out = root.join(&name);
+                let mut tree = FolderSource::open(&src).unwrap();
+                let mut stages: Vec<String> = Vec::new();
+                let built = build_at(
+                    format,
+                    inner.as_deref(),
+                    Level::Fast,
+                    5,
+                    None,
+                    &runtime(),
+                    &mut tree,
+                    &out,
+                    VerifyMode::Full,
+                    crate::image_build::DEFAULT_VERIFY_CHUNK,
+                    &AtomicBool::new(false),
+                    &mut |s, _, _| {
+                        if stages.last().map(String::as_str) != Some(s) {
+                            stages.push(s.to_string());
+                        }
+                    },
+                    0,
+                )
+                .unwrap_or_else(|e| panic!("{format:?} compress={compress}: {e}"));
+                let write = if compress { "compress" } else { "write" };
+                assert_eq!(stages, ["pack", "plan", write, "verify"], "{format:?}");
+                assert!(
+                    built.detail.contains("read back through the packs"),
+                    "{}",
+                    built.detail
+                );
+                let image = ps5upload_fpkg::source::open(&out).unwrap();
+                let mut game = ps5_dump_forge_zstd::reader::unpack(image).unwrap();
+                let want = std::fs::read(src.join("data/sub/table.bin")).unwrap();
+                assert_eq!(game.read("data/sub/table.bin").unwrap(), want, "{format:?}");
+                assert_eq!(game.read("fakelib/libSceAmpr.sprx").unwrap(), b"EMULATOR");
+                let _ = std::fs::remove_file(&out);
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn open_game(dir: &Path) -> Result<Box<dyn SourceTree>, String> {

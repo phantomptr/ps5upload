@@ -13,6 +13,7 @@ pub mod log;
 
 pub mod folder_build;
 pub mod image_build;
+pub mod lz4_packs;
 pub mod refusal;
 pub mod safe_write;
 pub mod writing;

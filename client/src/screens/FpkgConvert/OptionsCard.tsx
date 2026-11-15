@@ -13,9 +13,11 @@ import { CompressionTiles } from "./CompressionTiles";
 import {
   FullVerifyOption,
   ImageChoice,
+  Lz4Option,
   PacksNote,
   UnpackOption,
   ZstdOption,
+  lz4Offered,
   zstdOffered,
   type Lz4Choice,
   type UnpackChoice,
@@ -186,13 +188,11 @@ export function OptionsCard(props: OptionsCardProps) {
                 "The folder is named after the image or package, in the output folder. Nothing is compressed, and nothing reaches the PS5.",
               )}
             </div>
-            {/* A PS5 game can have its folder in zstd packs (LZ4 packs are for .exfat images
-                only). */}
-            {zstdOffered(props.image?.lz4) ? (
-              <ZstdOption lz4={props.image.lz4} folder />
-            ) : (
-              <PacksNote lz4={props.image?.lz4} folder />
-            )}
+            {/* A PS5 game can have its folder in packs, as an image: LZ4 for a game that reads
+                through AMPR, zstd for any PS5 game. */}
+            {lz4Offered(props.image?.lz4) && <Lz4Option lz4={props.image.lz4} folder />}
+            {zstdOffered(props.image?.lz4) && <ZstdOption lz4={props.image.lz4} folder />}
+            <PacksNote lz4={props.image?.lz4} />
             {props.unpack && <UnpackOption unpack={props.unpack} />}
           </div>
         ) : ps4Package ? (

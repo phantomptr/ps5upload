@@ -51,7 +51,7 @@ import { useConnectionsStore } from "../../state/connections";
 import { MakeCard } from "./MakeCard";
 import { mergeRole, Ps4MergePicker } from "./Ps4Merge";
 import { OptionsCard } from "./OptionsCard";
-import { folderPackOptions, folderPacks, packOptions, type UnpackChoice } from "./ImageOptions";
+import { folderLz4Options, folderPackOptions, folderPacks, packOptions, type UnpackChoice } from "./ImageOptions";
 import { DeleteSourceOption, RemoveBackportOption, backportRefusal, deleteSourceRefusal } from "./SourceOptions";
 import { useConfirm } from "../../components/ConfirmDialog";
 import {
@@ -194,7 +194,7 @@ export default function WorkshopScreen() {
   const imageFormat = useConvertPrefs((s) => s.imageFormat);
   const imageCompress = useConvertPrefs((s) => s.imageCompress);
   const setImageChoice = useConvertPrefs((s) => s.setImageChoice);
-  // AMPR LZ4 asset packs for this game's .exfat image, and the profile it packs with. Per game
+  // Asset packs (LZ4 or zstd) for this game's image or folder, and the profile it packs with. Per game
   // (they depend on the game's own ampr_emu), so only the game checked here carries them into
   // the queue.
   const [lz4On, setLz4On] = useState(false);
@@ -215,7 +215,7 @@ export default function WorkshopScreen() {
   const then = thenFor(build.kind, thenChoice, canInstall);
   /** A skip says which build the source cannot become: an image needs a game folder, image,
    *  package or archive (unpacked first); a folder needs an image or package, or a game folder
-   *  when it is made in zstd packs (`zstd`, this game's own choice). */
+   *  when it is made in packs (`zstd`, or for a folder `lz4`: this game's own choice). */
   const queueAdd = (
     src: string,
     isFolder: boolean,
@@ -228,7 +228,8 @@ export default function WorkshopScreen() {
     if (isRarLaterVolume(src)) return "later-part";
     if (build.kind === "image" && !isFolder && !isFolderableSource(src) && !isArchiveSource(src))
       return "not-image";
-    if (build.kind === "folder" && !isFolderableSource(src) && !(isFolder && (zstd || unpack))) return "not-folder";
+    if (build.kind === "folder" && !isFolderableSource(src) && !(isFolder && (zstd || lz4 || unpack)))
+      return "not-folder";
     const u = useUploadStore.getState();
     const out = outFor(src);
     const prefs = useConvertPrefs.getState();
@@ -247,7 +248,9 @@ export default function WorkshopScreen() {
           ? { ...imageBuildWith(build, lz4), ...(unpack && !lz4 ? { unpackPacks: true } : {}) }
           : build.kind === "folder" && zstd
             ? { ...build, zstd }
-            : build.kind === "folder" && unpack
+            : build.kind === "folder" && lz4
+              ? { ...build, lz4 }
+              : build.kind === "folder" && unpack
               ? { ...build, unpackPacks: true }
               : build,
       imageDest:
@@ -259,7 +262,7 @@ export default function WorkshopScreen() {
       host: then !== "keep" ? host : null,
       deleteAfterInstall: then !== "keep" && deleteAfter,
       fullVerify: prefs.fullVerify,
-      imageLevel: build.kind === "image" && build.compress && !lz4 ? prefs.imageLevel : undefined,
+      imageLevel: build.kind === "image" && build.compress ? prefs.imageLevel : undefined,
       // The AMPR emulator choice as it is now: changing it later is for games added later.
       addAmprEmu: prefs.addAmprEmu,
       amprEmuBuild: prefs.amprEmuBuild,
@@ -579,6 +582,7 @@ export default function WorkshopScreen() {
       const toServer = savesToServer(runChoice) ? serverFolder : undefined;
       void buildFolder(game, out.outputDir, out.keepBoth, {
         zstd: folderPackOptions(lz4Choice, packProfile),
+        lz4: folderLz4Options(lz4Choice, packProfile),
         update,
         ...(toServer ? { toServer } : {}),
         ...(removesBackport ? { removeBackport: true } : {}),
@@ -604,10 +608,10 @@ export default function WorkshopScreen() {
       void buildImage(
         game,
         out.outputDir,
-        build.compress && !lz4Active(build.format, lz4Choice),
+        build.compress,
         build.format,
         !direct && !toServer && then === "upload" ? plan : undefined,
-        packOptions(build.format, lz4Choice, packProfile),
+        packOptions(lz4Choice, packProfile),
         password || undefined,
         out.keepBoth,
         direct || toServer || update || removesBackport || deletesSource || unpackOn
@@ -760,11 +764,11 @@ export default function WorkshopScreen() {
   // The profile the packs are made with. A profile measured from play is written for LZ4 packs
   // (what it keeps loose suits drakmor's ampr_emu), so zstd packs take only one picked by hand.
   const packProfile = packKind === "zstd" && lz4Profile?.measured ? undefined : lz4Profile?.text;
-  // A folder in zstd packs can be made of a game folder too.
+  // A folder in packs (LZ4 or zstd) can be made of a game folder too.
   const packsFolder = folderPacks(lz4Choice);
   // A game in asset packs can be written as plain files again, as an image or a folder, while
   // no pack option is on (packing it again decodes the old packs anyway).
-  const packsOn = build.kind === "image" ? lz4Active(build.format, lz4Choice) : packsFolder;
+  const packsOn = build.kind === "image" ? lz4Active(lz4Choice) : packsFolder;
   const unpackChoice: UnpackChoice | undefined =
     inspection?.packs && (build.kind === "image" || build.kind === "folder") && !packsOn
       ? { kind: inspection.packs, on: unpackPacks, onToggle: setUnpackPacks }
@@ -778,9 +782,7 @@ export default function WorkshopScreen() {
   // either is what lets its backport go.
   const backportUnpacks =
     unpackOn ||
-    (build.kind === "folder"
-      ? packsFolder
-      : build.kind === "image" && lz4Active(build.format, lz4Choice) && lz4Choice?.kind === "zstd");
+    ((build.kind === "folder" || build.kind === "image") && lz4Active(lz4Choice) && lz4Choice?.kind === "zstd");
   const removesBackport =
     backport !== null && removeBackportFor === src && !backportRefusal(backport, backportUnpacks);
   // A game folder with an update merged in is a new folder too, and so is a packed one unpacked
@@ -1059,25 +1061,22 @@ export default function WorkshopScreen() {
   }
 
   const idle = pipeline.phase === "idle";
-  // Straight to the PS5 (first version): a plain .exfat, .ffpkg or .ffpfs, or .exfat with zstd packs.
-  const ps5Packs = build.kind === "image" ? packOptions(build.format, lz4Choice) : undefined;
+  // Straight to the PS5: an .exfat, .ffpkg or .ffpfs, with or without asset packs; a .ffpfsc is
+  // not streamed yet, packed or not.
   const ps5Refusal =
-    build.kind === "image" &&
-    ((build.compress && !lz4Active(build.format, lz4Choice)) ||
-      (ps5Packs && !ps5Packs.zstdLevel) ||
-      (ps5Packs?.zstdLevel && build.format !== "exfat"))
+    build.kind === "image" && build.compress
       ? tr(
-          "fpkg.save_to_ps5_unsupported",
+          "fpkg.save_to_ps5_unsupported_v2",
           undefined,
-          "Straight to the PS5 works for a plain .exfat, .ffpkg or .ffpfs image, or an .exfat with zstd packs. Save this one to this computer, or change the image above.",
+          "Straight to the PS5 works for an .exfat, .ffpkg or .ffpfs image, with or without asset packs, but not yet for a .ffpfsc. Save this one to this computer, or turn off compression above.",
         )
       : null;
   // Straight to a server: the same images as straight to the PS5.
   const serverRefusal = ps5Refusal
     ? tr(
-        "fpkg.save_to_server_unsupported",
+        "fpkg.save_to_server_unsupported_v2",
         undefined,
-        "Straight to a server works for a plain .exfat, .ffpkg or .ffpfs image, or an .exfat with zstd packs. Save this one to this computer, or change the image above.",
+        "Straight to a server works for an .exfat, .ffpkg or .ffpfs image, with or without asset packs, but not yet for a .ffpfsc. Save this one to this computer, or turn off compression above.",
       )
     : null;
   const runChoice: RunCardProps["choice"] = {
@@ -1222,7 +1221,7 @@ export default function WorkshopScreen() {
             plannedSize={locked ? undefined : inspection?.planned_size}
             outputFree={locked ? undefined : inspection?.output_free}
             compressedFrom={
-              !locked && build.kind === "image" && build.compress && !lz4Active(build.format, lz4Choice)
+              !locked && build.kind === "image" && build.compress
                 ? inspection?.bytes
                 : undefined
             }
@@ -1305,7 +1304,11 @@ export default function WorkshopScreen() {
               const r = queueAdd(
                 source.trim(),
                 isLocalFolder,
-                build.kind === "image" ? packOptions(build.format, lz4Choice, packProfile) : undefined,
+                build.kind === "image"
+                  ? packOptions(lz4Choice, packProfile)
+                  : build.kind === "folder"
+                    ? folderLz4Options(lz4Choice, packProfile)
+                    : undefined,
                 build.kind === "folder" ? folderPackOptions(lz4Choice, packProfile) : undefined,
                 unpackOn,
               );

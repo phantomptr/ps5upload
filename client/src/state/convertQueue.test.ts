@@ -88,14 +88,14 @@ describe("the Convert queue", () => {
     expect(builds).toHaveLength(1);
   });
 
-  it("an image with LZ4 packs is never also compressed, whatever is remembered", () => {
-    const remembered = { kind: "image", format: "exfat", compress: true } as const;
+  it("an image with asset packs keeps its .ffpfsc compression and its format", () => {
+    const remembered = { kind: "image", format: "ffpkg", compress: true } as const;
     expect(imageBuildWith(remembered, undefined)).toEqual(remembered);
     const packed = imageBuildWith(remembered, { installRuntime: false });
-    expect(packed.compress).toBe(false);
-    expect(buildExtension(packed)).toBe(".exfat");
-    // An item queued before this: the chip says what will be made.
-    expect(buildExtension({ ...remembered, lz4: { installRuntime: false } })).toBe(".exfat");
+    expect(packed).toEqual({ ...remembered, lz4: { installRuntime: false } });
+    expect(buildExtension(packed)).toBe(".ffpfsc");
+    const plain = imageBuildWith({ ...remembered, compress: false }, { zstdLevel: 5 });
+    expect(buildExtension(plain)).toBe(".ffpkg");
   });
 
   it("takes the same game for a second console, but not twice for one", () => {

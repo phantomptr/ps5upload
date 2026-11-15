@@ -2558,6 +2558,8 @@ pub async fn folder_build(
     keep_both: Option<bool>,
     // zstd asset packs: {level, runtime}. The source may then also be a game folder.
     ampr_zstd: Option<JsonValue>,
+    // AMPR LZ4 asset packs: {level, profile_toml, install_runtime}. Not with ampr_zstd.
+    ampr_lz4: Option<JsonValue>,
     // A PS4 update merged into the PS4 game `source` (which may then also be a folder).
     update: Option<String>,
     // Where the folder goes: {"kind":"local"} (the default) or {"kind":"server",...}.
@@ -2584,6 +2586,7 @@ pub async fn folder_build(
             "entry": entry,
             "keep_both": keep_both.unwrap_or(false),
             "ampr_zstd": ampr_zstd,
+            "ampr_lz4": ampr_lz4,
             "update": update,
             "destination": destination,
             "remove_backport": remove_backport.unwrap_or(false),
