@@ -1,11 +1,6 @@
 {
   "ar": {
-    "missing": [
-      "cw_convert_zstd_no_runtime",
-      "minion_zstd_runtime_done",
-      "minion_zstd_runtime_note",
-      "minion_zstd_runtime_put"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -21,12 +16,7 @@
     ]
   },
   "bn": {
-    "missing": [
-      "cw_convert_zstd_no_runtime",
-      "minion_zstd_runtime_done",
-      "minion_zstd_runtime_note",
-      "minion_zstd_runtime_put"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -46,12 +36,7 @@
     ]
   },
   "de": {
-    "missing": [
-      "cw_convert_zstd_no_runtime",
-      "minion_zstd_runtime_done",
-      "minion_zstd_runtime_note",
-      "minion_zstd_runtime_put"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -78,12 +63,7 @@
     ]
   },
   "es": {
-    "missing": [
-      "cw_convert_zstd_no_runtime",
-      "minion_zstd_runtime_done",
-      "minion_zstd_runtime_note",
-      "minion_zstd_runtime_put"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -105,12 +85,7 @@
     ]
   },
   "fa": {
-    "missing": [
-      "cw_convert_zstd_no_runtime",
-      "minion_zstd_runtime_done",
-      "minion_zstd_runtime_note",
-      "minion_zstd_runtime_put"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -128,12 +103,7 @@
     ]
   },
   "fr": {
-    "missing": [
-      "cw_convert_zstd_no_runtime",
-      "minion_zstd_runtime_done",
-      "minion_zstd_runtime_note",
-      "minion_zstd_runtime_put"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -154,12 +124,7 @@
     ]
   },
   "hi": {
-    "missing": [
-      "cw_convert_zstd_no_runtime",
-      "minion_zstd_runtime_done",
-      "minion_zstd_runtime_note",
-      "minion_zstd_runtime_put"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -179,12 +144,7 @@
     ]
   },
   "hu": {
-    "missing": [
-      "cw_convert_zstd_no_runtime",
-      "minion_zstd_runtime_done",
-      "minion_zstd_runtime_note",
-      "minion_zstd_runtime_put"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -209,12 +169,7 @@
     ]
   },
   "id": {
-    "missing": [
-      "cw_convert_zstd_no_runtime",
-      "minion_zstd_runtime_done",
-      "minion_zstd_runtime_note",
-      "minion_zstd_runtime_put"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -241,12 +196,7 @@
     ]
   },
   "it": {
-    "missing": [
-      "cw_convert_zstd_no_runtime",
-      "minion_zstd_runtime_done",
-      "minion_zstd_runtime_note",
-      "minion_zstd_runtime_put"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -273,12 +223,7 @@
     ]
   },
   "ja": {
-    "missing": [
-      "cw_convert_zstd_no_runtime",
-      "minion_zstd_runtime_done",
-      "minion_zstd_runtime_note",
-      "minion_zstd_runtime_put"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -295,12 +240,7 @@
     ]
   },
   "ko": {
-    "missing": [
-      "cw_convert_zstd_no_runtime",
-      "minion_zstd_runtime_done",
-      "minion_zstd_runtime_note",
-      "minion_zstd_runtime_put"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -319,12 +259,7 @@
     ]
   },
   "pl": {
-    "missing": [
-      "cw_convert_zstd_no_runtime",
-      "minion_zstd_runtime_done",
-      "minion_zstd_runtime_note",
-      "minion_zstd_runtime_put"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -346,12 +281,7 @@
     ]
   },
   "pt-BR": {
-    "missing": [
-      "cw_convert_zstd_no_runtime",
-      "minion_zstd_runtime_done",
-      "minion_zstd_runtime_note",
-      "minion_zstd_runtime_put"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -373,12 +303,7 @@
     ]
   },
   "ru": {
-    "missing": [
-      "cw_convert_zstd_no_runtime",
-      "minion_zstd_runtime_done",
-      "minion_zstd_runtime_note",
-      "minion_zstd_runtime_put"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -399,12 +324,7 @@
     ]
   },
   "th": {
-    "missing": [
-      "cw_convert_zstd_no_runtime",
-      "minion_zstd_runtime_done",
-      "minion_zstd_runtime_note",
-      "minion_zstd_runtime_put"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -425,12 +345,7 @@
     ]
   },
   "tr": {
-    "missing": [
-      "cw_convert_zstd_no_runtime",
-      "minion_zstd_runtime_done",
-      "minion_zstd_runtime_note",
-      "minion_zstd_runtime_put"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -454,12 +369,7 @@
     ]
   },
   "vi": {
-    "missing": [
-      "cw_convert_zstd_no_runtime",
-      "minion_zstd_runtime_done",
-      "minion_zstd_runtime_note",
-      "minion_zstd_runtime_put"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -482,12 +392,7 @@
     ]
   },
   "zh-CN": {
-    "missing": [
-      "cw_convert_zstd_no_runtime",
-      "minion_zstd_runtime_done",
-      "minion_zstd_runtime_note",
-      "minion_zstd_runtime_put"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -504,12 +409,7 @@
     ]
   },
   "zh-TW": {
-    "missing": [
-      "cw_convert_zstd_no_runtime",
-      "minion_zstd_runtime_done",
-      "minion_zstd_runtime_note",
-      "minion_zstd_runtime_put"
-    ],
+    "missing": [],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",

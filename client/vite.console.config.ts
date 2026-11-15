@@ -11,7 +11,9 @@
  * - Size budget: the build FAILS over 768 KiB raw or 220 KiB gzip. Ruling R19 raised the gzip
  *   cap from 150 KiB when all 21 locales were inlined; since then only English is (consoleStrings).
  *   The page is served gzipped, so the gzip cap is the one that matters; the raw cap went from 640 to
- *   768 KiB when the Games, Fan, Processes and Clean up sections landed together (7.1.18).
+ *   768 KiB when the Games, Fan, Processes and Clean up sections landed together (7.1.18). The
+ *   gzip cap went from 220 to 224 KiB when the converter's own failure and stage sentences landed
+ *   (the page was within 0.1 KiB of 220).
  * - Strings: every other locale is emitted next to the page as strings/<code>.json (minified, cw_*
  *   keys only); payload/Makefile gzips each into the ELF (build/webui_strings.c) and the helper
  *   serves them at GET /strings/<code>.json. The page fetches them with ?v=<hash of these files>
@@ -36,7 +38,7 @@ import { splitLangLists } from "./postcss/langLists.mjs";
 import { appcacheManifest, serviceWorkerSource } from "./src/console/offline/offlineCopy.ts";
 
 const RAW_BUDGET = 768 * 1024;
-const GZIP_BUDGET = 220 * 1024; // ruling R19 (was 150 KiB)
+const GZIP_BUDGET = 224 * 1024; // ruling R19 (was 150 KiB), 220 until the converter's sentences
 const TOKENS_ID = "virtual:pc-tokens.css";
 
 /** The `{…}` body that starts at `open` (the index of a "{"), braces balanced. */

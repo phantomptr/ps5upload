@@ -130,6 +130,11 @@ export const CONVERT_CAUSES: Record<string, string> = {
   convert_no_memory: "cw_convert_err_no_memory",
   convert_no_space: "cw_convert_err_no_space",
   convert_no_zstd_runtime: "cw_convert_zstd_no_runtime",
+  convert_not_packable: "cw_convert_err_not_packable",
+  convert_dest_read_only: "cw_convert_err_dest_read_only",
+  convert_too_big_for_drive: "cw_convert_err_too_big_for_drive",
+  convert_drive_gone: "cw_convert_err_drive_gone",
+  convert_build_failed: "cw_convert_err_build_failed",
   convert_source_unreadable: "cw_convert_err_unreadable",
   convert_unsupported_source: "cw_convert_err_unsupported",
   convert_open_failed: "cw_files_err_read",
@@ -184,6 +189,10 @@ export function stageText(message: string | null | undefined): string | null {
   const stage = /^convert_stage_([a-z_]+)$/.exec(m)?.[1];
   if (!stage) return null;
   switch (stage) {
+    case "plan":
+      return t("cw_convert_stage_plan");
+    case "pack":
+      return t("cw_convert_stage_pack");
     case "read":
       return t("cw_convert_stage_read");
     case "write":

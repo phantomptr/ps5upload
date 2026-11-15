@@ -130,7 +130,11 @@ describe("names and requests", () => {
   it("stage lines", () => {
     expect(stageText("convert_starting")).toBe(t("cw_convert_stage_starting"));
     expect(stageText("convert_stage_read")).toBe(t("cw_convert_stage_read"));
-    expect(stageText("convert_stage_pack")).toBe(t("cw_convert_stage_other"));
+    expect(stageText("convert_stage_pack")).toBe(t("cw_convert_stage_pack"));
+    expect(stageText("convert_stage_plan")).toBe(t("cw_convert_stage_plan"));
+    expect(stageText("convert_stage_write")).toBe(t("cw_convert_stage_write"));
+    expect(stageText("convert_stage_verify")).toBe(t("cw_convert_stage_verify"));
+    expect(stageText("convert_stage_other_thing")).toBe(t("cw_convert_stage_other"));
     expect(stageText(null)).toBeNull();
   });
 });
