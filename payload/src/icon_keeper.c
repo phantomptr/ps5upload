@@ -87,8 +87,13 @@ int icon_keeper_show_all(const char *except) {
             snprintf(left[kept++], 16, "%s", ids[i]);
             continue;
         }
-        if (content_db_icon_set_visible(ids[i], 1, err, sizeof err) == 0) shown++;
-        else fprintf(stderr, "[icons] could not show %s again: %s\n", ids[i], err);
+        if (content_db_icon_set_visible(ids[i], 1, err, sizeof err) == 0) {
+            shown++;
+        } else {
+            /* Still hidden: it stays on the list, so a later pass can show it. */
+            fprintf(stderr, "[icons] could not show %s again: %s\n", ids[i], err);
+            snprintf(left[kept++], 16, "%s", ids[i]);
+        }
     }
     keeper_save(left, kept);
     pthread_mutex_unlock(&g_keeper_mu);

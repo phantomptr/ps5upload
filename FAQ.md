@@ -2431,6 +2431,17 @@ Both (12.0.0).
   stopped; FTP and WebDAV start the file over. Images work as plain `.exfat`, `.ffpkg` or `.ffpfs`,
   or `.exfat` with zstd packs.
 
+**Q: How do I convert a game to zstd packs (the smallest size)?**
+It's in **Convert**, in every desktop build (Windows, macOS, Linux) and the Docker image; no extra
+tool is needed. Pick the game under **① Game**: a dumped game folder, a package, an image, or a
+game already on the PS5. Choose to make an **image** (`.exfat`, `.ffpkg` or `.ffpfs`) or a
+**folder**, then tick **zstd asset packs (smallest, for ShadowMount+)** and pick a level (1 is
+fastest, 19 is smallest). The game's files go into zstd packs and quer3q's ampr-emu-ng goes in as
+`fakelib/libSceAmpr.sprx`; every file is read back through the packs before the result is kept.
+The option shows only for a game that reads its files through AMPR (most PS5 games), and the
+result plays only when ShadowMount+ mounts it. If a packed game hangs at startup, see "A game in
+zstd packs hangs at startup" under Troubleshooting.
+
 **Q: Can I add games to Workshop's queue while one is converting?**
 Yes. While a game is being made, pick or drop more under **① Game** (also **On the PS5…**, or
 **Convert first** from elsewhere): they go into **⑤ Queue** and are made one at a time after it,

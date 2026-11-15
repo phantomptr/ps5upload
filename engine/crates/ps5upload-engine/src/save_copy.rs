@@ -1155,9 +1155,11 @@ fn restore_owned(
     };
     // Back to how it was: what they had before (and no record of the images added), or nothing.
     let back = match &theirs {
-        Some(zip) => c
-            .take_away(&folder, added, false)
-            .and_then(|()| undo(c, title_id, zip, &folder, to_user)),
+        // Their save goes back even when taking the added images away failed part way.
+        Some(zip) => {
+            let took = c.take_away(&folder, added, false);
+            undo(c, title_id, zip, &folder, to_user).and(took)
+        }
         None => c.take_away(&folder, images, true),
     };
     Err(match (back, theirs.is_some()) {
@@ -1347,7 +1349,11 @@ impl Console for Live<'_> {
         local::restore_zip_with(self.host, title_id, zip, folder, user_id, false)
     }
     fn can_make_owner(&self) -> bool {
-        true
+        // Asked before anything is written: an older helper has no such call, and finding that
+        // out after the backup's images went in leaves another user's save in the folder. Any
+        // other answer (this image isn't there) is a helper that knows the call.
+        let probe = format!("{}/sdimg_ps5upload_probe", save_folder_of(0, "NONE00000"));
+        owner_call(self.host, "info", &probe).err().as_deref() != Some(OWNER_UNSUPPORTED)
     }
     fn user_has_saves(&self, user: u32) -> Result<bool, String> {
         // The folder is missing for a user with no PS5 save yet: a failed listing is "no".
@@ -1392,10 +1398,14 @@ impl Console for Live<'_> {
         owner_call(self.host, "set", image).map(|_| ())
     }
     fn take_away(&self, folder: &str, images: &[String], whole: bool) -> Result<(), String> {
+        // Every image is taken away even when one can't be: a file left behind is another
+        // user's save in this user's folder.
+        let mut failed = None;
         for i in images {
             let image = format!("{folder}/{i}");
-            owner_call(self.host, "forget", &image)
-                .map_err(|e| format!("The PS5 still lists {i} for that user ({e})"))?;
+            if let Err(e) = owner_call(self.host, "forget", &image) {
+                failed.get_or_insert(format!("The PS5 still lists {i} for that user ({e})"));
+            }
             if !whole {
                 let _ = local::post(
                     "/api/ps5/fs/delete",
@@ -1410,7 +1420,7 @@ impl Console for Live<'_> {
             )
             .map_err(|e| format!("The save folder put there could not be removed ({e})"))?;
         }
-        Ok(())
+        failed.map_or(Ok(()), Err)
     }
 }
 
@@ -2026,6 +2036,8 @@ mod tests {
         no_database: bool,
         /// Making this image theirs fails.
         fail_owner: Option<String>,
+        /// Taking the added images away fails.
+        fail_take: bool,
         /// Image (name) → its size; not listed: unknown.
         sizes: BTreeMap<String, u64>,
         /// What every save's sce_sys holds.
@@ -2055,6 +2067,7 @@ mod tests {
                 owner: false,
                 no_database: false,
                 fail_owner: None,
+                fail_take: false,
                 sizes: BTreeMap::new(),
                 sys: 0,
                 calls: RefCell::default(),
@@ -2207,7 +2220,11 @@ mod tests {
         }
         fn take_away(&self, folder: &str, images: &[String], whole: bool) -> Result<(), String> {
             self.log(format!("take_away {folder} {} {whole}", images.join(",")));
-            Ok(())
+            if self.fail_take {
+                Err("still listed".into())
+            } else {
+                Ok(())
+            }
         }
         fn put_back(&self, _: &str, zip: &Path, folder: &str, _: u32) -> Result<(), String> {
             self.log(format!(
@@ -2889,6 +2906,20 @@ mod tests {
             format!("take_away {} {STAR} false", folder(B))
         );
         assert!(calls[n - 1].starts_with("put_back"), "{calls:?}");
+        // Their save goes back even when the added image could not be taken away.
+        let c = Fake {
+            owner: true,
+            fail_owner: Some(STAR.into()),
+            fail_take: true,
+            ..Fake::two_users(&[MAIN, STAR], &[MAIN])
+        };
+        let e = restore_to_user(&c, T, &file, &zip, B).unwrap_err().msg;
+        assert!(e.ends_with("still listed"), "{e}");
+        assert!(
+            c.calls().last().unwrap().starts_with("put_back"),
+            "{:?}",
+            c.calls()
+        );
         let _ = cleanup_temp_dir(&tmp.to_string_lossy());
     }
 

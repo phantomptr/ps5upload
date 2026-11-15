@@ -39,20 +39,25 @@ const ENDED = ["done", "declined", "cancelled", "failed", "refused"];
 
 type Tr = ReturnType<typeof useTr>;
 
-export function ReceivePanel({ pending, onEnded }: { pending?: string | null; onEnded?: () => void }) {
+export function ReceivePanel({ pending, onEnded }: { pending?: { link: string; n: number } | null; onEnded?: () => void }) {
   const tr = useTr();
   const host = useConnectionStore((s) => (s.payloadStatus === "up" ? (s.host?.trim() ?? "") : ""));
-  const [link, setLink] = useState(pending ?? "");
+  const [link, setLink] = useState(pending?.link ?? "");
   const [name, setName] = useState(() => savedShareName());
   const [id, setId] = useState<string | null>(null);
   const [view, setView] = useState<ReceiveView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // A new link handed over while this panel shows goes into the form (not over a running receive).
-  const [shown, setShown] = useState(pending);
-  if (pending !== shown) {
-    setShown(pending);
-    if (pending && !id) setLink(pending);
+  // One that arrives during a receive waits, and fills the form when that receive is closed.
+  const [shown, setShown] = useState(pending?.n);
+  const [held, setHeld] = useState<string | null>(null);
+  if (pending?.n !== shown) {
+    setShown(pending?.n);
+    if (pending) {
+      if (id) setHeld(pending.link);
+      else setLink(pending.link);
+    }
   }
 
   // While a receive runs, its state (read on demand; stops once it ended).
@@ -92,7 +97,8 @@ export function ReceivePanel({ pending, onEnded }: { pending?: string | null; on
   const reset = () => {
     setId(null);
     setView(null);
-    setLink("");
+    setLink(held ?? "");
+    setHeld(null);
   };
 
   return (

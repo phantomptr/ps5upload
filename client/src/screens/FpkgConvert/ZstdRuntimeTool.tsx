@@ -4,7 +4,7 @@
 // through a ShadowMount+ backport. On a PS5 it also says when ShadowMount+'s emulator updates
 // would swap the game's runtime for one that won't run it.
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { RefreshCw } from "lucide-react";
 
 import {
@@ -102,12 +102,14 @@ export function ZstdRuntimeTool({
 }) {
   const tr = useTr();
   const [busy, setBusy] = useState(false);
+  const shown = useRef(source);
   const [done, setDone] = useState<ZstdRuntimeOutcome | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [smp, setSmp] = useState<SmpEmulatorCheck | null>(null);
   const host = consoleOf(source.trim());
   const now = runtimeNow(inspection, tr);
   useEffect(() => {
+    shown.current = source;
     setDone(null);
     setFailed(null);
   }, [source]);
@@ -140,17 +142,20 @@ export function ZstdRuntimeTool({
           "Puts the newest ampr-emu-ng into this game, checked against the digest GitHub publishes for it. A folder is changed in place. An image isn't changed: the runtime goes in a ShadowMount+ backport folder.",
         )}
         onClick={() => {
+          const started = source;
           setBusy(true);
           setFailed(null);
           fpkg
-            .updateZstdRuntime(source.trim())
+            .updateZstdRuntime(started.trim())
             .then((outcome) => {
+              // Another game was picked meanwhile: this answer is not about what is shown now.
+              if (shown.current !== started) return;
               setDone(outcome);
               onUpdated();
             })
-            .catch((e: unknown) =>
-              setFailed(e instanceof Error ? e.message : String(e)),
-            )
+            .catch((e: unknown) => {
+              if (shown.current === started) setFailed(e instanceof Error ? e.message : String(e));
+            })
             .finally(() => setBusy(false));
         }}
       >

@@ -227,6 +227,13 @@ fn after_op(
     match op {
         tn::Op::Disable => {
             if let Err(e) = &r {
+                // A PS5 that answered "no" took the call: there is nothing to keep for later.
+                if e.downcast_ref::<ps5upload_core::mgmt::MgmtError>()
+                    .is_some_and(|m| m.status != 0)
+                {
+                    set_pause_pending(addr, false);
+                    return r;
+                }
                 set_pause_pending(addr, true);
                 crate::log_at!(
                     Info,

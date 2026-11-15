@@ -4,6 +4,21 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 12.4.23
+
+Fixes from a review of everything changed since 12.4.10. Checked with the automated tests; not tried on a PS5.
+
+- **Restore a save to another user:** if the last step failed, the other user's own save was not always put back, and with an older helper on the PS5 the restore started before finding out it could not finish. It now checks first, and always puts their save back.
+- **Remove PS5Upload from a PS5:** when the helper was slow to stop, it could exit before PS5Upload's files were all removed, after the app had already said it was done. The files are now always removed first.
+- **Convert:** a game with a non-English file name of a certain length could not be checked at all. Pressing **Update the zstd runtime** or **Add the AMPR emulator** and then picking another game no longer shows the first game's result under the second. The ShadowMount+ emulator check no longer reads a PS5 that didn't answer as "nothing to warn about". An image already on the newest zstd runtime no longer gets a needless backport folder.
+- **Share:** opening the same share link a second time, or a second link while one is being received, now fills the form instead of being dropped.
+- **Payloads:** checking for updates fetched every payload source once per payload, and could show one source's error on another source's payloads. Payloads from a source now show where they come from in the playlist picker, and Remove can't be pressed twice.
+- **Tailscale:** a pause the PS5 refused is no longer shown as paused.
+- **Play Together:** the log now names the port really in use when the chosen one is taken, and the router note is left out when there is no port to name.
+- **Files:** "Search all drives" with an empty search box no longer clears what you typed in the Search view.
+- **FAQ:** new entry on how to convert a game to zstd packs in Convert (it works the same in the Windows, macOS and Linux apps).
+- **PS5 helper:** changing a save's owner now takes the same lock as every other identity change, save details with long non-English text no longer break the reply, and an icon that could not be shown again stays on the list to retry.
+
 ## 12.4.22
 
 - **Games in zstd packs that hang at startup (ASTRO BOT and others):** the zstd runtime (ampr-emu-ng) that went into packed games could be 0.3.2, and versions before 0.3.4 hang some games at startup. New packs now get 0.4.0 or newer, and so does **Add the AMPR emulator** when you pick ampr-emu-ng.

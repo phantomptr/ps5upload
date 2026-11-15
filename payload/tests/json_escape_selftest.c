@@ -42,6 +42,20 @@ int main(void) {
     CHECK(json_escape_into(NULL, big, sizeof big) == 0 && big[0] == '\0');
     CHECK(json_escape_into("abc", NULL, 8) == 0);
 
+    /* Text that may not be clean UTF-8: whole characters pass, anything else reads '?'. */
+    {
+        char u[32];
+        char cut[6];
+        json_escape_utf8_into("caf\xC3\xA9 \xE3\x83\x87 \xF0\x9F\x98\x80", u, sizeof u);
+        CHECK(strcmp(u, "caf\xC3\xA9 \xE3\x83\x87 \xF0\x9F\x98\x80") == 0);
+        json_escape_utf8_into("a\xFF" "b\x80" "c\xC3", u, sizeof u);
+        CHECK(strcmp(u, "a?b?c?") == 0);
+        /* A three-byte character cut by the buffer after its second byte. */
+        json_escape_utf8_into("ab\xE3\x83\x87", cut, sizeof cut);
+        CHECK(strcmp(cut, "ab??") == 0 || strcmp(cut, "ab?") == 0 || strcmp(cut, "ab") == 0);
+        for (const char *p = cut; *p; p++) CHECK((unsigned char)*p < 0x80);
+    }
+
     if (failures) {
         fprintf(stderr, "json_escape_selftest: %d failure(s)\n", failures);
         return 1;

@@ -19,11 +19,15 @@ export default function ShareScreen() {
   const [params, setParams] = useSearchParams();
   // A link handed over (an app link, the website's share page): taken into the form, then off the
   // address. Read on every change, so a second link opened while this screen shows is not lost.
-  const [pending, setPending] = useState<string | null>(() => params.get("receive")?.trim() || null);
+  // Counted, so the same link opened again is still a new hand-over.
+  const [pending, setPending] = useState<{ link: string; n: number } | null>(() => {
+    const first = params.get("receive")?.trim();
+    return first ? { link: first, n: 1 } : null;
+  });
   useEffect(() => {
     if (!params.has("receive")) return;
     const next = params.get("receive")?.trim();
-    if (next) setPending(next);
+    if (next) setPending((p) => ({ link: next, n: (p?.n ?? 0) + 1 }));
     setParams({}, { replace: true });
   }, [params, setParams]);
   // Read the past shares again each time a receive ends, so it shows up there.

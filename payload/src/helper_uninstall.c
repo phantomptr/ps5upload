@@ -6,6 +6,7 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -142,7 +143,23 @@ static size_t live_mount_sources(struct statfs **m, const char **froms, size_t c
 
 #define HU_MAX_KEEP 32
 
+/* Main calls this last; the exit watchdog calls it too, so a slow stop cannot end the process
+ * with the folders half removed or untouched. One of them does the work, the other waits. */
+static pthread_mutex_t g_wipe_mu = PTHREAD_MUTEX_INITIALIZER;
+static int g_wiped;
+
+static void wipe_now(void);
+
 void hu_wipe(void) {
+    pthread_mutex_lock(&g_wipe_mu);
+    if (!g_wiped) {
+        wipe_now();
+        g_wiped = 1;
+    }
+    pthread_mutex_unlock(&g_wipe_mu);
+}
+
+static void wipe_now(void) {
     hu_counts_t c = {0, 0, 0};
     static char sources[HU_MAX_KEEP][HU_KEEP_PATH];
     const char *keep[HU_MAX_KEEP + 2];
@@ -184,9 +201,9 @@ void hu_wipe(void) {
 #ifndef HU_HOST_TEST
 int hu_mounts_in_use(char *out, size_t cap) {
     struct statfs *m = NULL;
-    int n = mntinfo_snapshot(&m), found = 0;
-    size_t at = 0;
     if (cap < 3) return -1;
+    int n = mntinfo_snapshot(&m), found = 0, listed = 0;
+    size_t at = 0;
     if (n <= 0 || !m) {
         free(m);
         snprintf(out, cap, "[]");
@@ -199,9 +216,10 @@ int hu_mounts_in_use(char *out, size_t cap) {
         found++;
         /* Mount points here are paths the helper made: plain characters, no quote to escape. */
         if (strchr(mp, '"') || strchr(mp, '\\')) continue;
-        int k = snprintf(out + at, cap - at, "%s\"%s\"", found > 1 ? "," : "", mp);
+        int k = snprintf(out + at, cap - at, "%s\"%s\"", listed ? "," : "", mp);
         if (k < 0 || (size_t)k >= cap - at - 1) break;
         at += (size_t)k;
+        listed++;
     }
     free(m);
     out[at++] = ']';

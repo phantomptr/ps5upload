@@ -3326,7 +3326,8 @@ export default function FileSystemScreen() {
               icon: SearchIcon,
               label: tr("fs_search_all_drives", undefined, "Search all drives"),
               run: () => {
-                askSearch(searchDraft.trim(), undefined, false);
+                // An empty box only opens the view: what was typed there stays.
+                if (searchDraft.trim()) askSearch(searchDraft.trim(), undefined, false);
                 openView("search");
               },
             },

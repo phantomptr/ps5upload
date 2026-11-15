@@ -1262,7 +1262,9 @@ function PlaylistCard({
                               )}
                             </span>
                             <span className="block truncate text-[var(--color-muted)]">
-                              {p.repo_owner}/{p.repo_name}
+                              {p.repo_owner
+                                ? `${p.repo_owner}/${p.repo_name}`
+                                : p.homepage.replace(/^https:\/\/(www\.)?/, "").replace(/\/releases\/?$/, "")}
                             </span>
                           </span>
                         </button>
