@@ -2050,7 +2050,9 @@ refuses to start the title. Check these in order.
    launch fails. Use a PS4 package, or the folder-dump route below.
 2. **"View product" or "missing base entitlement".** Install the base game
    before its update or DLC. A package that needs an entitlement the console
-   does not have will always show "View product".
+   does not have will always show "View product". A PS5 game installed from a
+   fake package on firmware above 11.60 (item 1) ends here too: it installs,
+   then shows "View product". Use the game folder or an image instead.
 3. **kstuff or ShadowMount+ is not running.** Launching needs kernel access.
    **Games** says so above the grid when the helper has none; load kstuff and
    reconnect. Disc-image titles need ShadowMount+ running.
@@ -2061,6 +2063,18 @@ refuses to start the title. Check these in order.
 5. **A launch the app sent is not the same as a game that started.** The
    console accepts a launch and may take a while on the first start. If the
    game never appears, close it from the PS5 and start it from there.
+6. **A game in zstd packs hangs at startup or won't start (ASTRO BOT and
+   others).** A zstd-packed game is read through the ampr-emu-ng runtime in
+   its `fakelib`. Releases before 0.3.4 hang some games at startup, and
+   drakmor's ampr_emu (for LZ4 packs) can't read zstd packs at all. Open the
+   game in **Convert**: when its runtime is old or the wrong one, **Update the
+   zstd runtime** puts the newest ampr-emu-ng in (a folder in place, an image
+   on the PS5 through a ShadowMount+ backport). Also check ShadowMount+'s
+   emulator updates: when they are on, ShadowMount+ puts
+   `/data/shadowmount/emus/libSceAmpr.sprx` into every game in place of the
+   game's own, and if that file is ampr_emu, zstd games won't start. Convert
+   warns about this for a game on the PS5; turn emulator updates off in
+   ShadowMount+'s settings, or remove that file.
 
 ## Games and the Collection
 

@@ -295,6 +295,22 @@ mod tests {
     const NEW_URL: &str =
         "https://github.com/quer3q/ampr-emu-ng/releases/download/v0.4.0/libSceAmpr.sprx";
 
+    #[test]
+    fn the_tested_release_starts_the_games_older_ones_hang() {
+        use ps5upload_fpkg::ampr_pack::ng;
+        assert!(
+            !ng::older(PINNED.version, ng::NG_FIXED),
+            "{}",
+            PINNED.version
+        );
+        assert!(PINNED.url.starts_with(DOWNLOAD_PREFIX));
+        assert!(PINNED.url.contains(&format!("/v{}/", PINNED.version)));
+        // The digest this app pins is the one it recognises that release by.
+        assert!(ng::NG_RELEASES
+            .iter()
+            .any(|(v, s)| *v == PINNED.version && *s == PINNED.sha256));
+    }
+
     fn cache(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "ps5upload-zstd-runtime-{name}-{}",

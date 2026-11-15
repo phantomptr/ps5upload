@@ -1268,6 +1268,9 @@ pub struct Inspection {
     /// For a libSceAmpr title, whether an image can carry LZ4 asset packs (see
     /// [`crate::ampr_pack::image::readiness`]); `None` for any other title.
     pub ampr_packs: Option<crate::ampr_pack::image::Readiness>,
+    /// For a game in zstd asset packs, the runtime it carries and whether it needs a newer one
+    /// ([`crate::ampr_pack::ng::zstd_runtime`]); `None` for any other game.
+    pub zstd_runtime: Option<crate::ampr_pack::ng::ZstdRuntime>,
     /// How many of its executables are plain ELF files, which a build fake-signs.
     pub unsigned_executables: usize,
     /// A PS4 game, update or add-on: it becomes an image or a folder, not a PS5 package.
@@ -1513,6 +1516,7 @@ fn licence_only(source_path: &Path, info: &crate::ps4_pkg::Ps4Info) -> Inspectio
             detail: crate::ps4_pkg::LICENCE_ONLY.into(),
         }],
         ampr_packs: None,
+        zstd_runtime: None,
         unsigned_executables: 0,
         ps4_game: true,
         content_version: info.text("APP_VER"),
@@ -1630,6 +1634,7 @@ pub fn inspect_with_update(
         output_free: free_bytes(output_dir),
         checks,
         ampr_packs: crate::ampr_pack::image::readiness(tree.as_mut()),
+        zstd_runtime: crate::ampr_pack::ng::zstd_runtime(tree.as_mut()),
         unsigned_executables: crate::fself::unsigned(tree.as_mut()).len(),
         ps4_game,
         content_version,

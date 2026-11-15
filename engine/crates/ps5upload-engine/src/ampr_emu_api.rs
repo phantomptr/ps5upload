@@ -302,6 +302,291 @@ pub(crate) async fn ampr_emu_handler(Json(req): Json<AmprEmuReq>) -> impl IntoRe
     }
 }
 
+#[derive(Deserialize)]
+pub(crate) struct ZstdRuntimeReq {
+    source: String,
+}
+
+/// What updating a zstd-packed game's runtime did.
+#[derive(Serialize, Debug, PartialEq, Eq)]
+pub(crate) struct ZstdRuntimeOutcome {
+    /// `folder`: replaced in the game's own folder. `backport`: a backport folder for an image.
+    kind: &'static str,
+    folder: String,
+    written: Vec<String>,
+    /// What the game had: `ampr-emu-ng 0.3.2`, `ampr_emu 0.4.2.1`, `unknown`, `none`.
+    from: String,
+    /// What it has now: `ampr-emu-ng 0.4.0`.
+    to: String,
+    /// It already had exactly this one: nothing was written.
+    already: bool,
+    rescanned: bool,
+}
+
+fn runtime_label(r: Option<&ps5upload_fpkg::ampr_pack::ng::ZstdRuntime>) -> String {
+    match r {
+        None => "none".into(),
+        Some(r) if r.kind == "missing" => "none".into(),
+        Some(r) => match &r.version {
+            Some(v) => format!("{} {v}", r.kind),
+            None => r.kind.to_string(),
+        },
+    }
+}
+
+/// The plan for one game: where the runtime goes, relative to the folder written to.
+/// `existing`: what that place holds now (`None`: nothing). Returns the files to write, empty when
+/// the place already holds `runtime`.
+fn zstd_writes(
+    tree: &mut dyn SourceTree,
+    at: &str,
+    runtime: &[u8],
+    existing: Option<&[u8]>,
+    copy_modules: Option<(&str, &str)>,
+) -> Result<Vec<(String, Vec<u8>)>, String> {
+    if existing == Some(runtime) {
+        return Ok(Vec::new());
+    }
+    // A packed game's ampr_emu.index lists its packed files too, so it is never rebuilt here.
+    writes(tree, at, runtime, copy_modules, false, now())
+}
+
+/// A file on the console, `None` when there is none (an emulator is well under 64 MiB).
+fn console_file(addr: &str, path: &str) -> Result<Option<Vec<u8>>, String> {
+    let Ok(st) = ps5upload_core::fs_ops::fs_stat(addr, path) else {
+        return Ok(None);
+    };
+    if st.kind != "file" || st.size > 64 << 20 {
+        return Ok(None);
+    }
+    ps5upload_core::fs_ops::fs_read_whole(addr, path, st.size)
+        .map(Some)
+        .map_err(|e| format!("{path}: {e:#}"))
+}
+
+fn update_zstd_runtime(source: &str) -> Result<ZstdRuntimeOutcome, String> {
+    use ps5upload_fpkg::ampr_pack::ng;
+    let path = resolve_engine_path(source);
+    let image = crate::image_build::has_image_extension(&path);
+    if !source.starts_with("ps5://") && ps5upload_fpkg::remote_source::is_remote(&path) {
+        return Err(
+            "this game is on a saved server: copy it to this computer or the PS5 first".into(),
+        );
+    }
+    if image && !source.starts_with("ps5://") {
+        return Err(
+            "this image is on this computer: convert it again with zstd packs, which puts the \
+             newest runtime in"
+                .into(),
+        );
+    }
+    let mut tree = ps5upload_fpkg::source::open(&path).map_err(|e| e.to_string())?;
+    let current = ng::zstd_runtime(tree.as_mut())
+        .ok_or_else(|| "this game isn't in zstd packs (no ampr_zstd.index)".to_string())?;
+    let from = runtime_label(Some(&current));
+    let r = crate::zstd_runtime::pack_runtime(crate::zstd_runtime::RuntimeChoice::Latest)?;
+    let to = format!("{} {}", r.name, r.version);
+    crate::log_info!(
+        "zstd runtime update for {source}: {from} -> {}",
+        r.describe()
+    );
+    let module = current
+        .module
+        .clone()
+        .unwrap_or_else(|| ps5upload_fpkg::ampr_pack::image::RUNTIME_MODULE.to_string());
+
+    if source.starts_with("ps5://") {
+        let (host, console_path) = crate::convert_source::console_target(source)?;
+        if !image && ps5upload_core::volumes::in_image_mount_root(&console_path) {
+            return Err(
+                "this folder is inside a mounted image, which is read-only: pick the image".into(),
+            );
+        }
+        let addr = crate::console_addr(&host);
+        if image {
+            // Images are read-only: a ShadowMount+ backport, which it loads ahead of the
+            // game's own fakelib (backport fakelib2, backport fakelib, then the game's).
+            let id = title_id(tree.as_mut())?;
+            let exists = |p: &str| ps5upload_core::fs_ops::fs_exists(&addr, p).unwrap_or(false);
+            let folder = backport_folder(&console_path, &id, &exists);
+            let existing_dir = ["fakelib2", "fakelib"]
+                .into_iter()
+                .find(|d| exists(&format!("{folder}/{d}")));
+            let own_dir = parent_of(&module).to_string();
+            let target = existing_dir.unwrap_or(&own_dir).to_string();
+            let at = format!("{target}/{MODULE}");
+            let full = format!("{folder}/{at}");
+            let have = console_file(&addr, &full)?;
+            let copy = existing_dir
+                .is_none()
+                .then_some((own_dir.as_str(), target.as_str()));
+            let files = zstd_writes(tree.as_mut(), &at, &r.bytes, have.as_deref(), copy)?;
+            let already = files.is_empty();
+            let written = to_console(&addr, &folder, &files)?;
+            let rescanned = !already
+                && ps5upload_core::smp_api::SmpApi::probe(&addr)
+                    .is_some_and(|(api, _)| api.rescan().is_ok());
+            return Ok(ZstdRuntimeOutcome {
+                kind: "backport",
+                folder,
+                written,
+                from,
+                to,
+                already,
+                rescanned,
+            });
+        }
+        let have = console_file(&addr, &format!("{console_path}/{module}"))?;
+        let files = zstd_writes(tree.as_mut(), &module, &r.bytes, have.as_deref(), None)?;
+        let already = files.is_empty();
+        let written = to_console(&addr, &console_path, &files)?;
+        return Ok(ZstdRuntimeOutcome {
+            kind: "folder",
+            folder: console_path,
+            written,
+            from,
+            to,
+            already,
+            rescanned: false,
+        });
+    }
+
+    let have = std::fs::read(path.join(&module)).ok();
+    let files = zstd_writes(tree.as_mut(), &module, &r.bytes, have.as_deref(), None)?;
+    let already = files.is_empty();
+    let mut written = Vec::new();
+    for (rel, bytes) in &files {
+        let to = path.join(rel);
+        if let Some(dir) = to.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        }
+        std::fs::write(&to, bytes).map_err(|e| format!("{}: {e}", to.display()))?;
+        written.push(rel.clone());
+    }
+    Ok(ZstdRuntimeOutcome {
+        kind: "folder",
+        folder: path.to_string_lossy().into_owned(),
+        written,
+        from,
+        to,
+        already,
+        rescanned: false,
+    })
+}
+
+/// POST /api/fpkg/zstd-runtime `{source}`: a game in zstd packs gets the newest ampr-emu-ng
+/// (checked against GitHub's digest; the tested release when it can't be). A folder, here or on
+/// the PS5, in place; an image on the PS5 through a ShadowMount+ backport.
+pub(crate) async fn zstd_runtime_handler(Json(req): Json<ZstdRuntimeReq>) -> impl IntoResponse {
+    let source = req.source.trim().to_string();
+    let done = tokio::task::spawn_blocking(move || update_zstd_runtime(&source))
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()));
+    match done {
+        Ok(outcome) => Json(outcome).into_response(),
+        Err(e) => json_err(StatusCode::BAD_REQUEST, e).into_response(),
+    }
+}
+
+/// ShadowMount+'s emulator updates, as its config.ini sets them: whether they are on (they are
+/// unless switched off) and the folder they come from.
+fn smp_emulator_updates(ini: &str) -> (bool, String) {
+    let mut enabled = true;
+    let mut folder = "/data/shadowmount/emus".to_string();
+    let mut section = String::new();
+    for line in ini.lines() {
+        let line = line.trim();
+        if line.starts_with('#') || line.starts_with(';') || line.is_empty() {
+            continue;
+        }
+        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            section = name.trim().to_ascii_lowercase();
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim().to_ascii_lowercase();
+        let value = value.trim();
+        // Version 2 keeps them under [emulators]; version 1 had them flat.
+        let (is_switch, is_path) = match section.as_str() {
+            "emulators" => (key == "update_enabled", key == "path"),
+            "" | "general" | "config" => (key == "update_emulators", key == "emulators_path"),
+            _ => (false, false),
+        };
+        if is_switch {
+            match value.to_ascii_lowercase().as_str() {
+                "off" | "0" | "false" | "no" => enabled = false,
+                "on" | "1" | "true" | "yes" => enabled = true,
+                _ => {}
+            }
+        } else if is_path && value.starts_with('/') {
+            folder = value.trim_end_matches('/').to_string();
+        }
+    }
+    (enabled, folder)
+}
+
+/// What ShadowMount+ does to a zstd-packed game's runtime on this console.
+#[derive(Serialize, Debug, PartialEq, Eq)]
+pub(crate) struct SmpEmulatorCheck {
+    /// ShadowMount+'s emulator updates are on.
+    updates_on: bool,
+    /// The `libSceAmpr.sprx` it puts into every game in its place, when there is one.
+    path: Option<String>,
+    /// What that file is (as a game's runtime: `ampr-emu-ng`, `ampr_emu`, `unknown`).
+    kind: Option<&'static str>,
+    version: Option<String>,
+    /// Games in zstd packs get that file instead of their own, and it won't start them, or may
+    /// hang them (drakmor's ampr_emu, or ampr-emu-ng older than 0.3.4).
+    breaks_zstd: bool,
+}
+
+fn smp_emulator_check(addr: &str) -> Result<SmpEmulatorCheck, String> {
+    let ini = console_file(addr, "/data/shadowmount/config.ini")?
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default();
+    let (updates_on, folder) = smp_emulator_updates(&ini);
+    let path = format!("{folder}/{MODULE}");
+    let Some(bytes) = console_file(addr, &path)? else {
+        return Ok(SmpEmulatorCheck {
+            updates_on,
+            path: None,
+            kind: None,
+            version: None,
+            breaks_zstd: false,
+        });
+    };
+    let (kind, version, outdated) = ps5upload_fpkg::ampr_pack::ng::classify(&bytes);
+    Ok(SmpEmulatorCheck {
+        updates_on,
+        path: Some(path),
+        kind: Some(kind),
+        version,
+        breaks_zstd: updates_on && outdated,
+    })
+}
+
+#[derive(Deserialize)]
+pub(crate) struct AddrQuery {
+    addr: String,
+}
+
+/// GET /api/ps5/smp-emulator?addr=: whether ShadowMount+ swaps zstd-packed games' runtime for
+/// one in its emulator folder that won't run them.
+pub(crate) async fn smp_emulator_handler(
+    axum::extract::Query(q): axum::extract::Query<AddrQuery>,
+) -> impl IntoResponse {
+    let addr = crate::console_addr(q.addr.trim());
+    let done = tokio::task::spawn_blocking(move || smp_emulator_check(&addr))
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()));
+    match done {
+        Ok(outcome) => Json(outcome).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, e).into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,5 +690,51 @@ mod tests {
         assert!(needed(&mut has).unwrap_err().contains("already"));
         let mut none = game(&["other.bin"]);
         assert!(needed(&mut none).unwrap_err().contains("needs no emulator"));
+    }
+
+    #[test]
+    fn shadowmounts_emulator_updates_are_on_unless_switched_off() {
+        assert_eq!(
+            smp_emulator_updates(""),
+            (true, "/data/shadowmount/emus".to_string())
+        );
+        let v2 = "[config]\nversion = 2\n[emulators]\n# update_enabled = off\nupdate_enabled = off\npath = /data/my/emus/\n";
+        assert_eq!(
+            smp_emulator_updates(v2),
+            (false, "/data/my/emus".to_string())
+        );
+        let v1 = "update_emulators=0\nemulators_path=/data/e\n";
+        assert_eq!(smp_emulator_updates(v1), (false, "/data/e".to_string()));
+        // Another section's path is not the emulators'.
+        let smb = "[smb:NAS]\npath = /x\n";
+        assert_eq!(
+            smp_emulator_updates(smb),
+            (true, "/data/shadowmount/emus".to_string())
+        );
+    }
+
+    #[test]
+    fn a_runtime_already_in_place_is_not_written_again() {
+        let mut g = game(&["eboot.bin", "fakelib/libSceAmpr.sprx", "fakelib/libc.prx"]);
+        let none =
+            zstd_writes(&mut g, "fakelib/libSceAmpr.sprx", b"NG", Some(b"NG"), None).unwrap();
+        assert!(none.is_empty());
+        let one =
+            zstd_writes(&mut g, "fakelib/libSceAmpr.sprx", b"NG", Some(b"OLD"), None).unwrap();
+        assert_eq!(
+            one,
+            vec![("fakelib/libSceAmpr.sprx".to_string(), b"NG".to_vec())]
+        );
+        // A fresh backport takes the game's other modules, the runtime last, and no index.
+        let bp = zstd_writes(
+            &mut g,
+            "fakelib/libSceAmpr.sprx",
+            b"NG",
+            None,
+            Some(("fakelib", "fakelib")),
+        )
+        .unwrap();
+        let names: Vec<&str> = bp.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(names, ["fakelib/libc.prx", "fakelib/libSceAmpr.sprx"]);
     }
 }

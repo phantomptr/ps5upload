@@ -79,7 +79,7 @@ export function folderPackOptions(lz4: Lz4Choice | undefined): ZstdPacks | undef
 }
 
 /** The tested ampr-emu-ng release, as the engine pins it (zstd_packs.rs). */
-const NG_TESTED = "0.3.2";
+const NG_TESTED = "0.4.0";
 
 /** Which ampr-emu-ng goes in with zstd packs: the newest release or the tested one. */
 function ZstdRuntimeChoice() {
@@ -434,7 +434,7 @@ function AmprEmuOption() {
 
 /** Product names, the same in every language. */
 const AMPR_EMU = "ampr_emu 0.4.2.1";
-const AMPR_EMU_NG = "ampr-emu-ng 0.3.2";
+const AMPR_EMU_NG = "ampr-emu-ng";
 
 /** Which emulator a game gets: drakmor's, or quer3q's, which also reads zstd packs. */
 export function AmprEmuBuildChoice({

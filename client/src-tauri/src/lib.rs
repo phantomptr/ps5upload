@@ -460,6 +460,8 @@ pub fn run() {
             commands::fpkg_build,
             commands::fpkg_delete,
             commands::fpkg_ampr_emu,
+            commands::fpkg_zstd_runtime,
+            commands::ps5_smp_emulator,
             commands::fpkg_ampr_index,
             commands::fpkg_estimate,
             commands::ps5_elfldr_health,

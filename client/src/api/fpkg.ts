@@ -60,6 +60,8 @@ export interface FpkgInspection {
   /** Present for a title that reads its files through libSceAmpr: whether a game image can
    *  carry AMPR LZ4 asset packs, which the game's own ampr_emu (fakelib) must serve. */
   ampr_packs?: AmprPacksReadiness | null;
+  /** A game in zstd packs: the runtime it carries. */
+  zstd_runtime?: ZstdRuntimeInfo | null;
   /** How many of its executables are plain ELF files, which a build fake-signs. */
   unsigned_executables?: number;
   /** A PS4 game, update or add-on: it becomes an image or a folder, not a PS5 package. */
@@ -295,6 +297,11 @@ export const fpkg = {
   /** The AMPR emulator added to a game where it stands: in a folder, or as a backport folder for
    *  an image on the PS5. */
   addAmprEmu: (source: string) => invoke<AmprEmuOutcome>("fpkg_ampr_emu", { source, build: useConvertPrefs.getState().amprEmuBuild }),
+  /** A game in zstd packs gets the newest ampr-emu-ng where it stands (a backport folder for an
+   *  image on the PS5). */
+  updateZstdRuntime: (source: string) => invoke<ZstdRuntimeOutcome>("fpkg_zstd_runtime", { source }),
+  /** Whether ShadowMount+ on `addr` swaps zstd-packed games' runtime for one that won't run them. */
+  smpEmulator: (addr: string) => invoke<SmpEmulatorCheck>("ps5_smp_emulator", { addr }),
   rebuildAmprIndex: (source: string) => invoke<{ job_id: string }>("fpkg_ampr_index", { source }),
   /** An edited copy of a game image whose one change is a regenerated `ampr_emu.index` (#621),
    *  named `<name>-edited` next to it (`<name>-edited (2)` when a rebuild already made one).
@@ -304,6 +311,39 @@ export const fpkg = {
 };
 
 /** What adding the AMPR emulator to a game did. */
+/** What runs a game in zstd packs (the engine's `ampr_pack::ng::ZstdRuntime`). */
+export interface ZstdRuntimeInfo {
+  module?: string | null;
+  kind: "ampr-emu-ng" | "ampr_emu" | "unknown" | "missing";
+  version?: string | null;
+  /** Missing, drakmor's (no zstd), or ampr-emu-ng older than 0.3.4: a newer one fixes it. */
+  outdated: boolean;
+}
+
+/** What updating a zstd-packed game's runtime did. */
+export interface ZstdRuntimeOutcome {
+  kind: "folder" | "backport";
+  folder: string;
+  written: string[];
+  /** `ampr-emu-ng 0.3.2`, `ampr_emu 0.4.2.1`, `unknown`, `none`. */
+  from: string;
+  /** `ampr-emu-ng 0.4.0`. */
+  to: string;
+  already: boolean;
+  rescanned: boolean;
+}
+
+/** ShadowMount+'s emulator updates on a console, as they touch zstd-packed games. */
+export interface SmpEmulatorCheck {
+  updates_on: boolean;
+  /** The libSceAmpr.sprx it puts into every game in place of the game's own. */
+  path?: string | null;
+  kind?: "ampr-emu-ng" | "ampr_emu" | "unknown" | null;
+  version?: string | null;
+  /** zstd-packed games get that file and it won't start them. */
+  breaks_zstd: boolean;
+}
+
 export interface AmprEmuOutcome {
   kind: "folder" | "backport";
   folder: string;

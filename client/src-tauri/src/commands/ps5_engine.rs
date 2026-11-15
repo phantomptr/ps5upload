@@ -2402,6 +2402,21 @@ pub async fn fpkg_ampr_emu(source: String, build: Option<String>) -> Result<Json
     .await
 }
 
+/// A zstd-packed game gets the newest ampr-emu-ng where it stands. POST /api/fpkg/zstd-runtime.
+#[tauri::command]
+pub async fn fpkg_zstd_runtime(source: String) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/fpkg/zstd-runtime");
+    post_json(&url, &serde_json::json!({ "source": source })).await
+}
+
+/// Whether ShadowMount+ swaps zstd-packed games' runtime for one that won't run them.
+/// GET /api/ps5/smp-emulator.
+#[tauri::command]
+pub async fn ps5_smp_emulator(addr: String) -> Result<JsonValue, String> {
+    get_json(&addr_url("/api/ps5/smp-emulator", Some(&addr))).await
+}
+
 #[tauri::command]
 pub async fn fpkg_ampr_index(source: String) -> Result<JsonValue, String> {
     let base = engine::url();
