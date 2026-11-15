@@ -20,7 +20,7 @@ import { displayPath, isRemotePath, parseRemotePath } from "../../lib/remotePath
 import { useConnectionsStore } from "../../state/connections";
 import type { ImageFormat } from "../../api/fpkg";
 import { overallProgress, stageRows, type StageRow } from "./stages";
-import { lz4Active, type Lz4Choice } from "./ImageOptions";
+import type { Lz4Choice } from "./ImageOptions";
 import { GentleToggle } from "./GentleToggle";
 
 export { lz4Active, type Lz4Choice } from "./ImageOptions";
@@ -176,7 +176,6 @@ export function idleRun(
   const c = props.choice;
   const image = c.make === "image";
   const folder = c.make === "folder";
-  const packing = image && lz4Active(c.imageFormat, c.lz4);
   const sends = c.then !== "keep";
   // Save to: PS5 that this image can't do (or with no console) runs nothing; nor does Save to:
   // a server with no folder chosen, or for an image that can't go there.
@@ -190,7 +189,7 @@ export function idleRun(
   const label = folder
     ? tr("fpkg.folder.make", undefined, "Make game folder")
     : image
-      ? c.imageCompress && !packing
+      ? c.imageCompress
         ? tr("fpkg.image.make_compressed", undefined, "Make compressed image")
         : tr("fpkg.image.make", undefined, "Make game image")
       : !sends

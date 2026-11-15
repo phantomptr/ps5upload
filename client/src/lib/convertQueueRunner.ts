@@ -53,6 +53,7 @@ async function build(item: ConvertItem) {
     await conv.buildFolder(item.source, outputOf(item), item.keepBoth, {
       fullVerify: item.fullVerify,
       zstd: item.build.zstd,
+      ...(item.build.lz4 ? { lz4: item.build.lz4 } : {}),
       ...(item.toServer ? { toServer: item.toServer } : {}),
       ...(item.removeBackport ? { removeBackport: true } : {}),
       ...(item.build.unpackPacks
@@ -71,7 +72,7 @@ async function build(item: ConvertItem) {
     await conv.buildImage(
       item.source,
       outputOf(item),
-      item.build.compress && !item.build.lz4,
+      item.build.compress,
       item.build.format,
       dest
         ? {

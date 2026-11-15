@@ -13,10 +13,11 @@ import {
 import { useTr } from "../../state/lang";
 
 // The options of a game image (③ Options when "A game image" is what Convert makes): its
-// filesystem, .ffpfsc compression, AMPR LZ4 asset packs for a libSceAmpr game, and how the
-// read-back check reads.
+// filesystem, .ffpfsc compression, AMPR LZ4 or zstd asset packs, and how the read-back check
+// reads. The folder options take the same pack choice.
 
-/** The AMPR LZ4 asset-pack option for a libSceAmpr game's .exfat image. */
+/** The asset-pack choice for a game's image or folder: LZ4 (a libSceAmpr game's own ampr_emu)
+ *  or zstd (ampr-emu-ng). */
 export interface Lz4Choice {
   /** What the check found about the game's own ampr_emu. */
   readiness: AmprPacksReadiness;
@@ -31,8 +32,8 @@ export interface Lz4Choice {
   /** Install ampr_emu 0.4.2.1 into the image (offered when `readiness.kind` is `runtime`). */
   installRuntime: boolean;
   onInstallRuntime: (on: boolean) => void;
-  /** Which packs: LZ4 (plain exFAT only, the game's own emulator) or zstd (any plain image,
-   *  with ampr-emu-ng). */
+  /** Which packs: LZ4 (the game's own emulator) or zstd (ampr-emu-ng goes in). Either goes into
+   *  any image, compressed into a .ffpfsc or not, and into a folder. */
   kind: "lz4" | "zstd";
   onKind: (kind: "lz4" | "zstd") => void;
   zstdLevel: number;
@@ -45,6 +46,12 @@ export interface Lz4Choice {
  *  ampr-emu-ng injected all the same, as ps5-dump-forge does it, marked as untested. */
 export function zstdOffered(lz4: Lz4Choice | undefined): lz4 is Lz4Choice {
   return !!lz4 && !lz4.ps4;
+}
+
+/** Whether LZ4 packs are offered: for a game that reads through AMPR (its own ampr_emu, or the
+ *  release one put in, reads them), in any image and in a folder. */
+export function lz4Offered(lz4: Lz4Choice | undefined): lz4 is Lz4Choice {
+  return !!lz4 && lz4.readiness.kind !== "no_ampr" && !lz4.ps4;
 }
 
 /** The zstd levels offered, as ps5-dump-forge offers them. */
@@ -60,27 +67,23 @@ export function lz4Refused(lz4: Lz4Choice): string | null {
   return lz4.readiness.refusal;
 }
 
-/** What the build is told when packs are on, or nothing. Packing replaces .ffpfsc compression:
- *  the packs are already compressed, so the image holding them is a plain one. */
-export function packOptions(
-  format: ImageFormat,
-  lz4: Lz4Choice | undefined,
-  profileToml?: string,
-): AmprLz4Options | undefined {
-  if (!lz4 || !lz4Active(format, lz4)) return undefined;
+/** What an image build is told when packs are on, or nothing. Packs go into any image, plain or
+ *  compressed into a .ffpfsc (as PS5 Dump Forge offers them). */
+export function packOptions(lz4: Lz4Choice | undefined, profileToml?: string): AmprLz4Options | undefined {
+  if (!lz4 || !lz4Active(lz4)) return undefined;
   return lz4.kind === "zstd"
     ? { zstdLevel: lz4.zstdLevel, zstdRuntime: useConvertPrefs.getState().zstdRuntime, profileToml }
     : { profileToml, installRuntime: lz4.installRuntime };
 }
 
-/** Whether a pack format is on for this image. */
-export function lz4Active(format: ImageFormat, lz4: Lz4Choice | undefined): boolean {
-  return !!lz4?.on && (format === "exfat" || lz4.kind === "zstd") && !lz4Refused(lz4);
+/** Whether a pack format is on: for any image (any format, compressed or not) and a folder. */
+export function lz4Active(lz4: Lz4Choice | undefined): boolean {
+  return !!lz4?.on && !lz4Refused(lz4);
 }
 
-/** Whether a folder build packs: zstd only (LZ4 packs go into an .exfat image). */
+/** Whether a folder build packs (LZ4 or zstd). */
 export function folderPacks(lz4: Lz4Choice | undefined): boolean {
-  return !!lz4?.on && lz4.kind === "zstd" && !lz4Refused(lz4);
+  return lz4Active(lz4);
 }
 
 /** What a folder build is told when zstd packs are on, or nothing. */
@@ -88,8 +91,18 @@ export function folderPackOptions(
   lz4: Lz4Choice | undefined,
   profileToml?: string,
 ): ZstdPacks | undefined {
-  return lz4 && folderPacks(lz4)
+  return lz4 && folderPacks(lz4) && lz4.kind === "zstd"
     ? { level: lz4.zstdLevel, runtime: useConvertPrefs.getState().zstdRuntime, profileToml }
+    : undefined;
+}
+
+/** What a folder build is told when LZ4 packs are on, or nothing. */
+export function folderLz4Options(
+  lz4: Lz4Choice | undefined,
+  profileToml?: string,
+): AmprLz4Options | undefined {
+  return lz4 && folderPacks(lz4) && lz4.kind === "lz4"
+    ? { profileToml, installRuntime: lz4.installRuntime }
     : undefined;
 }
 
@@ -199,9 +212,9 @@ export function ZstdOption({ lz4, folder }: { lz4: Lz4Choice; folder?: boolean }
           <span className="mt-0.5 block leading-relaxed text-[var(--color-muted)]">
             {folder
               ? tr(
-                  "fpkg.folder.zstd_body",
+                  "fpkg.folder.zstd_body_v2",
                   undefined,
-                  "Writes the game as a plain folder with all but its system files in zstd packs, and quer3q's ampr-emu-ng as fakelib/libSceAmpr.sprx. A game folder can be the source too. LZ4 packs are not offered here: they go into an .exfat image only. Turn off update_emulators in ShadowMount+, or it can swap the emulator for one that can't read them.",
+                  "Writes the game as a plain folder with all but its system files in zstd packs, and quer3q's ampr-emu-ng as fakelib/libSceAmpr.sprx. A game folder can be the source too. Turn off update_emulators in ShadowMount+, or it can swap the emulator for one that can't read them.",
                 )
               : tr(
                   "fpkg.image.zstd_body",
@@ -247,7 +260,8 @@ export function ZstdOption({ lz4, folder }: { lz4: Lz4Choice; folder?: boolean }
   );
 }
 
-function Lz4Option({ lz4 }: { lz4: Lz4Choice }) {
+/** LZ4 packs, for any image of a game that reads through AMPR, or for a folder (`folder`). */
+export function Lz4Option({ lz4, folder }: { lz4: Lz4Choice; folder?: boolean }) {
   const tr = useTr();
   const refusal = lz4Refused({ ...lz4, kind: "lz4" });
   const kind = lz4.readiness.kind ?? (lz4.readiness.refusal ? "runtime" : "ok");
@@ -269,11 +283,17 @@ function Lz4Option({ lz4 }: { lz4: Lz4Choice }) {
             {tr("fpkg.image.lz4", undefined, "AMPR LZ4 asset packs (smaller, for ShadowMount+)")}
           </span>
           <span className="mt-0.5 block leading-relaxed text-[var(--color-muted)]">
-            {tr(
-              "fpkg.image.lz4_body",
-              undefined,
-              "Packs the game's data into LZ4 asset packs that the game's own ampr_emu (fakelib/libSceAmpr.sprx) reads back, so the image is smaller. Executables, system files and already-compressed media stay as they are. Plain .exfat only, without .ffpfsc compression.",
-            )}
+            {folder
+              ? tr(
+                  "fpkg.folder.lz4_body",
+                  undefined,
+                  "Writes the game as a plain folder with its data in LZ4 asset packs that the game's own ampr_emu (fakelib/libSceAmpr.sprx) reads back, so the folder is smaller. Executables, system files and already-compressed media stay as they are. A game folder can be the source too. The packs are made beside the folder first, so it needs that much room again while it is made.",
+                )
+              : tr(
+                  "fpkg.image.lz4_body_v2",
+                  undefined,
+                  "Packs the game's data into LZ4 asset packs that the game's own ampr_emu (fakelib/libSceAmpr.sprx) reads back, so the image is smaller. Executables, system files and already-compressed media stay as they are. Works with every image format, and inside a .ffpfsc. The packs are made on this computer first, so it needs that much free space while the image is made, even when the image goes to the PS5 or a server.",
+                )}
           </span>
         </span>
       </label>
@@ -287,14 +307,22 @@ function Lz4Option({ lz4 }: { lz4: Lz4Choice }) {
           />
           <span className="min-w-0">
             <span className="block font-medium text-[var(--color-text)]">
-              {tr("fpkg.image.lz4_install_runtime", undefined, "Put ampr_emu 0.4.2.1 into the image")}
+              {folder
+                ? tr("fpkg.folder.lz4_install_runtime", undefined, "Put ampr_emu 0.4.2.1 into the folder")
+                : tr("fpkg.image.lz4_install_runtime", undefined, "Put ampr_emu 0.4.2.1 into the image")}
             </span>
             <span className="mt-0.5 block leading-relaxed text-[var(--color-muted)]">
-              {tr(
-                "fpkg.image.lz4_install_runtime_body",
-                { reason: lz4.readiness.refusal ?? "" },
-                "{reason}. The image gets drakmor's ampr_emu 0.4.2.1 as fakelib/libSceAmpr.sprx (fetched once from its GitHub release and checked against a known digest); the game's own copy stays beside it as libSceAmpr.sprx.orig.",
-              )}
+              {folder
+                ? tr(
+                    "fpkg.folder.lz4_install_runtime_body",
+                    { reason: lz4.readiness.refusal ?? "" },
+                    "{reason}. The folder gets drakmor's ampr_emu 0.4.2.1 as fakelib/libSceAmpr.sprx (fetched once from its GitHub release and checked against a known digest); the game's own copy stays beside it as libSceAmpr.sprx.orig.",
+                  )
+                : tr(
+                    "fpkg.image.lz4_install_runtime_body",
+                    { reason: lz4.readiness.refusal ?? "" },
+                    "{reason}. The image gets drakmor's ampr_emu 0.4.2.1 as fakelib/libSceAmpr.sprx (fetched once from its GitHub release and checked against a known digest); the game's own copy stays beside it as libSceAmpr.sprx.orig.",
+                  )}
             </span>
           </span>
         </label>
@@ -302,11 +330,17 @@ function Lz4Option({ lz4 }: { lz4: Lz4Choice }) {
       {refusal && kind === "runtime" ? (
         // The checkbox above fixes this one: say so, rather than that packs are unavailable (#449).
         <div className="text-xs text-[var(--color-warn)]">
-          {tr(
-            "fpkg.image.lz4_needs_runtime",
-            { reason: refusal },
-            "Tick “Put ampr_emu 0.4.2.1 into the image” above to use packs: {reason}",
-          )}
+          {folder
+            ? tr(
+                "fpkg.folder.lz4_needs_runtime",
+                { reason: refusal },
+                "Tick “Put ampr_emu 0.4.2.1 into the folder” above to use packs: {reason}",
+              )
+            : tr(
+                "fpkg.image.lz4_needs_runtime",
+                { reason: refusal },
+                "Tick “Put ampr_emu 0.4.2.1 into the image” above to use packs: {reason}",
+              )}
         </div>
       ) : refusal ? (
         <div className="text-xs text-[var(--color-warn)]">
@@ -391,30 +425,17 @@ function PacksWarning() {
 }
 
 /** One muted line where the pack options would be, saying why they aren't: no game checked
- *  yet (`lz4` absent), a game that doesn't read through AMPR, or (an image) LZ4 needing .exfat.
- *  Nothing when every pack option is offered. */
-export function PacksNote({
-  lz4,
-  format,
-  folder,
-}: {
-  lz4: Lz4Choice | undefined;
-  format?: ImageFormat;
-  folder?: boolean;
-}) {
+ *  yet (`lz4` absent), or a game that doesn't read through AMPR. Nothing when every pack option
+ *  is offered. */
+export function PacksNote({ lz4 }: { lz4: Lz4Choice | undefined }) {
   const tr = useTr();
+  // A folder takes the same packs as an image.
   const text = !lz4
-    ? folder
-      ? tr(
-          "fpkg.folder.packs_pending_v2",
-          undefined,
-          "zstd asset packs appear here once a PS5 game is checked.",
-        )
-      : tr(
-          "fpkg.image.packs_pending_v2",
-          undefined,
-          "Asset packs (LZ4, zstd) appear here once a PS5 game is checked.",
-        )
+    ? tr(
+        "fpkg.image.packs_pending_v2",
+        undefined,
+        "Asset packs (LZ4, zstd) appear here once a PS5 game is checked.",
+      )
     : lz4.readiness.kind === "no_ampr" && lz4.ps4
       ? tr(
           "fpkg.image.packs_no_ampr",
@@ -422,19 +443,11 @@ export function PacksNote({
           "Asset packs: not offered, this game doesn't read its files through AMPR.",
         )
       : lz4.readiness.kind === "no_ampr"
-        ? // zstd packs are offered above; a folder never gets LZ4 packs, so nothing to say there.
-          folder
-          ? null
-          : tr(
-              "fpkg.image.lz4_no_ampr",
-              undefined,
-              "LZ4 asset packs: not offered, this game doesn't read its files through AMPR.",
-            )
-      : !folder && format !== "exfat"
-        ? tr(
-            "fpkg.image.packs_lz4_needs_exfat",
+        ? // zstd packs are offered above.
+          tr(
+            "fpkg.image.lz4_no_ampr",
             undefined,
-            "LZ4 asset packs need an .exfat image. zstd asset packs work with this one.",
+            "LZ4 asset packs: not offered, this game doesn't read its files through AMPR.",
           )
         : null;
   if (!text) return null;
@@ -573,7 +586,7 @@ export function ImageChoice({
   const tr = useTr();
   const setFormat = (f: ImageFormat) => onChoice(f, compress);
   const setCompress = (c: boolean) => onChoice(format, c);
-  const packing = lz4Active(format, lz4);
+  const packing = lz4Active(lz4);
   const options: { id: ImageFormat; label: string; body: string }[] = [
     {
       id: "ffpkg",
@@ -627,8 +640,7 @@ export function ImageChoice({
       <label className="flex cursor-pointer items-start gap-2.5 text-xs">
         <input
           type="checkbox"
-          checked={compress && !packing}
-          disabled={packing}
+          checked={compress}
           onChange={(e) => setCompress(e.target.checked)}
           className="checkbox mt-px h-4 w-4 shrink-0"
         />
@@ -645,11 +657,11 @@ export function ImageChoice({
           </span>
         </span>
       </label>
-      {compress && !packing && <FfpfscLevelOption own={level} />}
+      {compress && <FfpfscLevelOption own={level} />}
       {lz4?.readiness.emulator_missing && !packing && <AmprEmuOption />}
-      {lz4 && lz4.readiness.kind !== "no_ampr" && format === "exfat" && <Lz4Option lz4={lz4} />}
+      {lz4Offered(lz4) && <Lz4Option lz4={lz4} />}
       {zstdOffered(lz4) && <ZstdOption lz4={lz4} />}
-      {(lz4 || packsNote) && <PacksNote lz4={lz4} format={format} />}
+      {(lz4 || packsNote) && <PacksNote lz4={lz4} />}
       <VerifyChunkOption />
       <p className="text-xs leading-relaxed text-[var(--color-muted)]">
         {tr(

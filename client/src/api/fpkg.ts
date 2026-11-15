@@ -113,6 +113,9 @@ export interface BuildExtras {
   /** The AMPR emulator choice that goes with unpacking into a folder (a queued game's own;
    *  the settings when absent). An image build takes its own `amprEmu` argument. */
   amprEmu?: { add: boolean; build: AmprEmuBuild };
+  /** A folder build: its files in AMPR LZ4 asset packs (not with zstd packs); the source may
+   *  then also be a game folder. An image build takes its packs as its `lz4` argument. */
+  lz4?: AmprLz4Options;
 }
 
 export type Ps4Kind = "game" | "patch" | "addon";
@@ -141,7 +144,8 @@ export interface AmprPacksReadiness {
   emulator_missing?: boolean;
 }
 
-/** Pack a game image's files into AMPR LZ4 asset packs first (exFAT images only). */
+/** Pack a game's files into asset packs first: AMPR LZ4 ones, or zstd ones with `zstdLevel`.
+ *  Either goes into any image, compressed into a .ffpfsc or not. */
 export interface AmprLz4Options {
   /** 1 (fastest) to 12 (smallest); the engine uses 9 when absent. */
   level?: number;
@@ -150,8 +154,8 @@ export interface AmprLz4Options {
   profileToml?: string;
   /** Put ampr_emu 0.4.2.1 into the image when the game's own is missing or too old. */
   installRuntime?: boolean;
-  /** zstd packs at this level in place of LZ4 ones, in a plain image of any format; ampr-emu-ng
-   *  goes in the image. */
+  /** zstd packs at this level in place of LZ4 ones, in an image of any format; ampr-emu-ng goes
+   *  in the image. */
   zstdLevel?: number;
   /** Which ampr-emu-ng goes in with zstd packs; Convert's setting when absent. */
   zstdRuntime?: ZstdRuntime;
@@ -249,8 +253,8 @@ export const fpkg = {
   /** Write a game folder as one .exfat image for ShadowMountPlus. Starts a job; the image
    *  lands in the output folder, named after the game folder. */
   /** One job: the image is planned, written (straight into a .ffpfsc when `compress`), read
-   *  back and hash-checked. With `lz4`, the game's files are packed into AMPR LZ4 asset packs
-   *  first (exFAT, not compressed). */
+   *  back and hash-checked. With `lz4`, the game's files are packed into asset packs first (any
+   *  format, compressed or not), and read back through them too. */
   buildImage: (
     source: string,
     outputDir?: string,
@@ -342,6 +346,13 @@ export const fpkg = {
       entry,
       keepBoth,
       amprZstd: zstd ? amprZstd(zstd.level, zstd.runtime, zstd.profileToml) : undefined,
+      amprLz4: extra?.lz4
+        ? {
+            level: extra.lz4.level,
+            profile_toml: extra.lz4.profileToml,
+            install_runtime: extra.lz4.installRuntime ?? false,
+          }
+        : undefined,
     }),
   /** Write an edited COPY of a game image (#479): the image's files with `edits` applied,
    *  as the same kind of image (.exfat, .ffpkg, .ffpfs or .ffpfsc), read back and checked,
