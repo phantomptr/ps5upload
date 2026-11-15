@@ -1113,6 +1113,7 @@ pub fn build_any(
         cancel,
         stage,
         checkpoints,
+        true,
     );
     let stopped = checkpoints.is_some_and(|c| c.stopped.load(Ordering::Relaxed));
     match result {
@@ -1141,6 +1142,7 @@ pub fn build_any(
                 cancel,
                 stage,
                 checkpoints,
+                true,
             )
             .0
         }
@@ -1148,7 +1150,80 @@ pub fn build_any(
     }
 }
 
-/// [`build_any`]'s one try, and whether it went on from a checkpoint.
+/// An image written to `<output>.partial` and read back, not yet given its name: for a build
+/// whose caller checks it further first (the game read back through its packs), so nothing
+/// unchecked is ever under the output's name, not even after a crash during that check. Kept
+/// with [`Unnamed::name`]; dropped without it, the partial file is removed.
+pub struct Unnamed {
+    partial: PathBuf,
+    output: PathBuf,
+    named: bool,
+}
+
+impl Unnamed {
+    /// The written image, for the caller's check.
+    pub fn partial(&self) -> &Path {
+        &self.partial
+    }
+
+    /// Gives the image its name (never over something that took it meanwhile).
+    pub fn name(mut self) -> Result<(), String> {
+        crate::safe_write::rename_new(&self.partial, &self.output).map_err(|e| e.to_string())?;
+        self.named = true;
+        Ok(())
+    }
+}
+
+impl Drop for Unnamed {
+    fn drop(&mut self) {
+        if !self.named {
+            let _ = crate::safe_write::discard(&self.partial);
+        }
+    }
+}
+
+/// [`build_at`] up to its last step: the image is written and read back at `<output>.partial`,
+/// and the caller gives it its name ([`Unnamed::name`]) once its own check passed. No
+/// checkpoints (packs are new each run).
+#[allow(clippy::too_many_arguments)]
+pub fn build_unnamed(
+    format: ImageFormat,
+    inner_name: Option<&str>,
+    level: Level,
+    source: &mut dyn SourceTree,
+    output: &Path,
+    mode: VerifyMode,
+    verify_chunk: u64,
+    cancel: &AtomicBool,
+    stage: &mut dyn FnMut(&str, u64, u64),
+) -> Result<(ImageBuilt, Unnamed), String> {
+    let built = build_once(
+        format,
+        inner_name,
+        level,
+        None,
+        source,
+        output,
+        mode,
+        verify_chunk,
+        cancel,
+        stage,
+        None,
+        false,
+    )
+    .0?;
+    Ok((
+        built,
+        Unnamed {
+            partial: PathBuf::from(format!("{}.partial", output.display())),
+            output: output.to_path_buf(),
+            named: false,
+        },
+    ))
+}
+
+/// [`build_any`]'s one try, and whether it went on from a checkpoint. `name`: the image read
+/// back is renamed to `output`; else it is left at its `.partial` for [`build_unnamed`].
 #[allow(clippy::too_many_arguments)]
 fn build_once(
     format: ImageFormat,
@@ -1162,6 +1237,7 @@ fn build_once(
     cancel: &AtomicBool,
     stage: &mut dyn FnMut(&str, u64, u64),
     checkpoints: Option<&Checkpoints>,
+    name: bool,
 ) -> (Result<ImageBuilt, String>, bool) {
     if source.files().is_empty() {
         return (
@@ -1350,8 +1426,10 @@ fn build_once(
             &mut |d, t| stage("verify", d, t),
         )?;
         drop(image);
-        // Never over something that took the name while this was written.
-        crate::safe_write::rename_new(&partial, output).map_err(|e| e.to_string())?;
+        if name {
+            // Never over something that took the name while this was written.
+            crate::safe_write::rename_new(&partial, output).map_err(|e| e.to_string())?;
+        }
         remove_checkpoint(&partial);
         crate::log::record("info", format!("verify: {}", log_line(&summary)));
         crate::log::record("info", format!(
@@ -1482,7 +1560,7 @@ pub fn build_packed(
             report,
             config,
         } = crate::lz4_packs::spool(source, packs, &spool, mtime, &shown, cancel, stage)?;
-        let mut built = build_at(
+        let (mut built, unnamed) = build_unnamed(
             format,
             inner_name,
             level,
@@ -1494,18 +1572,17 @@ pub fn build_packed(
             stage,
         )?;
         drop(tree);
-        let image = open_image(output, format, inner_name.is_some())?;
-        match crate::lz4_packs::read_back(image, source, &config, mode, cancel, &mut |d, t| {
-            stage("verify", d, t)
-        }) {
-            Ok(line) => built.detail.push_str(&format!(", {line}")),
-            Err(e) => {
-                // Finished and named by now, and no use: it doesn't stay looking like a good image.
-                let _ = crate::safe_write::discard(output);
-                return Err(e);
-            }
-        }
+        // Read back through its packs while still at its `.partial`: one that fails (or a crash
+        // during this) never looks like a good image under its name. Dropped unnamed on a
+        // failure, its partial file is removed.
+        let image = open_image(unnamed.partial(), format, inner_name.is_some())?;
+        let line =
+            crate::lz4_packs::read_back(image, source, &config, mode, cancel, &mut |d, t| {
+                stage("verify", d, t)
+            })?;
+        built.detail.push_str(&format!(", {line}"));
         built.detail.push_str(&crate::lz4_packs::detail(&report));
+        unnamed.name()?;
         Ok(built)
     })();
     let _ = std::fs::remove_dir_all(&spool);
@@ -2593,6 +2670,8 @@ mod tests {
         let mut tree = FolderSource::open(&src).unwrap();
         let cancel = AtomicBool::new(false);
         let mut stages: Vec<String> = Vec::new();
+        // The image gets its name only after the packs read back: never during a check.
+        let mut named_early = false;
         let built = build_packed(
             ImageFormat::Exfat,
             None,
@@ -2610,6 +2689,7 @@ mod tests {
             DEFAULT_VERIFY_CHUNK,
             &cancel,
             &mut |s, _, _| {
+                named_early |= s == "verify" && out.exists();
                 if stages.last().map(String::as_str) != Some(s) {
                     stages.push(s.to_string());
                 }
@@ -2617,6 +2697,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(stages, ["pack", "plan", "write", "verify"]);
+        assert!(!named_early);
+        assert!(!root.join("PPSA99999-app.exfat.partial").exists());
         assert!(built.detail.contains("LZ4 packs"), "{}", built.detail);
         assert!(!lz4_spool(&out).exists(), "the spool is removed");
 
