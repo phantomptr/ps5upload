@@ -325,7 +325,7 @@ static const char *check_build(const char *json, const char *src, int src_is_dir
     char parent[1024], verify[16];
     const char *slash, *by_name;
     struct stat st;
-    uint64_t zstd = 0;
+    uint64_t zstd = 0, level = 0;
     if (!fsj_json_str(json, "dest", dest, dest_cap) || !dest[0]) return "convert_missing_dest";
     if (!fsj_json_str(json, "format", format, format_cap) || !cc_format_ok(format)) return "convert_bad_format";
     /* Allowed, not a drive's root, not inside ShadowMount+'s mounts, inside a folder that exists. */
@@ -346,9 +346,11 @@ static const char *check_build(const char *json, const char *src, int src_is_dir
     if (fsj_json_str(json, "verify", verify, sizeof verify) && strcmp(verify, "fast") != 0 && strcmp(verify, "full") != 0)
         return "convert_bad_verify";
     (void)fsj_json_u64(json, "zstd", &zstd);
+    if (fsj_json_u64(json, "zstd_level", &level) && !cc_zstd_level_ok(level)) return "convert_bad_zstd_level";
     b->dest = dest;
     b->format = format;
     b->zstd = zstd != 0;
+    b->zstd_level = b->zstd ? (int)level : 0;
     b->full_verify = strcmp(verify, "full") == 0;
     return NULL;
 }
@@ -395,7 +397,7 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
             ava1_op_message(c, "%s", bad);
             return strcmp(bad, "convert_destination_exists") == 0 ? AVA1_ERR_EXISTS
                    : strncmp(bad, "convert_missing", 15) == 0 || strncmp(bad, "convert_bad_format", 18) == 0 ||
-                             strcmp(bad, "convert_bad_verify") == 0
+                             strcmp(bad, "convert_bad_verify") == 0 || strcmp(bad, "convert_bad_zstd_level") == 0
                          ? AVA1_ERR_PROTOCOL
                          : AVA1_ERR_PATH;
         }

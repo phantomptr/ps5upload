@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
-import { ArchiveRestore, Cpu, Folder, Gamepad2, House, Settings, Sparkles, type LucideIcon } from "lucide-react";
+import { ArchiveRestore, Cpu, Folder, Gamepad2, House, Repeat, Settings, Sparkles, type LucideIcon } from "lucide-react";
 import { Cheats } from "./cheats/Cheats";
+import { Convert } from "./convert/Convert";
 import { Files } from "./files/Files";
 import { GamesSection } from "./games/GamesSection";
 import { Home } from "./home/Home";
@@ -42,7 +43,7 @@ export interface Section {
   acceptsParams?: boolean;
 }
 
-// Registry: Home, Games (installed titles, and the Library of games on shares and drives, #498), Saves (save backups on the console), Files, Cheats (the running game's), Fan, Processes, Clean up, Settings. Files opens at ctx.params.path
+// Registry: Home, Games (installed titles, and the Library of games on shares and drives, #498), Saves (save backups on the console), Files, Convert, Cheats (the running game's), Fan, Processes, Clean up, Settings. Files opens at ctx.params.path
 // (acceptsParams), so Home's drive cards open it at a drive.
 export const SECTIONS: Section[] = [
   {
@@ -73,6 +74,15 @@ export const SECTIONS: Section[] = [
     icon: Folder,
     labelKey: "cw_nav_files",
     render: (ctx) => <Files ctx={ctx} />,
+    acceptsParams: true,
+  },
+  {
+    // Convert a game folder or image into another format on the console itself (convert/model.ts).
+    // Opened at a source with params.path.
+    id: "convert",
+    icon: Repeat,
+    labelKey: "cw_convert_title",
+    render: (ctx) => <Convert key={ctx.params?.path ?? ""} ctx={ctx} />,
     acceptsParams: true,
   },
   {

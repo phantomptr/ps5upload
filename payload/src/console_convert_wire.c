@@ -38,6 +38,11 @@ int cc_request_json(char *out, size_t cap, const char *id, const char *op, const
                      b->full_verify ? "full" : "fast");
         if (w < 0 || (size_t)w >= cap - at) return -1;
         at += (size_t)w;
+        if (b->zstd && b->zstd_level > 0) {
+            w = snprintf(out + at, cap - at, ",\"zstd_level\":%d", b->zstd_level);
+            if (w < 0 || (size_t)w >= cap - at) return -1;
+            at += (size_t)w;
+        }
     }
     if (at + 3 > cap) return -1;
     out[at++] = '}';

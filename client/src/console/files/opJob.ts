@@ -1,6 +1,7 @@
 /**
  * The helper's operation jobs the page starts on one file (Verify: HASH and
- * CRC32; Decompress: FFPFSC_UNPACK; Extract: ARCHIVE_EXTRACT) and their outcome, read from
+ * CRC32; Decompress: FFPFSC_UNPACK; Extract: ARCHIVE_EXTRACT; Convert: CONSOLE_CONVERT, see
+ * convert/model.ts) and their outcome, read from
  * /api/jobs/status (progress, the operation's message, and its result once it
  * ended well). Reading a finished job there releases it (after a short grace),
  * so it never holds one of the job table's slots.
@@ -42,8 +43,8 @@ const defaultDeps: OpDeps = {
 
 /** POST `route` {path, …} and return the job it started. */
 export async function startOp(
-  route: "/api/fs/hash" | "/api/fs/crc32" | "/api/fs/unpack" | "/api/fs/extract",
-  body: { path: string; name?: string } | ExtractBody,
+  route: "/api/fs/hash" | "/api/fs/crc32" | "/api/fs/unpack" | "/api/fs/extract" | "/api/convert/inspect" | "/api/convert/start",
+  body: { path: string; name?: string } | ExtractBody | { path: string; dest: string; format: string; zstd: boolean; zstd_level?: number; verify: string },
 ): Promise<string> {
   const r = await call<{ job?: unknown }>(route, body);
   if (!r || typeof r.job !== "string") throw new ApiError(500, "bad_reply");
