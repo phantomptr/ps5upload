@@ -20,6 +20,10 @@
 #define HU_USER_ROOT "/user/data/ps5upload"
 #define HU_STARTUP_LOG "/data/ps5upload_startup.log"
 #define HU_BACKUPS "/data/ps5upload/backups"
+/* The account's state from before the offline PSN sign-in (profile.c): the only way to undo that
+ * sign-in, so it always stays (the user's data, not PS5Upload's). Same path as
+ * PROFILE_NP_BACKUP_ROOT. */
+#define HU_NP_BACKUP "/data/ps5upload/np-backup"
 
 typedef struct {
     unsigned removed; /* files and folders deleted */
@@ -48,7 +52,8 @@ int hu_show_hidden_icons(void);
 void hu_request(int keep_backups);
 int hu_requested(void);
 
-/* The final delete (main.c, last). Writes nothing anywhere: stderr itself lives in HU_ROOT. */
+/* The final delete (main.c, last). HU_NP_BACKUP always stays. Writes nothing anywhere: stderr
+ * itself lives in HU_ROOT. */
 void hu_wipe(void);
 
 #endif

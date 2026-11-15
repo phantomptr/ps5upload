@@ -102,8 +102,8 @@ int hu_requested(void) { return __atomic_load_n(&g_requested, __ATOMIC_SEQ_CST);
 
 void hu_wipe(void) {
     hu_counts_t c = {0, 0, 0};
-    const char *keep[1] = {HU_BACKUPS};
-    hu_remove_tree(HU_ROOT, keep, g_keep_backups ? 1 : 0, &c);
+    const char *keep[2] = {HU_NP_BACKUP, HU_BACKUPS};
+    hu_remove_tree(HU_ROOT, keep, g_keep_backups ? 2 : 1, &c);
     hu_remove_tree(HU_USER_ROOT, NULL, 0, &c);
     if (unlink(HU_STARTUP_LOG) != 0 && errno != ENOENT) c.failed++;
 }
