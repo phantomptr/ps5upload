@@ -222,6 +222,7 @@ static void remove_partial(const char *dest) {
     struct stat st;
     size_t i;
     if (dest[0] != '/' || !may_write_here(dest)) return;
+    fprintf(stderr, "convert: a helper died mid-conversion; removing what it left beside %s\n", dest);
     for (i = 0; i < sizeof tails / sizeof *tails; i++) {
         if ((size_t)snprintf(path, sizeof path, "%s%s", dest, tails[i]) >= sizeof path) continue;
         if (lstat(path, &st) != 0) continue;
@@ -260,10 +261,7 @@ void console_convert_sweep(void) {
     }
     /* The helper that wrote it, or its converter, still runs (a takeover lets the old one finish). */
     if ((hpid != (long)getpid() && pid_alive((uint64_t)hpid)) || pid_alive(xpid)) return;
-    if (dest[0]) {
-        fprintf(stderr, "convert: a helper died mid-conversion; removing what it left beside %s\n", dest);
-        remove_partial(dest);
-    }
+    if (dest[0]) remove_partial(dest); /* says so in the log only for a place it may write */
     (void)unlink(file);
 }
 
