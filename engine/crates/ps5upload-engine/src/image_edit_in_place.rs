@@ -743,6 +743,25 @@ pub(crate) struct Outcome {
     pub checked: u64,
     pub journal_bytes: u64,
     pub notes: Vec<String>,
+    /// The edit is done, but something after it did not go as it should (said in plain words).
+    pub warning: Option<String>,
+}
+
+impl Outcome {
+    /// The finished job's `commit_ack`: what was written and checked, and `warning` when there
+    /// is one.
+    pub(crate) fn ack(&self) -> serde_json::Value {
+        let mut ack = serde_json::json!({
+            "in_place": true,
+            "written_bytes": self.written,
+            "checked_bytes": self.checked,
+            "journal_bytes": self.journal_bytes,
+        });
+        if let (Some(w), Some(o)) = (&self.warning, ack.as_object_mut()) {
+            o.insert("warning".into(), w.clone().into());
+        }
+        ack
+    }
 }
 
 /// Where an apply stands, for the job's progress: (stage, done, total).
@@ -760,6 +779,9 @@ enum Stop {
     /// Applied and verified, the journal not yet deleted.
     #[cfg(test)]
     BeforeCommit,
+    /// A normal run whose sync of the journal's folder after its removal fails.
+    #[cfg(test)]
+    DirSyncFails,
 }
 
 /// Hashes every file of `paths` in `tree` (blake3), in pieces.
@@ -811,11 +833,16 @@ impl Pending {
     }
 
     /// Keeps the edit: the undo journal is deleted, then its folder synced. A journal that
-    /// can't be deleted is still complete, so the image is restored from it; a failed folder
-    /// sync after the delete can't be undone, and says the image holds the edit.
-    fn commit(mut self, image: &Path) -> Result<(), String> {
+    /// can't be deleted is still complete, so the image is restored from it (an error). A
+    /// failed folder sync after the delete can't be undone: the edit is done, with a warning
+    /// (`Ok(Some(..))`) saying so in plain words.
+    fn commit(
+        mut self,
+        image: &Path,
+        dir_sync: fn(&Path) -> io::Result<()>,
+    ) -> Result<Option<String>, String> {
         let Some(applied) = self.applied.take() else {
-            return Ok(());
+            return Ok(None);
         };
         let no_dir = Syncs {
             file: SYNCS.file,
@@ -834,14 +861,22 @@ impl Pending {
             Some(p) if !p.as_os_str().is_empty() => p,
             _ => Path::new("."),
         };
-        (SYNCS.dir)(folder).map_err(|e| {
-            format!(
-                "the edit was applied and verified, but syncing {} failed: {e}; the image holds \
-                 the edit",
-                folder.display()
-            )
-        })
+        Ok(dir_synced(folder, dir_sync(folder)))
     }
+}
+
+/// The warning a failed sync of `folder` after the journal's removal leaves: the edit is in
+/// the image and checked; only the removal of its undo journal may not have reached the disk.
+fn dir_synced(folder: &Path, synced: io::Result<()>) -> Option<String> {
+    synced.err().map(|e| {
+        format!(
+            "the changes are in the image and were checked, but the computer could not confirm \
+             that its undo journal's removal was saved to disk ({}: {e}). If the computer \
+             crashes before that happens, the next time the image is opened here it is put \
+             back as it was before this edit",
+            folder.display()
+        )
+    })
 }
 
 impl Drop for Pending {
@@ -949,7 +984,7 @@ fn apply_stopping(
     let applied = match stop {
         Stop::Never => patch::apply(&mut file, &image, &writes, &mut read_source, cancel, SYNCS),
         #[cfg(test)]
-        Stop::BeforeCommit => {
+        Stop::BeforeCommit | Stop::DirSyncFails => {
             patch::apply(&mut file, &image, &writes, &mut read_source, cancel, SYNCS)
         }
         #[cfg(test)]
@@ -1028,7 +1063,15 @@ fn apply_stopping(
         drop(pending.applied.take());
         return Err("simulated crash before the commit".into());
     }
-    pending.commit(&image)?;
+    #[cfg(not(test))]
+    let dir_sync = SYNCS.dir;
+    #[cfg(test)]
+    let dir_sync: fn(&Path) -> io::Result<()> = if stop == Stop::DirSyncFails {
+        |_| Err(io::Error::other("simulated sync failure"))
+    } else {
+        SYNCS.dir
+    };
+    let warning = pending.commit(&image, dir_sync)?;
     drop(file);
     let mut notes = vec![format!(
         "edited {} in place ({}): {written} bytes written, {} files read back, a {journal_bytes} \
@@ -1046,6 +1089,7 @@ fn apply_stopping(
         checked: check_total,
         journal_bytes,
         notes,
+        warning,
     })
 }
 
@@ -1399,6 +1443,12 @@ pub(crate) async fn start(
                 for note in &o.notes {
                     crate::engine_log::record("info", format!("in-place edit: {note}"));
                 }
+                if let Some(w) = &o.warning {
+                    crate::engine_log::record(
+                        "warn",
+                        format!("in-place edit of {}: {w}", image.display()),
+                    );
+                }
                 crate::JobState::Done {
                     started_at_ms,
                     completed_at_ms,
@@ -1409,12 +1459,7 @@ pub(crate) async fn start(
                     files_sent: o.files,
                     skipped_files: 0,
                     skipped_bytes: 0,
-                    commit_ack: Some(serde_json::json!({
-                        "in_place": true,
-                        "written_bytes": o.written,
-                        "checked_bytes": o.checked,
-                        "journal_bytes": o.journal_bytes,
-                    })),
+                    commit_ack: Some(o.ack()),
                 }
             }
             Err(error) => {
@@ -1829,6 +1874,42 @@ mod tests {
         assert_eq!(locked_at_write, Some(true), "held while written");
         assert_eq!(locked_at_verify, Some(false), "released before the checks");
         assert_edited(&img);
+    }
+
+    /// The folder sync after the journal's removal failing can't undo the edit, which is in
+    /// the image and checked: the edit is done, with a warning in plain words (the job's
+    /// `commit_ack.warning`), not failed.
+    #[test]
+    fn a_failed_folder_sync_after_the_commit_is_done_with_a_warning() {
+        let tmp = Scratch::new("dirsync");
+        let src = game(&tmp.0, &[7u8; 70_000]);
+        let img = image(&src, &tmp.0, Fmt::Ufs2);
+        let p = prepare(&img, &edits(&tmp.0)).unwrap();
+        let o = apply_stopping(
+            p,
+            false,
+            &AtomicBool::new(false),
+            &mut no_progress(),
+            Stop::DirSyncFails,
+        )
+        .unwrap_or_else(|e| panic!("reported as failed: {e}"));
+        let w = o.warning.clone().expect("a warning");
+        assert!(w.contains("changes are in the image"), "{w}");
+        assert_eq!(o.ack()["warning"], w.as_str());
+        assert!(!patch::journal_path(&img).exists());
+        assert_edited(&img);
+        // A normal run has none.
+        let more = vec![Edit::Mkdir {
+            path: "more".into(),
+        }];
+        let o = apply(
+            prepare(&img, &more).unwrap(),
+            false,
+            &AtomicBool::new(false),
+            &mut no_progress(),
+        )
+        .unwrap();
+        assert!(o.warning.is_none() && o.ack().get("warning").is_none());
     }
 
     /// A cancel before the first write leaves the image untouched.
