@@ -198,12 +198,10 @@ impl Plan {
 /// this computer) is verified, and notes what the source is now. An error is the reason the
 /// request is refused: nothing has been written yet.
 pub(crate) fn plan(source: &Path, output: &Path) -> Result<Plan, String> {
-    plan_with(
-        source,
-        output,
-        crate::collection_tidy_api::trash_available(),
-        &crate::fpkg_api::user_home(),
-    )
+    // Tests run where there may be no Trash (a headless Linux): they never reach one anyway
+    // (see `finish`).
+    let trash = cfg!(test) || crate::collection_tidy_api::trash_available();
+    plan_with(source, output, trash, &crate::fpkg_api::user_home())
 }
 
 fn plan_with(source: &Path, output: &Path, trash: bool, home: &Path) -> Result<Plan, String> {
@@ -243,9 +241,37 @@ impl Outcome {
 /// conversion that had something to say is looked at before its source goes); `busy` is
 /// whether another running job reads the source.
 pub(crate) fn finish(plan: &Plan, output: &Path, warnings: &[String], busy: bool) -> Outcome {
-    finish_with(plan, output, warnings, busy, &mut |path| {
-        crate::collection_tidy_api::move_to_trash(path)
-    })
+    finish_with(plan, output, warnings, busy, &mut |path| trash(path))
+}
+
+#[cfg(not(test))]
+fn trash(path: &Path) -> Result<(), String> {
+    crate::collection_tidy_api::move_to_trash(path)
+}
+
+/// Tests never move anything to the real Trash: what would have gone is recorded instead
+/// ([`trashed_in_tests`]), and the source stays.
+#[cfg(test)]
+fn trash(path: &Path) -> Result<(), String> {
+    trashed()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(path.to_path_buf());
+    Err("tests never use the Trash".into())
+}
+
+#[cfg(test)]
+fn trashed() -> &'static std::sync::Mutex<Vec<PathBuf>> {
+    static TRASHED: std::sync::OnceLock<std::sync::Mutex<Vec<PathBuf>>> =
+        std::sync::OnceLock::new();
+    TRASHED.get_or_init(Default::default)
+}
+
+/// Tests: whether a build would have moved `path` to the Trash.
+#[cfg(test)]
+pub(crate) fn trashed_in_tests(path: &Path) -> bool {
+    let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    (trashed().lock().unwrap_or_else(|e| e.into_inner()).iter()).any(|p| *p == real || p == path)
 }
 
 fn finish_with(
