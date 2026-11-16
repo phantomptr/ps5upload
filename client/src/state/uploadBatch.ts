@@ -24,9 +24,10 @@ import {
 } from "../lib/archiveParts";
 import { invoke } from "../lib/invokeLogged";
 import { isInstallPackagePath } from "../lib/pkgDropDedupe";
+import { loadPkgChoice, savePkgChoice, type PkgChoice } from "../lib/pkgUploadChoice";
 import { isRemotePath } from "../lib/remotePath";
 import { trStatic } from "../lib/trStatic";
-import { archiveFormat, isImagePath, type PickedSource } from "./upload";
+import { archiveFormat, isImagePath, useUploadStore, type PickedSource } from "./upload";
 import { platformFromTitleId, titleIdFromContentId } from "./pkgLibrary";
 
 export type BatchStatus = "inspecting" | "ready" | "needs-password" | "error";
@@ -47,6 +48,8 @@ export interface BatchRow {
   /** An archive: unpack it or send it as it is (#645). Null until the user chooses, when its
    *  listing could not tell; such a row holds the list back. Unused for other kinds. */
   archiveChoice: ArchiveChoice | null;
+  /** A .pkg row: install it, or copy it as a plain file. Null for anything else. */
+  pkgChoice: PkgChoice | null;
   /** What the files beside it say about the set it belongs to (as a single pick is told). */
   setIssue?: ArchiveSetIssue | null;
 }
@@ -58,13 +61,21 @@ export interface BatchEntry {
   include?: boolean;
 }
 
-type Inspector = (path: string, isDir: boolean, password: string | null) => Promise<PickedSource>;
+type Inspector = (
+  path: string,
+  isDir: boolean,
+  password: string | null,
+  pkgChoice?: PkgChoice | null,
+) => Promise<PickedSource>;
 
 /** What a single pick would learn about `path`, as a `PickedSource`. */
 export async function inspectSource(
   path: string,
   isDir: boolean,
   password: string | null,
+  /** A .pkg copied as a file is a plain "file" source: no header read, and a split package's
+   *  part is fine. */
+  pkgChoice: PkgChoice | null = "install",
 ): Promise<PickedSource> {
   const base = { path, meta: null, wrappedHint: null, zipInfo: null };
   if (isDir) {
@@ -78,7 +89,7 @@ export async function inspectSource(
       wrappedHint: inspection.wrapped_hint,
     };
   }
-  if (isInstallPackagePath(path)) {
+  if (isInstallPackagePath(path) && pkgChoice !== "copy") {
     const meta = (await invoke("pkg_metadata_split", { path })) as {
       head?: { content_id?: string; title?: string; category?: string; platform?: string };
       parts?: unknown[];
@@ -167,6 +178,8 @@ interface BatchState {
   setInclude: (id: string, include: boolean) => void;
   setPassword: (id: string, password: string) => void;
   setArchiveChoice: (id: string, choice: ArchiveChoice) => void;
+  /** A .pkg row: install or copy. Remembered for the next package, and the row is re-read. */
+  setPkgChoice: (id: string, choice: PkgChoice) => void;
   clear: () => void;
 }
 
@@ -182,7 +195,7 @@ export const useUploadBatch = create<BatchState>((set, get) => {
       const gen = (generation.get(id) ?? 0) + 1;
       generation.set(id, gen);
       active++;
-      void inspector(row.path, row.isDir, row.password)
+      void inspector(row.path, row.isDir, row.password, row.pkgChoice)
         .then((source) => {
           if (generation.get(id) !== gen) return;
           // A choice the user made stays; otherwise the archive's listing picks one.
@@ -229,6 +242,7 @@ export const useUploadBatch = create<BatchState>((set, get) => {
     add: (entries) => {
       const have = new Set(get().rows.map((r) => r.path));
       const fresh: BatchRow[] = [];
+      const remembered = loadPkgChoice();
       for (const e of collapseRarVolumes(entries)) {
         if (have.has(e.path)) continue;
         have.add(e.path);
@@ -243,6 +257,7 @@ export const useUploadBatch = create<BatchState>((set, get) => {
           error: null,
           password: null,
           archiveChoice: null,
+          pkgChoice: !e.isDir && isInstallPackagePath(e.path) ? remembered : null,
         });
       }
       if (!fresh.length) return;
@@ -255,6 +270,20 @@ export const useUploadBatch = create<BatchState>((set, get) => {
     },
     setInclude: (id, include) => patch(id, { include }),
     setArchiveChoice: (id, archiveChoice) => patch(id, { archiveChoice }),
+    setPkgChoice: (id, pkgChoice) => {
+      savePkgChoice(pkgChoice);
+      useUploadStore.setState({ pkgChoice });
+      const row = get().rows.find((r) => r.id === id);
+      if (!row || row.pkgChoice === pkgChoice) return;
+      // A part refused for install was unticked; copying it brings it back.
+      patch(id, {
+        pkgChoice,
+        status: "inspecting",
+        error: null,
+        include: row.status === "error" ? true : row.include,
+      });
+      inspect(id);
+    },
     setPassword: (id, password) => {
       patch(id, { password, status: "inspecting", error: null });
       inspect(id);

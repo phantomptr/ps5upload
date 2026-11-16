@@ -175,6 +175,13 @@ const SETTINGS: &[Setting] = &[
         description: "Add an uploaded game folder to the home screen when it lands.",
     },
     Setting {
+        name: "pkg_upload_choice",
+        key: "ps5upload.pkg_upload_choice",
+        kind: Kind::Choice(&["install", "copy"]),
+        default: Default_::Str("install"),
+        description: "What Upload does with a package: install it, or copy it as a file.",
+    },
+    Setting {
         name: "auto_install_after_upload",
         key: "ps5upload.auto_install_after_upload",
         kind: ONE_ZERO,

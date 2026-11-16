@@ -47,6 +47,7 @@ export const SHARED_KEYS: readonly string[] = [
   "ps5upload.system_file_read",
   "ps5upload.rest_after_upload",
   "ps5upload.register_after_upload",
+  "ps5upload.pkg_upload_choice",
   // Installs and links.
   "ps5upload.auto_install_after_upload",
   "ps5upload.auto_remove_after_install",
