@@ -101,6 +101,8 @@ function refusalCode(message: string): string {
 /** An install's (or its start's) cause token as a sentence, or null when it has none. */
 export function installCauseText(code: string, message = ""): string | null {
   if (code === "pkg_install_busy" || code === "pkg_install_daemon_busy") return t("cw_pkg_err_busy");
+  // A conversion (or Convert reading an archive) holds the drive: not "another install".
+  if (code === "convert_busy") return t("cw_convert_err_busy");
   if (code === "pkg_install_already_installed") return t("cw_pkg_err_installed");
   if (code === "pkg_install_image_mounted") return t("cw_pkg_err_image");
   if (code === "pkg_install_no_space") return t("cw_pkg_err_no_space");

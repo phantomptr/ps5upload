@@ -13,7 +13,11 @@
       "receive_link_waiting",
       "saves_auto_load_failed",
       "saves_auto_retry",
-      "zstd_runtime_smp_unknown"
+      "zstd_runtime_smp_unknown",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -43,7 +47,11 @@
       "receive_link_waiting",
       "saves_auto_load_failed",
       "saves_auto_retry",
-      "zstd_runtime_smp_unknown"
+      "zstd_runtime_smp_unknown",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -77,7 +85,11 @@
       "receive_link_waiting",
       "saves_auto_load_failed",
       "saves_auto_retry",
-      "zstd_runtime_smp_unknown"
+      "zstd_runtime_smp_unknown",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -118,7 +130,11 @@
       "receive_link_waiting",
       "saves_auto_load_failed",
       "saves_auto_retry",
-      "zstd_runtime_smp_unknown"
+      "zstd_runtime_smp_unknown",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -154,7 +170,11 @@
       "receive_link_waiting",
       "saves_auto_load_failed",
       "saves_auto_retry",
-      "zstd_runtime_smp_unknown"
+      "zstd_runtime_smp_unknown",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -186,7 +206,11 @@
       "receive_link_waiting",
       "saves_auto_load_failed",
       "saves_auto_retry",
-      "zstd_runtime_smp_unknown"
+      "zstd_runtime_smp_unknown",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -221,7 +245,11 @@
       "receive_link_waiting",
       "saves_auto_load_failed",
       "saves_auto_retry",
-      "zstd_runtime_smp_unknown"
+      "zstd_runtime_smp_unknown",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -255,7 +283,11 @@
       "receive_link_waiting",
       "saves_auto_load_failed",
       "saves_auto_retry",
-      "zstd_runtime_smp_unknown"
+      "zstd_runtime_smp_unknown",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -294,7 +326,11 @@
       "receive_link_waiting",
       "saves_auto_load_failed",
       "saves_auto_retry",
-      "zstd_runtime_smp_unknown"
+      "zstd_runtime_smp_unknown",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -335,7 +371,11 @@
       "receive_link_waiting",
       "saves_auto_load_failed",
       "saves_auto_retry",
-      "zstd_runtime_smp_unknown"
+      "zstd_runtime_smp_unknown",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -376,7 +416,11 @@
       "receive_link_waiting",
       "saves_auto_load_failed",
       "saves_auto_retry",
-      "zstd_runtime_smp_unknown"
+      "zstd_runtime_smp_unknown",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -407,7 +451,11 @@
       "receive_link_waiting",
       "saves_auto_load_failed",
       "saves_auto_retry",
-      "zstd_runtime_smp_unknown"
+      "zstd_runtime_smp_unknown",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -440,7 +488,11 @@
       "receive_link_waiting",
       "saves_auto_load_failed",
       "saves_auto_retry",
-      "zstd_runtime_smp_unknown"
+      "zstd_runtime_smp_unknown",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -476,7 +528,11 @@
       "receive_link_waiting",
       "saves_auto_load_failed",
       "saves_auto_retry",
-      "zstd_runtime_smp_unknown"
+      "zstd_runtime_smp_unknown",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -512,7 +568,11 @@
       "receive_link_waiting",
       "saves_auto_load_failed",
       "saves_auto_retry",
-      "zstd_runtime_smp_unknown"
+      "zstd_runtime_smp_unknown",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -547,7 +607,11 @@
       "receive_link_waiting",
       "saves_auto_load_failed",
       "saves_auto_retry",
-      "zstd_runtime_smp_unknown"
+      "zstd_runtime_smp_unknown",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -582,7 +646,11 @@
       "receive_link_waiting",
       "saves_auto_load_failed",
       "saves_auto_retry",
-      "zstd_runtime_smp_unknown"
+      "zstd_runtime_smp_unknown",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -620,7 +688,11 @@
       "receive_link_waiting",
       "saves_auto_load_failed",
       "saves_auto_retry",
-      "zstd_runtime_smp_unknown"
+      "zstd_runtime_smp_unknown",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -657,7 +729,11 @@
       "receive_link_waiting",
       "saves_auto_load_failed",
       "saves_auto_retry",
-      "zstd_runtime_smp_unknown"
+      "zstd_runtime_smp_unknown",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
@@ -688,7 +764,11 @@
       "receive_link_waiting",
       "saves_auto_load_failed",
       "saves_auto_retry",
-      "zstd_runtime_smp_unknown"
+      "zstd_runtime_smp_unknown",
+      "remove_ps5u_console_busy",
+      "remove_ps5u_console_converting",
+      "remove_ps5u_console_extracting",
+      "remove_ps5u_console_installing"
     ],
     "stale": [],
     "untranslated": [
