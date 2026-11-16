@@ -508,6 +508,12 @@ pub fn prepare<'a>(
     control: &mut Control,
 ) -> Result<(Overlay<'a>, Output)> {
     let (entries, index) = entries_for(source, config, mtime)?;
+    // The spool's folder may not exist yet: the engine's data-folder spools (`lz4spool/`) are
+    // made by the first build that needs one. The spool itself must still be new.
+    if let Some(parent) = spool.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| Error::Format(format!("{}: {e}", parent.display())))?;
+    }
     std::fs::create_dir(spool).map_err(|e| Error::Format(format!("{}: {e}", spool.display())))?;
     let output = match pack::build(&entries, source, config, spool, control) {
         Ok(o) => o,
@@ -709,7 +715,9 @@ mod tests {
         std::fs::create_dir_all(src.join("d/shaders")).unwrap();
         let mut tree = crate::source::FolderSource::open(&src).unwrap();
         let config = super::super::default_profile(9, 16);
-        let spool = root.join("spool");
+        // Its folder not made yet, as the engine's data-folder `lz4spool/` on a first build.
+        let spool = root.join("lz4spool").join("game.lz4spool");
+        assert!(!spool.parent().unwrap().exists());
         let (mut overlay, out) =
             prepare(&mut tree, &config, &spool, 7, &mut Control::default()).unwrap();
         let mut names: Vec<String> = overlay.files().iter().map(|f| f.path.clone()).collect();
