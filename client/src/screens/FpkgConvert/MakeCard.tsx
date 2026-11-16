@@ -37,6 +37,7 @@ export function MakeCard({
   locked = false,
   forNext = false,
   ps4 = false,
+  kraken = false,
 }: {
   make: MakeKind;
   onMake: (make: MakeKind) => void;
@@ -53,10 +54,21 @@ export function MakeCard({
   forNext?: boolean;
   /** The checked game is a PS4 game: the package is a PS4 one. */
   ps4?: boolean;
+  /** Kraken Mount runs on the console (and ShadowMount+ does not): it mounts a PS5 package
+   *  from a drive without installing it, and mounts no images. */
+  kraken?: boolean;
 }) {
   const tr = useTr();
   const unplayableOn = checked ? ps5FakeGameUnplayableFirmware(kernel, contentId) : null;
-  const recommended: "pkg" | "image" | null = !checked ? null : unplayableOn ? "image" : "pkg";
+  // With Kraken Mount a PS5 package is mounted, not installed, so it plays where an installed one
+  // would not, and an image would not be mounted at all.
+  const recommended: "pkg" | "image" | null = !checked
+    ? null
+    : kraken && !ps4
+      ? "pkg"
+      : unplayableOn
+        ? "image"
+        : "pkg";
   const tiles: { id: MakeKind; icon: typeof Package; title: string; body: string }[] = [
     ps4
       ? {
@@ -73,21 +85,33 @@ export function MakeCard({
           id: "pkg",
           icon: Package,
           title: tr("fpkg.make.pkg_title", undefined, "A package (.pkg)"),
-          body: tr(
-            "fpkg.make.pkg_body",
-            undefined,
-            "Installs on the PS5 like a game from the store, streamed from here or uploaded first. PS4 games play on any firmware; PS5 games on 11.60 and below.",
-          ),
+          body: kraken
+            ? tr(
+                "fpkg.make.pkg_body_kraken",
+                undefined,
+                "Kraken Mount, running on this PS5, mounts it from a drive's homebrew folder and shows it on the home screen: nothing is installed, and it plays where an installed PS5 package does not. It can still be installed instead.",
+              )
+            : tr(
+                "fpkg.make.pkg_body",
+                undefined,
+                "Installs on the PS5 like a game from the store, streamed from here or uploaded first. PS4 games play on any firmware; PS5 games on 11.60 and below.",
+              ),
         },
     {
       id: "image",
       icon: HardDrive,
       title: tr("fpkg.make.image_title", undefined, "A game image"),
-      body: tr(
-        "fpkg.make.image_body",
-        undefined,
-        "One file on a PS5 drive that ShadowMount+ mounts and shows on the home screen. Nothing is installed, and it plays on firmware where a PS5 package will not.",
-      ),
+      body: kraken
+        ? tr(
+            "fpkg.make.image_body_kraken",
+            undefined,
+            "One file on a PS5 drive that ShadowMount+ mounts. Kraken Mount, which runs on this PS5, does not mount images: make a package instead.",
+          )
+        : tr(
+            "fpkg.make.image_body",
+            undefined,
+            "One file on a PS5 drive that ShadowMount+ mounts and shows on the home screen. Nothing is installed, and it plays on firmware where a PS5 package will not.",
+          ),
     },
     {
       id: "folder",
@@ -150,7 +174,13 @@ export function MakeCard({
             ? tr("fpkg.make.archive_later", undefined, "An archive is looked at after it is unpacked, so no choice is marked here.")
             : !checked
             ? tr("fpkg.make.pick_game", undefined, "Check a game under ① and the better choice for it on your PS5 is marked.")
-            : unplayableOn
+            : kraken && !ps4
+              ? tr(
+                  "fpkg.make.why_kraken",
+                  undefined,
+                  "Kraken Mount runs on this PS5: a package made here is mounted from a drive, not installed.",
+                )
+              : unplayableOn
               ? tr(
                   "fpkg.make.why_image",
                   { fw: unplayableOn },

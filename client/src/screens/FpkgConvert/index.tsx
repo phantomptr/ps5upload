@@ -87,6 +87,9 @@ import { sourcesForPath, withoutBuilding } from "../../lib/convertQueueSources";
 import { usePackageViewer } from "../../state/packageViewer";
 import { consoleSwapDeps } from "../../lib/dumpSwapConsole";
 import { amprTrace, titleIdOf } from "../../api/amprTrace";
+import { krakenIsTheMounter } from "../../lib/mounter";
+import { placePkgForMount, type MountPlaceResult } from "../../state/pkgMount";
+import { useSmpState } from "../GameHub/SmpNeeded";
 
 /** Why a source was not queued: the build picked cannot be made from it. */
 type QueueSkip = "not-image" | "not-folder" | "later-part";
@@ -136,6 +139,14 @@ export default function WorkshopScreen() {
   const profiles = useRosterStore((s) => s.profiles);
   const payloadUp = useConnectionStore((s) => s.payloadStatus === "up");
   const canInstall = payloadUp && host.trim() !== "";
+  // Kraken Mount on the console: a package made here can be mounted from a drive instead of
+  // installed (see lib/mounter).
+  const mounterProbe = useSmpState(host);
+  const kraken = krakenIsTheMounter(mounterProbe.status === "checking" ? null : mounterProbe.status);
+  const [mountRun, setMountRun] = useState<{ busy: boolean; result: MountPlaceResult | null }>({
+    busy: false,
+    result: null,
+  });
   const kernel = useConnectionStore((s) =>
     host ? (s.runtimeByHost[hostOf(host)]?.ps5Kernel ?? null) : null,
   );
@@ -1184,6 +1195,7 @@ export default function WorkshopScreen() {
             archive={!locked && isArchiveSource(src)}
             forNext={locked}
             ps4={!locked && ps4}
+            kraken={kraken}
           />
 
           <OptionsCard
@@ -1333,6 +1345,17 @@ export default function WorkshopScreen() {
               )
             }
             onInstall={(method) => void retryInstall(host, method)}
+            kraken={kraken}
+            onMount={
+              kraken && !ps4 && pipeline.phase !== "idle" && pipeline.packagePath
+                ? () => {
+                    const path = pipeline.packagePath ?? "";
+                    setMountRun({ busy: true, result: null });
+                    void placePkgForMount(path, host).then((result) => setMountRun({ busy: false, result }));
+                  }
+                : undefined
+            }
+            mountRun={mountRun}
             onLaunch={onLaunch}
             targetLabel={
               pipeline.phase === "running" && pipeline.host
