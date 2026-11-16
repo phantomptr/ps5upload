@@ -162,6 +162,10 @@ impl<'a> Ps4Params<'a> {
 }
 
 impl SourceTree for Ps4Params<'_> {
+    fn release(&mut self) {
+        self.inner.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         &self.files
     }

@@ -236,6 +236,10 @@ impl Lz4Unpacked {
 }
 
 impl SourceTree for Lz4Unpacked {
+    fn release(&mut self) {
+        self.inner.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         &self.files
     }
@@ -359,6 +363,10 @@ impl RuntimeInstalled {
 }
 
 impl SourceTree for RuntimeInstalled {
+    fn release(&mut self) {
+        self.inner.release();
+    }
+
     fn files(&self) -> &[crate::source::SourceFile] {
         &self.files
     }
@@ -439,6 +447,10 @@ pub struct Overlay<'a> {
 }
 
 impl SourceTree for Overlay<'_> {
+    fn release(&mut self) {
+        self.source.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         &self.files
     }

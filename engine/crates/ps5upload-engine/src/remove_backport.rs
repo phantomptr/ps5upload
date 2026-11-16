@@ -318,6 +318,10 @@ impl Without {
 }
 
 impl SourceTree for Without {
+    fn release(&mut self) {
+        self.inner.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         &self.files
     }

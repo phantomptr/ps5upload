@@ -73,6 +73,10 @@ struct Plain {
 }
 
 impl SourceTree for Plain {
+    fn release(&mut self) {
+        self.inner.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         &self.files
     }

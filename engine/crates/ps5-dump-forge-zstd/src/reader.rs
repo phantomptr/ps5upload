@@ -312,6 +312,10 @@ impl<T: SourceTree + ?Sized> Unpacked<T> {
 }
 
 impl<T: SourceTree + ?Sized> SourceTree for Unpacked<T> {
+    fn release(&mut self) {
+        self.inner.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         &self.files
     }

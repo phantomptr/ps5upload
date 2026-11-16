@@ -268,6 +268,10 @@ impl<'a> PackedTree<'a> {
 }
 
 impl SourceTree for PackedTree<'_> {
+    fn release(&mut self) {
+        self.inner.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         &self.files
     }

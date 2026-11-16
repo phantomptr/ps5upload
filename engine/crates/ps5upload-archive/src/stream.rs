@@ -829,6 +829,21 @@ impl Reader {
         self.kept.lock().unwrap_or_else(|e| e.into_inner()).bytes
     }
 
+    /// Whether a session (a walk and its decoder) is open now.
+    pub fn reading(&self) -> bool {
+        self.session.is_some()
+    }
+
+    /// Ends the session (its walk, the decoder and its dictionary) and lets go of the files kept
+    /// on the way and the heads served: before the archive is opened again, so two decoders are
+    /// never held at once. A read after it starts a new session.
+    pub fn release(&mut self) {
+        // Joins the walk's thread: nothing else touches what it kept after this.
+        self.session = None;
+        *self.kept.lock().unwrap_or_else(|e| e.into_inner()) = Kept::default();
+        self.heads = HashMap::new();
+    }
+
     /// Up to `len` bytes of `path` from `offset`; fewer only at the file's end.
     pub fn read_at(&mut self, path: &str, offset: u64, len: usize) -> Result<Vec<u8>, ReadError> {
         let Some(&idx) = self.index.get(path) else {
@@ -1667,6 +1682,28 @@ mod tests {
             }
             let _ = std::fs::remove_dir_all(&d);
         }
+    }
+
+    /// Release ends the session (its walk and decoder) and lets go of what it kept; a read after
+    /// it starts a new session and still gives the file's bytes.
+    #[test]
+    fn release_drops_the_session_and_what_it_kept() {
+        let d = dir("7z-release");
+        let files = sample();
+        let path = d.join("game.7z");
+        sevenz_of(&path, &files, true);
+        let mut r = reader(&path);
+        let (last, last_data) = files.last().unwrap();
+        assert_eq!(r.read_at(last, 0, last_data.len()).unwrap(), *last_data);
+        assert!(r.reading());
+        assert!(r.kept_bytes() > 0);
+        r.release();
+        assert!(!r.reading());
+        assert_eq!(r.kept_bytes(), 0);
+        let (first, first_data) = &files[0];
+        assert_eq!(r.read_at(first, 0, first_data.len()).unwrap(), *first_data);
+        assert_eq!(r.sessions(), 2);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

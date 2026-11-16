@@ -511,6 +511,10 @@ impl Aliased {
 }
 
 impl SourceTree for Aliased {
+    fn release(&mut self) {
+        self.inner.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         &self.files
     }
@@ -644,6 +648,8 @@ pub(crate) fn write_folder(
         let opened = ps5upload_fpkg::remote_source::open_remote(files, &root)
             .map_err(|e| format!("the folder could not be read back on {}: {e}", dest.label))?;
         let view = Aliased::new(opened, &launch);
+        // The check opens the source again: an archive's decoder goes first (one held at once).
+        tree.release();
         let checked = check(
             crate::folder_build::Written::Tree(Box::new(view)),
             &listed,

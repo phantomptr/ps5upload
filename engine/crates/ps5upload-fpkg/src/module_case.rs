@@ -297,6 +297,10 @@ fn respelled_index(tree: &mut dyn SourceTree, fixes: &[CaseFix]) -> Option<(Stri
 }
 
 impl SourceTree for CaseFixed {
+    fn release(&mut self) {
+        self.inner.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         &self.files
     }

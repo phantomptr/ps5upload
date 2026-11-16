@@ -675,6 +675,9 @@ fn write_checked_here(
             return Err("cancelled".into());
         }
 
+        // The read-back opens the source again: an archive's decoder (a `.7z`'s dictionary) and
+        // the files it kept go first, so only one is ever held.
+        tree.release();
         let checked = check(Written::Dir(&partial), &listed, &empty_dirs, stage)?;
         name_folder(&partial, target)?;
         Ok(FolderBuilt {
@@ -848,6 +851,7 @@ pub fn extract_file(
             ));
         }
         stage("verify", 0, size);
+        tree.release();
         let mut fresh = reopen()?;
         let (want, got) = {
             let mut report = |d: u64, t: u64| stage("verify", d, t);
@@ -887,6 +891,7 @@ mod tests {
     use super::*;
     use crate::image_build::{self, ImageFormat};
     use ps5upload_fpkg::source::{FolderSource, SourceFile};
+    use std::sync::Arc;
 
     #[test]
     fn keep_both_numbers_a_taken_name() {
@@ -974,6 +979,110 @@ mod tests {
             assert_eq!(stages, ["write", "verify"]);
         }
         r
+    }
+
+    /// `game` as a solid `.7z` at `path` (one LZMA2 block), inside a folder of its own name.
+    fn solid_7z_of(game: &Path, path: &Path) {
+        use sevenz_rust2::{ArchiveEntry, ArchiveWriter, SourceReader};
+        let name = game.file_name().unwrap().to_string_lossy().into_owned();
+        let (files, _) = ps5upload_fpkg::source::scan_tree(game).unwrap();
+        let mut w = ArchiveWriter::create(path).unwrap();
+        let entries: Vec<ArchiveEntry> = (files.iter())
+            .map(|f| ArchiveEntry::new_file(&format!("{name}/{}", f.path)))
+            .collect();
+        let readers: Vec<SourceReader<std::io::Cursor<Vec<u8>>>> = (files.iter())
+            .map(|f| {
+                SourceReader::new(std::io::Cursor::new(
+                    std::fs::read(game.join(&f.path)).unwrap(),
+                ))
+            })
+            .collect();
+        w.push_archive_entries(entries, readers).unwrap();
+        w.finish().unwrap();
+    }
+
+    /// An archive tree whose release is seen: whether it came, and whether the archive's walk
+    /// (and its decoder) was still held after it.
+    struct Watched {
+        inner: crate::archive_tree::ArchiveTree,
+        released: Arc<AtomicBool>,
+        still_reading: Arc<AtomicBool>,
+    }
+
+    impl SourceTree for Watched {
+        fn files(&self) -> &[SourceFile] {
+            self.inner.files()
+        }
+        fn read(&mut self, path: &str) -> ps5upload_fpkg::Result<Vec<u8>> {
+            self.inner.read(path)
+        }
+        fn read_range(
+            &mut self,
+            path: &str,
+            offset: u64,
+            len: usize,
+        ) -> ps5upload_fpkg::Result<Vec<u8>> {
+            self.inner.read_range(path, offset, len)
+        }
+        fn empty_dirs(&self) -> &[String] {
+            self.inner.empty_dirs()
+        }
+        fn describe(&self) -> String {
+            self.inner.describe()
+        }
+        fn release(&mut self) {
+            self.inner.release();
+            self.released.store(true, Ordering::SeqCst);
+            self.still_reading
+                .store(self.inner.reading(), Ordering::SeqCst);
+        }
+    }
+
+    /// A folder from a solid `.7z`: the first tree's walk and decoder are let go before the
+    /// read-back opens the archive again, so one decoder is held at a time; the folder verifies.
+    #[test]
+    fn the_read_back_of_an_archive_holds_one_decoder() {
+        let root = scratch("one-decoder");
+        let game = game(&root);
+        let archive = root.join("g.7z");
+        solid_7z_of(&game, &archive);
+        let open = |path: &Path| {
+            crate::archive_tree::open(path, None, Arc::new(|| false), None)
+                .map_err(|e| e.to_string())
+        };
+        let first = open(&archive).unwrap();
+        // Opening reads the param file: a walk is held from here on.
+        assert!(first.reading());
+        let released = Arc::new(AtomicBool::new(false));
+        let still_reading = Arc::new(AtomicBool::new(true));
+        let mut tree = Watched {
+            inner: first,
+            released: Arc::clone(&released),
+            still_reading: Arc::clone(&still_reading),
+        };
+        let seen = Arc::clone(&released);
+        let path = archive.clone();
+        let reopen = move || {
+            assert!(
+                seen.load(Ordering::SeqCst),
+                "reopened before the first tree let go"
+            );
+            open(&path).map(|t| Box::new(t) as Box<dyn SourceTree>)
+        };
+        let cancel = AtomicBool::new(false);
+        build(
+            &mut tree,
+            &reopen,
+            &root.join("out"),
+            VerifyMode::Full,
+            &cancel,
+            &mut |_, _, _| {},
+        )
+        .unwrap();
+        assert!(released.load(Ordering::SeqCst));
+        assert!(!still_reading.load(Ordering::SeqCst));
+        assert_eq!(snapshot(&root.join("out")).0, snapshot(&game).0);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A PS4 fixture package of ps5upload-fpkg (tests/fixtures/ps4), written to `dir`.

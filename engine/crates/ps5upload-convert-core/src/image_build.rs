@@ -338,6 +338,10 @@ impl<'a> HashingTree<'a> {
 }
 
 impl SourceTree for HashingTree<'_> {
+    fn release(&mut self) {
+        self.inner.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         self.inner.files()
     }
@@ -658,6 +662,10 @@ impl AmprIndexed<'_> {
 }
 
 impl SourceTree for AmprIndexed<'_> {
+    fn release(&mut self) {
+        self.inner.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         &self.files
     }

@@ -198,6 +198,10 @@ impl<'a> Only<'a> {
 }
 
 impl SourceTree for Only<'_> {
+    fn release(&mut self) {
+        self.inner.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         &self.files
     }
