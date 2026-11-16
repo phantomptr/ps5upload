@@ -4,6 +4,11 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+**Fixes**
+- **Convert, package metadata:** a debug package that keeps `sce_sys/param.json`, `sce_sys/trophy2/trophy00.ucp` or `sce_sys/uds/uds00.ucp` only in its container now unpacks them too. An image built from such a package no longer mounts and then fails to register with "missing/invalid param.json". Thanks to MayHappybb (#845).
+
 ## 12.5.1
 
 A big Convert update: zstd packs for every PS5 game, packs in every image format, converting straight from archives, editing an image in place, converting on the PS5 itself from Minion, and mounting a debug package with Kraken Mount instead of installing it. Checked with the automated tests; what was tried on a PS5 is said below.
