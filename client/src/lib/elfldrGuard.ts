@@ -108,6 +108,9 @@ export async function guardElfldr(
   try {
     const outcome = await deps.ensure(host);
     log.info("connection", `elfldr on ${host}: ${JSON.stringify(outcome)}`);
+    // #842: the engine leaves the swap for later while the console settles after a wake; the
+    // next check asks again instead of waiting out the 10 minutes.
+    if ((outcome as { reason?: unknown } | null)?.reason === "console_settling") lastAsked.delete(key);
   } catch (e) {
     log.warn("connection", `elfldr check on ${host} failed: ${e instanceof Error ? e.message : String(e)}`);
   }

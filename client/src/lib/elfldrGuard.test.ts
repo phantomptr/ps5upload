@@ -63,6 +63,23 @@ describe("keeping the patched elfldr in place", () => {
     expect(calls).toEqual(["10.0.0.2", "10.0.0.2"]);
   });
 
+  it("asks again at the next check when the console was still settling after a wake (#842)", async () => {
+    const calls: string[] = [];
+    let answer: unknown = { action: "skipped", reason: "console_settling" };
+    const deps = {
+      ensure: async (h: string) => {
+        calls.push(h);
+        return answer;
+      },
+      ...clock,
+    };
+    await guardElfldr("10.0.0.2", false, deps);
+    answer = { action: "current" };
+    await guardElfldr("10.0.0.2", false, deps);
+    await guardElfldr("10.0.0.2", false, deps);
+    expect(calls).toEqual(["10.0.0.2", "10.0.0.2"]);
+  });
+
   it("swallows a failure: it is an improvement, never a blocker", async () => {
     await expect(
       guardElfldr("10.0.0.2", false, {

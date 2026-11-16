@@ -194,6 +194,10 @@ pub struct HwPower {
     pub load_avg_5m: f32,
     #[serde(default = "default_loadavg_unavailable")]
     pub load_avg_15m: f32,
+    /// Where the console is in a rest/wake cycle, as the helper sees it: 0 normal, 1 going to
+    /// rest, 2 the minute after a wake (payload power_phase.h). 0 from a helper that doesn't say.
+    #[serde(default)]
+    pub power_phase: u8,
 }
 
 fn default_loadavg_unavailable() -> f32 {
@@ -524,6 +528,7 @@ pub fn hw_power(addr: &str) -> Result<HwPower> {
         load_avg_1m: la("load_avg_1m_centi"),
         load_avg_5m: la("load_avg_5m_centi"),
         load_avg_15m: la("load_avg_15m_centi"),
+        power_phase: get("power_phase").and_then(|v| v.parse().ok()).unwrap_or(0),
     })
 }
 

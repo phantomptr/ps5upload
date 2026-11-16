@@ -1096,12 +1096,17 @@ int hw_power_get_text(char *out, size_t out_cap, size_t *out_written,
         "power_consumption_mw=0\n"
         "load_avg_1m_centi=%ld\n"
         "load_avg_5m_centi=%ld\n"
-        "load_avg_15m_centi=%ld\n",
+        "load_avg_15m_centi=%ld\n"
+        "power_phase=%d\n",
         (unsigned long long)uptime_sec,
         (unsigned long long)hours,
         (unsigned long long)minutes,
         (unsigned long long)boot_time_sec,
-        la_1m, la_5m, la_15m);
+        la_1m, la_5m, la_15m,
+        /* Where the console is in a rest/wake cycle (power_phase.h: 0 normal, 1 going down, 2 the
+         * minute after a wake): the engine holds work that kills or starts processes (the elfldr
+         * swap) until it is 0. */
+        power_phase_current());
     if (n < 0 || (size_t)n >= out_cap) {
         if (err_reason_out) *err_reason_out = "hw_power_format_failed";
         return -1;

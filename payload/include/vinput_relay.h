@@ -30,6 +30,10 @@ typedef struct {
     void (*kill)(void *ctx, int pid);
     /* 1 while pid lives. NULL: kill(pid, 0). */
     int (*alive)(void *ctx, int pid);
+    /* 1 while the companion must not be started yet (the console is going to rest or settling in
+     * the minute after a wake, power_phase.h): sessions are told "starting" and the start waits.
+     * NULL: never held. */
+    int (*hold_start)(void *ctx);
     void *ctx;
     int port;                              /* 0: VWIRE_PORT */
     const char *token_path, *pid_path;     /* NULL: VWIRE_TOKEN_PATH / VWIRE_PID_PATH */

@@ -27,6 +27,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "power_phase.h"
 #include "ps5_firmware.h"
 #include "sigpipe_guard.h"
 #include "vinput_relay.h"
@@ -145,6 +146,12 @@ static void vps5_kill(void *ctx, int pid) {
     fprintf(stderr, "[vinput] SIGKILL companion pid %d: %d\n", pid, kill(pid, SIGKILL));
 }
 
+/* #842: no companion start while the console goes to rest or in the minute after a wake. */
+static int vps5_hold_start(void *ctx) {
+    (void)ctx;
+    return power_phase_quiet();
+}
+
 const vinput_backend_t *vinput_ps5_backend(void) {
     char kv[256], fw[32];
     size_t len = sizeof kv;
@@ -161,6 +168,7 @@ const vinput_backend_t *vinput_ps5_backend(void) {
     memset(&cfg, 0, sizeof cfg);
     cfg.launch = vps5_launch;
     cfg.kill = vps5_kill;
+    cfg.hold_start = vps5_hold_start;
     vinput_relay_configure(&cfg);
     fprintf(stderr, "[vinput] console devices on (firmware %s): relayed to %s on :%d\n", fw, "ps5u-vinput", 9184);
     return vinput_relay_backend();

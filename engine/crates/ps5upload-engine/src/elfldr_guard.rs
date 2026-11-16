@@ -239,11 +239,54 @@ pub struct Outcome {
     pub pid: Option<i32>,
 }
 
+/// How long [`ensure`] waits for a console that has just woken to settle: the helper's settle
+/// minute plus slack.
+const SETTLE_WAIT: Duration = Duration::from_secs(90);
+
+/// True once the helper says the console is in no rest/wake transition (or doesn't say: an older
+/// helper, or no answer, which the swap's own checks then handle).
+fn wait_until_settled(mgmt: &str) -> bool {
+    let until = Instant::now() + SETTLE_WAIT;
+    loop {
+        match ps5upload_core::hw::hw_power(mgmt) {
+            Ok(p) if settling(p.power_phase) => {}
+            _ => return true,
+        }
+        if Instant::now() >= until {
+            return false;
+        }
+        std::thread::sleep(Duration::from_secs(3));
+    }
+}
+
+/// A power phase in which the swap waits: going to rest (1) or settling after a wake (2).
+fn settling(phase: u8) -> bool {
+    matches!(phase, 1 | 2)
+}
+
 /// Make sure `host` runs the patched elfldr. Needs the helper up (it reads the process list).
 pub fn ensure(host: &str) -> Result<Outcome, String> {
     let lock = loader_lock(host);
     let _loader = lock.lock().unwrap_or_else(|e| e.into_inner());
     let mgmt = crate::console_addr(host);
+    // #842: a swap kills a process and starts another; not while the console goes to rest or in
+    // the minute after a wake (the helper's power phase). Waits for it, up to SETTLE_WAIT.
+    if !wait_until_settled(&mgmt) {
+        crate::log_info!(
+            "elfldr on {host}: left for later, the console is still settling after a wake"
+        );
+        return Ok(Outcome {
+            action: "skipped",
+            health: probe(
+                host,
+                LOADER_PORT,
+                Duration::from_secs(3),
+                Duration::from_secs(5),
+            ),
+            reason: Some("console_settling"),
+            pid: None,
+        });
+    }
     let before = elfldr_pids(&mgmt)?;
     let mine = installed()
         .lock()
@@ -342,6 +385,16 @@ pub fn ensure(host: &str) -> Result<Outcome, String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_swap_waits_while_the_console_goes_to_rest_or_settles() {
+        assert!(!settling(0));
+        assert!(settling(1));
+        assert!(settling(2));
+        // A phase a newer helper adds is not waited on.
+        assert!(!settling(3));
+    }
+
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
