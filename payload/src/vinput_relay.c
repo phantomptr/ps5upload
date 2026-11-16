@@ -397,7 +397,12 @@ static void *relay_main(void *arg) {
             C.hold_start(C.ctx)) {
             /* #842: the companion's Init calls into the console's input and user services; not in
              * the minute after a wake (or while it goes to rest). Asked again every 50 ms. */
-            if (!g_held_logged) {
+            if (!wanted) {
+                /* The session went away during the wait: nothing to start once it is over. */
+                fprintf(stderr, "[vinput] companion start dropped: no session wants it any more\n");
+                g_st = ST_IDLE;
+                g_held_logged = 0;
+            } else if (!g_held_logged) {
                 fprintf(stderr, "[vinput] companion start held: the console is settling after a wake\n");
                 g_held_logged = 1;
             }

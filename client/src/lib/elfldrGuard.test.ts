@@ -63,21 +63,41 @@ describe("keeping the patched elfldr in place", () => {
     expect(calls).toEqual(["10.0.0.2", "10.0.0.2"]);
   });
 
-  it("asks again at the next check when the console was still settling after a wake (#842)", async () => {
+  it("asks again every 30 s while the console settles after a wake (#842)", async () => {
+    const calls: number[] = [];
+    const answers: unknown[] = [
+      { action: "skipped", reason: "console_settling" },
+      { action: "skipped", reason: "console_settling" },
+      { action: "current" },
+    ];
+    const deps = {
+      ensure: async () => {
+        calls.push(now);
+        return answers.shift();
+      },
+      ...clock,
+    };
+    const start = now;
+    await guardElfldr("10.0.0.2", false, deps);
+    expect(calls).toEqual([start, start + 30_000, start + 60_000]);
+    // settled and swapped: the 10-minute spacing applies again
+    await guardElfldr("10.0.0.2", false, deps);
+    expect(calls).toHaveLength(3);
+  });
+
+  it("gives up after a few tries and asks at the next chance", async () => {
     const calls: string[] = [];
-    let answer: unknown = { action: "skipped", reason: "console_settling" };
     const deps = {
       ensure: async (h: string) => {
         calls.push(h);
-        return answer;
+        return { action: "skipped", reason: "console_settling" };
       },
       ...clock,
     };
     await guardElfldr("10.0.0.2", false, deps);
-    answer = { action: "current" };
+    expect(calls).toHaveLength(5);
     await guardElfldr("10.0.0.2", false, deps);
-    await guardElfldr("10.0.0.2", false, deps);
-    expect(calls).toEqual(["10.0.0.2", "10.0.0.2"]);
+    expect(calls).toHaveLength(10);
   });
 
   it("swallows a failure: it is an improvement, never a blocker", async () => {

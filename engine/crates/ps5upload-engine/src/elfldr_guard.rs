@@ -232,31 +232,23 @@ fn elfldr_pids(mgmt: &str) -> Result<Vec<i32>, String> {
 pub struct Outcome {
     /// `upgraded`, `recovered`, `current` or `skipped`.
     pub action: &'static str,
-    pub health: Health,
+    /// What the loader probe saw; absent when it was not probed (the console was settling).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health: Option<Health>,
     /// Why it was skipped.
     pub reason: Option<&'static str>,
     /// The elfldr running afterwards, when known.
     pub pid: Option<i32>,
 }
 
-/// How long [`ensure`] waits for a console that has just woken to settle: the helper's settle
-/// minute plus slack.
-const SETTLE_WAIT: Duration = Duration::from_secs(90);
-
-/// True once the helper says the console is in no rest/wake transition (or doesn't say: an older
-/// helper, or no answer, which the swap's own checks then handle).
-fn wait_until_settled(mgmt: &str) -> bool {
-    let until = Instant::now() + SETTLE_WAIT;
-    loop {
-        match ps5upload_core::hw::hw_power(mgmt) {
-            Ok(p) if settling(p.power_phase) => {}
-            _ => return true,
-        }
-        if Instant::now() >= until {
-            return false;
-        }
-        std::thread::sleep(Duration::from_secs(3));
-    }
+/// The helper's power phase when it is one in which the swap must wait: going to rest (1) or
+/// the minute after a wake (2). `None` for normal, an older helper, or no answer (the swap's own
+/// checks handle those).
+fn unsettled_phase(mgmt: &str) -> Option<u8> {
+    ps5upload_core::hw::hw_power(mgmt)
+        .ok()
+        .map(|p| p.power_phase)
+        .filter(|p| settling(*p))
 }
 
 /// A power phase in which the swap waits: going to rest (1) or settling after a wake (2).
@@ -266,27 +258,26 @@ fn settling(phase: u8) -> bool {
 
 /// Make sure `host` runs the patched elfldr. Needs the helper up (it reads the process list).
 pub fn ensure(host: &str) -> Result<Outcome, String> {
-    let lock = loader_lock(host);
-    let _loader = lock.lock().unwrap_or_else(|e| e.into_inner());
     let mgmt = crate::console_addr(host);
     // #842: a swap kills a process and starts another; not while the console goes to rest or in
-    // the minute after a wake (the helper's power phase). Waits for it, up to SETTLE_WAIT.
-    if !wait_until_settled(&mgmt) {
-        crate::log_info!(
-            "elfldr on {host}: left for later, the console is still settling after a wake"
-        );
+    // the minute after a wake (the helper's power phase). Answered at once, before the loader
+    // lock (sends must not wait on it), and the app asks again a little later.
+    if let Some(phase) = unsettled_phase(&mgmt) {
+        let why = if phase == 1 {
+            "going to rest"
+        } else {
+            "still settling after a wake"
+        };
+        crate::log_info!("elfldr on {host}: left for later, the console is {why}");
         return Ok(Outcome {
             action: "skipped",
-            health: probe(
-                host,
-                LOADER_PORT,
-                Duration::from_secs(3),
-                Duration::from_secs(5),
-            ),
+            health: None,
             reason: Some("console_settling"),
             pid: None,
         });
     }
+    let lock = loader_lock(host);
+    let _loader = lock.lock().unwrap_or_else(|e| e.into_inner());
     let before = elfldr_pids(&mgmt)?;
     let mine = installed()
         .lock()
@@ -307,7 +298,7 @@ pub fn ensure(host: &str) -> Result<Outcome, String> {
             } else {
                 "skipped"
             },
-            health,
+            health: Some(health),
             reason: Some(reason),
             pid: before.first().copied(),
         }),
@@ -324,7 +315,7 @@ pub fn ensure(host: &str) -> Result<Outcome, String> {
                 crate::log_info!("elfldr on {host} is {reason}; no recovery route: {e}");
                 return Ok(Outcome {
                     action: "skipped",
-                    health,
+                    health: Some(health),
                     reason: Some(reason),
                     pid: before.first().copied(),
                 });
@@ -345,7 +336,7 @@ pub fn ensure(host: &str) -> Result<Outcome, String> {
                     crate::log_info!("elfldr on {host} was {reason}; recovered through Payload Manager (pid {pid})");
                     return Ok(Outcome {
                         action: "recovered",
-                        health: answering,
+                        health: Some(answering),
                         reason: None,
                         pid: Some(pid),
                     });
@@ -372,7 +363,7 @@ pub fn ensure(host: &str) -> Result<Outcome, String> {
                     record_installed(host, &mgmt, pid);
                     return Ok(Outcome {
                         action: "upgraded",
-                        health: answering,
+                        health: Some(answering),
                         reason: None,
                         pid: Some(pid),
                     });
