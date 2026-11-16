@@ -1333,8 +1333,8 @@ async fn lz4_packs_go_into_a_folder_and_any_image() {
 
 /// LZ4 packs straight to a saved server through the HTTP surface: a `.ffpfs` with LZ4 packs and
 /// a folder with LZ4 packs land there under their names, each read back there through its packs;
-/// nothing is left on this computer, the spools in the data folder included. A `.ffpfsc` is
-/// still refused straight to a server, packed or not.
+/// nothing is left on this computer, the spools in the data folder included; a `.ffpfsc` with
+/// LZ4 packs too.
 #[tokio::test(flavor = "multi_thread")]
 async fn lz4_packs_go_straight_to_a_server() {
     let r = crate::remote::pool::testing::install_global(&[]);
@@ -1404,15 +1404,27 @@ async fn lz4_packs_go_straight_to_a_server() {
         let spool = crate::image_build::stream_spool(std::path::Path::new(&claimed));
         assert!(!spool.exists(), "{}", spool.display());
     }
-    // Compressed, packed or not: still kept on this computer.
+    // In a .ffpfsc too: measured, then written there; still nothing on this computer.
     let r3 = post_json(
         &app,
         "/api/exfat/build",
-        &json!({ "source": game, "compress": true, "ampr_lz4": lz4, "destination": to })
-            .to_string(),
+        &json!({
+            "source": game, "output_dir": out, "compress": true, "ffpfsc_level": "fast",
+            "name": "GameC", "ampr_lz4": lz4, "destination": to,
+        })
+        .to_string(),
     )
     .await;
-    assert_eq!(r3.status(), StatusCode::BAD_REQUEST);
+    match job_end(&st, r3).await {
+        JobState::Done { dest, .. } => assert_eq!(dest, format!("remote://{id}{dir}/GameC.ffpfsc")),
+        other => panic!("{}", json!(other)),
+    }
+    assert!(fs.stat(&format!("{dir}/GameC.ffpfsc")).await.is_ok());
+    assert!(!out.exists(), "nothing on this computer");
+    let spool = crate::image_build::stream_spool(std::path::Path::new(&format!(
+        "remote://{id}{dir}/GameC.ffpfsc"
+    )));
+    assert!(!spool.exists(), "{}", spool.display());
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -1507,19 +1519,25 @@ async fn an_image_and_a_folder_go_straight_to_a_server() {
         JobState::Failed { error, .. } => assert!(error.contains("already exists"), "{error}"),
         other => panic!("{}", json!(other)),
     }
-    // A .ffpfsc is refused before a job.
+    // A .ffpfsc goes there too, measured first.
     let r3 = post_json(
         &app,
         "/api/exfat/build",
         &json!({
             "source": game,
             "compress": true,
+            "name": "GameC",
             "destination": { "kind": "server", "source_id": id, "dir": dir },
         })
         .to_string(),
     )
     .await;
-    assert_eq!(r3.status(), StatusCode::BAD_REQUEST);
+    match finished(&st, r3).await {
+        JobState::Done { dest, .. } => {
+            assert_eq!(dest, format!("remote://{id}{dir}/GameC.ffpfsc"))
+        }
+        other => panic!("{}", json!(other)),
+    }
     // The image on the server unpacked to a folder on the server.
     let r4 = post_json(
         &app,

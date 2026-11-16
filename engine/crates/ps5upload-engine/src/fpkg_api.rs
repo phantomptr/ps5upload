@@ -1071,8 +1071,10 @@ pub(crate) struct ExfatBuildReq {
     /// then the image's path on the PS5, and the read-back runs there. For `.exfat`, `.ffpkg`
     /// and `.ffpfs` images, plain or in a `.ffpfsc` (`compress`: compressed once to measure it,
     /// then again as it is sent, so it takes about twice the compression time), with or
-    /// without `ampr_lz4` or `ampr_zstd` packs (LZ4 packs are made into the engine's data folder
-    /// first, and removed once the image is there); edited copies are refused for it.
+    /// without `ampr_lz4` or `ampr_zstd` packs (LZ4 packs are measured, then each volume is made
+    /// again as it is sent, so nothing is stored here; should a volume not come out as measured,
+    /// the packs are made into the engine's data folder first and removed once the image is
+    /// there); edited copies are refused for it.
     #[serde(default)]
     destination: Option<ImageDestinationReq>,
     /// A PS4 update (a package, image or folder) merged into the PS4 game `source`: the image
@@ -2224,8 +2226,8 @@ pub(crate) async fn exfat_build_handler(
     let Some(writing) = claim_off_thread(claimed.clone()).await else {
         return already_building(&claimed);
     };
-    // LZ4 packs are spooled beside the image, or, straight to a console or a server, in the
-    // engine's data folder (one spool per destination).
+    // LZ4 packs are spooled beside the image. Straight to a console or a server they are made
+    // as they are sent; the engine's data folder (one spool per destination) is the fallback.
     let spool = if straight {
         crate::image_build::stream_spool(&claimed)
     } else {
