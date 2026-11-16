@@ -89,4 +89,4 @@ locale needs an allowlist entry.
 ## Questions
 
 Open a [GitHub issue](https://github.com/phantomptr/ps5upload/issues) or ask
-in the [Discord](https://discord.gg/fzK3xddtrM).
+in the [UndefinedLab Discord](https://discord.gg/fzK3xddtrM).

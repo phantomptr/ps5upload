@@ -17,7 +17,7 @@ button (Security tab → Report a vulnerability). This opens a private
 advisory only you and the maintainer can see.
 
 If you can't use that, reach the maintainer on
-[Discord](https://discord.gg/fzK3xddtrM) and ask for a private channel —
+[UndefinedLab Discord](https://discord.gg/fzK3xddtrM) and ask for a private channel —
 don't post details publicly.
 
 Please include:
