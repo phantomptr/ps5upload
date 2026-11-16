@@ -49,6 +49,9 @@ describe("Tailscale device list", () => {
     expect(deviceKind("pixel-9-ps5u.tail1.ts.net.")).toBe("phone");
     expect(deviceKind("yuns-iphone")).toBe("phone");
     expect(deviceKind("yunpengs-mbp-ps5u")).toBe("computer");
+    // A phone with "ps5" in its name is still a phone: no Add as a console.
+    expect(deviceKind("yuns-ps5-pixel-ps5u")).toBe("phone");
+    expect(deviceKind("ps5-remote-android-ps5u")).toBe("phone");
   });
 
   it("puts PS5s first, by their name in the app, then this device, then online, then offline", () => {

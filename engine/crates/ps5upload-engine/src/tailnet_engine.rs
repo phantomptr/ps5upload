@@ -73,6 +73,10 @@ pub struct PeerSeen {
     pub online: bool,
     /// "builtin" or "system".
     pub source: &'static str,
+    /// The OS the peer's Tailscale reports, where this device's list carries it (the system app's;
+    /// the engine's own node does not): "ps5" for a PS5's helper node, "android", "macOS", ... Empty
+    /// when unknown.
+    pub os: String,
 }
 
 /// Which tailnet way this device has right now.
@@ -520,6 +524,7 @@ impl TailnetEngine {
                         ip,
                         online: p.online,
                         source: "builtin",
+                        os: String::new(),
                     });
                 }
             }
@@ -528,12 +533,18 @@ impl TailnetEngine {
             readable = true;
             for p in st.peers {
                 if let Some(ip) = p.ipv4 {
-                    if !out.iter().any(|o| o.ip == ip) {
+                    if let Some(o) = out.iter_mut().find(|o| o.ip == ip) {
+                        // The engine's own node has no OS for its peers: the system app's word.
+                        if o.os.is_empty() {
+                            o.os = p.os;
+                        }
+                    } else {
                         out.push(PeerSeen {
                             name: p.name,
                             ip,
                             online: p.online,
                             source: "system",
+                            os: p.os,
                         });
                     }
                 }

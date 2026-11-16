@@ -5,7 +5,7 @@
 import type { HostRuntime } from "../../../state/connection";
 import type { ConsoleOnTailnet } from "../../../state/useTailnet";
 import type { DiscoveredHost } from "../../../api/ps5";
-import type { FoundConsole } from "../../../api/tailnet";
+import { foundKind, type FoundConsole } from "../../../api/tailnet";
 import type { MeshDevice } from "../../../api/mesh";
 import { compareVersions } from "../../../lib/semver";
 import { parsePS5Firmware } from "../../../lib/ps5Firmware";
@@ -261,6 +261,8 @@ export function mergeFound(
     });
   }
   for (const c of tailnet) {
+    // Only a PS5 for sure: the app on a phone or computer is "…-ps5u" on Tailscale too.
+    if (foundKind(c) !== "ps5") continue;
     const addrs = [c.tailnet_ip, c.lan_host, ...(c.hosts ?? [])].filter((a): a is string => !!a);
     parts.push({
       key: c.id,
