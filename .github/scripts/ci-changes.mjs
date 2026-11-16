@@ -74,6 +74,7 @@ export const RULES = [
   // the crates it links.
   { pattern: "engine/crates/ps5upload-convert/**", lanes: [...RUST_USERS, "payload"] },
   { pattern: "engine/crates/ps5upload-convert-core/**", lanes: [...RUST_USERS, "payload"] },
+  { pattern: "engine/crates/ps5upload-archive/**", lanes: [...RUST_USERS, "payload"] },
   { pattern: "engine/crates/ps5-dump-forge-*/**", lanes: [...RUST_USERS, "payload"] },
   { pattern: "engine/crates/ps5upload-fpkg/**", lanes: [...RUST_USERS, "payload"] },
   { pattern: "engine/crates/ps5upload-pkg/**", lanes: [...RUST_USERS, "payload"] },

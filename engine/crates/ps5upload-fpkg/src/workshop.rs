@@ -40,13 +40,30 @@ pub fn gentle() -> bool {
     GENTLE.load(Ordering::Relaxed)
 }
 
+static CAP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The most worker threads any job of this process starts, whatever the core count (0, the
+/// default: no cap). The converter on the PS5 sets it to its share of the console's CPUs.
+pub fn set_thread_cap(threads: usize) {
+    CAP.store(threads, Ordering::Relaxed);
+}
+
 /// How many worker threads a Workshop job starts: every core, or about half of them while
-/// [`gentle`] is on.
+/// [`gentle`] is on; never more than [`set_thread_cap`] said.
 pub fn workshop_threads() -> usize {
-    threads_for(
+    let n = threads_for(
         std::thread::available_parallelism().map_or(4, |n| n.get()),
         gentle(),
-    )
+    );
+    capped(n, CAP.load(Ordering::Relaxed))
+}
+
+/// `n` threads under a cap of `cap` (0: none).
+fn capped(n: usize, cap: usize) -> usize {
+    match cap {
+        0 => n,
+        cap => n.min(cap),
+    }
 }
 
 /// [`workshop_threads`] for a machine with `cores` cores.
@@ -416,6 +433,10 @@ mod tests {
         assert_eq!(workshop_threads(), (all / 2).max(1));
         set_gentle(false);
         assert_eq!(workshop_threads(), all);
+        // The console's cap (set once, process-wide, by its converter).
+        assert_eq!(capped(5, 3), 3);
+        assert_eq!(capped(2, 3), 2);
+        assert_eq!(capped(16, 0), 16);
     }
 
     #[test]

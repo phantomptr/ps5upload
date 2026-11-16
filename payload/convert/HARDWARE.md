@@ -33,6 +33,7 @@ converter's imports the helper does not have, and the run that exercises each:
 | `fdopendir` | std's `remove_dir_all` (a stopped folder build's `.partial/`) | run 4 (Stop a folder output) |
 | `sched_yield` | rayon's idle workers (the read-back's BLAKE3) and std's `yield_now` | run 3 |
 | `log2` | the image writers' layout maths (UFS2/PFS) | run 3 with `ffpkg` |
+| `log2f` | the `.pkg` builder's Kraken encoder (its symbol costs), any level but `stored` | run 3d at `fast` |
 
 The exact current list is what `import-diff.sh` prints; if it names a symbol not in this table,
 add it here before the run.
@@ -97,6 +98,64 @@ Then once each with `format` `ffpkg` (`dest` `/data/out.ffpkg`), `ffpfs` and `fo
 Then the same with a large game (50+ GB, long enough to see the power tick hold off rest mode:
 leave the controller alone past the console's auto-rest time): the speed, and the converter's
 memory in the process list (the hash queue holds 4 reads of up to 8 MiB on the console).
+
+## Run 3b: a `.ffpfsc`
+
+No new imports (the ELF imports what it did before `.ffpfsc` output was added). New on the
+console: the deflate encoders (libdeflate, zlib-rs) on 3 worker threads, the PFSC reader in the
+read-back, and the container synced every 32 MiB as it is written.
+
+`fetch('/api/convert/start',{method:'POST',body:JSON.stringify({path:'/data/homebrew/<id>',dest:'/data/out.ffpfsc',format:'ffpfsc',inner:'exfat',ffpfsc_level:'balanced'})})`
+
+Proven when: the stages go `plan` → `compress` → `verify`, `convert.log` has `.ffpfsc holding
+out.exfat, balanced compression on 3 threads` and the `ffpfsc: compression=balanced ... threads=3`
+line (write down `stream_ms` and `raw_bytes`: the console's compression rate), the image mounts
+through ShadowMount+ and the game starts. Then `inner` `ffpkg` at `fast`, and one large game at
+`smallest` (the slow end: the page says 20-40 minutes for 30 GB) with Stop at about 50 %.
+
+## Run 3c: a game in a `.zip` and a `.7z`
+
+No import the helper lacks (`import-diff.sh` lists the same 24 as before); `getcwd` is new to
+the converter (std's `current_dir`, through the `zip` crate), and the helper imports it. New on the
+console: the archive reader's own thread (it decodes the archive front to back and hands the
+build the files it asks for), deflate and LZMA/LZMA2 decoding, and its memory: 4 MiB of chunks in
+flight, up to 64 MiB of small files kept, and a `.7z` block's dictionary (refused past 256 MiB
+on the console).
+
+Put a small game folder in a `.zip` (deflate) and in a `.7z` made with 7-Zip's defaults (solid
+LZMA2) on `/data`, then from Minion's Convert pick each (the picker lists `.zip`, `.7z` and `.rar`):
+
+- inspect shows the game's title and file count, and "read straight out of the archive";
+- `.zip` → `.exfat` and `.7z` → folder: the stages go `plan` → `write` → `verify`, the output
+  mounts or runs, and `convert.log` ends with `... (.7z archive, solid, read in place ...): N
+  pass(es) over the archive` (write N down: 1 is ideal; the console's decode speed is the
+  `built ... in S s` line);
+- Stop during a `.7z` → `.exfat` write: it ends `cancelled` within a second or two (the archive
+  thread stops too), nothing left;
+- a `.rar`: refused at once with "A .rar can't be converted on the PS5" (the helper refuses it;
+  no converter starts).
+
+Proven when all of that holds and `getcwd` raised nothing (a missing import stops the program
+before its first status, see "If it dies").
+
+## Run 3d: a `.pkg`
+
+One import the helper lacks: `log2f` (Kraken's cost model; a `stored` package never calls it).
+`statvfs` is new to the converter (the builder's free-space check) and the helper imports it.
+New on the console: the package builder (`ps5upload-fpkg`, a fake-signed debug package; it is
+written and read back, never installed here), Kraken on 3 threads (the converter caps every
+worker pool at 3), and a thread that syncs the `.pkg.partial` every 32 MiB it grows (U5: the
+builder writes through its own file, so it cannot be wrapped).
+
+`fetch('/api/convert/start',{method:'POST',body:JSON.stringify({path:'/data/homebrew/<id>',dest:'/data/out.pkg',format:'pkg',pkg_level:'stored'})})`
+
+Proven when: the stages go `check` → `plan` → `compress` → `write` → `verify`, it ends `ok`,
+`convert.log` has `.pkg at Kraken level Stored on 3 threads` and `built /data/out.pkg in S s:
+pkg, ... N syncs while written, verified: ok` (N > 0 for anything over 32 MiB), no `.partial` is
+left, and the package installs through the usual debug-package route (outside this program).
+Then `pkg_level` `fast` on the same game (`log2f`; write down the time: the page estimates
+about 15 minutes for 30 GB), then Stop during `compress`: `cancelled` within a second or two,
+nothing left.
 
 ## Run 4: Stop, and a full drive
 

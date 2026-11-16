@@ -17,10 +17,17 @@ path = "src/main.rs"
 ps5upload-fpkg = { path = "../ps5upload-fpkg" }
 # The build code, the same the engine runs on a computer.
 ps5upload-convert-core = { path = "../ps5upload-convert-core" }
+# A game read straight from a .zip or .7z (no .rar here: lib.rs RAR_REFUSAL).
+ps5upload-archive = { path = "../ps5upload-archive" }
 serde.workspace = true
 serde_json.workspace = true
 
 # The PS5 build checks libc's struct sizes at compile time (main.rs). Already in the tree.
+[dev-dependencies]
+# Writes the archives the tests convert from (the same pins as ps5upload-archive's).
+zip = { version = "9", default-features = false, features = ["deflate"] }
+sevenz-rust2 = { version = "0.23", default-features = false, features = ["compress"] }
+
 [target.'cfg(target_env = "ps5")'.dependencies]
 libc = "0.2"
 # The read-back's BLAKE3 hashes on rayon's global pool: kept to the converter's threads there.

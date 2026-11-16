@@ -325,6 +325,14 @@ fn wrap_inner<T>(
     let end = base + offsets.last().copied().unwrap_or(data_at);
     if skip > 0 {
         out.set_len(end)?;
+        out.seek(SeekFrom::Start(end))?;
+    } else {
+        // Zeros where the PFS, the header and the table go at the end, not a hole: on the PS5's
+        // UFS a sparse file is filled at 2-3 MiB/s (PS5 Dump Forge, measured). It is the
+        // console's converter that writes a `.ffpfsc` there; a computer pays a few hundred KiB.
+        let mut sink = Sink::new(&mut *out, cancel);
+        sink.zeros_to(end)?;
+        sink.w.flush()?;
     }
     out.seek(SeekFrom::Start(end))?;
     let mut sink = FileOut {
@@ -356,8 +364,17 @@ fn wrap_inner<T>(
     sink.w.flush()?;
     drop(sink);
     let image_size = img.ndblock * BLOCK;
-    // The zero tail of the container's last block.
-    out.set_len(image_size)?;
+    // The zero tail of the container's last block, written (no hole, as at the start); a longer
+    // file (a crashed build's tail past what this one stored) is cut.
+    let len = out.seek(SeekFrom::End(0))?;
+    if len < image_size {
+        let mut sink = Sink::new(&mut *out, cancel);
+        sink.pos = len;
+        sink.zeros_to(image_size)?;
+        sink.w.flush()?;
+    } else {
+        out.set_len(image_size)?;
+    }
     Ok((
         value,
         WrapReport {
@@ -1389,6 +1406,14 @@ mod tests {
         make(8, &d.join("many"), None).unwrap();
         let want = std::fs::read(d.join("one")).unwrap();
         assert!(std::fs::read(d.join("many")).unwrap() == want);
+        // The PS5 converter's way: synced every so often as it goes, nothing saved to go on from.
+        let synced = Resume {
+            blocks: 0,
+            every: 3 * BLOCK,
+            saved: &|_, _| Ok(()),
+        };
+        make(3, &d.join("synced"), Some(&synced)).unwrap();
+        assert!(std::fs::read(d.join("synced")).unwrap() == want);
 
         // Stopped after a checkpoint, as a crash would; then going on from it.
         let last = Mutex::new((0u64, 0u64));
