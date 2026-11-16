@@ -107,6 +107,7 @@ import { useAutoSaveBackupStore } from "../../state/autoSaveBackup";
 import { engineIsOnThisDevice } from "../../state/engine";
 import AutoBackupCard from "./AutoBackupCard";
 import ServerBackupCard from "./ServerBackupCard";
+import SaveSyncCard from "./SaveSyncCard";
 import MoveFromPs4 from "./MoveFromPs4";
 import SwitchSaves from "./SwitchSaves";
 import Ps2Saves from "./Ps2Saves";
@@ -1173,6 +1174,7 @@ export default function SavesScreen() {
       <ConnectionGate require="payload">
         <AutoBackupCard />
         <ServerBackupCard owners={owners} />
+        {hasOtherConsole && host?.trim() ? <SaveSyncCard host={host.trim()} /> : null}
         <MoveFromPs4 />
         {error && (
           <div className="mb-4">

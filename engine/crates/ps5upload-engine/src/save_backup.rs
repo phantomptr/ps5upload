@@ -784,7 +784,10 @@ pub(crate) fn running_of<'a>(host: &str, titles: &[&'a str]) -> Result<Option<&'
 /// the two machines' clocks never matter. A PS5 save is looked at two levels deep, as the saves
 /// list measures it; one of an emulator as deep as its saves are measured (and one loose in a
 /// folder, as only its own entries there).
-fn fingerprint(host: &str, entry: &SaveEntry) -> Result<Vec<(String, u64, i64)>, String> {
+pub(crate) fn fingerprint(
+    host: &str,
+    entry: &SaveEntry,
+) -> Result<Vec<(String, u64, i64)>, String> {
     fingerprint_with(&|p| folder_entries(host, p), entry)
 }
 
