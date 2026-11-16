@@ -5771,6 +5771,11 @@
           "power_consumption_mw": {
             "minimum": 0,
             "type": "integer"
+          },
+          "power_phase": {
+            "description": "Where the console is in a rest/wake cycle, as the helper sees it: 0 normal, 1 going to\nrest, 2 the minute after a wake (payload power_phase.h). 0 from a helper that doesn't say.",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
@@ -5782,7 +5787,8 @@
           "power_consumption_mw",
           "load_avg_1m",
           "load_avg_5m",
-          "load_avg_15m"
+          "load_avg_15m",
+          "power_phase"
         ],
         "type": "object"
       },
@@ -15408,7 +15414,15 @@
             "type": "string"
           },
           "health": {
-            "$ref": "#/components/schemas/Health"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Health"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the loader probe saw; absent when it was not probed (the console was settling)."
           },
           "pid": {
             "description": "The elfldr running afterwards, when known.",
@@ -15427,7 +15441,6 @@
         },
         "required": [
           "action",
-          "health",
           "reason",
           "pid"
         ],
