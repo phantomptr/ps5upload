@@ -417,6 +417,24 @@ pub fn open(path: &Path, passcode: &str) -> Result<PkgSource> {
     )
 }
 
+/// The container entries a game folder or image needs under `sce_sys`: the artwork the
+/// installer extracts from the container (`PRESENTATION`) and the files a third-party
+/// package keeps only there (`param.json`, the trophy and UDS data). The PlayGo tables and
+/// the debug license are package-level metadata, not game files: the folder and image
+/// builders make their own. [`PkgSource::restore_container_files`] adds `PROTECTED` too,
+/// decrypting those.
+fn restorable_container_entries() -> Vec<(u32, &'static str)> {
+    let mut wanted: Vec<(u32, &'static str)> = vec![
+        (cnt::ids::ICON0_PNG, "sce_sys/icon0.png"),
+        (cnt::ids::ICON0_DDS, "sce_sys/icon0.dds"),
+        (cnt::ids::PARAM_JSON, "sce_sys/param.json"),
+    ];
+    for (id, path, _) in crate::cnt_write::PRESENTATION {
+        wanted.push((id, path));
+    }
+    wanted
+}
+
 impl PkgSource {
     /// A package in any seekable bytes of known length; `label` names it in errors and logs.
     pub fn from_reader(
@@ -1003,22 +1021,14 @@ impl PkgSource {
         Ok(())
     }
 
-    /// The artwork a build moves from the image into the container, put back where the game
-    /// folder had it, and the title and NP binding files a package can keep only in its
-    /// container (`nptitle.dat`, the `npbind.dat` files: protected, so decrypted here, as PS5
-    /// Dump Forge does in its `lib.rs` `place_entry`). Only what the image lacks: a package
-    /// that kept its own copy wins. A protected entry that can't be decrypted is left out and
-    /// [`SourceTree::notes`] says why.
+    /// The game-facing files a package keeps only in its container, put back where a game
+    /// folder or image needs them: `param.json`, the trophy and UDS data, the artwork, and
+    /// `nptitle.dat` / the `npbind.dat` files (protected, so decrypted here, as PS5 Dump
+    /// Forge does in its `lib.rs` `place_entry`).
+    /// Only what the image lacks: a package that kept its own copy wins. A protected entry
+    /// that can't be decrypted is left out and [`SourceTree::notes`] says why.
     fn restore_container_files(&mut self, passcode: &str) {
-        let mut wanted: Vec<(u32, &str)> = vec![
-            (cnt::ids::ICON0_PNG, "sce_sys/icon0.png"),
-            (cnt::ids::ICON0_DDS, "sce_sys/icon0.dds"),
-        ];
-        for (id, path, _) in crate::cnt_write::PRESENTATION {
-            if crate::cnt_write::CONTAINER_ONLY.contains(&path) {
-                wanted.push((id, path));
-            }
-        }
+        let mut wanted = restorable_container_entries();
         for (id, path, _, _) in crate::cnt_write::PROTECTED {
             wanted.push((id, path));
         }
@@ -1881,6 +1891,79 @@ mod tests {
                 .all(|n| n.contains("left out") && n.contains("passcode")),
             "{notes:?}"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A third-party package keeps `param.json` and the trophy/UDS data only in its
+    /// container: a folder or image built from it needs them, so the source restores them
+    /// under `sce_sys/`. Regression for an image that mounted but could not register
+    /// (`missing/invalid param.json`).
+    #[test]
+    fn game_files_kept_only_in_the_container_are_restored() {
+        use crate::crypto::DEFAULT_PASSCODE;
+        let dir = std::env::temp_dir().join(format!("fpkg-restore-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (src, out) = (dir.join("src"), dir.join("out"));
+        let put = |path: &str, data: &[u8]| {
+            let full = src.join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, data).unwrap();
+        };
+        put("eboot.bin", &[7u8; 3000]);
+        put(
+            "sce_sys/param.json",
+            br#"{"contentId":"UP0000-PPSA04691_00-RESTORETEST00000","contentVersion":"01.000.000","titleId":"PPSA04691","applicationCategoryType":0}"#,
+        );
+        put("sce_sys/icon0.png", &[9u8; 500]);
+        put("sce_sys/trophy2/trophy00.ucp", &[3u8; 700]);
+        put("sce_sys/uds/uds00.ucp", &[4u8; 90]);
+        std::fs::create_dir_all(&out).unwrap();
+        let built =
+            crate::build::build(&crate::build::BuildRequest::new(&src, &out), &mut |_| {}).unwrap();
+        let mut pkg = open(&built.path, DEFAULT_PASSCODE).unwrap();
+
+        // What the image carried before its copies are removed: the comparison bytes.
+        let param = pkg.read("sce_sys/param.json").unwrap();
+        let trophy = pkg.read("sce_sys/trophy2/trophy00.ucp").unwrap();
+        let uds = pkg.read("sce_sys/uds/uds00.ucp").unwrap();
+
+        // A third-party package can keep these only in the container: drop the image's copies.
+        let drop = [
+            "sce_sys/param.json",
+            "sce_sys/trophy2/trophy00.ucp",
+            "sce_sys/uds/uds00.ucp",
+        ];
+        let keep: Vec<bool> = pkg
+            .files
+            .iter()
+            .map(|f| !drop.iter().any(|p| f.path == *p))
+            .collect();
+        let mut k = keep.iter();
+        pkg.files.retain(|_| *k.next().unwrap());
+        let mut k = keep.iter();
+        pkg.locations.retain(|_| *k.next().unwrap());
+
+        pkg.restore_container_files(DEFAULT_PASSCODE);
+        assert!(pkg.notes().is_empty(), "{:?}", pkg.notes());
+        assert_eq!(pkg.read("sce_sys/param.json").unwrap(), param);
+        assert_eq!(pkg.read("sce_sys/trophy2/trophy00.ucp").unwrap(), trophy);
+        assert_eq!(pkg.read("sce_sys/uds/uds00.ucp").unwrap(), uds);
+        for path in [
+            "sce_sys/param.json",
+            "sce_sys/trophy2/trophy00.ucp",
+            "sce_sys/uds/uds00.ucp",
+        ] {
+            assert!(
+                pkg.files.iter().any(|f| f.path == path),
+                "{path} is not restored"
+            );
+            let i = pkg.at(path).unwrap();
+            assert!(
+                matches!(pkg.locations[i], Location::Container(_) | Location::Held(_)),
+                "{path}"
+            );
+            assert!(!pkg.read(path).unwrap().is_empty(), "{path} is empty");
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 }
