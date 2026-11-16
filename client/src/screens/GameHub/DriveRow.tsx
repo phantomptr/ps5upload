@@ -150,6 +150,7 @@ import {
 } from "../../components";
 import { useTr } from "../../state/lang";
 import { useSmpState } from "./SmpNeeded";
+import { krakenRuns, useMounterFor } from "../../lib/mounter";
 import { formatDuration } from "../../lib/formatDate";
 
 // Module-level limiter shared across every LibraryRow mounted at once.
@@ -396,6 +397,7 @@ function LibraryRowImpl({
   const tr = useTr();
   const navigate = useNavigate();
   // A game folder of a game the console also has installed from a package: a second copy.
+  const kraken = krakenRuns(useMounterFor(host));
   const alsoInstalled = useLibraryStore(
     (s) =>
       entry.kind === "game" &&
@@ -828,11 +830,17 @@ function LibraryRowImpl({
       if (packed) {
         const go = await confirmDialog({
           title: tr("library_mount_packed_title", { name: entry.name }, 'Mount "{name}" without ShadowMount+?'),
-          message: tr(
-            "library_mount_packed_body",
-            undefined,
-            "This image holds a packed game. A packed game only plays when ShadowMount+ mounts it, and ShadowMount+ isn't running on this PS5. PS5Upload can still mount the image so you can reach its files, but the game won't start from it. Start ShadowMount+ (Payloads) and press Mount again to play it.",
-          ),
+          message: kraken
+            ? tr(
+                "library_mount_packed_body_kraken",
+                undefined,
+                "This image holds a packed game. A packed game in an image only plays when ShadowMount+ mounts it, and Kraken Mount, which runs on this PS5, does not mount images (ShadowMount+ must not run beside it). PS5Upload can still mount the image so you can reach its files, but the game won't start from it. To play it with Kraken Mount, convert it to a package or a folder.",
+              )
+            : tr(
+                "library_mount_packed_body",
+                undefined,
+                "This image holds a packed game. A packed game only plays when ShadowMount+ mounts it, and ShadowMount+ isn't running on this PS5. PS5Upload can still mount the image so you can reach its files, but the game won't start from it. Start ShadowMount+ (Payloads) and press Mount again to play it.",
+              ),
           confirmLabel: tr("library_mount_packed_confirm", undefined, "Mount anyway"),
         });
         if (!go) {
