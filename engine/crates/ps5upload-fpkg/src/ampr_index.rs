@@ -75,6 +75,8 @@ pub const NAME_MAX: usize = 255;
 /// The runtime's limits on the header (`MAX_RECORDS`, `MAX_PATH_BYTES`).
 const MAX_RECORDS: u64 = 2_000_000;
 const MAX_PATH_BYTES: u64 = 256 << 20;
+/// Hash-table steps [`check`] takes per record on average before it refuses the table.
+const MAX_PROBES_PER_RECORD: usize = 64;
 
 /// Why the runtime would refuse `path` (an index path, `/app0/...`), or `None`. Bytes, as the
 /// runtime counts them: a name of 100 CJK characters is 300 bytes, over [`NAME_MAX`].
@@ -139,11 +141,11 @@ pub fn check(d: &[u8]) -> Result<Checked, String> {
         Err(format!("{NAME} is not one the AMPR runtime accepts: {why}"))
     }
     let u32_at = |at: usize| {
-        d.get(at..at + 4)
+        d.get(at..at.checked_add(4)?)
             .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
     };
     let u64_at = |at: usize| {
-        d.get(at..at + 8)
+        d.get(at..at.checked_add(8)?)
             .map(|b| u64::from_le_bytes(b.try_into().unwrap()))
     };
     if d.len() < HEADER || &d[..8] != MAGIC {
@@ -166,24 +168,35 @@ pub fn check(d: &[u8]) -> Result<Checked, String> {
     if slot_count < 2 || !slot_count.is_power_of_two() || u64::from(slot_count) < count {
         return bad("its hash table is not a power of two at least as large as its records");
     }
+    // Bounded above (count and path_bytes are capped), but every sum and product of the file's
+    // own numbers is checked: a hostile index names a table at the end of the address space.
     let paths_at = HEADER as u64 + count * RECORD as u64;
-    if slots_at < paths_at + path_bytes || slots_at % 8 != 0 {
+    if paths_at
+        .checked_add(path_bytes)
+        .is_none_or(|end| slots_at < end)
+        || slots_at % 8 != 0
+    {
         return bad("its hash table overlaps its paths or is not 8-byte aligned");
     }
-    let file_len = slots_at + u64::from(slot_count) * SLOT as u64;
-    if (d.len() as u64) < file_len {
+    let file_len = u64::from(slot_count)
+        .checked_mul(SLOT as u64)
+        .and_then(|t| t.checked_add(slots_at));
+    if file_len.is_none_or(|end| (d.len() as u64) < end) {
         return bad("it is shorter than its header says");
     }
+    // Within `d` from here (its length is a usize): the casts and the sums below fit.
     let (count, paths_at, path_bytes) = (count as usize, paths_at as usize, path_bytes as usize);
     let (slots_at, slot_count) = (slots_at as usize, slot_count as usize);
     // Record `id` (one-based): its path without the NUL, and its size.
     let record = |id: usize| -> Result<&[u8], String> {
         let r = HEADER + (id - 1) * RECORD;
         let (off, len) = (field(r) as usize, field(r + 4) as usize);
-        if len >= PATH_MAX || off + len >= path_bytes {
-            return Err(format!("record {id}'s path is out of bounds or too long"));
+        match off.checked_add(len) {
+            Some(end) if len < PATH_MAX && end < path_bytes => {
+                Ok(&d[paths_at + off..paths_at + end])
+            }
+            _ => Err(format!("record {id}'s path is out of bounds or too long")),
         }
-        Ok(&d[paths_at + off..paths_at + off + len])
     };
     let shown = |p: &[u8]| String::from_utf8_lossy(p).into_owned();
     let mut sorted = true;
@@ -203,12 +216,15 @@ pub fn check(d: &[u8]) -> Result<Checked, String> {
         }
         previous = Some(path);
     }
+    // `pos` < slot_count: inside `d` (checked above). Checked anyway; out of range reads empty.
     let slot = |pos: usize| {
-        let at = slots_at + pos * SLOT;
+        let Some(at) = pos.checked_mul(SLOT).and_then(|o| o.checked_add(slots_at)) else {
+            return (0, 0, 0);
+        };
         (
             u64_at(at).unwrap_or(0),
-            field(at + 8) as usize,
-            field(at + 12),
+            at.checked_add(8).map_or(0, field) as usize,
+            at.checked_add(12).map_or(0, field),
         )
     };
     let mut occupied = 0usize;
@@ -236,12 +252,20 @@ pub fn check(d: &[u8]) -> Result<Checked, String> {
         return bad("its hash table does not hold every record once");
     }
     let mask = slot_count - 1;
+    // Every lookup walks its run of full slots: a table the runtime's builders write (at most
+    // half full) takes a step or two each. One whose records all collide would take count² steps
+    // (hours for two million): refused past a budget no real index comes near.
+    let mut budget = count.saturating_mul(MAX_PROBES_PER_RECORD);
     for id in 1..=count {
         let path = record(id).or_else(|e| bad(&e))?;
         let h = hash_bytes(path);
         let mut pos = h as usize & mask;
         let mut found = None;
         for _ in 0..slot_count {
+            if budget == 0 {
+                return bad("its hash table is too crowded to look every file up");
+            }
+            budget -= 1;
             let (slot_hash, slot_id, _) = slot(pos);
             if slot_id == 0 {
                 break;
@@ -928,6 +952,67 @@ pub(crate) mod tests {
         let mut none = raw(&[b"/app0/a"]);
         none[0x10] = 0;
         assert!(check(&none).unwrap_err().contains("lists no file"));
+    }
+
+    /// A header whose hash table sits at the end of the address space, or whose size wraps it:
+    /// refused, never a wrapped length or an out-of-range read.
+    #[test]
+    fn check_refuses_offsets_that_overflow() {
+        let ok = raw(&[b"/app0/a.bin", b"/app0/b.bin"]);
+        for slots_at in [!7u64, (u64::MAX - (1 << 34)) & !7, 1 << 63] {
+            let mut d = ok.clone();
+            d[0x20..0x28].copy_from_slice(&slots_at.to_le_bytes());
+            let e = check(&d).unwrap_err();
+            assert!(e.contains("shorter than its header"), "{slots_at:#x}: {e}");
+        }
+        // The largest table the header can name, past the end of the file.
+        let mut d = ok.clone();
+        d[0x2C..0x30].copy_from_slice(&(1u32 << 31).to_le_bytes());
+        assert!(check(&d).unwrap_err().contains("shorter than its header"));
+        // A record whose offset and length add up past u32 (and past the paths).
+        let mut d = ok.clone();
+        d[HEADER..HEADER + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        d[HEADER + 4..HEADER + 8].copy_from_slice(&2u32.to_le_bytes());
+        assert!(check(&d).unwrap_err().contains("out of bounds"));
+    }
+
+    /// A full table where every record sits one slot before where its lookup starts: each lookup
+    /// walks nearly the whole table (count² steps). Refused past the budget, quickly; the same
+    /// records in a table half full pass.
+    #[test]
+    fn check_refuses_a_table_every_lookup_crawls() {
+        const N: usize = 1024;
+        let names: Vec<Vec<u8>> = (0..N)
+            .map(|i| format!("/app0/f{i:05}.bin").into_bytes())
+            .collect();
+        let paths: Vec<&[u8]> = names.iter().map(Vec::as_slice).collect();
+        let good = raw(&paths);
+        assert!(check(&good).is_ok());
+        let slots_at = u64_at(&good, 0x20) as usize;
+        let mut d = good[..slots_at].to_vec();
+        d[0x2C..0x30].copy_from_slice(&(N as u32).to_le_bytes());
+        let mut slots = vec![(0u64, 0u32); N];
+        // Each record at its home slot minus one, in order of home; a taken slot pushes it on
+        // (backwards), so the table stays full and every record is found only at the end.
+        let mut order: Vec<usize> = (0..N).collect();
+        order.sort_by_key(|&i| hash_bytes(paths[i]) as usize & (N - 1));
+        for &i in &order {
+            let h = hash_bytes(paths[i]);
+            let mut at = (h as usize).wrapping_sub(1) & (N - 1);
+            while slots[at].1 != 0 {
+                at = at.wrapping_sub(1) & (N - 1);
+            }
+            slots[at] = (h, i as u32 + 1);
+        }
+        for (h, id) in slots {
+            d.extend_from_slice(&h.to_le_bytes());
+            d.extend_from_slice(&id.to_le_bytes());
+            d.extend_from_slice(&0u32.to_le_bytes());
+        }
+        let t = std::time::Instant::now();
+        let e = check(&d).unwrap_err();
+        assert!(e.contains("too crowded"), "{e}");
+        assert!(t.elapsed() < std::time::Duration::from_secs(5));
     }
 
     /// What [`build`] refuses rather than write an index the runtime would throw away whole.

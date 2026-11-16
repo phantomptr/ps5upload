@@ -101,6 +101,10 @@ pub struct Prepared<'a> {
 }
 
 impl SourceTree for Prepared<'_> {
+    fn release(&mut self) {
+        self.inner.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         &self.files
     }

@@ -192,6 +192,16 @@ pub fn data_bytes(files: &[source::SourceFile]) -> Result<u64, String> {
 /// Inspects the game folder or image at `path`. Reads the file list and `sce_sys/param.json`;
 /// never the game's data.
 pub fn inspect(path: &Path) -> Result<Inspection, Refusal> {
+    inspect_keeping(path, Arc::new(|| false)).map(|(inspection, _)| inspection)
+}
+
+/// [`inspect`], with `stop` ending a read waiting on an archive (a `.7z`'s param file may sit
+/// behind a large solid block), and handing back the archive it opened (`None` for a folder or
+/// an image) so a build reads it without opening it a second time.
+pub fn inspect_keeping(
+    path: &Path,
+    stop: ps5upload_archive::stream::Stop,
+) -> Result<(Inspection, Option<Box<dyn SourceTree>>), Refusal> {
     let format = format_of(path)?;
     let unreadable = |e: ps5upload_fpkg::Error| Refusal {
         cause: "convert_source_unreadable",
@@ -199,7 +209,7 @@ pub fn inspect(path: &Path) -> Result<Inspection, Refusal> {
     };
     let mut tree = if is_archive(format) {
         // The listing and the game's param file: never the game's data.
-        open_archive(path, Arc::new(|| false))?
+        open_archive(path, stop)?
     } else {
         source::open(path).map_err(unreadable)?
     };
@@ -266,7 +276,7 @@ pub fn inspect(path: &Path) -> Result<Inspection, Refusal> {
         Ok(kind) => out.packed = kind.map(str::to_string),
         Err(e) => out.warnings.push(format!("asset pack index: {e}")),
     }
-    Ok(out)
+    Ok((out, is_archive(format).then_some(tree)))
 }
 
 #[cfg(test)]

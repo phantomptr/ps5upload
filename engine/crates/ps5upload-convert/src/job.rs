@@ -204,6 +204,10 @@ struct Plan {
     zstd: Option<(Vec<u8>, u8)>,
     /// A `.pkg` (`image` is `None`) and its Kraken level.
     pkg: Option<ps5upload_fpkg::kraken::Level>,
+    /// The source's content id, as its inspection read it.
+    content_id: Option<String>,
+    /// The `.zip` or `.7z` the inspection opened, read by the build rather than opened again.
+    opened: Option<Box<dyn SourceTree>>,
 }
 
 fn bad(detail: String) -> Refusal {
@@ -214,8 +218,9 @@ fn bad(detail: String) -> Refusal {
 }
 
 /// The request checked against the console: the source readable, the destination new and in a
-/// folder that exists, the emulator there when zstd packs are asked for.
-fn plan(request: &Request) -> Result<Plan, Refusal> {
+/// folder that exists, the emulator there when zstd packs are asked for. `cancel` ends an
+/// inspection waiting on an archive.
+fn plan(request: &Request, cancel: &Arc<AtomicBool>) -> Result<Plan, Refusal> {
     if request.dest.is_empty() {
         return Err(bad("a build needs a dest".into()));
     }
@@ -310,7 +315,7 @@ fn plan(request: &Request) -> Result<Plan, Refusal> {
     }
     let source = PathBuf::from(&request.path);
     // What this program reads, and that it opens: the checks an inspection makes.
-    crate::inspect(&source)?;
+    let (inspection, opened) = inspect_stoppable(&source, cancel)?;
     if source == dest || dest.starts_with(&source) {
         return Err(bad_dest(format!(
             "{} is inside the source {}",
@@ -342,6 +347,28 @@ fn plan(request: &Request) -> Result<Plan, Refusal> {
         mode,
         zstd,
         pkg,
+        content_id: inspection.content_id,
+        opened,
+    })
+}
+
+/// [`crate::inspect_keeping`] ended by `cancel` (an archive's param file may be behind a large
+/// solid block): a stopped inspection is `convert_cancelled`, not an unreadable source.
+fn inspect_stoppable(
+    path: &Path,
+    cancel: &Arc<AtomicBool>,
+) -> Result<(crate::Inspection, Option<Box<dyn SourceTree>>), Refusal> {
+    let flag = Arc::clone(cancel);
+    let stop: ps5upload_archive::stream::Stop = Arc::new(move || flag.load(Ordering::Relaxed));
+    crate::inspect_keeping(path, stop).map_err(|refusal| {
+        if cancel.load(Ordering::Relaxed) {
+            Refusal {
+                cause: "convert_cancelled",
+                detail: refusal.detail,
+            }
+        } else {
+            refusal
+        }
     })
 }
 
@@ -385,13 +412,17 @@ fn read_runtime(path: &str) -> Result<Vec<u8>, Refusal> {
 
 /// The source opened as the engine opens it: module names in the eboot's spelling, an unsigned
 /// eboot fake-signed; for packing, any packs it has decoded. A `.zip` or `.7z` is read in place
-/// (`ps5upload_convert_core::archive_tree`), a read waiting on it ended by `cancel`.
+/// (`ps5upload_convert_core::archive_tree`), a read waiting on it ended by `cancel`; `opened`,
+/// when given, is that archive already opened (by the plan's inspection).
 fn open_source(
     path: &Path,
     packing: bool,
     cancel: &Arc<AtomicBool>,
+    opened: Option<Box<dyn SourceTree>>,
 ) -> Result<Box<dyn SourceTree>, String> {
-    let (tree, renamed, signing) = if is_archive_file(path) {
+    let (tree, renamed, signing) = if let Some(tree) = opened {
+        ps5upload_fpkg::module_case::wrap(tree)
+    } else if is_archive_file(path) {
         let flag = Arc::clone(cancel);
         let stop: ps5upload_archive::stream::Stop = Arc::new(move || flag.load(Ordering::Relaxed));
         let tree = crate::open_archive(path, stop).map_err(|r| r.detail)?;
@@ -470,7 +501,7 @@ fn build(
     cancel: &Arc<AtomicBool>,
     stage: &mut dyn FnMut(&str, u64, u64),
 ) -> Result<serde_json::Value, Refusal> {
-    let plan = plan(request)?;
+    let mut plan = plan(request, cancel)?;
     let unreadable = |e: String| Refusal {
         cause: "convert_source_unreadable",
         detail: format!("{}: {e}", plan.source.display()),
@@ -497,7 +528,8 @@ fn build(
             ),
         });
     }
-    let mut tree = open_source(&plan.source, false, cancel).map_err(unreadable)?;
+    let opened = plan.opened.take();
+    let mut tree = open_source(&plan.source, false, cancel, opened).map_err(unreadable)?;
     if let Some(why) =
         ps5upload_convert_core::refusal::ps4_refusal(&plan.source, &mut *tree, plan.image.is_some())
     {
@@ -615,7 +647,7 @@ fn build(
     let source = plan.source.clone();
     let packing = plan.zstd.is_some();
     let flag = Arc::clone(cancel);
-    let reopen = move || open_source(&source, packing, &flag);
+    let reopen = move || open_source(&source, packing, &flag, None);
     let built = match (plan.image, &plan.zstd) {
         (Some(format), zstd) => {
             // A PS4 game's image needs the param.json ShadowMount+ reads.
@@ -715,6 +747,17 @@ fn build(
     }
 }
 
+/// The stem the package builder is given for `dest`: the name without one `.pkg`, so the
+/// builder's `<stem>.pkg` and `<stem>.pkg.partial` are `dest` and `partial_of(dest)` — the names
+/// the sync, the claim, the cleanup and the helper use (`g.pkg.pkg` stays `g.pkg.pkg`).
+fn pkg_stem(dest: &Path) -> String {
+    let name = dest
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    name.strip_suffix(".pkg").unwrap_or(name).to_string()
+}
+
 /// Builds the plan's `.pkg` with `ps5upload-fpkg` (a debug package, the engine's builder; not
 /// installed here): `<dest>.partial` beside `dest`, read back, renamed. Its stages are the
 /// builder's (`check` reads the game's headers, `compress` is Kraken on the converter's
@@ -730,15 +773,10 @@ fn build_pkg(
 ) -> Result<(u64, String), Refusal> {
     use ps5upload_fpkg::build::{BuildControl, BuildRequest, Stage};
     let dir = plan.dest.parent().unwrap_or(Path::new("/"));
-    let name = plan
-        .dest
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or_default();
     let mut request = BuildRequest::new(&plan.source, dir);
-    request.file_name = Some(name.trim_end_matches(".pkg").to_string());
+    request.file_name = Some(pkg_stem(&plan.dest));
     // As the inspection reads it: a dump's param.json may start with a BOM and end in NULs.
-    request.content_id = crate::inspect(&plan.source).ok().and_then(|i| i.content_id);
+    request.content_id = plan.content_id.clone();
     request.kraken = true;
     request.level = level;
     crate::log(format_args!(
@@ -876,7 +914,15 @@ fn run_with(dir: &Path, hook: &mut dyn FnMut(&str)) -> std::io::Result<i32> {
     match request.op.as_str() {
         "inspect" => {
             crate::log(format_args!("inspect {}", request.path));
-            match crate::inspect(Path::new(&request.path)) {
+            // Under the cancel watcher, as a build: a `.7z`'s param file may be behind a large
+            // solid block, and Stop ends the wait.
+            let cancel = Arc::new(AtomicBool::new(dir.join("cancel").exists()));
+            let finished = Arc::new(AtomicBool::new(false));
+            let watcher = watch_cancel(dir, Arc::clone(&cancel), Arc::clone(&finished));
+            let inspected = inspect_stoppable(Path::new(&request.path), &cancel);
+            finished.store(true, Ordering::Relaxed);
+            let _ = watcher.join();
+            match inspected.map(|(inspection, _)| inspection) {
                 Ok(inspection) => done(json!(inspection)),
                 Err(refusal) => fail(refusal),
             }
@@ -946,6 +992,24 @@ mod tests {
         assert_eq!(result, crate::inspect(&game).unwrap());
         // The request is gone and no temporary status is left behind.
         assert_eq!(names(&dir), ["status.json"]);
+    }
+
+    /// Inspecting a `.7z` (its param file may be behind a large solid block) is ended by Stop:
+    /// `convert_cancelled`, as a build is; the same archive inspects when not stopped.
+    #[test]
+    fn an_archive_inspect_is_ended_by_stop() {
+        let (tmp, game, dir) = setup("jobinspectstop");
+        let archive = tmp.0.join("s.7z");
+        crate::testing::sevenz_of(&game, &archive, true);
+        std::fs::write(dir.join("cancel"), b"").unwrap();
+        ask(&dir, json!({"id": "i", "op": "inspect", "path": archive}));
+        assert_eq!(run(&dir).unwrap(), 1);
+        let s = status(&dir);
+        assert_eq!(s["cause"], "convert_cancelled", "{s}");
+        std::fs::remove_file(dir.join("cancel")).unwrap();
+        ask(&dir, json!({"id": "i", "op": "inspect", "path": archive}));
+        assert_eq!(run(&dir).unwrap(), 0, "{}", status(&dir));
+        assert_eq!(status(&dir)["result"]["format"], "7z");
     }
 
     #[test]
@@ -1254,6 +1318,55 @@ mod tests {
         assert!(!tmp.0.join("r.pkg").exists());
     }
 
+    /// A `.pkg` named `g.pkg.pkg`: the builder writes that name (one `.pkg` taken off for its
+    /// stem, not every one), so the sync, claim and cleanup watch the `.partial` it writes.
+    #[test]
+    fn a_pkg_named_with_two_pkg_extensions_keeps_its_name() {
+        for name in ["g.pkg", "g.pkg.pkg", "a.pkg.pkg.pkg"] {
+            let dest = Path::new("/data/out").join(name);
+            let stem = pkg_stem(&dest);
+            assert_eq!(Path::new("/data/out").join(format!("{stem}.pkg")), dest);
+            assert_eq!(
+                Path::new("/data/out").join(format!("{stem}.pkg.partial")),
+                folder_build::partial_of(&dest)
+            );
+        }
+        let (tmp, game, dir) = setup("jobpkgpkg");
+        let dest = tmp.0.join("g.pkg.pkg");
+        ask(
+            &dir,
+            json!({"id": "p", "op": "build", "path": game, "dest": dest, "format": "pkg",
+                "pkg_level": "stored", "verify": "full"}),
+        );
+        let code = run_with(&dir, &mut |_| {}).unwrap();
+        assert_eq!(code, 0, "{}", status(&dir));
+        assert!(dest.is_file());
+        assert!(!tmp.0.join("g.pkg").exists());
+        assert!(!tmp.0.join("g.pkg.pkg.partial").exists());
+    }
+
+    /// Stop while a `.pkg` is read back: `convert_cancelled`, and nothing is left.
+    #[test]
+    fn a_stop_during_a_pkg_verify_is_cancelled() {
+        let (tmp, game, _dir) = setup("jobpkgstop");
+        let dest = tmp.0.join("s.pkg");
+        let request: Request = serde_json::from_value(json!({"id": "p", "op": "build",
+            "path": game, "dest": dest, "format": "pkg", "pkg_level": "stored",
+            "verify": "full"}))
+        .unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&cancel);
+        let refusal = build(&request, &cancel, &mut |stage, _, _| {
+            if stage == "verify" {
+                flag.store(true, Ordering::Relaxed);
+            }
+        })
+        .unwrap_err();
+        assert_eq!(refusal.cause, "convert_cancelled", "{refusal}");
+        assert!(!dest.exists());
+        assert!(!tmp.0.join("s.pkg.partial").exists());
+    }
+
     /// zstd packs with the emulator the request names: an image and a folder, each reading
     /// back through its packs.
     #[test]
@@ -1424,6 +1537,8 @@ mod tests {
             mode: VerifyMode::Full,
             zstd: None,
             pkg: None,
+            content_id: None,
+            opened: None,
         };
         let fat = safe_write::Probe {
             fs_type: "msdosfs".into(),

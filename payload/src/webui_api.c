@@ -924,55 +924,26 @@ static void r_convert_inspect(const char *b, size_t n, uint8_t *out, int fd) {
 }
 
 /* Convert a game on the console (CONSOLE_CONVERT "build"): {"path","dest","format": "exfat"|"ffpkg"|
- * "ffpfs"|"folder", optional "zstd": bool, "zstd_level": 1..22 (sent on only with zstd), "verify":
- * "fast"|"full"}. The job's result: {"path"}. The
- * helper's operation checks the paths again (console_convert.c); this route refuses what the page
- * may never name and what is not well-formed. */
+ * "ffpfs"|"ffpfsc"|"pkg"|"folder", optional "zstd": bool, "zstd_level": 1..22 (sent on only with
+ * zstd), "verify": "fast"|"full", "inner": "exfat"|"ffpkg"|"ffpfs" and "ffpfsc_level":
+ * "fast"|"balanced"|"smallest" (with "ffpfsc"), "pkg_level": "stored"|"fast"|"balanced" (with
+ * "pkg")}. The job's result: {"path"}. The helper's operation checks the paths again
+ * (console_convert.c); this route refuses what the page may never name and what is not
+ * well-formed (cc_start_tail). */
 static void r_convert_start(const char *b, size_t n, uint8_t *out, int fd) {
-    char path[API_PATH], dest[API_PATH], format[16], verify[16], *tail;
-    size_t at = 0, cap = 6 * API_PATH + 128;
-    uint64_t level = 0;
-    int zstd = 0, rc;
+    char path[API_PATH], dest[API_PATH], *tail;
+    size_t cap = 6 * API_PATH + 192;
+    const char *bad;
     if (need_path(fd, b, n, "path", path, sizeof path) != 0) return;
     if (need_path(fd, b, n, "dest", dest, sizeof dest) != 0) return;
-    if (webui_json_str(b, n, "format", format, sizeof format) != 1 || !cc_format_ok(format)) {
-        send_bad(fd, "bad_format");
-        return;
-    }
-    rc = webui_json_str(b, n, "verify", verify, sizeof verify);
-    if (rc == 0) snprintf(verify, sizeof verify, "fast");
-    if (rc < 0 || (strcmp(verify, "fast") != 0 && strcmp(verify, "full") != 0)) {
-        send_bad(fd, "bad_verify");
-        return;
-    }
-    if (webui_json_bool(b, n, "zstd", &zstd) < 0) {
-        send_bad(fd, "bad_zstd");
-        return;
-    }
-    rc = webui_json_u64(b, n, "zstd_level", &level);
-    if (rc < 0 || (rc == 1 && !cc_zstd_level_ok(level))) {
-        send_bad(fd, "bad_zstd");
-        return;
-    }
     tail = malloc(cap);
     if (!tail) {
         send_error(fd, 500, "out_of_memory", 13);
         return;
     }
-    /* console_convert.c reads it back with fsj_json_str. format and verify are one of a few plain
-     * words by now, so only dest needs escaping. */
-    at = (size_t)snprintf(tail, cap, ",\"action\":\"build\",\"dest\":\"");
-    at += webui_json_escape(tail + at, cap - at, dest, strlen(dest));
-    if (at + 96 < cap) {
-        int w = snprintf(tail + at, cap - at, "\",\"format\":\"%s\",\"zstd\":%s,\"verify\":\"%s\"", format,
-                         zstd ? "true" : "false", verify);
-        /* The level goes with zstd only (at most ",\"zstd_level\":22": inside the 96 checked). */
-        if (zstd && level && w > 0)
-            snprintf(tail + at + (size_t)w, cap - at - (size_t)w, ",\"zstd_level\":%u", (unsigned)level);
-        start_path_job(fd, out, AVA1_JOB_OP_CONSOLE_CONVERT, path, NULL, tail);
-    } else {
-        send_bad(fd, "bad_path");
-    }
+    bad = cc_start_tail(b, n, dest, tail, cap);
+    if (bad) send_bad(fd, bad);
+    else start_path_job(fd, out, AVA1_JOB_OP_CONSOLE_CONVERT, path, NULL, tail);
     free(tail);
 }
 

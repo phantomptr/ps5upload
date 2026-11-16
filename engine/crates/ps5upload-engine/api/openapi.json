@@ -35727,7 +35727,7 @@
     },
     "/api/ps5/kraken/remove": {
       "post": {
-        "description": "POST /api/ps5/kraken/remove `{addr, title_id, path}` — remove a game Kraken Mount mounts, the\nway its own page does: off the home screen, and its SOURCE DELETED (the `.pkg` or the game\nfolder at `path`), then its cache. Answers `{ok: true}`.",
+        "description": "POST /api/ps5/kraken/remove `{addr, title_id, path}` — remove a game Kraken Mount mounts, the\nway its own page does: off the home screen, and its SOURCE DELETED (the `.pkg` or the game\nfolder at `path`), then its cache. Answers `{ok: true}`; 409 when Kraken Mount's library,\nread just before, no longer lists `title_id` at `path`. Kraken Mount answers once the source\nis deleted: the call waits up to 10 minutes, then judges by its library.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -35757,6 +35757,10 @@
           "403": {
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
           },
           "502": {
             "$ref": "#/components/responses/Error",

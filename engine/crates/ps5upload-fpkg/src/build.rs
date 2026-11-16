@@ -872,10 +872,12 @@ fn build_mode(
             f(done, total);
         }
     };
-    let report = verify::verify_streaming_sampled(
+    // Stop ends the read-back as it does the write (a 155 GB package takes minutes to check).
+    let report = verify::verify_streaming_controlled(
         &partial,
         &request.passcode,
         control.sample,
+        control.cancel,
         &mut verify_bytes,
     )?;
     if !report.ok() {

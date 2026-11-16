@@ -300,6 +300,10 @@ impl Subtree {
 }
 
 impl SourceTree for Subtree {
+    fn release(&mut self) {
+        self.inner.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         &self.files
     }
@@ -654,6 +658,10 @@ impl Edited {
 }
 
 impl SourceTree for Edited {
+    fn release(&mut self) {
+        self.base.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         &self.files
     }

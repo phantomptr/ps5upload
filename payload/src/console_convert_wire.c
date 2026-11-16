@@ -63,6 +63,67 @@ int cc_request_json(char *out, size_t cap, const char *id, const char *op, const
     return (int)at;
 }
 
+/* One optional word of the page's JSON: absent or "" leaves `out` empty (the converter's default),
+ * else it must be one `ok` accepts. 0, or -1 refused. */
+static int start_word(const char *json, size_t n, const char *key, char *out, size_t cap, int (*ok)(const char *)) {
+    int rc = webui_json_str(json, n, key, out, cap);
+    if (rc == 0) out[0] = 0;
+    if (rc < 0 || (rc == 1 && out[0] && !ok(out))) {
+        out[0] = 0;
+        return -1;
+    }
+    return 0;
+}
+
+const char *cc_start_tail(const char *json, size_t n, const char *dest, char *out, size_t cap) {
+    cc_build_t words; /* only its three words' room */
+    char format[16], verify[16];
+    uint64_t level = 0;
+    size_t at = 0;
+    int zstd = 0, rc, w;
+    if (cap) out[0] = 0;
+    if (webui_json_str(json, n, "format", format, sizeof format) != 1 || !cc_format_ok(format)) return "bad_format";
+    rc = webui_json_str(json, n, "verify", verify, sizeof verify);
+    if (rc == 0) snprintf(verify, sizeof verify, "fast");
+    if (rc < 0 || (strcmp(verify, "fast") != 0 && strcmp(verify, "full") != 0)) return "bad_verify";
+    if (webui_json_bool(json, n, "zstd", &zstd) < 0) return "bad_zstd";
+    rc = webui_json_u64(json, n, "zstd_level", &level);
+    if (rc < 0 || (rc == 1 && !cc_zstd_level_ok(level))) return "bad_zstd";
+    words.inner[0] = words.ffpfsc_level[0] = words.pkg_level[0] = 0;
+    /* Read only for the format they belong to (the op ignores them otherwise), with the op's own
+     * whitelists and tokens. */
+    if (strcmp(format, "ffpfsc") == 0) {
+        if (start_word(json, n, "inner", words.inner, sizeof words.inner, cc_inner_ok) != 0) return "convert_bad_inner";
+        if (start_word(json, n, "ffpfsc_level", words.ffpfsc_level, sizeof words.ffpfsc_level, cc_ffpfsc_level_ok) !=
+            0)
+            return "convert_bad_ffpfsc_level";
+    }
+    if (strcmp(format, "pkg") == 0 &&
+        start_word(json, n, "pkg_level", words.pkg_level, sizeof words.pkg_level, cc_pkg_level_ok) != 0)
+        return "convert_bad_pkg_level";
+    /* console_convert.c reads it back with fsj_json_str: every word is a plain one by now, and
+     * dest is escaped. */
+    w = snprintf(out, cap, ",\"action\":\"build\"");
+    if (w < 0 || (size_t)w >= cap) return "bad_path";
+    at = (size_t)w;
+    if (put_member(out, cap, &at, 1, "dest", dest) != 0 || put_member(out, cap, &at, 1, "format", format) != 0)
+        return "bad_path";
+    w = snprintf(out + at, cap - at, ",\"zstd\":%s,\"verify\":\"%s\"", zstd ? "true" : "false", verify);
+    if (w < 0 || (size_t)w >= cap - at) return "bad_path";
+    at += (size_t)w;
+    /* The level goes with zstd only. */
+    if (zstd && level) {
+        w = snprintf(out + at, cap - at, ",\"zstd_level\":%u", (unsigned)level);
+        if (w < 0 || (size_t)w >= cap - at) return "bad_path";
+        at += (size_t)w;
+    }
+    if ((words.inner[0] && put_member(out, cap, &at, 1, "inner", words.inner) != 0) ||
+        (words.ffpfsc_level[0] && put_member(out, cap, &at, 1, "ffpfsc_level", words.ffpfsc_level) != 0) ||
+        (words.pkg_level[0] && put_member(out, cap, &at, 1, "pkg_level", words.pkg_level) != 0))
+        return "bad_path";
+    return NULL;
+}
+
 static int is_space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
 
 /* The end of the string that opens at buf[i] (its closing quote's index), or n when it is cut. */

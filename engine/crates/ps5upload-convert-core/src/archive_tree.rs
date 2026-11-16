@@ -260,6 +260,11 @@ impl ArchiveTree {
     pub fn passes(&self) -> u64 {
         self.reader.sessions()
     }
+
+    /// Whether a walk over the archive (and its decoder) is held now.
+    pub fn reading(&self) -> bool {
+        self.reader.reading()
+    }
 }
 
 impl Drop for ArchiveTree {
@@ -322,6 +327,10 @@ impl SourceTree for ArchiveTree {
 
     fn notes(&self) -> Vec<String> {
         self.notes.clone()
+    }
+
+    fn release(&mut self) {
+        self.reader.release();
     }
 }
 

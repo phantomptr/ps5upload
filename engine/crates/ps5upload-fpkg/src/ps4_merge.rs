@@ -262,6 +262,11 @@ impl Ps4Merged {
 }
 
 impl SourceTree for Ps4Merged {
+    fn release(&mut self) {
+        self.game.release();
+        self.update.release();
+    }
+
     fn files(&self) -> &[SourceFile] {
         &self.files
     }

@@ -203,6 +203,13 @@ impl<W: Write + Seek + Durable> Seek for Bounded<W> {
     }
 }
 
+/// A handle [`GrowthSync`] syncs `path` through: with write access (Windows refuses
+/// `FlushFileBuffers` on a read-only handle, PermissionDenied), never creating or truncating the
+/// file the builder writes. `None` while it does not exist yet.
+fn open_for_sync(path: &std::path::Path) -> Option<std::fs::File> {
+    std::fs::OpenOptions::new().write(true).open(path).ok()
+}
+
 /// U5 for a file written by code that keeps its own `File` (the `.pkg` builder): a thread that
 /// looks at the file every `poll` and, each time it has grown by `every` bytes since the last
 /// sync, makes it durable through a handle of its own (a sync covers the file, whichever handle
@@ -231,7 +238,7 @@ impl GrowthSync {
                 let (mut synced, mut syncs) = (0u64, 0u64);
                 let mut look = |file: &mut Option<std::fs::File>, last: bool| -> io::Result<()> {
                     if file.is_none() {
-                        *file = std::fs::File::open(&path).ok();
+                        *file = open_for_sync(&path);
                     }
                     let Some(f) = file.as_mut() else {
                         return Ok(());
@@ -576,6 +583,27 @@ fn statfs_into(_dir: &Path, _p: &mut Probe) -> io::Result<()> {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    /// The sync's own handle can write (Windows syncs only such a handle), and opening it neither
+    /// creates the file nor cuts what the builder wrote.
+    #[test]
+    fn the_sync_handle_writes_and_never_creates_or_truncates() {
+        let dir = std::env::temp_dir().join(format!("ps5u-sync-handle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("g.pkg.partial");
+        assert!(open_for_sync(&path).is_none());
+        assert!(!path.exists());
+        std::fs::write(&path, b"written so far").unwrap();
+        let mut f = open_for_sync(&path).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"written so far");
+        // Needs write access on every platform (a read-only handle is refused).
+        f.set_len(14).unwrap();
+        sync(&mut f).unwrap();
+        drop(f);
+        assert_eq!(std::fs::read(&path).unwrap(), b"written so far");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// A file another writer grows is synced each time it grew by the interval, once more at
     /// the end, and a file that never appears costs nothing.

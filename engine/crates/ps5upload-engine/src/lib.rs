@@ -5177,29 +5177,56 @@ struct KrakenRemoveReq {
 
 /// POST /api/ps5/kraken/remove `{addr, title_id, path}` — remove a game Kraken Mount mounts, the
 /// way its own page does: off the home screen, and its SOURCE DELETED (the `.pkg` or the game
-/// folder at `path`), then its cache. Answers `{ok: true}`.
+/// folder at `path`), then its cache. Answers `{ok: true}`; 409 when Kraken Mount's library,
+/// read just before, no longer lists `title_id` at `path`. Kraken Mount answers once the source
+/// is deleted: the call waits up to 10 minutes, then judges by its library.
 async fn ps5_kraken_remove(
     State(state): State<AppState>,
     Json(req): Json<KrakenRemoveReq>,
 ) -> impl IntoResponse {
     let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
     let done = tokio::task::spawn_blocking(move || {
-        let (api, _) = ps5upload_core::kraken::KrakenApi::probe(&addr).ok_or_else(|| {
+        let (api, now) = ps5upload_core::kraken::KrakenApi::probe(&addr).ok_or_else(|| {
             anyhow::anyhow!(
                 "Kraken Mount doesn't answer from this computer: it needs to be running on the \
                  PS5 (its page is on port {})",
                 ps5upload_core::kraken::API_PORT
             )
         })?;
-        api.remove(&req.title_id, &req.path)
+        // The delete takes the whole source: only the one the user confirmed, as listed now.
+        if let Some(why) = kraken_remove_refusal(&now, &req.title_id, &req.path) {
+            return Ok(Err(why));
+        }
+        api.remove(&req.title_id, &req.path).map(Ok)
     })
     .await
     .map_err(anyhow::Error::from)
     .and_then(|r| r);
     match done {
-        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Ok(Ok(())) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Ok(Err(why)) => json_err(StatusCode::CONFLICT, why).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
+}
+
+/// Why a Kraken Mount remove of `title_id` at `path` is refused before it is sent: its library
+/// (`state`, just read) no longer lists that title at that source. `None` when it does.
+fn kraken_remove_refusal(
+    state: &ps5upload_core::kraken::KrakenState,
+    title_id: &str,
+    path: &str,
+) -> Option<String> {
+    if state
+        .games
+        .iter()
+        .any(|g| g.title_id == title_id && g.path == path)
+    {
+        return None;
+    }
+    Some(format!(
+        "Kraken Mount no longer lists {title_id} at {path}: its library changed. Refresh and \
+         check the game before removing it"
+    ))
 }
 
 /// GET /api/ps5/smp/checkout — what, if anything, is checked out for editing.
@@ -6821,6 +6848,39 @@ fn status_failure_body(
         body["power"] = p.as_str().into();
     }
     body
+}
+
+#[cfg(test)]
+mod kraken_remove_tests {
+    use super::*;
+
+    /// A remove goes out only for the title at the source the user confirmed, as Kraken Mount
+    /// lists it now: another source for the title (a duplicate on another drive), another title
+    /// at the source, or a library without it is refused.
+    #[test]
+    fn a_remove_needs_the_title_at_that_source_listed_now() {
+        let state: ps5upload_core::kraken::KrakenState = serde_json::from_str(
+            r#"{"cache":{"path":"/data/krakenmount/caches"},"games":[
+                {"title_id":"PPSA01234","path":"/data/homebrew/Game.pkg"},
+                {"title_id":"PPSA05678","path":"/mnt/usb0/Other"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            kraken_remove_refusal(&state, "PPSA01234", "/data/homebrew/Game.pkg"),
+            None
+        );
+        for (title, path) in [
+            ("PPSA01234", "/mnt/usb0/Game.pkg"),
+            ("PPSA05678", "/data/homebrew/Game.pkg"),
+            ("PPSA09999", "/data/homebrew/Game.pkg"),
+        ] {
+            let why = kraken_remove_refusal(&state, title, path).unwrap();
+            assert!(why.contains("no longer lists"), "{why}");
+        }
+        let empty: ps5upload_core::kraken::KrakenState =
+            serde_json::from_str(r#"{"games":[]}"#).unwrap();
+        assert!(kraken_remove_refusal(&empty, "PPSA01234", "/data/homebrew/Game.pkg").is_some());
+    }
 }
 
 #[cfg(test)]

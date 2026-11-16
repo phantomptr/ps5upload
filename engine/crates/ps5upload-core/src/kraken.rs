@@ -37,6 +37,9 @@ pub const LOG_PATH: &str = "/data/krakenmount/kraken.log";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 const RPC_TIMEOUT: Duration = Duration::from_secs(5);
+/// A remove deletes the game's whole source (a folder of 100+ GB on a USB drive) before it
+/// answers (src/web.rs:542-605): far longer than [`CALL_TIMEOUT`].
+const REMOVE_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Whether a process the console lists is Kraken Mount.
 ///
@@ -316,11 +319,70 @@ impl KrakenApi {
     /// Remove a game the way its own web UI does (src/web.rs:542-605): take it off the home
     /// screen and DELETE ITS SOURCE (the `.pkg` file, or the whole game folder), then its cache.
     /// `path` must be the source it lists for the title, or it refuses (the library changed).
+    ///
+    /// It answers once the source is gone, which may take minutes: the call waits up to
+    /// [`REMOVE_TIMEOUT`]. With no answer by then its library says what happened: the game no
+    /// longer listed at `path` is a success, else an error saying it may still be removing.
     pub fn remove(&self, title_id: &str, path: &str) -> Result<()> {
+        self.remove_within(title_id, path, REMOVE_TIMEOUT)
+    }
+
+    fn remove_within(&self, title_id: &str, path: &str, timeout: Duration) -> Result<()> {
         if !valid_title_id(title_id) {
             bail!("not a title id: {title_id}");
         }
-        self.post(&format!("/api/delete/{title_id}"), path.as_bytes())
+        let route = format!("/api/delete/{title_id}");
+        let long = KrakenApi {
+            base: self.base.clone(),
+            agent: agent(timeout),
+        };
+        match long.post(&route, path.as_bytes()) {
+            Err(e) if timed_out(&e) => after_timeout(&route, self.state(), title_id, path, timeout),
+            done => done,
+        }
+    }
+}
+
+/// Whether a call failed for want of an answer in time (not a refusal or a broken connection).
+fn timed_out(e: &anyhow::Error) -> bool {
+    use std::io::ErrorKind::{TimedOut, WouldBlock};
+    e.chain().any(|c| match c.downcast_ref::<ureq::Error>() {
+        Some(ureq::Error::Timeout(_)) => true,
+        Some(ureq::Error::Io(io)) => matches!(io.kind(), TimedOut | WouldBlock),
+        _ => c
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| matches!(io.kind(), TimedOut | WouldBlock)),
+    })
+}
+
+/// A remove that got no answer within `waited`: done when Kraken Mount's library (`state`, read
+/// again) no longer lists `title_id` at `path`; else it may still be deleting, or what happened is
+/// unknown when the library could not be read.
+fn after_timeout(
+    route: &str,
+    state: Result<KrakenState>,
+    title_id: &str,
+    path: &str,
+    waited: Duration,
+) -> Result<()> {
+    let mins = waited.as_secs().div_ceil(60);
+    match state {
+        Ok(s)
+            if !s
+                .games
+                .iter()
+                .any(|g| g.title_id == title_id && g.path == path) =>
+        {
+            Ok(())
+        }
+        Ok(_) => bail!(
+            "{route}: Kraken Mount gave no answer in {mins} min and still lists {title_id} at \
+             {path}: it may still be removing it; look again in a few minutes"
+        ),
+        Err(e) => bail!(
+            "{route}: Kraken Mount gave no answer in {mins} min, and its library could not be \
+             read ({e:#}): whether {title_id} was removed is unknown"
+        ),
     }
 }
 
@@ -700,6 +762,85 @@ mod tests {
             .contains("a game is running"));
         assert!(explain("/api/rescan", 409, "").contains("busy"));
         assert!(explain("/api/rescan", 500, "x").contains("HTTP 500"));
+    }
+
+    /// A stand-in Kraken Mount: `/api/state` answers `state` (as it is at the time), a delete
+    /// is read and never answered (a whole game folder still being deleted).
+    fn slow_kraken(state: std::sync::Arc<std::sync::Mutex<String>>) -> KrakenApi {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut conn) = conn else { return };
+                let state = std::sync::Arc::clone(&state);
+                std::thread::spawn(move || {
+                    let mut first = String::new();
+                    let mut reader = BufReader::new(conn.try_clone().unwrap());
+                    if reader.read_line(&mut first).is_err() {
+                        return;
+                    }
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                            break;
+                        }
+                    }
+                    if first.starts_with("GET /api/state") {
+                        let body = state.lock().unwrap().clone();
+                        let _ = write!(
+                            conn,
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                    } else {
+                        std::thread::sleep(Duration::from_secs(3));
+                    }
+                });
+            }
+        });
+        KrakenApi {
+            base: format!("http://127.0.0.1:{port}"),
+            agent: agent(Duration::from_secs(5)),
+        }
+    }
+
+    /// A remove with no answer in time: done when the library no longer lists the game at that
+    /// path, else an error saying it may still be removing; another path for the title is not it.
+    #[test]
+    fn a_remove_with_no_answer_is_judged_by_the_library() {
+        let listed = |path: &str| {
+            format!(
+                r#"{{"cache":{{"path":"/data/krakenmount/caches"}},"games":[{{"title_id":"PPSA01234","path":"{path}"}}]}}"#
+            )
+        };
+        let state = std::sync::Arc::new(std::sync::Mutex::new(listed("/data/homebrew/G")));
+        let api = slow_kraken(std::sync::Arc::clone(&state));
+        let wait = Duration::from_millis(300);
+        let e = api
+            .remove_within("PPSA01234", "/data/homebrew/G", wait)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("may still be removing"), "{e}");
+        *state.lock().unwrap() = listed("/mnt/usb0/G");
+        api.remove_within("PPSA01234", "/data/homebrew/G", wait)
+            .unwrap();
+        // The library could not be read either: unknown.
+        let gone = KrakenApi {
+            base: "http://127.0.0.1:1".into(),
+            agent: agent(Duration::from_secs(2)),
+        };
+        let e = after_timeout(
+            "/api/delete/PPSA01234",
+            gone.state(),
+            "PPSA01234",
+            "/data/homebrew/G",
+            REMOVE_TIMEOUT,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("unknown") && e.contains("10 min"), "{e}");
     }
 
     #[test]

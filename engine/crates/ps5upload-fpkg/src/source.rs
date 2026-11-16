@@ -100,6 +100,12 @@ pub trait SourceTree: Send {
     fn notes(&self) -> Vec<String> {
         Vec::new()
     }
+
+    /// Lets go of what reading holds beyond the listing (an archive's decoder and the files it
+    /// kept on the way), before the same source is opened again: a read-back then never holds
+    /// two decoders. A read after it starts over. Nothing for most sources; a tree that wraps
+    /// another passes it on.
+    fn release(&mut self) {}
 }
 
 /// How often [`SourceTree::read_heads`] reports progress (and can be stopped).

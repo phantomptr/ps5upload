@@ -483,6 +483,36 @@ static void test_wire(void) {
     CHECK(!console_convert_request_stale(1000, 1000 + CONVERT_REQUEST_STALE_S - 1));
     CHECK(console_convert_request_stale(1000, 1000 + CONVERT_REQUEST_STALE_S));
     CHECK(console_convert_request_stale(1000, 999));
+
+    /* The page's /api/convert/start body as the op's arguments (cc_start_tail). */
+    {
+        char tail[512];
+#define TAIL(BODY) cc_start_tail(BODY, strlen(BODY), "/data/o \"q\".ffpfsc", tail, sizeof tail)
+        CHECK(TAIL("{\"format\":\"ffpfsc\",\"inner\":\"ffpkg\",\"ffpfsc_level\":\"smallest\",\"verify\":\"full\"}") == NULL);
+        CHECK(strcmp(tail, ",\"action\":\"build\",\"dest\":\"/data/o \\\"q\\\".ffpfsc\",\"format\":\"ffpfsc\",\"zstd\":false,"
+                           "\"verify\":\"full\",\"inner\":\"ffpkg\",\"ffpfsc_level\":\"smallest\"") == 0);
+        /* What the page left out or sent empty is the converter's default: not passed on. */
+        CHECK(TAIL("{\"format\":\"ffpfsc\",\"inner\":\"\"}") == NULL && !strstr(tail, "inner") && !strstr(tail, "level"));
+        CHECK(TAIL("{\"format\":\"pkg\",\"pkg_level\":\"fast\"}") == NULL && strstr(tail, ",\"pkg_level\":\"fast\"") &&
+              strstr(tail, "\"verify\":\"fast\""));
+        /* A word for another format is not read (nor refused). */
+        CHECK(TAIL("{\"format\":\"exfat\",\"inner\":\"iso\",\"pkg_level\":\"x\",\"ffpfsc_level\":9}") == NULL &&
+              !strstr(tail, "inner") && !strstr(tail, "level"));
+        CHECK(strcmp(TAIL("{\"format\":\"ffpfsc\",\"inner\":\"iso\"}"), "convert_bad_inner") == 0 && !tail[0]);
+        CHECK(strcmp(TAIL("{\"format\":\"ffpfsc\",\"inner\":7}"), "convert_bad_inner") == 0);
+        CHECK(strcmp(TAIL("{\"format\":\"ffpfsc\",\"inner\":\"exfatexfatexfat\"}"), "convert_bad_inner") == 0);
+        CHECK(strcmp(TAIL("{\"format\":\"ffpfsc\",\"ffpfsc_level\":\"max\"}"), "convert_bad_ffpfsc_level") == 0);
+        CHECK(strcmp(TAIL("{\"format\":\"pkg\",\"pkg_level\":\"smallest\"}"), "convert_bad_pkg_level") == 0);
+        CHECK(strcmp(TAIL("{\"format\":\"iso\"}"), "bad_format") == 0);
+        CHECK(strcmp(TAIL("{\"format\":\"exfat\",\"verify\":\"some\"}"), "bad_verify") == 0);
+        CHECK(strcmp(TAIL("{\"format\":\"exfat\",\"zstd\":true,\"zstd_level\":23}"), "bad_zstd") == 0);
+        /* The level goes with zstd only. */
+        CHECK(TAIL("{\"format\":\"exfat\",\"zstd_level\":19}") == NULL && !strstr(tail, "zstd_level"));
+        CHECK(TAIL("{\"format\":\"exfat\",\"zstd\":true,\"zstd_level\":19}") == NULL &&
+              strstr(tail, "\"zstd\":true,\"verify\":\"fast\",\"zstd_level\":19"));
+#undef TAIL
+        CHECK(strcmp(cc_start_tail("{\"format\":\"exfat\"}", 18, "/data/o.exfat", tail, 40), "bad_path") == 0);
+    }
 }
 
 static void test_op(void) {
@@ -620,6 +650,29 @@ static void test_op(void) {
                  dest);
         CHECK(run_op(FAKE_FAILS, args, c) == AVA1_ERR_IO);
         CHECK(webui_json_str(g_request, strlen(g_request), "inner", got, sizeof got) == 0);
+        {
+            /* Minion's page through /api/convert/start (cc_start_tail, then the op as the route
+             * starts it): its image inside, .ffpfsc level and .pkg level reach request.json. */
+            char body[600], tail[1200];
+            snprintf(cdest, sizeof cdest, "%s/out.ffpfsc", g_root);
+            snprintf(body, sizeof body,
+                     "{\"path\":\"%s\",\"dest\":\"%s\",\"format\":\"ffpfsc\",\"inner\":\"ffpfs\",\"ffpfsc_level\":\"fast\"}",
+                     game, cdest);
+            CHECK(cc_start_tail(body, strlen(body), cdest, tail, sizeof tail) == NULL);
+            snprintf(args, sizeof args, "{\"path\":\"%s\"%s}", game, tail);
+            CHECK(run_op(FAKE_FAILS, args, c) == AVA1_ERR_IO);
+            CHECK(webui_json_str(g_request, strlen(g_request), "inner", got, sizeof got) == 1 && strcmp(got, "ffpfs") == 0);
+            CHECK(webui_json_str(g_request, strlen(g_request), "ffpfsc_level", got, sizeof got) == 1 &&
+                  strcmp(got, "fast") == 0);
+            snprintf(cdest, sizeof cdest, "%s/out.pkg", g_root);
+            snprintf(body, sizeof body, "{\"path\":\"%s\",\"dest\":\"%s\",\"format\":\"pkg\",\"pkg_level\":\"balanced\"}",
+                     game, cdest);
+            CHECK(cc_start_tail(body, strlen(body), cdest, tail, sizeof tail) == NULL);
+            snprintf(args, sizeof args, "{\"path\":\"%s\"%s}", game, tail);
+            CHECK(run_op(FAKE_FAILS, args, c) == AVA1_ERR_IO);
+            CHECK(webui_json_str(g_request, strlen(g_request), "pkg_level", got, sizeof got) == 1 &&
+                  strcmp(got, "balanced") == 0);
+        }
     }
 
     /* An inspection: the request names it, the status is followed past a half-written and a
@@ -686,9 +739,29 @@ static void test_op(void) {
         CHECK(webui_json_str(c->result, c->result_len, "zstd_runtime", got, sizeof got) == 1 && strcmp(got, "0.4.1") == 0);
     }
 
-    /* An inspection may run beside an install or an extraction; a build may not. */
+    /* An inspection may run beside an install or an extraction; a build may not, nor may an
+     * inspection of a .zip or .7z (a .7z's param file may need its whole solid block decoded). */
     g_installing = 1;
     CHECK(run_op(FAKE_INSPECT, args, c) == AVA1_STATUS_OK);
+    {
+        char sevenz[320], zargs[400];
+        snprintf(sevenz, sizeof sevenz, "%s/game.7z", g_root);
+        put_file(sevenz, "x");
+        snprintf(zargs, sizeof zargs, "{\"path\":\"%s\"}", sevenz);
+        g_building_when_installing_read = -1;
+        CHECK(run_op(FAKE_NEVER, zargs, c) == AVA1_ERR_BUSY && strcmp(c->message, "convert_busy") == 0 &&
+              !g_request[0]);
+        CHECK(g_building_when_installing_read == 1);
+        CHECK(!console_convert_building());
+        g_installing = 0;
+        g_extracting = 1;
+        CHECK(run_op(FAKE_NEVER, zargs, c) == AVA1_ERR_BUSY && !g_request[0]);
+        g_extracting = 0;
+        CHECK(run_op(FAKE_INSPECT, zargs, c) == AVA1_STATUS_OK);
+        CHECK(!console_convert_building());
+        unlink(sevenz);
+        g_installing = 1;
+    }
     snprintf(args, sizeof args,
              "{\"path\":\"%s\",\"action\":\"build\",\"dest\":\"%s\",\"format\":\"ffpkg\",\"zstd\":true,\"zstd_level\":19,\"verify\":\"full\"}",
              game, dest);
