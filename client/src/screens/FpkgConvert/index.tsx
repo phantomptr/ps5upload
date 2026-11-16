@@ -90,6 +90,7 @@ import { amprTrace, titleIdOf } from "../../api/amprTrace";
 import { krakenIsTheMounter } from "../../lib/mounter";
 import { placePkgForMount, type MountPlaceResult } from "../../state/pkgMount";
 import { useSmpState } from "../GameHub/SmpNeeded";
+import { useMountClashAsk } from "../InstallPackage/KrakenMountCard";
 
 /** Why a source was not queued: the build picked cannot be made from it. */
 type QueueSkip = "not-image" | "not-folder" | "later-part";
@@ -147,6 +148,7 @@ export default function WorkshopScreen() {
     busy: false,
     result: null,
   });
+  const mountClash = useMountClashAsk(host);
   const kernel = useConnectionStore((s) =>
     host ? (s.runtimeByHost[hostOf(host)]?.ps5Kernel ?? null) : null,
   );
@@ -1351,7 +1353,7 @@ export default function WorkshopScreen() {
                 ? () => {
                     const path = pipeline.packagePath ?? "";
                     setMountRun({ busy: true, result: null });
-                    void placePkgForMount(path, host).then((result) => setMountRun({ busy: false, result }));
+                    void placePkgForMount(path, host, { onExists: mountClash.onExists }).then((result) => setMountRun({ busy: false, result }));
                   }
                 : undefined
             }
@@ -1451,6 +1453,7 @@ export default function WorkshopScreen() {
       />
 
       <LocalDrivesCard drives={drives} quiet />
+      {mountClash.dialog}
 
       <details className="text-sm">
         <summary className="cursor-pointer text-[var(--color-muted)]">

@@ -6,7 +6,9 @@
 // drive, then ask it to scan now. Nothing here installs, and the upload is a plain file upload
 // (not a package-library item), so no install can follow it by accident.
 
-import { fsMkdir, listVolumes, smpRescan, smpStatus, type SmpStatus } from "../api/ps5";
+import { fetchConsoleStat } from "../api/consoleFiles";
+import { fsMkdir, isPathMissingError, listVolumes, smpRescan, smpStatus, type SmpStatus } from "../api/ps5";
+import { keepBothName } from "../lib/consolePath";
 import { mgmtAddr, transferAddr } from "../lib/addr";
 import { invoke } from "../lib/invokeLogged";
 import {
@@ -65,12 +67,35 @@ export function mountRefusalMessage(head: PkgHead | undefined, parts: number): s
   return null;
 }
 
+/** What to do when the scan folder already holds that name: overwrite it, keep both (the new one
+ *  under "Name (2).pkg"), or null to stop. */
+export type MountNameClash = "replace" | "keep" | null;
+
+/** The kind of `path` on the console ("file", "dir", ...), or null when nothing is there. Rejects
+ *  when the console could not answer: "don't know" must not read as "free". */
+async function consoleKindOf(host: string, path: string): Promise<string | null> {
+  try {
+    return (await fetchConsoleStat(host, path)).kind;
+  } catch (e) {
+    if (isPathMissingError(e)) return null;
+    throw e;
+  }
+}
+
 /** Upload `localPath` (a `.pkg` on this computer) into Kraken Mount's scan root on the chosen
- *  package drive of `host`, wait for the upload, and ask Kraken Mount to scan. */
+ *  package drive of `host`, wait for the upload, and ask Kraken Mount to scan.
+ *
+ *  A file of the same name in the scan folder (another dump, or the copy mounted right now) is
+ *  never overwritten unasked: `onExists` is asked (the name, and whether that is a folder), and
+ *  without it the package goes up under a free "Name (2).pkg". */
 export async function placePkgForMount(
   localPath: string,
   host: string,
-  opts: { drive?: string | null; onDest?: (dest: string) => void } = {},
+  opts: {
+    drive?: string | null;
+    onDest?: (dest: string) => void;
+    onExists?: (name: string, existingDir: boolean) => Promise<MountNameClash>;
+  } = {},
 ): Promise<MountPlaceResult> {
   const fail = (message: string): MountPlaceResult => ({ ok: false, message });
   let status: SmpStatus;
@@ -113,11 +138,27 @@ export async function placePkgForMount(
       ),
     );
   }
-  const name = mountFileName(localPath, meta.head?.content_id ?? "");
-  const dest = `${root}/${name}`;
-  opts.onDest?.(dest);
+  let name = mountFileName(localPath, meta.head?.content_id ?? "");
   // The drive's homebrew folder may not be there yet; a scanpath of the user's is.
   await fsMkdir(transferAddr(host), root).catch(() => {});
+  try {
+    const there = await consoleKindOf(host, `${root}/${name}`);
+    if (there !== null) {
+      const isDir = there === "dir";
+      const choice = opts.onExists ? await opts.onExists(name, isDir) : "keep";
+      if (choice === null) return fail(trStatic("pkg.cancelled", "Cancelled."));
+      // A folder can't be replaced by a file: that keeps both too.
+      if (choice === "keep" || isDir) {
+        let n = 2;
+        while ((await consoleKindOf(host, `${root}/${keepBothName(name, n, false)}`)) !== null) n++;
+        name = keepBothName(name, n, false);
+      }
+    }
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : String(e));
+  }
+  const dest = `${root}/${name}`;
+  opts.onDest?.(dest);
 
   const id = pkgQueue().add({
     sourceKind: "file",

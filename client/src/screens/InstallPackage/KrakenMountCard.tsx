@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { HardDrive } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
@@ -8,8 +8,23 @@ import { isMobile } from "../../lib/platform";
 import { pickPath } from "../../lib/pickPath";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { useTr } from "../../state/lang";
-import { placePkgForMount } from "../../state/pkgMount";
+import { placePkgForMount, type MountNameClash } from "../../state/pkgMount";
+import { useConflictAsk } from "../FileSystem/ConflictAsk";
 import { useSmpState } from "../GameHub/SmpNeeded";
+
+/** Asks Replace / Keep both (Skip and Cancel stop) when the scan folder already holds the name,
+ *  with the same question a copy onto the PS5 asks. Render `dialog`. */
+export function useMountClashAsk(host: string): {
+  onExists: (name: string, existingDir: boolean) => Promise<MountNameClash>;
+  dialog: ReactNode;
+} {
+  const { ask, dialog } = useConflictAsk(host);
+  const onExists = async (name: string, existingDir: boolean): Promise<MountNameClash> => {
+    const d = await ask({ name, pickedDir: false, existingDir, canReplace: !existingDir, left: 0 });
+    return d?.choice === "replace" ? "replace" : d?.choice === "keep" ? "keep" : null;
+  };
+  return { onExists, dialog };
+}
 
 /**
  * Shown on Install Package when Kraken Mount runs on the console: a PS5 package made with the
@@ -22,6 +37,7 @@ export function KrakenMountCard({ host }: { host: string }) {
   const snapshot = status === "checking" ? null : status;
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<{ name: string; ok: boolean; message: string }[]>([]);
+  const clash = useMountClashAsk(host);
   if (!krakenRuns(snapshot)) return null;
   const alone = krakenIsTheMounter(snapshot);
 
@@ -35,7 +51,7 @@ export function KrakenMountCard({ host }: { host: string }) {
       const paths = (Array.isArray(sel) ? sel : sel ? [sel] : []) as string[];
       // One at a time: each waits for its upload, so the results line up with the picks.
       for (const p of paths) {
-        const r = await placePkgForMount(p, host);
+        const r = await placePkgForMount(p, host, { onExists: clash.onExists });
         const name = p.split(/[\\/]/).pop() ?? p;
         setResults((prev) => [...prev, { name, ok: r.ok, message: r.message }]);
       }
@@ -95,6 +111,7 @@ export function KrakenMountCard({ host }: { host: string }) {
           ))}
         </ul>
       )}
+      {clash.dialog}
     </section>
   );
 }
