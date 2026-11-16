@@ -24,10 +24,9 @@ import { useTr } from "../../state/lang";
 
 /** What the action does for a source, or why it is not offered. */
 export type AmprIndexPlan =
-  /** Not shown: no game checked, or a package or archive (a build makes a fresh index). */
+  /** Not shown: no game checked, a package or archive (a build makes a fresh index), or a game
+   *  that does not read through libSceAmpr (it has no index to rebuild, #828). */
   | "hidden"
-  /** The game does not read through libSceAmpr: shown off, with why. */
-  | "not_ampr"
   | "folder"
   | "console_folder"
   /** An uncompressed image on this computer: an edited copy. */
@@ -51,7 +50,7 @@ export function amprIndexPlan(
   if (isArchiveSource(s) || /\.pkg$/i.test(s) || isRemotePath(s))
     return "hidden";
   if (!inspection.ampr_packs || inspection.ampr_packs.kind === "no_ampr")
-    return "not_ampr";
+    return "hidden";
   const onConsole = s.startsWith("ps5://");
   if (/\.ffpfsc$/i.test(s)) return "compressed";
   if (IMAGE.test(s)) return onConsole ? "console_image" : "image";
@@ -77,19 +76,13 @@ const stageText = (tr: Tr, id?: string) =>
         ? tr("ampr_index_stage_write", undefined, "Writing it…")
         : tr("ampr_index_running", undefined, "Rebuilding the AMPR index…");
 
-/** The line under the button: why it is off, what it is doing, or what it did. */
+/** The line under the button: why it can't run here, what it is doing, or what it did. */
 export function amprIndexStatus(
   plan: AmprIndexPlan,
   run: AmprIndexRun,
   explain: boolean,
   tr: Tr,
 ): string | null {
-  if (plan === "not_ampr")
-    return tr(
-      "ampr_index_not_ampr",
-      undefined,
-      "Only for a game whose eboot.bin reads its files through libSceAmpr. This one does not.",
-    );
   if (explain && plan === "compressed")
     return tr(
       "ampr_index_compressed",
@@ -222,11 +215,7 @@ export function AmprIndexTool({
 
   const start = async () => {
     setExplain(false);
-    if (
-      plan === "compressed" ||
-      plan === "console_image" ||
-      plan === "not_ampr"
-    ) {
+    if (plan === "compressed" || plan === "console_image") {
       setExplain(true);
       return;
     }
@@ -261,7 +250,7 @@ export function AmprIndexTool({
         variant="secondary"
         leftIcon={<ListRestart size={14} />}
         data-testid="ampr-index-rebuild"
-        disabled={plan === "not_ampr" || locked || running}
+        disabled={locked || running}
         title={tr(
           "ampr_index_hint",
           undefined,

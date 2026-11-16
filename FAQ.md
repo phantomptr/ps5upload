@@ -2487,7 +2487,7 @@ Packages and images Workshop builds always carry a fresh index; **Rebuild AMPR i
 - **A `.ffpfsc`**: compressed and read-only, so it is not edited. **Convert again** makes a fresh
   `.ffpfsc` with a new index.
 
-It is only offered for a game that uses libSceAmpr, and says so otherwise.
+It only shows for a game that uses libSceAmpr.
 
 **Q: Can I install a package that is already on a USB drive?**
 Yes. Plug the drive into the PS5; packages on it show in **Upload & Install → Already on the PS5**

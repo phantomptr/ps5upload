@@ -40,8 +40,9 @@ describe("Rebuild AMPR index: what it does for each source", () => {
     for (const [source, plan] of cases) expect(amprIndexPlan(source, ampr), source).toBe(plan);
     // Only once a game is checked, and only for one that reads through libSceAmpr.
     expect(amprIndexPlan("/games/PPSA01234", null)).toBe("hidden");
-    expect(amprIndexPlan("/games/PPSA01234", inspection("no_ampr"))).toBe("not_ampr");
-    expect(amprIndexPlan("/games/PPSA01234", inspection(null))).toBe("not_ampr");
+    // A game that doesn't read through AMPR has no index: no button at all (#828).
+    expect(amprIndexPlan("/games/PPSA01234", inspection("no_ampr"))).toBe("hidden");
+    expect(amprIndexPlan("/games/PPSA01234", inspection(null))).toBe("hidden");
     expect(amprIndexPlan("/games/PPSA01234", inspection("runtime"))).toBe("folder");
   });
 });
@@ -50,7 +51,6 @@ describe("Rebuild AMPR index: what it says", () => {
   const idle = { phase: "idle" } as const;
 
   it("says why it is off, and what a compressed image or one on the PS5 needs", () => {
-    expect(amprIndexStatus("not_ampr", idle, false, tr)).toContain("reads its files through libSceAmpr");
     expect(amprIndexStatus("compressed", idle, false, tr)).toBeNull();
     expect(amprIndexStatus("compressed", idle, true, tr)).toBe(
       "This image is compressed and read-only: rebuild the index by converting it again (Workshop › Convert).",
@@ -83,7 +83,7 @@ describe("Rebuild AMPR index: what it says", () => {
     expect(amprIndexStatus("folder", { phase: "failed", message: "no room" }, false, tr)).toBe("no room");
   });
 
-  it("is off with its reason for a game without AMPR, and while a build runs", () => {
+  it("is not shown for a game without AMPR, and is off while a build runs", () => {
     const render = (source: string, kind: "ok" | "no_ampr", locked = false) =>
       renderToStaticMarkup(
         <AmprIndexTool
@@ -95,9 +95,7 @@ describe("Rebuild AMPR index: what it says", () => {
         />,
       );
     const button = (html: string) => html.slice(html.indexOf("<button"), html.indexOf("Rebuild AMPR index"));
-    const off = render("/games/G", "no_ampr");
-    expect(button(off)).toContain('disabled=""');
-    expect(off).toContain("This one does not.");
+    expect(render("/games/G", "no_ampr")).toBe("");
     expect(button(render("/games/G", "ok"))).not.toContain('disabled=""');
     expect(button(render("/games/G", "ok", true))).toContain('disabled=""');
     expect(render("/games/G.pkg", "ok")).toBe("");
