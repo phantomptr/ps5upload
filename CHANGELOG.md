@@ -21,7 +21,17 @@ Keep saves in step between two PS5s, copy a `.pkg` instead of installing it, and
 **Fixes**
 - **After a wake:** the PS5Upload helper now waits until the console has settled (about a minute) before it starts the keyboard and mouse helper or swaps elfldr. A PS5 that shut down soon after Play woke it may be helped by this; we could not reproduce that crash ourselves. (#842)
 - **Convert, package metadata:** a debug package that keeps `sce_sys/param.json`, `sce_sys/trophy2/trophy00.ucp` or `sce_sys/uds/uds00.ucp` only in its container now unpacks them too. An image built from such a package no longer mounts and then fails to register with "missing/invalid param.json". Thanks to MayHappybb (#845).
-- AUDIT_FIXES_PLACEHOLDER
+- **Remove PS5Upload** now refuses while the PS5 is installing a package, converting a game or extracting an archive, and says which; a stop or removal also keeps the queue from starting a transfer meanwhile.
+- **Busy messages** name what is really busy: a conversion no longer shows up as "another install is running".
+- **Stop helper** shows the real error; "pair with this console" only when pairing is the reason.
+- **A refused install** (the PS5 was busy) keeps the package the Library downloaded.
+- **zstd runtime** is put back on the PS5 after Remove PS5Upload, and a stop can no longer cut its upload short.
+- **Convert:** the command line and the app no longer delete each other's unfinished output; progress no longer jumps back between stages (Minion too); a stopped job reads Stopped, not failed; Minion no longer says "another conversion is running" after a power loss; a package build can't replace a file that appeared at the last moment.
+- **Editing an image in place:** progress moves while a file is written in, and an upload of the same image waits instead of sending a mix of old and new bytes.
+- **Saves:** a failed Restore to another user says the save there before is back; switching automatic backups on backs up at once, not after the first interval.
+- **Payload Manager and On your PS5** no longer show the previous console's list after a switch, and ask for release info once instead of over and over.
+- **Kraken Mount:** pausing or stopping the upload no longer leaves "Put a package on the PS5 to mount" spinning; an error on one file keeps the others' results.
+- Smaller: the Update button in Convert's zstd runtime tool follows the picked game; Uninstall waits for the mounter check; Remove PS5Upload says "Removing…" only after you confirm; a Join waits until Remote Play has really stopped; and several messages that showed raw English or "Error: …" are fixed.
 
 ## 12.5.1
 
