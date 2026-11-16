@@ -43,6 +43,9 @@ pub const VOLUME_LIMIT: u64 = (1 << 32) - (1 << 16);
 pub const INDEX_HEADER_SIZE: usize = 128;
 pub const VOLUME_HEADER_SIZE: usize = 64;
 pub const MAX_VOLUMES: usize = 1 << 12;
+/// A stored path is shorter than this (SCE_KERNEL_PATH_MAX): ampr-emu-ng refuses an index
+/// with a longer one (`docs/zstd-format.md`, `path_len`).
+pub const PATH_LIMIT: usize = 1024;
 /// The index's zstd level (header byte 17) is one of these.
 pub const ZSTD_LEVELS: core::ops::RangeInclusive<u8> = 1..=22;
 /// Index table record sizes: file, chunk, volume size.

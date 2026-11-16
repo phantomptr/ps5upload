@@ -580,6 +580,10 @@ fn overlay<'a>(
     volumes: HashMap<String, PathBuf>,
     regen: Option<Regen>,
 ) -> Result<Overlay<'a>> {
+    // What the runtime checks when it mounts the packs: each packed record matches its index
+    // record by place, size and path. A mismatch is never shipped.
+    let manifest = super::format::Manifest::parse(&output.manifest)?;
+    ampr_index::check_lz4(&index, &manifest.files).map_err(Error::Format)?;
     let sizes: HashMap<&str, u64> = source
         .files()
         .iter()
