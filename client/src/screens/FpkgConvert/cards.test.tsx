@@ -94,6 +94,21 @@ describe("MakeCard", () => {
     expect(none).toContain("Check a game under");
   });
 
+  it("with Kraken Mount running, marks the package (mounted, not installed) and says images aren't mounted", () => {
+    const k = renderToStaticMarkup(
+      <MakeCard make="pkg" onMake={() => {}} kernel="r229358/releases/13.60" contentId="UP9000-PPSA03671_00-X" checked kraken />,
+    );
+    expect(k).not.toContain("Recommended on FW");
+    expect(k.match(/Recommended/g)).toHaveLength(1);
+    expect(k).toMatch(/A package \(\.pkg\)[\s\S]*?Recommended/);
+    expect(k).toContain("a package made here is mounted from a drive, not installed");
+    expect(k).toContain("Kraken Mount, running on this PS5, mounts it");
+    const img = renderToStaticMarkup(
+      <MakeCard make="image" onMake={() => {}} kernel={null} contentId={null} checked={false} kraken />,
+    );
+    expect(img).toContain("does not mount images");
+  });
+
   it("offers a game folder as a third choice, never marked as recommended", () => {
     const out = renderToStaticMarkup(
       <MakeCard make="folder" onMake={() => {}} kernel="r229358/releases/9.60" contentId="UP9000-PPSA03671_00-X" checked />,

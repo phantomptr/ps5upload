@@ -6,6 +6,7 @@ import { Button, Spinner, WarningCard } from "../../components";
 import { hostOf, mgmtAddr } from "../../lib/addr";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { invoke } from "../../lib/invokeLogged";
+import { krakenRuns, useMounterFor, useMounterStore } from "../../lib/mounter";
 import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
 
@@ -29,7 +30,10 @@ export function useSmpState(host: string): {
     setStatus("checking");
     smpStatus(mgmtAddr(host))
       .then((s) => {
-        if (!cancelled) setStatus(s);
+        if (!cancelled) {
+          setStatus(s);
+          useMounterStore.getState().put(host, s);
+        }
       })
       .catch(() => {
         if (!cancelled) setStatus(null);
@@ -57,8 +61,27 @@ export function SmpNeededWarning({
   count: number;
 }) {
   const tr = useTr();
+  const mounter = useMounterFor(host);
   const [sending, setSending] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  // Kraken Mount runs: it mounts no disk images, and ShadowMount+ must not be started beside it
+  // (the engine refuses that send too), so there is nothing to send here.
+  if (krakenRuns(mounter)) {
+    return (
+      <WarningCard
+        title={tr(
+          "installed_kraken_images_title",
+          { count },
+          `${count} disk image${count === 1 ? "" : "s"} can't be mounted while Kraken Mount runs`,
+        )}
+        detail={tr(
+          "installed_kraken_images_body",
+          undefined,
+          "Kraken Mount is running on this PS5. It mounts packages (.pkg) and game folders, not disk images, and ShadowMount+, which mounts images, must not run beside it. To play these, restart the PS5 with ShadowMount+ instead of Kraken Mount, or convert the games to packages or folders.",
+        )}
+      />
+    );
+  }
   const send = async () => {
     if (!host.trim()) return;
     setSending(true);

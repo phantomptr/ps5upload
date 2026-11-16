@@ -102,6 +102,7 @@ import { linkProbe, type LinkClass } from "../../api/links";
 import { LinkDownloadCard } from "./LinkDownloadCard";
 import { ArchivePackagesCard } from "./ArchivePackagesCard";
 import { LinkInstallCard } from "./LinkInstallCard";
+import { KrakenMountCard } from "./KrakenMountCard";
 import { Tabs } from "../../components/Tabs";
 import { linkModeFacts } from "../../lib/linkModes";
 import { useRecentLinksStore } from "../../state/recentLinks";
@@ -2038,6 +2039,7 @@ export default function InstallPackageScreen({
 
       <ConnectionGate require="payload">
         {noticesEl}
+        {hostReady && <KrakenMountCard host={host} />}
         {/* Two ways in, a tab each. They differ in one thing the user has to choose between:
             whether a copy of the package is put on the PS5 first. */}
         <Tabs

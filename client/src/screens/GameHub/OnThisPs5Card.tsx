@@ -17,6 +17,7 @@ import {
   appSuspend,
   appUnregister,
   fsChmod,
+  krakenRemove,
   sdkScan,
   type InstalledTitle,
   type SdkScanResponse,
@@ -27,6 +28,7 @@ import { Button, Card, ErrorCard } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { mgmtAddr, transferAddr } from "../../lib/addr";
 import { isBackportEligible } from "../../lib/backport";
+import { krakenGameFor, krakenTitleIds } from "../../lib/mounter";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import { isTauriEnv } from "../../lib/tauriEnv";
@@ -96,7 +98,12 @@ export function OnThisPs5Card({
   const guard = useStaleHostGuard();
   const { confirm, dialog } = useConfirm();
   const kind = installedKindOf(title);
-  const smp = useSmpState(kind === "disc" ? host : "");
+  // Read for a disk image (is ShadowMount+ there?) and for an installed-looking title, which may
+  // be one Kraken Mount mounts: it leaves no mount.lnk of ours, so it reads as installed.
+  const smp = useSmpState(kind === "disc" || kind === "installed" ? host : "");
+  const smpStatus = smp.status === "checking" ? null : smp.status;
+  const krakenTitle = !title.system && krakenTitleIds(smpStatus).has(title.titleId.toUpperCase());
+  const krakenGame = krakenTitle ? krakenGameFor(smpStatus, title.titleId) : null;
   const ps5Kernel = useConnectionStore((s) => s.ps5Kernel);
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<{ title: string; detail: string } | null>(null);
@@ -168,7 +175,46 @@ export function OnThisPs5Card({
     [allTitles],
   );
 
+  /** A game Kraken Mount mounts is removed through it: it takes the title off the home screen
+   *  and deletes the package or folder it mounts from. Unregistering it ourselves would only
+   *  last until its next scan, which registers the title again while the source is there. */
+  const removeThroughKraken = async (path: string) => {
+    const probe = guard.capture();
+    const t = title;
+    const ok = await confirm({
+      title: tr("installed_kraken_remove_title", { name: t.titleName }, `Remove ${t.titleName}?`),
+      message: tr(
+        "installed_kraken_remove_body",
+        { path },
+        "Kraken Mount mounts this game from {path}. Removing it takes the game off the home screen and DELETES {path} from the PS5. Saves are kept.",
+      ),
+      confirmLabel: tr("installed_kraken_remove_confirm", undefined, "Remove and delete"),
+      destructive: true,
+    });
+    if (!ok || probe.isStale()) return;
+    setBusy("uninstall");
+    setActionError(null);
+    try {
+      await krakenRemove(mgmtAddr(probe.host), t.titleId, path);
+      audit("app_uninstall", withConsolePrefix(probe.host, t.titleName), { context: t.titleId });
+      if (probe.isStale()) return;
+      onChanged();
+    } catch (e) {
+      if (probe.isStale()) return;
+      setActionError({
+        title: tr("installed_uninstall_failed", { name: t.titleName }, `Couldn't uninstall ${t.titleName}`),
+        detail: humanizePs5Error(e instanceof Error ? e.message : String(e)),
+      });
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const uninstall = async () => {
+    if (krakenGame?.path) {
+      await removeThroughKraken(krakenGame.path);
+      return;
+    }
     const probe = guard.capture();
     const t = title;
     const ok = await confirm({
@@ -183,7 +229,13 @@ export function OnThisPs5Card({
             { id: t.titleId },
             `${t.titleId} is a SYSTEM app. Removing it can destabilize the console and may require a reinstall to recover. Only continue if you know exactly what this package is.`,
           )
-        : t.origin === "registered"
+        : krakenTitle
+          ? tr(
+              "installed_uninstall_confirm_kraken",
+              undefined,
+              "Kraken Mount put this game on the home screen. Its page doesn't answer from this computer, so this only takes the title off the home screen, and Kraken Mount registers it again on its next scan while its package or folder is still in a scan folder. Delete or move that to keep it off.",
+            )
+          : t.origin === "registered"
           ? tr(
               "installed_uninstall_confirm_registered",
               undefined,
@@ -356,7 +408,7 @@ export function OnThisPs5Card({
           </span>
           {tr("game_tab_on", { name: consoleName }, "On {name}")}
         </h2>
-        <InstalledKindBadge title={title} />
+        <InstalledKindBadge title={title} kraken={krakenTitle} />
         {hidden && (
           <span
             className="inline-flex items-center gap-1 text-xs text-[var(--color-muted)]"

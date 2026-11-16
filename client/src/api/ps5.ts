@@ -2208,6 +2208,49 @@ export interface SmpStatus {
   errors: string[];
   /** SMP's own version from its HTTP API (1.7beta8+); absent when the API doesn't answer. */
   version?: string | null;
+  /** Which mounter runs on the console (an engine older than this field leaves it out). */
+  mounter?: Mounter;
+  /** Kraken Mount on the console; absent from an older engine. */
+  kraken?: KrakenStatus;
+}
+
+/** Which mounter runs on a console. `unknown`: the process list could not be read and no
+ *  mounter's API answered. `both`: ShadowMount+ and Kraken Mount at once, which must not be. */
+export type Mounter = "none" | "shadowmount" | "kraken" | "both" | "unknown";
+
+/** One game in Kraken Mount's library. */
+export interface KrakenGame {
+  title_id: string;
+  title_name: string;
+  /** The `.pkg` file or game folder it mounts from. */
+  path: string;
+  /** `pkg` or `folder`. */
+  kind: string;
+  /** A folder's packing: `plain`, `zstd`, `lz4`. */
+  packing?: string | null;
+  /** `pending`, `checking`, `building`, `ready`, `error` or `duplicate`. */
+  status: string;
+  error?: string | null;
+}
+
+export interface KrakenStatus {
+  /** /data/krakenmount exists: it has run on this console. */
+  installed: boolean;
+  running: boolean;
+  /** Its API answers from this computer: rescan and remove work. */
+  api: boolean;
+  version: string | null;
+  /** `kstuff` or `shadowmount` while it waits for one to start or stop. */
+  waiting: string | null;
+  games: KrakenGame[];
+  /** Titles it has put on the home screen. */
+  title_ids: string[];
+  /** Its AMPR runtime: kind `bundled`, `downloaded`, `hand` (the user's own), `missing`. */
+  ampr: { kind: string; version?: string | null } | null;
+  settings: { inject_ampr: boolean; ampr_auto_update: boolean; scan_paths: string[] };
+  /** The folders it scans (one level deep). */
+  scan_roots: string[];
+  errors: string[];
 }
 
 /** SMP status snapshot. `addr` is the management-port address. */
@@ -2215,9 +2258,17 @@ export async function smpStatus(addr: string): Promise<SmpStatus> {
   return invoke<SmpStatus>("smp_status", { addr });
 }
 
-/** Ask ShadowMount+ to scan again now, with its retry counters cleared. */
+/** Ask the console's mounter (ShadowMount+, retry counters cleared; or Kraken Mount) to scan
+ *  again now. */
 export async function smpRescan(addr: string): Promise<void> {
   await invoke<unknown>("smp_rescan", { addr });
+}
+
+/** Remove a game Kraken Mount mounts, as its own page does: off the home screen AND its source
+ *  (`path`, the `.pkg` or game folder it lists for the title) deleted. `addr` is the
+ *  management-port address. */
+export async function krakenRemove(addr: string, titleId: string, path: string): Promise<void> {
+  await invoke<unknown>("kraken_remove", { addr, titleId, path });
 }
 
 // ─── ShadowMount+ edit sessions ───────────────────────────────────────
