@@ -5177,7 +5177,9 @@ struct KrakenRemoveReq {
 
 /// POST /api/ps5/kraken/remove `{addr, title_id, path}` — remove a game Kraken Mount mounts, the
 /// way its own page does: off the home screen, and its SOURCE DELETED (the `.pkg` or the game
-/// folder at `path`), then its cache. Answers `{ok: true}`.
+/// folder at `path`), then its cache. Answers `{ok: true}`; 409 when Kraken Mount's library,
+/// read just before, no longer lists `title_id` at `path`. Kraken Mount answers once the source
+/// is deleted: the call waits up to 10 minutes, then judges by its library.
 async fn ps5_kraken_remove(
     State(state): State<AppState>,
     Json(req): Json<KrakenRemoveReq>,
