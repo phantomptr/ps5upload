@@ -6,7 +6,8 @@
 // ("shadowmountplus.elf", "nanodns.elf", "pldmgr.elf"; measured on FW 13.60), so names are
 // compared without case or extension. A payload that never names itself shows as the loader
 // called it ("payload.elf" from elfldr): such a payload is found by other evidence, the pid
-// it keeps in a lock file (Hush's /data/hush/pid.lock), passed in as `pids`.
+// it keeps in a lock file (Hush's /data/hush/pid.lock), passed in as `pids`, or, for Kraken
+// Mount, by its API answering while exactly one such generic process is left unclaimed.
 
 import type { PayloadInfo, ProcessInfo } from "../../../api/ps5";
 
@@ -43,6 +44,13 @@ export interface HubEntry {
   /** Its web page's port, if it has one. */
   webPort: number | null;
   isCustom: boolean;
+  /** Parts of a process name that mark it as this payload's (any case), for a payload whose
+   *  process name depends on how it was started (Kraken Mount, engine kraken.rs
+   *  is_kraken_process). */
+  processContains?: string[];
+  /** It may run under a loader's generic name (payload.elf): while its API answers and no
+   *  process of its own name is up, the one unclaimed generic process left is its. */
+  adoptsGeneric?: boolean;
 }
 
 /** Ports the catalogue lists that serve a web page (diagnostics::known_port_is_web). */
@@ -93,7 +101,49 @@ export const BUILTIN_ENTRIES: readonly HubEntry[] = [
     webPort: null,
     isCustom: false,
   },
+  {
+    // Not in the catalogue: the hub learns of it from the mounter snapshot (engine kraken.rs),
+    // which reads /data/krakenmount/config.toml and asks its API.
+    id: "kraken-mount",
+    name: "Kraken Mount",
+    processNames: [],
+    processContains: ["kraken-mount", "kraken_mount", "krakenmount"],
+    marker: "/data/krakenmount/config.toml",
+    webPort: null,
+    isCustom: false,
+    adoptsGeneric: true,
+  },
 ];
+
+/** Names a loader gives a payload that doesn't name itself (elfldr: "payload.elf"). Every such
+ *  process is a different payload, so each gets a card of its own. */
+const GENERIC_PROC_NAMES = new Set(["payload", "a.out"]);
+
+export function isGenericProcName(s: string): boolean {
+  return GENERIC_PROC_NAMES.has(normProcName(s));
+}
+
+/** The name one card shows for catalogue entries that the console can't tell apart: the part
+ *  their names share before " (" ("kstuff-lite" for "kstuff-lite (EchoStretch)" and
+ *  "kstuff-lite (drakmor — fpkg-optimized)"), else the process name without its extension.
+ *  `variants` tells them apart: the bracketed part up to " — ", or the whole name. */
+export function mergedName(
+  names: readonly string[],
+  procName: string | null,
+): { name: string; variants: string[] } {
+  const split = names.map((n) => {
+    const i = n.indexOf(" (");
+    return i > 0 && n.endsWith(")") ? { base: n.slice(0, i).trim(), tag: n.slice(i + 2, -1) } : null;
+  });
+  if (split.every((x) => x && x.base === split[0]!.base)) {
+    return {
+      name: split[0]!.base,
+      variants: split.map((x) => x!.tag.split(/\s+[—–-]\s+/)[0].trim() || x!.tag),
+    };
+  }
+  const proc = procName?.trim().replace(/\.(elf|bin)$/i, "");
+  return { name: proc || names.join(" / "), variants: [...names] };
+}
 
 export function entryFromCatalog(p: PayloadInfo): HubEntry {
   const names = [
@@ -129,6 +179,11 @@ export interface HubCard {
   /** Every catalogue entry this card stands for (two kstuff builds share one process name). */
   entryIds: string[];
   name: string;
+  /** For a card standing for several catalogue entries: what tells them apart ("EchoStretch",
+   *  "drakmor"). Empty for one. */
+  variants: string[];
+  /** A process shown under a loader's generic name: the card is about this one pid. */
+  byPid: boolean;
   state: HubState;
   /** Its running processes (empty when installed but not running). */
   processes: ProcessInfo[];
@@ -164,13 +219,19 @@ export function detectHubCards({
   const claimed = new Set<number>();
   const byEvidence = new Map<string, HubCard>();
   const cards: HubCard[] = [];
+  // Full names of the entries each merged card stands for, to name it once all are in.
+  const mergedNames = new Map<HubCard, string[]>();
+  const adopters: HubCard[] = [];
   for (const e of entries) {
     const names = new Set(e.processNames.map(normProcName).filter(Boolean));
+    const parts = (e.processContains ?? []).map((x) => x.toLowerCase());
+    const has = (n: string) => {
+      const l = n.toLowerCase();
+      return names.has(normProcName(n)) || parts.some((x) => l.includes(x));
+    };
     const own = pids?.get(e.id) ?? [];
     const procs = processes.filter(
-      (p) =>
-        !p.is_self &&
-        (names.has(normProcName(p.comm)) || names.has(normProcName(p.name)) || own.includes(p.pid)),
+      (p) => !p.is_self && (has(p.comm) || has(p.name) || own.includes(p.pid)),
     );
     const integration = isIntegration(e.id) ? e.id : null;
     const answered = !!answering?.has(e.id);
@@ -189,13 +250,17 @@ export function detectHubCards({
     const same = byEvidence.get(evidence);
     if (same && !integration && !same.integration) {
       same.entryIds.push(e.id);
-      same.name = `${same.name} / ${e.name}`;
+      const all = mergedNames.get(same) ?? [same.name];
+      all.push(e.name);
+      mergedNames.set(same, all);
       continue;
     }
     const card: HubCard = {
       id: e.id,
       entryIds: [e.id],
       name: e.name,
+      variants: [],
+      byPid: false,
       state,
       processes: procs,
       webPort: e.webPort,
@@ -204,14 +269,35 @@ export function detectHubCards({
     };
     byEvidence.set(evidence, card);
     cards.push(card);
+    if (e.adoptsGeneric && answered && procs.length === 0) adopters.push(card);
   }
-  // Payloads nobody catalogued, seen running (one card per name).
+  for (const [card, names] of mergedNames) {
+    const p = card.processes[0];
+    const m = mergedName(names, p ? p.comm || p.name : null);
+    card.name = m.name;
+    card.variants = m.variants;
+  }
+  const generic = (p: ProcessInfo) =>
+    p.kind === "payload" && !p.is_self && !claimed.has(p.pid) && (isGenericProcName(p.comm) || isGenericProcName(p.name));
+  // A payload that answers but runs under a generic name (Kraken Mount as payload.elf): when
+  // exactly one generic process is left, it is that one.
+  if (adopters.length === 1) {
+    const left = processes.filter(generic);
+    if (left.length === 1) {
+      adopters[0].processes = [left[0]];
+      claimed.add(left[0].pid);
+    }
+  }
+  // Payloads nobody catalogued, seen running: one card per name, and one per process for a
+  // generic name (each payload.elf is a different payload).
   const unknown = new Map<string, HubCard>();
   for (const p of processes) {
     if (p.kind !== "payload" || p.is_self || claimed.has(p.pid)) continue;
     const label = p.comm || p.name;
-    const key = normProcName(label);
-    if (!key) continue;
+    const name = normProcName(label);
+    if (!name) continue;
+    const byPid = isGenericProcName(label);
+    const key = byPid ? `${name}:${p.pid}` : name;
     const card = unknown.get(key);
     if (card) {
       card.processes.push(p);
@@ -221,6 +307,8 @@ export function detectHubCards({
       id: `proc:${key}`,
       entryIds: [],
       name: label,
+      variants: [],
+      byPid,
       state: "running",
       processes: [p],
       webPort: null,

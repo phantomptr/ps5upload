@@ -82,6 +82,8 @@ async function consoleKindOf(host: string, path: string): Promise<string | null>
   }
 }
 
+const uploadFailed = () => trStatic("pkg_mount_upload_failed", "The upload failed.");
+
 /** Upload `localPath` (a `.pkg` on this computer) into Kraken Mount's scan root on the chosen
  *  package drive of `host`, wait for the upload, and ask Kraken Mount to scan.
  *
@@ -179,6 +181,7 @@ export async function placePkgForMount(
   const done = await new Promise<{ ok: boolean; message?: string }>((resolve) => {
     let finished = false;
     let unsub: (() => void) | null = null;
+    let wasRunning = false;
     const finish = (r: { ok: boolean; message?: string }) => {
       if (finished) return;
       finished = true;
@@ -188,11 +191,22 @@ export async function placePkgForMount(
     unsub = pkgQueue().watch(id, (q) => {
       if (!q) finish({ ok: false, message: trStatic("pkg.removed_from_queue", "Removed from the queue.") });
       else if (q.status === "done") finish({ ok: true });
-      else if (q.status === "failed") finish({ ok: false, message: q.error ?? "upload failed" });
+      else if (q.status === "failed") finish({ ok: false, message: q.error ?? uploadFailed() });
+      else if (q.status === "running") wasRunning = true;
+      // Pause or Stop in the queue puts a running item back to waiting: this pick is over
+      // (a console gone to rest goes on by itself when it wakes, so that one is waited for).
+      else if (q.status === "pending" && wasRunning && !q.waitingForWake)
+        finish({
+          ok: false,
+          message: trStatic(
+            "pkg_mount_paused",
+            "Paused or stopped in the queue. Once it finishes there, Kraken Mount finds it on its next scan.",
+          ),
+        });
     });
     if (finished) unsub();
   });
-  if (!done.ok) return { ok: false, message: done.message ?? "upload failed", dest };
+  if (!done.ok) return { ok: false, message: done.message ?? uploadFailed(), dest };
   // Best effort: it scans every 10 s by itself anyway.
   await smpRescan(mgmtAddr(host)).catch(() => {});
   return {

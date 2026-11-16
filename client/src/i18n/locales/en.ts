@@ -9171,6 +9171,18 @@ game_fps_tv_note: "Shown here, not on the TV: drawing over a game means changing
 "pu_rollback_failed": "Couldn't roll back {name}",
 "pu_skip_not_saved": "not saved on this computer",
 "rp_blocker_resume_no_copy": "{name} is set to on again, but couldn't be started: there's no copy of it in ps5upload, and ps5upload doesn't download payloads. Send the {name} file to the PS5 to start it.",
+"hub_variants": "One of: {names} — the console can't tell which.",
+"hub_kill_pid_title": "Stop {name} (pid {pid})?",
+"hub_kill_pid_body": "This kills only process {pid}. {name} is the name the loader gives any payload that doesn't name itself, so other processes with that name keep running.",
+"pkg_mount_paused": "Paused or stopped in the queue. Once it finishes there, Kraken Mount finds it on its next scan.",
+"pkg_mount_upload_failed": "The upload failed.",
+"install.kraken.filter": "PS5 package",
+"usb_skipped_not_payload": "{name}: not an .elf or .bin file",
+"usb_wizard_payload_filter": "Payload",
+"usb_wizard_add_files": "Add files from this computer…",
+"usb_wizard_remove_file": "Remove",
+"usb_wizard_local_order": "Your files load after the library's payloads, in the order added.",
+"usb_wizard_step2_hint_v2": "Tick copies already in the app's library, or add payload files from this computer.",
 };
 
 export default en;

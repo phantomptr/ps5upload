@@ -77,23 +77,33 @@ export default function PayloadManagerPanel() {
   const [catalog, setCatalog] = useState<PayloadInfo[]>([]);
   const [pick, setPick] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
+  /** Ids whose newest release was asked for on this console. */
+  const asked = useRef(new Set<string>());
 
+  // Another console's answer is not this one's: a slow reply from the console picked before
+  // must not fill this one's list.
+  const genRef = useRef(0);
   const refresh = useCallback(async () => {
     const h = host.trim();
     if (!h) return;
+    const gen = genRef.current;
     setLoading(true);
     setError(null);
     try {
-      setView(await pmOverview(h));
+      const v = await pmOverview(h);
+      if (gen === genRef.current) setView(v);
     } catch (e) {
-      setError(humanizeCaught(e));
+      if (gen === genRef.current) setError(humanizeCaught(e));
     } finally {
-      setLoading(false);
+      if (gen === genRef.current) setLoading(false);
     }
   }, [host]);
 
   useEffect(() => {
+    genRef.current++;
     setView(null);
+    setLatest({});
+    asked.current.clear();
     void refresh();
   }, [refresh]);
 
@@ -114,19 +124,18 @@ export default function PayloadManagerPanel() {
 
   useEffect(() => {
     if (!isTauriEnv() || !view?.present) return;
-    // Only what this app stored has a known version to compare.
+    // Only what this app stored has a known version to compare. Each id is asked once per
+    // console: the answers it fills are not what it waits on.
     const ids = new Set(Object.values(pmRecords(hostOf(host))).map((r) => r.id));
-    let live = true;
+    const gen = genRef.current;
     for (const id of ids) {
-      if (id in latest) continue;
+      if (asked.current.has(id)) continue;
+      asked.current.add(id);
       payloadsReleases(id)
-        .then((list) => live && setLatest((m) => ({ ...m, [id]: defaultRelease(list) })))
-        .catch(() => live && setLatest((m) => ({ ...m, [id]: null })));
+        .then((list) => gen === genRef.current && setLatest((m) => ({ ...m, [id]: defaultRelease(list) })))
+        .catch(() => gen === genRef.current && setLatest((m) => ({ ...m, [id]: null })));
     }
-    return () => {
-      live = false;
-    };
-  }, [view, host, latest]);
+  }, [view, host]);
 
   const run = async (key: string, work: () => Promise<void>, failTitle: string) => {
     setBusy(key);

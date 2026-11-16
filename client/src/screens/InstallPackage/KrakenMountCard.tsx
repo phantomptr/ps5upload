@@ -41,33 +41,43 @@ export function KrakenMountCard({ host }: { host: string }) {
   // Results are about one console: another one starts with none, and a pick still going for the
   // old one adds no more.
   const hostRef = useRef(host);
+  // Each pick's token: a console switch starts a new one, so the old pick's end can't clear
+  // the new console's busy state, and the new console starts not busy.
+  const pickRef = useRef(0);
   useEffect(() => {
     hostRef.current = host;
+    pickRef.current++;
     setResults([]);
+    setBusy(false);
   }, [host]);
   if (!krakenRuns(snapshot)) return null;
   const alone = krakenIsTheMounter(snapshot);
 
   const pick = async () => {
+    const token = ++pickRef.current;
+    const live = () => pickRef.current === token && hostRef.current === host;
     setBusy(true);
     setResults([]);
+    const filters = [{ name: tr("install.kraken.filter", undefined, "PS5 package"), extensions: ["pkg"] }];
     try {
       const sel = isMobile()
-        ? await pickPath({ mode: "file", filters: [{ name: "PlayStation Package", extensions: ["pkg"] }] })
-        : await openDialog({ multiple: true, filters: [{ name: "PlayStation Package", extensions: ["pkg"] }] });
+        ? await pickPath({ mode: "file", filters })
+        : await openDialog({ multiple: true, filters });
       const paths = (Array.isArray(sel) ? sel : sel ? [sel] : []) as string[];
       // One at a time: each waits for its upload, so the results line up with the picks.
       for (const p of paths) {
-        if (hostRef.current !== host) break;
+        if (!live()) break;
         const r = await placePkgForMount(p, host, { onExists: clash.onExists });
-        if (hostRef.current !== host) break;
+        if (!live()) break;
         const name = p.split(/[\\/]/).pop() ?? p;
         setResults((prev) => [...prev, { name, ok: r.ok, message: r.message }]);
       }
     } catch (e) {
-      setResults([{ name: "", ok: false, message: e instanceof Error ? e.message : String(e) }]);
+      // Keep what the earlier files got.
+      if (live())
+        setResults((prev) => [...prev, { name: "", ok: false, message: e instanceof Error ? e.message : String(e) }]);
     } finally {
-      setBusy(false);
+      if (pickRef.current === token) setBusy(false);
     }
   };
 

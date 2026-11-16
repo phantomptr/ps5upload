@@ -58,7 +58,11 @@ export function payloadErrorText(tr: Tr, err: unknown): string {
 const UNKNOWN_SKIP = /^(.+): unknown_payload$/;
 
 /** One "Skipped" line of a USB stick write. */
+const NOT_PAYLOAD_SKIP = /^(.+): not_a_payload_file$/;
+
 export function usbSkippedText(tr: Tr, line: string): string {
+  const np = NOT_PAYLOAD_SKIP.exec(line);
+  if (np) return tr("usb_skipped_not_payload", { name: np[1] }, `${np[1]}: not an .elf or .bin file`);
   const m = UNKNOWN_SKIP.exec(line);
   if (!m) return line;
   return tr("usb_skipped_unknown", { id: m[1] }, `${m[1]}: not in the payload list any more`);

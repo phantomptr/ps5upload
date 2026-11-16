@@ -19,11 +19,13 @@ import {
   payloadsRelease,
   processKill,
   processList,
+  smpStatus,
   type PayloadInfo,
   type ProcessInfo,
 } from "../../../api/ps5";
 import { mgmtAddr, withPort } from "../../../lib/addr";
 import { openExternalUrl } from "../../../lib/openExternalUrl";
+import { useMounterFor, useMounterStore } from "../../../lib/mounter";
 import { compareVersions } from "../../../lib/semver";
 import { usePoll, useTransferBusy } from "../../../lib/usePoll";
 import { useDocumentVisible } from "../../../lib/visibility";
@@ -165,6 +167,14 @@ function OnPs5Body() {
       if (gen !== genRef.current) return;
       setProcs(r.processes);
       setError(null);
+      // The mounter snapshot, once per refresh: whether Kraken Mount answers (it may run as
+      // payload.elf) and ShadowMount+'s mounted images, for the cards' lines.
+      try {
+        const m = await smpStatus(addr);
+        if (gen === genRef.current) useMounterStore.getState().put(addr, m);
+      } catch {
+        /* the cards go by the process list alone */
+      }
     } catch (e) {
       if (gen !== genRef.current) return;
       setError(humanizeCaught(e));
@@ -198,17 +208,28 @@ function OnPs5Body() {
   const hush = useHush(host, online && hushWanted);
   const hushPid = hush.view?.lockPid ?? null;
   const hushActions = useHushActions(host, hush.refresh);
-  const cards = useMemo(
-    () =>
-      detectHubCards({
-        entries,
-        processes: procs,
-        markers,
-        pids: hushPid ? new Map([["hush", [hushPid]]]) : undefined,
-        forceShow: openId,
-      }),
-    [entries, procs, markers, openId, hushPid],
-  );
+  // Kraken Mount's state comes from the mounter snapshot; Payload Manager's from its own API
+  // answering (its summary reports what it read).
+  const mounter = useMounterFor(addr);
+  const krakenUp = !!(mounter?.kraken?.api || mounter?.kraken?.running);
+  const krakenInstalled = !!mounter?.kraken?.installed;
+  const pmAnswered = reports["payload-manager"] !== undefined;
+  const cards = useMemo(() => {
+    const answering = new Set<string>();
+    if (krakenUp) answering.add("kraken-mount");
+    if (pmAnswered) answering.add("payload-manager");
+    let seen = markers;
+    const kraken = entries.find((e) => e.id === "kraken-mount")?.marker;
+    if (krakenInstalled && kraken && !markers.has(kraken)) seen = new Set([...markers, kraken]);
+    return detectHubCards({
+      entries,
+      processes: procs,
+      markers: seen,
+      answering,
+      pids: hushPid ? new Map([["hush", [hushPid]]]) : undefined,
+      forceShow: openId,
+    });
+  }, [entries, procs, markers, openId, hushPid, krakenUp, krakenInstalled, pmAnswered]);
 
   const report = useCallback((id: string, r: IntegrationReport) => {
     setReports((prev) => {
@@ -219,38 +240,39 @@ function OnPs5Body() {
   }, []);
 
   // The newest stable release of each card whose running version is known, so the card
-  // can link to a newer one.
+  // can link to a newer one. Each id is asked once: what it fills is not what it waits on.
+  const asked = useRef(new Set<string>());
   const versionKey = cards
     .map((c) => `${c.id}=${reports[c.id]?.version ?? ""}`)
     .join("|");
   useEffect(() => {
-    let cancelled = false;
     for (const c of cards) {
       const v = reports[c.id]?.version;
-      if (!v || c.entryIds.length !== 1 || latest[c.id] !== undefined) continue;
+      if (!v || c.entryIds.length !== 1 || asked.current.has(c.id)) continue;
+      asked.current.add(c.id);
       payloadsRelease(c.id)
         .then((r) => {
-          if (!cancelled && r.tag) setLatest((prev) => ({ ...prev, [c.id]: { tag: r.tag, url: r.html_url } }));
+          if (r.tag) setLatest((prev) => ({ ...prev, [c.id]: { tag: r.tag, url: r.html_url } }));
         })
-        .catch(() => undefined);
+        .catch(() => asked.current.delete(c.id));
     }
-    return () => {
-      cancelled = true;
-    };
     // versionKey stands for cards + reports here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [versionKey]);
 
   // A link that opened a card (an old tab's URL, a notification) scrolls to it once.
+  // Any id of a card standing for several entries (kstuff's builds) finds that card.
   const scrolledTo = useRef<string | null>(null);
-  const openShown = !!openId && cards.some((c) => c.id === openId);
+  const openCard = openId
+    ? (cards.find((c) => c.id === openId) ?? cards.find((c) => c.entryIds.includes(openId)))?.id ?? null
+    : null;
   useEffect(() => {
-    if (!openId || !openShown || scrolledTo.current === openId) return;
+    if (!openId || !openCard || scrolledTo.current === openId) return;
     scrolledTo.current = openId;
     document
-      .querySelector(`[data-card="${CSS.escape(openId)}"]`)
+      .querySelector(`[data-card="${CSS.escape(openCard)}"]`)
       ?.scrollIntoView({ block: "start", behavior: "smooth" });
-  }, [openId, openShown]);
+  }, [openId, openCard]);
 
   const setOpen = (id: string | null) => {
     const next = new URLSearchParams(params);
@@ -264,20 +286,37 @@ function OnPs5Body() {
     if (!p) return;
     const kind = killPrompt(p);
     if (!kind) return;
-    const ok = await confirm({
-      title: tr("processes_kill_payload_title", { name: card.name }, `Stop payload "${card.name}"?`),
-      message: tr(
-        "processes_kill_payload_body",
-        { name: card.name },
-        `This kills the payload "${card.name}" (kstuff, etaHEN and the like). Whatever it provides stops until you send it again, and games that need it may stop starting.`,
-      ),
-      confirmLabel: tr("processes_kill", undefined, "Kill"),
-      destructive: true,
-    });
+    const ok = await confirm(
+      card.byPid
+        ? {
+            title: tr(
+              "hub_kill_pid_title",
+              { name: card.name, pid: p.pid },
+              `Stop ${card.name} (pid ${p.pid})?`,
+            ),
+            message: tr(
+              "hub_kill_pid_body",
+              { name: card.name, pid: p.pid },
+              `This kills only process ${p.pid}. ${card.name} is the name the loader gives any payload that doesn't name itself, so other processes with that name keep running.`,
+            ),
+            confirmLabel: tr("processes_kill", undefined, "Kill"),
+            destructive: true,
+          }
+        : {
+            title: tr("processes_kill_payload_title", { name: card.name }, `Stop payload "${card.name}"?`),
+            message: tr(
+              "processes_kill_payload_body",
+              { name: card.name },
+              `This kills the payload "${card.name}" (kstuff, etaHEN and the like). Whatever it provides stops until you send it again, and games that need it may stop starting.`,
+            ),
+            confirmLabel: tr("processes_kill", undefined, "Kill"),
+            destructive: true,
+          },
+    );
     if (!ok) return;
     setBusy(card.id);
     try {
-      for (const proc of card.processes) {
+      for (const proc of card.byPid ? [p] : card.processes) {
         const ack = await processKill(addr, proc.pid);
         if (!ack.ok) throw new Error(ack.err || `pid ${proc.pid}`);
       }
@@ -360,7 +399,7 @@ function OnPs5Body() {
                 newer={newer}
                 catalogued={catalog !== null}
                 busy={busy === c.id}
-                expanded={openId === c.id}
+                expanded={openCard === c.id}
                 onToggle={() => setOpen(openId === c.id ? null : c.id)}
                 onStop={() => void stop(c)}
                 summary={
@@ -379,6 +418,7 @@ function OnPs5Body() {
                             key={summaryRev}
                             id={c.integration!}
                             host={host}
+                            running={c.state === "running"}
                             onReport={report}
                             fallback={fallback}
                           />
@@ -406,18 +446,20 @@ function OnPs5Body() {
 function Summary({
   id,
   host,
+  running,
   onReport,
   fallback,
 }: {
   id: IntegrationId;
   host: string;
+  running: boolean;
   onReport: (id: string, r: IntegrationReport) => void;
   fallback: ReactNode;
 }) {
   if (id === "payload-manager") {
     return <PmSummary host={host} onReport={(r) => onReport(id, r)} fallback={fallback} />;
   }
-  if (id === "shadowmountplus") return <SmpSummary host={host} fallback={fallback} />;
+  if (id === "shadowmountplus") return <SmpSummary host={host} running={running} fallback={fallback} />;
   return <>{fallback}</>;
 }
 
@@ -514,6 +556,15 @@ function HubCardView({
             )}
           </div>
           <div className="mt-0.5 text-xs text-[var(--color-muted)]">{summary ? summary(detail) : detail}</div>
+          {card.variants.length > 1 && (
+            <div className="mt-0.5 text-xs text-[var(--color-muted)]">
+              {tr(
+                "hub_variants",
+                { names: card.variants.join(", ") },
+                `One of: ${card.variants.join(", ")} — the console can't tell which.`,
+              )}
+            </div>
+          )}
         </div>
         <div className="ms-auto flex flex-wrap items-center gap-1.5">
           {link && (
