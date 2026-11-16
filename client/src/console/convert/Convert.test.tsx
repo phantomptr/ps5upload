@@ -76,6 +76,14 @@ describe("Convert", () => {
     expect(h).toMatch(/data-action="convert-go"(?![^>]*disabled)/);
   });
 
+  it("a game in an archive is labelled so and says it is read in place", () => {
+    expect(html(props())).not.toContain("data-convert-archive");
+    const h = html(props({ inspected: { phase: "done", info: { ...INFO, format: "7z", path: "/data/g.7z" } } }));
+    expect(h).toContain(t("cw_convert_format_7z"));
+    expect(h).toContain("data-convert-archive");
+    expect(h).toContain(esc(t("cw_convert_archive_note")));
+  });
+
   it("a .ffpfsc offers the image inside it and its compression, and says what it costs", () => {
     expect(html(props())).not.toContain("data-convert-ffpfsc");
     const h = html(props({ format: "ffpfsc", dest: "/data/games/PPSA01234.ffpfsc", inner: "ffpkg", ffpfscLevel: "smallest" }));
@@ -134,7 +142,7 @@ describe("Convert", () => {
   });
 
   it("a game that could not be read says why, and no output is offered", () => {
-    const h = html(props({ inspected: { phase: "failed", error: t("cw_convert_err_unsupported") } }));
+    const h = html(props({ inspected: { phase: "failed", error: t("cw_convert_err_unsupported_source") } }));
     expect(h).toContain("data-convert-inspect-error");
     expect(h).not.toContain("convert-go");
   });

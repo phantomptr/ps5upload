@@ -16,7 +16,8 @@ import {
   formatLabel,
   INNER_FORMATS,
   inspect,
-  isConvertImage,
+  isArchiveFormat,
+  isConvertSource,
   lastPart,
   OUT_FORMATS,
   outputName,
@@ -208,6 +209,11 @@ export function ConvertView(p: ConvertViewProps) {
               </div>
             </dl>
             {!info.hasEboot ? <p className="cw-dim">{t("cw_convert_no_eboot")}</p> : null}
+            {isArchiveFormat(info.format) ? (
+              <p className="cw-dim" data-convert-archive="">
+                {t("cw_convert_archive_note")}
+              </p>
+            ) : null}
           </div>
 
           <h2 className="cw-h2">{t("cw_convert_output")}</h2>
@@ -445,10 +451,10 @@ export function Convert({ ctx }: { ctx: SectionContext }) {
       {picking === "source" ? (
         <PathPicker
           title={t("cw_convert_pick_title")}
-          subtitle={t("cw_convert_pick_hint")}
+          subtitle={t("cw_convert_pick_hint_archives")}
           volumes={volumes}
           start={source ? parentOf(source) : null}
-          pickFile={isConvertImage}
+          pickFile={isConvertSource}
           onPick={pickSource}
           onCancel={() => setPicking(null)}
         />

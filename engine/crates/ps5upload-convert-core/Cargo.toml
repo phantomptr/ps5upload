@@ -11,6 +11,8 @@ version.workspace = true
 [dependencies]
 blake3.workspace = true
 ps5upload-fpkg = { path = "../ps5upload-fpkg" }
+# A game read straight from a .zip or .7z (archive_tree.rs; .rar where the program adds it).
+ps5upload-archive = { path = "../ps5upload-archive" }
 ps5upload-pkg = { path = "../ps5upload-pkg" }
 ps5-dump-forge-ufs2 = { path = "../ps5-dump-forge-ufs2" }
 ps5-dump-forge-pfs = { path = "../ps5-dump-forge-pfs" }
@@ -26,6 +28,9 @@ libc = "0.2"
 [dev-dependencies]
 # Unpacks the gzip'd test package the folder tests read. Already in the tree (ps5upload-fpkg).
 flate2 = "1"
+# Writes the small archives the archive tests read (the same pins as ps5upload-archive's).
+zip = { version = "9", default-features = false, features = ["deflate"] }
+sevenz-rust2 = { version = "0.23", default-features = false, features = ["compress"] }
 
 [lints.rust]
 # payload/convert/x86_64-ps5-freebsd.json sets `env: ps5`.

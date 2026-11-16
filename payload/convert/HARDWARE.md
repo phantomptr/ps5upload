@@ -112,6 +112,31 @@ line (write down `stream_ms` and `raw_bytes`: the console's compression rate), t
 through ShadowMount+ and the game starts. Then `inner` `ffpkg` at `fast`, and one large game at
 `smallest` (the slow end: the page says 20-40 minutes for 30 GB) with Stop at about 50 %.
 
+## Run 3c: a game in a `.zip` and a `.7z`
+
+No import the helper lacks (`import-diff.sh` lists the same 24 as before); `getcwd` is new to
+the converter (std's `current_dir`, through the `zip` crate), and the helper imports it. New on the
+console: the archive reader's own thread (it decodes the archive front to back and hands the
+build the files it asks for), deflate and LZMA/LZMA2 decoding, and its memory: 4 MiB of chunks in
+flight, up to 64 MiB of small files kept, and a `.7z` block's dictionary (refused past 256 MiB
+on the console).
+
+Put a small game folder in a `.zip` (deflate) and in a `.7z` made with 7-Zip's defaults (solid
+LZMA2) on `/data`, then from Minion's Convert pick each (the picker lists `.zip`, `.7z` and `.rar`):
+
+- inspect shows the game's title and file count, and "read straight out of the archive";
+- `.zip` → `.exfat` and `.7z` → folder: the stages go `plan` → `write` → `verify`, the output
+  mounts or runs, and `convert.log` ends with `... (.7z archive, solid, read in place ...): N
+  pass(es) over the archive` (write N down: 1 is ideal; the console's decode speed is the
+  `built ... in S s` line);
+- Stop during a `.7z` → `.exfat` write: it ends `cancelled` within a second or two (the archive
+  thread stops too), nothing left;
+- a `.rar`: refused at once with "A .rar can't be converted on the PS5" (the helper refuses it;
+  no converter starts).
+
+Proven when all of that holds and `getcwd` raised nothing (a missing import stops the program
+before its first status, see "If it dies").
+
 ## Run 4: Stop, and a full drive
 
 Start run 3 on a large game and press Stop at about 10 %, then at about 50 %, then during

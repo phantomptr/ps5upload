@@ -537,8 +537,17 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
     }
     is_dir = S_ISDIR(st.st_mode);
     if (!is_dir && !cc_image_format(src)) {
-        ava1_op_message(c, "convert_unsupported_source");
-        return AVA1_ERR_PATH;
+        /* An archive: the game folder in a .zip or .7z is read in place; a .rar is not converted
+         * here (cc_archive_kind), refused before a converter is started. */
+        const char *kind = cc_archive_kind(src);
+        if (kind && strcmp(kind, "rar") == 0) {
+            ava1_op_message(c, "convert_rar_unsupported");
+            return AVA1_ERR_PATH;
+        }
+        if (!kind) {
+            ava1_op_message(c, "convert_unsupported_source");
+            return AVA1_ERR_PATH;
+        }
     }
     if (strcmp(action, "build") == 0) {
         bad = check_build(json, src, is_dir, dest, sizeof dest, format, sizeof format, &build);

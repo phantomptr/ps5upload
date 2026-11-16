@@ -49,6 +49,9 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 # overwhelming majority of real-world 7z game dumps; an archive using an
 # unsupported codec fails with a clear "re-pack with LZMA2" message.
 sevenz-rust2 = { version = "0.23", default-features = false }
+# The in-place archive reader and the entry-name checks (archive_stream.rs, transfer.rs), shared
+# with the converter that runs on the PS5.
+ps5upload-archive = { path = "../ps5upload-archive" }
 # Tar archives and single .zst files, the same host-decompress-and-stream way (tar_archive.rs),
 # and zip entries compressed with zstd (method 93). `tar` without its xattr feature (reading
 # only); zstd is C zstd through the `zstd` crate with the exact pin and features

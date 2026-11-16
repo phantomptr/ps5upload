@@ -2626,6 +2626,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ps5upload-archive"
+version = "12.5.0"
+dependencies = [
+ "anyhow",
+ "crc32fast",
+ "sevenz-rust2",
+ "zip",
+]
+
+[[package]]
 name = "ps5upload-ava1"
 version = "12.5.0"
 dependencies = [
@@ -2653,11 +2663,14 @@ name = "ps5upload-convert"
 version = "12.5.0"
 dependencies = [
  "libc",
+ "ps5upload-archive",
  "ps5upload-convert-core",
  "ps5upload-fpkg",
  "rayon",
  "serde",
  "serde_json",
+ "sevenz-rust2",
+ "zip",
 ]
 
 [[package]]
@@ -2670,11 +2683,14 @@ dependencies = [
  "ps5-dump-forge-pfs",
  "ps5-dump-forge-ufs2",
  "ps5-dump-forge-zstd",
+ "ps5upload-archive",
  "ps5upload-fpkg",
  "ps5upload-pkg",
  "serde",
  "serde_json",
+ "sevenz-rust2",
  "sha2 0.11.1",
+ "zip",
 ]
 
 [[package]]
@@ -2698,6 +2714,7 @@ dependencies = [
  "libc",
  "lzma-rust2 0.25.0",
  "mdns-sd",
+ "ps5upload-archive",
  "serde",
  "serde_json",
  "sevenz-rust2",

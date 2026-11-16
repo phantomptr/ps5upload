@@ -203,13 +203,14 @@ int cc_record_parse(const char *buf, unsigned long long *xpid, long *hpid, char 
     return 1;
 }
 
-const char *cc_image_format(const char *path) {
-    static const char *const formats[] = {"exfat", "ffpkg", "ffpfs", "ffpfsc"};
+/* The one of `exts` (lowercase) that the last part of `path` ends in after a dot, whatever its
+ * case, or NULL. */
+static const char *ext_of(const char *path, const char *const *exts, size_t n) {
     const char *slash = strrchr(path, '/'), *dot = strrchr(slash ? slash : path, '.');
     size_t i, k;
     if (!dot || !dot[1]) return NULL;
-    for (i = 0; i < sizeof formats / sizeof *formats; i++) {
-        const char *f = formats[i];
+    for (i = 0; i < n; i++) {
+        const char *f = exts[i];
         for (k = 0; f[k] && dot[1 + k]; k++) {
             char c = dot[1 + k];
             if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
@@ -218,6 +219,16 @@ const char *cc_image_format(const char *path) {
         if (!f[k] && !dot[1 + k]) return f;
     }
     return NULL;
+}
+
+const char *cc_image_format(const char *path) {
+    static const char *const formats[] = {"exfat", "ffpkg", "ffpfs", "ffpfsc"};
+    return ext_of(path, formats, sizeof formats / sizeof *formats);
+}
+
+const char *cc_archive_kind(const char *path) {
+    static const char *const kinds[] = {"zip", "7z", "rar"};
+    return ext_of(path, kinds, sizeof kinds / sizeof *kinds);
 }
 
 int cc_inner_ok(const char *inner) {

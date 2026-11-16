@@ -13,7 +13,7 @@
  *                 is started: one job across helpers, and the next start's sweep
  *   convert.log   the converter's stdout/stderr (the last run)
  *
- * JOB_OP_CONSOLE_CONVERT {"path":"<game folder or .exfat/.ffpkg/.ffpfs/.ffpfsc image>"
+ * JOB_OP_CONSOLE_CONVERT {"path":"<game folder, .exfat/.ffpkg/.ffpfs/.ffpfsc image, or .zip/.7z>"
  *   [,"action":"inspect"|"build"][,"dest":"<output>"]
  *   [,"format":"exfat"|"ffpkg"|"ffpfs"|"ffpfsc"|"folder"]
  *   [,"inner":"exfat"|"ffpkg"|"ffpfs"][,"ffpfsc_level":"fast"|"balanced"|"smallest"]  (ffpfsc)
@@ -130,6 +130,10 @@ int cc_record_parse(const char *buf, unsigned long long *xpid, long *hpid, char 
 
 /* The format an image path's extension stands for ("exfat", "ffpkg", "ffpfs", "ffpfsc"), or NULL. */
 const char *cc_image_format(const char *path);
+/* The archive a path's extension names ("zip", "7z", "rar"), or NULL. The converter reads the game
+ * folder inside a .zip or .7z in place; a .rar is refused (convert_rar_unsupported: UnRAR may not be
+ * linked into the converter, see engine/crates/ps5upload-convert/src/lib.rs RAR_REFUSAL). */
+const char *cc_archive_kind(const char *path);
 /* 1 when `level` is a zstd level a build may be asked for (zstd's own range; the page offers 1, 5, 19). */
 static inline int cc_zstd_level_ok(unsigned long long level) { return level >= 1 && level <= 22; }
 /* 1 when `format` is one a build writes. */

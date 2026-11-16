@@ -12,7 +12,9 @@ import {
   dismissConvert,
   endOf,
   inspect,
+  isArchiveFormat,
   isConvertImage,
+  isConvertSource,
   outputName,
   parentOf,
   parseInspection,
@@ -112,6 +114,18 @@ describe("names and requests", () => {
     expect(long).toBe(`${"é".repeat(28)}.ffpfsc`);
   });
 
+  it("offers archives as sources and names the output after the archive", () => {
+    for (const n of ["g.zip", "G.7Z", "g.part1.rar"]) expect(isConvertSource(n), n).toBe(true);
+    expect(isConvertSource("a.ffpfsc")).toBe(true);
+    expect(isConvertSource("a.tar")).toBe(false);
+    expect(isConvertImage("g.zip")).toBe(false);
+    expect(outputName("/data/Astro Bot.zip", "exfat")).toBe("Astro Bot.exfat");
+    expect(outputName("/data/Astro.part1.rar", "folder")).toBe("Astro");
+    expect(outputName("/data/Astro.7z", "ffpfsc")).toBe("Astro.ffpfsc");
+    expect(isArchiveFormat("7z") && isArchiveFormat("zip") && !isArchiveFormat("folder")).toBe(true);
+    expect(convertCauseText("convert_rar_unsupported")).toBe(t("cw_convert_err_rar"));
+  });
+
   it("sends the image inside and its compression only with a .ffpfsc", () => {
     const base = { source: "/data/g", dest: "/data/g.ffpfsc", zstd: false, level: 5 as const, verify: "fast" as const };
     expect(startBody({ ...base, format: "ffpfsc", inner: "ffpkg", ffpfscLevel: "smallest" })).toMatchObject({
@@ -173,7 +187,7 @@ describe("jobs", () => {
     const ok = await inspect("/data/g", deps({ end: "done", status: status({ state: "done", result: '{"path":"/data/g","format":"exfat","size":1}' }) }));
     expect(ok).toMatchObject({ ok: true, info: { format: "exfat" } });
     const bad = await inspect("/data/g", deps({ end: "failed", status: status({ state: "failed", message: "convert_unsupported_source" }) }));
-    expect(bad).toEqual({ ok: false, error: t("cw_convert_err_unsupported") });
+    expect(bad).toEqual({ ok: false, error: t("cw_convert_err_unsupported_source") });
   });
 
   it("a conversion: progress, then the not-built-yet ending", async () => {

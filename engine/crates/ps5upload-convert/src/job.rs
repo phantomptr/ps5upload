@@ -348,10 +348,21 @@ fn read_runtime(path: &str) -> Result<Vec<u8>, Refusal> {
 }
 
 /// The source opened as the engine opens it: module names in the eboot's spelling, an unsigned
-/// eboot fake-signed; for packing, any packs it has decoded.
-fn open_source(path: &Path, packing: bool) -> Result<Box<dyn SourceTree>, String> {
-    let (tree, renamed, signing) =
-        ps5upload_fpkg::module_case::open_with_update(path, None).map_err(|e| e.to_string())?;
+/// eboot fake-signed; for packing, any packs it has decoded. A `.zip` or `.7z` is read in place
+/// (`ps5upload_convert_core::archive_tree`), a read waiting on it ended by `cancel`.
+fn open_source(
+    path: &Path,
+    packing: bool,
+    cancel: &Arc<AtomicBool>,
+) -> Result<Box<dyn SourceTree>, String> {
+    let (tree, renamed, signing) = if is_archive_file(path) {
+        let flag = Arc::clone(cancel);
+        let stop: ps5upload_archive::stream::Stop = Arc::new(move || flag.load(Ordering::Relaxed));
+        let tree = crate::open_archive(path, stop).map_err(|r| r.detail)?;
+        ps5upload_fpkg::module_case::wrap(tree)
+    } else {
+        ps5upload_fpkg::module_case::open_with_update(path, None).map_err(|e| e.to_string())?
+    };
     if !renamed.is_empty() {
         crate::log(format_args!(
             "renamed to the eboot's spelling: {}",
@@ -366,6 +377,16 @@ fn open_source(path: &Path, packing: bool) -> Result<Box<dyn SourceTree>, String
     } else {
         Ok(tree)
     }
+}
+
+/// Whether `path` is a `.zip` or `.7z` file, read in place (a `.rar` never gets this far: the
+/// inspection in [`plan`] refuses it).
+fn is_archive_file(path: &Path) -> bool {
+    path.is_file()
+        && matches!(
+            ps5upload_archive::stream::Kind::of(path),
+            Some(ps5upload_archive::stream::Kind::Zip | ps5upload_archive::stream::Kind::SevenZ)
+        )
 }
 
 /// Removes what a stopped or failed build of `dest` left: the names the helper also cleans up.
@@ -410,7 +431,7 @@ fn failure(detail: String, cancelled: bool, plan: &Plan) -> Refusal {
 /// progress; `cancel` stops it.
 fn build(
     request: &Request,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     stage: &mut dyn FnMut(&str, u64, u64),
 ) -> Result<serde_json::Value, Refusal> {
     let plan = plan(request)?;
@@ -418,7 +439,19 @@ fn build(
         cause: "convert_source_unreadable",
         detail: format!("{}: {e}", plan.source.display()),
     };
-    let mut tree = open_source(&plan.source, false).map_err(unreadable)?;
+    if is_archive_file(&plan.source) && plan.image.is_none() && plan.zstd.is_some() {
+        // A folder in zstd packs reads its source again after packing (as the engine refuses it
+        // for an archive): once more through a whole solid archive.
+        return Err(Refusal {
+            cause: "convert_archive_needs_unpack",
+            detail: format!(
+                "{}: a folder with zstd packs is made from an unpacked game; unpack the archive \
+                 first, or make an image",
+                plan.source.display()
+            ),
+        });
+    }
+    let mut tree = open_source(&plan.source, false, cancel).map_err(unreadable)?;
     if let Some(why) =
         ps5upload_convert_core::refusal::ps4_refusal(&plan.source, &mut *tree, plan.image.is_some())
     {
@@ -512,7 +545,8 @@ fn build(
     let chunk = image_build::DEFAULT_VERIFY_CHUNK;
     let source = plan.source.clone();
     let packing = plan.zstd.is_some();
-    let reopen = move || open_source(&source, packing);
+    let flag = Arc::clone(cancel);
+    let reopen = move || open_source(&source, packing, &flag);
     let built = match (plan.image, &plan.zstd) {
         (Some(format), zstd) => {
             // A PS4 game's image needs the param.json ShadowMount+ reads.
@@ -949,6 +983,50 @@ mod tests {
                 .join(format!("c{inner}{level}.ffpfsc.partial"))
                 .exists());
         }
+    }
+
+    /// A game read straight from a `.zip` and a `.7z` (solid and not) into an image and a
+    /// folder: done, and the output holds the game; zstd packs in a folder from an archive are
+    /// refused (unpack it first).
+    #[test]
+    fn a_build_reads_the_game_in_an_archive() {
+        let (tmp, game, dir) = setup("jobarchive");
+        let want = crate::inspect(&game).unwrap();
+        for (archive, solid) in [("g.zip", false), ("g.7z", false), ("s.7z", true)] {
+            let path = tmp.0.join(archive);
+            if archive.ends_with(".zip") {
+                crate::testing::zip_of(&game, &path);
+            } else {
+                crate::testing::sevenz_of(&game, &path, solid);
+            }
+            for (format, ext) in [("ffpkg", ".ffpkg"), ("folder", "")] {
+                let dest = tmp
+                    .0
+                    .join(format!("out-{}{ext}", archive.replace('.', "-")));
+                ask(
+                    &dir,
+                    json!({"id": "a", "op": "build", "path": path, "dest": dest,
+                        "format": format, "verify": "full"}),
+                );
+                let code = run_with(&dir, &mut |_| {}).unwrap();
+                assert_eq!(code, 0, "{archive} -> {format}: {}", status(&dir));
+                let i = crate::inspect(&dest).unwrap();
+                assert_eq!(i.title.as_deref(), Some("Test Game"), "{archive} {format}");
+                assert_eq!((i.files, i.data_bytes), (want.files, want.data_bytes));
+                assert_eq!(i.empty_dirs, want.empty_dirs, "{archive} {format}");
+            }
+        }
+        let emu = tmp.0.join("libSceAmpr.sprx");
+        std::fs::write(&emu, b"EMULATOR").unwrap();
+        ask(
+            &dir,
+            json!({"id": "z", "op": "build", "path": tmp.0.join("g.zip"),
+                "dest": tmp.0.join("zf"), "format": "folder", "zstd": true,
+                "zstd_runtime": emu}),
+        );
+        assert_eq!(run_with(&dir, &mut |_| {}).unwrap(), 1);
+        assert_eq!(status(&dir)["cause"], "convert_archive_needs_unpack");
+        assert!(!tmp.0.join("zf").exists());
     }
 
     /// zstd packs with the emulator the request names: an image and a folder, each reading

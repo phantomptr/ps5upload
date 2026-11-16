@@ -455,6 +455,10 @@ static void test_wire(void) {
     CHECK(strcmp(cc_image_format("/data/a.b/Game.ExFAT"), "exfat") == 0);
     CHECK(strcmp(cc_image_format("/data/g.ffpkg"), "ffpkg") == 0 && strcmp(cc_image_format("/data/g.ffpfs"), "ffpfs") == 0);
     CHECK(strcmp(cc_image_format("/data/g.FFPFSC"), "ffpfsc") == 0);
+    CHECK(strcmp(cc_archive_kind("/data/Game.ZIP"), "zip") == 0 && strcmp(cc_archive_kind("/data/g.7z"), "7z") == 0);
+    CHECK(strcmp(cc_archive_kind("/data/g.part1.rar"), "rar") == 0);
+    CHECK(!cc_archive_kind("/data/g.7z.001") && !cc_archive_kind("/data/a.zip/g") && !cc_archive_kind("/data/g.tar"));
+    CHECK(!cc_image_format("/data/g.zip") && !cc_archive_kind("/data/g.exfat"));
     CHECK(!cc_image_format("/data/g.ffpfscx") && !cc_image_format("/data/g.pkg") && !cc_image_format("/data/a.exfat/g"));
     CHECK(!cc_image_format("/data/g.") && !cc_image_format("/data/exfat"));
     CHECK(cc_format_ok("folder") && cc_format_ok("ffpfs") && cc_format_ok("ffpfsc") && !cc_format_ok("pkg") && !cc_format_ok(""));
@@ -505,6 +509,23 @@ static void test_op(void) {
     CHECK(run_op(FAKE_NEVER, args, c) == AVA1_ERR_PATH && strcmp(c->message, "convert_open_failed") == 0);
     snprintf(args, sizeof args, "{\"path\":\"%s\"}", other);
     CHECK(run_op(FAKE_NEVER, args, c) == AVA1_ERR_PATH && strcmp(c->message, "convert_unsupported_source") == 0);
+    {
+        /* A .rar is refused before a converter starts; a .zip goes to it. */
+        char rar[320], zip[320];
+        snprintf(rar, sizeof rar, "%s/game.rar", g_root);
+        snprintf(zip, sizeof zip, "%s/game.zip", g_root);
+        put_file(rar, "x");
+        put_file(zip, "x");
+        snprintf(args, sizeof args, "{\"path\":\"%s\"}", rar);
+        CHECK(run_op(FAKE_NEVER, args, c) == AVA1_ERR_PATH && strcmp(c->message, "convert_rar_unsupported") == 0 &&
+              !g_request[0]);
+        snprintf(args, sizeof args, "{\"path\":\"%s\",\"action\":\"build\",\"dest\":\"%s\",\"format\":\"ffpkg\"}", zip,
+                 dest);
+        CHECK(run_op(FAKE_FAILS, args, c) == AVA1_ERR_IO && strcmp(c->message, "convert_build_failed") == 0);
+        CHECK(strstr(g_request, "game.zip") != NULL);
+        unlink(rar);
+        unlink(zip);
+    }
 #define BUILD_REFUSED(DEST, FORMAT, STATUS, CAUSE)                                                                    \
     do {                                                                                                              \
         snprintf(args, sizeof args, "{\"path\":\"%s\",\"action\":\"build\",\"dest\":\"%s\",\"format\":\"%s\"}", game, \
