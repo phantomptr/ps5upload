@@ -1277,6 +1277,13 @@ export async function browserInvoke<T>(
     case "smp_rescan":
       return postJson<T>(addrUrl("/api/ps5/smp/rescan", args["addr"]), {});
 
+    case "kraken_remove":
+      return postJson<T>("/api/ps5/kraken/remove", {
+        addr: args["addr"],
+        title_id: args["titleId"],
+        path: args["path"],
+      });
+
     // Small-file write. The desktop app has this as a Tauri command; without
     // the browser counterpart anything that writes a config file to the
     // console failed here — including handing a game to ShadowMount+, which

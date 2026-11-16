@@ -5146,22 +5146,52 @@ async fn ps5_smp_status(
     }
 }
 
-/// POST /api/ps5/smp/rescan?addr= — ask ShadowMount+ to scan again now, with its retry counters
-/// cleared, so a new image of a game is picked up without deleting the game from the home screen.
+/// POST /api/ps5/smp/rescan?addr= — ask the console's mounter to scan again now: ShadowMount+ with
+/// its retry counters cleared, so a new image of a game is picked up without deleting the game
+/// from the home screen, or Kraken Mount. Answers `{ok, mounter}` with the one asked
+/// (`shadowmount` or `kraken`).
 async fn ps5_smp_rescan(
     State(state): State<AppState>,
     Query(q): Query<AddrQuery>,
 ) -> impl IntoResponse {
     let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
+    let done = tokio::task::spawn_blocking(move || ps5upload_core::kraken::rescan(&addr))
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|r| r);
+    match done {
+        Ok(m) => Json(serde_json::json!({ "ok": true, "mounter": m })).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct KrakenRemoveReq {
+    #[serde(alias = "console", alias = "host")]
+    addr: Option<String>,
+    title_id: String,
+    /// The source Kraken Mount lists for the title (its `.pkg` or game folder), as shown to the
+    /// user when they confirmed: it refuses when its library has another source for it by now.
+    path: String,
+}
+
+/// POST /api/ps5/kraken/remove `{addr, title_id, path}` — remove a game Kraken Mount mounts, the
+/// way its own page does: off the home screen, and its SOURCE DELETED (the `.pkg` or the game
+/// folder at `path`), then its cache. Answers `{ok: true}`.
+async fn ps5_kraken_remove(
+    State(state): State<AppState>,
+    Json(req): Json<KrakenRemoveReq>,
+) -> impl IntoResponse {
+    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
     let done = tokio::task::spawn_blocking(move || {
-        let (api, _) = ps5upload_core::smp_api::SmpApi::probe(&addr).ok_or_else(|| {
+        let (api, _) = ps5upload_core::kraken::KrakenApi::probe(&addr).ok_or_else(|| {
             anyhow::anyhow!(
-                "ShadowMount+'s API doesn't answer from this computer: it needs ShadowMount+ \
-                 1.7 or later running, with api_enabled on and api_bind_address open to the \
-                 network in /data/shadowmount/config.ini"
+                "Kraken Mount doesn't answer from this computer: it needs to be running on the \
+                 PS5 (its page is on port {})",
+                ps5upload_core::kraken::API_PORT
             )
         })?;
-        api.rescan()
+        api.remove(&req.title_id, &req.path)
     })
     .await
     .map_err(anyhow::Error::from)
@@ -13355,6 +13385,10 @@ fn build_app_and_mcp(
         .route("/api/ps5/screenshots/list", get(ps5_screenshots_list))
         .route("/api/ps5/videos/list", get(ps5_videos_list))
         .route("/api/ps5/smp/status", get(ps5_smp_status))
+        // The same snapshot by a name that says what it is now: which mounter runs (`mounter`),
+        // ShadowMount+'s state and Kraken Mount's (`kraken`).
+        .route("/api/ps5/mounter/status", get(ps5_smp_status))
+        .route("/api/ps5/kraken/remove", post(ps5_kraken_remove))
         .route(
             "/api/ps5/smp-emulator",
             get(ampr_emu_api::smp_emulator_handler),
