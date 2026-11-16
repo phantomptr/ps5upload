@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { HardDrive } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
@@ -38,6 +38,13 @@ export function KrakenMountCard({ host }: { host: string }) {
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<{ name: string; ok: boolean; message: string }[]>([]);
   const clash = useMountClashAsk(host);
+  // Results are about one console: another one starts with none, and a pick still going for the
+  // old one adds no more.
+  const hostRef = useRef(host);
+  useEffect(() => {
+    hostRef.current = host;
+    setResults([]);
+  }, [host]);
   if (!krakenRuns(snapshot)) return null;
   const alone = krakenIsTheMounter(snapshot);
 
@@ -51,7 +58,9 @@ export function KrakenMountCard({ host }: { host: string }) {
       const paths = (Array.isArray(sel) ? sel : sel ? [sel] : []) as string[];
       // One at a time: each waits for its upload, so the results line up with the picks.
       for (const p of paths) {
+        if (hostRef.current !== host) break;
         const r = await placePkgForMount(p, host, { onExists: clash.onExists });
+        if (hostRef.current !== host) break;
         const name = p.split(/[\\/]/).pop() ?? p;
         setResults((prev) => [...prev, { name, ok: r.ok, message: r.message }]);
       }
