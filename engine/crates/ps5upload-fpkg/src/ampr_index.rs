@@ -959,7 +959,7 @@ pub(crate) mod tests {
     #[test]
     fn check_refuses_offsets_that_overflow() {
         let ok = raw(&[b"/app0/a.bin", b"/app0/b.bin"]);
-        for slots_at in [u64::MAX & !7, (u64::MAX - (1 << 34)) & !7, 1 << 63] {
+        for slots_at in [!7u64, (u64::MAX - (1 << 34)) & !7, 1 << 63] {
             let mut d = ok.clone();
             d[0x20..0x28].copy_from_slice(&slots_at.to_le_bytes());
             let e = check(&d).unwrap_err();
