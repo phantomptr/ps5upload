@@ -5314,8 +5314,6 @@ saves_auto_old_dirs: "Sicherungen in früher genutzten Ordnern werden weiter ang
 saves_auto_running: "Wird gerade gesichert…",
 saves_auto_title: "Automatische Sicherungen",
 saves_auto_run_now: "Jetzt sichern",
-saves_auto_note_engine: "Solange PS5Upload läuft, werden geänderte Spielstände deiner Konsolen alle zehn Minuten in diesen Ordner kopiert. Ein Spielstand, der gerade geschrieben wird, kommt in der nächsten Runde dran.",
-saves_auto_note_server: "Die Engine kopiert geänderte Spielstände deiner Konsolen alle zehn Minuten in diesen Ordner, auch ohne offenen Browser. In Docker einen Ordner in einem eingebundenen Volume verwenden, z. B. /data/save-backups.",
 saves_auto_last_at: "Letzte Runde ({when}): {ok} gesichert, {failed} fehlgeschlagen.",
 save_backup_restore_title: "Sicherung vom {when} wiederherstellen?",
 save_backup_restore_body: "Schließe zuerst das Spiel. Der Spielstand auf der PS5 wird gesichert und dann durch diese Sicherung ersetzt.",

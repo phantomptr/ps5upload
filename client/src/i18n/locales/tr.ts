@@ -5313,8 +5313,6 @@ saves_auto_old_dirs: "Daha önce kullanılan klasörlerdeki yedekler görünmeye
 saves_auto_running: "Şimdi yedekleniyor…",
 saves_auto_title: "Otomatik yedeklemeler",
 saves_auto_run_now: "Şimdi yedekle",
-saves_auto_note_engine: "PS5Upload çalışırken konsollarınızda değişen kayıtlar on dakikada bir bu klasöre kopyalanır. Hâlâ yazılan bir kayıt sonraki tura bırakılır.",
-saves_auto_note_server: "Motor, konsollarınızda değişen kayıtları tarayıcı açık olmasa bile on dakikada bir bu klasöre kopyalar. Docker'da bağlı bir birim içindeki bir klasör kullanın, örneğin /data/save-backups.",
 saves_auto_last_at: "Son tur ({when}): {ok} yedeklendi, {failed} başarısız.",
 save_backup_restore_title: "{when} tarihli yedek geri yüklensin mi?",
 save_backup_restore_body: "Önce oyunu kapatın. PS5'teki kayıt yedeklenir, ardından bu yedekle değiştirilir.",

@@ -16019,6 +16019,14 @@
               "null"
             ]
           },
+          "interval_minutes": {
+            "description": "Minutes between automatic passes, 5 to 1440; out of range is refused.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "keep": {
             "minimum": 0,
             "type": [
@@ -44574,7 +44582,7 @@
         }
       },
       "put": {
-        "description": "`PUT /api/save-backup` — change any of `{enabled, dir, keep, hosts, add_hosts, remove_hosts}`.",
+        "description": "`PUT /api/save-backup` — change any of `{enabled, dir, keep, interval_minutes, hosts, add_hosts, remove_hosts}`.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -44611,7 +44619,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "Change any of `{enabled, dir, keep, hosts, add_hosts, remove_hosts}`",
+        "summary": "Change any of `{enabled, dir, keep, interval_minutes, hosts, add_hosts, remove_hosts}`",
         "tags": [
           "saves"
         ],

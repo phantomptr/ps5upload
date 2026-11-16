@@ -5259,8 +5259,6 @@ saves_auto_old_dirs: "Las copias de las carpetas usadas antes siguen apareciendo
 saves_auto_running: "Haciendo copia ahora…",
 saves_auto_title: "Copias automáticas",
 saves_auto_run_now: "Hacer copia ahora",
-saves_auto_note_engine: "Mientras PS5Upload está abierto, las partidas guardadas que cambian en tus consolas se copian a esta carpeta cada diez minutos. Una partida que aún se está escribiendo se deja para la siguiente ronda.",
-saves_auto_note_server: "El motor copia a esta carpeta cada diez minutos las partidas que cambian en tus consolas, aunque no haya ningún navegador abierto. En Docker, usa una carpeta dentro de un volumen montado, como /data/save-backups.",
 saves_auto_last_at: "Última ronda ({when}): {ok} copiadas, {failed} fallidas.",
 save_backup_restore_title: "¿Restaurar la copia de {when}?",
 save_backup_restore_body: "Cierra primero el juego. Se hace una copia de la partida de la PS5 y luego se reemplaza con esta copia.",

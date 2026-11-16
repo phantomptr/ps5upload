@@ -5325,8 +5325,6 @@ saves_auto_old_dirs: "以前使っていたフォルダーのバックアップ�
 saves_auto_running: "バックアップ中…",
 saves_auto_title: "自動バックアップ",
 saves_auto_run_now: "今すぐバックアップ",
-saves_auto_note_engine: "PS5Upload の実行中は、本体で変更されたセーブデータが 10 分ごとにこのフォルダーへコピーされます。書き込み中のセーブは次の回に回されます。",
-saves_auto_note_server: "エンジンは、ブラウザーを開いていなくても、本体で変更されたセーブデータを 10 分ごとにこのフォルダーへコピーします。Docker ではマウントしたボリューム内のフォルダー(例: /data/save-backups)を使ってください。",
 saves_auto_last_at: "前回 ({when}): {ok} 件バックアップ、{failed} 件失敗。",
 save_backup_restore_title: "{when} のバックアップを復元しますか?",
 save_backup_restore_body: "先にゲームを終了してください。PS5 上のセーブをバックアップしてから、このバックアップに置き換えます。",

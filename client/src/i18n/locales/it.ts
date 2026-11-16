@@ -5259,8 +5259,6 @@ saves_auto_old_dirs: "I backup nelle cartelle usate prima restano visibili e si 
 saves_auto_running: "Backup in corso…",
 saves_auto_title: "Backup automatici",
 saves_auto_run_now: "Esegui backup ora",
-saves_auto_note_engine: "Mentre PS5Upload è in esecuzione, i salvataggi modificati sulle tue console vengono copiati in questa cartella ogni dieci minuti. Un salvataggio ancora in scrittura viene lasciato al giro successivo.",
-saves_auto_note_server: "Il motore copia in questa cartella ogni dieci minuti i salvataggi modificati sulle tue console, anche senza browser aperto. In Docker usa una cartella dentro un volume montato, come /data/save-backups.",
 saves_auto_last_at: "Ultimo giro ({when}): {ok} salvati, {failed} non riusciti.",
 save_backup_restore_title: "Ripristinare il backup del {when}?",
 save_backup_restore_body: "Chiudi prima il gioco. Il salvataggio sulla PS5 viene copiato, poi sostituito con questo backup.",

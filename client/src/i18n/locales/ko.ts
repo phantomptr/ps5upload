@@ -5323,8 +5323,6 @@ saves_auto_old_dirs: "이전에 쓰던 폴더의 백업도 계속 표시되며 �
 saves_auto_running: "지금 백업 중…",
 saves_auto_title: "자동 백업",
 saves_auto_run_now: "지금 백업",
-saves_auto_note_engine: "PS5Upload가 실행되는 동안 콘솔에서 바뀐 세이브가 10분마다 이 폴더로 복사됩니다. 아직 기록 중인 세이브는 다음 차례로 넘깁니다.",
-saves_auto_note_server: "엔진은 브라우저가 열려 있지 않아도 콘솔에서 바뀐 세이브를 10분마다 이 폴더로 복사합니다. Docker에서는 /data/save-backups처럼 마운트한 볼륨 안의 폴더를 쓰세요.",
 saves_auto_last_at: "지난 회차 ({when}): {ok}개 백업, {failed}개 실패.",
 save_backup_restore_title: "{when} 백업을 복원할까요?",
 save_backup_restore_body: "먼저 게임을 종료하세요. PS5의 세이브를 백업한 뒤 이 백업으로 교체합니다.",

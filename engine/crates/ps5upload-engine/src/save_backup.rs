@@ -31,8 +31,12 @@ use ps5upload_core::saves::SaveEntry;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-/// How often the consoles are looked at.
-pub const EVERY: Duration = Duration::from_secs(10 * 60);
+/// How often the consoles are looked at, in minutes, unless the settings say otherwise.
+pub const DEFAULT_INTERVAL_MINUTES: u32 = 10;
+/// The interval the settings may choose: 5 minutes to a day.
+pub const INTERVAL_MINUTES: std::ops::RangeInclusive<u32> = 5..=1440;
+/// How often the waiting loop looks at the settings again, so a new interval counts at once.
+const RECHECK: Duration = Duration::from_secs(30);
 /// A save written to in the last few minutes is probably still being written: wait.
 pub const SETTLE_SECS: i64 = 180;
 pub const DEFAULT_KEEP: u32 = 5;
@@ -53,9 +57,18 @@ pub struct Settings {
     /// first. New backups go only into `dir`.
     #[serde(default)]
     pub old_dirs: Vec<String>,
+    /// Minutes from the end of one automatic pass to the start of the next (5 to 1440).
+    /// A settings file from before it was a choice reads as 10.
+    #[serde(default = "default_interval_minutes")]
+    pub interval_minutes: u32,
 }
 
 impl Settings {
+    /// The wait between automatic passes, kept in its range whatever the file says.
+    pub fn interval(&self) -> Duration {
+        Duration::from_secs(u64::from(clamp_interval(self.interval_minutes)) * 60)
+    }
+
     /// Every folder backups are read from: `dir`, then the earlier ones.
     pub fn read_dirs(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
@@ -110,12 +123,30 @@ impl Default for Settings {
             keep: DEFAULT_KEEP,
             hosts: Vec::new(),
             old_dirs: Vec::new(),
+            interval_minutes: DEFAULT_INTERVAL_MINUTES,
         }
     }
 }
 
+fn default_interval_minutes() -> u32 {
+    DEFAULT_INTERVAL_MINUTES
+}
+
 pub fn clamp_keep(n: u32) -> u32 {
     n.clamp(1, 50)
+}
+
+pub fn clamp_interval(minutes: u32) -> u32 {
+    minutes.clamp(*INTERVAL_MINUTES.start(), *INTERVAL_MINUTES.end())
+}
+
+/// How much longer to wait before the next pass, `since` the last one ended: `interval` less
+/// that, never more than `RECHECK` so a changed interval is looked at again soon.
+fn wait_left(since: Duration, interval: Duration) -> Option<Duration> {
+    interval
+        .checked_sub(since)
+        .filter(|d| !d.is_zero())
+        .map(|d| d.min(RECHECK))
 }
 
 /// What the last pass did, for the Saves screen.
@@ -259,9 +290,20 @@ pub fn spawn(bind: &str, base_path: &str) {
         format!("/{base}")
     };
     let _ = BASE.set(format!("http://127.0.0.1:{port}{prefix}"));
-    crate::ava1_api::spawn_periodic(EVERY, || {
-        if let Err(e) = run_pass() {
-            crate::log_warn!("save backup: {e}");
+    // A pass at start, then each one the chosen interval after the previous one ended. The
+    // interval is read again while waiting, so a new one counts without a restart.
+    tokio::spawn(async move {
+        loop {
+            let _ = tokio::task::spawn_blocking(|| {
+                if let Err(e) = run_pass() {
+                    crate::log_warn!("save backup: {e}");
+                }
+            })
+            .await;
+            let ended = std::time::Instant::now();
+            while let Some(d) = wait_left(ended.elapsed(), settings().interval()) {
+                tokio::time::sleep(d).await;
+            }
         }
     });
 }
@@ -1749,6 +1791,8 @@ pub struct SettingsPatch {
     pub enabled: Option<bool>,
     pub dir: Option<String>,
     pub keep: Option<u32>,
+    /// Minutes between automatic passes, 5 to 1440; out of range is refused.
+    pub interval_minutes: Option<u32>,
     pub hosts: Option<Vec<String>>,
     /// Consoles to add to `hosts`, whatever else is on it: what a client knows of its own roster.
     /// Several clients share one engine, so none of them sends the whole list.
@@ -1787,7 +1831,7 @@ pub(crate) fn writable(dir: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// `PUT /api/save-backup` — change any of `{enabled, dir, keep, hosts, add_hosts, remove_hosts}`.
+/// `PUT /api/save-backup` — change any of `{enabled, dir, keep, interval_minutes, hosts, add_hosts, remove_hosts}`.
 pub async fn put_settings(Json(patch): Json<SettingsPatch>) -> Response {
     let mut next = settings();
     if let Some(d) = patch.dir {
@@ -1799,6 +1843,19 @@ pub async fn put_settings(Json(patch): Json<SettingsPatch>) -> Response {
     }
     if let Some(k) = patch.keep {
         next.keep = clamp_keep(k);
+    }
+    if let Some(m) = patch.interval_minutes {
+        if !INTERVAL_MINUTES.contains(&m) {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "interval_minutes must be {} to {}",
+                    INTERVAL_MINUTES.start(),
+                    INTERVAL_MINUTES.end()
+                ),
+            );
+        }
+        next.interval_minutes = m;
     }
     if let Some(h) = patch.hosts {
         next.hosts = hosts_with(h, Vec::new(), &[]);
@@ -2764,5 +2821,63 @@ mod tests {
         assert_eq!(clamp_keep(0), 1);
         assert_eq!(clamp_keep(500), 50);
         assert_eq!(clamp_keep(7), 7);
+    }
+
+    #[test]
+    fn interval_defaults_to_ten_minutes_and_old_files_read_so() {
+        assert_eq!(Settings::default().interval_minutes, 10);
+        assert_eq!(Settings::default().interval(), Duration::from_secs(600));
+        // A settings file written before the interval was a choice.
+        let old: Settings =
+            serde_json::from_str(r#"{"enabled":true,"dir":"/b","keep":5,"hosts":["192.0.2.7"]}"#)
+                .unwrap();
+        assert_eq!(old.interval_minutes, 10);
+        assert!(old.enabled);
+        let chosen: Settings = serde_json::from_str(r#"{"interval_minutes":60}"#).unwrap();
+        assert_eq!(chosen.interval(), Duration::from_secs(3600));
+    }
+
+    #[test]
+    fn interval_stays_in_its_range() {
+        assert_eq!(clamp_interval(0), 5);
+        assert_eq!(clamp_interval(4), 5);
+        assert_eq!(clamp_interval(5), 5);
+        assert_eq!(clamp_interval(1440), 1440);
+        assert_eq!(clamp_interval(5000), 1440);
+        assert!(INTERVAL_MINUTES.contains(&30) && !INTERVAL_MINUTES.contains(&1441));
+        // A hand-edited file out of range is held to it.
+        let s = Settings {
+            interval_minutes: 1,
+            ..Settings::default()
+        };
+        assert_eq!(s.interval(), Duration::from_secs(5 * 60));
+    }
+
+    #[test]
+    fn the_next_pass_waits_the_interval_after_the_last() {
+        let ten = Duration::from_secs(600);
+        // Waits in short steps, so a changed interval counts soon.
+        assert_eq!(wait_left(Duration::ZERO, ten), Some(RECHECK));
+        assert_eq!(
+            wait_left(Duration::from_secs(590), ten),
+            Some(Duration::from_secs(10))
+        );
+        assert_eq!(wait_left(ten, ten), None);
+        assert_eq!(wait_left(Duration::from_secs(700), ten), None);
+        // The interval shortened while waiting: due at once.
+        assert_eq!(
+            wait_left(Duration::from_secs(400), Duration::from_secs(300)),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn put_refuses_an_interval_out_of_range() {
+        for bad in [4u32, 1441] {
+            let patch: SettingsPatch =
+                serde_json::from_value(json!({ "interval_minutes": bad })).unwrap();
+            let r = put_settings(Json(patch)).await;
+            assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+        }
     }
 }

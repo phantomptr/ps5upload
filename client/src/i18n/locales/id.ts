@@ -5315,8 +5315,6 @@ saves_auto_old_dirs: "Cadangan di folder yang dipakai sebelumnya tetap tampil da
 saves_auto_running: "Sedang mencadangkan…",
 saves_auto_title: "Cadangan otomatis",
 saves_auto_run_now: "Cadangkan sekarang",
-saves_auto_note_engine: "Selama PS5Upload berjalan, simpanan yang berubah di konsol Anda disalin ke folder ini setiap sepuluh menit. Simpanan yang masih ditulis ditunda ke putaran berikutnya.",
-saves_auto_note_server: "Mesin menyalin simpanan yang berubah di konsol Anda ke folder ini setiap sepuluh menit, bahkan tanpa browser terbuka. Di Docker, gunakan folder di dalam volume yang di-mount, misalnya /data/save-backups.",
 saves_auto_last_at: "Putaran terakhir ({when}): {ok} dicadangkan, {failed} gagal.",
 save_backup_restore_title: "Pulihkan cadangan dari {when}?",
 save_backup_restore_body: "Tutup game terlebih dahulu. Simpanan di PS5 dicadangkan, lalu diganti dengan cadangan ini.",

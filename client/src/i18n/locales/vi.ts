@@ -5308,8 +5308,6 @@ saves_auto_old_dirs: "Các bản sao lưu trong những thư mục dùng trướ
 saves_auto_running: "Đang sao lưu…",
 saves_auto_title: "Sao lưu tự động",
 saves_auto_run_now: "Sao lưu ngay",
-saves_auto_note_engine: "Khi PS5Upload đang chạy, các bản lưu thay đổi trên máy được sao chép vào thư mục này mỗi mười phút. Bản lưu đang ghi dở sẽ đợi lượt sau.",
-saves_auto_note_server: "Engine sao chép các bản lưu thay đổi trên máy vào thư mục này mỗi mười phút, kể cả khi không mở trình duyệt. Với Docker, hãy dùng thư mục trong một volume đã gắn, ví dụ /data/save-backups.",
 saves_auto_last_at: "Lượt gần nhất ({when}): sao lưu {ok}, lỗi {failed}.",
 save_backup_restore_title: "Khôi phục bản sao lưu lúc {when}?",
 save_backup_restore_body: "Hãy đóng game trước. Bản lưu trên PS5 sẽ được sao lưu, rồi thay bằng bản này.",

@@ -5601,8 +5601,6 @@ saves_auto_old_dirs: "A korábban használt mappákban lévő mentések továbbr
 saves_auto_running: "Biztonsági mentés folyamatban…",
 saves_auto_title: "Automatikus biztonsági mentések",
 saves_auto_run_now: "Mentés most",
-saves_auto_note_engine: "Amíg a PS5Upload fut, a konzolokon megváltozott mentések tízpercenként ebbe a mappába másolódnak. Az éppen íródó mentés a következő körre marad.",
-saves_auto_note_server: "A motor tízpercenként ebbe a mappába másolja a konzolokon megváltozott mentéseket, nyitott böngésző nélkül is. Dockerben egy csatolt köteten belüli mappát használj, például /data/save-backups.",
 saves_auto_last_at: "Utolsó kör ({when}): {ok} mentve, {failed} sikertelen.",
 save_backup_restore_title: "Visszaállítod a(z) {when} mentést?",
 save_backup_restore_body: "Előbb zárd be a játékot. A PS5-ön lévő mentésről másolat készül, majd ez a mentés lép a helyére.",

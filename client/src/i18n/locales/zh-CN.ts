@@ -5265,8 +5265,6 @@ saves_auto_old_dirs: "以前使用的文件夹中的备份仍会显示，并且�
 saves_auto_running: "正在备份…",
 saves_auto_title: "自动备份",
 saves_auto_run_now: "立即备份",
-saves_auto_note_engine: "PS5Upload 运行期间,主机上有变化的存档每十分钟复制到此文件夹。仍在写入的存档留到下一轮。",
-saves_auto_note_server: "即使没有打开浏览器,引擎也会每十分钟把主机上有变化的存档复制到此文件夹。在 Docker 中请使用挂载卷中的文件夹,例如 /data/save-backups。",
 saves_auto_last_at: "上一轮({when}):已备份 {ok} 个,失败 {failed} 个。",
 save_backup_restore_title: "恢复 {when} 的备份?",
 save_backup_restore_body: "请先关闭游戏。PS5 上的存档会先备份,再替换为此备份。",

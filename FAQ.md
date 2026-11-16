@@ -669,9 +669,11 @@ and folded sections are shared too. Before 7.4.2 the list lived in each browser 
 `PS5UPLOAD_ALLOW_IP` to your own devices.
 
 **Q: How do automatic save backups work, and how do I restore one?**
-Save Data → Automatic backups: choose a folder and how many versions to keep, then turn it on. Every
-ten minutes the engine copies each console's saves that changed since their last backup (a save
-written in the last few minutes waits for the next round). In the desktop app this runs while the
+Save Data → Automatic backups: choose a folder, how often to back up (**Back up every**, from 5
+minutes to a day; 10 minutes unless you change it) and how many versions to keep, then turn it on.
+Each round the engine copies each console's saves that changed since their last backup (a save
+written in the last few minutes waits for the next round); the next round starts that long after
+the last one ends. In the desktop app this runs while the
 app runs; in Docker it runs all the time, with no browser open. Use a folder the container keeps,
 such as `/data/save-backups`, or a NAS share you mount into the container. To restore, close the
 game, then in Save Data press **Restore…** on the game's save (or open its page in PS5Upload and

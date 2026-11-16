@@ -5546,8 +5546,6 @@ saves_auto_old_dirs: "Kopie w wcześniej używanych folderach nadal są widoczne
 saves_auto_running: "Tworzenie kopii…",
 saves_auto_title: "Automatyczne kopie zapasowe",
 saves_auto_run_now: "Utwórz kopię teraz",
-saves_auto_note_engine: "Gdy PS5Upload działa, zmienione zapisy z konsol są co dziesięć minut kopiowane do tego folderu. Zapis, który wciąż jest zapisywany, czeka na następną rundę.",
-saves_auto_note_server: "Silnik co dziesięć minut kopiuje do tego folderu zmienione zapisy z konsol, nawet bez otwartej przeglądarki. W Dockerze użyj folderu w zamontowanym woluminie, np. /data/save-backups.",
 saves_auto_last_at: "Ostatnia runda ({when}): skopiowano {ok}, nieudane {failed}.",
 save_backup_restore_title: "Przywrócić kopię z {when}?",
 save_backup_restore_body: "Najpierw zamknij grę. Zapis na PS5 zostanie skopiowany, a potem zastąpiony tą kopią.",
