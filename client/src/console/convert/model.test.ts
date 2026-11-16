@@ -3,6 +3,7 @@ import { ApiError } from "../api";
 import type { OpEnd, OpStatus } from "../files/opJob";
 import en from "../locales/en.json";
 import { t } from "../strings";
+import { freeName } from "../files/paste";
 import {
   CONVERT_CAUSES,
   convertCauseText,
@@ -11,6 +12,7 @@ import {
   currentConvert,
   dismissConvert,
   endOf,
+  fitFfpfscName,
   inspect,
   isArchiveFormat,
   isConvertImage,
@@ -112,6 +114,24 @@ describe("names and requests", () => {
     const long = outputName(`/data/${"é".repeat(40)}`, "ffpfsc");
     expect(new TextEncoder().encode(long).length).toBeLessThanOrEqual(63);
     expect(long).toBe(`${"é".repeat(28)}.ffpfsc`);
+  });
+
+  it("keeps a Keep both .ffpfsc name within 63 bytes, cutting the stem", async () => {
+    const bytes = (s: string) => new TextEncoder().encode(s).length;
+    const full = outputName(`/data/${"é".repeat(40)}`, "ffpfsc"); // 63 bytes already
+    const taken = new Set([`/d/${full}`]);
+    const next = await freeName("/d", full, false, async (p) => taken.has(p), fitFfpfscName);
+    expect(bytes(next)).toBeLessThanOrEqual(63);
+    expect(next).toBe(`${"é".repeat(26)} (2).ffpfsc`);
+    // The fitted name is the one checked: a taken "(2)" moves on to "(3)".
+    taken.add(`/d/${next}`);
+    expect(await freeName("/d", full, false, async (p) => taken.has(p), fitFfpfscName)).toBe(
+      `${"é".repeat(26)} (3).ffpfsc`,
+    );
+    // Short names and other formats are left as they are.
+    expect(fitFfpfscName("Astro (2).ffpfsc")).toBe("Astro (2).ffpfsc");
+    const longExfat = `${"a".repeat(70)} (2).exfat`;
+    expect(fitFfpfscName(longExfat)).toBe(longExfat);
   });
 
   it("offers archives as sources and names the output after the archive", () => {

@@ -16,6 +16,7 @@ import {
   FFPFSC_LEVELS,
   formatLabel,
   INNER_FORMATS,
+  fitFfpfscName,
   inspect,
   isArchiveFormat,
   isConvertSource,
@@ -426,7 +427,8 @@ export function Convert({ ctx }: { ctx: SectionContext }) {
   const keepBoth = () => {
     if (!outParent || !outName) return;
     setNaming(true);
-    freeName(outParent, outName, format === "folder", isTaken).then(
+    // A .ffpfsc keeps to the length ShadowMountPlus mounts with its " (2)" too.
+    freeName(outParent, outName, format === "folder", isTaken, format === "ffpfsc" ? fitFfpfscName : undefined).then(
       (n) => {
         setNaming(false);
         setName(n);

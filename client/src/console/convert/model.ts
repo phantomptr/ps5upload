@@ -85,6 +85,16 @@ function fitBytes(stem: string, max: number): string {
   return out;
 }
 
+/** A .ffpfsc name cut to the bytes ShadowMountPlus mounts (FFPFSC_NAME_MAX, UTF-8): the stem is
+ *  shortened, a Keep both " (n)" and the extension are kept. Any other name is left as it is. */
+export function fitFfpfscName(name: string): string {
+  const m = /^(.*?)( \(\d+\))?(\.ffpfsc)$/i.exec(name);
+  if (!m || new TextEncoder().encode(name).length <= FFPFSC_NAME_MAX) return name;
+  const tail = `${m[2] ?? ""}${m[3]}`;
+  const room = FFPFSC_NAME_MAX - new TextEncoder().encode(tail).length;
+  return `${fitBytes(m[1], room).trim() || "game"}${tail}`;
+}
+
 /** The output's default name: the source's name without an image extension, plus the format's
  *  (a .ffpfsc's cut to the length ShadowMountPlus mounts). */
 export function outputName(source: string, format: OutFormat): string {
