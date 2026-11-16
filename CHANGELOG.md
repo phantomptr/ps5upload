@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.0
 
 Keep saves in step between two PS5s, copy a `.pkg` instead of installing it, and payloads now come from you: the app no longer downloads them. Checked with the automated tests; not yet tried on a PS5 unless it says so.
 
