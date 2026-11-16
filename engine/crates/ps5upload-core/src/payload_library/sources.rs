@@ -3,18 +3,21 @@
 //! (`payloads_v2.json`): `{"name": "...", "payloads": [{"name", "url", "version", "checksum",
 //! "description", "category", "extract_file"?, "last_update"?, "source"?}, ...]}`.
 //!
-//! Each listed payload shows in the catalogue as `srcp-<hex>` and goes through the same cache and
-//! download path as every other payload, with two extra rules, because a list can name any file:
-//!   - the payload's file must be https on github.com (or the list's own site), and a download
-//!     must be exactly the listed URL;
-//!   - the list must give the file's SHA-256, and a download that does not match is refused.
-//!     A listed payload without one is left out (and counted).
+//! Each listed payload shows in the catalogue as `srcp-<hex>`, with two rules, because a list can
+//! name any file:
+//!   - the payload's file must be https on github.com (or the list's own site);
+//!   - the list must give the file's SHA-256. A listed payload without one is left out (and
+//!     counted).
 //!
 //! A payload the curated catalogue already has (same GitHub repo in its `source` field) is left
-//! out too, so it is not shown twice. Lists are fetched when added and refreshed at most once an
-//! hour; a failed refresh keeps the last copy.
+//! out too, so it is not shown twice.
+//!
+//! New lists can no longer be added, and the app never downloads a payload from one: lists added
+//! by earlier versions still show their payloads, and a local copy got earlier stays usable. A
+//! check for updates reads a list again (release information only); a failed read keeps the last
+//! copy.
 
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -26,7 +29,6 @@ use super::{atomic_write, Library, LibraryError, PayloadInfo, ResolvedEntry};
 
 const SOURCES_FILE: &str = "payload-sources.json";
 const SOURCES_CACHE_DIR: &str = "sources";
-const LIST_TTL: Duration = Duration::from_secs(3600);
 /// Payload Manager's own list is ~25 KB; this leaves room for big lists and stops a huge answer.
 const LIST_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const URL_MAX_CHARS: usize = 2000;
@@ -40,7 +42,7 @@ pub(crate) struct PayloadSource {
     pub(crate) url: String,
 }
 
-/// One usable payload of a list, as the catalogue and the download path need it.
+/// One usable payload of a list, as the catalogue needs it.
 #[derive(Debug, Clone)]
 pub(crate) struct ListPayload {
     pub(crate) id: String,
@@ -50,7 +52,6 @@ pub(crate) struct ListPayload {
     pub(crate) url: String,
     pub(crate) host: String,
     pub(crate) version: String,
-    pub(crate) sha256: String,
     pub(crate) description: String,
     pub(crate) category: String,
     pub(crate) extract_file: String,
@@ -243,7 +244,6 @@ fn parse_list(src: &PayloadSource, body: &[u8]) -> Result<Parsed, String> {
             url,
             host: host.unwrap_or_default(),
             version: capped(&str_field(item, "version"), NAME_MAX_CHARS),
-            sha256,
             description: capped(&str_field(item, "description"), TEXT_MAX_CHARS),
             category: capped(&str_field(item, "category"), NAME_MAX_CHARS),
             extract_file: capped(&str_field(item, "extract_file"), NAME_MAX_CHARS),
@@ -278,7 +278,7 @@ impl From<&ListPayload> for PayloadInfo {
                 p.homepage.clone()
             },
             is_custom: false,
-            file_name: super::download::cached_elf_name(&p.id, &p.file_hint(), &p.url),
+            file_name: super::cache::cached_elf_name(&p.id, &p.file_hint(), &p.url),
             source_id: p.source_id.clone(),
             source_name: p.source_name.clone(),
         }
@@ -302,7 +302,6 @@ impl ListPayload {
             repo_owner: String::new(),
             repo_name: String::new(),
             asset_name_hint: self.file_hint(),
-            checksum_file: String::new(),
             is_custom: false,
             list_payload: Some(Box::new(self.clone())),
         }
@@ -368,7 +367,6 @@ impl Library {
             repo_owner: String::new(),
             repo_name: String::new(),
             asset_name_hint: String::new(),
-            checksum_file: String::new(),
             is_custom: false,
             list_payload: None,
         };
@@ -443,13 +441,6 @@ impl Library {
             .collect()
     }
 
-    /// Refresh the lists older than an hour (every list with `force`). A failure keeps the last
-    /// copy and is reported on that source.
-    pub fn refresh_sources(&self, force: bool) -> Vec<SourceInfo> {
-        self.refresh_lists(None, if force { 0 } else { LIST_TTL.as_secs() });
-        self.sources()
-    }
-
     /// Fetch one list again unless its copy is younger than `younger_than` seconds, and give that
     /// list's own fetch error. A check for updates asks once per payload: the lists it shares
     /// with others are fetched once, and one list's failure is not shown on another's payloads.
@@ -479,34 +470,7 @@ impl Library {
         }
     }
 
-    /// Add a list by its address. It is fetched first: an address that does not answer with a
-    /// payload list is refused and nothing is saved. Adding one again refreshes it.
-    pub fn add_source(&self, url: &str) -> Result<SourceInfo, LibraryError> {
-        let url = normalize_url(url)?;
-        let mut list = self.read_sources();
-        let src = match list.iter().find(|s| s.url == url) {
-            Some(s) => s.clone(),
-            None => PayloadSource {
-                id: format!("src-{}", fnv12(&url)),
-                url: url.clone(),
-            },
-        };
-        let parsed = self.fetch_list(&src)?;
-        if parsed.payloads.is_empty() && parsed.already_listed == 0 {
-            let _ = std::fs::remove_file(self.list_cache_path(&src.id));
-            return Err(LibraryError::new(
-                "source_empty",
-                "The list has no payload ps5upload can use: each needs its SHA-256 and a file on github.com or the list's own site.",
-            ));
-        }
-        if !list.iter().any(|s| s.id == src.id) {
-            list.push(src.clone());
-            self.save_sources(&list)?;
-        }
-        Ok(self.source_info(&src))
-    }
-
-    /// Remove a list, its copy and what was downloaded from it. `false` for an unknown id.
+    /// Remove a list, its copy and the local copies of its payloads. `false` for an unknown id.
     pub fn remove_source(&self, id: &str) -> Result<bool, LibraryError> {
         if !is_valid_source_id(id) {
             return Ok(false);
@@ -555,7 +519,7 @@ impl Library {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::library;
+    use super::super::test_support::{library, seed};
     use super::*;
 
     const LIST_URL: &str = "https://lists.example.org/payloads.json";
@@ -596,12 +560,31 @@ mod tests {
         .to_string()
     }
 
+    /// A list as an earlier version of the app added it.
+    fn add(lib: &Library, url: &str) -> Result<SourceInfo, LibraryError> {
+        let src = PayloadSource {
+            id: format!("src-{}", fnv12(url)),
+            url: normalize_url(url)?,
+        };
+        lib.fetch_list(&src)?;
+        lib.save_sources(std::slice::from_ref(&src))?;
+        Ok(lib.source_info(&src))
+    }
+
+    fn tool_id(lib: &Library) -> String {
+        lib.catalog()
+            .into_iter()
+            .find(|p| p.display_name == "tool")
+            .unwrap()
+            .id
+    }
+
     #[test]
-    fn a_list_adds_its_usable_payloads_to_the_catalogue() {
+    fn a_list_shows_its_usable_payloads_in_the_catalogue() {
         let (_d, http, lib) = library("src-add");
         let elf = elf_bytes();
         http.ok(LIST_URL, list_body(&sha(&elf)).as_bytes());
-        let info = lib.add_source(LIST_URL).unwrap();
+        let info = add(&lib, LIST_URL).unwrap();
         assert_eq!(info.name, "Some suite");
         assert_eq!(info.payloads, 1);
         assert_eq!(info.skipped, 3, "no checksum, another host, plain http");
@@ -615,48 +598,31 @@ mod tests {
         assert_eq!(p.source_name, "Some suite");
         assert_eq!(p.homepage, "https://github.com/someone/tool");
         assert_eq!(lib.sources().len(), 1);
-        // Adding it again keeps one.
-        lib.add_source(LIST_URL).unwrap();
-        assert_eq!(lib.sources().len(), 1);
     }
 
     #[test]
-    fn a_listed_payload_downloads_only_when_its_sha256_matches() {
-        let (_d, http, lib) = library("src-dl");
+    fn a_listed_payload_is_sent_only_from_a_local_copy() {
+        let (_d, http, lib) = library("src-local");
         let elf = elf_bytes();
         http.ok(LIST_URL, list_body(&sha(&elf)).as_bytes());
-        lib.add_source(LIST_URL).unwrap();
-        let id = lib
-            .catalog()
-            .into_iter()
-            .find(|p| p.display_name == "tool")
-            .unwrap()
-            .id;
+        add(&lib, LIST_URL).unwrap();
+        let id = tool_id(&lib);
         let rel = lib.release(&id, false).unwrap();
         assert_eq!(rel.tag, "v1");
         assert_eq!(rel.picked_asset_url, ELF_URL);
 
-        http.ok(ELF_URL, b"\x7FELF but not the listed file");
-        let err = lib.download(&id, ELF_URL, "v1").unwrap_err();
-        assert_eq!(err.code, "checksum_mismatch");
-        assert!(lib.local_path(&id).is_none());
+        let e = lib.local_copy(&id, None).unwrap_err();
+        assert_eq!(e.code, super::super::NOT_ON_THIS_COMPUTER);
+        assert!(e.message.contains("https://github.com/someone/tool"), "{e}");
+        assert!(!http.asked.lock().unwrap().iter().any(|u| u == ELF_URL));
 
-        http.ok(ELF_URL, &elf);
-        let got = lib.download_release(&id, None, false).unwrap();
-        assert_eq!(got.version, "v1");
-        assert_eq!(std::fs::read(&got.path).unwrap(), elf);
+        let path = seed(&lib, &id, "tool.elf", &elf, "v1");
+        assert_eq!(lib.local_copy(&id, None).unwrap(), path);
         assert!(lib.local_inventory().iter().any(|e| e.payload_id == id));
-
-        // Only the listed file: another URL on the same host is refused.
-        let other = "https://github.com/someone/tool/releases/download/v2/tool.elf";
-        assert_eq!(
-            lib.download(&id, other, "v2").unwrap_err().code,
-            "asset_url_refused"
-        );
     }
 
     #[test]
-    fn bad_addresses_and_non_lists_are_refused_and_nothing_is_saved() {
+    fn bad_addresses_and_non_lists_are_refused() {
         let (_d, http, lib) = library("src-bad");
         for url in [
             "http://lists.example.org/p.json",
@@ -664,18 +630,10 @@ mod tests {
             "https://user@lists.example.org/p.json",
             "not a url",
         ] {
-            assert_eq!(lib.add_source(url).unwrap_err().code, "source_url_invalid");
+            assert_eq!(add(&lib, url).unwrap_err().code, "source_url_invalid");
         }
         http.ok(LIST_URL, b"<html>hello</html>");
-        assert_eq!(
-            lib.add_source(LIST_URL).unwrap_err().code,
-            "source_not_a_list"
-        );
-        http.ok(
-            LIST_URL,
-            br#"{"name":"x","payloads":[{"name":"a","url":"x"}]}"#,
-        );
-        assert_eq!(lib.add_source(LIST_URL).unwrap_err().code, "source_empty");
+        assert_eq!(add(&lib, LIST_URL).unwrap_err().code, "source_not_a_list");
         assert!(lib.sources().is_empty());
     }
 
@@ -683,13 +641,12 @@ mod tests {
     fn a_failed_refresh_keeps_the_last_copy_and_says_why() {
         let (_d, http, lib) = library("src-refresh");
         http.ok(LIST_URL, list_body(&sha(&elf_bytes())).as_bytes());
-        lib.add_source(LIST_URL).unwrap();
+        let src = add(&lib, LIST_URL).unwrap();
         http.status(LIST_URL, 503);
-        let after = lib.refresh_sources(true);
-        assert_eq!(after[0].payloads, 1);
-        assert!(after[0].error.as_deref().unwrap().contains("503"));
+        assert!(lib.refresh_source(&src.id, 0).unwrap().contains("503"));
+        assert_eq!(lib.sources()[0].payloads, 1);
         http.ok(LIST_URL, list_body(&sha(&elf_bytes())).as_bytes());
-        assert!(lib.refresh_sources(true)[0].error.is_none());
+        assert!(lib.refresh_source(&src.id, 0).is_none());
     }
 
     #[test]
@@ -697,45 +654,13 @@ mod tests {
         let (_d, http, lib) = library("src-rm");
         let elf = elf_bytes();
         http.ok(LIST_URL, list_body(&sha(&elf)).as_bytes());
-        let src = lib.add_source(LIST_URL).unwrap();
-        let id = lib
-            .catalog()
-            .into_iter()
-            .find(|p| p.display_name == "tool")
-            .unwrap()
-            .id;
-        http.ok(ELF_URL, &elf);
-        lib.download_release(&id, None, false).unwrap();
+        let src = add(&lib, LIST_URL).unwrap();
+        let id = tool_id(&lib);
+        seed(&lib, &id, "tool.elf", &elf, "v1");
         assert!(lib.remove_source(&src.id).unwrap());
         assert!(lib.local_path(&id).is_none());
         assert!(!lib.catalog().iter().any(|p| p.id == id));
         assert!(!lib.remove_source(&src.id).unwrap());
         assert!(!lib.remove_source("../x").unwrap());
-    }
-}
-
-#[cfg(test)]
-mod manual {
-    /// Adds real lists and downloads one payload from each, over the network:
-    /// `PS5UPLOAD_SOURCE_URLS="<url> <url>" cargo test -p ps5upload-core --lib
-    /// payload_library::sources::manual -- --ignored --nocapture`
-    #[test]
-    #[ignore = "needs the network and PS5UPLOAD_SOURCE_URLS"]
-    fn add_real_lists() {
-        let urls = std::env::var("PS5UPLOAD_SOURCE_URLS").expect("PS5UPLOAD_SOURCE_URLS");
-        let dir = super::super::test_support::TempDir::new("src-manual");
-        let lib = super::Library::new(dir.0.join("payloads"));
-        for url in urls.split_whitespace() {
-            let info = lib.add_source(url).expect("add");
-            println!("{info:?}");
-        }
-        for p in lib.list_payloads().iter().take(3) {
-            let got = lib.download_release(&p.id, None, false).expect("download");
-            println!(
-                "{} {} -> {} ({} bytes)",
-                p.source_name, p.name, got.path, got.size
-            );
-        }
-        println!("catalogue: {} entries", lib.catalog().len());
     }
 }

@@ -856,7 +856,6 @@ mod tests {
             "rp_passcode",
             "rp_keyboard",
             "payloads_catalog",
-            "payloads_download",
             "payloads_send",
             "files_hash",
             "shell_run",

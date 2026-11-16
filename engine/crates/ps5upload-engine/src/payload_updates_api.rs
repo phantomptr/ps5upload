@@ -1,16 +1,14 @@
 //! Payload updates and the Payload Manager sync over HTTP (`ps5upload_core::payload_library`'s
-//! `updates` and `pm_sync`), and the "Keep payloads up to date" schedule.
+//! `updates` and `pm_sync`).
 //!
-//! - `GET  /api/payloads/updates`                 the last check, what was applied, the settings
-//! - `POST /api/payloads/updates/check`           check every payload for a newer release
-//! - `POST /api/payloads/updates/apply`           update (all, or `ids`), then sync `console`
-//! - `GET|PUT /api/payloads/updates/settings`     `{auto_update}`
-//! - `POST /api/payloads/{id}/rollback`           put back the copy the last update replaced
+//! - `GET  /api/payloads/updates`                 the last check and what was applied
+//! - `POST /api/payloads/updates/check`           check for a newer release (no download)
+//! - `POST /api/payloads/updates/apply`           refused: 410 `payload_downloads_removed`
+//! - `POST /api/payloads/{id}/rollback`           put back the copy an earlier update replaced
 //! - `GET|PUT /api/payloads/pm-sync`              what a console's Payload Manager keeps / loads
 //! - `POST /api/payloads/pm-sync/run`             bring Payload Manager in step
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::{
     extract::{Path, Query, State},
@@ -19,13 +17,11 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use ps5upload_core::payload_library::{
-    HttpPm, Library, LibraryError, PmConsole, PmSyncReport, UpdateOutcome, UpdateSettings,
-};
+use ps5upload_core::payload_library::{HttpPm, Library, LibraryError, PmConsole};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::payloads_api::{library_error, no_library};
+use crate::payloads_api::{downloads_removed, library_error, no_library};
 
 /// How a route reaches a console's Payload Manager: over HTTP, or a fake in tests.
 pub(crate) type PmFactory = Arc<dyn Fn(&str) -> Box<dyn PmConsole> + Send + Sync>;
@@ -73,22 +69,17 @@ pub(crate) fn routes_with<S: Clone + Send + Sync + 'static>(
         .route("/api/payloads/updates", get(overview))
         .route("/api/payloads/updates/check", post(check))
         .route("/api/payloads/updates/apply", post(apply))
-        .route(
-            "/api/payloads/updates/settings",
-            get(get_settings).put(put_settings),
-        )
         .route("/api/payloads/{id}/rollback", post(rollback))
         .route("/api/payloads/pm-sync", get(get_choice).put(put_choice))
         .route("/api/payloads/pm-sync/run", post(run_sync))
         .with_state(Api { lib, pm })
 }
 
-/// GET /api/payloads/updates → `{settings, state}`: the last check, what was applied and the
-/// last Payload Manager syncs. Never asks the network or a console.
+/// GET /api/payloads/updates → `{state}`: the last check, what was applied and the last Payload
+/// Manager syncs. Never asks the network or a console.
 async fn overview(State(api): State<Api>) -> Response {
     api.run(|lib, _| {
         Ok(json!({
-            "settings": lib.update_settings(),
             "state": lib.update_state(),
         }))
     })
@@ -129,103 +120,21 @@ fn parse_or_default<T: serde::de::DeserializeOwned + Default>(
     })
 }
 
-#[derive(Deserialize, Default)]
-struct ApplyReq {
-    /// The payloads to update. Absent: every one the last check found an update for.
-    #[serde(default)]
-    ids: Option<Vec<String>>,
-    /// A console whose Payload Manager is synced afterwards.
-    #[serde(default, alias = "host", alias = "addr", alias = "sync_console")]
-    console: Option<String>,
-}
-
-/// A payload that could not be updated.
-#[derive(Serialize)]
-struct ApplyError {
-    payload_id: String,
-    code: &'static str,
-    error: String,
-}
-
-#[derive(Serialize)]
-struct ApplyResult {
-    updated: Vec<UpdateOutcome>,
-    errors: Vec<ApplyError>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pm_sync: Option<PmSyncReport>,
-}
-
-/// Update `ids` (or everything the last check found), then sync `console` when given.
-fn apply_updates(
-    lib: &Library,
-    ids: Option<Vec<String>>,
-    console: Option<&str>,
-    pm: &PmFactory,
-) -> ApplyResult {
-    let ids = ids.unwrap_or_else(|| {
-        let mut state = lib.update_state();
-        if state.checked_at == 0 {
-            if let Ok(s) = lib.check_updates(false, &lib.pm_sync_ids()) {
-                state = s;
-            }
-        }
-        state.available().map(|r| r.payload_id.clone()).collect()
-    });
-    let mut out = ApplyResult {
-        updated: Vec::new(),
-        errors: Vec::new(),
-        pm_sync: None,
-    };
-    for id in ids {
-        match lib.update_payload(&id) {
-            Ok(o) => {
-                if o.updated {
-                    crate::log_info!("payload update: {id} {} -> {}", o.from, o.to);
-                }
-                out.updated.push(o);
-            }
-            Err(e) => {
-                crate::log_warn!("payload update: {id} failed: {}", e.message);
-                out.errors.push(ApplyError {
-                    payload_id: id,
-                    code: e.code,
-                    error: e.message,
-                });
-            }
-        }
-    }
-    if let Some(host) = console.map(str::trim).filter(|h| !h.is_empty()) {
-        out.pm_sync = Some(lib.sync_payload_manager(host, pm(host).as_ref()));
-    }
-    out
-}
-
-/// POST /api/payloads/updates/apply `{ids?, console?}` → `{updated, errors, pm_sync?}`.
-/// Each update keeps the copy it replaces for a rollback; one failure does not stop the rest.
-async fn apply(State(api): State<Api>, body: axum::body::Bytes) -> Response {
-    let req: ApplyReq = match parse_or_default(&body) {
-        Ok(r) => r,
-        Err(r) => return *r,
-    };
-    api.run(move |lib, pm| Ok(apply_updates(&lib, req.ids, req.console.as_deref(), &pm)))
-        .await
+/// POST /api/payloads/updates/apply: refused (410 `payload_downloads_removed`). ps5upload no
+/// longer downloads payloads; a check says what is newer, and the user gets it from the project
+/// page.
+async fn apply() -> Response {
+    downloads_removed(
+        "ps5upload no longer downloads payloads, so updates can't be applied: get the new \
+         version from the payload's project page and send the file."
+            .to_string(),
+    )
 }
 
 /// POST /api/payloads/{id}/rollback → what was put back. 404 `no_previous` when no earlier copy
-/// is kept.
+/// is kept (earlier versions of the app kept one when they updated a payload).
 async fn rollback(State(api): State<Api>, Path(id): Path<String>) -> Response {
     api.run(move |lib, _| lib.rollback_payload(&id)).await
-}
-
-/// GET /api/payloads/updates/settings → `{auto_update}`.
-async fn get_settings(State(api): State<Api>) -> Response {
-    api.run(|lib, _| Ok(lib.update_settings())).await
-}
-
-/// PUT /api/payloads/updates/settings `{auto_update}`: "Keep payloads up to date" checks at
-/// start and daily, and applies what is newer.
-async fn put_settings(State(api): State<Api>, Json(s): Json<UpdateSettings>) -> Response {
-    api.run(move |lib, _| lib.set_update_settings(&s)).await
 }
 
 #[derive(Deserialize)]
@@ -276,61 +185,6 @@ async fn run_sync(State(api): State<Api>, Json(req): Json<RunReq>) -> Response {
         Ok(r)
     })
     .await
-}
-
-/// How often the schedule looks at whether a run is due.
-const TICK: Duration = Duration::from_secs(30 * 60);
-/// A run a day.
-const DAY_SECS: i64 = 24 * 60 * 60;
-
-/// One automatic run, when "Keep payloads up to date" is on and it is due (at start, then
-/// daily): check, update what is newer, then sync every console with chosen payloads.
-fn auto_run(lib: &Library, at_start: bool, pm: &PmFactory) -> bool {
-    if !lib.update_settings().auto_update {
-        return false;
-    }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let last = lib.update_state().last_auto_run_at;
-    if !at_start && now - last < DAY_SECS {
-        return false;
-    }
-    let _ = lib.edit_update_state(|s| s.last_auto_run_at = now);
-    let state = match lib.check_updates(false, &lib.pm_sync_ids()) {
-        Ok(s) => s,
-        Err(e) => {
-            crate::log_warn!("payload auto-update: check failed: {}", e.message);
-            return true;
-        }
-    };
-    let ids: Vec<String> = state.available().map(|r| r.payload_id.clone()).collect();
-    if !ids.is_empty() {
-        apply_updates(lib, Some(ids), None, pm);
-    }
-    for host in lib.pm_sync_hosts() {
-        lib.sync_payload_manager(&host, pm(&host).as_ref());
-    }
-    true
-}
-
-/// Start the "Keep payloads up to date" schedule. Off unless the user turned it on.
-pub(crate) fn spawn_scheduler() {
-    let Some(lib) = crate::payloads_api::library() else {
-        return;
-    };
-    tokio::spawn(async move {
-        // Let the app come up first.
-        tokio::time::sleep(Duration::from_secs(60)).await;
-        let mut at_start = true;
-        loop {
-            let (l, pm) = (lib.clone(), http_pm());
-            let _ = tokio::task::spawn_blocking(move || auto_run(&l, at_start, &pm)).await;
-            at_start = false;
-            tokio::time::sleep(TICK).await;
-        }
-    });
 }
 
 #[cfg(test)]
@@ -459,21 +313,26 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn settings_are_off_by_default_and_round_trip() {
-        let h = serve("settings").await;
-        let (s, v) = h.call("GET", "/api/payloads/updates/settings", None).await;
-        assert_eq!((s, v), (200, json!({"auto_update": false})));
+    async fn the_overview_has_the_state_and_apply_is_refused() {
+        let h = serve("overview").await;
+        let (s, v) = h.call("GET", "/api/payloads/updates", None).await;
+        assert_eq!((s, v["state"]["checked_at"].clone()), (200, json!(0)));
+        assert!(v.get("settings").is_none());
+        cache(&h.lib, "kstuff-echostretch", "v1");
         let (s, v) = h
             .call(
-                "PUT",
-                "/api/payloads/updates/settings",
-                Some(json!({"auto_update": true})),
+                "POST",
+                "/api/payloads/updates/apply",
+                Some(json!({"ids": ["kstuff-echostretch"]})),
             )
             .await;
-        assert_eq!((s, v["auto_update"].clone()), (200, json!(true)));
-        let (_, v) = h.call("GET", "/api/payloads/updates", None).await;
-        assert_eq!(v["settings"]["auto_update"], true);
-        assert_eq!(v["state"]["checked_at"], 0);
+        assert_eq!(
+            (s, v["code"].clone()),
+            (410, json!("payload_downloads_removed"))
+        );
+        assert!(v["error"].as_str().unwrap().contains("project page"));
+        let (s, _) = h.call("GET", "/api/payloads/updates/settings", None).await;
+        assert_eq!(s, 404, "the auto-update switch is gone");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -531,36 +390,7 @@ mod tests {
             .call("GET", "/api/payloads/pm-sync?host=192.0.2.9", None)
             .await;
         assert_eq!(c["autoload_ids"], json!(["kstuff-echostretch"]));
-        // Applying with nothing available still reports the console's sync.
-        let (s, a) = h
-            .call(
-                "POST",
-                "/api/payloads/updates/apply",
-                Some(json!({"console": "192.0.2.9"})),
-            )
-            .await;
-        assert_eq!(s, 200, "{a}");
-        assert_eq!(a["updated"], json!([]));
-        assert_eq!(a["pm_sync"]["present"], false);
         let (_, o) = h.call("GET", "/api/payloads/updates", None).await;
         assert_eq!(o["state"]["pm_syncs"]["192.0.2.9"]["present"], false);
-    }
-
-    #[test]
-    fn the_schedule_does_nothing_until_turned_on_then_runs_daily() {
-        let dir = std::env::temp_dir().join(format!(
-            "ps5upload-payload-updates-auto-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        let lib = Library::with_http(dir.join("payloads"), Arc::new(Offline));
-        let pm: PmFactory = Arc::new(|_: &str| Box::new(NoPm) as Box<dyn PmConsole>);
-        assert!(!auto_run(&lib, true, &pm), "off by default");
-        lib.set_update_settings(&UpdateSettings { auto_update: true })
-            .unwrap();
-        assert!(auto_run(&lib, true, &pm), "at start");
-        assert!(lib.update_state().last_auto_run_at > 0);
-        assert!(!auto_run(&lib, false, &pm), "not again the same day");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -12594,8 +12594,6 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
 
     // The Collection's automatic refresh (a no-op until a folder is added).
     collection_api::spawn_auto_refresh();
-    // "Keep payloads up to date" (a no-op until the user turns it on).
-    payload_updates_api::spawn_scheduler();
     // Install sessions live in their own state (served by pkg_install::api_router below); the helper
     // log mirror also reads it, to stay off a console while an install runs.
     let pkg_state = std::sync::Arc::new(pkg_install::PkgInstallState::restored());

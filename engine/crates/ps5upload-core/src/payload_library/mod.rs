@@ -1,5 +1,7 @@
 //! Payload Library: the curated catalogue of third-party PS5 payloads, user-added repos,
-//! release fetching (GitHub, Gitea, Forgejo), and the on-disk cache of downloaded ELFs.
+//! release information (GitHub, Gitea, Forgejo: read-only, for "a new version is out"), and the
+//! local copies of payloads users got earlier. The app never downloads a payload: users get the
+//! file from the project themselves and send it.
 //!
 //! One implementation for every front end: the desktop app's commands and the engine's
 //! `/api/payloads` routes both call [`Library`], over the same folder when the engine is the
@@ -10,15 +12,15 @@
 //!     of forks of every project. Each entry is hand-picked; users add their own repos on top.
 //!   - **Static table + runtime release fetch.** The table ships in the binary; versions are
 //!     fetched on demand and cached for an hour, to stay under GitHub's 60 requests an hour.
-//!   - **Read-only towards the console.** This module fetches and caches. Sending is
+//!   - **Read-only towards the console.** This module reads release info and local copies. Sending is
 //!     `payload_lifecycle::send_payload_file`.
 //!
 //! On-disk layout (kept from when this lived in the desktop app, so existing caches work):
 //! `<dir>/custom-repos.json`, `<dir>/<id>/<name>.elf`, `<dir>/<id>/VERSION`,
 //! `<dir>/<id>/release.json`, `<dir>/<id>/releases.json`.
 
+mod cache;
 mod catalogue;
-mod download;
 mod http;
 mod pm_sync;
 mod releases;
@@ -33,6 +35,7 @@ use std::time::UNIX_EPOCH;
 
 use serde::Serialize;
 
+pub use cache::NOT_ON_THIS_COMPUTER;
 use catalogue::{CatalogueEntry, CATALOGUE};
 pub use http::{FetchKind, HttpClient, HttpResponse, UreqClient};
 pub use pm_sync::{HttpPm, PmChange, PmConsole, PmStoredRecord, PmSyncChoice, PmSyncReport};
@@ -41,9 +44,7 @@ pub use repos::AddRepo;
 use repos::CustomRepo;
 use sources::ListPayload;
 pub use sources::SourceInfo;
-pub use updates::{
-    is_newer, AppliedUpdate, UpdateOutcome, UpdateRow, UpdateSettings, UpdateState, PREVIOUS_DIR,
-};
+pub use updates::{is_newer, AppliedUpdate, UpdateOutcome, UpdateRow, UpdateState, PREVIOUS_DIR};
 
 /// Overrides where the library lives. The desktop app sets it for its sidecar, so the engine's
 /// routes and the app's screens share one cache.
@@ -58,18 +59,7 @@ pub struct LibraryError {
 }
 
 /// Codes the app words itself, in the user's language (`lib/payloadErrors.ts`).
-const WORDED_BY_THE_APP: &[&str] = &[
-    "repo_host_is_ip",
-    "repo_host_gitlab",
-    "custom_repos_unreadable",
-    "download_cancelled",
-    "redirect_refused",
-    "invalid_checksum_file",
-    "source_url_invalid",
-    "source_not_a_list",
-    "source_empty",
-    "source_fetch_failed",
-];
+const WORDED_BY_THE_APP: &[&str] = &["custom_repos_unreadable", "redirect_refused"];
 
 impl LibraryError {
     pub(crate) fn new(code: &'static str, message: impl Into<String>) -> Self {
@@ -142,7 +132,7 @@ impl From<&CatalogueEntry> for PayloadInfo {
             autoload_delay_ms: e.autoload_delay_ms,
             homepage: e.homepage.to_string(),
             is_custom: false,
-            file_name: download::cached_elf_name(e.id, e.asset_name_hint, ""),
+            file_name: cache::cached_elf_name(e.id, e.asset_name_hint, ""),
             source_id: String::new(),
             source_name: String::new(),
         }
@@ -178,9 +168,6 @@ pub(crate) struct ResolvedEntry {
     pub(crate) repo_owner: String,
     pub(crate) repo_name: String,
     pub(crate) asset_name_hint: String,
-    /// The release's `sha256sum`-style list, when it publishes one: a download is refused unless
-    /// its SHA-256 matches. Empty for most payloads.
-    pub(crate) checksum_file: String,
     /// A user-added repo: its host was approved at add time, so the catalogue's fixed host list
     /// does not apply to it.
     pub(crate) is_custom: bool,
@@ -196,9 +183,6 @@ impl From<&CatalogueEntry> for ResolvedEntry {
             repo_owner: e.repo_owner.to_string(),
             repo_name: e.repo_name.to_string(),
             asset_name_hint: e.asset_name_hint.to_string(),
-            checksum_file: download::checksum_file_for(e.id)
-                .unwrap_or_default()
-                .to_string(),
             is_custom: false,
             list_payload: None,
         }
@@ -213,7 +197,6 @@ impl From<&CustomRepo> for ResolvedEntry {
             repo_owner: r.repo_owner.clone(),
             repo_name: r.repo_name.clone(),
             asset_name_hint: r.asset_name_hint.clone(),
-            checksum_file: r.checksum_file.clone(),
             is_custom: true,
             list_payload: None,
         }
@@ -525,6 +508,16 @@ pub(crate) mod test_support {
         }
     }
 
+    /// Put a local copy in the library, as an earlier version of the app left it.
+    pub fn seed(lib: &Library, id: &str, name: &str, body: &[u8], version: &str) -> PathBuf {
+        let dir = lib.dir().join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        std::fs::write(dir.join("VERSION"), version).unwrap();
+        path
+    }
+
     pub fn library(tag: &str) -> (TempDir, Arc<Scripted>, Library) {
         let dir = TempDir::new(tag);
         let http = Arc::new(Scripted::default());
@@ -579,8 +572,8 @@ mod tests {
 
     #[test]
     fn the_app_words_only_the_codes_it_knows() {
-        let worded = LibraryError::new("repo_host_is_ip", "x");
-        assert_eq!(worded.ui_text(), "repo_host_is_ip: x");
+        let worded = LibraryError::new("redirect_refused", "x");
+        assert_eq!(worded.ui_text(), "redirect_refused: x");
         // An older message the renderer matches ("HTTP 404") stays as it was.
         let plain = LibraryError::new("fetch_failed", "fetch u: HTTP 404 (Not Found)");
         assert_eq!(plain.ui_text(), "fetch u: HTTP 404 (Not Found)");
@@ -643,56 +636,47 @@ mod tests {
     }
 }
 
-/// Real network, real TLS and real redirects: run by hand after changing the HTTP client.
+/// Real network, real TLS and real redirects (release information only): run by hand after
+/// changing the HTTP client.
 /// `cargo test -p ps5upload-core payload_library::live -- --ignored --nocapture`
 #[cfg(test)]
 mod live {
     use super::test_support::TempDir;
     use super::*;
 
-    fn fetch_and_cache(id: &str) {
+    fn fetch_release_list(id: &str) {
         let d = TempDir::new("live");
         let lib = Library::new(d.0.join("payloads"));
         let list = lib.releases(id, false).expect("release list");
         println!("{id}: {} releases, newest {}", list.len(), list[0].tag);
         assert!(list[0].refresh_error.is_none());
-        let local = lib
-            .download_release(id, Some(&list[0].tag), false)
-            .expect("download");
-        println!("{id}: cached {} bytes at {}", local.size, local.path);
-        let bytes = std::fs::read(&local.path).unwrap();
-        assert_eq!(&bytes[..4], b"\x7FELF");
-        assert_eq!(bytes.len() as u64, local.size);
-        // The file, VERSION and the release list: no temporary left behind.
-        assert_eq!(
-            std::fs::read_dir(d.0.join("payloads").join(id))
-                .unwrap()
-                .count(),
-            3
+        assert!(
+            !list[0].picked_asset_url.is_empty(),
+            "a payload file is named"
         );
     }
 
     #[test]
     #[ignore]
     fn github_through_its_asset_cdn() {
-        fetch_and_cache("kstuff-echostretch");
+        fetch_release_list("kstuff-echostretch");
     }
 
     #[test]
     #[ignore]
     fn a_zip_release_on_github() {
-        fetch_and_cache("shadowmountplus");
+        fetch_release_list("shadowmountplus");
     }
 
     #[test]
     #[ignore]
     fn a_gitea_host() {
-        fetch_and_cache("np-fake-signin");
+        fetch_release_list("np-fake-signin");
     }
 
     #[test]
     #[ignore]
     fn a_release_with_a_checksum_list() {
-        fetch_and_cache("hush");
+        fetch_release_list("hush");
     }
 }

@@ -25,7 +25,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::download::sha256_of_file;
+use super::cache::sha256_of_file;
 use super::updates::{now_secs, write_json};
 use super::{Library, LibraryError};
 use crate::payload_manager::{self as pm, Autoload, StoreCheck, StoredPayload};
@@ -365,7 +365,7 @@ impl Library {
                 report.changes.push(PmChange::Skipped {
                     payload_id: id.clone(),
                     code: "not_downloaded".into(),
-                    reason: "Not downloaded to this computer yet.".into(),
+                    reason: "Not on this computer.".into(),
                 });
                 continue;
             };

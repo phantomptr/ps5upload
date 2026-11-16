@@ -3,6 +3,10 @@
 //!
 //! The library's folder is `PS5UPLOAD_PAYLOADS_DIR` (the desktop app points its sidecar at its
 //! own cache), else `payloads` under the engine's data folder.
+//!
+//! ps5upload no longer downloads payloads: users get a payload from its project page and send
+//! the file. The routes that used to download (or add a repo or a payload list to download from)
+//! answer 410 `payload_downloads_removed` with where to get the file.
 
 use axum::{
     extract::{Path, Query, State},
@@ -11,7 +15,7 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
-use ps5upload_core::payload_library::{AddRepo, Library, LibraryError};
+use ps5upload_core::payload_library::{Library, LibraryError, PayloadInfo};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -33,21 +37,14 @@ pub(crate) fn no_library() -> Response {
 
 fn status_of(code: &str) -> StatusCode {
     match code {
-        "unknown_payload" | "unknown_release" | "no_previous" | "not_downloaded" => {
-            StatusCode::NOT_FOUND
-        }
-        "repo_host_is_ip"
-        | "repo_host_gitlab"
-        | "repo_host_invalid"
-        | "repo_owner_invalid"
-        | "repo_name_invalid"
-        | "invalid_checksum_file"
-        | "asset_url_refused"
-        | "no_asset"
-        | "source_url_invalid"
-        | "bad_host" => StatusCode::BAD_REQUEST,
-        "source_not_a_list" | "source_empty" => StatusCode::UNPROCESSABLE_ENTITY,
-        "custom_repos_unreadable" | "download_cancelled" => StatusCode::CONFLICT,
+        "unknown_payload"
+        | "unknown_release"
+        | "no_previous"
+        | "not_downloaded"
+        | "not_on_this_computer" => StatusCode::NOT_FOUND,
+        "repo_host_is_ip" | "repo_host_gitlab" | "repo_host_invalid" | "repo_owner_invalid"
+        | "repo_name_invalid" | "no_asset" | "bad_host" => StatusCode::BAD_REQUEST,
+        "custom_repos_unreadable" => StatusCode::CONFLICT,
         "io_failed" => StatusCode::INTERNAL_SERVER_ERROR,
         _ => StatusCode::BAD_GATEWAY,
     }
@@ -57,6 +54,37 @@ pub(crate) fn library_error(e: &LibraryError) -> Response {
     (
         status_of(e.code),
         Json(json!({ "error": e.message, "code": e.code })),
+    )
+        .into_response()
+}
+
+/// The code a route that used to download a payload answers with (HTTP 410 Gone).
+pub(crate) const DOWNLOADS_REMOVED: &str = "payload_downloads_removed";
+
+/// What to tell a client that asked for a payload download: where the user gets the file.
+pub(crate) fn downloads_removed_text(info: Option<&PayloadInfo>) -> String {
+    match info {
+        Some(p) if !p.homepage.is_empty() => format!(
+            "ps5upload no longer downloads payloads: get {} from its project page ({}) and send \
+             the file.",
+            p.display_name, p.homepage
+        ),
+        Some(p) => format!(
+            "ps5upload no longer downloads payloads: get {} from its project page and send the \
+             file.",
+            p.display_name
+        ),
+        None => "ps5upload no longer downloads payloads: get the payload from its project page \
+                 and send the file."
+            .to_string(),
+    }
+}
+
+/// 410 Gone with [`DOWNLOADS_REMOVED`].
+pub(crate) fn downloads_removed(text: String) -> Response {
+    (
+        StatusCode::GONE,
+        Json(json!({ "error": text, "code": DOWNLOADS_REMOVED })),
     )
         .into_response()
 }
@@ -101,7 +129,6 @@ fn router_with<S: Clone + Send + Sync + 'static>(library: Option<Library>) -> Ro
         .route("/api/payloads/{id}/releases", get(releases))
         .route("/api/payloads/{id}/releases/latest", get(latest))
         .route("/api/payloads/{id}/download", post(download))
-        .route("/api/payloads/{id}/download/cancel", post(cancel))
         .with_state(Api(library.clone()))
         .merge(crate::payload_updates_api::routes(library))
 }
@@ -154,56 +181,30 @@ async fn latest(
     api.run(move |lib| lib.release(&id, force)).await
 }
 
-#[derive(Deserialize, Default)]
-struct DownloadRequest {
-    /// A release's `picked_asset_url`, with its `version`, as the screens send it.
-    #[serde(default)]
-    asset_url: Option<String>,
-    #[serde(default)]
-    version: Option<String>,
-    /// A release tag. Absent with no `asset_url`: the latest.
-    #[serde(default)]
-    release: Option<String>,
-}
-
-/// POST /api/payloads/{id}/download: fetch a release into the cache. Takes as long as the
-/// download does; `/download/cancel` stops it.
-async fn download(
-    State(api): State<Api>,
-    Path(id): Path<String>,
-    body: axum::body::Bytes,
-) -> Response {
-    let req: DownloadRequest = if body.is_empty() {
-        DownloadRequest::default()
-    } else {
-        match serde_json::from_slice(&body) {
-            Ok(r) => r,
-            Err(e) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": format!("bad request: {e}") })),
-                )
-                    .into_response()
-            }
+/// POST /api/payloads/{id}/download: refused (410 `payload_downloads_removed`). The app no
+/// longer downloads payloads; the answer names the payload's project page.
+async fn download(State(api): State<Api>, Path(id): Path<String>) -> Response {
+    let info = match &api.0 {
+        Some(lib) => {
+            let lib = lib.clone();
+            tokio::task::spawn_blocking(move || lib.catalog().into_iter().find(|p| p.id == id))
+                .await
+                .ok()
+                .flatten()
         }
+        None => None,
     };
-    api.run(move |lib| match req.asset_url {
-        Some(url) => lib.download(&id, &url, req.version.as_deref().unwrap_or_default()),
-        None => lib.download_release(&id, req.release.as_deref(), false),
-    })
-    .await
+    downloads_removed(downloads_removed_text(info.as_ref()))
 }
 
-/// POST /api/payloads/{id}/download/cancel → {cancelled}. The download's own request answers
-/// 409 `download_cancelled`.
-async fn cancel(State(api): State<Api>, Path(id): Path<String>) -> Response {
-    api.run(move |lib| Ok(json!({ "cancelled": lib.cancel_download(&id) })))
-        .await
-}
-
-/// POST /api/payloads/repos {host, owner, name, display_name?, asset_hint?, checksum_file?}
-async fn add_repo(State(api): State<Api>, Json(req): Json<AddRepo>) -> Response {
-    api.run(move |lib| lib.add_custom_repo(&req)).await
+/// POST /api/payloads/repos: refused (410 `payload_downloads_removed`). Repos added earlier stay
+/// listed and can be removed.
+async fn add_repo() -> Response {
+    downloads_removed(
+        "ps5upload no longer downloads payloads, so repos can't be added: get the payload from \
+         its project page and send the file."
+            .to_string(),
+    )
 }
 
 /// DELETE /api/payloads/repos/{id} → {removed}
@@ -217,25 +218,26 @@ async fn list_sources(State(api): State<Api>) -> Response {
     api.run(|lib| Ok(json!({ "sources": lib.sources() }))).await
 }
 
-#[derive(Deserialize)]
-struct AddSource {
-    url: String,
+/// POST /api/payloads/sources: refused (410 `payload_downloads_removed`). Lists added earlier
+/// stay listed and can be removed.
+async fn add_source() -> Response {
+    downloads_removed(
+        "ps5upload no longer downloads payloads, so payload lists can't be added: get the \
+         payload from its project page and send the file."
+            .to_string(),
+    )
 }
 
-/// POST /api/payloads/sources {url}: fetch the list and keep it. Refused when it is not one.
-async fn add_source(State(api): State<Api>, Json(req): Json<AddSource>) -> Response {
-    api.run(move |lib| lib.add_source(&req.url)).await
+/// POST /api/payloads/sources/refresh: refused (410 `payload_downloads_removed`).
+async fn refresh_sources() -> Response {
+    downloads_removed(
+        "ps5upload no longer downloads payloads or payload lists: get the payload from its \
+         project page and send the file."
+            .to_string(),
+    )
 }
 
-/// POST /api/payloads/sources/refresh?force=1 → {sources}: lists older than an hour (all with
-/// force) are fetched again; a failure keeps the last copy and sets that source's `error`.
-async fn refresh_sources(State(api): State<Api>, Query(q): Query<ReleaseQuery>) -> Response {
-    let force = q.force();
-    api.run(move |lib| Ok(json!({ "sources": lib.refresh_sources(force) })))
-        .await
-}
-
-/// DELETE /api/payloads/sources/{id} → {removed}: the list, and what was downloaded from it.
+/// DELETE /api/payloads/sources/{id} → {removed}: the list, and the local copies of its payloads.
 async fn remove_source(State(api): State<Api>, Path(id): Path<String>) -> Response {
     api.run(move |lib| Ok(json!({ "removed": lib.remove_source(&id)? })))
         .await
@@ -321,7 +323,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn the_catalogue_and_a_custom_repo_round_trip() {
+    async fn the_catalogue_lists_and_a_saved_custom_repo_can_be_removed() {
         let h = serve("repos").await;
         let (status, v) = h.get("/api/payloads").await;
         assert_eq!(status, 200);
@@ -330,45 +332,54 @@ mod tests {
         assert_eq!(v["local"], json!([]));
         assert!(v.get("custom_repos_error").is_none());
 
-        let (status, added) = h
-            .post(
-                "/api/payloads/repos",
-                json!({"host": "www.github.com", "owner": "Me", "name": "thing.git"}),
-            )
-            .await;
-        assert_eq!(status, 200, "{added}");
-        assert_eq!(added["is_custom"], true);
-        assert_eq!(added["homepage"], "https://github.com/Me/thing");
-        let id = added["id"].as_str().unwrap().to_string();
-
+        // A repo an earlier version added stays listed and can be removed.
+        let added = Library::new(h.dir.join("payloads"))
+            .add_custom_repo(&ps5upload_core::payload_library::AddRepo {
+                host: "github.com".into(),
+                owner: "Me".into(),
+                name: "thing".into(),
+                ..Default::default()
+            })
+            .unwrap();
         let (_, v) = h.get("/api/payloads").await;
         assert_eq!(v["payloads"].as_array().unwrap().len(), curated + 1);
-
-        let (status, gone) = h.delete(&format!("/api/payloads/repos/{id}")).await;
-        assert_eq!(status, 200);
-        assert_eq!(gone["removed"], true);
-        let (_, gone) = h.delete(&format!("/api/payloads/repos/{id}")).await;
+        let (status, gone) = h.delete(&format!("/api/payloads/repos/{}", added.id)).await;
+        assert_eq!((status, gone["removed"].clone()), (200, json!(true)));
+        let (_, gone) = h.delete(&format!("/api/payloads/repos/{}", added.id)).await;
         assert_eq!(gone["removed"], false);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn payload_sources_start_empty_and_refuse_a_bad_address() {
-        let h = serve("sources").await;
-        let (status, v) = h.get("/api/payloads/sources").await;
-        assert_eq!((status, v["sources"].clone()), (200, json!([])));
+    async fn every_download_route_is_refused_with_where_to_get_the_file() {
+        let h = serve("refused").await;
         let (status, v) = h
-            .post(
-                "/api/payloads/sources",
-                json!({"url": "http://lists.example.org/p.json"}),
-            )
+            .post("/api/payloads/kstuff-echostretch/download", json!({}))
             .await;
-        assert_eq!(
-            (status, v["code"].as_str()),
-            (400, Some("source_url_invalid"))
+        assert_eq!((status, v["code"].as_str()), (410, Some(DOWNLOADS_REMOVED)));
+        let text = v["error"].as_str().unwrap();
+        assert!(text.contains("no longer downloads payloads"), "{text}");
+        assert!(
+            text.contains("https://github.com/EchoStretch/kstuff-lite"),
+            "{text}"
         );
-        let (status, v) = h
-            .post("/api/payloads/sources/refresh?force=1", json!({}))
-            .await;
+        let (status, v) = h.post("/api/payloads/nope/download", json!({})).await;
+        assert_eq!((status, v["code"].as_str()), (410, Some(DOWNLOADS_REMOVED)));
+        for path in [
+            "/api/payloads/repos",
+            "/api/payloads/sources",
+            "/api/payloads/sources/refresh",
+        ] {
+            let (status, v) = h
+                .post(path, json!({"host": "github.com", "owner": "a", "name": "b", "url": "https://x.org/p.json"}))
+                .await;
+            assert_eq!(
+                (status, v["code"].as_str()),
+                (410, Some(DOWNLOADS_REMOVED)),
+                "{path}"
+            );
+        }
+        assert!(!h.dir.join("payloads").join("custom-repos.json").exists());
+        let (status, v) = h.get("/api/payloads/sources").await;
         assert_eq!((status, v["sources"].clone()), (200, json!([])));
         let (status, v) = h.delete("/api/payloads/sources/src-000000000000").await;
         assert_eq!((status, v["removed"].clone()), (200, json!(false)));
@@ -377,40 +388,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn errors_carry_a_code_and_a_fitting_status() {
         let h = serve("errors").await;
-        let (status, v) = h
-            .post(
-                "/api/payloads/repos",
-                json!({"host": "192.168.1.5", "owner": "a", "name": "b"}),
-            )
-            .await;
-        assert_eq!((status, v["code"].as_str()), (400, Some("repo_host_is_ip")));
-
         let (status, v) = h.get("/api/payloads/nope/releases").await;
         assert_eq!((status, v["code"].as_str()), (404, Some("unknown_payload")));
-
-        let (status, v) = h.post("/api/payloads/nope/download", json!({})).await;
-        assert_eq!((status, v["code"].as_str()), (404, Some("unknown_payload")));
-
-        // The request is pinned before any network.
-        let (status, v) = h
-            .post(
-                "/api/payloads/kstuff-echostretch/download",
-                json!({"asset_url": "http://127.0.0.1/x.elf", "version": "v1"}),
-            )
-            .await;
-        assert_eq!(
-            (status, v["code"].as_str()),
-            (400, Some("asset_url_refused"))
-        );
-
-        let (status, v) = h
-            .post(
-                "/api/payloads/kstuff-echostretch/download/cancel",
-                json!({}),
-            )
-            .await;
-        assert_eq!(status, 200);
-        assert_eq!(v["cancelled"], false);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -422,16 +401,6 @@ mod tests {
         let (status, v) = h.get("/api/payloads").await;
         assert_eq!(status, 200);
         assert!(v["custom_repos_error"].is_string(), "{v}");
-        let (status, v) = h
-            .post(
-                "/api/payloads/repos",
-                json!({"host": "github.com", "owner": "a", "name": "b"}),
-            )
-            .await;
-        assert_eq!(
-            (status, v["code"].as_str()),
-            (409, Some("custom_repos_unreadable"))
-        );
         assert_eq!(
             std::fs::read(dir.join("custom-repos.json")).unwrap(),
             b"{ oops"

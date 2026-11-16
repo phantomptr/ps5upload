@@ -1,9 +1,10 @@
-//! Payloads: the engine's library (`payloads_catalog`, `payloads_download`), its updates
-//! (`payloads_updates`, `payloads_updates_check`, `payloads_update`, `payloads_rollback`,
-//! `payloads_update_settings`), keeping a console's Payload Manager in step
+//! Payloads: the engine's library (`payloads_catalog`), new versions (`payloads_updates`,
+//! `payloads_updates_check`, `payloads_rollback`), keeping a console's Payload Manager in step
 //! (`payloads_pm_choice`, `payloads_pm_sync`), sending one to a
 //! console (`payloads_send`), and the console's Payload Manager (`payloads_list`,
 //! `payloads_launch`, `payloads_store`, `payloads_delete`, `payloads_autoload`).
+//!
+//! ps5upload never downloads a payload: the user gets the file from the project page.
 
 use serde_json::json;
 
@@ -15,38 +16,21 @@ pub(super) fn tools() -> Vec<ToolDef> {
         ToolDef {
             name: "payloads_catalog",
             title: "The payload library",
-            description: "The payloads the engine's library knows, and which are downloaded on \
-                          its computer. Nothing here touches a console.",
+            description: "The payloads the engine's library knows (each with its project page), \
+                          and which have a local copy on its computer. ps5upload never downloads \
+                          a payload: the user gets the file from the project page. Nothing here \
+                          touches a console.",
             kind: Kind::Read,
             schema: object(json!({}), &[]),
             run: route!(path: "/api/payloads", done: "The payload library."),
-        },
-        ToolDef {
-            name: "payloads_download",
-            title: "Download a library payload",
-            description: "Downloads a payload of the library to the engine's computer, so it can \
-                          be sent.",
-            kind: Kind::Write { idempotent: true },
-            schema: object(
-                json!({
-                    "id": text("The payload's id, from payloads_catalog."),
-                    "release": text("A release tag. Left out, the latest."),
-                }),
-                &["id"],
-            ),
-            run: route!(
-                method: "POST",
-                path: "/api/payloads/{id}/download",
-                done: "Downloaded the payload.",
-            ),
         },
         ToolDef {
             name: "payloads_updates",
             title: "Payload updates, as last checked",
             description: "The last update check (one row per payload: the version here, the \
                           latest, whether an update is available, the version a rollback puts \
-                          back), what was applied, each console's last Payload Manager sync, and \
-                          the \"Keep payloads up to date\" setting. Asks no network.",
+                          back), what was applied and each console's last Payload Manager sync. \
+                          Asks no network.",
             kind: Kind::Read,
             schema: object(json!({}), &[]),
             run: route!(path: "/api/payloads/updates", done: "Payload updates."),
@@ -57,7 +41,8 @@ pub(super) fn tools() -> Vec<ToolDef> {
             description: "Checks every payload on the engine's computer, and every one kept in a \
                           console's Payload Manager, for a newer release. Releases are cached for \
                           an hour; once the host's rate limit answers, the rest come from the \
-                          cache. Nothing is downloaded.",
+                          cache. Nothing is downloaded: a newer version comes from the payload's \
+                          project page (its `html_url`), which the user gets themselves.",
             kind: Kind::Write { idempotent: true },
             schema: object(
                 json!({
@@ -72,38 +57,11 @@ pub(super) fn tools() -> Vec<ToolDef> {
             ),
         },
         ToolDef {
-            name: "payloads_update",
-            title: "Update payloads",
-            description: "Downloads the newer release of each payload (`ids`, or all that the \
-                          last check found), with the same checks as any download, and keeps the \
-                          copy it replaces for payloads_rollback. With `sync_console`, then brings \
-                          that console's Payload Manager in step (see payloads_pm_sync).",
-            kind: Kind::Destructive { idempotent: true },
-            schema: object(
-                json!({
-                    "ids": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Payload ids, from payloads_updates. Left out, every \
-                                        update the last check found.",
-                    },
-                    "sync_console": text(
-                        "A console whose Payload Manager to sync afterwards: its address.",
-                    ),
-                }),
-                &[],
-            ),
-            run: route!(
-                method: "POST",
-                path: "/api/payloads/updates/apply",
-                done: "Updated the payloads.",
-            ),
-        },
-        ToolDef {
             name: "payloads_rollback",
             title: "Roll a payload back",
-            description: "Puts back the copy the last update of a payload replaced, on the \
-                          engine's computer; calling it again rolls forward. A console's Payload \
+            description: "Puts back the copy an earlier update of a payload replaced (older \
+                          versions of the app kept one), on the engine's computer; calling it \
+                          again rolls forward. A console's Payload \
                           Manager gets it on its next sync.",
             kind: Kind::Write { idempotent: false },
             schema: object(
@@ -114,23 +72,6 @@ pub(super) fn tools() -> Vec<ToolDef> {
                 method: "POST",
                 path: "/api/payloads/{id}/rollback",
                 done: "Rolled the payload back.",
-            ),
-        },
-        ToolDef {
-            name: "payloads_update_settings",
-            title: "Keep payloads up to date",
-            description: "Turns \"Keep payloads up to date\" on or off. On, the engine checks at \
-                          start and daily, downloads what is newer, and syncs every console's \
-                          Payload Manager the user chose payloads for. Off by default.",
-            kind: Kind::Write { idempotent: true },
-            schema: object(
-                json!({ "auto_update": flag("On or off.") }),
-                &["auto_update"],
-            ),
-            run: route!(
-                method: "PUT",
-                path: "/api/payloads/updates/settings",
-                done: "Saved the setting.",
             ),
         },
         ToolDef {
@@ -185,16 +126,18 @@ pub(super) fn tools() -> Vec<ToolDef> {
             name: "payloads_send",
             title: "Send a payload to a console",
             description: "Sends a payload to a console's loader, which runs it: a file on the \
-                          engine's computer (`path`) or one of the library (`payload_id`). A \
-                          payload is a program with full access to the console: only one the user \
-                          asked for.",
+                          engine's computer (`path`) or the local copy of a library payload \
+                          (`payload_id`). Nothing is downloaded: without a local copy it fails \
+                          with `not_on_this_computer`, and the user gets the file from the \
+                          project page. A payload is a program with full access to the console: \
+                          only one the user asked for.",
             kind: Kind::Destructive { idempotent: false },
             schema: object(
                 json!({
                     "console": console_required(),
                     "path": text("A file on the engine's computer: its full path."),
                     "payload_id": text("A payload of the library, from payloads_catalog."),
-                    "release": text("With `payload_id`: this release tag."),
+                    "release": text("With `payload_id`: only this version of the local copy."),
                     "port": whole("The loader's port. Default 9021."),
                 }),
                 &["console"],

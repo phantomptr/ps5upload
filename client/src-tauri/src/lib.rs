@@ -518,22 +518,17 @@ pub fn run() {
             commands::discover_ps5,
             // ── Payload Library (curated catalogue + GitHub fetch) ──
             // The Payloads tab uses these to list third-party
-            // homebrew payloads (kstuff, SMP, etaHEN, …),
-            // fetch their latest releases from GitHub, cache to disk,
-            // and re-send via the existing payload_send flow. See
+            // homebrew payloads (kstuff, SMP, etaHEN, …), read their
+            // latest release information, and send the local copies
+            // users got earlier. Nothing is downloaded. See
             // commands/payloads.rs.
             commands::payloads_catalog,
             commands::payloads_release,
             commands::payloads_releases,
             commands::payloads_local_inventory,
             commands::payloads_local_path,
-            commands::payloads_download,
-            commands::payloads_download_cancel,
-            commands::payloads_add_custom_repo,
             commands::payloads_remove_custom_repo,
             commands::payloads_sources,
-            commands::payloads_add_source,
-            commands::payloads_refresh_sources,
             commands::payloads_remove_source,
             // ── ShadowMount+ awareness (read-only) ──────────────────
             // `smp_status` collects the on-console SMP state — config,

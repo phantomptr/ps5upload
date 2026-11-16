@@ -183,58 +183,6 @@
         ],
         "type": "object"
       },
-      "AddRepo": {
-        "description": "What a repo is added with.",
-        "properties": {
-          "asset_hint": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "x-aliases": [
-              "asset_name_hint"
-            ]
-          },
-          "checksum_file": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "display_name": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "host": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "owner": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "host",
-          "owner",
-          "name"
-        ],
-        "type": "object"
-      },
-      "AddSource": {
-        "properties": {
-          "url": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "url"
-        ],
-        "type": "object"
-      },
       "AddrQuery": {
         "properties": {
           "addr": {
@@ -14665,16 +14613,6 @@
         ],
         "type": "object"
       },
-      "UpdateSettings": {
-        "description": "The user's update settings.",
-        "properties": {
-          "auto_update": {
-            "description": "\"Keep payloads up to date\": check at start and daily, and apply what is newer. Off\nunless the user turns it on.",
-            "type": "boolean"
-          }
-        },
-        "type": "object"
-      },
       "UsbEjectReq": {
         "properties": {
           "addr": {
@@ -26308,17 +26246,7 @@
     },
     "/api/payloads/repos": {
       "post": {
-        "description": "POST /api/payloads/repos {host, owner, name, display_name?, asset_hint?, checksum_file?}",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AddRepo"
-              }
-            }
-          },
-          "required": true
-        },
+        "description": "POST /api/payloads/repos: refused (410 `payload_downloads_removed`). Repos added earlier stay\nlisted and can be removed.",
         "responses": {
           "200": {
             "description": "Success. The handler builds this answer in a way the generator cannot read."
@@ -26327,11 +26255,35 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "code": {},
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Gone"
+          },
           "default": {
             "$ref": "#/components/responses/Error",
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "Refused (410 `payload_downloads_removed`)",
         "tags": [
           "payloads"
         ],
@@ -26403,17 +26355,7 @@
         }
       },
       "post": {
-        "description": "POST /api/payloads/sources {url}: fetch the list and keep it. Refused when it is not one.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AddSource"
-              }
-            }
-          },
-          "required": true
-        },
+        "description": "POST /api/payloads/sources: refused (410 `payload_downloads_removed`). Lists added earlier\nstay listed and can be removed.",
         "responses": {
           "200": {
             "description": "Success. The handler builds this answer in a way the generator cannot read."
@@ -26422,12 +26364,35 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "code": {},
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Gone"
+          },
           "default": {
             "$ref": "#/components/responses/Error",
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "Fetch the list and keep it",
+        "summary": "Refused (410 `payload_downloads_removed`)",
         "tags": [
           "payloads"
         ],
@@ -26439,23 +26404,7 @@
     },
     "/api/payloads/sources/refresh": {
       "post": {
-        "description": "POST /api/payloads/sources/refresh?force=1 → {sources}: lists older than an hour (all with\nforce) are fetched again; a failure keeps the last copy and sets that source's `error`.",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "force",
-            "required": false,
-            "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "x-aliases": [
-              "force_refresh"
-            ]
-          }
-        ],
+        "description": "POST /api/payloads/sources/refresh: refused (410 `payload_downloads_removed`).",
         "responses": {
           "200": {
             "description": "Success. The handler builds this answer in a way the generator cannot read."
@@ -26464,12 +26413,35 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "code": {},
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Gone"
+          },
           "default": {
             "$ref": "#/components/responses/Error",
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "{sources}: lists older than an hour (all with force) are fetched again; a failure keeps the last copy and sets that source's `error`",
+        "summary": "Refused (410 `payload_downloads_removed`)",
         "tags": [
           "payloads"
         ],
@@ -26481,7 +26453,7 @@
     },
     "/api/payloads/sources/{id}": {
       "delete": {
-        "description": "DELETE /api/payloads/sources/{id} → {removed}: the list, and what was downloaded from it.",
+        "description": "DELETE /api/payloads/sources/{id} → {removed}: the list, and the local copies of its payloads.",
         "parameters": [
           {
             "in": "path",
@@ -26505,7 +26477,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "{removed}: the list, and what was downloaded from it",
+        "summary": "{removed}: the list, and the local copies of its payloads",
         "tags": [
           "payloads"
         ],
@@ -26517,7 +26489,7 @@
     },
     "/api/payloads/updates": {
       "get": {
-        "description": "GET /api/payloads/updates → `{settings, state}`: the last check, what was applied and the\nlast Payload Manager syncs. Never asks the network or a console.",
+        "description": "GET /api/payloads/updates → `{state}`: the last check, what was applied and the last Payload\nManager syncs. Never asks the network or a console.",
         "responses": {
           "200": {
             "description": "Success. The handler builds this answer in a way the generator cannot read."
@@ -26531,7 +26503,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "`{settings, state}`: the last check, what was applied and the last Payload Manager syncs",
+        "summary": "`{state}`: the last check, what was applied and the last Payload Manager syncs",
         "tags": [
           "payloads"
         ],
@@ -26543,23 +26515,16 @@
     },
     "/api/payloads/updates/apply": {
       "post": {
-        "description": "POST /api/payloads/updates/apply `{ids?, console?}` → `{updated, errors, pm_sync?}`.\nEach update keeps the copy it replaces for a rollback; one failure does not stop the rest.",
-        "requestBody": {
-          "content": {
-            "application/octet-stream": {
-              "schema": {
-                "contentEncoding": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "required": true
-        },
+        "description": "POST /api/payloads/updates/apply: refused (410 `payload_downloads_removed`). ps5upload no\nlonger downloads payloads; a check says what is newer, and the user gets it from the project\npage.",
         "responses": {
           "200": {
             "description": "Success. The handler builds this answer in a way the generator cannot read."
           },
-          "400": {
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "410": {
             "content": {
               "application/json": {
                 "schema": {
@@ -26569,6 +26534,7 @@
                     },
                     {
                       "properties": {
+                        "code": {},
                         "error": {
                           "type": "string"
                         }
@@ -26579,18 +26545,14 @@
                 }
               }
             },
-            "description": "Bad request"
-          },
-          "403": {
-            "$ref": "#/components/responses/Error",
-            "description": "Refused by the engine's address, Origin or Host guards."
+            "description": "Gone"
           },
           "default": {
             "$ref": "#/components/responses/Error",
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "`{updated, errors, pm_sync?}`",
+        "summary": "Refused (410 `payload_downloads_removed`)",
         "tags": [
           "payloads"
         ],
@@ -26659,69 +26621,9 @@
         }
       }
     },
-    "/api/payloads/updates/settings": {
-      "get": {
-        "description": "GET /api/payloads/updates/settings → `{auto_update}`.",
-        "responses": {
-          "200": {
-            "description": "Success. The handler builds this answer in a way the generator cannot read."
-          },
-          "403": {
-            "$ref": "#/components/responses/Error",
-            "description": "Refused by the engine's address, Origin or Host guards."
-          },
-          "default": {
-            "$ref": "#/components/responses/Error",
-            "description": "Any other failure, in the same shape."
-          }
-        },
-        "summary": "`{auto_update}`",
-        "tags": [
-          "payloads"
-        ],
-        "x-ps5upload": {
-          "access": "loopback",
-          "response_schema": "none"
-        }
-      },
-      "put": {
-        "description": "PUT /api/payloads/updates/settings `{auto_update}`: \"Keep payloads up to date\" checks at\nstart and daily, and applies what is newer.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateSettings"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Success. The handler builds this answer in a way the generator cannot read."
-          },
-          "403": {
-            "$ref": "#/components/responses/Error",
-            "description": "Refused by the engine's address, Origin or Host guards."
-          },
-          "default": {
-            "$ref": "#/components/responses/Error",
-            "description": "Any other failure, in the same shape."
-          }
-        },
-        "summary": "\"Keep payloads up to date\" checks at start and daily, and applies what is newer",
-        "tags": [
-          "payloads"
-        ],
-        "x-ps5upload": {
-          "access": "loopback",
-          "response_schema": "none"
-        }
-      }
-    },
     "/api/payloads/{id}/download": {
       "post": {
-        "description": "POST /api/payloads/{id}/download: fetch a release into the cache. Takes as long as the\ndownload does; `/download/cancel` stops it.",
+        "description": "POST /api/payloads/{id}/download: refused (410 `payload_downloads_removed`). The app no\nlonger downloads payloads; the answer names the payload's project page.",
         "parameters": [
           {
             "in": "path",
@@ -26732,22 +26634,15 @@
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/octet-stream": {
-              "schema": {
-                "contentEncoding": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "200": {
             "description": "Success. The handler builds this answer in a way the generator cannot read."
           },
-          "400": {
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "410": {
             "content": {
               "application/json": {
                 "schema": {
@@ -26757,6 +26652,7 @@
                     },
                     {
                       "properties": {
+                        "code": {},
                         "error": {
                           "type": "string"
                         }
@@ -26767,54 +26663,14 @@
                 }
               }
             },
-            "description": "Bad request"
-          },
-          "403": {
-            "$ref": "#/components/responses/Error",
-            "description": "Refused by the engine's address, Origin or Host guards."
+            "description": "Gone"
           },
           "default": {
             "$ref": "#/components/responses/Error",
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "Fetch a release into the cache",
-        "tags": [
-          "payloads"
-        ],
-        "x-ps5upload": {
-          "access": "loopback",
-          "response_schema": "none"
-        }
-      }
-    },
-    "/api/payloads/{id}/download/cancel": {
-      "post": {
-        "description": "POST /api/payloads/{id}/download/cancel → {cancelled}. The download's own request answers\n409 `download_cancelled`.",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success. The handler builds this answer in a way the generator cannot read."
-          },
-          "403": {
-            "$ref": "#/components/responses/Error",
-            "description": "Refused by the engine's address, Origin or Host guards."
-          },
-          "default": {
-            "$ref": "#/components/responses/Error",
-            "description": "Any other failure, in the same shape."
-          }
-        },
-        "summary": "{cancelled}",
+        "summary": "Refused (410 `payload_downloads_removed`)",
         "tags": [
           "payloads"
         ],
@@ -26925,7 +26781,7 @@
     },
     "/api/payloads/{id}/rollback": {
       "post": {
-        "description": "POST /api/payloads/{id}/rollback → what was put back. 404 `no_previous` when no earlier copy\nis kept.",
+        "description": "POST /api/payloads/{id}/rollback → what was put back. 404 `no_previous` when no earlier copy\nis kept (earlier versions of the app kept one when they updated a payload).",
         "parameters": [
           {
             "in": "path",
