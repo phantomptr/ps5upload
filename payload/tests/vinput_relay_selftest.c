@@ -756,6 +756,13 @@ static void fake_kill(void *ctx, int pid) {
     pthread_mutex_unlock(&l_mu);
 }
 
+/* hold_start: 1 while the test says the console is settling after a wake. */
+static int l_hold;
+static int fake_hold(void *ctx) {
+    (void)ctx;
+    return __atomic_load_n(&l_hold, __ATOMIC_ACQUIRE);
+}
+
 static void relay_setup(int mode) {
     vrelay_cfg_t cfg;
     vinput_set_backend(NULL);
@@ -769,6 +776,7 @@ static void relay_setup(int mode) {
     memset(&cfg, 0, sizeof cfg);
     cfg.launch = fake_launch;
     cfg.kill = fake_kill;
+    cfg.hold_start = fake_hold;
     cfg.port = g_port;
     cfg.token_path = g_token;
     cfg.pid_path = "/nonexistent/vinput.pid";
@@ -1112,6 +1120,24 @@ static void test_relay_init_failure_not_retried(void) {
     unlink(pidf);
 }
 
+/* #842: while the console settles after a wake, an open is told "starting" and nothing is sent
+ * to the loader; once it has settled the companion starts and the same open goes through. */
+static void test_relay_held_while_settling(void) {
+    int starting = 0;
+    __atomic_store_n(&l_hold, 1, __ATOMIC_RELEASE);
+    relay_setup(0);
+    session("{\"op\":\"open\",\"id\":7,\"mouse\":true,\"keyboard\":true}");
+    CHECK(has("\"err\":\"vinput_starting\""));
+    nap(300);
+    session("{\"op\":\"open\",\"id\":7,\"mouse\":true,\"keyboard\":true}");
+    CHECK(has("\"err\":\"vinput_starting\""));
+    CHECK(launches() == 0);
+    __atomic_store_n(&l_hold, 0, __ATOMIC_RELEASE);
+    CHECK(open_until_ok(3000, &starting));
+    CHECK(launches() == 1);
+    session("{\"op\":\"close\",\"id\":7}");
+}
+
 int main(void) {
     snprintf(g_dir, sizeof g_dir, "/tmp/ps5u-vinput-test-%d", (int)getpid());
     mkdir(g_dir, 0700);
@@ -1124,6 +1150,7 @@ int main(void) {
     test_companion_remake();
     test_companion_bind();
     test_relay();
+    test_relay_held_while_settling();
     test_relay_bind();
     test_relay_no_loader();
     test_relay_overlong_answer();

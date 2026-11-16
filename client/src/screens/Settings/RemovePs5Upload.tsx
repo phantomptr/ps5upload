@@ -63,6 +63,31 @@ function refusedMessage(r: Extract<HelperUninstallResult, { state: "refused" }>,
         { paths: r.paths.join(", ") },
         "Something is still mounted in PS5Upload's folders on the PS5. Unmount it first, then try again: {paths}",
       );
+    // The PS5 itself is running something the removal would cut off (the helper says which).
+    case "console_installing":
+      return tr(
+        "remove_ps5u_console_installing",
+        undefined,
+        "The PS5 is installing a package. Wait for it to finish, then try again.",
+      );
+    case "console_converting":
+      return tr(
+        "remove_ps5u_console_converting",
+        undefined,
+        "Convert is working on a game on the PS5. Wait for it to finish, then try again.",
+      );
+    case "console_extracting":
+      return tr(
+        "remove_ps5u_console_extracting",
+        undefined,
+        "The PS5 is extracting an archive. Wait for it to finish, then try again.",
+      );
+    case "console_busy":
+      return tr(
+        "remove_ps5u_console_busy",
+        undefined,
+        "The PS5 is busy with something PS5Upload started. Wait for it to finish, then try again.",
+      );
     case "old_helper":
       return tr(
         "remove_ps5u_old_helper",
@@ -246,20 +271,27 @@ export function RemovePs5Upload({ host }: { host: string }) {
   const tr = useTr();
   const { confirm, dialog } = useConfirm();
   const [keepBackups, setKeepBackups] = useState(true);
-  const [working, setWorking] = useState(false);
+  // "checking" while the helper is asked and the confirm is up; "removing" only once confirmed.
+  const [phase, setPhase] = useState<"idle" | "checking" | "removing">("idle");
   const [message, setMessage] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
 
   async function onClick() {
     setMessage(null);
-    setWorking(true);
+    setPhase("checking");
+    const confirmThenRemove: RemoveDeps["confirm"] = async (opts) => {
+      const ok = await confirm(opts);
+      if (ok) setPhase("removing");
+      return ok;
+    };
     try {
-      const out = await removePs5UploadFlow(host, keepBackups, liveDeps(confirm), tr);
+      const out = await removePs5UploadFlow(host, keepBackups, liveDeps(confirmThenRemove), tr);
       if (out.kind === "refused") setMessage({ tone: "warn", text: out.message });
       else if (out.kind === "removed") setMessage({ tone: "ok", text: removedMessage(out, tr) });
     } finally {
-      setWorking(false);
+      setPhase("idle");
     }
   }
+  const working = phase === "removing";
 
   return (
     <div className="space-y-3 text-sm" data-testid="remove-ps5upload">
@@ -281,7 +313,7 @@ export function RemovePs5Upload({ host }: { host: string }) {
         size="sm"
         leftIcon={<Trash2 size={14} />}
         onClick={() => void onClick()}
-        disabled={working || !host.trim()}
+        disabled={phase !== "idle" || !host.trim()}
         loading={working}
       >
         {working

@@ -114,6 +114,7 @@ mod rp_stream_api;
 mod save_backup;
 mod save_backup_server;
 mod save_copy;
+mod save_sync;
 mod server_out;
 mod settings_api;
 mod settings_backup;
@@ -1752,11 +1753,93 @@ fn signal_transfer_cancel(job_id: Uuid) -> bool {
                 flag.store(true, Ordering::Relaxed);
                 // A paused Workshop job wakes to see it.
                 ps5upload_fpkg::workshop::wake(&flag);
+                stopped_jobs()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(job_id);
                 true
             }
             None => false,
         },
         None => false,
+    }
+}
+
+/// Jobs a Stop was sent to and that have not ended yet: their failure is a stop, said on the wire
+/// as `error_reason: "cancelled"` ([`stopped_reason`]).
+fn stopped_jobs() -> &'static Mutex<std::collections::HashSet<Uuid>> {
+    static SET: OnceLock<Mutex<std::collections::HashSet<Uuid>>> = OnceLock::new();
+    SET.get_or_init(Default::default)
+}
+
+/// A job that ends failed after the user stopped it ends with `error_reason: "cancelled"`, unless
+/// it already names a reason (a transfer's own `transfer_cancelled`): there is no "stopped" job
+/// state, and a builder's "cancelled; nothing was written" read as a failure in Tasks, the API
+/// and MCP. A terminal state takes the job off the stopped list.
+fn stopped_reason(job_id: Uuid, state: &mut JobState) {
+    if !matches!(state, JobState::Done { .. } | JobState::Failed { .. }) {
+        return;
+    }
+    let stopped = stopped_jobs()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&job_id);
+    if let JobState::Failed { error_reason, .. } = state {
+        if stopped && error_reason.is_none() {
+            *error_reason = Some("cancelled".into());
+        }
+    }
+}
+
+#[cfg(test)]
+mod stopped_tests {
+    use super::*;
+
+    fn failed(reason: Option<&str>) -> JobState {
+        JobState::Failed {
+            started_at_ms: 1,
+            completed_at_ms: 2,
+            elapsed_ms: 1,
+            error: "cancelled; nothing was written".into(),
+            error_reason: reason.map(str::to_string),
+            error_detail: None,
+            error_console: None,
+            error_space: None,
+        }
+    }
+
+    fn reason(s: &JobState) -> Option<String> {
+        match s {
+            JobState::Failed { error_reason, .. } => error_reason.clone(),
+            _ => None,
+        }
+    }
+
+    /// A job the user stopped ends with `error_reason: "cancelled"` (Tasks, the API and MCP say
+    /// Stopped); one nobody stopped, or one that names its own reason, keeps what it had.
+    #[test]
+    fn a_stopped_job_says_so_on_the_wire() {
+        let id = Uuid::new_v4();
+        let flag = register_workshop_job(id);
+        assert!(signal_transfer_cancel(id));
+        let mut s = failed(None);
+        stopped_reason(id, &mut s);
+        assert_eq!(reason(&s).as_deref(), Some("cancelled"));
+        // Once: the job is off the list after its end.
+        let mut again = failed(None);
+        stopped_reason(id, &mut again);
+        assert_eq!(reason(&again), None);
+        drop(flag);
+
+        let other = Uuid::new_v4();
+        let _flag = register_transfer_cancel(other);
+        let mut s = failed(None);
+        stopped_reason(other, &mut s);
+        assert_eq!(reason(&s), None, "nobody stopped it");
+        assert!(signal_transfer_cancel(other));
+        let mut s = failed(Some("transfer_cancelled"));
+        stopped_reason(other, &mut s);
+        assert_eq!(reason(&s).as_deref(), Some("transfer_cancelled"));
     }
 }
 
@@ -1803,8 +1886,9 @@ pub(crate) fn set_job(
     jobs: &Arc<Mutex<HashMap<Uuid, JobState>>>,
     events_tx: &broadcast::Sender<String>,
     job_id: Uuid,
-    state: JobState,
+    mut state: JobState,
 ) {
+    stopped_reason(job_id, &mut state);
     // Serialized before the move into the map, so the (possibly long) file
     // list is never cloned; it serializes as a count.
     let terminal = matches!(state, JobState::Done { .. } | JobState::Failed { .. });
@@ -4616,7 +4700,8 @@ struct HelperStopReq {
 ///
 /// 200 `{ "state": "stopped" }` once the helper's port went quiet, or `{ "state": "not_running" }`
 /// when nothing answered. 409 `{ "error", "reason": "busy" }` while a job runs; 502
-/// `{ "error", "reason": "refused" | "still_running" }` otherwise.
+/// `{ "error", "reason": "refused" (not paired) | "failed" (the real error) | "still_running" }`
+/// otherwise. Also 409 busy while another stop or removal of that console runs.
 async fn ps5_helper_stop(
     installs: pkg_install::PkgInstallStateHandle,
     req: HelperStopReq,
@@ -4625,8 +4710,16 @@ async fn ps5_helper_stop(
     let Some(addr) = required_console_addr(req.addr) else {
         return missing_console_addr();
     };
-    let busy = helper_stop::is_busy(&addr) || installs.jobs.active_for(&addr);
-    let r = tokio::task::spawn_blocking(move || helper_stop::stop(&addr, busy)).await;
+    // Marked first, then the jobs read: from here until the stop ends the queue starts nothing
+    // on this console (it can take seconds). A second stop or removal of it meanwhile is busy.
+    let stopping = helper_stop::begin_stopping(&addr);
+    let busy =
+        stopping.is_none() || helper_stop::jobs_running(&addr) || installs.jobs.active_for(&addr);
+    let r = tokio::task::spawn_blocking(move || {
+        let _stopping = stopping;
+        helper_stop::stop(&addr, busy)
+    })
+    .await;
     match r {
         Ok(Ok(helper_stop::Stopped::Stopped)) => {
             Json(serde_json::json!({ "state": "stopped" })).into_response()
@@ -4667,7 +4760,9 @@ struct HelperUninstallReq {
 /// PS5": the helper turns Minion off and removes its tile, shows the icons it hid, exits and
 /// deletes its own folders on the console (`node.uninstall`). Refused (409) while this engine
 /// has a job running against the console (`reason: busy`) or while something is mounted in
-/// those folders (`reason: in_use`, `paths`); an older helper answers `reason: old_helper` (501).
+/// those folders (`reason: in_use`, `paths`) or while the console itself installs a package,
+/// converts a game or extracts an archive (`reason: console_installing` | `console_converting` |
+/// `console_extracting`); an older helper answers `reason: old_helper` (501).
 /// Copies of the helper stored in loaders are not touched here: the app removes them first.
 /// After a removal the key pinned for the console is forgotten (`key_forgotten`): its identity
 /// went with the folders.
@@ -4678,11 +4773,17 @@ async fn ps5_helper_uninstall(
     let Some(addr) = required_console_addr(req.addr) else {
         return missing_console_addr();
     };
-    let busy = helper_stop::is_busy(&addr) || installs.jobs.active_for(&addr);
+    // As for a stop: marked before the jobs are read, held for the whole call (up to 240 s).
+    let stopping = helper_stop::begin_stopping(&addr);
+    let busy =
+        stopping.is_none() || helper_stop::jobs_running(&addr) || installs.jobs.active_for(&addr);
     let (keep, check) = (req.keep_backups, req.check);
     let console = addr.clone();
-    let r =
-        tokio::task::spawn_blocking(move || helper_stop::uninstall(&addr, busy, keep, check)).await;
+    let r = tokio::task::spawn_blocking(move || {
+        let _stopping = stopping;
+        helper_stop::uninstall(&addr, busy, keep, check)
+    })
+    .await;
     match r {
         Ok(Ok(mut v)) => {
             v["state"] = if check { "ready" } else { "removed" }.into();
@@ -4694,14 +4795,16 @@ async fn ps5_helper_uninstall(
                     .forget_console_key(&console)
                     .await
                     .into();
+                // The zstd runtime went with the folders: put it again with the next helper.
+                convert_runtime::forget(&console);
             }
             Json(v).into_response()
         }
         Ok(Err(e)) => {
             let code = match e {
-                helper_stop::UninstallError::Busy | helper_stop::UninstallError::InUse(_) => {
-                    StatusCode::CONFLICT
-                }
+                helper_stop::UninstallError::Busy
+                | helper_stop::UninstallError::InUse(_)
+                | helper_stop::UninstallError::ConsoleBusy(_) => StatusCode::CONFLICT,
                 helper_stop::UninstallError::OldHelper => StatusCode::NOT_IMPLEMENTED,
                 _ => StatusCode::BAD_GATEWAY,
             };
@@ -5416,21 +5519,16 @@ async fn ps5_fs_write_bytes(
 struct PeripheralReq {
     #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
-    /// `bd_power_off`, `bd_power_on`, `eject_disc`, `usb_port_off`, `usb_port_on` or `beep`.
-    /// The front light's `led_off`, `led_on` and `led_dim` are no longer supported (400).
+    /// `bd_power_off`, `bd_power_on`, `eject_disc`, `usb_port_off`, `usb_port_on`, `beep`,
+    /// or the front light's `led_off`, `led_on` and `led_dim`.
     action: String,
-    /// The USB port or beep pattern the action takes; 0 otherwise.
+    /// The USB port, beep pattern or brightness level the action takes; 0 otherwise.
     #[serde(default)]
     port: i32,
 }
 
 /// The action a peripheral request names, or why it is refused.
 fn peripheral_action(name: &str) -> Result<ps5upload_core::diagnostics::PeripheralAction, String> {
-    if ps5upload_core::diagnostics::REMOVED_PERIPHERAL_ACTIONS.contains(&name) {
-        return Err(format!(
-            "{name} is not supported: the PS5's front light can't be controlled"
-        ));
-    }
     serde_json::from_value(serde_json::Value::String(name.to_string()))
         .map_err(|_| format!("unknown peripheral action: {name}"))
 }
@@ -5438,8 +5536,10 @@ fn peripheral_action(name: &str) -> Result<ps5upload_core::diagnostics::Peripher
 /// POST /api/ps5/peripheral
 /// Body: `{ "addr": "IP", "action": "beep", "port": 1 }`
 ///
-/// The disc drive, the USB ports and the beeper. Replies with the helper's own ack (`ok`,
-/// `action`, `code`); a transport failure is a 502, an unknown or removed action a 400.
+/// The disc drive, the USB ports, the beeper and the front light. Replies with the helper's own
+/// ack (`ok`, `action`, `code`); a transport failure is a 502, an unknown action a 400. The
+/// front light's calls are accepted on every firmware tried, but did not change the light on
+/// a launch PS5 on FW 13.60 (#840).
 async fn ps5_peripheral(Json(q): Json<PeripheralReq>) -> impl IntoResponse {
     let action = match peripheral_action(q.action.trim()) {
         Ok(a) => a,
@@ -6889,7 +6989,7 @@ mod peripheral_tests {
     use ps5upload_core::diagnostics::PeripheralAction;
 
     #[test]
-    fn the_front_light_is_refused_by_name() {
+    fn actions_are_parsed_by_name() {
         assert!(matches!(
             peripheral_action("beep"),
             Ok(PeripheralAction::Beep)
@@ -6898,19 +6998,28 @@ mod peripheral_tests {
             peripheral_action("eject_disc"),
             Ok(PeripheralAction::EjectDisc)
         ));
-        for led in ["led_off", "led_on", "led_dim"] {
-            let e = peripheral_action(led).unwrap_err();
-            assert!(e.contains("not supported"), "{e}");
-        }
+        // The front light is offered again (#840): accepted everywhere, works on some consoles.
+        assert!(matches!(
+            peripheral_action("led_off"),
+            Ok(PeripheralAction::LedOff)
+        ));
+        assert!(matches!(
+            peripheral_action("led_on"),
+            Ok(PeripheralAction::LedOn)
+        ));
+        assert!(matches!(
+            peripheral_action("led_dim"),
+            Ok(PeripheralAction::LedDim)
+        ));
         assert!(peripheral_action("disco")
             .unwrap_err()
             .contains("unknown peripheral action"));
     }
 
     #[tokio::test]
-    async fn an_old_client_asking_for_the_light_gets_a_400() {
+    async fn an_unknown_action_gets_a_400() {
         let req: PeripheralReq =
-            serde_json::from_value(serde_json::json!({ "addr": "192.0.2.7", "action": "led_off" }))
+            serde_json::from_value(serde_json::json!({ "addr": "192.0.2.7", "action": "disco" }))
                 .unwrap();
         let r = ps5_peripheral(Json(req)).await.into_response();
         assert_eq!(r.status(), StatusCode::BAD_REQUEST);
@@ -7464,6 +7573,26 @@ async fn transfer_file_handler(
             return json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response()
         }
     };
+    // A file on this computer is read until the upload ends: an in-place edit of it is refused
+    // meanwhile (and this upload while one runs), and an undo journal an interrupted edit left
+    // beside it is settled first, so the console gets the image as it is, not half-edited.
+    let reading = if source_fs.is_none() {
+        let src = src_path.clone();
+        match tokio::task::spawn_blocking(move || {
+            crate::image_edit_in_place::open_for_reading(&src)
+        })
+        .await
+        {
+            Ok(Ok((_, reading))) => Some(reading),
+            Ok(Err(why)) => return json_err(StatusCode::CONFLICT, why).into_response(),
+            Err(e) => {
+                return json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}"))
+                    .into_response()
+            }
+        }
+    } else {
+        None
+    };
     let src_basename = src_path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -7527,6 +7656,8 @@ async fn transfer_file_handler(
     // Registered before the task so a cancel that arrives before the transfer starts is kept.
     let cancel = register_transfer_cancel(job_id);
     tokio::task::spawn_blocking(move || {
+        // Held for the whole upload (see above).
+        let _reading = reading;
         // Marks the console busy for the job: a helper stop is refused meanwhile.
         let _busy = helper_stop::enter(&addr);
         // Drops at closure end (success OR panic), stopping the
@@ -12594,8 +12725,6 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
 
     // The Collection's automatic refresh (a no-op until a folder is added).
     collection_api::spawn_auto_refresh();
-    // "Keep payloads up to date" (a no-op until the user turns it on).
-    payload_updates_api::spawn_scheduler();
     // Install sessions live in their own state (served by pkg_install::api_router below); the helper
     // log mirror also reads it, to stay off a console while an install runs.
     let pkg_state = std::sync::Arc::new(pkg_install::PkgInstallState::restored());
@@ -12639,6 +12768,8 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     );
     // Save backups to a network share: on an interval, or when a game is closed (#592).
     save_backup_server::spawn();
+    // Save sync between two consoles: suggests a copy after a game closes, never copies itself.
+    save_sync::spawn();
     // Mesh Drive folders are kept in sync here too, app open or not.
     mesh_drive::spawn();
     pkg_install::spawn_stale_upload_sweep();
@@ -13005,6 +13136,19 @@ fn build_app_and_mcp(
             "/api/save-backup/copy-console/targets",
             get(save_copy::get_copy_targets),
         )
+        // One user's saves kept in step across two consoles, on the user's say-so.
+        .route("/api/save-sync", get(save_sync::get_view))
+        .route(
+            "/api/save-sync/pair",
+            axum::routing::put(save_sync::put_pair),
+        )
+        .route(
+            "/api/save-sync/pair/remove",
+            post(save_sync::post_remove_pair),
+        )
+        .route("/api/save-sync/status", get(save_sync::get_status))
+        .route("/api/save-sync/apply", post(save_sync::post_apply))
+        .route("/api/save-sync/dismiss", post(save_sync::post_dismiss))
         .route(
             "/api/shared/{name}",
             get(shared_state::get_doc).put(shared_state::put_doc),

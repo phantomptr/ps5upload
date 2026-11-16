@@ -23,6 +23,24 @@ use crate::{
     JobStage, JobState,
 };
 
+/// A job's overall bytes out of `job_total`, for its `bytes_sent`: each of the `of` stages it goes
+/// through an equal share, those before `at` done in full and this one by its own `done` of
+/// `total`. Never past `job_total`. The stage's own count is the job's `stage`, which the Convert
+/// screen draws; this one is what a job list's bar (Tasks, the API, MCP) shows, so it must not
+/// fall back to 0 at each stage or pass its total.
+pub(crate) fn overall_progress(job_total: u64, at: u32, of: u32, done: u64, total: u64) -> u64 {
+    if of == 0 {
+        return 0;
+    }
+    let within = if total == 0 {
+        0.0
+    } else {
+        done.min(total) as f64 / total as f64
+    };
+    let share = (f64::from(at.min(of)) + within) / f64::from(of);
+    ((job_total as f64 * share) as u64).min(job_total)
+}
+
 /// A build's stages by index, as `build::Stage::index` numbers them.
 const STAGES: [build::Stage; 5] = [
     build::Stage::Check,
@@ -458,6 +476,7 @@ pub(crate) async fn fpkg_build_handler(
     );
 
     // The ticker: the build's own counters, published on the same cadence as a transfer's.
+    let job_total = inspection.planned_size.max(1);
     let jobs = state.jobs.clone();
     let events_tx = state.events_tx.clone();
     let tick_bytes = bytes.clone();
@@ -474,16 +493,31 @@ pub(crate) async fn fpkg_build_handler(
                     stage,
                     ..
                 }) => {
-                    *bytes_sent = tick_bytes.load(Ordering::Relaxed);
-                    *total_bytes = tick_total.load(Ordering::Relaxed);
+                    // The stage's own count goes in `stage` (the Convert screen draws each
+                    // stage); the job's is the whole build's, so it never goes back.
+                    let (done, of) = (
+                        tick_bytes.load(Ordering::Relaxed),
+                        tick_total.load(Ordering::Relaxed),
+                    );
                     let at = tick_stage.load(Ordering::Relaxed);
                     *stage = STAGES.get(at as usize).map(|s| JobStage {
                         id: s.id().to_string(),
                         index: s.index(),
                         count: build::STAGE_COUNT,
-                        done: *bytes_sent,
-                        total: *total_bytes,
+                        done,
+                        total: of,
                     });
+                    if let Some(s) = STAGES.get(at as usize) {
+                        let overall = overall_progress(
+                            job_total,
+                            s.index().saturating_sub(0),
+                            build::STAGE_COUNT,
+                            done,
+                            of,
+                        );
+                        *bytes_sent = (*bytes_sent).max(overall);
+                    }
+                    *total_bytes = job_total;
                     // Nobody listening: nothing to build.
                     let state = crate::event_bus::tick_wanted(&events_tx)
                         .then(|| g.get(&job_id).map(|st| serde_json::json!(st)))
@@ -754,6 +788,8 @@ async fn ps4_package_build(
     );
     let jobs = state.jobs.clone();
     let events_tx = state.events_tx.clone();
+    // Writing, then reading back: the job's progress is the two stages together.
+    let job_total = inspection.bytes.max(1);
     let (tick_bytes, tick_total, tick_stage) = (bytes.clone(), total.clone(), stage.clone());
     let ticker = tokio::spawn(async move {
         loop {
@@ -766,16 +802,31 @@ async fn ps4_package_build(
                     stage,
                     ..
                 }) => {
-                    *bytes_sent = tick_bytes.load(Ordering::Relaxed);
-                    *total_bytes = tick_total.load(Ordering::Relaxed);
+                    // The stage's own count goes in `stage` (the Convert screen draws each
+                    // stage); the job's is the whole build's, so it never goes back.
+                    let (done, of) = (
+                        tick_bytes.load(Ordering::Relaxed),
+                        tick_total.load(Ordering::Relaxed),
+                    );
                     let at = tick_stage.load(Ordering::Relaxed);
                     *stage = STAGES.get(at as usize).map(|s| JobStage {
                         id: s.id().to_string(),
                         index: s.index(),
                         count: build::STAGE_COUNT,
-                        done: *bytes_sent,
-                        total: *total_bytes,
+                        done,
+                        total: of,
                     });
+                    if let Some(s) = STAGES.get(at as usize) {
+                        let overall = overall_progress(
+                            job_total,
+                            s.index().saturating_sub(build::Stage::Write.index()),
+                            2,
+                            done,
+                            of,
+                        );
+                        *bytes_sent = (*bytes_sent).max(overall);
+                    }
+                    *total_bytes = job_total;
                     let state = crate::event_bus::tick_wanted(&events_tx)
                         .then(|| g.get(&job_id).map(|st| serde_json::json!(st)))
                         .flatten();
@@ -852,7 +903,9 @@ async fn ps4_package_build(
                     final_path.display()
                 ));
             }
-            std::fs::rename(&partial_path, &final_path)
+            // Never over a file that appeared since the check above (another program's, a
+            // second build's): the system's no-replace rename where there is one.
+            ps5upload_convert_core::safe_write::rename_new(&partial_path, &final_path)
                 .map_err(|e| format!("{}: {e}", final_path.display()))?;
             Ok(written)
         })();
@@ -2341,14 +2394,18 @@ pub(crate) async fn exfat_build_handler(
             (false, true) => &["plan", "compress", "write", "verify"],
             (false, false) => &["plan", "write", "verify"],
         };
+        // The job's bytes are the whole build's (see `overall_progress`); the stage's own are in
+        // its `stage`.
+        let job_total = total;
         let mut report = |id: &str, done: u64, total: u64| {
-            if id != "verify" {
-                bytes.store(done, Ordering::Relaxed);
-            }
             let index = stages
                 .iter()
                 .position(|s| *s == id || (id == "compress" && *s == "write"))
                 .unwrap_or(0) as u32;
+            bytes.fetch_max(
+                overall_progress(job_total, index, stages.len() as u32, done, total),
+                Ordering::Relaxed,
+            );
             *current.lock().unwrap_or_else(|e| e.into_inner()) = Some(JobStage {
                 id: id.to_string(),
                 index,
@@ -3501,11 +3558,15 @@ pub(crate) async fn folder_build_handler(
         } else {
             &["write", "verify"]
         };
+        // The job's bytes are the whole build's (see `overall_progress`); the stage's own are in
+        // its `stage`.
+        let job_total = total;
         let mut report = |id: &str, done: u64, total: u64| {
-            if id != "verify" {
-                bytes.store(done, Ordering::Relaxed);
-            }
             let index = stages.iter().position(|s| *s == id).unwrap_or(0) as u32;
+            bytes.fetch_max(
+                overall_progress(job_total, index, stages.len() as u32, done, total),
+                Ordering::Relaxed,
+            );
             *current.lock().unwrap_or_else(|e| e.into_inner()) = Some(JobStage {
                 id: id.to_string(),
                 index,
@@ -3751,7 +3812,8 @@ impl Drop for Scaffold {
 
 pub(crate) use ps5upload_convert_core::writing::Writing;
 use ps5upload_convert_core::writing::{
-    active_partials, has_download_sidecar, has_fresh_checkpoint, is_our_partial,
+    active_partials, claimed_elsewhere, has_download_sidecar, has_fresh_checkpoint, is_our_partial,
+    sweep_dead_claims,
 };
 
 /// [`Writing::claim`] on a blocking thread: clearing a leftover can mean removing a whole pack
@@ -3824,7 +3886,7 @@ pub(crate) fn sweep_output_leftovers(out: &Path) {
                 }
             })
             .map(|e| e.path())
-            .filter(|p| !active.contains(p))
+            .filter(|p| !active.contains(p) && !claimed_elsewhere(p))
             .partition(|p| p.is_file())
     };
     for p in stale {
@@ -3833,6 +3895,7 @@ pub(crate) fn sweep_output_leftovers(out: &Path) {
     for p in spools {
         let _ = std::fs::remove_dir_all(&p);
     }
+    sweep_dead_claims(out);
 }
 
 /// An LZ4 build's spool, `<image or folder>.lz4spool/`: named so, and holding nothing but pack
@@ -3858,10 +3921,31 @@ fn is_our_lz4_spool(dir: &Path) -> bool {
 pub(crate) const EXTRACT_PREFIX: &str = ".ps5upload-extract-";
 
 /// Unpack folders this engine is still using (a build reads from one until it is cleaned).
-fn active_extracts() -> &'static std::sync::Mutex<std::collections::HashSet<PathBuf>> {
-    static SET: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
-        std::sync::OnceLock::new();
+fn active_extracts() -> &'static std::sync::Mutex<ActiveExtracts> {
+    static SET: std::sync::OnceLock<std::sync::Mutex<ActiveExtracts>> = std::sync::OnceLock::new();
     SET.get_or_init(Default::default)
+}
+
+/// The unpack folders in use, each with its claim file held, so another process's sweep (the
+/// `convert` command, a second engine) leaves them alone too.
+#[derive(Default)]
+struct ActiveExtracts(
+    std::collections::HashMap<PathBuf, Option<ps5upload_convert_core::writing::ClaimLock>>,
+);
+
+impl ActiveExtracts {
+    fn insert(&mut self, path: PathBuf) {
+        let lock = ps5upload_convert_core::writing::ClaimLock::take(&path)
+            .ok()
+            .flatten();
+        self.0.insert(path, lock);
+    }
+    fn remove(&mut self, path: &Path) {
+        self.0.remove(path);
+    }
+    fn contains(&self, path: &Path) -> bool {
+        self.0.contains_key(path)
+    }
 }
 
 /// Unpacking needs room for the files and, after them, for a package about as large on the
@@ -3902,7 +3986,8 @@ fn remove_stale_extracts(out: &Path) {
             .to_str()
             .is_some_and(|n| n.starts_with(EXTRACT_PREFIX))
             && e.file_type().is_ok_and(|t| t.is_dir())
-            && !active.contains(&p);
+            && !active.contains(&p)
+            && !claimed_elsewhere(&p);
         if stale {
             let _ = ps5upload_core::archive_extract::remove_path_retrying(&p);
         }
@@ -4292,14 +4377,20 @@ mod extract_tests {
             .collect();
         assert_eq!(
             left,
-            ["D.ffpkg.partial", "Game.ffpfsc", "movie.mkv.partial"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect()
+            [
+                ".D.ffpkg.partial.ps5upload-claim",
+                "D.ffpkg.partial",
+                "Game.ffpfsc",
+                "movie.mkv.partial"
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
         );
         drop(writing);
         sweep_output_leftovers(&out);
         assert!(!out.join("D.ffpkg.partial").exists());
+        assert!(!out.join(".D.ffpkg.partial.ps5upload-claim").exists());
 
         // An LZ4 build's pack spool goes too, unless its build is running.
         std::fs::create_dir_all(out.join("E.exfat.lz4spool")).unwrap();
@@ -4311,6 +4402,54 @@ mod extract_tests {
         assert!(out.join("F.exfat.lz4spool").exists());
         drop(spooling);
         let _ = std::fs::remove_dir_all(&out);
+    }
+
+    /// Another process's build (the `convert` command beside the app, or a second engine) is seen
+    /// through its claim file: its unfinished output and its unpack folder are not swept, and the
+    /// same output is refused here. A claim file nobody holds (a killed process's) goes.
+    #[test]
+    fn another_process_s_unfinished_output_is_never_swept() {
+        use ps5upload_convert_core::writing::ClaimLock;
+        let out =
+            std::env::temp_dir().join(format!("ps5upload-other-claim-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        std::fs::create_dir_all(&out).unwrap();
+        let theirs = out.join("A.exfat.partial");
+        std::fs::write(&theirs, b"x").unwrap();
+        let unpack = out.join(format!("{EXTRACT_PREFIX}theirs"));
+        std::fs::create_dir_all(&unpack).unwrap();
+        // Held as another process holds it: a lock on its claim file, not in this engine's sets.
+        let held = ClaimLock::take(&theirs).unwrap().unwrap();
+        let held_unpack = ClaimLock::take(&unpack).unwrap().unwrap();
+        sweep_output_leftovers(&out);
+        assert!(theirs.exists() && unpack.exists());
+        assert!(Writing::claim(theirs.clone()).is_none());
+        assert!(theirs.exists(), "a refused claim clears nothing");
+        drop((held, held_unpack));
+        sweep_output_leftovers(&out);
+        assert!(!theirs.exists() && !unpack.exists());
+        // A dead process's claim file, nobody holding it: gone, with what it claimed.
+        std::fs::write(&theirs, b"x").unwrap();
+        std::fs::write(out.join(".A.exfat.partial.ps5upload-claim"), b"1\n").unwrap();
+        std::fs::write(out.join(".Gone.exfat.partial.ps5upload-claim"), b"1\n").unwrap();
+        sweep_output_leftovers(&out);
+        let left: Vec<_> = std::fs::read_dir(&out).unwrap().flatten().collect();
+        assert!(left.is_empty(), "{left:?}");
+        let _ = std::fs::remove_dir_all(&out);
+    }
+
+    #[test]
+    fn a_job_s_bytes_go_through_every_stage_once() {
+        // Three stages of 1000: each moves the job through its share, never back.
+        assert_eq!(overall_progress(3000, 0, 3, 0, 500), 0);
+        assert_eq!(overall_progress(3000, 0, 3, 500, 500), 1000);
+        assert_eq!(overall_progress(3000, 1, 3, 0, 0), 1000);
+        assert_eq!(overall_progress(3000, 1, 3, 50, 100), 1500);
+        assert_eq!(overall_progress(3000, 2, 3, 10, 10), 3000);
+        // A stage that counts past its own total, or a stage past the list, stays inside.
+        assert_eq!(overall_progress(3000, 2, 3, 20, 10), 3000);
+        assert_eq!(overall_progress(3000, 7, 3, 0, 0), 3000);
+        assert_eq!(overall_progress(3000, 0, 0, 1, 1), 0);
     }
 
     /// Straight to the console: .exfat, .ffpkg and .ffpfs, plain or in a .ffpfsc, packed (LZ4

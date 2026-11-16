@@ -8,48 +8,14 @@
 type Tr = (key: string, vars?: Record<string, string | number>, fallback?: string) => string;
 
 const WORDED: Record<string, { key: string; fallback: string; detail?: boolean }> = {
-  repo_host_is_ip: {
-    key: "payloads_err_repo_host_ip",
-    fallback: "That is an IP address. Use github.com or the domain of a Gitea or Forgejo server.",
-  },
-  repo_host_gitlab: {
-    key: "payloads_err_repo_host_gitlab",
-    fallback: "GitLab isn't supported. Use github.com or a Gitea or Forgejo server.",
-  },
   custom_repos_unreadable: {
     key: "payloads_err_custom_repos_unreadable",
     fallback: "Your list of added repos can't be read, so it was left as it is. Fix or delete this file: {detail}",
     detail: true,
   },
-  download_cancelled: {
-    key: "payloads_err_download_cancelled",
-    fallback: "Download cancelled.",
-  },
   redirect_refused: {
     key: "payloads_err_redirect_refused",
     fallback: "The server sent this download to an address that isn't allowed, so it was stopped.",
-  },
-  invalid_checksum_file: {
-    key: "payloads_err_invalid_checksum_file",
-    fallback: "The checksum list must be a file name, like SHA256SUMS.",
-  },
-  source_url_invalid: {
-    key: "payloads_err_source_url_invalid",
-    fallback: "A source must be an https:// address on a public site.",
-  },
-  source_not_a_list: {
-    key: "payloads_err_source_not_a_list",
-    fallback: "That address didn't answer with a payload list. ({detail})",
-    detail: true,
-  },
-  source_empty: {
-    key: "payloads_err_source_empty",
-    fallback: "The list has no payload ps5upload can use: each needs its SHA-256 and a file on github.com or the list's own site.",
-  },
-  source_fetch_failed: {
-    key: "payloads_err_source_fetch_failed",
-    fallback: "Couldn't load the list. ({detail})",
-    detail: true,
   },
   usb_not_enough_space: {
     key: "usb_err_not_enough_space",
@@ -80,11 +46,6 @@ function codeOf(message: string): string | null {
   return m && WORDED_ERROR_CODES.has(m[1]) ? m[1] : null;
 }
 
-/** A user's own Cancel is not a failure: no error box, no notification. */
-export function isDownloadCancelled(err: unknown): boolean {
-  return codeOf(messageOf(err)) === "download_cancelled";
-}
-
 export function payloadErrorText(tr: Tr, err: unknown): string {
   const message = messageOf(err);
   const code = codeOf(message);
@@ -97,7 +58,11 @@ export function payloadErrorText(tr: Tr, err: unknown): string {
 const UNKNOWN_SKIP = /^(.+): unknown_payload$/;
 
 /** One "Skipped" line of a USB stick write. */
+const NOT_PAYLOAD_SKIP = /^(.+): not_a_payload_file$/;
+
 export function usbSkippedText(tr: Tr, line: string): string {
+  const np = NOT_PAYLOAD_SKIP.exec(line);
+  if (np) return tr("usb_skipped_not_payload", { name: np[1] }, `${np[1]}: not an .elf or .bin file`);
   const m = UNKNOWN_SKIP.exec(line);
   if (!m) return line;
   return tr("usb_skipped_unknown", { id: m[1] }, `${m[1]}: not in the payload list any more`);

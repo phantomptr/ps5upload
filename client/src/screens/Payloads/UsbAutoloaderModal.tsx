@@ -3,7 +3,10 @@ import {
   HardDrive,
   RefreshCw,
   CheckCircle2,
+  FilePlus,
+  X,
 } from "lucide-react";
+import { pickPaths } from "../../lib/pickPath";
 import {
   usbListRemovable,
   usbAutoloaderInstall,
@@ -23,8 +26,9 @@ import { isMobile } from "../../lib/platform";
  * USB autoloader wizard. Three-step inline modal:
  *
  *   1. Pick a removable drive (list comes from `usbListRemovable`).
- *   2. Pick which payloads to bundle (only ones already in the local
- *      cache — the modal explains how to download missing ones).
+ *   2. Pick which payloads to bundle: copies already in the app's
+ *      library, and payload files from this computer (the app doesn't
+ *      download payloads, so a new user's library is empty).
  *   3. Confirm + write. The Rust side reorders by autoload_priority,
  *      copies ELFs, and emits autoload.txt.
  *
@@ -48,6 +52,8 @@ export default function UsbAutoloaderModal({
   const [pickedDrive, setPickedDrive] = useState<string | null>(null);
   const [pickedIds, setPickedIds] = useState<Set<string>>(new Set());
   const [includeUs, setIncludeUs] = useState(true);
+  // Payload files from this computer, in the order added.
+  const [localFiles, setLocalFiles] = useState<string[]>([]);
   const [installing, setInstalling] = useState(false);
   const [result, setResult] = useState<AutoloaderInstallResult | null>(null);
   const [installError, setInstallError] = useState<string | null>(null);
@@ -87,6 +93,16 @@ export default function UsbAutoloaderModal({
     });
   }
 
+  async function addLocalFiles() {
+    // pickPaths: real paths on every platform (Android's dialog would hand back content:// URIs).
+    const paths = await pickPaths({
+      filters: [{ name: tr("usb_wizard_payload_filter", undefined, "Payload"), extensions: ["elf", "bin"] }],
+    }).catch(() => [] as string[]);
+    if (paths.length === 0) return;
+    setLocalFiles((prev) => [...prev, ...paths.filter((p) => !prev.includes(p))]);
+    setResult(null);
+  }
+
   async function handleInstall() {
     if (!pickedDrive) return;
     setInstalling(true);
@@ -97,6 +113,7 @@ export default function UsbAutoloaderModal({
         drive_path: pickedDrive,
         payload_ids: Array.from(pickedIds),
         include_ps5upload: includeUs,
+        local_files: localFiles,
       });
       setResult(r);
     } catch (e) {
@@ -224,11 +241,52 @@ export default function UsbAutoloaderModal({
                 />
                 <p className="mb-2 text-xs text-[var(--color-muted)]">
                   {tr(
-                    "usb_wizard_step2_hint",
+                    "usb_wizard_step2_hint_v2",
                     undefined,
-                    "Only payloads already in your local cache are eligible. Cache more on the Payloads screen first if a payload is missing here.",
+                    "Tick copies already in the app's library, or add payload files from this computer.",
                   )}
                 </p>
+                <div className="mb-3">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    leftIcon={<FilePlus size={12} />}
+                    onClick={() => void addLocalFiles()}
+                  >
+                    {tr("usb_wizard_add_files", undefined, "Add files from this computer…")}
+                  </Button>
+                  {localFiles.length > 0 && (
+                    <ul className="mt-2 space-y-1">
+                      {localFiles.map((f) => (
+                        <li
+                          key={f}
+                          className="flex items-center gap-3 rounded-[var(--radius-field)] border border-[var(--color-accent)] bg-[var(--color-surface)] p-2 text-xs"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate font-medium">{f.split(/[\\/]/).pop()}</div>
+                            <div className="truncate text-xs text-[var(--color-muted)]" title={f}>
+                              {f}
+                            </div>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            aria-label={tr("usb_wizard_remove_file", undefined, "Remove")}
+                            leftIcon={<X size={12} />}
+                            onClick={() => setLocalFiles((prev) => prev.filter((x) => x !== f))}
+                          />
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <p className="mt-1 text-xs text-[var(--color-muted)]">
+                    {tr(
+                      "usb_wizard_local_order",
+                      undefined,
+                      "Your files load after the library's payloads, in the order added.",
+                    )}
+                  </p>
+                </div>
                 <ul className="space-y-1">
                   {catalog.map((p) => {
                     const cached = !!inventoryById[p.id];
@@ -289,7 +347,7 @@ export default function UsbAutoloaderModal({
             )}
 
             {/* Step 3 — install + result */}
-            {pickedDrive && (pickedIds.size > 0 || includeUs) && (
+            {pickedDrive && (pickedIds.size > 0 || localFiles.length > 0 || includeUs) && (
               <section>
                 <SectionHeader
                   index={3}

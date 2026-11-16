@@ -2093,7 +2093,7 @@ export async function payloadsRelease(
  *  can pick a specific version — pin a known-good build or downgrade when
  *  the latest is unstable. Each entry is a full `PayloadReleaseInfo`
  *  (same shape as `payloadsRelease`), so the chosen one's
- *  `picked_asset_url` + `tag` feed straight into `payloadsDownload`. */
+ *  `html_url` links to that release's page. */
 export async function payloadsReleases(
   id: string,
   forceRefresh = false,
@@ -2106,29 +2106,6 @@ export async function payloadsReleases(
 
 export async function payloadsLocalInventory(): Promise<PayloadLocalEntry[]> {
   return invoke<PayloadLocalEntry[]>("payloads_local_inventory");
-}
-
-/** Add a user's own GitHub/Gitea repo to the Payloads catalogue (#93). The
- *  backend validates host/owner/name, mints a stable `custom-<hex>` id, and
- *  persists. Idempotent — re-adding the same repo returns the existing entry.
- *  Returns the added (or existing) catalogue row. */
-export async function payloadsAddCustomRepo(args: {
-  host: string;
-  owner: string;
-  name: string;
-  displayName?: string;
-  assetHint?: string;
-  /** A `sha256sum`-style list the repo's releases publish. A download that doesn't match is refused. */
-  checksumFile?: string;
-}): Promise<PayloadInfo> {
-  return invoke<PayloadInfo>("payloads_add_custom_repo", {
-    host: args.host,
-    owner: args.owner,
-    name: args.name,
-    displayName: args.displayName ?? null,
-    assetHint: args.assetHint ?? null,
-    checksumFile: args.checksumFile ?? null,
-  });
 }
 
 /** Remove a user-added custom repo by id (#93). No-op for a catalogue id.
@@ -2157,38 +2134,12 @@ export async function payloadsSources(): Promise<PayloadSourceInfo[]> {
   return invoke<PayloadSourceInfo[]>("payloads_sources");
 }
 
-export async function payloadsAddSource(url: string): Promise<PayloadSourceInfo> {
-  return invoke<PayloadSourceInfo>("payloads_add_source", { url });
-}
-
-export async function payloadsRefreshSources(force = false): Promise<PayloadSourceInfo[]> {
-  return invoke<PayloadSourceInfo[]>("payloads_refresh_sources", { force });
-}
-
 export async function payloadsRemoveSource(id: string): Promise<boolean> {
   return invoke<boolean>("payloads_remove_source", { id });
 }
 
 export async function payloadsLocalPath(id: string): Promise<string | null> {
   return invoke<string | null>("payloads_local_path", { id });
-}
-
-export async function payloadsDownload(
-  id: string,
-  assetUrl: string,
-  version: string,
-): Promise<PayloadLocalEntry> {
-  return invoke<PayloadLocalEntry>("payloads_download", {
-    id,
-    assetUrl,
-    version,
-  });
-}
-
-/** Stop a running download of this payload. Its `payloadsDownload` then rejects with
- *  `download_cancelled` (`isDownloadCancelled`). False when none was running. */
-export async function payloadsDownloadCancel(id: string): Promise<boolean> {
-  return invoke<boolean>("payloads_download_cancel", { id });
 }
 
 // ─── ShadowMount+ awareness (read-only) ───────────────────────────────
@@ -2412,6 +2363,8 @@ export async function usbAutoloaderInstall(req: {
   drive_path: string;
   payload_ids: string[];
   include_ps5upload?: boolean;
+  /** Payload files on this computer (.elf / .bin) to put on the stick too. */
+  local_files?: string[];
 }): Promise<AutoloaderInstallResult> {
   return invoke<AutoloaderInstallResult>("usb_autoloader_install", { req });
 }
@@ -3173,6 +3126,17 @@ export async function peripheralBdOn(addr: string): Promise<PeripheralAck> {
 export async function peripheralBeep(addr: string, pattern = 1): Promise<PeripheralAck> {
   return invoke<PeripheralAck>("peripheral_beep", { addr, pattern });
 }
+/** Turn the front LED off, or hand it back to the console.
+ *  ok-checked-by-caller: PeripheralPanel's run() checks ok once for every action. */
+export async function peripheralLed(addr: string, on: boolean): Promise<PeripheralAck> {
+  return invoke<PeripheralAck>("peripheral_led", { addr, on });
+}
+/** Front LED brightness (0-2); the console keeps it across restarts.
+ *  ok-checked-by-caller: PeripheralPanel's run() checks ok once for every action. */
+export async function peripheralLedDim(addr: string, level: number): Promise<PeripheralAck> {
+  return invoke<PeripheralAck>("peripheral_led_dim", { addr, level });
+}
+
 export interface ModuleInfo {
   handle: number;
   name: string;

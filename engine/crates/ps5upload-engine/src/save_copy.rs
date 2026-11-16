@@ -1154,20 +1154,25 @@ fn restore_owned(
         return Ok(images.to_vec());
     };
     // Back to how it was: what they had before (and no record of the images added), or nothing.
-    let back = match &theirs {
-        // Their save goes back even when taking the added images away failed part way.
+    // Their save going back and the added images going away are told apart: a failure taking
+    // the images away must not hide that the save there before is back.
+    let msg = match &theirs {
         Some(zip) => {
             let took = c.take_away(&folder, added, false);
-            undo(c, title_id, zip, &folder, to_user).and(took)
+            match (undo(c, title_id, zip, &folder, to_user), took) {
+                (Ok(()), Ok(())) => format!("{why}. The save there before was put back."),
+                (Ok(()), Err(left)) => format!(
+                    "{why}. The save there before was put back, but some added files could not be removed: {left}"
+                ),
+                (Err(then), _) => format!("{why}. {then}"),
+            }
         }
-        None => c.take_away(&folder, images, true),
+        None => match c.take_away(&folder, images, true) {
+            Ok(()) => format!("{why}. Nothing was left in that user's saves."),
+            Err(then) => format!("{why}. {then}"),
+        },
     };
-    Err(match (back, theirs.is_some()) {
-        (Ok(()), true) => format!("{why}. The save there before was put back."),
-        (Ok(()), false) => format!("{why}. Nothing was left in that user's saves."),
-        (Err(then), _) => format!("{why}. {then}"),
-    }
-    .into())
+    Err(msg.into())
 }
 
 // ── on a real console ───────────────────────────────────────────────────
@@ -1737,7 +1742,7 @@ pub fn copy_to_console(
 
 /// An emulator's save onto another console: plain files, so they go as they are, through the
 /// backup and restore every other emulator save uses (the one there is backed up first).
-fn copy_emulator_save(
+pub(crate) fn copy_emulator_save(
     from: &str,
     to: &str,
     entry: &SaveEntry,

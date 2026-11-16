@@ -2,6 +2,7 @@
 //! a build's own: what lets two builds of one output refuse each other, and a sweep tell an
 //! unfinished build of ours from a user's file.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Package files being written by a build in this engine (`<stem>.pkg.partial`).
@@ -12,8 +13,156 @@ pub fn active_partials() -> &'static std::sync::Mutex<std::collections::HashSet<
 }
 
 /// Marks a file as being written by a running build, for as long as it lives: the sweep below
-/// leaves it alone, and a second build of the same output is refused.
-pub struct Writing(PathBuf);
+/// leaves it alone, and a second build of the same output is refused. The mark is seen by other
+/// processes too (the `convert` command, a second engine, the app): see [`ClaimLock`].
+pub struct Writing {
+    path: PathBuf,
+    _lock: Option<ClaimLock>,
+}
+
+/// A claim on a path every process honours: a small file beside it, `.<name>.ps5upload-claim`,
+/// held under an OS file lock for as long as the claim lives. The OS drops the lock when the
+/// process ends however it ends (a crash, a kill, a power cut), so a claim never outlives its
+/// owner the way a pid written to a file would. The file also names the owning process's pid,
+/// for whoever looks.
+pub struct ClaimLock {
+    file_path: PathBuf,
+    _file: std::fs::File,
+}
+
+/// The claim file of `path`, or `None` for a path that is not a plain absolute one (a console
+/// or server destination is claimed in this process only).
+pub fn claim_file_of(path: &Path) -> Option<PathBuf> {
+    let path = clean_absolute(path)?;
+    let name = path.file_name()?;
+    let mut claim = std::ffi::OsString::from(".");
+    claim.push(name);
+    claim.push(CLAIM_SUFFIX);
+    Some(path.with_file_name(claim))
+}
+
+const CLAIM_SUFFIX: &str = ".ps5upload-claim";
+
+/// Whether `file` is still the file at `path` (it was not removed and made anew between the open
+/// and the lock). Off Unix there is no cheap file identity; Windows refuses to open a file that
+/// is being removed, which covers the same race.
+fn same_file(file: &std::fs::File, path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match (file.metadata(), std::fs::metadata(path)) {
+            (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (file, path);
+        true
+    }
+}
+
+impl ClaimLock {
+    /// Takes the claim on `path`. `Err(())` when another process holds it. `Ok(None)` when no
+    /// claim file can be made there (a read-only folder, a file system without locks, a path
+    /// that is not a local one): the claim is then this process's alone.
+    #[allow(clippy::result_unit_err)]
+    pub fn take(path: &Path) -> Result<Option<ClaimLock>, ()> {
+        let Some(file_path) = claim_file_of(path) else {
+            return Ok(None);
+        };
+        if let Some(parent) = file_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        for _ in 0..3 {
+            let file = match std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(&file_path)
+            {
+                Ok(f) => f,
+                // Windows: the claim file is being removed by its owner right now.
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && cfg!(windows) => {
+                    return Err(())
+                }
+                Err(_) => return Ok(None),
+            };
+            match file.try_lock() {
+                Ok(()) => {}
+                Err(std::fs::TryLockError::WouldBlock) => return Err(()),
+                Err(std::fs::TryLockError::Error(_)) => return Ok(None),
+            }
+            if !same_file(&file, &file_path) {
+                // Its owner removed it as we opened it: take the new one.
+                continue;
+            }
+            let _ = file.set_len(0);
+            let _ = (&file).write_all(format!("{}\n", std::process::id()).as_bytes());
+            return Ok(Some(ClaimLock {
+                file_path,
+                _file: file,
+            }));
+        }
+        Ok(None)
+    }
+}
+
+impl Drop for ClaimLock {
+    fn drop(&mut self) {
+        // Removed while still locked, then unlocked as the file closes: whoever opened it in
+        // between finds it gone after the lock (`same_file`) and starts over.
+        let _ = std::fs::remove_file(&self.file_path);
+    }
+}
+
+/// Whether another process holds a claim on `path` (a build writing it, an unpack in use). A
+/// claim file nobody holds any more is a dead process's and is removed here.
+pub fn claimed_elsewhere(path: &Path) -> bool {
+    let Some(file_path) = claim_file_of(path) else {
+        return false;
+    };
+    let file = match std::fs::OpenOptions::new().read(true).open(&file_path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+        // Windows: being removed by its owner, which still holds it.
+        Err(_) => return cfg!(windows),
+    };
+    match file.try_lock() {
+        Ok(()) => {
+            if same_file(&file, &file_path) {
+                let _ = std::fs::remove_file(&file_path);
+            }
+            false
+        }
+        Err(std::fs::TryLockError::WouldBlock) => true,
+        Err(std::fs::TryLockError::Error(_)) => false,
+    }
+}
+
+/// Claim files in `dir` that nobody holds and whose path is gone: what a killed process left.
+pub fn sweep_dead_claims(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let name = e.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(target) = name
+            .strip_suffix(CLAIM_SUFFIX)
+            .and_then(|n| n.strip_prefix('.'))
+            .filter(|n| !n.is_empty())
+        else {
+            continue;
+        };
+        let target = dir.join(target);
+        if !target.exists() && e.file_type().is_ok_and(|t| t.is_file()) {
+            // Removes it when nobody holds it.
+            let _ = claimed_elsewhere(&target);
+        }
+    }
+}
 
 /// A path this engine writes and may clear: a `.partial` output or an `.lz4spool` beside one.
 fn is_own_leftover(path: &std::path::Path) -> bool {
@@ -46,8 +195,16 @@ pub fn partial_in_the_way(partial: &Path) -> Option<String> {
 /// non-normal part) after its root, and named like one of our own leftovers. `None` for
 /// anything else, which `claim` then never touches on disk.
 fn clearable_leftover(path: &std::path::Path) -> Option<PathBuf> {
+    if !is_own_leftover(path) {
+        return None;
+    }
+    clean_absolute(path)
+}
+
+/// `path` absolute with no `..` (or other non-normal part) after its root, or `None`.
+fn clean_absolute(path: &Path) -> Option<PathBuf> {
     use std::path::Component;
-    if !path.is_absolute() || !is_own_leftover(path) {
+    if !path.is_absolute() {
         return None;
     }
     let mut clean = PathBuf::new();
@@ -70,6 +227,9 @@ impl Writing {
         if active.contains(&path) {
             return None;
         }
+        // Another process (the `convert` command, a second engine) writing it refuses this one
+        // too, and its file is not cleared from under it.
+        let lock = ClaimLock::take(&path).ok()?;
         // Only ever our own leftovers (a `.partial` output or an `.lz4spool`) at an absolute
         // path with no `..`, whatever path a caller hands in; anything else is never touched.
         if let Some(leftover) = clearable_leftover(&path) {
@@ -90,7 +250,7 @@ impl Writing {
             }
         }
         active.insert(path.clone());
-        Some(Writing(path))
+        Some(Writing { path, _lock: lock })
     }
 }
 
@@ -99,7 +259,7 @@ impl Drop for Writing {
         active_partials()
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .remove(&self.0);
+            .remove(&self.path);
     }
 }
 
@@ -176,6 +336,40 @@ mod tests {
         drop(Writing::claim(spool.clone()).unwrap());
         assert!(!spool.exists());
         assert!(partial_in_the_way(&root.join("missing.partial")).is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A claim is seen through its file by any process (here: another handle, which the OS lock
+    /// treats the same), refuses a second claim, and leaves nothing behind once dropped.
+    #[test]
+    fn a_claim_is_seen_by_other_processes_and_cleared_when_dropped() {
+        let root = std::env::temp_dir().join(format!("ps5upload-claimlock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let partial = root.join("Game.exfat.partial");
+        let file = claim_file_of(&partial).unwrap();
+        assert_eq!(file, root.join(".Game.exfat.partial.ps5upload-claim"));
+        let w = Writing::claim(partial.clone()).unwrap();
+        assert!(file.is_file());
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap().trim(),
+            std::process::id().to_string()
+        );
+        assert!(claimed_elsewhere(&partial));
+        assert!(ClaimLock::take(&partial).is_err());
+        drop(w);
+        assert!(!file.exists());
+        assert!(!claimed_elsewhere(&partial));
+        // A claim file its process left when it was killed is nobody's: free, and removed.
+        std::fs::write(&file, b"1\n").unwrap();
+        assert!(!claimed_elsewhere(&partial));
+        assert!(!file.exists());
+        // A path that is no local one (a console or a server destination) has no claim file.
+        assert!(claim_file_of(Path::new("ps5://1.2.3.4/data/g.exfat")).is_none());
+        assert!(matches!(
+            ClaimLock::take(Path::new("ps5://1.2.3.4/data/g.exfat")),
+            Ok(None)
+        ));
+        sweep_dead_claims(&root);
         let _ = std::fs::remove_dir_all(&root);
     }
 

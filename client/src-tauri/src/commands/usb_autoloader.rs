@@ -365,6 +365,11 @@ pub struct AutoloaderInstallReq {
     /// payload (rare — user explicitly wants a kstuff+SMP-only stick).
     #[serde(default)]
     include_ps5upload: bool,
+    /// Payload files on this computer (`.elf` / `.bin`) the user picked in the wizard. They go
+    /// on the stick under their own names, after the library's payloads and before ps5upload,
+    /// in the order picked.
+    #[serde(default)]
+    local_files: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -430,6 +435,52 @@ struct StickFile {
     /// Name under `ps5_autoloader/`.
     name: String,
     delay_ms: u32,
+}
+
+/// A payload file the user picked on this computer, as it goes on the stick: it must be a
+/// `.elf` or `.bin` file, and it keeps its own name unless that is taken (`kstuff-2.elf`).
+fn local_stick_file(path: &str, taken: &[String]) -> Result<StickFile, String> {
+    let src = PathBuf::from(path);
+    let name = src
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let lower = name.to_ascii_lowercase();
+    if !(lower.ends_with(".elf") || lower.ends_with(".bin")) {
+        return Err(format!("{path}: not_a_payload_file"));
+    }
+    match std::fs::metadata(&src) {
+        Ok(m) if m.is_file() => {}
+        Ok(_) => return Err(format!("{path}: not_a_payload_file")),
+        Err(e) => return Err(format!("{path}: {e}")),
+    }
+    // Characters a FAT/exFAT stick can't hold become `_`.
+    let clean: String = name
+        .chars()
+        .map(|c| {
+            if c < ' ' || "<>:\"|?*\\/".contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    // The extension is 4 ASCII characters, so this split is on a char boundary.
+    let (stem, ext) = clean.split_at(clean.len() - 4);
+    let is_taken = |n: &str| {
+        n.eq_ignore_ascii_case("autoload.txt") || taken.iter().any(|t| t.eq_ignore_ascii_case(n))
+    };
+    let mut out = clean.clone();
+    let mut n = 2;
+    while is_taken(&out) {
+        out = format!("{stem}-{n}{ext}");
+        n += 1;
+    }
+    Ok(StickFile {
+        src,
+        name: out,
+        delay_ms: 0,
+    })
 }
 
 /// The `autoload.txt` for these files, in order.
@@ -525,7 +576,8 @@ fn write_autoloader_folder(
     if let Ok(read) = std::fs::read_dir(folder) {
         for entry in read.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if name.ends_with(".elf")
+            let lower = name.to_ascii_lowercase();
+            if (lower.ends_with(".elf") || lower.ends_with(".bin"))
                 && !files.iter().any(|f| f.name == name)
                 && is_ours_from_an_earlier_run(&name, previous.as_deref(), lib)
             {
@@ -605,7 +657,7 @@ pub async fn usb_autoloader_install(
                 Some(p) => p,
                 None => {
                     skipped.push(format!(
-                        "{id}: no local cache (download via Payloads tab first)"
+                        "{id}: no copy saved on this computer (ps5upload doesn't download payloads)"
                     ));
                     continue;
                 }
@@ -617,6 +669,25 @@ pub async fn usb_autoloader_install(
             delay_ms: *delay_ms,
         });
     }
+
+    // The user's own files load after the library's and before ps5upload (which is last).
+    let ours_at = files
+        .iter()
+        .position(|f| f.name == "ps5upload.elf")
+        .unwrap_or(files.len());
+    let mut local: Vec<StickFile> = Vec::with_capacity(req.local_files.len());
+    for path in &req.local_files {
+        let taken: Vec<String> = files
+            .iter()
+            .chain(local.iter())
+            .map(|f| f.name.clone())
+            .collect();
+        match local_stick_file(path, &taken) {
+            Ok(f) => local.push(f),
+            Err(e) => skipped.push(e),
+        }
+    }
+    files.splice(ours_at..ours_at, local);
 
     // Before anything is written. Zero means the OS didn't say; the copy then reports a full stick.
     let needed = total_size(&files)?;
@@ -838,6 +909,52 @@ mod tests {
             std::fs::read_to_string(folder.join("autoload.txt")).unwrap(),
             "old list\n"
         );
+    }
+
+    #[test]
+    fn a_picked_file_keeps_its_name_unless_taken() {
+        let t = Temp::new("local");
+        let k = src_file(&t, "kstuff.elf", b"k");
+        let f = local_stick_file(k.to_str().unwrap(), &ids(&["ps5upload.elf"])).unwrap();
+        assert_eq!(f.name, "kstuff.elf");
+        assert_eq!(f.src, k);
+        let f =
+            local_stick_file(k.to_str().unwrap(), &ids(&["KSTUFF.elf", "kstuff-2.elf"])).unwrap();
+        assert_eq!(f.name, "kstuff-3.elf");
+        let b = src_file(&t, "mine.BIN", b"b");
+        assert_eq!(
+            local_stick_file(b.to_str().unwrap(), &[]).unwrap().name,
+            "mine.BIN"
+        );
+    }
+
+    #[test]
+    fn a_picked_file_that_is_no_payload_is_refused() {
+        let t = Temp::new("local-bad");
+        let txt = src_file(&t, "notes.txt", b"x");
+        let e = local_stick_file(txt.to_str().unwrap(), &[]).err().unwrap();
+        assert!(e.ends_with("not_a_payload_file"), "{e}");
+        let gone = t.0.join("src").join("gone.elf");
+        assert!(local_stick_file(gone.to_str().unwrap(), &[]).is_err());
+    }
+
+    #[test]
+    fn a_picked_bin_from_an_earlier_run_goes_when_not_picked_again() {
+        let t = Temp::new("local-old");
+        let lib = library(&t);
+        let folder = t.0.join("stick").join("ps5_autoloader");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(
+            folder.join("autoload.txt"),
+            format!("{AUTOLOAD_HEADER}\nold.bin\n"),
+        )
+        .unwrap();
+        std::fs::write(folder.join("old.bin"), b"old").unwrap();
+        std::fs::write(folder.join("users.bin"), b"user's").unwrap();
+        let files = vec![stick_file(src_file(&t, "n.elf", b"new"), "new.elf")];
+        let text = autoload_text(&files);
+        write_autoloader_folder(&folder, &files, &text, &lib).unwrap();
+        assert_eq!(files_in(&folder), ["autoload.txt", "new.elf", "users.bin"]);
     }
 
     #[test]

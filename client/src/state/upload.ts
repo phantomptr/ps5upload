@@ -21,6 +21,12 @@ import { isRemotePath } from "../lib/remotePath";
 import { trStatic } from "../lib/trStatic";
 import { platformFromTitleId, titleIdFromContentId } from "./pkgLibrary";
 import { registerSettingReload } from "../lib/liveSettings";
+import {
+  loadPkgChoice,
+  PKG_CHOICE_KEY,
+  savePkgChoice,
+  type PkgChoice,
+} from "../lib/pkgUploadChoice";
 
 /**
  * Detected source kind. Drives which options the Upload screen shows.
@@ -114,6 +120,10 @@ export interface UploadState {
    *  preference (localStorage), default ON — uploading a game and NOT
    *  wanting to play it is the rare case. */
   registerAfterUpload: boolean;
+  /** What a picked .pkg does: "install" (a "pkg" source: staged, then installed) or "copy" (a
+   *  plain "file" source sent to the destination folder). Sticky (localStorage), default
+   *  install; a batch row's choice updates it too. */
+  pkgChoice: PkgChoice;
 
   destinationVolume: string | null;
   destinationSubpath: string;
@@ -142,6 +152,8 @@ export interface UploadState {
   setMountAfterUpload(on: boolean): void;
   setMountReadOnly(on: boolean): void;
   setRegisterAfterUpload(on: boolean): void;
+  /** Remember the .pkg choice and, when the picked source is a package, pick it again that way. */
+  setPkgChoice(choice: PkgChoice): Promise<void>;
   setDestination(volume: string | null, subpath?: string): void;
   setExcludeMode(mode: ExcludeMode): void;
   toggleExclude(pattern: string): void;
@@ -277,6 +289,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     typeof window === "undefined"
       ? true
       : safeGetItem("ps5upload.register_after_upload") !== "false",
+  pkgChoice: typeof window === "undefined" ? "install" : loadPkgChoice(),
   destinationVolume: null,
   // Default to /data/homebrew/ — the community-standard scan path
   // that third-party PS5 game scanners typically walk. Files landed
@@ -320,8 +333,10 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     // a "pkg" queue source: uploaded to the staging dir, then installed (and
     // optionally deleted) by the queue's pkg finisher — one queued unit. Parse
     // the header for ContentID/title so the row shows the title and the staged
-    // file is named the way Sony's installer expects.
-    if (isInstallPackagePath(path)) {
+    // file is named the way Sony's installer expects. With "Copy as a file" chosen it is an
+    // ordinary file instead (below): sent to the destination folder, nothing installed, so a
+    // split package's part can go too.
+    if (isInstallPackagePath(path) && get().pkgChoice !== "copy") {
       set({
         source: {
           kind: "pkg",
@@ -597,6 +612,13 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     set({ registerAfterUpload });
   },
 
+  async setPkgChoice(pkgChoice) {
+    savePkgChoice(pkgChoice);
+    set({ pkgChoice });
+    const src = get().source;
+    if (src && isInstallPackagePath(src.path)) await get().pickFile(src.remoteOrigin ?? src.path);
+  },
+
   setDestination: (destinationVolume, destinationSubpath) =>
     set((s) => ({
       destinationVolume,
@@ -629,3 +651,4 @@ export const useUploadStore = create<UploadState>((set, get) => ({
 registerSettingReload(["ps5upload.register_after_upload"], () =>
   useUploadStore.setState({ registerAfterUpload: safeGetItem("ps5upload.register_after_upload") !== "false" }),
 );
+registerSettingReload([PKG_CHOICE_KEY], () => useUploadStore.setState({ pkgChoice: loadPkgChoice() }));

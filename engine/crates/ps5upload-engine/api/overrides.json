@@ -94,6 +94,7 @@
   "/api/rar": "transfer",
   "/api/remote": "remote-sources",
   "/api/save-backup": "saves",
+  "/api/save-sync": "saves",
   "/api/settings": "settings",
   "/api/settings-backup": "settings",
   "/api/shared": "settings",

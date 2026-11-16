@@ -4,6 +4,35 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+Keep saves in step between two PS5s, copy a `.pkg` instead of installing it, and payloads now come from you: the app no longer downloads them. Checked with the automated tests; not yet tried on a PS5 unless it says so.
+
+**New**
+- **Save sync between two PS5s** (Saves › Save sync): pair a user on one PS5 with a user on the other, press **Check now**, and see for each game whether the saves are in step, newer on one side, or changed on both. **Sync selected** copies the newer save across; the save it replaces is backed up first. When you close a game whose save changed, the app asks whether to send it to the other PS5. Nothing is ever copied without you saying so, a console that is off or resting is never woken, and when both sides changed you choose which one to keep.
+- **Copy a `.pkg` as a file:** on the Upload screen each package can be **Installed** (as before) or **Copied as a file** to a folder, for Kraken Mount and anyone who keeps packages on a drive. The choice is remembered. When Kraken Mount runs, the folder it scans is filled in.
+- **USB payload stick:** add payload files from this computer, not only ones already in the app.
+
+**Changed**
+- **The app no longer downloads payloads.** Get kstuff, ShadowMount+ and the others from their project pages and send the file. The Catalog is now a guide with each payload's project page and **Send a file…**; the setup wizard asks you to pick your kstuff and ShadowMount+ files. Copies the app already saved keep working. "X is out" notices stay and link to the project page.
+- **Front light buttons are back** (Hardware). On some consoles the light doesn't change (seen on a PS5 on firmware 13.60), but owners of other consoles told us it works for them. (#840)
+- **Payloads › On your PS5:** two kstuff builds the console can't tell apart now show as one "kstuff-lite" card that says so; Kraken Mount gets its own card, even when the console lists it as `payload.elf`; and each unnamed `payload.elf` has its own card, so **Stop** ends only that one. (#846)
+
+**Fixes**
+- **After a wake:** the PS5Upload helper now waits until the console has settled (about a minute) before it starts the keyboard and mouse helper or swaps elfldr. A PS5 that shut down soon after Play woke it may be helped by this; we could not reproduce that crash ourselves. (#842)
+- **Convert, package metadata:** a debug package that keeps `sce_sys/param.json`, `sce_sys/trophy2/trophy00.ucp` or `sce_sys/uds/uds00.ucp` only in its container now unpacks them too. An image built from such a package no longer mounts and then fails to register with "missing/invalid param.json". Thanks to MayHappybb (#845).
+- **Remove PS5Upload** now refuses while the PS5 is installing a package, converting a game or extracting an archive, and says which; a stop or removal also keeps the queue from starting a transfer meanwhile.
+- **Busy messages** name what is really busy: a conversion no longer shows up as "another install is running".
+- **Stop helper** shows the real error; "pair with this console" only when pairing is the reason.
+- **A refused install** (the PS5 was busy) keeps the package the Library downloaded.
+- **zstd runtime** is put back on the PS5 after Remove PS5Upload, and a stop can no longer cut its upload short.
+- **Convert:** the command line and the app no longer delete each other's unfinished output; progress no longer jumps back between stages (Minion too); a stopped job reads Stopped, not failed; Minion no longer says "another conversion is running" after a power loss; a package build can't replace a file that appeared at the last moment.
+- **Editing an image in place:** progress moves while a file is written in, and an upload of the same image waits instead of sending a mix of old and new bytes.
+- **Saves:** a failed Restore to another user says the save there before is back; switching automatic backups on backs up at once, not after the first interval.
+- **Payload Manager and On your PS5** no longer show the previous console's list after a switch, and ask for release info once instead of over and over.
+- **Kraken Mount:** pausing or stopping the upload no longer leaves "Put a package on the PS5 to mount" spinning; an error on one file keeps the others' results.
+- Smaller: the Update button in Convert's zstd runtime tool follows the picked game; Uninstall waits for the mounter check; Remove PS5Upload says "Removing…" only after you confirm; a Join waits until Remote Play has really stopped; and several messages that showed raw English or "Error: …" are fixed.
+
 ## 12.5.1
 
 A big Convert update: zstd packs for every PS5 game, packs in every image format, converting straight from archives, editing an image in place, converting on the PS5 itself from Minion, and mounting a debug package with Kraken Mount instead of installing it. Checked with the automated tests; what was tried on a PS5 is said below.

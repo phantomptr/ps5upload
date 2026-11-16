@@ -527,8 +527,7 @@ pub(super) const CATALOGUE: &[CatalogueEntry] = &[
         // recording by pointing SceAvCapture's sceVencStartEncode import at a stub. Remote
         // Play encodes through the same call, so while Hush is on a stream gets no picture
         // (#561): Play pauses it (enabled=0 in /data/hush/config.ini) and turns it back on.
-        // Releases ship `hush.elf` and a `SHA256SUMS` the download is checked against
-        // (CHECKSUM_FILES). Hush does not rename its process (elfldr calls it payload.elf),
+        // Releases ship `hush.elf`. Hush does not rename its process (elfldr calls it payload.elf),
         // so the client tells it running by the pid in /data/hush/pid.lock.
         id: "hush",
         display_name: "Hush",

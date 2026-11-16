@@ -154,6 +154,10 @@ export function humanizePs5Error(
     return te("err_unpack_bad");
   }
 
+  // A conversion on the console holds the drive: an install or an extraction refused for it
+  // answers convert_busy (not "another install / extraction is running").
+  if (/\bconvert_busy\b/i.test(raw)) return te("upload_as_image_busy");
+
   // ─── Extracting an archive on the console (the extractor payload) ────
   {
     const m = raw.match(/fs_extract_(\w+)/i);

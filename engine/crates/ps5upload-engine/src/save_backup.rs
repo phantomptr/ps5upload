@@ -784,7 +784,10 @@ pub(crate) fn running_of<'a>(host: &str, titles: &[&'a str]) -> Result<Option<&'
 /// the two machines' clocks never matter. A PS5 save is looked at two levels deep, as the saves
 /// list measures it; one of an emulator as deep as its saves are measured (and one loose in a
 /// folder, as only its own entries there).
-fn fingerprint(host: &str, entry: &SaveEntry) -> Result<Vec<(String, u64, i64)>, String> {
+pub(crate) fn fingerprint(
+    host: &str,
+    entry: &SaveEntry,
+) -> Result<Vec<(String, u64, i64)>, String> {
     fingerprint_with(&|p| folder_entries(host, p), entry)
 }
 
@@ -1833,7 +1836,8 @@ pub(crate) fn writable(dir: &str) -> Result<(), String> {
 
 /// `PUT /api/save-backup` — change any of `{enabled, dir, keep, interval_minutes, hosts, add_hosts, remove_hosts}`.
 pub async fn put_settings(Json(patch): Json<SettingsPatch>) -> Response {
-    let mut next = settings();
+    let before = settings();
+    let mut next = before.clone();
     if let Some(d) = patch.dir {
         // Backups already in the folder left behind still list and restore.
         next.move_to(&d);
@@ -1881,7 +1885,22 @@ pub async fn put_settings(Json(patch): Json<SettingsPatch>) -> Response {
     if let Err(e) = save(SETTINGS_FILE, &next) {
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     }
+    // Switched on, or a console added while on: a pass now rather than one whole interval later
+    // (up to a day). A pass already running makes this one a no-op.
+    if pass_due_after_change(&before, &next) {
+        tokio::task::spawn_blocking(|| {
+            if let Err(e) = run_pass() {
+                crate::log_warn!("save backup: {e}");
+            }
+        });
+    }
     Json(view()).into_response()
+}
+
+/// True when a settings change should start a backup pass at once: backups were just switched
+/// on, or a console was added while they are on.
+fn pass_due_after_change(before: &Settings, next: &Settings) -> bool {
+    next.enabled && (!before.enabled || next.hosts.iter().any(|h| !before.hosts.contains(h)))
 }
 
 /// `POST /api/save-backup/run` — a pass now (in the background).
@@ -2014,6 +2033,25 @@ pub async fn get_note(Query(q): Query<NoteQuery>) -> Response {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn switching_on_or_adding_a_console_starts_a_pass_at_once() {
+        let off = Settings::default();
+        let mut on = Settings {
+            enabled: true,
+            hosts: vec!["192.0.2.7".into()],
+            ..Settings::default()
+        };
+        assert!(pass_due_after_change(&off, &on));
+        assert!(!pass_due_after_change(&on, &on));
+        let mut more = on.clone();
+        more.hosts.push("192.0.2.8".into());
+        assert!(pass_due_after_change(&on, &more));
+        on.enabled = false;
+        more.enabled = false;
+        assert!(!pass_due_after_change(&on, &more));
+    }
+
     #[test]
     fn one_client_adding_or_removing_leaves_the_others_consoles_alone() {
         let strs = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();

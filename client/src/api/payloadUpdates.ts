@@ -59,23 +59,12 @@ export interface PayloadUpdateState {
   applied: AppliedPayloadUpdate[];
   available_seq: number;
   applied_seq: number;
-  last_auto_run_at: number;
   pm_syncs: Record<string, PmSyncReport>;
-}
-
-export interface PayloadUpdateSettings {
-  auto_update: boolean;
 }
 
 export interface PmSyncChoice {
   ids: string[];
   autoload_ids: string[];
-}
-
-export interface ApplyResult {
-  updated: { payload_id: string; display_name: string; updated: boolean; from: string; to: string }[];
-  errors: { payload_id: string; code: string; error: string }[];
-  pm_sync?: PmSyncReport;
 }
 
 async function call<T>(method: string, path: string, body?: unknown, timeoutMs = 30_000): Promise<T> {
@@ -90,9 +79,8 @@ async function call<T>(method: string, path: string, body?: unknown, timeoutMs =
   return v;
 }
 
-/** The last check, what was applied and the settings. Asks no network. */
+/** The last check and what changed. Asks no network. */
 export function payloadUpdatesOverview(): Promise<{
-  settings: PayloadUpdateSettings;
   state: PayloadUpdateState;
 }> {
   return call("GET", "/api/payloads/updates");
@@ -102,22 +90,8 @@ export function checkPayloadUpdates(force: boolean): Promise<PayloadUpdateState>
   return call("POST", "/api/payloads/updates/check", { force }, 120_000);
 }
 
-/** Update `ids` (all available when absent), then sync `console`'s Payload Manager if given. */
-export function applyPayloadUpdates(ids?: string[], console?: string): Promise<ApplyResult> {
-  return call(
-    "POST",
-    "/api/payloads/updates/apply",
-    { ids, console: console ? hostOf(console) : undefined },
-    600_000,
-  );
-}
-
 export function rollbackPayload(id: string): Promise<{ from: string; to: string }> {
   return call("POST", `/api/payloads/${encodeURIComponent(id)}/rollback`);
-}
-
-export function setPayloadUpdateSettings(s: PayloadUpdateSettings): Promise<PayloadUpdateSettings> {
-  return call("PUT", "/api/payloads/updates/settings", s);
 }
 
 export function pmSyncChoice(host: string): Promise<PmSyncChoice> {

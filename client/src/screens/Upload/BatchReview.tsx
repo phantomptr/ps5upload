@@ -11,6 +11,8 @@ import type { ArchiveChoice } from "../../lib/archiveDefault";
 import type { BatchRow } from "../../state/uploadBatch";
 import { convertFirstState, type WorkshopHandOver } from "../../lib/convertFirst";
 import { useTr } from "../../state/lang";
+import type { PkgChoice } from "../../lib/pkgUploadChoice";
+import { PkgChoiceField } from "./PkgChoiceField";
 import { STICKY_ACTIONS } from "./stickyActions";
 
 export interface BatchReviewProps {
@@ -41,6 +43,8 @@ export interface BatchReviewProps {
   onPassword: (id: string, password: string) => void;
   /** An archive row: unpack it, or send it as it is (#645). */
   onArchiveChoice?: (id: string, choice: ArchiveChoice) => void;
+  /** A .pkg row: install it, or copy it as a file. */
+  onPkgChoice?: (id: string, choice: PkgChoice) => void;
   onClear: () => void;
   /** Hand the listed games, folders and images to the Workshop to convert first. */
   onConvert?: (state: WorkshopHandOver) => void;
@@ -220,6 +224,14 @@ export function BatchReview(p: BatchReviewProps) {
                       choice={r.archiveChoice}
                       onChoose={(c) => p.onArchiveChoice!(r.id, c)}
                     />
+                  )}
+                  {r.pkgChoice && p.onPkgChoice && (
+                    <div className="mt-1">
+                      <PkgChoiceField
+                        choice={r.pkgChoice}
+                        onChoose={(c) => p.onPkgChoice!(r.id, c)}
+                      />
+                    </div>
                   )}
                   {r.status === "needs-password" && (
                     <div className="mt-1">

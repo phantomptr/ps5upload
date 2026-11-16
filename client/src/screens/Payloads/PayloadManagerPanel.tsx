@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Download, Play, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
+import { ArrowDown, ArrowUp, ExternalLink, Play, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
 
 import { Badge, Button, Callout, ErrorCard, Select, Spinner, Toggle } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
@@ -19,7 +19,6 @@ import {
 } from "../../api/payloadManager";
 import {
   payloadsCatalog,
-  payloadsDownload,
   payloadsLocalInventory,
   payloadsReleases,
   type PayloadInfo,
@@ -27,6 +26,7 @@ import {
   type PayloadReleaseInfo,
 } from "../../api/ps5";
 import { hostOf } from "../../lib/addr";
+import { openExternalUrl } from "../../lib/openExternalUrl";
 import { defaultRelease } from "../../lib/payloadVersions";
 import {
   catalogueMatch,
@@ -35,7 +35,6 @@ import {
   pmRecords,
   pmUpdateFor,
   recordPmStore,
-  swapAutoloadKey,
 } from "../../lib/pmUpdates";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { useConnectionStore } from "../../state/connection";
@@ -78,23 +77,33 @@ export default function PayloadManagerPanel() {
   const [catalog, setCatalog] = useState<PayloadInfo[]>([]);
   const [pick, setPick] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
+  /** Ids whose newest release was asked for on this console. */
+  const asked = useRef(new Set<string>());
 
+  // Another console's answer is not this one's: a slow reply from the console picked before
+  // must not fill this one's list.
+  const genRef = useRef(0);
   const refresh = useCallback(async () => {
     const h = host.trim();
     if (!h) return;
+    const gen = genRef.current;
     setLoading(true);
     setError(null);
     try {
-      setView(await pmOverview(h));
+      const v = await pmOverview(h);
+      if (gen === genRef.current) setView(v);
     } catch (e) {
-      setError(humanizeCaught(e));
+      if (gen === genRef.current) setError(humanizeCaught(e));
     } finally {
-      setLoading(false);
+      if (gen === genRef.current) setLoading(false);
     }
   }, [host]);
 
   useEffect(() => {
+    genRef.current++;
     setView(null);
+    setLatest({});
+    asked.current.clear();
     void refresh();
   }, [refresh]);
 
@@ -115,22 +124,18 @@ export default function PayloadManagerPanel() {
 
   useEffect(() => {
     if (!isTauriEnv() || !view?.present) return;
+    // Only what this app stored has a known version to compare. Each id is asked once per
+    // console: the answers it fills are not what it waits on.
     const ids = new Set(Object.values(pmRecords(hostOf(host))).map((r) => r.id));
-    for (const p of view.payloads) {
-      const id = catalogueMatch(p, inventory, catalog);
-      if (id) ids.add(id);
-    }
-    let live = true;
+    const gen = genRef.current;
     for (const id of ids) {
-      if (id in latest) continue;
+      if (asked.current.has(id)) continue;
+      asked.current.add(id);
       payloadsReleases(id)
-        .then((list) => live && setLatest((m) => ({ ...m, [id]: defaultRelease(list) })))
-        .catch(() => live && setLatest((m) => ({ ...m, [id]: null })));
+        .then((list) => gen === genRef.current && setLatest((m) => ({ ...m, [id]: defaultRelease(list) })))
+        .catch(() => gen === genRef.current && setLatest((m) => ({ ...m, [id]: null })));
     }
-    return () => {
-      live = false;
-    };
-  }, [view, host, latest, inventory, catalog]);
+  }, [view, host]);
 
   const run = async (key: string, work: () => Promise<void>, failTitle: string) => {
     setBusy(key);
@@ -178,68 +183,6 @@ export default function PayloadManagerPanel() {
       tr("pm_delete_failed", { name: p.filename }, `Couldn't delete ${p.filename}`),
     );
   };
-
-  /** Downloads the newer release, stores it in Payload Manager in place of the old file (same
-   *  name: its slot and boot-list entry stay), keeps its place in the boot list, and drops an old
-   *  copy left under another name. A new name that would land in a folder Payload Manager
-   *  already has is asked about first, as storing is: that folder may be the user's. */
-  const updateOne = async (p: PmStoredPayload, id: string, to: PayloadReleaseInfo) => {
-    const h = hostOf(host);
-    const local = await payloadsDownload(id, to.picked_asset_url, to.tag);
-    const name = local.path.split(/[\\/]/).pop() || p.filename;
-    if (name === p.filename) {
-      const r = await pmStore(h, name, local.path, true);
-      if (!r.stored) throw new Error("Payload Manager did not store it");
-    } else if (!(await storeConfirmed(name, (c) => pmStore(h, name, local.path, c), true))) {
-      return;
-    }
-    const after = await pmOverview(h);
-    if (after.present) {
-      const fresh =
-        after.payloads.find((x) => x.filename === name && x.path !== p.path) ??
-        after.payloads.find((x) => x.filename === name);
-      const oldKey = listedEntry(after.autoload?.list, p);
-      if (fresh && after.autoload && oldKey) {
-        const swapped = swapAutoloadKey(after.autoload.list, oldKey, autoloadKey(fresh));
-        if (swapped !== after.autoload.list) await pmSetAutoload(h, after.autoload.enabled, swapped);
-      }
-      if (name !== p.filename && after.payloads.some((x) => x.path === p.path)) await pmDelete(h, p.filename);
-    }
-    if (name !== p.filename) forgetPmStore(h, p.filename);
-    recordPmStore(h, name, id, to.tag);
-    pushNotification(
-      "success",
-      withConsolePrefix(host, tr("pm_updated", { name, tag: to.tag }, `Updated ${name} to ${to.tag}`)),
-    );
-  };
-
-  const update = (p: PmStoredPayload, id: string, to: PayloadReleaseInfo) =>
-    run(
-      `update:${p.path}`,
-      () => updateOne(p, id, to),
-      tr("pm_update_failed", { name: p.filename }, `Couldn't update ${p.filename}`),
-    );
-
-  /** Every stored copy this app knows a newer release for, one after another; one that fails
-   *  is said and the rest go on. */
-  const updateAll = (items: { p: PmStoredPayload; id: string; to: PayloadReleaseInfo }[]) =>
-    run(
-      "update:all",
-      async () => {
-        for (const { p, id, to } of items) {
-          try {
-            await updateOne(p, id, to);
-          } catch (e) {
-            pushNotification(
-              "error",
-              withConsolePrefix(host, tr("pm_update_failed", { name: p.filename }, `Couldn't update ${p.filename}`)),
-              { body: humanizeCaught(e) },
-            );
-          }
-        }
-      },
-      tr("pm_update_failed", { name: "" }, "Couldn't update"),
-    );
 
   /** Stores under `filename`, asking first when Payload Manager already has that folder
    *  (storing into it removes the folder's other files). False when the user said no. */
@@ -423,25 +366,17 @@ export default function PayloadManagerPanel() {
 
   const records = pmRecords(hostOf(host));
   const nameOf = (id: string) => catalog.find((c) => c.id === id)?.display_name ?? id;
-  /** What the tab offers for a stored copy: the newer release of the catalogue payload this app
-   *  stored there, or for one stored by hand, the catalogue's release of the same payload
-   *  (Payload Manager keeps no version for it, so "newer" cannot be told). */
+  /** What the tab says about a stored copy: a newer release of the catalogue payload this app
+   *  stored there (linked to its page: the app doesn't download payloads), or for one stored by
+   *  hand, which catalogue payload it is (Payload Manager keeps no version for it). */
   const offerFor = (p: PmStoredPayload) => {
     const recorded = isRepoManaged(p) ? undefined : records[p.filename];
     const matchId = recorded ? null : catalogueMatch(p, inventory, catalog);
-    const matchTo = matchId ? latest[matchId] : null;
-    const rec = recorded ?? (matchId && matchTo?.picked_asset_url ? { id: matchId, tag: "" } : undefined);
-    const to = recorded ? pmUpdateFor(recorded, latest[recorded.id]) : (rec && matchTo) || null;
-    return { recorded, matchId, rec, to };
+    const to = recorded ? pmUpdateFor(recorded, latest[recorded.id]) : null;
+    return { recorded, matchId, to };
   };
-  // "Update all" takes what this app stored and knows to be older, not hand-stored copies whose
-  // version is unknown (those are offered one by one).
-  const updatable = stored.flatMap((p) => {
-    const { recorded, to } = offerFor(p);
-    return recorded && to ? [{ p, id: recorded.id, to }] : [];
-  });
   const row = (p: PmStoredPayload) => {
-    const { recorded, matchId, rec, to } = offerFor(p);
+    const { recorded, matchId, to } = offerFor(p);
     const listed = inList(p);
     // The entry that names it now (slot, file name or path), else the one to add.
     const key = listedEntry(autoload?.list, p) ?? autoloadKey(p);
@@ -469,7 +404,7 @@ export default function PayloadManagerPanel() {
                 {tr("pm_update_available", { tag: to.tag }, `${to.tag} available`)}
               </Badge>
             )}
-            {to && !recorded && matchId && (
+            {!recorded && matchId && (
               <Badge tone="neutral" variant="outline">
                 {tr("pm_catalogue_match", { name: nameOf(matchId) }, `Catalogue: ${nameOf(matchId)}`)}
               </Badge>
@@ -538,30 +473,19 @@ export default function PayloadManagerPanel() {
               )}
             </>
           )}
-          {to && rec && (
+          {to && recorded && to.html_url && (
             <Button
               variant="secondary"
               size="sm"
-              leftIcon={busy === `update:${p.path}` ? <Spinner size={12} tone="inherit" /> : <Download size={12} />}
-              disabled={busy !== null}
-              onClick={() => void update(p, rec.id, to)}
-              title={
-                recorded
-                  ? tr(
-                      "pm_update_tooltip",
-                      undefined,
-                      "Downloads the newer release and stores it in Payload Manager in place of this one, keeping its place in the boot list.",
-                    )
-                  : tr(
-                      "pm_replace_tooltip",
-                      undefined,
-                      "Payload Manager keeps no version for a payload stored by hand, so ps5upload cannot tell whether this one is older. Replacing stores the catalogue's release in its place, keeping its place in the boot list; after that, updates are offered here.",
-                    )
-              }
+              leftIcon={<ExternalLink size={12} />}
+              onClick={() => void openExternalUrl(to.html_url)}
+              title={tr(
+                "pm_update_page_tooltip",
+                undefined,
+                "ps5upload doesn't download payloads. Get the newer file from its project page, then store it here.",
+              )}
             >
-              {recorded
-                ? tr("pm_update", undefined, "Update")
-                : tr("pm_replace_with", { tag: to.tag }, `Replace with ${to.tag}`)}
+              {tr("pu_out_open_page", { version: to.tag }, `${to.tag} is out — open project page`)}
             </Button>
           )}
           <Button
@@ -723,7 +647,7 @@ export default function PayloadManagerPanel() {
             <>
               <div className="min-w-48">
                 <Select
-                  aria-label={tr("pm_add_catalogue_label", undefined, "Downloaded catalogue payload")}
+                  aria-label={tr("pm_add_saved_label", undefined, "Saved catalogue payload")}
                   value={pick}
                   onChange={(e) => setPick(e.currentTarget.value)}
                   disabled={busy !== null}
@@ -766,17 +690,6 @@ export default function PayloadManagerPanel() {
           <header className="text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
             {tr("pm_stored_header", { n: stored.length }, `Stored on the PS5 · ${stored.length}`)}
           </header>
-          {updatable.length > 1 && (
-            <Button
-              variant="secondary"
-              size="sm"
-              leftIcon={busy === "update:all" ? <Spinner size={12} tone="inherit" /> : <Download size={12} />}
-              disabled={busy !== null}
-              onClick={() => void updateAll(updatable)}
-            >
-              {tr("pu_update_all", undefined, "Update all")}
-            </Button>
-          )}
         </div>
         {stored.length === 0 ? (
           <p className="text-sm text-[var(--color-muted)]">

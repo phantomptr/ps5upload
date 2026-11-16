@@ -1,15 +1,24 @@
 import type { PayloadLocalEntry } from "../api/ps5";
 
-/** The cached copy to send instead of downloading: only one of the release being asked for.
- *  Any other version (or a copy from before versions were recorded) is downloaded again, which
- *  is what a firmware change that needs a newer kstuff depends on. */
-export function cachedCopyOfRelease(
+/** The file the wizard sends for one payload of the chain: the one the user picked, else the copy
+ *  already in the app's payload library (left by an older version of the app, which downloaded
+ *  them), else none. The app never downloads payloads: the user gets them from each project. */
+export interface ChainFile {
+  path: string;
+  /** Picked by the user, or the library's copy (with its version). */
+  from: "picked" | "library";
+  version?: string;
+}
+
+export function chainFileFor(
+  picked: string | null | undefined,
   inventory: readonly PayloadLocalEntry[],
   id: string,
-  tag: string,
-): PayloadLocalEntry | null {
+): ChainFile | null {
+  const p = picked?.trim();
+  if (p) return { path: p, from: "picked" };
   const entry = inventory.find((e) => e.payload_id === id);
-  return entry && entry.version === tag ? entry : null;
+  return entry ? { path: entry.path, from: "library", version: entry.version } : null;
 }
 
 export interface RunRow {

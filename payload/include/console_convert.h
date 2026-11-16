@@ -9,8 +9,11 @@
  *   request.json  written here (0600), read and deleted by the converter at start
  *   status.json   rewritten by the converter through a temporary file and a rename in that folder
  *   cancel        created here when Stop is asked
- *   job.rec       the running job's owner (helper pid, job id, dest), written before the converter
- *                 is started: one job across helpers, and the next start's sweep
+ *   job.rec       the running job's owner (helper pid, job id, boot time, dest), written before the
+ *                 converter is started: one job across helpers, and the next start's sweep. One
+ *                 from an earlier boot (a power cut) is dead whatever its pids name now.
+ *   pending.rec   unfinished outputs a sweep could not clear yet, their folder missing (a drive not
+ *                 mounted yet after a restart): tried again at every sweep
  *   convert.log   the converter's stdout/stderr (the last run)
  *
  * JOB_OP_CONSOLE_CONVERT {"path":"<game folder, .exfat/.ffpkg/.ffpfs/.ffpfsc image, or .zip/.7z>"
@@ -137,6 +140,29 @@ int cc_record_format(char *out, size_t cap, unsigned long long xpid, long hpid, 
 /* 1 parsed, 0 not a record. A record from before job ids reads with `id` "". */
 int cc_record_parse(const char *buf, unsigned long long *xpid, long *hpid, char *id, size_t id_cap, char *dest,
                     size_t cap);
+/* The same with the boot the record was written in: "<xpid> <hpid> <id> <boot>\n<dest>\n", `boot`
+ * kern.boottime's seconds (0, unknown, is left out). A record from before boot times reads with
+ * boot 0. */
+int cc_record_format_boot(char *out, size_t cap, unsigned long long xpid, long hpid, const char *id, const char *dest,
+                          unsigned long long boot);
+int cc_record_parse_boot(const char *buf, unsigned long long *xpid, long *hpid, char *id, size_t id_cap, char *dest,
+                         size_t cap, unsigned long long *boot);
+/* 1 when something dated `then` (a record's boot time, a file's mtime: wall-clock seconds) is from
+ * before the boot at `boot` (kern.boottime): the console was restarted (a power cut, a crash) since,
+ * and every process named in it is gone; a pid in it may be another process's now. 0 when either
+ * is unknown (0). A minute of slack: the boot time moves with the clock, which is set after boot. */
+#define CC_BOOT_SLACK_S 60
+static inline int cc_from_earlier_boot(unsigned long long then, unsigned long long boot) {
+    return then && boot && then + CC_BOOT_SLACK_S < boot;
+}
+
+/* The bytes a build has done out of `job_total` for the job's one bar, from the converter's
+ * `stage` and that stage's own `done` of `total`: each stage of the build (`format`, zstd packs or
+ * not) has a fixed share, those before it counted in full. It never goes back as stages change,
+ * and never passes `job_total`. UINT64_MAX for a stage the build does not list (the caller keeps
+ * what it showed). Without a format or a stage (an inspection): `done` of `total` scaled. */
+uint64_t cc_job_progress(const char *format, int zstd, const char *stage, uint64_t done, uint64_t total,
+                         uint64_t job_total);
 
 /* The format an image path's extension stands for ("exfat", "ffpkg", "ffpfs", "ffpfsc"), or NULL. */
 const char *cc_image_format(const char *path);
@@ -194,6 +220,8 @@ int console_convert_find_runtime(cc_runtime_t *rt);
 extern const char *console_convert_test_dir;
 extern int (*console_convert_test_launch)(void);
 extern const char *console_convert_test_runtime_dir;
+/* Stands in for kern.boottime when set. */
+extern unsigned long long console_convert_test_boot;
 #endif
 
 #endif

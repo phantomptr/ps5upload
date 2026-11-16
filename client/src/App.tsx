@@ -13,6 +13,7 @@ import { lazyWithReload } from "./lib/lazyWithReload";
 import AppShell from "./layout/AppShell";
 import { AndroidPipPicture, RemotePlayMini } from "./layout/RemotePlayMini";
 import { ConsoleAsks } from "./screens/Connection/consoles/ConsoleAsks";
+import { SaveSyncPrompt } from "./screens/Saves/SaveSyncPrompt";
 import { useRosterStore } from "./state/roster";
 import { isTauriEnv } from "./lib/tauriEnv";
 
@@ -216,8 +217,13 @@ export default function App() {
       {/* Remote Play over every screen and console (#637): the floating mini player, and only
           the picture while the Android app is in picture in picture. One of each, here. */}
       <RemotePlayMini />
-      {/* "Pixel wants to use Living-room PS5: Allow / Decline", over every screen. */}
-      <ConsoleAsks />
+      {/* Prompts over every screen, stacked in one corner so two never cover each other:
+          "Pixel wants to use Living-room PS5: Allow / Decline", and "Send <game>'s save to
+          <other PS5>?" after a game closes (save sync). */}
+      <div className="pointer-events-none fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+5rem)] z-50 flex flex-col gap-2 px-4 md:bottom-6 md:px-6">
+        <ConsoleAsks />
+        <SaveSyncPrompt />
+      </div>
       <AndroidPipPicture />
     </>
   );
@@ -464,8 +470,8 @@ function AppRoutes({ location }: { location: Location }) {
         <Route path="/payloads/nanodns" element={<Navigate to={payloadCardLink("nanodns")} replace />} />
         <Route path="/payloads/ports" element={<Navigate to={RUNNING_LINK} replace />} />
         <Route path="/ports" element={<Navigate to={RUNNING_LINK} replace />} />
-        {/* The wizard's whole point is step 2: download the payload ELFs to
-            this machine and send them to the console over a raw socket.
+        {/* The wizard's whole point is step 2: send the payload files the user
+            picked on this machine to the console over a raw socket.
             Neither is possible from a browser (the Payloads screen there has
             no Catalog or Send tab), so guard it rather than stranding
             self-hosted users on a wizard that dies at step 2. */}

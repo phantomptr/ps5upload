@@ -148,6 +148,8 @@ export interface QueueItemProgress {
   totalBytes: number;
   bytesPerSec: number;
   error: string | null;
+  /** Parked until its console wakes from rest mode (it goes on by itself). */
+  waitingForWake?: boolean;
 }
 
 /** Package uploads through the console queue (Install Package's uploader). */

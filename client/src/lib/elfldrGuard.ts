@@ -67,6 +67,9 @@ const GUARD_INTERVAL_MS = 10 * 60_000;
 /** How long the swap waits for a playlist on that console before leaving it for the next time. */
 const PLAYLIST_WAIT_MS = 2 * 60_000;
 const PLAYLIST_POLL_MS = 2_000;
+/** A console still settling after a wake is asked again this often, this many times. */
+const SETTLE_RETRY_MS = 30_000;
+const SETTLE_RETRIES = 4;
 
 function playlistRunsOn(host: string): boolean {
   const kind = runStatusForHost(usePayloadPlaylistsStore.getState(), host).kind;
@@ -106,8 +109,19 @@ export async function guardElfldr(
     await deps.sleep(PLAYLIST_POLL_MS);
   }
   try {
-    const outcome = await deps.ensure(host);
-    log.info("connection", `elfldr on ${host}: ${JSON.stringify(outcome)}`);
+    // #842: the engine leaves the swap for later while the console goes to rest or settles in the
+    // minute after a wake; asked again every 30 s, a few times.
+    for (let attempt = 0; ; attempt++) {
+      const outcome = await deps.ensure(host);
+      log.info("connection", `elfldr on ${host}: ${JSON.stringify(outcome)}`);
+      const settling = (outcome as { reason?: unknown } | null)?.reason === "console_settling";
+      if (!settling) break;
+      if (attempt >= SETTLE_RETRIES) {
+        lastAsked.delete(key);
+        break;
+      }
+      await deps.sleep(SETTLE_RETRY_MS);
+    }
   } catch (e) {
     log.warn("connection", `elfldr check on ${host} failed: ${e instanceof Error ? e.message : String(e)}`);
   }

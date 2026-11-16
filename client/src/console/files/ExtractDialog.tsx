@@ -35,6 +35,9 @@ export function extractCauseText(code: string): string | null {
       return t("cw_files_err_exists");
     case "busy":
       return t("cw_files_extract_err_busy");
+    case "convert_busy":
+      // Convert is writing a game: the drive is held by it, not by another extraction.
+      return t("cw_convert_err_busy");
     case "password_required":
       return t("cw_files_extract_err_password");
     case "wrong_password":

@@ -183,58 +183,6 @@
         ],
         "type": "object"
       },
-      "AddRepo": {
-        "description": "What a repo is added with.",
-        "properties": {
-          "asset_hint": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "x-aliases": [
-              "asset_name_hint"
-            ]
-          },
-          "checksum_file": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "display_name": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "host": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "owner": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "host",
-          "owner",
-          "name"
-        ],
-        "type": "object"
-      },
-      "AddSource": {
-        "properties": {
-          "url": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "url"
-        ],
-        "type": "object"
-      },
       "AddrQuery": {
         "properties": {
           "addr": {
@@ -5823,6 +5771,11 @@
           "power_consumption_mw": {
             "minimum": 0,
             "type": "integer"
+          },
+          "power_phase": {
+            "description": "Where the console is in a rest/wake cycle, as the helper sees it: 0 normal, 1 going to\nrest, 2 the minute after a wake (payload power_phase.h). 0 from a helper that doesn't say.",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
@@ -5834,7 +5787,8 @@
           "power_consumption_mw",
           "load_avg_1m",
           "load_avg_5m",
-          "load_avg_15m"
+          "load_avg_15m",
+          "power_phase"
         ],
         "type": "object"
       },
@@ -9661,7 +9615,7 @@
       "PeripheralReq": {
         "properties": {
           "action": {
-            "description": "`bd_power_off`, `bd_power_on`, `eject_disc`, `usb_port_off`, `usb_port_on` or `beep`.\nThe front light's `led_off`, `led_on` and `led_dim` are no longer supported (400).",
+            "description": "`bd_power_off`, `bd_power_on`, `eject_disc`, `usb_port_off`, `usb_port_on`, `beep`,\nor the front light's `led_off`, `led_on` and `led_dim`.",
             "type": "string"
           },
           "addr": {
@@ -9675,7 +9629,7 @@
             ]
           },
           "port": {
-            "description": "The USB port or beep pattern the action takes; 0 otherwise.",
+            "description": "The USB port, beep pattern or brightness level the action takes; 0 otherwise.",
             "type": "integer"
           }
         },
@@ -13826,6 +13780,269 @@
         },
         "type": "object"
       },
+      "SyncApplyBody": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SyncApplyItem"
+            },
+            "type": "array"
+          },
+          "pair": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pair",
+          "items"
+        ],
+        "type": "object"
+      },
+      "SyncApplyItem": {
+        "properties": {
+          "direction": {
+            "$ref": "#/components/schemas/SyncDirection"
+          },
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "direction"
+        ],
+        "type": "object"
+      },
+      "SyncDirection": {
+        "enum": [
+          "a_to_b",
+          "b_to_a"
+        ],
+        "type": "string"
+      },
+      "SyncDismissBody": {
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "pair": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pair",
+          "key"
+        ],
+        "type": "object"
+      },
+      "SyncPair": {
+        "properties": {
+          "a": {
+            "$ref": "#/components/schemas/SyncSide"
+          },
+          "b": {
+            "$ref": "#/components/schemas/SyncSide"
+          },
+          "excluded": {
+            "description": "Saves left out (their keys, see [`Item::key`]). Everything else both sides have is in.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "a",
+          "b",
+          "excluded"
+        ],
+        "type": "object"
+      },
+      "SyncPairBody": {
+        "properties": {
+          "a": {
+            "$ref": "#/components/schemas/SyncSide"
+          },
+          "b": {
+            "$ref": "#/components/schemas/SyncSide"
+          },
+          "excluded": {
+            "description": "Saves left out (keys from the status). Left out: as before (none for a new pair).",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "a",
+          "b"
+        ],
+        "type": "object"
+      },
+      "SyncPairRef": {
+        "properties": {
+          "pair": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pair"
+        ],
+        "type": "object"
+      },
+      "SyncReason": {
+        "enum": [
+          "offline",
+          "settling",
+          "running",
+          "ps4",
+          "error"
+        ],
+        "type": "string"
+      },
+      "SyncRow": {
+        "properties": {
+          "a": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SyncSideView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "b": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SyncSideView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SyncReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason_side": {
+            "description": "Which console the reason is about: `a` or `b`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/SyncStatus"
+          },
+          "synced_ms": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "title_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "title_id",
+          "kind",
+          "status",
+          "reason",
+          "reason_side",
+          "a",
+          "b",
+          "synced_ms",
+          "last_error"
+        ],
+        "type": "object"
+      },
+      "SyncSide": {
+        "description": "A user on a console.",
+        "properties": {
+          "host": {
+            "description": "The console (bare IP, as the app's console list has it).",
+            "type": "string"
+          },
+          "user_id": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "host",
+          "user_id"
+        ],
+        "type": "object"
+      },
+      "SyncSideView": {
+        "properties": {
+          "changed_ms": {
+            "description": "When this engine first saw the save differ (approximate), if it has.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "size",
+          "changed_ms"
+        ],
+        "type": "object"
+      },
+      "SyncStatus": {
+        "enum": [
+          "in_step",
+          "a_newer",
+          "b_newer",
+          "both_changed",
+          "first_time",
+          "only_on_a",
+          "only_on_b",
+          "unavailable",
+          "excluded"
+        ],
+        "type": "string"
+      },
       "SystemControlAck": {
         "properties": {
           "action": {
@@ -14665,16 +14882,6 @@
         ],
         "type": "object"
       },
-      "UpdateSettings": {
-        "description": "The user's update settings.",
-        "properties": {
-          "auto_update": {
-            "description": "\"Keep payloads up to date\": check at start and daily, and apply what is newer. Off\nunless the user turns it on.",
-            "type": "boolean"
-          }
-        },
-        "type": "object"
-      },
       "UsbEjectReq": {
         "properties": {
           "addr": {
@@ -15470,7 +15677,15 @@
             "type": "string"
           },
           "health": {
-            "$ref": "#/components/schemas/Health"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Health"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the loader probe saw; absent when it was not probed (the console was settling)."
           },
           "pid": {
             "description": "The elfldr running afterwards, when known.",
@@ -15489,7 +15704,6 @@
         },
         "required": [
           "action",
-          "health",
           "reason",
           "pid"
         ],
@@ -26308,17 +26522,7 @@
     },
     "/api/payloads/repos": {
       "post": {
-        "description": "POST /api/payloads/repos {host, owner, name, display_name?, asset_hint?, checksum_file?}",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AddRepo"
-              }
-            }
-          },
-          "required": true
-        },
+        "description": "POST /api/payloads/repos: refused (410 `payload_downloads_removed`). Repos added earlier stay\nlisted and can be removed.",
         "responses": {
           "200": {
             "description": "Success. The handler builds this answer in a way the generator cannot read."
@@ -26327,11 +26531,35 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "code": {},
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Gone"
+          },
           "default": {
             "$ref": "#/components/responses/Error",
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "Refused (410 `payload_downloads_removed`)",
         "tags": [
           "payloads"
         ],
@@ -26403,17 +26631,7 @@
         }
       },
       "post": {
-        "description": "POST /api/payloads/sources {url}: fetch the list and keep it. Refused when it is not one.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AddSource"
-              }
-            }
-          },
-          "required": true
-        },
+        "description": "POST /api/payloads/sources: refused (410 `payload_downloads_removed`). Lists added earlier\nstay listed and can be removed.",
         "responses": {
           "200": {
             "description": "Success. The handler builds this answer in a way the generator cannot read."
@@ -26422,12 +26640,35 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "code": {},
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Gone"
+          },
           "default": {
             "$ref": "#/components/responses/Error",
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "Fetch the list and keep it",
+        "summary": "Refused (410 `payload_downloads_removed`)",
         "tags": [
           "payloads"
         ],
@@ -26439,23 +26680,7 @@
     },
     "/api/payloads/sources/refresh": {
       "post": {
-        "description": "POST /api/payloads/sources/refresh?force=1 → {sources}: lists older than an hour (all with\nforce) are fetched again; a failure keeps the last copy and sets that source's `error`.",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "force",
-            "required": false,
-            "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "x-aliases": [
-              "force_refresh"
-            ]
-          }
-        ],
+        "description": "POST /api/payloads/sources/refresh: refused (410 `payload_downloads_removed`).",
         "responses": {
           "200": {
             "description": "Success. The handler builds this answer in a way the generator cannot read."
@@ -26464,12 +26689,35 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "code": {},
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Gone"
+          },
           "default": {
             "$ref": "#/components/responses/Error",
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "{sources}: lists older than an hour (all with force) are fetched again; a failure keeps the last copy and sets that source's `error`",
+        "summary": "Refused (410 `payload_downloads_removed`)",
         "tags": [
           "payloads"
         ],
@@ -26481,7 +26729,7 @@
     },
     "/api/payloads/sources/{id}": {
       "delete": {
-        "description": "DELETE /api/payloads/sources/{id} → {removed}: the list, and what was downloaded from it.",
+        "description": "DELETE /api/payloads/sources/{id} → {removed}: the list, and the local copies of its payloads.",
         "parameters": [
           {
             "in": "path",
@@ -26505,7 +26753,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "{removed}: the list, and what was downloaded from it",
+        "summary": "{removed}: the list, and the local copies of its payloads",
         "tags": [
           "payloads"
         ],
@@ -26517,7 +26765,7 @@
     },
     "/api/payloads/updates": {
       "get": {
-        "description": "GET /api/payloads/updates → `{settings, state}`: the last check, what was applied and the\nlast Payload Manager syncs. Never asks the network or a console.",
+        "description": "GET /api/payloads/updates → `{state}`: the last check, what was applied and the last Payload\nManager syncs. Never asks the network or a console.",
         "responses": {
           "200": {
             "description": "Success. The handler builds this answer in a way the generator cannot read."
@@ -26531,7 +26779,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "`{settings, state}`: the last check, what was applied and the last Payload Manager syncs",
+        "summary": "`{state}`: the last check, what was applied and the last Payload Manager syncs",
         "tags": [
           "payloads"
         ],
@@ -26543,23 +26791,16 @@
     },
     "/api/payloads/updates/apply": {
       "post": {
-        "description": "POST /api/payloads/updates/apply `{ids?, console?}` → `{updated, errors, pm_sync?}`.\nEach update keeps the copy it replaces for a rollback; one failure does not stop the rest.",
-        "requestBody": {
-          "content": {
-            "application/octet-stream": {
-              "schema": {
-                "contentEncoding": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "required": true
-        },
+        "description": "POST /api/payloads/updates/apply: refused (410 `payload_downloads_removed`). ps5upload no\nlonger downloads payloads; a check says what is newer, and the user gets it from the project\npage.",
         "responses": {
           "200": {
             "description": "Success. The handler builds this answer in a way the generator cannot read."
           },
-          "400": {
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "410": {
             "content": {
               "application/json": {
                 "schema": {
@@ -26569,6 +26810,7 @@
                     },
                     {
                       "properties": {
+                        "code": {},
                         "error": {
                           "type": "string"
                         }
@@ -26579,18 +26821,14 @@
                 }
               }
             },
-            "description": "Bad request"
-          },
-          "403": {
-            "$ref": "#/components/responses/Error",
-            "description": "Refused by the engine's address, Origin or Host guards."
+            "description": "Gone"
           },
           "default": {
             "$ref": "#/components/responses/Error",
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "`{updated, errors, pm_sync?}`",
+        "summary": "Refused (410 `payload_downloads_removed`)",
         "tags": [
           "payloads"
         ],
@@ -26659,69 +26897,9 @@
         }
       }
     },
-    "/api/payloads/updates/settings": {
-      "get": {
-        "description": "GET /api/payloads/updates/settings → `{auto_update}`.",
-        "responses": {
-          "200": {
-            "description": "Success. The handler builds this answer in a way the generator cannot read."
-          },
-          "403": {
-            "$ref": "#/components/responses/Error",
-            "description": "Refused by the engine's address, Origin or Host guards."
-          },
-          "default": {
-            "$ref": "#/components/responses/Error",
-            "description": "Any other failure, in the same shape."
-          }
-        },
-        "summary": "`{auto_update}`",
-        "tags": [
-          "payloads"
-        ],
-        "x-ps5upload": {
-          "access": "loopback",
-          "response_schema": "none"
-        }
-      },
-      "put": {
-        "description": "PUT /api/payloads/updates/settings `{auto_update}`: \"Keep payloads up to date\" checks at\nstart and daily, and applies what is newer.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateSettings"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Success. The handler builds this answer in a way the generator cannot read."
-          },
-          "403": {
-            "$ref": "#/components/responses/Error",
-            "description": "Refused by the engine's address, Origin or Host guards."
-          },
-          "default": {
-            "$ref": "#/components/responses/Error",
-            "description": "Any other failure, in the same shape."
-          }
-        },
-        "summary": "\"Keep payloads up to date\" checks at start and daily, and applies what is newer",
-        "tags": [
-          "payloads"
-        ],
-        "x-ps5upload": {
-          "access": "loopback",
-          "response_schema": "none"
-        }
-      }
-    },
     "/api/payloads/{id}/download": {
       "post": {
-        "description": "POST /api/payloads/{id}/download: fetch a release into the cache. Takes as long as the\ndownload does; `/download/cancel` stops it.",
+        "description": "POST /api/payloads/{id}/download: refused (410 `payload_downloads_removed`). The app no\nlonger downloads payloads; the answer names the payload's project page.",
         "parameters": [
           {
             "in": "path",
@@ -26732,22 +26910,15 @@
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/octet-stream": {
-              "schema": {
-                "contentEncoding": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "200": {
             "description": "Success. The handler builds this answer in a way the generator cannot read."
           },
-          "400": {
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "410": {
             "content": {
               "application/json": {
                 "schema": {
@@ -26757,6 +26928,7 @@
                     },
                     {
                       "properties": {
+                        "code": {},
                         "error": {
                           "type": "string"
                         }
@@ -26767,54 +26939,14 @@
                 }
               }
             },
-            "description": "Bad request"
-          },
-          "403": {
-            "$ref": "#/components/responses/Error",
-            "description": "Refused by the engine's address, Origin or Host guards."
+            "description": "Gone"
           },
           "default": {
             "$ref": "#/components/responses/Error",
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "Fetch a release into the cache",
-        "tags": [
-          "payloads"
-        ],
-        "x-ps5upload": {
-          "access": "loopback",
-          "response_schema": "none"
-        }
-      }
-    },
-    "/api/payloads/{id}/download/cancel": {
-      "post": {
-        "description": "POST /api/payloads/{id}/download/cancel → {cancelled}. The download's own request answers\n409 `download_cancelled`.",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success. The handler builds this answer in a way the generator cannot read."
-          },
-          "403": {
-            "$ref": "#/components/responses/Error",
-            "description": "Refused by the engine's address, Origin or Host guards."
-          },
-          "default": {
-            "$ref": "#/components/responses/Error",
-            "description": "Any other failure, in the same shape."
-          }
-        },
-        "summary": "{cancelled}",
+        "summary": "Refused (410 `payload_downloads_removed`)",
         "tags": [
           "payloads"
         ],
@@ -26925,7 +27057,7 @@
     },
     "/api/payloads/{id}/rollback": {
       "post": {
-        "description": "POST /api/payloads/{id}/rollback → what was put back. 404 `no_previous` when no earlier copy\nis kept.",
+        "description": "POST /api/payloads/{id}/rollback → what was put back. 404 `no_previous` when no earlier copy\nis kept (earlier versions of the app kept one when they updated a payload).",
         "parameters": [
           {
             "in": "path",
@@ -34539,7 +34671,7 @@
     },
     "/api/ps5/helper/stop": {
       "post": {
-        "description": "POST /api/ps5/helper/stop — Body: `{ addr }`. Asks the console's helper to exit\n(`node.shutdown`), refused while this engine runs a job against that console.\n\n200 `{ \"state\": \"stopped\" }` once the helper's port went quiet, or `{ \"state\": \"not_running\" }`\nwhen nothing answered. 409 `{ \"error\", \"reason\": \"busy\" }` while a job runs; 502\n`{ \"error\", \"reason\": \"refused\" | \"still_running\" }` otherwise.",
+        "description": "POST /api/ps5/helper/stop — Body: `{ addr }`. Asks the console's helper to exit\n(`node.shutdown`), refused while this engine runs a job against that console.\n\n200 `{ \"state\": \"stopped\" }` once the helper's port went quiet, or `{ \"state\": \"not_running\" }`\nwhen nothing answered. 409 `{ \"error\", \"reason\": \"busy\" }` while a job runs; 502\n`{ \"error\", \"reason\": \"refused\" (not paired) | \"failed\" (the real error) | \"still_running\" }`\notherwise. Also 409 busy while another stop or removal of that console runs.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -34686,7 +34818,7 @@
     },
     "/api/ps5/helper/uninstall": {
       "post": {
-        "description": "POST /api/ps5/helper/uninstall — Body: `{ addr, keep_backups, check }`. \"Remove PS5Upload from this\nPS5\": the helper turns Minion off and removes its tile, shows the icons it hid, exits and\ndeletes its own folders on the console (`node.uninstall`). Refused (409) while this engine\nhas a job running against the console (`reason: busy`) or while something is mounted in\nthose folders (`reason: in_use`, `paths`); an older helper answers `reason: old_helper` (501).\nCopies of the helper stored in loaders are not touched here: the app removes them first.\nAfter a removal the key pinned for the console is forgotten (`key_forgotten`): its identity\nwent with the folders.",
+        "description": "POST /api/ps5/helper/uninstall — Body: `{ addr, keep_backups, check }`. \"Remove PS5Upload from this\nPS5\": the helper turns Minion off and removes its tile, shows the icons it hid, exits and\ndeletes its own folders on the console (`node.uninstall`). Refused (409) while this engine\nhas a job running against the console (`reason: busy`) or while something is mounted in\nthose folders (`reason: in_use`, `paths`) or while the console itself installs a package,\nconverts a game or extracts an archive (`reason: console_installing` | `console_converting` |\n`console_extracting`); an older helper answers `reason: old_helper` (501).\nCopies of the helper stored in loaders are not touched here: the app removes them first.\nAfter a removal the key pinned for the console is forgotten (`key_forgotten`): its identity\nwent with the folders.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -36352,7 +36484,7 @@
     },
     "/api/ps5/peripheral": {
       "post": {
-        "description": "POST /api/ps5/peripheral\nBody: `{ \"addr\": \"IP\", \"action\": \"beep\", \"port\": 1 }`\n\nThe disc drive, the USB ports and the beeper. Replies with the helper's own ack (`ok`,\n`action`, `code`); a transport failure is a 502, an unknown or removed action a 400.",
+        "description": "POST /api/ps5/peripheral\nBody: `{ \"addr\": \"IP\", \"action\": \"beep\", \"port\": 1 }`\n\nThe disc drive, the USB ports, the beeper and the front light. Replies with the helper's own\nack (`ok`, `action`, `code`); a transport failure is a 502, an unknown action a 400. The\nfront light's calls are accepted on every firmware tried, but did not change the light on\na launch PS5 on FW 13.60 (#840).",
         "requestBody": {
           "content": {
             "application/json": {
@@ -46059,6 +46191,328 @@
         }
       }
     },
+    "/api/save-sync": {
+      "get": {
+        "description": "`GET /api/save-sync`: the pairs, what is kept of each save, the suggestions and which pairs\nare copying now. Reads nothing from a console.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "applying": {},
+                    "items": {},
+                    "pairs": {},
+                    "suggestions": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The pairs, what is kept of each save, the suggestions and which pairs are copying now",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/save-sync/apply": {
+      "post": {
+        "description": "`POST /api/save-sync/apply` `{pair, items: [{key, direction}]}`: copies each, one at a time,\nthrough Copy to another console. Answers each one's outcome; one failing does not stop the\nrest. Refused while another apply runs between the same two consoles.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncApplyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "results": {
+                      "items": {},
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Copies each, one at a time, through Copy to another console",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/save-sync/dismiss": {
+      "post": {
+        "description": "`POST /api/save-sync/dismiss` `{pair, key}`: Not now. The suggestion goes; the next time the\ngame closes with a change it comes back.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncDismissBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Not now",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/save-sync/pair": {
+      "put": {
+        "description": "`PUT /api/save-sync/pair` `{a, b, excluded?}`: adds the pair, or changes which saves it leaves\nout.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncPairBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "pair": {
+                      "$ref": "#/components/schemas/SyncPair"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Adds the pair, or changes which saves it leaves out",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/save-sync/pair/remove": {
+      "post": {
+        "description": "`POST /api/save-sync/pair/remove` `{pair}`: stops keeping the pair in step (nothing on a\nconsole changes).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncPairRef"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Stops keeping the pair in step (nothing on a console changes)",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/save-sync/status": {
+      "get": {
+        "description": "`GET /api/save-sync/status?pair=`: Check now. Reads both consoles; wakes neither.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "pair",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "checked_ms": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "pair": {
+                      "$ref": "#/components/schemas/SyncPair"
+                    },
+                    "rows": {
+                      "items": {
+                        "$ref": "#/components/schemas/SyncRow"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Check now",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
     "/api/settings": {
       "get": {
         "description": "`GET /api/settings`.",
@@ -48858,6 +49312,10 @@
           "403": {
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
           },
           "500": {
             "$ref": "#/components/responses/Error",

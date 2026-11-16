@@ -81,7 +81,8 @@ more depth further down.
 Send **elfldr** first (if your setup uses it), then **kstuff**, then
 **ShadowMount+**, then **ps5upload**. The **Set up your PS5** wizard does the
 last three in this order for you, with the delays the Payloads catalogue
-recommends. Send them one at a time; the loader takes one file per
+recommends. ps5upload doesn't download payloads: get kstuff and ShadowMount+ from their project
+pages (Payloads › Catalog links to them) and choose the files in the wizard. Send them one at a time; the loader takes one file per
 connection. After a reboot the payloads are gone, so load them again. Rest mode
 can stop them too; the PS5Upload helper usually keeps running through it.
 
@@ -107,8 +108,9 @@ running.
 3. Open **Connection** and press **Add a PS5**. **Scan** finds it on your home network; or type
    its IP under **Or type its address**. Its card then shows **Finish setting up**: **Check**,
    then **Send helper**.
-4. First time? **Open setup wizard** on the card runs **Set up your PS5**: it sends kstuff and
-   ShadowMount+, then the helper, in order. If something already loads kstuff, send only ps5upload.
+4. First time? **Open setup wizard** on the card runs **Set up your PS5**: it sends the kstuff and
+   ShadowMount+ files you choose (get them from their project pages), then the helper, in order.
+   If something already loads kstuff, send only ps5upload.
 5. Wait for the card to say **Ready for uploads** (the `helper` dot at the bottom turns green).
 6. Open **Upload & Install**, drop or choose your game, pick the drive and click **Start**. The
    free-space check runs before anything is sent.
@@ -517,10 +519,11 @@ something else, and records the send in a history panel so you
 can replay it without re-picking the file.
 
 **Q: How do I keep my payloads up to date?**
-Open **Payloads › Catalog › Payload updates** (12.0.0). **Check for payload updates** compares each
-payload you downloaded with its latest release; update one, or **Update all**. Turn on **Keep
-payloads up to date** and the app checks when it starts and once a day, and downloads newer
-releases by itself. The version an update replaced is kept: **Roll back** puts it back.
+ps5upload doesn't download payloads. Get a newer release from the payload's project page and send
+the file from **Payloads → Send payload**. **Payloads › Catalog › Payload updates** still tells you
+when one is out: **Check for payload updates** compares each payload saved in the app (copies
+earlier versions of the app downloaded) with its latest release, and links to the release page.
+A copy an earlier update replaced is kept: **Roll back** puts it back.
 
 If you use itsPLK's Payload Manager on the PS5, tick **Keep in Payload Manager** (and **Payload
 Manager loads it at boot** if you want it at boot) on a payload, and **Sync with Payload Manager**
@@ -760,7 +763,7 @@ phone or another computer?" below walks through it from start to finish.
   wait until a tab is open. Only one tab runs the queue.
 - **Payloads → Send payload** accepts an ELF from your browser machine and forwards it through
   the engine to the selected console's loader (9021 by default). Sending bytes does not confirm
-  execution. Catalog downloads and the other payload formats still use the native app.
+  execution. The other payload formats still use the native app.
 - Archives: a `.zip`, `.7z`, `.rar`, tar or `.zst` on the engine's disk uploads like on desktop. An archive on
   the device your browser runs on can't be read as an archive; unpack it first.
 - Hidden in the browser: saving a save backup or downloading files to your computer, and attaching
@@ -3201,8 +3204,9 @@ User.
 **Q: The PS5 won't let me turn on its own Remote Play setting.**
 The PS5 offers Settings › System › Remote Play only to an account signed in to PlayStation
 Network. Open **Accounts** › **Sign in to PlayStation Network (offline)**: it checks that the
-signed-in user has an activated account, then fetches earthonion's np-fake-signin and runs it on
-the PS5 with one button. Nothing is sent to Sony. Restart the PS5 afterwards. Before it runs, the
+signed-in user has an activated account, then sends earthonion's np-fake-signin and runs it on
+the PS5. ps5upload doesn't download it: get the PS5 build from its project page, and **Sign in**
+asks for the file. Nothing is sent to Sony. Restart the PS5 afterwards. Before it runs, the
 helper keeps a copy on the PS5 of every setting and file np-fake-signin changes; **Undo sign-in**
 on the same card puts them back (restart again afterwards). In the web UI, send np-fake-signin
 from **Payloads** instead (Undo works there too, but nothing is kept unless the desktop app ran

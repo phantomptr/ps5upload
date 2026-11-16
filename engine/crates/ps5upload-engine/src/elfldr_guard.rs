@@ -232,18 +232,52 @@ fn elfldr_pids(mgmt: &str) -> Result<Vec<i32>, String> {
 pub struct Outcome {
     /// `upgraded`, `recovered`, `current` or `skipped`.
     pub action: &'static str,
-    pub health: Health,
+    /// What the loader probe saw; absent when it was not probed (the console was settling).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health: Option<Health>,
     /// Why it was skipped.
     pub reason: Option<&'static str>,
     /// The elfldr running afterwards, when known.
     pub pid: Option<i32>,
 }
 
+/// The helper's power phase when it is one in which the swap must wait: going to rest (1) or
+/// the minute after a wake (2). `None` for normal, an older helper, or no answer (the swap's own
+/// checks handle those).
+fn unsettled_phase(mgmt: &str) -> Option<u8> {
+    ps5upload_core::hw::hw_power(mgmt)
+        .ok()
+        .map(|p| p.power_phase)
+        .filter(|p| settling(*p))
+}
+
+/// A power phase in which the swap waits: going to rest (1) or settling after a wake (2).
+fn settling(phase: u8) -> bool {
+    matches!(phase, 1 | 2)
+}
+
 /// Make sure `host` runs the patched elfldr. Needs the helper up (it reads the process list).
 pub fn ensure(host: &str) -> Result<Outcome, String> {
+    let mgmt = crate::console_addr(host);
+    // #842: a swap kills a process and starts another; not while the console goes to rest or in
+    // the minute after a wake (the helper's power phase). Answered at once, before the loader
+    // lock (sends must not wait on it), and the app asks again a little later.
+    if let Some(phase) = unsettled_phase(&mgmt) {
+        let why = if phase == 1 {
+            "going to rest"
+        } else {
+            "still settling after a wake"
+        };
+        crate::log_info!("elfldr on {host}: left for later, the console is {why}");
+        return Ok(Outcome {
+            action: "skipped",
+            health: None,
+            reason: Some("console_settling"),
+            pid: None,
+        });
+    }
     let lock = loader_lock(host);
     let _loader = lock.lock().unwrap_or_else(|e| e.into_inner());
-    let mgmt = crate::console_addr(host);
     let before = elfldr_pids(&mgmt)?;
     let mine = installed()
         .lock()
@@ -264,7 +298,7 @@ pub fn ensure(host: &str) -> Result<Outcome, String> {
             } else {
                 "skipped"
             },
-            health,
+            health: Some(health),
             reason: Some(reason),
             pid: before.first().copied(),
         }),
@@ -281,7 +315,7 @@ pub fn ensure(host: &str) -> Result<Outcome, String> {
                 crate::log_info!("elfldr on {host} is {reason}; no recovery route: {e}");
                 return Ok(Outcome {
                     action: "skipped",
-                    health,
+                    health: Some(health),
                     reason: Some(reason),
                     pid: before.first().copied(),
                 });
@@ -302,7 +336,7 @@ pub fn ensure(host: &str) -> Result<Outcome, String> {
                     crate::log_info!("elfldr on {host} was {reason}; recovered through Payload Manager (pid {pid})");
                     return Ok(Outcome {
                         action: "recovered",
-                        health: answering,
+                        health: Some(answering),
                         reason: None,
                         pid: Some(pid),
                     });
@@ -329,7 +363,7 @@ pub fn ensure(host: &str) -> Result<Outcome, String> {
                     record_installed(host, &mgmt, pid);
                     return Ok(Outcome {
                         action: "upgraded",
-                        health: answering,
+                        health: Some(answering),
                         reason: None,
                         pid: Some(pid),
                     });
@@ -342,6 +376,16 @@ pub fn ensure(host: &str) -> Result<Outcome, String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_swap_waits_while_the_console_goes_to_rest_or_settles() {
+        assert!(!settling(0));
+        assert!(settling(1));
+        assert!(settling(2));
+        // A phase a newer helper adds is not waited on.
+        assert!(!settling(3));
+    }
+
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;

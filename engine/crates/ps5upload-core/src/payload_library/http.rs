@@ -243,7 +243,6 @@ mod tests {
             repo_owner: "o".into(),
             repo_name: "n".into(),
             asset_name_hint: String::new(),
-            checksum_file: String::new(),
             is_custom,
             list_payload: None,
         }

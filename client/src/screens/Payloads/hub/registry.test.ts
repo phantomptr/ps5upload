@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PayloadInfo, ProcessInfo } from "../../../api/ps5";
-import { detectHubCards, entryFromCatalog, hubEntries, markerFolders, normProcName } from "./registry";
+import { detectHubCards, entryFromCatalog, hubEntries, markerFolders, mergedName, normProcName } from "./registry";
 
 const proc = (pid: number, comm: string, kind: ProcessInfo["kind"] = "payload", extra: Partial<ProcessInfo> = {}): ProcessInfo => ({
   pid,
@@ -66,9 +66,10 @@ describe("On your PS5 detection", () => {
       ["kstuff-echostretch", "running"],
     ]);
     const kstuff = cards.find((c) => c.id === "kstuff-echostretch")!;
-    // Two catalogue builds, one process name: one card naming both, both pids.
+    // Two catalogue builds, one process name: one card named by the process, both pids.
     expect(kstuff.entryIds).toEqual(["kstuff-echostretch", "kstuff-lite-drakmor"]);
-    expect(kstuff.name).toBe("kstuff / kstuff-lite");
+    expect(kstuff.name).toBe("kstuff");
+    expect(kstuff.variants).toEqual(["kstuff", "kstuff-lite"]);
     expect(kstuff.processes.map((p) => p.pid)).toEqual([128, 107]);
     expect(cards.find((c) => c.id === "payload-manager")!.webPort).toBe(8084);
     expect(cards.find((c) => c.id === "proc:elfldr")!.name).toBe("elfldr.elf");
@@ -164,5 +165,69 @@ describe("On your PS5 detection", () => {
     const folders = markerFolders(hubEntries(CATALOG));
     expect(folders.get("/data")).toEqual(["/data/kstuff.elf"]);
     expect(folders.get("/data/pldmgr")).toEqual(["/data/pldmgr/pldmgr_config.txt"]);
+  });
+
+  it("names a merged card by what its entries' names share", () => {
+    expect(mergedName(["kstuff-lite (EchoStretch)", "kstuff-lite (drakmor — fpkg-optimized)"], "kstuff.elf")).toEqual({
+      name: "kstuff-lite",
+      variants: ["EchoStretch", "drakmor"],
+    });
+    expect(mergedName(["kstuff", "kstuff-lite"], "kstuff.elf")).toEqual({
+      name: "kstuff",
+      variants: ["kstuff", "kstuff-lite"],
+    });
+    const catalog = [
+      info("kstuff-echostretch", "kstuff-lite (EchoStretch)", null, "/data/kstuff.elf"),
+      info("kstuff-lite-drakmor", "kstuff-lite (drakmor — fpkg-optimized)", null, "/data/kstuff.elf"),
+    ];
+    const cards = detectHubCards({ entries: hubEntries(catalog), processes: [proc(128, "kstuff.elf")], markers: new Set() });
+    expect(cards.map((c) => [c.id, c.name, c.variants])).toEqual([
+      ["kstuff-echostretch", "kstuff-lite", ["EchoStretch", "drakmor"]],
+    ]);
+  });
+
+  it("gives each payload.elf its own card, keyed by pid", () => {
+    const procs = [proc(150, "payload.elf"), proc(151, "payload.elf"), proc(152, "foo.elf"), proc(153, "foo.elf")];
+    const cards = detectHubCards({ entries: hubEntries(null), processes: procs, markers: new Set() });
+    expect(cards.map((c) => [c.id, c.byPid, c.processes.map((p) => p.pid)])).toEqual([
+      ["proc:foo", false, [152, 153]],
+      ["proc:payload:150", true, [150]],
+      ["proc:payload:151", true, [151]],
+    ]);
+  });
+
+  it("finds Kraken Mount by its process name, any loader's", () => {
+    for (const name of ["kraken-mount.elf", "Kraken_Mount", "krakenmount.bin"]) {
+      const cards = detectHubCards({ entries: hubEntries(null), processes: [proc(160, name)], markers: new Set() });
+      expect(cards.map((c) => [c.id, c.name, c.state])).toEqual([["kraken-mount", "Kraken Mount", "running"]]);
+    }
+    const installed = detectHubCards({
+      entries: hubEntries(null),
+      processes: [],
+      markers: new Set(["/data/krakenmount/config.toml"]),
+    });
+    expect(installed.map((c) => [c.id, c.state])).toEqual([["kraken-mount", "installed"]]);
+  });
+
+  it("gives Kraken Mount the one payload.elf left when its API answers", () => {
+    const answering = new Set(["kraken-mount"]);
+    const one = detectHubCards({
+      entries: hubEntries(null),
+      processes: [proc(170, "payload.elf"), proc(171, "payload.elf")],
+      markers: new Set(),
+      answering,
+      pids: new Map([["hush", [171]]]),
+    });
+    expect(one.find((c) => c.id === "kraken-mount")!.processes.map((p) => p.pid)).toEqual([170]);
+    expect(one.some((c) => c.id.startsWith("proc:payload"))).toBe(false);
+    // Two generic processes left: which is Kraken's can't be told, so neither is given to it.
+    const two = detectHubCards({
+      entries: hubEntries(null),
+      processes: [proc(170, "payload.elf"), proc(171, "payload.elf")],
+      markers: new Set(),
+      answering,
+    });
+    expect(two.find((c) => c.id === "kraken-mount")!.processes).toEqual([]);
+    expect(two.filter((c) => c.id.startsWith("proc:payload"))).toHaveLength(2);
   });
 });

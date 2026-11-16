@@ -46,6 +46,7 @@ static uint8_t g_seq;
 static uint8_t g_rbuf[4 * VWIRE_MAX_FRAME];
 static size_t g_rhave;
 static int g_cm, g_ck;         /* what the companion can make */
+static int g_held_logged; /* "start held" said for this wait (hold_start) */
 static int g_want_m, g_want_k; /* what the session has open (made again after a restart) */
 static int g_m_open, g_k_open; /* what the companion has open */
 static uint8_t g_buttons, g_mods, g_keys[VINPUT_KEYS];
@@ -392,10 +393,25 @@ static void *relay_main(void *arg) {
         }
         now = now_ms();
         wanted = wanted_locked(now);
-        if (g_st == ST_STARTING || (g_st == ST_STOPPED && wanted && now >= g_retry_at)) {
+        if ((g_st == ST_STARTING || (g_st == ST_STOPPED && wanted && now >= g_retry_at)) && C.hold_start &&
+            C.hold_start(C.ctx)) {
+            /* #842: the companion's Init calls into the console's input and user services; not in
+             * the minute after a wake (or while it goes to rest). Asked again every 50 ms. */
+            if (!wanted) {
+                /* The session went away during the wait: nothing to start once it is over. */
+                fprintf(stderr, "[vinput] companion start dropped: no session wants it any more\n");
+                g_st = ST_IDLE;
+                g_held_logged = 0;
+            } else if (!g_held_logged) {
+                fprintf(stderr, "[vinput] companion start held: the console is settling after a wake\n");
+                g_held_logged = 1;
+            }
+        } else if (g_st == ST_STARTING || (g_st == ST_STOPPED && wanted && now >= g_retry_at)) {
             started_t s;
             int rc;
             g_st = ST_STARTING;
+            if (g_held_logged) fprintf(stderr, "[vinput] the console has settled: starting the companion\n");
+            g_held_logged = 0;
             pthread_mutex_unlock(&g_mu);
             rc = start_companion(&s);
             pthread_mutex_lock(&g_mu);
@@ -758,6 +774,7 @@ void vinput_relay_reset(void) {
     memset(g_keys, 0, sizeof g_keys);
     g_fails = 0;
     g_init_failed = g_init_pid = 0;
+    g_held_logged = 0;
     g_mbus = g_hold_sent = 0;
     g_hold_until = 0;
     g_retry_at = g_last_reply = g_last_hb = g_running_since = g_unavail_at = g_asked_at = 0;

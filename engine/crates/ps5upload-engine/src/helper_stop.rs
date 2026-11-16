@@ -22,6 +22,57 @@ fn key(addr: &str) -> String {
     crate::install::console_id(addr).to_ascii_lowercase()
 }
 
+/// One console's key for per-console tables (case-folded host, no port).
+pub(crate) fn console_key(addr: &str) -> String {
+    key(addr)
+}
+
+/// Consoles whose helper is being stopped or removed right now (a call that can take minutes).
+fn stopping_set() -> &'static Mutex<std::collections::HashSet<String>> {
+    static M: std::sync::OnceLock<Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    M.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+}
+
+/// Marks a console's helper as being stopped or removed until dropped: [`is_busy`] says so, so
+/// the queue starts nothing there meanwhile.
+pub(crate) struct StoppingGuard(String);
+
+/// Mark `addr` as being stopped, or None when a stop or removal of it already runs.
+pub(crate) fn begin_stopping(addr: &str) -> Option<StoppingGuard> {
+    let k = key(addr);
+    // The lock is released before any guard exists: a guard built and dropped while it is held
+    // (`then_some` builds its value eagerly) would lock it again in Drop and deadlock, and would
+    // clear the marker of the stop already running.
+    let inserted = stopping_set()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(k.clone());
+    if inserted {
+        Some(StoppingGuard(k))
+    } else {
+        None
+    }
+}
+
+impl Drop for StoppingGuard {
+    fn drop(&mut self) {
+        stopping_set()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.0);
+    }
+}
+
+/// Whether a job holding a [`BusyGuard`] runs against `addr` (a stop in progress not counted).
+pub(crate) fn jobs_running(addr: &str) -> bool {
+    busy_counts()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&key(addr))
+        .is_some_and(|n| *n > 0)
+}
+
 /// Marks a console busy until dropped (a panic unwinding the job drops it too).
 pub(crate) struct BusyGuard(String);
 
@@ -48,13 +99,14 @@ impl Drop for BusyGuard {
     }
 }
 
-/// Whether a job holding a [`BusyGuard`] is running against `addr`.
+/// Whether a job holding a [`BusyGuard`] is running against `addr`, or its helper is being
+/// stopped or removed.
 pub(crate) fn is_busy(addr: &str) -> bool {
-    busy_counts()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(&key(addr))
-        .is_some_and(|n| *n > 0)
+    jobs_running(addr)
+        || stopping_set()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&key(addr))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -69,8 +121,10 @@ pub(crate) enum Stopped {
 pub(crate) enum StopError {
     /// A job of this engine is using the console.
     Busy,
-    /// Something answers on the helper's port but did not take the stop (not paired, say).
-    Refused,
+    /// The helper refused the stop because this app is not paired with it.
+    NotPaired,
+    /// Something answers on the helper's port but the stop failed (a timeout, a lost session).
+    Failed(String),
     /// The helper acknowledged but still answers after the wait.
     StillRunning,
 }
@@ -79,34 +133,46 @@ impl StopError {
     pub(crate) fn reason(&self) -> &'static str {
         match self {
             StopError::Busy => "busy",
-            StopError::Refused => "refused",
+            StopError::NotPaired => "refused",
+            StopError::Failed(_) => "failed",
             StopError::StillRunning => "still_running",
         }
     }
 
-    pub(crate) fn message(&self) -> &'static str {
+    pub(crate) fn message(&self) -> String {
         match self {
             StopError::Busy => {
-                "the helper is in use: wait for the transfers and installs on this console to finish, then stop it"
+                "the helper is in use: wait for the transfers and installs on this console to finish, then stop it".into()
             }
-            StopError::Refused => {
-                "the helper did not accept the stop request; pair with this console and try again"
+            StopError::NotPaired => {
+                "the helper did not accept the stop request; pair with this console and try again".into()
             }
+            StopError::Failed(e) => format!("the helper did not take the stop request: {e}"),
             StopError::StillRunning => {
-                "the helper acknowledged the stop but is still answering; try again in a moment"
+                "the helper acknowledged the stop but is still answering; try again in a moment".into()
             }
         }
     }
 }
 
+/// Whether `e` is the helper refusing this app for not being paired with it.
+pub(crate) fn is_pairing_refusal(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<ps5upload_core::mgmt::MgmtError>()
+        .is_some_and(|m| {
+            m.status == ps5upload_ava1::gen::ERR_NOT_PAIRED
+                || m.status == ps5upload_ava1::gen::ERR_PAIRING_CLOSED
+                || m.cause == "not_paired"
+        })
+}
+
 /// The decision, with the console calls passed in so it can be tested without one.
 ///
-/// `shutdown` sends `node.shutdown` and says whether it was acknowledged; `port_open` probes the
-/// helper's port once. After an acknowledgement the port is polled every `step` until `wait` has
+/// `shutdown` sends `node.shutdown` (Ok once acknowledged); `port_open` probes the helper's port
+/// once. After an acknowledgement the port is polled every `step` until `wait` has
 /// passed.
 pub(crate) fn stop_with(
     busy: bool,
-    shutdown: impl FnOnce() -> bool,
+    shutdown: impl FnOnce() -> anyhow::Result<()>,
     mut port_open: impl FnMut() -> bool,
     wait: Duration,
     step: Duration,
@@ -114,11 +180,13 @@ pub(crate) fn stop_with(
     if busy {
         return Err(StopError::Busy);
     }
-    if !shutdown() {
-        return if port_open() {
-            Err(StopError::Refused)
-        } else {
+    if let Err(e) = shutdown() {
+        return if !port_open() {
             Ok(Stopped::NotRunning)
+        } else if is_pairing_refusal(&e) {
+            Err(StopError::NotPaired)
+        } else {
+            Err(StopError::Failed(format!("{e:#}")))
         };
     }
     let deadline = Instant::now() + wait;
@@ -141,7 +209,18 @@ pub(crate) fn stop(addr: &str, busy: bool) -> Result<Stopped, StopError> {
         ps5upload_core::payload_lifecycle::join_host_port(&host, ps5upload_ava1::gen::DEFAULT_PORT);
     let r = stop_with(
         busy,
-        || ps5upload_core::payload_lifecycle::shutdown_running_payload(&host).unwrap_or(false),
+        || {
+            // `node.shutdown`, as `payload_lifecycle::shutdown_running_payload` sends it, but
+            // keeping the error: a timeout is not "pair with this console".
+            ps5upload_core::mgmt::call_with(
+                &host,
+                ps5upload_core::mgmt::m::NODE_SHUTDOWN,
+                "SHUTDOWN",
+                &[],
+                Some(Duration::from_secs(2)),
+            )
+            .map(|_| ())
+        },
         || ps5upload_core::payload_lifecycle::port_is_open(&port, Duration::from_millis(800)),
         Duration::from_secs(8),
         Duration::from_millis(400),
@@ -162,6 +241,9 @@ pub(crate) enum UninstallError {
     Busy,
     /// Something is mounted in the helper's folders (an image, a share, a save): unmount first.
     InUse(Vec<String>),
+    /// The console itself runs something the removal would cut off: `installing` (a package),
+    /// `converting` (Convert on the PS5) or `extracting` (an archive).
+    ConsoleBusy(String),
     /// The running helper predates the request.
     OldHelper,
     /// Nothing answered: no helper is running to remove anything.
@@ -175,6 +257,12 @@ impl UninstallError {
         match self {
             UninstallError::Busy => "busy",
             UninstallError::InUse(_) => "in_use",
+            UninstallError::ConsoleBusy(cause) => match cause.as_str() {
+                "installing" => "console_installing",
+                "converting" => "console_converting",
+                "extracting" => "console_extracting",
+                _ => "console_busy",
+            },
             UninstallError::OldHelper => "old_helper",
             UninstallError::NotRunning => "not_running",
             UninstallError::Failed(_) => "failed",
@@ -184,6 +272,7 @@ impl UninstallError {
     pub(crate) fn message(&self) -> String {
         match self {
             UninstallError::Busy => "the helper is in use: wait for the transfers and installs on this console to finish, then try again".into(),
+            UninstallError::ConsoleBusy(cause) => format!("the PS5 is busy ({cause}): wait for it to finish, then try again"),
             UninstallError::InUse(p) => format!("something is still mounted in PS5Upload's folders on the console; unmount it first: {}", p.join(", ")),
             UninstallError::OldHelper => "this helper is too old to remove itself; send this app's helper, then try again".into(),
             UninstallError::NotRunning => "the helper is not running on this console; send it, then try again".into(),
@@ -192,8 +281,8 @@ impl UninstallError {
     }
 }
 
-/// What a refusal body says, when it is one of ours (`{ok:false, err, paths?}`).
-fn refusal(cause: &str) -> Option<(String, Vec<String>)> {
+/// What a refusal body says, when it is one of ours (`{ok:false, err, paths?, cause?}`).
+fn refusal(cause: &str) -> Option<(String, Vec<String>, String)> {
     let v: serde_json::Value = serde_json::from_str(cause.trim()).ok()?;
     let err = v.get("err")?.as_str()?.to_string();
     let paths = v
@@ -205,7 +294,12 @@ fn refusal(cause: &str) -> Option<(String, Vec<String>)> {
                 .collect()
         })
         .unwrap_or_default();
-    Some((err, paths))
+    let why = v
+        .get("cause")
+        .and_then(|c| c.as_str())
+        .unwrap_or("")
+        .to_string();
+    Some((err, paths, why))
 }
 
 /// The decision, with the console calls passed in. `call` sends `node.uninstall`; after an
@@ -230,11 +324,11 @@ pub(crate) fn uninstall_with(
                 return Err(UninstallError::OldHelper);
             }
             if let Some(m) = e.downcast_ref::<ps5upload_core::mgmt::MgmtError>() {
-                if let Some((err, paths)) = refusal(&m.cause) {
-                    return Err(if err == "uninstall_in_use" {
-                        UninstallError::InUse(paths)
-                    } else {
-                        UninstallError::Failed(err)
+                if let Some((err, paths, why)) = refusal(&m.cause) {
+                    return Err(match err.as_str() {
+                        "uninstall_in_use" => UninstallError::InUse(paths),
+                        "uninstall_busy" => UninstallError::ConsoleBusy(why),
+                        _ => UninstallError::Failed(err),
                     });
                 }
             }
@@ -430,7 +524,7 @@ mod tests {
             true,
             || {
                 called.set(true);
-                true
+                Ok(())
             },
             || {
                 called.set(true);
@@ -446,14 +540,100 @@ mod tests {
 
     #[test]
     fn nothing_answering_is_not_running() {
-        let r = stop_with(false, || false, || false, NO_WAIT, NO_WAIT);
+        let r = stop_with(
+            false,
+            || Err(anyhow::anyhow!("connection refused")),
+            || false,
+            NO_WAIT,
+            NO_WAIT,
+        );
         assert_eq!(r, Ok(Stopped::NotRunning));
     }
 
     #[test]
-    fn an_unacknowledged_stop_with_the_port_open_is_refused() {
-        let r = stop_with(false, || false, || true, NO_WAIT, NO_WAIT);
-        assert_eq!(r, Err(StopError::Refused));
+    fn only_a_pairing_refusal_asks_to_pair() {
+        let unpaired = || {
+            Err(anyhow::Error::new(ps5upload_core::mgmt::MgmtError {
+                label: "SHUTDOWN".into(),
+                status: ps5upload_ava1::gen::ERR_NOT_PAIRED,
+                cause: "not_paired".into(),
+            }))
+        };
+        let e = stop_with(false, unpaired, || true, NO_WAIT, NO_WAIT).unwrap_err();
+        assert_eq!(e, StopError::NotPaired);
+        assert_eq!(e.reason(), "refused");
+        assert!(e.message().contains("pair with this console"));
+
+        // A timeout (or any other failure) says what happened, not "pair".
+        let e = stop_with(
+            false,
+            || {
+                Err(anyhow::anyhow!(
+                    "management call SHUTDOWN failed: timed out after 2s"
+                ))
+            },
+            || true,
+            NO_WAIT,
+            NO_WAIT,
+        )
+        .unwrap_err();
+        assert_eq!(e.reason(), "failed");
+        assert!(e.message().contains("timed out"), "{}", e.message());
+        assert!(!e.message().contains("pair"), "{}", e.message());
+    }
+
+    #[test]
+    fn a_stop_in_progress_marks_the_console_busy_and_one_at_a_time() {
+        let addr = "192.0.2.61";
+        let g = begin_stopping(addr).expect("first stop");
+        assert!(is_busy(addr), "the queue starts nothing during a stop");
+        assert!(!jobs_running(addr), "a stop is not a job");
+        // A second stop is refused without blocking (run on a thread with a deadline, so a lock
+        // taken twice fails this test instead of hanging the run) and leaves the first one's mark.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(begin_stopping("192.0.2.61:9120").is_none());
+        });
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(5)),
+            Ok(true),
+            "one stop per console, answered at once"
+        );
+        assert!(is_busy(addr), "the running stop keeps its mark");
+        drop(g);
+        assert!(!is_busy(addr));
+        assert!(begin_stopping(addr).is_some());
+    }
+
+    #[test]
+    fn uninstall_says_what_the_console_is_busy_with() {
+        let r = uninstall_with(
+            false,
+            true,
+            || {
+                Err(refused(
+                    r#"{"ok":false,"err":"uninstall_busy","cause":"converting"}"#,
+                ))
+            },
+            || true,
+            NO_WAIT,
+            NO_WAIT,
+        );
+        let e = r.unwrap_err();
+        assert_eq!(e, UninstallError::ConsoleBusy("converting".into()));
+        assert_eq!(e.reason(), "console_converting");
+        assert_eq!(
+            UninstallError::ConsoleBusy("installing".into()).reason(),
+            "console_installing"
+        );
+        assert_eq!(
+            UninstallError::ConsoleBusy("extracting".into()).reason(),
+            "console_extracting"
+        );
+        assert_eq!(
+            UninstallError::ConsoleBusy("?".into()).reason(),
+            "console_busy"
+        );
     }
 
     #[test]
@@ -461,7 +641,7 @@ mod tests {
         let probes = Cell::new(0);
         let r = stop_with(
             false,
-            || true,
+            || Ok(()),
             || {
                 probes.set(probes.get() + 1);
                 probes.get() < 3
@@ -477,7 +657,7 @@ mod tests {
     fn a_helper_that_keeps_answering_is_reported() {
         let r = stop_with(
             false,
-            || true,
+            || Ok(()),
             || true,
             Duration::from_millis(5),
             Duration::from_millis(1),

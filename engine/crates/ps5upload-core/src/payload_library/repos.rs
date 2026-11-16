@@ -1,8 +1,9 @@
 //! User-added payload repos (#93).
 //!
 //! The curated catalogue is a `const`. Users also track their own repos (a fork, a niche payload),
-//! which live in `custom-repos.json` and flow through the same release and download path, so
-//! every download guard applies to them. Custom ids are always `custom-<hex>`, so they can never
+//! which live in `custom-repos.json` and flow through the same release-information path, so
+//! every fetch guard applies to them. New repos can no longer be added from the app (it never
+//! downloads a payload); repos added earlier stay listed. Custom ids are always `custom-<hex>`, so they can never
 //! collide with a catalogue id nor leave the library's folder.
 
 use std::net::IpAddr;
@@ -609,10 +610,9 @@ mod tests {
                 ..add("me", "r")
             })
             .unwrap();
-        assert_eq!(
-            lib.resolve_entry(&info.id).unwrap().checksum_file,
-            "SHA256SUMS"
-        );
+        let saved = lib.load_custom_repos();
+        let repo = saved.iter().find(|r| r.id == info.id).unwrap();
+        assert_eq!(repo.checksum_file, "SHA256SUMS");
     }
 
     #[test]

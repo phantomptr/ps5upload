@@ -129,7 +129,13 @@ export function useHushActions(host: string, refresh: () => Promise<void>) {
             host,
             outcome === "running"
               ? tr("hush_turned_on", undefined, "Hush is on")
-              : tr("hush_turned_on_send", undefined, "Hush is set to on. Send it to the PS5 to start it."),
+              : outcome === "no_copy"
+                ? tr(
+                    "hush_turned_on_no_copy",
+                    undefined,
+                    "Hush is set to on, but couldn't be started: there's no copy of Hush in ps5upload, and ps5upload doesn't download payloads. Get Hush from its project page and send the file to the PS5.",
+                  )
+                : tr("hush_turned_on_send", undefined, "Hush is set to on. Send it to the PS5 to start it."),
           ),
         );
       } else {

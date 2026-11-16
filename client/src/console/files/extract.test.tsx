@@ -227,6 +227,9 @@ describe("extract lines", () => {
     expect(extractMessage({ end: "error", error: new ApiError(409, "fs_extract_busy") }, false)?.text).toBe(
       t("cw_files_extract_failed", { reason: t("cw_files_extract_err_busy") }),
     );
+    expect(extractMessage({ end: "error", error: new ApiError(409, "convert_busy") }, false)?.text).toBe(
+      t("cw_files_extract_failed", { reason: t("cw_convert_err_busy") }),
+    );
   });
 
   it("every cause in the contract has a sentence", () => {

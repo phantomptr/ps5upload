@@ -146,6 +146,7 @@ describe("install progress and outcome", () => {
 
   it("maps the start's refusals", () => {
     expect(installCauseText("pkg_install_busy")).toBe(t("cw_pkg_err_busy"));
+    expect(installCauseText("convert_busy")).toBe(t("cw_convert_err_busy"));
     expect(installCauseText("pkg_install_image_mounted")).toBe(t("cw_pkg_err_image"));
     expect(installCauseText("loader_unreachable")).toBe(t("cw_pkg_err_loader"));
     expect(installCauseText("pkg_not_pkg")).toBe(t("cw_pkg_err_not_pkg"));

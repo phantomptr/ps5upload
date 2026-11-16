@@ -54,6 +54,25 @@ int main(void) {
         json_escape_utf8_into("ab\xE3\x83\x87", cut, sizeof cut);
         CHECK(strcmp(cut, "ab??") == 0 || strcmp(cut, "ab?") == 0 || strcmp(cut, "ab") == 0);
         for (const char *p = cut; *p; p++) CHECK((unsigned char)*p < 0x80);
+        /* Overlong forms, encoded surrogates and code points past U+10FFFF are not valid UTF-8
+         * (serde refuses the whole reply over one): each byte of them reads '?'. */
+        json_escape_utf8_into("a\xC0\xAF" "b", u, sizeof u);
+        CHECK(strcmp(u, "a??b") == 0);
+        json_escape_utf8_into("a\xC1\xBF", u, sizeof u);
+        CHECK(strcmp(u, "a??") == 0);
+        json_escape_utf8_into("a\xE0\x80\xAF" "b", u, sizeof u); /* overlong '/' */
+        CHECK(strcmp(u, "a???b") == 0);
+        json_escape_utf8_into("a\xED\xA0\x80" "b", u, sizeof u); /* U+D800 */
+        CHECK(strcmp(u, "a???b") == 0);
+        json_escape_utf8_into("a\xF0\x8F\xBF\xBF" "b", u, sizeof u); /* overlong U+FFFF */
+        CHECK(strcmp(u, "a????b") == 0);
+        json_escape_utf8_into("a\xF4\x90\x80\x80" "b", u, sizeof u); /* U+110000 */
+        CHECK(strcmp(u, "a????b") == 0);
+        json_escape_utf8_into("a\xF5\x80\x80\x80", u, sizeof u);
+        CHECK(strcmp(u, "a????") == 0);
+        /* The edges of each range still pass. */
+        json_escape_utf8_into("\xE0\xA0\x80\xED\x9F\xBF\xF0\x90\x80\x80\xF4\x8F\xBF\xBF", u, sizeof u);
+        CHECK(strcmp(u, "\xE0\xA0\x80\xED\x9F\xBF\xF0\x90\x80\x80\xF4\x8F\xBF\xBF") == 0);
     }
 
     if (failures) {

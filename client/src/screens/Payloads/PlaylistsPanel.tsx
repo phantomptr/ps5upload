@@ -10,7 +10,6 @@ import {
   FilePlus,
   FolderOpen,
   ListPlus,
-  Package as PackageIcon,
   Pencil,
   Play,
   Plus,
@@ -23,7 +22,7 @@ import {
 } from "lucide-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 
-import { Button, ErrorCard, Modal, Spinner, Badge, Input, Select, Toggle } from "../../components";
+import { Button, ErrorCard, Modal, Spinner, Badge, Select, Toggle } from "../../components";
 import { ConsoleChip } from "../../components/ConsoleChip";
 import { useTr } from "../../state/lang";
 import { BrowseButton } from "../../components/BrowseButton";
@@ -36,7 +35,7 @@ import {
   sanitiseSleepMs,
   type Playlist,
 } from "../../lib/playlistOps";
-import { payloadsAddCustomRepo, payloadsCatalog, type PayloadInfo } from "../../api/ps5";
+import { payloadsCatalog } from "../../api/ps5";
 import { buildPlaylistExport, parsePlaylistExport } from "../../lib/playlistShare";
 import { isAndroid, isMobile } from "../../lib/platform";
 import { isTauriEnv, safeUnlisten } from "../../lib/tauriEnv";
@@ -95,22 +94,12 @@ export function PlaylistsPanel({ host, port }: { host: string; port: number }) {
   };
   const applyImport = async (text: string) => {
     const doc = parsePlaylistExport(text);
-    // The repos first, so the imported repo steps find their payloads.
-    const known = new Set((await payloadsCatalog().catch(() => [] as PayloadInfo[])).map((p) => p.id));
-    let repos = 0;
-    for (const r of doc.customRepos) {
-      if (known.has(r.id)) continue;
-      await payloadsAddCustomRepo({ host: r.host, owner: r.owner, name: r.name, displayName: r.displayName });
-      repos += 1;
-    }
+    // The file's custom repos are not added: the app doesn't download payloads, so a repo step
+    // runs from a copy saved here, or asks for the file.
     const added = usePayloadPlaylistsStore.getState().importPlaylists(doc);
     setShareMsg({
       ok: true,
-      text: tr(
-        "playlists_imported",
-        { count: added, repos },
-        `Imported ${added} playlist(s) and ${repos} custom repo(s)`,
-      ),
+      text: tr("playlists_imported_only", { count: added }, `Imported ${added} playlist(s)`),
     });
   };
   const importPlaylists = async () => {
@@ -326,9 +315,9 @@ export function PlaylistsPanel({ host, port }: { host: string; port: number }) {
             onClick={() => void importPlaylists()}
             disabled={isBusy}
             title={tr(
-              "playlists_import_title",
+              "playlists_import_title_v2",
               undefined,
-              "Add playlists (and the custom repos they use) from a file someone exported",
+              "Add playlists from a file someone exported",
             )}
           >
             {tr("playlists_import", undefined, "Import…")}
@@ -340,9 +329,9 @@ export function PlaylistsPanel({ host, port }: { host: string; port: number }) {
             onClick={() => void exportPlaylists()}
             disabled={playlists.length === 0}
             title={tr(
-              "playlists_export_title",
+              "playlists_export_title_v2",
               undefined,
-              "Save every playlist, the auto-loader choice and your custom repos to one file to share",
+              "Save every playlist and the auto-loader choice to one file to share",
             )}
           >
             {tr("playlists_export", undefined, "Export…")}
@@ -761,30 +750,6 @@ function PlaylistCard({
   const [draftName, setDraftName] = useState(playlist.name);
   const renameRef = useRef<HTMLInputElement | null>(null);
 
-  // Repo-step picker (#129): a modal listing the Payloads catalogue so the
-  // user can add a step that's fetched from a repo at run time (no local
-  // file). Lazy-loaded on open so opening a playlist doesn't fetch it.
-  const [repoPickerOpen, setRepoPickerOpen] = useState(false);
-  const [catalog, setCatalog] = useState<PayloadInfo[] | null>(null);
-  const [repoQuery, setRepoQuery] = useState("");
-  useEffect(() => {
-    if (repoPickerOpen && catalog === null) {
-      payloadsCatalog()
-        .then(setCatalog)
-        .catch(() => setCatalog([]));
-    }
-  }, [repoPickerOpen, catalog]);
-
-  function handleAddRepoStep(info: PayloadInfo) {
-    addStep(playlist.id, {
-      path: "",
-      payloadId: info.id,
-      payloadLabel: info.display_name,
-      sleepMs: 0,
-    });
-    setRepoPickerOpen(false);
-    setRepoQuery("");
-  }
   // Custom delete-confirm modal — Tauri webview also no-ops
   // window.confirm, so we render an in-tree confirmation dialog.
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -818,6 +783,18 @@ function PlaylistCard({
       ],
     });
     for (const path of picked) addStep(playlist.id, { path, sleepMs: 0 });
+  };
+
+  /** Turn a repo step into a file step for a file the user picks (its wait, address and port
+   *  stay). */
+  const chooseStepFile = async (index: number) => {
+    const [path] = await pickPaths({
+      filters: [
+        { name: "Payload", extensions: ["elf", "bin", "js", "lua", "jar"] },
+        { name: "All files", extensions: ["*"] },
+      ],
+    });
+    if (path) updateStep(playlist.id, index, { path, payloadId: undefined, payloadLabel: undefined });
   };
 
   const canRun = playlist.steps.length > 0 && !!host?.trim() && !anyRunning;
@@ -1035,9 +1012,9 @@ function PlaylistCard({
                   {String(i + 1).padStart(2, "0")}
                 </span>
                 {step.payloadId ? (
-                  // Repo-sourced step (#129): show the payload label + a badge
-                  // instead of a host path (there may be none yet — it's
-                  // resolved from the repo at run time).
+                  // Repo-sourced step (#129, from before the app stopped downloading payloads):
+                  // it sends the copy saved in the app's library. Choose file turns it into a
+                  // file step, the way to run it when there is no saved copy.
                   <div className="flex min-w-0 flex-1 items-center gap-1.5">
                     <Badge tone="neutral" variant="outline">
                       {tr("playlist_step_repo_badge", undefined, "Repo")}
@@ -1045,13 +1022,22 @@ function PlaylistCard({
                     <span
                       className="min-w-0 flex-1 truncate text-xs"
                       title={tr(
-                        "playlist_step_repo_hint",
-                        { id: step.payloadId },
-                        `Fetched from the ${step.payloadId} repo at run time — no local file needed.`,
+                        "playlist_step_saved_hint",
+                        { name: step.payloadLabel || step.payloadId },
+                        `Sends the copy of ${step.payloadLabel || step.payloadId} saved in ps5upload. ps5upload doesn't download payloads: if there's no saved copy, choose the file.`,
                       )}
                     >
                       {step.payloadLabel || step.payloadId}
                     </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      leftIcon={<FolderOpen size={12} />}
+                      onClick={() => void chooseStepFile(i)}
+                      disabled={anyRunning}
+                    >
+                      {tr("first_run_choose_file", undefined, "Choose file…")}
+                    </Button>
                   </div>
                 ) : (
                   <div className="min-w-0 flex-1 truncate font-mono text-xs">
@@ -1177,20 +1163,6 @@ function PlaylistCard({
         <Button
           variant="ghost"
           size="sm"
-          leftIcon={<PackageIcon size={12} />}
-          onClick={() => setRepoPickerOpen(true)}
-          disabled={anyRunning}
-          title={tr(
-            "playlist_add_repo_step_hint",
-            undefined,
-            "Add a step fetched from a repo at run time — no local file needed (#129).",
-          )}
-        >
-          {tr("playlist_add_repo_step", undefined, "Add repo step")}
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
           leftIcon={<FolderOpen size={12} />}
           onClick={handleAddStep}
           disabled={anyRunning}
@@ -1199,83 +1171,6 @@ function PlaylistCard({
         </Button>
       </div>
 
-      {repoPickerOpen && (
-        <Modal
-          open
-          onClose={() => setRepoPickerOpen(false)}
-          title={tr("playlist_repo_picker_title", undefined, "Add a repo step")}
-        >
-          <div className="flex flex-col gap-3">
-            <p className="text-xs text-[var(--color-muted)]">
-              {tr(
-                "playlist_repo_picker_hint",
-                undefined,
-                "Pick a payload. The playlist fetches its latest release and caches it when you run — so you don't keep the file on your PC. Add your own repos on the Catalog tab.",
-              )}
-            </p>
-            <Input
-              type="search"
-              value={repoQuery}
-              onChange={(e) => setRepoQuery(e.target.value)}
-              placeholder={tr(
-                "playlist_repo_picker_search",
-                undefined,
-                "Search payloads…",
-              )}
-              autoFocus
-            />
-            <div className="max-h-[50vh] overflow-y-auto">
-              {catalog === null ? (
-                <div className="flex items-center gap-2 p-4 text-xs text-[var(--color-muted)]">
-                  <Spinner size={14} />
-                  {tr("playlist_repo_picker_loading", undefined, "Loading catalogue…")}
-                </div>
-              ) : (
-                <ul className="grid gap-1">
-                  {catalog
-                    .filter((p) => {
-                      const q = repoQuery.trim().toLowerCase();
-                      if (!q) return true;
-                      return [p.display_name, p.role, p.repo_owner, p.repo_name]
-                        .join(" ")
-                        .toLowerCase()
-                        .includes(q);
-                    })
-                    .map((p) => (
-                      <li key={p.id}>
-                        <button
-                          type="button"
-                          onClick={() => handleAddRepoStep(p)}
-                          className="flex w-full items-center gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-start text-xs hover:border-[var(--color-accent)]"
-                        >
-                          <PackageIcon
-                            size={14}
-                            className="shrink-0 text-[var(--color-muted)]"
-                          />
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate font-medium text-[var(--color-text)]">
-                              {p.display_name}
-                              {p.is_custom && (
-                                <Badge tone="neutral" variant="outline" className="ms-1.5">
-                                  {tr("payloads_custom_badge", undefined, "Custom")}
-                                </Badge>
-                              )}
-                            </span>
-                            <span className="block truncate text-[var(--color-muted)]">
-                              {p.repo_owner
-                                ? `${p.repo_owner}/${p.repo_name}`
-                                : p.homepage.replace(/^https:\/\/(www\.)?/, "").replace(/\/releases\/?$/, "")}
-                            </span>
-                          </span>
-                        </button>
-                      </li>
-                    ))}
-                </ul>
-              )}
-            </div>
-          </div>
-        </Modal>
-      )}
     </article>
   );
 }

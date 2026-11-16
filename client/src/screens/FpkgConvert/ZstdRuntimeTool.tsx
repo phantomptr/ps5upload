@@ -16,6 +16,7 @@ import {
 import { Button } from "../../components";
 import { isRemotePath } from "../../lib/remotePath";
 import { useTr, type Translator } from "../../state/lang";
+import { log } from "../../state/logs";
 
 const IMAGE = /\.(exfat|ffpkg|ufs2|ffpfs|ffpfsc)$/i;
 
@@ -114,11 +115,13 @@ export function ZstdRuntimeTool({
   onUpdated: () => void;
 }) {
   const tr = useTr();
-  const [busy, setBusy] = useState(false);
+  // The source an update runs for: another game picked meanwhile gets its own button.
+  const [busyFor, setBusyFor] = useState<string | null>(null);
   const shown = useRef(source);
   const [done, setDone] = useState<ZstdRuntimeOutcome | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [smp, setSmp] = useState<SmpEmulatorCheck | null>(null);
+  const [smpUnknown, setSmpUnknown] = useState(false);
   const host = consoleOf(source.trim());
   const now = runtimeNow(inspection, tr);
   useEffect(() => {
@@ -128,6 +131,7 @@ export function ZstdRuntimeTool({
   }, [source]);
   useEffect(() => {
     setSmp(null);
+    setSmpUnknown(false);
     if (!host) return;
     let live = true;
     fpkg
@@ -135,7 +139,10 @@ export function ZstdRuntimeTool({
       .then((c) => {
         if (live) setSmp(c);
       })
-      .catch(() => {});
+      .catch((e: unknown) => {
+        log.warn("convert", `couldn't check ShadowMount+'s emulator folder on ${host}`, e);
+        if (live) setSmpUnknown(true);
+      });
     return () => {
       live = false;
     };
@@ -148,7 +155,7 @@ export function ZstdRuntimeTool({
         variant="secondary"
         leftIcon={<RefreshCw size={14} />}
         data-testid="zstd-runtime-update"
-        disabled={locked || busy || !!done}
+        disabled={locked || busyFor === source || !!done}
         title={tr(
           "zstd_runtime_update_hint",
           undefined,
@@ -156,7 +163,7 @@ export function ZstdRuntimeTool({
         )}
         onClick={() => {
           const started = source;
-          setBusy(true);
+          setBusyFor(started);
           setFailed(null);
           fpkg
             .updateZstdRuntime(started.trim())
@@ -169,12 +176,12 @@ export function ZstdRuntimeTool({
             .catch((e: unknown) => {
               if (shown.current === started) setFailed(e instanceof Error ? e.message : String(e));
             })
-            .finally(() => setBusy(false));
+            .finally(() => setBusyFor((b) => (b === started ? null : b)));
         }}
       >
         {tr("zstd_runtime_update", undefined, "Update the zstd runtime")}
       </Button>
-      {(now || done || failed || warning) && (
+      {(now || done || failed || warning || smpUnknown) && (
         <div
           className="w-full space-y-1 text-xs"
           data-testid="zstd-runtime-status"
@@ -213,6 +220,15 @@ export function ZstdRuntimeTool({
             </p>
           )}
           {warning && <p className="text-[var(--color-warn)]">{warning}</p>}
+          {smpUnknown && (
+            <p className="text-[var(--color-muted)]" data-testid="zstd-runtime-smp-unknown">
+              {tr(
+                "zstd_runtime_smp_unknown",
+                undefined,
+                "Couldn't check whether ShadowMount+ swaps this game's runtime.",
+              )}
+            </p>
+          )}
         </div>
       )}
     </>

@@ -162,7 +162,7 @@ export function ConsoleAsks() {
     }
   };
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+5rem)] z-50 flex justify-center px-4 md:bottom-6 md:justify-end md:px-6">
+    <div className="pointer-events-none flex justify-center md:justify-end">
       <AskPrompt
         pending={first}
         more={all.length - 1}

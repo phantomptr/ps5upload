@@ -9,6 +9,7 @@ import {
   type MinionTileState,
 } from "../../api/consoleFiles";
 import { hostOf } from "../../lib/addr";
+import { humanizeCaught } from "../../lib/humanizeError";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
@@ -435,7 +436,7 @@ function ZstdRuntimePut({ host }: { host: string }) {
     try {
       setDone((await putZstdRuntime(host)).version);
     } catch (e) {
-      setError(String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(false);
     }

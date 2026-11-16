@@ -539,7 +539,9 @@ export function OnThisPs5Card({
           variant="danger"
           leftIcon={<Trash2 size={13} />}
           loading={busy === "uninstall"}
-          disabled={busy !== null}
+          // Until the mounter check answers, a Kraken-mounted title reads as installed, and a
+          // plain unregister would be the wrong uninstall for it.
+          disabled={busy !== null || smp.status === "checking"}
           onClick={() => void uninstall()}
         >
           {tr("installed_uninstall", undefined, "Uninstall")}

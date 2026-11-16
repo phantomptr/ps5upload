@@ -1,7 +1,7 @@
 import BrowserFilePicker from "./BrowserFilePicker";
 import { OPEN_FOLD } from "../Send/sendEvents";
 import { consoleAddr } from "../../lib/addr";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PackagePanel } from "../../components/PackagePanel";
 import {
   Upload as UploadIcon,
@@ -116,6 +116,14 @@ import {
   type BatchRow,
 } from "../../state/uploadBatch";
 import { BatchReview } from "./BatchReview";
+import { PkgChoiceField, PkgCopyHint } from "./PkgChoiceField";
+import {
+  krakenCopyDestination,
+  pkgChoiceOf,
+  type PkgChoice,
+} from "../../lib/pkgUploadChoice";
+import { krakenRuns, useMounterFor } from "../../lib/mounter";
+import { useSmpState } from "../GameHub/SmpNeeded";
 import { STICKY_ACTIONS } from "./stickyActions";
 import { inStreamOrder } from "../../lib/streamSelection";
 import { resolveUploadDest } from "../../lib/uploadDest";
@@ -224,6 +232,7 @@ export default function UploadScreen({
     setMountReadOnly,
     setRegisterAfterUpload,
     setDestination,
+    setPkgChoice,
     setExcludeMode,
     toggleExclude,
     addExclude,
@@ -248,6 +257,7 @@ export default function UploadScreen({
       setMountAfterUpload: s.setMountAfterUpload,
       setMountReadOnly: s.setMountReadOnly,
       setRegisterAfterUpload: s.setRegisterAfterUpload,
+      setPkgChoice: s.setPkgChoice,
       setDestination: s.setDestination,
       setExcludeMode: s.setExcludeMode,
       toggleExclude: s.toggleExclude,
@@ -616,6 +626,55 @@ export default function UploadScreen({
     };
   }, [host]);
 
+  // A .pkg copied as a file (for Kraken Mount): when Kraken Mount runs on this console, the
+  // destination is set once to a folder it scans; the user can still change it.
+  const pkgCopyIds = [
+    pkgChoiceOf(source) === "copy" ? source?.path ?? "" : "",
+    useUploadBatch((s) =>
+      s.rows
+        .filter((r) => r.pkgChoice === "copy")
+        .map((r) => r.id)
+        .join("|"),
+    ),
+  ]
+    .filter(Boolean)
+    .join("|");
+  useSmpState(pkgCopyIds && host?.trim() ? host : "");
+  const mounterSnap = useMounterFor(host);
+  const kraken = krakenRuns(mounterSnap) ? (mounterSnap?.kraken ?? null) : null;
+  const krakenPrefilled = useRef<string | null>(null);
+  useEffect(() => {
+    if (!pkgCopyIds || !kraken) return;
+    const key = `${hostOf(host ?? "")}|${pkgCopyIds}`;
+    if (krakenPrefilled.current === key) return;
+    krakenPrefilled.current = key;
+    const d = krakenCopyDestination(
+      destinationVolume,
+      kraken,
+      availableVolumes.map((v) => v.path),
+    );
+    if (
+      d &&
+      (d.volume !== (destinationVolume ?? "/data") ||
+        d.subpath !== destinationSubpath.replace(/^\/+|\/+$/g, ""))
+    )
+      setDestination(d.volume, d.subpath);
+    // Once per copied package (and console): a later edit of the destination stays.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pkgCopyIds, kraken, host]);
+  // The hint says the folder is one Kraken Mount scans only while it is.
+  const krakenDest = kraken
+    ? krakenCopyDestination(
+        destinationVolume,
+        kraken,
+        availableVolumes.map((v) => v.path),
+      )
+    : null;
+  const inKrakenFolder =
+    !!krakenDest &&
+    krakenDest.volume === (destinationVolume ?? "/data") &&
+    krakenDest.subpath === destinationSubpath.replace(/^\/+|\/+$/g, "");
+
   /** Upload now: the item goes into this console's queue, which then starts as every add
    *  does (#536: the whole queue in order, or nothing until Start when "Start the queue when
    *  you add something" is off), so its progress, install, mount and result show on its queue
@@ -971,6 +1030,9 @@ export default function UploadScreen({
                   )}
                 />
               )}
+              {batchRows.some((r) => r.pkgChoice === "copy") && (
+                <PkgCopyHint krakenRuns={inKrakenFolder} />
+              )}
               {hasBatchPkg && (
                 <Toggle
                   checked={
@@ -1001,6 +1063,7 @@ export default function UploadScreen({
           onInclude={(id, v) => batch.setInclude(id, v)}
           onPassword={(id, pw) => batch.setPassword(id, pw)}
           onArchiveChoice={(id, c) => batch.setArchiveChoice(id, c)}
+          onPkgChoice={(id, c) => batch.setPkgChoice(id, c)}
           onClear={() => batch.clear()}
           onConvert={(state) => navigate("/workshop", { state })}
         />
@@ -1040,6 +1103,8 @@ export default function UploadScreen({
           onSetMountReadOnly={setMountReadOnly}
           onSetRegisterAfterUpload={setRegisterAfterUpload}
           onSetDestination={setDestination}
+          onSetPkgChoice={(c) => void setPkgChoice(c)}
+          krakenRuns={inKrakenFolder}
           onSetExcludeMode={setExcludeMode}
           onToggleExclude={toggleExclude}
           onAddExclude={addExclude}
@@ -1237,6 +1302,10 @@ function Step2Options(props: {
   onSetMountReadOnly: (on: boolean) => void;
   onSetRegisterAfterUpload: (on: boolean) => void;
   onSetDestination: (v: string | null, s?: string) => void;
+  /** A .pkg: install it, or copy it as a file. */
+  onSetPkgChoice: (c: PkgChoice) => void;
+  /** Kraken Mount runs on the console and the destination is a folder it scans. */
+  krakenRuns: boolean;
   onSetExcludeMode: (m: ExcludeMode) => void;
   onToggleExclude: (p: string) => void;
   onAddExclude: (p: string) => void;
@@ -1270,6 +1339,8 @@ function Step2Options(props: {
     onSetMountReadOnly,
     onSetRegisterAfterUpload,
     onSetDestination,
+    onSetPkgChoice,
+    krakenRuns: krakenRunning,
     onSetExcludeMode,
     onToggleExclude,
     onAddExclude,
@@ -1381,6 +1452,8 @@ function Step2Options(props: {
   // `rar_password_required` token would show in red next to the friendly card.
   const isRarSource =
     source.kind === "archive" && archiveFormat(source.path) === "rar";
+  // A .pkg picked to install ("pkg") or to copy as a file ("file"); null for anything else.
+  const pkgChoice = pkgChoiceOf(source);
   // A rar whose inspect hasn't succeeded yet (needs/wrong password, missing
   // volume, or still scanning) — the downstream extract-mode config is
   // premature until we can actually read the archive, so lead with the rar
@@ -1780,6 +1853,28 @@ function Step2Options(props: {
           destinationVolume={destinationVolume}
           destinationSubpath={destinationSubpath}
         />
+      )}
+
+      {/* A .pkg: install it, or copy it to the destination as a plain file (Kraken Mount
+          mounts packages from the folders it scans). The choice is remembered. */}
+      {pkgChoice && (
+        <section
+          className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-3 grid gap-2 p-4"
+          data-testid="pkg-choice-card"
+        >
+          <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+            <Package size={16} className="text-[var(--color-muted)]" />
+            <span className="me-auto">
+              {tr("upload_pkg_choice_title", undefined, "Package")}
+            </span>
+            <PkgChoiceField
+              choice={pkgChoice}
+              onChoose={onSetPkgChoice}
+              disabled={detecting}
+            />
+          </div>
+          {pkgChoice === "copy" && <PkgCopyHint krakenRuns={krakenRunning} />}
+        </section>
       )}
 
       {/* A .pkg has a fixed destination (the package library) and installs

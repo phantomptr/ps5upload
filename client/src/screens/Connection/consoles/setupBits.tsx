@@ -101,9 +101,9 @@ export function FirstRunNudge() {
         </div>
         <div className="text-[var(--color-muted)]">
           {tr(
-            "connection_first_run_nudge_body_v2",
+            "connection_first_run_nudge_body_files",
             undefined,
-            "The setup wizard downloads kstuff and ShadowMount+ and sends them, then the helper, in the right order. If your console already loads kstuff itself (an autoloader, etaHEN), step 2 below sends just the helper.",
+            "The setup wizard sends kstuff and ShadowMount+ (get the files from their project pages), then the helper, in the right order. If your console already loads kstuff itself (an autoloader, etaHEN), step 2 below sends just the helper.",
           )}
         </div>
       </div>
