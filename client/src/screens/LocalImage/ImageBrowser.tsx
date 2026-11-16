@@ -170,6 +170,10 @@ export function ImageBrowser({
   /** Follows a job to its end, updating the progress shown. */
   const follow = useCallback(
     async (id: string, kind: RunningJob["kind"], what: string) => {
+      // The image the job is about: if another is opened meanwhile, its end (changes cleared,
+      // the saved banner, an error) is not written onto that one.
+      const about = current.current;
+      const here = () => alive.current && current.current === about;
       setFinished(null);
       setJob({ id, kind, what, done: 0, total: 0 });
       try {
@@ -177,13 +181,14 @@ export function ImageBrowser({
           const snap = await jobStatus(id);
           if (!alive.current) return;
           if (snap.status === "done") {
+            if (!here()) return;
             const warning = snap.commit_ack?.warning;
             setFinished({ kind, dest: snap.dest ?? "", ...(typeof warning === "string" && warning ? { warning } : {}) });
             if (kind === "edit" || kind === "inplace") setEdits([]);
             return;
           }
           if (snap.status === "failed") {
-            setError(snap.error ?? tr("imgbrowse_job_failed", undefined, "It did not finish."));
+            if (here()) setError(snap.error ?? tr("imgbrowse_job_failed", undefined, "It did not finish."));
             return;
           }
           setJob({
@@ -197,7 +202,7 @@ export function ImageBrowser({
           await new Promise((r) => setTimeout(r, 500));
         }
       } catch (e) {
-        if (alive.current) setError(String(e));
+        if (here()) setError(String(e));
       } finally {
         if (alive.current) setJob(null);
       }
@@ -280,7 +285,7 @@ export function ImageBrowser({
     try {
       const { job_id } = await fpkg.editImageInPlace(image, edits);
       await follow(job_id, "inplace", name);
-      if (alive.current) await load(image, listing?.dir ?? "");
+      if (alive.current && current.current === image) await load(image, listing?.dir ?? "");
     } catch (e) {
       // Refused (it didn't fit, the image is in use): the edited copy is still there to use.
       if (current.current === image) setError(String(e));

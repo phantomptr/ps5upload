@@ -1,6 +1,14 @@
 {
   "ar": {
-    "missing": [],
+    "missing": [
+      "fpkg_swap_no_title_id",
+      "fpkg_swap_unfinished",
+      "join_rp_still_stopping",
+      "receive_link_waiting",
+      "saves_auto_load_failed",
+      "saves_auto_retry",
+      "zstd_runtime_smp_unknown"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -16,7 +24,15 @@
     ]
   },
   "bn": {
-    "missing": [],
+    "missing": [
+      "fpkg_swap_no_title_id",
+      "fpkg_swap_unfinished",
+      "join_rp_still_stopping",
+      "receive_link_waiting",
+      "saves_auto_load_failed",
+      "saves_auto_retry",
+      "zstd_runtime_smp_unknown"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -36,7 +52,15 @@
     ]
   },
   "de": {
-    "missing": [],
+    "missing": [
+      "fpkg_swap_no_title_id",
+      "fpkg_swap_unfinished",
+      "join_rp_still_stopping",
+      "receive_link_waiting",
+      "saves_auto_load_failed",
+      "saves_auto_retry",
+      "zstd_runtime_smp_unknown"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -63,7 +87,15 @@
     ]
   },
   "es": {
-    "missing": [],
+    "missing": [
+      "fpkg_swap_no_title_id",
+      "fpkg_swap_unfinished",
+      "join_rp_still_stopping",
+      "receive_link_waiting",
+      "saves_auto_load_failed",
+      "saves_auto_retry",
+      "zstd_runtime_smp_unknown"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -85,7 +117,15 @@
     ]
   },
   "fa": {
-    "missing": [],
+    "missing": [
+      "fpkg_swap_no_title_id",
+      "fpkg_swap_unfinished",
+      "join_rp_still_stopping",
+      "receive_link_waiting",
+      "saves_auto_load_failed",
+      "saves_auto_retry",
+      "zstd_runtime_smp_unknown"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -103,7 +143,15 @@
     ]
   },
   "fr": {
-    "missing": [],
+    "missing": [
+      "fpkg_swap_no_title_id",
+      "fpkg_swap_unfinished",
+      "join_rp_still_stopping",
+      "receive_link_waiting",
+      "saves_auto_load_failed",
+      "saves_auto_retry",
+      "zstd_runtime_smp_unknown"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -124,7 +172,15 @@
     ]
   },
   "hi": {
-    "missing": [],
+    "missing": [
+      "fpkg_swap_no_title_id",
+      "fpkg_swap_unfinished",
+      "join_rp_still_stopping",
+      "receive_link_waiting",
+      "saves_auto_load_failed",
+      "saves_auto_retry",
+      "zstd_runtime_smp_unknown"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -144,7 +200,15 @@
     ]
   },
   "hu": {
-    "missing": [],
+    "missing": [
+      "fpkg_swap_no_title_id",
+      "fpkg_swap_unfinished",
+      "join_rp_still_stopping",
+      "receive_link_waiting",
+      "saves_auto_load_failed",
+      "saves_auto_retry",
+      "zstd_runtime_smp_unknown"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -169,7 +233,15 @@
     ]
   },
   "id": {
-    "missing": [],
+    "missing": [
+      "fpkg_swap_no_title_id",
+      "fpkg_swap_unfinished",
+      "join_rp_still_stopping",
+      "receive_link_waiting",
+      "saves_auto_load_failed",
+      "saves_auto_retry",
+      "zstd_runtime_smp_unknown"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -196,7 +268,15 @@
     ]
   },
   "it": {
-    "missing": [],
+    "missing": [
+      "fpkg_swap_no_title_id",
+      "fpkg_swap_unfinished",
+      "join_rp_still_stopping",
+      "receive_link_waiting",
+      "saves_auto_load_failed",
+      "saves_auto_retry",
+      "zstd_runtime_smp_unknown"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -223,7 +303,15 @@
     ]
   },
   "ja": {
-    "missing": [],
+    "missing": [
+      "fpkg_swap_no_title_id",
+      "fpkg_swap_unfinished",
+      "join_rp_still_stopping",
+      "receive_link_waiting",
+      "saves_auto_load_failed",
+      "saves_auto_retry",
+      "zstd_runtime_smp_unknown"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -240,7 +328,15 @@
     ]
   },
   "ko": {
-    "missing": [],
+    "missing": [
+      "fpkg_swap_no_title_id",
+      "fpkg_swap_unfinished",
+      "join_rp_still_stopping",
+      "receive_link_waiting",
+      "saves_auto_load_failed",
+      "saves_auto_retry",
+      "zstd_runtime_smp_unknown"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -259,7 +355,15 @@
     ]
   },
   "pl": {
-    "missing": [],
+    "missing": [
+      "fpkg_swap_no_title_id",
+      "fpkg_swap_unfinished",
+      "join_rp_still_stopping",
+      "receive_link_waiting",
+      "saves_auto_load_failed",
+      "saves_auto_retry",
+      "zstd_runtime_smp_unknown"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -281,7 +385,15 @@
     ]
   },
   "pt-BR": {
-    "missing": [],
+    "missing": [
+      "fpkg_swap_no_title_id",
+      "fpkg_swap_unfinished",
+      "join_rp_still_stopping",
+      "receive_link_waiting",
+      "saves_auto_load_failed",
+      "saves_auto_retry",
+      "zstd_runtime_smp_unknown"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -303,7 +415,15 @@
     ]
   },
   "ru": {
-    "missing": [],
+    "missing": [
+      "fpkg_swap_no_title_id",
+      "fpkg_swap_unfinished",
+      "join_rp_still_stopping",
+      "receive_link_waiting",
+      "saves_auto_load_failed",
+      "saves_auto_retry",
+      "zstd_runtime_smp_unknown"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -324,7 +444,15 @@
     ]
   },
   "th": {
-    "missing": [],
+    "missing": [
+      "fpkg_swap_no_title_id",
+      "fpkg_swap_unfinished",
+      "join_rp_still_stopping",
+      "receive_link_waiting",
+      "saves_auto_load_failed",
+      "saves_auto_retry",
+      "zstd_runtime_smp_unknown"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -345,7 +473,15 @@
     ]
   },
   "tr": {
-    "missing": [],
+    "missing": [
+      "fpkg_swap_no_title_id",
+      "fpkg_swap_unfinished",
+      "join_rp_still_stopping",
+      "receive_link_waiting",
+      "saves_auto_load_failed",
+      "saves_auto_retry",
+      "zstd_runtime_smp_unknown"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -369,7 +505,15 @@
     ]
   },
   "vi": {
-    "missing": [],
+    "missing": [
+      "fpkg_swap_no_title_id",
+      "fpkg_swap_unfinished",
+      "join_rp_still_stopping",
+      "receive_link_waiting",
+      "saves_auto_load_failed",
+      "saves_auto_retry",
+      "zstd_runtime_smp_unknown"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -392,7 +536,15 @@
     ]
   },
   "zh-CN": {
-    "missing": [],
+    "missing": [
+      "fpkg_swap_no_title_id",
+      "fpkg_swap_unfinished",
+      "join_rp_still_stopping",
+      "receive_link_waiting",
+      "saves_auto_load_failed",
+      "saves_auto_retry",
+      "zstd_runtime_smp_unknown"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",
@@ -409,7 +561,15 @@
     ]
   },
   "zh-TW": {
-    "missing": [],
+    "missing": [
+      "fpkg_swap_no_title_id",
+      "fpkg_swap_unfinished",
+      "join_rp_still_stopping",
+      "receive_link_waiting",
+      "saves_auto_load_failed",
+      "saves_auto_retry",
+      "zstd_runtime_smp_unknown"
+    ],
     "stale": [],
     "untranslated": [
       "about_feat_minion_title",

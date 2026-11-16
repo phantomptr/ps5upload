@@ -11,6 +11,7 @@ import { useTr } from "../../state/lang";
 import { useJoinPresence } from "../../state/joinPresence";
 import { activeJoin, useJoinStore } from "../../state/joinSession";
 import { useRemotePlayStore } from "../../state/remotePlay";
+import { pushNotification } from "../../state/notifications";
 import { holdPageStill, lockLandscape, setWindowFullscreen, unlockOrientation } from "./immersive";
 import { useConnectionStore } from "../../state/connection";
 import { deviceName, meshFor, nearbyJoins, useMeshStore } from "../../state/mesh";
@@ -57,6 +58,14 @@ export async function okToJoin(tr: Tr, confirm: Confirm, link: JoinLink): Promis
     useRemotePlayStore.getState().stop();
     for (let i = 0; i < 50 && useRemotePlayStore.getState().stream; i++) {
       await new Promise((r) => window.setTimeout(r, 100));
+    }
+    // Two streams at once would fight over the network and the controller: don't join yet.
+    if (useRemotePlayStore.getState().stream) {
+      pushNotification(
+        "warning",
+        tr("join_rp_still_stopping", undefined, "Remote Play is still stopping. Try again in a moment."),
+      );
+      return false;
     }
     return true;
   }

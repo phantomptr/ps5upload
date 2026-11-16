@@ -9,6 +9,7 @@ import {
   DEFAULT_INTERVAL_MINUTES,
   clampKeep,
   intervalChoices,
+  intervalSupported,
   useAutoSaveBackupStore,
 } from "../../state/autoSaveBackup";
 import { useTr } from "../../state/lang";
@@ -77,7 +78,29 @@ export default function AutoBackupCard() {
     return () => window.clearInterval(id);
   }, [running, refresh]);
 
-  if (!settings) return null;
+  // The first read failed (the engine is down or refused): say so, with a way to try again.
+  if (!settings) {
+    if (!error) return null;
+    return (
+      <section
+        className="mb-4 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4"
+        data-testid="auto-save-backup-error"
+      >
+        <header className="mb-1 flex flex-wrap items-center gap-2">
+          <History size={14} />
+          <h3 className="flex-1 basis-[8rem] text-sm font-semibold">
+            {tr("saves_auto_title", undefined, "Automatic backups")}
+          </h3>
+          <Button variant="ghost" size="sm" onClick={() => void refresh()}>
+            {tr("saves_auto_retry", undefined, "Try again")}
+          </Button>
+        </header>
+        <p className="text-xs text-[var(--color-bad)]">
+          {tr("saves_auto_load_failed", { error }, "Couldn't read the backup settings: {error}")}
+        </p>
+      </section>
+    );
+  }
   const dir = settings.dir;
 
   async function chooseFolder() {
@@ -162,13 +185,15 @@ export default function AutoBackupCard() {
             </Button>
           </>
         )}
-        <IntervalChoice
-          minutes={settings.interval_minutes}
-          onChange={(interval_minutes) => {
-            if (interval_minutes !== settings.interval_minutes) void set({ interval_minutes });
-          }}
-        />
-        <label htmlFor="saves-auto-keep"className="text-xs text-[var(--color-muted)]">
+        {intervalSupported(settings) && (
+          <IntervalChoice
+            minutes={settings.interval_minutes}
+            onChange={(interval_minutes) => {
+              if (interval_minutes !== settings.interval_minutes) void set({ interval_minutes });
+            }}
+          />
+        )}
+        <label htmlFor="saves-auto-keep" className="text-xs text-[var(--color-muted)]">
           {tr("saves_auto_keep", undefined, "Versions to keep")}
         </label>
         <input

@@ -1,8 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { IntervalChoice } from "./AutoBackupCard";
-import { intervalChoices } from "../../state/autoSaveBackup";
+// A static render reads the store's live state, not its initial one.
+vi.mock("zustand", async (orig) => {
+  const { liveZustand } = await import("../../test-utils/liveZustand");
+  return liveZustand(await orig<typeof import("zustand")>());
+});
+
+import AutoBackupCard, { IntervalChoice } from "./AutoBackupCard";
+import { intervalChoices, intervalSupported, useAutoSaveBackupStore } from "../../state/autoSaveBackup";
 
 const noop = () => {};
 
@@ -29,5 +35,32 @@ describe("automatic backups: how often", () => {
     expect(renderToStaticMarkup(<IntervalChoice minutes={45} onChange={noop} />)).toMatch(
       /<option value="45" selected="">45 min<\/option>/,
     );
+  });
+});
+
+describe("automatic backups: the card", () => {
+  const base = { enabled: false, dir: "/data/save-backups", keep: 5, hosts: [] };
+  afterEach(() => useAutoSaveBackupStore.setState({ settings: null, status: null, error: null }));
+
+  it("offers the interval only when the engine has one", () => {
+    expect(intervalSupported({ interval_minutes: 30 })).toBe(true);
+    expect(intervalSupported({})).toBe(false);
+    expect(intervalSupported(null)).toBe(false);
+    useAutoSaveBackupStore.setState({ settings: { ...base, interval_minutes: 30 } });
+    expect(renderToStaticMarkup(<AutoBackupCard />)).toContain("Back up every");
+    // An engine before 12.5.1 ignores the choice: no picker that snaps back.
+    useAutoSaveBackupStore.setState({ settings: base });
+    const html = renderToStaticMarkup(<AutoBackupCard />);
+    expect(html).toContain("Versions to keep");
+    expect(html).not.toContain("Back up every");
+  });
+
+  it("shows why when the settings could not be read", () => {
+    useAutoSaveBackupStore.setState({ settings: null, error: "engine down" });
+    const html = renderToStaticMarkup(<AutoBackupCard />);
+    expect(html).toContain("auto-save-backup-error");
+    expect(html).toContain("engine down");
+    useAutoSaveBackupStore.setState({ settings: null, error: null });
+    expect(renderToStaticMarkup(<AutoBackupCard />)).toBe("");
   });
 });
