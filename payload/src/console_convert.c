@@ -522,7 +522,7 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
     struct stat st;
     cc_runtime_t *rt = NULL; /* on the heap: a job thread's stack is small */
     char *buf = NULL;
-    int status = AVA1_ERR_IO, r, is_dir, never_seen = 0;
+    int status = AVA1_ERR_IO, r, is_dir, never_seen = 0, archive = 0;
     (void)arg;
     (void)n;
     memset(&s, 0, sizeof s);
@@ -559,6 +559,7 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
             ava1_op_message(c, "convert_unsupported_source");
             return AVA1_ERR_PATH;
         }
+        archive = 1;
     }
     if (strcmp(action, "build") == 0) {
         bad = check_build(json, src, is_dir, dest, sizeof dest, format, sizeof format, &build);
@@ -599,10 +600,12 @@ int console_convert_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
         return AVA1_ERR_BUSY;
     }
     /* A build beside an install or an extraction: all three write a drive hard and hold memory.
-     * An inspection reads a few KiB and may run beside either. Our flag first, then theirs (all
-     * seq_cst; the install and the extraction do the same the other way round): of two that
-     * start at once at least one sees the other and backs out, never neither. */
-    if (b) {
+     * An inspection of a folder or an image reads a few KiB and may run beside either; one of a
+     * .zip or .7z is held like a build (a .7z's param file may be behind a large solid block,
+     * decoded with its dictionary and cache). Our flag first, then theirs (all seq_cst; the
+     * install and the extraction do the same the other way round): of two that start at once at
+     * least one sees the other and backs out, never neither. */
+    if (b || archive) {
         __atomic_store_n(&g_building, 1, __ATOMIC_SEQ_CST);
         if (webui_pkg_installing() || archive_extract_running()) {
             ava1_op_message(c, "convert_busy");

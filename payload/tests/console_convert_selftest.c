@@ -686,9 +686,29 @@ static void test_op(void) {
         CHECK(webui_json_str(c->result, c->result_len, "zstd_runtime", got, sizeof got) == 1 && strcmp(got, "0.4.1") == 0);
     }
 
-    /* An inspection may run beside an install or an extraction; a build may not. */
+    /* An inspection may run beside an install or an extraction; a build may not, nor may an
+     * inspection of a .zip or .7z (a .7z's param file may need its whole solid block decoded). */
     g_installing = 1;
     CHECK(run_op(FAKE_INSPECT, args, c) == AVA1_STATUS_OK);
+    {
+        char sevenz[320], zargs[400];
+        snprintf(sevenz, sizeof sevenz, "%s/game.7z", g_root);
+        put_file(sevenz, "x");
+        snprintf(zargs, sizeof zargs, "{\"path\":\"%s\"}", sevenz);
+        g_building_when_installing_read = -1;
+        CHECK(run_op(FAKE_NEVER, zargs, c) == AVA1_ERR_BUSY && strcmp(c->message, "convert_busy") == 0 &&
+              !g_request[0]);
+        CHECK(g_building_when_installing_read == 1);
+        CHECK(!console_convert_building());
+        g_installing = 0;
+        g_extracting = 1;
+        CHECK(run_op(FAKE_NEVER, zargs, c) == AVA1_ERR_BUSY && !g_request[0]);
+        g_extracting = 0;
+        CHECK(run_op(FAKE_INSPECT, zargs, c) == AVA1_STATUS_OK);
+        CHECK(!console_convert_building());
+        unlink(sevenz);
+        g_installing = 1;
+    }
     snprintf(args, sizeof args,
              "{\"path\":\"%s\",\"action\":\"build\",\"dest\":\"%s\",\"format\":\"ffpkg\",\"zstd\":true,\"zstd_level\":19,\"verify\":\"full\"}",
              game, dest);
