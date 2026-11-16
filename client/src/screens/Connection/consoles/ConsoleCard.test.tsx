@@ -35,7 +35,6 @@ function card(runtime: Partial<HostRuntime>, patch: Partial<ConsoleCardViewProps
   });
   const props: ConsoleCardViewProps = {
     profile,
-    active: true,
     status,
     tn: TN_OFF,
     mesh: null,
@@ -50,7 +49,6 @@ function card(runtime: Partial<HostRuntime>, patch: Partial<ConsoleCardViewProps
     tailnetPanel: <div data-testid="tailnet-panel-slot" />,
     trusted: <div data-testid="trusted-slot" />,
     stop: <span data-testid="stop-slot" />,
-    onUse: noop,
     onResend: noop,
     onWake: noop,
     onSettings: noop,
@@ -100,6 +98,9 @@ describe("Consoles › a console's card", () => {
     expect(html).not.toContain('data-testid="checklist-slot"');
     // Wake is for a console that is asleep or away, not one that answers.
     expect(html).not.toContain('data-testid="consoles-wake"');
+    // The card on show is always the console picked at the top: no "Selected", no "Use this PS5".
+    expect(html).not.toContain("Selected");
+    expect(html).not.toContain("Use this PS5");
   });
 
   it("needs the helper: the checklist shows in the card, and no Invite yet", () => {

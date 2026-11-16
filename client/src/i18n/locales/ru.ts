@@ -8503,8 +8503,6 @@ rp_users_add_hint: "Чтобы играть и за другого пользо�
 "cs_card_rename": "Переименовать",
 "cs_card_rename_title": "Переименовать эту PS5",
 "cs_card_rest": "В режиме покоя",
-"cs_card_selected": "Выбрана",
-"cs_card_use": "Использовать эту PS5",
 "cs_card_via_home": "В сети · Домашняя сеть {ip}",
 "cs_card_via_tailscale_direct": "В сети · Tailscale {ip}, напрямую",
 "cs_card_via_tailscale_relayed": "В сети · Tailscale {ip}, через ретранслятор",

@@ -8566,8 +8566,6 @@ rp_users_add_hint: "Pour jouer aussi avec un autre utilisateur, connectez-vous �
 "cs_card_rename": "Renommer",
 "cs_card_rename_title": "Renommer cette PS5",
 "cs_card_rest": "En mode repos",
-"cs_card_selected": "Sélectionnée",
-"cs_card_use": "Utiliser cette PS5",
 "cs_card_via_home": "En ligne · Réseau domestique {ip}",
 "cs_card_via_tailscale_direct": "En ligne · Tailscale {ip}, direct",
 "cs_card_via_tailscale_relayed": "En ligne · Tailscale {ip}, relayé",

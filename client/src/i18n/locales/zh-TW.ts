@@ -8503,8 +8503,6 @@ rp_users_add_hint: "若也想以其他使用者遊玩，請在 PS5 上登入該�
 "cs_card_rename": "重新命名",
 "cs_card_rename_title": "重新命名這台 PS5",
 "cs_card_rest": "待命模式中",
-"cs_card_selected": "已選取",
-"cs_card_use": "使用這台 PS5",
 "cs_card_via_home": "線上 · 家用網路 {ip}",
 "cs_card_via_tailscale_direct": "線上 · Tailscale {ip}，直連",
 "cs_card_via_tailscale_relayed": "線上 · Tailscale {ip}，中繼",

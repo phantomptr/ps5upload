@@ -8550,8 +8550,6 @@ rp_users_add_hint: "অন্য ব্যবহারকারী হিসে�
 "cs_card_rename": "নাম বদলান",
 "cs_card_rename_title": "এই PS5-এর নাম বদলান",
 "cs_card_rest": "রেস্ট মোডে",
-"cs_card_selected": "নির্বাচিত",
-"cs_card_use": "এই PS5 ব্যবহার করুন",
 "cs_card_via_home": "অনলাইন · হোম নেটওয়ার্ক {ip}",
 "cs_card_via_tailscale_direct": "অনলাইন · Tailscale {ip}, সরাসরি",
 "cs_card_via_tailscale_relayed": "অনলাইন · Tailscale {ip}, রিলে",

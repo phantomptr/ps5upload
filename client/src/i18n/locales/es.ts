@@ -8503,8 +8503,6 @@ rp_users_add_hint: "Para jugar también como otro usuario, inicia sesión con es
 "cs_card_rename": "Renombrar",
 "cs_card_rename_title": "Renombrar esta PS5",
 "cs_card_rest": "En modo de reposo",
-"cs_card_selected": "Seleccionada",
-"cs_card_use": "Usar esta PS5",
 "cs_card_via_home": "En línea · Red doméstica {ip}",
 "cs_card_via_tailscale_direct": "En línea · Tailscale {ip}, directo",
 "cs_card_via_tailscale_relayed": "En línea · Tailscale {ip}, retransmitido",

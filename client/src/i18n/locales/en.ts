@@ -8857,8 +8857,6 @@ rp_users_add_hint: "To play as another user too, sign in to that user on the PS5
 "cs_card_rename": "Rename",
 "cs_card_rename_title": "Rename this PS5",
 "cs_card_rest": "In rest mode",
-"cs_card_selected": "Selected",
-"cs_card_use": "Use this PS5",
 "cs_card_via_home": "Online · Home network {ip}",
 "cs_card_via_tailscale_direct": "Online · Tailscale {ip}, direct",
 "cs_card_via_tailscale_relayed": "Online · Tailscale {ip}, relayed",

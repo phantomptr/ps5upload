@@ -8564,8 +8564,6 @@ rp_users_add_hint: "किसी दूसरे उपयोगकर्ता 
 "cs_card_rename": "नाम बदलें",
 "cs_card_rename_title": "इस PS5 का नाम बदलें",
 "cs_card_rest": "रेस्ट मोड में",
-"cs_card_selected": "चुना गया",
-"cs_card_use": "यह PS5 इस्तेमाल करें",
 "cs_card_via_home": "ऑनलाइन · होम नेटवर्क {ip}",
 "cs_card_via_tailscale_direct": "ऑनलाइन · Tailscale {ip}, सीधा",
 "cs_card_via_tailscale_relayed": "ऑनलाइन · Tailscale {ip}, रिले",

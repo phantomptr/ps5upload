@@ -8567,8 +8567,6 @@ rp_users_add_hint: "다른 사용자로도 플레이하려면 PS5에서 그 사�
 "cs_card_rename": "이름 변경",
 "cs_card_rename_title": "이 PS5 이름 변경",
 "cs_card_rest": "휴식 모드",
-"cs_card_selected": "선택됨",
-"cs_card_use": "이 PS5 사용",
 "cs_card_via_home": "온라인 · 홈 네트워크 {ip}",
 "cs_card_via_tailscale_direct": "온라인 · Tailscale {ip}, 직접",
 "cs_card_via_tailscale_relayed": "온라인 · Tailscale {ip}, 중계",

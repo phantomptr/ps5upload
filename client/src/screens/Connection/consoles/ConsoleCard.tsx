@@ -396,7 +396,6 @@ function InternetRow() {
 
 export interface ConsoleCardViewProps {
   profile: PS5Profile;
-  active: boolean;
   status: CardStatus;
   tn: TailnetSummary;
   mesh: MeshState | null;
@@ -406,7 +405,6 @@ export interface ConsoleCardViewProps {
   tsBusy: boolean;
   tsOpen: boolean;
   devicesOpen: boolean;
-  highlight?: boolean;
   error: string | null;
   /** The helper before this one did not end cleanly (another payload ended it, low memory). */
   priorKilled?: boolean;
@@ -414,7 +412,6 @@ export interface ConsoleCardViewProps {
   tailnetPanel: ReactNode;
   trusted: ReactNode;
   stop: ReactNode;
-  onUse: () => void;
   onResend: () => void;
   onWake: () => void;
   onSettings: () => void;
@@ -441,9 +438,7 @@ export function ConsoleCardView(p: ConsoleCardViewProps) {
   const up = s.helper === "match" || s.helper === "update" || s.helper === "newer";
   return (
     <article
-      className={`rounded-[var(--radius-panel)] border bg-[var(--color-surface-raised)] p-4 shadow-[var(--edge-highlight),var(--shadow-1)] sm:p-5 ${
-        p.highlight ? "border-[color-mix(in_srgb,var(--color-accent)_55%,transparent)]" : "border-[var(--glass-edge)]"
-      }`}
+      className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-4 shadow-[var(--edge-highlight),var(--shadow-1)] sm:p-5"
       aria-labelledby={`console-${p.profile.id}-name`}
       data-testid="console-card"
       data-console={p.profile.id}
@@ -452,12 +447,9 @@ export function ConsoleCardView(p: ConsoleCardViewProps) {
       <header className="flex items-start gap-3">
         <span className={`mt-2 h-2.5 w-2.5 shrink-0 rounded-full ${dotClass(s)}`} aria-hidden />
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 id={`console-${p.profile.id}-name`} className="truncate text-base font-semibold">
-              {p.profile.name}
-            </h2>
-            {p.active ? <Badge tone="accent">{tr("cs_card_selected", undefined, "Selected")}</Badge> : null}
-          </div>
+          <h2 id={`console-${p.profile.id}-name`} className="truncate text-base font-semibold">
+            {p.profile.name}
+          </h2>
           <p className="mt-0.5 break-words text-sm text-[var(--color-muted)]" data-testid="console-card-status">
             {statusLine(tr, s)}
           </p>
@@ -465,8 +457,7 @@ export function ConsoleCardView(p: ConsoleCardViewProps) {
         <OverflowMenu
           ariaLabel={tr("cs_card_more", { name: p.profile.name }, "More for {name}")}
           items={[
-            ...(p.active ? [] : [{ label: tr("cs_card_use", undefined, "Use this PS5"), onSelect: p.onUse }]),
-            { label: tr("cs_card_rename", undefined, "Rename"), onSelect: p.onRename, separator: !p.active },
+            { label: tr("cs_card_rename", undefined, "Rename"), onSelect: p.onRename },
             { label: tr("cs_card_notes", undefined, "Notes"), onSelect: p.onNotes },
             { label: tr("remove", undefined, "Remove"), onSelect: p.onRemove, destructive: true, separator: true },
           ]}
@@ -562,11 +553,6 @@ export function ConsoleCardView(p: ConsoleCardViewProps) {
         <Button size="sm" variant="ghost" leftIcon={<Settings2 size={13} />} onClick={p.onSettings}>
           {tr("connection_ps5_settings_open", undefined, "Settings for this PS5")}
         </Button>
-        {!p.active ? (
-          <Button size="sm" variant="ghost" onClick={p.onUse} data-testid="consoles-use">
-            {tr("cs_card_use", undefined, "Use this PS5")}
-          </Button>
-        ) : null}
       </div>
       {p.wakeError ? (
         <p role="alert" className="mt-2 text-xs text-[var(--color-bad)]">
@@ -598,26 +584,39 @@ export function ConsoleCardView(p: ConsoleCardViewProps) {
   );
 }
 
-/** The live card for one roster profile. */
+/** A console the page does not show (another chip at the top is picked): nothing on screen, but
+ *  its device list is still read while its helper answers, so a device asking to use it is
+ *  prompted for on this page too (the selected console's list is read by useMeshSync). */
+export function ConsoleMeshPoll({ host }: { host: string }) {
+  const runtime = useHostRuntime(host);
+  const up = runtime.payloadStatus === "up" && runtime.session !== "needs_pairing";
+  useEffect(() => {
+    if (!up) return;
+    void pollMesh(host);
+    const id = window.setInterval(() => {
+      if (!document.hidden && !consoleBusy(host)) void pollMesh(host);
+    }, 6000);
+    return () => window.clearInterval(id);
+  }, [up, host]);
+  return null;
+}
+
+/** The live card for the selected roster profile (the Consoles page shows that one only). */
 export function ConsoleCard({
   profile,
   appTailnet,
   appVersion,
-  highlight,
   defaultOpen,
 }: {
   profile: PS5Profile;
   appTailnet: AppTailnetStatus | null;
   appVersion: string | null;
-  highlight?: boolean;
   defaultOpen?: boolean;
 }) {
   const tr = useTr();
   const navigate = useNavigate();
   const host = profile.host.trim();
   const runtime = useHostRuntime(host);
-  const activeId = useRosterStore((s) => s.active_id);
-  const setActive = useRosterStore((s) => s.setActive);
   const rename = useRosterStore((s) => s.rename);
   const setNotes = useRosterStore((s) => s.setNotes);
   const remove = useRosterStore((s) => s.remove);
@@ -713,7 +712,6 @@ export function ConsoleCard({
       {promptDialog}
       <ConsoleCardView
         profile={profile}
-        active={profile.id === activeId}
         status={status}
         tn={tn}
         mesh={up ? mesh.state : null}
@@ -723,14 +721,12 @@ export function ConsoleCard({
         tsBusy={tsBusy}
         tsOpen={tsOpen}
         devicesOpen={devicesOpen}
-        highlight={highlight}
         error={error}
-        checklist={<SetupChecklist host={host} status={status} active={profile.id === activeId} />}
+        checklist={<SetupChecklist host={host} status={status} active />}
         priorKilled={up && runtime.priorInstance === "killed_externally"}
         tailnetPanel={<TailnetPanel host={host} startTest={testNonce} />}
         trusted={<TrustedDevices host={host} consoleName={profile.name} state={up ? mesh.state : null} />}
         stop={<StopHelperButton host={host} size="sm" />}
-        onUse={() => setActive(profile.id)}
         onResend={() => void resend()}
         onWake={() => void wake.wake()}
         onSettings={() => navigate(ps5SettingsLink(profile.id))}

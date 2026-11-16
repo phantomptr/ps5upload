@@ -8559,8 +8559,6 @@ rp_users_add_hint: "Untuk bermain juga sebagai pengguna lain, masuk ke pengguna 
 "cs_card_rename": "Ganti nama",
 "cs_card_rename_title": "Ganti nama PS5 ini",
 "cs_card_rest": "Dalam mode istirahat",
-"cs_card_selected": "Dipilih",
-"cs_card_use": "Pakai PS5 ini",
 "cs_card_via_home": "Online · Jaringan rumah {ip}",
 "cs_card_via_tailscale_direct": "Online · Tailscale {ip}, langsung",
 "cs_card_via_tailscale_relayed": "Online · Tailscale {ip}, diteruskan",

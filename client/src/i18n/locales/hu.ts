@@ -8845,8 +8845,6 @@ rp_users_add_hint: "Ha másik felhasználóként is játszanál, jelentkezz be a
 "cs_card_rename": "Átnevezés",
 "cs_card_rename_title": "PS5 átnevezése",
 "cs_card_rest": "Pihenő módban",
-"cs_card_selected": "Kiválasztva",
-"cs_card_use": "Ezt a PS5-öt használom",
 "cs_card_via_home": "Online · Otthoni hálózat {ip}",
 "cs_card_via_tailscale_direct": "Online · Tailscale {ip}, közvetlen",
 "cs_card_via_tailscale_relayed": "Online · Tailscale {ip}, továbbítva",
