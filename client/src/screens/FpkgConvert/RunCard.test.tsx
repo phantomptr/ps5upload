@@ -266,6 +266,21 @@ describe("RunCard", () => {
       );
     });
 
+    it("sends a .ffpfsc straight to the PS5 or a server, saying it is compressed twice", () => {
+      const img = { make: "image" as const, onSaveTo: noop, onServerFolder: noop, imageCompress: true };
+      const note = 'data-testid="convert-save-to-ffpfsc-note"';
+      const toPs5 = idle({ ...img, saveTo: "ps5" }, { canImage: true });
+      expect(toPs5).toContain(note);
+      expect(toPs5).toContain("compressed twice");
+      expect(button(toPs5, "Make compressed image")?.disabled).toBe(false);
+      const toServer = idle({ ...img, saveTo: "server", serverFolder: "remote://nas1/games" }, { canImage: true });
+      expect(toServer).toContain(note);
+      expect(button(toServer, "Make compressed image")?.disabled).toBe(false);
+      // Not for a plain image, nor for one saved here.
+      expect(idle({ ...img, imageCompress: false, saveTo: "ps5" }, { canImage: true })).not.toContain(note);
+      expect(idle({ ...img, saveTo: "computer" }, { canImage: true })).not.toContain(note);
+    });
+
     it("says a finished image is on a server, with nothing to upload, show or delete", () => {
       const out = html(
         {

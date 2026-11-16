@@ -54,6 +54,9 @@ pub struct Output {
     pub loose: Vec<String>,
     pub stats: Stats,
     pub warnings: Vec<String>,
+    /// CRC-32 of each chunk's stored bytes, in chunk order (0 for a chunk shared with an earlier
+    /// one). What a set [`measure`]d and made again later is checked against, besides the size.
+    pub stored_crcs: Vec<u32>,
 }
 
 impl Output {
@@ -97,15 +100,15 @@ struct Selected {
 }
 
 /// A block compressed (or not) by a worker.
-struct Block {
-    stored: Option<Vec<u8>>,
-    codec: u8,
-    raw_crc: u32,
+pub(crate) struct Block {
+    pub(crate) stored: Option<Vec<u8>>,
+    pub(crate) codec: u8,
+    pub(crate) raw_crc: u32,
     raw_len: u64,
     fingerprint: [u8; 28],
 }
 
-fn compress_block(raw: &[u8], rule: &Rule, io_page: u64) -> Block {
+pub(crate) fn compress_block(raw: &[u8], rule: &Rule, io_page: u64) -> Block {
     let raw_crc = crc32(raw);
     let mut fingerprint = [0u8; 28];
     fingerprint[..4].copy_from_slice(&raw_crc.to_le_bytes());
@@ -148,12 +151,12 @@ fn compress_block(raw: &[u8], rule: &Rule, io_page: u64) -> Block {
     }
 }
 
-/// One data volume being written.
+/// One data volume being written (or, measuring, only laid out: no file).
 struct Volume {
     pack_id: usize,
     name: String,
     path: PathBuf,
-    out: BufWriter<std::fs::File>,
+    out: Option<BufWriter<std::fs::File>>,
     payload_offset: u64,
     position: u64,
     chunk_alignment: u64,
@@ -201,7 +204,9 @@ impl Volume {
     fn write(&mut self, bytes: &[u8], layout: Layout, extent_start: bool) -> Result<(u64, u8)> {
         let (offset, flags) = self.placement(bytes.len() as u64, layout, extent_start);
         self.pad_to(offset)?;
-        self.out.write_all(bytes)?;
+        if let Some(out) = &mut self.out {
+            out.write_all(bytes)?;
+        }
         self.position = offset + bytes.len() as u64;
         Ok((offset, flags))
     }
@@ -209,7 +214,9 @@ impl Volume {
     fn pad_to(&mut self, offset: u64) -> Result<()> {
         let gap = offset - self.position;
         if gap > 0 {
-            std::io::copy(&mut std::io::repeat(0).take(gap), &mut self.out)?;
+            if let Some(out) = &mut self.out {
+                std::io::copy(&mut std::io::repeat(0).take(gap), out)?;
+            }
             self.padding += gap;
             self.position = offset;
         }
@@ -224,19 +231,21 @@ impl Volume {
         let size = self.final_size();
         self.pad_to(size)?;
         let payload = self.position - self.payload_offset;
-        self.out.flush()?;
-        let file = self.out.get_mut();
-        file.seek(SeekFrom::Start(0))?;
-        file.write_all(&data_header(
-            self.pack_id as u32,
-            build_id,
-            self.payload_offset,
-            payload,
-            self.flags,
-        ))?;
-        file.sync_all()?;
-        if file.metadata()?.len() != size {
-            return format_err(format!("{} has an unexpected size", self.name));
+        if let Some(out) = &mut self.out {
+            out.flush()?;
+            let file = out.get_mut();
+            file.seek(SeekFrom::Start(0))?;
+            file.write_all(&data_header(
+                self.pack_id as u32,
+                build_id,
+                self.payload_offset,
+                payload,
+                self.flags,
+            ))?;
+            file.sync_all()?;
+            if file.metadata()?.len() != size {
+                return format_err(format!("{} has an unexpected size", self.name));
+            }
         }
         Ok(PackRecord {
             payload_bytes: payload,
@@ -254,6 +263,8 @@ use std::io::Read as _;
 struct Volumes<'a> {
     config: &'a Config,
     dir: &'a Path,
+    /// Measuring: the volumes are laid out, not written.
+    measure: bool,
     all: Vec<Volume>,
     current: HashMap<(String, u32), usize>,
     numbers: HashMap<(String, u32), u64>,
@@ -288,20 +299,25 @@ impl Volumes<'_> {
             self.config.payload_alignment.max(page),
         );
         let path = self.dir.join(&name);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|e| Error::Format(format!("{}: {e}", path.display())))?;
+        let out = if self.measure {
+            None
+        } else {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .map_err(|e| Error::Format(format!("{}: {e}", path.display())))?;
+            Some(BufWriter::with_capacity(4 << 20, file))
+        };
         let mut v = Volume {
             pack_id,
             name,
             path,
-            out: BufWriter::with_capacity(4 << 20, file),
+            out,
             payload_offset,
             position: 0,
             chunk_alignment: self.config.chunk_alignment,
@@ -495,6 +511,7 @@ pub fn build(
     let mut volumes = Volumes {
         config,
         dir: out_dir,
+        measure: false,
         all: Vec::new(),
         current: HashMap::new(),
         numbers: HashMap::new(),
@@ -507,6 +524,29 @@ pub fn build(
         }
     }
     result
+}
+
+/// [`build`] without writing a byte: every block is compressed and placed as `build` would,
+/// and the [`Output`] is the one `build` gives (its `volumes` name files that are not there).
+/// With the manifest, the CRC sidecar and `stored_crcs`, the volumes can be made again from the
+/// source, chunk by chunk, as they are read ([`super::regen`]), so a pack set streamed to
+/// another device needs no room on this computer.
+pub fn measure(
+    entries: &[Entry],
+    tree: &mut dyn SourceTree,
+    config: &Config,
+    control: &mut Control,
+) -> Result<Output> {
+    let mut volumes = Volumes {
+        config,
+        dir: Path::new(""),
+        measure: true,
+        all: Vec::new(),
+        current: HashMap::new(),
+        numbers: HashMap::new(),
+        names: Default::default(),
+    };
+    build_into(entries, tree, config, &mut volumes, control)
 }
 
 fn build_into(
@@ -656,6 +696,7 @@ fn build_into(
     let mut done = 0u64;
     let mut chunks: Vec<ChunkRecord> = Vec::new();
     let mut crcs: Vec<u32> = Vec::new();
+    let mut stored_crcs: Vec<u32> = Vec::new();
     let mut dedupe: HashMap<(String, bool, u8, [u8; 28]), ChunkRecord> = HashMap::new();
     let workers = config.workers.max(1);
     const BATCH_BYTES: usize = 32 << 20;
@@ -689,6 +730,7 @@ fn build_into(
         };
         let key = (domain, streaming, block.codec, block.fingerprint);
         let dedupe_ok = config.deduplicate && (!streaming || config.deduplicate_streaming);
+        let mut stored_crc = 0;
         let record = match dedupe.get(&key).filter(|_| dedupe_ok) {
             Some(prior) => {
                 stats.chunks_shared += 1;
@@ -735,6 +777,7 @@ fn build_into(
                 if dedupe_ok {
                     dedupe.insert(key, record);
                 }
+                stored_crc = crc32(bytes);
                 stats.stored_bytes += bytes.len() as u64;
                 record
             }
@@ -748,6 +791,7 @@ fn build_into(
         stats.logical_bytes += block.raw_len;
         chunks.push(record);
         crcs.push(block.raw_crc);
+        stored_crcs.push(stored_crc);
         files[file].chunk_count += 1;
         Ok(())
     };
@@ -902,6 +946,7 @@ fn build_into(
         loose,
         stats,
         warnings,
+        stored_crcs,
     })
 }
 

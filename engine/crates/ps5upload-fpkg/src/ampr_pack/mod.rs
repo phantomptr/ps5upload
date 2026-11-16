@@ -39,12 +39,13 @@ pub mod ng;
 pub mod pack;
 pub mod profile_gen;
 pub mod read;
+pub mod regen;
 
 pub use config::{
     default_profile, default_profile_for, default_profile_name, large_files_profile, unity_profile,
     unreal_profile, Config, GameEngine, LARGE_FILE_MIN,
 };
-pub use pack::{build, Control, Output};
+pub use pack::{build, measure, Control, Output};
 pub use read::Reader;
 
 /// Does this `libSceAmpr.sprx` serve asset packs, and which version is it? Read from the
@@ -444,6 +445,120 @@ mod tests {
         let mut folder = crate::source::FolderSource::open(&dir.0).unwrap();
         let reader = Reader::open(&mut folder, "ampr_assets.index").unwrap();
         assert!(reader.read_file(0, &mut folder, "").is_err());
+    }
+
+    /// Built into a folder, and measured then made again from the tree: the same manifest,
+    /// sidecars and volume bytes, read whole and in odd pieces out of order.
+    fn built_and_made_again_agree(tag: &str, items: &[(String, Vec<u8>)], config: &Config) {
+        let dir = Dir::new(tag);
+        let borrowed: Vec<(&str, Vec<u8>)> =
+            items.iter().map(|(p, d)| (p.as_str(), d.clone())).collect();
+        let mut tree = Mem::new(&borrowed);
+        let entries = tree.entries();
+        let built = build(&entries, &mut tree, config, &dir.0, &mut Control::default()).unwrap();
+        let measured = measure(&entries, &mut tree, config, &mut Control::default()).unwrap();
+        assert_eq!(built.build_id, measured.build_id, "{tag}");
+        assert_eq!(built.manifest, measured.manifest, "{tag}");
+        assert_eq!(built.crc, measured.crc, "{tag}");
+        assert_eq!(built.runtime, measured.runtime, "{tag}");
+        assert_eq!(built.stored_crcs, measured.stored_crcs, "{tag}");
+        assert_eq!(built.packed, measured.packed, "{tag}");
+        assert_eq!(built.loose, measured.loose, "{tag}");
+        let names = |o: &Output| o.volumes.iter().map(|v| v.0.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&built), names(&measured), "{tag}");
+        let mut again = regen::Regen::new(&measured, config).unwrap();
+        for (name, path) in &built.volumes {
+            let want = std::fs::read(path).unwrap();
+            let n = want.len();
+            assert_eq!(again.size(name), Some(n as u64), "{tag} {name}");
+            let whole = again.read_range(&mut tree, name, 0, n).unwrap();
+            assert!(whole == want, "{tag} {name}: other bytes");
+            for (off, len) in [
+                (n / 2, 100_003),
+                (0, 1),
+                (63, 2),
+                (65_535, 3),
+                (n.saturating_sub(5), 50),
+                (7, n),
+                (n, 10),
+            ] {
+                let off = off.min(n);
+                let got = again.read_range(&mut tree, name, off as u64, len).unwrap();
+                assert!(
+                    got[..] == want[off..(off + len).min(n)],
+                    "{tag} {name} at {off}+{len}"
+                );
+            }
+        }
+        // Every volume was spooled and made: the folder holds only them.
+        assert_eq!(
+            std::fs::read_dir(&dir.0).unwrap().count(),
+            built.volumes.len(),
+            "{tag}"
+        );
+    }
+
+    /// A pack set made again from the source as it is read is the one the spool holds, byte for
+    /// byte, whatever the rules: duplicates, many small files, empty and tiny files, lanes that
+    /// roll over to new volumes, striped files, store-only and streaming rules, the fast and the
+    /// hash-chain encoders, the smallest and largest blocks.
+    #[test]
+    fn a_pack_set_made_again_is_the_one_built() {
+        let mut items: Vec<(String, Vec<u8>)> = vec![
+            ("d/text.bin".into(), text(700_000)),
+            ("d/noise.bin".into(), noise(300_000, 7)),
+            ("d/empty.bin".into(), Vec::new()),
+            ("d/tiny.bin".into(), b"hello".to_vec()),
+            ("e/again.bin".into(), text(700_000)),
+        ];
+        for i in 0..300usize {
+            let mut d = text(500 + i * 211);
+            d.extend(noise(300 + i * 97, i as u32));
+            items.push((format!("s/{:02}/f{i:03}.bin", i % 17), d));
+        }
+        // One block repeated many times inside a file and across files.
+        let block = noise(65_536, 42);
+        items.push(("r/repeats.bin".into(), block.repeat(9)));
+        items.push(("r/one.bin".into(), block.clone()));
+
+        // Fast encoder, 64 KiB blocks, one lane.
+        let mut fast = compress_all(16);
+        fast.rules[0].mode = config::CompressionMode::Fast;
+        built_and_made_again_agree("fast", &items, &fast);
+
+        // Hash-chain encoder at the smallest blocks.
+        let mut hc = compress_all(14);
+        hc.rules[0].mode = config::CompressionMode::Hc;
+        hc.rules[0].level = 9;
+        built_and_made_again_agree("hc14", &items, &hc);
+
+        // Lanes, volumes that roll over, striped large files, dedupe over the group.
+        let mut lanes = compress_all(16);
+        let mut g = config::Group::new("assets");
+        g.pack_count = 3;
+        g.max_pack_size = 384 << 10;
+        g.stripe_large_files = true;
+        g.stripe_threshold = 200_000;
+        g.stripe_group_blocks = 2;
+        lanes.groups.insert("assets".into(), g);
+        lanes.rules[0].group = "assets".into();
+        lanes.deduplicate_group_scope = true;
+        lanes.pack_pattern =
+            "ampr_assets-{group}-lane{lane:02d}-vol{volume:02d}-{id:03d}.pak".into();
+        built_and_made_again_agree("lanes", &items, &lanes);
+
+        // Store-only streaming files in 1 MiB blocks next to compressed ones, random layout.
+        let mut mixed = compress_all(16);
+        mixed.rules[0].layout = Layout::Random;
+        mixed.rules.push(Rule {
+            action: Action::Store,
+            include: vec!["d/**".into()],
+            block_shift: 20,
+            layout: Layout::Streaming,
+            ..mixed.default_rule()
+        });
+        mixed.deduplicate_streaming = true;
+        built_and_made_again_agree("mixed", &items, &mixed);
     }
 
     #[test]

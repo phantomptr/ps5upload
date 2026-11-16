@@ -4710,6 +4710,7 @@ gate_engine_down_body_v2: "This screen needs the app's engine, which is not answ
 "fpkg.save_to_server": "A server, straight (nothing stored here)",
 "fpkg.save_to_server_note": "Written to the server as it is made, then read back there before it gets its name. Nothing is stored on this computer.",
 "fpkg.save_to_server_unsupported_v2": "Straight to a server works for an .exfat, .ffpkg or .ffpfs image, with or without asset packs, but not yet for a .ffpfsc. Save this one to this computer, or turn off compression above.",
+"fpkg.save_to_ffpfsc_twice_note": "A .ffpfsc sent straight there is compressed twice: once to work out its size, then again as it is sent. It takes about twice as long to make as one saved to this computer.",
 "fpkg.save_to_server_pick": "Folder on the server to save it in",
 "fpkg.save_to_server_none": "Add a server under Connections first.",
 "fpkg.save_to_server_choose": "Choose a server",

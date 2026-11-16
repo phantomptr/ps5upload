@@ -176,11 +176,16 @@ const TIME: i64 = 1_700_000_000;
 
 /// The same game built on this computer, as Convert writes it today.
 fn local_build(src: &Path, format: ImageFormat, out: &Path) -> Vec<u8> {
+    local_build_as(src, format, None, out)
+}
+
+/// [`local_build`], in a `.ffpfsc` holding `inner` when given.
+fn local_build_as(src: &Path, format: ImageFormat, inner: Option<&str>, out: &Path) -> Vec<u8> {
     let _ = std::fs::remove_file(out);
     let mut tree = FolderSource::open(src).unwrap();
     super::super::build_any(
         format,
-        None,
+        inner,
         Level::default(),
         Some(TIME),
         &mut tree,
@@ -203,11 +208,25 @@ fn stream(
     path: &str,
     stage: &mut dyn FnMut(&str, u64, u64),
 ) -> anyhow::Result<Streamed> {
+    stream_as(lb, cfg, src, format, None, path, stage)
+}
+
+/// [`stream`], in a `.ffpfsc` when `ffpfsc` says so.
+fn stream_as(
+    lb: &Loopback,
+    cfg: &TransferConfig,
+    src: &Path,
+    format: ImageFormat,
+    ffpfsc: Option<FfpfscOut>,
+    path: &str,
+    stage: &mut dyn FnMut(&str, u64, u64),
+) -> anyhow::Result<Streamed> {
     let cancel = cfg.cancel.clone().unwrap();
     let mut tree = FolderSource::open(src).unwrap();
     lb.with_target(cfg, path, |t| {
         stream_to_console(
             format,
+            ffpfsc,
             Some(TIME),
             "",
             &mut tree,
@@ -481,4 +500,139 @@ fn the_job_id_follows_the_plan_the_console_and_the_path() {
     assert_ne!(a, job_id("192.168.1.6", "/data/x.exfat", "k"));
     assert_ne!(a, job_id("192.168.1.5", "/data/y.exfat", "k"));
     assert_ne!(a, job_id("192.168.1.5", "/data/x.exfat", "k2"));
+}
+
+/// A game with a stretch that compresses, so a `.ffpfsc` holds every kind of block.
+fn compressible(src: &Path) {
+    let text: Vec<u8> = (0..900_000u32)
+        .map(|i| b"ps5upload "[(i % 10) as usize])
+        .collect();
+    std::fs::write(src.join("data/text.bin"), text).unwrap();
+}
+
+/// A `.ffpfsc` streamed to the console: measured, then written front to back, it is the very
+/// file a local build of it makes, for every image inside it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_ffpfsc_arrives_as_the_local_build_would_write_it() {
+    let lb = Loopback::start("ffpfsc", None).await;
+    let src = game(&lb.dir, 2 << 20);
+    compressible(&src);
+    for format in [ImageFormat::Exfat, ImageFormat::Ffpkg, ImageFormat::Ffpfs] {
+        let inner = format!("PPSA99999.{}", format.extension());
+        let want = local_build_as(
+            &src,
+            format,
+            Some(&inner),
+            &lb.dir.join(format!("local-{}.ffpfsc", format.extension())),
+        );
+        let path = format!("dst/G-{}.ffpfsc", format.extension());
+        let mut stages: Vec<String> = Vec::new();
+        let ffpfsc = FfpfscOut {
+            inner: &inner,
+            level: Level::default(),
+        };
+        let r = tokio::task::block_in_place(|| {
+            stream_as(
+                &lb,
+                &cfg(),
+                &src,
+                format,
+                Some(ffpfsc),
+                &path,
+                &mut |s, _, _| {
+                    if stages.last().map(String::as_str) != Some(s) {
+                        stages.push(s.to_string());
+                    }
+                },
+            )
+        })
+        .unwrap_or_else(|e| panic!("{format:?}: {e:#}"));
+        assert_eq!(
+            stages,
+            ["plan", "compress", "write", "verify"],
+            "{format:?}"
+        );
+        assert_eq!(r.built.image_bytes, want.len() as u64, "{format:?}");
+        assert!(
+            r.built.detail.contains("in a .ffpfsc"),
+            "{}",
+            r.built.detail
+        );
+        let got = std::fs::read(lb.share().join(&path)).unwrap();
+        assert!(
+            got == want,
+            "{format:?}: the console's .ffpfsc differs from the local build"
+        );
+        assert!(!lb.share().join(format!("{path}.ava-part")).exists());
+    }
+}
+
+/// The connection drops while a `.ffpfsc` streams: the write pass runs again from the start
+/// (the measure is not made again), and the console ends up with the local build's bytes.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_ffpfsc_goes_on_after_a_dropped_connection() {
+    let lb = Loopback::start(
+        "ffpfsc-drop",
+        Some(ava1_chaos::ChaosConfig {
+            bytes_per_sec: Some(3 << 20),
+            ..Default::default()
+        }),
+    )
+    .await;
+    let src = game(&lb.dir, 14 << 20);
+    compressible(&src);
+    let inner = "PPSA99999.exfat";
+    let want = local_build_as(
+        &src,
+        ImageFormat::Exfat,
+        Some(inner),
+        &lb.dir.join("local.ffpfsc"),
+    );
+    let c = cfg();
+    let durable = c.progress_bytes_finalized.clone().unwrap();
+    let proxy = lb.proxy.clone().unwrap();
+    let killer = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        while durable.load(Ordering::Relaxed) == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "nothing became durable"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        proxy.kill_all();
+    });
+    let path = "dst/G.ffpfsc";
+    let mut stages: Vec<String> = Vec::new();
+    let r = tokio::task::block_in_place(|| {
+        stream_as(
+            &lb,
+            &c,
+            &src,
+            ImageFormat::Exfat,
+            Some(FfpfscOut {
+                inner,
+                level: Level::default(),
+            }),
+            path,
+            &mut |s, _, _| {
+                if stages.last().map(String::as_str) != Some(s) {
+                    stages.push(s.to_string());
+                }
+            },
+        )
+    })
+    .unwrap_or_else(|e| panic!("{e:#}"));
+    killer.join().unwrap();
+    assert!(r.passes >= 2, "the writer ran {} time(s)", r.passes);
+    assert_eq!(
+        stages.iter().filter(|s| *s == "compress").count(),
+        1,
+        "measured once: {stages:?}"
+    );
+    let got = std::fs::read(lb.share().join(path)).unwrap();
+    assert!(
+        got == want,
+        "the resumed .ffpfsc differs from the local build"
+    );
 }

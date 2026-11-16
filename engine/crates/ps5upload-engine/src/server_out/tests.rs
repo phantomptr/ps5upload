@@ -87,11 +87,16 @@ fn game(root: &Path, big: usize) -> (PathBuf, Vec<u8>) {
 }
 
 fn local_build(src: &Path, format: ImageFormat, out: &Path) -> Vec<u8> {
+    local_build_as(src, format, None, out)
+}
+
+/// [`local_build`], in a `.ffpfsc` holding `inner` when given.
+fn local_build_as(src: &Path, format: ImageFormat, inner: Option<&str>, out: &Path) -> Vec<u8> {
     let _ = std::fs::remove_file(out);
     let mut tree = FolderSource::open(src).unwrap();
     image_build::build_resumable(
         format,
-        None,
+        inner,
         Level::default(),
         TIME,
         &mut tree,
@@ -114,6 +119,21 @@ fn to_server(
     cancel: &Arc<AtomicBool>,
     stage: &mut dyn FnMut(&str, u64, u64),
 ) -> Result<image_build::ToServer, String> {
+    to_server_as(dest, src, format, None, name, data, cancel, stage)
+}
+
+/// [`to_server`], in a `.ffpfsc` when `ffpfsc` says so.
+#[allow(clippy::too_many_arguments)]
+fn to_server_as(
+    dest: &ServerDest,
+    src: &Path,
+    format: ImageFormat,
+    ffpfsc: Option<image_build::FfpfscOut>,
+    name: &str,
+    data: Option<PathBuf>,
+    cancel: &Arc<AtomicBool>,
+    stage: &mut dyn FnMut(&str, u64, u64),
+) -> Result<image_build::ToServer, String> {
     let mut tree = FolderSource::open(src).unwrap();
     let target = ServerImage {
         dest,
@@ -122,6 +142,7 @@ fn to_server(
     };
     stream_to_server(
         format,
+        ffpfsc,
         TIME,
         "",
         &mut tree,
@@ -369,6 +390,130 @@ async fn a_dropped_connection_is_tried_again_within_the_job() {
     back.join().unwrap();
     assert!(nas.mem.bytes("/out/G.exfat").unwrap() == want);
     assert!(r.built.detail.contains("written to the server NAS"));
+}
+
+/// A game with a stretch that compresses, so a `.ffpfsc` holds every kind of block.
+fn compressible(src: &Path) {
+    let text: Vec<u8> = (0..900_000u32)
+        .map(|i| b"ps5upload "[(i % 10) as usize])
+        .collect();
+    std::fs::write(src.join("data/text.bin"), text).unwrap();
+}
+
+/// A `.ffpfsc` straight to a server: measured, then written front to back, the very file a
+/// local build makes, for every image inside it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_ffpfsc_arrives_as_the_local_build_writes_it() {
+    let nas = Nas::new("ffpfsc");
+    let (src, _) = game(&nas.dir, 2 << 20);
+    compressible(&src);
+    for format in [ImageFormat::Exfat, ImageFormat::Ffpkg, ImageFormat::Ffpfs] {
+        let inner = format!("PPSA99998.{}", format.extension());
+        let want = local_build_as(
+            &src,
+            format,
+            Some(&inner),
+            &nas.dir.join(format!("local-{}.ffpfsc", format.extension())),
+        );
+        let name = format!("G-{}.ffpfsc", format.extension());
+        let mut stages: Vec<String> = Vec::new();
+        let r = tokio::task::block_in_place(|| {
+            to_server_as(
+                &nas.dest,
+                &src,
+                format,
+                Some(image_build::FfpfscOut {
+                    inner: &inner,
+                    level: Level::default(),
+                }),
+                &name,
+                None,
+                &Arc::new(AtomicBool::new(false)),
+                &mut |s, _, _| {
+                    if stages.last().map(String::as_str) != Some(s) {
+                        stages.push(s.to_string());
+                    }
+                },
+            )
+        })
+        .unwrap_or_else(|e| panic!("{format:?}: {e}"));
+        assert_eq!(
+            stages,
+            ["plan", "compress", "write", "verify"],
+            "{format:?}"
+        );
+        assert_eq!(r.built.image_bytes, want.len() as u64, "{format:?}");
+        assert!(
+            r.built.detail.contains("in a .ffpfsc"),
+            "{}",
+            r.built.detail
+        );
+        let got = nas.mem.bytes(&format!("/out/{name}")).unwrap();
+        assert!(got == want, "{format:?}: the server's .ffpfsc differs");
+        assert!(nas.mem.bytes(&format!("/out/{name}.partial")).is_none());
+    }
+}
+
+/// A `.ffpfsc` write cut off goes on from what the server holds: the blocks it holds whole are
+/// not compressed again, and the file is the local build's.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cut_off_ffpfsc_goes_on_from_what_the_server_holds() {
+    let nas = Nas::new("ffpfsc-resume");
+    let (src, _) = game(&nas.dir, 6 << 20);
+    compressible(&src);
+    let inner = "PPSA99998.ffpfs";
+    let want = local_build_as(
+        &src,
+        ImageFormat::Ffpfs,
+        Some(inner),
+        &nas.dir.join("l.ffpfsc"),
+    );
+    let ffpfsc = Some(image_build::FfpfscOut {
+        inner,
+        level: Level::default(),
+    });
+    let data = nas.dir.join("data");
+    nas.mem.go_down_after_writes(5);
+    let e = tokio::task::block_in_place(|| {
+        to_server_as(
+            &nas.dest,
+            &src,
+            ImageFormat::Ffpfs,
+            ffpfsc,
+            "G.ffpfsc",
+            Some(data.clone()),
+            &Arc::new(AtomicBool::new(false)),
+            &mut |_, _, _| {},
+        )
+    })
+    .err()
+    .expect("a server that stays away fails the build");
+    assert!(e.contains("goes on from it"), "{e}");
+    nas.mem.set_down(false);
+    let held = nas.mem.bytes("/out/G.ffpfsc.partial").unwrap().len() as u64;
+    assert!(held > 2 << 20, "held {held}");
+    let r = tokio::task::block_in_place(|| {
+        to_server_as(
+            &nas.dest,
+            &src,
+            ImageFormat::Ffpfs,
+            ffpfsc,
+            "G.ffpfsc",
+            Some(data.clone()),
+            &Arc::new(AtomicBool::new(false)),
+            &mut |_, _, _| {},
+        )
+    })
+    .unwrap();
+    assert!(r.resumed_from > 0, "it started over");
+    assert!(r.resumed_from < held);
+    assert!(nas.mem.bytes("/out/G.ffpfsc").unwrap() == want);
+    assert!(nas.mem.bytes("/out/G.ffpfsc.partial").is_none());
+    assert!(
+        r.built.detail.contains("went on from"),
+        "{}",
+        r.built.detail
+    );
 }
 
 #[test]

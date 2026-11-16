@@ -735,12 +735,12 @@ export interface OutputChoiceProps {
    *  stored here. Offered when `onSaveTo` is given. */
   saveTo?: SaveTo;
   onSaveTo?: (to: SaveTo) => void;
-  /** Why this image can't go straight to the PS5 (a .ffpfsc, LZ4 packs), or null. */
+  /** Why this image can't go straight to the PS5, or null. */
   ps5Refusal?: string | null;
   /** Save to: a server: the folder chosen there (a `remote://` path, "" for none). */
   serverFolder?: string;
   onServerFolder?: (folder: string) => void;
-  /** Why this image can't go straight to a server (a .ffpfsc, LZ4 packs), or null. */
+  /** Why this image can't go straight to a server, or null. */
   serverRefusal?: string | null;
 }
 
@@ -818,6 +818,15 @@ export function OutputChoice(c: OutputChoiceProps) {
                 "fpkg.save_to_server_note",
                 undefined,
                 "Written to the server as it is made, then read back there before it gets its name. Nothing is stored on this computer.",
+              )}
+            </span>
+          )}
+          {((toPs5 && !c.ps5Refusal) || (toServer && image && !c.serverRefusal)) && c.imageCompress && (
+            <span className="text-xs text-[var(--color-muted)]" data-testid="convert-save-to-ffpfsc-note">
+              {tr(
+                "fpkg.save_to_ffpfsc_twice_note",
+                undefined,
+                "A .ffpfsc sent straight there is compressed twice: once to work out its size, then again as it is sent. It takes about twice as long to make as one saved to this computer.",
               )}
             </span>
           )}
