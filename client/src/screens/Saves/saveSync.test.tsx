@@ -138,3 +138,12 @@ describe("save sync: the prompt after a game closes", () => {
     expect(conflict).not.toContain('data-testid="save-sync-send"');
   });
 });
+
+describe("an engine without save sync", () => {
+  it("reads as nothing set up, never a crash", async () => {
+    const { syncView } = await import("../../api/saveSync");
+    for (const raw of [null, undefined, {}, "x", { pairs: {}, suggestions: null }, { ok: false, error: "not found" }]) {
+      expect(syncView(raw)).toEqual({ pairs: [], suggestions: [], applying: [] });
+    }
+  });
+});

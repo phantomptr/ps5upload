@@ -76,6 +76,18 @@ export interface SyncApplyResult {
   error?: string;
 }
 
+/** A view whatever the engine answered: an engine without save sync (older, or one the browser
+ *  build talks to) or an odd answer is "nothing set up", never a crash of the screen that asked. */
+export function syncView(raw: unknown): SyncView {
+  const o = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const list = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
+  return {
+    pairs: list<SyncPair>(o.pairs),
+    suggestions: list<SyncSuggestion>(o.suggestions),
+    applying: list<string>(o.applying),
+  };
+}
+
 async function call<T>(path: string, init?: EngineFetchInit): Promise<T> {
   const res = await engineFetch(`${getEngineUrl()}/api/save-sync${path}`, {
     ...init,
@@ -93,7 +105,7 @@ async function call<T>(path: string, init?: EngineFetchInit): Promise<T> {
 }
 
 export const saveSyncApi = {
-  view: () => call<SyncView>(""),
+  view: async () => syncView(await call<unknown>("")),
   setPair: (a: SyncSide, b: SyncSide, excluded?: string[]) =>
     call<{ pair: SyncPair }>("/pair", {
       method: "PUT",
@@ -106,11 +118,13 @@ export const saveSyncApi = {
   removePair: (pair: string) =>
     call<{ ok: boolean }>("/pair/remove", { method: "POST", body: JSON.stringify({ pair }) }),
   /** Check now: reads both consoles (wakes neither). */
-  status: (pair: string) =>
-    call<{ pair: SyncPair; rows: SyncRow[]; checked_ms: number }>(
+  status: async (pair: string) => {
+    const r = await call<{ pair: SyncPair; rows?: unknown; checked_ms: number }>(
       `/status?pair=${encodeURIComponent(pair)}`,
       { timeoutMs: ENGINE_LONG_TIMEOUT_MS },
-    ),
+    );
+    return { ...r, rows: Array.isArray(r?.rows) ? (r.rows as SyncRow[]) : [] };
+  },
   /** Copies the picked saves, one at a time. */
   apply: (pair: string, items: { key: string; direction: SyncDirection }[]) =>
     call<{ results: SyncApplyResult[] }>("/apply", {
