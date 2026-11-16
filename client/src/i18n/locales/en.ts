@@ -9224,6 +9224,13 @@ game_fps_tv_note: "Shown here, not on the TV: drawing over a game means changing
 "fpkg.make.why_kraken": "Kraken Mount runs on this PS5: a package made here is mounted from a drive, not installed.",
 "zstd_runtime_kraken_swaps": "Kraken Mount puts {path} ({what}) over every game's own runtime, and that one won't start games in zstd packs. Replace that file with ampr-emu-ng 0.3.4 or newer, or set inject_ampr = false in /data/krakenmount/config.toml.",
 "zstd_runtime_kraken_override": "Kraken Mount runs on this PS5 and starts every game with its own runtime, {path}, instead of the game's: that file is the one that has to be new enough.",
+"zstd_runtime_smp_unknown": "Couldn't check whether ShadowMount+ swaps this game's runtime.",
+"saves_auto_retry": "Try again",
+"saves_auto_load_failed": "Couldn't read the backup settings: {error}",
+"fpkg_swap_no_title_id": "The package has no title id to match the dump with.",
+"fpkg_swap_unfinished": "The swap did not finish.",
+"receive_link_waiting": "Another link is waiting. It fills the form when you close this one.",
+"join_rp_still_stopping": "Remote Play is still stopping. Try again in a moment.",
 };
 
 export default en;

@@ -39,6 +39,12 @@ export function intervalChoices(current: number | undefined): number[] {
   return list.sort((a, b) => a - b);
 }
 
+/** Whether the engine lets the interval be chosen: one before 12.5.1 leaves `interval_minutes`
+ *  out and ignores a new one, so a picker would only snap back. */
+export function intervalSupported(settings: Pick<SaveBackupSettings, "interval_minutes"> | null): boolean {
+  return typeof settings?.interval_minutes === "number";
+}
+
 /** The settings an older version kept here, if it had a folder set. */
 export function legacySettings(raw: string | null): Pick<SaveBackupSettings, "enabled" | "dir" | "keep"> | null {
   try {

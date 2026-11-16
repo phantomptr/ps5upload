@@ -141,6 +141,15 @@ export function ReceivePanel({ pending, onEnded }: { pending?: { link: string; n
           </div>
         </form>
       )}
+      {id && held && (
+        <p className="text-xs text-[var(--color-muted)]" data-testid="receive-held" role="status">
+          {tr(
+            "receive_link_waiting",
+            undefined,
+            "Another link is waiting. It fills the form when you close this one.",
+          )}
+        </p>
+      )}
       {id && !view && <Connecting />}
       {id && view && <ReceiveFlow view={view} host={host} onDone={reset} onView={setView} />}
     </div>

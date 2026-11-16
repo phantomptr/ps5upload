@@ -511,7 +511,11 @@ async function runReplace(packagePath: string, host: string, dump: string) {
   const p = running();
   if (!p) return;
   if (!p.titleId) {
-    fail("park", "The package has no title id to match the dump with.", packagePath);
+    fail(
+      "park",
+      trStatic("fpkg_swap_no_title_id", "The package has no title id to match the dump with."),
+      packagePath,
+    );
     return;
   }
   enterStage("park");
@@ -523,7 +527,7 @@ async function runReplace(packagePath: string, host: string, dump: string) {
   );
   if (!running()) return;
   if (!r.ok) {
-    fail(running()!.stage, r.message ?? "The swap did not finish.", packagePath);
+    fail(running()!.stage, r.message ?? trStatic("fpkg_swap_unfinished", "The swap did not finish."), packagePath);
     return;
   }
   const cur = running()!;
