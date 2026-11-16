@@ -344,3 +344,32 @@ fn records_folding_together_both_keep_their_packed_copy() {
     assert_eq!(tree.read("DATA/A.bin").unwrap(), b);
     assert_eq!(tree.files().len(), 2);
 }
+
+/// ampr-emu-ng refuses an index with a path of 1024 bytes or more (`path_len`, the PS5 path
+/// limit), so the writer does not make one; 1023 bytes pack.
+#[test]
+fn a_path_of_the_ps5_limit_is_not_packed() {
+    for (len, ok) in [(1023usize, true), (1024, false)] {
+        let path = format!("{}/{}", "d".repeat(200), "x".repeat(len - 201));
+        assert_eq!(path.len(), len);
+        let mut source = Mem::new([(path, vec![1u8; 10])].into_iter().collect());
+        let listed = source.files().to_vec();
+        let packed = writer::pack(&mut source, &listed, 5, &mut Output::default());
+        assert_eq!(packed.is_ok(), ok, "{len} bytes");
+    }
+}
+
+/// The few fields of `ampr_zstd.index` the app's own check reads
+/// (`ps5upload_fpkg::ampr_index::zstd_files`) are the ones the writer writes.
+#[test]
+fn the_apps_index_check_reads_what_the_writer_wrote() {
+    let (index, packs) = pack(&[("Data/A.bin", noise(300_000, 1)), ("b.bin", noise(10, 2))]);
+    let bytes = &packs[ps5_dump_forge_zstd::INDEX_NAME];
+    let read = ps5upload_fpkg::ampr_index::zstd_files(bytes).unwrap();
+    let want: Vec<(String, u64)> = index
+        .files
+        .iter()
+        .map(|f| (f.path.clone(), f.logical_size))
+        .collect();
+    assert_eq!(read, want);
+}

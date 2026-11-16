@@ -549,6 +549,57 @@ fn a_dumps_stale_ampr_index_is_regenerated_from_the_packaged_files() {
     );
 }
 
+/// A game in zstd packs keeps its own `ampr_emu.index` byte for byte: it lists the files inside
+/// the packs, which are not on disk, and one made from the folder would leave every packed file
+/// unserved.
+#[test]
+fn a_zstd_packed_games_index_goes_in_as_it_is() {
+    use ps5upload_fpkg::{ampr_index, kraken_image};
+    let src = TempDir::new("zstd-index-src");
+    write_tree(src.path());
+    let mut eboot: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
+    eboot[1000..1014].copy_from_slice(b"libSceAmpr.prx");
+    std::fs::write(src.path().join("eboot.bin"), &eboot).unwrap();
+    let mut zstd = b"AMPRZPK1".to_vec();
+    zstd.resize(128, 0);
+    std::fs::write(src.path().join("ampr_zstd.index"), &zstd).unwrap();
+    let mut listed: Vec<(String, u64)> = source::scan(src.path())
+        .unwrap()
+        .into_iter()
+        .map(|f| (f.path, f.size))
+        .collect();
+    listed.push(("data/packed.bin".to_string(), 1 << 20));
+    let own = ampr_index::build(&listed, 0).unwrap();
+    std::fs::write(src.path().join("ampr_emu.index"), &own).unwrap();
+
+    let out = TempDir::new("zstd-index-out");
+    let mut request = BuildRequest::new(src.path(), out.path());
+    request.time = Some((1_700_000_000, 0));
+    let mut phases = Vec::new();
+    let report = build::build(&request, &mut |p| phases.push(p.to_string())).unwrap();
+    assert!(report.verify.ok(), "{}", report.verify);
+    assert!(
+        phases
+            .iter()
+            .any(|p| p.starts_with("keeping the zstd-packed game's ampr_emu.index")),
+        "{phases:?}"
+    );
+    let naps = outer_file(&report.path, "naps_pkg_layout.dat");
+    let image = outer_file(&report.path, "pfs_image.dat");
+    let blocks = kraken_image::describe(&naps).unwrap();
+    let size = blocks.last().map(|b| b.logical + b.len).unwrap();
+    let mut mount = vec![0u8; size as usize];
+    for b in &blocks {
+        let bytes = kraken_image::decode_described(&image, b).unwrap();
+        mount[b.logical as usize..(b.logical + b.len) as usize].copy_from_slice(&bytes);
+    }
+    let at = mount
+        .windows(own.len())
+        .position(|w| w == own.as_slice())
+        .is_some();
+    assert!(at, "the package carries the game's own index");
+}
+
 /// Two paths an `ampr_emu.index` cannot tell apart stop the build with a message naming them.
 #[test]
 fn a_case_collision_in_an_ampr_title_is_refused() {
