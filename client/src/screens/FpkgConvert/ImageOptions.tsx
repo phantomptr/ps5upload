@@ -318,7 +318,12 @@ export function Lz4Option({ lz4, folder }: { lz4: Lz4Choice; folder?: boolean })
           <input
             type="checkbox"
             checked={lz4.installRuntime}
-            onChange={(e) => lz4.onInstallRuntime(e.target.checked)}
+            onChange={(e) => {
+              lz4.onInstallRuntime(e.target.checked);
+              // This game's own emulator can't read packs: without ampr_emu 0.4.2.1 none are
+              // made, so LZ4 packs go off with it (ticking them again puts it back in).
+              if (!e.target.checked) lz4.onToggle(false);
+            }}
             className="checkbox mt-px h-4 w-4 shrink-0"
           />
           <span className="min-w-0">

@@ -691,6 +691,44 @@ describe("RunCard", () => {
       expect(idle("exfat", undefined)).not.toContain("AMPR LZ4 asset packs");
     });
 
+    it("turns LZ4 packs off with ampr_emu for a game that needs it, and back on together", () => {
+      const calls: string[] = [];
+      const choice = lz4({
+        on: true,
+        installRuntime: true,
+        readiness: { runtime_version: null, refusal: "none", kind: "runtime" },
+        onToggle: (on) => calls.push(`packs:${on}`),
+        onInstallRuntime: (on) => calls.push(`runtime:${on}`),
+        onKind: () => {},
+      });
+      /** The onChange of the checkbox in the element tree under `testid` (or the first one). */
+      const inputs: { onChange: (e: { target: { checked: boolean } }) => void; testid?: string }[] = [];
+      const walk = (node: unknown, testid?: string) => {
+        if (Array.isArray(node)) return node.forEach((n) => walk(n, testid));
+        if (!node || typeof node !== "object" || !("props" in node)) return;
+        const props = (node as { props: Record<string, unknown> }).props;
+        const id = (props["data-testid"] as string | undefined) ?? testid;
+        if (props.type === "checkbox") inputs.push({ onChange: props.onChange as never, testid: id });
+        walk(props.children, id);
+      };
+      walk(Lz4Option({ lz4: choice }));
+      const runtimeBox = inputs.find((i) => i.testid === "lz4-install-runtime");
+      expect(runtimeBox).toBeDefined();
+      runtimeBox!.onChange({ target: { checked: false } });
+      expect(calls).toEqual(["runtime:false", "packs:false"]);
+
+      calls.length = 0;
+      const packsBox = inputs.find((i) => i.testid === "lz4-option");
+      packsBox!.onChange({ target: { checked: true } });
+      expect(calls).toEqual(["packs:true"]);
+      // With the runtime off, ticking packs puts it back in.
+      calls.length = 0;
+      inputs.length = 0;
+      walk(Lz4Option({ lz4: { ...choice, installRuntime: false } }));
+      inputs.find((i) => i.testid === "lz4-option")!.onChange({ target: { checked: true } });
+      expect(calls).toEqual(["packs:true", "runtime:true"]);
+    });
+
     it("goes with .ffpfsc compression, and offers a profile", () => {
       const on = idle("ffpkg", lz4({ on: true }), true);
       expect(checkbox(on, "Compress it into a .ffpfsc")).toEqual({ checked: true, disabled: false });
