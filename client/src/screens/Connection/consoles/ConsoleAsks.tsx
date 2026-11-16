@@ -120,15 +120,15 @@ export function AskPrompt({
   );
 }
 
-/** Whether a path is the Consoles page, where each card answers its own asks (the prompt would
- *  show the same ask twice there). */
+/** Whether a path is the Consoles page, where the card on show answers its console's asks (the
+ *  prompt would show the same ask twice there). */
 export function onConsolesPage(pathname: string, search: string): boolean {
   if (pathname !== "/connection") return false;
   const tab = new URLSearchParams(search).get("tab");
   return tab !== "devices" && tab !== "health";
 }
 
-/** Mounted once, over every screen but the Consoles page. */
+/** Mounted once, over every screen (on the Consoles page, for the consoles not on show). */
 export function ConsoleAsks() {
   const byHost = useMeshStore((s) => s.byHost);
   const profiles = useRosterStore((s) => s.profiles);
@@ -137,9 +137,17 @@ export function ConsoleAsks() {
   const [later, setLater] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const all = pendingAsks(byHost, profiles, later, (h) => runtimeByHost[hostOf(h)]?.payloadStatus === "up");
+  const activeId = useRosterStore((s) => s.active_id);
+  // On the Consoles page the card on show (the selected console's) answers its own asks; the
+  // other consoles' asks still come here.
+  const shownHost = onConsolesPage(loc.pathname, loc.search)
+    ? (profiles.find((p) => p.id === activeId) ?? profiles[0])?.host
+    : undefined;
+  const all = pendingAsks(byHost, profiles, later, (h) => runtimeByHost[hostOf(h)]?.payloadStatus === "up").filter(
+    (a) => !shownHost || hostOf(a.host) !== hostOf(shownHost),
+  );
   const first = all[0];
-  if (!first || onConsolesPage(loc.pathname, loc.search)) return null;
+  if (!first) return null;
   const answer = async (op: "allow" | "decline") => {
     setBusy(true);
     setError(null);

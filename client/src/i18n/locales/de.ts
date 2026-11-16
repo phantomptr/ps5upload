@@ -8558,8 +8558,6 @@ rp_users_add_hint: "Um auch als anderer Benutzer zu spielen, melde dich auf der 
 "cs_card_rename": "Umbenennen",
 "cs_card_rename_title": "Diese PS5 umbenennen",
 "cs_card_rest": "Im Ruhemodus",
-"cs_card_selected": "Ausgewählt",
-"cs_card_use": "Diese PS5 nutzen",
 "cs_card_via_home": "Online · Heimnetz {ip}",
 "cs_card_via_tailscale_direct": "Online · Tailscale {ip}, direkt",
 "cs_card_via_tailscale_relayed": "Online · Tailscale {ip}, weitergeleitet",

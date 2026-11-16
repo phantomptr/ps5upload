@@ -434,6 +434,20 @@ export interface FoundConsole {
   /** On the console list already: that entry. */
   listed: ListedConsole | null;
   error: string | null;
+  /** What the engine made of it: "ps5" when its helper answered as the PS5 (or its Tailscale
+   *  says it is one), "device" for a phone or computer, "unknown" otherwise. Missing from an
+   *  older engine (see {@link foundKind}). */
+  kind?: "ps5" | "device" | "unknown";
+  /** The OS its Tailscale reports, when this device's list carries it. */
+  os?: string;
+}
+
+/** Whether a tailnet find is a PS5. The app on a phone or computer names its Tailscale node
+ *  "…-ps5u" too, so the name proves nothing: the engine's `kind`, or (an older engine) the helper
+ *  having answered with its key, which only the PS5's helper does on its port. */
+export function foundKind(c: Pick<FoundConsole, "kind" | "reachable" | "id">): "ps5" | "device" | "unknown" {
+  if (c.kind === "ps5" || c.kind === "device" || c.kind === "unknown") return c.kind;
+  return c.reachable && !!c.id ? "ps5" : "unknown";
 }
 
 export interface FoundConsoles {

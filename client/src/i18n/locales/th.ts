@@ -8557,8 +8557,6 @@ rp_users_add_hint: "หากต้องการเล่นในฐานะ
 "cs_card_rename": "เปลี่ยนชื่อ",
 "cs_card_rename_title": "เปลี่ยนชื่อ PS5 เครื่องนี้",
 "cs_card_rest": "อยู่ในโหมดพัก",
-"cs_card_selected": "เลือกอยู่",
-"cs_card_use": "ใช้ PS5 เครื่องนี้",
 "cs_card_via_home": "ออนไลน์ · เครือข่ายในบ้าน {ip}",
 "cs_card_via_tailscale_direct": "ออนไลน์ · Tailscale {ip} โดยตรง",
 "cs_card_via_tailscale_relayed": "ออนไลน์ · Tailscale {ip} ส่งต่อ",

@@ -8552,8 +8552,6 @@ rp_users_add_hint: "Để chơi bằng cả người dùng khác, hãy đăng nh
 "cs_card_rename": "Đổi tên",
 "cs_card_rename_title": "Đổi tên PS5 này",
 "cs_card_rest": "Đang ở chế độ nghỉ",
-"cs_card_selected": "Đã chọn",
-"cs_card_use": "Dùng PS5 này",
 "cs_card_via_home": "Trực tuyến · Mạng nhà {ip}",
 "cs_card_via_tailscale_direct": "Trực tuyến · Tailscale {ip}, trực tiếp",
 "cs_card_via_tailscale_relayed": "Trực tuyến · Tailscale {ip}, chuyển tiếp",

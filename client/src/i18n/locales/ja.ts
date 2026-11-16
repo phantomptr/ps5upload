@@ -8569,8 +8569,6 @@ rp_users_add_hint: "別のユーザーでもプレイするには、PS5 でそ�
 "cs_card_rename": "名前を変更",
 "cs_card_rename_title": "この PS5 の名前を変更",
 "cs_card_rest": "レストモード中",
-"cs_card_selected": "選択中",
-"cs_card_use": "この PS5 を使う",
 "cs_card_via_home": "オンライン · ホームネットワーク {ip}",
 "cs_card_via_tailscale_direct": "オンライン · Tailscale {ip}、直接",
 "cs_card_via_tailscale_relayed": "オンライン · Tailscale {ip}、中継",

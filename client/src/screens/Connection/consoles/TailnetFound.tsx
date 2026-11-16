@@ -12,15 +12,22 @@ import { useTr } from "../../../state/lang";
 import { useRosterStore } from "../../../state/roster";
 import { requestRosterPull } from "../../../state/rosterShare";
 import { selfTailnet } from "../../../state/useTailnet";
-import { addTailnetConsole, tailnetConsoles, type AppTailnetStatus, type FoundConsole } from "../../../api/tailnet";
+import {
+  addTailnetConsole,
+  foundKind,
+  tailnetConsoles,
+  type AppTailnetStatus,
+  type FoundConsole,
+} from "../../../api/tailnet";
 import { consoleAddr } from "../../../lib/addr";
 import { humanizeCaught } from "../../../lib/humanizeError";
 
 /** How often the list is read again while the page is open (the engine answers from its cache). */
 export const FOUND_READ_MS = 60_000;
 
-/** The found consoles worth offering: online, not on this device's list (by the engine's word, or
- *  by either of their addresses), and not put aside this session. */
+/** The found consoles worth offering: a PS5 for sure (a phone or computer running PS5Upload is
+ *  named "…-ps5u" on Tailscale as well: {@link foundKind}), online, not on this device's list (by
+ *  the engine's word, or by either of their addresses), and not put aside this session. */
 export function toOffer(
   found: readonly FoundConsole[],
   profiles: readonly { host: string }[],
@@ -29,6 +36,7 @@ export function toOffer(
   const listed = new Set(profiles.map((p) => consoleAddr(p.host).toLowerCase()));
   return found.filter(
     (c) =>
+      foundKind(c) === "ps5" &&
       c.online &&
       !c.listed &&
       !hidden.has(c.tailnet_ip) &&

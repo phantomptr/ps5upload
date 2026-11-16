@@ -8831,8 +8831,6 @@ rp_users_add_hint: "برای بازی به‌عنوان کاربری دیگر ن
 "cs_card_rename": "تغییر نام",
 "cs_card_rename_title": "تغییر نام این PS5",
 "cs_card_rest": "در حالت استراحت",
-"cs_card_selected": "انتخاب‌شده",
-"cs_card_use": "استفاده از این PS5",
 "cs_card_via_home": "آنلاین · شبکهٔ خانگی {ip}",
 "cs_card_via_tailscale_direct": "آنلاین · Tailscale {ip}، مستقیم",
 "cs_card_via_tailscale_relayed": "آنلاین · Tailscale {ip}، بازپخش",

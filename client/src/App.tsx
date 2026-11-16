@@ -6,7 +6,7 @@ import {
   useConnectionStore,
 } from "./state/connection";
 import { Navigate, Route, Routes, useLocation, useNavigate, type Location } from "react-router";
-import { recallRoute, rememberRoute } from "./lib/consoleRoutes";
+import { recallRoute, rememberRoute, staysOnConsoleSwitch } from "./lib/consoleRoutes";
 import { payloadCardLink, RUNNING_LINK } from "./screens/Payloads/payloadTabs";
 
 import { lazyWithReload } from "./lib/lazyWithReload";
@@ -153,7 +153,8 @@ function useConsoleRouteMemory() {
     if (host !== before) {
       lastHost.current = host;
       // A switch from one console to another (not the first console set at start).
-      if (before && host) {
+      // Not from the Consoles page: it shows the console picked, so it stays.
+      if (before && host && !staysOnConsoleSwitch(route)) {
         const back = recallRoute(host);
         if (back && back !== route) {
           navigate(back);

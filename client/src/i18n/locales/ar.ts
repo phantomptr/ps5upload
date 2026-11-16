@@ -8550,8 +8550,6 @@ rp_users_add_hint: "للعب باسم مستخدم آخر أيضًا، سجّل 
 "cs_card_rename": "إعادة تسمية",
 "cs_card_rename_title": "إعادة تسمية جهاز PS5 هذا",
 "cs_card_rest": "في وضع الراحة",
-"cs_card_selected": "محدد",
-"cs_card_use": "استخدام هذا PS5",
 "cs_card_via_home": "متصل · الشبكة المنزلية {ip}",
 "cs_card_via_tailscale_direct": "متصل · Tailscale {ip}، مباشر",
 "cs_card_via_tailscale_relayed": "متصل · Tailscale {ip}، مُمرَّر",

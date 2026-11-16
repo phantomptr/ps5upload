@@ -8790,8 +8790,6 @@ rp_users_add_hint: "Aby grać także jako inny użytkownik, zaloguj się na nim 
 "cs_card_rename": "Zmień nazwę",
 "cs_card_rename_title": "Zmień nazwę tej PS5",
 "cs_card_rest": "W trybie spoczynku",
-"cs_card_selected": "Wybrana",
-"cs_card_use": "Użyj tej PS5",
 "cs_card_via_home": "Online · Sieć domowa {ip}",
 "cs_card_via_tailscale_direct": "Online · Tailscale {ip}, bezpośrednio",
 "cs_card_via_tailscale_relayed": "Online · Tailscale {ip}, przekazywane",

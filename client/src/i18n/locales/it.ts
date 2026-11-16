@@ -8503,8 +8503,6 @@ rp_users_add_hint: "Per giocare anche come un altro utente, accedi con quell’u
 "cs_card_rename": "Rinomina",
 "cs_card_rename_title": "Rinomina questa PS5",
 "cs_card_rest": "In modalità riposo",
-"cs_card_selected": "Selezionata",
-"cs_card_use": "Usa questa PS5",
 "cs_card_via_home": "Online · Rete domestica {ip}",
 "cs_card_via_tailscale_direct": "Online · Tailscale {ip}, diretto",
 "cs_card_via_tailscale_relayed": "Online · Tailscale {ip}, inoltrato",

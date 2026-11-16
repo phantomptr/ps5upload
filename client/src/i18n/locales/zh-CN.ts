@@ -8509,8 +8509,6 @@ rp_users_add_hint: "若也想以其他用户游玩，请在 PS5 上登录该用�
 "cs_card_rename": "重命名",
 "cs_card_rename_title": "重命名这台 PS5",
 "cs_card_rest": "待机模式中",
-"cs_card_selected": "已选择",
-"cs_card_use": "使用这台 PS5",
 "cs_card_via_home": "在线 · 家庭网络 {ip}",
 "cs_card_via_tailscale_direct": "在线 · Tailscale {ip}，直连",
 "cs_card_via_tailscale_relayed": "在线 · Tailscale {ip}，中继",

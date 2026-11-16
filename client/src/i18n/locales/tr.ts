@@ -8557,8 +8557,6 @@ rp_users_add_hint: "Başka bir kullanıcıyla da oynamak için PS5'te o kullanı
 "cs_card_rename": "Yeniden adlandır",
 "cs_card_rename_title": "Bu PS5'i yeniden adlandır",
 "cs_card_rest": "Dinlenme modunda",
-"cs_card_selected": "Seçili",
-"cs_card_use": "Bu PS5'i kullan",
 "cs_card_via_home": "Çevrimiçi · Ev ağı {ip}",
 "cs_card_via_tailscale_direct": "Çevrimiçi · Tailscale {ip}, doğrudan",
 "cs_card_via_tailscale_relayed": "Çevrimiçi · Tailscale {ip}, aktarılıyor",
