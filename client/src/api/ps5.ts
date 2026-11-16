@@ -2255,7 +2255,31 @@ export interface KrakenStatus {
 
 /** SMP status snapshot. `addr` is the management-port address. */
 export async function smpStatus(addr: string): Promise<SmpStatus> {
-  return invoke<SmpStatus>("smp_status", { addr });
+  return normalizeSmpStatus(await invoke<Partial<SmpStatus> | null>("smp_status", { addr }));
+}
+
+/** The mounter snapshot with its lists always present: a partial answer (an older engine, a
+ *  proxy, a stand-in) must not crash the game page, which reads `errors` and
+ *  `mounted_images` directly. */
+export function normalizeSmpStatus(s: Partial<SmpStatus> | null | undefined): SmpStatus {
+  const v = s ?? {};
+  return {
+    ...v,
+    installed: v.installed === true,
+    running: v.running === true,
+    config_ini: v.config_ini ?? null,
+    autotune_ini: v.autotune_ini ?? null,
+    debug_log_tail: v.debug_log_tail ?? null,
+    mounted_images: Array.isArray(v.mounted_images) ? v.mounted_images : [],
+    errors: Array.isArray(v.errors) ? v.errors : [],
+    kraken: v.kraken
+      ? {
+          ...v.kraken,
+          games: Array.isArray(v.kraken.games) ? v.kraken.games : [],
+          title_ids: Array.isArray(v.kraken.title_ids) ? v.kraken.title_ids : [],
+        }
+      : v.kraken,
+  };
 }
 
 /** Ask the console's mounter (ShadowMount+, retry counters cleared; or Kraken Mount) to scan
