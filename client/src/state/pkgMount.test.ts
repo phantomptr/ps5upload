@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const taken = new Set<string>();
 const added: { resolvedDest: string; strategy: string }[] = [];
 let statFails: Error | null = null;
+// What the queue reports for the item, in order.
+let queueSteps: { status: string; waitingForWake?: boolean }[] = [{ status: "done" }];
 
 vi.mock("../api/ps5", async (orig) => ({
   ...(await orig<typeof import("../api/ps5")>()),
@@ -32,7 +34,7 @@ vi.mock("./consoleQueueBridge", () => ({
       return "q1";
     },
     watch: (_id: string, cb: (q: { status: string }) => void) => {
-      cb({ status: "done" });
+      for (const q of queueSteps) cb(q);
       return () => {};
     },
   }),
@@ -45,6 +47,7 @@ describe("placePkgForMount name clash", () => {
     taken.clear();
     added.length = 0;
     statFails = null;
+    queueSteps = [{ status: "done" }];
   });
 
   it("uploads straight in when the name is free", async () => {
@@ -81,5 +84,23 @@ describe("placePkgForMount name clash", () => {
     const r = await placePkgForMount("/pc/Game.pkg", "10.0.0.2", { drive: "/data" });
     expect(r).toMatchObject({ ok: false, message: "timed out" });
     expect(added).toHaveLength(0);
+  });
+
+  it("ends when Pause or Stop puts the running upload back to waiting", async () => {
+    queueSteps = [{ status: "pending" }, { status: "running" }, { status: "pending" }];
+    const r = await placePkgForMount("/pc/Game.pkg", "10.0.0.2", { drive: "/data" });
+    expect(r.ok).toBe(false);
+    expect(r.message).toMatch(/Paused or stopped/);
+  });
+
+  it("keeps waiting while the console rests, then finishes", async () => {
+    queueSteps = [
+      { status: "running" },
+      { status: "pending", waitingForWake: true },
+      { status: "running" },
+      { status: "done" },
+    ];
+    const r = await placePkgForMount("/pc/Game.pkg", "10.0.0.2", { drive: "/data" });
+    expect(r.ok).toBe(true);
   });
 });

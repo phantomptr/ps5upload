@@ -3583,6 +3583,7 @@ registerPkgQueueApi({
             totalBytes: it.totalBytes,
             bytesPerSec: it.bytesPerSec,
             error: it.error,
+            waitingForWake: !!it.waitingForWake,
           }
         : null;
     };

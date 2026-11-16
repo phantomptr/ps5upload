@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { pmOverview } from "../../../api/payloadManager";
-import { smpStatus } from "../../../api/ps5";
 import { mgmtAddr } from "../../../lib/addr";
+import { useMounterFor } from "../../../lib/mounter";
 import { useTr } from "../../../state/lang";
 import type { IntegrationReport } from "./registry";
 
@@ -45,23 +45,20 @@ export function PmSummary({
   return <>{line ?? fallback}</>;
 }
 
-/** ShadowMount+'s card line: how many game images it has mounted. */
-export function SmpSummary({ host, fallback }: { host: string; fallback: ReactNode }) {
+/** ShadowMount+'s card line: how many game images it has mounted, while it runs. Reads the
+ *  mounter snapshot the panel takes on each refresh. */
+export function SmpSummary({
+  host,
+  running,
+  fallback,
+}: {
+  host: string;
+  running: boolean;
+  fallback: ReactNode;
+}) {
   const tr = useTr();
-  const [mounted, setMounted] = useState<number | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    setMounted(null);
-    if (!host.trim()) return;
-    smpStatus(mgmtAddr(host.trim()))
-      .then((s) => {
-        if (!cancelled) setMounted(s.mounted_images.length);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [host]);
-  if (mounted === null) return <>{fallback}</>;
+  const snapshot = useMounterFor(host.trim() ? mgmtAddr(host.trim()) : null);
+  const mounted = snapshot ? snapshot.mounted_images.length : null;
+  if (!running || mounted === null) return <>{fallback}</>;
   return <>{tr("hub_smp_summary", { n: mounted }, `Game images mounted: ${mounted}`)}</>;
 }

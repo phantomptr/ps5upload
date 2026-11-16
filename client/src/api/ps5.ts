@@ -2363,6 +2363,8 @@ export async function usbAutoloaderInstall(req: {
   drive_path: string;
   payload_ids: string[];
   include_ps5upload?: boolean;
+  /** Payload files on this computer (.elf / .bin) to put on the stick too. */
+  local_files?: string[];
 }): Promise<AutoloaderInstallResult> {
   return invoke<AutoloaderInstallResult>("usb_autoloader_install", { req });
 }
