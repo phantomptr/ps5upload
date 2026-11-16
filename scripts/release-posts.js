@@ -38,7 +38,7 @@ const { execFileSync } = require("child_process");
 const { captureSite, copyImages } = require("./post-images.js");
 
 const REPO = "phantomptr/ps5upload";
-const DISCORD_INVITE = "https://discord.gg/BqjZE6vZE";
+const DISCORD_INVITE = "https://discord.gg/fzK3xddtrM";
 const ISSUES_URL = `https://github.com/${REPO}/issues`;
 const COFFEE_URL = "https://ko-fi.com/B0B81S0WUA"; // client/src/lib/supportLinks.ts
 const SITE_URL = "https://ps5upload.phantomptr.com/"; // site/ on GitHub Pages

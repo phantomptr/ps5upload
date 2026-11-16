@@ -20,7 +20,7 @@ export interface SupporterList {
   anonymous: number;
 }
 
-const DISCORD = "https://discord.gg/BqjZE6vZE";
+const DISCORD = "https://discord.gg/fzK3xddtrM";
 /** Brand names, the same in every language. */
 const KOFI = "Ko-fi";
 
