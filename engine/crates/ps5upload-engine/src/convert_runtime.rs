@@ -11,6 +11,8 @@
 //! through a temporary name in that same folder, read back and hashed, then renamed in place
 //! (one folder, one drive: never a rename across filesystems). The helper
 //! (payload/src/console_convert.c) passes the newest such folder's file to the converter.
+//! Temporary files an engine that died mid-put left in the folder are removed on the next put,
+//! once they are [`STALE_PART`] old by the console's own file times.
 //!
 //! It happens on its own the first time a console with a helper that has the converter answers
 //! a status call (once per console per engine run; a failure is tried again after
@@ -44,6 +46,27 @@ fn part_name() -> String {
         NEXT.fetch_add(1, Ordering::Relaxed)
     )
 }
+/// A `.part` left in the folder longer than this (by the console's own clock against the file's
+/// mtime) belongs to a put that died (an engine that crashed or was killed mid-put): every put
+/// writes and checks its ~1 MB file in seconds, so a live one is never this old.
+const STALE_PART: Duration = Duration::from_secs(10 * 60);
+
+/// Whether `name` is a temporary name [`part_name`] makes: `<FILE>.<pid>-<n>-<nanos>.part`.
+fn is_part_name(name: &str) -> bool {
+    let Some(tag) = name
+        .strip_prefix(FILE)
+        .and_then(|r| r.strip_prefix('.'))
+        .and_then(|r| r.strip_suffix(".part"))
+    else {
+        return false;
+    };
+    let fields: Vec<&str> = tag.split('-').collect();
+    fields.len() == 3
+        && fields
+            .iter()
+            .all(|f| !f.is_empty() && f.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// The first helper that carries the converter.
 const FIRST_HELPER: &str = "12.5.0";
 /// A failed automatic attempt is tried again on a status answer this long after it.
@@ -68,6 +91,8 @@ pub(crate) trait ConsoleFiles {
     /// Within one folder, replacing what is at `to`.
     fn rename(&self, from: &str, to: &str) -> Result<(), String>;
     fn remove(&self, path: &str) -> Result<(), String>;
+    /// The files in `dir` (one level), each with its mtime (Unix seconds; 0 when unknown).
+    fn list(&self, dir: &str) -> Result<Vec<(String, i64)>, String>;
 }
 
 /// The console, through its helper.
@@ -106,6 +131,86 @@ impl ConsoleFiles for Helper<'_> {
     fn remove(&self, path: &str) -> Result<(), String> {
         ps5upload_core::fs_ops::fs_delete(self.0, path).map_err(|e| format!("{e:#}"))
     }
+    fn list(&self, dir: &str) -> Result<Vec<(String, i64)>, String> {
+        use ps5upload_core::fs_ops::{list_dir, ListDirOptions};
+        let mut out = Vec::new();
+        let mut opts = ListDirOptions::default();
+        loop {
+            let page = list_dir(self.0, dir, opts).map_err(|e| format!("{e:#}"))?;
+            let got = page.entries.len() as u64;
+            out.extend(
+                page.entries
+                    .into_iter()
+                    .filter(|e| e.kind == "file")
+                    .map(|e| (e.name, e.mtime)),
+            );
+            if got == 0 || opts.offset + got >= page.total_scanned {
+                return Ok(out);
+            }
+            opts.offset += got;
+        }
+    }
+}
+
+/// Removes the temporary files a put that died left in `dir`: only names [`part_name`] makes,
+/// only ones whose mtime is known and at least [`STALE_PART`] behind now (a put another engine
+/// is making right now is never touched), never the final file. "Now" is the mtime of a small
+/// probe file of its own written in that folder, so both times come from the console's own file
+/// clock, whatever its time zone or skew against this computer; the probe is removed again (and,
+/// being a temporary name itself, swept later if this engine dies first). Nothing is written
+/// when the folder holds no temporary file. Best effort: what cannot be listed or removed is
+/// logged, and the put goes on. Answers what it removed.
+fn sweep_stale_parts(fs: &dyn ConsoleFiles, dir: &str) -> Vec<String> {
+    let has_parts = |entries: &[(String, i64)]| entries.iter().any(|(n, _)| is_part_name(n));
+    match fs.list(dir) {
+        Ok(e) if has_parts(&e) => {}
+        // No folder yet, or nothing left behind.
+        _ => return Vec::new(),
+    }
+    let probe_name = part_name();
+    let probe = format!("{dir}/{probe_name}");
+    if let Err(why) = fs.write(&probe, b"0") {
+        crate::log_warn!("zstd runtime: could not write {probe} to read the console's time: {why}");
+        return Vec::new();
+    }
+    let listed = fs.list(dir);
+    if let Err(why) = fs.remove(&probe) {
+        crate::log_warn!("zstd runtime: {probe} was left on the console: {why}");
+    }
+    let entries = match listed {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+    let now = entries
+        .iter()
+        .find(|(n, _)| *n == probe_name)
+        .map_or(0, |(_, t)| *t);
+    if now <= 0 {
+        return Vec::new();
+    }
+    let stale = i64::try_from(STALE_PART.as_secs()).unwrap_or(i64::MAX);
+    let mut removed = Vec::new();
+    for (name, mtime) in entries {
+        if name == probe_name
+            || !is_part_name(&name)
+            || mtime <= 0
+            || now.saturating_sub(mtime) < stale
+        {
+            continue;
+        }
+        let path = format!("{dir}/{name}");
+        match fs.remove(&path) {
+            Ok(()) => removed.push(path),
+            Err(why) => crate::log_warn!("zstd runtime: could not remove {path}: {why}"),
+        }
+    }
+    if !removed.is_empty() {
+        crate::log_info!(
+            "zstd runtime: removed {} temporary file(s) an earlier put left in {dir}",
+            removed.len()
+        );
+    }
+    removed
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -143,6 +248,7 @@ pub(crate) fn put(fs: &dyn ConsoleFiles, version: &str, bytes: &[u8]) -> Result<
     let part = format!("{dir}/{}", part_name());
     let sha = sha256_hex(bytes);
     let len = bytes.len() as u64;
+    sweep_stale_parts(fs, &dir);
     if holds(fs, &path, len, &sha)? {
         return Ok(Outcome {
             version: version.to_string(),
@@ -345,6 +451,9 @@ mod tests {
         rename_lands: Option<Vec<u8>>,
         /// Every temporary name written.
         parts: RefCell<Vec<String>>,
+        /// The console's clock; None: it does not say. A write stamps a file with it.
+        clock: Option<i64>,
+        mtimes: RefCell<BTreeMap<String, i64>>,
     }
 
     impl ConsoleFiles for Fake {
@@ -370,6 +479,9 @@ mod tests {
                 b[0] ^= 1;
             }
             self.files.borrow_mut().insert(path.to_string(), b);
+            self.mtimes
+                .borrow_mut()
+                .insert(path.to_string(), self.clock.unwrap_or(0));
             Ok(())
         }
         fn rename(&self, from: &str, to: &str) -> Result<(), String> {
@@ -389,6 +501,18 @@ mod tests {
         fn remove(&self, path: &str) -> Result<(), String> {
             self.files.borrow_mut().remove(path);
             Ok(())
+        }
+        fn list(&self, dir: &str) -> Result<Vec<(String, i64)>, String> {
+            let prefix = format!("{dir}/");
+            let m = self.mtimes.borrow();
+            Ok(self
+                .files
+                .borrow()
+                .keys()
+                .filter_map(|k| k.strip_prefix(&prefix))
+                .filter(|n| !n.contains('/'))
+                .map(|n| (n.to_string(), *m.get(&format!("{prefix}{n}")).unwrap_or(&0)))
+                .collect())
         }
     }
 
@@ -487,6 +611,93 @@ mod tests {
         let e = put(&fs, "0.4.1", b"EMULATOR").unwrap_err();
         assert!(e.contains("does not match"), "{e}");
         assert!(fs.files.borrow().is_empty(), "{:?}", fs.files.borrow());
+    }
+
+    #[test]
+    fn only_temporary_names_are_recognised() {
+        assert!(is_part_name("libSceAmpr.sprx.123-0-456789.part"));
+        assert!(is_part_name(&part_name()));
+        for not in [
+            "libSceAmpr.sprx",
+            "libSceAmpr.sprx.part",
+            "libSceAmpr.sprx.1-2.part",
+            "libSceAmpr.sprx.1-2-x.part",
+            "libSceAmpr.sprx.1-2-3.part.bak",
+            "other.sprx.1-2-3.part",
+            "libSceAmpr.sprx.1--3.part",
+        ] {
+            assert!(!is_part_name(not), "{not}");
+        }
+    }
+
+    #[test]
+    fn temporary_files_a_dead_put_left_are_removed_and_a_live_one_is_not() {
+        const NOW: i64 = 1_800_000_000;
+        let dir = version_dir("0.4.1");
+        let fs = Fake {
+            clock: Some(NOW),
+            ..Default::default()
+        };
+        let old = format!("{dir}/libSceAmpr.sprx.77-0-123.part");
+        let live = format!("{dir}/libSceAmpr.sprx.88-0-456.part");
+        let unknown_age = format!("{dir}/libSceAmpr.sprx.99-0-789.part");
+        let not_ours = format!("{dir}/notes.part");
+        let other_version = format!("{}/libSceAmpr.sprx.77-1-123.part", version_dir("0.4.0"));
+        for (p, mtime) in [
+            (&old, NOW - 3600),
+            (&live, NOW - 30),
+            (&unknown_age, 0),
+            (&not_ours, NOW - 3600),
+            (&other_version, NOW - 3600),
+        ] {
+            fs.files.borrow_mut().insert(p.clone(), b"x".to_vec());
+            fs.mtimes.borrow_mut().insert(p.clone(), mtime);
+        }
+        fs.dirs.borrow_mut().push(dir.clone());
+        // The final file, however old, is never swept.
+        fs.files
+            .borrow_mut()
+            .insert(FINAL.into(), b"EMULATOR".to_vec());
+        fs.mtimes.borrow_mut().insert(FINAL.into(), NOW - 86_400);
+        let out = put(&fs, "0.4.1", b"EMULATOR").unwrap();
+        assert!(!out.written, "the sweep runs when nothing is written too");
+        let files = fs.files.borrow();
+        assert!(!files.contains_key(&old));
+        for kept in [&live, &unknown_age, &not_ours, &other_version] {
+            assert!(files.contains_key(kept), "{kept}");
+        }
+        assert_eq!(files[FINAL], b"EMULATOR");
+        // The probe that read the time is gone again.
+        assert_eq!(files.len(), 5, "{:?}", files.keys());
+        assert_eq!(fs.parts.borrow().len(), 1, "one probe write");
+    }
+
+    #[test]
+    fn a_folder_with_no_temporary_file_is_only_listed() {
+        let fs = Fake {
+            clock: Some(1_800_000_000),
+            ..Default::default()
+        };
+        fs.files
+            .borrow_mut()
+            .insert(FINAL.into(), b"EMULATOR".to_vec());
+        assert!(sweep_stale_parts(&fs, &version_dir("0.4.1")).is_empty());
+        assert_eq!(*fs.writes.borrow(), 0);
+    }
+
+    #[test]
+    fn without_a_time_on_the_probe_nothing_is_swept() {
+        let dir = version_dir("0.4.1");
+        // The console's listing gives no mtime (an old helper): the probe's is 0.
+        let fs = Fake::default();
+        fs.dirs.borrow_mut().push(dir.clone());
+        let old = format!("{dir}/libSceAmpr.sprx.77-0-123.part");
+        fs.files.borrow_mut().insert(old.clone(), b"x".to_vec());
+        fs.mtimes.borrow_mut().insert(old.clone(), 1);
+        assert!(sweep_stale_parts(&fs, &dir).is_empty());
+        let files = fs.files.borrow();
+        assert!(files.contains_key(&old));
+        assert_eq!(files.len(), 1, "the probe is removed");
     }
 
     #[test]
