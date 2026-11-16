@@ -715,6 +715,17 @@ fn build(
     }
 }
 
+/// The stem the package builder is given for `dest`: the name without one `.pkg`, so the
+/// builder's `<stem>.pkg` and `<stem>.pkg.partial` are `dest` and `partial_of(dest)` — the names
+/// the sync, the claim, the cleanup and the helper use (`g.pkg.pkg` stays `g.pkg.pkg`).
+fn pkg_stem(dest: &Path) -> String {
+    let name = dest
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    name.strip_suffix(".pkg").unwrap_or(name).to_string()
+}
+
 /// Builds the plan's `.pkg` with `ps5upload-fpkg` (a debug package, the engine's builder; not
 /// installed here): `<dest>.partial` beside `dest`, read back, renamed. Its stages are the
 /// builder's (`check` reads the game's headers, `compress` is Kraken on the converter's
@@ -730,13 +741,8 @@ fn build_pkg(
 ) -> Result<(u64, String), Refusal> {
     use ps5upload_fpkg::build::{BuildControl, BuildRequest, Stage};
     let dir = plan.dest.parent().unwrap_or(Path::new("/"));
-    let name = plan
-        .dest
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or_default();
     let mut request = BuildRequest::new(&plan.source, dir);
-    request.file_name = Some(name.trim_end_matches(".pkg").to_string());
+    request.file_name = Some(pkg_stem(&plan.dest));
     // As the inspection reads it: a dump's param.json may start with a BOM and end in NULs.
     request.content_id = crate::inspect(&plan.source).ok().and_then(|i| i.content_id);
     request.kraken = true;
@@ -1252,6 +1258,33 @@ mod tests {
             "convert_archive_needs_unpack"
         );
         assert!(!tmp.0.join("r.pkg").exists());
+    }
+
+    /// A `.pkg` named `g.pkg.pkg`: the builder writes that name (one `.pkg` taken off for its
+    /// stem, not every one), so the sync, claim and cleanup watch the `.partial` it writes.
+    #[test]
+    fn a_pkg_named_with_two_pkg_extensions_keeps_its_name() {
+        for name in ["g.pkg", "g.pkg.pkg", "a.pkg.pkg.pkg"] {
+            let dest = Path::new("/data/out").join(name);
+            let stem = pkg_stem(&dest);
+            assert_eq!(Path::new("/data/out").join(format!("{stem}.pkg")), dest);
+            assert_eq!(
+                Path::new("/data/out").join(format!("{stem}.pkg.partial")),
+                folder_build::partial_of(&dest)
+            );
+        }
+        let (tmp, game, dir) = setup("jobpkgpkg");
+        let dest = tmp.0.join("g.pkg.pkg");
+        ask(
+            &dir,
+            json!({"id": "p", "op": "build", "path": game, "dest": dest, "format": "pkg",
+                "pkg_level": "stored", "verify": "full"}),
+        );
+        let code = run_with(&dir, &mut |_| {}).unwrap();
+        assert_eq!(code, 0, "{}", status(&dir));
+        assert!(dest.is_file());
+        assert!(!tmp.0.join("g.pkg").exists());
+        assert!(!tmp.0.join("g.pkg.pkg.partial").exists());
     }
 
     /// zstd packs with the emulator the request names: an image and a folder, each reading
