@@ -7070,9 +7070,14 @@ static int handle_peripheral_control(runtime_state_t *state, const char *body,
         rc = p_sceKernelIccControlUSBPowerState
                 ? p_sceKernelIccControlUSBPowerState(port, 1) : -1;
     } else if (strcmp(action, "beep") == 0) {
-        /* The beeper (indicator.c): `port` carries the pattern. The front light's actions are
-         * gone (#840): an old engine asking for one gets unknown_action. */
+        /* The beeper and the front LED (indicator.c): `port` carries the pattern or level. */
         rc = indicator_beep(port);
+    } else if (strcmp(action, "led_off") == 0) {
+        rc = indicator_led(0);
+    } else if (strcmp(action, "led_on") == 0) {
+        rc = indicator_led(1);
+    } else if (strcmp(action, "led_dim") == 0) {
+        rc = indicator_led_dim(port);
     } else {
         const char *err = "{\"ok\":false,\"err\":\"unknown_action\"}";
         return mgmt_reply(MGMT_FRAME_PERIPHERAL_CONTROL_ACK, err, strlen(err));

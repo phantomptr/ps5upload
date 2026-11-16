@@ -3124,6 +3124,17 @@ export async function peripheralBdOn(addr: string): Promise<PeripheralAck> {
 export async function peripheralBeep(addr: string, pattern = 1): Promise<PeripheralAck> {
   return invoke<PeripheralAck>("peripheral_beep", { addr, pattern });
 }
+/** Turn the front LED off, or hand it back to the console.
+ *  ok-checked-by-caller: PeripheralPanel's run() checks ok once for every action. */
+export async function peripheralLed(addr: string, on: boolean): Promise<PeripheralAck> {
+  return invoke<PeripheralAck>("peripheral_led", { addr, on });
+}
+/** Front LED brightness (0-2); the console keeps it across restarts.
+ *  ok-checked-by-caller: PeripheralPanel's run() checks ok once for every action. */
+export async function peripheralLedDim(addr: string, level: number): Promise<PeripheralAck> {
+  return invoke<PeripheralAck>("peripheral_led_dim", { addr, level });
+}
+
 export interface ModuleInfo {
   handle: number;
   name: string;

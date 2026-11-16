@@ -638,6 +638,8 @@ pub fn run() {
             commands::peripheral_bd_off,
             commands::peripheral_bd_on,
             commands::peripheral_beep,
+            commands::peripheral_led,
+            commands::peripheral_led_dim,
             commands::proc_list_get,
             // Shell + CRC32 + app.db query
             commands::shell_run_cmd,

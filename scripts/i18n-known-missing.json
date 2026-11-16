@@ -55,7 +55,8 @@
       "pu_pm_absent_saved",
       "pu_rollback_failed",
       "pu_skip_not_saved",
-      "rp_blocker_resume_no_copy"
+      "rp_blocker_resume_no_copy",
+      "peripheral_led_note"
     ],
     "stale": [],
     "untranslated": [
@@ -127,7 +128,8 @@
       "pu_pm_absent_saved",
       "pu_rollback_failed",
       "pu_skip_not_saved",
-      "rp_blocker_resume_no_copy"
+      "rp_blocker_resume_no_copy",
+      "peripheral_led_note"
     ],
     "stale": [],
     "untranslated": [
@@ -203,7 +205,8 @@
       "pu_pm_absent_saved",
       "pu_rollback_failed",
       "pu_skip_not_saved",
-      "rp_blocker_resume_no_copy"
+      "rp_blocker_resume_no_copy",
+      "peripheral_led_note"
     ],
     "stale": [],
     "untranslated": [
@@ -286,7 +289,8 @@
       "pu_pm_absent_saved",
       "pu_rollback_failed",
       "pu_skip_not_saved",
-      "rp_blocker_resume_no_copy"
+      "rp_blocker_resume_no_copy",
+      "peripheral_led_note"
     ],
     "stale": [],
     "untranslated": [
@@ -364,7 +368,8 @@
       "pu_pm_absent_saved",
       "pu_rollback_failed",
       "pu_skip_not_saved",
-      "rp_blocker_resume_no_copy"
+      "rp_blocker_resume_no_copy",
+      "peripheral_led_note"
     ],
     "stale": [],
     "untranslated": [
@@ -438,7 +443,8 @@
       "pu_pm_absent_saved",
       "pu_rollback_failed",
       "pu_skip_not_saved",
-      "rp_blocker_resume_no_copy"
+      "rp_blocker_resume_no_copy",
+      "peripheral_led_note"
     ],
     "stale": [],
     "untranslated": [
@@ -515,7 +521,8 @@
       "pu_pm_absent_saved",
       "pu_rollback_failed",
       "pu_skip_not_saved",
-      "rp_blocker_resume_no_copy"
+      "rp_blocker_resume_no_copy",
+      "peripheral_led_note"
     ],
     "stale": [],
     "untranslated": [
@@ -591,7 +598,8 @@
       "pu_pm_absent_saved",
       "pu_rollback_failed",
       "pu_skip_not_saved",
-      "rp_blocker_resume_no_copy"
+      "rp_blocker_resume_no_copy",
+      "peripheral_led_note"
     ],
     "stale": [],
     "untranslated": [
@@ -672,7 +680,8 @@
       "pu_pm_absent_saved",
       "pu_rollback_failed",
       "pu_skip_not_saved",
-      "rp_blocker_resume_no_copy"
+      "rp_blocker_resume_no_copy",
+      "peripheral_led_note"
     ],
     "stale": [],
     "untranslated": [
@@ -755,7 +764,8 @@
       "pu_pm_absent_saved",
       "pu_rollback_failed",
       "pu_skip_not_saved",
-      "rp_blocker_resume_no_copy"
+      "rp_blocker_resume_no_copy",
+      "peripheral_led_note"
     ],
     "stale": [],
     "untranslated": [
@@ -838,7 +848,8 @@
       "pu_pm_absent_saved",
       "pu_rollback_failed",
       "pu_skip_not_saved",
-      "rp_blocker_resume_no_copy"
+      "rp_blocker_resume_no_copy",
+      "peripheral_led_note"
     ],
     "stale": [],
     "untranslated": [
@@ -911,7 +922,8 @@
       "pu_pm_absent_saved",
       "pu_rollback_failed",
       "pu_skip_not_saved",
-      "rp_blocker_resume_no_copy"
+      "rp_blocker_resume_no_copy",
+      "peripheral_led_note"
     ],
     "stale": [],
     "untranslated": [
@@ -986,7 +998,8 @@
       "pu_pm_absent_saved",
       "pu_rollback_failed",
       "pu_skip_not_saved",
-      "rp_blocker_resume_no_copy"
+      "rp_blocker_resume_no_copy",
+      "peripheral_led_note"
     ],
     "stale": [],
     "untranslated": [
@@ -1064,7 +1077,8 @@
       "pu_pm_absent_saved",
       "pu_rollback_failed",
       "pu_skip_not_saved",
-      "rp_blocker_resume_no_copy"
+      "rp_blocker_resume_no_copy",
+      "peripheral_led_note"
     ],
     "stale": [],
     "untranslated": [
@@ -1142,7 +1156,8 @@
       "pu_pm_absent_saved",
       "pu_rollback_failed",
       "pu_skip_not_saved",
-      "rp_blocker_resume_no_copy"
+      "rp_blocker_resume_no_copy",
+      "peripheral_led_note"
     ],
     "stale": [],
     "untranslated": [
@@ -1219,7 +1234,8 @@
       "pu_pm_absent_saved",
       "pu_rollback_failed",
       "pu_skip_not_saved",
-      "rp_blocker_resume_no_copy"
+      "rp_blocker_resume_no_copy",
+      "peripheral_led_note"
     ],
     "stale": [],
     "untranslated": [
@@ -1296,7 +1312,8 @@
       "pu_pm_absent_saved",
       "pu_rollback_failed",
       "pu_skip_not_saved",
-      "rp_blocker_resume_no_copy"
+      "rp_blocker_resume_no_copy",
+      "peripheral_led_note"
     ],
     "stale": [],
     "untranslated": [
@@ -1376,7 +1393,8 @@
       "pu_pm_absent_saved",
       "pu_rollback_failed",
       "pu_skip_not_saved",
-      "rp_blocker_resume_no_copy"
+      "rp_blocker_resume_no_copy",
+      "peripheral_led_note"
     ],
     "stale": [],
     "untranslated": [
@@ -1455,7 +1473,8 @@
       "pu_pm_absent_saved",
       "pu_rollback_failed",
       "pu_skip_not_saved",
-      "rp_blocker_resume_no_copy"
+      "rp_blocker_resume_no_copy",
+      "peripheral_led_note"
     ],
     "stale": [],
     "untranslated": [
@@ -1528,7 +1547,8 @@
       "pu_pm_absent_saved",
       "pu_rollback_failed",
       "pu_skip_not_saved",
-      "rp_blocker_resume_no_copy"
+      "rp_blocker_resume_no_copy",
+      "peripheral_led_note"
     ],
     "stale": [],
     "untranslated": [

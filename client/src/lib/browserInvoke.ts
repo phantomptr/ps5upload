@@ -540,7 +540,7 @@ export async function browserInvoke<T>(
     case "ps5_hw_storage":
       return getJson<T>(addrUrl("/api/ps5/hw/storage", args["addr"]));
 
-    // The disc drive and the beeper: one engine route, one action each.
+    // The disc drive, the beeper and the front light: one engine route, one action each.
     case "peripheral_eject":
       return postJson<T>("/api/ps5/peripheral", { addr: args["addr"], action: "eject_disc" });
     case "peripheral_bd_off":
@@ -552,6 +552,17 @@ export async function browserInvoke<T>(
         addr: args["addr"],
         action: "beep",
         port: args["pattern"],
+      });
+    case "peripheral_led":
+      return postJson<T>("/api/ps5/peripheral", {
+        addr: args["addr"],
+        action: args["on"] ? "led_on" : "led_off",
+      });
+    case "peripheral_led_dim":
+      return postJson<T>("/api/ps5/peripheral", {
+        addr: args["addr"],
+        action: "led_dim",
+        port: args["level"],
       });
 
     case "ps5_hw_set_fan_threshold":

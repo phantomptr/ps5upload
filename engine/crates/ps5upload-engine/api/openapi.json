@@ -9609,7 +9609,7 @@
       "PeripheralReq": {
         "properties": {
           "action": {
-            "description": "`bd_power_off`, `bd_power_on`, `eject_disc`, `usb_port_off`, `usb_port_on` or `beep`.\nThe front light's `led_off`, `led_on` and `led_dim` are no longer supported (400).",
+            "description": "`bd_power_off`, `bd_power_on`, `eject_disc`, `usb_port_off`, `usb_port_on`, `beep`,\nor the front light's `led_off`, `led_on` and `led_dim`.",
             "type": "string"
           },
           "addr": {
@@ -9623,7 +9623,7 @@
             ]
           },
           "port": {
-            "description": "The USB port or beep pattern the action takes; 0 otherwise.",
+            "description": "The USB port, beep pattern or brightness level the action takes; 0 otherwise.",
             "type": "integer"
           }
         },
@@ -36208,7 +36208,7 @@
     },
     "/api/ps5/peripheral": {
       "post": {
-        "description": "POST /api/ps5/peripheral\nBody: `{ \"addr\": \"IP\", \"action\": \"beep\", \"port\": 1 }`\n\nThe disc drive, the USB ports and the beeper. Replies with the helper's own ack (`ok`,\n`action`, `code`); a transport failure is a 502, an unknown or removed action a 400.",
+        "description": "POST /api/ps5/peripheral\nBody: `{ \"addr\": \"IP\", \"action\": \"beep\", \"port\": 1 }`\n\nThe disc drive, the USB ports, the beeper and the front light. Replies with the helper's own\nack (`ok`, `action`, `code`); a transport failure is a 502, an unknown action a 400. The\nfront light's calls are accepted on every firmware tried, but did not change the light on\na launch PS5 on FW 13.60 (#840).",
         "requestBody": {
           "content": {
             "application/json": {
