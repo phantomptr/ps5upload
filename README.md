@@ -572,6 +572,7 @@ adapted file by file), **library** (a dependency the build pulls in), **fetched 
 
 **References:**
 * [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus) (drakmor) — the mount tool that shows our game images on the home screen; the images we write are the ones it mounts
+* [Kraken Mount](https://github.com/quer3q/kraken-mount) ([quer3q](https://github.com/quer3q)) — the mount tool that puts debug packages (`.pkg`) and game folders on the home screen without installing them; PS5Upload recognises it on a console and puts games where it finds them
 * [garlic-savemgr](https://github.com/earthonion/garlic-savemgr) (earthonion) — how a save image is opened on the console: the sealed key unsealed through `/dev/pfsmgr` and the image mounted with `sceFsMountSaveData` from a copy under `/data`, which "Open save" follows
 * cy33hc's [ps5-ezremote-dpi](https://github.com/cy33hc/ps5-ezremote-dpi), etaHEN and elf-arsenal's DPI payloads, and itsPLK's PKG Manager — behavioural references for our installer daemon (no code taken)
 * [LibOrbisPkg](https://github.com/maxton/LibOrbisPkg) — its documentation of the PlayGo chunk format
