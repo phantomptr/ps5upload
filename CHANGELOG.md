@@ -6,7 +6,7 @@ What's new in ps5upload, written for humans.
 
 ## 12.5.0
 
-Convert gets most of what PS5 Dump Forge can do, and a first version of converting on the PS5 itself, from Minion. Checked with the automated tests; what was tried on a PS5 is said below.
+A big Convert update: zstd packs for every PS5 game, packs in every image format, converting straight from archives, editing an image in place, and a first version of converting on the PS5 itself, from Minion. Checked with the automated tests; what was tried on a PS5 is said below.
 
 **zstd packs**
 - **Runtime 0.4.1:** new zstd packs get ampr-emu-ng 0.4.1, which starts very large games that 0.4.0 refused with "index tables need … MiB, over the 48 MiB" (Final Fantasy XVI, Demon's Souls, Returnal, God of War Ragnarök and others). A game already packed with 0.4.0 is offered **Update the zstd runtime** in Convert.
@@ -37,7 +37,6 @@ Convert gets most of what PS5 Dump Forge can do, and a first version of converti
 - From a review of everything in this release: a stopped or interrupted conversion no longer leaves a finished-looking but unchecked image behind; a folder you named `X.partial` is never removed by a conversion to `X`; an image left half-edited by a crash is put back before anything reads it; an archive's password is no longer kept in the queue file; and Convert's folder button, the image browser and a `.rar`'s password for folder builds work as they should.
 - A game folder with unusual characters in its `param.json`, or a damaged `eboot.bin`, could crash the engine during conversion. Found by new automated fuzz tests; it now reports the problem instead.
 
-Thanks to quer3q's PS5 Dump Forge, whose code most of this release adapts (credited in the README).
 
 ## 12.4.23
 

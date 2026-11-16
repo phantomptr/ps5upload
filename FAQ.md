@@ -1943,7 +1943,7 @@ the copy is read back and checked, and the image you opened is not changed.
 its free space (an image never grows): `.exfat` and `.ffpkg` take any change that fits, `.ffpfs`
 takes deletes, renames and replacements that fit its existing space, and `.ffpfsc`, packages and
 games in asset packs only get an edited copy. While the change goes in, an undo journal sits
-beside the image (`<image>.forge-undo`, the same format PS5 Dump Forge uses): if the app closes
+beside the image (`<image>.forge-undo`): if the app closes
 or the computer loses power, the image is put back as it was the next time anything opens it.
 Every changed file is read back afterwards, and the image is restored if anything doesn't match.
 The image can't be converted or edited by anything else while this runs. Keep a backup of an
@@ -2399,8 +2399,7 @@ name. Tick **Full verification** to re-read every byte of the output instead; it
 
 Nothing is installed. Copy the image to a folder ShadowMount+ watches on the PS5 (for example
 `/data/homebrew`, with **Upload & Install**), and ShadowMount+ mounts it and puts the game on the home
-screen. The `.ffpkg` and `.ffpfs` writers and the streaming `.ffpfsc` container come from quer3q's
-PS5 Dump Forge; the `.exfat` writer is ps5upload's own. On a PS5 on firmware 13.60 with
+screen. On a PS5 on firmware 13.60 with
 ShadowMount+ 1.7, a game image made by the app in each of `.exfat`, `.ffpkg`, `.ffpfs` and a
 compressed `.ffpfsc` mounted, registered and ran its game. A folder that is on the console or on
 a saved server cannot be made into an image from here; copy it to this computer first.
