@@ -13,6 +13,7 @@ import { lazyWithReload } from "./lib/lazyWithReload";
 import AppShell from "./layout/AppShell";
 import { AndroidPipPicture, RemotePlayMini } from "./layout/RemotePlayMini";
 import { ConsoleAsks } from "./screens/Connection/consoles/ConsoleAsks";
+import { SaveSyncPrompt } from "./screens/Saves/SaveSyncPrompt";
 import { useRosterStore } from "./state/roster";
 import { isTauriEnv } from "./lib/tauriEnv";
 
@@ -218,6 +219,8 @@ export default function App() {
       <RemotePlayMini />
       {/* "Pixel wants to use Living-room PS5: Allow / Decline", over every screen. */}
       <ConsoleAsks />
+      {/* "Send <game>'s save to <other PS5>?" after a game closes (save sync). */}
+      <SaveSyncPrompt />
       <AndroidPipPicture />
     </>
   );

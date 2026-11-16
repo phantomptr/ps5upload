@@ -13780,6 +13780,269 @@
         },
         "type": "object"
       },
+      "SyncApplyBody": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SyncApplyItem"
+            },
+            "type": "array"
+          },
+          "pair": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pair",
+          "items"
+        ],
+        "type": "object"
+      },
+      "SyncApplyItem": {
+        "properties": {
+          "direction": {
+            "$ref": "#/components/schemas/SyncDirection"
+          },
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "direction"
+        ],
+        "type": "object"
+      },
+      "SyncDirection": {
+        "enum": [
+          "a_to_b",
+          "b_to_a"
+        ],
+        "type": "string"
+      },
+      "SyncDismissBody": {
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "pair": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pair",
+          "key"
+        ],
+        "type": "object"
+      },
+      "SyncPair": {
+        "properties": {
+          "a": {
+            "$ref": "#/components/schemas/SyncSide"
+          },
+          "b": {
+            "$ref": "#/components/schemas/SyncSide"
+          },
+          "excluded": {
+            "description": "Saves left out (their keys, see [`Item::key`]). Everything else both sides have is in.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "a",
+          "b",
+          "excluded"
+        ],
+        "type": "object"
+      },
+      "SyncPairBody": {
+        "properties": {
+          "a": {
+            "$ref": "#/components/schemas/SyncSide"
+          },
+          "b": {
+            "$ref": "#/components/schemas/SyncSide"
+          },
+          "excluded": {
+            "description": "Saves left out (keys from the status). Left out: as before (none for a new pair).",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "a",
+          "b"
+        ],
+        "type": "object"
+      },
+      "SyncPairRef": {
+        "properties": {
+          "pair": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pair"
+        ],
+        "type": "object"
+      },
+      "SyncReason": {
+        "enum": [
+          "offline",
+          "settling",
+          "running",
+          "ps4",
+          "error"
+        ],
+        "type": "string"
+      },
+      "SyncRow": {
+        "properties": {
+          "a": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SyncSideView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "b": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SyncSideView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SyncReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason_side": {
+            "description": "Which console the reason is about: `a` or `b`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/SyncStatus"
+          },
+          "synced_ms": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "title_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "title_id",
+          "kind",
+          "status",
+          "reason",
+          "reason_side",
+          "a",
+          "b",
+          "synced_ms",
+          "last_error"
+        ],
+        "type": "object"
+      },
+      "SyncSide": {
+        "description": "A user on a console.",
+        "properties": {
+          "host": {
+            "description": "The console (bare IP, as the app's console list has it).",
+            "type": "string"
+          },
+          "user_id": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "host",
+          "user_id"
+        ],
+        "type": "object"
+      },
+      "SyncSideView": {
+        "properties": {
+          "changed_ms": {
+            "description": "When this engine first saw the save differ (approximate), if it has.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "size",
+          "changed_ms"
+        ],
+        "type": "object"
+      },
+      "SyncStatus": {
+        "enum": [
+          "in_step",
+          "a_newer",
+          "b_newer",
+          "both_changed",
+          "first_time",
+          "only_on_a",
+          "only_on_b",
+          "unavailable",
+          "excluded"
+        ],
+        "type": "string"
+      },
       "SystemControlAck": {
         "properties": {
           "action": {
@@ -45924,6 +46187,328 @@
             "name": "addr",
             "required": true
           },
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/save-sync": {
+      "get": {
+        "description": "`GET /api/save-sync`: the pairs, what is kept of each save, the suggestions and which pairs\nare copying now. Reads nothing from a console.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "applying": {},
+                    "items": {},
+                    "pairs": {},
+                    "suggestions": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The pairs, what is kept of each save, the suggestions and which pairs are copying now",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/save-sync/apply": {
+      "post": {
+        "description": "`POST /api/save-sync/apply` `{pair, items: [{key, direction}]}`: copies each, one at a time,\nthrough Copy to another console. Answers each one's outcome; one failing does not stop the\nrest. Refused while another apply runs between the same two consoles.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncApplyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "results": {
+                      "items": {},
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Copies each, one at a time, through Copy to another console",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/save-sync/dismiss": {
+      "post": {
+        "description": "`POST /api/save-sync/dismiss` `{pair, key}`: Not now. The suggestion goes; the next time the\ngame closes with a change it comes back.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncDismissBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Not now",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/save-sync/pair": {
+      "put": {
+        "description": "`PUT /api/save-sync/pair` `{a, b, excluded?}`: adds the pair, or changes which saves it leaves\nout.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncPairBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "pair": {
+                      "$ref": "#/components/schemas/SyncPair"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Adds the pair, or changes which saves it leaves out",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/save-sync/pair/remove": {
+      "post": {
+        "description": "`POST /api/save-sync/pair/remove` `{pair}`: stops keeping the pair in step (nothing on a\nconsole changes).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncPairRef"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Stops keeping the pair in step (nothing on a console changes)",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/save-sync/status": {
+      "get": {
+        "description": "`GET /api/save-sync/status?pair=`: Check now. Reads both consoles; wakes neither.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "pair",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "checked_ms": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "pair": {
+                      "$ref": "#/components/schemas/SyncPair"
+                    },
+                    "rows": {
+                      "items": {
+                        "$ref": "#/components/schemas/SyncRow"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Check now",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
           "response_schema": "literal"
         }
       }

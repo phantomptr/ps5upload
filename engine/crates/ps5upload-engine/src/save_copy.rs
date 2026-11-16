@@ -1737,7 +1737,7 @@ pub fn copy_to_console(
 
 /// An emulator's save onto another console: plain files, so they go as they are, through the
 /// backup and restore every other emulator save uses (the one there is backed up first).
-fn copy_emulator_save(
+pub(crate) fn copy_emulator_save(
     from: &str,
     to: &str,
     entry: &SaveEntry,

@@ -1,5 +1,5 @@
-//! Game saves: `saves_list`, `saves_backups_list`, `saves_backup_now`, `saves_restore`. Backups
-//! are kept by the engine, on its computer.
+//! Game saves: `saves_list`, `saves_backups_list`, `saves_sync_state`, `saves_backup_now`,
+//! `saves_restore`. Backups are kept by the engine, on its computer.
 
 use serde_json::json;
 
@@ -37,6 +37,17 @@ pub(super) fn tools() -> Vec<ToolDef> {
                 &["title_id"],
             ),
             run: route!(path: "/api/save-backup/list", done: "The game's backups."),
+        },
+        ToolDef {
+            name: "saves_sync_state",
+            title: "Save sync between two consoles",
+            description: "Save sync as the engine keeps it: each pair (a user on one console and \
+                          a user on another), what was kept of each save at its last copy, the \
+                          copies suggested after a game closed, and the last error per save. \
+                          Nothing here touches a console.",
+            kind: Kind::Read,
+            schema: object(json!({}), &[]),
+            run: route!(path: "/api/save-sync", done: "Save sync's pairs and suggestions."),
         },
         ToolDef {
             name: "saves_backup_now",
